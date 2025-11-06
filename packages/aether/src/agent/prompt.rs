@@ -1,4 +1,5 @@
-use crate::agent::{AgentError, Result};
+use crate::agent::{AgentError, Result, substitute_parameters};
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -7,7 +8,11 @@ use std::process::Command;
 #[derive(Debug, Clone)]
 pub enum Prompt {
     Text(String),
-    File { path: String, ancestors: bool },
+    File {
+        path: String,
+        ancestors: bool,
+        args: Option<HashMap<String, String>>,
+    },
     SystemEnv,
 }
 
@@ -20,6 +25,15 @@ impl Prompt {
         Self::File {
             path: path.to_string(),
             ancestors,
+            args: None,
+        }
+    }
+
+    pub fn file_with_args(path: &str, ancestors: bool, args: HashMap<String, String>) -> Self {
+        Self::File {
+            path: path.to_string(),
+            ancestors,
+            args: Some(args),
         }
     }
 
@@ -27,6 +41,7 @@ impl Prompt {
         Self::File {
             path: "AGENTS.md".to_string(),
             ancestors: true,
+            args: None,
         }
     }
 
@@ -38,12 +53,18 @@ impl Prompt {
     pub fn build(&self) -> Result<String> {
         match self {
             Prompt::Text(text) => Ok(text.clone()),
-            Prompt::File { path, ancestors } => {
-                if *ancestors {
-                    Self::resolve_file_with_ancestors(path)
+            Prompt::File {
+                path,
+                ancestors,
+                args,
+            } => {
+                let content = if *ancestors {
+                    Self::resolve_file_with_ancestors(path)?
                 } else {
-                    Self::resolve_file(&PathBuf::from(path))
-                }
+                    Self::resolve_file(&PathBuf::from(path))?
+                };
+
+                Ok(substitute_parameters(&content, args))
             }
             Prompt::SystemEnv => Self::resolve_system_env(),
         }
