@@ -1,8 +1,9 @@
 use super::{
     BackgroundProcessHandle, BashInput, BashResult, EditFileArgs, EditFileResponse, ListFilesArgs,
-    ListFilesResult, ReadBackgroundBashOutput, ReadFileArgs, ReadFileResult, WriteFileArgs,
-    WriteFileResponse, edit_file_contents, execute_command, list_files, read_background_bash,
-    read_file_contents, tools_trait::CodingTools, write_file_contents,
+    ListFilesResult, LspDiagnosticsArgs, LspDiagnosticsResponse, ReadBackgroundBashOutput,
+    ReadFileArgs, ReadFileResult, WriteFileArgs, WriteFileResponse, edit_file_contents,
+    execute_command, list_files, lsp, read_background_bash, read_file_contents,
+    tools_trait::CodingTools, write_file_contents,
 };
 
 /// Default implementation that uses local filesystem operations.
@@ -51,5 +52,19 @@ impl CodingTools for DefaultCodingTools {
         read_background_bash(handle, filter)
             .await
             .map_err(|e| format!("Failed to get output: {e}"))
+    }
+
+    async fn lsp_diagnostics(
+        &self,
+        args: LspDiagnosticsArgs,
+    ) -> Result<LspDiagnosticsResponse, String> {
+        let diagnostics =
+            lsp::collect_diagnostics(args.workspace_root, args.severity_filter).await?;
+
+        Ok(LspDiagnosticsResponse {
+            status: "success".to_string(),
+            diagnostics: diagnostics.clone(),
+            total_count: diagnostics.len(),
+        })
     }
 }

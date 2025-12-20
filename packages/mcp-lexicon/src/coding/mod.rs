@@ -17,6 +17,7 @@ pub mod edit_file;
 pub mod find;
 pub mod grep;
 pub mod list_files;
+pub mod lsp;
 pub mod read_file;
 pub mod todo_write;
 pub mod tools_trait;
@@ -35,6 +36,7 @@ pub use read_file::{ReadFileArgs, ReadFileResult, read_file_contents};
 pub use todo_write::{TodoItem, TodoStatus, TodoWriteInput, TodoWriteOutput, process_todo_write};
 pub use tools_trait::CodingTools;
 pub use write_file::{WriteFileArgs, WriteFileResponse, write_file_contents};
+pub use lsp::{DiagnosticResult, LspDiagnosticsArgs, LspDiagnosticsResponse};
 
 #[derive(Debug)]
 pub struct CodingMcp<T: CodingTools = DefaultCodingTools> {
@@ -406,6 +408,27 @@ When in doubt, use this tool. Being proactive with task management demonstrates 
 
         let output = process_todo_write(input);
         Ok(Json(output))
+    }
+
+    #[tool(
+        description = "Get compiler diagnostics (errors, warnings) from the language server.
+
+Usage:
+- Returns diagnostics from rust-analyzer for Rust projects
+- Optionally filter by severity: 'error', 'warning', 'info', 'hint'
+- Useful for understanding compilation errors and type issues
+- May take a few seconds on first run as rust-analyzer analyzes the workspace
+
+Requirements:
+- rust-analyzer must be installed and available in PATH
+- The workspace must be a valid Cargo project for Rust analysis"
+    )]
+    pub async fn lsp_diagnostics(
+        &self,
+        request: Parameters<LspDiagnosticsArgs>,
+    ) -> Result<Json<LspDiagnosticsResponse>, String> {
+        let Parameters(args) = request;
+        self.tools.lsp_diagnostics(args).await.map(Json)
     }
 }
 

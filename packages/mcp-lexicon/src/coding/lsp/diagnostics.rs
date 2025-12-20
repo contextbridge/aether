@@ -5,6 +5,18 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tokio::time::timeout;
 
+/// Convert an LSP Uri to a file path string
+fn uri_to_file_path(uri: &lsp_types::Uri) -> String {
+    // Try to parse as url::Url and convert to file path
+    if let Ok(url) = url::Url::parse(uri.as_str()) {
+        if let Ok(path) = url.to_file_path() {
+            return path.to_string_lossy().to_string();
+        }
+    }
+    // Fallback: use the URI string directly
+    uri.as_str().to_string()
+}
+
 pub struct DiagnosticCollector {
     session: LspSession,
     diagnostics: HashMap<String, Vec<DiagnosticResult>>,
@@ -78,10 +90,7 @@ impl DiagnosticCollector {
         params: PublishDiagnosticsParams,
         severity_filter: Option<&str>,
     ) {
-        let file_path = params.uri.to_file_path()
-            .unwrap_or_else(|_| PathBuf::from(params.uri.as_str()))
-            .to_string_lossy()
-            .to_string();
+        let file_path = uri_to_file_path(&params.uri);
 
         let mut file_diagnostics = Vec::new();
 

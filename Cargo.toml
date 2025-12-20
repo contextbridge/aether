@@ -48,6 +48,10 @@ globset = "0.4"
 grep = "0.3.2"
 ignore = "0.4"
 
+# LSP support
+lsp-types = "0.97"
+url = "2.5"
+
 # Terminal UI
 crossterm = { version = "0.29", features = ["event-stream"] }
 owo-colors = "4.0"

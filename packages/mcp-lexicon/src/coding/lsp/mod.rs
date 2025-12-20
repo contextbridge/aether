@@ -1,8 +1,10 @@
 pub mod client;
 pub mod diagnostics;
+pub mod error;
 
 pub use client::{LspClient, LspSession};
-pub use diagnostics::DiagnosticCollector;
+pub use diagnostics::{collect_diagnostics, DiagnosticCollector};
+pub use error::LspError;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

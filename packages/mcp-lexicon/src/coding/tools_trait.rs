@@ -2,8 +2,8 @@ use std::future::Future;
 
 use super::{
     BackgroundProcessHandle, BashInput, BashResult, EditFileArgs, EditFileResponse, ListFilesArgs,
-    ListFilesResult, ReadBackgroundBashOutput, ReadFileArgs, ReadFileResult, WriteFileArgs,
-    WriteFileResponse,
+    ListFilesResult, LspDiagnosticsArgs, LspDiagnosticsResponse, ReadBackgroundBashOutput,
+    ReadFileArgs, ReadFileResult, WriteFileArgs, WriteFileResponse,
 };
 
 /// Trait defining the underlying implementation for coding tool operations.
@@ -47,4 +47,10 @@ pub trait CodingTools: Send + Sync + std::fmt::Debug {
     ) -> impl Future<
         Output = Result<(ReadBackgroundBashOutput, Option<BackgroundProcessHandle>), String>,
     > + Send;
+
+    /// Get LSP diagnostics (compiler errors, warnings, etc.) from the language server
+    fn lsp_diagnostics(
+        &self,
+        args: LspDiagnosticsArgs,
+    ) -> impl Future<Output = Result<LspDiagnosticsResponse, String>> + Send;
 }

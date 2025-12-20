@@ -24,6 +24,9 @@ crucible = { path = "../crucible" }
 clap = { workspace = true, features = ["env"] }
 tracing-subscriber = { workspace = true, features = ["registry", "fmt", "json"] }
 tracing-appender = { workspace = true }
+lsp-types = { workspace = true }
+url = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

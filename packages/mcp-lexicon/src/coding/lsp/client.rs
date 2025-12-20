@@ -9,7 +9,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout, Command};
 use tokio::sync::{Mutex, mpsc, oneshot};
-use url::Url;
+
+/// Convert a file path to an LSP Uri
+fn path_to_uri(path: &std::path::Path) -> Result<Uri, String> {
+    let url = url::Url::from_file_path(path)
+        .map_err(|_| format!("Invalid path: {:?}", path))?;
+    url.as_str()
+        .parse()
+        .map_err(|e| format!("Failed to parse URI: {}", e))
+}
 
 /// LSP client that spawns process in background task and provides typed API
 pub struct LspClient {
@@ -55,19 +63,6 @@ impl LspClient {
 
         // Spawn background task to manage the rust-analyzer process
         tokio::spawn(async move {
-            let (stdin, stdout) = {
-                let mut child = Command::new("rust-analyzer")
-                    .stdin(std::process::Stdio::piped())
-                    .stdout(std::process::Stdio::piped())
-                    .stderr(std::process::Stdio::piped())
-                    .spawn()
-                    .map_err(|e| format!("Failed to spawn rust-analyzer: {}", e))?;
-
-                let stdin = child.stdin.take().ok_or("Failed to get stdin handle")?;
-                let stdout = child.stdout.take().ok_or("Failed to get stdout handle")?;
-                (stdin, stdout)
-            };
-
             if let Err(e) = Self::run_process_loop(request_rx, notification_tx, shutdown_rx).await {
                 eprintln!("LSP process task failed: {}", e);
             }
@@ -77,8 +72,8 @@ impl LspClient {
     }
 
     async fn run_process_loop(
-        mut request_rx: mpsc::UnboundedReceiver<LspRequest>,
-        notification_tx: mpsc::UnboundedSender<Value>,
+        mut request_rx: mpsc::Receiver<LspRequest>,
+        notification_tx: mpsc::Sender<Value>,
         mut shutdown_rx: oneshot::Receiver<()>,
     ) -> Result<(), String> {
         // Spawn rust-analyzer process within the task
@@ -360,13 +355,13 @@ impl LspSession {
     }
 
     async fn initialize(&self, workspace_root: PathBuf) -> Result<(), String> {
-        let workspace_uri = Url::from_file_path(&workspace_root)
-            .map_err(|_| format!("Invalid workspace root path: {:?}", workspace_root))?;
+        let workspace_uri = path_to_uri(&workspace_root)?;
 
+        #[allow(deprecated)]
         let init_params = InitializeParams {
             process_id: Some(std::process::id()),
-            root_path: None,
-            root_uri: None,
+            root_path: None,  // deprecated, but required by struct
+            root_uri: None,   // deprecated, using workspace_folders instead
             initialization_options: None,
             capabilities: ClientCapabilities {
                 text_document: Some(TextDocumentClientCapabilities {
@@ -423,8 +418,7 @@ impl LspSession {
         line: u32,
         character: u32,
     ) -> Result<Option<GotoDefinitionResponse>, String> {
-        let uri = Url::from_file_path(&file_path)
-            .map_err(|_| format!("Invalid file path: {:?}", file_path))?;
+        let uri = path_to_uri(&file_path)?;
 
         let params = GotoDefinitionParams {
             text_document_position_params: TextDocumentPositionParams {
