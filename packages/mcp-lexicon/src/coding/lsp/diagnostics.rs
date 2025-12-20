@@ -20,6 +20,7 @@ fn uri_to_file_path(uri: &lsp_types::Uri) -> String {
 pub struct DiagnosticCollector {
     session: LspSession,
     diagnostics: HashMap<String, Vec<DiagnosticResult>>,
+    opened_files: usize,
 }
 
 impl DiagnosticCollector {
@@ -27,7 +28,18 @@ impl DiagnosticCollector {
         Self {
             session,
             diagnostics: HashMap::new(),
+            opened_files: 0,
         }
+    }
+
+    /// Open Rust files to trigger analysis
+    pub async fn open_files(&mut self, workspace: &PathBuf, max_files: usize) -> Result<(), String> {
+        let files = find_rust_files(workspace, max_files);
+        for file in files {
+            self.session.open_file(file).await?;
+            self.opened_files += 1;
+        }
+        Ok(())
     }
 
     pub async fn collect_workspace_diagnostics(
@@ -37,39 +49,52 @@ impl DiagnosticCollector {
     ) -> Result<Vec<DiagnosticResult>, String> {
         // Give rust-analyzer time to analyze the workspace and send diagnostics
         let collection_timeout = timeout(timeout_duration, async {
-            let mut first_diagnostic_received = false;
-            let mut stable_count = 0;
-            let target_stable_iterations = 5; // Wait for 5 iterations without new diagnostics
+            let mut stable_iterations = 0;
+            let required_stable_iterations = 3; // Wait for 3 iterations without new data
 
             loop {
-                match self.session.get_next_notification().await {
-                    Some(notification) => {
+                // Use timeout on notification receive to avoid blocking forever
+                let notif_result = tokio::time::timeout(
+                    Duration::from_millis(500),
+                    self.session.get_next_notification(),
+                )
+                .await;
+
+                match notif_result {
+                    Ok(Some(notification)) => {
+                        stable_iterations = 0; // Reset stability counter on any notification
                         if let Some(method) = notification.get("method").and_then(|m| m.as_str()) {
                             if method == "textDocument/publishDiagnostics" {
                                 if let Some(params) = notification.get("params") {
-                                    if let Ok(diagnostic_params) = serde_json::from_value::<PublishDiagnosticsParams>(params.clone()) {
+                                    if let Ok(diagnostic_params) =
+                                        serde_json::from_value::<PublishDiagnosticsParams>(
+                                            params.clone(),
+                                        )
+                                    {
                                         self.process_diagnostics(diagnostic_params, severity_filter);
-                                        first_diagnostic_received = true;
-                                        stable_count = 0; // Reset stability counter
                                     }
                                 }
                             }
                         }
                     }
-                    None => {
-                        if first_diagnostic_received {
-                            stable_count += 1;
-                            if stable_count >= target_stable_iterations {
-                                break; // No more notifications, we're done
-                            }
+                    Ok(None) => {
+                        // Channel closed
+                        break;
+                    }
+                    Err(_) => {
+                        // Timeout - no notification received
+                        stable_iterations += 1;
+
+                        // Exit if we've had stable_iterations without new data
+                        if self.opened_files > 0 && stable_iterations >= required_stable_iterations {
+                            break;
                         }
-                        tokio::time::sleep(Duration::from_millis(100)).await;
                     }
                 }
             }
         });
 
-        if let Err(_) = collection_timeout.await {
+        if collection_timeout.await.is_err() {
             // Timeout occurred, return what we have
         }
 
@@ -144,14 +169,52 @@ pub async fn collect_diagnostics(
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-    let session = LspSession::new(workspace_path).await?;
-    let collector = DiagnosticCollector::new(session);
+    let session = LspSession::new(workspace_path.clone()).await?;
+    let mut collector = DiagnosticCollector::new(session);
 
-    // Wait up to 10 seconds for diagnostics to be collected
+    // Open files to trigger analysis (limit to 50 files to avoid overwhelming the LSP)
+    collector.open_files(&workspace_path, 50).await?;
+
+    // Wait up to 30 seconds for diagnostics to be collected
     collector
-        .collect_workspace_diagnostics(
-            severity_filter.as_deref(),
-            Duration::from_secs(10),
-        )
+        .collect_workspace_diagnostics(severity_filter.as_deref(), Duration::from_secs(30))
         .await
+}
+
+/// Find Rust files in a directory, skipping target and hidden directories
+fn find_rust_files(dir: &PathBuf, max: usize) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    find_rust_files_recursive(dir, &mut files, max);
+    files
+}
+
+fn find_rust_files_recursive(dir: &PathBuf, files: &mut Vec<PathBuf>, max: usize) {
+    if files.len() >= max {
+        return;
+    }
+
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        if files.len() >= max {
+            return;
+        }
+
+        let path = entry.path();
+
+        // Skip target directory and hidden directories
+        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+            if name == "target" || name.starts_with('.') {
+                continue;
+            }
+        }
+
+        if path.is_dir() {
+            find_rust_files_recursive(&path, files, max);
+        } else if path.extension().is_some_and(|ext| ext == "rs") {
+            files.push(path);
+        }
+    }
 }

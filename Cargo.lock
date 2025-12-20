@@ -1713,6 +1713,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "tempfile",
+ "thiserror 2.0.16",
  "tokio",
  "tracing",
  "tracing-appender",

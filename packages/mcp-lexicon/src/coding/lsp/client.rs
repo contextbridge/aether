@@ -1,6 +1,7 @@
-use lsp_types::notification::{Initialized, Notification};
+use lsp_types::notification::{DidCloseTextDocument, DidOpenTextDocument, Initialized, Notification};
 use lsp_types::request::{GotoDefinition, Initialize, Request};
 use lsp_types::*;
+use std::fs;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -16,23 +17,27 @@ fn path_to_uri(path: &std::path::Path) -> Result<Uri, String> {
         .map_err(|_| format!("Invalid path: {:?}", path))?;
     url.as_str()
         .parse()
-        .map_err(|e| format!("Failed to parse URI: {}", e))
+        .map_err(|e| format!("Failed to parse URI: {e}"))
 }
+
+type PendingRequests = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>>;
 
 /// LSP client that spawns process in background task and provides typed API
 pub struct LspClient {
-    request_tx: mpsc::Sender<LspRequest>,
+    request_tx: mpsc::Sender<LspMessage>,
+    pending_requests: PendingRequests,
     notification_rx: Arc<Mutex<mpsc::Receiver<Value>>>,
     shutdown_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
+    next_id: AtomicU64,
 }
 
-enum LspRequest {
-    TypedRequest {
+enum LspMessage {
+    Request {
+        id: u64,
         method: String,
         params: Value,
-        response_tx: oneshot::Sender<Result<Value, String>>,
     },
-    TypedNotification {
+    Notification {
         method: String,
         params: Value,
     },
@@ -40,110 +45,144 @@ enum LspRequest {
 
 impl LspClient {
     pub async fn new(_workspace_root: PathBuf) -> Result<Self, String> {
-        let (request_tx, notification_rx, shutdown_tx) = Self::process_task().await?;
-
-        Ok(LspClient {
-            request_tx,
-            notification_rx: Arc::new(Mutex::new(notification_rx)),
-            shutdown_tx: Arc::new(Mutex::new(Some(shutdown_tx))),
-        })
-    }
-
-    async fn process_task() -> Result<
-        (
-            mpsc::Sender<LspRequest>,
-            mpsc::Receiver<Value>,
-            oneshot::Sender<()>,
-        ),
-        String,
-    > {
-        let (request_tx, request_rx) = mpsc::channel(100);
-        let (notification_tx, notification_rx) = mpsc::channel(100);
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-
-        // Spawn background task to manage the rust-analyzer process
-        tokio::spawn(async move {
-            if let Err(e) = Self::run_process_loop(request_rx, notification_tx, shutdown_rx).await {
-                eprintln!("LSP process task failed: {}", e);
-            }
-        });
-
-        Ok((request_tx, notification_rx, shutdown_tx))
-    }
-
-    async fn run_process_loop(
-        mut request_rx: mpsc::Receiver<LspRequest>,
-        notification_tx: mpsc::Sender<Value>,
-        mut shutdown_rx: oneshot::Receiver<()>,
-    ) -> Result<(), String> {
-        // Spawn rust-analyzer process within the task
+        // Spawn rust-analyzer process
         let mut child = Command::new("rust-analyzer")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
-            .map_err(|e| format!("Failed to spawn rust-analyzer: {}", e))?;
+            .map_err(|e| format!("Failed to spawn rust-analyzer: {e}"))?;
 
         let stdin = child.stdin.take().ok_or("Failed to get stdin handle")?;
-
         let stdout = child.stdout.take().ok_or("Failed to get stdout handle")?;
 
-        // Set up low-level protocol handling
-        let pending_requests = Arc::new(Mutex::new(HashMap::<u64, oneshot::Sender<Value>>::new()));
-        let request_id = AtomicU64::new(1);
-        let stdin = Arc::new(Mutex::new(stdin));
+        let (request_tx, request_rx) = mpsc::channel::<LspMessage>(100);
+        let (notification_tx, notification_rx) = mpsc::channel::<Value>(100);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
+        let pending_requests: PendingRequests = Arc::new(Mutex::new(HashMap::new()));
+        let pending_for_loop = pending_requests.clone();
+
+        // Spawn background task to handle stdin/stdout
+        tokio::spawn(async move {
+            if let Err(e) = Self::run_process_loop(
+                child,
+                stdin,
+                stdout,
+                request_rx,
+                notification_tx,
+                pending_for_loop,
+                shutdown_rx,
+            ).await {
+                eprintln!("LSP process task failed: {e}");
+            }
+        });
+
+        Ok(LspClient {
+            request_tx,
+            pending_requests,
+            notification_rx: Arc::new(Mutex::new(notification_rx)),
+            shutdown_tx: Arc::new(Mutex::new(Some(shutdown_tx))),
+            next_id: AtomicU64::new(1),
+        })
+    }
+
+    async fn run_process_loop(
+        mut child: tokio::process::Child,
+        stdin: ChildStdin,
+        stdout: ChildStdout,
+        mut request_rx: mpsc::Receiver<LspMessage>,
+        notification_tx: mpsc::Sender<Value>,
+        pending_requests: PendingRequests,
+        mut shutdown_rx: oneshot::Receiver<()>,
+    ) -> Result<(), String> {
+        let stdin = Arc::new(Mutex::new(stdin));
         let mut reader = BufReader::new(stdout);
 
         loop {
             tokio::select! {
+                // Handle outgoing requests/notifications
                 request = request_rx.recv() => {
                     match request {
-                        Some(LspRequest::TypedRequest { method, params, response_tx }) => {
-                            let result = Self::send_request_raw(&stdin, &request_id, &pending_requests, &method, params).await;
-                            let _ = response_tx.send(result);
+                        Some(LspMessage::Request { id, method, params }) => {
+                            let message = json!({
+                                "jsonrpc": "2.0",
+                                "id": id,
+                                "method": method,
+                                "params": params
+                            });
+                            if let Err(e) = Self::send_message(&stdin, message).await {
+                                let mut pending = pending_requests.lock().await;
+                                if let Some(tx) = pending.remove(&id) {
+                                    let _ = tx.send(Err(e));
+                                }
+                            }
                         }
-                        Some(LspRequest::TypedNotification { method, params }) => {
-                            let _ = Self::send_notification_raw(&stdin, &method, params).await;
+                        Some(LspMessage::Notification { method, params }) => {
+                            let message = json!({
+                                "jsonrpc": "2.0",
+                                "method": method,
+                                "params": params
+                            });
+                            let _ = Self::send_message(&stdin, message).await;
                         }
-                        None => break, // Channel closed
+                        None => break,
                     }
                 }
+
+                // Handle incoming messages from LSP server
                 message_result = Self::read_lsp_message(&mut reader) => {
                     match message_result {
                         Ok(Some(message)) => {
-                            if let Some(id) = message.get("id") {
-                                if let Some(id) = id.as_u64() {
+                            // Response: has id but no method
+                            if message.get("id").is_some() && message.get("method").is_none() {
+                                if let Some(id) = message.get("id").and_then(|i| i.as_u64()) {
                                     let mut pending = pending_requests.lock().await;
-                                    if let Some(sender) = pending.remove(&id) {
-                                        let _ = sender.send(message);
+                                    if let Some(tx) = pending.remove(&id) {
+                                        let result = if let Some(error) = message.get("error") {
+                                            Err(format!("LSP error: {error}"))
+                                        } else if let Some(result) = message.get("result") {
+                                            Ok(result.clone())
+                                        } else {
+                                            Ok(Value::Null)
+                                        };
+                                        let _ = tx.send(result);
                                     }
                                 }
                             } else {
+                                // Server notification
                                 if let Err(e) = notification_tx.try_send(message) {
-                                    match e {
-                                        mpsc::error::TrySendError::Full(_) => {
-                                            eprintln!("Warning: LSP notification channel full, dropping message");
-                                        }
-                                        mpsc::error::TrySendError::Closed(_) => {
-                                            eprintln!("LSP notification channel closed");
-                                            break;
-                                        }
+                                    if matches!(e, mpsc::error::TrySendError::Closed(_)) {
+                                        break;
                                     }
                                 }
                             }
                         }
-                        Ok(None) => break, // EOF
+                        Ok(None) => break,
                         Err(e) => {
-                            eprintln!("Error reading LSP message: {}", e);
+                            eprintln!("Error reading LSP message: {e}");
                             break;
                         }
                     }
                 }
+
+                // Handle shutdown
                 _ = &mut shutdown_rx => {
-                    // Shutdown requested
-                    let _ = Self::send_request_raw(&stdin, &request_id, &pending_requests, "shutdown", json!({})).await;
-                    let _ = Self::send_notification_raw(&stdin, "exit", json!({})).await;
+                    let shutdown_msg = json!({
+                        "jsonrpc": "2.0",
+                        "id": 999999,
+                        "method": "shutdown",
+                        "params": null
+                    });
+                    let _ = Self::send_message(&stdin, shutdown_msg).await;
+
+                    let exit_msg = json!({
+                        "jsonrpc": "2.0",
+                        "method": "exit",
+                        "params": null
+                    });
+                    let _ = Self::send_message(&stdin, exit_msg).await;
+
                     let _ = child.wait().await;
                     break;
                 }
@@ -153,30 +192,27 @@ impl LspClient {
         Ok(())
     }
 
-    async fn read_lsp_message(
-        reader: &mut BufReader<ChildStdout>,
-    ) -> Result<Option<Value>, String> {
-        // Read headers
+    async fn read_lsp_message(reader: &mut BufReader<ChildStdout>) -> Result<Option<Value>, String> {
         let mut content_length = 0;
         let mut line = String::new();
 
         loop {
             line.clear();
             match reader.read_line(&mut line).await {
-                Ok(0) => return Ok(None), // EOF
+                Ok(0) => return Ok(None),
                 Ok(_) => {
-                    let line = line.trim_end();
-                    if line.is_empty() {
-                        break; // End of headers
+                    let trimmed = line.trim_end();
+                    if trimmed.is_empty() {
+                        break;
                     }
-                    if line.starts_with("Content-Length: ") {
-                        content_length = line[16..]
+                    if let Some(len_str) = trimmed.strip_prefix("Content-Length: ") {
+                        content_length = len_str
                             .trim()
                             .parse::<usize>()
-                            .map_err(|e| format!("Invalid Content-Length: {}", e))?;
+                            .map_err(|e| format!("Invalid Content-Length: {e}"))?;
                     }
                 }
-                Err(e) => return Err(format!("Error reading header: {}", e)),
+                Err(e) => return Err(format!("Error reading header: {e}")),
             }
         }
 
@@ -184,123 +220,71 @@ impl LspClient {
             return Err("Missing Content-Length header".to_string());
         }
 
-        // Read exact number of bytes for content
         let mut content_bytes = vec![0u8; content_length];
         reader
             .read_exact(&mut content_bytes)
             .await
-            .map_err(|e| format!("Error reading content bytes: {}", e))?;
+            .map_err(|e| format!("Error reading content: {e}"))?;
 
         let content = String::from_utf8(content_bytes)
-            .map_err(|e| format!("Invalid UTF-8 in content: {}", e))?;
+            .map_err(|e| format!("Invalid UTF-8: {e}"))?;
 
-        // Parse JSON
         serde_json::from_str(&content)
             .map(Some)
-            .map_err(|e| format!("Failed to parse JSON: {}", e))
-    }
-
-    async fn send_request_raw(
-        stdin: &Arc<Mutex<ChildStdin>>,
-        request_id: &AtomicU64,
-        pending_requests: &Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>,
-        method: &str,
-        params: Value,
-    ) -> Result<Value, String> {
-        let id = request_id.fetch_add(1, Ordering::SeqCst);
-        let request = json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": method,
-            "params": params
-        });
-
-        let (tx, rx) = oneshot::channel();
-        {
-            let mut pending = pending_requests.lock().await;
-            pending.insert(id, tx);
-        }
-
-        Self::send_message(stdin, request).await?;
-
-        let response = rx.await.map_err(|_| "Request was cancelled".to_string())?;
-
-        // Check for error in response
-        if let Some(error) = response.get("error") {
-            return Err(format!("LSP request failed: {}", error));
-        }
-
-        // Extract result
-        response
-            .get("result")
-            .cloned()
-            .ok_or("No result in LSP response".to_string())
-    }
-
-    async fn send_notification_raw(
-        stdin: &Arc<Mutex<ChildStdin>>,
-        method: &str,
-        params: Value,
-    ) -> Result<(), String> {
-        let notification = json!({
-            "jsonrpc": "2.0",
-            "method": method,
-            "params": params
-        });
-
-        Self::send_message(stdin, notification).await
+            .map_err(|e| format!("Failed to parse JSON: {e}"))
     }
 
     async fn send_message(stdin: &Arc<Mutex<ChildStdin>>, message: Value) -> Result<(), String> {
         let content = serde_json::to_string(&message)
-            .map_err(|e| format!("Failed to serialize message: {}", e))?;
+            .map_err(|e| format!("Failed to serialize: {e}"))?;
 
-        let header = format!("Content-Length: {}\r\n\r\n", content.len());
-        let full_message = format!("{}{}", header, content);
+        let full_message = format!("Content-Length: {}\r\n\r\n{}", content.len(), content);
 
         let mut stdin_guard = stdin.lock().await;
         stdin_guard
             .write_all(full_message.as_bytes())
             .await
-            .map_err(|e| format!("Failed to write to stdin: {}", e))?;
-
+            .map_err(|e| format!("Failed to write: {e}"))?;
         stdin_guard
             .flush()
             .await
-            .map_err(|e| format!("Failed to flush stdin: {}", e))
+            .map_err(|e| format!("Failed to flush: {e}"))
     }
 
-    // Public API methods for the LspClient
+    /// Send a typed LSP request and wait for response
     pub async fn send_request<R>(&self, params: R::Params) -> Result<R::Result, String>
     where
         R: Request,
         R::Params: serde::Serialize,
         R::Result: serde::de::DeserializeOwned,
     {
+        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+
         let params_value = serde_json::to_value(params)
-            .map_err(|e| format!("Failed to serialize params: {}", e))?;
+            .map_err(|e| format!("Failed to serialize params: {e}"))?;
 
-        let (response_tx, response_rx) = oneshot::channel();
+        // Create response channel and register BEFORE sending
+        let (tx, rx) = oneshot::channel();
+        {
+            let mut pending = self.pending_requests.lock().await;
+            pending.insert(id, tx);
+        }
 
-        let request = LspRequest::TypedRequest {
-            method: R::METHOD.to_string(),
-            params: params_value,
-            response_tx,
-        };
-
+        // Send the request
         self.request_tx
-            .try_send(request)
-            .map_err(|e| match e {
-                mpsc::error::TrySendError::Full(_) => "LSP client channel full".to_string(),
-                mpsc::error::TrySendError::Closed(_) => "LSP client channel closed".to_string(),
-            })?;
-
-        let response = response_rx
+            .send(LspMessage::Request {
+                id,
+                method: R::METHOD.to_string(),
+                params: params_value,
+            })
             .await
-            .map_err(|_| "Response channel closed".to_string())??;
+            .map_err(|_| "Channel closed".to_string())?;
+
+        // Wait for response
+        let response = rx.await.map_err(|_| "Response channel closed".to_string())??;
 
         serde_json::from_value(response)
-            .map_err(|e| format!("Failed to deserialize response: {}", e))
+            .map_err(|e| format!("Failed to deserialize response: {e}"))
     }
 
     pub async fn send_notification<N>(&self, params: N::Params) -> Result<(), String>
@@ -309,19 +293,15 @@ impl LspClient {
         N::Params: serde::Serialize,
     {
         let params_value = serde_json::to_value(params)
-            .map_err(|e| format!("Failed to serialize params: {}", e))?;
-
-        let request = LspRequest::TypedNotification {
-            method: N::METHOD.to_string(),
-            params: params_value,
-        };
+            .map_err(|e| format!("Failed to serialize params: {e}"))?;
 
         self.request_tx
-            .try_send(request)
-            .map_err(|e| match e {
-                mpsc::error::TrySendError::Full(_) => "LSP client channel full".to_string(),
-                mpsc::error::TrySendError::Closed(_) => "LSP client channel closed".to_string(),
+            .send(LspMessage::Notification {
+                method: N::METHOD.to_string(),
+                params: params_value,
             })
+            .await
+            .map_err(|_| "Channel closed".to_string())
     }
 
     pub async fn get_next_notification(&self) -> Option<Value> {
@@ -347,10 +327,7 @@ impl LspSession {
     pub async fn new(workspace_root: PathBuf) -> Result<Self, String> {
         let client = LspClient::new(workspace_root.clone()).await?;
         let session = LspSession { client };
-
-        // Initialize the LSP connection
         session.initialize(workspace_root).await?;
-
         Ok(session)
     }
 
@@ -360,8 +337,8 @@ impl LspSession {
         #[allow(deprecated)]
         let init_params = InitializeParams {
             process_id: Some(std::process::id()),
-            root_path: None,  // deprecated, but required by struct
-            root_uri: None,   // deprecated, using workspace_folders instead
+            root_path: None,
+            root_uri: None,
             initialization_options: None,
             capabilities: ClientCapabilities {
                 text_document: Some(TextDocumentClientCapabilities {
@@ -404,12 +381,44 @@ impl LspSession {
         let _init_result: InitializeResult =
             self.client.send_request::<Initialize>(init_params).await?;
 
-        // Send initialized notification
         self.client
             .send_notification::<Initialized>(InitializedParams {})
             .await?;
 
         Ok(())
+    }
+
+    /// Open a file for analysis. This triggers diagnostics for the file.
+    pub async fn open_file(&self, file_path: PathBuf) -> Result<(), String> {
+        let uri = path_to_uri(&file_path)?;
+        let content = fs::read_to_string(&file_path)
+            .map_err(|e| format!("Failed to read file {:?}: {e}", file_path))?;
+
+        let params = DidOpenTextDocumentParams {
+            text_document: TextDocumentItem {
+                uri,
+                language_id: "rust".to_string(),
+                version: 1,
+                text: content,
+            },
+        };
+
+        self.client
+            .send_notification::<DidOpenTextDocument>(params)
+            .await
+    }
+
+    /// Close a file (stop tracking it)
+    pub async fn close_file(&self, file_path: PathBuf) -> Result<(), String> {
+        let uri = path_to_uri(&file_path)?;
+
+        let params = DidCloseTextDocumentParams {
+            text_document: TextDocumentIdentifier { uri },
+        };
+
+        self.client
+            .send_notification::<DidCloseTextDocument>(params)
+            .await
     }
 
     pub async fn goto_definition(
