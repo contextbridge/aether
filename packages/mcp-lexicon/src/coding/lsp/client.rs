@@ -1,15 +1,18 @@
 use lsp_types::notification::{DidCloseTextDocument, DidOpenTextDocument, Initialized, Notification};
 use lsp_types::request::{GotoDefinition, Initialize, Request};
 use lsp_types::*;
-use std::fs;
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout, Command};
 use tokio::sync::{Mutex, mpsc, oneshot};
+
+/// Request ID reserved for the shutdown request during cleanup
+const SHUTDOWN_REQUEST_ID: u64 = u64::MAX;
 
 /// Convert a file path to an LSP Uri
 fn path_to_uri(path: &std::path::Path) -> Result<Uri, String> {
@@ -170,7 +173,7 @@ impl LspClient {
                 _ = &mut shutdown_rx => {
                     let shutdown_msg = json!({
                         "jsonrpc": "2.0",
-                        "id": 999999,
+                        "id": SHUTDOWN_REQUEST_ID,
                         "method": "shutdown",
                         "params": null
                     });

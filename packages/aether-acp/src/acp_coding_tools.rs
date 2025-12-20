@@ -1,8 +1,8 @@
 use agent_client_protocol as acp;
 use mcp_lexicon::coding::{
     BackgroundProcessHandle, BashInput, BashOutput, BashResult, CodingTools, EditFileArgs,
-    EditFileResponse, ListFilesArgs, ListFilesResult, ReadBackgroundBashOutput, ReadFileArgs,
-    ReadFileResult, WriteFileArgs, WriteFileResponse,
+    EditFileResponse, ListFilesArgs, ListFilesResult, LspDiagnosticsArgs, LspDiagnosticsResponse,
+    ReadBackgroundBashOutput, ReadFileArgs, ReadFileResult, WriteFileArgs, WriteFileResponse,
 };
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -316,5 +316,25 @@ impl CodingTools for AcpCodingTools {
 
             Ok((result, None))
         }
+    }
+
+    async fn lsp_diagnostics(
+        &self,
+        args: LspDiagnosticsArgs,
+    ) -> Result<LspDiagnosticsResponse, String> {
+        debug!("ACP lsp_diagnostics: {:?}", args.workspace_root);
+
+        // ACP doesn't have LSP support, so fall back to local implementation
+        warn!("ACP doesn't support lsp_diagnostics, falling back to local LSP");
+
+        let diagnostics =
+            mcp_lexicon::coding::lsp::collect_diagnostics(args.workspace_root, args.severity_filter)
+                .await?;
+
+        Ok(LspDiagnosticsResponse {
+            status: "success".to_string(),
+            diagnostics: diagnostics.clone(),
+            total_count: diagnostics.len(),
+        })
     }
 }

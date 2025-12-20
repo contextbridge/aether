@@ -22,7 +22,7 @@ pub fn map_mcp_prompt_to_available_command(prompt: &McpPrompt) -> acp::Available
             // Create a hint from the argument names
             let hint = args
                 .iter()
-                .map(|arg| arg.name.as_ref())
+                .map(|arg| arg.name.as_str())
                 .collect::<Vec<_>>()
                 .join(" ");
             Some(acp::AvailableCommandInput::Unstructured { hint })
