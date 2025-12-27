@@ -339,7 +339,7 @@ async fn create_agent(
 
     // Send initial prompt via handle (before storing)
     handle
-        .send_prompt(initial_message.clone())
+        .send_prompt(initial_message.clone(), Vec::new())
         .map_err(|e| ActorError::Session(e.to_string()))?;
 
     // Create UI state

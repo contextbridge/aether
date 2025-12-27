@@ -241,23 +241,15 @@ impl AgentHandles {
         self.handles.insert(handle.id.clone(), handle);
     }
 
-    /// Send a prompt to an agent by its UUID.
-    pub fn send_prompt(&self, agent_id: &str, message: String) -> Result<(), SendError> {
-        match self.handles.get(agent_id) {
-            Some(handle) => handle.send_prompt(message),
-            None => Err(SendError::NotConnected),
-        }
-    }
-
-    /// Send a prompt with embedded file references to an agent by its UUID.
-    pub fn send_prompt_with_files(
+    /// Send a prompt to an agent by its UUID, optionally with embedded file references.
+    pub fn send_prompt(
         &self,
         agent_id: &str,
         message: String,
         files: Vec<FileReference>,
     ) -> Result<(), SendError> {
         match self.handles.get(agent_id) {
-            Some(handle) => handle.send_prompt_with_files(message, files),
+            Some(handle) => handle.send_prompt(message, files),
             None => Err(SendError::NotConnected),
         }
     }

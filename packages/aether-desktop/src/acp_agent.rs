@@ -84,17 +84,8 @@ impl AgentHandle {
         })
     }
 
-    /// Send a prompt to the agent.
-    pub fn send_prompt(&self, message: String) -> Result<(), SendError> {
-        self.send_prompt_with_files(message, Vec::new())
-    }
-
-    /// Send a prompt with embedded file references to the agent.
-    pub fn send_prompt_with_files(
-        &self,
-        message: String,
-        files: Vec<FileReference>,
-    ) -> Result<(), SendError> {
+    /// Send a prompt to the agent, optionally with embedded file references.
+    pub fn send_prompt(&self, message: String, files: Vec<FileReference>) -> Result<(), SendError> {
         self.cmd_tx
             .send(AgentCommand::Prompt {
                 acp_session_id: self.acp_session_id.clone(),

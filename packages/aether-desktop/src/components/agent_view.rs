@@ -136,7 +136,7 @@ pub fn AgentView(agent_id: String) -> Element {
 
             // Send via handles with file references
             // For now, we send the content with @mentions; the agent will handle reading files
-            if let Err(e) = HANDLES.read().send_prompt_with_files(&agent_id_for_send, content, refs) {
+            if let Err(e) = HANDLES.read().send_prompt(&agent_id_for_send, content, refs) {
                 tracing::error!("Failed to send message: {}", e);
                 let mut list = AGENTS.write();
                 if let Some(agent) = list.iter_mut().find(|a| a.id == agent_id_for_send) {
