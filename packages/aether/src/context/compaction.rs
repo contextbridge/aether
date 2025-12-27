@@ -115,6 +115,15 @@ impl CompactionConfig {
         self.min_messages_for_compaction = count;
         self
     }
+
+    /// Create a configuration with compaction disabled.
+    /// Useful for explicitly opting out of the default auto-compaction.
+    pub fn disabled() -> Self {
+        Self {
+            auto_compact: false,
+            ..Default::default()
+        }
+    }
 }
 
 /// A compactor that clears old tool results to reduce context size.
@@ -310,13 +319,26 @@ fn format_messages_for_summary(messages: &[&ChatMessage]) -> String {
     output
 }
 
-/// Truncate long tool results to avoid overwhelming the summarization
+/// Truncate long tool results to avoid overwhelming the summarization.
+/// Uses char_indices to ensure we don't split multi-byte UTF-8 characters.
 fn truncate_result(result: &str, max_len: usize) -> String {
     if result.len() <= max_len {
-        result.to_string()
-    } else {
-        format!("{}... [truncated, {} chars total]", &result[..max_len], result.len())
+        return result.to_string();
     }
+
+    // Find a safe UTF-8 boundary at or before max_len
+    let truncate_at = result
+        .char_indices()
+        .take_while(|(idx, _)| *idx < max_len)
+        .last()
+        .map(|(idx, c)| idx + c.len_utf8())
+        .unwrap_or(0);
+
+    format!(
+        "{}... [truncated, {} chars total]",
+        &result[..truncate_at],
+        result.chars().count()
+    )
 }
 
 /// A hybrid compactor that first tries tool result clearing,
@@ -454,6 +476,15 @@ mod tests {
     }
 
     #[test]
+    fn test_compaction_config_disabled() {
+        let config = CompactionConfig::disabled();
+        assert!(!config.auto_compact);
+        // Other fields should be default
+        assert!((config.threshold - 0.85).abs() < 0.001);
+        assert_eq!(config.keep_recent_tool_results, 5);
+    }
+
+    #[test]
     fn test_format_messages_for_summary() {
         let messages = vec![
             ChatMessage::User {
@@ -484,6 +515,25 @@ mod tests {
         assert!(truncated.len() < long.len());
         assert!(truncated.contains("[truncated"));
         assert!(truncated.contains("1000 chars total"));
+    }
+
+    #[test]
+    fn test_truncate_result_utf8_safety() {
+        // Multi-byte UTF-8 characters: 日本語 (each is 3 bytes)
+        let japanese = "日本語テスト"; // 6 chars, 18 bytes
+
+        // Truncate at byte 5 - should not panic and should find safe boundary
+        let truncated = truncate_result(japanese, 5);
+        assert!(truncated.contains("[truncated"));
+        // Should truncate to "日" (3 bytes) since "日本" would be 6 bytes > 5
+        assert!(truncated.starts_with("日"));
+
+        // Emoji test: 🦀 is 4 bytes
+        let emoji = "🦀🦀🦀🦀🦀"; // 5 chars, 20 bytes
+        let truncated = truncate_result(emoji, 10);
+        assert!(truncated.contains("[truncated"));
+        // Should include 2 crabs (8 bytes) since 3 would be 12 > 10
+        assert!(truncated.starts_with("🦀🦀"));
     }
 
     #[tokio::test]

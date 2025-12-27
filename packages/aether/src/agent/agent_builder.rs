@@ -112,20 +112,33 @@ impl<T: StreamingModelProvider + 'static> AgentBuilder<T> {
         self
     }
 
-    /// Enable automatic context compaction with default settings.
+    /// Override the compaction threshold.
     ///
-    /// This is a convenience method that enables compaction at the specified
-    /// threshold (0.0-1.0 representing percentage of context limit).
-    ///
-    /// Default threshold: 0.85 (85% of context window)
+    /// Compaction is enabled by default at 85% of the context window.
+    /// Use this method to set a custom threshold (0.0-1.0).
     ///
     /// # Example
     /// ```ignore
     /// agent(llm)
-    ///     .auto_compact(0.85)
+    ///     .auto_compact(0.9) // Compact at 90% instead of 85%
     /// ```
     pub fn auto_compact(mut self, threshold: f64) -> Self {
         self.compaction_config = Some(CompactionConfig::with_threshold(threshold));
+        self
+    }
+
+    /// Disable automatic context compaction.
+    ///
+    /// By default, agents automatically compact context when usage exceeds 85%.
+    /// Use this method to disable that behavior entirely.
+    ///
+    /// # Example
+    /// ```ignore
+    /// agent(llm)
+    ///     .no_compaction()
+    /// ```
+    pub fn no_compaction(mut self) -> Self {
+        self.compaction_config = Some(CompactionConfig::disabled());
         self
     }
 
