@@ -94,51 +94,28 @@ impl<T: StreamingModelProvider + 'static> AgentBuilder<T> {
         self
     }
 
-    /// Configure context compaction with full control over settings.
+    /// Configure context compaction settings.
     ///
-    /// When enabled, the agent will automatically compact the conversation context
-    /// when token usage exceeds the configured threshold, helping prevent context
-    /// window overflow during long-running tasks.
+    /// By default, agents automatically compact context when token usage exceeds
+    /// 85% of the context window, preventing overflow during long-running tasks.
     ///
-    /// # Example
+    /// # Examples
     /// ```ignore
-    /// agent(llm)
-    ///     .compaction(CompactionConfig::with_threshold(0.85)
-    ///         .keep_recent_tool_results(5)
-    ///         .auto_compact(true))
+    /// // Custom threshold
+    /// agent(llm).compaction(CompactionConfig::with_threshold(0.9))
+    ///
+    /// // Disable compaction entirely
+    /// agent(llm).compaction(CompactionConfig::disabled())
+    ///
+    /// // Full customization
+    /// agent(llm).compaction(
+    ///     CompactionConfig::with_threshold(0.85)
+    ///         .keep_recent_tool_results(3)
+    ///         .min_messages(20)
+    /// )
     /// ```
     pub fn compaction(mut self, config: CompactionConfig) -> Self {
         self.compaction_config = Some(config);
-        self
-    }
-
-    /// Override the compaction threshold.
-    ///
-    /// Compaction is enabled by default at 85% of the context window.
-    /// Use this method to set a custom threshold (0.0-1.0).
-    ///
-    /// # Example
-    /// ```ignore
-    /// agent(llm)
-    ///     .auto_compact(0.9) // Compact at 90% instead of 85%
-    /// ```
-    pub fn auto_compact(mut self, threshold: f64) -> Self {
-        self.compaction_config = Some(CompactionConfig::with_threshold(threshold));
-        self
-    }
-
-    /// Disable automatic context compaction.
-    ///
-    /// By default, agents automatically compact context when usage exceeds 85%.
-    /// Use this method to disable that behavior entirely.
-    ///
-    /// # Example
-    /// ```ignore
-    /// agent(llm)
-    ///     .no_compaction()
-    /// ```
-    pub fn no_compaction(mut self) -> Self {
-        self.compaction_config = Some(CompactionConfig::disabled());
         self
     }
 
