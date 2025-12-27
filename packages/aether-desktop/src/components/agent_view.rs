@@ -71,42 +71,6 @@ fn navigate_dropdown(current_index: usize, item_count: usize, direction: Navigat
     }
 }
 
-/// Parse file references from the input text.
-///
-/// Returns a list of file paths that are @-mentioned in the text.
-#[allow(dead_code)]
-fn parse_file_references(text: &str) -> Vec<PathBuf> {
-    let mut refs = Vec::new();
-    let mut in_mention = false;
-    let mut current_path = String::new();
-    let mut prev_char: Option<char> = None;
-
-    for c in text.chars() {
-        if c == '@' && prev_char.map_or(true, |pc| pc.is_whitespace()) {
-            in_mention = true;
-            current_path.clear();
-        } else if in_mention {
-            if c.is_whitespace() {
-                if !current_path.is_empty() {
-                    refs.push(PathBuf::from(&current_path));
-                }
-                in_mention = false;
-                current_path.clear();
-            } else {
-                current_path.push(c);
-            }
-        }
-        prev_char = Some(c);
-    }
-
-    // Handle mention at end of string
-    if in_mention && !current_path.is_empty() {
-        refs.push(PathBuf::from(&current_path));
-    }
-
-    refs
-}
-
 #[component]
 pub fn AgentView(agent_id: String) -> Element {
     let mut input_val = use_signal(String::new);
