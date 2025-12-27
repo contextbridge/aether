@@ -37,7 +37,7 @@ impl<T: StreamingModelProvider + 'static> AgentBuilder<T> {
             mcp_tx: None,
             channel_capacity: 1000,
             tool_timeout: Duration::from_secs(60 * 10),
-            compaction_config: None,
+            compaction_config: Some(CompactionConfig::default()),
         }
     }
 
