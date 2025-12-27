@@ -22,6 +22,13 @@ struct DropdownState {
     mode: DropdownMode,
 }
 
+/// Direction for dropdown navigation.
+#[derive(Clone, Copy)]
+enum NavigationDirection {
+    Up,
+    Down,
+}
+
 /// Find the position of an incomplete @-mention in the input.
 ///
 /// Returns the position of the @ character if there's an incomplete mention,
@@ -33,25 +40,14 @@ fn find_incomplete_at_mention(text: &str) -> Option<usize> {
     let mut prev_char: Option<char> = None;
 
     for (i, c) in text.char_indices() {
-        if c == '@' {
-            // Check if this @ is at start or preceded by whitespace
-            if prev_char.is_none() || prev_char.is_some_and(|pc| pc.is_whitespace()) {
-                last_at = Some(i);
-            }
+        if c == '@' && prev_char.map_or(true, |pc| pc.is_whitespace()) {
+            last_at = Some(i);
         }
         prev_char = Some(c);
     }
 
-    // Check if the mention is incomplete (no space after the @path)
-    if let Some(at_pos) = last_at {
-        let after_at = &text[at_pos + 1..];
-        // If there's no space in the text after @, it's incomplete
-        if !after_at.contains(' ') {
-            return Some(at_pos);
-        }
-    }
-
-    None
+    // Return only if incomplete (no space after the @path)
+    last_at.filter(|&at_pos| !text[at_pos + 1..].contains(' '))
 }
 
 /// Extract the filter text from an @-mention at the given position.
@@ -67,14 +63,11 @@ fn apply_file_selection(current_input: &str, at_position: usize, path: &PathBuf)
 }
 
 /// Navigate dropdown selection (wrapping at bounds).
-fn navigate_dropdown(current_index: usize, item_count: usize, direction: i32) -> usize {
-    if item_count == 0 {
-        return 0;
-    }
-    if direction > 0 {
-        (current_index + 1) % item_count
-    } else {
-        current_index.checked_sub(1).unwrap_or(item_count.saturating_sub(1))
+fn navigate_dropdown(current_index: usize, item_count: usize, direction: NavigationDirection) -> usize {
+    match (item_count, direction) {
+        (0, _) => 0,
+        (n, NavigationDirection::Down) => (current_index + 1) % n,
+        (n, NavigationDirection::Up) => current_index.checked_sub(1).unwrap_or(n - 1),
     }
 }
 
@@ -89,7 +82,7 @@ fn parse_file_references(text: &str) -> Vec<PathBuf> {
     let mut prev_char: Option<char> = None;
 
     for c in text.chars() {
-        if c == '@' && (prev_char.is_none() || prev_char.is_some_and(|pc| pc.is_whitespace())) {
+        if c == '@' && prev_char.map_or(true, |pc| pc.is_whitespace()) {
             in_mention = true;
             current_path.clear();
         } else if in_mention {
@@ -285,12 +278,12 @@ pub fn AgentView(agent_id: String) -> Element {
                     Key::ArrowDown => {
                         e.prevent_default();
                         let mut state = dropdown_state.write();
-                        state.selected_index = navigate_dropdown(state.selected_index, item_count, 1);
+                        state.selected_index = navigate_dropdown(state.selected_index, item_count, NavigationDirection::Down);
                     }
                     Key::ArrowUp => {
                         e.prevent_default();
                         let mut state = dropdown_state.write();
-                        state.selected_index = navigate_dropdown(state.selected_index, item_count, -1);
+                        state.selected_index = navigate_dropdown(state.selected_index, item_count, NavigationDirection::Up);
                     }
                     Key::Enter | Key::Tab => {
                         e.prevent_default();
