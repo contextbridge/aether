@@ -3,7 +3,7 @@
 //! Displays the chat interface for a single agent session.
 
 use dioxus::prelude::*;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::file_walker::FileWalker;
 use crate::state::{now_iso, AgentStatus, DropdownMode, FileReference, Message, MessageKind, Role, SlashCommand};
@@ -56,7 +56,7 @@ fn extract_at_filter(text: &str, at_pos: usize) -> String {
 }
 
 /// Apply file selection to input: replace @partial with @full/path and return new input value.
-fn apply_file_selection(current_input: &str, at_position: usize, path: &PathBuf) -> String {
+fn apply_file_selection(current_input: &str, at_position: usize, path: &Path) -> String {
     let before = &current_input[..at_position];
     let path_str = path.to_string_lossy();
     format!("{}@{} ", before, path_str)
@@ -69,6 +69,11 @@ fn navigate_dropdown(current_index: usize, item_count: usize, direction: Navigat
         (n, NavigationDirection::Down) => (current_index + 1) % n,
         (n, NavigationDirection::Up) => current_index.checked_sub(1).unwrap_or(n - 1),
     }
+}
+
+/// Check if a command matches the filter text.
+fn command_matches_filter(cmd: &SlashCommand, filter: &str) -> bool {
+    filter.is_empty() || cmd.name.to_lowercase().contains(&filter.to_lowercase())
 }
 
 #[component]
@@ -230,10 +235,7 @@ pub fn AgentView(agent_id: String) -> Element {
                 let item_count = match &state.mode {
                     DropdownMode::SlashCommand => commands
                         .iter()
-                        .filter(|cmd| {
-                            state.filter_text.is_empty()
-                                || cmd.name.to_lowercase().contains(&state.filter_text.to_lowercase())
-                        })
+                        .filter(|cmd| command_matches_filter(cmd, &state.filter_text))
                         .count(),
                     DropdownMode::FilePicker { .. } => file_results.read().len(),
                 };
@@ -255,10 +257,7 @@ pub fn AgentView(agent_id: String) -> Element {
                             DropdownMode::SlashCommand => {
                                 let filtered: Vec<_> = commands
                                     .iter()
-                                    .filter(|cmd| {
-                                        state.filter_text.is_empty()
-                                            || cmd.name.to_lowercase().contains(&state.filter_text.to_lowercase())
-                                    })
+                                    .filter(|cmd| command_matches_filter(cmd, &state.filter_text))
                                     .collect();
                                 if let Some(cmd) = filtered.get(state.selected_index) {
                                     input_val.set(format!("/{} ", cmd.name));

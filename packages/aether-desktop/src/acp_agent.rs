@@ -508,42 +508,30 @@ fn transform_session_notification(
             let tool_id = update.id.0.to_string();
             debug!("Tool call update: {} - {:?}", tool_id, update.fields.status);
 
-            if let Some(status) = &update.fields.status {
-                match status {
-                    ToolCallStatus::Completed => {
-                        let content = extract_tool_content(&update.fields)
-                            .unwrap_or_else(|| "Completed".to_string());
-
-                        vec![AgentEvent::ToolCallCompleted {
-                            agent_id: agent_id.to_string(),
-                            tool_id,
-                            result: content,
-                        }]
-                    }
-                    ToolCallStatus::Failed => {
-                        let error_msg = extract_tool_content(&update.fields)
-                            .unwrap_or_else(|| "Unknown error".to_string());
-
-                        vec![AgentEvent::ToolCallFailed {
-                            agent_id: agent_id.to_string(),
-                            tool_id,
-                            error: error_msg,
-                        }]
-                    }
-                    _ => {
-                        vec![AgentEvent::ToolCallUpdated {
-                            agent_id: agent_id.to_string(),
-                            tool_id,
-                            fields: update.fields,
-                        }]
-                    }
+            match update.fields.status.as_ref() {
+                Some(ToolCallStatus::Completed) => {
+                    let content = extract_tool_content(&update.fields)
+                        .unwrap_or_else(|| "Completed".to_string());
+                    vec![AgentEvent::ToolCallCompleted {
+                        agent_id: agent_id.to_string(),
+                        tool_id,
+                        result: content,
+                    }]
                 }
-            } else {
-                vec![AgentEvent::ToolCallUpdated {
+                Some(ToolCallStatus::Failed) => {
+                    let error_msg = extract_tool_content(&update.fields)
+                        .unwrap_or_else(|| "Unknown error".to_string());
+                    vec![AgentEvent::ToolCallFailed {
+                        agent_id: agent_id.to_string(),
+                        tool_id,
+                        error: error_msg,
+                    }]
+                }
+                _ => vec![AgentEvent::ToolCallUpdated {
                     agent_id: agent_id.to_string(),
                     tool_id,
                     fields: update.fields,
-                }]
+                }],
             }
         }
 
@@ -571,13 +559,7 @@ fn transform_session_notification(
 fn extract_tool_content(fields: &ToolCallUpdateFields) -> Option<String> {
     fields.content.as_ref().and_then(|contents| {
         contents.iter().find_map(|c| match c {
-            ToolCallContent::Content { content } => {
-                if let ContentBlock::Text(t) = content {
-                    Some(t.text.clone())
-                } else {
-                    None
-                }
-            }
+            ToolCallContent::Content { content: ContentBlock::Text(t) } => Some(t.text.clone()),
             _ => None,
         })
     })
