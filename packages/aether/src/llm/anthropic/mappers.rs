@@ -87,6 +87,16 @@ pub fn map_messages(messages: &[ChatMessage]) -> Result<(Option<String>, Vec<Mes
                     cache_control: None,
                 });
             }
+            ChatMessage::Summary { content, .. } => {
+                // Summaries from previous compaction are treated as user context
+                anthropic_messages.push(Message {
+                    role: Role::User,
+                    content: Content::Text(format!(
+                        "[Previous conversation summary]\n\n{content}"
+                    )),
+                    cache_control: None,
+                });
+            }
         }
     }
 

@@ -128,6 +128,15 @@ fn map_messages_to_contents(messages: &[ChatMessage]) -> (Option<Content>, Vec<C
             ChatMessage::Error { .. } => {
                 // Skip error messages in the context
             }
+            ChatMessage::Summary { content, .. } => {
+                // Summaries from previous compaction are treated as user context
+                contents.push(Content {
+                    role: "user".to_string(),
+                    parts: vec![Part::Text {
+                        text: format!("[Previous conversation summary]\n\n{content}"),
+                    }],
+                });
+            }
         }
     }
 

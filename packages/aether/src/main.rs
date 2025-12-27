@@ -139,6 +139,17 @@ async fn run_agent(
                 eprintln!("Cancelled: {message}");
             }
 
+            ContextCompacted {
+                messages_removed,
+                strategy,
+                ..
+            } => {
+                println!(
+                    "[Context compacted: {} messages removed using {} strategy]",
+                    messages_removed, strategy
+                );
+            }
+
             Done => {
                 println!("Agent task completed");
                 break;

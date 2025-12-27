@@ -68,6 +68,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("⚠️  Processing cancelled");
                 break;
             }
+            Some(ContextCompacted {
+                messages_removed,
+                strategy,
+                ..
+            }) => {
+                println!(
+                    "📦 Context compacted: {} messages removed using {}",
+                    messages_removed, strategy
+                );
+            }
             None => {
                 println!("Channel closed");
                 break;

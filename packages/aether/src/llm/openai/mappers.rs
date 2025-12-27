@@ -68,7 +68,15 @@ impl From<ChatMessage> for Option<ChatCompletionRequestMessage> {
                     },
                 ))
             }
-
+            ChatMessage::Summary { content, .. } => {
+                // Summaries from previous compaction are treated as user context
+                Some(ChatCompletionRequestMessage::User(
+                    ChatCompletionRequestUserMessage {
+                        content: format!("[Previous conversation summary]\n\n{content}").into(),
+                        name: None,
+                    },
+                ))
+            }
             ChatMessage::Error { .. } => None,
         }
     }

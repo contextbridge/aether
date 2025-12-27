@@ -1,6 +1,6 @@
 use crate::agent::middleware::{AgentEvent, Middleware, MiddlewareAction};
 use crate::agent::{AgentMessage, UserMessage};
-use crate::context::TokenTracker;
+use crate::context::{CompactionConfig, HybridCompactor, TokenTracker};
 use crate::llm::{
     ChatMessage, StreamingModelProvider, ToolCallError, ToolCallRequest, ToolCallResult,
 };
@@ -10,6 +10,7 @@ use crate::types::IsoString;
 use futures::Stream;
 use std::collections::HashMap;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
@@ -27,7 +28,7 @@ enum StreamEvent {
 type EventStream = Pin<Box<dyn Stream<Item = StreamEvent> + Send>>;
 
 pub struct Agent<T: StreamingModelProvider> {
-    llm: T,
+    llm: Arc<T>,
     context: Context,
     mcp_command_tx: Option<mpsc::Sender<McpCommand>>,
     agent_message_tx: mpsc::Sender<AgentMessage>,
@@ -35,17 +36,21 @@ pub struct Agent<T: StreamingModelProvider> {
     middleware: Middleware,
     tool_timeout: Duration,
     token_tracker: TokenTracker,
+    compaction_config: Option<CompactionConfig>,
+    /// Flag indicating compaction is needed before the next LLM call
+    pending_compaction: bool,
 }
 
 impl<T: StreamingModelProvider + 'static> Agent<T> {
     pub fn new(
-        llm: T,
+        llm: Arc<T>,
         context: Context,
         mcp_command_tx: Option<mpsc::Sender<McpCommand>>,
         user_message_rx: mpsc::Receiver<UserMessage>,
         agent_message_tx: mpsc::Sender<AgentMessage>,
         middleware: Middleware,
         tool_timeout: Duration,
+        compaction_config: Option<CompactionConfig>,
     ) -> Self {
         let mut streams: StreamMap<String, EventStream> = StreamMap::new();
         streams.insert(
@@ -62,6 +67,8 @@ impl<T: StreamingModelProvider + 'static> Agent<T> {
             middleware,
             tool_timeout,
             token_tracker: TokenTracker::new(200_000), // Default to Claude's 200k context limit
+            compaction_config,
+            pending_compaction: false,
         }
     }
 
@@ -120,7 +127,7 @@ impl<T: StreamingModelProvider + 'static> Agent<T> {
                 state = IterationState::new();
 
                 if should_continue {
-                    self.start_llm_stream();
+                    self.start_llm_stream().await;
                 } else if let Err(e) = self.agent_message_tx.send(AgentMessage::Done).await {
                     tracing::warn!("Failed to send Done message: {:?}", e);
                 }
@@ -166,10 +173,13 @@ impl<T: StreamingModelProvider + 'static> Agent<T> {
             timestamp: IsoString::now(),
         });
 
-        self.start_llm_stream();
+        self.start_llm_stream().await;
     }
 
-    fn start_llm_stream(&mut self) {
+    async fn start_llm_stream(&mut self) {
+        // Perform compaction if needed before starting a new LLM call
+        self.maybe_compact_context().await;
+
         self.streams.remove("llm");
 
         let llm_stream = self
@@ -352,6 +362,83 @@ impl<T: StreamingModelProvider + 'static> Agent<T> {
             self.token_tracker.usage_ratio() * 100.0,
             self.token_tracker.tokens_remaining()
         );
+
+        // Check if compaction is needed
+        if let Some(ref config) = self.compaction_config {
+            if config.auto_compact
+                && self.token_tracker.should_compact(config.threshold)
+                && self.context.message_count() >= config.min_messages_for_compaction
+            {
+                tracing::info!(
+                    "Context compaction needed - usage at {:.1}% of limit",
+                    self.token_tracker.usage_ratio() * 100.0
+                );
+                self.pending_compaction = true;
+            }
+        }
+    }
+
+    /// Perform context compaction if pending and conditions are met.
+    /// This uses a hybrid approach: first tries light-touch tool result clearing,
+    /// then falls back to full LLM summarization if still over threshold.
+    async fn maybe_compact_context(&mut self) {
+        if !self.pending_compaction {
+            return;
+        }
+
+        let config = match &self.compaction_config {
+            Some(config) => config.clone(),
+            None => return,
+        };
+
+        self.pending_compaction = false;
+
+        tracing::info!(
+            "Starting context compaction - {} messages, {:.1}% of context limit",
+            self.context.message_count(),
+            self.token_tracker.usage_ratio() * 100.0
+        );
+
+        let compactor = HybridCompactor::new(self.llm.clone(), config.keep_recent_tool_results);
+
+        // Create a closure to check if we're still over threshold
+        // Note: We capture the threshold and use it with the tracker
+        let threshold = config.threshold;
+        let still_over = || self.token_tracker.exceeds_threshold(threshold);
+
+        match compactor.compact(&mut self.context, still_over).await {
+            Ok(result) => {
+                tracing::info!(
+                    "Context compacted: {} messages removed using {} strategy",
+                    result.messages_removed,
+                    result.strategy
+                );
+
+                // Emit middleware event
+                let _ = self
+                    .middleware
+                    .emit(AgentEvent::ContextCompacted {
+                        summary_length: result.summary.len(),
+                        messages_removed: result.messages_removed,
+                        strategy: result.strategy.to_string(),
+                    })
+                    .await;
+
+                // Send message to consumers
+                let _ = self
+                    .agent_message_tx
+                    .send(AgentMessage::ContextCompacted {
+                        summary: result.summary,
+                        messages_removed: result.messages_removed,
+                        strategy: result.strategy.to_string(),
+                    })
+                    .await;
+            }
+            Err(e) => {
+                tracing::warn!("Context compaction failed: {}", e);
+                // Don't block the agent - just log and continue
+            }
+        }
     }
 
     async fn on_tool_execution_event(
