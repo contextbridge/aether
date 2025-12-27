@@ -10,6 +10,7 @@ mod acp_agent;
 mod acp_client;
 mod components;
 mod error;
+mod file_walker;
 mod markdown;
 mod settings;
 mod state;

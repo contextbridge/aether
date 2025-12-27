@@ -3,25 +3,100 @@
 //! Displays the chat interface for a single agent session.
 
 use dioxus::prelude::*;
+use std::path::PathBuf;
 
-use crate::state::{now_iso, AgentStatus, Message, MessageKind, Role, SlashCommand};
+use crate::file_walker::FileWalker;
+use crate::state::{now_iso, AgentStatus, DropdownMode, FileReference, Message, MessageKind, Role, SlashCommand};
 use crate::{AGENTS, HANDLES};
 
 use super::command_dropdown::CommandDropdown;
+use super::file_picker_dropdown::FilePickerDropdown;
 use super::message_bubble::MessageBubble;
 
-/// State for the command dropdown
+/// State for the dropdown (both slash commands and file picker)
 #[derive(Clone, PartialEq, Default)]
 struct DropdownState {
     visible: bool,
     selected_index: usize,
     filter_text: String,
+    mode: DropdownMode,
+}
+
+/// Find the position of an incomplete @-mention in the input.
+///
+/// Returns the position of the @ character if there's an incomplete mention,
+/// i.e., an @ followed by text but not yet completed (no space after).
+fn find_incomplete_at_mention(text: &str) -> Option<usize> {
+    // Find the last @ that starts a file mention
+    // A mention is incomplete if it doesn't end with a space
+    let mut last_at = None;
+
+    for (i, c) in text.char_indices() {
+        if c == '@' {
+            // Check if this @ is at start or preceded by whitespace
+            if i == 0 || text.chars().nth(i.saturating_sub(1)).map(|c| c.is_whitespace()).unwrap_or(true) {
+                last_at = Some(i);
+            }
+        }
+    }
+
+    // Check if the mention is incomplete (no space after the @path)
+    if let Some(at_pos) = last_at {
+        let after_at = &text[at_pos + 1..];
+        // If there's no space in the text after @, it's incomplete
+        if !after_at.contains(' ') {
+            return Some(at_pos);
+        }
+    }
+
+    None
+}
+
+/// Extract the filter text from an @-mention at the given position.
+fn extract_at_filter(text: &str, at_pos: usize) -> String {
+    text[at_pos + 1..].to_string()
+}
+
+/// Parse file references from the input text.
+///
+/// Returns a list of file paths that are @-mentioned in the text.
+#[allow(dead_code)]
+fn parse_file_references(text: &str) -> Vec<PathBuf> {
+    let mut refs = Vec::new();
+    let mut in_mention = false;
+    let mut current_path = String::new();
+
+    for (i, c) in text.char_indices() {
+        if c == '@' && (i == 0 || text.chars().nth(i.saturating_sub(1)).map(|ch| ch.is_whitespace()).unwrap_or(true)) {
+            in_mention = true;
+            current_path.clear();
+        } else if in_mention {
+            if c.is_whitespace() {
+                if !current_path.is_empty() {
+                    refs.push(PathBuf::from(&current_path));
+                }
+                in_mention = false;
+                current_path.clear();
+            } else {
+                current_path.push(c);
+            }
+        }
+    }
+
+    // Handle mention at end of string
+    if in_mention && !current_path.is_empty() {
+        refs.push(PathBuf::from(&current_path));
+    }
+
+    refs
 }
 
 #[component]
 pub fn AgentView(agent_id: String) -> Element {
     let mut input_val = use_signal(String::new);
     let dropdown_state = use_signal(DropdownState::default);
+    let file_results = use_signal(Vec::<PathBuf>::new);
+    let file_refs = use_signal(Vec::<FileReference>::new);
     let agent_id_for_send = agent_id.clone();
     let agent_id_for_handlers = agent_id.clone();
 
@@ -37,6 +112,7 @@ pub fn AgentView(agent_id: String) -> Element {
 
     let mut do_send = {
         let mut dropdown_state = dropdown_state;
+        let mut file_refs = file_refs;
         move || {
             let content = input_val.read().clone();
             if content.trim().is_empty() {
@@ -46,14 +122,25 @@ pub fn AgentView(agent_id: String) -> Element {
             // Close dropdown on send
             dropdown_state.write().visible = false;
 
-            // Add user message to state
+            // Get the file references for this message
+            let refs: Vec<FileReference> = file_refs.read().clone();
+
+            // Add user message to state (with file refs noted in content)
+            let display_content = if refs.is_empty() {
+                content.clone()
+            } else {
+                // Show which files are attached
+                let file_list: Vec<String> = refs.iter().map(|r| format!("@{}", r.path.display())).collect();
+                format!("{}\n\n📎 Attached: {}", content, file_list.join(", "))
+            };
+
             {
                 let mut list = AGENTS.write();
                 if let Some(agent) = list.iter_mut().find(|a| a.id == agent_id_for_send) {
                     agent.messages.push(Message {
                         id: uuid::Uuid::new_v4().to_string(),
                         role: Role::User,
-                        content: content.clone(),
+                        content: display_content,
                         kind: MessageKind::Text,
                         timestamp: now_iso(),
                         is_streaming: false,
@@ -62,8 +149,9 @@ pub fn AgentView(agent_id: String) -> Element {
                 }
             }
 
-            // Send via handles (separate from UI state)
-            if let Err(e) = HANDLES.read().send_prompt(&agent_id_for_send, content) {
+            // Send via handles with file references
+            // For now, we send the content with @mentions; the agent will handle reading files
+            if let Err(e) = HANDLES.read().send_prompt_with_files(&agent_id_for_send, content, refs) {
                 tracing::error!("Failed to send message: {}", e);
                 let mut list = AGENTS.write();
                 if let Some(agent) = list.iter_mut().find(|a| a.id == agent_id_for_send) {
@@ -72,6 +160,7 @@ pub fn AgentView(agent_id: String) -> Element {
             }
 
             input_val.set(String::new());
+            file_refs.write().clear();
         }
     };
 
@@ -86,22 +175,64 @@ pub fn AgentView(agent_id: String) -> Element {
         }
     };
 
-    // Handle input changes - detect "/" for dropdown
+    // Handle file selection from file picker
+    let on_file_select = {
+        let mut input_val = input_val;
+        let mut dropdown_state = dropdown_state;
+        let mut file_refs = file_refs;
+        move |path: PathBuf| {
+            let state = dropdown_state.read().clone();
+            if let DropdownMode::FilePicker { at_position } = state.mode {
+                // Replace @partial with @full/path
+                let current = input_val.read().clone();
+                let before = &current[..at_position];
+                let path_str = path.to_string_lossy();
+                let new_value = format!("{}@{} ", before, path_str);
+                input_val.set(new_value);
+
+                // Add to file references
+                file_refs.write().push(FileReference::new(path));
+            }
+            dropdown_state.write().visible = false;
+        }
+    };
+
+    // Handle input changes - detect "/" for slash commands or "@" for file picker
     let on_input_change = {
         let mut dropdown_state = dropdown_state;
+        let file_results = file_results;
         let commands = available_commands.clone();
         move |e: Event<FormData>| {
             let value = e.value();
             input_val.set(value.clone());
 
-            // Check if we should show/hide dropdown
-            if value.starts_with('/') && !value.contains(' ') {
+            // Check for @ pattern first (file picker)
+            if let Some(at_pos) = find_incomplete_at_mention(&value) {
+                let filter = extract_at_filter(&value, at_pos);
+                let mut state = dropdown_state.write();
+                state.visible = true;
+                state.filter_text = filter.clone();
+                state.selected_index = 0;
+                state.mode = DropdownMode::FilePicker { at_position: at_pos };
+
+                // Trigger file search asynchronously
+                let mut file_results = file_results.clone();
+                spawn(async move {
+                    let cwd = std::env::current_dir().unwrap_or_default();
+                    let walker = FileWalker::new(cwd);
+                    let results = walker.search(&filter).await;
+                    file_results.set(results);
+                });
+            }
+            // Check for / pattern (slash commands)
+            else if value.starts_with('/') && !value.contains(' ') {
                 // Show dropdown, filter by text after "/"
                 let filter = value.trim_start_matches('/').to_string();
                 let mut state = dropdown_state.write();
                 state.visible = !commands.is_empty();
                 state.filter_text = filter;
                 state.selected_index = 0;
+                state.mode = DropdownMode::SlashCommand;
             } else {
                 dropdown_state.write().visible = false;
             }
@@ -113,62 +244,112 @@ pub fn AgentView(agent_id: String) -> Element {
         let mut do_send = do_send.clone();
         let mut dropdown_state = dropdown_state;
         let commands = available_commands.clone();
+        let file_results = file_results;
         let mut input_val = input_val;
+        let mut file_refs = file_refs;
 
         move |e: KeyboardEvent| {
             let state = dropdown_state.read().clone();
 
             if state.visible {
-                // Dropdown is open - handle navigation
-                let filtered: Vec<&SlashCommand> = commands
-                    .iter()
-                    .filter(|cmd| {
-                        state.filter_text.is_empty()
-                            || cmd
-                                .name
-                                .to_lowercase()
-                                .contains(&state.filter_text.to_lowercase())
-                    })
-                    .collect();
+                match &state.mode {
+                    DropdownMode::SlashCommand => {
+                        // Slash command dropdown - handle navigation
+                        let filtered: Vec<&SlashCommand> = commands
+                            .iter()
+                            .filter(|cmd| {
+                                state.filter_text.is_empty()
+                                    || cmd
+                                        .name
+                                        .to_lowercase()
+                                        .contains(&state.filter_text.to_lowercase())
+                            })
+                            .collect();
 
-                match e.key() {
-                    Key::ArrowDown => {
-                        e.prevent_default();
-                        let mut state = dropdown_state.write();
-                        if !filtered.is_empty() {
-                            state.selected_index = (state.selected_index + 1) % filtered.len();
+                        match e.key() {
+                            Key::ArrowDown => {
+                                e.prevent_default();
+                                let mut state = dropdown_state.write();
+                                if !filtered.is_empty() {
+                                    state.selected_index = (state.selected_index + 1) % filtered.len();
+                                }
+                            }
+                            Key::ArrowUp => {
+                                e.prevent_default();
+                                let mut state = dropdown_state.write();
+                                if !filtered.is_empty() {
+                                    state.selected_index = state
+                                        .selected_index
+                                        .checked_sub(1)
+                                        .unwrap_or(filtered.len().saturating_sub(1));
+                                }
+                            }
+                            Key::Enter => {
+                                e.prevent_default();
+                                if let Some(cmd) = filtered.get(state.selected_index) {
+                                    input_val.set(format!("/{} ", cmd.name));
+                                    dropdown_state.write().visible = false;
+                                }
+                            }
+                            Key::Escape => {
+                                e.prevent_default();
+                                dropdown_state.write().visible = false;
+                            }
+                            Key::Tab => {
+                                e.prevent_default();
+                                if let Some(cmd) = filtered.get(state.selected_index) {
+                                    input_val.set(format!("/{} ", cmd.name));
+                                    dropdown_state.write().visible = false;
+                                }
+                            }
+                            _ => {}
                         }
                     }
-                    Key::ArrowUp => {
-                        e.prevent_default();
-                        let mut state = dropdown_state.write();
-                        if !filtered.is_empty() {
-                            state.selected_index = state
-                                .selected_index
-                                .checked_sub(1)
-                                .unwrap_or(filtered.len().saturating_sub(1));
+                    DropdownMode::FilePicker { at_position } => {
+                        // File picker dropdown - handle navigation
+                        let files = file_results.read();
+                        let file_count = files.len();
+
+                        match e.key() {
+                            Key::ArrowDown => {
+                                e.prevent_default();
+                                let mut state = dropdown_state.write();
+                                if file_count > 0 {
+                                    state.selected_index = (state.selected_index + 1) % file_count;
+                                }
+                            }
+                            Key::ArrowUp => {
+                                e.prevent_default();
+                                let mut state = dropdown_state.write();
+                                if file_count > 0 {
+                                    state.selected_index = state
+                                        .selected_index
+                                        .checked_sub(1)
+                                        .unwrap_or(file_count.saturating_sub(1));
+                                }
+                            }
+                            Key::Enter | Key::Tab => {
+                                e.prevent_default();
+                                if let Some(path) = files.get(state.selected_index) {
+                                    // Replace @partial with @full/path
+                                    let current = input_val.read().clone();
+                                    let before = &current[..*at_position];
+                                    let path_str = path.to_string_lossy();
+                                    let new_value = format!("{}@{} ", before, path_str);
+                                    input_val.set(new_value);
+
+                                    // Add to file references
+                                    file_refs.write().push(FileReference::new(path.clone()));
+                                    dropdown_state.write().visible = false;
+                                }
+                            }
+                            Key::Escape => {
+                                e.prevent_default();
+                                dropdown_state.write().visible = false;
+                            }
+                            _ => {}
                         }
                     }
-                    Key::Enter => {
-                        e.prevent_default();
-                        if let Some(cmd) = filtered.get(state.selected_index) {
-                            input_val.set(format!("/{} ", cmd.name));
-                            dropdown_state.write().visible = false;
-                        }
-                    }
-                    Key::Escape => {
-                        e.prevent_default();
-                        dropdown_state.write().visible = false;
-                    }
-                    Key::Tab => {
-                        // Tab also selects (like autocomplete)
-                        e.prevent_default();
-                        if let Some(cmd) = filtered.get(state.selected_index) {
-                            input_val.set(format!("/{} ", cmd.name));
-                            dropdown_state.write().visible = false;
-                        }
-                    }
-                    _ => {}
                 }
             } else {
                 // Normal mode - send on Enter
@@ -208,6 +389,8 @@ pub fn AgentView(agent_id: String) -> Element {
     let dropdown_visible = dropdown_state.read().visible;
     let dropdown_selected = dropdown_state.read().selected_index;
     let dropdown_filter = dropdown_state.read().filter_text.clone();
+    let dropdown_mode = dropdown_state.read().mode.clone();
+    let current_file_results = file_results.read().clone();
 
     rsx! {
         div {
@@ -257,13 +440,22 @@ pub fn AgentView(agent_id: String) -> Element {
                 div {
                     class: "relative",
 
-                    // Command dropdown (positioned above input)
-                    if dropdown_visible && !available_commands.is_empty() {
+                    // Show appropriate dropdown based on mode
+                    if dropdown_visible && matches!(dropdown_mode, DropdownMode::SlashCommand) && !available_commands.is_empty() {
                         CommandDropdown {
                             commands: available_commands.clone(),
-                            filter: dropdown_filter,
+                            filter: dropdown_filter.clone(),
                             selected_index: dropdown_selected,
                             on_select: on_command_select,
+                        }
+                    }
+
+                    if dropdown_visible && matches!(dropdown_mode, DropdownMode::FilePicker { .. }) {
+                        FilePickerDropdown {
+                            files: current_file_results.clone(),
+                            filter: dropdown_filter.clone(),
+                            selected_index: dropdown_selected,
+                            on_select: on_file_select,
                         }
                     }
 
@@ -274,7 +466,7 @@ pub fn AgentView(agent_id: String) -> Element {
                             value: "{input_val}",
                             oninput: on_input_change,
                             onkeydown: on_keydown,
-                            placeholder: "Type a message or / for commands... (Enter to send)",
+                            placeholder: "Type a message, / for commands, or @ for files... (Enter to send)",
                             disabled: is_running,
                             rows: "2",
                         }

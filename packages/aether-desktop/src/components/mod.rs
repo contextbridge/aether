@@ -1,5 +1,6 @@
 pub mod agent_view;
 pub mod command_dropdown;
+pub mod file_picker_dropdown;
 pub mod message_bubble;
 pub mod new_agent_modal;
 pub mod settings_editor;

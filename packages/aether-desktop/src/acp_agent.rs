@@ -1,10 +1,10 @@
 use crate::acp_client::{AcpClient, RawAgentEvent};
-use crate::state::{AgentStatus, SendError};
+use crate::state::{AgentStatus, FileReference, SendError};
 use agent_client_protocol::{
-    Agent, AvailableCommand, ClientSideConnection, ContentBlock, InitializeRequest,
-    NewSessionRequest, NewSessionResponse, PromptRequest, RequestPermissionRequest,
-    RequestPermissionResponse, SessionId, SessionUpdate, ToolCall, ToolCallContent, ToolCallStatus,
-    ToolCallUpdateFields, VERSION,
+    Agent, AvailableCommand, ClientSideConnection, ContentBlock, EmbeddedResource,
+    EmbeddedResourceResource, InitializeRequest, NewSessionRequest, NewSessionResponse,
+    PromptRequest, RequestPermissionRequest, RequestPermissionResponse, SessionId, SessionUpdate,
+    TextResourceContents, ToolCall, ToolCallContent, ToolCallStatus, ToolCallUpdateFields, VERSION,
 };
 use futures::Stream;
 use std::path::{Path, PathBuf};
@@ -90,6 +90,22 @@ impl AgentHandle {
             .send(AgentCommand::Prompt {
                 acp_session_id: self.acp_session_id.clone(),
                 message,
+                files: Vec::new(),
+            })
+            .map_err(|_| SendError::ChannelClosed)
+    }
+
+    /// Send a prompt with embedded file references to the agent.
+    pub fn send_prompt_with_files(
+        &self,
+        message: String,
+        files: Vec<FileReference>,
+    ) -> Result<(), SendError> {
+        self.cmd_tx
+            .send(AgentCommand::Prompt {
+                acp_session_id: self.acp_session_id.clone(),
+                message,
+                files,
             })
             .map_err(|_| SendError::ChannelClosed)
     }
@@ -179,6 +195,7 @@ pub enum AgentCommand {
     Prompt {
         acp_session_id: SessionId,
         message: String,
+        files: Vec<FileReference>,
     },
 }
 
@@ -299,16 +316,38 @@ async fn run_agent(
             LoopEvent::Command(AgentCommand::Prompt {
                 acp_session_id: prompt_acp_session_id,
                 message,
+                files,
             }) => {
                 // Spawn prompt as a stream so it doesn't block other events
                 let conn = Rc::clone(&conn);
                 let (tx, rx) = mpsc::channel(1);
 
                 tokio::task::spawn_local(async move {
+                    // Build content blocks: text message + embedded file resources
+                    let mut content_blocks: Vec<ContentBlock> = vec![ContentBlock::from(message)];
+
+                    // Add embedded resources for each file reference
+                    for file_ref in files {
+                        match read_file_for_embedding(&file_ref.path).await {
+                            Ok(resource_block) => {
+                                content_blocks.push(resource_block);
+                            }
+                            Err(e) => {
+                                // If file can't be read, add an error note as text
+                                debug!("Failed to read file for embedding: {:?} - {}", file_ref.path, e);
+                                content_blocks.push(ContentBlock::from(format!(
+                                    "[Error reading {}: {}]",
+                                    file_ref.path.display(),
+                                    e
+                                )));
+                            }
+                        }
+                    }
+
                     let response = conn
                         .prompt(PromptRequest {
                             session_id: prompt_acp_session_id,
-                            prompt: vec![ContentBlock::from(message)],
+                            prompt: content_blocks,
                             meta: None,
                         })
                         .await;
@@ -531,4 +570,48 @@ fn extract_tool_content(fields: &ToolCallUpdateFields) -> Option<String> {
             _ => None,
         })
     })
+}
+
+/// Read a file and create an embedded resource ContentBlock.
+async fn read_file_for_embedding(path: &Path) -> Result<ContentBlock, std::io::Error> {
+    let content = tokio::fs::read_to_string(path).await?;
+    let uri = format!("file://{}", path.display());
+
+    // Determine MIME type based on extension
+    let mime_type = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| match ext.to_lowercase().as_str() {
+            "rs" => "text/x-rust",
+            "ts" | "tsx" => "text/typescript",
+            "js" | "jsx" => "text/javascript",
+            "py" => "text/x-python",
+            "go" => "text/x-go",
+            "java" => "text/x-java",
+            "c" | "h" => "text/x-c",
+            "cpp" | "hpp" | "cc" => "text/x-c++",
+            "json" => "application/json",
+            "yaml" | "yml" => "text/yaml",
+            "toml" => "text/toml",
+            "md" => "text/markdown",
+            "html" => "text/html",
+            "css" => "text/css",
+            "sql" => "text/x-sql",
+            "sh" | "bash" => "text/x-shellscript",
+            "xml" => "text/xml",
+            "proto" => "text/x-protobuf",
+            _ => "text/plain",
+        })
+        .map(String::from);
+
+    Ok(ContentBlock::Resource(EmbeddedResource {
+        annotations: None,
+        resource: EmbeddedResourceResource::TextResourceContents(TextResourceContents {
+            uri,
+            mime_type,
+            text: content,
+            meta: None,
+        }),
+        meta: None,
+    }))
 }

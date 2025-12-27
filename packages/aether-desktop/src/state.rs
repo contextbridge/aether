@@ -6,6 +6,7 @@
 use crate::acp_agent::AgentHandle;
 use agent_client_protocol::{AvailableCommand, AvailableCommandInput, SessionId, ToolCall};
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum AgentStatus {
@@ -103,6 +104,37 @@ impl From<AvailableCommand> for SlashCommand {
             input_hint,
         }
     }
+}
+
+/// A reference to a file that should be embedded in the prompt.
+#[derive(Clone, PartialEq, Debug)]
+pub struct FileReference {
+    /// The file path relative to cwd
+    pub path: PathBuf,
+    /// Display name (usually just the filename)
+    pub display_name: String,
+}
+
+impl FileReference {
+    pub fn new(path: PathBuf) -> Self {
+        let display_name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown")
+            .to_string();
+        Self { path, display_name }
+    }
+}
+
+/// Mode for the input dropdown (slash commands vs file picker)
+#[derive(Clone, PartialEq, Debug, Default)]
+pub enum DropdownMode {
+    #[default]
+    SlashCommand,
+    FilePicker {
+        /// Position of the @ character that triggered the file picker
+        at_position: usize,
+    },
 }
 
 /// Represents an active agent session in the UI.
@@ -213,6 +245,19 @@ impl AgentHandles {
     pub fn send_prompt(&self, agent_id: &str, message: String) -> Result<(), SendError> {
         match self.handles.get(agent_id) {
             Some(handle) => handle.send_prompt(message),
+            None => Err(SendError::NotConnected),
+        }
+    }
+
+    /// Send a prompt with embedded file references to an agent by its UUID.
+    pub fn send_prompt_with_files(
+        &self,
+        agent_id: &str,
+        message: String,
+        files: Vec<FileReference>,
+    ) -> Result<(), SendError> {
+        match self.handles.get(agent_id) {
+            Some(handle) => handle.send_prompt_with_files(message, files),
             None => Err(SendError::NotConnected),
         }
     }
