@@ -13,29 +13,6 @@ pub struct CompactionResult {
     pub summary: String,
     /// Number of messages that were removed/compacted
     pub messages_removed: usize,
-    /// The type of compaction that was performed
-    pub strategy: CompactionStrategy,
-}
-
-/// Types of compaction strategies
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CompactionStrategy {
-    /// Removed old tool results to reduce context size
-    ToolResultClearing,
-    /// Generated an LLM summary of the conversation
-    LlmSummarization,
-    /// A combination of strategies was used
-    Hybrid,
-}
-
-impl fmt::Display for CompactionStrategy {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CompactionStrategy::ToolResultClearing => write!(f, "tool_result_clearing"),
-            CompactionStrategy::LlmSummarization => write!(f, "llm_summarization"),
-            CompactionStrategy::Hybrid => write!(f, "hybrid"),
-        }
-    }
 }
 
 /// Errors that can occur during compaction
@@ -45,8 +22,6 @@ pub enum CompactionError {
     SummarizationFailed(String),
     /// No messages to compact
     NothingToCompact,
-    /// Compaction would not reduce context size enough
-    InsufficientReduction,
 }
 
 impl fmt::Display for CompactionError {
@@ -56,9 +31,6 @@ impl fmt::Display for CompactionError {
                 write!(f, "summarization failed: {}", msg)
             }
             CompactionError::NothingToCompact => write!(f, "nothing to compact"),
-            CompactionError::InsufficientReduction => {
-                write!(f, "compaction would not reduce context size sufficiently")
-            }
         }
     }
 }
@@ -70,8 +42,6 @@ impl std::error::Error for CompactionError {}
 pub struct CompactionConfig {
     /// Threshold (0.0-1.0) at which to trigger compaction
     pub threshold: f64,
-    /// Number of recent tool results to keep during tool result clearing
-    pub keep_recent_tool_results: usize,
     /// Whether to automatically compact when threshold is exceeded
     pub auto_compact: bool,
     /// Minimum number of messages before compaction is considered
@@ -82,7 +52,6 @@ impl Default for CompactionConfig {
     fn default() -> Self {
         Self {
             threshold: super::DEFAULT_COMPACTION_THRESHOLD,
-            keep_recent_tool_results: 5,
             auto_compact: true,
             min_messages_for_compaction: 10,
         }
@@ -98,18 +67,6 @@ impl CompactionConfig {
         }
     }
 
-    /// Set the number of recent tool results to keep
-    pub fn keep_recent_tool_results(mut self, count: usize) -> Self {
-        self.keep_recent_tool_results = count;
-        self
-    }
-
-    /// Enable or disable automatic compaction
-    pub fn auto_compact(mut self, enabled: bool) -> Self {
-        self.auto_compact = enabled;
-        self
-    }
-
     /// Set minimum messages required before compaction
     pub fn min_messages(mut self, count: usize) -> Self {
         self.min_messages_for_compaction = count;
@@ -117,7 +74,6 @@ impl CompactionConfig {
     }
 
     /// Create a configuration with compaction disabled.
-    /// Useful for explicitly opting out of the default auto-compaction.
     pub fn disabled() -> Self {
         Self {
             auto_compact: false,
@@ -126,42 +82,7 @@ impl CompactionConfig {
     }
 }
 
-/// A compactor that clears old tool results to reduce context size.
-/// This is a lightweight compaction strategy that preserves conversation structure.
-#[derive(Debug, Clone)]
-pub struct ToolResultClearer {
-    keep_recent: usize,
-}
-
-impl ToolResultClearer {
-    pub fn new(keep_recent: usize) -> Self {
-        Self { keep_recent }
-    }
-
-    /// Perform tool result clearing on the context.
-    /// Returns the number of messages removed, or None if nothing was removed.
-    pub fn compact(&self, context: &mut Context) -> Option<CompactionResult> {
-        let removed = context.clear_old_tool_results(self.keep_recent);
-        if removed > 0 {
-            Some(CompactionResult {
-                summary: format!("Cleared {} old tool results", removed),
-                messages_removed: removed,
-                strategy: CompactionStrategy::ToolResultClearing,
-            })
-        } else {
-            None
-        }
-    }
-}
-
-impl Default for ToolResultClearer {
-    fn default() -> Self {
-        Self::new(5)
-    }
-}
-
-/// The structured summarization prompt following Factory.ai's anchored iterative approach.
-/// This prompt instructs the LLM to create a structured summary with dedicated sections.
+/// The structured summarization prompt.
 const SUMMARIZATION_PROMPT: &str = r#"You are a context compaction assistant. Your task is to create a structured summary of the conversation history that preserves critical information while significantly reducing token usage.
 
 Create a summary with the following sections:
@@ -193,25 +114,22 @@ Any specific requirements or constraints the user mentioned?
 
 Be concise but preserve all information needed to continue the task effectively. Do not include pleasantries or meta-commentary about the summary itself."#;
 
-/// A compactor that uses an LLM to generate structured summaries.
-/// This provides the highest quality compaction but incurs API cost and latency.
-pub struct LlmCompactor<T: StreamingModelProvider> {
+/// Compacts context by generating an LLM summary
+pub struct Compactor<T: StreamingModelProvider> {
     llm: Arc<T>,
 }
 
-impl<T: StreamingModelProvider> LlmCompactor<T> {
+impl<T: StreamingModelProvider> Compactor<T> {
     pub fn new(llm: Arc<T>) -> Self {
         Self { llm }
     }
 
-    /// Generate a structured summary of the conversation history.
-    pub async fn compact(&self, context: &Context) -> Result<CompactionResult, CompactionError> {
+    /// Generate a structured summary of the conversation and apply it to the context.
+    pub async fn compact(&self, context: &mut Context) -> Result<CompactionResult, CompactionError> {
         let messages_to_summarize = context.messages_for_summary();
         if messages_to_summarize.is_empty() {
             return Err(CompactionError::NothingToCompact);
         }
-
-        let messages_count = messages_to_summarize.len();
 
         // Format the conversation history for summarization
         let conversation_text = format_messages_for_summary(&messages_to_summarize);
@@ -260,10 +178,12 @@ impl<T: StreamingModelProvider> LlmCompactor<T> {
             ));
         }
 
+        // Apply the summary to the context
+        let messages_removed = context.compact(&summary);
+
         Ok(CompactionResult {
             summary,
-            messages_removed: messages_count,
-            strategy: CompactionStrategy::LlmSummarization,
+            messages_removed,
         })
     }
 }
@@ -341,137 +261,26 @@ fn truncate_result(result: &str, max_len: usize) -> String {
     )
 }
 
-/// A hybrid compactor that first tries tool result clearing,
-/// then falls back to LLM summarization if still over threshold.
-pub struct HybridCompactor<T: StreamingModelProvider> {
-    tool_clearer: ToolResultClearer,
-    llm_compactor: LlmCompactor<T>,
-}
-
-impl<T: StreamingModelProvider> HybridCompactor<T> {
-    pub fn new(llm: Arc<T>, keep_recent_tool_results: usize) -> Self {
-        Self {
-            tool_clearer: ToolResultClearer::new(keep_recent_tool_results),
-            llm_compactor: LlmCompactor::new(llm),
-        }
-    }
-
-    /// Try tool result clearing first, then LLM summarization if needed.
-    /// The `still_over_threshold` function is called after tool clearing to check
-    /// if further compaction is needed.
-    pub async fn compact<F>(
-        &self,
-        context: &mut Context,
-        still_over_threshold: F,
-    ) -> Result<CompactionResult, CompactionError>
-    where
-        F: Fn() -> bool,
-    {
-        // Phase 1: Try tool result clearing
-        let tool_result = self.tool_clearer.compact(context);
-        let did_tool_clearing = tool_result.is_some();
-
-        if let Some(result) = tool_result {
-            if !still_over_threshold() {
-                // Tool clearing was sufficient
-                return Ok(result);
-            }
-        }
-
-        // Phase 2: Need full LLM summarization
-        let llm_result = self.llm_compactor.compact(context).await?;
-
-        // Apply the summary to the context
-        let compacted = context.compact(&llm_result.summary);
-
-        Ok(CompactionResult {
-            summary: llm_result.summary,
-            messages_removed: compacted,
-            strategy: if did_tool_clearing {
-                CompactionStrategy::Hybrid
-            } else {
-                CompactionStrategy::LlmSummarization
-            },
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::llm::{ChatMessage, ToolCallResult};
+    use crate::llm::ChatMessage;
     use crate::types::IsoString;
-
-    fn create_context_with_tool_results(count: usize) -> Context {
-        let mut messages = vec![
-            ChatMessage::System {
-                content: "System prompt".to_string(),
-                timestamp: IsoString::now(),
-            },
-            ChatMessage::User {
-                content: "Hello".to_string(),
-                timestamp: IsoString::now(),
-            },
-        ];
-
-        for i in 0..count {
-            messages.push(ChatMessage::ToolCallResult(Ok(ToolCallResult {
-                id: format!("tool_{}", i),
-                name: format!("tool_{}", i),
-                arguments: "{}".to_string(),
-                result: format!("Result {}", i),
-            })));
-        }
-
-        Context::new(messages, vec![])
-    }
-
-    #[test]
-    fn test_tool_result_clearer_removes_old_results() {
-        let mut ctx = create_context_with_tool_results(10);
-        let clearer = ToolResultClearer::new(3);
-
-        let result = clearer.compact(&mut ctx);
-
-        assert!(result.is_some());
-        let result = result.unwrap();
-        assert_eq!(result.messages_removed, 7);
-        assert_eq!(result.strategy, CompactionStrategy::ToolResultClearing);
-
-        // Should have 2 (system + user) + 3 (kept tool results) = 5 messages
-        assert_eq!(ctx.message_count(), 5);
-    }
-
-    #[test]
-    fn test_tool_result_clearer_nothing_to_remove() {
-        let mut ctx = create_context_with_tool_results(2);
-        let clearer = ToolResultClearer::new(5);
-
-        let result = clearer.compact(&mut ctx);
-
-        assert!(result.is_none());
-        assert_eq!(ctx.message_count(), 4); // 2 + 2 tool results
-    }
 
     #[test]
     fn test_compaction_config_default() {
         let config = CompactionConfig::default();
         assert!((config.threshold - 0.85).abs() < 0.001);
-        assert_eq!(config.keep_recent_tool_results, 5);
         assert!(config.auto_compact);
         assert_eq!(config.min_messages_for_compaction, 10);
     }
 
     #[test]
-    fn test_compaction_config_builder() {
-        let config = CompactionConfig::with_threshold(0.9)
-            .keep_recent_tool_results(3)
-            .auto_compact(false)
-            .min_messages(20);
+    fn test_compaction_config_with_threshold() {
+        let config = CompactionConfig::with_threshold(0.9).min_messages(20);
 
         assert!((config.threshold - 0.9).abs() < 0.001);
-        assert_eq!(config.keep_recent_tool_results, 3);
-        assert!(!config.auto_compact);
+        assert!(config.auto_compact);
         assert_eq!(config.min_messages_for_compaction, 20);
     }
 
@@ -479,9 +288,7 @@ mod tests {
     fn test_compaction_config_disabled() {
         let config = CompactionConfig::disabled();
         assert!(!config.auto_compact);
-        // Other fields should be default
         assert!((config.threshold - 0.85).abs() < 0.001);
-        assert_eq!(config.keep_recent_tool_results, 5);
     }
 
     #[test]
@@ -537,7 +344,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_llm_compactor_generates_summary() {
+    async fn test_compactor_generates_summary() {
         use crate::testing::FakeLlmProvider;
 
         let summary_response = vec![
@@ -547,9 +354,9 @@ mod tests {
         ];
 
         let fake_llm = Arc::new(FakeLlmProvider::with_single_response(summary_response));
-        let compactor = LlmCompactor::new(fake_llm);
+        let compactor = Compactor::new(fake_llm);
 
-        let context = Context::new(
+        let mut context = Context::new(
             vec![
                 ChatMessage::System {
                     content: "System".to_string(),
@@ -563,17 +370,16 @@ mod tests {
             vec![],
         );
 
-        let result = compactor.compact(&context).await;
+        let result = compactor.compact(&mut context).await;
         assert!(result.is_ok());
 
         let result = result.unwrap();
         assert!(result.summary.contains("Session Intent"));
         assert_eq!(result.messages_removed, 1); // Only user message (system excluded)
-        assert_eq!(result.strategy, CompactionStrategy::LlmSummarization);
     }
 
     #[tokio::test]
-    async fn test_llm_compactor_handles_error() {
+    async fn test_compactor_handles_error() {
         use crate::testing::FakeLlmProvider;
 
         let error_response = vec![LlmResponse::Error {
@@ -581,9 +387,9 @@ mod tests {
         }];
 
         let fake_llm = Arc::new(FakeLlmProvider::with_single_response(error_response));
-        let compactor = LlmCompactor::new(fake_llm);
+        let compactor = Compactor::new(fake_llm);
 
-        let context = Context::new(
+        let mut context = Context::new(
             vec![
                 ChatMessage::System {
                     content: "System".to_string(),
@@ -597,19 +403,19 @@ mod tests {
             vec![],
         );
 
-        let result = compactor.compact(&context).await;
+        let result = compactor.compact(&mut context).await;
         assert!(matches!(result, Err(CompactionError::SummarizationFailed(_))));
     }
 
     #[tokio::test]
-    async fn test_llm_compactor_empty_context() {
+    async fn test_compactor_empty_context() {
         use crate::testing::FakeLlmProvider;
 
         let fake_llm = Arc::new(FakeLlmProvider::with_single_response(vec![]));
-        let compactor = LlmCompactor::new(fake_llm);
+        let compactor = Compactor::new(fake_llm);
 
         // Context with only system message
-        let context = Context::new(
+        let mut context = Context::new(
             vec![ChatMessage::System {
                 content: "System".to_string(),
                 timestamp: IsoString::now(),
@@ -617,7 +423,7 @@ mod tests {
             vec![],
         );
 
-        let result = compactor.compact(&context).await;
+        let result = compactor.compact(&mut context).await;
         assert!(matches!(result, Err(CompactionError::NothingToCompact)));
     }
 }

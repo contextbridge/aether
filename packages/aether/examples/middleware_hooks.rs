@@ -41,11 +41,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 AgentEvent::ContextCompacted {
-                    messages_removed,
-                    strategy,
-                    ..
+                    messages_removed, ..
                 } => {
-                    println!("📦 Context compacted: {messages_removed} messages using {strategy}");
+                    println!("📦 Context compacted: {messages_removed} messages");
                 }
             }
             MiddlewareAction::Allow

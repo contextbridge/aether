@@ -47,8 +47,6 @@ pub enum AgentMessage {
         summary: String,
         /// Number of messages that were removed
         messages_removed: usize,
-        /// The compaction strategy used
-        strategy: String,
     },
 
     Done,

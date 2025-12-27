@@ -140,14 +140,9 @@ async fn run_agent(
             }
 
             ContextCompacted {
-                messages_removed,
-                strategy,
-                ..
+                messages_removed, ..
             } => {
-                println!(
-                    "[Context compacted: {} messages removed using {} strategy]",
-                    messages_removed, strategy
-                );
+                println!("[Context compacted: {} messages removed]", messages_removed);
             }
 
             Done => {

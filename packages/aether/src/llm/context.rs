@@ -36,50 +36,6 @@ impl Context {
         self.messages.len()
     }
 
-    /// Retain only messages that match the predicate
-    pub fn retain_messages<F>(&mut self, predicate: F)
-    where
-        F: FnMut(&ChatMessage) -> bool,
-    {
-        self.messages.retain(predicate);
-    }
-
-    /// Clear tool call results from the context, keeping only the most recent ones.
-    /// This is a light-touch compaction strategy that reduces context size
-    /// while preserving the structure of the conversation.
-    ///
-    /// Returns the number of tool results that were removed.
-    pub fn clear_old_tool_results(&mut self, keep_recent: usize) -> usize {
-        // Find indices of all tool results
-        let tool_result_indices: Vec<usize> = self
-            .messages
-            .iter()
-            .enumerate()
-            .filter(|(_, msg)| msg.is_tool_result())
-            .map(|(idx, _)| idx)
-            .collect();
-
-        let total_results = tool_result_indices.len();
-        if total_results <= keep_recent {
-            return 0;
-        }
-
-        // Determine which indices to remove (older ones)
-        let remove_count = total_results - keep_recent;
-        let indices_to_remove: std::collections::HashSet<usize> =
-            tool_result_indices.into_iter().take(remove_count).collect();
-
-        // Remove those messages
-        let mut idx = 0;
-        self.messages.retain(|_| {
-            let keep = !indices_to_remove.contains(&idx);
-            idx += 1;
-            keep
-        });
-
-        remove_count
-    }
-
     /// Replace all messages (except system prompt) with a summary message.
     /// This is a full compaction that significantly reduces context size.
     ///
@@ -164,28 +120,6 @@ mod tests {
     }
 
     #[test]
-    fn test_clear_old_tool_results_keeps_recent() {
-        let mut ctx = create_test_context();
-        let removed = ctx.clear_old_tool_results(2);
-
-        assert_eq!(removed, 1);
-        assert_eq!(ctx.message_count(), 5);
-
-        // Should have kept the last 2 tool results
-        let tool_results: Vec<_> = ctx.messages().iter().filter(|m| m.is_tool_result()).collect();
-        assert_eq!(tool_results.len(), 2);
-    }
-
-    #[test]
-    fn test_clear_old_tool_results_nothing_to_remove() {
-        let mut ctx = create_test_context();
-        let removed = ctx.clear_old_tool_results(10);
-
-        assert_eq!(removed, 0);
-        assert_eq!(ctx.message_count(), 6);
-    }
-
-    #[test]
     fn test_compact_preserves_system_prompt() {
         let mut ctx = create_test_context();
         let compacted = ctx.compact("This is a summary of previous conversation.");
@@ -222,11 +156,4 @@ mod tests {
         assert!(msgs.iter().all(|m| !m.is_system()));
     }
 
-    #[test]
-    fn test_retain_messages() {
-        let mut ctx = create_test_context();
-        ctx.retain_messages(|msg| !msg.is_tool_result());
-
-        assert_eq!(ctx.message_count(), 3); // System, User, Assistant
-    }
 }

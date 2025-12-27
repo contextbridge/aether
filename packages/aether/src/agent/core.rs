@@ -1,6 +1,6 @@
 use crate::agent::middleware::{AgentEvent, Middleware, MiddlewareAction};
 use crate::agent::{AgentMessage, UserMessage};
-use crate::context::{CompactionConfig, HybridCompactor, TokenTracker};
+use crate::context::{CompactionConfig, Compactor, TokenTracker};
 use crate::llm::{
     ChatMessage, StreamingModelProvider, ToolCallError, ToolCallRequest, ToolCallResult,
 };
@@ -378,18 +378,11 @@ impl<T: StreamingModelProvider + 'static> Agent<T> {
         }
     }
 
-    /// Perform context compaction if pending and conditions are met.
-    /// This uses a hybrid approach: first tries light-touch tool result clearing,
-    /// then falls back to full LLM summarization if still over threshold.
+    /// Perform context compaction if pending.
     async fn maybe_compact_context(&mut self) {
         if !self.pending_compaction {
             return;
         }
-
-        let config = match &self.compaction_config {
-            Some(config) => config.clone(),
-            None => return,
-        };
 
         self.pending_compaction = false;
 
@@ -399,19 +392,13 @@ impl<T: StreamingModelProvider + 'static> Agent<T> {
             self.token_tracker.usage_ratio() * 100.0
         );
 
-        let compactor = HybridCompactor::new(self.llm.clone(), config.keep_recent_tool_results);
+        let compactor = Compactor::new(self.llm.clone());
 
-        // Create a closure to check if we're still over threshold
-        // Note: We capture the threshold and use it with the tracker
-        let threshold = config.threshold;
-        let still_over = || self.token_tracker.exceeds_threshold(threshold);
-
-        match compactor.compact(&mut self.context, still_over).await {
+        match compactor.compact(&mut self.context).await {
             Ok(result) => {
                 tracing::info!(
-                    "Context compacted: {} messages removed using {} strategy",
-                    result.messages_removed,
-                    result.strategy
+                    "Context compacted: {} messages removed",
+                    result.messages_removed
                 );
 
                 // Emit middleware event
@@ -420,7 +407,6 @@ impl<T: StreamingModelProvider + 'static> Agent<T> {
                     .emit(AgentEvent::ContextCompacted {
                         summary_length: result.summary.len(),
                         messages_removed: result.messages_removed,
-                        strategy: result.strategy.to_string(),
                     })
                     .await;
 
@@ -430,7 +416,6 @@ impl<T: StreamingModelProvider + 'static> Agent<T> {
                     .send(AgentMessage::ContextCompacted {
                         summary: result.summary,
                         messages_removed: result.messages_removed,
-                        strategy: result.strategy.to_string(),
                     })
                     .await;
             }
