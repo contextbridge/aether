@@ -86,13 +86,7 @@ impl AgentHandle {
 
     /// Send a prompt to the agent.
     pub fn send_prompt(&self, message: String) -> Result<(), SendError> {
-        self.cmd_tx
-            .send(AgentCommand::Prompt {
-                acp_session_id: self.acp_session_id.clone(),
-                message,
-                files: Vec::new(),
-            })
-            .map_err(|_| SendError::ChannelClosed)
+        self.send_prompt_with_files(message, Vec::new())
     }
 
     /// Send a prompt with embedded file references to the agent.
