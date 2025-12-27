@@ -326,20 +326,31 @@ async fn run_agent(
                     // Build content blocks: text message + embedded file resources
                     let mut content_blocks: Vec<ContentBlock> = vec![ContentBlock::from(message)];
 
-                    // Add embedded resources for each file reference
-                    for file_ref in files {
-                        match read_file_for_embedding(&file_ref.path).await {
-                            Ok(resource_block) => {
-                                content_blocks.push(resource_block);
-                            }
-                            Err(e) => {
-                                // If file can't be read, add an error note as text
-                                debug!("Failed to read file for embedding: {:?} - {}", file_ref.path, e);
-                                content_blocks.push(ContentBlock::from(format!(
-                                    "[Error reading {}: {}]",
-                                    file_ref.path.display(),
-                                    e
-                                )));
+                    // Read all files in parallel
+                    if !files.is_empty() {
+                        let file_futures: Vec<_> = files
+                            .iter()
+                            .map(|file_ref| {
+                                let path = file_ref.path.clone();
+                                async move { (path.clone(), read_file_for_embedding(&path).await) }
+                            })
+                            .collect();
+
+                        let results = futures::future::join_all(file_futures).await;
+
+                        for (path, result) in results {
+                            match result {
+                                Ok(resource_block) => {
+                                    content_blocks.push(resource_block);
+                                }
+                                Err(e) => {
+                                    debug!("Failed to read file for embedding: {:?} - {}", path, e);
+                                    content_blocks.push(ContentBlock::from(format!(
+                                        "[Error reading {}: {}]",
+                                        path.display(),
+                                        e
+                                    )));
+                                }
                             }
                         }
                     }
