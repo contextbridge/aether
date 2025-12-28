@@ -4,6 +4,8 @@ use dioxus::prelude::*;
 
 use crate::state::{DiffComment, LineOrigin};
 
+use super::voice_input::VoiceInput;
+
 /// Information about a line that can be commented on.
 #[derive(Clone, PartialEq, Debug)]
 pub struct LineInfo {
@@ -73,19 +75,36 @@ pub fn CommentInput(
             }
 
             div {
-                class: "flex justify-end gap-2 mt-2",
+                class: "flex justify-between items-center mt-2",
 
-                button {
-                    class: "px-3 py-1.5 text-sm text-gray-400 hover:text-gray-200 transition-colors",
-                    onclick: move |_| on_cancel.call(()),
-                    "Cancel"
+                VoiceInput {
+                    on_transcription: move |text: String| {
+                        let current = content.read().clone();
+                        let new_value = if current.is_empty() {
+                            text
+                        } else {
+                            format!("{} {}", current, text)
+                        };
+                        content.set(new_value);
+                    },
+                    disabled: false,
                 }
 
-                button {
-                    class: "px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed",
-                    disabled: content.read().trim().is_empty(),
-                    onclick: move |_| try_save(),
-                    "Save (Ctrl+Enter)"
+                div {
+                    class: "flex gap-2",
+
+                    button {
+                        class: "px-3 py-1.5 text-sm text-gray-400 hover:text-gray-200 transition-colors",
+                        onclick: move |_| on_cancel.call(()),
+                        "Cancel"
+                    }
+
+                    button {
+                        class: "px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed",
+                        disabled: content.read().trim().is_empty(),
+                        onclick: move |_| try_save(),
+                        "Save (Ctrl+Enter)"
+                    }
                 }
             }
         }

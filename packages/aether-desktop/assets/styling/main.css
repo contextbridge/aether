@@ -46,3 +46,19 @@ body {
 #header {
     max-width: 1200px;
 }
+
+/* Voice input recording indicator animation */
+@keyframes pulse-recording {
+    0%, 100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+    50% {
+        opacity: 0.7;
+        transform: scale(1.1);
+    }
+}
+
+.recording-active {
+    animation: pulse-recording 1s ease-in-out infinite;
+}

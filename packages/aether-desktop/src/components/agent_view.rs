@@ -27,6 +27,7 @@ use super::diff_view::DiffView;
 use super::file_picker::{FilePicker, FilePill};
 use super::message_bubble::MessageBubble;
 use super::view_tabs::{AgentViewTab, ViewTabs};
+use super::voice_input::VoiceInput;
 
 #[component]
 pub fn AgentView(agent_id: String) -> Element {
@@ -453,6 +454,18 @@ pub fn AgentView(agent_id: String) -> Element {
                                     placeholder: "Type a message, / for commands, or @ to mention files...",
                                     disabled: is_running,
                                     rows: "2",
+                                }
+                                VoiceInput {
+                                    on_transcription: move |text: String| {
+                                        let current = input_val.read().clone();
+                                        let new_value = if current.is_empty() {
+                                            text
+                                        } else {
+                                            format!("{} {}", current, text)
+                                        };
+                                        input_val.set(new_value);
+                                    },
+                                    disabled: is_running,
                                 }
                                 button {
                                     class: "btn-primary px-6 py-3 rounded-xl font-semibold disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100",

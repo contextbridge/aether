@@ -1,0 +1,30 @@
+[package]
+name = "aether-voice"
+version = "0.1.0"
+authors = ["Josh Carver <jcarver989@gmail.com>"]
+edition = "2021"
+
+[dependencies]
+tokio = { workspace = true }
+futures = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+# Audio capture
+cpal = "0.15"
+
+# Whisper transcription
+whisper-rs = "0.12"
+
+# WAV encoding for Whisper
+hound = "3.5"
+
+# File system utilities for model management
+dirs = "5.0"
+
+# HTTP client for model downloads
+reqwest = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true }

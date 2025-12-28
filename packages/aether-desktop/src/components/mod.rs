@@ -8,12 +8,16 @@ pub mod file_drawer;
 pub mod file_picker;
 pub mod message_bubble;
 pub mod new_agent_modal;
+pub mod prompt_input;
 pub mod settings_editor;
 pub mod sidebar;
 pub mod tool_call_display;
 pub mod view_tabs;
+pub mod voice_input;
 
 pub use agent_view::{AgentView, EmptyState};
 pub use new_agent_modal::NewAgentForm;
+pub use prompt_input::PromptInput;
 pub use settings_editor::SettingsEditor;
 pub use sidebar::Sidebar;
+pub use voice_input::VoiceInput;
