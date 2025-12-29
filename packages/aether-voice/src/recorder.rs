@@ -59,7 +59,6 @@ impl AudioRecorder {
         mut stop_rx: oneshot::Receiver<()>,
     ) -> Result<Vec<f32>, VoiceError> {
         let samples = Arc::new(Mutex::new(Vec::new()));
-        let samples_clone = Arc::clone(&samples);
 
         let err_fn = |err| {
             warn!("Audio stream error: {}", err);
@@ -70,38 +69,39 @@ impl AudioRecorder {
         let sample_rate = self.config.sample_rate.0;
 
         let stream = match sample_format {
-            SampleFormat::F32 => self.device.build_input_stream(
-                &self.config,
-                move |data: &[f32], _: &_| {
-                    samples_clone.lock().unwrap().extend_from_slice(data);
-                },
-                err_fn,
-                None,
-            ),
+            SampleFormat::F32 => {
+                let samples = Arc::clone(&samples);
+                self.device.build_input_stream(
+                    &self.config,
+                    move |data: &[f32], _: &_| {
+                        samples.lock().unwrap().extend_from_slice(data);
+                    },
+                    err_fn,
+                    None,
+                )
+            }
             SampleFormat::I16 => {
-                let samples_clone = Arc::clone(&samples);
+                let samples = Arc::clone(&samples);
                 self.device.build_input_stream(
                     &self.config,
                     move |data: &[i16], _: &_| {
-                        let mut samples = samples_clone.lock().unwrap();
-                        for &sample in data {
-                            samples.push(sample as f32 / i16::MAX as f32);
-                        }
+                        let mut buf = samples.lock().unwrap();
+                        buf.extend(data.iter().map(|&s| s as f32 / i16::MAX as f32));
                     },
                     err_fn,
                     None,
                 )
             }
             SampleFormat::U16 => {
-                let samples_clone = Arc::clone(&samples);
+                let samples = Arc::clone(&samples);
                 self.device.build_input_stream(
                     &self.config,
                     move |data: &[u16], _: &_| {
-                        let mut samples = samples_clone.lock().unwrap();
-                        for &sample in data {
-                            let normalized = (sample as f32 / u16::MAX as f32) * 2.0 - 1.0;
-                            samples.push(normalized);
-                        }
+                        let mut buf = samples.lock().unwrap();
+                        buf.extend(
+                            data.iter()
+                                .map(|&s| (s as f32 / u16::MAX as f32) * 2.0 - 1.0),
+                        );
                     },
                     err_fn,
                     None,

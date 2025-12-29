@@ -27,7 +27,7 @@ pub async fn record_and_transcribe(
     let audio = recorder.record_until_stopped(stop_rx).await?;
 
     let transcriber = Transcriber::new()?;
-    let text = transcriber.transcribe(&audio)?;
+    let text = transcriber.transcribe(&audio).await?;
 
     Ok(text)
 }

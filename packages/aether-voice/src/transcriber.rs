@@ -20,26 +20,7 @@ impl Transcriber {
     /// If the model doesn't exist, it will be downloaded automatically
     pub fn new() -> Result<Self, VoiceError> {
         let model_path = get_model_path()?;
-
-        if !model_path.exists() {
-            return Err(VoiceError::ModelNotFound);
-        }
-
-        debug!("Loading Whisper model from {:?}", model_path);
-
-        let ctx = WhisperContext::new_with_params(
-            model_path.to_str().ok_or_else(|| {
-                VoiceError::ModelLoadError("Invalid model path".to_string())
-            })?,
-            WhisperContextParameters::default(),
-        )
-        .map_err(|e| VoiceError::ModelLoadError(e.to_string()))?;
-
-        info!("Whisper model loaded successfully");
-
-        Ok(Self {
-            ctx: Arc::new(Mutex::new(ctx)),
-        })
+        Self::with_model_path(model_path)
     }
 
     /// Create a transcriber with a custom model path
@@ -50,14 +31,14 @@ impl Transcriber {
             return Err(VoiceError::ModelNotFound);
         }
 
+        let path_str = path
+            .to_str()
+            .ok_or_else(|| VoiceError::ModelLoadError("Invalid model path".to_string()))?;
+
         debug!("Loading Whisper model from {:?}", path);
 
-        let ctx = WhisperContext::new_with_params(
-            path.to_str()
-                .ok_or_else(|| VoiceError::ModelLoadError("Invalid model path".to_string()))?,
-            WhisperContextParameters::default(),
-        )
-        .map_err(|e| VoiceError::ModelLoadError(e.to_string()))?;
+        let ctx = WhisperContext::new_with_params(path_str, WhisperContextParameters::default())
+            .map_err(|e| VoiceError::ModelLoadError(e.to_string()))?;
 
         info!("Whisper model loaded successfully");
 
@@ -73,50 +54,59 @@ impl Transcriber {
     ///
     /// # Returns
     /// The transcribed text
-    pub fn transcribe(&self, audio: &[f32]) -> Result<String, VoiceError> {
+    pub async fn transcribe(&self, audio: &[f32]) -> Result<String, VoiceError> {
         if audio.is_empty() {
             return Ok(String::new());
         }
 
-        debug!("Transcribing {} audio samples", audio.len());
+        let sample_count = audio.len();
+        debug!("Transcribing {} audio samples", sample_count);
 
-        let ctx = self.ctx.blocking_lock();
+        let ctx = Arc::clone(&self.ctx);
+        let audio_vec = audio.to_vec();
 
-        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        // Use spawn_blocking to avoid blocking the async runtime
+        let result = tokio::task::spawn_blocking(move || {
+            let ctx = ctx.blocking_lock();
 
-        // Set language to English
-        params.set_language(Some("en"));
-        params.set_print_special(false);
-        params.set_print_progress(false);
-        params.set_print_realtime(false);
-        params.set_print_timestamps(false);
+            let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
 
-        let mut state = ctx
-            .create_state()
-            .map_err(|e| VoiceError::TranscriptionError(e.to_string()))?;
+            // Set language to English
+            params.set_language(Some("en"));
+            params.set_print_special(false);
+            params.set_print_progress(false);
+            params.set_print_realtime(false);
+            params.set_print_timestamps(false);
 
-        state
-            .full(params, audio)
-            .map_err(|e| VoiceError::TranscriptionError(e.to_string()))?;
-
-        let num_segments = state
-            .full_n_segments()
-            .map_err(|e| VoiceError::TranscriptionError(e.to_string()))?;
-
-        let mut result = String::new();
-
-        for i in 0..num_segments {
-            let segment = state
-                .full_get_segment_text(i)
+            let mut state = ctx
+                .create_state()
                 .map_err(|e| VoiceError::TranscriptionError(e.to_string()))?;
 
-            if i > 0 {
-                result.push(' ');
-            }
-            result.push_str(&segment);
-        }
+            state
+                .full(params, &audio_vec)
+                .map_err(|e| VoiceError::TranscriptionError(e.to_string()))?;
 
-        let result = result.trim().to_string();
+            let num_segments = state
+                .full_n_segments()
+                .map_err(|e| VoiceError::TranscriptionError(e.to_string()))?;
+
+            let mut result = String::new();
+
+            for i in 0..num_segments {
+                let segment = state
+                    .full_get_segment_text(i)
+                    .map_err(|e| VoiceError::TranscriptionError(e.to_string()))?;
+
+                if i > 0 {
+                    result.push(' ');
+                }
+                result.push_str(&segment);
+            }
+
+            Ok(result.trim().to_string())
+        })
+        .await
+        .map_err(|e| VoiceError::TranscriptionError(format!("Task join error: {}", e)))??;
 
         debug!("Transcription result: {}", result);
 
@@ -124,25 +114,16 @@ impl Transcriber {
     }
 }
 
-/// Get the path to the Whisper model file
-fn get_model_path() -> Result<PathBuf, VoiceError> {
-    let config_dir = dirs::config_dir()
-        .ok_or_else(|| VoiceError::ModelLoadError("Could not find config directory".to_string()))?;
-
-    let model_dir = config_dir.join("aether").join("models").join("whisper");
-    let model_path = model_dir.join(MODEL_NAME);
-
-    Ok(model_path)
-}
-
 /// Get the directory where models should be stored
 pub fn get_model_dir() -> Result<PathBuf, VoiceError> {
-    let config_dir = dirs::config_dir()
-        .ok_or_else(|| VoiceError::ModelLoadError("Could not find config directory".to_string()))?;
+    dirs::config_dir()
+        .map(|dir| dir.join("aether").join("models").join("whisper"))
+        .ok_or_else(|| VoiceError::ModelLoadError("Could not find config directory".to_string()))
+}
 
-    let model_dir = config_dir.join("aether").join("models").join("whisper");
-
-    Ok(model_dir)
+/// Get the path to the Whisper model file
+fn get_model_path() -> Result<PathBuf, VoiceError> {
+    get_model_dir().map(|dir| dir.join(MODEL_NAME))
 }
 
 /// Download the Whisper model from Hugging Face
