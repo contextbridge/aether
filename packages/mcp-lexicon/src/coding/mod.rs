@@ -108,8 +108,10 @@ pub struct CodingMcp<T: CodingTools = DefaultCodingTools> {
     tools: T,
     web_fetcher: WebFetcher,
     web_searcher: Option<WebSearcher<BraveSearchClient>>,
-    /// Workspace root directory - communicated to LLMs via server instructions
-    root_dir: Option<PathBuf>,
+    /// Workspace roots provided via MCP protocol
+    roots: RwLock<Vec<PathBuf>>,
+    /// Fallback workspace root from CLI args (used when no protocol roots provided)
+    fallback_root_dir: Option<PathBuf>,
 }
 
 #[tool_handler(router = self.tool_router)]
@@ -141,7 +143,8 @@ impl CodingMcp<DefaultCodingTools> {
             tools: DefaultCodingTools::new(),
             web_fetcher: WebFetcher::new(),
             web_searcher: WebSearcher::try_new().ok(),
-            root_dir: None,
+            roots: RwLock::new(Vec::new()),
+            fallback_root_dir: None,
         }
     }
 }
@@ -157,20 +160,50 @@ impl<T: CodingTools + 'static> CodingMcp<T> {
             tools,
             web_fetcher: WebFetcher::new(),
             web_searcher: WebSearcher::try_new().ok(),
-            root_dir: None,
+            roots: RwLock::new(Vec::new()),
+            fallback_root_dir: None,
         }
     }
 
-    /// Set the workspace root directory.
+    /// Set workspace roots via MCP protocol.
     ///
-    /// This path is communicated to LLMs via the server instructions,
+    /// These roots take precedence over the fallback root directory.
+    /// The first root is used as the primary workspace root.
+    ///
+    /// # Note
+    /// This is a builder method - call it before using the server.
+    pub fn with_roots(mut self, roots: Vec<PathBuf>) -> Self {
+        self.roots = RwLock::new(roots);
+        self
+    }
+
+    /// Set the fallback workspace root directory.
+    ///
+    /// This path is used when no roots are provided via the MCP protocol.
+    /// It is communicated to LLMs via the server instructions,
     /// helping them use correct absolute paths when calling file tools.
     ///
     /// # Note
     /// This is a builder method - call it before using the server.
     pub fn with_root_dir(mut self, root_dir: PathBuf) -> Self {
-        self.root_dir = Some(root_dir);
+        self.fallback_root_dir = Some(root_dir);
         self
+    }
+
+    /// Get the current workspace root.
+    ///
+    /// Checks protocol roots first, then falls back to CLI argument.
+    /// Returns the first root if multiple are provided.
+    fn get_workspace_root(&self) -> Option<PathBuf> {
+        // Try protocol roots first
+        if let Ok(roots) = self.roots.try_read() {
+            if let Some(first_root) = roots.first() {
+                return Some(first_root.clone());
+            }
+        }
+
+        // Fall back to CLI argument
+        self.fallback_root_dir.clone()
     }
 
     fn build_instructions(&self) -> String {
@@ -201,7 +234,7 @@ impl<T: CodingTools + 'static> CodingMcp<T> {
 - **File names** (find *.test.ts): `find`
 "#;
 
-        match &self.root_dir {
+        match self.get_workspace_root() {
             Some(root) => format!(
                 r#"{}
 

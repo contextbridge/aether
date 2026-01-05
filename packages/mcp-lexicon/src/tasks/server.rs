@@ -9,7 +9,8 @@ use rmcp::{
     tool, tool_handler, tool_router,
 };
 use std::path::PathBuf;
-use tokio::sync::Mutex;
+use std::sync::Arc;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::tasks::{
     TaskCreateInput, TaskCreateOutput, TaskGetInput, TaskGetOutput, TaskListInput, TaskListOutput,
@@ -44,6 +45,10 @@ impl TasksMcpArgs {
 pub struct TasksMcp {
     task_store: Mutex<TaskStore>,
     tool_router: ToolRouter<Self>,
+    /// Workspace roots provided via MCP protocol
+    roots: Arc<RwLock<Vec<PathBuf>>>,
+    /// Fallback base directory from CLI args
+    fallback_base_dir: Option<PathBuf>,
 }
 
 impl TasksMcp {
@@ -54,6 +59,8 @@ impl TasksMcp {
         Self {
             task_store: Mutex::new(TaskStore::new(base_dir.join(".aether-tasks"))),
             tool_router: Self::tool_router(),
+            roots: Arc::new(RwLock::new(Vec::new())),
+            fallback_base_dir: Some(base_dir),
         }
     }
 
@@ -63,6 +70,31 @@ impl TasksMcp {
     pub fn from_args(args: Vec<String>) -> Result<Self, String> {
         let parsed_args = TasksMcpArgs::from_args(args)?;
         Ok(Self::new(parsed_args.dir))
+    }
+
+    /// Set workspace roots via MCP protocol.
+    ///
+    /// These roots take precedence over the fallback base directory.
+    pub fn with_roots(mut self, roots: Vec<PathBuf>) -> Self {
+        self.roots = Arc::new(RwLock::new(roots));
+        self
+    }
+
+    /// Get the current base directory for task storage.
+    ///
+    /// Checks protocol roots first, then falls back to CLI argument.
+    fn get_base_dir(&self) -> PathBuf {
+        // Try protocol roots first
+        if let Ok(roots) = self.roots.try_read() {
+            if let Some(first_root) = roots.first() {
+                return first_root.clone();
+            }
+        }
+
+        // Fall back to CLI argument or current directory
+        self.fallback_base_dir
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("."))
     }
 }
 

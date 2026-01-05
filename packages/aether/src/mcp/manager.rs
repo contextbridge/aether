@@ -1,12 +1,12 @@
 use crate::{
     llm::ToolDefinition,
-    mcp::{McpError, Result, config::McpServerConfig},
+    mcp::{McpError, Result, Root, config::McpServerConfig},
 };
 use rmcp::{
     RoleClient, ServiceExt,
     model::{
         ClientCapabilities, ClientInfo, CreateElicitationRequestParam, CreateElicitationResult,
-        ElicitationAction, ElicitationCapability, Implementation, Tool as RmcpTool,
+        ElicitationAction, Implementation, Tool as RmcpTool,
     },
     serve_client,
     service::RunningService,
@@ -17,7 +17,7 @@ use std::collections::HashMap;
 
 use crate::{mcp::client::McpClient, transport::create_in_memory_transport};
 use std::sync::Arc;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, RwLock};
 use tokio::{process::Command, task::JoinHandle};
 
 const SERVERNAME_DELIMITER: &str = "__";
@@ -41,6 +41,8 @@ pub struct McpManager {
     tool_definitions: Vec<ToolDefinition>,
     client_info: ClientInfo,
     elicitation_sender: mpsc::Sender<ElicitationRequest>,
+    /// Roots shared with all MCP clients
+    roots: Arc<RwLock<Vec<Root>>>,
 }
 
 impl McpManager {
@@ -51,12 +53,10 @@ impl McpManager {
             tool_definitions: Vec::new(),
             client_info: ClientInfo {
                 protocol_version: Default::default(),
-                capabilities: ClientCapabilities {
-                    elicitation: Some(ElicitationCapability {
-                        schema_validation: Some(true),
-                    }),
-                    ..ClientCapabilities::default()
-                },
+                capabilities: ClientCapabilities::builder()
+                    .enable_elicitation()
+                    .enable_roots()
+                    .build(),
                 client_info: Implementation {
                     name: "aether".to_string(),
                     version: "0.1.0".to_string(),
@@ -66,11 +66,16 @@ impl McpManager {
                 },
             },
             elicitation_sender,
+            roots: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
     fn create_mcp_client(&self) -> McpClient {
-        McpClient::new(self.client_info.clone(), self.elicitation_sender.clone())
+        McpClient::new(
+            self.client_info.clone(),
+            self.elicitation_sender.clone(),
+            Arc::clone(&self.roots),
+        )
     }
 
     pub async fn add_mcps(&mut self, configs: Vec<McpServerConfig>) -> Result<()> {
@@ -383,6 +388,40 @@ impl McpManager {
         }
 
         Ok(())
+    }
+
+    /// Set the roots advertised to MCP servers.
+    ///
+    /// This updates the roots and sends notifications to all connected servers
+    /// that support the roots/list_changed notification.
+    pub async fn set_roots(&mut self, new_roots: Vec<Root>) -> Result<()> {
+        // Update stored roots
+        {
+            let mut roots = self.roots.write().await;
+            *roots = new_roots;
+        }
+
+        // Notify all connected servers
+        self.notify_roots_changed().await;
+
+        Ok(())
+    }
+
+    /// Send roots/list_changed notification to all connected servers.
+    ///
+    /// This prompts servers to re-request the roots via the roots/list endpoint.
+    /// Servers that don't support roots will simply ignore the notification.
+    async fn notify_roots_changed(&self) {
+        for (server_name, server_conn) in &self.servers {
+            // Try to send notification - servers that don't support roots will ignore it
+            if let Err(e) = server_conn.client.notify_roots_list_changed().await {
+                // Only log errors for debugging; it's expected that some servers may not support roots
+                eprintln!(
+                    "Note: server '{}' did not accept roots notification: {}",
+                    server_name, e
+                );
+            }
+        }
     }
 }
 
