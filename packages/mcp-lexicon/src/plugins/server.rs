@@ -99,15 +99,6 @@ impl PluginsMcp {
         self
     }
 
-    /// Get the current base directory (first root).
-    fn get_base_dir(&self) -> PathBuf {
-        self.roots
-            .try_read()
-            .ok()
-            .and_then(|roots| roots.first().cloned())
-            .unwrap_or_else(|| PathBuf::from("."))
-    }
-
     fn build_instructions(&self) -> String {
         let mut instructions = include_str!("./instructions.md").to_string();
 
