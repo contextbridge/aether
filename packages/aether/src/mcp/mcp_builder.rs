@@ -1,8 +1,8 @@
 use crate::llm::ToolDefinition;
 
 use super::{
-    ElicitationRequest, McpError, McpManager, McpServerConfig, ParseError, RawMcpConfig, Root,
-    ServerFactory, ServerInstructions,
+    ElicitationRequest, McpError, McpManager, McpServerConfig, ParseError, RawMcpConfig,
+    ServerFactory, ServerInstructions, root_from_path,
     run_mcp_task::{McpCommand, run_mcp_task},
 };
 use std::collections::HashMap;
@@ -89,10 +89,10 @@ impl McpBuilder {
 
         // Set workspace roots if provided
         if !self.roots.is_empty() {
-            let roots: Vec<Root> = self
+            let roots = self
                 .roots
                 .into_iter()
-                .map(|path| Root::from_path(path, None))
+                .map(|path| root_from_path(path, None))
                 .collect();
             mcp_manager.set_roots(roots).await?;
         }

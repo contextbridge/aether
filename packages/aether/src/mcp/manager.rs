@@ -1,12 +1,12 @@
 use crate::{
     llm::ToolDefinition,
-    mcp::{McpError, Result, Root, config::McpServerConfig},
+    mcp::{McpError, Result, config::McpServerConfig},
 };
 use rmcp::{
     RoleClient, ServiceExt,
     model::{
         ClientCapabilities, ClientInfo, CreateElicitationRequestParam, CreateElicitationResult,
-        ElicitationAction, Implementation, Tool as RmcpTool,
+        ElicitationAction, Implementation, Root, Tool as RmcpTool,
     },
     serve_client,
     service::RunningService,

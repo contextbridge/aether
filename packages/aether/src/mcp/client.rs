@@ -12,7 +12,8 @@ use std::result::Result;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, RwLock};
 
-use crate::mcp::{ElicitationRequest, Root};
+use crate::mcp::ElicitationRequest;
+use rmcp::model::Root;
 
 pub struct McpClient {
     client_info: ClientInfo,
@@ -82,10 +83,9 @@ impl ClientHandler for McpClient {
         _context: RequestContext<RoleClient>,
     ) -> Result<ListRootsResult, ErrorData> {
         let roots = self.roots.read().await;
-        let rmcp_roots = roots.iter().map(|r| r.clone().into()).collect();
 
         Ok(ListRootsResult {
-            roots: rmcp_roots,
+            roots: roots.clone(),
         })
     }
 }
