@@ -48,6 +48,7 @@ impl Session {
 
         let config_str = mcp_config_path.to_str().ok_or("Invalid MCP config path")?;
         let tasks_project_path = project_path.clone();
+        let roots_path = project_path.clone();
 
         debug!("Creating ACP-enabled CodingMcp and PluginsMcp");
         let McpSpawnResult {
@@ -102,6 +103,7 @@ impl Session {
                     .boxed()
                 }),
             )
+            .with_roots(vec![roots_path])
             .from_json_file(config_str)
             .await?
             .spawn()

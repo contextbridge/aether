@@ -1,11 +1,12 @@
 use crate::llm::ToolDefinition;
 
 use super::{
-    ElicitationRequest, McpError, McpManager, McpServerConfig, ParseError, RawMcpConfig,
+    ElicitationRequest, McpError, McpManager, McpServerConfig, ParseError, RawMcpConfig, Root,
     ServerFactory, ServerInstructions,
     run_mcp_task::{McpCommand, run_mcp_task},
 };
 use std::collections::HashMap;
+use std::path::PathBuf;
 use tokio::{
     sync::mpsc::{self, Sender},
     task::JoinHandle,
@@ -27,6 +28,7 @@ pub struct McpBuilder {
     mcp_configs: Vec<McpServerConfig>,
     factories: HashMap<String, ServerFactory>,
     mcp_channel_capacity: usize,
+    roots: Vec<PathBuf>,
 }
 
 impl Default for McpBuilder {
@@ -35,6 +37,7 @@ impl Default for McpBuilder {
             mcp_configs: Vec::new(),
             factories: HashMap::new(),
             mcp_channel_capacity: 1000,
+            roots: Vec::new(),
         }
     }
 }
@@ -58,6 +61,16 @@ impl McpBuilder {
         self
     }
 
+    /// Set workspace roots that will be advertised to MCP servers.
+    ///
+    /// These roots are passed to the MCP client via the roots protocol,
+    /// allowing servers to dynamically receive workspace information without
+    /// relying solely on CLI arguments.
+    pub fn with_roots(mut self, roots: Vec<PathBuf>) -> Self {
+        self.roots = roots;
+        self
+    }
+
     pub async fn from_json_file(mut self, path: &str) -> Result<Self, ParseError> {
         let raw_config = RawMcpConfig::from_json_file(path)?;
         let mcp_configs = raw_config.into_configs(&self.factories).await?;
@@ -73,6 +86,17 @@ impl McpBuilder {
 
         let mut mcp_manager = McpManager::new(elicitation_tx);
         mcp_manager.add_mcps(self.mcp_configs).await?;
+
+        // Set workspace roots if provided
+        if !self.roots.is_empty() {
+            let roots: Vec<Root> = self
+                .roots
+                .into_iter()
+                .map(|path| Root::from_path(path, None))
+                .collect();
+            mcp_manager.set_roots(roots).await?;
+        }
+
         let tool_definitions = mcp_manager.tool_definitions();
         let instructions = mcp_manager.server_instructions();
         let mcp_handle = tokio::spawn(run_mcp_task(mcp_manager, mcp_command_rx));
