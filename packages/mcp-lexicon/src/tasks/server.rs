@@ -45,10 +45,8 @@ impl TasksMcpArgs {
 pub struct TasksMcp {
     task_store: Mutex<TaskStore>,
     tool_router: ToolRouter<Self>,
-    /// Workspace roots provided via MCP protocol
+    /// Workspace roots (from MCP protocol or CLI args)
     roots: Arc<RwLock<Vec<PathBuf>>>,
-    /// Fallback base directory from CLI args
-    fallback_base_dir: Option<PathBuf>,
 }
 
 impl TasksMcp {
@@ -59,8 +57,7 @@ impl TasksMcp {
         Self {
             task_store: Mutex::new(TaskStore::new(base_dir.join(".aether-tasks"))),
             tool_router: Self::tool_router(),
-            roots: Arc::new(RwLock::new(Vec::new())),
-            fallback_base_dir: Some(base_dir),
+            roots: Arc::new(RwLock::new(vec![base_dir])),
         }
     }
 
@@ -72,28 +69,20 @@ impl TasksMcp {
         Ok(Self::new(parsed_args.dir))
     }
 
-    /// Set workspace roots via MCP protocol.
+    /// Set workspace roots.
     ///
-    /// These roots take precedence over the fallback base directory.
+    /// Can be used to set roots from MCP protocol or to override CLI arguments.
     pub fn with_roots(mut self, roots: Vec<PathBuf>) -> Self {
         self.roots = Arc::new(RwLock::new(roots));
         self
     }
 
-    /// Get the current base directory for task storage.
-    ///
-    /// Checks protocol roots first, then falls back to CLI argument.
+    /// Get the current base directory for task storage (first root).
     fn get_base_dir(&self) -> PathBuf {
-        // Try protocol roots first
-        if let Ok(roots) = self.roots.try_read() {
-            if let Some(first_root) = roots.first() {
-                return first_root.clone();
-            }
-        }
-
-        // Fall back to CLI argument or current directory
-        self.fallback_base_dir
-            .clone()
+        self.roots
+            .try_read()
+            .ok()
+            .and_then(|roots| roots.first().cloned())
             .unwrap_or_else(|| PathBuf::from("."))
     }
 }
