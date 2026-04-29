@@ -1,6 +1,7 @@
 use super::variables::{VarError, expand_env_vars};
 use futures::future::BoxFuture;
 use rmcp::{RoleServer, service::DynService, transport::streamable_http_client::StreamableHttpClientTransportConfig};
+use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, from_value};
 use std::collections::{BTreeMap, HashMap};
@@ -8,7 +9,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::path::Path;
 
 /// Top-level MCP configuration
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, JsonSchema)]
 pub struct RawMcpConfig {
     pub servers: BTreeMap<String, RawMcpServerConfig>,
 }
@@ -42,7 +43,7 @@ impl<'a> Deserialize<'a> for RawMcpConfig {
 ///
 /// When `"type"` is omitted, defaults to `"stdio"` for compatibility with
 /// Claude Code's `.mcp.json` format.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum RawMcpServerConfig {
     Stdio {
