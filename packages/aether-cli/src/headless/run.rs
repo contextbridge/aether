@@ -12,7 +12,7 @@ pub async fn run(config: RunConfig) -> Result<ExitCode, CliError> {
     setup_tracing(config.verbose, &config.output);
 
     let agent = RuntimeBuilder::from_spec(config.cwd.clone(), config.spec)
-        .mcp_configs(config.mcp_configs)
+        .mcp_sources(config.mcp_config_sources)
         .build(config.system_prompt.as_deref().map(Prompt::text), None)
         .await?;
 

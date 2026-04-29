@@ -2,6 +2,7 @@
 
 pub mod acp;
 pub mod agent;
+pub mod config_args;
 pub mod error;
 pub mod headless;
 pub mod prompt;

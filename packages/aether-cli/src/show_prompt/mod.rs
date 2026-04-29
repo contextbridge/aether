@@ -1,5 +1,6 @@
 mod run;
 
+use crate::config_args::{ConfigSourceArgs, McpConfigArgs};
 use std::path::PathBuf;
 
 #[derive(clap::Args)]
@@ -8,10 +9,11 @@ pub struct PromptArgs {
     #[arg(short = 'C', long = "cwd", default_value = ".")]
     pub cwd: PathBuf,
 
-    /// Path(s) to mcp.json. Pass multiple times to layer configs (last wins on collisions).
-    /// If omitted, paths from settings.json `mcpServers` are used (or `cwd/mcp.json` is auto-detected).
-    #[arg(long = "mcp-config")]
-    pub mcp_configs: Vec<PathBuf>,
+    #[command(flatten)]
+    pub config_source: ConfigSourceArgs,
+
+    #[command(flatten)]
+    pub mcp_config: McpConfigArgs,
 
     /// Additional system prompt
     #[arg(long = "system-prompt")]

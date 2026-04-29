@@ -1,13 +1,14 @@
 pub mod error;
 pub mod run;
 
-use aether_core::agent_spec::{AgentSpec, McpJsonFileRef};
-use aether_project::load_agent_catalog;
+use aether_core::agent_spec::AgentSpec;
+use aether_project::{AetherConfig, AgentCatalog};
 use error::CliError;
 use std::io::{IsTerminal, Read as _, stdin};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use crate::config_args::{ConfigSourceArgs, McpConfigArgs};
 use crate::resolve::resolve_agent_spec;
 
 #[derive(Clone)]
@@ -62,7 +63,7 @@ impl CliEventKind {
 pub struct RunConfig {
     pub prompt: String,
     pub cwd: PathBuf,
-    pub mcp_configs: Vec<McpJsonFileRef>,
+    pub mcp_config_sources: Vec<aether_core::agent_spec::McpConfigSource>,
     pub spec: AgentSpec,
     pub system_prompt: Option<String>,
     pub output: OutputFormat,
@@ -73,7 +74,7 @@ pub struct RunConfig {
 pub async fn run_headless(args: HeadlessArgs) -> Result<ExitCode, CliError> {
     let prompt = resolve_prompt(&args)?;
     let cwd = args.cwd.canonicalize().map_err(CliError::IoError)?;
-    let spec = resolve_spec(args.agent.as_deref(), args.model.as_deref(), &cwd)?;
+    let spec = resolve_spec(args.agent.as_deref(), args.model.as_deref(), &cwd, &args.config_source)?;
 
     let output = match args.output {
         CliOutputFormat::Text => OutputFormat::Text,
@@ -81,10 +82,12 @@ pub async fn run_headless(args: HeadlessArgs) -> Result<ExitCode, CliError> {
         CliOutputFormat::Json => OutputFormat::Json,
     };
 
+    let mcp_config_sources = args.mcp_config.sources(&cwd);
+
     let config = RunConfig {
         prompt,
         cwd,
-        mcp_configs: args.mcp_configs.into_iter().map(McpJsonFileRef::direct).collect(),
+        mcp_config_sources,
         spec,
         system_prompt: args.system_prompt,
         output,
@@ -119,10 +122,11 @@ pub struct HeadlessArgs {
     #[arg(short = 'C', long = "cwd", default_value = ".")]
     pub cwd: PathBuf,
 
-    /// Path(s) to mcp.json. Pass multiple times to layer configs (last wins on collisions).
-    /// If omitted, paths from settings.json `mcpServers` are used (or `cwd/mcp.json` is auto-detected).
-    #[arg(long = "mcp-config")]
-    pub mcp_configs: Vec<PathBuf>,
+    #[command(flatten)]
+    pub config_source: ConfigSourceArgs,
+
+    #[command(flatten)]
+    pub mcp_config: McpConfigArgs,
 
     /// Additional system prompt
     #[arg(long = "system-prompt")]
@@ -159,19 +163,34 @@ fn resolve_prompt(args: &HeadlessArgs) -> Result<String, CliError> {
     }
 }
 
-fn resolve_spec(agent: Option<&str>, model: Option<&str>, cwd: &std::path::Path) -> Result<AgentSpec, CliError> {
+fn resolve_spec(
+    agent: Option<&str>,
+    model: Option<&str>,
+    cwd: &std::path::Path,
+    config_source: &ConfigSourceArgs,
+) -> Result<AgentSpec, CliError> {
     if agent.is_some() && model.is_some() {
         return Err(CliError::ConflictingArgs("Cannot specify both --agent and --model".to_string()));
     }
 
-    let catalog = load_agent_catalog(cwd).map_err(|e| CliError::AgentError(e.to_string()))?;
+    let config = if let Some(source) = config_source.source() {
+        AetherConfig::load(cwd, [source])
+    } else {
+        AetherConfig::load_default(cwd)
+    }
+    .map_err(|e| CliError::AgentError(e.to_string()))?;
+    let catalog = if config.agents.is_empty() {
+        AgentCatalog::empty(cwd.to_path_buf())
+    } else {
+        AgentCatalog::from_config(cwd, config).map_err(|e| CliError::AgentError(e.to_string()))?
+    };
 
     match model {
         Some(m) => {
             let parsed = m.parse().map_err(|e: String| CliError::ModelError(e))?;
-            Ok(catalog.resolve_default(&parsed, None, cwd))
+            Ok(AgentSpec::default_spec(&parsed, None, Vec::new()))
         }
-        None => resolve_agent_spec(&catalog, agent, cwd),
+        None => resolve_agent_spec(&catalog, agent),
     }
 }
 
@@ -194,8 +213,8 @@ mod tests {
             dir.path(),
             ".aether/settings.json",
             r#"{"agents": [
-                {"name": "alpha", "description": "Alpha agent", "model": "anthropic:claude-sonnet-4-5", "userInvocable": true, "prompts": ["PROMPT.md"]},
-                {"name": "beta", "description": "Beta agent", "model": "anthropic:claude-sonnet-4-5", "userInvocable": true, "prompts": ["PROMPT.md"]}
+                {"name": "alpha", "description": "Alpha agent", "model": "anthropic:claude-sonnet-4-5", "userInvocable": true, "prompts": [{"type":"file","path":"PROMPT.md"}]},
+                {"name": "beta", "description": "Beta agent", "model": "anthropic:claude-sonnet-4-5", "userInvocable": true, "prompts": [{"type":"file","path":"PROMPT.md"}]}
             ]}"#,
         );
         dir
@@ -204,49 +223,52 @@ mod tests {
     #[test]
     fn resolve_spec_with_named_agent() {
         let dir = setup_dir_with_agents();
-        let spec = resolve_spec(Some("beta"), None, dir.path()).unwrap();
+        let spec = resolve_spec(Some("beta"), None, dir.path(), &ConfigSourceArgs::default()).unwrap();
         assert_eq!(spec.name, "beta");
     }
 
     #[test]
     fn resolve_spec_with_model_creates_default() {
         let dir = setup_dir_with_agents();
-        let spec = resolve_spec(None, Some("anthropic:claude-sonnet-4-5"), dir.path()).unwrap();
+        let spec =
+            resolve_spec(None, Some("anthropic:claude-sonnet-4-5"), dir.path(), &ConfigSourceArgs::default()).unwrap();
         assert_eq!(spec.name, "__default__");
     }
 
     #[test]
     fn resolve_spec_defaults_to_first_user_invocable() {
         let dir = setup_dir_with_agents();
-        let spec = resolve_spec(None, None, dir.path()).unwrap();
+        let spec = resolve_spec(None, None, dir.path(), &ConfigSourceArgs::default()).unwrap();
         assert_eq!(spec.name, "alpha");
     }
 
     #[test]
     fn resolve_spec_defaults_to_fallback_without_settings() {
         let dir = tempfile::tempdir().unwrap();
-        let spec = resolve_spec(None, None, dir.path()).unwrap();
-        assert_eq!(spec.name, "__default__");
+        let spec = resolve_spec(None, None, dir.path(), &ConfigSourceArgs::default()).unwrap();
+        assert_eq!(spec.name, "default");
     }
 
     #[test]
     fn resolve_spec_rejects_both_agent_and_model() {
         let dir = setup_dir_with_agents();
-        let err = resolve_spec(Some("alpha"), Some("anthropic:claude-sonnet-4-5"), dir.path()).unwrap_err();
+        let err =
+            resolve_spec(Some("alpha"), Some("anthropic:claude-sonnet-4-5"), dir.path(), &ConfigSourceArgs::default())
+                .unwrap_err();
         assert!(err.to_string().contains("Cannot specify both"), "unexpected error: {err}");
     }
 
     #[test]
     fn resolve_spec_rejects_invalid_model() {
         let dir = tempfile::tempdir().unwrap();
-        let err = resolve_spec(None, Some("not-a-valid-model"), dir.path()).unwrap_err();
+        let err = resolve_spec(None, Some("not-a-valid-model"), dir.path(), &ConfigSourceArgs::default()).unwrap_err();
         assert!(matches!(err, CliError::ModelError(_)));
     }
 
     #[test]
     fn resolve_spec_rejects_unknown_agent() {
         let dir = setup_dir_with_agents();
-        let err = resolve_spec(Some("nonexistent"), None, dir.path()).unwrap_err();
+        let err = resolve_spec(Some("nonexistent"), None, dir.path(), &ConfigSourceArgs::default()).unwrap_err();
         assert!(matches!(err, CliError::AgentError(_)));
     }
 }

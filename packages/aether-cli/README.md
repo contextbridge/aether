@@ -151,8 +151,7 @@ Define agents with specific model, prompts, and tool configurations:
 
 ```json
 {
-  "prompts": [".aether/SYSTEM.md", "AGENTS.md"],
-  "mcpServers": [".aether/mcp.json"],
+  "agent": "planner",
   "agents": [
     {
       "name": "planner",
@@ -161,8 +160,11 @@ Define agents with specific model, prompts, and tool configurations:
       "reasoningEffort": "high",
       "userInvocable": true,
       "agentInvocable": true,
-      "prompts": [".aether/prompts/planner.md"],
-      "mcpServers": [".aether/mcp/planner.json"]
+      "prompts": [
+        { "type": "file", "path": ".aether/prompts/planner.md" },
+        { "type": "file", "path": "AGENTS.md" }
+      ],
+      "mcp": [{ "type": "file", "path": ".aether/mcp/planner.json" }]
     },
     {
       "name": "researcher",
@@ -170,7 +172,7 @@ Define agents with specific model, prompts, and tool configurations:
       "model": "anthropic:claude-sonnet-4-5",
       "userInvocable": false,
       "agentInvocable": true,
-      "prompts": [".aether/prompts/researcher.md"],
+      "prompts": [{ "type": "file", "path": ".aether/prompts/researcher.md" }],
       "tools": {
         "allow": ["coding__grep", "coding__read_file", "coding__glob"],
         "deny": []
@@ -182,19 +184,18 @@ Define agents with specific model, prompts, and tool configurations:
       "model": "deepseek:deepseek-chat",
       "userInvocable": true,
       "agentInvocable": false,
-      "prompts": [".aether/prompts/coder.md"]
+      "prompts": [{ "type": "file", "path": ".aether/prompts/coder.md" }]
     }
   ]
 }
 ```
 
+- **`agent`** — Optional default user-invocable agent name.
 - **`userInvocable: true`** — Agent appears as a mode option in ACP clients (e.g., Wisp's Shift+Tab)
 - **`agentInvocable: true`** — Agent can be spawned as a sub-agent
-- **`prompts`** — Explicit prompt file references (supports glob patterns)
-- **`mcpServers`** — Path to MCP configuration file (optional, overrides top-level `mcpServers`)
+- **`prompts`** — Ordered prompt sources. Supports `{ "type": "text", "text": "..." }`, `{ "type": "file", "path": "..." }`, and `{ "type": "glob", "pattern": "..." }`.
+- **`mcp`** — Ordered MCP config sources. Supports `{ "type": "file", "path": "...", "proxy": false }` and inline `{ "type": "inline", "servers": { ... } }` entries.
 - **`tools`** — Filter which MCP tools the agent can use (optional). Supports `allow` (allowlist) and `deny` (blocklist) with trailing `*` wildcards. If both are set, `allow` is applied first, then `deny` removes from the result. Omit or leave empty to allow all tools.
-- Top-level `prompts` are inherited by all agents
-- Top-level `mcpServers` is the default MCP config for all agents
 
 ## Logs
 

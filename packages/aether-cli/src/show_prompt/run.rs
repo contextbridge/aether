@@ -4,19 +4,30 @@ use super::PromptArgs;
 use crate::error::CliError;
 use crate::resolve::resolve_agent_spec;
 use crate::runtime::RuntimeBuilder;
-use aether_core::agent_spec::McpJsonFileRef;
 use aether_core::core::Prompt;
-use aether_project::load_agent_catalog;
+use aether_project::{AetherConfig, AgentCatalog};
 use llm::ToolDefinition;
 use serde_json::Value;
 
 pub async fn run_prompt(args: PromptArgs) -> Result<(), CliError> {
     let cwd = args.cwd.canonicalize().map_err(CliError::IoError)?;
-    let catalog = load_agent_catalog(&cwd).map_err(|e| CliError::AgentError(e.to_string()))?;
-    let spec = resolve_agent_spec(&catalog, args.agent.as_deref(), &cwd)?;
+    let config = if let Some(source) = args.config_source.source() {
+        AetherConfig::load(&cwd, [source])
+    } else {
+        AetherConfig::load_default(&cwd)
+    }
+    .map_err(|e| CliError::AgentError(e.to_string()))?;
+    let catalog = if config.agents.is_empty() {
+        AgentCatalog::empty(cwd.clone())
+    } else {
+        AgentCatalog::from_config(&cwd, config).map_err(|e| CliError::AgentError(e.to_string()))?
+    };
+    let spec = resolve_agent_spec(&catalog, args.agent.as_deref())?;
 
-    let mcp_refs = args.mcp_configs.into_iter().map(McpJsonFileRef::direct).collect();
-    let info = RuntimeBuilder::from_spec(cwd, spec).mcp_configs(mcp_refs).build_prompt_info().await?;
+    let info = RuntimeBuilder::from_spec(cwd.clone(), spec)
+        .mcp_sources(args.mcp_config.sources(&cwd))
+        .build_prompt_info()
+        .await?;
 
     let system_prompt = build_prompt(&info.spec.prompts, args.system_prompt.as_deref()).await?;
     let tools_output = build_tools(&info.tool_definitions);

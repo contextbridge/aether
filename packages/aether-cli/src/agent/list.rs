@@ -1,4 +1,4 @@
-use aether_project::{AgentEntry, Settings};
+use aether_project::{AetherConfig, AgentConfig};
 use crossterm::style::Stylize;
 use std::fs;
 
@@ -18,28 +18,28 @@ pub fn run_list(args: ListArgs) -> Result<(), CliError> {
         Err(e) => return Err(CliError::IoError(e)),
     };
 
-    let settings: Settings =
+    let config: AetherConfig =
         serde_json::from_str(&content).map_err(|e| CliError::AgentError(format!("Failed to parse settings: {e}")))?;
 
-    if settings.agents.is_empty() {
+    if config.agents.is_empty() {
         println!("No agents found. Run `aether agent new` to create one.");
         return Ok(());
     }
 
-    let mut sorted: Vec<&AgentEntry> = settings.agents.iter().collect();
+    let mut sorted: Vec<&AgentConfig> = config.agents.iter().collect();
     sorted.sort_by(|a, b| a.name.cmp(&b.name));
 
     for (i, agent) in sorted.iter().enumerate() {
         if i > 0 {
             println!();
         }
-        print_agent(agent, &settings);
+        print_agent(agent);
     }
 
     Ok(())
 }
 
-fn print_agent(agent: &AgentEntry, settings: &Settings) {
+fn print_agent(agent: &AgentConfig) {
     println!("{}", agent.name.as_str().bold().cyan());
     println!("  {}       {}", "model:".dim(), agent.model);
 
@@ -57,21 +57,19 @@ fn print_agent(agent: &AgentEntry, settings: &Settings) {
     }
     println!("  {}   {}", "invocable:".dim(), surfaces.join(", "));
 
-    let effective_prompts = if agent.prompts.is_empty() { &settings.prompts } else { &agent.prompts };
-    if !effective_prompts.is_empty() {
+    if !agent.prompts.is_empty() {
         println!(
             "  {}     {}",
             "prompts:".dim(),
-            effective_prompts.iter().map(std::string::String::as_str).collect::<Vec<_>>().join(", ")
+            agent.prompts.iter().filter_map(aether_project::PromptSource::path).collect::<Vec<_>>().join(", ")
         );
     }
 
-    let effective_mcp = if agent.mcp_servers.is_empty() { &settings.mcp_servers } else { &agent.mcp_servers };
-    if !effective_mcp.is_empty() {
+    if !agent.mcps.is_empty() {
         println!(
             "  {} {}",
             "mcp servers:".dim(),
-            effective_mcp.iter().map(aether_project::McpServerEntry::path_str).collect::<Vec<_>>().join(", ")
+            agent.mcps.iter().filter_map(aether_project::McpSourceSpec::path).collect::<Vec<_>>().join(", ")
         );
     }
 
@@ -86,7 +84,7 @@ fn print_agent(agent: &AgentEntry, settings: &Settings) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::new_agent_wizard::{DraftAgentEntry, scaffold};
+    use crate::agent::new_agent_wizard::{DraftAgentEntry, build_system_md, scaffold};
 
     #[test]
     fn list_empty_project() {
@@ -104,21 +102,19 @@ mod tests {
     }
 
     fn test_draft() -> DraftAgentEntry {
-        use crate::agent::new_agent_wizard::build_system_md;
-
         let mut draft = DraftAgentEntry {
-            entry: AgentEntry {
+            entry: AgentConfig {
                 name: "Coder".to_string(),
                 description: "A coding agent".to_string(),
                 user_invocable: true,
                 agent_invocable: true,
                 model: "anthropic:claude-sonnet-4-5".to_string(),
-                prompts: vec!["AGENTS.md".to_string()],
-                mcp_servers: vec!["coding".into()],
-                ..AgentEntry::default()
+                prompts: vec![aether_project::PromptSource::file("AGENTS.md")],
+                ..AgentConfig::default()
             },
             system_md_content: String::new(),
             system_md_edited: false,
+            selected_mcp_servers: vec!["coding".into()],
             workspace_mcp_configs: vec![],
         };
         draft.system_md_content = build_system_md(&draft);

@@ -1,4 +1,4 @@
-use aether_project::Settings;
+use aether_project::{AetherConfig, AgentConfig};
 use crossterm::style::Stylize;
 use std::fs;
 use std::path::Path;
@@ -11,42 +11,44 @@ pub fn run_remove(args: RemoveArgs) -> Result<(), CliError> {
     let settings_path = project_root.join(".aether/settings.json");
 
     let content = fs::read_to_string(&settings_path).map_err(CliError::IoError)?;
-    let mut settings: Settings =
+    let mut config: AetherConfig =
         serde_json::from_str(&content).map_err(|e| CliError::AgentError(format!("Failed to parse settings: {e}")))?;
 
-    let index = settings
+    let index = config
         .agents
         .iter()
         .position(|a| a.name == args.name)
         .ok_or_else(|| CliError::AgentError(format!("Agent '{}' not found", args.name)))?;
 
-    let entry = settings.agents.remove(index);
+    let entry = config.agents.remove(index);
     let slug = entry.name.to_lowercase().replace(' ', "-");
 
     cleanup_agent_files(&project_root, &slug, &entry);
 
-    let json = serde_json::to_string_pretty(&settings).expect("settings serialization cannot fail");
+    let json = serde_json::to_string_pretty(&config).expect("settings serialization cannot fail");
     fs::write(&settings_path, json).map_err(CliError::IoError)?;
 
     println!("{} Removed agent '{}'", "✓".green().bold(), entry.name);
     Ok(())
 }
 
-fn cleanup_agent_files(project_root: &Path, slug: &str, entry: &aether_project::AgentEntry) {
+fn cleanup_agent_files(project_root: &Path, slug: &str, entry: &AgentConfig) {
     let per_agent_dir = project_root.join(".aether/agents").join(slug);
     if per_agent_dir.is_dir() {
         let _ = fs::remove_dir_all(&per_agent_dir);
     }
 
     for prompt in &entry.prompts {
-        let path = project_root.join(prompt);
+        let Some(prompt_path) = prompt.path() else { continue };
+        let path = project_root.join(prompt_path);
         if path.starts_with(project_root.join(".aether")) {
             let _ = fs::remove_file(&path);
         }
     }
 
-    for mcp in &entry.mcp_servers {
-        let path = project_root.join(mcp.path_str());
+    for mcp in &entry.mcps {
+        let Some(mcp_path) = mcp.path() else { continue };
+        let path = project_root.join(mcp_path);
         if path.starts_with(project_root.join(".aether")) {
             let _ = fs::remove_file(&path);
         }
@@ -57,7 +59,6 @@ fn cleanup_agent_files(project_root: &Path, slug: &str, entry: &aether_project::
 mod tests {
     use super::*;
     use crate::agent::new_agent_wizard::{DraftAgentEntry, add_agent, build_system_md, scaffold};
-    use aether_project::AgentEntry;
 
     #[test]
     fn remove_only_agent() {
@@ -68,8 +69,8 @@ mod tests {
         run_remove(args).unwrap();
 
         let content = fs::read_to_string(dir.path().join(".aether/settings.json")).unwrap();
-        let settings: Settings = serde_json::from_str(&content).unwrap();
-        assert!(settings.agents.is_empty());
+        let config: AetherConfig = serde_json::from_str(&content).unwrap();
+        assert!(config.agents.is_empty());
 
         assert!(!dir.path().join(".aether/DEFAULT.md").exists());
     }
@@ -86,9 +87,9 @@ mod tests {
         run_remove(args).unwrap();
 
         let content = fs::read_to_string(&settings_path).unwrap();
-        let settings: Settings = serde_json::from_str(&content).unwrap();
-        assert_eq!(settings.agents.len(), 1);
-        assert_eq!(settings.agents[0].name, "Default");
+        let config: AetherConfig = serde_json::from_str(&content).unwrap();
+        assert_eq!(config.agents.len(), 1);
+        assert_eq!(config.agents[0].name, "Default");
 
         assert!(!dir.path().join(".aether/agents/researcher").exists());
         assert!(dir.path().join(".aether/DEFAULT.md").exists());
@@ -114,18 +115,18 @@ mod tests {
 
     fn default_draft() -> DraftAgentEntry {
         let mut draft = DraftAgentEntry {
-            entry: AgentEntry {
+            entry: AgentConfig {
                 name: "Default".to_string(),
                 description: "Default coding agent".to_string(),
                 user_invocable: true,
                 agent_invocable: true,
                 model: "anthropic:claude-sonnet-4-5".to_string(),
-                prompts: vec!["AGENTS.md".to_string()],
-                mcp_servers: vec!["coding".into()],
-                ..AgentEntry::default()
+                prompts: vec![aether_project::PromptSource::file("AGENTS.md")],
+                ..AgentConfig::default()
             },
             system_md_content: String::new(),
             system_md_edited: false,
+            selected_mcp_servers: vec!["coding".into()],
             workspace_mcp_configs: vec![],
         };
         draft.system_md_content = build_system_md(&draft);
@@ -136,7 +137,7 @@ mod tests {
         let mut draft = default_draft();
         draft.entry.name = "Researcher".to_string();
         draft.entry.description = "Research agent".to_string();
-        draft.entry.mcp_servers = vec![];
+        draft.selected_mcp_servers = vec![];
         draft.workspace_mcp_configs = vec![];
         draft.system_md_content = build_system_md(&draft);
         draft
