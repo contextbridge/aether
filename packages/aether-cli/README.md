@@ -152,6 +152,11 @@ Define agents with specific model, prompts, and tool configurations:
 ```json
 {
   "agent": "planner",
+  "prompts": [
+    { "type": "file", "path": ".aether/prompts/shared.md" },
+    { "type": "file", "path": "AGENTS.md" }
+  ],
+  "mcps": [{ "type": "file", "path": ".aether/mcp.json" }],
   "agents": [
     {
       "name": "planner",
@@ -159,12 +164,7 @@ Define agents with specific model, prompts, and tool configurations:
       "model": "anthropic:claude-sonnet-4-5",
       "reasoningEffort": "high",
       "userInvocable": true,
-      "agentInvocable": true,
-      "prompts": [
-        { "type": "file", "path": ".aether/prompts/planner.md" },
-        { "type": "file", "path": "AGENTS.md" }
-      ],
-      "mcp": [{ "type": "file", "path": ".aether/mcp/planner.json" }]
+      "agentInvocable": true
     },
     {
       "name": "researcher",
@@ -173,6 +173,7 @@ Define agents with specific model, prompts, and tool configurations:
       "userInvocable": false,
       "agentInvocable": true,
       "prompts": [{ "type": "file", "path": ".aether/prompts/researcher.md" }],
+      "mcps": [{ "type": "file", "path": ".aether/resarcher-mcp.json" }],
       "tools": {
         "allow": ["coding__grep", "coding__read_file", "coding__glob"],
         "deny": []
@@ -191,10 +192,12 @@ Define agents with specific model, prompts, and tool configurations:
 ```
 
 - **`agent`** — Optional default user-invocable agent name.
+- **Top-level `prompts`** — Ordered default prompt sources used by agents that do not define their own `prompts`.
+- **Top-level `mcps`** — Ordered default MCP config sources used by agents that do not define their own `mcps`.
+- **Agent `prompts`** — Optional ordered prompt sources that override top-level `prompts` for that agent. Supports `{ "type": "text", "text": "..." }`, `{ "type": "file", "path": "..." }`, and `{ "type": "glob", "pattern": "..." }`.
+- **Agent `mcps`** — Optional ordered MCP config sources that override top-level `mcps` for that agent. Supports `{ "type": "file", "path": "...", "proxy": false }` and inline `{ "type": "inline", "servers": { ... } }` entries.
 - **`userInvocable: true`** — Agent appears as a mode option in ACP clients (e.g., Wisp's Shift+Tab)
 - **`agentInvocable: true`** — Agent can be spawned as a sub-agent
-- **`prompts`** — Ordered prompt sources. Supports `{ "type": "text", "text": "..." }`, `{ "type": "file", "path": "..." }`, and `{ "type": "glob", "pattern": "..." }`.
-- **`mcp`** — Ordered MCP config sources. Supports `{ "type": "file", "path": "...", "proxy": false }` and inline `{ "type": "inline", "servers": { ... } }` entries.
 - **`tools`** — Filter which MCP tools the agent can use (optional). Supports `allow` (allowlist) and `deny` (blocklist) with trailing `*` wildcards. If both are set, `allow` is applied first, then `deny` removes from the result. Omit or leave empty to allow all tools.
 
 ## Logs

@@ -18,7 +18,7 @@ pub struct AgentConfig {
     pub user_invocable: bool,
     #[serde(default)]
     pub agent_invocable: bool,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schemars(length(min = 1))]
     pub prompts: Vec<PromptSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

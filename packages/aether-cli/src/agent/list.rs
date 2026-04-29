@@ -33,13 +33,17 @@ pub fn run_list(args: ListArgs) -> Result<(), CliError> {
         if i > 0 {
             println!();
         }
-        print_agent(agent);
+        print_agent(agent, &config.prompts, &config.mcps);
     }
 
     Ok(())
 }
 
-fn print_agent(agent: &AgentConfig) {
+fn print_agent(
+    agent: &AgentConfig,
+    default_prompts: &[aether_project::PromptSource],
+    default_mcps: &[aether_project::McpSourceSpec],
+) {
     println!("{}", agent.name.as_str().bold().cyan());
     println!("  {}       {}", "model:".dim(), agent.model);
 
@@ -57,19 +61,21 @@ fn print_agent(agent: &AgentConfig) {
     }
     println!("  {}   {}", "invocable:".dim(), surfaces.join(", "));
 
-    if !agent.prompts.is_empty() {
+    let prompts = if agent.prompts.is_empty() { default_prompts } else { &agent.prompts };
+    if !prompts.is_empty() {
         println!(
             "  {}     {}",
             "prompts:".dim(),
-            agent.prompts.iter().filter_map(aether_project::PromptSource::path).collect::<Vec<_>>().join(", ")
+            prompts.iter().filter_map(aether_project::PromptSource::path).collect::<Vec<_>>().join(", ")
         );
     }
 
-    if !agent.mcps.is_empty() {
+    let mcps = if agent.mcps.is_empty() { default_mcps } else { &agent.mcps };
+    if !mcps.is_empty() {
         println!(
             "  {} {}",
             "mcp servers:".dim(),
-            agent.mcps.iter().filter_map(aether_project::McpSourceSpec::path).collect::<Vec<_>>().join(", ")
+            mcps.iter().filter_map(aether_project::McpSourceSpec::path).collect::<Vec<_>>().join(", ")
         );
     }
 

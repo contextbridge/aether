@@ -1,5 +1,6 @@
 use crate::agent_config::AgentConfig;
 use crate::error::SettingsError;
+use crate::{McpSourceSpec, PromptSource};
 use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
 
@@ -8,6 +9,10 @@ use std::path::{Path, PathBuf};
 pub struct AetherSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prompts: Vec<PromptSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcps: Vec<McpSourceSpec>,
     #[schemars(length(min = 1))]
     pub agents: Vec<AgentConfig>,
 }
@@ -43,6 +48,13 @@ impl AetherSettings {
     pub fn merge(mut self, next: Self) -> Self {
         if next.agent.is_some() {
             self.agent = next.agent;
+        }
+
+        if !next.prompts.is_empty() {
+            self.prompts = next.prompts;
+        }
+        if !next.mcps.is_empty() {
+            self.mcps = next.mcps;
         }
 
         for next_agent in next.agents {
@@ -94,6 +106,7 @@ mod tests {
         let config = AetherSettings {
             agent: Some("beta".to_string()),
             agents: vec![agent_config("alpha"), agent_config("beta")],
+            ..AetherSettings::default()
         };
 
         let catalog = AgentCatalog::from_settings(dir.path(), config).unwrap();
@@ -106,7 +119,8 @@ mod tests {
         let mut internal = agent_config("internal");
         internal.user_invocable = false;
         internal.agent_invocable = true;
-        let config = AetherSettings { agent: Some("internal".to_string()), agents: vec![internal] };
+        let config =
+            AetherSettings { agent: Some("internal".to_string()), agents: vec![internal], ..AetherSettings::default() };
 
         let err = AgentCatalog::from_settings(Path::new("/tmp"), config).unwrap_err();
 
@@ -136,14 +150,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let base = AetherSettings {
             agent: Some("alpha".to_string()),
+            prompts: vec![PromptSource::file("BASE.md")],
             agents: vec![AgentConfig { description: "Base alpha".to_string(), ..agent_config("alpha") }],
+            ..AetherSettings::default()
         };
         let override_config = AetherSettings {
             agent: Some("beta".to_string()),
+            prompts: vec![PromptSource::file("OVERRIDE.md")],
             agents: vec![
                 AgentConfig { description: "Override alpha".to_string(), ..agent_config("alpha") },
                 agent_config("beta"),
             ],
+            ..AetherSettings::default()
         };
 
         let config = AetherSettings::load(
@@ -157,6 +175,7 @@ mod tests {
         assert_eq!(config.agents[0].name, "alpha");
         assert_eq!(config.agents[0].description, "Override alpha");
         assert_eq!(config.agents[1].name, "beta");
+        assert_eq!(config.prompts, vec![PromptSource::file("OVERRIDE.md")]);
     }
 
     #[test]
@@ -169,6 +188,7 @@ mod tests {
                 mcps: vec![McpSourceSpec::Inline { servers: BTreeMap::new() }],
                 ..agent_config("alpha")
             }],
+            ..AetherSettings::default()
         };
 
         let catalog = AgentCatalog::from_settings(dir.path(), config).unwrap();
@@ -176,6 +196,45 @@ mod tests {
 
         assert_eq!(spec.mcp_config_sources.len(), 1);
         assert!(matches!(spec.mcp_config_sources[0], McpConfigSource::Inline(_)));
+    }
+
+    #[test]
+    fn parses_top_level_prompt_and_mcp_defaults() {
+        let config = AetherSettings::try_from(
+            r#"{
+                "prompts": [{"type":"file","path":"BASE.md"}],
+                "mcps": [{"type":"file","path":"mcp.json"}],
+                "agents": [{
+                    "name":"alpha",
+                    "description":"Alpha",
+                    "model":"anthropic:claude-sonnet-4-5",
+                    "userInvocable":true
+                }]
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.prompts, vec![PromptSource::file("BASE.md")]);
+        assert_eq!(config.mcps[0].path(), Some("mcp.json"));
+    }
+
+    #[test]
+    fn rejects_old_top_level_mcp_servers_field() {
+        let err = AetherSettings::try_from(
+            r#"{
+                "mcpServers": ["mcp.json"],
+                "agents": [{
+                    "name":"alpha",
+                    "description":"Alpha",
+                    "model":"anthropic:claude-sonnet-4-5",
+                    "userInvocable":true,
+                    "prompts":[{"type":"file","path":"PROMPT.md"}]
+                }]
+            }"#,
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, SettingsError::ParseError(message) if message.contains("mcpServers")));
     }
 
     fn write_file(dir: &Path, path: &str, content: &str) {

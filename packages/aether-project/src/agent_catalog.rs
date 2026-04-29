@@ -22,10 +22,19 @@ impl AgentCatalog {
         validate_selected_agent(&settings)?;
         let selected_agent =
             settings.agent.as_deref().map(str::trim).filter(|name| !name.is_empty()).map(str::to_string);
+        let default_prompts = settings.prompts;
+        let default_mcps = settings.mcps;
         let mut seen_names = HashSet::new();
         let mut specs = Vec::with_capacity(settings.agents.len());
         for (index, entry) in settings.agents.into_iter().enumerate() {
-            specs.push(resolve_agent_entry(project_root, entry, index, &mut seen_names)?);
+            specs.push(resolve_agent_entry(
+                project_root,
+                entry,
+                &default_prompts,
+                &default_mcps,
+                index,
+                &mut seen_names,
+            )?);
         }
 
         Ok(Self::new(project_root.to_path_buf(), specs, selected_agent))
@@ -107,6 +116,8 @@ fn validate_selected_agent(settings: &AetherSettings) -> Result<(), SettingsErro
 fn resolve_agent_entry(
     project_root: &Path,
     entry: AgentConfig,
+    default_prompts: &[crate::PromptSource],
+    default_mcps: &[McpSourceSpec],
     index: usize,
     seen_names: &mut HashSet<String>,
 ) -> Result<AgentSpec, SettingsError> {
@@ -130,13 +141,15 @@ fn resolve_agent_entry(
     if !entry.user_invocable && !entry.agent_invocable {
         return Err(SettingsError::NoInvocationSurface { agent: name.clone() });
     }
-    if entry.prompts.is_empty() {
+    let prompt_sources = if entry.prompts.is_empty() { default_prompts } else { &entry.prompts };
+    if prompt_sources.is_empty() {
         return Err(SettingsError::NoPrompts { agent: name.clone() });
     }
 
-    let prompts = Prompt::from_sources(project_root, &entry.prompts)
+    let prompts = Prompt::from_sources(project_root, prompt_sources)
         .map_err(|source| SettingsError::AgentPromptSource { agent: name.clone(), source })?;
-    let mcp_config_sources = resolve_mcp_config_sources(project_root, &entry.mcps)?;
+    let mcp_sources = if entry.mcps.is_empty() { default_mcps } else { &entry.mcps };
+    let mcp_config_sources = resolve_mcp_config_sources(project_root, mcp_sources)?;
 
     Ok(AgentSpec {
         name,
@@ -242,6 +255,13 @@ mod tests {
             .collect()
     }
 
+    fn has_prompt_file(spec: &AgentSpec, expected: &str) -> bool {
+        spec.prompts.iter().any(|prompt| match prompt {
+            Prompt::File { path, .. } => path == expected,
+            Prompt::Text(_) | Prompt::PromptGlobs { .. } | Prompt::McpInstructions(_) => false,
+        })
+    }
+
     #[test]
     fn user_invocable_filters_correctly() {
         let dir = create_temp_project();
@@ -311,6 +331,125 @@ mod tests {
         let catalog = create_test_catalog(dir.path().to_path_buf());
         let result = catalog.get("nonexistent");
         assert!(matches!(result, Err(SettingsError::AgentNotFound { .. })));
+    }
+
+    #[test]
+    fn top_level_prompts_are_inherited_when_agent_prompts_are_empty() {
+        let dir = create_temp_project();
+        write_file(dir.path(), "BASE.md", "Base instructions");
+
+        let config = AetherSettings {
+            prompts: vec![crate::PromptSource::file("BASE.md")],
+            agents: vec![AgentConfig {
+                name: "planner".to_string(),
+                description: "Planner agent".to_string(),
+                model: "anthropic:claude-sonnet-4-5".to_string(),
+                user_invocable: true,
+                ..AgentConfig::default()
+            }],
+            ..AetherSettings::default()
+        };
+
+        let catalog = AgentCatalog::from_settings(dir.path(), config).unwrap();
+        let spec = catalog.resolve("planner").unwrap();
+
+        assert!(has_prompt_file(&spec, "BASE.md"));
+    }
+
+    #[test]
+    fn agent_prompts_override_top_level_prompts() {
+        let dir = create_temp_project();
+        write_file(dir.path(), "BASE.md", "Base instructions");
+        write_file(dir.path(), "AGENT.md", "Agent instructions");
+
+        let config = AetherSettings {
+            prompts: vec![crate::PromptSource::file("BASE.md")],
+            agents: vec![AgentConfig {
+                name: "planner".to_string(),
+                description: "Planner agent".to_string(),
+                model: "anthropic:claude-sonnet-4-5".to_string(),
+                user_invocable: true,
+                prompts: vec![crate::PromptSource::file("AGENT.md")],
+                ..AgentConfig::default()
+            }],
+            ..AetherSettings::default()
+        };
+
+        let catalog = AgentCatalog::from_settings(dir.path(), config).unwrap();
+        let spec = catalog.resolve("planner").unwrap();
+
+        assert!(has_prompt_file(&spec, "AGENT.md"));
+        assert!(!has_prompt_file(&spec, "BASE.md"));
+    }
+
+    #[test]
+    fn top_level_mcps_are_inherited_when_agent_mcps_are_empty() {
+        let dir = create_temp_project();
+        write_file(dir.path(), "BASE.md", "Base instructions");
+        write_file(dir.path(), "base-mcp.json", "{}");
+
+        let config = AetherSettings {
+            prompts: vec![crate::PromptSource::file("BASE.md")],
+            mcps: vec![McpSourceSpec::file("base-mcp.json")],
+            agents: vec![AgentConfig {
+                name: "planner".to_string(),
+                description: "Planner agent".to_string(),
+                model: "anthropic:claude-sonnet-4-5".to_string(),
+                user_invocable: true,
+                ..AgentConfig::default()
+            }],
+            ..AetherSettings::default()
+        };
+
+        let catalog = AgentCatalog::from_settings(dir.path(), config).unwrap();
+        let spec = catalog.resolve("planner").unwrap();
+
+        assert_eq!(file_sources(&spec), vec![(dir.path().join("base-mcp.json"), false)]);
+    }
+
+    #[test]
+    fn agent_mcps_override_top_level_mcps() {
+        let dir = create_temp_project();
+        write_file(dir.path(), "BASE.md", "Base instructions");
+        write_file(dir.path(), "base-mcp.json", "{}");
+        write_file(dir.path(), "agent-mcp.json", "{}");
+
+        let config = AetherSettings {
+            prompts: vec![crate::PromptSource::file("BASE.md")],
+            mcps: vec![McpSourceSpec::file("base-mcp.json")],
+            agents: vec![AgentConfig {
+                name: "planner".to_string(),
+                description: "Planner agent".to_string(),
+                model: "anthropic:claude-sonnet-4-5".to_string(),
+                user_invocable: true,
+                mcps: vec![McpSourceSpec::file("agent-mcp.json")],
+                ..AgentConfig::default()
+            }],
+            ..AetherSettings::default()
+        };
+
+        let catalog = AgentCatalog::from_settings(dir.path(), config).unwrap();
+        let spec = catalog.resolve("planner").unwrap();
+
+        assert_eq!(file_sources(&spec), vec![(dir.path().join("agent-mcp.json"), false)]);
+    }
+
+    #[test]
+    fn missing_top_level_and_agent_prompts_still_errors() {
+        let config = AetherSettings {
+            agents: vec![AgentConfig {
+                name: "planner".to_string(),
+                description: "Planner agent".to_string(),
+                model: "anthropic:claude-sonnet-4-5".to_string(),
+                user_invocable: true,
+                ..AgentConfig::default()
+            }],
+            ..AetherSettings::default()
+        };
+
+        let err = AgentCatalog::from_settings(Path::new("/tmp"), config).unwrap_err();
+
+        assert!(matches!(err, SettingsError::NoPrompts { agent } if agent == "planner"));
     }
 
     #[test]

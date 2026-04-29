@@ -71,7 +71,7 @@ impl DraftAgentEntry {
         match mode {
             NewAgentMode::ScaffoldProject => {
                 let entry = self.to_agent_config(mode, &[]);
-                AetherSettings { agent: Some(entry.name.clone()), agents: vec![entry] }
+                AetherSettings { agent: Some(entry.name.clone()), agents: vec![entry], ..AetherSettings::default() }
             }
             NewAgentMode::AddAgentToExistingProject => {
                 let inherited = inherited_prompts_from_existing(existing);
@@ -119,17 +119,17 @@ fn inherited_prompts_from_existing(existing: Option<&str>) -> Vec<String> {
     existing
         .and_then(|s| serde_json::from_str::<AetherSettings>(s).ok())
         .map(|s| {
-            s.agents
-                .first()
-                .map(|agent| {
-                    agent
-                        .prompts
-                        .iter()
-                        .filter_map(|p| p.path().map(str::to_string))
-                        .filter(|p| PromptFile::all().iter().any(|d| d.filename() == p))
-                        .collect()
-                })
-                .unwrap_or_default()
+            let prompts = if s.prompts.is_empty() {
+                s.agents.first().map(|agent| agent.prompts.clone()).unwrap_or_default()
+            } else {
+                s.prompts
+            };
+
+            prompts
+                .iter()
+                .filter_map(|p| p.path().map(str::to_string))
+                .filter(|p| PromptFile::all().iter().any(|d| d.filename() == p))
+                .collect()
         })
         .unwrap_or_default()
 }
@@ -517,7 +517,12 @@ mod tests {
     fn build_settings_add_agent_skips_shared_prompts() {
         let existing = serde_json::to_string_pretty(&AetherSettings {
             agent: Some("Default".to_string()),
-            agents: vec![default_draft().to_agent_config(&NewAgentMode::ScaffoldProject, &[])],
+            prompts: vec![PromptSource::file("AGENTS.md")],
+            agents: vec![AgentConfig {
+                prompts: vec![],
+                ..default_draft().to_agent_config(&NewAgentMode::ScaffoldProject, &[])
+            }],
+            ..AetherSettings::default()
         })
         .unwrap();
 

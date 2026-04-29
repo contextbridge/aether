@@ -30,7 +30,7 @@ Sub-agents are discovered from `.aether/settings.json`:
       "model": "anthropic:claude-sonnet-4-5",
       "agentInvocable": true,
       "prompts": [{ "type": "file", "path": ".aether/prompts/explore.md" }],
-      "mcp": [{ "type": "file", "path": ".aether/mcp/explore.json" }],
+      "mcps": [{ "type": "file", "path": ".aether/mcp/explore.json" }],
       "tools": {
         "allow": ["coding__*"],
         "deny": ["coding__write_file", "coding__bash"]
@@ -40,7 +40,7 @@ Sub-agents are discovered from `.aether/settings.json`:
 }
 ```
 
-Only agents with `agentInvocable: true` are exposed by SubAgentsMcp.
+Only agents with `agentInvocable: true` are exposed by SubAgentsMcp. Top-level `prompts` and `mcps` act as defaults for agents that do not define their own agent-local `prompts` or `mcps`; agent-local values override the top-level defaults.
 
 ## Tools
 

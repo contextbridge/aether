@@ -22,6 +22,8 @@ Project-local settings and agent catalog resolution for the Aether AI agent fram
 
 ## Usage
 
+`.aether/settings.json` supports top-level `prompts` and `mcps` as typed defaults. An agent without local `prompts` inherits top-level `prompts`; an agent without local `mcps` inherits top-level `mcps`. Agent-local `prompts` or `mcps` replace the corresponding top-level defaults for that agent.
+
 ```rust,no_run
 use aether_project::{AetherSettings, AgentCatalog};
 use std::path::Path;
