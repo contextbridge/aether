@@ -58,9 +58,10 @@ enum PromptSourceObject {
 impl<'de> Deserialize<'de> for PromptSource {
     fn deserialize<T: Deserializer<'de>>(deserializer: T) -> std::result::Result<Self, T::Error> {
         match serde::Deserialize::deserialize(deserializer)? {
-            PromptSourceInput::Path(path) => Ok(Self::File { path }),
+            PromptSourceInput::Path(path) | PromptSourceInput::Object(PromptSourceObject::File { path }) => {
+                Ok(Self::File { path })
+            }
             PromptSourceInput::Object(PromptSourceObject::Text { text }) => Ok(Self::Text { text }),
-            PromptSourceInput::Object(PromptSourceObject::File { path }) => Ok(Self::File { path }),
             PromptSourceInput::Object(PromptSourceObject::Glob { pattern }) => Ok(Self::Glob { pattern }),
         }
     }
