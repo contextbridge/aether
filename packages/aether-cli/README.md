@@ -88,7 +88,7 @@ Aether supports multiple LLM providers using a `provider:model` string format:
 | Provider | Example | Env var required |
 |----------|---------|-----------------|
 | Anthropic | `anthropic:claude-sonnet-4-5-20250929` | `ANTHROPIC_API_KEY` |
-| OpenRouter | `openrouter:moonshotai/kimi-k2-thinking` | `OPENROUTER_API_KEY` |
+| `OpenRouter` | `openrouter:moonshotai/kimi-k2-thinking` | `OPENROUTER_API_KEY` |
 | ZAI | `zai:GLM-4.6` | `ZAI_API_KEY` |
 | Ollama | `ollama:llama3.2` | None (local) |
 | Llama.cpp | `llamacpp` | None (local) |
