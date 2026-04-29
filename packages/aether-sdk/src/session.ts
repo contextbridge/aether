@@ -17,7 +17,7 @@ import type {
   ExternalMcpServerConfig,
 } from "./types.js";
 
-const SDK_VERSION = "0.1.1";
+const SDK_VERSION = "0.2.0";
 
 export type PermissionRequestHandler = (
   request: acp.RequestPermissionRequest,
