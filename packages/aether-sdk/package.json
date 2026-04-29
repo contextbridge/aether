@@ -19,9 +19,10 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run",
+    "build": "pnpm generate:settings-types && tsc -p tsconfig.build.json",
+    "typecheck": "pnpm generate:settings-types && tsc -p tsconfig.json --noEmit",
+    "test": "pnpm generate:settings-types && vitest run",
+    "generate:settings-types": "node scripts/generate-settings-types.mjs",
     "e2e": "node scripts/e2e.mjs"
   },
   "dependencies": {
@@ -33,6 +34,7 @@
   "devDependencies": {
     "@types/express": "^5.0.0",
     "@types/node": "^25.6.0",
+    "quicktype-core": "^23.2.6",
     "typescript": "^6.0.3",
     "vitest": "^4.0.0"
   },

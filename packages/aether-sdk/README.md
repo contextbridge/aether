@@ -63,15 +63,17 @@ yourself in a `finally` block.
 | `agent`           | Mode name from `.aether/settings.json` (e.g. `planner`).             |
 | `model`           | Direct model id (e.g. `anthropic:claude-sonnet-4-5`).                |
 | `reasoningEffort` | `"low"`, `"medium"`, `"high"`, `"xhigh"`.                            |
+| `settings`        | Inline Aether settings object using the `.aether/settings.json` shape. |
+| `settingsFile`    | Path to an alternate settings JSON file.                              |
 | `cwd`             | Working directory for the spawned `aether acp` process.              |
 | `tools`           | Closure-backed TypeScript tool groups keyed by Aether tool prefix.   |
 | `externalMcpServers` | External stdio/http/sse MCP servers keyed by Aether tool prefix.   |
 | `abortSignal`     | Cancel the active session and tear the subprocess down.              |
 
-`agent` and `model` are mutually exclusive — they are forwarded to the spawned
-`aether acp` process as `--agent` / `--model` / `--reasoning-effort`, where the
-CLI enforces the conflict and resolves the initial system prompt and tool
-filter before the session is constructed.
+`agent` and `model` are mutually exclusive. `settings` and `settingsFile` are
+mutually exclusive. These are forwarded to the spawned `aether acp` process,
+where the CLI resolves the initial system prompt and tool filter before the
+session is constructed.
 
 ## Multi-turn usage
 

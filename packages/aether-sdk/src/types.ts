@@ -4,8 +4,7 @@ import type {
   ToolAnnotations,
 } from "@modelcontextprotocol/sdk/types.js";
 import type { z } from "zod";
-
-export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
+import type { ReasoningEffort } from "./generated/aether-settings.js";
 
 export type AgentSelection =
   | { agent: string; model?: never; reasoningEffort?: never }

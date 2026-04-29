@@ -5,6 +5,7 @@ export type AetherSdkErrorCode =
   | "mcp_server_invalid_config"
   | "session_not_started"
   | "prompt_in_progress"
+  | "invalid_options"
   | "aborted";
 
 export class AetherSdkError extends Error {

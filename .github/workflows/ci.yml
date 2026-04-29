@@ -84,8 +84,6 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Check formatting
         run: pnpm fmt-check
-      - name: Check generated config types
-        run: pnpm sdk:generate-config-types:check
       - name: Typecheck
         run: pnpm sdk:typecheck
       - name: Build

@@ -5,6 +5,7 @@ dist/
 gen/
 eval-results/
 packages/llm/src/catalog/generated.rs
+packages/aether-sdk/src/generated/
 .aether-tasks/
 plans/
 sweep.timestamp

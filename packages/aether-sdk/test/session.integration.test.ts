@@ -12,6 +12,36 @@ const FAKE_AETHER = path.resolve(
 );
 
 describe("AetherSession with a fake ACP agent", () => {
+  it("rejects mutually exclusive settings sources", async () => {
+    await expect(
+      AetherSession.start({
+        binaryPath: FAKE_AETHER,
+        settings: {
+          agents: [
+            {
+              name: "default",
+              description: "Default agent",
+              model: "anthropic:claude-sonnet-4-5",
+              userInvocable: true,
+              prompts: [{ type: "text", text: "Be helpful" }],
+            },
+          ],
+        },
+        settingsFile: ".aether/settings.json",
+      } as never),
+    ).rejects.toMatchObject({ code: "invalid_options" });
+  });
+
+  it("rejects agent and model together at runtime", async () => {
+    await expect(
+      AetherSession.start({
+        binaryPath: FAKE_AETHER,
+        agent: "planner",
+        model: "anthropic:claude-sonnet-4-5",
+      } as never),
+    ).rejects.toMatchObject({ code: "invalid_options" });
+  });
+
   it("starts an explicit session and streams a final result", async () => {
     const session = await AetherSession.start({
       binaryPath: FAKE_AETHER,
