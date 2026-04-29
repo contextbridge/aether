@@ -1,6 +1,6 @@
 [package]
 name = "aether-llm-codegen"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 description = "Code generation utilities for the Aether LLM provider layer"
 license = "MIT"
@@ -29,4 +29,4 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-utils = { package = "aether-utils", path = "../utils", version = "0.2.0" }
+utils = { package = "aether-utils", path = "../utils", version = "0.2.1" }

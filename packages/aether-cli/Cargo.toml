@@ -1,6 +1,6 @@
 [package]
 name = "aether-agent-cli"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2024"
 description = "CLI and ACP server for the Aether AI coding agent"
 license = "MIT"
@@ -29,16 +29,16 @@ name = "aether"
 path = "src/main.rs"
 
 [dependencies]
-aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.3.1" }
-aether-project = { path = "../aether-project", version = "0.3.1" }
-llm = { package = "aether-llm", path = "../llm", features = ["bedrock", "codex"], version = "0.2.4" }
-mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.3.1" }
-mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", features = ["all"], version = "0.3.1" }
-wisp = { package = "aether-wisp", path = "../wisp", version = "0.3.1" }
-tui = { package = "aether-tui", path = "../tui", default-features = false, features = ["syntax"], version = "0.2.1" }
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["server", "testing"], version = "0.3.1" }
+aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.3.2" }
+aether-project = { path = "../aether-project", version = "0.3.2" }
+llm = { package = "aether-llm", path = "../llm", features = ["bedrock", "codex"], version = "0.2.5" }
+mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.3.2" }
+mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", features = ["all"], version = "0.3.2" }
+wisp = { package = "aether-wisp", path = "../wisp", version = "0.3.2" }
+tui = { package = "aether-tui", path = "../tui", default-features = false, features = ["syntax"], version = "0.2.2" }
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["server", "testing"], version = "0.3.2" }
 agent-client-protocol = { workspace = true }
-aether-lspd = { path = "../aether-lspd", version = "0.1.8" }
+aether-lspd = { path = "../aether-lspd", version = "0.1.9" }
 rmcp = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true, features = ["compat"] }
@@ -56,4 +56,4 @@ tempfile = { workspace = true }
 crossterm = { workspace = true }
 
 [dev-dependencies]
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["testing"], version = "0.3.1" }
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["testing"], version = "0.3.2" }
