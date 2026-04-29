@@ -1,5 +1,6 @@
 //! Error types for settings loading and validation.
 
+use aether_core::core::PromptSourceError;
 use thiserror::Error;
 
 /// Errors that can occur during settings loading and agent resolution.
@@ -33,21 +34,17 @@ pub enum SettingsError {
     #[error("Agent '{agent}' must have at least one invocation flag (userInvocable or agentInvocable)")]
     NoInvocationSurface { agent: String },
 
-    /// A prompt glob pattern is syntactically invalid.
-    #[error("Invalid glob pattern '{pattern}' for agent '{agent}': {error}")]
-    InvalidGlobPattern { agent: String, pattern: String, error: String },
+    /// A prompt source on a specific agent failed validation.
+    #[error("Agent '{agent}': {source}")]
+    AgentPromptSource {
+        agent: String,
+        #[source]
+        source: PromptSourceError,
+    },
 
-    /// An inherited prompt glob pattern is syntactically invalid.
-    #[error("Invalid inherited glob pattern '{pattern}': {error}")]
-    InvalidInheritedGlobPattern { pattern: String, error: String },
-
-    /// A prompt entry resolves to zero files.
-    #[error("Prompt entry '{pattern}' for agent '{agent}' resolves to no files")]
-    ZeroMatchPrompt { agent: String, pattern: String },
-
-    /// An inherited prompt entry resolves to zero files.
-    #[error("Inherited prompt entry '{pattern}' resolves to no files")]
-    ZeroMatchInheritedPrompt { pattern: String },
+    /// A prompt source failed validation outside an agent context.
+    #[error(transparent)]
+    PromptSource(#[from] PromptSourceError),
 
     /// An agent has no prompts after inheritance.
     #[error("Agent '{agent}' has no prompts after inheritance (neither inherited nor local)")]
@@ -64,6 +61,18 @@ pub enum SettingsError {
     /// An agent was not found in the catalog.
     #[error("Agent '{name}' not found")]
     AgentNotFound { name: String },
+
+    /// The authored config contains no agents.
+    #[error("Aether config must contain at least one agent")]
+    EmptyAgents,
+
+    /// The configured agent selector did not match an agent.
+    #[error("Configured agent selector '{name}' did not match any agent")]
+    InvalidAgentSelector { name: String },
+
+    /// The configured agent selector matched an agent that users cannot invoke.
+    #[error("Configured agent selector '{name}' is not user-invocable")]
+    NonUserInvocableAgentSelector { name: String },
 
     /// Duplicate prompt names in the catalog.
     #[error("Duplicate prompt name: '{name}'")]
