@@ -121,8 +121,8 @@ export class AetherSession {
       );
 
     const args = ["acp"];
-    if (settings) args.push("--config-json", JSON.stringify(settings));
-    if (settingsFile) args.push("--config-file", settingsFile);
+    if (settings) args.push("--settings-json", JSON.stringify(settings));
+    if (settingsFile) args.push("--settings-file", settingsFile);
     if (agent) args.push("--agent", agent);
     else if (model) {
       args.push("--model", model);

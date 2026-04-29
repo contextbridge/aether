@@ -34,8 +34,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_file(dir.path(), "PROMPT.md", "Be helpful");
         write_file(dir.path(), ".aether/settings.json", settings_json);
-        let config = aether_project::AetherConfig::load_default(dir.path()).unwrap();
-        let catalog = AgentCatalog::from_config(dir.path(), config).unwrap();
+        let config = aether_project::AetherSettings::load_default(dir.path()).unwrap();
+        let catalog = AgentCatalog::from_settings(dir.path(), config).unwrap();
         (dir, catalog)
     }
 

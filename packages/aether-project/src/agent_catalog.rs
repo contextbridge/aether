@@ -1,5 +1,5 @@
 use crate::error::SettingsError;
-use crate::{AetherConfig, AgentConfig, McpSourceSpec};
+use crate::{AetherSettings, AgentConfig, McpSourceSpec};
 use aether_core::agent_spec::{AgentSpec, AgentSpecExposure, McpConfigSource};
 use aether_core::core::Prompt;
 use llm::LlmModel;
@@ -18,12 +18,13 @@ pub struct AgentCatalog {
 }
 
 impl AgentCatalog {
-    pub fn from_config(project_root: &Path, config: AetherConfig) -> Result<Self, SettingsError> {
-        validate_selected_agent(&config)?;
-        let selected_agent = config.agent.as_deref().map(str::trim).filter(|name| !name.is_empty()).map(str::to_string);
+    pub fn from_settings(project_root: &Path, settings: AetherSettings) -> Result<Self, SettingsError> {
+        validate_selected_agent(&settings)?;
+        let selected_agent =
+            settings.agent.as_deref().map(str::trim).filter(|name| !name.is_empty()).map(str::to_string);
         let mut seen_names = HashSet::new();
-        let mut specs = Vec::with_capacity(config.agents.len());
-        for (index, entry) in config.agents.into_iter().enumerate() {
+        let mut specs = Vec::with_capacity(settings.agents.len());
+        for (index, entry) in settings.agents.into_iter().enumerate() {
             specs.push(resolve_agent_entry(project_root, entry, index, &mut seen_names)?);
         }
 
@@ -84,14 +85,14 @@ impl AgentCatalog {
     }
 }
 
-fn validate_selected_agent(config: &AetherConfig) -> Result<(), SettingsError> {
-    if config.agents.is_empty() {
+fn validate_selected_agent(settings: &AetherSettings) -> Result<(), SettingsError> {
+    if settings.agents.is_empty() {
         return Err(SettingsError::EmptyAgents);
     }
 
-    if let Some(agent) = config.agent.as_deref() {
+    if let Some(agent) = settings.agent.as_deref() {
         let selector = agent.trim();
-        let Some(entry) = config.agents.iter().find(|entry| entry.name.trim() == selector) else {
+        let Some(entry) = settings.agents.iter().find(|entry| entry.name.trim() == selector) else {
             return Err(SettingsError::InvalidAgentSelector { name: selector.to_string() });
         };
 

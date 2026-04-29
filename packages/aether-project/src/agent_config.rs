@@ -1,8 +1,6 @@
-use crate::aether_config::AetherConfig;
 use crate::{McpSourceSpec, PromptSource};
 use aether_core::agent_spec::ToolFilter;
 use llm::ReasoningEffort;
-use std::path::PathBuf;
 
 #[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -27,13 +25,6 @@ pub struct AgentConfig {
     pub mcps: Vec<McpSourceSpec>,
     #[serde(default, skip_serializing_if = "ToolFilter::is_empty")]
     pub tools: ToolFilter,
-}
-
-#[derive(Debug, Clone)]
-pub enum AetherConfigSource {
-    File(PathBuf),
-    Json(String),
-    Value(AetherConfig),
 }
 
 fn require_agent_invocation_surface_schema(schema: &mut schemars::Schema) {

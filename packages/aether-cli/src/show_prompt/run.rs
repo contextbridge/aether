@@ -5,22 +5,22 @@ use crate::error::CliError;
 use crate::resolve::resolve_agent_spec;
 use crate::runtime::RuntimeBuilder;
 use aether_core::core::Prompt;
-use aether_project::{AetherConfig, AgentCatalog};
+use aether_project::{AetherSettings, AgentCatalog};
 use llm::ToolDefinition;
 use serde_json::Value;
 
 pub async fn run_prompt(args: PromptArgs) -> Result<(), CliError> {
     let cwd = args.cwd.canonicalize().map_err(CliError::IoError)?;
-    let config = if let Some(source) = args.config_source.source() {
-        AetherConfig::load(&cwd, [source])
+    let config = if let Some(source) = args.settings_source.source() {
+        AetherSettings::load(&cwd, [source])
     } else {
-        AetherConfig::load_default(&cwd)
+        AetherSettings::load_default(&cwd)
     }
     .map_err(|e| CliError::AgentError(e.to_string()))?;
     let catalog = if config.agents.is_empty() {
         AgentCatalog::empty(cwd.clone())
     } else {
-        AgentCatalog::from_config(&cwd, config).map_err(|e| CliError::AgentError(e.to_string()))?
+        AgentCatalog::from_settings(&cwd, config).map_err(|e| CliError::AgentError(e.to_string()))?
     };
     let spec = resolve_agent_spec(&catalog, args.agent.as_deref())?;
 

@@ -71,9 +71,9 @@ yourself in a `finally` block.
 | `abortSignal`     | Cancel the active session and tear the subprocess down.              |
 
 `agent` and `model` are mutually exclusive. `settings` and `settingsFile` are
-mutually exclusive. These are forwarded to the spawned `aether acp` process,
-where the CLI resolves the initial system prompt and tool filter before the
-session is constructed.
+mutually exclusive. These are forwarded to the spawned `aether acp` process as
+`--settings-json` and `--settings-file`, where the CLI resolves the initial
+system prompt and tool filter before the session is constructed.
 
 ## Multi-turn usage
 

@@ -1,4 +1,4 @@
-use aether_project::{AetherConfig, AgentConfig};
+use aether_project::{AetherSettings, AgentConfig};
 use crossterm::style::Stylize;
 use std::fs;
 use std::path::Path;
@@ -11,7 +11,7 @@ pub fn run_remove(args: RemoveArgs) -> Result<(), CliError> {
     let settings_path = project_root.join(".aether/settings.json");
 
     let content = fs::read_to_string(&settings_path).map_err(CliError::IoError)?;
-    let mut config: AetherConfig =
+    let mut config: AetherSettings =
         serde_json::from_str(&content).map_err(|e| CliError::AgentError(format!("Failed to parse settings: {e}")))?;
 
     let index = config
@@ -69,7 +69,7 @@ mod tests {
         run_remove(args).unwrap();
 
         let content = fs::read_to_string(dir.path().join(".aether/settings.json")).unwrap();
-        let config: AetherConfig = serde_json::from_str(&content).unwrap();
+        let config: AetherSettings = serde_json::from_str(&content).unwrap();
         assert!(config.agents.is_empty());
 
         assert!(!dir.path().join(".aether/DEFAULT.md").exists());
@@ -87,7 +87,7 @@ mod tests {
         run_remove(args).unwrap();
 
         let content = fs::read_to_string(&settings_path).unwrap();
-        let config: AetherConfig = serde_json::from_str(&content).unwrap();
+        let config: AetherSettings = serde_json::from_str(&content).unwrap();
         assert_eq!(config.agents.len(), 1);
         assert_eq!(config.agents[0].name, "Default");
 

@@ -1,6 +1,7 @@
 mod run;
 
-use crate::config_args::{ConfigSourceArgs, McpConfigArgs};
+use crate::mcp_config_args::McpConfigArgs;
+use crate::settings_args::SettingsSourceArgs;
 use std::path::PathBuf;
 
 #[derive(clap::Args)]
@@ -10,7 +11,7 @@ pub struct PromptArgs {
     pub cwd: PathBuf,
 
     #[command(flatten)]
-    pub config_source: ConfigSourceArgs,
+    pub settings_source: SettingsSourceArgs,
 
     #[command(flatten)]
     pub mcp_config: McpConfigArgs,

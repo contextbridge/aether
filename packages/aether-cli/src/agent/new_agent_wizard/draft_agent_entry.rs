@@ -1,4 +1,4 @@
-use aether_project::{AetherConfig, AgentConfig, McpSourceSpec, PromptSource};
+use aether_project::{AetherSettings, AgentConfig, McpSourceSpec, PromptSource};
 use std::{
     fs::{create_dir_all, read_to_string, write},
     path::{Path, PathBuf},
@@ -67,17 +67,18 @@ impl DraftAgentEntry {
         AgentConfig { prompts, mcps: mcp, ..self.entry.clone() }
     }
 
-    pub fn to_config(&self, mode: &NewAgentMode, existing: Option<&str>) -> AetherConfig {
+    pub fn to_settings(&self, mode: &NewAgentMode, existing: Option<&str>) -> AetherSettings {
         match mode {
             NewAgentMode::ScaffoldProject => {
                 let entry = self.to_agent_config(mode, &[]);
-                AetherConfig { agent: Some(entry.name.clone()), agents: vec![entry] }
+                AetherSettings { agent: Some(entry.name.clone()), agents: vec![entry] }
             }
             NewAgentMode::AddAgentToExistingProject => {
                 let inherited = inherited_prompts_from_existing(existing);
                 let entry = self.to_agent_config(mode, &inherited);
 
-                let mut config: AetherConfig = existing.and_then(|s| serde_json::from_str(s).ok()).unwrap_or_default();
+                let mut config: AetherSettings =
+                    existing.and_then(|s| serde_json::from_str(s).ok()).unwrap_or_default();
                 config.agents.push(entry);
                 config
             }
@@ -116,7 +117,7 @@ pub struct GeneratedPaths {
 
 fn inherited_prompts_from_existing(existing: Option<&str>) -> Vec<String> {
     existing
-        .and_then(|s| serde_json::from_str::<AetherConfig>(s).ok())
+        .and_then(|s| serde_json::from_str::<AetherSettings>(s).ok())
         .map(|s| {
             s.agents
                 .first()
@@ -164,7 +165,7 @@ pub fn scaffold(project_root: &Path, draft: &DraftAgentEntry) -> Result<(), CliE
     if draft.entry.prompts.iter().any(|n| n.path() == Some(PromptFile::Agents.filename())) {
         write_if_absent(&project_root.join("AGENTS.md"), &build_agents_md(draft))?;
     }
-    let config = draft.to_config(&NewAgentMode::ScaffoldProject, None);
+    let config = draft.to_settings(&NewAgentMode::ScaffoldProject, None);
     let json = serde_json::to_string_pretty(&config).expect("settings serialization cannot fail");
     write_if_absent(&project_root.join(".aether/settings.json"), &json)?;
 
@@ -183,7 +184,7 @@ pub fn add_agent(settings_path: &Path, draft: &DraftAgentEntry) -> Result<(), Cl
         write(slug_dir.join("mcp.json"), draft.to_mcp_json()).map_err(CliError::IoError)?;
     }
 
-    let config = draft.to_config(&NewAgentMode::AddAgentToExistingProject, Some(&content));
+    let config = draft.to_settings(&NewAgentMode::AddAgentToExistingProject, Some(&content));
     let json = serde_json::to_string_pretty(&config).expect("settings serialization cannot fail");
     write(settings_path, json).map_err(CliError::IoError)?;
 
@@ -261,8 +262,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         scaffold(dir.path(), &default_draft()).unwrap();
 
-        let config = aether_project::AetherConfig::load_default(dir.path()).unwrap();
-        let catalog = aether_project::AgentCatalog::from_config(dir.path(), config).unwrap();
+        let config = aether_project::AetherSettings::load_default(dir.path()).unwrap();
+        let catalog = aether_project::AgentCatalog::from_settings(dir.path(), config).unwrap();
         assert_eq!(catalog.all().len(), 1);
         assert_eq!(catalog.all()[0].name, "Default");
     }
@@ -318,7 +319,7 @@ mod tests {
         scaffold(dir.path(), &default_draft()).unwrap();
 
         let content = std::fs::read_to_string(dir.path().join(".aether/settings.json")).unwrap();
-        let config: AetherConfig = serde_json::from_str(&content).unwrap();
+        let config: AetherSettings = serde_json::from_str(&content).unwrap();
         let agent = &config.agents[0];
 
         assert_eq!(config.agents.len(), 1);
@@ -337,7 +338,7 @@ mod tests {
         assert!(!dir.path().join("AGENTS.md").exists());
 
         let content = std::fs::read_to_string(dir.path().join(".aether/settings.json")).unwrap();
-        let config: AetherConfig = serde_json::from_str(&content).unwrap();
+        let config: AetherSettings = serde_json::from_str(&content).unwrap();
         assert!(!has_prompt(&config.agents[0], "AGENTS.md"));
     }
 
@@ -348,8 +349,8 @@ mod tests {
         draft.entry.reasoning_effort = Some(ReasoningEffort::High);
         scaffold(dir.path(), &draft).unwrap();
 
-        let config = aether_project::AetherConfig::load_default(dir.path()).unwrap();
-        let catalog = aether_project::AgentCatalog::from_config(dir.path(), config).unwrap();
+        let config = aether_project::AetherSettings::load_default(dir.path()).unwrap();
+        let catalog = aether_project::AgentCatalog::from_settings(dir.path(), config).unwrap();
         assert_eq!(catalog.all()[0].reasoning_effort, Some(ReasoningEffort::High));
     }
 
@@ -384,7 +385,7 @@ mod tests {
         scaffold(dir.path(), &draft).unwrap();
 
         let content = std::fs::read_to_string(dir.path().join(".aether/settings.json")).unwrap();
-        let config: AetherConfig = serde_json::from_str(&content).unwrap();
+        let config: AetherSettings = serde_json::from_str(&content).unwrap();
         assert!(config.agents[0].mcps.is_empty());
     }
 
@@ -396,8 +397,8 @@ mod tests {
         let settings_path = dir.path().join(".aether/settings.json");
         add_agent(&settings_path, &researcher_draft()).unwrap();
 
-        let config = aether_project::AetherConfig::load_default(dir.path()).unwrap();
-        let catalog = aether_project::AgentCatalog::from_config(dir.path(), config).unwrap();
+        let config = aether_project::AetherSettings::load_default(dir.path()).unwrap();
+        let catalog = aether_project::AgentCatalog::from_settings(dir.path(), config).unwrap();
         assert_eq!(catalog.all().len(), 2);
         assert_eq!(catalog.all()[0].name, "Default");
         assert_eq!(catalog.all()[1].name, "Researcher");
@@ -452,7 +453,7 @@ mod tests {
         add_agent(&settings_path, &new_draft).unwrap();
 
         let content = std::fs::read_to_string(&settings_path).unwrap();
-        let config: AetherConfig = serde_json::from_str(&content).unwrap();
+        let config: AetherSettings = serde_json::from_str(&content).unwrap();
         let researcher = &config.agents[1];
 
         assert_eq!(researcher.name, "Researcher");
@@ -501,10 +502,10 @@ mod tests {
     }
 
     #[test]
-    fn build_config_scaffold_emits_all_selected_prompts() {
+    fn build_settings_scaffold_emits_all_selected_prompts() {
         let mut draft = default_draft();
         draft.entry.prompts = vec![PromptSource::file("AGENTS.md"), PromptSource::file("CLAUDE.md")];
-        let config = draft.to_config(&NewAgentMode::ScaffoldProject, None);
+        let config = draft.to_settings(&NewAgentMode::ScaffoldProject, None);
         let agent = &config.agents[0];
 
         assert!(has_prompt(agent, ".aether/DEFAULT.md"));
@@ -513,8 +514,8 @@ mod tests {
     }
 
     #[test]
-    fn build_config_add_agent_skips_shared_prompts() {
-        let existing = serde_json::to_string_pretty(&AetherConfig {
+    fn build_settings_add_agent_skips_shared_prompts() {
+        let existing = serde_json::to_string_pretty(&AetherSettings {
             agent: Some("Default".to_string()),
             agents: vec![default_draft().to_agent_config(&NewAgentMode::ScaffoldProject, &[])],
         })
@@ -522,7 +523,7 @@ mod tests {
 
         let mut new_draft = researcher_draft();
         new_draft.entry.prompts = vec![PromptSource::file("AGENTS.md"), PromptSource::file("CLAUDE.md")];
-        let config = new_draft.to_config(&NewAgentMode::AddAgentToExistingProject, Some(&existing));
+        let config = new_draft.to_settings(&NewAgentMode::AddAgentToExistingProject, Some(&existing));
 
         let researcher = &config.agents[1];
         assert_eq!(researcher.name, "Researcher");
@@ -549,7 +550,7 @@ mod tests {
         scaffold(dir.path(), &draft).unwrap();
 
         let content = std::fs::read_to_string(dir.path().join(".aether/settings.json")).unwrap();
-        let config: AetherConfig = serde_json::from_str(&content).unwrap();
+        let config: AetherSettings = serde_json::from_str(&content).unwrap();
 
         assert!(has_mcp(&config.agents[0], "mcp.json"));
     }
@@ -566,7 +567,7 @@ mod tests {
         add_agent(&settings_path, &new_draft).unwrap();
 
         let content = std::fs::read_to_string(&settings_path).unwrap();
-        let config: AetherConfig = serde_json::from_str(&content).unwrap();
+        let config: AetherSettings = serde_json::from_str(&content).unwrap();
         let researcher = &config.agents[1];
 
         assert!(has_mcp(researcher, ".mcp.json"));

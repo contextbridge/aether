@@ -1,6 +1,6 @@
 use aether_core::events::AgentMessage;
 use aether_core::events::SubAgentProgressPayload;
-use aether_project::{AetherConfig, AgentCatalog};
+use aether_project::{AetherSettings, AgentCatalog};
 use clap::Parser;
 use rmcp::{
     RoleServer, ServerHandler,
@@ -47,11 +47,12 @@ pub struct SubAgentsMcp {
 
 impl SubAgentsMcp {
     pub fn from_project_root(project_root: PathBuf) -> Result<Self, String> {
-        let config = AetherConfig::load_default(&project_root).map_err(|e| format!("Failed to load agents: {e}"))?;
-        let catalog = if config.agents.is_empty() {
+        let settings =
+            AetherSettings::load_default(&project_root).map_err(|e| format!("Failed to load agents: {e}"))?;
+        let catalog = if settings.agents.is_empty() {
             AgentCatalog::empty(project_root.clone())
         } else {
-            AgentCatalog::from_config(&project_root, config).map_err(|e| format!("Failed to load agents: {e}"))?
+            AgentCatalog::from_settings(&project_root, settings).map_err(|e| format!("Failed to load agents: {e}"))?
         };
         Ok(Self::new(catalog, project_root))
     }

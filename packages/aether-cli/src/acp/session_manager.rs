@@ -32,7 +32,7 @@ use super::session_store::{SessionMeta, SessionStore};
 use acp_utils::content::format_embedded_resource;
 use aether_core::agent_spec::AgentSpec;
 use aether_core::context::ext::ContextExt;
-use aether_project::{AetherConfig, AetherConfigSource, AgentCatalog};
+use aether_project::{AetherSettings, AetherSettingsSource, AgentCatalog};
 use llm::Context;
 
 /// Initial session selection supplied when `aether acp` starts.
@@ -63,7 +63,7 @@ pub struct SessionManager {
     session_store: Arc<SessionStore>,
     has_oauth_credential: fn(&str) -> bool,
     initial_selection: InitialSessionSelection,
-    config_source: Option<AetherConfigSource>,
+    settings_source: Option<AetherSettingsSource>,
 }
 
 pub(crate) struct SessionManagerConfig {
@@ -71,7 +71,7 @@ pub(crate) struct SessionManagerConfig {
     pub(crate) session_store: Arc<SessionStore>,
     pub(crate) has_oauth_credential: fn(&str) -> bool,
     pub(crate) initial_selection: InitialSessionSelection,
-    pub(crate) config_source: Option<AetherConfigSource>,
+    pub(crate) settings_source: Option<AetherSettingsSource>,
 }
 
 struct SessionModeCatalog {
@@ -111,7 +111,7 @@ impl SessionManager {
             session_store: deps.session_store,
             has_oauth_credential: deps.has_oauth_credential,
             initial_selection: deps.initial_selection,
-            config_source: deps.config_source,
+            settings_source: deps.settings_source,
         }
     }
 
@@ -141,10 +141,10 @@ impl SessionManager {
     }
 
     async fn load_mode_catalog(&self, cwd: &Path) -> Result<SessionModeCatalog, acp::Error> {
-        let config = if let Some(source) = self.config_source.clone() {
-            AetherConfig::load(cwd, [source])
+        let config = if let Some(source) = self.settings_source.clone() {
+            AetherSettings::load(cwd, [source])
         } else {
-            AetherConfig::load_default(cwd)
+            AetherSettings::load_default(cwd)
         }
         .map_err(|e| {
             error!("Failed to load agent catalog: {e}");
@@ -153,7 +153,7 @@ impl SessionManager {
         let catalog = if config.agents.is_empty() {
             AgentCatalog::empty(cwd.to_path_buf())
         } else {
-            AgentCatalog::from_config(cwd, config).map_err(|e| {
+            AgentCatalog::from_settings(cwd, config).map_err(|e| {
                 error!("Failed to load agent catalog: {e}");
                 acp::Error::invalid_params()
             })?
@@ -378,7 +378,7 @@ mod tests {
             session_store,
             has_oauth_credential: |_| false,
             initial_selection: InitialSessionSelection::default(),
-            config_source: None,
+            settings_source: None,
         });
         let response =
             manager.initialize(InitializeRequest::new(ProtocolVersion::LATEST)).await.expect("initialize succeeds");

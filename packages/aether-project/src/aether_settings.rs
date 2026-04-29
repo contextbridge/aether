@@ -1,18 +1,25 @@
-use crate::agent_config::{AetherConfigSource, AgentConfig};
+use crate::agent_config::AgentConfig;
 use crate::error::SettingsError;
 use std::fs::read_to_string;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AetherConfig {
+pub struct AetherSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
     #[schemars(length(min = 1))]
     pub agents: Vec<AgentConfig>,
 }
 
-impl AetherConfig {
+#[derive(Debug, Clone)]
+pub enum AetherSettingsSource {
+    File(PathBuf),
+    Json(String),
+    Value(AetherSettings),
+}
+
+impl AetherSettings {
     pub fn load_default(project_root: &Path) -> Result<Self, SettingsError> {
         let settings_path = project_root.join(".aether/settings.json");
         match read_to_string(&settings_path) {
@@ -25,7 +32,7 @@ impl AetherConfig {
 
     pub fn load(
         project_root: &Path,
-        sources: impl IntoIterator<Item = AetherConfigSource>,
+        sources: impl IntoIterator<Item = AetherSettingsSource>,
     ) -> Result<Self, SettingsError> {
         sources.into_iter().try_fold(Self::default(), |config, source| {
             let next = Self::load_source(project_root, source)?;
@@ -49,21 +56,21 @@ impl AetherConfig {
         self
     }
 
-    fn load_source(project_root: &Path, source: AetherConfigSource) -> Result<Self, SettingsError> {
+    fn load_source(project_root: &Path, source: AetherSettingsSource) -> Result<Self, SettingsError> {
         match source {
-            AetherConfigSource::File(path) => {
+            AetherSettingsSource::File(path) => {
                 let path = project_root.join(path);
                 let content = read_to_string(&path)
                     .map_err(|e| SettingsError::IoError(format!("Failed to read {}: {}", path.display(), e)))?;
                 Self::try_from(content.as_str())
             }
-            AetherConfigSource::Json(json) => Self::try_from(json.as_str()),
-            AetherConfigSource::Value(config) => Ok(config),
+            AetherSettingsSource::Json(json) => Self::try_from(json.as_str()),
+            AetherSettingsSource::Value(config) => Ok(config),
         }
     }
 }
 
-impl TryFrom<&str> for AetherConfig {
+impl TryFrom<&str> for AetherSettings {
     type Error = SettingsError;
 
     fn try_from(content: &str) -> Result<Self, Self::Error> {
@@ -84,10 +91,12 @@ mod tests {
     fn resolves_selected_agent() {
         let dir = tempfile::tempdir().unwrap();
         write_file(dir.path(), "PROMPT.md", "Be helpful");
-        let config =
-            AetherConfig { agent: Some("beta".to_string()), agents: vec![agent_config("alpha"), agent_config("beta")] };
+        let config = AetherSettings {
+            agent: Some("beta".to_string()),
+            agents: vec![agent_config("alpha"), agent_config("beta")],
+        };
 
-        let catalog = AgentCatalog::from_config(dir.path(), config).unwrap();
+        let catalog = AgentCatalog::from_settings(dir.path(), config).unwrap();
 
         assert_eq!(catalog.default_agent().map(|spec| spec.name.as_str()), Some("beta"));
     }
@@ -97,15 +106,15 @@ mod tests {
         let mut internal = agent_config("internal");
         internal.user_invocable = false;
         internal.agent_invocable = true;
-        let config = AetherConfig { agent: Some("internal".to_string()), agents: vec![internal] };
+        let config = AetherSettings { agent: Some("internal".to_string()), agents: vec![internal] };
 
-        let err = AgentCatalog::from_config(Path::new("/tmp"), config).unwrap_err();
+        let err = AgentCatalog::from_settings(Path::new("/tmp"), config).unwrap_err();
 
         assert!(matches!(err, SettingsError::NonUserInvocableAgentSelector { .. }));
     }
 
     #[test]
-    fn config_file_paths_are_project_relative() {
+    fn settings_file_paths_are_project_relative() {
         let dir = tempfile::tempdir().unwrap();
         write_file(dir.path(), "PROMPT.md", "Be helpful");
         write_file(
@@ -115,8 +124,9 @@ mod tests {
         );
 
         let config =
-            AetherConfig::load(dir.path(), [AetherConfigSource::File(PathBuf::from("nested/config.json"))]).unwrap();
-        let catalog = AgentCatalog::from_config(dir.path(), config).unwrap();
+            AetherSettings::load(dir.path(), [AetherSettingsSource::File(PathBuf::from("nested/config.json"))])
+                .unwrap();
+        let catalog = AgentCatalog::from_settings(dir.path(), config).unwrap();
 
         assert_eq!(catalog.all()[0].name, "alpha");
     }
@@ -124,11 +134,11 @@ mod tests {
     #[test]
     fn load_merges_sources_with_rightmost_agent_winning() {
         let dir = tempfile::tempdir().unwrap();
-        let base = AetherConfig {
+        let base = AetherSettings {
             agent: Some("alpha".to_string()),
             agents: vec![AgentConfig { description: "Base alpha".to_string(), ..agent_config("alpha") }],
         };
-        let override_config = AetherConfig {
+        let override_config = AetherSettings {
             agent: Some("beta".to_string()),
             agents: vec![
                 AgentConfig { description: "Override alpha".to_string(), ..agent_config("alpha") },
@@ -136,9 +146,9 @@ mod tests {
             ],
         };
 
-        let config = AetherConfig::load(
+        let config = AetherSettings::load(
             dir.path(),
-            [AetherConfigSource::Value(base), AetherConfigSource::Value(override_config)],
+            [AetherSettingsSource::Value(base), AetherSettingsSource::Value(override_config)],
         )
         .unwrap();
 
@@ -153,7 +163,7 @@ mod tests {
     fn resolves_inline_mcp_config() {
         let dir = tempfile::tempdir().unwrap();
         write_file(dir.path(), "PROMPT.md", "Be helpful");
-        let config = AetherConfig {
+        let config = AetherSettings {
             agent: None,
             agents: vec![AgentConfig {
                 mcps: vec![McpSourceSpec::Inline { servers: BTreeMap::new() }],
@@ -161,7 +171,7 @@ mod tests {
             }],
         };
 
-        let catalog = AgentCatalog::from_config(dir.path(), config).unwrap();
+        let catalog = AgentCatalog::from_settings(dir.path(), config).unwrap();
         let spec = catalog.resolve("alpha").unwrap();
 
         assert_eq!(spec.mcp_config_sources.len(), 1);

@@ -1,4 +1,4 @@
-use aether_project::{AetherConfig, AgentConfig};
+use aether_project::{AetherSettings, AgentConfig};
 use crossterm::style::Stylize;
 use std::fs;
 
@@ -18,7 +18,7 @@ pub fn run_list(args: ListArgs) -> Result<(), CliError> {
         Err(e) => return Err(CliError::IoError(e)),
     };
 
-    let config: AetherConfig =
+    let config: AetherSettings =
         serde_json::from_str(&content).map_err(|e| CliError::AgentError(format!("Failed to parse settings: {e}")))?;
 
     if config.agents.is_empty() {
