@@ -39,7 +39,7 @@ impl Session {
         restored_messages: Option<Vec<ChatMessage>>,
         prompt_cache_key: Option<String>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        debug!("MCP configs: {:?}", spec.mcp_config_refs);
+        debug!("MCP configs: {:?}", spec.mcp_config_sources);
         debug!("Using project root: {:?}", cwd);
 
         let mut rb = RuntimeBuilder::from_spec(cwd, spec).extra_servers(extra_mcp_servers);

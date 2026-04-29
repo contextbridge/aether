@@ -5,22 +5,27 @@
 
 use crate::core::Prompt;
 use llm::{LlmModel, ReasoningEffort, ToolDefinition};
-use std::path::{Path, PathBuf};
+use mcp_utils::client::RawMcpConfig;
+use std::path::PathBuf;
 
-/// Reference to an MCP config file with optional proxy wrapping.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct McpJsonFileRef {
-    pub path: PathBuf,
-    pub proxy: bool,
+#[derive(Debug, Clone)]
+pub enum McpConfigSource {
+    File { path: PathBuf, proxy: bool },
+    Json(String),
+    Inline(RawMcpConfig),
 }
 
-impl McpJsonFileRef {
+impl McpConfigSource {
+    pub fn file(path: PathBuf, proxy: bool) -> Self {
+        Self::File { path, proxy }
+    }
+
     pub fn direct(path: PathBuf) -> Self {
-        Self { path, proxy: false }
+        Self::file(path, false)
     }
 
     pub fn proxied(path: PathBuf) -> Self {
-        Self { path, proxy: true }
+        Self::file(path, true)
     }
 }
 
@@ -50,12 +55,11 @@ pub struct AgentSpec {
     /// the command at prompt-load time. `Prompt::McpInstructions` is added separately
     /// during agent construction.
     pub prompts: Vec<Prompt>,
-    /// Resolved MCP config refs for this agent, applied in order.
+    /// Resolved MCP config sources for this agent, applied in order.
     ///
-    /// On server name collisions across files, the last entry in the list wins.
-    /// Before catalog resolution, this holds agent-local overrides (empty if none).
-    /// After catalog resolution, this holds the effective list (agent-local > inherited > cwd/mcp.json).
-    pub mcp_config_refs: Vec<McpJsonFileRef>,
+    /// Direct server name collisions use last-source-wins semantics. Proxy-enabled
+    /// file sources are merged into a single runtime tool proxy.
+    pub mcp_config_sources: Vec<McpConfigSource>,
     /// How this agent can be invoked.
     pub exposure: AgentSpecExposure,
     /// Tool filter for restricting which MCP tools this agent can use.
@@ -63,7 +67,7 @@ pub struct AgentSpec {
 }
 
 impl AgentSpec {
-    /// Create a default (no-mode) agent spec with inherited prompts.
+    /// Create a default (no-mode) agent spec with the provided prompts.
     pub fn default_spec(model: &LlmModel, reasoning_effort: Option<ReasoningEffort>, prompts: Vec<Prompt>) -> Self {
         Self {
             name: "__default__".to_string(),
@@ -71,27 +75,9 @@ impl AgentSpec {
             model: model.to_string(),
             reasoning_effort,
             prompts,
-            mcp_config_refs: Vec::new(),
+            mcp_config_sources: Vec::new(),
             exposure: AgentSpecExposure::none(),
             tools: ToolFilter::default(),
-        }
-    }
-
-    /// Resolve effective MCP config refs in place using precedence:
-    /// 1. Agent's own `mcp_config_refs` (kept as-is if non-empty)
-    /// 2. `inherited` refs from settings (if non-empty)
-    /// 3. `cwd/mcp.json` (becomes a single direct ref if it exists)
-    pub fn resolve_mcp_config(&mut self, inherited: &[McpJsonFileRef], cwd: &Path) {
-        if !self.mcp_config_refs.is_empty() {
-            return;
-        }
-        if !inherited.is_empty() {
-            self.mcp_config_refs = inherited.to_vec();
-            return;
-        }
-        let cwd_mcp = cwd.join("mcp.json");
-        if cwd_mcp.is_file() {
-            self.mcp_config_refs = vec![McpJsonFileRef::direct(cwd_mcp)];
         }
     }
 }
@@ -101,7 +87,7 @@ impl AgentSpec {
 /// Supports `allow` (allowlist) and `deny` (blocklist) with trailing `*` wildcards.
 /// If both are set, allow is applied first, then deny removes from the result.
 /// An empty filter (the default) allows all tools.
-#[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 pub struct ToolFilter {
     /// If non-empty, only tools matching these patterns are allowed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -171,20 +157,6 @@ impl AgentSpecExposure {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-
-    fn make_spec() -> AgentSpec {
-        AgentSpec {
-            name: "test".to_string(),
-            description: "Test agent".to_string(),
-            model: "anthropic:claude-sonnet-4-5".to_string(),
-            reasoning_effort: None,
-            prompts: vec![],
-            mcp_config_refs: Vec::new(),
-            exposure: AgentSpecExposure::both(),
-            tools: ToolFilter::default(),
-        }
-    }
 
     #[test]
     fn default_spec_has_expected_fields() {
@@ -197,54 +169,8 @@ mod tests {
         assert_eq!(spec.model, model.to_string());
         assert!(spec.reasoning_effort.is_none());
         assert_eq!(spec.prompts.len(), 1);
-        assert!(spec.mcp_config_refs.is_empty());
+        assert!(spec.mcp_config_sources.is_empty());
         assert_eq!(spec.exposure, AgentSpecExposure::none());
-    }
-
-    #[test]
-    fn resolve_mcp_prefers_agent_local_refs() {
-        let dir = tempfile::tempdir().unwrap();
-        let agent_path = dir.path().join("agent-mcp.json");
-        let inherited_path = dir.path().join("inherited-mcp.json");
-        fs::write(&agent_path, "{}").unwrap();
-        fs::write(&inherited_path, "{}").unwrap();
-
-        let mut spec = make_spec();
-        spec.mcp_config_refs = vec![McpJsonFileRef::direct(agent_path.clone())];
-
-        spec.resolve_mcp_config(&[McpJsonFileRef::direct(inherited_path)], dir.path());
-        assert_eq!(spec.mcp_config_refs, vec![McpJsonFileRef::direct(agent_path)]);
-    }
-
-    #[test]
-    fn resolve_mcp_falls_back_to_inherited() {
-        let dir = tempfile::tempdir().unwrap();
-        let inherited_path = dir.path().join("inherited-mcp.json");
-        fs::write(&inherited_path, "{}").unwrap();
-        fs::write(dir.path().join("mcp.json"), "{}").unwrap();
-
-        let mut spec = make_spec();
-        let inherited_ref = McpJsonFileRef::direct(inherited_path.clone());
-        spec.resolve_mcp_config(std::slice::from_ref(&inherited_ref), dir.path());
-        assert_eq!(spec.mcp_config_refs, vec![McpJsonFileRef::direct(inherited_path)]);
-    }
-
-    #[test]
-    fn resolve_mcp_falls_back_to_cwd() {
-        let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("mcp.json"), "{}").unwrap();
-
-        let mut spec = make_spec();
-        spec.resolve_mcp_config(&[], dir.path());
-        assert_eq!(spec.mcp_config_refs, vec![McpJsonFileRef::direct(dir.path().join("mcp.json"))]);
-    }
-
-    #[test]
-    fn resolve_mcp_yields_empty_when_nothing_found() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut spec = make_spec();
-        spec.resolve_mcp_config(&[], dir.path());
-        assert!(spec.mcp_config_refs.is_empty());
     }
 
     fn make_tool(name: &str) -> ToolDefinition {
@@ -288,7 +214,8 @@ mod tests {
 
     #[test]
     fn combined_allow_and_deny() {
-        let filter = ToolFilter { allow: vec!["coding__*".to_string()], deny: vec!["coding__write_file".to_string()] };
+        let filter =
+            { ToolFilter { allow: vec!["coding__*".to_string()], deny: vec!["coding__write_file".to_string()] } };
         let tools = vec![
             make_tool("coding__grep"),
             make_tool("coding__write_file"),

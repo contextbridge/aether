@@ -39,15 +39,15 @@ impl NewAgentWizard {
             mode,
             step: NewAgentStep::Identity,
             draft: DraftAgentEntry {
-                entry: aether_project::AgentEntry {
+                entry: aether_project::AgentConfig {
                     user_invocable: true,
                     agent_invocable: true,
-                    prompts: prompt_options.iter().map(|d| d.filename().to_string()).collect(),
-                    mcp_servers: default_servers(),
-                    ..aether_project::AgentEntry::default()
+                    prompts: prompt_options.iter().map(|d| aether_project::PromptSource::file(d.filename())).collect(),
+                    ..aether_project::AgentConfig::default()
                 },
                 system_md_content: String::new(),
                 system_md_edited: false,
+                selected_mcp_servers: default_servers(),
                 workspace_mcp_configs: vec![],
             },
             identity: IdentityStep::new(),

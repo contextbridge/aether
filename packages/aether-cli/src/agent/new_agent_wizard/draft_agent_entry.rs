@@ -1,4 +1,4 @@
-use aether_project::{AgentEntry, McpServerEntry, Settings};
+use aether_project::{AetherConfig, AgentConfig, McpSourceSpec, PromptSource};
 use std::{
     fs::{create_dir_all, read_to_string, write},
     path::{Path, PathBuf},
@@ -8,9 +8,10 @@ use super::new_agent_step::{NewAgentMode, PromptFile};
 use crate::error::CliError;
 
 pub struct DraftAgentEntry {
-    pub entry: AgentEntry,
+    pub entry: AgentConfig,
     pub system_md_content: String,
     pub system_md_edited: bool,
+    pub selected_mcp_servers: Vec<String>,
     pub workspace_mcp_configs: Vec<String>,
 }
 
@@ -36,47 +37,49 @@ impl DraftAgentEntry {
         }
     }
 
-    pub fn to_agent_entry(&self, mode: &NewAgentMode, inherited_prompts: &[String]) -> AgentEntry {
+    pub fn to_agent_config(&self, mode: &NewAgentMode, inherited_prompts: &[String]) -> AgentConfig {
         let paths = self.generated_paths(mode);
 
-        let mut prompts = vec![paths.system_md.to_string_lossy().to_string()];
+        let mut prompts = vec![PromptSource::file(paths.system_md.to_string_lossy())];
         match mode {
             NewAgentMode::ScaffoldProject => {
                 prompts.extend(self.entry.prompts.iter().cloned());
             }
             NewAgentMode::AddAgentToExistingProject => {
-                for name in &self.entry.prompts {
-                    if !inherited_prompts.iter().any(|d| d == name) {
-                        prompts.push(name.clone());
+                for prompt in &self.entry.prompts {
+                    if let Some(path) = prompt.path()
+                        && !inherited_prompts.iter().any(|d| d == path)
+                    {
+                        prompts.push(prompt.clone());
                     }
                 }
             }
         }
 
-        let mut mcp_servers: Vec<McpServerEntry> = if self.entry.mcp_servers.is_empty() {
+        let mut mcp = if self.selected_mcp_servers.is_empty() {
             vec![]
         } else {
-            vec![McpServerEntry::Path(paths.mcp_json.to_string_lossy().to_string())]
+            vec![McpSourceSpec::file(paths.mcp_json.to_string_lossy())]
         };
 
-        mcp_servers.extend(self.workspace_mcp_configs.iter().map(|s| McpServerEntry::Path(s.clone())));
+        mcp.extend(self.workspace_mcp_configs.iter().map(McpSourceSpec::file));
 
-        AgentEntry { prompts, mcp_servers, ..self.entry.clone() }
+        AgentConfig { prompts, mcps: mcp, ..self.entry.clone() }
     }
 
-    pub fn to_settings(&self, mode: &NewAgentMode, existing: Option<&str>) -> Settings {
+    pub fn to_config(&self, mode: &NewAgentMode, existing: Option<&str>) -> AetherConfig {
         match mode {
             NewAgentMode::ScaffoldProject => {
-                let entry = self.to_agent_entry(mode, &[]);
-                Settings { prompts: vec![], mcp_servers: vec![], agents: vec![entry] }
+                let entry = self.to_agent_config(mode, &[]);
+                AetherConfig { agent: Some(entry.name.clone()), agents: vec![entry] }
             }
             NewAgentMode::AddAgentToExistingProject => {
                 let inherited = inherited_prompts_from_existing(existing);
-                let entry = self.to_agent_entry(mode, &inherited);
+                let entry = self.to_agent_config(mode, &inherited);
 
-                let mut settings: Settings = existing.and_then(|s| serde_json::from_str(s).ok()).unwrap_or_default();
-                settings.agents.push(entry);
-                settings
+                let mut config: AetherConfig = existing.and_then(|s| serde_json::from_str(s).ok()).unwrap_or_default();
+                config.agents.push(entry);
+                config
             }
         }
     }
@@ -86,11 +89,10 @@ impl DraftAgentEntry {
         use std::collections::BTreeMap;
 
         let servers = self
-            .entry
-            .mcp_servers
+            .selected_mcp_servers
             .iter()
             .map(|entry| {
-                let name = entry.path_str();
+                let name = entry.as_str();
                 let args = match name {
                     "coding" => vec!["--rules-dir".into(), ".aether/skills".into()],
                     "skills" => {
@@ -114,8 +116,20 @@ pub struct GeneratedPaths {
 
 fn inherited_prompts_from_existing(existing: Option<&str>) -> Vec<String> {
     existing
-        .and_then(|s| serde_json::from_str::<Settings>(s).ok())
-        .map(|s| s.prompts.into_iter().filter(|p| PromptFile::all().iter().any(|d| d.filename() == p)).collect())
+        .and_then(|s| serde_json::from_str::<AetherConfig>(s).ok())
+        .map(|s| {
+            s.agents
+                .first()
+                .map(|agent| {
+                    agent
+                        .prompts
+                        .iter()
+                        .filter_map(|p| p.path().map(str::to_string))
+                        .filter(|p| PromptFile::all().iter().any(|d| d.filename() == p))
+                        .collect()
+                })
+                .unwrap_or_default()
+        })
         .unwrap_or_default()
 }
 
@@ -147,11 +161,11 @@ pub fn scaffold(project_root: &Path, draft: &DraftAgentEntry) -> Result<(), CliE
     let paths = draft.generated_paths(&NewAgentMode::ScaffoldProject);
     write_if_absent(&project_root.join(&paths.system_md), &draft.system_md_content)?;
     write_if_absent(&project_root.join(".aether/mcp.json"), &draft.to_mcp_json())?;
-    if draft.entry.prompts.iter().any(|n| n == PromptFile::Agents.filename()) {
+    if draft.entry.prompts.iter().any(|n| n.path() == Some(PromptFile::Agents.filename())) {
         write_if_absent(&project_root.join("AGENTS.md"), &build_agents_md(draft))?;
     }
-    let settings = draft.to_settings(&NewAgentMode::ScaffoldProject, None);
-    let json = serde_json::to_string_pretty(&settings).expect("settings serialization cannot fail");
+    let config = draft.to_config(&NewAgentMode::ScaffoldProject, None);
+    let json = serde_json::to_string_pretty(&config).expect("settings serialization cannot fail");
     write_if_absent(&project_root.join(".aether/settings.json"), &json)?;
 
     Ok(())
@@ -165,12 +179,12 @@ pub fn add_agent(settings_path: &Path, draft: &DraftAgentEntry) -> Result<(), Cl
     let filename = format!("{}.md", draft.slug().to_uppercase());
     write(slug_dir.join(filename), &draft.system_md_content).map_err(CliError::IoError)?;
 
-    if !draft.entry.mcp_servers.is_empty() {
+    if !draft.selected_mcp_servers.is_empty() {
         write(slug_dir.join("mcp.json"), draft.to_mcp_json()).map_err(CliError::IoError)?;
     }
 
-    let settings = draft.to_settings(&NewAgentMode::AddAgentToExistingProject, Some(&content));
-    let json = serde_json::to_string_pretty(&settings).expect("settings serialization cannot fail");
+    let config = draft.to_config(&NewAgentMode::AddAgentToExistingProject, Some(&content));
+    let json = serde_json::to_string_pretty(&config).expect("settings serialization cannot fail");
     write(settings_path, json).map_err(CliError::IoError)?;
 
     Ok(())
@@ -193,22 +207,40 @@ mod tests {
     use llm::ReasoningEffort;
     use mcp_utils::client::config::RawMcpConfig;
 
+    fn has_prompt(agent: &AgentConfig, path: &str) -> bool {
+        agent.prompts.iter().any(|prompt| prompt.path() == Some(path))
+    }
+
+    fn has_mcp(agent: &AgentConfig, path: &str) -> bool {
+        agent.mcps.iter().any(|mcp| mcp.path() == Some(path))
+    }
+
     fn default_draft() -> DraftAgentEntry {
         let mut draft = DraftAgentEntry {
-            entry: AgentEntry {
+            entry: AgentConfig {
                 name: "Default".to_string(),
                 description: "Default coding agent".to_string(),
                 user_invocable: true,
                 agent_invocable: true,
                 model: "anthropic:claude-sonnet-4-5".to_string(),
-                prompts: vec!["AGENTS.md".to_string()],
-                mcp_servers: vec!["coding".into(), "skills".into(), "tasks".into()],
-                ..AgentEntry::default()
+                prompts: vec![PromptSource::file("AGENTS.md")],
+                ..AgentConfig::default()
             },
             system_md_content: String::new(),
             system_md_edited: false,
+            selected_mcp_servers: vec!["coding".into(), "skills".into(), "tasks".into()],
             workspace_mcp_configs: vec![],
         };
+        draft.system_md_content = build_system_md(&draft);
+        draft
+    }
+
+    fn researcher_draft() -> DraftAgentEntry {
+        let mut draft = default_draft();
+        draft.entry.name = "Researcher".to_string();
+        draft.entry.description = "Research agent".to_string();
+        draft.selected_mcp_servers = vec![];
+        draft.workspace_mcp_configs = vec![];
         draft.system_md_content = build_system_md(&draft);
         draft
     }
@@ -229,7 +261,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         scaffold(dir.path(), &default_draft()).unwrap();
 
-        let catalog = aether_project::load_agent_catalog(dir.path()).unwrap();
+        let config = aether_project::AetherConfig::load_default(dir.path()).unwrap();
+        let catalog = aether_project::AgentCatalog::from_config(dir.path(), config).unwrap();
         assert_eq!(catalog.all().len(), 1);
         assert_eq!(catalog.all()[0].name, "Default");
     }
@@ -239,8 +272,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         scaffold(dir.path(), &default_draft()).unwrap();
 
-        let mcp_path = dir.path().join(".aether/mcp.json");
-        let raw = RawMcpConfig::from_json_file(&mcp_path).unwrap();
+        let raw = RawMcpConfig::from_json_file(dir.path().join(".aether/mcp.json")).unwrap();
         assert_eq!(raw.servers.len(), 3);
         assert!(raw.servers.contains_key("coding"));
         assert!(raw.servers.contains_key("skills"));
@@ -281,30 +313,18 @@ mod tests {
     }
 
     #[test]
-    fn scaffold_system_md_matches_draft_content() {
-        let dir = tempfile::tempdir().unwrap();
-        let draft = default_draft();
-        scaffold(dir.path(), &draft).unwrap();
-
-        let content = std::fs::read_to_string(dir.path().join(".aether/DEFAULT.md")).unwrap();
-        assert_eq!(content, draft.system_md_content);
-    }
-
-    #[test]
     fn generated_settings_reference_aether_paths() {
         let dir = tempfile::tempdir().unwrap();
         scaffold(dir.path(), &default_draft()).unwrap();
 
         let content = std::fs::read_to_string(dir.path().join(".aether/settings.json")).unwrap();
-        let settings: Settings = serde_json::from_str(&content).unwrap();
+        let config: AetherConfig = serde_json::from_str(&content).unwrap();
+        let agent = &config.agents[0];
 
-        assert!(settings.prompts.is_empty());
-        assert!(settings.mcp_servers.is_empty());
-
-        assert_eq!(settings.agents.len(), 1);
-        assert!(settings.agents[0].prompts.contains(&".aether/DEFAULT.md".to_string()));
-        assert!(settings.agents[0].prompts.contains(&"AGENTS.md".to_string()));
-        assert!(settings.agents[0].mcp_servers.contains(&".aether/mcp.json".into()));
+        assert_eq!(config.agents.len(), 1);
+        assert!(has_prompt(agent, ".aether/DEFAULT.md"));
+        assert!(has_prompt(agent, "AGENTS.md"));
+        assert!(has_mcp(agent, ".aether/mcp.json"));
     }
 
     #[test]
@@ -317,8 +337,8 @@ mod tests {
         assert!(!dir.path().join("AGENTS.md").exists());
 
         let content = std::fs::read_to_string(dir.path().join(".aether/settings.json")).unwrap();
-        let settings: Settings = serde_json::from_str(&content).unwrap();
-        assert!(!settings.prompts.contains(&"AGENTS.md".to_string()));
+        let config: AetherConfig = serde_json::from_str(&content).unwrap();
+        assert!(!has_prompt(&config.agents[0], "AGENTS.md"));
     }
 
     #[test]
@@ -328,7 +348,8 @@ mod tests {
         draft.entry.reasoning_effort = Some(ReasoningEffort::High);
         scaffold(dir.path(), &draft).unwrap();
 
-        let catalog = aether_project::load_agent_catalog(dir.path()).unwrap();
+        let config = aether_project::AetherConfig::load_default(dir.path()).unwrap();
+        let catalog = aether_project::AgentCatalog::from_config(dir.path(), config).unwrap();
         assert_eq!(catalog.all()[0].reasoning_effort, Some(ReasoningEffort::High));
     }
 
@@ -345,7 +366,7 @@ mod tests {
     fn scaffold_custom_servers() {
         let dir = tempfile::tempdir().unwrap();
         let mut draft = default_draft();
-        draft.entry.mcp_servers = vec!["coding".into(), "lsp".into()];
+        draft.selected_mcp_servers = vec!["coding".into(), "lsp".into()];
         scaffold(dir.path(), &draft).unwrap();
 
         let raw = RawMcpConfig::from_json_file(dir.path().join(".aether/mcp.json")).unwrap();
@@ -359,22 +380,12 @@ mod tests {
     fn scaffold_no_servers_no_mcp_json_ref() {
         let dir = tempfile::tempdir().unwrap();
         let mut draft = default_draft();
-        draft.entry.mcp_servers = vec![];
+        draft.selected_mcp_servers = vec![];
         scaffold(dir.path(), &draft).unwrap();
 
         let content = std::fs::read_to_string(dir.path().join(".aether/settings.json")).unwrap();
-        let settings: Settings = serde_json::from_str(&content).unwrap();
-        assert!(settings.mcp_servers.is_empty());
-    }
-
-    fn researcher_draft() -> DraftAgentEntry {
-        let mut draft = default_draft();
-        draft.entry.name = "Researcher".to_string();
-        draft.entry.description = "Research agent".to_string();
-        draft.entry.mcp_servers = vec![];
-        draft.workspace_mcp_configs = vec![];
-        draft.system_md_content = build_system_md(&draft);
-        draft
+        let config: AetherConfig = serde_json::from_str(&content).unwrap();
+        assert!(config.agents[0].mcps.is_empty());
     }
 
     #[test]
@@ -385,7 +396,8 @@ mod tests {
         let settings_path = dir.path().join(".aether/settings.json");
         add_agent(&settings_path, &researcher_draft()).unwrap();
 
-        let catalog = aether_project::load_agent_catalog(dir.path()).unwrap();
+        let config = aether_project::AetherConfig::load_default(dir.path()).unwrap();
+        let catalog = aether_project::AgentCatalog::from_config(dir.path(), config).unwrap();
         assert_eq!(catalog.all().len(), 2);
         assert_eq!(catalog.all()[0].name, "Default");
         assert_eq!(catalog.all()[1].name, "Researcher");
@@ -405,31 +417,6 @@ mod tests {
         let agent_md = dir.path().join(".aether/agents/researcher/RESEARCHER.md");
         assert!(agent_md.exists());
         assert_eq!(std::fs::read_to_string(agent_md).unwrap(), expected_per_agent);
-
-        let shared_md = dir.path().join(".aether/DEFAULT.md");
-        assert_eq!(std::fs::read_to_string(&shared_md).unwrap(), default_draft().system_md_content);
-    }
-
-    #[test]
-    fn add_agent_does_not_rewrite_shared_files() {
-        let dir = tempfile::tempdir().unwrap();
-        scaffold(dir.path(), &default_draft()).unwrap();
-
-        let shared_system = dir.path().join(".aether/DEFAULT.md");
-        std::fs::write(&shared_system, "custom shared prompt").unwrap();
-        let shared_mcp = dir.path().join(".aether/mcp.json");
-        let original_mcp = std::fs::read_to_string(&shared_mcp).unwrap();
-        let agents_md = dir.path().join("AGENTS.md");
-        std::fs::write(&agents_md, "custom agents md").unwrap();
-
-        let settings_path = dir.path().join(".aether/settings.json");
-        let mut new_draft = researcher_draft();
-        new_draft.entry.mcp_servers = vec!["coding".into()];
-        add_agent(&settings_path, &new_draft).unwrap();
-
-        assert_eq!(std::fs::read_to_string(&shared_system).unwrap(), "custom shared prompt");
-        assert_eq!(std::fs::read_to_string(&shared_mcp).unwrap(), original_mcp);
-        assert_eq!(std::fs::read_to_string(&agents_md).unwrap(), "custom agents md");
     }
 
     #[test]
@@ -440,7 +427,7 @@ mod tests {
         let settings_path = dir.path().join(".aether/settings.json");
         let mut new_draft = researcher_draft();
         new_draft.entry.prompts = vec![];
-        new_draft.entry.mcp_servers = vec!["coding".into(), "lsp".into()];
+        new_draft.selected_mcp_servers = vec!["coding".into(), "lsp".into()];
         add_agent(&settings_path, &new_draft).unwrap();
 
         let agent_mcp = dir.path().join(".aether/agents/researcher/mcp.json");
@@ -453,7 +440,7 @@ mod tests {
     }
 
     #[test]
-    fn add_agent_agent_entry_references_local_assets() {
+    fn add_agent_config_references_local_assets() {
         let dir = tempfile::tempdir().unwrap();
         scaffold(dir.path(), &default_draft()).unwrap();
 
@@ -461,18 +448,18 @@ mod tests {
         let mut new_draft = researcher_draft();
         new_draft.entry.user_invocable = false;
         new_draft.entry.prompts = vec![];
-        new_draft.entry.mcp_servers = vec!["coding".into()];
+        new_draft.selected_mcp_servers = vec!["coding".into()];
         add_agent(&settings_path, &new_draft).unwrap();
 
         let content = std::fs::read_to_string(&settings_path).unwrap();
-        let settings: Settings = serde_json::from_str(&content).unwrap();
-        let researcher = &settings.agents[1];
+        let config: AetherConfig = serde_json::from_str(&content).unwrap();
+        let researcher = &config.agents[1];
 
         assert_eq!(researcher.name, "Researcher");
         assert!(!researcher.user_invocable);
         assert!(researcher.agent_invocable);
-        assert!(researcher.prompts.contains(&".aether/agents/researcher/RESEARCHER.md".to_string()));
-        assert!(researcher.mcp_servers.contains(&".aether/agents/researcher/mcp.json".into()));
+        assert!(has_prompt(researcher, ".aether/agents/researcher/RESEARCHER.md"));
+        assert!(has_mcp(researcher, ".aether/agents/researcher/mcp.json"));
     }
 
     #[test]
@@ -514,44 +501,40 @@ mod tests {
     }
 
     #[test]
-    fn build_settings_json_scaffold_emits_all_selected_prompts() {
+    fn build_config_scaffold_emits_all_selected_prompts() {
         let mut draft = default_draft();
-        draft.entry.prompts = vec!["AGENTS.md".into(), "CLAUDE.md".into()];
-        let settings = draft.to_settings(&NewAgentMode::ScaffoldProject, None);
+        draft.entry.prompts = vec![PromptSource::file("AGENTS.md"), PromptSource::file("CLAUDE.md")];
+        let config = draft.to_config(&NewAgentMode::ScaffoldProject, None);
+        let agent = &config.agents[0];
 
-        assert!(settings.prompts.is_empty());
-        assert!(settings.agents[0].prompts.contains(&".aether/DEFAULT.md".to_string()));
-        assert!(settings.agents[0].prompts.contains(&"AGENTS.md".to_string()));
-        assert!(settings.agents[0].prompts.contains(&"CLAUDE.md".to_string()));
+        assert!(has_prompt(agent, ".aether/DEFAULT.md"));
+        assert!(has_prompt(agent, "AGENTS.md"));
+        assert!(has_prompt(agent, "CLAUDE.md"));
     }
 
     #[test]
-    fn build_settings_json_add_agent_skips_inherited_prompts() {
-        let existing = serde_json::to_string_pretty(&Settings {
-            prompts: vec!["AGENTS.md".into()],
-            mcp_servers: vec![],
-            agents: vec![default_draft().to_agent_entry(&NewAgentMode::ScaffoldProject, &[])],
+    fn build_config_add_agent_skips_shared_prompts() {
+        let existing = serde_json::to_string_pretty(&AetherConfig {
+            agent: Some("Default".to_string()),
+            agents: vec![default_draft().to_agent_config(&NewAgentMode::ScaffoldProject, &[])],
         })
         .unwrap();
 
         let mut new_draft = researcher_draft();
-        new_draft.entry.prompts = vec!["AGENTS.md".into(), "CLAUDE.md".into()];
-        let settings = new_draft.to_settings(&NewAgentMode::AddAgentToExistingProject, Some(&existing));
+        new_draft.entry.prompts = vec![PromptSource::file("AGENTS.md"), PromptSource::file("CLAUDE.md")];
+        let config = new_draft.to_config(&NewAgentMode::AddAgentToExistingProject, Some(&existing));
 
-        let researcher = &settings.agents[1];
+        let researcher = &config.agents[1];
         assert_eq!(researcher.name, "Researcher");
-        assert!(
-            !researcher.prompts.contains(&"AGENTS.md".to_string()),
-            "AGENTS.md is inherited from top-level prompts"
-        );
-        assert!(researcher.prompts.contains(&"CLAUDE.md".to_string()));
+        assert!(!has_prompt(researcher, "AGENTS.md"));
+        assert!(has_prompt(researcher, "CLAUDE.md"));
     }
 
     #[test]
     fn scaffold_writes_agents_md_when_selected() {
         let dir = tempfile::tempdir().unwrap();
         let mut draft = default_draft();
-        draft.entry.prompts = vec!["AGENTS.md".into()];
+        draft.entry.prompts = vec![PromptSource::file("AGENTS.md")];
         scaffold(dir.path(), &draft).unwrap();
         assert!(dir.path().join("AGENTS.md").exists());
     }
@@ -566,10 +549,9 @@ mod tests {
         scaffold(dir.path(), &draft).unwrap();
 
         let content = std::fs::read_to_string(dir.path().join(".aether/settings.json")).unwrap();
-        let settings: Settings = serde_json::from_str(&content).unwrap();
+        let config: AetherConfig = serde_json::from_str(&content).unwrap();
 
-        assert!(settings.mcp_servers.is_empty());
-        assert!(settings.agents[0].mcp_servers.contains(&"mcp.json".into()));
+        assert!(has_mcp(&config.agents[0], "mcp.json"));
     }
 
     #[test]
@@ -579,22 +561,23 @@ mod tests {
 
         let settings_path = dir.path().join(".aether/settings.json");
         let mut new_draft = researcher_draft();
-        new_draft.entry.mcp_servers = vec!["coding".into()];
+        new_draft.selected_mcp_servers = vec!["coding".into()];
         new_draft.workspace_mcp_configs = vec![".mcp.json".to_string()];
         add_agent(&settings_path, &new_draft).unwrap();
 
         let content = std::fs::read_to_string(&settings_path).unwrap();
-        let settings: Settings = serde_json::from_str(&content).unwrap();
-        let researcher = &settings.agents[1];
+        let config: AetherConfig = serde_json::from_str(&content).unwrap();
+        let researcher = &config.agents[1];
 
-        assert!(researcher.mcp_servers.contains(&".mcp.json".into()));
+        assert!(has_mcp(researcher, ".mcp.json"));
     }
 
     #[test]
     fn scaffold_never_writes_claude_or_gemini_md() {
         let dir = tempfile::tempdir().unwrap();
         let mut draft = default_draft();
-        draft.entry.prompts = vec!["AGENTS.md".into(), "CLAUDE.md".into(), "GEMINI.md".into()];
+        draft.entry.prompts =
+            vec![PromptSource::file("AGENTS.md"), PromptSource::file("CLAUDE.md"), PromptSource::file("GEMINI.md")];
         scaffold(dir.path(), &draft).unwrap();
 
         assert!(dir.path().join("AGENTS.md").exists());

@@ -32,7 +32,7 @@ use super::session_store::{SessionMeta, SessionStore};
 use acp_utils::content::format_embedded_resource;
 use aether_core::agent_spec::AgentSpec;
 use aether_core::context::ext::ContextExt;
-use aether_project::{AgentCatalog, load_agent_catalog};
+use aether_project::{AetherConfig, AetherConfigSource, AgentCatalog};
 use llm::Context;
 
 /// Initial session selection supplied when `aether acp` starts.
@@ -63,6 +63,7 @@ pub struct SessionManager {
     session_store: Arc<SessionStore>,
     has_oauth_credential: fn(&str) -> bool,
     initial_selection: InitialSessionSelection,
+    config_source: Option<AetherConfigSource>,
 }
 
 pub(crate) struct SessionManagerConfig {
@@ -70,6 +71,7 @@ pub(crate) struct SessionManagerConfig {
     pub(crate) session_store: Arc<SessionStore>,
     pub(crate) has_oauth_credential: fn(&str) -> bool,
     pub(crate) initial_selection: InitialSessionSelection,
+    pub(crate) config_source: Option<AetherConfigSource>,
 }
 
 struct SessionModeCatalog {
@@ -109,6 +111,7 @@ impl SessionManager {
             session_store: deps.session_store,
             has_oauth_credential: deps.has_oauth_credential,
             initial_selection: deps.initial_selection,
+            config_source: deps.config_source,
         }
     }
 
@@ -116,33 +119,45 @@ impl SessionManager {
         &self,
         mode_catalog: &SessionModeCatalog,
         default_model: &LlmModel,
-        cwd: &Path,
     ) -> Result<ResolvedInitialSession, acp::Error> {
         match &self.initial_selection {
-            InitialSessionSelection::Default => resolve_default_initial_session(mode_catalog, default_model, cwd),
+            InitialSessionSelection::Default => resolve_default_initial_session(mode_catalog, default_model),
             InitialSessionSelection::Agent(agent) => {
                 if !mode_catalog.modes.iter().any(|mode| mode.name == *agent) {
                     warn!("Unknown agent `{agent}` requested via --agent");
                     return Err(acp::Error::invalid_params());
                 }
-                resolve_agent_spec(&mode_catalog.catalog, agent, cwd)
+                resolve_agent_spec(&mode_catalog.catalog, agent)
                     .map(|spec| ResolvedInitialSession { spec, selected_mode: Some(agent.clone()) })
             }
             InitialSessionSelection::Model { model, reasoning_effort } => {
                 let model = parse_available_model(model, &mode_catalog.available)?;
                 Ok(ResolvedInitialSession {
-                    spec: mode_catalog.catalog.resolve_default(&model, *reasoning_effort, cwd),
+                    spec: AgentSpec::default_spec(&model, *reasoning_effort, Vec::new()),
                     selected_mode: None,
                 })
             }
         }
     }
 
-    async fn load_mode_catalog(cwd: &Path) -> Result<SessionModeCatalog, acp::Error> {
-        let catalog = load_agent_catalog(cwd).map_err(|e| {
+    async fn load_mode_catalog(&self, cwd: &Path) -> Result<SessionModeCatalog, acp::Error> {
+        let config = if let Some(source) = self.config_source.clone() {
+            AetherConfig::load(cwd, [source])
+        } else {
+            AetherConfig::load_default(cwd)
+        }
+        .map_err(|e| {
             error!("Failed to load agent catalog: {e}");
             acp::Error::invalid_params()
         })?;
+        let catalog = if config.agents.is_empty() {
+            AgentCatalog::empty(cwd.to_path_buf())
+        } else {
+            AgentCatalog::from_config(cwd, config).map_err(|e| {
+                error!("Failed to load agent catalog: {e}");
+                acp::Error::invalid_params()
+            })?
+        };
 
         let available = get_local_models().await;
         let specs: Vec<_> = catalog.user_invocable().cloned().collect();
@@ -280,8 +295,8 @@ fn map_acp_to_content_blocks(blocks: Vec<acp::ContentBlock>) -> Vec<ContentBlock
         .collect()
 }
 
-fn resolve_agent_spec(catalog: &AgentCatalog, mode_name: &str, cwd: &Path) -> Result<AgentSpec, acp::Error> {
-    catalog.resolve(mode_name, cwd).map_err(|e| {
+fn resolve_agent_spec(catalog: &AgentCatalog, mode_name: &str) -> Result<AgentSpec, acp::Error> {
+    catalog.resolve(mode_name).map_err(|e| {
         error!("Failed to resolve runtime inputs for mode '{}': {e}", mode_name);
         acp::Error::invalid_params()
     })
@@ -290,17 +305,13 @@ fn resolve_agent_spec(catalog: &AgentCatalog, mode_name: &str, cwd: &Path) -> Re
 fn resolve_default_initial_session(
     mode_catalog: &SessionModeCatalog,
     default_model: &LlmModel,
-    cwd: &Path,
 ) -> Result<ResolvedInitialSession, acp::Error> {
     if let Some(mode) = mode_catalog.modes.first() {
-        return resolve_agent_spec(&mode_catalog.catalog, &mode.name, cwd)
+        return resolve_agent_spec(&mode_catalog.catalog, &mode.name)
             .map(|spec| ResolvedInitialSession { spec, selected_mode: Some(mode.name.clone()) });
     }
 
-    Ok(ResolvedInitialSession {
-        spec: mode_catalog.catalog.resolve_default(default_model, None, cwd),
-        selected_mode: None,
-    })
+    Ok(ResolvedInitialSession { spec: AgentSpec::default_spec(default_model, None, Vec::new()), selected_mode: None })
 }
 
 fn parse_available_model(model: &str, available: &[LlmModel]) -> Result<LlmModel, acp::Error> {
@@ -367,6 +378,7 @@ mod tests {
             session_store,
             has_oauth_credential: |_| false,
             initial_selection: InitialSessionSelection::default(),
+            config_source: None,
         });
         let response =
             manager.initialize(InitializeRequest::new(ProtocolVersion::LATEST)).await.expect("initialize succeeds");
@@ -488,14 +500,14 @@ impl SessionManager {
         let session_id = uuid::Uuid::new_v4().to_string();
         let acp_session_id = acp::SessionId::new(session_id.clone());
 
-        let mode_catalog = Self::load_mode_catalog(&args.cwd).await?;
+        let mode_catalog = self.load_mode_catalog(&args.cwd).await?;
         let default_model = pick_default_model(&mode_catalog.available).ok_or_else(|| {
             error!("No models available — set an API key env var (e.g. ANTHROPIC_API_KEY)");
             acp::Error::internal_error()
         })?;
 
         let ResolvedInitialSession { spec, selected_mode } =
-            self.resolve_initial_session(&mode_catalog, default_model, &args.cwd)?;
+            self.resolve_initial_session(&mode_catalog, default_model)?;
         let model_str = spec.model.clone();
         let reasoning_effort = spec.reasoning_effort;
 
@@ -576,16 +588,16 @@ impl SessionManager {
         })?;
 
         let context = Context::from_events(&events);
-        let mode_catalog = Self::load_mode_catalog(&args.cwd).await?;
+        let mode_catalog = self.load_mode_catalog(&args.cwd).await?;
 
         let spec = if let Some(mode_name) = meta.selected_mode.as_deref() {
-            resolve_agent_spec(&mode_catalog.catalog, mode_name, &args.cwd)?
+            resolve_agent_spec(&mode_catalog.catalog, mode_name)?
         } else {
             let parsed_model: LlmModel = meta.model.parse().map_err(|e: String| {
                 error!("Failed to parse restored model '{}': {e}", meta.model);
                 acp::Error::invalid_params()
             })?;
-            mode_catalog.catalog.resolve_default(&parsed_model, None, &args.cwd)
+            AgentSpec::default_spec(&parsed_model, None, Vec::new())
         };
 
         let model = spec.model.clone();

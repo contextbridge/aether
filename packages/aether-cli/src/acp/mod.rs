@@ -12,6 +12,7 @@ pub mod testing;
 pub use mappers::map_mcp_prompt_to_available_command;
 pub use session_manager::SessionManager;
 
+use crate::config_args::ConfigSourceArgs;
 use agent_client_protocol::{self as acp, ByteStreams};
 use llm::ReasoningEffort;
 use std::sync::Arc;
@@ -45,6 +46,9 @@ pub struct AcpArgs {
     /// Initial reasoning effort for an explicit model session. Requires `--model` and is mutually exclusive with `--agent`.
     #[clap(long, value_name = "low|medium|high|xhigh", requires = "model", conflicts_with = "agent")]
     pub reasoning_effort: Option<ReasoningEffort>,
+
+    #[command(flatten)]
+    pub config_source: ConfigSourceArgs,
 }
 
 /// Outcome of running the ACP server successfully.
@@ -95,6 +99,7 @@ pub async fn run_acp(args: AcpArgs) -> Result<AcpRunOutcome, AcpRunError> {
         session_store,
         has_oauth_credential: OAuthCredentialStore::has_credential,
         initial_selection,
+        config_source: args.config_source.source(),
     }));
 
     let transport = ByteStreams::new(stdout().compat_write(), stdin().compat());

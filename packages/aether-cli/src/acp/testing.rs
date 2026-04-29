@@ -39,6 +39,7 @@ impl AcpTestHarness {
             session_store: session_store.clone(),
             has_oauth_credential: OAuthCredentialStore::has_credential,
             initial_selection: InitialSessionSelection::default(),
+            config_source: None,
         }));
 
         let (peer, client_builder) = TestPeer::new();

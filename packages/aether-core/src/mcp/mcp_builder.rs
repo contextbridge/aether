@@ -6,7 +6,7 @@ use mcp_utils::client::{
     ServerFactory, ServerInstructions, root_from_path,
 };
 
-use crate::agent_spec::McpJsonFileRef;
+use crate::agent_spec::McpConfigSource;
 
 use super::run_mcp_task::{McpCommand, run_mcp_task};
 use std::collections::HashMap;
@@ -95,27 +95,40 @@ impl McpBuilder {
         Ok(self)
     }
 
-    /// Load MCP server definitions from config refs, routing proxy-flagged files
-    /// through a single merged `ToolProxy`.
-    ///
-    /// Direct refs are loaded normally. All proxy-flagged refs are merged into
-    /// one `McpServerConfig::ToolProxy` named `"proxy"`.
-    pub async fn from_mcp_config_refs(mut self, refs: &[McpJsonFileRef]) -> Result<Self, ParseError> {
-        if refs.is_empty() {
+    pub async fn from_mcp_config_sources(mut self, sources: &[McpConfigSource]) -> Result<Self, ParseError> {
+        if sources.is_empty() {
             return Ok(self);
         }
 
-        let (direct, proxied): (Vec<_>, Vec<_>) = refs.iter().partition(|r| !r.proxy);
+        let mut direct_config = RawMcpConfig::default();
+        let mut proxied_config = RawMcpConfig::default();
 
-        if !direct.is_empty() {
-            let paths: Vec<&Path> = direct.iter().map(|r| r.path.as_path()).collect();
-            self = self.from_json_files(&paths).await?;
+        for source in sources {
+            match source {
+                McpConfigSource::File { path, proxy } => {
+                    let raw_config = RawMcpConfig::from_json_file(path)?;
+                    if *proxy {
+                        proxied_config.servers.extend(raw_config.servers);
+                    } else {
+                        direct_config.servers.extend(raw_config.servers);
+                    }
+                }
+                McpConfigSource::Json(json) => {
+                    direct_config.servers.extend(RawMcpConfig::from_json(json)?.servers);
+                }
+                McpConfigSource::Inline(raw_config) => {
+                    direct_config.servers.extend(raw_config.clone().servers);
+                }
+            }
         }
 
-        if !proxied.is_empty() {
-            let paths: Vec<&Path> = proxied.iter().map(|r| r.path.as_path()).collect();
-            let raw_config = RawMcpConfig::from_json_files(&paths)?;
-            let servers = raw_config.into_proxy_server_configs(&self.factories).await?;
+        if !direct_config.servers.is_empty() {
+            let configs = direct_config.into_configs(&self.factories).await?;
+            self.mcp_configs.extend(configs);
+        }
+
+        if !proxied_config.servers.is_empty() {
+            let servers = proxied_config.into_proxy_server_configs(&self.factories).await?;
             self.mcp_configs.push(McpServerConfig::ToolProxy { name: "proxy".to_string(), servers });
         }
 
@@ -129,7 +142,6 @@ impl McpBuilder {
         let mut mcp_manager = McpManager::new(event_tx, self.oauth_handler);
         mcp_manager.add_mcps(self.mcp_configs).await?;
 
-        // Set workspace roots if provided
         if !self.roots.is_empty() {
             let roots = self.roots.into_iter().map(|path| root_from_path(&path, None)).collect();
             mcp_manager.set_roots(roots).await?;
@@ -147,6 +159,59 @@ impl McpBuilder {
             command_tx: mcp_command_tx,
             event_rx,
             handle: mcp_handle,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mcp_utils::client::{RawMcpServerConfig, ServerConfig};
+    use std::collections::{BTreeMap, HashMap};
+
+    #[tokio::test]
+    async fn mixed_direct_sources_preserve_last_wins_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("mcp.json");
+        std::fs::write(&file_path, r#"{"servers":{"coding":{"type":"stdio","command":"from_file"}}}"#).unwrap();
+        let inline = RawMcpConfig {
+            servers: BTreeMap::from([(
+                "coding".to_string(),
+                RawMcpServerConfig::Stdio { command: "from_inline".to_string(), args: Vec::new(), env: HashMap::new() },
+            )]),
+        };
+        let sources = vec![
+            McpConfigSource::direct(file_path.clone()),
+            McpConfigSource::Json(r#"{"servers":{"coding":{"type":"stdio","command":"from_json"}}}"#.to_string()),
+            McpConfigSource::Inline(inline),
+        ];
+
+        let builder = McpBuilder::new().from_mcp_config_sources(&sources).await.unwrap();
+
+        assert_eq!(command_for(&builder, "coding"), Some("from_inline"));
+    }
+
+    #[tokio::test]
+    async fn file_sources_keep_their_position_relative_to_json_sources() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("mcp.json");
+        std::fs::write(&file_path, r#"{"servers":{"coding":{"type":"stdio","command":"from_file"}}}"#).unwrap();
+        let sources = vec![
+            McpConfigSource::Json(r#"{"servers":{"coding":{"type":"stdio","command":"from_json"}}}"#.to_string()),
+            McpConfigSource::direct(file_path),
+        ];
+
+        let builder = McpBuilder::new().from_mcp_config_sources(&sources).await.unwrap();
+
+        assert_eq!(command_for(&builder, "coding"), Some("from_file"));
+    }
+
+    fn command_for<'a>(builder: &'a McpBuilder, name: &str) -> Option<&'a str> {
+        builder.mcp_configs.iter().find_map(|config| match config {
+            McpServerConfig::Server(ServerConfig::Stdio { name: server_name, command, .. }) if server_name == name => {
+                Some(command.as_str())
+            }
+            McpServerConfig::Server(_) | McpServerConfig::ToolProxy { .. } => None,
         })
     }
 }

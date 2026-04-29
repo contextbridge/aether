@@ -4,6 +4,7 @@ use mcp_utils::client::ServerInstructions;
 use std::collections::HashMap;
 use std::env;
 use std::path::{Path, PathBuf};
+use thiserror::Error;
 use tokio::fs;
 use tracing::warn;
 use utils::shell_expander::ShellExpander;
@@ -26,6 +27,56 @@ pub enum Prompt {
     McpInstructions(Vec<ServerInstructions>),
 }
 
+/// Authored description of a prompt source — text, a file path, or a glob pattern.
+///
+/// Used by configuration layers to declare prompts before resolution. Convert into
+/// runtime [`Prompt`] values with [`Prompt::from_sources`].
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+pub enum PromptSource {
+    Text { text: String },
+    File { path: String },
+    Glob { pattern: String },
+}
+
+impl PromptSource {
+    pub fn file(path: impl Into<String>) -> Self {
+        Self::File { path: path.into() }
+    }
+
+    pub fn path(&self) -> Option<&str> {
+        match self {
+            Self::File { path } => Some(path.as_str()),
+            Self::Glob { pattern } => Some(pattern.as_str()),
+            Self::Text { .. } => None,
+        }
+    }
+}
+
+impl From<&str> for PromptSource {
+    fn from(value: &str) -> Self {
+        Self::file(value)
+    }
+}
+
+impl From<String> for PromptSource {
+    fn from(value: String) -> Self {
+        Self::file(value)
+    }
+}
+
+/// Validation failures raised while resolving [`PromptSource`] values into [`Prompt`]s.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum PromptSourceError {
+    /// A glob pattern is syntactically invalid.
+    #[error("Invalid glob pattern '{pattern}': {error}")]
+    InvalidGlobPattern { pattern: String, error: String },
+
+    /// A prompt file or glob did not match any files on disk.
+    #[error("Prompt entry '{pattern}' resolves to no files")]
+    ZeroMatch { pattern: String },
+}
+
 impl Prompt {
     pub fn text(str: &str) -> Self {
         Self::Text(str.to_string())
@@ -41,6 +92,26 @@ impl Prompt {
 
     pub fn from_globs(patterns: Vec<String>, cwd: PathBuf) -> Self {
         Self::PromptGlobs { patterns, cwd }
+    }
+
+    /// Resolve a slice of [`PromptSource`] declarations into runtime [`Prompt`] values.
+    ///
+    /// Validates that file paths and glob patterns produce at least one matching file
+    /// under `project_root`. Text sources pass through unchanged.
+    pub fn from_sources(
+        project_root: &Path,
+        sources: &[PromptSource],
+    ) -> std::result::Result<Vec<Prompt>, PromptSourceError> {
+        sources
+            .iter()
+            .map(|source| match source {
+                PromptSource::Text { text } => Ok(Prompt::text(text)),
+                PromptSource::File { path } => validate_prompt_file(project_root, path)
+                    .map(|()| Prompt::file(path).with_cwd(project_root.to_path_buf())),
+                PromptSource::Glob { pattern } => validate_prompt_glob(project_root, pattern)
+                    .map(|()| Prompt::from_globs(vec![pattern.clone()], project_root.to_path_buf())),
+            })
+            .collect()
     }
 
     pub fn with_cwd(self, cwd: PathBuf) -> Self {
@@ -136,6 +207,26 @@ impl Prompt {
         };
         Ok(expander.expand(content, &cwd).await)
     }
+}
+
+fn validate_prompt_file(project_root: &Path, path: &str) -> std::result::Result<(), PromptSourceError> {
+    let full_path = project_root.join(path);
+    if full_path.is_file() { Ok(()) } else { Err(PromptSourceError::ZeroMatch { pattern: path.to_string() }) }
+}
+
+fn validate_prompt_glob(project_root: &Path, pattern: &str) -> std::result::Result<(), PromptSourceError> {
+    let full_pattern = if Path::new(pattern).is_absolute() {
+        pattern.to_string()
+    } else {
+        project_root.join(pattern).to_string_lossy().to_string()
+    };
+
+    let has_file_match = glob(&full_pattern)
+        .map_err(|e| PromptSourceError::InvalidGlobPattern { pattern: pattern.to_string(), error: e.to_string() })?
+        .filter_map(std::result::Result::ok)
+        .any(|path| path.is_file());
+
+    if has_file_match { Ok(()) } else { Err(PromptSourceError::ZeroMatch { pattern: pattern.to_string() }) }
 }
 
 /// Format MCP instructions with XML tags for the system prompt.

@@ -268,7 +268,7 @@ mod tests {
             model: "ollama:llama3.2,llamacpp:local".to_string(),
             reasoning_effort: None,
             prompts: vec![],
-            mcp_config_refs: Vec::new(),
+            mcp_config_sources: Vec::new(),
             exposure: AgentSpecExposure::both(),
             tools: ToolFilter::default(),
         };
