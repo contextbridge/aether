@@ -1,5 +1,4 @@
 {
-  "prompts": [".aether/SYSTEM.md", "AGENTS.md"],
   "agents": [
     {
       "name": "Planner",
@@ -7,7 +6,7 @@
       "model": "codex:gpt-5.5",
       "reasoningEffort": "high",
       "userInvocable": true,
-      "agentInvocable": false
+      "prompts": [{ "type": "file", "path": ".aether/SYSTEM.md" }]
     },
     {
       "name": "Builder",
@@ -15,7 +14,7 @@
       "model": "codex:gpt-5.3-codex",
       "reasoningEffort": "high",
       "userInvocable": true,
-      "agentInvocable": false
+      "prompts": [{ "type": "file", "path": ".aether/SYSTEM.md" }]
     },
     {
       "name": "Cheap",
@@ -23,7 +22,7 @@
       "model": "zai:glm-5.1",
       "reasoningEffort": "high",
       "userInvocable": true,
-      "agentInvocable": false
+      "prompts": [{ "type": "file", "path": ".aether/SYSTEM.md" }]
     },
     {
       "name": "Fast",
@@ -31,23 +30,22 @@
       "model": "openrouter:minimax/minimax-m2.7",
       "reasoningEffort": "high",
       "userInvocable": true,
-      "agentInvocable": false
+      "prompts": [{ "type": "file", "path": ".aether/SYSTEM.md" }]
     },
     {
       "name": "Local",
       "description": "Llama.cpp",
       "model": "llamacpp:unsloth/Qwen3.5-9B-GGUF",
       "userInvocable": true,
-      "agentInvocable": false
+      "prompts": [{ "type": "file", "path": ".aether/SYSTEM.md" }]
     },
     {
       "name": "Explorer",
       "description": "Explores codebases to find relevant files, patterns, and integration points",
       "model": "zai:glm-4.7",
-      "userInvocable": false,
       "agentInvocable": true,
-      "prompts": [".aether/agents/codebase-explorer/AGENTS.md"],
-      "mcpServers": [".aether/agents/codebase-explorer/mcp.json"]
+      "prompts": [{ "type": "file", "path": ".aether/agents/codebase-explorer/AGENTS.md" }],
+      "mcps": [{ "type": "file", "path": ".aether/agents/codebase-explorer/mcp.json" }]
     }
   ]
 }
