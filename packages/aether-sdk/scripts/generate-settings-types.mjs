@@ -87,12 +87,21 @@ function schemaForTypeGeneration(schema) {
 }
 
 function addCompatibilityAliases(content) {
-  const aliases = [
-    ["McpSourceSpec", "MCPSourceSpec"],
-    ["RawMcpServerConfig", "RawMCPServerConfig"],
-  ]
-    .filter(([, target]) => content.includes(`export interface ${target} `))
-    .map(([alias, target]) => `export type ${alias} = ${target};`);
+  const aliases = [];
+
+  if (content.includes("export interface MCPSourceSpecObject ")) {
+    aliases.push("export type McpSourceSpec = MCPSourceSpecObject | string;");
+  } else if (content.includes("export interface MCPSourceSpec ")) {
+    aliases.push("export type McpSourceSpec = MCPSourceSpec;");
+  }
+
+  if (content.includes("export interface PromptSourceObject ")) {
+    aliases.push("export type PromptSource = PromptSourceObject | string;");
+  }
+
+  if (content.includes("export interface RawMCPServerConfig ")) {
+    aliases.push("export type RawMcpServerConfig = RawMCPServerConfig;");
+  }
 
   if (aliases.length === 0) return content;
   return `${content.trimEnd()}\n\n${aliases.join("\n")}\n`;

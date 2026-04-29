@@ -219,6 +219,45 @@ mod tests {
     }
 
     #[test]
+    fn parses_and_serializes_string_shorthand_for_file_sources() {
+        let config = AetherSettings::try_from(
+            r#"{
+                "prompts": ["BASE.md"],
+                "mcps": ["mcp.json"],
+                "agents": [{
+                    "name":"alpha",
+                    "description":"Alpha",
+                    "model":"anthropic:claude-sonnet-4-5",
+                    "userInvocable":true,
+                    "prompts":["AGENT.md"],
+                    "mcps":["agent-mcp.json"]
+                }]
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.prompts, vec![PromptSource::file("BASE.md")]);
+        assert_eq!(config.mcps[0].path(), Some("mcp.json"));
+        assert_eq!(config.agents[0].prompts, vec![PromptSource::file("AGENT.md")]);
+        assert_eq!(config.agents[0].mcps[0].path(), Some("agent-mcp.json"));
+
+        let value = serde_json::to_value(&config).unwrap();
+        assert_eq!(value["prompts"], serde_json::json!(["BASE.md"]));
+        assert_eq!(value["mcps"], serde_json::json!(["mcp.json"]));
+        assert_eq!(value["agents"][0]["prompts"], serde_json::json!(["AGENT.md"]));
+        assert_eq!(value["agents"][0]["mcps"], serde_json::json!(["agent-mcp.json"]));
+    }
+
+    #[test]
+    fn serializes_proxied_mcp_file_as_typed_object() {
+        let source = McpSourceSpec::File { path: "mcp.json".to_string(), proxy: true };
+
+        let value = serde_json::to_value(source).unwrap();
+
+        assert_eq!(value, serde_json::json!({"type":"file", "path":"mcp.json", "proxy":true}));
+    }
+
+    #[test]
     fn rejects_old_top_level_mcp_servers_field() {
         let err = AetherSettings::try_from(
             r#"{

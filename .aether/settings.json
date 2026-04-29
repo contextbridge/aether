@@ -1,9 +1,6 @@
 {
-  "prompts": [
-    { "type": "file", "path": ".aether/SYSTEM.md" },
-    { "type": "file", "path": "AGENTS.md" }
-  ],
-  "mcps": [{ "type": "file", "path": "mcp.json" }],
+  "prompts": [".aether/SYSTEM.md", "AGENTS.md"],
+  "mcps": ["mcp.json"],
   "agents": [
     {
       "name": "Planner",
@@ -44,8 +41,8 @@
       "description": "Explores codebases to find relevant files, patterns, and integration points",
       "model": "zai:glm-4.7",
       "agentInvocable": true,
-      "prompts": [{ "type": "file", "path": ".aether/agents/codebase-explorer/AGENTS.md" }],
-      "mcps": [{ "type": "file", "path": ".aether/agents/codebase-explorer/mcp.json" }]
+      "prompts": [".aether/agents/codebase-explorer/AGENTS.md"],
+      "mcps": [".aether/agents/codebase-explorer/mcp.json"]
     }
   ]
 }

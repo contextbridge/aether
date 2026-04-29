@@ -1,6 +1,8 @@
 use crate::core::{AgentError, Result};
 use glob::glob;
 use mcp_utils::client::ServerInstructions;
+use schemars::{JsonSchema, Schema, SchemaGenerator};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use std::env;
 use std::path::{Path, PathBuf};
@@ -31,12 +33,67 @@ pub enum Prompt {
 ///
 /// Used by configuration layers to declare prompts before resolution. Convert into
 /// runtime [`Prompt`] values with [`Prompt::from_sources`].
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
-#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PromptSource {
     Text { text: String },
     File { path: String },
     Glob { pattern: String },
+}
+
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum PromptSourceInput {
+    Path(String),
+    Object(PromptSourceObject),
+}
+
+#[derive(schemars::JsonSchema, serde::Deserialize, serde::Serialize)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+enum PromptSourceObject {
+    Text { text: String },
+    File { path: String },
+    Glob { pattern: String },
+}
+
+impl<'de> Deserialize<'de> for PromptSource {
+    fn deserialize<T: Deserializer<'de>>(deserializer: T) -> std::result::Result<Self, T::Error> {
+        match serde::Deserialize::deserialize(deserializer)? {
+            PromptSourceInput::Path(path) => Ok(Self::File { path }),
+            PromptSourceInput::Object(PromptSourceObject::Text { text }) => Ok(Self::Text { text }),
+            PromptSourceInput::Object(PromptSourceObject::File { path }) => Ok(Self::File { path }),
+            PromptSourceInput::Object(PromptSourceObject::Glob { pattern }) => Ok(Self::Glob { pattern }),
+        }
+    }
+}
+
+impl Serialize for PromptSource {
+    fn serialize<T: Serializer>(&self, serializer: T) -> std::result::Result<T::Ok, T::Error> {
+        match self {
+            Self::File { path } => serializer.serialize_str(path),
+            Self::Text { text } => Serialize::serialize(&PromptSourceObject::Text { text: text.clone() }, serializer),
+            Self::Glob { pattern } => {
+                Serialize::serialize(&PromptSourceObject::Glob { pattern: pattern.clone() }, serializer)
+            }
+        }
+    }
+}
+
+impl JsonSchema for PromptSource {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "PromptSource".into()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        let object_schema = generator.subschema_for::<PromptSourceObject>().to_value();
+        Schema::try_from(serde_json::json!({
+            "description": "Authored description of a prompt source — either a file path string or a typed text, file, or glob object.",
+            "oneOf": [
+                { "type": "string" },
+                object_schema
+            ]
+        }))
+        .expect("prompt source schema must be valid")
+    }
 }
 
 impl PromptSource {
