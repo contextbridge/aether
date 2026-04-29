@@ -230,9 +230,11 @@ version = "0.3.1"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
+ "aether-mcp-utils",
  "aether-utils",
  "glob",
  "globset",
+ "schemars 1.2.1",
  "serde",
  "serde_json",
  "serde_yml",
@@ -267,6 +269,7 @@ version = "0.2.0"
 dependencies = [
  "futures",
  "regex",
+ "schemars 1.2.1",
  "serde",
  "serde_json",
  "serde_yml",

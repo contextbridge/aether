@@ -47,6 +47,7 @@ sdk-e2e *ARGS:
 # Run all CI checks
 ci: fmt-check lint test doc-check
     pnpm fmt-check
+    pnpm sdk:generate-config-types:check
     pnpm sdk:typecheck
     pnpm sdk:test
 

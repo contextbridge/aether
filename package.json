@@ -6,6 +6,8 @@
     "sdk:typecheck": "pnpm --filter @aether-agent/sdk typecheck",
     "sdk:test": "pnpm --filter @aether-agent/sdk test",
     "sdk:e2e": "pnpm --filter @aether-agent/sdk e2e",
+    "sdk:generate-config-types": "pnpm --filter @aether-agent/sdk generate:config-types",
+    "sdk:generate-config-types:check": "pnpm --filter @aether-agent/sdk generate:config-types:check",
     "fmt": "prettier --write \"packages/aether-sdk/**/*.{ts,mts,cts,mjs,cjs,js,jsx,json}\"",
     "fmt-check": "prettier --check \"packages/aether-sdk/**/*.{ts,mts,cts,mjs,cjs,js,jsx,json}\""
   },
