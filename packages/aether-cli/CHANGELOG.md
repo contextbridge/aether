@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.3](https://github.com/jcarver989/aether/compare/aether-agent-cli-v0.3.2...aether-agent-cli-v0.3.3) - 2026-04-29
+
+### Other
+
+- *(aether-cli)* Fix backticks
+- *(aether-cli)* correct binary references and slash command docs
+
 ## [0.3.2](https://github.com/jcarver989/aether/compare/aether-agent-cli-v0.3.1...aether-agent-cli-v0.3.2) - 2026-04-29
 
 ### Fixed
