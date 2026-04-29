@@ -271,11 +271,12 @@ export class AetherSession {
     let yieldedResult = false;
     try {
       for await (const event of this.events) {
-        yield event;
         if (event.type === "result" && event.sessionId === this.sessionId) {
           yieldedResult = true;
+          yield event;
           break;
         }
+        yield event;
       }
       await promptPromise;
     } finally {

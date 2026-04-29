@@ -126,6 +126,26 @@ describe("AetherSession with a fake ACP agent", () => {
     }
   });
 
+  it("releases promptInProgress when consumer breaks immediately after the result event", async () => {
+    const session = await AetherSession.start({
+      binaryPath: FAKE_AETHER,
+    });
+
+    try {
+      for await (const message of session.prompt("first")) {
+        if (message.type === "result") break;
+      }
+
+      const second: AetherMessage[] = [];
+      for await (const message of session.prompt("second")) {
+        second.push(message);
+      }
+      expect(second.map((m) => m.type)).toEqual(["session_update", "result"]);
+    } finally {
+      await session.close();
+    }
+  });
+
   it("bridges a closure-backed SDK MCP tool through to the fake agent", async () => {
     let received: string | null = null;
     const submit = tool({
