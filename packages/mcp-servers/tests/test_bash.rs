@@ -109,24 +109,29 @@ async fn test_background_process() {
         BashResult::Background(handle) => {
             assert!(!handle.shell_id.is_empty());
 
-            // Get output immediately (may not have all output yet)
-            let (result1, handle_opt) = read_background_bash(handle, None).await.unwrap();
-            assert!(result1.status == "running" || result1.status == "completed"); // Either is fine
+            let (result1, mut handle_opt) = read_background_bash(handle, None).await.unwrap();
+            assert!(result1.status == "running" || result1.status == "completed");
 
-            if let Some(handle) = handle_opt {
-                // Wait a bit and check again
-                tokio::time::sleep(Duration::from_millis(200)).await;
-                let (result2, _) = read_background_bash(handle, None).await.unwrap();
+            let mut combined_output = result1.output.clone();
+            let (final_status, final_exit) = loop {
+                let Some(handle) = handle_opt.take() else {
+                    panic!("expected at least one read iteration");
+                };
+                let (result, next) = read_background_bash(handle, None).await.unwrap();
+                combined_output.push_str(&result.output);
+                match next {
+                    Some(h) => {
+                        handle_opt = Some(h);
+                        tokio::task::yield_now().await;
+                    }
+                    None => break (result.status, result.exit_code),
+                }
+            };
 
-                // Should be done now
-                assert_eq!(result2.status, "completed");
-                assert_eq!(result2.exit_code, Some(0));
-
-                // Check we got both lines (combined from both checks)
-                let combined_output = format!("{}{}", result1.output, result2.output);
-                assert!(combined_output.contains("line1"));
-                assert!(combined_output.contains("line2"));
-            }
+            assert_eq!(final_status, "completed");
+            assert_eq!(final_exit, Some(0));
+            assert!(combined_output.contains("line1"));
+            assert!(combined_output.contains("line2"));
         }
         BashResult::Completed(_) => panic!("Expected background result, got completed"),
     }
