@@ -1,19 +1,23 @@
 # aether-agent-cli
 
-Binary package containing Aether's two runnable entrypoints:
+The Aether CLI ships as a single binary, **`aether`**, with subcommands for each mode of use:
 
-- **`aether-acp`** — [Agent Client Protocol (ACP)](https://agentclientprotocol.com/overview/introduction) server for editor/IDE integration (e.g. Zed)
-- **`aether`** — Headless CLI for single-prompt usage
+- `aether` — interactive TUI (default when run with no args)
+- `aether headless` — single-prompt headless run for scripting/CI
+- `aether acp` — [Agent Client Protocol (ACP)](https://agentclientprotocol.com/overview/introduction) server for editor/IDE integration (e.g. Zed)
+- `aether agent new|list|remove` — manage project agents
+- `aether show-prompt` — print the fully-assembled system prompt (debugging)
 
 ## Table of Contents
 
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
 
+- [Install](#install)
 - [Quick Start](#quick-start)
-  - [Build](#build)
-  - [Run the CLI](#run-the-cli)
-  - [Run the ACP server](#run-the-acp-server)
+  - [Interactive TUI](#interactive-tui)
+  - [Headless](#headless)
+  - [ACP server](#acp-server)
 - [Choosing a Model](#choosing-a-model)
 - [Editor Integration (ACP)](#editor-integration-acp)
   - [Zed](#zed)
@@ -25,29 +29,57 @@ Binary package containing Aether's two runnable entrypoints:
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
-## Quick Start
+## Install
 
-### Build
+Pick whichever fits your workflow:
 
-From the workspace root:
+```bash
+# npm (cross-platform)
+npm install -g @aether-agent/cli
+
+# Homebrew (macOS / Linux)
+brew install jcarver989/tap/aether
+
+# Shell installer (macOS / Linux)
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/jcarver989/aether/releases/latest/download/aether-agent-cli-installer.sh | sh
+
+# From source
+cargo install aether-agent-cli
+```
+
+To build from a workspace checkout:
 
 ```bash
 cargo build --release -p aether-agent-cli
+# binary lands at target/release/aether
 ```
 
-Binaries will be at `target/release/aether-acp` and `target/release/aether`.
+## Quick Start
 
-### Run the CLI
+### Interactive TUI
 
 ```bash
-cargo run -p aether-agent-cli --bin aether -- -m anthropic:claude-sonnet-4-5-20250929 "Refactor auth module"
+aether
 ```
 
-### Run the ACP server
+If the project has no `.aether/settings.json`, the binary launches an onboarding wizard before starting the TUI.
+
+### Headless
 
 ```bash
-cargo run -p aether-agent-cli --bin aether-acp -- --model anthropic:claude-sonnet-4-5-20250929 --mcp-config mcp.json
+aether headless -m anthropic:claude-sonnet-4-5-20250929 "Refactor auth module"
 ```
+
+Useful flags: `-a/--agent` (named agent from settings), `-C/--cwd`, `--system-prompt`, `--output text|json`, `--events tool_call,tool_result,...`, `--mcp-config <path>`, `--settings-file <path>` / `--settings-json <json>`. Pass the prompt as positional args, or pipe it on stdin.
+
+### ACP server
+
+```bash
+aether acp --model anthropic:claude-sonnet-4-5-20250929 --mcp-config mcp.json
+```
+
+Flags: `--agent <name>` (mutually exclusive with `--model`), `--reasoning-effort low|medium|high|xhigh`, `--log-dir <path>`, plus the same `--settings-file` / `--settings-json` options.
 
 ## Choosing a Model
 
@@ -56,7 +88,7 @@ Aether supports multiple LLM providers using a `provider:model` string format:
 | Provider | Example | Env var required |
 |----------|---------|-----------------|
 | Anthropic | `anthropic:claude-sonnet-4-5-20250929` | `ANTHROPIC_API_KEY` |
-| `OpenRouter` | `openrouter:moonshotai/kimi-k2-thinking` | `OPENROUTER_API_KEY` |
+| OpenRouter | `openrouter:moonshotai/kimi-k2-thinking` | `OPENROUTER_API_KEY` |
 | ZAI | `zai:GLM-4.6` | `ZAI_API_KEY` |
 | Ollama | `ollama:llama3.2` | None (local) |
 | Llama.cpp | `llamacpp` | None (local) |
@@ -65,18 +97,19 @@ Aether supports multiple LLM providers using a `provider:model` string format:
 
 ### Zed
 
-Add to your Zed `settings.json` (Main Menu -> "Open Settings File"):
+Add to your Zed `settings.json` (Main Menu → "Open Settings File"):
 
 ```json
 {
   "agent_servers": {
     "Aether Agent": {
-      "command": "/path/to/aether/target/release/aether-acp",
+      "command": "/path/to/aether",
       "args": [
+        "acp",
         "--model",
         "zai:GLM-4.6",
         "--mcp-config",
-        "/path/to/aether/mcp.json"
+        "/path/to/your/project/mcp.json"
       ],
       "env": {
         "RUST_LOG": "debug",
@@ -90,7 +123,7 @@ Add to your Zed `settings.json` (Main Menu -> "Open Settings File"):
 Then open the [Agent Panel](https://zed.dev/docs/ai/agent-panel) and select "New Aether Agent Thread".
 
 **Important:** Update the paths and configuration:
-- `command`: Full path to your built `aether-acp` binary
+- `command`: Full path to the `aether` binary (e.g. the result of `which aether` or `target/release/aether`)
 - `--mcp-config`: Path to your MCP configuration file
 - Set the appropriate API key env var for your model provider
 
@@ -117,18 +150,20 @@ The `mcp.json` file configures MCP tool servers:
 }
 ```
 
-- **coding** — Filesystem tools (read, write, bash, etc.) + optional automatic read rules from configured `--rules-dir` paths
-- **skills** — Slash commands and reusable prompts from configured prompt directories
+- **coding** — Filesystem tools (read, write, bash, etc.) plus optional auto-read rules from configured `--rules-dir` paths
+- **skills** — Slash commands and reusable prompts loaded from the configured `--dir` paths
 
 ## Slash Commands
 
-Create markdown files in `~/.aether/commands/` to define custom slash commands.
+Slash commands are markdown files served by the `skills` MCP server from any directory passed via `--dir`. Each entry is either a single `.md` file or a directory containing `SKILL.md` (plus optional supporting files). To make a prompt appear as a `/slash-command` in the TUI / ACP client, set `userInvocable: true` in its frontmatter.
 
-**Example** `~/.aether/commands/plan.md`:
+**Example** `.aether/skills/plan.md`:
 
 ```markdown
 ---
 description: Create a detailed implementation spec for a task
+argumentHint: <task description>
+userInvocable: true
 ---
 
 You are an expert software architect. Create a comprehensive technical specification.
@@ -137,13 +172,20 @@ You are an expert software architect. Create a comprehensive technical specifica
 $ARGUMENTS
 ```
 
-**Parameter syntax:**
-- `$ARGUMENTS` — Full argument string (e.g., `/plan add user auth` -> "add user auth")
-- `$1`, `$2`, `$3` — Positional arguments
+**Frontmatter fields:**
+- `description` — shown in command pickers
+- `argumentHint` — optional hint string for the argument
+- `userInvocable` — exposes the prompt as a `/slash-command`
+- `agentInvocable` — exposes the prompt as a skill that other agents can `get_skills` against
+- `tags` — used by the `search_notes` / `list_skills` discovery surface
+
+**Parameter syntax in the body:**
+- `$ARGUMENTS` — full argument string (e.g. `/plan add user auth` → `add user auth`)
+- `$1`, `$2`, `$3` — positional arguments
 
 ## Settings
 
-Project-level agent configuration is centralized in `.aether/settings.json` in your project root. This file defines agents (modes and sub-agents), prompts, and MCP server configuration.
+Project-level agent configuration lives in `.aether/settings.json` at your project root. This file defines agents (modes and sub-agents), default prompts, and default MCP server configuration.
 
 ### Agents (Modes and Sub-agents)
 
@@ -197,6 +239,8 @@ Define agents with specific model, prompts, and tool configurations:
 - **`agentInvocable: true`** — Agent can be spawned as a sub-agent
 - **`tools`** — Filter which MCP tools the agent can use (optional). Supports `allow` (allowlist) and `deny` (blocklist) with trailing `*` wildcards. If both are set, `allow` is applied first, then `deny` removes from the result. Omit or leave empty to allow all tools.
 
+You can scaffold settings interactively via `aether agent new`, list current agents with `aether agent list`, and remove one with `aether agent remove <name>`.
+
 ## Logs
 
-Logs are written to `--log-dir` (default: `/tmp/aether-acp-logs/`). Control verbosity with the `RUST_LOG` environment variable.
+ACP runs write logs to `--log-dir` (default: `/tmp/aether-acp-logs/`). Control verbosity with the `RUST_LOG` environment variable.
