@@ -1,6 +1,6 @@
 # aether-project
 
-Project-local settings and agent catalog resolution for the Aether AI agent framework. Reads `.aether/settings.json` to discover agents, prompts, and MCP server configurations.
+Project-local and user-level settings plus agent catalog resolution for the Aether AI agent framework. Reads user settings from `$AETHER_HOME/settings.json` or `$HOME/.aether/settings.json`, then project settings from `.aether/settings.json`, to discover agents, prompts, and MCP server configurations.
 
 ## Table of Contents
 
@@ -23,6 +23,8 @@ Project-local settings and agent catalog resolution for the Aether AI agent fram
 ## Usage
 
 `.aether/settings.json` supports top-level `prompts` and `mcps` as typed defaults. An agent without local `prompts` inherits top-level `prompts`; an agent without local `mcps` inherits top-level `mcps`. Agent-local `prompts` or `mcps` replace the corresponding top-level defaults for that agent.
+
+`AetherSettings::load_default` loads user settings first, then project settings. User settings come from `$AETHER_HOME/settings.json` when `AETHER_HOME` is set, otherwise `$HOME/.aether/settings.json` or `%USERPROFILE%/.aether/settings.json`. Project settings come from `project_root/.aether/settings.json`. Missing default files are ignored. When multiple sources define an agent with the same name, the later source wins, so project agents override user agents with the same name.
 
 ```rust,no_run
 use aether_project::{AetherSettings, AgentCatalog};

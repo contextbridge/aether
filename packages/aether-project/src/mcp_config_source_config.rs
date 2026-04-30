@@ -2,7 +2,7 @@ use mcp_utils::client::RawMcpServerConfig;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum McpSourceSpec {
     File { path: String, proxy: bool },
     Inline { servers: BTreeMap<String, RawMcpServerConfig> },

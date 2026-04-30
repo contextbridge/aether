@@ -1,10 +1,11 @@
+use aether_project::{AetherSettings, AetherSettingsSource, AgentCatalog};
 use mcp_servers::subagents::SubAgentsMcp;
 use mcp_utils::testing::connect;
 use rmcp::model::{CallToolRequestParams, ClientCapabilities, ClientInfo, Implementation};
 use rmcp::service::RunningService;
 use rmcp::{RoleClient, RoleServer};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 #[tokio::test]
@@ -198,11 +199,22 @@ fn create_project_with_invocable_agent() -> TempDir {
     ])
 }
 
+fn create_test_server(test_dir: &Path) -> SubAgentsMcp {
+    let settings =
+        AetherSettings::load(test_dir, [AetherSettingsSource::OptionalFile(PathBuf::from(".aether/settings.json"))])
+            .expect("Failed to load project settings");
+    let catalog = if settings.agents.is_empty() {
+        AgentCatalog::empty(test_dir.to_path_buf())
+    } else {
+        AgentCatalog::from_settings(test_dir, settings).expect("Failed to create agent catalog")
+    };
+    SubAgentsMcp::new(catalog, test_dir.to_path_buf())
+}
+
 async fn create_test_client(
     test_dir: &Path,
 ) -> (RunningService<RoleServer, SubAgentsMcp>, RunningService<RoleClient, ClientInfo>) {
-    let server_service = SubAgentsMcp::from_project_root(test_dir.to_path_buf())
-        .expect("Failed to create SubAgentsMcp from project root");
+    let server_service = create_test_server(test_dir);
     let client_info = ClientInfo::new(ClientCapabilities::default(), Implementation::new("test-client", "0.1.0"));
 
     let (server_handle, client) =

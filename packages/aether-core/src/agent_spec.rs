@@ -87,7 +87,7 @@ impl AgentSpec {
 /// Supports `allow` (allowlist) and `deny` (blocklist) with trailing `*` wildcards.
 /// If both are set, allow is applied first, then deny removes from the result.
 /// An empty filter (the default) allows all tools.
-#[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 pub struct ToolFilter {
     /// If non-empty, only tools matching these patterns are allowed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

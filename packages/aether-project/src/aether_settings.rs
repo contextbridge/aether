@@ -1,10 +1,14 @@
+use utils::SettingsStore;
+
 use crate::agent_config::AgentConfig;
 use crate::error::SettingsError;
 use crate::{McpSourceSpec, PromptSource};
 use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+const PROJECT_SETTINGS_PATH: &str = ".aether/settings.json";
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AetherSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -20,19 +24,14 @@ pub struct AetherSettings {
 #[derive(Debug, Clone)]
 pub enum AetherSettingsSource {
     File(PathBuf),
+    OptionalFile(PathBuf),
     Json(String),
     Value(AetherSettings),
 }
 
 impl AetherSettings {
     pub fn load_default(project_root: &Path) -> Result<Self, SettingsError> {
-        let settings_path = project_root.join(".aether/settings.json");
-        match read_to_string(&settings_path) {
-            Ok(content) if content.trim().is_empty() => Ok(Self::default()),
-            Ok(content) => Self::try_from(content.as_str()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(e) => Err(SettingsError::IoError(format!("Failed to read {}: {}", settings_path.display(), e))),
-        }
+        Self::load(project_root, default_sources())
     }
 
     pub fn load(
@@ -70,15 +69,38 @@ impl AetherSettings {
 
     fn load_source(project_root: &Path, source: AetherSettingsSource) -> Result<Self, SettingsError> {
         match source {
-            AetherSettingsSource::File(path) => {
-                let path = project_root.join(path);
-                let content = read_to_string(&path)
-                    .map_err(|e| SettingsError::IoError(format!("Failed to read {}: {}", path.display(), e)))?;
-                Self::try_from(content.as_str())
-            }
+            AetherSettingsSource::File(path) => load_file(&source_path(project_root, path), false),
+            AetherSettingsSource::OptionalFile(path) => load_file(&source_path(project_root, path), true),
             AetherSettingsSource::Json(json) => Self::try_from(json.as_str()),
             AetherSettingsSource::Value(config) => Ok(config),
         }
+    }
+}
+
+fn default_sources() -> Vec<AetherSettingsSource> {
+    let aether_home = SettingsStore::new("AETHER_HOME", ".aether").map(|store| store.home().to_path_buf());
+    default_sources_for_home(aether_home.as_deref())
+}
+
+fn default_sources_for_home(aether_home: Option<&Path>) -> Vec<AetherSettingsSource> {
+    let mut sources = Vec::new();
+    if let Some(aether_home) = aether_home {
+        sources.push(AetherSettingsSource::OptionalFile(aether_home.join("settings.json")));
+    }
+    sources.push(AetherSettingsSource::OptionalFile(PathBuf::from(PROJECT_SETTINGS_PATH)));
+    sources
+}
+
+fn source_path(project_root: &Path, path: PathBuf) -> PathBuf {
+    if path.is_absolute() { path } else { project_root.join(path) }
+}
+
+fn load_file(path: &Path, missing_is_empty: bool) -> Result<AetherSettings, SettingsError> {
+    match read_to_string(path) {
+        Ok(content) if content.trim().is_empty() => Ok(AetherSettings::default()),
+        Ok(content) => AetherSettings::try_from(content.as_str()),
+        Err(error) if missing_is_empty && error.kind() == std::io::ErrorKind::NotFound => Ok(AetherSettings::default()),
+        Err(error) => Err(SettingsError::IoError(format!("Failed to read {}: {}", path.display(), error))),
     }
 }
 
@@ -170,12 +192,142 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(config.agent.as_deref(), Some("beta"));
-        assert_eq!(config.agents.len(), 2);
-        assert_eq!(config.agents[0].name, "alpha");
-        assert_eq!(config.agents[0].description, "Override alpha");
-        assert_eq!(config.agents[1].name, "beta");
-        assert_eq!(config.prompts, vec![PromptSource::file("OVERRIDE.md")]);
+        assert_eq!(
+            config,
+            AetherSettings {
+                agent: Some("beta".to_string()),
+                prompts: vec![PromptSource::file("OVERRIDE.md")],
+                agents: vec![
+                    AgentConfig { description: "Override alpha".to_string(), ..agent_config("alpha") },
+                    agent_config("beta"),
+                ],
+                ..AetherSettings::default()
+            }
+        );
+    }
+
+    #[test]
+    fn load_default_merges_user_and_project_settings_with_project_winning() {
+        let project = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let aether_home = home.path().join(".aether");
+        write_file(
+            &aether_home,
+            "settings.json",
+            r#"{
+                "agent":"shared",
+                "prompts":["USER.md"],
+                "agents":[
+                    {"name":"shared","description":"User shared","model":"anthropic:claude-sonnet-4-5","userInvocable":true},
+                    {"name":"user-only","description":"User only","model":"anthropic:claude-sonnet-4-5","userInvocable":true}
+                ]
+            }"#,
+        );
+        write_file(
+            project.path(),
+            ".aether/settings.json",
+            r#"{
+                "agent":"project-only",
+                "prompts":["PROJECT.md"],
+                "agents":[
+                    {"name":"shared","description":"Project shared","model":"anthropic:claude-sonnet-4-5","userInvocable":true},
+                    {"name":"project-only","description":"Project only","model":"anthropic:claude-sonnet-4-5","userInvocable":true}
+                ]
+            }"#,
+        );
+
+        let config = load_default_from_home(project.path(), &aether_home).unwrap();
+        assert_eq!(
+            config,
+            AetherSettings {
+                agent: Some("project-only".to_string()),
+                prompts: vec![PromptSource::file("PROJECT.md")],
+                agents: vec![
+                    settings_agent("shared", "Project shared"),
+                    settings_agent("user-only", "User only"),
+                    settings_agent("project-only", "Project only"),
+                ],
+                ..AetherSettings::default()
+            }
+        );
+    }
+
+    #[test]
+    fn load_default_uses_user_settings_when_project_settings_are_missing() {
+        let project = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let aether_home = home.path().join(".aether");
+        write_file(
+            &aether_home,
+            "settings.json",
+            r#"{"agents":[{"name":"user-only","description":"User only","model":"anthropic:claude-sonnet-4-5","userInvocable":true}]}"#,
+        );
+
+        let config = load_default_from_home(project.path(), &aether_home).unwrap();
+        assert_eq!(
+            config,
+            AetherSettings { agents: vec![settings_agent("user-only", "User only")], ..AetherSettings::default() }
+        );
+    }
+
+    #[test]
+    fn load_default_uses_project_settings_when_user_settings_are_missing() {
+        let project = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let aether_home = home.path().join(".aether");
+        write_file(
+            project.path(),
+            ".aether/settings.json",
+            r#"{"agents":[{"name":"project-only","description":"Project only","model":"anthropic:claude-sonnet-4-5","userInvocable":true}]}"#,
+        );
+
+        let config = load_default_from_home(project.path(), &aether_home).unwrap();
+
+        assert_eq!(
+            config,
+            AetherSettings {
+                agents: vec![settings_agent("project-only", "Project only")],
+                ..AetherSettings::default()
+            }
+        );
+    }
+
+    #[test]
+    fn load_default_returns_default_when_user_and_project_settings_are_missing() {
+        let project = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let aether_home = home.path().join(".aether");
+        let config = load_default_from_home(project.path(), &aether_home).unwrap();
+        assert_eq!(config, AetherSettings::default());
+    }
+
+    #[test]
+    fn load_default_rejects_malformed_user_settings() {
+        let project = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let aether_home = home.path().join(".aether");
+        write_file(&aether_home, "settings.json", "{not-json");
+        let err = load_default_from_home(project.path(), &aether_home).unwrap_err();
+        assert!(matches!(err, SettingsError::ParseError(_)));
+    }
+
+    #[test]
+    fn strict_file_source_errors_when_missing() {
+        let project = tempfile::tempdir().unwrap();
+        let err = AetherSettings::load(project.path(), [AetherSettingsSource::File(PathBuf::from("missing.json"))])
+            .unwrap_err();
+
+        assert!(matches!(err, SettingsError::IoError(_)));
+    }
+
+    #[test]
+    fn optional_file_source_returns_default_when_missing() {
+        let project = tempfile::tempdir().unwrap();
+        let config =
+            AetherSettings::load(project.path(), [AetherSettingsSource::OptionalFile(PathBuf::from("missing.json"))])
+                .unwrap();
+
+        assert_eq!(config, AetherSettings::default());
     }
 
     #[test]
@@ -214,8 +366,15 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(config.prompts, vec![PromptSource::file("BASE.md")]);
-        assert_eq!(config.mcps[0].path(), Some("mcp.json"));
+        assert_eq!(
+            config,
+            AetherSettings {
+                prompts: vec![PromptSource::file("BASE.md")],
+                mcps: vec![McpSourceSpec::file("mcp.json")],
+                agents: vec![settings_agent("alpha", "Alpha")],
+                ..AetherSettings::default()
+            }
+        );
     }
 
     #[test]
@@ -236,10 +395,19 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(config.prompts, vec![PromptSource::file("BASE.md")]);
-        assert_eq!(config.mcps[0].path(), Some("mcp.json"));
-        assert_eq!(config.agents[0].prompts, vec![PromptSource::file("AGENT.md")]);
-        assert_eq!(config.agents[0].mcps[0].path(), Some("agent-mcp.json"));
+        assert_eq!(
+            config,
+            AetherSettings {
+                prompts: vec![PromptSource::file("BASE.md")],
+                mcps: vec![McpSourceSpec::file("mcp.json")],
+                agents: vec![AgentConfig {
+                    prompts: vec![PromptSource::file("AGENT.md")],
+                    mcps: vec![McpSourceSpec::file("agent-mcp.json")],
+                    ..settings_agent("alpha", "Alpha")
+                }],
+                ..AetherSettings::default()
+            }
+        );
 
         let value = serde_json::to_value(&config).unwrap();
         assert_eq!(value["prompts"], serde_json::json!(["BASE.md"]));
@@ -276,6 +444,10 @@ mod tests {
         assert!(matches!(err, SettingsError::ParseError(message) if message.contains("mcpServers")));
     }
 
+    fn load_default_from_home(project_root: &Path, aether_home: &Path) -> Result<AetherSettings, SettingsError> {
+        AetherSettings::load(project_root, default_sources_for_home(Some(aether_home)))
+    }
+
     fn write_file(dir: &Path, path: &str, content: &str) {
         let full = dir.join(path);
         if let Some(parent) = full.parent() {
@@ -283,6 +455,16 @@ mod tests {
         }
 
         write(full, content).unwrap();
+    }
+
+    fn settings_agent(name: &str, description: &str) -> AgentConfig {
+        AgentConfig {
+            name: name.to_string(),
+            description: description.to_string(),
+            model: "anthropic:claude-sonnet-4-5".to_string(),
+            user_invocable: true,
+            ..AgentConfig::default()
+        }
     }
 
     fn agent_config(name: &str) -> AgentConfig {

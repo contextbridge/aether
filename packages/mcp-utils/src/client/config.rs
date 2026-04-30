@@ -43,7 +43,7 @@ impl<'a> Deserialize<'a> for RawMcpConfig {
 ///
 /// When `"type"` is omitted, defaults to `"stdio"` for compatibility with
 /// Claude Code's `.mcp.json` format.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum RawMcpServerConfig {
     Stdio {

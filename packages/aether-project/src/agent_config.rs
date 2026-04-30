@@ -2,7 +2,7 @@ use crate::{McpSourceSpec, PromptSource};
 use aether_core::agent_spec::ToolFilter;
 use llm::ReasoningEffort;
 
-#[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[schemars(transform = require_agent_invocation_surface_schema)]
 pub struct AgentConfig {

@@ -205,6 +205,7 @@ fn write_if_absent(path: &Path, content: &str) -> Result<(), CliError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aether_project::{AetherSettingsSource, AgentCatalog};
     use llm::ReasoningEffort;
     use mcp_utils::client::config::RawMcpConfig;
 
@@ -262,8 +263,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         scaffold(dir.path(), &default_draft()).unwrap();
 
-        let config = aether_project::AetherSettings::load_default(dir.path()).unwrap();
-        let catalog = aether_project::AgentCatalog::from_settings(dir.path(), config).unwrap();
+        let config = load_project_settings(dir.path());
+        let catalog = AgentCatalog::from_settings(dir.path(), config).unwrap();
         assert_eq!(catalog.all().len(), 1);
         assert_eq!(catalog.all()[0].name, "Default");
     }
@@ -349,8 +350,8 @@ mod tests {
         draft.entry.reasoning_effort = Some(ReasoningEffort::High);
         scaffold(dir.path(), &draft).unwrap();
 
-        let config = aether_project::AetherSettings::load_default(dir.path()).unwrap();
-        let catalog = aether_project::AgentCatalog::from_settings(dir.path(), config).unwrap();
+        let config = load_project_settings(dir.path());
+        let catalog = AgentCatalog::from_settings(dir.path(), config).unwrap();
         assert_eq!(catalog.all()[0].reasoning_effort, Some(ReasoningEffort::High));
     }
 
@@ -397,8 +398,8 @@ mod tests {
         let settings_path = dir.path().join(".aether/settings.json");
         add_agent(&settings_path, &researcher_draft()).unwrap();
 
-        let config = aether_project::AetherSettings::load_default(dir.path()).unwrap();
-        let catalog = aether_project::AgentCatalog::from_settings(dir.path(), config).unwrap();
+        let config = load_project_settings(dir.path());
+        let catalog = AgentCatalog::from_settings(dir.path(), config).unwrap();
         assert_eq!(catalog.all().len(), 2);
         assert_eq!(catalog.all()[0].name, "Default");
         assert_eq!(catalog.all()[1].name, "Researcher");
@@ -589,5 +590,9 @@ mod tests {
         assert!(dir.path().join("AGENTS.md").exists());
         assert!(!dir.path().join("CLAUDE.md").exists());
         assert!(!dir.path().join("GEMINI.md").exists());
+    }
+
+    fn load_project_settings(dir: &Path) -> AetherSettings {
+        AetherSettings::load(dir, [AetherSettingsSource::File(PathBuf::from(".aether/settings.json"))]).unwrap()
     }
 }

@@ -197,56 +197,36 @@ fn resolve_spec(
 
 #[cfg(test)]
 mod tests {
+    use std::fs::{create_dir_all, write};
+
     use super::*;
-
-    fn write_file(dir: &std::path::Path, path: &str, content: &str) {
-        let full = dir.join(path);
-        if let Some(parent) = full.parent() {
-            std::fs::create_dir_all(parent).unwrap();
-        }
-        std::fs::write(full, content).unwrap();
-    }
-
-    fn setup_dir_with_agents() -> tempfile::TempDir {
-        let dir = tempfile::tempdir().unwrap();
-        write_file(dir.path(), "PROMPT.md", "Be helpful");
-        write_file(
-            dir.path(),
-            ".aether/settings.json",
-            r#"{"agents": [
-                {"name": "alpha", "description": "Alpha agent", "model": "anthropic:claude-sonnet-4-5", "userInvocable": true, "prompts": [{"type":"file","path":"PROMPT.md"}]},
-                {"name": "beta", "description": "Beta agent", "model": "anthropic:claude-sonnet-4-5", "userInvocable": true, "prompts": [{"type":"file","path":"PROMPT.md"}]}
-            ]}"#,
-        );
-        dir
-    }
 
     #[test]
     fn resolve_spec_with_named_agent() {
         let dir = setup_dir_with_agents();
-        let spec = resolve_spec(Some("beta"), None, dir.path(), &SettingsSourceArgs::default()).unwrap();
+        let spec = resolve_spec(Some("beta"), None, dir.path(), &project_settings_args()).unwrap();
         assert_eq!(spec.name, "beta");
     }
 
     #[test]
     fn resolve_spec_with_model_creates_default() {
         let dir = setup_dir_with_agents();
-        let spec = resolve_spec(None, Some("anthropic:claude-sonnet-4-5"), dir.path(), &SettingsSourceArgs::default())
-            .unwrap();
+        let spec =
+            resolve_spec(None, Some("anthropic:claude-sonnet-4-5"), dir.path(), &project_settings_args()).unwrap();
         assert_eq!(spec.name, "__default__");
     }
 
     #[test]
     fn resolve_spec_defaults_to_first_user_invocable() {
         let dir = setup_dir_with_agents();
-        let spec = resolve_spec(None, None, dir.path(), &SettingsSourceArgs::default()).unwrap();
+        let spec = resolve_spec(None, None, dir.path(), &project_settings_args()).unwrap();
         assert_eq!(spec.name, "alpha");
     }
 
     #[test]
     fn resolve_spec_defaults_to_fallback_without_settings() {
         let dir = tempfile::tempdir().unwrap();
-        let spec = resolve_spec(None, None, dir.path(), &SettingsSourceArgs::default()).unwrap();
+        let spec = resolve_spec(None, None, dir.path(), &empty_settings_args()).unwrap();
         assert_eq!(spec.name, "__default__");
     }
 
@@ -266,15 +246,44 @@ mod tests {
     #[test]
     fn resolve_spec_rejects_invalid_model() {
         let dir = tempfile::tempdir().unwrap();
-        let err =
-            resolve_spec(None, Some("not-a-valid-model"), dir.path(), &SettingsSourceArgs::default()).unwrap_err();
+        let err = resolve_spec(None, Some("not-a-valid-model"), dir.path(), &empty_settings_args()).unwrap_err();
         assert!(matches!(err, CliError::ModelError(_)));
     }
 
     #[test]
     fn resolve_spec_rejects_unknown_agent() {
         let dir = setup_dir_with_agents();
-        let err = resolve_spec(Some("nonexistent"), None, dir.path(), &SettingsSourceArgs::default()).unwrap_err();
+        let err = resolve_spec(Some("nonexistent"), None, dir.path(), &project_settings_args()).unwrap_err();
         assert!(matches!(err, CliError::AgentError(_)));
+    }
+
+    fn write_file(dir: &std::path::Path, path: &str, content: &str) {
+        let full = dir.join(path);
+        if let Some(parent) = full.parent() {
+            create_dir_all(parent).unwrap();
+        }
+        write(full, content).unwrap();
+    }
+
+    fn project_settings_args() -> SettingsSourceArgs {
+        SettingsSourceArgs { settings_json: None, settings_file: Some(PathBuf::from(".aether/settings.json")) }
+    }
+
+    fn empty_settings_args() -> SettingsSourceArgs {
+        SettingsSourceArgs { settings_json: Some(r#"{"agents":[]}"#.to_string()), settings_file: None }
+    }
+
+    fn setup_dir_with_agents() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "PROMPT.md", "Be helpful");
+        write_file(
+            dir.path(),
+            ".aether/settings.json",
+            r#"{"agents": [
+                {"name": "alpha", "description": "Alpha agent", "model": "anthropic:claude-sonnet-4-5", "userInvocable": true, "prompts": [{"type":"file","path":"PROMPT.md"}]},
+                {"name": "beta", "description": "Beta agent", "model": "anthropic:claude-sonnet-4-5", "userInvocable": true, "prompts": [{"type":"file","path":"PROMPT.md"}]}
+            ]}"#,
+        );
+        dir
     }
 }

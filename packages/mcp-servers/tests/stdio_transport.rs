@@ -21,7 +21,9 @@ fn extract_text(content: &rmcp::model::Content) -> &str {
 }
 
 async fn connect_and_list_tools(server: &str, extra_args: &[&str]) -> Vec<rmcp::model::Tool> {
+    let aether_home = tempfile::tempdir().expect("create temp aether home");
     let mut cmd = stdio_binary();
+    cmd.env("AETHER_HOME", aether_home.path().join(".aether"));
     cmd.arg("--server").arg(server);
     for arg in extra_args {
         cmd.arg(arg);
