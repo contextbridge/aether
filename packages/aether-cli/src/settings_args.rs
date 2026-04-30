@@ -1,5 +1,5 @@
-use aether_project::AetherSettingsSource;
-use std::path::PathBuf;
+use aether_project::{AetherSettingsSource, SettingsFileSource};
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, Default, clap::Args)]
 pub struct SettingsSourceArgs {
@@ -11,11 +11,13 @@ pub struct SettingsSourceArgs {
 }
 
 impl SettingsSourceArgs {
-    pub fn source(&self) -> Option<AetherSettingsSource> {
+    pub fn source(&self, root: &Path) -> Option<AetherSettingsSource> {
         if let Some(json) = &self.settings_json {
             Some(AetherSettingsSource::Json(json.clone()))
         } else {
-            self.settings_file.as_ref().map(|path| AetherSettingsSource::File(path.clone()))
+            self.settings_file
+                .as_ref()
+                .map(|path| AetherSettingsSource::File(SettingsFileSource::new(path.clone(), root)))
         }
     }
 }
@@ -28,7 +30,7 @@ mod tests {
     fn settings_json_maps_to_json_source() {
         let args = SettingsSourceArgs { settings_json: Some("{\"agents\":[]}".to_string()), settings_file: None };
 
-        let Some(AetherSettingsSource::Json(json)) = args.source() else {
+        let Some(AetherSettingsSource::Json(json)) = args.source(Path::new(".")) else {
             panic!("expected JSON settings source");
         };
         assert_eq!(json, "{\"agents\":[]}");
@@ -38,9 +40,9 @@ mod tests {
     fn settings_file_maps_to_file_source() {
         let args = SettingsSourceArgs { settings_json: None, settings_file: Some(PathBuf::from("settings.json")) };
 
-        let Some(AetherSettingsSource::File(path)) = args.source() else {
+        let Some(AetherSettingsSource::File(source)) = args.source(Path::new("/workspace")) else {
             panic!("expected file settings source");
         };
-        assert_eq!(path, PathBuf::from("settings.json"));
+        assert_eq!(source, SettingsFileSource::new("settings.json", "/workspace"));
     }
 }

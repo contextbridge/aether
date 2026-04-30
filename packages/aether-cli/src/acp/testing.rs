@@ -4,6 +4,7 @@ use super::session::Session;
 use super::session_manager::{InitialSessionSelection, SessionManager, SessionManagerConfig};
 use super::session_registry::SessionRegistry;
 use super::session_store::SessionStore;
+use crate::settings_args::SettingsSourceArgs;
 use acp_utils::testing::{TestPeer, duplex_pair};
 use aether_core::core::AgentHandle;
 use aether_core::events::{AgentMessage, UserMessage};
@@ -39,7 +40,7 @@ impl AcpTestHarness {
             session_store: session_store.clone(),
             has_oauth_credential: OAuthCredentialStore::has_credential,
             initial_selection: InitialSessionSelection::default(),
-            settings_source: None,
+            settings_source: SettingsSourceArgs::default(),
         }));
 
         let (peer, client_builder) = TestPeer::new();

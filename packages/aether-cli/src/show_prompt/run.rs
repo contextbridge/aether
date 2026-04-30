@@ -11,7 +11,7 @@ use serde_json::Value;
 
 pub async fn run_prompt(args: PromptArgs) -> Result<(), CliError> {
     let cwd = args.cwd.canonicalize().map_err(CliError::IoError)?;
-    let config = if let Some(source) = args.settings_source.source() {
+    let config = if let Some(source) = args.settings_source.source(&cwd) {
         AetherSettings::load(&cwd, [source])
     } else {
         AetherSettings::load_default(&cwd)

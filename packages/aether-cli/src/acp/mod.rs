@@ -99,7 +99,7 @@ pub async fn run_acp(args: AcpArgs) -> Result<AcpRunOutcome, AcpRunError> {
         session_store,
         has_oauth_credential: OAuthCredentialStore::has_credential,
         initial_selection,
-        settings_source: args.settings_source.source(),
+        settings_source: args.settings_source,
     }));
 
     let transport = ByteStreams::new(stdout().compat_write(), stdin().compat());

@@ -174,7 +174,7 @@ fn resolve_spec(
         return Err(CliError::ConflictingArgs("Cannot specify both --agent and --model".to_string()));
     }
 
-    let config = if let Some(source) = settings_source.source() {
+    let config = if let Some(source) = settings_source.source(cwd) {
         AetherSettings::load(cwd, [source])
     } else {
         AetherSettings::load_default(cwd)

@@ -9,7 +9,7 @@ mod prompt_catalog;
 pub mod prompt_file;
 
 pub use aether_core::core::{PromptSource, PromptSourceError};
-pub use aether_settings::{AetherSettings, AetherSettingsSource};
+pub use aether_settings::{AetherSettings, AetherSettingsSource, SettingsFileSource};
 pub use agent_catalog::AgentCatalog;
 pub use agent_config::AgentConfig;
 pub use error::SettingsError;

@@ -205,7 +205,7 @@ fn write_if_absent(path: &Path, content: &str) -> Result<(), CliError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aether_project::{AetherSettingsSource, AgentCatalog};
+    use aether_project::{AetherSettingsSource, AgentCatalog, SettingsFileSource};
     use llm::ReasoningEffort;
     use mcp_utils::client::config::RawMcpConfig;
 
@@ -593,6 +593,7 @@ mod tests {
     }
 
     fn load_project_settings(dir: &Path) -> AetherSettings {
-        AetherSettings::load(dir, [AetherSettingsSource::File(PathBuf::from(".aether/settings.json"))]).unwrap()
+        AetherSettings::load(dir, [AetherSettingsSource::File(SettingsFileSource::new(".aether/settings.json", dir))])
+            .unwrap()
     }
 }

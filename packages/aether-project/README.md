@@ -24,7 +24,7 @@ Project-local and user-level settings plus agent catalog resolution for the Aeth
 
 `.aether/settings.json` supports top-level `prompts` and `mcps` as typed defaults. An agent without local `prompts` inherits top-level `prompts`; an agent without local `mcps` inherits top-level `mcps`. Agent-local `prompts` or `mcps` replace the corresponding top-level defaults for that agent.
 
-`AetherSettings::load_default` loads user settings first, then project settings. User settings come from `$AETHER_HOME/settings.json` when `AETHER_HOME` is set, otherwise `$HOME/.aether/settings.json` or `%USERPROFILE%/.aether/settings.json`. Project settings come from `project_root/.aether/settings.json`. Missing default files are ignored. When multiple sources define an agent with the same name, the later source wins, so project agents override user agents with the same name.
+`AetherSettings::load_default` loads user settings first, then project settings. User settings come from `$AETHER_HOME/settings.json` when `AETHER_HOME` is set, otherwise `$HOME/.aether/settings.json` or `%USERPROFILE%/.aether/settings.json`. Project settings come from `project_root/.aether/settings.json`. Missing default files are ignored. Relative prompt and MCP paths in user settings resolve against `$AETHER_HOME`; relative prompt and MCP paths in project settings resolve against `project_root`. When multiple sources define an agent with the same name, the later source wins, so project agents override user agents with the same name.
 
 ```rust,no_run
 use aether_project::{AetherSettings, AgentCatalog};

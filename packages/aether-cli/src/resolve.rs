@@ -21,8 +21,7 @@ pub fn resolve_agent_spec(catalog: &AgentCatalog, agent_name: Option<&str>) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aether_project::{AetherSettings, AetherSettingsSource};
-    use std::path::PathBuf;
+    use aether_project::{AetherSettings, AetherSettingsSource, SettingsFileSource};
 
     fn write_file(dir: &std::path::Path, path: &str, content: &str) {
         let full = dir.join(path);
@@ -36,9 +35,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_file(dir.path(), "PROMPT.md", "Be helpful");
         write_file(dir.path(), ".aether/settings.json", settings_json);
-        let config =
-            AetherSettings::load(dir.path(), [AetherSettingsSource::File(PathBuf::from(".aether/settings.json"))])
-                .unwrap();
+        let config = AetherSettings::load(
+            dir.path(),
+            [AetherSettingsSource::File(SettingsFileSource::new(".aether/settings.json", dir.path()))],
+        )
+        .unwrap();
         let catalog = AgentCatalog::from_settings(dir.path(), config).unwrap();
         (dir, catalog)
     }

@@ -29,10 +29,11 @@ use super::relay::{SessionCommand, spawn_relay};
 use super::session::Session;
 use super::session_registry::{ConfigSnapshot, SessionRegistry};
 use super::session_store::{SessionMeta, SessionStore};
+use crate::settings_args::SettingsSourceArgs;
 use acp_utils::content::format_embedded_resource;
 use aether_core::agent_spec::AgentSpec;
 use aether_core::context::ext::ContextExt;
-use aether_project::{AetherSettings, AetherSettingsSource, AgentCatalog};
+use aether_project::{AetherSettings, AgentCatalog};
 use llm::Context;
 
 /// Initial session selection supplied when `aether acp` starts.
@@ -63,7 +64,7 @@ pub struct SessionManager {
     session_store: Arc<SessionStore>,
     has_oauth_credential: fn(&str) -> bool,
     initial_selection: InitialSessionSelection,
-    settings_source: Option<AetherSettingsSource>,
+    settings_source: SettingsSourceArgs,
 }
 
 pub(crate) struct SessionManagerConfig {
@@ -71,7 +72,7 @@ pub(crate) struct SessionManagerConfig {
     pub(crate) session_store: Arc<SessionStore>,
     pub(crate) has_oauth_credential: fn(&str) -> bool,
     pub(crate) initial_selection: InitialSessionSelection,
-    pub(crate) settings_source: Option<AetherSettingsSource>,
+    pub(crate) settings_source: SettingsSourceArgs,
 }
 
 struct SessionModeCatalog {
@@ -141,7 +142,7 @@ impl SessionManager {
     }
 
     async fn load_mode_catalog(&self, cwd: &Path) -> Result<SessionModeCatalog, acp::Error> {
-        let config = if let Some(source) = self.settings_source.clone() {
+        let config = if let Some(source) = self.settings_source.source(cwd) {
             AetherSettings::load(cwd, [source])
         } else {
             AetherSettings::load_default(cwd)
@@ -378,7 +379,7 @@ mod tests {
             session_store,
             has_oauth_credential: |_| false,
             initial_selection: InitialSessionSelection::default(),
-            settings_source: None,
+            settings_source: SettingsSourceArgs::default(),
         });
         let response =
             manager.initialize(InitializeRequest::new(ProtocolVersion::LATEST)).await.expect("initialize succeeds");

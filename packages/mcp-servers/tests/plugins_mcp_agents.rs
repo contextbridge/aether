@@ -1,11 +1,11 @@
-use aether_project::{AetherSettings, AetherSettingsSource, AgentCatalog};
+use aether_project::{AetherSettings, AetherSettingsSource, AgentCatalog, SettingsFileSource};
 use mcp_servers::subagents::SubAgentsMcp;
 use mcp_utils::testing::connect;
 use rmcp::model::{CallToolRequestParams, ClientCapabilities, ClientInfo, Implementation};
 use rmcp::service::RunningService;
 use rmcp::{RoleClient, RoleServer};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tempfile::TempDir;
 
 #[tokio::test]
@@ -200,9 +200,11 @@ fn create_project_with_invocable_agent() -> TempDir {
 }
 
 fn create_test_server(test_dir: &Path) -> SubAgentsMcp {
-    let settings =
-        AetherSettings::load(test_dir, [AetherSettingsSource::OptionalFile(PathBuf::from(".aether/settings.json"))])
-            .expect("Failed to load project settings");
+    let settings = AetherSettings::load(
+        test_dir,
+        [AetherSettingsSource::OptionalFile(SettingsFileSource::new(".aether/settings.json", test_dir))],
+    )
+    .expect("Failed to load project settings");
     let catalog = if settings.agents.is_empty() {
         AgentCatalog::empty(test_dir.to_path_buf())
     } else {
