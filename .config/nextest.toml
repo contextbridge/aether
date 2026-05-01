@@ -1,0 +1,26 @@
+nextest-version = { required = "0.9.133" }
+
+[profile.default]
+default-filter = 'not (package(aether-evals) and test(/_eval$/))'
+fail-fast = false
+failure-output = "immediate-final"
+success-output = "never"
+retries = 0
+
+[profile.ci]
+inherits = "default"
+fail-fast = false
+
+[profile.ci.junit]
+path = "junit.xml"
+store-success-output = false
+store-failure-output = true
+
+[test-groups]
+evals = { max-threads = 5 }
+
+[[profile.default.overrides]]
+filter = 'package(aether-evals) and test(/_eval$/)'
+test-group = 'evals'
+slow-timeout = { period = "180s", terminate-after = 3 }
+failure-output = "immediate-final"

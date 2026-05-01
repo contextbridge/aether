@@ -1,48 +1,48 @@
+use aether_core::agent_spec::McpConfigSource;
 use aether_core::core::{Prompt, agent};
 use aether_core::events::{AgentMessage, UserMessage};
 use aether_core::mcp::{McpBuilder, McpSpawnResult, mcp};
 use llm::{StreamingModelProvider, ToolCallRequest};
 use mcp_utils::client::ServerFactory;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::mpsc::{Receiver, Sender};
 
-use super::{AgentConfig, AgentRunner, AgentRunnerMessage, RunError};
+use super::{Agent, AgentConfig, AgentEvalMessage, RunError};
 
-/// Agent runner implementation for Aether agents
+/// `Agent` implementation backed by an Aether agent.
 ///
-/// This implementation creates MCP connections for each eval run, ensuring full isolation.
-/// It supports both in-memory MCP servers and external servers (via mcp.json).
+/// Creates MCP connections for each eval run, ensuring full isolation. Supports
+/// both in-memory MCP servers and external servers (via mcp.json).
 ///
 /// # Example
 ///
 /// ```ignore
-/// use crucible::aether_runner::AetherRunner;
+/// use crucible::AetherAgent;
 /// use mcp_coding::CodingMcp;
 ///
 /// // Assume you have an LLM provider
 /// let llm = /* your LLM provider */;
-/// let runner = AetherRunner::new(llm)
+/// let agent = AetherAgent::new(llm)
 ///     .with_mcp_server_factory("coding", Box::new(|_| CodingMcp::new().into_dyn()));
 /// ```
-pub struct AetherRunner<T> {
+pub struct AetherAgent<T> {
     llm: T,
     factories: HashMap<String, Arc<ServerFactory>>,
     mcp_json_path: Option<PathBuf>,
+    system_prompts: Vec<Prompt>,
 }
 
-impl<T: StreamingModelProvider + 'static> AetherRunner<T> {
-    /// Create a new `AetherRunner` with the given LLM provider
+impl<T: StreamingModelProvider + 'static> AetherAgent<T> {
+    /// Create a new `AetherAgent` with the given LLM provider
     pub fn new(llm: T) -> Self {
-        Self { llm, factories: HashMap::new(), mcp_json_path: None }
+        Self { llm, factories: HashMap::new(), mcp_json_path: None, system_prompts: Vec::new() }
     }
 
-    /// Register an in-memory MCP server factory
+    /// Register an in-memory MCP server factory.
     ///
-    /// # Arguments
-    /// * `name` - The name of the server (referenced in mcp.json)
-    /// * `factory` - Factory function that creates server instances
+    /// Registered factories are spawned automatically — no `.mcp.json` entry required.
     pub fn with_mcp_server_factory(mut self, name: impl Into<String>, factory: ServerFactory) -> Self {
         self.factories.insert(name.into(), Arc::new(factory));
         self
@@ -62,31 +62,44 @@ impl<T: StreamingModelProvider + 'static> AetherRunner<T> {
         self
     }
 
+    /// Append a system prompt the agent will run with.
+    ///
+    /// Multiple calls are additive and concatenated with double newlines, after the MCP instructions
+    /// assembled from the registered servers.
+    pub fn with_system_prompt(mut self, prompt: Prompt) -> Self {
+        self.system_prompts.push(prompt);
+        self
+    }
+
     async fn create_mcp_builder(&self) -> Result<McpBuilder, RunError> {
         let mut mcp_builder = mcp();
+        let mut sources: Vec<McpConfigSource> = Vec::new();
 
-        // Clone the Arc, not the factory itself
         for (name, factory) in &self.factories {
-            // We need to create a new factory from the Arc by cloning the Arc and calling it
             let factory_arc = factory.clone();
             let factory_fn: ServerFactory = Box::new(move |args, input| factory_arc(args, input));
             mcp_builder = mcp_builder.register_in_memory_server(name.clone(), factory_fn);
+            sources.push(McpConfigSource::Json(format!(r#"{{"servers":{{"{name}":{{"type":"in-memory"}}}}}}"#)));
         }
 
         if let Some(mcp_json_path) = &self.mcp_json_path {
+            sources.push(McpConfigSource::file(mcp_json_path.clone(), false));
+        }
+
+        if !sources.is_empty() {
             mcp_builder = mcp_builder
-                .from_json_files(std::slice::from_ref(mcp_json_path))
+                .from_mcp_config_sources(&sources)
                 .await
-                .map_err(|e| RunError::ConfigurationError(format!("Failed to load mcp.json: {e}")))?;
+                .map_err(|e| RunError::ConfigurationError(format!("Failed to load MCP configuration: {e}")))?;
         }
 
         Ok(mcp_builder)
     }
 }
 
-/// Convert `AgentMessages` to `AgentRunnerMessages` in real-time, streaming them as they arrive
+/// Convert `AgentMessage`s to `AgentEvalMessage`s in real-time, streaming them as they arrive
 #[allow(clippy::too_many_lines)]
-async fn stream_agent_messages(mut rx: Receiver<AgentMessage>, tx: Sender<AgentRunnerMessage>) -> Result<(), RunError> {
+async fn stream_agent_messages(mut rx: Receiver<AgentMessage>, tx: Sender<AgentEvalMessage>) -> Result<(), RunError> {
     let mut accumulated_text = String::new();
     let mut accumulated_tool_calls: HashMap<String, ToolCallRequest> = HashMap::new();
 
@@ -111,7 +124,7 @@ async fn stream_agent_messages(mut rx: Receiver<AgentMessage>, tx: Sender<AgentR
                     tx.send(tool_call).await.map_err(|e| RunError::ChannelSendFailed(e.to_string()))?;
                 }
                 tracing::debug!("Tool result for {}: {}", result.name, result.result);
-                tx.send(AgentRunnerMessage::ToolResult { name: result.name.clone(), result: result.result.clone() })
+                tx.send(AgentEvalMessage::ToolResult { name: result.name.clone(), result: result.result.clone() })
                     .await
                     .map_err(|e| RunError::ChannelSendFailed(e.to_string()))?;
             }
@@ -126,7 +139,7 @@ async fn stream_agent_messages(mut rx: Receiver<AgentMessage>, tx: Sender<AgentR
                     tx.send(tool_call).await.map_err(|e| RunError::ChannelSendFailed(e.to_string()))?;
                 }
                 tracing::debug!("Tool error: {:?}", error);
-                tx.send(AgentRunnerMessage::ToolError(format!("{error:?}")))
+                tx.send(AgentEvalMessage::ToolError(format!("{error:?}")))
                     .await
                     .map_err(|e| RunError::ChannelSendFailed(e.to_string()))?;
             }
@@ -137,7 +150,7 @@ async fn stream_agent_messages(mut rx: Receiver<AgentMessage>, tx: Sender<AgentR
 
             AgentMessage::Error { message: msg } => {
                 tracing::debug!("Agent error: {}", msg);
-                tx.send(AgentRunnerMessage::Error(msg.clone()))
+                tx.send(AgentEvalMessage::Error(msg.clone()))
                     .await
                     .map_err(|e| RunError::ChannelSendFailed(e.to_string()))?;
                 // Agent errors are terminal - agent won't send Done, so break out
@@ -146,7 +159,7 @@ async fn stream_agent_messages(mut rx: Receiver<AgentMessage>, tx: Sender<AgentR
 
             AgentMessage::Cancelled { message: msg } => {
                 tracing::debug!("Agent cancelled: {}", msg);
-                tx.send(AgentRunnerMessage::Error(format!("Cancelled: {msg}")))
+                tx.send(AgentEvalMessage::Error(format!("Cancelled: {msg}")))
                     .await
                     .map_err(|e| RunError::ChannelSendFailed(e.to_string()))?;
                 // Cancellation is terminal - break out
@@ -211,8 +224,8 @@ async fn stream_agent_messages(mut rx: Receiver<AgentMessage>, tx: Sender<AgentR
     Ok(())
 }
 
-impl<T: StreamingModelProvider + Clone + 'static> AgentRunner for AetherRunner<T> {
-    async fn run(&self, config: AgentConfig<'_>, tx: Sender<AgentRunnerMessage>) -> Result<(), RunError> {
+impl<T: StreamingModelProvider + Clone + 'static> Agent for AetherAgent<T> {
+    async fn run(&self, config: AgentConfig<'_>, tx: Sender<AgentEvalMessage>) -> Result<(), RunError> {
         let mcp_builder = self.create_mcp_builder().await?;
         let McpSpawnResult {
             tool_definitions,
@@ -227,8 +240,8 @@ impl<T: StreamingModelProvider + Clone + 'static> AgentRunner for AetherRunner<T
         let mut agent_builder =
             agent(llm).system_prompt(Prompt::mcp_instructions(instructions)).tools(command_tx, tool_definitions);
 
-        if let Some(prompt) = config.system_prompt {
-            agent_builder = agent_builder.system_prompt(Prompt::text(prompt));
+        for prompt in &self.system_prompts {
+            agent_builder = agent_builder.system_prompt(prompt.clone());
         }
 
         let (agent_tx, agent_rx, _handle) = agent_builder
@@ -236,8 +249,9 @@ impl<T: StreamingModelProvider + Clone + 'static> AgentRunner for AetherRunner<T
             .await
             .map_err(|e| RunError::ExecutionFailed(format!("Failed to spawn agent: {e}")))?;
 
+        let task_prompt = build_aether_task_prompt(config.task_prompt, config.workspace);
         agent_tx
-            .send(UserMessage::text(config.task_prompt))
+            .send(UserMessage::text(&task_prompt))
             .await
             .map_err(|e| RunError::ChannelSendFailed(format!("Failed to send task: {e}")))?;
 
@@ -249,14 +263,14 @@ async fn handle_text(
     chunk: &str,
     is_complete: bool,
     accumulated_text: &mut String,
-    tx: &Sender<AgentRunnerMessage>,
+    tx: &Sender<AgentEvalMessage>,
 ) -> Result<(), RunError> {
     accumulated_text.push_str(chunk);
     if is_complete && !accumulated_text.is_empty() {
         for line in accumulated_text.lines() {
             tracing::debug!("Agent response: {}", line);
         }
-        tx.send(AgentRunnerMessage::AgentText(accumulated_text.clone()))
+        tx.send(AgentEvalMessage::AgentText(accumulated_text.clone()))
             .await
             .map_err(|e| RunError::ChannelSendFailed(e.to_string()))?;
         accumulated_text.clear();
@@ -304,12 +318,12 @@ fn take_tool_call(
     tool_call_id: &str,
     fallback_name: &str,
     fallback_arguments: &str,
-) -> Option<AgentRunnerMessage> {
+) -> Option<AgentEvalMessage> {
     let request = accumulated_tool_calls.remove(tool_call_id)?;
     let name = if request.name.is_empty() { fallback_name.to_string() } else { request.name };
     let arguments = if request.arguments.is_empty() { fallback_arguments.to_string() } else { request.arguments };
 
-    Some(AgentRunnerMessage::ToolCall { name, arguments })
+    Some(AgentEvalMessage::ToolCall { name, arguments })
 }
 
 fn handle_tool_progress(request: &ToolCallRequest, progress: f64, total: Option<f64>, message: Option<&String>) {
@@ -318,19 +332,31 @@ fn handle_tool_progress(request: &ToolCallRequest, progress: f64, total: Option<
     tracing::debug!("Tool progress for {}: {}{}{}", request.name, msg, progress, total_str);
 }
 
-async fn handle_done(accumulated_text: &mut String, tx: &Sender<AgentRunnerMessage>) -> Result<(), RunError> {
+async fn handle_done(accumulated_text: &mut String, tx: &Sender<AgentEvalMessage>) -> Result<(), RunError> {
     if !accumulated_text.is_empty() {
         for line in accumulated_text.lines() {
             tracing::debug!("Agent response: {}", line);
         }
-        tx.send(AgentRunnerMessage::AgentText(accumulated_text.clone()))
+        tx.send(AgentEvalMessage::AgentText(accumulated_text.clone()))
             .await
             .map_err(|e| RunError::ChannelSendFailed(e.to_string()))?;
         accumulated_text.clear();
     }
     tracing::debug!("Agent done");
-    tx.send(AgentRunnerMessage::Done).await.map_err(|e| RunError::ChannelSendFailed(e.to_string()))?;
+    tx.send(AgentEvalMessage::Done).await.map_err(|e| RunError::ChannelSendFailed(e.to_string()))?;
     Ok(())
+}
+
+fn build_aether_task_prompt(task_prompt: &str, workspace: &Path) -> String {
+    [
+        "Complete the following task:".to_string(),
+        format!("<task>{task_prompt}</task>"),
+        format!(
+            "CRITICAL INSTRUCTIONS: when working on this task, you MUST only operate within this directory: {}",
+            workspace.display()
+        ),
+    ]
+    .join("\n")
 }
 
 #[cfg(test)]
@@ -342,9 +368,9 @@ mod tests {
     #[tokio::test]
     async fn stream_agent_messages_emits_tool_call_when_result_arrives() {
         let (agent_tx, agent_rx) = mpsc::channel(8);
-        let (runner_tx, mut runner_rx) = mpsc::channel(8);
+        let (eval_tx, mut eval_rx) = mpsc::channel(8);
 
-        let task = tokio::spawn(async move { stream_agent_messages(agent_rx, runner_tx).await });
+        let task = tokio::spawn(async move { stream_agent_messages(agent_rx, eval_tx).await });
 
         agent_tx
             .send(AgentMessage::ToolCall {
@@ -382,8 +408,8 @@ mod tests {
         drop(agent_tx);
 
         let mut messages = Vec::new();
-        while let Some(message) = runner_rx.recv().await {
-            let is_done = matches!(message, AgentRunnerMessage::Done);
+        while let Some(message) = eval_rx.recv().await {
+            let is_done = matches!(message, AgentEvalMessage::Done);
             messages.push(message);
             if is_done {
                 break;
@@ -394,23 +420,23 @@ mod tests {
 
         assert!(matches!(
             &messages[0],
-            AgentRunnerMessage::ToolCall { name, arguments }
+            AgentEvalMessage::ToolCall { name, arguments }
                 if name == "coding__read_file" && arguments == r#"["Cargo.toml"]"#
         ));
         assert!(matches!(
             &messages[1],
-            AgentRunnerMessage::ToolResult { name, result }
+            AgentEvalMessage::ToolResult { name, result }
                 if name == "coding__read_file" && result == "file contents"
         ));
-        assert!(matches!(messages.last(), Some(AgentRunnerMessage::Done)));
+        assert!(matches!(messages.last(), Some(AgentEvalMessage::Done)));
     }
 
     #[tokio::test]
     async fn stream_agent_messages_emits_tool_call_when_error_arrives() {
         let (agent_tx, agent_rx) = mpsc::channel(8);
-        let (runner_tx, mut runner_rx) = mpsc::channel(8);
+        let (eval_tx, mut eval_rx) = mpsc::channel(8);
 
-        let task = tokio::spawn(async move { stream_agent_messages(agent_rx, runner_tx).await });
+        let task = tokio::spawn(async move { stream_agent_messages(agent_rx, eval_tx).await });
 
         agent_tx
             .send(AgentMessage::ToolCall {
@@ -447,8 +473,8 @@ mod tests {
         drop(agent_tx);
 
         let mut messages = Vec::new();
-        while let Some(message) = runner_rx.recv().await {
-            let is_done = matches!(message, AgentRunnerMessage::Done);
+        while let Some(message) = eval_rx.recv().await {
+            let is_done = matches!(message, AgentEvalMessage::Done);
             messages.push(message);
             if is_done {
                 break;
@@ -459,10 +485,18 @@ mod tests {
 
         assert!(matches!(
             &messages[0],
-            AgentRunnerMessage::ToolCall { name, arguments }
+            AgentEvalMessage::ToolCall { name, arguments }
                 if name == "coding__read_file" && arguments == r#"["Cargo.toml"]"#
         ));
-        assert!(matches!(&messages[1], AgentRunnerMessage::ToolError(error) if error.contains("boom")));
-        assert!(matches!(messages.last(), Some(AgentRunnerMessage::Done)));
+        assert!(matches!(&messages[1], AgentEvalMessage::ToolError(error) if error.contains("boom")));
+        assert!(matches!(messages.last(), Some(AgentEvalMessage::Done)));
+    }
+
+    #[test]
+    fn build_aether_task_prompt_wraps_prompt_and_pins_workspace() {
+        let prompt = build_aether_task_prompt("write hello.txt", Path::new("/tmp/work"));
+
+        assert!(prompt.contains("<task>write hello.txt</task>"));
+        assert!(prompt.contains("/tmp/work"));
     }
 }

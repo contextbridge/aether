@@ -17,6 +17,19 @@ check:
 test *PKGS:
     cargo nextest run --all-features {{ if PKGS == "" { "--workspace" } else { PKGS } }}
 
+# Run tests with nextest's CI profile and JUnit output
+test-ci *PKGS:
+    cargo nextest run --profile ci --all-features {{ if PKGS == "" { "--workspace" } else { PKGS } }}
+
+# Run real LLM evals from the dedicated eval crate
+# e.g. `just evals anthropic:claude-sonnet-4-5`
+evals MODEL *ARGS:
+    AETHER_EVAL_MODEL={{MODEL}} cargo nextest run -p aether-evals --ignore-default-filter -E 'group(evals)' {{ARGS}}
+
+# List eval test names without running them
+evals-list *ARGS:
+    cargo nextest list -p aether-evals --ignore-default-filter -E 'group(evals)' {{ARGS}}
+
 # Check formatting
 fmt-check *PKGS:
     cargo fmt --check {{ if PKGS == "" { "--all" } else { PKGS } }}
@@ -45,7 +58,7 @@ sdk-e2e *ARGS:
     pnpm sdk:e2e {{ARGS}}
 
 # Run all CI checks
-ci: fmt-check lint test doc-check
+ci: fmt-check lint test-ci doc-check
     pnpm fmt-check
     pnpm sdk:typecheck
     pnpm sdk:test

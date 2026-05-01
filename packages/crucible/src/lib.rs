@@ -1,17 +1,16 @@
 pub mod agents;
 mod assertions;
+mod error;
 pub mod evals;
 pub mod git_repo;
-pub mod hooks;
 pub mod metrics;
-pub mod server;
-pub mod storage;
 
-pub use agents::AgentRunnerMessage;
-pub use agents::{AetherRunner, AgentConfig, AgentRunner, FakeAgentRunner, RunError};
+pub use aether_core::core::Prompt;
+pub use agents::{AetherAgent, Agent, AgentConfig, AgentEvalMessage, FakeAgent, RunError};
+pub use assertions::{assert_tool_call_count, assert_tool_call_with_args, assert_tool_called};
+pub use error::{EvalRunError, WorkspaceError};
 pub use evals::{
-    Eval, EvalAssertion, EvalAssertionResult, EvalRunner, EvalsConfig, LlmJudgeContext, ToolCallCount, WorkingDirectory,
+    DiffStats, EvalReport, GitDiff, GitRepoSpec, JudgeError, JudgeResult, LlmJudgeContext, ToolCall, Workspace,
+    WorkspaceSource, run_eval,
 };
 pub use metrics::{BinaryMetric, EvalMetric, NumericMetric};
-pub use server::{AppState, SseEvent};
-pub use storage::{FileSystemStore, Result as StoreResult, ResultsStore};

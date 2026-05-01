@@ -1,9 +1,7 @@
-pub mod assertion;
-pub mod config;
-pub mod eval;
-pub mod runner;
+mod eval;
+mod judge;
+mod report;
 
-pub use assertion::{EvalAssertion, EvalAssertionResult, LlmJudgeContext, ToolCallCount};
-pub use config::EvalsConfig;
-pub use eval::{Eval, WorkingDirectory};
-pub use runner::EvalRunner;
+pub use eval::{GitRepoSpec, Workspace, WorkspaceSource, run_eval};
+pub use judge::{JudgeError, JudgeResult, LlmJudgeContext};
+pub use report::{DiffStats, EvalReport, GitDiff, ToolCall};

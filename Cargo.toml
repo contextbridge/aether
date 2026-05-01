@@ -5,6 +5,7 @@ members = [
     "packages/aether-project",
     "packages/wisp",
     "packages/crucible",
+    "packages/evals",
     "packages/aether-cli",
     "packages/acp-utils",
     "packages/aether-lspd",

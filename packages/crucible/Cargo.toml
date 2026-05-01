@@ -11,44 +11,17 @@ dist = false
 workspace = true
 
 [dependencies]
-# CLI
-clap = { workspace = true }
-
-# Colored output
-crossterm = { workspace = true }
-
-# Async runtime
 tokio = { workspace = true }
 futures = { workspace = true }
-
-# Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
 schemars = { workspace = true }
-
-# Logging and tracing
+thiserror = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true, features = ["fmt", "json", "env-filter"] }
-tracing-appender = { workspace = true }
-
-# Date and time
-chrono = { workspace = true, features = ["serde"] }
-
-# File system
 tempfile = { workspace = true }
-
-# HTTP server
-axum = { workspace = true }
-tower = { workspace = true }
-tower-http = { workspace = true, features = ["fs", "cors"] }
-tokio-stream = { workspace = true, features = ["sync"] }
-
-# Internal dependencies
 aether-core = { package = "aether-agent-core", path = "../aether-core" }
 llm = { package = "aether-llm", path = "../llm" }
 mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils" }
-uuid = { workspace = true, features = ["v4", "serde"] }
-async-trait.workspace = true
 
 [lib]
 name = "crucible"

@@ -1,0 +1,22 @@
+[package]
+name = "aether-evals"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[package.metadata.dist]
+dist = false
+
+[lints]
+workspace = true
+
+[dependencies]
+crucible = { path = "../crucible" }
+futures = { workspace = true }
+llm = { package = "aether-llm", path = "../llm" }
+mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", features = ["coding"] }
+mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils" }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

@@ -66,7 +66,7 @@ impl StreamingModelProvider for Box<dyn StreamingModelProvider> {
     }
 }
 
-impl<T: StreamingModelProvider> StreamingModelProvider for std::sync::Arc<T> {
+impl<T: StreamingModelProvider + ?Sized> StreamingModelProvider for std::sync::Arc<T> {
     fn stream_response(&self, context: &Context) -> LlmResponseStream {
         (**self).stream_response(context)
     }

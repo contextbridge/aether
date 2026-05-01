@@ -9,3 +9,8 @@ dependencies_update = true
 name = "crucible"
 release = false
 publish = false
+
+[[package]]
+name = "aether-evals"
+release = false
+publish = false

@@ -1,6 +1,6 @@
 # Crucible
 
-A Rust library for writing automated tests (evals) for LLM-powered agents.
+Crucible is a Rust library that makes writing agent evals easier to express as ordinary `cargo-nextest` tests.
 
 ## Table of Contents
 
@@ -8,171 +8,131 @@ A Rust library for writing automated tests (evals) for LLM-powered agents.
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
 
 - [Quick Start](#quick-start)
-- [Directory Structure](#directory-structure)
-- [Eval Configuration](#eval-configuration)
-  - [Basic Eval (with local files)](#basic-eval-with-local-files)
-  - [Git Repository Eval](#git-repository-eval)
-- [Assertion Types](#assertion-types)
-  - [ToolCall Options](#toolcall-options)
-- [Configuration](#configuration)
-- [Output](#output)
+- [Test organization](#test-organization)
+- [Core API](#core-api)
+- [Assertions](#assertions)
+- [Failure output and debugging](#failure-output-and-debugging)
+- [Git-backed evals](#git-backed-evals)
 - [Development](#development)
 
-<!-- END doctoc generated TOC please keep comment here to allow auto update -->
+<!-- END doctoc generated TOC -->
 
 ## Quick Start
 
 ```rust
-use crucible::{AetherRunner, Eval, EvalAssertion, EvalRunner, EvalsConfig, FileSystemStore, WorkingDirectory};
-use llm::providers::openrouter::OpenRouterProvider;
+use crucible::{FakeAgent, Workspace, run_eval};
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let llm = OpenRouterProvider::default("anthropic/claude-sonnet-4-5-20250929")?;
-    let judge_llm = OpenRouterProvider::default("anthropic/claude-sonnet-4-5-20250929")?;
+#[tokio::test]
+async fn hello_world_test() -> Result<(), crucible::EvalRunError> {
+    let report = run_eval(
+        &FakeAgent::writes_file("hello.txt", "Hello, World!"),
+        "Write 'Hello, World!' to hello.txt",
+        Workspace::empty()?,
+    )
+    .await?;
 
-    let runner = AetherRunner::new(llm);
-    let store = FileSystemStore::new("./results".into())?;
-    let config = EvalsConfig::new(judge_llm)
-        .with_batch_size(3)
-        .with_serve(true);
-
-    let evals = vec![
-        Eval::new(
-            "hello_world",
-            "Write 'Hello, World!' to hello.txt",
-            WorkingDirectory::empty()?,
-            vec![EvalAssertion::file_exists("hello.txt")],
-        ),
-    ];
-
-    let run_id = EvalRunner::new(runner, store)
-        .run_evals(evals, config)
-        .await?;
-
-    println!("Run: {run_id}");
+    assert!(report.path("hello.txt").exists(), "{}", report.failure_context());
     Ok(())
 }
 ```
 
-## Directory Structure
+Run evals with nextest:
 
-```
-my-agent/
-├── AGENTS.md          # Agent system prompt (optional)
-├── mcp.json          # MCP servers config (optional)
-└── evals/
-    └── test-name/
-        ├── prompt.md      # Task for the agent
-        ├── eval.json      # Assertions
-        └── src/           # Working directory files (optional)
+```bash
+cargo nextest run -p crucible --all-features
+cargo nextest run --profile ci --all-features --workspace
 ```
 
-## Eval Configuration
+The CI profile writes JUnit XML to `target/nextest/ci/junit.xml`.
 
-### Basic Eval (with local files)
+## Test organization
 
-**evals/test-name/prompt.md:**
-```markdown
-Read data.txt and count lines containing "error". Write result to output.txt.
-```
+Crucible's fake-agent coverage should use normal test names. Reserve `_eval` suffixes for real provider-backed evals selected by the repository `evals` nextest group.
 
-**evals/test-name/eval.json:**
-```json
-{
-  "assertions": [
-    {
-      "type": "ToolCall",
-      "data": { "name": "read_file", "count": { "Exact": 1 } }
-    },
-    {
-      "type": "FileExists",
-      "data": { "path": "output.txt" }
-    },
-    {
-      "type": "LLMJudge",
-      "data": { "prompt": "Did the agent correctly count error lines?" }
-    }
-  ]
-}
-```
+## Core API
 
-### Git Repository Eval
+- `run_eval(&agent, prompt, workspace)` runs one eval and returns an `EvalReport`.
+- `AetherAgent::with_system_prompt(prompt)` configures the agent's system prompt; accepts any `crucible::Prompt`, including file/glob prompts that get `!`cmd`` shell interpolation.
+- `Workspace::empty()` creates an isolated temp directory.
+- `Workspace::from_dir(path)` copies fixture directory contents into a temp directory.
+- `Workspace::from_git_repo(GitRepoSpec { url, start_commit, gold_commit, subdir })` clones and checks out a git repository.
+- `EvalReport` exposes the prompt, workspace, agent messages, tool-call helpers, and git diff summaries.
 
-Use real codebases instead of `src/` directory:
+## Assertions
 
-```json
-{
-  "git": {
-    "url": "https://github.com/user/repo",
-    "start_commit": "abc123",
-    "eval_commit": "def456",
-    "subdir": "packages/api"  // optional
-  },
-  "assertions": [
-    {
-      "type": "CommandExitCode",
-      "data": { "command": "npm test", "expected_code": 0 }
-    }
-  ]
-}
-```
-
-The agent starts at `start_commit` and `eval_commit` provides reference for LLM judge assertions.
-
-## Assertion Types
-
-| Type | Description | Example |
-|------|-------------|---------|
-| `ToolCall` | Validate tool usage | `{ "name": "read_file", "count": { "AtLeast": 1 } }` |
-| `FileExists` | Check file exists | `{ "path": "output.txt" }` |
-| `FileMatches` | Check file content | `{ "path": "out.txt", "content": "expected" }` |
-| `LLMJudge` | LLM evaluates result | `{ "prompt": "Did agent solve the task?" }` |
-| `CommandExitCode` | Check command exit code | `{ "command": "cargo test", "expected_code": 0 }` |
-
-### ToolCall Options
-
-```json
-{
-  "type": "ToolCall",
-  "data": {
-    "name": "write_file",
-    "arguments": { "path": "out.txt" },  // Optional: exact match
-    "count": { "Exact": 1 }  // Or "AtLeast", "AtMost"
-  }
-}
-```
-
-## Configuration
+Use normal Rust assertions over the returned `EvalReport` and files on disk:
 
 ```rust
-use std::time::Duration;
+let report = run_eval(&agent, prompt, Workspace::empty()?).await?;
 
-// Control batching and rate limiting
-let config = EvalsConfig::new(judge_llm)
-    .with_batch_size(5)
-    .with_batch_delay(Duration::from_secs(1))
-    .with_serve(true);
-
-// Custom output directory and MCP server factories
-let eval_runner = EvalRunner::new(runner, store)
-    .with_output_dir("./results".into());
+assert!(report.tool_called("write_file"), "{}", report.failure_context());
+assert_eq!(report.tool_call_count("bash"), 1, "{}", report.failure_context());
+assert_eq!(std::fs::read_to_string(report.path("output.txt"))?, "expected text\n");
 ```
 
-## Output
+Crucible also exports small `#[track_caller]` helpers for common tool assertions:
 
+```rust
+crucible::assert_tool_called(&report, "write_file");
+crucible::assert_tool_call_count(&report, "bash", 1);
+crucible::assert_tool_call_with_args(&report, "write_file", &serde_json::json!({ "path": "output.txt" }));
 ```
-crucible_output_20241104_120000/
-├── summary.json      # Overall results
-├── traces.jsonl     # Full execution traces
-├── results/         # Individual eval results
-└── report/          # HTML report (served at localhost:3000)
+
+LLM judging is explicit on the report:
+
+```rust
+use crucible::BinaryMetric;
+use schemars::schema_for;
+
+let judgment = report
+    .judge(&judge_llm, |ctx| {
+        format!(
+            "Did the agent satisfy the task?\n\nTask: {}\n\nRespond as JSON matching this schema:\n{}",
+            ctx.original_prompt,
+            serde_json::to_string_pretty(&schema_for!(BinaryMetric)).unwrap()
+        )
+    })
+    .await
+    .expect("judge failed to produce a result");
+
+assert!(judgment.passed(), "{}\n\n{}", judgment.reason(), report.failure_context());
 ```
+
+`judge` returns `Err(JudgeError::Stream)` for transient LLM stream failures and `Err(JudgeError::InvalidJson)` when the judge response is not parseable — these are system errors that should fail the test loudly rather than be conflated with a "the agent didn't do it" verdict.
+
+## Failure output and debugging
+
+`EvalReport::failure_context()` returns deterministic plain text suitable for assertion messages, nextest output, and JUnit failure bodies. It includes prompt, workspace path, agent messages, and git diff stats when available.
+
+Temp directories are deleted when the report is dropped.
+
+## Git-backed evals
+
+```rust
+use crucible::GitRepoSpec;
+
+let report = run_eval(
+    &agent,
+    "Make the test pass",
+    Workspace::from_git_repo(GitRepoSpec {
+        url: "https://github.com/example/repo".to_string(),
+        start_commit: "start_sha".to_string(),
+        gold_commit: "gold_sha".to_string(),
+        subdir: Some("packages/api".into()),
+    })?,
+)
+.await?;
+
+assert!(report.tool_called("bash"), "{}", report.failure_context());
+```
+
+For git-backed evals, `EvalReport` exposes the agent diff from `HEAD` and the reference diff from `start_commit..gold_commit` when git commands succeed.
 
 ## Development
 
 ```bash
-cargo test -p crucible
-cargo build -p crucible
-cargo clippy -p crucible
+just test -p crucible
+just test-ci -p crucible
+just lint -p crucible
+just doc-check -p crucible
 ```

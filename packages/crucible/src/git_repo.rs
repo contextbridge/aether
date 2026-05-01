@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use thiserror::Error;
 
 /// Represents a git repository used for evaluation purposes
 pub struct GitRepo {
@@ -119,32 +120,20 @@ impl GitRepo {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum GitRepoError {
+    #[error("Git command failed: {0}")]
     CommandFailed(String),
+
+    #[error("Failed to clone repository: {0}")]
     CloneFailed(String),
+
+    #[error("Failed to checkout '{reference}': {reason}")]
     CheckoutFailed { reference: String, reason: String },
+
+    #[error("Failed to diff '{from}..{to}': {reason}")]
     DiffFailed { from: String, to: String, reason: String },
 }
-
-impl std::fmt::Display for GitRepoError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            GitRepoError::CommandFailed(msg) => write!(f, "Git command failed: {msg}"),
-            GitRepoError::CloneFailed(reason) => {
-                write!(f, "Failed to clone repository: {reason}")
-            }
-            GitRepoError::CheckoutFailed { reference, reason } => {
-                write!(f, "Failed to checkout '{reference}': {reason}")
-            }
-            GitRepoError::DiffFailed { from, to, reason } => {
-                write!(f, "Failed to diff '{from}..{to}': {reason}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for GitRepoError {}
 
 #[cfg(test)]
 mod tests {
