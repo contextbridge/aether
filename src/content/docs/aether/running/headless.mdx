@@ -19,7 +19,10 @@ aether headless "Explain the main function in this project"
 | `-m, --model` | `string` | — | Model spec (e.g., `anthropic:claude-sonnet-4-5`) |
 | `-a, --agent` | `string` | — | Named agent from settings.json |
 | `-C, --cwd` | `path` | `.` | Working directory |
-| `--mcp-config` | `path` | — | Path to MCP config file |
+| `--settings-file` | `path` | — | Path to settings JSON (conflicts with `--settings-json`) |
+| `--settings-json` | `string` | — | Inline settings JSON (conflicts with `--settings-file`) |
+| `--mcp-config` | `path` | — | Path to MCP config file (repeatable) |
+| `--mcp-config-json` | `string` | — | Inline MCP config JSON (repeatable) |
 | `--system-prompt` | `string` | — | Additional system prompt text |
 | `--output` | `string` | `text` | Output format: `text`, `pretty`, `json` |
 | `-v, --verbose` | flag | — | Verbose logging to stderr |
@@ -75,6 +78,7 @@ Available event kinds:
 | `error` | Agent-level error |
 | `cancelled` | Operation cancelled |
 | `auto_continue` | Agent auto-continuing |
+| `retrying` | Agent is retrying a failed operation |
 | `model_switched` | Model changed (alloying) |
 | `tool_progress` | Tool execution progress |
 | `context_compaction_started` | Compaction beginning |
@@ -138,13 +142,17 @@ Print the fully assembled system prompt (useful for debugging):
 
 ```bash
 aether show-prompt
-aether show-prompt --agent researcher
+# Inspect a specific agent
+aether show-prompt -a researcher
 ```
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `-C, --cwd` | `path` | `.` | Working directory |
+| `--settings-file` | `path` | — | Path to settings JSON |
+| `--settings-json` | `string` | — | Inline settings JSON |
 | `--mcp-config` | `path` | — | Path to MCP config file (repeatable) |
+| `--mcp-config-json` | `string` | — | Inline MCP config JSON (repeatable) |
 | `--system-prompt` | `string` | — | Additional system prompt text |
 | `-a, --agent` | `string` | — | Named agent to inspect |
 

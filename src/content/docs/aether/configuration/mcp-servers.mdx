@@ -5,7 +5,7 @@ description: Configure the MCP servers that give agents their tools.
 
 import { Tabs, TabItem, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-Agents get their tools exclusively from MCP (Model Context Protocol) servers. In scaffolded projects, you'll usually define those servers in `.aether/mcp.json` and then reference that file from `.aether/settings.json` via `mcpServers`.
+Agents get their tools exclusively from MCP (Model Context Protocol) servers. In scaffolded projects, you'll usually define those servers in `.aether/mcp.json` and then reference that file from `.aether/settings.json` via `mcps`.
 
 ## Server types
 
@@ -54,8 +54,9 @@ Agents get their tools exclusively from MCP (Model Context Protocol) servers. In
     | `tasks` | Hierarchical task management | `--dir <path>` |
     | `subagents` | Spawn child agents from `.aether/settings.json` | `--project-root <path>` (alias: `--dir`) |
     | `survey` | Human-in-the-loop structured questions | — |
-    | `plan` | Plan prompt + markdown plan review via elicitation | `--prompt-file <path>` |
-    | `proxy` | Lazy-load nested external MCP servers on demand | nested `input.servers` config |
+    | `plan` | Plan prompt + markdown plan review via elicitation | `--prompt-file <path>`; optional submit command as trailing args |
+
+    A top-level in-memory entry with an `input.servers` block is treated as a tool proxy that lazy-loads nested external MCP servers on demand.
 
     <CardGrid>
       <LinkCard title="Coding" description="File ops, bash, search, web" href="/aether/built-in-servers/coding/" />
@@ -146,7 +147,7 @@ Agents get their tools exclusively from MCP (Model Context Protocol) servers. In
 
 ## Proxy-wrapped configs
 
-If you want to connect several external servers through Aether's built-in proxy, define a `proxy` in-memory server whose `input.servers` block contains the nested server configs:
+If you want to connect several external servers through Aether's tool proxy, define an in-memory entry with an `input.servers` block containing the nested server configs:
 
 ```json title=".aether/mcp.json"
 {
@@ -197,32 +198,31 @@ Environment variables are expanded in `command`, `args`, `url`, `headers`, and `
 
 ## Per-agent overrides
 
-Each agent can use a different MCP config by setting `mcpServers` in its [agent entry](/aether/configuration/agent-settings/). Aether resolves config in this order:
+Each agent can use a different MCP config by setting `mcps` in its [agent entry](/aether/configuration/agent-settings/). Aether resolves config in this order:
 
-1. Agent-level `mcpServers` (if non-empty)
-2. Top-level `mcpServers` (if non-empty)
-3. `mcp.json` in the working directory
+1. Agent-level `mcps` (if non-empty)
+2. Top-level `mcps` (if non-empty)
 
 ## Merging multiple files
 
-Both top-level and agent-level `mcpServers` accept an array of config refs. Files are loaded and merged in order — on server name collisions, the **last file in the array wins**. This lets you layer a shared base config with project- or agent-specific overrides:
+Both top-level and agent-level `mcps` accept an array of config refs. Files are loaded and merged in order — on server name collisions, the **last file in the array wins**. This lets you layer a shared base config with project- or agent-specific overrides:
 
 ```json
 {
-  "mcpServers": [".aether/mcp/base.json", ".aether/mcp/overrides.json"],
+  "mcps": [".aether/mcp/base.json", ".aether/mcp/overrides.json"],
   "agents": [
     {
       "name": "researcher",
       "description": "Research agent",
       "model": "anthropic:claude-sonnet-4-5",
       "userInvocable": true,
-      "mcpServers": [".aether/mcp/base.json", ".aether/mcp/researcher.json"]
+      "mcps": [".aether/mcp/base.json", ".aether/mcp/researcher.json"]
     }
   ]
 }
 ```
 
-Note that an agent-level `mcpServers` array replaces the inherited list rather than appending to it.
+Note that an agent-level `mcps` array replaces the inherited list rather than appending to it.
 
 ## Tool filtering
 

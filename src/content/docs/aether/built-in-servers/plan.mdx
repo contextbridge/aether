@@ -14,7 +14,7 @@ See [Tools](/aether/configuration/mcp-servers/) for configuration.
 
 When the server is enabled it advertises a `plan` prompt. The prompt accepts a single `ARGUMENTS` parameter containing the task to plan.
 
-By default the prompt returns Aether's built-in planner instructions. You can override that behavior with `--prompt-file <path>` to load your own markdown prompt body instead.
+By default the prompt returns Aether's built-in planner instructions. You can override that behavior with `--prompt-file <path>` to load your own markdown prompt body instead. You can also provide a trailing submit command (for example `"args": ["contextbridge", "plan"]`) to handle `submit_plan` outside MCP elicitation.
 
 :::note
 If the configured prompt file is missing at runtime, the server falls back to the built-in default planner prompt.
@@ -92,11 +92,11 @@ To customize the planning prompt:
 }
 ```
 
-## Typical review flow
+## Typical MCP review flow
 
 1. The planner writes a markdown file such as `feature-plan.md`.
 2. The planner calls `submit_plan` with the absolute file path.
 3. The client shows an approve / deny review form, including the plan path and rendered markdown.
 4. The tool returns `{ approved, feedback }` so the planner can either continue or revise the plan.
 
-This makes plan approval part of the MCP workflow instead of relying on free-form chat alone.
+This makes plan approval part of the MCP workflow instead of relying on free-form chat alone. If you configure a submit command, Aether appends the absolute plan path to that command and returns the command's stdout as the tool feedback.

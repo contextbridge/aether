@@ -129,7 +129,7 @@ export const toolsWireCode = `{
       "model": "zai:glm-5.1",
       "userInvocable": true,
       "prompts": ["BUILD.md", "AGENTS.md"],
-      "mcpServers": [".aether/mcp.json"]
+      "mcps": [".aether/mcp.json"]
     }
   ]
 }`;
@@ -265,7 +265,7 @@ export const runAcpCode = `$ aether acp`;
             <ToolShowcaseItem title="Any MCP server" description="Plug in any external MCP server via stdio, SSE, or streamable HTTP. Remote server OAuth credentials are stored securely in your keychain.">
                 <Code code={toolsExternalCode} lang="json" title=".aether/mcp.json" meta="ins={4-8}" />
             </ToolShowcaseItem>
-            <ToolShowcaseItem title="Built in proxy stops MCP tools from eating your context" description="Aether ships with a built-in proxy, so you don't have to worry about MCPs flooding your context. When enabled, agents only load MCP tools when they need them." border={false}>
+            <ToolShowcaseItem title="MCP tool proxy stops tools from eating your context" description="Aether can wrap external MCP servers in a built-in tool proxy, so agents discover nested tools on demand instead of loading every schema up front." border={false}>
                 <Code code={proxyConfigCode} lang="json" title=".aether/mcp.json" meta="ins={3-17}" />
             </ToolShowcaseItem>
         </div>

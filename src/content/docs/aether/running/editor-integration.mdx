@@ -53,6 +53,11 @@ Aether can run as an ACP (Agent Client Protocol) server, integrating directly in
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--log-dir` | `path` | `/tmp/aether-acp-logs` | Log output directory |
+| `--agent` | `string` | — | Initial agent (mode) to select for new sessions. Conflicts with `--model` and `--reasoning-effort`. |
+| `--model` | `string` | — | Initial model id for new sessions. Conflicts with `--agent`. |
+| `--reasoning-effort` | `low\|medium\|high\|xhigh` | — | Initial reasoning effort for an explicit `--model`. |
+| `--settings-file` | `path` | — | Path to settings JSON (conflicts with `--settings-json`) |
+| `--settings-json` | `string` | — | Inline settings JSON (conflicts with `--settings-file`) |
 
 ## Logging
 

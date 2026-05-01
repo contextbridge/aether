@@ -3,30 +3,32 @@ title: Prompts
 description: Control agent behavior with prompt files.
 ---
 
-import { FileTree } from '@astrojs/starlight/components';
-
-Aether assembles system prompts from multiple sources — markdown files on disk, glob patterns in your config, and MCP server instructions — into a single system prompt for each agent.
+Aether assembles system prompts from authored prompt sources and MCP server instructions into a single system prompt for each agent.
 
 ## Prompt sources
 
-Prompts are assembled in this order:
+The `prompts` field in `settings.json` accepts four source types:
 
-1. **Inherited prompts** — `prompts` array at the top level of `settings.json`, applied to all agents
-2. **Agent-specific prompts** — `prompts` array on individual agent entries
-3. **MCP instructions** — Prompts provided by MCP servers during initialization
+- file-path strings such as `"AGENTS.md"`
+- typed file sources such as `{ "type": "file", "path": ".aether/DEFAULT.md" }`
+- typed glob sources such as `{ "type": "glob", "pattern": "prompts/*.md" }`
+- inline text sources such as `{ "type": "text", "text": "Always answer concisely." }`
 
-## Prompt files
-
-The `prompts` field in `settings.json` accepts glob patterns that resolve to markdown files relative to the project root. Top-level patterns are inherited by all agents; agent-specific patterns add to (not replace) the inherited set.
+Top-level `prompts` are defaults. An agent inherits them only when its own `prompts` array is empty. If an agent provides a non-empty `prompts` array, that array replaces the top-level prompt list for that agent.
 
 ```json title=".aether/settings.json"
 {
-  "prompts": ["AGENTS.md", "prompts/*.md"],
+  "prompts": ["AGENTS.md"],
   "agents": [
     {
       "name": "coder",
-      "prompts": [".aether/agents/coder/AGENTS.md"],
-      "..."
+      "description": "Coding agent",
+      "model": "anthropic:claude-sonnet-4-5",
+      "userInvocable": true,
+      "prompts": [
+        ".aether/agents/coder/CODER.md",
+        { "type": "glob", "pattern": "prompts/*.md" }
+      ]
     }
   ]
 }
@@ -46,7 +48,7 @@ You are a coding assistant for this Rust project.
 ```
 
 :::note
-Every glob pattern must match at least one file. Aether reports a validation error if a pattern matches nothing.
+Prompt file paths and glob patterns must match at least one file. Aether reports a validation error if a path or pattern matches nothing.
 :::
 
 ## Debugging prompts
@@ -55,6 +57,7 @@ Use `show-prompt` to see the fully assembled system prompt for any agent:
 
 ```bash
 aether show-prompt
-aether show-prompt --agent researcher
+# Inspect a specific agent
+aether show-prompt -a researcher
 aether show-prompt -C /path/to/project
 ```

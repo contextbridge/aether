@@ -56,18 +56,13 @@ Aether is a modular, open-source AI coding agent toolkit written in Rust.
    aether agent new
    ```
 
-   ```
-   ✓ Created .aether/settings.json
-   ✓ Created .aether/mcp.json
-   ✓ Created .aether/DEFAULT.md
-   ✓ Created AGENTS.md
-   ```
+   The setup wizard walks you through choosing an agent name, model, prompt files, and built-in MCP tools. When you finish, it writes the selected files, typically including `.aether/settings.json`, `.aether/mcp.json`, an agent prompt under `.aether/`, and `AGENTS.md` if selected.
 
    <FileTree>
      - .aether/
        - settings.json — [Agent definitions](/aether/configuration/agent-settings/)
        - mcp.json — [MCP server config](/aether/configuration/mcp-servers/)
-       - DEFAULT.md — Default prompt scaffold
+       - AGENT.md — Agent prompt scaffold (filename matches the agent name)
      - AGENTS.md — [Project instructions](/aether/configuration/system-prompts/)
    </FileTree>
 
