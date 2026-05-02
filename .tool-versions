@@ -1,5 +1,5 @@
 just 1.43.1
-aqua:nextest-rs/nextest/cargo-nextest 0.9.126
+aqua:nextest-rs/nextest/cargo-nextest 0.9.133
 cargo-dist 0.31.0
 git-cliff 2.12.0
 nodejs 24.15.0

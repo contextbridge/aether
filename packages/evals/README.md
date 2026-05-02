@@ -1,3 +1,13 @@
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+
+- [Aether evals](#aether-evals)
+  - [Running evals](#running-evals)
+  - [Model configuration](#model-configuration)
+  - [Adding evals](#adding-evals)
+
+<!-- END doctoc generated TOC please keep comment here to allow auto update -->
+
 # Aether evals
 
 Contains evals for Aether agents.
