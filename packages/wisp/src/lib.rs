@@ -79,6 +79,65 @@ fn render(terminal: &mut TerminalRuntime<impl io::Write>, app: &mut App) -> Resu
     Ok(())
 }
 
+const MAX_TERMINAL_EVENTS_PER_FRAME: usize = 128;
+
+fn collect_terminal_event_batch(
+    first: CrosstermEvent,
+    mut try_next: impl FnMut() -> Option<CrosstermEvent>,
+) -> Vec<CrosstermEvent> {
+    let mut events = Vec::new();
+    events.push(first);
+
+    while events.len() < MAX_TERMINAL_EVENTS_PER_FRAME {
+        let Some(event) = try_next() else {
+            break;
+        };
+        events.push(event);
+    }
+
+    events
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TerminalBatchOutcome {
+    Continue { should_render: bool },
+    Exit,
+}
+
+async fn process_terminal_event_batch(
+    terminal: &mut TerminalRuntime<impl io::Write>,
+    app: &mut App,
+    events: Vec<CrosstermEvent>,
+) -> Result<TerminalBatchOutcome, AppError> {
+    let mut should_render = false;
+
+    for event in events {
+        let tui_event = match event {
+            CrosstermEvent::Resize(cols, rows) => {
+                terminal.on_resize((cols, rows));
+                should_render = true;
+                Event::try_from(CrosstermEvent::Resize(cols, rows)).ok()
+            }
+            event => Event::try_from(event).ok(),
+        };
+
+        let Some(tui_event) = tui_event else {
+            continue;
+        };
+
+        if let Some(commands) = app.on_event(&tui_event).await {
+            terminal.apply_commands(commands)?;
+            should_render = true;
+        }
+
+        if app.exit_requested() {
+            return Ok(TerminalBatchOutcome::Exit);
+        }
+    }
+
+    Ok(TerminalBatchOutcome::Continue { should_render })
+}
+
 async fn run_app(
     mut app: App,
     theme: tui::Theme,
@@ -109,17 +168,19 @@ async fn run_app(
 
         select! {
             terminal_event = terminal.next_event() => {
-                let Some(event) = terminal_event else {
+                let Some(first_event) = terminal_event else {
                     return Ok(());
                 };
-                if let CrosstermEvent::Resize(cols, rows) = &event {
-                    terminal.on_resize((*cols, *rows));
+
+                let events = collect_terminal_event_batch(first_event, || terminal.try_next_event());
+                if events.len() > 1 {
+                    tracing::debug!(count = events.len(), "processing terminal event batch");
                 }
-                if let Ok(tui_event) = Event::try_from(event) {
-                    let commands = app.on_event(&tui_event).await.unwrap_or_default();
-                    terminal.apply_commands(commands)?;
-                    if app.exit_requested() { return Ok(()); }
-                    render(&mut terminal, &mut app)?;
+
+                match process_terminal_event_batch(&mut terminal, &mut app, events).await? {
+                    TerminalBatchOutcome::Exit => return Ok(()),
+                    TerminalBatchOutcome::Continue { should_render } if should_render => render(&mut terminal, &mut app)?,
+                    TerminalBatchOutcome::Continue { .. } => {}
                 }
             }
 
@@ -146,5 +207,45 @@ async fn run_app(
             terminal.apply_commands(vec![RendererCommand::SetMouseCapture(capture)])?;
             last_mouse_capture = capture;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::VecDeque;
+
+    #[test]
+    fn collect_terminal_event_batch_includes_first_event() {
+        let events = collect_terminal_event_batch(CrosstermEvent::Resize(80, 24), || None);
+
+        assert_eq!(events, vec![CrosstermEvent::Resize(80, 24)]);
+    }
+
+    #[test]
+    fn collect_terminal_event_batch_drains_until_empty() {
+        let mut queued = VecDeque::from([
+            CrosstermEvent::Resize(81, 24),
+            CrosstermEvent::Resize(82, 24),
+            CrosstermEvent::Resize(83, 24),
+        ]);
+
+        let events = collect_terminal_event_batch(CrosstermEvent::Resize(80, 24), || queued.pop_front());
+
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0], CrosstermEvent::Resize(80, 24));
+        assert_eq!(events[1], CrosstermEvent::Resize(81, 24));
+        assert_eq!(events[3], CrosstermEvent::Resize(83, 24));
+    }
+
+    #[test]
+    fn collect_terminal_event_batch_respects_max() {
+        let mut next_width = 1;
+        let events = collect_terminal_event_batch(CrosstermEvent::Resize(0, 24), || {
+            next_width += 1;
+            Some(CrosstermEvent::Resize(next_width, 24))
+        });
+
+        assert_eq!(events.len(), MAX_TERMINAL_EVENTS_PER_FRAME);
     }
 }

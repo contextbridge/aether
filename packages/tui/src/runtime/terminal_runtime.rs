@@ -40,6 +40,10 @@ impl<T: Write> TerminalRuntime<T> {
         task.rx().recv().await
     }
 
+    pub fn try_next_event(&mut self) -> Option<CrosstermEvent> {
+        self.event_task.as_mut()?.rx().try_recv().ok()
+    }
+
     pub fn render_frame(&mut self, f: impl FnOnce(&ViewContext) -> Frame) -> io::Result<()> {
         self.renderer.render_frame(f)
     }
