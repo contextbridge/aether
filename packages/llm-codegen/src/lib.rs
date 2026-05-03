@@ -6,6 +6,7 @@ use std::fmt::Write;
 use std::path::Path;
 
 type ModelsDevData = HashMap<String, ProviderData>;
+type ContextWindowOverride = fn(&str, u32) -> u32;
 
 #[derive(Debug, Deserialize)]
 struct ProviderData {
@@ -71,6 +72,8 @@ struct ProviderConfig {
     extra_source_ids: &'static [&'static str],
     /// Only include models whose ID passes this filter (None = include all)
     model_filter: Option<fn(&str) -> bool>,
+    /// Provider-specific generated context window override
+    context_window_override: Option<ContextWindowOverride>,
     /// Our Rust enum name (e.g. "Gemini")
     enum_name: &'static str,
     /// Our internal provider name used for parsing (e.g. "gemini")
@@ -99,6 +102,7 @@ impl ProviderConfig {
             source_dev_id: None,
             extra_source_ids: &[],
             model_filter: None,
+            context_window_override: None,
             enum_name,
             parser_name,
             display_name,
@@ -132,6 +136,7 @@ const PROVIDERS: &[ProviderConfig] = &[
         source_dev_id: Some("openai"),
         extra_source_ids: &[],
         model_filter: Some(|id| id.contains("codex") || id.starts_with("gpt-5.") || id == "gpt-5"),
+        context_window_override: Some(codex_subscription_context_window),
         enum_name: "Codex",
         parser_name: "codex",
         display_name: "Codex",
@@ -155,6 +160,17 @@ const DYNAMIC_PROVIDERS: &[DynamicProviderConfig] = &[
     DynamicProviderConfig { enum_name: "Ollama", parser_name: "ollama", display_name: "Ollama" },
     DynamicProviderConfig { enum_name: "LlamaCpp", parser_name: "llamacpp", display_name: "LlamaCpp" },
 ];
+
+const CODEX_SUBSCRIPTION_CONTEXT_WINDOW: u32 = 272_000;
+
+fn codex_subscription_context_window(model_id: &str, default_context_window: u32) -> u32 {
+    match model_id {
+        "gpt-5.5" | "gpt-5.4" | "gpt-5.4-mini" | "gpt-5.3-codex" | "gpt-5.2" | "codex-auto-review" => {
+            CODEX_SUBSCRIPTION_CONTEXT_WINDOW
+        }
+        _ => default_context_window,
+    }
+}
 
 #[derive(Debug, Clone)]
 struct ModelInfo {
@@ -233,11 +249,15 @@ fn collect_models_from(cfg: &ProviderConfig, models: &HashMap<String, ModelData>
             };
             let input_modalities =
                 m.modalities.as_ref().map_or_else(|| vec!["text".to_string()], |md| md.input.clone());
+            let source_context_window = m.limit.as_ref().map_or(0, |l| l.context);
+            let context_window = cfg.context_window_override.map_or(source_context_window, |override_context_window| {
+                override_context_window(&m.id, source_context_window)
+            });
             ModelInfo {
                 variant_name: model_id_to_variant(&m.id),
                 model_id: m.id.clone(),
                 display_name: m.name.clone(),
-                context_window: m.limit.as_ref().map_or(0, |l| l.context),
+                context_window,
                 reasoning_levels,
                 input_modalities,
             }
@@ -1096,6 +1116,46 @@ mod tests {
         );
     }
 
+    #[test]
+    fn generate_codex_overrides_gpt55_subscription_context_window() {
+        let mut data = minimal_models_dev_json();
+        let root = data.as_object_mut().expect("root object");
+        let openai = root.get_mut("openai").and_then(Value::as_object_mut).expect("openai provider");
+
+        openai.insert(
+            "models".to_string(),
+            json!({
+                "gpt-5.5": {
+                    "id": "gpt-5.5",
+                    "name": "GPT-5.5",
+                    "tool_call": true,
+                    "reasoning": true,
+                    "limit": {"context": 1_050_000, "output": 128_000}
+                }
+            }),
+        );
+
+        let source = generate_from_value(&data);
+        let codex_impl = generated_impl_block(&source, "CodexModel");
+        let openai_impl = generated_impl_block(&source, "OpenaiModel");
+
+        assert!(codex_impl.contains("Self::Gpt55 => 272_000,"));
+        assert!(openai_impl.contains("Self::Gpt55 => 1_050_000,"));
+    }
+
+    #[test]
+    fn codex_subscription_context_window_overrides_known_codex_models() {
+        for model_id in ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.2", "codex-auto-review"] {
+            assert_eq!(codex_subscription_context_window(model_id, 1_050_000), 272_000);
+        }
+    }
+
+    #[test]
+    fn codex_subscription_context_window_leaves_unknown_models_unchanged() {
+        assert_eq!(codex_subscription_context_window("gpt-5.3-codex-spark", 128_000), 128_000);
+        assert_eq!(codex_subscription_context_window("some-future-model", 400_000), 400_000);
+    }
+
     fn generate_from_value(data: &Value) -> String {
         let tmp = NamedTempFile::new().expect("temp file");
         let json = serde_json::to_string(data).expect("serialize fixture");
@@ -1103,6 +1163,14 @@ mod tests {
         generate(tmp.path()).expect("codegen succeeds").rust_source
     }
 
+    fn generated_impl_block<'a>(source: &'a str, enum_name: &str) -> &'a str {
+        let start_marker = format!("impl {enum_name} {{");
+        let start = source.find(&start_marker).expect("provider impl block start");
+        let rest = &source[start..];
+        let end_marker = format!("impl std::str::FromStr for {enum_name}");
+        let end = rest.find(&end_marker).expect("provider impl block end");
+        &rest[..end]
+    }
     fn minimal_models_dev_json() -> Value {
         let mut root = serde_json::Map::new();
         for cfg in PROVIDERS {

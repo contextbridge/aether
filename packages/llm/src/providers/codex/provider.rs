@@ -265,6 +265,12 @@ mod tests {
     }
 
     #[test]
+    fn context_window_uses_codex_subscription_limit() {
+        let provider = create_test_provider();
+        assert_eq!(provider.context_window(), Some(272_000));
+    }
+
+    #[test]
     fn display_name_includes_model() {
         let provider = create_test_provider();
         assert_eq!(provider.display_name(), "Codex (gpt-5.5)");

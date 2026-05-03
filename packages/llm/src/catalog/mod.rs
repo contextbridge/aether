@@ -45,6 +45,18 @@ mod tests {
     }
 
     #[test]
+    fn codex_gpt55_uses_subscription_context_window() {
+        let model: LlmModel = "codex:gpt-5.5".parse().unwrap();
+        assert_eq!(model.context_window(), Some(272_000));
+    }
+
+    #[test]
+    fn openai_gpt55_keeps_api_context_window() {
+        let model: LlmModel = "openai:gpt-5.5".parse().unwrap();
+        assert_eq!(model.context_window(), Some(1_050_000));
+    }
+
+    #[test]
     fn provider_display_name_returns_human_readable() {
         let anthropic: LlmModel = "anthropic:claude-opus-4-6".parse().unwrap();
         assert_eq!(anthropic.provider_display_name(), "Anthropic");
