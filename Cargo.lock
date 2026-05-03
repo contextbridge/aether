@@ -21,7 +21,7 @@ dependencies = [
 
 [[package]]
 name = "aether-acp-utils"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "aether-mcp-utils",
  "aether-utils",
@@ -41,7 +41,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-cli"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
@@ -72,7 +72,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-core"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
@@ -116,7 +116,7 @@ dependencies = [
 
 [[package]]
 name = "aether-llm"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "aether-llm-codegen",
  "aether-utils",
@@ -149,7 +149,7 @@ dependencies = [
 
 [[package]]
 name = "aether-llm-codegen"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "aether-utils",
  "serde",
@@ -183,7 +183,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp-servers"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -219,7 +219,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp-utils"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "aether-llm",
  "aether-utils",
@@ -239,7 +239,7 @@ dependencies = [
 
 [[package]]
 name = "aether-project"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -293,7 +293,7 @@ dependencies = [
 
 [[package]]
 name = "aether-wisp"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "aether-acp-utils",
  "aether-tui",
@@ -4023,9 +4023,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "1.5.0"
+version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67d69668de0b0ccd9cc435f700f3b39a7861863cf37a15e1f304ea78688a4826"
+checksum = "e12ca9067b5ebfbd5b3fcdc4acfceb81aa7d5ab2a879dff7cb75d22434276aad"
 dependencies = [
  "async-trait",
  "base64",
@@ -4052,9 +4052,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp-macros"
-version = "1.5.0"
+version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "48fdc01c81097b0aed18633e676e269fefa3a78ec1df56b4fe597c1241b92025"
+checksum = "7caa6743cc0888e433105fe1bc551a7f607940b126a37bc97b478e86064627eb"
 dependencies = [
  "darling 0.23.0",
  "proc-macro2",
@@ -4453,9 +4453,9 @@ dependencies = [
 
 [[package]]
 name = "serde_with"
-version = "3.18.0"
+version = "3.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd5414fad8e6907dbdd5bc441a50ae8d6e26151a03b1de04d89a5576de61d01f"
+checksum = "f05839ce67618e14a09b286535c0d9c94e85ef25469b0e13cb4f844e5593eb19"
 dependencies = [
  "base64",
  "chrono",
@@ -4472,9 +4472,9 @@ dependencies = [
 
 [[package]]
 name = "serde_with_macros"
-version = "3.18.0"
+version = "3.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3db8978e608f1fe7357e211969fd9abdcae80bac1ba7a3369bb7eb6b404eb65"
+checksum = "cf2ebbe86054f9b45bc3881e865683ccfaccce97b9b4cb53f3039d67f355a334"
 dependencies = [
  "darling 0.23.0",
  "proc-macro2",

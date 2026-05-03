@@ -1,6 +1,6 @@
 [package]
 name = "aether-llm"
-version = "0.2.5"
+version = "0.2.6"
 edition = "2024"
 description = "Multi-provider LLM abstraction layer for the Aether AI agent framework"
 license = "MIT"
@@ -63,7 +63,7 @@ keyring = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
 
 [build-dependencies]
-llm-codegen = { package = "aether-llm-codegen", path = "../llm-codegen", version = "0.2.2" }
+llm-codegen = { package = "aether-llm-codegen", path = "../llm-codegen", version = "0.2.3" }
 
 [dev-dependencies]
 tempfile = { workspace = true }
