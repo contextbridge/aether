@@ -120,17 +120,14 @@ impl Component for FileListPanel {
 
         self.ensure_visible(height);
 
-        self.tree.ensure_cache();
-
         let visible_entries = self.tree.visible_entries();
         let tree_selected = self.tree.selected_visible();
 
-        let row_count = height.max(visible_entries.len());
         let mut lines = Vec::with_capacity(height);
 
-        for i in 0..row_count {
+        for row in 0..height {
             let mut line = Line::default();
-            let queue_row = self.queued_comment_count > 0 && i == height.saturating_sub(1);
+            let queue_row = self.queued_comment_count > 0 && row == height.saturating_sub(1);
             if queue_row {
                 let indicator = format!(
                     " [{} comment{}]",
@@ -144,9 +141,9 @@ impl Component for FileListPanel {
                     line.push_with_style(" ".repeat(pad), Style::default().bg_color(theme.sidebar_bg()));
                 }
             } else {
-                let scrolled_i = i + self.cursor.scroll;
-                if let Some(entry) = visible_entries.get(scrolled_i) {
-                    render_file_tree_cell(&mut line, entry, scrolled_i == tree_selected, width, theme);
+                let entry_index = row + self.cursor.scroll;
+                if let Some(entry) = visible_entries.get(entry_index) {
+                    render_file_tree_cell(&mut line, entry, entry_index == tree_selected, width, theme);
                 } else {
                     line.push_with_style(" ".repeat(width), Style::default().bg_color(theme.sidebar_bg()));
                 }
@@ -155,7 +152,6 @@ impl Component for FileListPanel {
             lines.push(line);
         }
 
-        lines.truncate(height);
         Frame::new(lines)
     }
 }

@@ -20,12 +20,12 @@ pub enum FileTreeEntryKind {
 pub struct FileTree {
     roots: Vec<FileTreeNode>,
     selected_visible: usize,
-    cached_entries: Option<Vec<FileTreeEntry>>,
+    cached_entries: Vec<FileTreeEntry>,
 }
 
 impl FileTree {
     pub fn empty() -> Self {
-        Self { roots: Vec::new(), selected_visible: 0, cached_entries: Some(Vec::new()) }
+        Self { roots: Vec::new(), selected_visible: 0, cached_entries: Vec::new() }
     }
 
     pub fn from_files(files: &[FileDiff]) -> Self {
@@ -39,15 +39,14 @@ impl FileTree {
         sort_tree(&mut roots);
         compress_paths(&mut roots);
 
-        let mut tree = Self { roots, selected_visible: 0, cached_entries: None };
-        tree.ensure_cache();
+        let mut tree = Self { roots, selected_visible: 0, cached_entries: Vec::new() };
+        tree.rebuild_visible_entries();
         tree
     }
 
     pub fn select_file_index(&mut self, file_index: usize) {
-        self.ensure_cache();
-        let entries = self.cached_entries.as_ref().unwrap();
-        if let Some(pos) = entries
+        if let Some(pos) = self
+            .cached_entries
             .iter()
             .position(|e| matches!(&e.kind, FileTreeEntryKind::File { file_index: fi, .. } if *fi == file_index))
         {
@@ -55,15 +54,8 @@ impl FileTree {
         }
     }
 
-    pub fn visible_entries(&self) -> Vec<FileTreeEntry> {
-        if let Some(entries) = &self.cached_entries {
-            return entries.clone();
-        }
-        let mut entries = Vec::new();
-        for node in &self.roots {
-            collect_visible(node, 0, &mut entries);
-        }
-        entries
+    pub fn visible_entries(&self) -> &[FileTreeEntry] {
+        &self.cached_entries
     }
 
     pub fn selected_visible(&self) -> usize {
@@ -71,36 +63,31 @@ impl FileTree {
     }
 
     pub fn selected_file_index(&self) -> Option<usize> {
-        let entries = self.visible_entries();
-        entries.get(self.selected_visible).and_then(|e| match &e.kind {
+        self.cached_entries.get(self.selected_visible).and_then(|e| match &e.kind {
             FileTreeEntryKind::File { file_index, .. } => Some(*file_index),
             FileTreeEntryKind::Directory { .. } => None,
         })
     }
 
     pub fn navigate(&mut self, delta: isize) {
-        self.ensure_cache();
-        let count = self.cached_entries.as_ref().unwrap().len();
-        if count == 0 {
+        if self.cached_entries.is_empty() {
             return;
         }
-        crate::components::wrap_selection(&mut self.selected_visible, count, delta);
+        crate::components::wrap_selection(&mut self.selected_visible, self.cached_entries.len(), delta);
     }
 
     pub fn collapse_or_parent(&mut self) {
-        self.ensure_cache();
-        let entries = self.cached_entries.as_ref().unwrap();
-        let Some(entry) = entries.get(self.selected_visible) else {
+        let Some(entry) = self.cached_entries.get(self.selected_visible) else {
             return;
         };
 
         match &entry.kind {
             FileTreeEntryKind::Directory { expanded: true, .. } => {
                 toggle_at(&mut self.roots, self.selected_visible);
-                self.invalidate_cache();
+                self.rebuild_visible_entries();
             }
             _ => {
-                if let Some(parent_idx) = find_parent_dir(entries, self.selected_visible) {
+                if let Some(parent_idx) = find_parent_dir(&self.cached_entries, self.selected_visible) {
                     self.selected_visible = parent_idx;
                 }
             }
@@ -108,21 +95,18 @@ impl FileTree {
     }
 
     pub fn expand_or_enter(&mut self) -> bool {
-        self.ensure_cache();
-        let entries = self.cached_entries.as_ref().unwrap();
-        let Some(entry) = entries.get(self.selected_visible) else {
+        let Some(entry) = self.cached_entries.get(self.selected_visible) else {
             return false;
         };
 
         match &entry.kind {
             FileTreeEntryKind::Directory { expanded: false, .. } => {
                 toggle_at(&mut self.roots, self.selected_visible);
-                self.invalidate_cache();
+                self.rebuild_visible_entries();
                 false
             }
             FileTreeEntryKind::Directory { expanded: true, .. } => {
-                // Already expanded, move into first child
-                if self.selected_visible + 1 < entries.len() {
+                if self.selected_visible + 1 < self.cached_entries.len() {
                     self.selected_visible += 1;
                 }
                 false
@@ -131,18 +115,17 @@ impl FileTree {
         }
     }
 
-    pub fn ensure_cache(&mut self) {
-        if self.cached_entries.is_none() {
-            let mut entries = Vec::new();
-            for node in &self.roots {
-                collect_visible(node, 0, &mut entries);
-            }
-            self.cached_entries = Some(entries);
+    fn rebuild_visible_entries(&mut self) {
+        let mut entries = Vec::new();
+        for node in &self.roots {
+            collect_visible(node, 0, &mut entries);
         }
-    }
-
-    fn invalidate_cache(&mut self) {
-        self.cached_entries = None;
+        self.cached_entries = entries;
+        if self.cached_entries.is_empty() {
+            self.selected_visible = 0;
+        } else {
+            self.selected_visible = self.selected_visible.min(self.cached_entries.len() - 1);
+        }
     }
 }
 
@@ -339,7 +322,6 @@ mod tests {
         let files = vec![modified("src/a.rs"), modified("src/b.rs"), modified("lib/c.rs")];
         let tree = FileTree::from_files(&files);
         let entries = tree.visible_entries();
-        // lib/ dir, c.rs, src/ dir, a.rs, b.rs = 5 entries
         assert_eq!(entries.len(), 5);
         assert!(matches!(&entries[0].kind, FileTreeEntryKind::Directory { name, .. } if name == "lib"));
         assert!(matches!(&entries[1].kind, FileTreeEntryKind::File { name, .. } if name == "c.rs"));
@@ -352,12 +334,10 @@ mod tests {
     fn visible_entries_respects_collapse() {
         let files = vec![modified("src/a.rs"), modified("src/b.rs")];
         let mut tree = FileTree::from_files(&files);
-        assert_eq!(tree.visible_entries().len(), 3); // dir + 2 files
+        assert_eq!(tree.visible_entries().len(), 3);
 
-        // Collapse the directory
-        toggle_at(&mut tree.roots, 0);
-        tree.invalidate_cache();
-        assert_eq!(tree.visible_entries().len(), 1); // just the dir
+        tree.collapse_or_parent();
+        assert_eq!(tree.visible_entries().len(), 1);
     }
 
     #[test]
@@ -368,14 +348,13 @@ mod tests {
         tree.navigate(1);
         assert_eq!(tree.selected_visible, 1);
         tree.navigate(1);
-        assert_eq!(tree.selected_visible, 0); // wraps
+        assert_eq!(tree.selected_visible, 0);
     }
 
     #[test]
     fn collapse_or_parent_collapses_dir() {
         let files = vec![modified("src/a.rs")];
         let mut tree = FileTree::from_files(&files);
-        // selected is at dir (index 0)
         tree.selected_visible = 0;
         assert_eq!(tree.visible_entries().len(), 2);
         tree.collapse_or_parent();
@@ -386,9 +365,9 @@ mod tests {
     fn collapse_or_parent_moves_to_parent_from_file() {
         let files = vec![modified("src/a.rs"), modified("src/b.rs")];
         let mut tree = FileTree::from_files(&files);
-        tree.selected_visible = 1; // first file inside src/
+        tree.selected_visible = 1;
         tree.collapse_or_parent();
-        assert_eq!(tree.selected_visible, 0); // moved to parent dir
+        assert_eq!(tree.selected_visible, 0);
     }
 
     #[test]
@@ -402,12 +381,11 @@ mod tests {
     fn expand_or_enter_expands_collapsed_dir() {
         let files = vec![modified("src/a.rs")];
         let mut tree = FileTree::from_files(&files);
-        toggle_at(&mut tree.roots, 0); // collapse
-        tree.invalidate_cache();
+        tree.collapse_or_parent();
         assert_eq!(tree.visible_entries().len(), 1);
         let result = tree.expand_or_enter();
-        assert!(!result); // not a file
-        assert_eq!(tree.visible_entries().len(), 2); // expanded again
+        assert!(!result);
+        assert_eq!(tree.visible_entries().len(), 2);
     }
 
     #[test]
@@ -415,8 +393,7 @@ mod tests {
         let files = vec![modified("src/deep/nested/file.rs")];
         let tree = FileTree::from_files(&files);
         let entries = tree.visible_entries();
-        // Should compress src/deep/nested into single dir node
-        assert_eq!(entries.len(), 2); // compressed dir + file
+        assert_eq!(entries.len(), 2);
         match &entries[0].kind {
             FileTreeEntryKind::Directory { name, .. } => {
                 assert_eq!(name, "src/deep/nested");
@@ -429,7 +406,6 @@ mod tests {
     fn selected_file_index_returns_none_for_dir() {
         let files = vec![modified("src/a.rs")];
         let tree = FileTree::from_files(&files);
-        // Index 0 is the dir
         assert!(tree.selected_file_index().is_none());
     }
 
@@ -448,5 +424,24 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert!(matches!(&entries[0].kind, FileTreeEntryKind::File { name, .. } if name == "a.rs"));
         assert!(matches!(&entries[1].kind, FileTreeEntryKind::File { name, .. } if name == "b.rs"));
+    }
+
+    #[test]
+    fn selected_visible_clamped_after_collapse() {
+        let files = vec![modified("src/a.rs"), modified("src/b.rs")];
+        let mut tree = FileTree::from_files(&files);
+        tree.selected_visible = 2;
+        tree.collapse_or_parent();
+        assert!(tree.selected_visible < tree.visible_entries().len());
+    }
+
+    #[test]
+    fn expand_already_expanded_dir_moves_to_first_child() {
+        let files = vec![modified("src/a.rs"), modified("src/b.rs")];
+        let mut tree = FileTree::from_files(&files);
+        tree.selected_visible = 0;
+        let result = tree.expand_or_enter();
+        assert!(!result);
+        assert_eq!(tree.selected_visible, 1);
     }
 }

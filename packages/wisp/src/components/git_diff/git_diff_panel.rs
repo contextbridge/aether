@@ -32,19 +32,18 @@ impl GitDiffPanel {
         }
     }
 
-    pub fn invalidate_diff_layer(&mut self) {
+    pub fn clear_rendered_patches(&mut self) {
         self.saved_cursor_anchor = self.current_cursor_anchor();
-        self.compositor.invalidate_diff_layer();
-        self.compositor.invalidate_submitted_comments_layer();
+        self.compositor.clear_rendered_patches();
     }
 
-    pub fn invalidate_submitted_comments_layer(&mut self) {
-        self.compositor.invalidate_submitted_comments_layer();
+    pub fn invalidate_comment_splices(&mut self) {
+        self.compositor.invalidate_comment_splices();
     }
 
     pub fn reset_for_new_file(&mut self) {
         self.surface = ReviewSurface::new();
-        self.invalidate_diff_layer();
+        self.saved_cursor_anchor = None;
     }
 
     pub fn reset_scroll(&mut self) {
@@ -66,9 +65,7 @@ impl GitDiffPanel {
         self.update_file_header(file);
 
         if file.binary {
-            if self.compositor.rendered_patch().is_some() {
-                self.compositor.invalidate_all();
-            }
+            self.compositor.deactivate_rendered_patch();
             self.restore_cursor_to_anchor(cursor_anchor);
             return;
         }

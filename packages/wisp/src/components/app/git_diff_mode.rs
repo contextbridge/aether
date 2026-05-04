@@ -68,7 +68,7 @@ impl GitDiffMode {
             was_right_focused: !self.split.is_left_focused(),
         });
         self.load_state = GitDiffLoadState::Loading;
-        self.split.right_mut().invalidate_diff_layer();
+        self.split.right_mut().clear_rendered_patches();
     }
 
     pub(crate) async fn complete_load(&mut self) {
@@ -83,7 +83,7 @@ impl GitDiffMode {
             Err(error) => {
                 self.pending_restore = None;
                 self.load_state = GitDiffLoadState::Error { message: error.to_string() };
-                self.split.right_mut().invalidate_diff_layer();
+                self.split.right_mut().clear_rendered_patches();
             }
         }
     }
@@ -125,7 +125,7 @@ impl Component for GitDiffMode {
                 KeyCode::Char('u') => {
                     self.queued_comments.pop();
                     self.split.left_mut().set_queued_comment_count(self.queued_comments.len());
-                    self.split.right_mut().invalidate_submitted_comments_layer();
+                    self.split.right_mut().invalidate_comment_splices();
                     return Some(vec![]);
                 }
                 KeyCode::Char('s') if !self.split.is_left_focused() => {
@@ -273,7 +273,7 @@ impl GitDiffMode {
             },
         });
         self.split.left_mut().set_queued_comment_count(self.queued_comments.len());
-        self.split.right_mut().invalidate_submitted_comments_layer();
+        self.split.right_mut().invalidate_comment_splices();
     }
 
     fn submit_review(&self) -> Vec<GitDiffViewMessage> {
@@ -297,12 +297,12 @@ impl GitDiffMode {
 
         if doc.files.is_empty() {
             self.load_state = GitDiffLoadState::Empty;
-            self.split.right_mut().invalidate_diff_layer();
+            self.split.right_mut().clear_rendered_patches();
             return;
         }
 
         self.split.left_mut().rebuild_from_files(&doc.files);
-        self.split.right_mut().invalidate_diff_layer();
+        self.split.right_mut().clear_rendered_patches();
 
         if let Some(restore) = restore {
             if restore.was_right_focused {

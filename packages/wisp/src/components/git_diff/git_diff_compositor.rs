@@ -6,6 +6,8 @@ use crate::components::review_comments::{CommentGroup, FrameSplice};
 use crate::git_diff::FileDiff;
 use tui::ViewContext;
 
+const MAX_CACHED_DIFF_LAYERS: usize = 16;
+
 #[derive(Clone, PartialEq, Eq)]
 struct DiffLayerKey {
     document_revision: usize,
@@ -27,29 +29,42 @@ struct CommentLayerKey {
     file_path: String,
 }
 
+struct CachedRenderedPatch {
+    key: DiffLayerKey,
+    patch: RenderedPatch,
+}
+
 pub struct GitDiffCompositor {
-    diff_layer: CachedLayer<DiffLayerKey, RenderedPatch>,
+    rendered_patches: Vec<CachedRenderedPatch>,
+    has_active_rendered_patch: bool,
     submitted_layer: CachedLayer<CommentLayerKey, Vec<FrameSplice>>,
     submitted_revision: usize,
 }
 
 impl GitDiffCompositor {
     pub fn new() -> Self {
-        Self { diff_layer: CachedLayer::new(), submitted_layer: CachedLayer::new(), submitted_revision: 0 }
+        Self {
+            rendered_patches: Vec::new(),
+            has_active_rendered_patch: false,
+            submitted_layer: CachedLayer::new(),
+            submitted_revision: 0,
+        }
     }
 
-    pub fn invalidate_diff_layer(&mut self) {
-        self.diff_layer.reset();
-    }
-
-    pub fn invalidate_submitted_comments_layer(&mut self) {
-        self.submitted_revision = self.submitted_revision.saturating_add(1);
+    pub fn clear_rendered_patches(&mut self) {
+        self.rendered_patches.clear();
+        self.has_active_rendered_patch = false;
         self.submitted_layer.reset();
     }
 
-    pub fn invalidate_all(&mut self) {
-        self.diff_layer.reset();
-        self.invalidate_submitted_comments_layer();
+    pub fn deactivate_rendered_patch(&mut self) {
+        self.has_active_rendered_patch = false;
+        self.submitted_layer.reset();
+    }
+
+    pub fn invalidate_comment_splices(&mut self) {
+        self.submitted_revision = self.submitted_revision.saturating_add(1);
+        self.submitted_layer.reset();
     }
 
     pub fn ensure_diff_layer(
@@ -66,17 +81,35 @@ impl GitDiffCompositor {
             file_path: file.path.clone(),
             layout: if split_layout { DiffLayout::Split } else { DiffLayout::Unified },
         };
-        self.diff_layer.ensure(key, || {
-            if split_layout {
-                build_split_patch_base_lines(file, usize::from(width), ctx)
-            } else {
-                RenderedPatch::from_file_diff(file, usize::from(width), ctx)
-            }
-        });
+
+        if let Some(index) = self.rendered_patches.iter().position(|cached| cached.key == key) {
+            let cached = self.rendered_patches.remove(index);
+            self.rendered_patches.push(cached);
+            self.has_active_rendered_patch = true;
+            return;
+        }
+
+        let patch = if split_layout {
+            build_split_patch_base_lines(file, usize::from(width), ctx)
+        } else {
+            RenderedPatch::from_file_diff(file, usize::from(width), ctx)
+        };
+
+        if self.rendered_patches.len() == MAX_CACHED_DIFF_LAYERS {
+            self.rendered_patches.remove(0);
+        }
+
+        self.rendered_patches.push(CachedRenderedPatch { key, patch });
+        self.has_active_rendered_patch = true;
     }
 
     pub fn ensure_submitted_layer(&mut self, file: &FileDiff, comments: &[&QueuedComment], ctx: &ViewContext) {
-        let Some(rendered) = self.diff_layer.get() else {
+        let rendered = if self.has_active_rendered_patch {
+            self.rendered_patches.last().map(|cached| &cached.patch)
+        } else {
+            None
+        };
+        let Some(rendered) = rendered else {
             self.submitted_layer.reset();
             return;
         };
@@ -89,7 +122,7 @@ impl GitDiffCompositor {
     }
 
     pub fn rendered_patch(&self) -> Option<&RenderedPatch> {
-        self.diff_layer.get()
+        if self.has_active_rendered_patch { self.rendered_patches.last().map(|cached| &cached.patch) } else { None }
     }
 
     pub fn comment_splices(&self) -> &[FrameSplice] {
@@ -116,9 +149,13 @@ mod tests {
     }
 
     fn make_file(lines: Vec<PatchLine>) -> FileDiff {
+        make_file_with_path("test.rs", lines)
+    }
+
+    fn make_file_with_path(path: &str, lines: Vec<PatchLine>) -> FileDiff {
         FileDiff {
-            old_path: Some("test.rs".to_string()),
-            path: "test.rs".to_string(),
+            old_path: Some(path.to_string()),
+            path: path.to_string(),
             status: FileStatus::Modified,
             hunks: vec![Hunk {
                 header: "@@ -1,1 +1,1 @@".to_string(),
@@ -155,6 +192,65 @@ mod tests {
         let refs = comments.iter().collect::<Vec<_>>();
         compositor.ensure_diff_layer(file, width, false, document_revision, &ctx);
         compositor.ensure_submitted_layer(file, &refs, &ctx);
+    }
+
+    fn added_line(text: &str) -> PatchLine {
+        PatchLine { kind: PatchLineKind::Added, text: text.to_string(), old_line_no: None, new_line_no: Some(1) }
+    }
+
+    fn rendered_patch_contains(compositor: &GitDiffCompositor, marker: &str) -> bool {
+        compositor
+            .rendered_patch()
+            .expect("rendered patch should exist")
+            .surface
+            .lines()
+            .iter()
+            .any(|line| line.plain_text().contains(marker))
+    }
+
+    #[test]
+    fn switching_back_to_cached_file_updates_active_patch() {
+        let file_a = make_file_with_path("a.rs", vec![added_line("file a marker")]);
+        let file_b = make_file_with_path("b.rs", vec![added_line("file b marker")]);
+        let ctx = context().with_width(80);
+        let mut compositor = GitDiffCompositor::new();
+
+        compositor.ensure_diff_layer(&file_a, 80, false, 1, &ctx);
+        compositor.ensure_diff_layer(&file_b, 80, false, 1, &ctx);
+        compositor.ensure_diff_layer(&file_a, 80, false, 1, &ctx);
+
+        assert!(rendered_patch_contains(&compositor, "file a marker"));
+        assert!(!rendered_patch_contains(&compositor, "file b marker"));
+    }
+
+    #[test]
+    fn clear_rendered_patches_clears_cached_patches() {
+        let file = make_file(vec![added_line("cached marker")]);
+        let ctx = context().with_width(80);
+        let mut compositor = GitDiffCompositor::new();
+
+        compositor.ensure_diff_layer(&file, 80, false, 1, &ctx);
+        compositor.clear_rendered_patches();
+
+        assert!(compositor.rendered_patch().is_none());
+        compositor.ensure_diff_layer(&file, 80, false, 1, &ctx);
+        assert!(rendered_patch_contains(&compositor, "cached marker"));
+    }
+
+    #[test]
+    fn rendered_patch_tracks_active_file() {
+        let file_a = make_file_with_path("a.rs", vec![added_line("file a marker")]);
+        let file_b = make_file_with_path("b.rs", vec![added_line("file b marker")]);
+        let ctx = context().with_width(80);
+        let mut compositor = GitDiffCompositor::new();
+
+        compositor.ensure_diff_layer(&file_a, 80, false, 1, &ctx);
+        assert!(rendered_patch_contains(&compositor, "file a marker"));
+        assert!(!rendered_patch_contains(&compositor, "file b marker"));
+
+        compositor.ensure_diff_layer(&file_b, 80, false, 1, &ctx);
+        assert!(rendered_patch_contains(&compositor, "file b marker"));
+        assert!(!rendered_patch_contains(&compositor, "file a marker"));
     }
 
     #[test]
@@ -224,5 +320,21 @@ mod tests {
         let rendered = compositor.rendered_patch().unwrap();
         let end_row = rendered.surface.end_row_for_anchor(anchor).expect("anchor end row should exist");
         assert_eq!(splices[0].after_row, end_row);
+    }
+
+    #[test]
+    fn deactivate_rendered_patch_clears_active_but_keeps_cache() {
+        let file = make_file(vec![added_line("deactivate marker")]);
+        let ctx = context().with_width(80);
+        let mut compositor = GitDiffCompositor::new();
+
+        compositor.ensure_diff_layer(&file, 80, false, 1, &ctx);
+        assert!(compositor.rendered_patch().is_some());
+
+        compositor.deactivate_rendered_patch();
+        assert!(compositor.rendered_patch().is_none());
+
+        compositor.ensure_diff_layer(&file, 80, false, 1, &ctx);
+        assert!(rendered_patch_contains(&compositor, "deactivate marker"));
     }
 }

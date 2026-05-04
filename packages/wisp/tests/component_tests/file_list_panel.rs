@@ -223,3 +223,27 @@ async fn arrow_keys_navigate() {
     let term = render_component(|ctx| panel.render(ctx), W, 4);
     assert_buffer_eq(&term, &flat_selected_first());
 }
+
+#[tokio::test]
+async fn renders_only_viewport_rows_after_scrolling_many_files() {
+    let files = (0..20).map(|i| file(&format!("file-{i:02}.rs"), FileStatus::Modified, 1, 1)).collect::<Vec<_>>();
+    let mut panel = FileListPanel::new();
+    panel.rebuild_from_files(&files);
+
+    for _ in 0..7 {
+        panel.on_event(&ev(KeyCode::Char('j'))).await;
+    }
+
+    let term = render_component(|ctx| panel.render(ctx), W, 5);
+
+    assert_buffer_eq(
+        &term,
+        &[
+            cols(&[("    M file-03.rs", 35), ("+1/-1", 5)]),
+            cols(&[("    M file-04.rs", 35), ("+1/-1", 5)]),
+            cols(&[("    M file-05.rs", 35), ("+1/-1", 5)]),
+            cols(&[("    M file-06.rs", 35), ("+1/-1", 5)]),
+            cols(&[(">   M file-07.rs", 35), ("+1/-1", 5)]),
+        ],
+    );
+}
