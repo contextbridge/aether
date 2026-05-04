@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.1](https://github.com/jcarver989/aether/compare/aether-agent-cli-v0.4.0...aether-agent-cli-v0.4.1) - 2026-05-04
+
+### Other
+
+- updated the following local packages: aether-tui, aether-wisp
+
 ## [0.4.0](https://github.com/jcarver989/aether/compare/aether-agent-cli-v0.3.3...aether-agent-cli-v0.4.0) - 2026-05-03
 
 ### Added

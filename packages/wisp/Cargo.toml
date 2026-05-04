@@ -1,6 +1,6 @@
 [package]
 name = "aether-wisp"
-version = "0.3.3"
+version = "0.4.0"
 edition = "2024"
 description = "A terminal UI for AI coding agents via the Agent Client Protocol (ACP)"
 license = "MIT"
@@ -29,7 +29,7 @@ workspace = true
 
 [dependencies]
 acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client"], version = "0.3.3" }
-tui = { package = "aether-tui", path = "../tui", version = "0.2.2" }
+tui = { package = "aether-tui", path = "../tui", version = "0.2.3" }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.1" }
 agent-client-protocol = { workspace = true }
 base64 = { workspace = true }
@@ -49,5 +49,5 @@ chrono = { workspace = true }
 
 [dev-dependencies]
 acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client", "testing"], version = "0.3.3" }
-tui = { package = "aether-tui", path = "../tui", features = ["testing"], version = "0.2.2" }
+tui = { package = "aether-tui", path = "../tui", features = ["testing"], version = "0.2.3" }
 tempfile = { workspace = true }

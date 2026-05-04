@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0](https://github.com/jcarver989/aether/compare/aether-wisp-v0.3.3...aether-wisp-v0.4.0) - 2026-05-04
+
+### Other
+
+- *(wisp)* Improve rendering performance of git diff view
+- *(wisp)* Batch event renders
+
 ## [0.3.3](https://github.com/jcarver989/aether/compare/aether-wisp-v0.3.2...aether-wisp-v0.3.3) - 2026-05-03
 
 ### Other
