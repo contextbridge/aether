@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.4](https://github.com/contextbridge/aether/compare/aether-tui-v0.2.3...aether-tui-v0.2.4) - 2026-05-05
+
+### Other
+
+- port to contextbridge org
+
 ## [0.2.3](https://github.com/contextbridge/aether/compare/aether-tui-v0.2.2...aether-tui-v0.2.3) - 2026-05-04
 
 ### Other

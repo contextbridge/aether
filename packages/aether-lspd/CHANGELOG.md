@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.11](https://github.com/contextbridge/aether/compare/aether-lspd-v0.1.10...aether-lspd-v0.1.11) - 2026-05-05
+
+### Other
+
+- port to contextbridge org
+
 ## [0.1.10](https://github.com/contextbridge/aether/compare/aether-lspd-v0.1.9...aether-lspd-v0.1.10) - 2026-05-05
 
 ### Other

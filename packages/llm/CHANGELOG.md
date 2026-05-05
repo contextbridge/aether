@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.7](https://github.com/contextbridge/aether/compare/aether-llm-v0.2.6...aether-llm-v0.2.7) - 2026-05-05
+
+### Other
+
+- port to contextbridge org
+
 ## [0.2.6](https://github.com/contextbridge/aether/compare/aether-llm-v0.2.5...aether-llm-v0.2.6) - 2026-05-03
 
 ### Fixed
