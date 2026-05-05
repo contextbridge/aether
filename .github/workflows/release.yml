@@ -297,15 +297,23 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       PLAN: ${{ needs.plan.outputs.val }}
-      GITHUB_USER: "axo bot"
-      GITHUB_EMAIL: "admin+bot@axo.dev"
+      GITHUB_USER: "contextbridge-homebrew-publisher[bot]"
+      GITHUB_EMAIL: "278110463+contextbridge-homebrew-publisher[bot]@users.noreply.github.com"
     if: ${{ !fromJson(needs.plan.outputs.val).announcement_is_prerelease || fromJson(needs.plan.outputs.val).publish_prereleases }}
     steps:
+      - name: Mint Homebrew tap token
+        id: tap-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.HOMEBREW_TAP_APP_ID }}
+          private-key: ${{ secrets.HOMEBREW_TAP_APP_PRIVATE_KEY }}
+          owner: contextbridge
+          repositories: homebrew-tap
       - uses: actions/checkout@v6
         with:
           persist-credentials: true
           repository: "contextbridge/homebrew-tap"
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          token: ${{ steps.tap-token.outputs.token }}
       # So we have access to the formula
       - name: Fetch homebrew formulae
         uses: actions/download-artifact@v7
