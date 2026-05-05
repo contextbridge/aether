@@ -26,10 +26,10 @@
     "e2e": "node scripts/e2e.mjs"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "^0.20.0",
+    "@agentclientprotocol/sdk": "^0.21.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "express": "^5.1.0",
-    "zod": "^4.0.0"
+    "zod": "^4.4.2"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
