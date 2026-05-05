@@ -288,10 +288,10 @@ async fn test_settings_option_update_refreshes_mode_display() {
 async fn test_server_status_notification_updates_overlay_state() {
     let mut r = open_settings(&[], (TEST_WIDTH, 40)).await;
     let notification = acp_utils::notifications::McpNotification::ServerStatus {
-        servers: vec![acp_utils::notifications::McpServerStatusEntry {
-            name: "docs".to_string(),
-            status: acp_utils::notifications::McpServerStatus::Connected { tool_count: 0 },
-        }],
+        servers: vec![acp_utils::notifications::McpServerStatusEntry::new(
+            "docs",
+            acp_utils::notifications::McpServerStatus::Connected { tool_count: 0 },
+        )],
     };
     r.on_mcp_notification(notification).unwrap();
     assert!(has_settings_menu(r.writer()));

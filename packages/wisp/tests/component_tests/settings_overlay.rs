@@ -1,9 +1,9 @@
-use acp_utils::notifications::{McpServerStatus, McpServerStatusEntry};
+use acp_utils::notifications::{McpServerAuthCapability, McpServerStatus, McpServerStatusEntry};
 use agent_client_protocol::schema::{self as acp, SessionConfigSelectOption};
 use tui::testing::render_component;
 use tui::{Component, Event, KeyCode, KeyEvent, KeyModifiers, ViewContext};
 use wisp::settings::menu::SettingsMenu;
-use wisp::settings::overlay::SettingsOverlay;
+use wisp::settings::overlay::{SettingsMessage, SettingsOverlay};
 
 fn make_menu() -> SettingsMenu {
     let options = vec![
@@ -58,8 +58,9 @@ fn make_multi_select_menu() -> SettingsMenu {
 
 fn make_server_statuses() -> Vec<McpServerStatusEntry> {
     vec![
-        McpServerStatusEntry { name: "github".to_string(), status: McpServerStatus::Connected { tool_count: 5 } },
-        McpServerStatusEntry { name: "linear".to_string(), status: McpServerStatus::NeedsOAuth },
+        McpServerStatusEntry::new("github", McpServerStatus::Connected { tool_count: 5 }),
+        McpServerStatusEntry::new("linear", McpServerStatus::NeedsOAuth)
+            .with_auth_capability(McpServerAuthCapability::OAuth),
     ]
 }
 
@@ -148,7 +149,7 @@ async fn footer_shows_authenticate_and_back_for_servers() {
     let statuses = make_server_statuses();
     let mut overlay = open_server_overlay(menu, statuses).await;
     let footer = render_footer(&mut overlay);
-    assert!(footer.contains("[Enter] Authenticate"), "footer: {footer}");
+    assert!(footer.contains("[Enter] Authenticate OAuth servers"), "footer: {footer}");
     assert!(footer.contains("[Esc] Back"), "footer: {footer}");
 }
 
@@ -222,7 +223,7 @@ async fn render_server_overlay_hides_top_level_rows() {
     assert!(text.contains("linear  \u{26A1} needs authentication"), "rendered:\n{text}");
     assert!(!text.contains("Provider: OpenRouter"), "rendered:\n{text}");
     assert!(!text.contains("Model: GPT-4o"), "rendered:\n{text}");
-    assert!(text.contains("[Enter] Authenticate"), "rendered:\n{text}");
+    assert!(text.contains("[Enter] Authenticate OAuth servers"), "rendered:\n{text}");
     assert!(text.contains("[Esc] Back"), "rendered:\n{text}");
 }
 
@@ -365,7 +366,7 @@ async fn server_overlay_esc_closes_server_not_settings_overlay() {
     let menu = make_menu();
     let statuses = make_server_statuses();
     let mut overlay = open_server_overlay(menu, statuses).await;
-    assert!(render_footer(&mut overlay).contains("Authenticate"));
+    assert!(render_footer(&mut overlay).contains("Authenticate OAuth servers"));
 
     let outcome = overlay.on_event(&Event::Key(key(KeyCode::Esc))).await;
     assert!(outcome.is_some());
@@ -383,4 +384,20 @@ async fn multi_select_entry_opens_model_selector() {
 
     let footer = render_footer(&mut overlay);
     assert!(footer.contains("Toggle"), "expected model selector, got: {footer}");
+}
+
+#[tokio::test]
+async fn connected_oauth_server_can_reauth_from_server_overlay() {
+    let menu = make_menu();
+    let statuses = vec![
+        McpServerStatusEntry::new("remote", McpServerStatus::Connected { tool_count: 2 })
+            .with_auth_capability(McpServerAuthCapability::OAuth),
+    ];
+
+    let mut overlay = open_server_overlay(menu, statuses).await;
+    let messages = overlay.on_event(&Event::Key(key(KeyCode::Enter))).await.unwrap();
+    match messages.as_slice() {
+        [SettingsMessage::AuthenticateServer(name)] => assert_eq!(name, "remote"),
+        other => panic!("messages: {other:?}"),
+    }
 }

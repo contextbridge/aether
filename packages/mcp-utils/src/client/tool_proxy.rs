@@ -56,6 +56,10 @@ impl ToolProxy {
         &self.name
     }
 
+    pub fn members(&self) -> &HashSet<String> {
+        &self.members
+    }
+
     /// Whether `server_name` is a nested member of this proxy.
     pub fn contains_server(&self, server_name: &str) -> bool {
         self.members.contains(server_name)
@@ -130,7 +134,7 @@ impl ToolProxy {
     }
 
     /// Discover tools from a connected MCP server and write them as JSON files
-    /// to `tool_dir/<server_name>/`.
+    /// to `tool_dir/<server_name>/`, replacing any existing files for that server.
     pub async fn write_tools_to_dir(
         server_name: &str,
         client: &RunningService<RoleClient, McpClient>,
@@ -140,10 +144,22 @@ impl ToolProxy {
             McpError::ToolDiscoveryFailed(format!("Failed to list tools for nested server '{server_name}': {e}"))
         })?;
 
+        Self::write_tool_entries_to_dir(server_name, &tools_response.tools, tool_dir).await
+    }
+
+    /// Write tool entries to `tool_dir/<server_name>/`, removing any stale files first.
+    pub(super) async fn write_tool_entries_to_dir(
+        server_name: &str,
+        tools: &[rmcp::model::Tool],
+        tool_dir: &Path,
+    ) -> Result<(), McpError> {
         let server_dir = tool_dir.join(server_name);
+        if server_dir.exists() {
+            remove_dir_all(&server_dir).await?;
+        }
         create_dir_all(&server_dir).await?;
 
-        for tool in &tools_response.tools {
+        for tool in tools {
             let entry = ToolFileEntry {
                 name: tool.name.to_string(),
                 description: tool.description.clone().unwrap_or_default().to_string(),
@@ -170,7 +186,7 @@ impl ToolProxy {
     }
 
     /// Build proxy instructions describing the tool directory and connected servers.
-    fn build_instructions(tool_dir: &Path, server_descriptions: &[(String, String)]) -> String {
+    pub(super) fn build_instructions(tool_dir: &Path, server_descriptions: &[(String, String)]) -> String {
         use std::fmt::Write;
 
         let mut instructions = format!(
@@ -239,7 +255,6 @@ mod tests {
         assert!(properties.contains_key("tool"));
         assert!(properties.contains_key("arguments"));
 
-        // `server` and `tool` are required; `arguments` is Option so not required
         let required = schema.get("required").unwrap().as_array().unwrap();
         assert_eq!(required.len(), 2);
         let required_names: Vec<&str> = required.iter().map(|v| v.as_str().unwrap()).collect();
@@ -300,6 +315,30 @@ mod tests {
         assert!(instr.contains("## Connected Servers"));
         assert!(instr.contains("**math**"));
         assert!(instr.contains("**git**"));
+    }
+
+    #[tokio::test]
+    async fn write_tool_entries_to_dir_removes_stale_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tool_dir = tmp.path().to_path_buf();
+        let server_dir = tool_dir.join("my-server");
+        std::fs::create_dir_all(&server_dir).unwrap();
+
+        let old_entry = ToolFileEntry {
+            name: "old_tool".to_string(),
+            description: "Old tool".to_string(),
+            server: "my-server".to_string(),
+            parameters: json!({"type": "object", "properties": {}}),
+        };
+        std::fs::write(server_dir.join("old_tool.json"), serde_json::to_string_pretty(&old_entry).unwrap()).unwrap();
+        assert!(server_dir.join("old_tool.json").exists());
+
+        let tools: Vec<rmcp::model::Tool> =
+            vec![rmcp::model::Tool::new("new_tool", "New tool", Arc::new(serde_json::Map::new()))];
+        ToolProxy::write_tool_entries_to_dir("my-server", &tools, &tool_dir).await.unwrap();
+
+        assert!(!server_dir.join("old_tool.json").exists(), "stale file should be removed");
+        assert!(server_dir.join("new_tool.json").exists(), "new file should be written");
     }
 
     fn make_proxy(members: &[&str]) -> ToolProxy {

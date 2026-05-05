@@ -6,6 +6,9 @@ struct ServerItem(McpServerStatusEntry);
 impl SelectItem for ServerItem {
     fn render_item(&self, selected: bool, context: &ViewContext) -> Line {
         let (indicator, detail) = match &self.0.status {
+            McpServerStatus::Connected { tool_count } if self.0.can_authenticate() => {
+                ("✓", format!("{tool_count} tools, authenticated"))
+            }
             McpServerStatus::Connected { tool_count } => ("✓", format!("{tool_count} tools")),
             McpServerStatus::Failed { error } => ("✗", error.clone()),
             McpServerStatus::NeedsOAuth => ("⚡", "needs authentication".to_string()),
@@ -55,7 +58,7 @@ impl Component for ServerStatusOverlay {
             Some([SelectListMessage::Close]) => Some(vec![ServerStatusMessage::Close]),
             Some([SelectListMessage::Select(_)]) => {
                 if let Some(item) = self.list.selected_item()
-                    && matches!(item.0.status, McpServerStatus::NeedsOAuth)
+                    && item.0.can_authenticate()
                 {
                     return Some(vec![ServerStatusMessage::Authenticate(item.0.name.clone())]);
                 }
@@ -108,15 +111,14 @@ impl ServerStatusOverlay {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use acp_utils::notifications::McpServerAuthCapability;
 
     fn sample_entries() -> Vec<McpServerStatusEntry> {
         vec![
-            McpServerStatusEntry { name: "github".to_string(), status: McpServerStatus::Connected { tool_count: 5 } },
-            McpServerStatusEntry { name: "linear".to_string(), status: McpServerStatus::NeedsOAuth },
-            McpServerStatusEntry {
-                name: "slack".to_string(),
-                status: McpServerStatus::Failed { error: "connection timeout".to_string() },
-            },
+            McpServerStatusEntry::new("github", McpServerStatus::Connected { tool_count: 5 }),
+            McpServerStatusEntry::new("linear", McpServerStatus::NeedsOAuth)
+                .with_auth_capability(McpServerAuthCapability::OAuth),
+            McpServerStatusEntry::new("slack", McpServerStatus::Failed { error: "connection timeout".to_string() }),
         ]
     }
 
@@ -178,13 +180,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn enter_on_connected_is_noop() {
+    async fn enter_on_connected_without_auth_is_noop() {
         let mut overlay = ServerStatusOverlay::new(sample_entries());
         // index 0 = github (Connected)
 
         let outcome =
             overlay.on_event(&Event::Key(tui::KeyEvent::new(tui::KeyCode::Enter, tui::KeyModifiers::NONE))).await;
         assert!(outcome.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn enter_on_connected_oauth_server_emits_authenticate_for_reauth() {
+        let mut overlay = ServerStatusOverlay::new(vec![
+            McpServerStatusEntry::new("github", McpServerStatus::Connected { tool_count: 5 })
+                .with_auth_capability(McpServerAuthCapability::OAuth),
+        ]);
+
+        let outcome =
+            overlay.on_event(&Event::Key(tui::KeyEvent::new(tui::KeyCode::Enter, tui::KeyModifiers::NONE))).await;
+        let messages = outcome.unwrap();
+        match messages.as_slice() {
+            [ServerStatusMessage::Authenticate(name)] => assert_eq!(name, "github"),
+            _ => panic!("Expected Authenticate message"),
+        }
     }
 
     #[tokio::test]
@@ -210,10 +228,7 @@ mod tests {
         let mut overlay = ServerStatusOverlay::new(sample_entries());
         overlay.list.set_selected(2);
 
-        overlay.update_entries(vec![McpServerStatusEntry {
-            name: "github".to_string(),
-            status: McpServerStatus::Connected { tool_count: 3 },
-        }]);
+        overlay.update_entries(vec![McpServerStatusEntry::new("github", McpServerStatus::Connected { tool_count: 3 })]);
         assert_eq!(overlay.list.selected_index(), 0);
     }
 }

@@ -6,7 +6,7 @@ pub use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
 pub use rmcp::model::CreateElicitationRequestParams;
 use serde::{Deserialize, Serialize};
 
-pub use mcp_utils::status::{McpServerStatus, McpServerStatusEntry};
+pub use mcp_utils::status::{McpServerAuthCapability, McpServerStatus, McpServerStatusEntry};
 
 /// Parameters for `_aether/context_usage` notifications.
 ///
@@ -249,15 +249,10 @@ mod tests {
     fn mcp_notification_server_status_roundtrip() {
         let msg = McpNotification::ServerStatus {
             servers: vec![
-                McpServerStatusEntry {
-                    name: "github".to_string(),
-                    status: McpServerStatus::Connected { tool_count: 5 },
-                },
-                McpServerStatusEntry { name: "linear".to_string(), status: McpServerStatus::NeedsOAuth },
-                McpServerStatusEntry {
-                    name: "slack".to_string(),
-                    status: McpServerStatus::Failed { error: "connection timeout".to_string() },
-                },
+                McpServerStatusEntry::new("github", McpServerStatus::Connected { tool_count: 5 }),
+                McpServerStatusEntry::new("linear", McpServerStatus::NeedsOAuth)
+                    .with_auth_capability(McpServerAuthCapability::OAuth),
+                McpServerStatusEntry::new("slack", McpServerStatus::Failed { error: "connection timeout".to_string() }),
             ],
         };
 
@@ -336,14 +331,14 @@ mod tests {
 
     #[test]
     fn mcp_server_status_entry_serde_roundtrip() {
-        let entry = McpServerStatusEntry {
-            name: "test-server".to_string(),
-            status: McpServerStatus::Connected { tool_count: 3 },
-        };
+        let entry = McpServerStatusEntry::new("test-server", McpServerStatus::Connected { tool_count: 3 })
+            .with_auth_capability(McpServerAuthCapability::OAuth);
 
         let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("\"auth_capability\":\"OAuth\""));
         let parsed: McpServerStatusEntry = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, entry);
+        assert!(parsed.can_authenticate());
     }
 
     #[test]

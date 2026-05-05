@@ -158,7 +158,8 @@ impl SettingsOverlay {
         match &self.active_pane {
             SettingsPane::ModelSelector(_) => "[Space/Enter] Toggle  [Tab] Reasoning  [Esc] Done",
             SettingsPane::Picker(_) => "[Enter] Confirm  [Esc] Back",
-            SettingsPane::ServerStatus(_) | SettingsPane::ProviderLogin(_) => "[Enter] Authenticate  [Esc] Back",
+            SettingsPane::ServerStatus(_) => "[Enter] Authenticate OAuth servers  [Esc] Back",
+            SettingsPane::ProviderLogin(_) => "[Enter] Authenticate  [Esc] Back",
             SettingsPane::Menu => "[Enter] Select  [Esc] Close",
         }
     }
@@ -321,7 +322,7 @@ mod tests {
     use crate::components::provider_login::ProviderLoginStatus;
     use crate::settings::types::SettingsMenuEntryKind;
     use acp_utils::config_option_id::THEME_CONFIG_ID;
-    use acp_utils::notifications::McpServerStatus;
+    use acp_utils::notifications::{McpServerAuthCapability, McpServerStatus};
     use agent_client_protocol::schema::{SessionConfigOption, SessionConfigSelectOption};
     use tui::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -369,8 +370,9 @@ mod tests {
 
     fn make_server_statuses() -> Vec<McpServerStatusEntry> {
         vec![
-            McpServerStatusEntry { name: "github".to_string(), status: McpServerStatus::Connected { tool_count: 5 } },
-            McpServerStatusEntry { name: "linear".to_string(), status: McpServerStatus::NeedsOAuth },
+            McpServerStatusEntry::new("github", McpServerStatus::Connected { tool_count: 5 }),
+            McpServerStatusEntry::new("linear", McpServerStatus::NeedsOAuth)
+                .with_auth_capability(McpServerAuthCapability::OAuth),
         ]
     }
 
@@ -678,6 +680,24 @@ mod tests {
                 .find(|e| e.method_id == "anthropic")
                 .expect("anthropic entry should still exist");
             assert_eq!(entry.status, ProviderLoginStatus::LoggedIn);
+        }
+    }
+
+    #[tokio::test]
+    async fn connected_oauth_server_authenticate_message_propagates() {
+        let mut menu = make_menu();
+        menu.add_mcp_servers_entry("1 connected");
+        let statuses = vec![
+            McpServerStatusEntry::new("remote", McpServerStatus::Connected { tool_count: 2 })
+                .with_auth_capability(McpServerAuthCapability::OAuth),
+        ];
+        let mut overlay = SettingsOverlay::new(menu, statuses, vec![]);
+        send_keys(&mut overlay, &[KeyCode::Down, KeyCode::Down, KeyCode::Enter]).await;
+
+        let messages = overlay.on_event(&Event::Key(key(KeyCode::Enter))).await.unwrap();
+        match messages.as_slice() {
+            [SettingsMessage::AuthenticateServer(name)] => assert_eq!(name, "remote"),
+            other => panic!("expected AuthenticateServer, got: {other:?}"),
         }
     }
 }

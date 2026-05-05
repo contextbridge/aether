@@ -3,7 +3,7 @@ use aether_core::testing::{FakeMcpServer, fake_mcp};
 use futures::future::BoxFuture;
 use mcp_utils::client::oauth::{OAuthCallback, OAuthError, OAuthHandler, accept_oauth_callback};
 use mcp_utils::client::{McpClientEvent, McpManager, McpServerConfig, ServerConfig};
-use mcp_utils::status::McpServerStatus;
+use mcp_utils::status::{McpServerAuthCapability, McpServerStatus};
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -103,6 +103,7 @@ async fn http_server_with_handler_stashes_needs_oauth_on_failure() {
         "Expected NeedsOAuth, got: {:?}",
         statuses[0].status
     );
+    assert!(statuses[0].can_authenticate());
 }
 
 #[tokio::test]
@@ -185,6 +186,8 @@ async fn tool_proxy_with_failing_http_surfaces_needs_oauth() {
         "Expected NeedsOAuth for failing HTTP server, got: {:?}",
         remote_status.status
     );
+    assert_eq!(remote_status.auth_capability, McpServerAuthCapability::OAuth);
+    assert!(remote_status.can_authenticate());
 
     // The proxy itself should still be connected
     let proxy_status = statuses.iter().find(|s| s.name == "proxy-oauth").expect("Expected status entry for proxy");
@@ -194,6 +197,8 @@ async fn tool_proxy_with_failing_http_surfaces_needs_oauth() {
         "Expected proxy to be Connected, got: {:?}",
         proxy_status.status
     );
+
+    assert_eq!(proxy_status.auth_capability, McpServerAuthCapability::Unavailable);
 
     // The proxy's call_tool should still be available
     let defs = manager.tool_definitions();

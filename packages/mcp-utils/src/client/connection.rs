@@ -126,8 +126,6 @@ impl McpServerConnection {
         Ok(response.tools)
     }
 
-    /// Build a connection from already-connected parts, extracting any
-    /// server-provided instructions from peer info.
     fn from_parts(client: RunningService<RoleClient, McpClient>, server_task: Option<JoinHandle<()>>) -> Self {
         let instructions = client.peer_info().and_then(|info| info.instructions.clone()).filter(|s| !s.is_empty());
         Self { client: Arc::new(client), server_task, instructions }
@@ -143,23 +141,25 @@ impl McpServerConnection {
     ) -> ConnectResult {
         let conn_err = |e| McpError::ConnectionFailed(format!("HTTP MCP server {name}: {e}"));
 
-        let result = match create_auth_client(&name, &config.uri).await {
-            Some(auth_client) if config.auth_header.is_none() => {
+        let result = if config.auth_header.is_none() {
+            if let Some(auth_client) = create_auth_client(&name, &config.uri).await {
                 tracing::debug!("Using OAuth for server '{name}'");
                 let transport = StreamableHttpClientTransport::with_client(auth_client, config.clone());
                 serve_client(params.mcp_client, transport).await.map_err(conn_err)
-            }
-            _ => {
+            } else {
                 let transport = StreamableHttpClientTransport::from_config(config.clone());
                 serve_client(params.mcp_client, transport).await.map_err(conn_err)
             }
+        } else {
+            let transport = StreamableHttpClientTransport::from_config(config.clone());
+            serve_client(params.mcp_client, transport).await.map_err(conn_err)
         };
 
         match result {
             Ok(client) => ConnectResult::Connected(Self::from_parts(client, None)),
             Err(err) => {
                 tracing::warn!("Failed to connect to MCP server '{name}': {err}");
-                if params.oauth_handler.is_some() {
+                if params.oauth_handler.is_some() && config.auth_header.is_none() {
                     ConnectResult::NeedsOAuth { name, config, error: err }
                 } else {
                     ConnectResult::Failed(err)

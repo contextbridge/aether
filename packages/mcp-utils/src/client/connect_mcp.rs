@@ -47,6 +47,7 @@ pub(super) enum ConnectOutcome {
         tools: Vec<RmcpTool>,
         proxy: Option<String>,
         registration: Registration,
+        reauth_config: Option<StreamableHttpClientTransportConfig>,
     },
     NeedsOAuth {
         name: String,
@@ -99,6 +100,19 @@ pub(super) async fn build_plan(configs: Vec<McpServerConfig>) -> Result<(Vec<Con
     Ok((direct, proxies))
 }
 
+/// Derive re-auth config from the server config and OAuth handler availability.
+pub(super) fn get_reauth_config(
+    config: &ServerConfig,
+    oauth_handler: Option<&Arc<dyn OAuthHandler>>,
+) -> Option<StreamableHttpClientTransportConfig> {
+    match config {
+        ServerConfig::Http { config, .. } if oauth_handler.is_some() && config.auth_header.is_none() => {
+            Some(config.clone())
+        }
+        _ => None,
+    }
+}
+
 /// Connect a single leaf and discover its tools. Parallel-safe: takes no
 /// `&self` borrow on the manager, only immutable references to shared state.
 pub(super) async fn connect_mcp(
@@ -109,11 +123,12 @@ pub(super) async fn connect_mcp(
     oauth_handler: Option<&Arc<dyn OAuthHandler>>,
 ) -> ConnectOutcome {
     let ConnectionSpec { name, config, proxy, registration } = leaf;
+    let reauth_config = get_reauth_config(&config, oauth_handler);
     let mcp_client = McpClient::new(client_info.clone(), name.clone(), event_sender.clone(), Arc::clone(roots));
     let params = ConnectParams { mcp_client, oauth_handler: oauth_handler.cloned() };
     match McpServerConnection::connect(config, params).await {
         ConnectResult::Connected(conn) => match conn.list_tools().await {
-            Ok(tools) => ConnectOutcome::Ready { name, conn, tools, proxy, registration },
+            Ok(tools) => ConnectOutcome::Ready { name, conn, tools, proxy, registration, reauth_config },
             Err(e) => ConnectOutcome::Failed {
                 error: McpError::ToolDiscoveryFailed(format!("Failed to list tools for {name}: {e}")),
                 name,
