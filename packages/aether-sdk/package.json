@@ -4,7 +4,7 @@
   "description": "TypeScript SDK for the Aether agent CLI",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/jcarver989/aether.git",
+    "url": "git+https://github.com/contextbridge/aether.git",
     "directory": "packages/aether-sdk"
   },
   "type": "module",

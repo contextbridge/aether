@@ -2,7 +2,7 @@
 
 **[Website](https://aether-agent.io)** | **[Quickstart Docs](https://aether-agent.io/getting-started/overview/#getting-started)**
 
-[![CI](https://github.com/jcarver989/aether/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/jcarver989/aether/actions/workflows/ci.yml)
+[![CI](https://github.com/contextbridge/aether/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/contextbridge/aether/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Crates.io](https://img.shields.io/crates/v/aether-agent-cli.svg)](https://crates.io/crates/aether-agent-cli)
 [![Rust](https://img.shields.io/badge/Made_with-Rust-orange.svg)](https://www.rust-lang.org)
@@ -52,13 +52,13 @@ Aether takes a different approach. Agents begin as blank slates with _no_ system
    **macOS** (Apple Silicon):
 
    ```bash
-   brew install jcarver989/tap/aether
+   brew install contextbridge/tap/aether
    ```
 
    **macOS / Linux** (x64, ARM64):
 
    ```bash
-   curl --proto '=https' --tlsv1.2 -LsSf https://github.com/jcarver989/aether/releases/latest/download/aether-agent-cli-installer.sh | sh
+   curl --proto '=https' --tlsv1.2 -LsSf https://github.com/contextbridge/aether/releases/latest/download/aether-agent-cli-installer.sh | sh
    ```
 
    **Any platform** (requires **Rust 1.85+**):

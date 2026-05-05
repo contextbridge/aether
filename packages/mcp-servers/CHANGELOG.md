@@ -2,13 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.3.4](https://github.com/jcarver989/aether/compare/aether-mcp-servers-v0.3.3...aether-mcp-servers-v0.3.4) - 2026-05-05
+## [0.3.4](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.3.3...aether-mcp-servers-v0.3.4) - 2026-05-05
 
 ### Other
 
 - update Cargo.lock dependencies
 
-## [0.3.3](https://github.com/jcarver989/aether/compare/aether-mcp-servers-v0.3.2...aether-mcp-servers-v0.3.3) - 2026-05-03
+## [0.3.3](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.3.2...aether-mcp-servers-v0.3.3) - 2026-05-03
 
 ### Added
 
@@ -19,7 +19,7 @@ All notable changes to this project will be documented in this file.
 - *(aether-cli)* Resolve user-level settings from aether home
 - *(mcp-servers)* fix flaky test
 
-## [0.3.2](https://github.com/jcarver989/aether/compare/aether-mcp-servers-v0.3.1...aether-mcp-servers-v0.3.2) - 2026-04-29
+## [0.3.2](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.3.1...aether-mcp-servers-v0.3.2) - 2026-04-29
 
 ### Added
 

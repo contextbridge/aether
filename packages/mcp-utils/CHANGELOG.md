@@ -2,13 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.4.0](https://github.com/jcarver989/aether/compare/aether-mcp-utils-v0.3.3...aether-mcp-utils-v0.4.0) - 2026-05-05
+## [0.4.0](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.3.3...aether-mcp-utils-v0.4.0) - 2026-05-05
 
 ### Fixed
 
 - *(mcp-utils)* Allow re-authing proxied mcps
 
-## [0.3.3](https://github.com/jcarver989/aether/compare/aether-mcp-utils-v0.3.2...aether-mcp-utils-v0.3.3) - 2026-05-03
+## [0.3.3](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.3.2...aether-mcp-utils-v0.3.3) - 2026-05-03
 
 ### Added
 
@@ -18,7 +18,7 @@ All notable changes to this project will be documented in this file.
 
 - *(crucible)* Simplify crucible to rely on normal rust tests and cargo next test
 
-## [0.3.2](https://github.com/jcarver989/aether/compare/aether-mcp-utils-v0.3.1...aether-mcp-utils-v0.3.2) - 2026-04-29
+## [0.3.2](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.3.1...aether-mcp-utils-v0.3.2) - 2026-04-29
 
 ### Other
 

@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.\n
 """
 body = """
 {%- macro remote_url() -%}
-  https://github.com/jcarver989/aether
+  https://github.com/contextbridge/aether
 {%- endmacro -%}
 
 {% if version -%}

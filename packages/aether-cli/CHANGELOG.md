@@ -2,19 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.4.2](https://github.com/jcarver989/aether/compare/aether-agent-cli-v0.4.1...aether-agent-cli-v0.4.2) - 2026-05-05
+## [0.4.2](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.4.1...aether-agent-cli-v0.4.2) - 2026-05-05
 
 ### Other
 
 - updated the following local packages: aether-mcp-utils, aether-acp-utils, aether-acp-utils, aether-agent-core, aether-wisp, aether-lspd, aether-mcp-servers, aether-project
 
-## [0.4.1](https://github.com/jcarver989/aether/compare/aether-agent-cli-v0.4.0...aether-agent-cli-v0.4.1) - 2026-05-04
+## [0.4.1](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.4.0...aether-agent-cli-v0.4.1) - 2026-05-04
 
 ### Other
 
 - updated the following local packages: aether-tui, aether-wisp
 
-## [0.4.0](https://github.com/jcarver989/aether/compare/aether-agent-cli-v0.3.3...aether-agent-cli-v0.4.0) - 2026-05-03
+## [0.4.0](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.3.3...aether-agent-cli-v0.4.0) - 2026-05-03
 
 ### Added
 
@@ -24,14 +24,14 @@ All notable changes to this project will be documented in this file.
 
 - *(aether-cli)* Resolve user-level settings from aether home
 
-## [0.3.3](https://github.com/jcarver989/aether/compare/aether-agent-cli-v0.3.2...aether-agent-cli-v0.3.3) - 2026-04-29
+## [0.3.3](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.3.2...aether-agent-cli-v0.3.3) - 2026-04-29
 
 ### Other
 
 - *(aether-cli)* Fix backticks
 - *(aether-cli)* correct binary references and slash command docs
 
-## [0.3.2](https://github.com/jcarver989/aether/compare/aether-agent-cli-v0.3.1...aether-agent-cli-v0.3.2) - 2026-04-29
+## [0.3.2](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.3.1...aether-agent-cli-v0.3.2) - 2026-04-29
 
 ### Fixed
 

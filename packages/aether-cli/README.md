@@ -38,11 +38,11 @@ Pick whichever fits your workflow:
 npm install -g @aether-agent/cli
 
 # Homebrew (macOS / Linux)
-brew install jcarver989/tap/aether
+brew install contextbridge/tap/aether
 
 # Shell installer (macOS / Linux)
 curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/jcarver989/aether/releases/latest/download/aether-agent-cli-installer.sh | sh
+  https://github.com/contextbridge/aether/releases/latest/download/aether-agent-cli-installer.sh | sh
 
 # From source
 cargo install aether-agent-cli
