@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0](https://github.com/jcarver989/aether/compare/aether-mcp-utils-v0.3.3...aether-mcp-utils-v0.4.0) - 2026-05-05
+
+### Fixed
+
+- *(mcp-utils)* Allow re-authing proxied mcps
+
 ## [0.3.3](https://github.com/jcarver989/aether/compare/aether-mcp-utils-v0.3.2...aether-mcp-utils-v0.3.3) - 2026-05-03
 
 ### Added

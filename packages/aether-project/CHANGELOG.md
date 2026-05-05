@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.1](https://github.com/jcarver989/aether/compare/aether-project-v0.4.0...aether-project-v0.4.1) - 2026-05-05
+
+### Other
+
+- updated the following local packages: aether-mcp-utils, aether-agent-core
+
 ## [0.4.0](https://github.com/jcarver989/aether/compare/aether-project-v0.3.2...aether-project-v0.4.0) - 2026-05-03
 
 ### Added

@@ -1,6 +1,6 @@
 [package]
 name = "aether-lspd"
-version = "0.1.9"
+version = "0.1.10"
 edition = "2024"
 description = "LSP daemon for sharing language servers across multiple agents"
 license = "MIT"
