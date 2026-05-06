@@ -1,5 +1,4 @@
-use mcp_utils::client::mcp_client::McpClient;
-use mcp_utils::client::{McpManager, McpServerStatusEntry};
+use mcp_utils::client::{McpClient, McpManager, McpServerStatusEntry};
 use mcp_utils::display_meta::ToolResultMeta;
 
 use futures::future::Either;

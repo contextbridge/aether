@@ -3,7 +3,7 @@ use crate::{AetherSettings, AgentConfig, McpSourceSpec};
 use aether_core::agent_spec::{AgentSpec, AgentSpecExposure, McpConfigSource};
 use aether_core::core::Prompt;
 use llm::LlmModel;
-use mcp_utils::client::RawMcpConfig;
+use mcp_utils::client::McpConfig;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -178,7 +178,7 @@ fn resolve_mcp_config_sources(
                     Err(SettingsError::InvalidMcpConfigPath { path: path.clone() })
                 }
             }
-            McpSourceSpec::Inline { servers } => Ok(McpConfigSource::Inline(RawMcpConfig { servers: servers.clone() })),
+            McpSourceSpec::Inline { servers } => Ok(McpConfigSource::Inline(McpConfig { servers: servers.clone() })),
         })
         .collect()
 }

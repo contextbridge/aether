@@ -1,6 +1,6 @@
 use aether_project::PromptCatalog;
 use clap::Parser;
-use mcp_utils::client::{RawMcpConfig, RawMcpServerConfig};
+use mcp_utils::client::{InMemoryServerConfig, McpConfig, McpServerConfig};
 use rmcp::{
     RoleServer, ServerHandler,
     handler::server::{
@@ -116,21 +116,19 @@ impl CodingMcpArgs {
     /// Looks for the "coding" server entry and parses its args for `--root-dir`.
     /// Relative paths (like ".") are resolved against the mcp.json's directory.
     pub fn parse_root_dir_from_config(mcp_config_path: &Path) -> Option<PathBuf> {
-        let raw_config = RawMcpConfig::from_json_file(mcp_config_path).ok()?;
-        let coding_config = raw_config.servers.get("coding")?;
+        let raw_config = McpConfig::from_json_file(mcp_config_path).ok()?;
+        let McpServerConfig::InMemory(InMemoryServerConfig { args, .. }) = raw_config.servers.get("coding")? else {
+            return None;
+        };
 
-        if let RawMcpServerConfig::InMemory { args, .. } = coding_config {
-            let parsed_args = Self::from_args(args.clone()).ok()?;
-            let root_dir = parsed_args.root_dir?;
+        let parsed_args = Self::from_args(args.clone()).ok()?;
+        let root_dir = parsed_args.root_dir?;
 
-            if root_dir.is_relative() {
-                let config_dir = mcp_config_path.parent()?;
-                Some(config_dir.join(&root_dir).canonicalize().ok()?)
-            } else {
-                Some(root_dir)
-            }
+        if root_dir.is_relative() {
+            let config_dir = mcp_config_path.parent()?;
+            Some(config_dir.join(&root_dir).canonicalize().ok()?)
         } else {
-            None
+            Some(root_dir)
         }
     }
 }

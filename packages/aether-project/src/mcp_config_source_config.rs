@@ -1,11 +1,11 @@
-use mcp_utils::client::RawMcpServerConfig;
+use mcp_utils::client::McpServerConfig;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum McpSourceSpec {
     File { path: String, proxy: bool },
-    Inline { servers: BTreeMap<String, RawMcpServerConfig> },
+    Inline { servers: BTreeMap<String, McpServerConfig> },
 }
 
 #[derive(serde::Deserialize)]
@@ -24,7 +24,7 @@ enum McpSourceSpecObject {
         proxy: bool,
     },
     Inline {
-        servers: BTreeMap<String, RawMcpServerConfig>,
+        servers: BTreeMap<String, McpServerConfig>,
     },
 }
 

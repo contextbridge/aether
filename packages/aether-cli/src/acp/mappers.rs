@@ -8,7 +8,7 @@ use agent_client_protocol::schema::{
 };
 use agent_client_protocol::{Client, ConnectionTo};
 use llm::{ToolCallError, ToolCallRequest, ToolCallResult};
-use mcp_utils::client::{McpServerConfig, ServerConfig};
+use mcp_utils::client::{McpServer as RuntimeMcpServer, McpTransport};
 use mcp_utils::display_meta::{PlanMetaStatus, ToolResultMeta};
 use rmcp::model::Prompt as McpPrompt;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
@@ -37,8 +37,8 @@ pub fn map_mcp_prompt_to_available_command(prompt: &McpPrompt) -> acp::Available
     acp::AvailableCommand::new(command_name, description).input(input)
 }
 
-/// Maps ACP MCP server definitions to internal `McpServerConfig`, skipping unsupported transports.
-pub fn map_acp_mcp_servers(servers: Vec<McpServer>) -> Vec<McpServerConfig> {
+/// Maps ACP MCP server definitions to internal MCP servers, skipping unsupported transports.
+pub fn map_acp_mcp_servers(servers: Vec<McpServer>) -> Vec<RuntimeMcpServer> {
     servers
         .into_iter()
         .filter_map(|s| {
@@ -50,22 +50,30 @@ pub fn map_acp_mcp_servers(servers: Vec<McpServer>) -> Vec<McpServerConfig> {
         .collect()
 }
 
-fn try_map_mcp_server(server: McpServer) -> Option<McpServerConfig> {
+fn try_map_mcp_server(server: McpServer) -> Option<RuntimeMcpServer> {
     use McpServer::{Http, Sse, Stdio};
     match server {
-        Stdio(stdio) => Some(
-            ServerConfig::Stdio {
-                name: stdio.name,
+        Stdio(stdio) => Some(RuntimeMcpServer::new(
+            stdio.name,
+            McpTransport::Stdio {
                 command: stdio.command.to_string_lossy().into_owned(),
                 args: stdio.args,
                 env: stdio.env.into_iter().map(|e| (e.name, e.value)).collect(),
-            }
-            .into(),
-        ),
+            },
+            false,
+        )),
 
-        Http(http) => Some(ServerConfig::Http { name: http.name, config: http_config(http.url, &http.headers) }.into()),
+        Http(http) => Some(RuntimeMcpServer::new(
+            http.name,
+            McpTransport::Http { config: http_config(http.url, &http.headers) },
+            false,
+        )),
 
-        Sse(sse) => Some(ServerConfig::Http { name: sse.name, config: http_config(sse.url, &sse.headers) }.into()),
+        Sse(sse) => Some(RuntimeMcpServer::new(
+            sse.name,
+            McpTransport::Http { config: http_config(sse.url, &sse.headers) },
+            false,
+        )),
 
         _ => None,
     }
@@ -702,9 +710,9 @@ mod tests {
         let configs = map_acp_mcp_servers(vec![server]);
         assert_eq!(configs.len(), 1);
 
-        match &configs[0] {
-            McpServerConfig::Server(ServerConfig::Stdio { name, command, args, env }) => {
-                assert_eq!(name, "my-server");
+        match &configs[0].transport {
+            McpTransport::Stdio { command, args, env } => {
+                assert_eq!(configs[0].name, "my-server");
                 assert_eq!(command, "/usr/bin/server");
                 assert_eq!(args, &["--port", "8080"]);
                 assert_eq!(env.get("FOO").unwrap(), "bar");
@@ -723,9 +731,9 @@ mod tests {
         let configs = map_acp_mcp_servers(vec![server]);
         assert_eq!(configs.len(), 1);
 
-        match &configs[0] {
-            McpServerConfig::Server(ServerConfig::Http { name, config }) => {
-                assert_eq!(name, "http-server");
+        match &configs[0].transport {
+            McpTransport::Http { config } => {
+                assert_eq!(configs[0].name, "http-server");
                 assert_eq!(config.uri.as_ref(), "https://example.com/mcp");
                 assert_eq!(config.auth_header.as_deref(), Some("token123"));
             }
@@ -752,8 +760,8 @@ mod tests {
                     .headers(vec![acp::HttpHeader::new("Authorization", input)]),
             );
             let configs = map_acp_mcp_servers(vec![server]);
-            match &configs[0] {
-                McpServerConfig::Server(ServerConfig::Http { config, .. }) => {
+            match &configs[0].transport {
+                McpTransport::Http { config } => {
                     assert_eq!(config.auth_header.as_deref(), Some(expected), "input was {input:?}");
                 }
                 other => panic!("Expected Http, got {other:?}"),
@@ -768,9 +776,9 @@ mod tests {
         let configs = map_acp_mcp_servers(vec![server]);
         assert_eq!(configs.len(), 1);
 
-        match &configs[0] {
-            McpServerConfig::Server(ServerConfig::Http { name, config }) => {
-                assert_eq!(name, "sse-server");
+        match &configs[0].transport {
+            McpTransport::Http { config } => {
+                assert_eq!(configs[0].name, "sse-server");
                 assert_eq!(config.uri.as_ref(), "https://example.com/sse");
                 assert_eq!(config.auth_header, None);
             }

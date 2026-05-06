@@ -16,7 +16,7 @@ async fn test_fake_mcp_server_has_instructions() {
         event_rx: _,
         handle: _,
         ..
-    } = mcp().with_servers(vec![fake_mcp("test", FakeMcpServer::new()).into()]).spawn().await.unwrap();
+    } = mcp().with_servers(vec![fake_mcp("test", FakeMcpServer::new())]).spawn().await.unwrap();
 
     // FakeMcpServer does provide instructions, so we should get them
     assert_eq!(instructions.len(), 1);
@@ -35,10 +35,7 @@ async fn test_multiple_servers_with_instructions() {
         handle: _,
         ..
     } = mcp()
-        .with_servers(vec![
-            fake_mcp("server1", FakeMcpServer::new()).into(),
-            fake_mcp("server2", FakeMcpServer::new()).into(),
-        ])
+        .with_servers(vec![fake_mcp("server1", FakeMcpServer::new()), fake_mcp("server2", FakeMcpServer::new())])
         .spawn()
         .await
         .unwrap();
@@ -107,7 +104,7 @@ async fn test_agent_builder_includes_mcp_instructions_in_system_prompt() {
         event_rx: _,
         handle: _,
         ..
-    } = mcp().with_servers(vec![fake_mcp("test", FakeMcpServer::new()).into()]).spawn().await.unwrap();
+    } = mcp().with_servers(vec![fake_mcp("test", FakeMcpServer::new())]).spawn().await.unwrap();
 
     let (tx, mut rx, _handle) = agent(llm)
         .system_prompt(Prompt::text("You are a test agent"))
@@ -160,7 +157,7 @@ async fn test_agent_builder_works_without_mcp_instructions() {
         event_rx: _,
         handle: _,
         ..
-    } = mcp().with_servers(vec![fake_mcp("test", FakeMcpServer::new()).into()]).spawn().await.unwrap();
+    } = mcp().with_servers(vec![fake_mcp("test", FakeMcpServer::new())]).spawn().await.unwrap();
 
     // No mcp_instructions provided - should still work
     let (tx, mut rx, _handle) = agent(llm)

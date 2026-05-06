@@ -5,7 +5,7 @@ use aether_core::events::{AgentMessage, UserMessage};
 use aether_core::mcp::run_mcp_task::McpCommand;
 use llm::ChatMessage;
 use mcp_utils::client::oauth::BrowserOAuthHandler;
-use mcp_utils::client::{McpClientEvent, McpServerConfig};
+use mcp_utils::client::{McpClientEvent, McpServer};
 use mcp_utils::status::McpServerStatusEntry;
 
 use agent_client_protocol::schema as acp;
@@ -35,7 +35,7 @@ impl Session {
     pub async fn new(
         spec: AgentSpec,
         cwd: PathBuf,
-        extra_mcp_servers: Vec<McpServerConfig>,
+        extra_mcp_servers: Vec<McpServer>,
         restored_messages: Option<Vec<ChatMessage>>,
         prompt_cache_key: Option<String>,
     ) -> Result<Self, Box<dyn std::error::Error>> {

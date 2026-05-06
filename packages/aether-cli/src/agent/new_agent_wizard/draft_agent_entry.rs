@@ -86,7 +86,7 @@ impl DraftAgentEntry {
     }
 
     pub fn to_mcp_json(&self) -> String {
-        use mcp_utils::client::config::{RawMcpConfig, RawMcpServerConfig};
+        use mcp_utils::client::config::{InMemoryServerConfig, InMemoryType, McpConfig, McpServerConfig};
         use std::collections::BTreeMap;
 
         let servers = self
@@ -101,11 +101,19 @@ impl DraftAgentEntry {
                     }
                     _ => vec![],
                 };
-                (name.to_string(), RawMcpServerConfig::InMemory { args, input: None })
+                (
+                    name.to_string(),
+                    McpServerConfig::InMemory(InMemoryServerConfig {
+                        type_: InMemoryType::InMemory,
+                        args,
+                        input: None,
+                        proxy: false,
+                    }),
+                )
             })
             .collect::<BTreeMap<_, _>>();
 
-        let config = RawMcpConfig { servers };
+        let config = McpConfig { servers };
         serde_json::to_string_pretty(&config).expect("mcp serialization cannot fail")
     }
 }
@@ -207,7 +215,7 @@ mod tests {
     use super::*;
     use aether_project::{AetherSettingsSource, AgentCatalog, SettingsFileSource};
     use llm::ReasoningEffort;
-    use mcp_utils::client::config::RawMcpConfig;
+    use mcp_utils::client::config::McpConfig;
 
     fn has_prompt(agent: &AgentConfig, path: &str) -> bool {
         agent.prompts.iter().any(|prompt| prompt.path() == Some(path))
@@ -274,7 +282,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         scaffold(dir.path(), &default_draft()).unwrap();
 
-        let raw = RawMcpConfig::from_json_file(dir.path().join(".aether/mcp.json")).unwrap();
+        let raw = McpConfig::from_json_file(dir.path().join(".aether/mcp.json")).unwrap();
         assert_eq!(raw.servers.len(), 3);
         assert!(raw.servers.contains_key("coding"));
         assert!(raw.servers.contains_key("skills"));
@@ -371,7 +379,7 @@ mod tests {
         draft.selected_mcp_servers = vec!["coding".into(), "lsp".into()];
         scaffold(dir.path(), &draft).unwrap();
 
-        let raw = RawMcpConfig::from_json_file(dir.path().join(".aether/mcp.json")).unwrap();
+        let raw = McpConfig::from_json_file(dir.path().join(".aether/mcp.json")).unwrap();
         assert_eq!(raw.servers.len(), 2);
         assert!(raw.servers.contains_key("coding"));
         assert!(raw.servers.contains_key("lsp"));
@@ -435,7 +443,7 @@ mod tests {
         let agent_mcp = dir.path().join(".aether/agents/researcher/mcp.json");
         assert!(agent_mcp.exists());
 
-        let raw = RawMcpConfig::from_json_file(&agent_mcp).unwrap();
+        let raw = McpConfig::from_json_file(&agent_mcp).unwrap();
         assert_eq!(raw.servers.len(), 2);
         assert!(raw.servers.contains_key("coding"));
         assert!(raw.servers.contains_key("lsp"));

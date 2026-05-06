@@ -5,14 +5,14 @@
 
 use crate::core::Prompt;
 use llm::{LlmModel, ReasoningEffort, ToolDefinition};
-use mcp_utils::client::RawMcpConfig;
+use mcp_utils::client::McpConfig;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub enum McpConfigSource {
     File { path: PathBuf, proxy: bool },
     Json(String),
-    Inline(RawMcpConfig),
+    Inline(McpConfig),
 }
 
 impl McpConfigSource {

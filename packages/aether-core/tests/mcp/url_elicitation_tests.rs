@@ -1,6 +1,6 @@
 use aether_core::mcp::run_mcp_task::{McpCommand, ToolExecutionEvent};
 use aether_core::mcp::{McpSpawnResult, mcp};
-use mcp_utils::client::ServerConfig;
+use mcp_utils::client::{McpServer, McpTransport};
 use rmcp::{
     RoleServer, ServerHandler,
     model::{
@@ -129,8 +129,8 @@ impl ServerHandler for MalformedUrlElicitationRequiredServer {
     }
 }
 
-fn fake_url_elicit_mcp(name: &str, server: UrlElicitationRequiredServer) -> mcp_utils::client::McpServerConfig {
-    ServerConfig::InMemory { name: name.to_string(), server: server.into_dyn() }.into()
+fn fake_url_elicit_mcp(name: &str, server: UrlElicitationRequiredServer) -> McpServer {
+    McpServer::new(name, McpTransport::InMemory { server: server.into_dyn() }, false)
 }
 
 async fn drain_until_complete(
@@ -193,8 +193,7 @@ async fn spawn_scripted(
 #[tokio::test]
 async fn malformed_url_elicitation_required_data_returns_protocol_error() {
     let server = MalformedUrlElicitationRequiredServer::new(json!({ "elicitations": "not-an-array" }));
-    let config: mcp_utils::client::McpServerConfig =
-        ServerConfig::InMemory { name: "browser_server".to_string(), server: server.into_dyn() }.into();
+    let config = McpServer::new("browser_server", McpTransport::InMemory { server: server.into_dyn() }, false);
 
     let McpSpawnResult { command_tx, .. } = mcp().with_servers(vec![config]).spawn().await.unwrap();
 

@@ -9,7 +9,7 @@ use aether_core::mcp::run_mcp_task::McpCommand;
 use llm::{ChatMessage, LlmModel, ToolDefinition};
 use mcp_servers::McpBuilderExt;
 use mcp_utils::client::oauth::OAuthHandler;
-use mcp_utils::client::{McpClientEvent, McpServerConfig};
+use mcp_utils::client::{McpClientEvent, McpServer};
 use mcp_utils::status::McpServerStatusEntry;
 use std::path::{Path, PathBuf};
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -20,7 +20,7 @@ pub struct RuntimeBuilder {
     cwd: PathBuf,
     spec: AgentSpec,
     mcp_config_sources: Vec<McpConfigSource>,
-    extra_mcp_servers: Vec<McpServerConfig>,
+    extra_mcp_servers: Vec<McpServer>,
     oauth_applicator: Option<Box<dyn FnOnce(McpBuilder) -> McpBuilder + Send>>,
     prompt_cache_key: Option<String>,
 }
@@ -79,7 +79,7 @@ impl RuntimeBuilder {
         self
     }
 
-    pub fn extra_servers(mut self, servers: Vec<McpServerConfig>) -> Self {
+    pub fn extra_servers(mut self, servers: Vec<McpServer>) -> Self {
         self.extra_mcp_servers = servers;
         self
     }

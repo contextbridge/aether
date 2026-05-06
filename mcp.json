@@ -21,17 +21,11 @@
       "type": "in-memory",
       "args": ["contextbridge", "plan"]
     },
-    "proxy": {
-      "type": "in-memory",
-      "input": {
-        "servers": {
-          "playwright": {
-            "type": "stdio",
-            "command": "npx",
-            "args": ["@playwright/mcp@latest"]
-          }
-        }
-      }
+    "playwright": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["@playwright/mcp@latest"],
+      "proxy": true
     }
   }
 }

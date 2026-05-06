@@ -1,6 +1,5 @@
 use super::McpError;
 use super::mcp_client::McpClient;
-use super::naming::split_on_server_name;
 use llm::ToolDefinition;
 use rmcp::{RoleClient, service::RunningService};
 use schemars::JsonSchema;
@@ -22,12 +21,8 @@ pub struct ResolvedCall {
 /// A tool-proxy that wraps multiple servers behind a single `call_tool`.
 pub struct ToolProxy {
     name: String,
-    /// Set of nested server names belonging to this proxy.
     members: HashSet<String>,
-    /// Directory where tool description files are written for agent browsing.
     tool_dir: PathBuf,
-    /// Synthesized instructions text for the proxy.
-    instructions: String,
 }
 
 /// Parsed arguments from a proxy `call_tool` invocation.
@@ -42,14 +37,8 @@ struct ProxyCallArgs {
 }
 
 impl ToolProxy {
-    pub fn new(
-        name: String,
-        members: HashSet<String>,
-        tool_dir: PathBuf,
-        server_descriptions: &[(String, String)],
-    ) -> Self {
-        let instructions = Self::build_instructions(&tool_dir, server_descriptions);
-        Self { name, members, tool_dir, instructions }
+    pub fn new(name: String, members: HashSet<String>, tool_dir: PathBuf) -> Self {
+        Self { name, members, tool_dir }
     }
 
     pub fn name(&self) -> &str {
@@ -65,12 +54,6 @@ impl ToolProxy {
         self.members.contains(server_name)
     }
 
-    /// Whether a namespaced tool name refers to this proxy's `call_tool`.
-    pub fn is_call_tool(&self, namespaced_tool_name: &str) -> bool {
-        split_on_server_name(namespaced_tool_name)
-            .is_some_and(|(server, tool)| tool == "call_tool" && server == self.name)
-    }
-
     /// Parse and validate a proxy `call_tool` invocation.
     pub fn resolve_call(&self, arguments_json: &str) -> super::Result<ResolvedCall> {
         let args: ProxyCallArgs = serde_json::from_str(arguments_json)?;
@@ -81,10 +64,6 @@ impl ToolProxy {
             )));
         }
         Ok(ResolvedCall { server: args.server, tool: args.tool, arguments: args.arguments })
-    }
-
-    pub fn instructions(&self) -> &str {
-        &self.instructions
     }
 
     pub fn tool_dir(&self) -> &Path {
@@ -101,7 +80,11 @@ impl ToolProxy {
     /// Uses `$AETHER_HOME/tool-proxy/<name>` or `~/.aether/tool-proxy/<name>`.
     pub fn dir(name: &str) -> Result<PathBuf, McpError> {
         let base = super::aether_home().ok_or_else(|| McpError::Other("Home directory not set".into()))?;
-        Ok(base.join("tool-proxy").join(name))
+        Ok(Self::dir_in_home(&base, name))
+    }
+
+    pub fn dir_in_home(home: &Path, name: &str) -> PathBuf {
+        home.join("tool-proxy").join(name)
     }
 
     /// Clean up the tool directory for a proxy, removing all tool files.
@@ -186,7 +169,7 @@ impl ToolProxy {
     }
 
     /// Build proxy instructions describing the tool directory and connected servers.
-    pub(super) fn build_instructions(tool_dir: &Path, server_descriptions: &[(String, String)]) -> String {
+    pub fn build_instructions(tool_dir: &Path, server_descriptions: &[(String, String)]) -> String {
         use std::fmt::Write;
 
         let mut instructions = format!(
@@ -343,12 +326,7 @@ mod tests {
 
     fn make_proxy(members: &[&str]) -> ToolProxy {
         let members: HashSet<String> = members.iter().map(std::string::ToString::to_string).collect();
-        ToolProxy::new(
-            "myproxy".to_string(),
-            members,
-            PathBuf::from("/tmp/tool-proxy/myproxy"),
-            &[("math".to_string(), "Math tools".to_string())],
-        )
+        ToolProxy::new("myproxy".to_string(), members, PathBuf::from("/tmp/tool-proxy/myproxy"))
     }
 
     #[test]
@@ -357,15 +335,6 @@ mod tests {
         assert!(proxy.contains_server("math"));
         assert!(proxy.contains_server("git"));
         assert!(!proxy.contains_server("unknown"));
-    }
-
-    #[test]
-    fn tool_proxy_is_call_tool() {
-        let proxy = make_proxy(&["math"]);
-        assert!(proxy.is_call_tool("myproxy__call_tool"));
-        assert!(!proxy.is_call_tool("myproxy__other_tool"));
-        assert!(!proxy.is_call_tool("other__call_tool"));
-        assert!(!proxy.is_call_tool("invalid"));
     }
 
     #[test]
@@ -392,7 +361,6 @@ mod tests {
         let proxy = make_proxy(&["math"]);
         assert_eq!(proxy.name(), "myproxy");
         assert_eq!(proxy.tool_dir(), Path::new("/tmp/tool-proxy/myproxy"));
-        assert!(proxy.instructions().contains("call_tool"));
     }
 
     #[test]

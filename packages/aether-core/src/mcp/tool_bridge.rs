@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use mcp_utils::client::split_on_server_name;
-use mcp_utils::display_meta::ToolResultMeta;
+use mcp_utils::{client::SERVERNAME_DELIMITER, display_meta::ToolResultMeta};
 use rmcp::model::CallToolRequestParams;
 use serde_json;
 
@@ -16,8 +15,9 @@ const SPILLOVER_PREVIEW_BYTES: usize = 10_000;
 
 /// Convert a `ToolCallRequest` to `rmcp::CallToolRequestParams`
 pub fn tool_call_request_to_mcp(request: &ToolCallRequest) -> Result<CallToolRequestParams, String> {
-    // Parse the tool name to remove namespace prefix if present
-    let tool_name = split_on_server_name(&request.name)
+    let tool_name = request
+        .name
+        .split_once(SERVERNAME_DELIMITER)
         .map_or_else(|| request.name.clone(), |(_, tool_name)| tool_name.to_string());
 
     // Parse arguments from JSON string

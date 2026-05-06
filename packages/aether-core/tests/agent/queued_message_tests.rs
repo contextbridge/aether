@@ -53,11 +53,8 @@ async fn user_message_during_tool_execution_is_queued() {
     let llm = FakeLlmProvider::new(turns).pause_turn_after(0, 1, Arc::clone(&release));
     let captured = llm.captured_contexts();
 
-    let McpSpawnResult { tool_definitions, command_tx: mcp_tx, .. } = mcp()
-        .with_servers(vec![fake_mcp("test", FakeMcpServer::new()).into()])
-        .spawn()
-        .await
-        .expect("MCP should spawn");
+    let McpSpawnResult { tool_definitions, command_tx: mcp_tx, .. } =
+        mcp().with_servers(vec![fake_mcp("test", FakeMcpServer::new())]).spawn().await.expect("MCP should spawn");
 
     let (tx, mut rx, _handle) = agent(llm).tools(mcp_tx, tool_definitions).spawn().await.expect("Agent should spawn");
     tx.send(UserMessage::text("add 2 and 3")).await.expect("Initial prompt should send");

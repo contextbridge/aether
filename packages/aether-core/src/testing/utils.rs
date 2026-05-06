@@ -99,7 +99,7 @@ impl TestAgentBuilder {
             command_tx: mcp_tx,
             event_rx: _,
             handle: _mcp_handle,
-        } = mcp().with_servers(vec![fake_mcp("test", FakeMcpServer::new()).into()]).spawn().await?;
+        } = mcp().with_servers(vec![fake_mcp("test", FakeMcpServer::new())]).spawn().await?;
 
         let mut builder = agent(llm).tools(mcp_tx, tool_definitions);
         if let Some(timeout) = self.timeout {
