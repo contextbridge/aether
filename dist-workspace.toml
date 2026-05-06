@@ -25,6 +25,7 @@ allow-dirty = ["ci"]
 # A namespace to use when publishing this package to the npm registry
 npm-scope = "@aether-agent"
 npm-package = "cli"
+macos-sign = true
 
 [dist.dependencies.apt]
 libdbus-1-dev = "*"
