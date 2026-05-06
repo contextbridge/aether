@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.2](https://github.com/contextbridge/aether/compare/aether-utils-v0.2.1...aether-utils-v0.2.2) - 2026-05-05
+
+### Other
+
+- port to contextbridge org
+
 ## [0.2.1](https://github.com/contextbridge/aether/compare/aether-utils-v0.2.0...aether-utils-v0.2.1) - 2026-04-29
 
 ### Other

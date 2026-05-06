@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.1](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.4.0...aether-mcp-utils-v0.4.1) - 2026-05-05
+
+### Other
+
+- port to contextbridge org
+
 ## [0.4.0](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.3.3...aether-mcp-utils-v0.4.0) - 2026-05-05
 
 ### Fixed
