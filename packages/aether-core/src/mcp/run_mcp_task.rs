@@ -1,9 +1,9 @@
-use mcp_utils::client::{McpClient, McpManager, McpServerStatusEntry};
+use mcp_utils::client::{ConnectedServer, ConnectionError, McpClient, McpError, McpManager, McpServerStatusEntry};
 use mcp_utils::display_meta::ToolResultMeta;
 
 use futures::future::Either;
 use futures::stream::{self, StreamExt};
-use llm::{ToolCallError, ToolCallRequest, ToolCallResult, ToolDefinition};
+use llm::{ToolCallError, ToolCallRequest, ToolCallResult};
 use rmcp::RoleClient;
 use rmcp::model::{
     CallToolRequestParams, CreateElicitationRequestParams, ErrorCode, GetPromptResult, ProgressNotificationParam,
@@ -12,8 +12,10 @@ use rmcp::model::{
 use rmcp::service::RunningService;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::select;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tokio::task::JoinSet;
 
 /// Events emitted during tool execution lifecycle
 #[derive(Debug)]
@@ -23,7 +25,7 @@ pub enum ToolExecutionEvent {
     Complete { tool_id: String, result: Result<ToolCallResult, ToolCallError>, result_meta: Option<ToolResultMeta> },
 }
 
-type AuthResult = Result<(Vec<McpServerStatusEntry>, Vec<ToolDefinition>), String>;
+const MCP_AUTH_TIMEOUT: Duration = Duration::from_mins(3);
 
 /// Commands that can be sent to the MCP manager task
 #[derive(Debug)]
@@ -46,20 +48,42 @@ pub enum McpCommand {
     },
     AuthenticateServer {
         name: String,
-        tx: oneshot::Sender<AuthResult>,
     },
 }
 
 pub async fn run_mcp_task(mut mcp: McpManager, mut command_rx: mpsc::Receiver<McpCommand>) {
-    while let Some(command) = command_rx.recv().await {
-        on_command(command, &mut mcp).await;
+    let mut auth_tasks = JoinSet::<(String, Result<ConnectedServer, ConnectionError>)>::new();
+    loop {
+        select! {
+            command = command_rx.recv() => {
+                let Some(command) = command else { break; };
+                on_command(command, &mut mcp, &mut auth_tasks).await;
+            }
+
+            Some(joined) = auth_tasks.join_next(), if !auth_tasks.is_empty() => {
+                match joined {
+                    Ok((_name, attempt)) => {
+                        mcp.apply_connection_attempt(attempt).await;
+                    }
+                    Err(e) => {
+                        tracing::error!("MCP auth task did not complete normally: {e:?}");
+                    }
+                }
+            }
+        }
     }
 
+    auth_tasks.abort_all();
+    while auth_tasks.join_next().await.is_some() {}
     mcp.shutdown().await;
     tracing::debug!("MCP manager task ended");
 }
 
-async fn on_command(command: McpCommand, mcp: &mut McpManager) {
+async fn on_command(
+    command: McpCommand,
+    mcp: &mut McpManager,
+    auth_tasks: &mut JoinSet<(String, Result<ConnectedServer, ConnectionError>)>,
+) {
     match command {
         McpCommand::ExecuteTool { request, timeout, tx } => {
             let tool_id = request.id.clone();
@@ -104,13 +128,22 @@ async fn on_command(command: McpCommand, mcp: &mut McpManager) {
             let _ = tx.send(mcp.server_statuses().to_vec());
         }
 
-        McpCommand::AuthenticateServer { name, tx } => {
-            let result = match mcp.authenticate_server(&name).await {
-                Ok(()) => Ok((mcp.server_statuses().to_vec(), mcp.tool_definitions())),
-                Err(e) => Err(format!("Authentication failed for '{name}': {e}")),
-            };
-            let _ = tx.send(result);
-        }
+        McpCommand::AuthenticateServer { name } => match mcp.authenticate_server_task(&name).await {
+            Ok(task) => {
+                let server_name = name.clone();
+                auth_tasks.spawn(async move {
+                    let attempt = match tokio::time::timeout(MCP_AUTH_TIMEOUT, task).await {
+                        Ok(attempt) => attempt,
+                        Err(_) => Err(ConnectionError::Failed {
+                            name: server_name.clone(),
+                            error: McpError::ConnectionFailed("authentication timed out after 3 minutes".to_string()),
+                        }),
+                    };
+                    (server_name, attempt)
+                });
+            }
+            Err(e) => tracing::warn!("Authentication failed for '{name}': {e}"),
+        },
     }
 }
 

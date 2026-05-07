@@ -8,8 +8,7 @@ use aether_core::mcp::mcp;
 use aether_core::mcp::run_mcp_task::McpCommand;
 use llm::{ChatMessage, LlmModel, ToolDefinition};
 use mcp_servers::McpBuilderExt;
-use mcp_utils::client::oauth::OAuthHandler;
-use mcp_utils::client::{McpClientEvent, McpServer};
+use mcp_utils::client::{McpClientEvent, McpServer, OAuthHandlerFactory};
 use mcp_utils::status::McpServerStatusEntry;
 use std::path::{Path, PathBuf};
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -84,8 +83,8 @@ impl RuntimeBuilder {
         self
     }
 
-    pub fn oauth_handler<H: OAuthHandler + 'static>(mut self, handler: H) -> Self {
-        self.oauth_applicator = Some(Box::new(|builder| builder.with_oauth_handler(handler)));
+    pub fn oauth_handler_factory(mut self, factory: OAuthHandlerFactory) -> Self {
+        self.oauth_applicator = Some(Box::new(|builder| builder.with_oauth_handler_factory(factory)));
         self
     }
 

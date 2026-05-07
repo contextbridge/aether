@@ -4,16 +4,17 @@ use aether_core::core::AgentHandle;
 use aether_core::events::{AgentMessage, UserMessage};
 use aether_core::mcp::run_mcp_task::McpCommand;
 use llm::ChatMessage;
-use mcp_utils::client::oauth::BrowserOAuthHandler;
-use mcp_utils::client::{McpClientEvent, McpServer};
+use mcp_utils::client::oauth::{BrowserOAuthHandler, OAuthHandler};
+use mcp_utils::client::{McpClientEvent, McpError, McpServer, OAuthHandlerFactory};
 use mcp_utils::status::McpServerStatusEntry;
 
 use agent_client_protocol::schema as acp;
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
-use tracing::{debug, error};
+use tracing::debug;
 
 use crate::runtime::RuntimeBuilder;
 
@@ -48,14 +49,7 @@ impl Session {
             rb = rb.prompt_cache_key(key);
         }
 
-        match BrowserOAuthHandler::new() {
-            Ok(handler) => {
-                rb = rb.oauth_handler(handler);
-            }
-            Err(e) => {
-                error!("Failed to initialize browser OAuth handler: {e}");
-            }
-        }
+        rb = rb.oauth_handler_factory(browser_oauth_handler_factory());
 
         let agent = rb.build(None, restored_messages).await?;
 
@@ -85,6 +79,14 @@ impl Session {
 
         Ok(merge_builtin_commands(prompt_commands))
     }
+}
+
+fn browser_oauth_handler_factory() -> OAuthHandlerFactory {
+    Arc::new(|| {
+        BrowserOAuthHandler::new()
+            .map(|handler| Arc::new(handler) as Arc<dyn OAuthHandler>)
+            .map_err(|e| McpError::ConnectionFailed(format!("failed to initialize browser OAuth handler: {e}")))
+    })
 }
 
 fn merge_builtin_commands(commands: Vec<acp::AvailableCommand>) -> Vec<acp::AvailableCommand> {

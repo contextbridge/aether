@@ -160,12 +160,12 @@ async fn run_session_relay(
             Some(msg) = mcp_request_rx.recv() => {
                 match msg {
                     McpRequest::Authenticate { server_name, .. } => {
-                        authenticate_mcp_server(&mcp_tx, &connection, &agent_tx, &server_name).await;
+                        authenticate_mcp_server(&mcp_tx, &server_name).await;
                     }
                 }
             }
             Some(event) = event_rx.recv() => {
-                handle_mcp_client_event(&connection, event).await;
+                handle_mcp_client_event(&connection, &agent_tx, event).await;
             }
             else => break,
         }
@@ -265,12 +265,12 @@ where
                 }
             }
             Some(event) = ctx.event_rx.recv() => {
-                handle_mcp_client_event(ctx.connection, event).await;
+                handle_mcp_client_event(ctx.connection, ctx.agent_tx, event).await;
             }
             Some(msg) = ctx.mcp_request_rx.recv() => {
                 match msg {
                     McpRequest::Authenticate { server_name, .. } => {
-                        authenticate_mcp_server(ctx.mcp_tx, ctx.connection, ctx.agent_tx, &server_name).await;
+                        authenticate_mcp_server(ctx.mcp_tx, &server_name).await;
                     }
                 }
             }
@@ -427,39 +427,9 @@ fn parse_slash_command_arguments(args_text: &str) -> Option<serde_json::Map<Stri
     }
 }
 
-async fn authenticate_mcp_server(
-    mcp_tx: &mpsc::Sender<McpCommand>,
-    connection: &ConnectionTo<Client>,
-    agent_tx: &mpsc::Sender<UserMessage>,
-    name: &str,
-) {
-    let (tx, rx) = oneshot::channel();
-    if let Err(e) = mcp_tx.send(McpCommand::AuthenticateServer { name: name.to_string(), tx }).await {
+async fn authenticate_mcp_server(mcp_tx: &mpsc::Sender<McpCommand>, name: &str) {
+    if let Err(e) = mcp_tx.send(McpCommand::AuthenticateServer { name: name.to_string() }).await {
         error!("MCP server authentication failed: Failed to send AuthenticateServer command: {e}");
-        return;
-    }
-
-    let result = match rx.await {
-        Ok(Ok(result)) => result,
-        Ok(Err(e)) => {
-            error!("MCP server authentication failed: {e}");
-            return;
-        }
-        Err(e) => {
-            error!("MCP server authentication failed: Failed to receive auth result: {e}");
-            return;
-        }
-    };
-
-    let (statuses, tool_definitions) = result;
-    if let Err(e) = connection
-        .send_notification(McpNotification::ServerStatus { servers: statuses })
-        .map_err(|e| AcpServerError::protocol("_aether/mcp_event", e))
-    {
-        error!("Failed to send updated MCP server status: {:?}", e);
-    }
-    if let Err(e) = agent_tx.send(UserMessage::UpdateTools(tool_definitions)).await {
-        error!("Failed to send updated tools to agent: {:?}", e);
     }
 }
 
@@ -503,7 +473,11 @@ fn send_agent_notification(
     }
 }
 
-async fn handle_mcp_client_event(connection: &ConnectionTo<Client>, event: McpClientEvent) {
+async fn handle_mcp_client_event(
+    connection: &ConnectionTo<Client>,
+    agent_tx: &mpsc::Sender<UserMessage>,
+    event: McpClientEvent,
+) {
     match event {
         McpClientEvent::Elicitation(elicitation) => {
             handle_elicitation_request(connection, elicitation).await;
@@ -516,6 +490,22 @@ async fn handle_mcp_client_event(connection: &ConnectionTo<Client>, event: McpCl
                 error!("Failed to send URL elicitation complete notification: {:?}", e);
             }
         }
+        McpClientEvent::ServerStatusesChanged(servers) => {
+            if let Err(e) = connection
+                .send_notification(McpNotification::ServerStatus { servers })
+                .map_err(|e| AcpServerError::protocol("_aether/mcp_event", e))
+            {
+                error!("Failed to send updated MCP server status: {:?}", e);
+            }
+        }
+        McpClientEvent::ToolDefinitionsChanged(tool_definitions) => {
+            if let Err(e) = agent_tx.send(UserMessage::UpdateTools(tool_definitions)).await {
+                error!("Failed to send updated tools to agent: {:?}", e);
+            }
+        }
+        McpClientEvent::AuthenticationFailed { server, error } => {
+            error!("MCP server authentication failed for '{server}': {error}");
+        }
     }
 }
 
@@ -523,6 +513,8 @@ async fn handle_mcp_client_event(connection: &ConnectionTo<Client>, event: McpCl
 mod tests {
     use super::*;
     use acp_utils::testing::test_connection;
+    use llm::ToolDefinition;
+    use mcp_utils::client::{McpServerStatus, McpServerStatusEntry};
     use tokio::task::LocalSet;
     #[test]
     fn test_argument_parsing() {
@@ -672,10 +664,68 @@ mod tests {
                     elicitation_id: "el-42".to_string(),
                 });
 
-                handle_mcp_client_event(&cx, event).await;
+                let (agent_tx, _agent_rx) = mpsc::channel(1);
+                handle_mcp_client_event(&cx, &agent_tx, event).await;
 
                 let received = peer.next_mcp_notification().await;
                 assert!(matches!(received, McpNotification::UrlElicitationComplete(_)));
+            })
+            .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn server_status_changed_with_tools_forwards_status_and_tools() {
+        LocalSet::new()
+            .run_until(async {
+                let (cx, mut peer) = test_connection().await;
+                let (agent_tx, mut agent_rx) = mpsc::channel(1);
+                let tools = vec![ToolDefinition {
+                    name: "github__issues".to_string(),
+                    description: "List issues".to_string(),
+                    parameters: "{}".to_string(),
+                    server: Some("github".to_string()),
+                }];
+                let servers =
+                    vec![McpServerStatusEntry::new("github", McpServerStatus::Connected { tool_count: tools.len() })];
+
+                handle_mcp_client_event(&cx, &agent_tx, McpClientEvent::ServerStatusesChanged(servers.clone())).await;
+                handle_mcp_client_event(&cx, &agent_tx, McpClientEvent::ToolDefinitionsChanged(tools.clone())).await;
+
+                let received = peer.next_mcp_notification().await;
+                assert!(matches!(received, McpNotification::ServerStatus { .. }));
+                let Some(UserMessage::UpdateTools(received_tools)) = agent_rx.recv().await else {
+                    panic!("expected tool update");
+                };
+                assert_eq!(received_tools, tools);
+            })
+            .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn server_status_changed_without_tools_skips_agent_update() {
+        LocalSet::new()
+            .run_until(async {
+                let (cx, mut peer) = test_connection().await;
+                let (agent_tx, mut agent_rx) = mpsc::channel(1);
+                let servers = vec![McpServerStatusEntry::new(
+                    "github",
+                    McpServerStatus::Failed { error: "authentication timed out after 3 minutes".to_string() },
+                )];
+
+                handle_mcp_client_event(&cx, &agent_tx, McpClientEvent::ServerStatusesChanged(servers)).await;
+                handle_mcp_client_event(
+                    &cx,
+                    &agent_tx,
+                    McpClientEvent::AuthenticationFailed {
+                        server: "github".to_string(),
+                        error: "authentication timed out after 3 minutes".to_string(),
+                    },
+                )
+                .await;
+
+                assert!(matches!(peer.next_mcp_notification().await, McpNotification::ServerStatus { .. }));
+                drop(agent_tx);
+                assert!(agent_rx.recv().await.is_none(), "no UpdateTools should be sent on failure");
             })
             .await;
     }

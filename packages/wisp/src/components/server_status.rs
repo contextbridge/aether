@@ -11,6 +11,7 @@ impl SelectItem for ServerItem {
             }
             McpServerStatus::Connected { tool_count } => ("✓", format!("{tool_count} tools")),
             McpServerStatus::Failed { error } => ("✗", error.clone()),
+            McpServerStatus::Authenticating => ("…", "authenticating".to_string()),
             McpServerStatus::NeedsOAuth => ("⚡", "needs authentication".to_string()),
         };
         let text = format!("{}  {indicator} {detail}", self.0.name);
@@ -29,7 +30,7 @@ impl SelectItem for ServerItem {
                     Line::styled(text, context.theme.error())
                 }
             }
-            McpServerStatus::NeedsOAuth => {
+            McpServerStatus::Authenticating | McpServerStatus::NeedsOAuth => {
                 if selected {
                     Line::with_style(text, context.theme.selected_row_style_with_fg(context.theme.warning()))
                 } else {
@@ -77,15 +78,16 @@ pub fn server_status_summary(statuses: &[McpServerStatusEntry]) -> String {
     if statuses.is_empty() {
         return "none".to_string();
     }
-    let (mut c, mut n, mut f) = (0usize, 0usize, 0usize);
+    let (mut c, mut a, mut n, mut f) = (0usize, 0usize, 0usize, 0usize);
     for s in statuses {
         match &s.status {
             McpServerStatus::Connected { .. } => c += 1,
+            McpServerStatus::Authenticating => a += 1,
             McpServerStatus::NeedsOAuth => n += 1,
             McpServerStatus::Failed { .. } => f += 1,
         }
     }
-    [(c, "connected"), (n, "needs auth"), (f, "failed")]
+    [(c, "connected"), (a, "authenticating"), (n, "needs auth"), (f, "failed")]
         .iter()
         .filter(|(count, _)| *count > 0)
         .map(|(count, label)| format!("{count} {label}"))

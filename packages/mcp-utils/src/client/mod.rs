@@ -13,11 +13,12 @@ pub use config::{
     HttpServerConfig, HttpType, InMemoryServerConfig, InMemoryType, McpConfig, McpServer, McpServerConfig,
     McpTransport, ParseError, ServerFactory, SseServerConfig, SseType, StdioServerConfig, StdioType,
 };
-pub use connection::ServerInstructions;
+pub use connection::{ConnectedServer, ConnectionError, McpServerConnection, ServerInstructions};
 pub use error::{McpError, Result};
 pub use llm::oauth;
 pub use manager::{
-    ElicitationRequest, McpClientEvent, McpManager, McpServerStatus, McpServerStatusEntry, UrlElicitationCompleteParams,
+    ElicitationRequest, McpClientEvent, McpManager, McpServerStatus, McpServerStatusEntry, OAuthHandlerFactory,
+    UrlElicitationCompleteParams,
 };
 pub use mcp_client::{McpClient, cancel_result};
 pub use naming::{SERVERNAME_DELIMITER, split_on_server_name};

@@ -128,7 +128,7 @@ mod tests {
     fn unwrap_elicitation(event: McpClientEvent) -> ElicitationRequest {
         match event {
             McpClientEvent::Elicitation(req) => req,
-            other @ McpClientEvent::UrlElicitationComplete(_) => panic!("expected Elicitation, got {other:?}"),
+            other => panic!("expected Elicitation, got {other:?}"),
         }
     }
 
@@ -213,7 +213,7 @@ mod tests {
                 assert_eq!(params.server_name, "test-server");
                 assert_eq!(params.elicitation_id, "el-456");
             }
-            other @ McpClientEvent::Elicitation(_) => panic!("expected UrlElicitationComplete, got {other:?}"),
+            other => panic!("expected UrlElicitationComplete, got {other:?}"),
         }
     }
 

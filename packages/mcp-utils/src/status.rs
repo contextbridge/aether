@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum McpServerStatus {
     Connected { tool_count: usize },
+    Authenticating,
     Failed { error: String },
     NeedsOAuth,
 }
@@ -33,5 +34,6 @@ impl McpServerStatusEntry {
 
     pub fn can_authenticate(&self) -> bool {
         self.auth_capability == McpServerAuthCapability::OAuth
+            && !matches!(self.status, McpServerStatus::Authenticating)
     }
 }

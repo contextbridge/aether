@@ -3,10 +3,13 @@ use llm::ToolDefinition;
 use super::{
     McpError, Result,
     config::McpServer,
-    connection::{ConnectContext, ConnectionAttempt, McpServerConnection, ServerInstructions, Tool, connect_server},
+    connection::{
+        ConnectContext, ConnectedServer, ConnectionError, McpServerConnection, ServerInstructions, Tool,
+        authenticate_http, connect_server,
+    },
     mcp_client::McpClient,
     naming::{create_namespaced_tool_name, split_on_server_name},
-    oauth::{OAuthHandler, perform_oauth_flow},
+    oauth::OAuthHandler,
     tool_proxy::ToolProxy,
 };
 use futures::future::join_all;
@@ -22,6 +25,7 @@ use rmcp::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc, oneshot};
@@ -29,6 +33,8 @@ use tokio::sync::{RwLock, mpsc, oneshot};
 pub use crate::status::{McpServerAuthCapability, McpServerStatus, McpServerStatusEntry};
 
 pub const DEFAULT_PROXY_NAME: &str = "proxy";
+
+pub type OAuthHandlerFactory = Arc<dyn Fn() -> Result<Arc<dyn OAuthHandler>> + Send + Sync>;
 
 #[derive(Debug)]
 pub struct ElicitationRequest {
@@ -56,6 +62,9 @@ pub struct UrlElicitationCompleteParams {
 pub enum McpClientEvent {
     Elicitation(ElicitationRequest),
     UrlElicitationComplete(UrlElicitationCompleteParams),
+    ServerStatusesChanged(Vec<McpServerStatusEntry>),
+    ToolDefinitionsChanged(Vec<ToolDefinition>),
+    AuthenticationFailed { server: String, error: String },
 }
 
 /// Manages connections to multiple MCP servers and their tools
@@ -70,12 +79,12 @@ pub struct McpManager {
     event_sender: mpsc::Sender<McpClientEvent>,
     /// Roots shared with all MCP clients
     roots: Arc<RwLock<Vec<Root>>>,
-    oauth_handler: Option<Arc<dyn OAuthHandler>>,
+    oauth_handler_factory: Option<OAuthHandlerFactory>,
     server_statuses: Vec<McpServerStatusEntry>,
 }
 
 impl McpManager {
-    pub fn new(event_sender: mpsc::Sender<McpClientEvent>, oauth_handler: Option<Arc<dyn OAuthHandler>>) -> Self {
+    pub fn new(event_sender: mpsc::Sender<McpClientEvent>, oauth_handler_factory: Option<OAuthHandlerFactory>) -> Self {
         let mut capabilities = ClientCapabilities::builder().enable_elicitation().enable_roots().build();
         if let Some(elicitation) = capabilities.elicitation.as_mut() {
             elicitation.form = Some(FormElicitationCapability::default());
@@ -92,7 +101,7 @@ impl McpManager {
             client_info: ClientInfo::new(capabilities, Implementation::new("aether", "0.1.0")),
             event_sender,
             roots: Arc::new(RwLock::new(Vec::new())),
-            oauth_handler,
+            oauth_handler_factory,
             server_statuses: Vec::new(),
         }
     }
@@ -124,18 +133,18 @@ impl McpManager {
         let mut connected_proxied = Vec::new();
         for outcome in outcomes {
             match outcome {
-                ConnectionAttempt::Ready { name, conn, reauth_config } => {
+                Ok(ConnectedServer { name, conn, reauth_config }) => {
                     let is_proxied = proxied_members.contains(&name);
                     self.register_connection(&name, conn, reauth_config, is_proxied).await?;
                     if is_proxied {
                         connected_proxied.push(name);
                     }
                 }
-                ConnectionAttempt::NeedsOAuth { name, config, error } => {
+                Err(ConnectionError::NeedsOAuth { name, config, error }) => {
                     tracing::warn!("Server '{name}' needs OAuth: {error}");
                     self.upsert_status(&name, McpServerStatus::NeedsOAuth, Some(config));
                 }
-                ConnectionAttempt::Failed { name, error } => {
+                Err(ConnectionError::Failed { name, error }) => {
                     tracing::warn!("Failed to connect to MCP server '{name}': {error}");
                     if !self.servers.contains_key(&name) {
                         self.upsert_status(&name, McpServerStatus::Failed { error: error.to_string() }, None);
@@ -225,7 +234,10 @@ impl McpManager {
         &self.server_statuses
     }
 
-    pub async fn authenticate_server(&mut self, name: &str) -> Result<()> {
+    pub async fn authenticate_server_task(
+        &mut self,
+        name: &str,
+    ) -> Result<impl Future<Output = std::result::Result<ConnectedServer, ConnectionError>> + Send + 'static> {
         let record = self
             .servers
             .get(name)
@@ -233,8 +245,51 @@ impl McpManager {
         if !record.can_authenticate() {
             return Err(McpError::ConnectionFailed(format!("server '{name}' is not OAuth-authenticatable")));
         }
+        if matches!(record.status, McpServerStatus::Authenticating) {
+            return Err(McpError::ConnectionFailed(format!("server '{name}' is already authenticating")));
+        }
 
-        self.oauth_and_reconnect(name.to_string(), record.reauth_config.clone().expect("checked above")).await
+        let oauth_handler_factory = self
+            .oauth_handler_factory
+            .clone()
+            .ok_or_else(|| McpError::ConnectionFailed(format!("No OAuth handler factory available for '{name}'")))?;
+        let name = name.to_string();
+        let config = record.reauth_config.clone().expect("checked above");
+        let client_info = self.client_info.clone();
+        let event_sender = self.event_sender.clone();
+        let roots = Arc::clone(&self.roots);
+
+        self.upsert_status(&name, McpServerStatus::Authenticating, Some(config.clone()));
+        self.emit_server_statuses_changed().await;
+
+        Ok(
+            async move { authenticate_http(name, config, client_info, event_sender, roots, oauth_handler_factory).await },
+        )
+    }
+
+    pub async fn apply_connection_attempt(&mut self, attempt: std::result::Result<ConnectedServer, ConnectionError>) {
+        match attempt {
+            Ok(ConnectedServer { name, conn, reauth_config }) => {
+                let is_proxied = self.proxy.as_ref().is_some_and(|proxy| proxy.contains_server(&name));
+                match self.register_connection(&name, conn, reauth_config, is_proxied).await {
+                    Ok(tools) => {
+                        self.refresh_proxy_after_auth(&name, &tools, is_proxied).await;
+                        self.emit_server_statuses_changed().await;
+                        self.emit_tool_definitions_changed().await;
+                    }
+                    Err(error) => {
+                        self.apply_authentication_failure(name, error.to_string()).await;
+                    }
+                }
+            }
+            Err(ConnectionError::Failed { name, error }) => {
+                self.apply_authentication_failure(name, error.to_string()).await;
+            }
+            Err(ConnectionError::NeedsOAuth { name, .. }) => {
+                self.apply_authentication_failure(name, "internal error: auth task returned NeedsOAuth".to_string())
+                    .await;
+            }
+        }
     }
 
     /// List all prompts from all connected MCP servers with namespacing
@@ -371,12 +426,30 @@ impl McpManager {
         Ok(())
     }
 
+    async fn emit_server_statuses_changed(&self) {
+        self.emit_event(McpClientEvent::ServerStatusesChanged(self.server_statuses().to_vec())).await;
+    }
+
+    async fn emit_tool_definitions_changed(&self) {
+        self.emit_event(McpClientEvent::ToolDefinitionsChanged(self.tool_definitions())).await;
+    }
+
+    async fn emit_authentication_failed(&self, server: String, error: String) {
+        self.emit_event(McpClientEvent::AuthenticationFailed { server, error }).await;
+    }
+
+    async fn emit_event(&self, event: McpClientEvent) {
+        if let Err(e) = self.event_sender.send(event).await {
+            tracing::warn!("Failed to emit MCP client event: {e}");
+        }
+    }
+
     fn connect_context(&self) -> ConnectContext<'_> {
         ConnectContext {
             client_info: &self.client_info,
             event_sender: &self.event_sender,
             roots: &self.roots,
-            oauth_handler: self.oauth_handler.as_ref(),
+            oauth_handler_factory: self.oauth_handler_factory.as_ref(),
         }
     }
 
@@ -393,13 +466,13 @@ impl McpManager {
         conn: McpServerConnection,
         reauth_config: Option<StreamableHttpClientTransportConfig>,
         is_proxied: bool,
-    ) -> Result<()> {
+    ) -> Result<Vec<RmcpTool>> {
         let tools = conn
             .list_tools()
             .await
             .map_err(|e| McpError::ToolDiscoveryFailed(format!("Failed to list tools for {name}: {e}")))?;
         self.apply_connected(name, conn, &tools, reauth_config, is_proxied);
-        Ok(())
+        Ok(tools)
     }
 
     fn apply_connected(
@@ -453,39 +526,20 @@ impl McpManager {
         self.upsert_status(DEFAULT_PROXY_NAME, McpServerStatus::Connected { tool_count: 1 }, None);
     }
 
-    async fn oauth_and_reconnect(&mut self, name: String, config: StreamableHttpClientTransportConfig) -> Result<()> {
-        let handler = self
-            .oauth_handler
-            .as_ref()
-            .ok_or_else(|| McpError::ConnectionFailed(format!("No OAuth handler available for '{name}'")))?;
-        let auth_client = perform_oauth_flow(&name, &config.uri, handler.as_ref())
-            .await
-            .map_err(|e| McpError::ConnectionFailed(format!("OAuth failed for '{name}': {e}")))?;
-
-        let mcp_client =
-            McpClient::new(self.client_info.clone(), name.clone(), self.event_sender.clone(), Arc::clone(&self.roots));
-        let conn = McpServerConnection::reconnect_with_auth(&name, config.clone(), auth_client, mcp_client).await?;
-
-        let is_proxied = self.proxy.as_ref().is_some_and(|proxy| proxy.contains_server(&name));
-        self.register_connection(&name, conn, Some(config), is_proxied).await?;
-
-        if is_proxied {
-            let tool_dir = self
-                .proxy
-                .as_ref()
-                .map(|p| p.tool_dir().to_path_buf())
-                .ok_or_else(|| McpError::ConnectionFailed("proxy is not registered".to_string()))?;
-            if let Some(proxy) = self.proxy.as_mut() {
-                proxy.add_member(name.clone());
-            }
-            if let Some(client) = self.client_for_server(&name)
-                && let Err(e) = ToolProxy::write_tools_to_dir(&name, &client, &tool_dir).await
-            {
-                tracing::warn!("Failed to write tool files for '{name}' after OAuth: {e}");
-            }
+    async fn refresh_proxy_after_auth(&mut self, name: &str, tools: &[RmcpTool], is_proxied: bool) {
+        if !is_proxied {
+            return;
         }
 
-        Ok(())
+        if let Some(proxy) = self.proxy.as_mut() {
+            proxy.add_member(name.to_string());
+        }
+
+        if let Some(tool_dir) = self.proxy.as_ref().map(|proxy| proxy.tool_dir().to_path_buf())
+            && let Err(e) = ToolProxy::write_tool_entries_to_dir(name, tools, &tool_dir).await
+        {
+            tracing::warn!("Failed to write tool files for '{name}' after OAuth: {e}");
+        }
     }
 
     async fn write_proxy_tool_files(&self, connected_proxied: &[String], tool_dir: &std::path::Path) {
@@ -514,6 +568,17 @@ impl McpManager {
         if !self.server_order.iter().any(|n| n == name) {
             self.server_order.push(name.to_string());
         }
+    }
+
+    async fn apply_authentication_failure(&mut self, name: String, error: String) {
+        self.mark_failed(&name, error.clone());
+        self.emit_server_statuses_changed().await;
+        self.emit_authentication_failed(name, error).await;
+    }
+
+    fn mark_failed(&mut self, name: &str, error: String) {
+        let existing_reauth = self.servers.get(name).and_then(|record| record.reauth_config.clone());
+        self.upsert_status(name, McpServerStatus::Failed { error }, existing_reauth);
     }
 
     fn upsert_status(
@@ -608,7 +673,8 @@ impl ServerRecord {
 
 #[cfg(test)]
 mod tests {
-    use super::{McpManager, McpServerStatus, Tool};
+    use super::{McpClientEvent, McpManager, McpServerStatus, Tool};
+    use crate::client::OAuthHandlerFactory;
     use crate::client::config::{McpServer, McpTransport};
     use crate::client::oauth::{OAuthCallback, OAuthError, OAuthHandler};
     use crate::status::McpServerAuthCapability;
@@ -699,35 +765,104 @@ mod tests {
         }
     }
 
+    fn test_oauth_handler_factory() -> OAuthHandlerFactory {
+        Arc::new(|| Ok(Arc::new(TestOAuthHandler)))
+    }
+
     #[tokio::test]
-    async fn authenticate_server_rejects_record_without_reauth_config() {
+    async fn authenticate_server_task_rejects_record_without_reauth_config() {
         let (event_sender, _event_receiver) = mpsc::channel(1);
-        let mut manager = McpManager::new(event_sender, Some(Arc::new(TestOAuthHandler)));
+        let mut manager = McpManager::new(event_sender, Some(test_oauth_handler_factory()));
         manager.upsert_status("public", McpServerStatus::Connected { tool_count: 1 }, None);
 
-        let error = manager.authenticate_server("public").await.unwrap_err().to_string();
+        let error = match manager.authenticate_server_task("public").await {
+            Ok(_) => panic!("non-OAuth server should be rejected"),
+            Err(error) => error.to_string(),
+        };
         assert!(error.contains("not OAuth-authenticatable"));
     }
 
     #[tokio::test]
-    async fn authenticate_server_uses_reauth_config_for_connected_oauth_server() {
-        let (event_sender, _event_receiver) = mpsc::channel(1);
-        let mut manager = McpManager::new(event_sender, Some(Arc::new(TestOAuthHandler)));
+    async fn authenticate_server_task_marks_server_authenticating_and_emits_status() {
+        let (event_sender, mut event_receiver) = mpsc::channel(2);
+        let mut manager = McpManager::new(event_sender, Some(test_oauth_handler_factory()));
         manager.upsert_status(
             "remote",
-            McpServerStatus::Connected { tool_count: 1 },
+            McpServerStatus::NeedsOAuth,
             Some(StreamableHttpClientTransportConfig::with_uri("http://localhost:19999/mcp")),
         );
 
-        let error = manager.authenticate_server("remote").await.unwrap_err().to_string();
-        assert!(!error.contains("not OAuth-authenticatable"));
-        assert!(error.contains("OAuth failed") || error.contains("UserCancelled"));
+        let _task = manager.authenticate_server_task("remote").await.expect("auth should start");
+
+        assert!(matches!(manager.server_statuses()[0].status, McpServerStatus::Authenticating));
+        let event = event_receiver.recv().await.expect("status change event");
+        let McpClientEvent::ServerStatusesChanged(servers) = event else {
+            panic!("expected ServerStatusesChanged");
+        };
+        let status = servers.iter().find(|entry| entry.name == "remote").expect("remote status");
+        assert!(matches!(status.status, McpServerStatus::Authenticating));
+        assert_eq!(status.auth_capability, McpServerAuthCapability::OAuth);
+    }
+
+    #[tokio::test]
+    async fn authenticate_server_task_rejects_duplicate_same_server_while_in_flight() {
+        let (event_sender, _event_receiver) = mpsc::channel(1);
+        let mut manager = McpManager::new(event_sender, Some(test_oauth_handler_factory()));
+        manager.upsert_status(
+            "remote",
+            McpServerStatus::NeedsOAuth,
+            Some(StreamableHttpClientTransportConfig::with_uri("http://localhost:19999/mcp")),
+        );
+
+        let _task = manager.authenticate_server_task("remote").await.expect("first auth should start");
+        let error = match manager.authenticate_server_task("remote").await {
+            Ok(_) => panic!("duplicate auth should be rejected"),
+            Err(error) => error.to_string(),
+        };
+
+        assert!(error.contains("already authenticating"));
+    }
+
+    #[tokio::test]
+    async fn apply_connection_attempt_failure_allows_retry() {
+        let (event_sender, mut event_receiver) = mpsc::channel(2);
+        let mut manager = McpManager::new(event_sender, Some(test_oauth_handler_factory()));
+        manager.upsert_status(
+            "remote",
+            McpServerStatus::NeedsOAuth,
+            Some(StreamableHttpClientTransportConfig::with_uri("http://localhost:19999/mcp")),
+        );
+        let _task = manager.authenticate_server_task("remote").await.expect("auth should start");
+        let _authenticating_event = event_receiver.recv().await.expect("authenticating status change event");
+
+        manager
+            .apply_connection_attempt(Err(crate::client::ConnectionError::Failed {
+                name: "remote".to_string(),
+                error: crate::client::McpError::ConnectionFailed("boom".to_string()),
+            }))
+            .await;
+
+        let event = event_receiver.recv().await.expect("status change event");
+        let McpClientEvent::ServerStatusesChanged(servers) = event else {
+            panic!("expected ServerStatusesChanged");
+        };
+        let auth_event = event_receiver.recv().await.expect("authentication failure event");
+        let McpClientEvent::AuthenticationFailed { server, error } = auth_event else {
+            panic!("expected AuthenticationFailed");
+        };
+        assert_eq!(server, "remote");
+        assert!(error.contains("boom"));
+
+        let status = servers.iter().find(|entry| entry.name == "remote").expect("remote status");
+        assert_eq!(status.auth_capability, McpServerAuthCapability::OAuth);
+        assert!(matches!(status.status, McpServerStatus::Failed { ref error } if error.contains("boom")));
+        assert!(manager.authenticate_server_task("remote").await.is_ok());
     }
 
     #[test]
     fn status_entries_are_derived_from_reauth_config() {
         let (event_sender, _event_receiver) = mpsc::channel(1);
-        let mut manager = McpManager::new(event_sender, Some(Arc::new(TestOAuthHandler)));
+        let mut manager = McpManager::new(event_sender, Some(test_oauth_handler_factory()));
 
         manager.upsert_status(
             "with-oauth",

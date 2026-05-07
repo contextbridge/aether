@@ -1,9 +1,8 @@
 use llm::ToolDefinition;
-use mcp_utils::client::oauth::OAuthHandler;
 
 use mcp_utils::client::{
-    McpClientEvent, McpConfig, McpError, McpManager, McpServer, McpServerStatusEntry, ParseError, ServerFactory,
-    ServerInstructions, root_from_path,
+    McpClientEvent, McpConfig, McpError, McpManager, McpServer, McpServerStatusEntry, OAuthHandlerFactory, ParseError,
+    ServerFactory, ServerInstructions, root_from_path,
 };
 
 use crate::agent_spec::McpConfigSource;
@@ -11,7 +10,6 @@ use crate::agent_spec::McpConfigSource;
 use super::run_mcp_task::{McpCommand, run_mcp_task};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use tokio::{
     sync::mpsc::{self, Receiver, Sender},
     task::JoinHandle,
@@ -35,7 +33,7 @@ pub struct McpBuilder {
     factories: HashMap<String, ServerFactory>,
     mcp_channel_capacity: usize,
     roots: Vec<PathBuf>,
-    oauth_handler: Option<Arc<dyn OAuthHandler>>,
+    oauth_handler_factory: Option<OAuthHandlerFactory>,
     aether_home: Option<PathBuf>,
 }
 
@@ -46,7 +44,7 @@ impl Default for McpBuilder {
             factories: HashMap::new(),
             mcp_channel_capacity: 1000,
             roots: Vec::new(),
-            oauth_handler: None,
+            oauth_handler_factory: None,
             aether_home: None,
         }
     }
@@ -72,8 +70,8 @@ impl McpBuilder {
         self
     }
 
-    pub fn with_oauth_handler<T: OAuthHandler + 'static>(mut self, handler: T) -> Self {
-        self.oauth_handler = Some(Arc::new(handler));
+    pub fn with_oauth_handler_factory(mut self, factory: OAuthHandlerFactory) -> Self {
+        self.oauth_handler_factory = Some(factory);
         self
     }
 
@@ -120,7 +118,7 @@ impl McpBuilder {
         let (mcp_command_tx, mcp_command_rx) = mpsc::channel::<McpCommand>(self.mcp_channel_capacity);
         let (event_tx, event_rx) = mpsc::channel::<McpClientEvent>(self.mcp_channel_capacity);
 
-        let mut mcp_manager = McpManager::new(event_tx, self.oauth_handler);
+        let mut mcp_manager = McpManager::new(event_tx, self.oauth_handler_factory);
         if let Some(aether_home) = self.aether_home {
             mcp_manager = mcp_manager.with_aether_home(aether_home);
         }

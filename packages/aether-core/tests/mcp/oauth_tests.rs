@@ -2,7 +2,7 @@ use aether_core::mcp::{McpSpawnResult, mcp};
 use aether_core::testing::{FakeMcpServer, fake_mcp_with_proxy};
 use futures::future::BoxFuture;
 use mcp_utils::client::oauth::{OAuthCallback, OAuthError, OAuthHandler, accept_oauth_callback};
-use mcp_utils::client::{McpClientEvent, McpManager, McpServer, McpTransport};
+use mcp_utils::client::{McpClientEvent, McpManager, McpServer, McpTransport, OAuthHandlerFactory};
 use mcp_utils::status::{McpServerAuthCapability, McpServerStatus};
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use std::sync::Arc;
@@ -49,6 +49,10 @@ impl OAuthHandler for CancellingOAuthHandler {
     }
 }
 
+fn fake_oauth_handler_factory() -> OAuthHandlerFactory {
+    Arc::new(|| Ok(Arc::new(CancellingOAuthHandler)))
+}
+
 #[tokio::test]
 async fn fake_oauth_handler_returns_configured_callback() {
     let handler = FakeOAuthHandler::new("test_code", "test_state");
@@ -66,11 +70,15 @@ async fn cancelling_handler_returns_user_cancelled() {
 }
 
 #[tokio::test]
-async fn builder_with_oauth_handler_spawns_successfully() {
-    let handler = FakeOAuthHandler::new("code", "state");
+async fn builder_with_oauth_handler_factory_spawns_successfully() {
+    let handler = Arc::new(FakeOAuthHandler::new("code", "state"));
 
-    let McpSpawnResult { tool_definitions, instructions, event_rx: _, .. } =
-        mcp().with_oauth_handler(handler).with_servers(vec![]).spawn().await.unwrap();
+    let McpSpawnResult { tool_definitions, instructions, event_rx: _, .. } = mcp()
+        .with_oauth_handler_factory(Arc::new(move || Ok(handler.clone())))
+        .with_servers(vec![])
+        .spawn()
+        .await
+        .unwrap();
 
     assert!(tool_definitions.is_empty());
     assert!(instructions.is_empty());
@@ -88,9 +96,8 @@ async fn http_server_without_handler_stashes_failed_status() {
 
 #[tokio::test]
 async fn http_server_with_handler_stashes_needs_oauth_on_failure() {
-    let handler = FakeOAuthHandler::new("test_code", "test_state");
     let (event_tx, _event_rx) = mpsc::channel::<McpClientEvent>(50);
-    let mut manager = mcp_utils::client::McpManager::new(event_tx, Some(Arc::new(handler)));
+    let mut manager = mcp_utils::client::McpManager::new(event_tx, Some(fake_oauth_handler_factory()));
 
     let result = manager.add_mcps(vec![http_mcp("test_oauth_server", "http://localhost:19999/mcp")]).await;
 
@@ -110,9 +117,8 @@ async fn http_server_with_handler_stashes_needs_oauth_on_failure() {
 
 #[tokio::test]
 async fn add_mcps_continues_on_oauth_failure() {
-    let handler = FakeOAuthHandler::new("code", "state");
     let (event_tx, _event_rx) = mpsc::channel::<McpClientEvent>(50);
-    let mut manager = mcp_utils::client::McpManager::new(event_tx, Some(Arc::new(handler)));
+    let mut manager = mcp_utils::client::McpManager::new(event_tx, Some(fake_oauth_handler_factory()));
 
     let direct = vec![
         http_mcp("failing_server_1", "http://localhost:19998/mcp"),
@@ -154,10 +160,10 @@ async fn oauth_handler_is_dyn_compatible() {
 
 #[tokio::test]
 async fn tool_proxy_with_failing_http_surfaces_needs_oauth() {
-    let handler = FakeOAuthHandler::new("code", "state");
     let (event_tx, _event_rx) = mpsc::channel::<McpClientEvent>(50);
     let aether_home = tempfile::tempdir().unwrap();
-    let mut manager = McpManager::new(event_tx, Some(Arc::new(handler))).with_aether_home(aether_home.path());
+    let mut manager =
+        McpManager::new(event_tx, Some(fake_oauth_handler_factory())).with_aether_home(aether_home.path());
 
     let servers = vec![
         fake_mcp_with_proxy("local", FakeMcpServer::new(), true),
