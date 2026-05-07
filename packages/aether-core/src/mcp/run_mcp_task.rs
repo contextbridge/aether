@@ -137,6 +137,7 @@ async fn on_command(
                         Err(_) => Err(ConnectionError::Failed {
                             name: server_name.clone(),
                             error: McpError::ConnectionFailed("authentication timed out after 3 minutes".to_string()),
+                            proxy: false,
                         }),
                     };
                     (server_name, attempt)

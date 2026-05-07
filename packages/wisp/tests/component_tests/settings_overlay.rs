@@ -64,6 +64,16 @@ fn make_server_statuses() -> Vec<McpServerStatusEntry> {
     ]
 }
 
+fn make_mixed_server_statuses() -> Vec<McpServerStatusEntry> {
+    vec![
+        McpServerStatusEntry::new("github", McpServerStatus::Connected { tool_count: 5 }),
+        McpServerStatusEntry::new("math", McpServerStatus::Connected { tool_count: 3 }).as_proxied(),
+        McpServerStatusEntry::new("linear", McpServerStatus::NeedsOAuth)
+            .with_auth_capability(McpServerAuthCapability::OAuth)
+            .as_proxied(),
+    ]
+}
+
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
@@ -225,6 +235,23 @@ async fn render_server_overlay_hides_top_level_rows() {
     assert!(!text.contains("Model: GPT-4o"), "rendered:\n{text}");
     assert!(text.contains("[Enter] Authenticate OAuth servers"), "rendered:\n{text}");
     assert!(text.contains("[Esc] Back"), "rendered:\n{text}");
+}
+
+#[tokio::test]
+async fn render_server_overlay_groups_direct_and_proxied_statuses() {
+    let menu = make_menu();
+    let statuses = make_mixed_server_statuses();
+    let mut overlay = open_server_overlay(menu, statuses).await;
+
+    let lines = render_plain_text(&mut overlay);
+    let text = lines.join("\n");
+
+    assert!(text.contains("Direct"), "rendered:\n{text}");
+    assert!(text.contains("github  \u{2713} 5 tools"), "rendered:\n{text}");
+    assert!(text.contains("Proxied"), "rendered:\n{text}");
+    assert!(text.contains("math  \u{2713} 3 tools"), "rendered:\n{text}");
+    assert!(text.contains("linear  \u{26A1} needs authentication"), "rendered:\n{text}");
+    assert!(!text.contains("proxy  \u{2713} 1 tool"), "rendered:\n{text}");
 }
 
 #[tokio::test]

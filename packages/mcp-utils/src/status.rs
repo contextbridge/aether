@@ -20,16 +20,27 @@ pub struct McpServerStatusEntry {
     pub name: String,
     pub status: McpServerStatus,
     pub auth_capability: McpServerAuthCapability,
+    #[serde(default)]
+    pub proxy: bool,
 }
 
 impl McpServerStatusEntry {
     pub fn new(name: impl Into<String>, status: McpServerStatus) -> Self {
-        Self { name: name.into(), status, auth_capability: McpServerAuthCapability::Unavailable }
+        Self { name: name.into(), status, auth_capability: McpServerAuthCapability::Unavailable, proxy: false }
     }
 
     pub fn with_auth_capability(mut self, auth: McpServerAuthCapability) -> Self {
         self.auth_capability = auth;
         self
+    }
+
+    pub fn with_proxy(mut self, proxy: bool) -> Self {
+        self.proxy = proxy;
+        self
+    }
+
+    pub fn as_proxied(self) -> Self {
+        self.with_proxy(true)
     }
 
     pub fn can_authenticate(&self) -> bool {
