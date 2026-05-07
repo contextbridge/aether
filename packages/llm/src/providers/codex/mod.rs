@@ -7,5 +7,5 @@ pub mod streaming;
 
 pub const PROVIDER_ID: &str = "codex";
 
-pub use oauth::perform_codex_oauth_flow;
+pub use oauth::{perform_codex_oauth_flow, perform_codex_oauth_flow_with_store};
 pub use provider::CodexProvider;

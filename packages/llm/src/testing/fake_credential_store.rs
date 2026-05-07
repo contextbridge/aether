@@ -14,8 +14,8 @@ impl FakeOAuthCredentialStore {
         Self { credentials: Mutex::new(HashMap::new()) }
     }
 
-    pub fn with_credential(self, server_id: &str, credential: OAuthCredential) -> Self {
-        self.credentials.lock().unwrap().insert(server_id.to_string(), credential);
+    pub fn with_credential(self, key: &str, credential: OAuthCredential) -> Self {
+        self.credentials.lock().unwrap().insert(key.to_string(), credential);
         self
     }
 }
@@ -25,13 +25,13 @@ impl OAuthCredentialStorage for FakeOAuthCredentialStore {
         Ok(self.credentials.lock().unwrap().get(server_id).cloned())
     }
 
-    async fn save_credential(&self, server_id: &str, credential: OAuthCredential) -> Result<(), OAuthError> {
-        self.credentials.lock().unwrap().insert(server_id.to_string(), credential);
+    async fn save_credential(&self, key: &str, credential: OAuthCredential) -> Result<(), OAuthError> {
+        self.credentials.lock().unwrap().insert(key.to_string(), credential);
         Ok(())
     }
 
-    fn has_credential(&self, server_id: &str) -> bool {
-        self.credentials.lock().unwrap().contains_key(server_id)
+    fn has_credential(&self, key: &str) -> bool {
+        self.credentials.lock().unwrap().contains_key(key)
     }
 }
 

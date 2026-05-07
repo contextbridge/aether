@@ -16,6 +16,10 @@ use tempfile::TempDir;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::spawn_local;
 
+fn mock_oauth_store() -> OAuthCredentialStore {
+    OAuthCredentialStore::with_mock_store().unwrap()
+}
+
 /// In-memory ACP harness running the real `acp_agent_builder` against a
 /// pre-wired test client. Created via [`AcpTestHarness::start`] inside a
 /// `LocalSet`. The harness owns its own [`SessionRegistry`] and a
@@ -38,7 +42,7 @@ impl AcpTestHarness {
         let manager = Arc::new(SessionManager::new(SessionManagerConfig {
             registry: registry.clone(),
             session_store: session_store.clone(),
-            has_oauth_credential: OAuthCredentialStore::has_credential,
+            oauth_credential_store: mock_oauth_store(),
             initial_selection: InitialSessionSelection::default(),
             settings_source: SettingsSourceArgs::default(),
         }));

@@ -25,6 +25,7 @@
 2. When fixing a bug, always write test(s) first. Confirm the test(s) fail _before_ attempting to fix the bug.
 3. Prefer integration tests that assert against state using fakes (e.g. in memory file system that asserts file contents) over mocks that test behavior (e.g. how many times did we call write_file?)
 4. Don't put timeouts into tests, this always leads to flaky tests on CPUs with different speeds.
+5. All tests must test _only_ the public API. Never write tests that test a private method as that couples the tests to implementation details and makes the code harder to refactor.
 
 ### Error handling
 

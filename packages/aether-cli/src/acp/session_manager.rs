@@ -9,7 +9,7 @@ use agent_client_protocol::schema::{
 };
 use agent_client_protocol::{Client, ConnectionTo};
 use llm::catalog::{LlmModel, get_local_models};
-use llm::oauth::OAuthCredentialStore;
+use llm::oauth::{OAuthCredentialStorage, OAuthCredentialStore};
 use llm::types::IsoString;
 use llm::{ContentBlock, ReasoningEffort};
 use std::collections::HashSet;
@@ -62,7 +62,7 @@ impl InitialSessionSelection {
 pub struct SessionManager {
     registry: Arc<SessionRegistry>,
     session_store: Arc<SessionStore>,
-    has_oauth_credential: fn(&str) -> bool,
+    oauth_credential_store: OAuthCredentialStore,
     initial_selection: InitialSessionSelection,
     settings_source: SettingsSourceArgs,
 }
@@ -70,7 +70,7 @@ pub struct SessionManager {
 pub(crate) struct SessionManagerConfig {
     pub(crate) registry: Arc<SessionRegistry>,
     pub(crate) session_store: Arc<SessionStore>,
-    pub(crate) has_oauth_credential: fn(&str) -> bool,
+    pub(crate) oauth_credential_store: OAuthCredentialStore,
     pub(crate) initial_selection: InitialSessionSelection,
     pub(crate) settings_source: SettingsSourceArgs,
 }
@@ -110,7 +110,7 @@ impl SessionManager {
         Self {
             registry: deps.registry,
             session_store: deps.session_store,
-            has_oauth_credential: deps.has_oauth_credential,
+            oauth_credential_store: deps.oauth_credential_store,
             initial_selection: deps.initial_selection,
             settings_source: deps.settings_source,
         }
@@ -201,7 +201,7 @@ impl SessionManager {
             model,
             reasoning_effort,
             &all_models,
-            &OAuthCredentialStore::default(),
+            &self.oauth_credential_store,
         )
     }
 
@@ -237,7 +237,7 @@ fn options_from_snapshot(
     snapshot: &ConfigSnapshot,
     available: &[LlmModel],
     all_models: &[LlmModel],
-    credential_store: &OAuthCredentialStore,
+    credential_store: &impl OAuthCredentialStorage,
 ) -> Vec<acp::SessionConfigOption> {
     build_config_options_from_modes(
         &snapshot.modes,
@@ -262,7 +262,7 @@ fn get_all_models(discovered: &[LlmModel]) -> Vec<LlmModel> {
     all
 }
 
-fn build_auth_methods(has_credential: impl Fn(&str) -> bool) -> Vec<AuthMethod> {
+fn build_auth_methods(store: &impl OAuthCredentialStorage) -> Vec<AuthMethod> {
     let mut seen = HashSet::new();
     LlmModel::all()
         .iter()
@@ -274,7 +274,7 @@ fn build_auth_methods(has_credential: impl Fn(&str) -> bool) -> Vec<AuthMethod> 
                 .find(|m| m.oauth_provider_id() == Some(id))
                 .map_or(id, |m| m.provider_display_name());
             let mut method = acp::AuthMethodAgent::new(id, display);
-            if has_credential(id) {
+            if store.has_credential(id) {
                 method = method.description("authenticated");
             }
             AuthMethod::Agent(method)
@@ -370,6 +370,10 @@ mod tests {
     const SONNET: &str = "anthropic:claude-sonnet-4-5";
     const DEEPSEEK: &str = "deepseek:deepseek-chat";
 
+    fn mock_oauth_store() -> OAuthCredentialStore {
+        OAuthCredentialStore::with_mock_store().unwrap()
+    }
+
     #[tokio::test]
     async fn initialize_always_advertises_load_session_support() {
         let session_store =
@@ -377,7 +381,7 @@ mod tests {
         let manager = SessionManager::new(SessionManagerConfig {
             registry: Arc::new(SessionRegistry::new()),
             session_store,
-            has_oauth_credential: |_| false,
+            oauth_credential_store: mock_oauth_store(),
             initial_selection: InitialSessionSelection::default(),
             settings_source: SettingsSourceArgs::default(),
         });
@@ -429,7 +433,7 @@ mod tests {
 impl SessionManager {
     pub async fn initialize(&self, args: InitializeRequest) -> Result<InitializeResponse, acp::Error> {
         info!("Received initialize request: {:?}", args);
-        let auth_methods = build_auth_methods(self.has_oauth_credential);
+        let auth_methods = build_auth_methods(&self.oauth_credential_store);
         let available = get_local_models().await;
         Ok(InitializeResponse::new(ProtocolVersion::V1)
             .agent_info(Implementation::new("Aether", "0.1.0"))
@@ -452,14 +456,14 @@ impl SessionManager {
         let method_id = args.method_id.0.as_ref();
         match method_id {
             "codex" => {
-                llm::perform_codex_oauth_flow().await.map_err(|e| {
+                llm::perform_codex_oauth_flow_with_store(&self.oauth_credential_store).await.map_err(|e| {
                     error!("OAuth flow failed for {method_id}: {e}");
                     acp::Error::internal_error()
                 })?;
             }
             _ => return Err(acp::Error::invalid_params()),
         }
-        let auth_methods = build_auth_methods(self.has_oauth_credential);
+        let auth_methods = build_auth_methods(&self.oauth_credential_store);
         if let Err(e) = cx
             .send_notification(AuthMethodsUpdatedParams { auth_methods })
             .map_err(|e| AcpServerError::protocol("_aether/auth_methods_updated", e))
@@ -467,13 +471,12 @@ impl SessionManager {
             error!("Failed to send auth methods updated notification: {:?}", e);
         }
 
-        let credential_store = OAuthCredentialStore::default();
         let available = get_local_models().await;
         let all_models = get_all_models(&available);
         let snapshots = self.registry.snapshot_all_configs().await;
 
         for (id, snap) in snapshots {
-            let options = options_from_snapshot(&snap, &available, &all_models, &credential_store);
+            let options = options_from_snapshot(&snap, &available, &all_models, &self.oauth_credential_store);
             let notification = SessionNotification::new(
                 SessionId::new(id),
                 SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(options)),
@@ -739,7 +742,7 @@ impl SessionManager {
                 acp::Error::invalid_params()
             })??;
 
-        let options = options_from_snapshot(&snapshot, &available, &all_models, &OAuthCredentialStore::default());
+        let options = options_from_snapshot(&snapshot, &available, &all_models, &self.oauth_credential_store);
         Ok(SetSessionConfigOptionResponse::new(options))
     }
 

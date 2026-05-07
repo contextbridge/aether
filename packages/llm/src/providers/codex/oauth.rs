@@ -22,6 +22,11 @@ const SCOPE: &str = "openid profile email offline_access";
 ///
 /// This is designed to be called from `aether auth codex` CLI command.
 pub async fn perform_codex_oauth_flow() -> Result<(), LlmError> {
+    let store = OAuthCredentialStore::with_platform_store()?;
+    perform_codex_oauth_flow_with_store(&store).await
+}
+
+pub async fn perform_codex_oauth_flow_with_store(store: &impl OAuthCredentialStorage) -> Result<(), LlmError> {
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
     let state = generate_random_state();
 
@@ -93,8 +98,7 @@ pub async fn perform_codex_oauth_flow() -> Result<(), LlmError> {
         expires_at,
     };
 
-    let store = OAuthCredentialStore::new(super::PROVIDER_ID);
-    store.save_credential(credential).await.map_err(|e| OAuthError::CredentialStore(e.to_string()))?;
+    store.save_credential(super::PROVIDER_ID, credential).await?;
 
     Ok(())
 }
@@ -126,13 +130,13 @@ impl CachedToken {
 /// instead of hitting the OS keychain.
 pub struct CodexTokenManager<T: OAuthCredentialStorage> {
     store: T,
-    server_id: String,
+    credential_key: String,
     cached: Mutex<Option<CachedToken>>,
 }
 
 impl<T: OAuthCredentialStorage> CodexTokenManager<T> {
-    pub fn new(store: T, server_id: &str) -> Self {
-        Self { store, server_id: server_id.to_string(), cached: Mutex::new(None) }
+    pub fn new(store: T, credential_key: &str) -> Self {
+        Self { store, credential_key: credential_key.to_string(), cached: Mutex::new(None) }
     }
 
     /// Get a valid access token and account ID.
@@ -152,7 +156,7 @@ impl<T: OAuthCredentialStorage> CodexTokenManager<T> {
 
         let credential = self
             .store
-            .load_credential(&self.server_id)
+            .load_credential(&self.credential_key)
             .await
             .map_err(|e| OAuthError::NoCredentials(e.to_string()))?
             .ok_or_else(|| {

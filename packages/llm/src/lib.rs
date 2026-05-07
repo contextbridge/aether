@@ -29,4 +29,4 @@ pub use reasoning::ReasoningEffort;
 pub use tools::*;
 
 #[cfg(feature = "codex")]
-pub use providers::codex::perform_codex_oauth_flow;
+pub use providers::codex::{perform_codex_oauth_flow, perform_codex_oauth_flow_with_store};

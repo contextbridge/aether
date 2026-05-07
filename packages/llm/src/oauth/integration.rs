@@ -5,8 +5,8 @@ use rmcp::transport::auth::{AuthClient, AuthorizationManager, OAuthState};
 
 const OAUTH_CLIENT_NAME: &str = "Aether MCP Client";
 
-fn create_credential_store(server_id: &str) -> OAuthCredentialStore {
-    OAuthCredentialStore::new(server_id)
+fn create_credential_store() -> Result<OAuthCredentialStore, OAuthError> {
+    OAuthCredentialStore::with_platform_store()
 }
 
 /// Returns `Ok(Some(manager))` if credentials were found and initialized successfully,
@@ -15,7 +15,7 @@ pub async fn create_auth_manager_from_store(
     server_id: &str,
     base_url: &str,
 ) -> Result<Option<AuthorizationManager>, OAuthError> {
-    let credential_store = create_credential_store(server_id);
+    let credential_store = create_credential_store()?.mcp_store(server_id);
 
     let mut auth_manager = AuthorizationManager::new(base_url).await.map_err(|e| OAuthError::Rmcp(e.to_string()))?;
     auth_manager.set_credential_store(credential_store);
@@ -40,7 +40,7 @@ pub async fn perform_oauth_flow(
     let mut oauth_state =
         OAuthState::new(base_url, None).await.map_err(|e| OAuthError::Rmcp(format!("OAuth init failed: {e}")))?;
 
-    let credential_store = create_credential_store(server_id);
+    let credential_store = create_credential_store()?.mcp_store(server_id);
     if let OAuthState::Unauthorized(ref mut manager) = oauth_state {
         manager.set_credential_store(credential_store);
     }

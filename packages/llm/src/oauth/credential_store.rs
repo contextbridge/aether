@@ -1,11 +1,12 @@
 use async_trait::async_trait;
-use keyring::Entry;
+use keyring_core::{CredentialStore as KeyringCredentialStore, Entry, Error as KeyringError};
 use oauth2::{AccessToken, RefreshToken, TokenResponse};
 use rmcp::transport::auth::{
     AuthError, CredentialStore, OAuthTokenResponse, StoredCredentials, VendorExtraTokenFields,
 };
 use serde::{Deserialize, Serialize};
 use std::future::Future;
+use std::sync::Arc;
 use std::time::Duration;
 
 use super::OAuthError;
@@ -22,94 +23,136 @@ pub struct OAuthCredential {
     pub expires_at: Option<u64>,
 }
 
-/// Trait for loading and saving OAuth credentials, keyed by server/provider ID.
+/// Trait for loading and saving OAuth credentials, keyed by provider ID or credential key.
 ///
 /// The default implementation (`OAuthCredentialStore`) uses the OS keychain.
 /// Tests can use an in-memory fake to avoid keychain popups.
 pub trait OAuthCredentialStorage: Send + Sync {
-    fn load_credential(
-        &self,
-        server_id: &str,
-    ) -> impl Future<Output = Result<Option<OAuthCredential>, OAuthError>> + Send;
+    fn load_credential(&self, key: &str) -> impl Future<Output = Result<Option<OAuthCredential>, OAuthError>> + Send;
 
     fn save_credential(
         &self,
-        server_id: &str,
+        key: &str,
         credential: OAuthCredential,
     ) -> impl Future<Output = Result<(), OAuthError>> + Send;
 
-    fn has_credential(&self, server_id: &str) -> bool;
+    fn has_credential(&self, key: &str) -> bool;
 }
 
-/// OAuth credential store that persists credentials in the OS keychain
-/// and directly implements rmcp's `CredentialStore` trait.
+/// Shared OAuth credential repository backed by a keyring-core credential store.
 ///
-/// Each server/provider ID maps to its own keychain entry.
-#[derive(Clone, Default)]
+/// Each provider/server key maps to its own keychain entry.
+#[derive(Clone)]
 pub struct OAuthCredentialStore {
+    keyring_store: Arc<KeyringCredentialStore>,
+}
+
+/// Per-server adapter for rmcp OAuth credential storage.
+#[derive(Clone)]
+pub struct McpCredentialStore {
     server_id: String,
+    store: OAuthCredentialStore,
 }
 
 impl OAuthCredentialStore {
-    /// Create a new store for the given server/provider ID.
-    pub fn new(server_id: &str) -> Self {
-        Self { server_id: server_id.to_string() }
+    pub fn new(keyring_store: Arc<KeyringCredentialStore>) -> Self {
+        Self { keyring_store }
     }
 
-    /// Load the raw `OAuthCredential` for this store's server ID.
-    pub async fn load_credential(&self) -> Result<Option<OAuthCredential>, OAuthError> {
+    pub fn with_platform_store() -> Result<Self, OAuthError> {
+        Ok(Self::new(create_platform_keyring_store()?))
+    }
+
+    pub fn with_mock_store() -> Result<Self, OAuthError> {
+        Ok(Self::new(keyring_core::mock::Store::new()?))
+    }
+
+    pub fn mcp_store(&self, server_id: &str) -> McpCredentialStore {
+        McpCredentialStore { server_id: server_id.to_string(), store: self.clone() }
+    }
+
+    pub async fn load_credential(&self, key: &str) -> Result<Option<OAuthCredential>, OAuthError> {
         let store = self.clone();
-        spawn_blocking(move || store.load_sync()).await
+        let key = key.to_string();
+        spawn_blocking(move || store.load_from_keyring(&key)).await
     }
 
-    /// Save a raw `OAuthCredential` directly, keyed by this store's server ID.
-    pub async fn save_credential(&self, credential: OAuthCredential) -> Result<(), OAuthError> {
+    pub async fn save_credential(&self, key: &str, credential: OAuthCredential) -> Result<(), OAuthError> {
         let store = self.clone();
-        spawn_blocking(move || store.save_sync(&credential)).await
+        let key = key.to_string();
+        spawn_blocking(move || store.save_to_keyring(&key, &credential)).await
     }
 
-    /// Check synchronously whether credentials exist for a given server ID.
-    pub fn has_credential(server_id: &str) -> bool {
-        keychain_entry(server_id).ok().and_then(|e| e.get_secret().ok()).is_some()
+    pub async fn delete_credential(&self, key: &str) -> Result<(), OAuthError> {
+        let store = self.clone();
+        let key = key.to_string();
+        spawn_blocking(move || store.delete_from_keyring(&key)).await
     }
 
-    fn load_sync(&self) -> Result<Option<OAuthCredential>, OAuthError> {
-        load_from_keychain(&self.server_id)
+    pub fn try_has_credential(&self, key: &str) -> Result<bool, OAuthError> {
+        let entry = self.credential_entry(key)?;
+        match entry.get_credential() {
+            Ok(_) => Ok(true),
+            Err(KeyringError::NoEntry) => Ok(false),
+            Err(err) => Err(err.into()),
+        }
     }
 
-    fn save_sync(&self, credential: &OAuthCredential) -> Result<(), OAuthError> {
-        save_to_keychain(&self.server_id, credential)
+    pub fn has_credential(&self, key: &str) -> bool {
+        self.try_has_credential(key).unwrap_or(false)
     }
 
-    fn delete_sync(&self) -> Result<(), OAuthError> {
-        let entry = keychain_entry(&self.server_id)?;
+    fn credential_entry(&self, key: &str) -> Result<Entry, OAuthError> {
+        build_keyring_entry(self.keyring_store.as_ref(), key)
+    }
+
+    fn load_from_keyring(&self, key: &str) -> Result<Option<OAuthCredential>, OAuthError> {
+        let entry = self.credential_entry(key)?;
+        match entry.get_secret() {
+            Ok(blob) => serde_json::from_slice(&blob)
+                .map(Some)
+                .map_err(|err| OAuthError::CredentialStore(format!("invalid credential: {err}"))),
+            Err(KeyringError::NoEntry) => Ok(None),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    fn save_to_keyring(&self, key: &str, credential: &OAuthCredential) -> Result<(), OAuthError> {
+        let entry = self.credential_entry(key)?;
+        let blob = serde_json::to_vec(credential)
+            .map_err(|err| OAuthError::CredentialStore(format!("failed to serialize credential: {err}")))?;
+        entry.set_secret(&blob)?;
+        Ok(())
+    }
+
+    fn delete_from_keyring(&self, key: &str) -> Result<(), OAuthError> {
+        let entry = self.credential_entry(key)?;
         match entry.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Ok(()) | Err(KeyringError::NoEntry) => Ok(()),
             Err(err) => Err(err.into()),
         }
     }
 }
 
 impl OAuthCredentialStorage for OAuthCredentialStore {
-    async fn load_credential(&self, server_id: &str) -> Result<Option<OAuthCredential>, OAuthError> {
-        let server_id = server_id.to_string();
-        spawn_blocking(move || load_from_keychain(&server_id)).await
+    async fn load_credential(&self, key: &str) -> Result<Option<OAuthCredential>, OAuthError> {
+        OAuthCredentialStore::load_credential(self, key).await
     }
 
-    async fn save_credential(&self, server_id: &str, credential: OAuthCredential) -> Result<(), OAuthError> {
-        let server_id = server_id.to_string();
-        spawn_blocking(move || save_to_keychain(&server_id, &credential)).await
+    async fn save_credential(&self, key: &str, credential: OAuthCredential) -> Result<(), OAuthError> {
+        OAuthCredentialStore::save_credential(self, key, credential).await
     }
 
-    fn has_credential(&self, server_id: &str) -> bool {
-        keychain_entry(server_id).ok().and_then(|e| e.get_secret().ok()).is_some()
+    fn has_credential(&self, key: &str) -> bool {
+        OAuthCredentialStore::has_credential(self, key)
     }
 }
 
 #[async_trait]
-impl CredentialStore for OAuthCredentialStore {
+impl CredentialStore for McpCredentialStore {
     async fn load(&self) -> Result<Option<StoredCredentials>, AuthError> {
-        let cred = self.load_credential().await.map_err(|e| AuthError::InternalError(e.to_string()))?;
+        let cred =
+            self.store.load_credential(&self.server_id).await.map_err(|e| AuthError::InternalError(e.to_string()))?;
 
         Ok(cred.map(|c| {
             let token_response = build_token_response(&c);
@@ -138,36 +181,54 @@ impl CredentialStore for OAuthCredentialStore {
             expires_at,
         };
 
-        self.save_credential(credential).await.map_err(|e| AuthError::InternalError(e.to_string()))
+        self.store
+            .save_credential(&self.server_id, credential)
+            .await
+            .map_err(|e| AuthError::InternalError(e.to_string()))
     }
 
     async fn clear(&self) -> Result<(), AuthError> {
-        let store = self.clone();
-        spawn_blocking(move || store.delete_sync()).await.map_err(|e| AuthError::InternalError(e.to_string()))
+        self.store.delete_credential(&self.server_id).await.map_err(|e| AuthError::InternalError(e.to_string()))
     }
 }
 
-fn keychain_entry(server_id: &str) -> Result<Entry, OAuthError> {
-    Ok(Entry::new(KEYCHAIN_SERVICE, server_id)?)
+#[cfg(target_os = "macos")]
+fn create_platform_keyring_store() -> Result<Arc<KeyringCredentialStore>, OAuthError> {
+    let store: Arc<KeyringCredentialStore> = apple_native_keyring_store::keychain::Store::new()?;
+    Ok(store)
 }
 
-fn load_from_keychain(server_id: &str) -> Result<Option<OAuthCredential>, OAuthError> {
-    let entry = keychain_entry(server_id)?;
-    match entry.get_secret() {
-        Ok(blob) => serde_json::from_slice(&blob)
-            .map(Some)
-            .map_err(|err| OAuthError::CredentialStore(format!("invalid credential: {err}"))),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(err) => Err(err.into()),
+#[cfg(target_os = "windows")]
+fn create_platform_keyring_store() -> Result<Arc<KeyringCredentialStore>, OAuthError> {
+    let store: Arc<KeyringCredentialStore> = windows_native_keyring_store::Store::new()?;
+    Ok(store)
+}
+
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn create_platform_keyring_store() -> Result<Arc<KeyringCredentialStore>, OAuthError> {
+    let store: Arc<KeyringCredentialStore> = dbus_secret_service_keyring_store::Store::new()?;
+    Ok(store)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "freebsd")))]
+fn create_platform_keyring_store() -> Result<Arc<KeyringCredentialStore>, OAuthError> {
+    Err(OAuthError::CredentialStore("OS keychain is not supported on this platform".to_string()))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+fn build_keyring_entry(store: &KeyringCredentialStore, key: &str) -> Result<Entry, OAuthError> {
+    Ok(store.build(KEYCHAIN_SERVICE, key, None)?)
+}
+
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn build_keyring_entry(store: &KeyringCredentialStore, key: &str) -> Result<Entry, OAuthError> {
+    if store.as_any().is::<keyring_core::mock::Store>() {
+        return Ok(store.build(KEYCHAIN_SERVICE, key, None)?);
     }
-}
 
-fn save_to_keychain(server_id: &str, credential: &OAuthCredential) -> Result<(), OAuthError> {
-    let entry = keychain_entry(server_id)?;
-    let blob = serde_json::to_vec(credential)
-        .map_err(|err| OAuthError::CredentialStore(format!("failed to serialize credential: {err}")))?;
-    entry.set_secret(&blob)?;
-    Ok(())
+    let label = format!("Aether OAuth: {key}");
+    let modifiers = std::collections::HashMap::from([("label", label.as_str())]);
+    Ok(store.build(KEYCHAIN_SERVICE, key, Some(&modifiers))?)
 }
 
 async fn spawn_blocking<T: Send + 'static>(
@@ -183,7 +244,6 @@ async fn spawn_blocking<T: Send + 'static>(
 /// The upstream struct is `#[non_exhaustive]` with no constructor, so this is
 /// the only way to build one from outside the crate.
 fn build_stored_credentials(client_id: &str, token_response: Option<&OAuthTokenResponse>) -> StoredCredentials {
-    // granted_scopes and token_received_at have #[serde(default)] so we can omit them.
     serde_json::from_value(serde_json::json!({
         "client_id": client_id,
         "token_response": token_response,
@@ -214,4 +274,104 @@ fn build_token_response(cred: &OAuthCredential) -> OAuthTokenResponse {
     }
 
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn load_returns_none_when_missing() {
+        let store = test_store();
+        assert!(store.load_credential("server").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn save_then_load_round_trips_secret_bytes() {
+        let store = test_store();
+        store.save_credential("server", credential()).await.unwrap();
+
+        let loaded = store.load_credential("server").await.unwrap().unwrap();
+        assert_eq!(loaded.client_id, "client");
+        assert_eq!(loaded.access_token, "access");
+        assert_eq!(loaded.refresh_token.as_deref(), Some("refresh"));
+        assert_eq!(loaded.expires_at, Some(1234));
+    }
+
+    #[tokio::test]
+    async fn credential_keys_are_isolated() {
+        let store = test_store();
+        store.save_credential("key-a", credential()).await.unwrap();
+
+        assert!(store.load_credential("key-b").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn clear_removes_saved_credential_through_mcp_store() {
+        let store = test_store();
+        store.save_credential("server", credential()).await.unwrap();
+
+        let mcp_store = store.mcp_store("server");
+        CredentialStore::clear(&mcp_store).await.unwrap();
+
+        assert!(store.load_credential("server").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn has_credential_reflects_keyring_state() {
+        let store = test_store();
+        assert!(!store.has_credential("server"));
+
+        store.save_credential("server", credential()).await.unwrap();
+        assert!(store.has_credential("server"));
+
+        CredentialStore::clear(&store.mcp_store("server")).await.unwrap();
+        assert!(!store.has_credential("server"));
+    }
+
+    #[tokio::test]
+    async fn load_reports_invalid_json() {
+        let keyring_store = mock_keyring_store();
+        let store = OAuthCredentialStore::new(keyring_store.clone());
+        let entry = keyring_store.build(KEYCHAIN_SERVICE, "server", None).unwrap();
+        entry.set_secret(b"not-json").unwrap();
+
+        let err = store.load_credential("server").await.unwrap_err();
+        assert!(matches!(err, OAuthError::CredentialStore(message) if message.contains("invalid credential")));
+    }
+
+    #[tokio::test]
+    async fn mcp_store_round_trips_stored_credentials() {
+        let store = test_store();
+        let mcp_store = store.mcp_store("server");
+        let credential = credential();
+        let token_response = build_token_response(&credential);
+        let stored = build_stored_credentials(&credential.client_id, Some(&token_response));
+
+        CredentialStore::save(&mcp_store, stored).await.unwrap();
+
+        let loaded = CredentialStore::load(&mcp_store).await.unwrap().unwrap();
+        let token = loaded.token_response.unwrap();
+        assert_eq!(loaded.client_id, "client");
+        assert_eq!(token.access_token().secret(), "access");
+        assert_eq!(token.refresh_token().map(|t| t.secret().as_str()), Some("refresh"));
+    }
+
+    fn mock_keyring_store() -> Arc<keyring_core::CredentialStore> {
+        keyring_core::mock::Store::new().unwrap()
+    }
+
+    fn test_store() -> OAuthCredentialStore {
+        OAuthCredentialStore::new(mock_keyring_store())
+    }
+
+    fn credential() -> OAuthCredential {
+        OAuthCredential {
+            client_id: "client".to_string(),
+            access_token: "access".to_string(),
+            refresh_token: Some("refresh".to_string()),
+            expires_at: Some(1234),
+        }
+    }
 }

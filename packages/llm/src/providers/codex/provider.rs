@@ -129,7 +129,7 @@ impl CodexProvider {
 
 impl ProviderFactory for CodexProvider {
     async fn from_env() -> Result<Self> {
-        let store = OAuthCredentialStore::new(super::PROVIDER_ID);
+        let store = OAuthCredentialStore::with_platform_store()?;
         let token_manager = CodexTokenManager::new(store, super::PROVIDER_ID);
         Ok(Self::new(token_manager))
     }
@@ -209,12 +209,6 @@ mod tests {
     use crate::ContentBlock;
     use crate::ToolDefinition;
     use crate::types::IsoString;
-
-    fn create_test_provider() -> CodexProvider {
-        let store = OAuthCredentialStore::new("codex-test");
-        let tm = CodexTokenManager::new(store, "codex-test");
-        CodexProvider::new(tm).with_model("gpt-5.5")
-    }
 
     #[test]
     fn build_request_simple() {
@@ -345,5 +339,12 @@ mod tests {
 
         let request = provider.build_request(&context).unwrap();
         assert!(request.prompt_cache_key.is_none());
+    }
+
+    fn create_test_provider() -> CodexProvider {
+        let keyring_store: Arc<keyring_core::CredentialStore> = keyring_core::mock::Store::new().unwrap();
+        let store = OAuthCredentialStore::new(keyring_store);
+        let tm = CodexTokenManager::new(store, "codex-test");
+        CodexProvider::new(tm).with_model("gpt-5.5")
     }
 }

@@ -9,7 +9,7 @@ pub enum OAuthError {
     CredentialStore(String),
 
     #[error("OS keychain error: {0}")]
-    Keychain(#[from] keyring::Error),
+    Keychain(#[from] keyring_core::Error),
 
     #[error("rmcp auth error: {0}")]
     Rmcp(String),
