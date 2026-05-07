@@ -113,7 +113,7 @@ impl TestProject for NodeProject {
 impl NodeProject {
     /// Create a new minimal Node/TypeScript project.
     ///
-    /// Runs `npm install typescript` so typescript-language-server can find tsserver.
+    /// Runs `npm install typescript typescript-language-server` so tests do not depend on global Node tools.
     pub fn new(name: &str) -> Result<Self, TestProjectError> {
         let temp_dir = TempDir::new()?;
         let project = Self { temp_dir };
@@ -154,12 +154,14 @@ impl NodeProject {
     }
 
     fn install_typescript(&self) -> Result<(), TestProjectError> {
-        let output =
-            Command::new("npm").args(["install", "--save-dev", "typescript"]).current_dir(self.root()).output()?;
+        let output = Command::new("npm")
+            .args(["install", "--save-dev", "typescript", "typescript-language-server"])
+            .current_dir(self.root())
+            .output()?;
 
         if !output.status.success() {
             return Err(TestProjectError::CommandFailed {
-                command: "npm install --save-dev typescript".to_string(),
+                command: "npm install --save-dev typescript typescript-language-server".to_string(),
                 stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
             });
         }

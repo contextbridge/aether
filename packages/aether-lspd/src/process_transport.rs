@@ -61,13 +61,14 @@ impl ProcessTransport {
         command: &str,
         args: &[String],
     ) -> DaemonResult<(Self, mpsc::Receiver<TransportEvent>)> {
-        let mut process = Command::new(command)
+        let resolved_command = resolve_command(root_path, command);
+        let mut process = Command::new(&resolved_command)
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .map_err(|e| DaemonError::LspSpawnFailed(format!("{command}: {e}")))?;
+            .map_err(|e| DaemonError::LspSpawnFailed(format!("{}: {e}", resolved_command.display())))?;
 
         let stdin =
             process.stdin.take().ok_or_else(|| DaemonError::LspSpawnFailed("Failed to capture stdin".into()))?;
@@ -357,6 +358,16 @@ fn parse_file_system_watchers(opts: &Value) -> Result<Vec<lsp_types::FileSystemW
 
     let parsed: WatcherOptions = serde_json::from_value(opts.clone())?;
     Ok(parsed.watchers)
+}
+
+fn resolve_command(root_path: &Path, command: &str) -> PathBuf {
+    let command_path = Path::new(command);
+    if command_path.is_absolute() || command_path.components().count() > 1 {
+        return command_path.to_path_buf();
+    }
+
+    let local_command = root_path.join("node_modules").join(".bin").join(command);
+    if local_command.exists() { local_command } else { command_path.to_path_buf() }
 }
 
 async fn send_notification(stdin: &mut ChildStdin, method: &str, params: Value) -> std::io::Result<()> {
