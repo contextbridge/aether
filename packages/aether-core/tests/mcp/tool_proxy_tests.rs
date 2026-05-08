@@ -306,7 +306,7 @@ async fn test_tool_proxy_multiple_nested_servers() {
 }
 
 #[tokio::test]
-async fn test_tool_proxy_server_status_shows_connected() {
+async fn test_tool_proxy_member_server_status_shows_connected_and_proxied() {
     let aether_home = tempfile::tempdir().unwrap();
     let servers = vec![fake_mcp_with_proxy("math", FakeMcpServer::new(), true)];
 
@@ -320,14 +320,19 @@ async fn test_tool_proxy_server_status_shows_connected() {
         ..
     } = mcp().with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
 
-    // The proxy itself should show as Connected with tool_count=1 (just call_tool)
-    let proxy_status = server_statuses.iter().find(|s| s.name == "proxy").expect("Expected proxy status entry");
+    assert!(
+        !server_statuses.iter().any(|s| s.name == "proxy"),
+        "Proxy itself should not appear as a status entry, got: {server_statuses:?}"
+    );
+
+    let math_status = server_statuses.iter().find(|s| s.name == "math").expect("Expected 'math' status entry");
 
     assert!(
-        matches!(proxy_status.status, mcp_utils::status::McpServerStatus::Connected { tool_count: 1 }),
-        "Expected Connected with 1 tool, got: {:?}",
-        proxy_status.status
+        matches!(math_status.status, mcp_utils::status::McpServerStatus::Connected { .. }),
+        "Expected math to be Connected, got: {:?}",
+        math_status.status
     );
+    assert!(math_status.proxy, "Expected math to be marked as proxied");
 
     cleanup_tool_dir(&instructions, "proxy");
 }
