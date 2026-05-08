@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.1](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.5.0...aether-agent-cli-v0.5.1) - 2026-05-08
+
+### Other
+
+- updated the following local packages: aether-wisp
+
 ## [0.5.0](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.4.3...aether-agent-cli-v0.5.0) - 2026-05-08
 
 ### Fixed
