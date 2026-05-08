@@ -18,7 +18,7 @@ pub trait CodingTools: Send + Sync + Debug {
     /// Write content to a file
     fn write_file(&self, args: WriteFileArgs) -> impl Future<Output = Result<WriteFileResponse, CodingError>> + Send;
 
-    /// Edit a file using string replacement
+    /// Edit a file using line-numbered edits
     fn edit_file(&self, args: EditFileArgs) -> impl Future<Output = Result<EditFileResponse, CodingError>> + Send;
 
     /// List files in a directory

@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::coding::error::FileError;
 use crate::coding::tools::file_io::read_text_file;
+use crate::coding::tools::line_document::LineDocument;
 use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename};
 
 const MAX_LINE_LENGTH: usize = 2000;
@@ -44,13 +45,11 @@ pub struct ReadFileResult {
 pub async fn read_file_contents(args: ReadFileArgs) -> Result<ReadFileResult, FileError> {
     let content = read_text_file(&args.file_path).await?;
 
-    let all_lines: Vec<&str> = content.lines().collect();
-    let total_lines = all_lines.len();
+    let document = LineDocument::parse(&content);
+    let total_lines = document.line_count();
 
-    // Default offset to 1 if not provided
     let offset = args.offset.unwrap_or(1);
 
-    // Validate offset is 1-indexed
     if offset == 0 {
         return Err(FileError::InvalidOffset { path: args.file_path });
     }
@@ -58,19 +57,9 @@ pub async fn read_file_contents(args: ReadFileArgs) -> Result<ReadFileResult, Fi
     let start_idx = (offset - 1).min(total_lines);
     let limit = args.limit.unwrap_or(DEFAULT_LINE_LIMIT);
     let end_idx = (start_idx + limit).min(total_lines);
-    let selected_lines: Vec<&str> = all_lines[start_idx..end_idx].to_vec();
-    let lines_with_numbers: Vec<String> = selected_lines
-        .iter()
-        .enumerate()
-        .map(|(i, line)| {
-            let line_num = offset + i;
-            if line.len() > MAX_LINE_LENGTH {
-                format!("{:5}\t{}... [truncated, {} chars total]", line_num, &line[..MAX_LINE_LENGTH], line.len())
-            } else {
-                format!("{line_num:5}\t{line}")
-            }
-        })
-        .collect();
+    let selected_lines = &document.lines()[start_idx..end_idx];
+    let lines_with_numbers: Vec<String> =
+        selected_lines.iter().enumerate().map(|(index, line)| format_numbered_line(offset + index, line)).collect();
 
     let formatted_content = lines_with_numbers.join("\n");
 
@@ -88,6 +77,16 @@ pub async fn read_file_contents(args: ReadFileArgs) -> Result<ReadFileResult, Fi
         raw_content: content,
         meta: Some(display_meta.into()),
     })
+}
+
+fn format_numbered_line(line_number: usize, line: &str) -> String {
+    let char_count = line.chars().count();
+    if char_count > MAX_LINE_LENGTH {
+        let truncated: String = line.chars().take(MAX_LINE_LENGTH).collect();
+        format!("{line_number:5}\t{truncated}... [truncated, {char_count} chars total]")
+    } else {
+        format!("{line_number:5}\t{line}")
+    }
 }
 
 #[cfg(test)]
@@ -150,7 +149,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let test_path = temp_dir.path().join("test_truncation.txt");
         let short_line = "short";
-        let long_line = "x".repeat(2500);
+        let long_line = "é".repeat(2500);
         let test_content = format!("{short_line}\n{long_line}");
 
         fs::write(&test_path, &test_content).unwrap();
@@ -167,6 +166,7 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert!(lines[0].contains("short"));
         assert!(!lines[0].contains("truncated"));
+        assert!(lines[1].starts_with("    2\t"));
         assert!(lines[1].contains("truncated"));
         assert!(lines[1].contains("2500 chars total"));
     }
@@ -175,7 +175,6 @@ mod tests {
     async fn test_read_file_default_limit() {
         let temp_dir = TempDir::new().unwrap();
         let test_path = temp_dir.path().join("test_default_limit.txt");
-        // Create file with more than DEFAULT_LINE_LIMIT lines
         let mut lines = Vec::new();
         for i in 1..=2500 {
             lines.push(format!("Line {i}"));
@@ -231,6 +230,25 @@ mod tests {
         .await;
 
         assert!(matches!(result, Err(FileError::NotFound { .. })));
+    }
+
+    #[tokio::test]
+    async fn empty_file_has_zero_lines() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_path = temp_dir.path().join("empty.txt");
+        fs::write(&test_path, "").unwrap();
+
+        let result = read_file_contents(ReadFileArgs {
+            file_path: test_path.to_string_lossy().to_string(),
+            offset: None,
+            limit: None,
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(result.total_lines, 0);
+        assert_eq!(result.lines_shown, 0);
+        assert_eq!(result.content, "");
     }
 
     #[test]

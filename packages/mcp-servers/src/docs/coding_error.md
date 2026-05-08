@@ -15,7 +15,7 @@ Error types for all coding tool operations.
 
 # Sub-error types
 
-- [`FileError`] -- `NotFound`, `ReadFailed`, `WriteFailed`, `CreateDirFailed`, `InvalidOffset`, `PatternNotFound`, `Io`.
+- [`FileError`] -- `NotFound`, `ReadFailed`, `WriteFailed`, `CreateDirFailed`, `InvalidOffset`, `InvalidLine`, `InvalidEdit`, `OverlappingEdits`, `Io`.
 - [`BashError`] -- `Forbidden`, `TimeoutTooLarge`, `SpawnFailed`, `InvalidRegex`, `JoinFailed`, `ShellNotFound`, `WaitFailed`.
 - [`GrepError`] -- `InvalidGlobPattern`, `GlobSetBuildFailed`, `InvalidRegex`, `SearchFailed`, `PathNotFound`.
 - [`FindError`] -- `PathNotFound`, `InvalidGlobPattern`, `LockFailed`.

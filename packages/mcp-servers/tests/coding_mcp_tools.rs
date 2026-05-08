@@ -38,7 +38,6 @@ async fn test_read_file_tool() {
             let parsed: serde_json::Value = serde_json::from_str(&text_content.text).expect("Invalid JSON response");
             assert_eq!(parsed["status"], "success");
 
-            // Verify line-numbered content format (should read full file by default)
             let expected_formatted = "    1\tHello, World!\n    2\tThis is a test file.";
             assert_eq!(parsed["content"], expected_formatted);
             assert_eq!(parsed["totalLines"], 2);
@@ -160,7 +159,6 @@ async fn test_edit_file_tool() {
     // Create initial file
     tokio::fs::write(test_path, initial_content).await.expect("Failed to create test file");
 
-    // First, read the file (required by safety check)
     client
         .call_tool(
             CallToolRequestParams::new("read_file").with_arguments(
@@ -174,15 +172,14 @@ async fn test_edit_file_tool() {
         )
         .await
         .expect("Failed to read file before edit");
-
-    // Test edit_file tool - replace single occurrence
     let result = client
         .call_tool(
             CallToolRequestParams::new("edit_file").with_arguments(
                 serde_json::json!({
                     "filePath": test_path,
-                    "oldString": "World",
-                    "newString": "Rust"
+                    "edits": [
+                        {"type": "set_line", "line": 1, "newText": "Hello, Rust!"}
+                    ]
                 })
                 .as_object()
                 .unwrap()
@@ -192,13 +189,13 @@ async fn test_edit_file_tool() {
         .await
         .expect("Failed to call edit_file tool");
 
-    // Verify result
     assert!(result.content.len() == 1);
     if let Some(content) = result.content.first() {
         if let Some(text_content) = content.as_text() {
             let parsed: serde_json::Value = serde_json::from_str(&text_content.text).expect("Invalid JSON response");
             assert_eq!(parsed["status"], "success");
-            assert_eq!(parsed["replacementsMade"], 1);
+            assert_eq!(parsed["editsApplied"], 1);
+            assert!(parsed.get("content").is_none());
         } else {
             panic!("Expected text content");
         }
@@ -206,14 +203,11 @@ async fn test_edit_file_tool() {
         panic!("Expected content in result");
     }
 
-    // Verify file was actually edited
     let file_content = tokio::fs::read_to_string(test_path).await.expect("Failed to read edited file");
     assert_eq!(file_content, "Hello, Rust!\nThis is a test.");
 
-    // Test replace_all flag
     tokio::fs::write(test_path, "test test test").await.expect("Failed to write test file");
 
-    // Read the file again before editing
     client
         .call_tool(
             CallToolRequestParams::new("read_file").with_arguments(
@@ -227,15 +221,14 @@ async fn test_edit_file_tool() {
         )
         .await
         .expect("Failed to read file before second edit");
-
     let result = client
         .call_tool(
             CallToolRequestParams::new("edit_file").with_arguments(
                 serde_json::json!({
                     "filePath": test_path,
-                    "oldString": "test",
-                    "newString": "TEST",
-                    "replaceAll": true
+                    "edits": [
+                        {"type": "set_line", "line": 1, "newText": "TEST TEST TEST"}
+                    ]
                 })
                 .as_object()
                 .unwrap()
@@ -243,11 +236,11 @@ async fn test_edit_file_tool() {
             ),
         )
         .await
-        .expect("Failed to call edit_file tool with replace_all");
+        .expect("Failed to call edit_file tool with line edit");
 
-    if let Some(text_content) = result.content.first().and_then(|c| c.as_text()) {
+    if let Some(text_content) = result.content.first().and_then(|content| content.as_text()) {
         let parsed: serde_json::Value = serde_json::from_str(&text_content.text).expect("Invalid JSON response");
-        assert_eq!(parsed["replacementsMade"], 3);
+        assert_eq!(parsed["editsApplied"], 1);
     }
 
     let file_content = tokio::fs::read_to_string(test_path).await.expect("Failed to read edited file");

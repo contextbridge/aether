@@ -14,6 +14,27 @@ mod common;
 
 use aether_lspd::testing::{NodeProject, TestProject};
 use common::{call_tool, connect_lsp, has_errors, has_no_errors, poll_diagnostics};
+use rmcp::RoleClient;
+use rmcp::model::ClientInfo;
+use rmcp::service::RunningService;
+
+async fn set_line(
+    client: &RunningService<RoleClient, ClientInfo>,
+    file_path: &str,
+    line_number: usize,
+    new_text: &str,
+) {
+    call_tool(client, "read_file", serde_json::json!({ "filePath": file_path })).await;
+    call_tool(
+        client,
+        "edit_file",
+        serde_json::json!({
+            "filePath": file_path,
+            "edits": [{"type": "set_line", "line": line_number, "newText": new_text}]
+        }),
+    )
+    .await;
+}
 
 /// Test: MCP `edit_file` tool → `typescript-language-server` picks up change → diagnostics queryable
 #[tokio::test]
@@ -35,35 +56,13 @@ async fn test_ts_mcp_edit_produces_diagnostics() {
     assert!(errors > 0, "Expected type error diagnostics");
 
     // 4. Fix the error using MCP tools: read_file then edit_file
-    call_tool(&client, "read_file", serde_json::json!({ "filePath": index_ts })).await;
-
-    call_tool(
-        &client,
-        "edit_file",
-        serde_json::json!({
-            "filePath": index_ts,
-            "oldString": "\"not a number\"",
-            "newString": "42"
-        }),
-    )
-    .await;
+    set_line(&client, &index_ts, 1, "const x: number = 42;").await;
 
     // 5. Poll until errors clear
     poll_diagnostics(&client, Some(&index_ts), has_no_errors).await;
 
     // 6. Re-introduce a different error via MCP edit
-    call_tool(&client, "read_file", serde_json::json!({ "filePath": index_ts })).await;
-
-    call_tool(
-        &client,
-        "edit_file",
-        serde_json::json!({
-            "filePath": index_ts,
-            "oldString": "42",
-            "newString": "true"
-        }),
-    )
-    .await;
+    set_line(&client, &index_ts, 1, "const x: number = true;").await;
 
     // 7. Poll until errors reappear
     let result = poll_diagnostics(&client, Some(&index_ts), has_errors).await;
@@ -123,18 +122,7 @@ async fn test_ts_diagnostics_after_edit_without_polling() {
     poll_diagnostics(&client, Some(&index_ts), has_no_errors).await;
 
     // 4. Introduce a type error via edit_file
-    call_tool(&client, "read_file", serde_json::json!({ "filePath": index_ts })).await;
-
-    call_tool(
-        &client,
-        "edit_file",
-        serde_json::json!({
-            "filePath": index_ts,
-            "oldString": "42",
-            "newString": "\"not a number\""
-        }),
-    )
-    .await;
+    set_line(&client, &index_ts, 1, "const x: number = \"not a number\";").await;
 
     // 5. Wait for typescript-language-server to process, then make a SINGLE call.
     //    tsserver is slower than rust-analyzer, so give it more time.

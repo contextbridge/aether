@@ -15,14 +15,11 @@ use rmcp::{
     tool, tool_handler, tool_router,
 };
 use std::fmt::Write as _;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
-use std::{
-    collections::{HashMap, HashSet},
-    path::Path,
-    sync::Arc,
-};
+use std::{collections::HashMap, path::Path, sync::Arc};
 use tokio::{
-    fs::try_exists,
+    fs::{canonicalize, read_to_string, try_exists},
     sync::{Mutex, RwLock},
 };
 
@@ -66,6 +63,30 @@ trait IntoMcpResult<T> {
 impl<T, E: std::fmt::Display> IntoMcpResult<T> for Result<T, E> {
     fn into_mcp(self) -> Result<Json<T>, String> {
         self.map(Json).map_err(|e| e.to_string())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ReadSnapshot {
+    content_hash: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileMutation {
+    Edit,
+    OverwriteExisting,
+}
+
+impl FileMutation {
+    fn unread_error(self, file_path: &str) -> String {
+        match self {
+            Self::Edit => format!(
+                "Safety check failed: You must use read_file on '{file_path}' before editing it. This ensures you understand the current file contents before making changes."
+            ),
+            Self::OverwriteExisting => format!(
+                "Safety check failed: File '{file_path}' already exists. You must use read_file on it before overwriting. This prevents accidental data loss."
+            ),
+        }
     }
 }
 
@@ -138,8 +159,8 @@ impl CodingMcpArgs {
 pub struct CodingMcp<T: CodingTools = DefaultCodingTools> {
     tool_router: ToolRouter<Self>,
     background_processes: Mutex<HashMap<String, BackgroundProcessHandle>>,
-    /// Track files that have been read to enforce read-before-edit safety
-    files_read: RwLock<HashSet<String>>,
+    /// Track read file snapshots to enforce read-before-edit safety
+    files_read: RwLock<HashMap<String, ReadSnapshot>>,
     tools: T,
     /// Optional LSP operations (enabled with `.with_lsp()`)
     lsp: Option<Arc<LspRegistry>>,
@@ -234,6 +255,22 @@ fn is_dangerous_cmd(command: &str) -> bool {
     false
 }
 
+async fn read_snapshot(file_path: &str) -> Result<(String, ReadSnapshot), String> {
+    let path_key = canonical_path_key(file_path).await;
+    let content = read_to_string(file_path).await.map_err(|e| format!("Failed to read {file_path}: {e}"))?;
+    Ok((path_key, ReadSnapshot { content_hash: content_hash(&content) }))
+}
+
+async fn canonical_path_key(file_path: &str) -> String {
+    canonicalize(file_path).await.unwrap_or_else(|_| PathBuf::from(file_path)).to_string_lossy().to_string()
+}
+
+fn content_hash(content: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    content.hash(&mut hasher);
+    hasher.finish()
+}
+
 #[tool_router]
 impl<T: CodingTools + 'static> CodingMcp<T> {
     /// Create a `CodingMcp` with custom tool implementation
@@ -241,7 +278,7 @@ impl<T: CodingTools + 'static> CodingMcp<T> {
         Self {
             tool_router: Self::tool_router(),
             background_processes: Mutex::new(HashMap::new()),
-            files_read: RwLock::new(HashSet::new()),
+            files_read: RwLock::new(HashMap::new()),
             tools,
             lsp: None,
             web_fetcher: WebFetcher::new(),
@@ -400,6 +437,39 @@ When using tools that take file paths, always use absolute paths from:
         }
     }
 
+    async fn track_read_snapshot(&self, file_path: &str) -> Result<String, String> {
+        let (path_key, snapshot) = read_snapshot(file_path).await?;
+        self.files_read.write().await.insert(path_key.clone(), snapshot);
+        Ok(path_key)
+    }
+
+    async fn ensure_fresh_read(&self, file_path: &str, mutation: FileMutation) -> Result<(), String> {
+        let (path_key, current_snapshot) = read_snapshot(file_path).await?;
+        let files_read = self.files_read.read().await;
+        let read_snapshot = files_read.get(&path_key).ok_or_else(|| mutation.unread_error(file_path))?;
+
+        if read_snapshot != &current_snapshot {
+            return Err(format!(
+                "Safety check failed: File '{file_path}' changed since it was read. Use read_file again before modifying it."
+            ));
+        }
+
+        Ok(())
+    }
+
+    async fn ensure_existing_file_fresh_read(&self, file_path: &str, mutation: FileMutation) -> Result<(), String> {
+        if try_exists(file_path).await.map_err(|e| format!("Failed to check existence of {file_path}: {e}"))? {
+            self.ensure_fresh_read(file_path, mutation).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn forget_read_snapshot(&self, file_path: &str) {
+        let path_key = canonical_path_key(file_path).await;
+        self.files_read.write().await.remove(&path_key);
+    }
+
     fn spawn_diagnostic_refresh(&self, file_path: &str) {
         if let Some(lsp) = &self.lsp {
             let lsp = Arc::clone(lsp);
@@ -445,7 +515,7 @@ When using tools that take file paths, always use absolute paths from:
         notify_preview(&context, ToolDisplayMeta::new("Read file", basename(&args.file_path))).await;
         let file_path = args.file_path.clone();
         let mut result = self.tools.read_file(args).await.map_err(|e| e.to_string())?;
-        self.files_read.write().await.insert(file_path.clone());
+        self.track_read_snapshot(&file_path).await?;
 
         let total_lines = result.total_lines;
         let roots = self.roots.read().await;
@@ -476,21 +546,11 @@ When using tools that take file paths, always use absolute paths from:
 
         self.check_write_permission(&context, "write_file", &args.file_path).await?;
 
-        // Safety check: if file exists, ensure it has been read first
-        if try_exists(&args.file_path)
-            .await
-            .map_err(|e| format!("Failed to check existence of {}: {e}", args.file_path))?
-        {
-            let files_read = self.files_read.read().await;
-            if !files_read.contains(&args.file_path) {
-                return Err(format!(
-                    "Safety check failed: File '{}' already exists. You must use read_file on it before overwriting. This prevents accidental data loss.",
-                    args.file_path
-                ));
-            }
-        }
+        self.ensure_existing_file_fresh_read(&args.file_path, FileMutation::OverwriteExisting).await?;
 
         let response = self.tools.write_file(args).await.map_err(|e| e.to_string())?;
+
+        self.forget_read_snapshot(&response.file_path).await;
 
         self.spawn_diagnostic_refresh(&response.file_path);
 
@@ -509,18 +569,11 @@ When using tools that take file paths, always use absolute paths from:
 
         self.check_write_permission(&context, "edit_file", &args.file_path).await?;
 
-        // Safety check: ensure file has been read first
-        {
-            let files_read = self.files_read.read().await;
-            if !files_read.contains(&args.file_path) {
-                return Err(format!(
-                    "Safety check failed: You must use read_file on '{}' before editing it. This ensures you understand the current file contents before making changes.",
-                    args.file_path
-                ));
-            }
-        }
+        self.ensure_fresh_read(&args.file_path, FileMutation::Edit).await?;
 
         let response = self.tools.edit_file(args).await.map_err(|e| e.to_string())?;
+
+        self.forget_read_snapshot(&response.file_path).await;
 
         self.spawn_diagnostic_refresh(&response.file_path);
 
@@ -704,7 +757,7 @@ impl<T: CodingTools + 'static> CodingMcp<T> {
     pub async fn test_read_file(&self, args: ReadFileArgs) -> Result<Json<ReadFileResult>, String> {
         let file_path = args.file_path.clone();
         let mut result = self.tools.read_file(args).await.map_err(|e| e.to_string())?;
-        self.files_read.write().await.insert(file_path.clone());
+        self.track_read_snapshot(&file_path).await?;
 
         let total_lines = result.total_lines;
         let roots = self.roots.read().await;
@@ -725,33 +778,18 @@ impl<T: CodingTools + 'static> CodingMcp<T> {
 
     /// Write a file with read-before-write safety check (test helper, no MCP context needed).
     pub async fn test_write_file(&self, args: WriteFileArgs) -> Result<Json<WriteFileResponse>, String> {
-        if try_exists(&args.file_path)
-            .await
-            .map_err(|e| format!("Failed to check existence of {}: {e}", args.file_path))?
-        {
-            let files_read = self.files_read.read().await;
-            if !files_read.contains(&args.file_path) {
-                return Err(format!(
-                    "Safety check failed: File '{}' already exists. You must use read_file on it before overwriting. This prevents accidental data loss.",
-                    args.file_path
-                ));
-            }
-        }
-        self.tools.write_file(args).await.map(Json).map_err(|e| e.to_string())
+        self.ensure_existing_file_fresh_read(&args.file_path, FileMutation::OverwriteExisting).await?;
+        let response = self.tools.write_file(args).await.map_err(|e| e.to_string())?;
+        self.forget_read_snapshot(&response.file_path).await;
+        Ok(Json(response))
     }
 
     /// Edit a file with read-before-edit safety check (test helper, no MCP context needed).
     pub async fn test_edit_file(&self, args: EditFileArgs) -> Result<Json<EditFileResponse>, String> {
-        {
-            let files_read = self.files_read.read().await;
-            if !files_read.contains(&args.file_path) {
-                return Err(format!(
-                    "Safety check failed: You must use read_file on '{}' before editing it. This ensures you understand the current file contents before making changes.",
-                    args.file_path
-                ));
-            }
-        }
-        self.tools.edit_file(args).await.map(Json).map_err(|e| e.to_string())
+        self.ensure_fresh_read(&args.file_path, FileMutation::Edit).await?;
+        let response = self.tools.edit_file(args).await.map_err(|e| e.to_string())?;
+        self.forget_read_snapshot(&response.file_path).await;
+        Ok(Json(response))
     }
 }
 

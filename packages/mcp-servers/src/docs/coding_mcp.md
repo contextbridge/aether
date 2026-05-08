@@ -27,9 +27,9 @@ let server = CodingMcp::with_tools(my_custom_tools);
 # Tools provided
 
 **File operations:**
-- `read_file` -- Read file contents with optional offset/limit
+- `read_file` -- Read file contents with optional offset/limit and line numbers
 - `write_file` -- Write content to a file (creates parent dirs)
-- `edit_file` -- String replacement in an existing file
+- `edit_file` -- Line-numbered edits in an existing file
 - `list_files` -- List directory contents with metadata
 
 **Shell & search:**

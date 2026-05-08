@@ -63,6 +63,24 @@ fn canonical_path(path: &str) -> String {
     std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path)).to_string_lossy().to_string()
 }
 
+async fn set_line(
+    client: &RunningService<RoleClient, ClientInfo>,
+    file_path: &str,
+    line_number: usize,
+    new_text: &str,
+) {
+    call_tool(client, "read_file", serde_json::json!({ "filePath": file_path })).await;
+    call_tool(
+        client,
+        "edit_file",
+        serde_json::json!({
+            "filePath": file_path,
+            "edits": [{"type": "set_line", "line": line_number, "newText": new_text}]
+        }),
+    )
+    .await;
+}
+
 /// Test: MCP `edit_file` tool → rust-analyzer picks up change → diagnostics queryable
 #[tokio::test]
 async fn test_mcp_edit_produces_diagnostics() {
@@ -90,34 +108,12 @@ async fn test_mcp_edit_produces_diagnostics() {
     assert!(errors > 0, "Expected type error diagnostics");
 
     // 4. Fix the error using MCP tools: read_file then edit_file
-    call_tool(&client, "read_file", serde_json::json!({ "filePath": main_rs })).await;
-
-    call_tool(
-        &client,
-        "edit_file",
-        serde_json::json!({
-            "filePath": main_rs,
-            "oldString": "\"not an int\"",
-            "newString": "42"
-        }),
-    )
-    .await;
+    set_line(&client, &main_rs, 2, "    let x: i32 = 42;").await;
     // 5. Poll until errors clear
     poll_diagnostics(&client, Some(&main_rs), has_no_errors).await;
 
     // 6. Re-introduce a different error via MCP edit
-    call_tool(&client, "read_file", serde_json::json!({ "filePath": main_rs })).await;
-
-    call_tool(
-        &client,
-        "edit_file",
-        serde_json::json!({
-            "filePath": main_rs,
-            "oldString": "42",
-            "newString": "true"
-        }),
-    )
-    .await;
+    set_line(&client, &main_rs, 2, "    let x: i32 = true;").await;
 
     // 7. Poll until errors reappear
     let result = poll_diagnostics(&client, Some(&main_rs), has_errors).await;
@@ -152,18 +148,7 @@ async fn test_diagnostics_available_after_edit_without_polling() {
     poll_diagnostics(&client, Some(&main_rs), has_no_errors).await;
 
     // 4. Introduce a syntax error via edit_file
-    call_tool(&client, "read_file", serde_json::json!({ "filePath": main_rs })).await;
-
-    call_tool(
-        &client,
-        "edit_file",
-        serde_json::json!({
-            "filePath": main_rs,
-            "oldString": "42",
-            "newString": "\"not an int\""
-        }),
-    )
-    .await;
+    set_line(&client, &main_rs, 2, "    let x: i32 = \"not an int\";").await;
 
     // 5. Poll until rust-analyzer reports errors for the edited file.
     poll_diagnostics(&client, Some(&main_rs), has_errors).await;
@@ -196,18 +181,7 @@ async fn test_diagnostics_all_files_after_edit() {
     poll_diagnostics(&client, Some(&main_rs), has_no_errors).await;
 
     // 4. Introduce a type error via edit_file
-    call_tool(&client, "read_file", serde_json::json!({ "filePath": main_rs })).await;
-
-    call_tool(
-        &client,
-        "edit_file",
-        serde_json::json!({
-            "filePath": main_rs,
-            "oldString": "42",
-            "newString": "\"not an int\""
-        }),
-    )
-    .await;
+    set_line(&client, &main_rs, 2, "    let x: i32 = \"not an int\";").await;
 
     // 5. Poll workspace diagnostics until rust-analyzer reports errors.
     poll_diagnostics(&client, None, has_errors).await;
@@ -237,18 +211,7 @@ async fn test_workspace_diagnostics_after_edit_without_file_check() {
     // Wait for RA to finish initial indexing via workspace-scope polling.
     poll_diagnostics(&client, None, has_no_errors).await;
 
-    call_tool(&client, "read_file", serde_json::json!({ "filePath": main_rs })).await;
-
-    call_tool(
-        &client,
-        "edit_file",
-        serde_json::json!({
-            "filePath": main_rs,
-            "oldString": "42",
-            "newString": "\"not an int\""
-        }),
-    )
-    .await;
+    set_line(&client, &main_rs, 2, "    let x: i32 = \"not an int\";").await;
 
     // Poll workspace diagnostics until the edit is picked up by RA.
     poll_workspace_diagnostics(&client, |result| file_error_count(result, &main_rs) > 0, Duration::from_secs(30)).await;
@@ -283,18 +246,7 @@ async fn test_workspace_diagnostics_clear_after_fix_without_file_check() {
         "Expected bootstrap workspace diagnostics to report the initial error. Full result: {initial}"
     );
 
-    call_tool(&client, "read_file", serde_json::json!({ "filePath": main_rs })).await;
-
-    call_tool(
-        &client,
-        "edit_file",
-        serde_json::json!({
-            "filePath": main_rs,
-            "oldString": "\"not an int\"",
-            "newString": "42"
-        }),
-    )
-    .await;
+    set_line(&client, &main_rs, 2, "    let x: i32 = 42;").await;
 
     let result =
         poll_workspace_diagnostics(&client, |r| file_error_count(r, &main_rs) == 0, Duration::from_secs(15)).await;

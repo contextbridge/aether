@@ -8,7 +8,7 @@ Implement this trait to provide a custom backend -- for example, a sandboxed fil
 
 - **`read_file`** -- Read a file's contents with optional offset and line limit.
 - **`write_file`** -- Write content to a file, creating parent directories as needed.
-- **`edit_file`** -- Replace a string pattern in an existing file.
+- **`edit_file`** -- Apply line-numbered edits to an existing file.
 - **`list_files`** -- List directory entries with metadata (size, type, modified time).
 - **`bash`** -- Execute a shell command, returning stdout/stderr and exit code. Supports background execution.
 - **`read_background_bash`** -- Read accumulated output from a running background process.

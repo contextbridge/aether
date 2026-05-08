@@ -64,9 +64,17 @@ pub enum FileError {
     #[error("Invalid offset for file {path}: offset must be 1-indexed (start from 1)")]
     InvalidOffset { path: String },
 
-    /// String replacement failed (string not found)
-    #[error("String replacement failed for file {path}: string '{pattern}' not found")]
-    PatternNotFound { path: String, pattern: String },
+    /// Invalid edit target line
+    #[error("Invalid line for file {path} at edit {edit_index}: {line} ({reason})")]
+    InvalidLine { path: String, edit_index: usize, line: usize, reason: String },
+
+    /// Invalid edit request
+    #[error("Invalid edit for file {path}{edit_label}: {reason}", edit_label = edit_index.map(|index| format!(" at edit {index}")).unwrap_or_default())]
+    InvalidEdit { path: String, edit_index: Option<usize>, reason: String },
+
+    /// Ambiguous overlapping edits
+    #[error("Overlapping edits for file {path}: edits {first_edit_index} and {second_edit_index} conflict ({reason})")]
+    OverlappingEdits { path: String, first_edit_index: usize, second_edit_index: usize, reason: String },
 
     /// IO error (wraps `std::io::Error`)
     #[error("IO error: {0}")]
