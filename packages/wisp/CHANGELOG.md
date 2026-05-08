@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.4](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.3...aether-wisp-v0.4.4) - 2026-05-08
+
+### Other
+
+- *(wisp)* DRY up tests with better helpers
+
 ## [0.4.3](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.2...aether-wisp-v0.4.3) - 2026-05-08
 
 ### Added

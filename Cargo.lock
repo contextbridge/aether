@@ -41,7 +41,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-cli"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
@@ -296,7 +296,7 @@ dependencies = [
 
 [[package]]
 name = "aether-wisp"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "aether-acp-utils",
  "aether-tui",
