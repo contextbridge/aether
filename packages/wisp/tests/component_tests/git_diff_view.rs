@@ -1,90 +1,14 @@
+use super::support::git_diff::{
+    added_line, comment_diff_document, git_diff_document, hunk, modified_file_with_hunks, removed_line,
+    sample_git_diff_document, wrapping_split_document,
+};
 use std::path::PathBuf;
 use tui::testing::{assert_buffer_eq, cols, key, render_component, render_lines};
 use tui::{Component, Event, KeyCode, MIN_GUTTER_WIDTH, SEPARATOR_WIDTH, ViewContext};
 use wisp::components::app::{GitDiffLoadState, GitDiffMode};
-use wisp::git_diff::{FileDiff, FileStatus, GitDiffDocument, Hunk, PatchLine, PatchLineKind};
+use wisp::git_diff::GitDiffDocument;
 
 const HINT_LINE: &str = "j/k:move  n/p:hunk  h/l:focus  c:comment  s:submit  u:undo  r:refresh  Esc:close";
-
-fn make_test_doc() -> GitDiffDocument {
-    GitDiffDocument {
-        repo_root: PathBuf::from("/tmp/test"),
-        files: vec![
-            FileDiff {
-                old_path: Some("a.rs".to_string()),
-                path: "a.rs".to_string(),
-                status: FileStatus::Modified,
-                hunks: vec![Hunk {
-                    header: "@@ -1,3 +1,3 @@".to_string(),
-                    old_start: 1,
-                    old_count: 3,
-                    new_start: 1,
-                    new_count: 3,
-                    lines: vec![
-                        PatchLine {
-                            kind: PatchLineKind::HunkHeader,
-                            text: "@@ -1,3 +1,3 @@".to_string(),
-                            old_line_no: None,
-                            new_line_no: None,
-                        },
-                        PatchLine {
-                            kind: PatchLineKind::Context,
-                            text: "fn main() {".to_string(),
-                            old_line_no: Some(1),
-                            new_line_no: Some(1),
-                        },
-                        PatchLine {
-                            kind: PatchLineKind::Removed,
-                            text: "    old();".to_string(),
-                            old_line_no: Some(2),
-                            new_line_no: None,
-                        },
-                        PatchLine {
-                            kind: PatchLineKind::Added,
-                            text: "    new();".to_string(),
-                            old_line_no: None,
-                            new_line_no: Some(2),
-                        },
-                        PatchLine {
-                            kind: PatchLineKind::Context,
-                            text: "}".to_string(),
-                            old_line_no: Some(3),
-                            new_line_no: Some(3),
-                        },
-                    ],
-                }],
-                binary: false,
-            },
-            FileDiff {
-                old_path: None,
-                path: "b.rs".to_string(),
-                status: FileStatus::Added,
-                hunks: vec![Hunk {
-                    header: "@@ -0,0 +1,1 @@".to_string(),
-                    old_start: 0,
-                    old_count: 0,
-                    new_start: 1,
-                    new_count: 1,
-                    lines: vec![
-                        PatchLine {
-                            kind: PatchLineKind::HunkHeader,
-                            text: "@@ -0,0 +1,1 @@".to_string(),
-                            old_line_no: None,
-                            new_line_no: None,
-                        },
-                        PatchLine {
-                            kind: PatchLineKind::Added,
-                            text: "new_content".to_string(),
-                            old_line_no: None,
-                            new_line_no: Some(1),
-                        },
-                    ],
-                }],
-                binary: false,
-            },
-        ],
-    }
-}
 
 fn make_mode(doc: GitDiffDocument) -> GitDiffMode {
     let mut mode = GitDiffMode::new(PathBuf::from("."));
@@ -92,54 +16,9 @@ fn make_mode(doc: GitDiffDocument) -> GitDiffMode {
     mode
 }
 
-fn make_wrapping_split_doc() -> GitDiffDocument {
-    GitDiffDocument {
-        repo_root: PathBuf::from("/tmp/test"),
-        files: vec![FileDiff {
-            old_path: Some("x.rs".to_string()),
-            path: "x.rs".to_string(),
-            status: FileStatus::Modified,
-            hunks: vec![Hunk {
-                header: "@@ -1,2 +1,2 @@".to_string(),
-                old_start: 1,
-                old_count: 2,
-                new_start: 1,
-                new_count: 2,
-                lines: vec![
-                    PatchLine {
-                        kind: PatchLineKind::HunkHeader,
-                        text: "@@ -1,2 +1,2 @@".to_string(),
-                        old_line_no: None,
-                        new_line_no: None,
-                    },
-                    PatchLine {
-                        kind: PatchLineKind::Removed,
-                        text: "LEFT_MARK".to_string(),
-                        old_line_no: Some(1),
-                        new_line_no: None,
-                    },
-                    PatchLine {
-                        kind: PatchLineKind::Added,
-                        text: format!("RIGHT_HEAD {} RIGHT_TAIL", "A".repeat(140)),
-                        old_line_no: None,
-                        new_line_no: Some(1),
-                    },
-                    PatchLine {
-                        kind: PatchLineKind::Context,
-                        text: "}".to_string(),
-                        old_line_no: Some(2),
-                        new_line_no: Some(2),
-                    },
-                ],
-            }],
-            binary: false,
-        }],
-    }
-}
-
 #[test]
 fn wrapped_right_pane_rows_keep_a_neutral_boundary() {
-    let mut mode = make_mode(make_wrapping_split_doc());
+    let mut mode = make_mode(wrapping_split_document());
     let term = render_component(|ctx| mode.render(ctx), 140, 12);
     let lines = term.get_lines();
 
@@ -172,7 +51,7 @@ fn wrapped_right_pane_rows_keep_a_neutral_boundary() {
 
 #[test]
 fn wrapped_split_diff_continuation_row_keeps_neutral_padding() {
-    let mut mode = make_mode(make_wrapping_split_doc());
+    let mut mode = make_mode(wrapping_split_document());
     let ctx = ViewContext::new((140, 12));
     let frame = mode.render(&ctx);
     let wrapped_row = frame
@@ -206,42 +85,17 @@ fn wrapped_split_diff_continuation_row_keeps_neutral_padding() {
 #[test]
 fn git_diff_view_keeps_wrapped_code_out_of_the_line_number_gutter() {
     let filler = "A".repeat(48);
-    let mut mode = make_mode(GitDiffDocument {
-        repo_root: PathBuf::from("/tmp/test"),
-        files: vec![FileDiff {
-            old_path: Some("x.rs".to_string()),
-            path: "x.rs".to_string(),
-            status: FileStatus::Modified,
-            hunks: vec![Hunk {
-                header: "@@ -1,2 +1,2 @@".to_string(),
-                old_start: 1,
-                old_count: 2,
-                new_start: 1,
-                new_count: 2,
-                lines: vec![
-                    PatchLine {
-                        kind: PatchLineKind::HunkHeader,
-                        text: "@@ -1,2 +1,2 @@".to_string(),
-                        old_line_no: None,
-                        new_line_no: None,
-                    },
-                    PatchLine {
-                        kind: PatchLineKind::Removed,
-                        text: "LEFT_MARK".to_string(),
-                        old_line_no: Some(1),
-                        new_line_no: None,
-                    },
-                    PatchLine {
-                        kind: PatchLineKind::Added,
-                        text: format!("RIGHT_HEAD {filler} RIGHT_TAIL"),
-                        old_line_no: None,
-                        new_line_no: Some(1),
-                    },
-                ],
-            }],
-            binary: false,
-        }],
-    });
+    let mut mode = make_mode(git_diff_document(vec![modified_file_with_hunks(
+        "x.rs",
+        vec![hunk(
+            "@@ -1,2 +1,2 @@",
+            1,
+            2,
+            1,
+            2,
+            vec![removed_line("LEFT_MARK", 1), added_line(format!("RIGHT_HEAD {filler} RIGHT_TAIL"), 1)],
+        )],
+    )]));
     let term = render_component(|ctx| mode.render(ctx), 140, 7);
 
     assert_buffer_eq(
@@ -260,44 +114,23 @@ fn git_diff_view_keeps_wrapped_code_out_of_the_line_number_gutter() {
 
 #[test]
 fn screenshot_shaped_git_diff_wrap_row_stays_out_of_gutters() {
-    let mut mode = make_mode(GitDiffDocument {
-        repo_root: PathBuf::from("/tmp/test"),
-        files: vec![FileDiff {
-            old_path: Some("split_diff.rs".to_string()),
-            path: "split_diff.rs".to_string(),
-            status: FileStatus::Modified,
-            hunks: vec![Hunk {
-                header: "@@ -56,2 +57,2 @@".to_string(),
-                old_start: 56,
-                old_count: 2,
-                new_start: 57,
-                new_count: 2,
-                lines: vec![
-                    PatchLine {
-                        kind: PatchLineKind::HunkHeader,
-                        text: "@@ -56,2 +57,2 @@".to_string(),
-                        old_line_no: None,
-                        new_line_no: None,
-                    },
-                    PatchLine {
-                        kind: PatchLineKind::Removed,
-                        text: "let left = left_lines.get(i).cloned().unwrap_or_else(|| blank_panel(left_panel));"
-                            .to_string(),
-                        old_line_no: Some(56),
-                        new_line_no: None,
-                    },
-                    PatchLine {
-                        kind: PatchLineKind::Added,
-                        text: "let left = left_lines.get(i).cloned().unwrap_or_else(|| blank_panel(left_panel, theme.code_bg()));"
-                            .to_string(),
-                        old_line_no: None,
-                        new_line_no: Some(57),
-                    },
-                ],
-            }],
-            binary: false,
-        }],
-    });
+    let mut mode = make_mode(git_diff_document(vec![modified_file_with_hunks(
+        "split_diff.rs",
+        vec![hunk(
+            "@@ -56,2 +57,2 @@",
+            56,
+            2,
+            57,
+            2,
+            vec![
+                removed_line("let left = left_lines.get(i).cloned().unwrap_or_else(|| blank_panel(left_panel));", 56),
+                added_line(
+                    "let left = left_lines.get(i).cloned().unwrap_or_else(|| blank_panel(left_panel, theme.code_bg()));",
+                    57,
+                ),
+            ],
+        )],
+    )]));
     let term = render_component(|ctx| mode.render(ctx), 151, 8);
     let lines = term.get_lines();
     let wrapped_idx = lines
@@ -334,7 +167,7 @@ fn screenshot_shaped_git_diff_wrap_row_stays_out_of_gutters() {
 }
 
 fn make_long_header_doc() -> GitDiffDocument {
-    let mut doc = make_test_doc();
+    let mut doc = sample_git_diff_document();
     let long_path = "src/components/git_diff_mode/this_is_a_deliberately_long_filename_that_should_be_clipped_in_the_patch_header.rs".to_string();
     doc.files[0].old_path = Some(long_path.clone());
     doc.files[0].path = long_path;
@@ -342,7 +175,7 @@ fn make_long_header_doc() -> GitDiffDocument {
 }
 
 fn make_long_split_hunk_header_doc() -> GitDiffDocument {
-    let mut doc = make_test_doc();
+    let mut doc = sample_git_diff_document();
     let long_header = format!("@@ -1,3 +1,3 @@ {}", "WRAPME_".repeat(30));
     doc.files[0].hunks[0].header.clone_from(&long_header);
     doc.files[0].hunks[0].lines[0].text = long_header;
@@ -379,7 +212,7 @@ fn render_error_state() {
 #[test]
 fn render_shows_file_list_and_patch() {
     let sb = 28;
-    let doc = make_test_doc();
+    let doc = sample_git_diff_document();
     let mut mode = make_mode(doc);
     let term = render_component(|ctx| mode.render(ctx), 100, 9);
     assert_buffer_eq(
@@ -400,7 +233,7 @@ fn render_shows_file_list_and_patch() {
 
 #[test]
 fn added_lines_use_added_background_style() {
-    let mut mode = make_mode(make_test_doc());
+    let mut mode = make_mode(sample_git_diff_document());
     let term = render_component(|ctx| mode.render(ctx), 100, 8);
     let lines = term.get_lines();
 
@@ -413,7 +246,7 @@ fn added_lines_use_added_background_style() {
 
 #[test]
 fn narrow_width_renders_unified_diff_rows() {
-    let mut mode = make_mode(make_test_doc());
+    let mut mode = make_mode(sample_git_diff_document());
     let term = render_component(|ctx| mode.render(ctx), 108, 10);
     let lines = term.get_lines();
 
@@ -427,7 +260,7 @@ fn narrow_width_renders_unified_diff_rows() {
 
 #[test]
 fn wide_width_renders_split_diff_rows() {
-    let mut mode = make_mode(make_test_doc());
+    let mut mode = make_mode(sample_git_diff_document());
     let term = render_component(|ctx| mode.render(ctx), 109, 10);
     let lines = term.get_lines();
 
@@ -477,51 +310,6 @@ fn git_split_view_preserves_hunk_header_background_on_wrapped_rows() {
     assert_eq!(term.get_style_at(header_row + 1, 129).bg, expected_bg);
 }
 
-fn make_comment_test_doc() -> GitDiffDocument {
-    GitDiffDocument {
-        repo_root: PathBuf::from("/tmp/test"),
-        files: vec![FileDiff {
-            old_path: Some("test.rs".to_string()),
-            path: "test.rs".to_string(),
-            status: FileStatus::Added,
-            hunks: vec![Hunk {
-                header: "@@ -0,0 +1,3 @@".to_string(),
-                old_start: 0,
-                old_count: 0,
-                new_start: 1,
-                new_count: 3,
-                lines: vec![
-                    PatchLine {
-                        kind: PatchLineKind::HunkHeader,
-                        text: "@@ -0,0 +1,3 @@".to_string(),
-                        old_line_no: None,
-                        new_line_no: None,
-                    },
-                    PatchLine {
-                        kind: PatchLineKind::Added,
-                        text: "line_one".to_string(),
-                        old_line_no: None,
-                        new_line_no: Some(1),
-                    },
-                    PatchLine {
-                        kind: PatchLineKind::Added,
-                        text: "line_two".to_string(),
-                        old_line_no: None,
-                        new_line_no: Some(2),
-                    },
-                    PatchLine {
-                        kind: PatchLineKind::Added,
-                        text: "line_three".to_string(),
-                        old_line_no: None,
-                        new_line_no: Some(3),
-                    },
-                ],
-            }],
-            binary: false,
-        }],
-    }
-}
-
 async fn send_keys(mode: &mut GitDiffMode, codes: &[KeyCode]) {
     let ctx = ViewContext::new((100, 20));
     for &code in codes {
@@ -532,7 +320,7 @@ async fn send_keys(mode: &mut GitDiffMode, codes: &[KeyCode]) {
 
 #[tokio::test]
 async fn draft_comment_appears_after_correct_line_when_submitted_comment_exists() {
-    let mut mode = make_mode(make_comment_test_doc());
+    let mut mode = make_mode(comment_diff_document());
 
     // Focus right panel (l on file list triggers FileOpened)
     send_keys(&mut mode, &[KeyCode::Char('l')]).await;
@@ -597,7 +385,7 @@ async fn draft_comment_appears_after_correct_line_when_submitted_comment_exists(
 
 #[tokio::test]
 async fn submitted_comment_visible_on_last_line() {
-    let mut mode = make_mode(make_comment_test_doc());
+    let mut mode = make_mode(comment_diff_document());
 
     send_keys(&mut mode, &[KeyCode::Char('l')]).await;
     send_keys(
@@ -629,7 +417,7 @@ async fn submitted_comment_visible_on_last_line() {
 
 #[tokio::test]
 async fn draft_comment_bottom_border_visible_on_last_line() {
-    let mut mode = make_mode(make_comment_test_doc());
+    let mut mode = make_mode(comment_diff_document());
 
     send_keys(&mut mode, &[KeyCode::Char('l')]).await;
     send_keys(

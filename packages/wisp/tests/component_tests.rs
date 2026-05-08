@@ -8,5 +8,6 @@ mod component_tests {
     mod settings_menu;
     mod settings_overlay;
     mod status_line;
+    mod support;
     mod tool_call_statuses;
 }

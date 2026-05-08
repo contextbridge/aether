@@ -1,5 +1,6 @@
-use acp_utils::notifications::SubAgentProgressParams;
+use super::support::tool_events::*;
 use agent_client_protocol::schema as acp;
+use serde_json::json;
 use tui::testing::{assert_buffer_eq, render_component, render_lines};
 use tui::{BRAILLE_FRAMES as FRAMES, DiffLine, DiffPreview, DiffTag, Line, SplitDiffCell, SplitDiffRow, ViewContext};
 use wisp::components::tool_call_status_view::{MAX_TOOL_ARG_LENGTH, ToolCallStatus, ToolCallStatusView};
@@ -13,66 +14,6 @@ fn render_all(statuses: &ToolCallStatuses, ids: &[&str], ctx: &ViewContext) -> V
     ids.iter().flat_map(|id| statuses.render_tool(id, ctx).into_lines()).collect()
 }
 
-fn make_tool_call(id: &str, title: &str, raw_input: Option<&str>) -> acp::ToolCall {
-    let mut tc = acp::ToolCall::new(id.to_string(), title);
-    if let Some(input) = raw_input {
-        tc = tc.raw_input(serde_json::from_str::<serde_json::Value>(input).unwrap());
-    }
-    tc
-}
-
-fn make_tool_call_update(id: &str, status: acp::ToolCallStatus) -> acp::ToolCallUpdate {
-    acp::ToolCallUpdate::new(id.to_string(), acp::ToolCallUpdateFields::new().status(status))
-}
-
-fn make_sub_agent_notification(parent_tool_id: &str, agent_name: &str, event_json: &str) -> SubAgentProgressParams {
-    make_sub_agent_notification_with_task_id(parent_tool_id, agent_name, agent_name, event_json)
-}
-
-fn make_sub_agent_notification_with_task_id(
-    parent_tool_id: &str,
-    task_id: &str,
-    agent_name: &str,
-    event_json: &str,
-) -> SubAgentProgressParams {
-    let json = format!(
-        r#"{{"parent_tool_id":"{parent_tool_id}","task_id":"{task_id}","agent_name":"{agent_name}","event":{event_json}}}"#,
-    );
-    serde_json::from_str(&json).unwrap()
-}
-
-fn tool_call_event(id: &str, name: &str) -> String {
-    format!(r#"{{"ToolCall":{{"request":{{"id":"{id}","name":"{name}","arguments":"{{}}"}},"model_name":"m"}}}}"#)
-}
-
-fn tool_call_event_with_args(id: &str, name: &str, arguments: &str) -> String {
-    let escaped = arguments.replace('"', r#"\""#);
-    format!(r#"{{"ToolCall":{{"request":{{"id":"{id}","name":"{name}","arguments":"{escaped}"}},"model_name":"m"}}}}"#)
-}
-
-fn tool_result_event(id: &str, name: &str) -> String {
-    format!(
-        r#"{{"ToolResult":{{"result":{{"id":"{id}","name":"{name}","arguments":"{{}}","result":"ok"}},"model_name":"m"}}}}"#
-    )
-}
-
-fn tool_result_event_with_meta(id: &str, name: &str, title: &str, value: &str) -> String {
-    format!(
-        r#"{{"ToolResult":{{"result":{{"id":"{id}","name":"{name}","result_meta":{{"display":{{"title":"{title}","value":"{value}"}}}}}},"model_name":"m"}}}}"#
-    )
-}
-
-fn tool_error_event(id: &str, name: &str) -> String {
-    format!(
-        r#"{{"ToolError":{{"error":{{"id":"{id}","name":"{name}","arguments":"{{}}","error":"not found"}},"model_name":"m"}}}}"#
-    )
-}
-
-fn tool_update_event(id: &str, chunk: &str) -> String {
-    let escaped = chunk.replace('"', r#"\""#);
-    format!(r#"{{"ToolCallUpdate":{{"update":{{"id":"{id}","chunk":"{escaped}"}}}}}}"#)
-}
-
 fn render_tool_lines(statuses: &ToolCallStatuses, id: &str) -> Vec<String> {
     let lines = statuses.render_tool(id, &ctx()).into_lines();
     let count = lines.len();
@@ -82,18 +23,20 @@ fn render_tool_lines(statuses: &ToolCallStatuses, id: &str) -> Vec<String> {
 
 fn setup_parent() -> ToolCallStatuses {
     let mut statuses = ToolCallStatuses::new();
-    statuses.on_tool_call(&make_tool_call("parent-1", "spawn_subagent", None));
+    statuses.on_tool_call(&ToolCallFactory::default().id("parent-1").name("spawn_subagent").build());
     statuses
 }
 
-fn progress(statuses: &mut ToolCallStatuses, agent: &str, event: &str) {
-    statuses.on_sub_agent_progress(&make_sub_agent_notification("parent-1", agent, event));
+fn progress(statuses: &mut ToolCallStatuses, agent: &str, event: SubAgentEvent) {
+    statuses.on_sub_agent_progress(&sub_agent_progress("parent-1", agent, event));
 }
 
 #[test]
 fn request_tracks_tool() {
     let mut statuses = ToolCallStatuses::new();
-    statuses.on_tool_call(&make_tool_call("tool-1", "Read", Some(r#""/path/to/file""#)));
+    statuses.on_tool_call(
+        &ToolCallFactory::default().id("tool-1").name("Read").raw_input_json(r#""/path/to/file""#).build(),
+    );
 
     let output = render_tool_lines(&statuses, "tool-1");
     assert_eq!(output.len(), 1);
@@ -103,8 +46,8 @@ fn request_tracks_tool() {
 #[test]
 fn update_to_success() {
     let mut statuses = ToolCallStatuses::new();
-    statuses.on_tool_call(&make_tool_call("tool-1", "Read", None));
-    statuses.on_tool_call_update(&make_tool_call_update("tool-1", acp::ToolCallStatus::Completed));
+    statuses.on_tool_call(&ToolCallFactory::default().id("tool-1").name("Read").build());
+    statuses.on_tool_call_update(&completed_tool_call_update("tool-1"));
 
     let output = render_tool_lines(&statuses, "tool-1");
     assert_eq!(output.len(), 1);
@@ -114,15 +57,15 @@ fn update_to_success() {
 #[test]
 fn unknown_update_is_ignored() {
     let mut statuses = ToolCallStatuses::new();
-    statuses.on_tool_call_update(&make_tool_call_update("unknown", acp::ToolCallStatus::Completed));
+    statuses.on_tool_call_update(&completed_tool_call_update("unknown"));
     assert!(statuses.render_tool("unknown", &ctx()).lines().is_empty());
 }
 
 #[test]
 fn update_to_error() {
     let mut statuses = ToolCallStatuses::new();
-    statuses.on_tool_call(&make_tool_call("tool-1", "Read", None));
-    statuses.on_tool_call_update(&make_tool_call_update("tool-1", acp::ToolCallStatus::Failed));
+    statuses.on_tool_call(&ToolCallFactory::default().id("tool-1").name("Read").build());
+    statuses.on_tool_call_update(&failed_tool_call_update("tool-1"));
 
     let output = render_tool_lines(&statuses, "tool-1");
     assert_eq!(output.len(), 1);
@@ -132,8 +75,8 @@ fn update_to_error() {
 #[test]
 fn multiple_tools_render_in_order() {
     let mut statuses = ToolCallStatuses::new();
-    statuses.on_tool_call(&make_tool_call("tool-1", "Read", None));
-    statuses.on_tool_call(&make_tool_call("tool-2", "Write", None));
+    statuses.on_tool_call(&ToolCallFactory::default().id("tool-1").name("Read").build());
+    statuses.on_tool_call(&ToolCallFactory::default().id("tool-2").name("Write").build());
 
     let lines = render_all(&statuses, &["tool-1", "tool-2"], &ctx());
     assert_eq!(lines.len(), 2);
@@ -146,9 +89,9 @@ fn multiple_tools_render_in_order() {
 #[test]
 fn multiple_tools_complete_independently() {
     let mut statuses = ToolCallStatuses::new();
-    statuses.on_tool_call(&make_tool_call("tool-1", "Read", None));
-    statuses.on_tool_call(&make_tool_call("tool-2", "Write", None));
-    statuses.on_tool_call_update(&make_tool_call_update("tool-1", acp::ToolCallStatus::Completed));
+    statuses.on_tool_call(&ToolCallFactory::default().id("tool-1").name("Read").build());
+    statuses.on_tool_call(&ToolCallFactory::default().id("tool-2").name("Write").build());
+    statuses.on_tool_call_update(&completed_tool_call_update("tool-1"));
 
     let lines = render_all(&statuses, &["tool-1", "tool-2"], &ctx());
     let term = render_lines(&lines, 80, 24);
@@ -160,7 +103,7 @@ fn multiple_tools_complete_independently() {
 #[test]
 fn clear_removes_all() {
     let mut statuses = ToolCallStatuses::new();
-    statuses.on_tool_call(&make_tool_call("tool-1", "Read", None));
+    statuses.on_tool_call(&ToolCallFactory::default().id("tool-1").name("Read").build());
     statuses.clear();
     assert!(!statuses.has_tool("tool-1"));
     assert!(statuses.render_tool("tool-1", &ctx()).lines().is_empty());
@@ -169,14 +112,7 @@ fn clear_removes_all() {
 #[test]
 fn view_renders_running_with_spinner() {
     let status = ToolCallStatus::Running;
-    let view = ToolCallStatusView {
-        name: "TestTool",
-        arguments: "test args",
-        display_value: None,
-        diff_preview: None,
-        status: &status,
-        tick: 0,
-    };
+    let view = ToolCallStatusView { arguments: "test args", ..tool_call_status_view(&status) };
     let lines = view.render(&ctx()).into_lines();
     assert_eq!(lines.len(), 1);
     let term = render_lines(&lines, 80, 24);
@@ -189,22 +125,8 @@ fn view_renders_running_with_spinner() {
 #[test]
 fn view_running_spinner_changes_with_tick() {
     let status = ToolCallStatus::Running;
-    let view_a = ToolCallStatusView {
-        name: "TestTool",
-        arguments: "",
-        display_value: None,
-        diff_preview: None,
-        status: &status,
-        tick: 0,
-    };
-    let view_b = ToolCallStatusView {
-        name: "TestTool",
-        arguments: "",
-        display_value: None,
-        diff_preview: None,
-        status: &status,
-        tick: 1,
-    };
+    let view_a = tool_call_status_view(&status);
+    let view_b = ToolCallStatusView { tick: 1, ..tool_call_status_view(&status) };
     let lines_a = view_a.render(&ctx()).into_lines();
     let lines_b = view_b.render(&ctx()).into_lines();
     let term_a = render_lines(&lines_a, 80, 24);
@@ -217,14 +139,7 @@ fn view_running_spinner_changes_with_tick() {
 #[test]
 fn view_renders_success() {
     let status = ToolCallStatus::Success;
-    let view = ToolCallStatusView {
-        name: "TestTool",
-        arguments: "test args",
-        display_value: None,
-        diff_preview: None,
-        status: &status,
-        tick: 0,
-    };
+    let view = ToolCallStatusView { arguments: "test args", ..tool_call_status_view(&status) };
     let lines = view.render(&ctx()).into_lines();
     assert_eq!(lines.len(), 1);
     let term = render_lines(&lines, 80, 24);
@@ -235,14 +150,7 @@ fn view_renders_success() {
 #[test]
 fn view_renders_error() {
     let status = ToolCallStatus::Error("boom".to_string());
-    let view = ToolCallStatusView {
-        name: "TestTool",
-        arguments: "test args",
-        display_value: None,
-        diff_preview: None,
-        status: &status,
-        tick: 0,
-    };
+    let view = ToolCallStatusView { arguments: "test args", ..tool_call_status_view(&status) };
     let lines = view.render(&ctx()).into_lines();
     assert_eq!(lines.len(), 1);
     let term = render_lines(&lines, 80, 24);
@@ -255,14 +163,7 @@ fn view_renders_error() {
 fn view_truncates_utf8_arguments_without_panicking() {
     let arguments = format!("{}界", "a".repeat(MAX_TOOL_ARG_LENGTH - 2));
     let status = ToolCallStatus::Success;
-    let view = ToolCallStatusView {
-        name: "TestTool",
-        arguments: &arguments,
-        display_value: None,
-        diff_preview: None,
-        status: &status,
-        tick: 0,
-    };
+    let view = ToolCallStatusView { arguments: &arguments, ..tool_call_status_view(&status) };
 
     let expected = format!("✓ TestTool {}", "a".repeat(MAX_TOOL_ARG_LENGTH - 2));
     let width = expected.len() + 10;
@@ -284,10 +185,7 @@ fn view_running_hides_raw_args_then_shows_display_value() {
     let view = ToolCallStatusView {
         name: "Read",
         arguments: r#"{"file_path":"/path/to/main.rs"}"#,
-        display_value: None,
-        diff_preview: None,
-        status: &status,
-        tick: 0,
+        ..tool_call_status_view(&status)
     };
 
     // While running with no display_value, raw args are hidden
@@ -324,11 +222,9 @@ fn indented_split_diff_does_not_bleed_diff_bg_into_left_indent_columns() {
     let status = ToolCallStatus::Success;
     let view = ToolCallStatusView {
         name: "Edit",
-        arguments: "",
         display_value: Some("file.rs"),
         diff_preview: Some(&preview),
-        status: &status,
-        tick: 0,
+        ..tool_call_status_view(&status)
     };
 
     let indent: u16 = 2;
@@ -348,7 +244,7 @@ fn indented_split_diff_does_not_bleed_diff_bg_into_left_indent_columns() {
 #[test]
 fn sub_agent_tool_call_renders_nested() {
     let mut statuses = setup_parent();
-    progress(&mut statuses, "explorer", &tool_call_event_with_args("c1", "grep", r#"{"pattern":"test"}"#));
+    progress(&mut statuses, "explorer", sub_agent_tool_call_with_args("c1", "grep", json!({ "pattern": "test" })));
 
     let output = render_tool_lines(&statuses, "parent-1");
     assert_eq!(output.len(), 2);
@@ -361,9 +257,9 @@ fn sub_agent_tool_call_renders_nested() {
 #[test]
 fn sub_agent_tool_call_update_appends_chunk() {
     let mut statuses = setup_parent();
-    progress(&mut statuses, "explorer", &tool_call_event("c1", "grep"));
-    progress(&mut statuses, "explorer", &tool_update_event("c1", r#"{"pattern":"updated"}"#));
-    progress(&mut statuses, "explorer", &tool_result_event("c1", "grep"));
+    progress(&mut statuses, "explorer", sub_agent_tool_call("c1", "grep"));
+    progress(&mut statuses, "explorer", sub_agent_tool_update("c1", json!({ "pattern": "updated" })));
+    progress(&mut statuses, "explorer", sub_agent_tool_result("c1", "grep"));
 
     let output = render_tool_lines(&statuses, "parent-1");
     assert_eq!(output.len(), 2);
@@ -373,8 +269,8 @@ fn sub_agent_tool_call_update_appends_chunk() {
 #[test]
 fn sub_agent_tool_result_shows_checkmark() {
     let mut statuses = setup_parent();
-    progress(&mut statuses, "explorer", &tool_call_event("c1", "read_file"));
-    progress(&mut statuses, "explorer", &tool_result_event("c1", "read_file"));
+    progress(&mut statuses, "explorer", sub_agent_tool_call("c1", "read_file"));
+    progress(&mut statuses, "explorer", sub_agent_tool_result("c1", "read_file"));
 
     let output = render_tool_lines(&statuses, "parent-1");
     assert_eq!(output.len(), 2);
@@ -387,12 +283,12 @@ fn sub_agent_tool_result_uses_result_meta() {
     progress(
         &mut statuses,
         "explorer",
-        &tool_call_event_with_args("c1", "coding__read_file", r#"{"filePath":"Cargo.toml"}"#),
+        sub_agent_tool_call_with_args("c1", "coding__read_file", json!({ "filePath": "Cargo.toml" })),
     );
     progress(
         &mut statuses,
         "explorer",
-        &tool_result_event_with_meta("c1", "coding__read_file", "Read file", "Cargo.toml, 156 lines"),
+        sub_agent_tool_result_with_display_meta("c1", "coding__read_file", "Read file", "Cargo.toml, 156 lines"),
     );
 
     let output = render_tool_lines(&statuses, "parent-1");
@@ -406,8 +302,8 @@ fn sub_agent_tool_result_uses_result_meta() {
 #[test]
 fn sub_agent_tool_error_shows_x() {
     let mut statuses = setup_parent();
-    progress(&mut statuses, "explorer", &tool_call_event("c1", "read_file"));
-    progress(&mut statuses, "explorer", &tool_error_event("c1", "read_file"));
+    progress(&mut statuses, "explorer", sub_agent_tool_call("c1", "read_file"));
+    progress(&mut statuses, "explorer", sub_agent_tool_error("c1", "read_file"));
 
     let output = render_tool_lines(&statuses, "parent-1");
     assert_eq!(output.len(), 2);
@@ -417,8 +313,8 @@ fn sub_agent_tool_error_shows_x() {
 #[test]
 fn multiple_sub_agents_render_separate_headers() {
     let mut statuses = setup_parent();
-    progress(&mut statuses, "explorer", &tool_call_event("c1", "grep"));
-    progress(&mut statuses, "writer", &tool_call_event("c2", "write_file"));
+    progress(&mut statuses, "explorer", sub_agent_tool_call("c1", "grep"));
+    progress(&mut statuses, "writer", sub_agent_tool_call("c2", "write_file"));
 
     let output = render_tool_lines(&statuses, "parent-1");
     assert_eq!(output.len(), 5);
@@ -430,11 +326,11 @@ fn multiple_sub_agents_render_separate_headers() {
 fn same_name_agents_with_different_task_ids_render_separately() {
     let mut statuses = setup_parent();
     for (task, id, name) in [("task-1", "c1", "grep"), ("task-2", "c2", "read_file"), ("task-3", "c3", "list_files")] {
-        statuses.on_sub_agent_progress(&make_sub_agent_notification_with_task_id(
+        statuses.on_sub_agent_progress(&sub_agent_progress_with_task_id(
             "parent-1",
             task,
             "codebase-explorer",
-            &tool_call_event(id, name),
+            sub_agent_tool_call(id, name),
         ));
     }
 
@@ -448,11 +344,11 @@ fn same_name_agents_with_different_task_ids_render_separately() {
 #[test]
 fn sub_agent_renders_latest_three_tools_with_overflow() {
     let mut statuses = setup_parent();
-    progress(&mut statuses, "explorer", &tool_call_event("c1", "grep"));
-    progress(&mut statuses, "explorer", &tool_result_event("c1", "grep"));
-    progress(&mut statuses, "explorer", &tool_call_event("c2", "read_file"));
-    progress(&mut statuses, "explorer", &tool_call_event("c3", "list_files"));
-    progress(&mut statuses, "explorer", &tool_call_event("c4", "write_file"));
+    progress(&mut statuses, "explorer", sub_agent_tool_call("c1", "grep"));
+    progress(&mut statuses, "explorer", sub_agent_tool_result("c1", "grep"));
+    progress(&mut statuses, "explorer", sub_agent_tool_call("c2", "read_file"));
+    progress(&mut statuses, "explorer", sub_agent_tool_call("c3", "list_files"));
+    progress(&mut statuses, "explorer", sub_agent_tool_call("c4", "write_file"));
 
     let output = render_tool_lines(&statuses, "parent-1");
     assert_eq!(output.len(), 5);
@@ -468,8 +364,8 @@ fn sub_agent_renders_latest_three_tools_with_overflow() {
 #[test]
 fn agent_header_shows_spinner_while_running() {
     let mut statuses = setup_parent();
-    progress(&mut statuses, "explorer", &tool_call_event("c1", "grep"));
-    progress(&mut statuses, "explorer", &tool_result_event("c1", "grep"));
+    progress(&mut statuses, "explorer", sub_agent_tool_call("c1", "grep"));
+    progress(&mut statuses, "explorer", sub_agent_tool_result("c1", "grep"));
 
     let output = render_tool_lines(&statuses, "parent-1");
     assert!(!output[0].contains('✓'), "Expected spinner, not ✓ in header: {}", output[0]);
@@ -478,8 +374,8 @@ fn agent_header_shows_spinner_while_running() {
 #[test]
 fn agent_header_shows_done_after_done_event() {
     let mut statuses = setup_parent();
-    progress(&mut statuses, "explorer", &tool_call_event("c1", "grep"));
-    progress(&mut statuses, "explorer", r#""Done""#);
+    progress(&mut statuses, "explorer", sub_agent_tool_call("c1", "grep"));
+    progress(&mut statuses, "explorer", sub_agent_done());
 
     let output = render_tool_lines(&statuses, "parent-1");
     assert!(output[0].contains('✓'), "Expected ✓ in header: {}", output[0]);
@@ -488,7 +384,7 @@ fn agent_header_shows_done_after_done_event() {
 #[test]
 fn test_display_value_shown_on_completion() {
     let mut statuses = ToolCallStatuses::new();
-    statuses.on_tool_call(&make_tool_call("tool-1", "coding__read_file", None));
+    statuses.on_tool_call(&ToolCallFactory::default().id("tool-1").name("coding__read_file").build());
 
     let mut meta_map = serde_json::Map::new();
     meta_map.insert("display_value".into(), "Cargo.toml, 156 lines".into());
@@ -511,7 +407,13 @@ fn test_display_value_shown_on_completion() {
 #[test]
 fn test_display_value_shown_while_running() {
     let mut statuses = ToolCallStatuses::new();
-    statuses.on_tool_call(&make_tool_call("tool-1", "Read file", Some(r#"{"file_path":"/path/to/main.rs"}"#)));
+    statuses.on_tool_call(
+        &ToolCallFactory::default()
+            .id("tool-1")
+            .name("Read file")
+            .raw_input_json(r#"{"file_path":"/path/to/main.rs"}"#)
+            .build(),
+    );
 
     let mut meta_map = serde_json::Map::new();
     meta_map.insert("display_value".into(), "main.rs".into());
