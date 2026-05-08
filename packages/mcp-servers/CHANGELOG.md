@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.6](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.3.5...aether-mcp-servers-v0.3.6) - 2026-05-08
+
+### Other
+
+- *(mcp-utils)* Rewrite mcp config to better use serde, schemars, and enforce 1 proxy instance
+
 ## [0.3.5](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.3.4...aether-mcp-servers-v0.3.5) - 2026-05-05
 
 ### Other

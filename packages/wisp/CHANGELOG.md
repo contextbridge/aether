@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.3](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.2...aether-wisp-v0.4.3) - 2026-05-08
+
+### Added
+
+- *(aether-cli)* Render proxied MCP servers in a separate list from non-proxied MCPs in settings menu
+
+### Fixed
+
+- *(mcp-servers)* Allow concurrent mcp auth requests
+
 ## [0.4.2](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.1...aether-wisp-v0.4.2) - 2026-05-05
 
 ### Other

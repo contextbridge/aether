@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.6](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.3.5...aether-acp-utils-v0.3.6) - 2026-05-08
+
+### Added
+
+- *(aether-cli)* Render proxied MCP servers in a separate list from non-proxied MCPs in settings menu
+
 ## [0.3.5](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.3.4...aether-acp-utils-v0.3.5) - 2026-05-05
 
 ### Other

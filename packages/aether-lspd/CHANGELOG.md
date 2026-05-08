@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.12](https://github.com/contextbridge/aether/compare/aether-lspd-v0.1.11...aether-lspd-v0.1.12) - 2026-05-08
+
+### Other
+
+- *(aether-lspd)* fix flaky test
+
 ## [0.1.11](https://github.com/contextbridge/aether/compare/aether-lspd-v0.1.10...aether-lspd-v0.1.11) - 2026-05-05
 
 ### Other

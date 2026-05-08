@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.3.5...aether-agent-core-v0.4.0) - 2026-05-08
+
+### Added
+
+- *(aether-cli)* Render proxied MCP servers in a separate list from non-proxied MCPs in settings menu
+
+### Fixed
+
+- *(mcp-servers)* Allow concurrent mcp auth requests
+
+### Other
+
+- *(mcp-utils)* Rewrite mcp config to better use serde, schemars, and enforce 1 proxy instance
+
 ## [0.3.5](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.3.4...aether-agent-core-v0.3.5) - 2026-05-05
 
 ### Other

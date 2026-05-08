@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0](https://github.com/contextbridge/aether/compare/aether-llm-v0.2.7...aether-llm-v0.3.0) - 2026-05-08
+
+### Other
+
+- *(workspace)* Upgrade deps and to keyring 4.x
+
 ## [0.2.7](https://github.com/contextbridge/aether/compare/aether-llm-v0.2.6...aether-llm-v0.2.7) - 2026-05-05
 
 ### Other
