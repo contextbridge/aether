@@ -177,7 +177,6 @@ async fn tool_proxy_with_failing_http_surfaces_needs_oauth() {
     let _ = manager.add_mcps(servers).await;
     let statuses = manager.server_statuses();
 
-    // The failing HTTP server should be stashed as NeedsOAuth
     let remote_status = statuses.iter().find(|s| s.name == "remote").expect("Expected status entry for 'remote'");
     assert!(
         matches!(remote_status.status, McpServerStatus::NeedsOAuth),
@@ -186,17 +185,12 @@ async fn tool_proxy_with_failing_http_surfaces_needs_oauth() {
     );
     assert_eq!(remote_status.auth_capability, McpServerAuthCapability::OAuth);
     assert!(remote_status.can_authenticate());
+    assert!(remote_status.proxied, "Expected remote to be marked as proxied");
 
-    // The proxy itself should still be connected
-    let proxy_status = statuses.iter().find(|s| s.name == "proxy").expect("Expected status entry for proxy");
-
-    assert!(
-        matches!(proxy_status.status, McpServerStatus::Connected { .. }),
-        "Expected proxy to be Connected, got: {:?}",
-        proxy_status.status
-    );
-
-    assert_eq!(proxy_status.auth_capability, McpServerAuthCapability::Unavailable);
+    let local_status = statuses.iter().find(|s| s.name == "local").expect("Expected status entry for 'local'");
+    assert!(matches!(local_status.status, McpServerStatus::Connected { .. }),);
+    assert!(local_status.proxied);
+    assert!(!statuses.iter().any(|s| s.name == "proxy"));
 
     // The proxy's call_tool should still be available
     let defs = manager.tool_definitions();

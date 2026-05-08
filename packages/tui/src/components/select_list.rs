@@ -1,11 +1,15 @@
 use crossterm::event::{KeyCode, MouseEventKind};
 
-use crate::components::{Component, Event, ViewContext, wrap_selection};
+use crate::components::{Component, Event, ViewContext};
 use crate::line::Line;
 use crate::rendering::frame::Frame;
 
 pub trait SelectItem {
     fn render_item(&self, selected: bool, ctx: &ViewContext) -> Line;
+
+    fn is_selectable(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Debug)]
@@ -17,13 +21,14 @@ pub enum SelectListMessage {
 #[doc = include_str!("../docs/select_list.md")]
 pub struct SelectList<T: SelectItem> {
     items: Vec<T>,
-    selected_index: usize,
+    selected_index: Option<usize>,
     placeholder: String,
 }
 
 impl<T: SelectItem> SelectList<T> {
     pub fn new(items: Vec<T>, placeholder: impl Into<String>) -> Self {
-        Self { items, selected_index: 0, placeholder: placeholder.into() }
+        let selected_index = first_selectable(&items);
+        Self { items, selected_index, placeholder: placeholder.into() }
     }
 
     pub fn items(&self) -> &[T] {
@@ -36,30 +41,44 @@ impl<T: SelectItem> SelectList<T> {
 
     pub fn retain(&mut self, f: impl FnMut(&T) -> bool) {
         self.items.retain(f);
-        self.clamp_index();
+        self.reseat_selection();
     }
 
     pub fn selected_index(&self) -> usize {
-        self.selected_index
+        self.selected_index.unwrap_or(0)
     }
 
     pub fn selected_item(&self) -> Option<&T> {
-        self.items.get(self.selected_index)
+        self.selected_index.and_then(|i| self.items.get(i))
     }
 
     pub fn set_items(&mut self, items: Vec<T>) {
         self.items = items;
-        self.clamp_index();
+        self.reseat_selection();
     }
 
+    /// Select the item at `index`. No-op if out of bounds or not selectable.
     pub fn set_selected(&mut self, index: usize) {
-        if index < self.items.len() {
-            self.selected_index = index;
+        if self.items.get(index).is_some_and(SelectItem::is_selectable) {
+            self.selected_index = Some(index);
         }
     }
 
+    /// Reselect by name/identity using a predicate. Falls back to first selectable item.
+    pub fn select_where(&mut self, predicate: impl Fn(&T) -> bool) {
+        self.selected_index = self
+            .items
+            .iter()
+            .position(|item| item.is_selectable() && predicate(item))
+            .or_else(|| first_selectable(&self.items));
+    }
+
     pub fn push(&mut self, item: T) {
+        let was_unselectable = self.selected_index.is_none();
         self.items.push(item);
+        if was_unselectable {
+            self.selected_index = first_selectable(&self.items);
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -70,8 +89,22 @@ impl<T: SelectItem> SelectList<T> {
         self.items.is_empty()
     }
 
-    fn clamp_index(&mut self) {
-        self.selected_index = self.selected_index.min(self.items.len().saturating_sub(1));
+    fn reseat_selection(&mut self) {
+        let target = self.selected_index.unwrap_or(0);
+        self.selected_index = self
+            .items
+            .iter()
+            .enumerate()
+            .filter_map(|(i, item)| item.is_selectable().then_some(i))
+            .min_by_key(|i| (i.abs_diff(target), *i));
+    }
+
+    fn move_selection(&mut self, delta: isize) {
+        if let Some(current) = self.selected_index
+            && let Some(next) = step_selectable(&self.items, current, delta)
+        {
+            self.selected_index = Some(next);
+        }
     }
 }
 
@@ -82,11 +115,11 @@ impl<T: SelectItem> Component for SelectList<T> {
         if let Event::Mouse(mouse) = event {
             return match mouse.kind {
                 MouseEventKind::ScrollUp => {
-                    wrap_selection(&mut self.selected_index, self.items.len(), -1);
+                    self.move_selection(-1);
                     Some(vec![])
                 }
                 MouseEventKind::ScrollDown => {
-                    wrap_selection(&mut self.selected_index, self.items.len(), 1);
+                    self.move_selection(1);
                     Some(vec![])
                 }
                 _ => Some(vec![]),
@@ -98,20 +131,17 @@ impl<T: SelectItem> Component for SelectList<T> {
         match key.code {
             KeyCode::Esc => Some(vec![SelectListMessage::Close]),
             KeyCode::Up => {
-                wrap_selection(&mut self.selected_index, self.items.len(), -1);
+                self.move_selection(-1);
                 Some(vec![])
             }
             KeyCode::Down => {
-                wrap_selection(&mut self.selected_index, self.items.len(), 1);
+                self.move_selection(1);
                 Some(vec![])
             }
-            KeyCode::Enter => {
-                if self.items.is_empty() {
-                    Some(vec![])
-                } else {
-                    Some(vec![SelectListMessage::Select(self.selected_index)])
-                }
-            }
+            KeyCode::Enter => match self.selected_index {
+                Some(i) => Some(vec![SelectListMessage::Select(i)]),
+                None => Some(vec![]),
+            },
             _ => Some(vec![]),
         }
     }
@@ -126,10 +156,29 @@ impl<T: SelectItem> Component for SelectList<T> {
             self.items
                 .iter()
                 .enumerate()
-                .map(|(i, item)| item.render_item(i == self.selected_index, &inner).prepend("  "))
+                .map(|(i, item)| item.render_item(Some(i) == self.selected_index, &inner).prepend("  "))
                 .collect(),
         )
     }
+}
+
+fn first_selectable<T: SelectItem>(items: &[T]) -> Option<usize> {
+    items.iter().position(SelectItem::is_selectable)
+}
+
+fn step_selectable<T: SelectItem>(items: &[T], current: usize, delta: isize) -> Option<usize> {
+    let selectable: Vec<usize> =
+        items.iter().enumerate().filter_map(|(i, item)| item.is_selectable().then_some(i)).collect();
+    if selectable.is_empty() {
+        return None;
+    }
+    let position = selectable.iter().position(|i| *i == current).unwrap_or(0);
+    let next = if delta < 0 {
+        position.checked_sub(1).unwrap_or(selectable.len() - 1)
+    } else {
+        (position + 1) % selectable.len()
+    };
+    selectable.get(next).copied()
 }
 
 #[cfg(test)]

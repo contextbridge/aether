@@ -61,15 +61,23 @@ pub(super) struct ConnectContext<'a> {
     pub oauth_handler_factory: Option<&'a OAuthHandlerFactory>,
 }
 
-pub struct ConnectedServer {
+/// The result of attempting to connect (or authenticate) to an MCP server.
+pub struct McpConnectAttempt {
     pub name: String,
-    pub conn: McpServerConnection,
-    pub reauth_config: Option<StreamableHttpClientTransportConfig>,
+    pub proxied: bool,
+    pub outcome: McpConnectOutcome,
 }
 
-pub enum ConnectionError {
-    NeedsOAuth { name: String, config: StreamableHttpClientTransportConfig, error: McpError },
-    Failed { name: String, error: McpError },
+pub enum McpConnectOutcome {
+    Connected { conn: McpServerConnection, reauth_config: Option<StreamableHttpClientTransportConfig> },
+    NeedsOAuth { config: StreamableHttpClientTransportConfig, error: McpError },
+    Failed { error: McpError },
+}
+
+impl McpConnectAttempt {
+    pub fn failed(name: impl Into<String>, error: McpError, proxied: bool) -> Self {
+        Self { name: name.into(), proxied, outcome: McpConnectOutcome::Failed { error } }
+    }
 }
 
 pub struct McpServerConnection {
@@ -107,34 +115,63 @@ impl McpServerConnection {
     }
 }
 
-pub(super) async fn connect_server(
-    server: McpServer,
-    ctx: &ConnectContext<'_>,
-) -> std::result::Result<ConnectedServer, ConnectionError> {
-    let McpServer { name, transport, proxy: _ } = server;
+pub(super) async fn connect_server(server: McpServer, ctx: &ConnectContext<'_>) -> McpConnectAttempt {
+    let McpServer { name, transport, proxy: proxied } = server;
     let reauth_config = reauth_config_for(&transport, ctx.oauth_handler_factory);
     let mcp_client =
         McpClient::new(ctx.client_info.clone(), name.clone(), ctx.event_sender.clone(), Arc::clone(ctx.roots));
 
-    match transport {
-        McpTransport::Stdio { command, args, env } => {
-            connect_stdio(name, command, args, env, reauth_config, mcp_client).await
-        }
-        McpTransport::InMemory { server } => connect_in_memory(name, server, reauth_config, mcp_client).await,
-        McpTransport::Http { config } => {
-            connect_http(name, config, reauth_config, mcp_client, ctx.oauth_handler_factory).await
+    let outcome = match transport {
+        McpTransport::Stdio { command, args, env } => connect_stdio(command, args, env, mcp_client).await,
+        McpTransport::InMemory { server } => connect_in_memory(&name, server, mcp_client).await,
+        McpTransport::Http { config } => connect_http(&name, config, mcp_client, ctx.oauth_handler_factory).await,
+    };
+
+    McpConnectAttempt { name, proxied, outcome: outcome.with_reauth(reauth_config) }
+}
+
+pub async fn authenticate_http(
+    name: String,
+    config: StreamableHttpClientTransportConfig,
+    client_info: ClientInfo,
+    event_sender: mpsc::Sender<McpClientEvent>,
+    roots: Arc<RwLock<Vec<Root>>>,
+    oauth_handler_factory: OAuthHandlerFactory,
+    proxied: bool,
+) -> McpConnectAttempt {
+    let outcome = match async {
+        let handler = oauth_handler_factory()?;
+        let auth_client = perform_oauth_flow(&name, &config.uri, handler.as_ref())
+            .await
+            .map_err(|e| McpError::ConnectionFailed(format!("OAuth failed for '{name}': {e}")))?;
+
+        let mcp_client = McpClient::new(client_info, name.clone(), event_sender, roots);
+        McpServerConnection::reconnect_with_auth(&name, config.clone(), auth_client, mcp_client).await
+    }
+    .await
+    {
+        Ok(conn) => McpConnectOutcome::Connected { conn, reauth_config: Some(config) },
+        Err(error) => McpConnectOutcome::Failed { error },
+    };
+
+    McpConnectAttempt { name, proxied, outcome }
+}
+
+impl McpConnectOutcome {
+    fn with_reauth(self, reauth_config: Option<StreamableHttpClientTransportConfig>) -> Self {
+        match self {
+            Self::Connected { conn, .. } => Self::Connected { conn, reauth_config },
+            other => other,
         }
     }
 }
 
 async fn connect_stdio(
-    name: String,
     command: String,
     args: Vec<String>,
     env: HashMap<String, String>,
-    reauth_config: Option<StreamableHttpClientTransportConfig>,
     mcp_client: McpClient,
-) -> std::result::Result<ConnectedServer, ConnectionError> {
+) -> McpConnectOutcome {
     let cmd = {
         let mut cmd = Command::new(&command);
         cmd.args(&args);
@@ -144,45 +181,40 @@ async fn connect_stdio(
 
     let child = match TokioChildProcess::new(cmd) {
         Ok(child) => child,
-        Err(e) => {
-            return Err(ConnectionError::Failed {
-                name,
-                error: McpError::SpawnFailed { command, reason: e.to_string() },
-            });
-        }
+        Err(e) => return McpConnectOutcome::Failed { error: McpError::SpawnFailed { command, reason: e.to_string() } },
     };
 
     match mcp_client.serve(child).await {
-        Ok(client) => Ok(connected_server(name, McpServerConnection::from_parts(client, None), reauth_config)),
-        Err(e) => Err(ConnectionError::Failed { name, error: McpError::from(e) }),
+        Ok(client) => {
+            McpConnectOutcome::Connected { conn: McpServerConnection::from_parts(client, None), reauth_config: None }
+        }
+        Err(e) => McpConnectOutcome::Failed { error: McpError::from(e) },
     }
 }
 
 async fn connect_in_memory(
-    name: String,
+    name: &str,
     server: Box<dyn DynService<RoleServer>>,
-    reauth_config: Option<StreamableHttpClientTransportConfig>,
     mcp_client: McpClient,
-) -> std::result::Result<ConnectedServer, ConnectionError> {
-    match serve_in_memory(server, mcp_client, &name).await {
-        Ok((client, handle)) => {
-            Ok(connected_server(name, McpServerConnection::from_parts(client, Some(handle)), reauth_config))
-        }
-        Err(error) => Err(ConnectionError::Failed { name, error }),
+) -> McpConnectOutcome {
+    match serve_in_memory(server, mcp_client, name).await {
+        Ok((client, handle)) => McpConnectOutcome::Connected {
+            conn: McpServerConnection::from_parts(client, Some(handle)),
+            reauth_config: None,
+        },
+        Err(error) => McpConnectOutcome::Failed { error },
     }
 }
 
 async fn connect_http(
-    name: String,
+    name: &str,
     config: StreamableHttpClientTransportConfig,
-    reauth_config: Option<StreamableHttpClientTransportConfig>,
     mcp_client: McpClient,
     oauth_handler_factory: Option<&OAuthHandlerFactory>,
-) -> std::result::Result<ConnectedServer, ConnectionError> {
+) -> McpConnectOutcome {
     let conn_err = |e| McpError::ConnectionFailed(format!("HTTP MCP server {name}: {e}"));
-
     let result = if config.auth_header.is_none()
-        && let Ok(Some(auth_manager)) = create_auth_manager_from_store(&name, &config.uri).await
+        && let Ok(Some(auth_manager)) = create_auth_manager_from_store(name, &config.uri).await
     {
         tracing::debug!("Using OAuth for server '{name}'");
         let auth_client = AuthClient::new(reqwest::Client::default(), auth_manager);
@@ -194,50 +226,18 @@ async fn connect_http(
     };
 
     match result {
-        Ok(client) => Ok(connected_server(name, McpServerConnection::from_parts(client, None), reauth_config)),
-        Err(err) => {
-            tracing::warn!("Failed to connect to MCP server '{name}': {err}");
+        Ok(client) => {
+            McpConnectOutcome::Connected { conn: McpServerConnection::from_parts(client, None), reauth_config: None }
+        }
+        Err(error) => {
+            tracing::warn!("Failed to connect to MCP server '{name}': {error}");
             if oauth_handler_factory.is_some() && config.auth_header.is_none() {
-                Err(ConnectionError::NeedsOAuth { name, config, error: err })
+                McpConnectOutcome::NeedsOAuth { config, error }
             } else {
-                Err(ConnectionError::Failed { name, error: err })
+                McpConnectOutcome::Failed { error }
             }
         }
     }
-}
-
-pub async fn authenticate_http(
-    name: String,
-    config: StreamableHttpClientTransportConfig,
-    client_info: ClientInfo,
-    event_sender: mpsc::Sender<McpClientEvent>,
-    roots: Arc<RwLock<Vec<Root>>>,
-    oauth_handler_factory: OAuthHandlerFactory,
-) -> std::result::Result<ConnectedServer, ConnectionError> {
-    let conn = match async {
-        let handler = oauth_handler_factory()?;
-        let auth_client = perform_oauth_flow(&name, &config.uri, handler.as_ref())
-            .await
-            .map_err(|e| McpError::ConnectionFailed(format!("OAuth failed for '{name}': {e}")))?;
-
-        let mcp_client = McpClient::new(client_info, name.clone(), event_sender, roots);
-        McpServerConnection::reconnect_with_auth(&name, config.clone(), auth_client, mcp_client).await
-    }
-    .await
-    {
-        Ok(conn) => conn,
-        Err(error) => return Err(ConnectionError::Failed { name, error }),
-    };
-
-    Ok(connected_server(name, conn, Some(config)))
-}
-
-fn connected_server(
-    name: String,
-    conn: McpServerConnection,
-    reauth_config: Option<StreamableHttpClientTransportConfig>,
-) -> ConnectedServer {
-    ConnectedServer { name, conn, reauth_config }
 }
 
 fn reauth_config_for(

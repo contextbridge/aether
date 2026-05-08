@@ -336,9 +336,23 @@ mod tests {
 
         let json = serde_json::to_string(&entry).unwrap();
         assert!(json.contains("\"auth_capability\":\"OAuth\""));
+        assert!(json.contains("\"proxied\":false"));
         let parsed: McpServerStatusEntry = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, entry);
+        assert!(!parsed.proxied);
         assert!(parsed.can_authenticate());
+    }
+
+    #[test]
+    fn mcp_server_status_entry_proxied_serde_roundtrip() {
+        let entry = McpServerStatusEntry::new("math", McpServerStatus::NeedsOAuth)
+            .with_auth_capability(McpServerAuthCapability::OAuth)
+            .with_proxied(true);
+
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("\"proxied\":true"));
+        let parsed: McpServerStatusEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, entry);
     }
 
     #[test]

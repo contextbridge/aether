@@ -1,48 +1,8 @@
 use acp_utils::notifications::{McpServerStatus, McpServerStatusEntry};
 use tui::{Component, Event, Frame, Line, SelectItem, SelectList, SelectListMessage, ViewContext};
 
-struct ServerItem(McpServerStatusEntry);
-
-impl SelectItem for ServerItem {
-    fn render_item(&self, selected: bool, context: &ViewContext) -> Line {
-        let (indicator, detail) = match &self.0.status {
-            McpServerStatus::Connected { tool_count } if self.0.can_authenticate() => {
-                ("✓", format!("{tool_count} tools, authenticated"))
-            }
-            McpServerStatus::Connected { tool_count } => ("✓", format!("{tool_count} tools")),
-            McpServerStatus::Failed { error } => ("✗", error.clone()),
-            McpServerStatus::Authenticating => ("…", "authenticating".to_string()),
-            McpServerStatus::NeedsOAuth => ("⚡", "needs authentication".to_string()),
-        };
-        let text = format!("{}  {indicator} {detail}", self.0.name);
-        match &self.0.status {
-            McpServerStatus::Connected { .. } => {
-                if selected {
-                    Line::with_style(text, context.theme.selected_row_style())
-                } else {
-                    Line::new(text)
-                }
-            }
-            McpServerStatus::Failed { .. } => {
-                if selected {
-                    Line::with_style(text, context.theme.selected_row_style_with_fg(context.theme.error()))
-                } else {
-                    Line::styled(text, context.theme.error())
-                }
-            }
-            McpServerStatus::Authenticating | McpServerStatus::NeedsOAuth => {
-                if selected {
-                    Line::with_style(text, context.theme.selected_row_style_with_fg(context.theme.warning()))
-                } else {
-                    Line::styled(text, context.theme.warning())
-                }
-            }
-        }
-    }
-}
-
 pub struct ServerStatusOverlay {
-    list: SelectList<ServerItem>,
+    list: SelectList<ServerStatusRow>,
 }
 
 pub enum ServerStatusMessage {
@@ -58,10 +18,10 @@ impl Component for ServerStatusOverlay {
         match outcome.as_deref() {
             Some([SelectListMessage::Close]) => Some(vec![ServerStatusMessage::Close]),
             Some([SelectListMessage::Select(_)]) => {
-                if let Some(item) = self.list.selected_item()
-                    && item.0.can_authenticate()
+                if let Some(ServerStatusRow::Server { entry, .. }) = self.list.selected_item()
+                    && entry.can_authenticate()
                 {
-                    return Some(vec![ServerStatusMessage::Authenticate(item.0.name.clone())]);
+                    return Some(vec![ServerStatusMessage::Authenticate(entry.name.clone())]);
                 }
                 Some(vec![])
             }
@@ -97,16 +57,94 @@ pub fn server_status_summary(statuses: &[McpServerStatusEntry]) -> String {
 
 impl ServerStatusOverlay {
     pub fn new(entries: Vec<McpServerStatusEntry>) -> Self {
-        let items: Vec<ServerItem> = entries.into_iter().map(ServerItem).collect();
-        Self { list: SelectList::new(items, "no MCP servers configured") }
+        Self { list: SelectList::new(build_rows(entries), "no MCP servers configured") }
     }
 
     pub fn update_entries(&mut self, entries: Vec<McpServerStatusEntry>) {
-        let prev_index = self.list.selected_index();
-        let items: Vec<ServerItem> = entries.into_iter().map(ServerItem).collect();
-        self.list.set_items(items);
-        let max = self.list.len().saturating_sub(1);
-        self.list.set_selected(prev_index.min(max));
+        let selected_name = match self.list.selected_item() {
+            Some(ServerStatusRow::Server { entry, .. }) => Some(entry.name.clone()),
+            _ => None,
+        };
+        self.list.set_items(build_rows(entries));
+        if let Some(name) = selected_name {
+            self.list.select_where(|row| matches!(row, ServerStatusRow::Server { entry, .. } if entry.name == name));
+        }
+    }
+}
+
+#[derive(Clone)]
+enum ServerStatusRow {
+    Header(String),
+    Spacer,
+    Server { entry: McpServerStatusEntry, indented: bool },
+}
+
+impl SelectItem for ServerStatusRow {
+    fn render_item(&self, selected: bool, context: &ViewContext) -> Line {
+        match self {
+            ServerStatusRow::Header(label) => Line::new(label.clone()),
+            ServerStatusRow::Spacer => Line::default(),
+            ServerStatusRow::Server { entry, indented } => render_server_entry(entry, selected, *indented, context),
+        }
+    }
+
+    fn is_selectable(&self) -> bool {
+        matches!(self, ServerStatusRow::Server { .. })
+    }
+}
+
+fn build_rows(entries: Vec<McpServerStatusEntry>) -> Vec<ServerStatusRow> {
+    let (proxied, direct): (Vec<_>, Vec<_>) = entries.into_iter().partition(|entry| entry.proxied);
+
+    if proxied.is_empty() {
+        return direct.into_iter().map(|entry| ServerStatusRow::Server { entry, indented: false }).collect();
+    }
+
+    let mut rows = Vec::new();
+    if !direct.is_empty() {
+        rows.push(ServerStatusRow::Header("Direct".to_string()));
+        rows.extend(direct.into_iter().map(|entry| ServerStatusRow::Server { entry, indented: true }));
+        rows.push(ServerStatusRow::Spacer);
+    }
+    rows.push(ServerStatusRow::Header("Proxied".to_string()));
+    rows.extend(proxied.into_iter().map(|entry| ServerStatusRow::Server { entry, indented: true }));
+    rows
+}
+
+fn render_server_entry(entry: &McpServerStatusEntry, selected: bool, indented: bool, context: &ViewContext) -> Line {
+    let (indicator, detail) = match &entry.status {
+        McpServerStatus::Connected { tool_count } if entry.can_authenticate() => {
+            ("✓", format!("{tool_count} tools, authenticated"))
+        }
+        McpServerStatus::Connected { tool_count } => ("✓", format!("{tool_count} tools")),
+        McpServerStatus::Failed { error } => ("✗", error.clone()),
+        McpServerStatus::Authenticating => ("…", "authenticating".to_string()),
+        McpServerStatus::NeedsOAuth => ("⚡", "needs authentication".to_string()),
+    };
+    let prefix = if indented { "  " } else { "" };
+    let text = format!("{prefix}{}  {indicator} {detail}", entry.name);
+    match &entry.status {
+        McpServerStatus::Connected { .. } => {
+            if selected {
+                Line::with_style(text, context.theme.selected_row_style())
+            } else {
+                Line::new(text)
+            }
+        }
+        McpServerStatus::Failed { .. } => {
+            if selected {
+                Line::with_style(text, context.theme.selected_row_style_with_fg(context.theme.error()))
+            } else {
+                Line::styled(text, context.theme.error())
+            }
+        }
+        McpServerStatus::Authenticating | McpServerStatus::NeedsOAuth => {
+            if selected {
+                Line::with_style(text, context.theme.selected_row_style_with_fg(context.theme.warning()))
+            } else {
+                Line::styled(text, context.theme.warning())
+            }
+        }
     }
 }
 
@@ -124,56 +162,72 @@ mod tests {
         ]
     }
 
+    fn mixed_entries() -> Vec<McpServerStatusEntry> {
+        vec![
+            McpServerStatusEntry::new("github", McpServerStatus::Connected { tool_count: 5 }),
+            McpServerStatusEntry::new("math", McpServerStatus::Connected { tool_count: 3 }).with_proxied(true),
+            McpServerStatusEntry::new("linear", McpServerStatus::NeedsOAuth)
+                .with_auth_capability(McpServerAuthCapability::OAuth)
+                .with_proxied(true),
+        ]
+    }
+
+    fn key(code: tui::KeyCode) -> Event {
+        Event::Key(tui::KeyEvent::new(code, tui::KeyModifiers::NONE))
+    }
+
     #[test]
-    fn renders_all_entries_with_status_indicators() {
+    fn renders_flat_entries_when_no_proxy_exists() {
         let mut overlay = ServerStatusOverlay::new(sample_entries());
         let ctx = ViewContext::new((80, 24));
         let frame = overlay.render(&ctx);
 
         assert_eq!(frame.lines().len(), 3);
-        let text0 = frame.lines()[0].plain_text();
-        assert!(text0.contains("github"), "should contain server name");
-        assert!(text0.contains("✓"), "connected should show checkmark");
-        assert!(text0.contains("5 tools"), "should show tool count");
-
-        let text1 = frame.lines()[1].plain_text();
-        assert!(text1.contains("linear"), "should contain server name");
-        assert!(text1.contains("⚡"), "needs auth should show bolt");
-
-        let text2 = frame.lines()[2].plain_text();
-        assert!(text2.contains("slack"), "should contain server name");
-        assert!(text2.contains("✗"), "failed should show X");
-        assert!(text2.contains("connection timeout"), "should show error");
+        assert!(frame.lines()[0].plain_text().contains("github"));
+        assert!(frame.lines()[0].plain_text().contains("✓"));
+        assert!(frame.lines()[0].plain_text().contains("5 tools"));
+        assert!(frame.lines()[1].plain_text().contains("linear"));
+        assert!(frame.lines()[1].plain_text().contains("⚡"));
+        assert!(frame.lines()[2].plain_text().contains("slack"));
+        assert!(frame.lines()[2].plain_text().contains("✗"));
+        assert!(frame.lines()[2].plain_text().contains("connection timeout"));
+        assert!(!frame.lines().iter().any(|line| line.plain_text().contains("Direct")));
     }
 
     #[test]
-    fn selected_entry_has_pointer() {
-        let mut overlay = ServerStatusOverlay::new(sample_entries());
+    fn renders_direct_and_proxied_sections_when_proxy_exists() {
+        let mut overlay = ServerStatusOverlay::new(mixed_entries());
         let ctx = ViewContext::new((80, 24));
-        let frame = overlay.render(&ctx);
+        let text: Vec<_> = overlay.render(&ctx).lines().iter().map(tui::Line::plain_text).collect();
 
-        assert!(frame.lines()[0].plain_text().starts_with("  "));
-        assert!(frame.lines()[1].plain_text().starts_with("  "));
+        assert_eq!(text[0].trim(), "Direct");
+        assert!(text[1].contains("  github  ✓ 5 tools"));
+        assert!(text[2].trim().is_empty());
+        assert_eq!(text[3].trim(), "Proxied");
+        assert!(text[4].contains("  math  ✓ 3 tools"));
+        assert!(text[5].contains("  linear  ⚡ needs authentication"));
+        assert!(!text.join("\n").contains("proxy  ✓ 1 tool"));
     }
 
     #[tokio::test]
-    async fn navigation_wraps_around() {
-        let mut overlay = ServerStatusOverlay::new(sample_entries());
+    async fn navigation_skips_headers_and_spacers() {
+        let mut overlay = ServerStatusOverlay::new(mixed_entries());
 
-        overlay.on_event(&Event::Key(tui::KeyEvent::new(tui::KeyCode::Up, tui::KeyModifiers::NONE))).await;
-        assert_eq!(overlay.list.selected_index(), 2);
-
-        overlay.on_event(&Event::Key(tui::KeyEvent::new(tui::KeyCode::Down, tui::KeyModifiers::NONE))).await;
-        assert_eq!(overlay.list.selected_index(), 0);
+        assert_eq!(overlay.list.selected_index(), 1);
+        overlay.on_event(&key(tui::KeyCode::Down)).await;
+        assert_eq!(overlay.list.selected_index(), 4);
+        overlay.on_event(&key(tui::KeyCode::Up)).await;
+        assert_eq!(overlay.list.selected_index(), 1);
+        overlay.on_event(&key(tui::KeyCode::Up)).await;
+        assert_eq!(overlay.list.selected_index(), 5);
     }
 
     #[tokio::test]
-    async fn enter_on_needs_oauth_emits_authenticate() {
-        let mut overlay = ServerStatusOverlay::new(sample_entries());
-        overlay.list.set_selected(1); // linear - NeedsOAuth
+    async fn enter_on_proxied_oauth_server_emits_nested_server_name() {
+        let mut overlay = ServerStatusOverlay::new(mixed_entries());
+        overlay.list.set_selected(5);
 
-        let outcome =
-            overlay.on_event(&Event::Key(tui::KeyEvent::new(tui::KeyCode::Enter, tui::KeyModifiers::NONE))).await;
+        let outcome = overlay.on_event(&key(tui::KeyCode::Enter)).await;
         let messages = outcome.unwrap();
         match messages.as_slice() {
             [ServerStatusMessage::Authenticate(name)] => assert_eq!(name, "linear"),
@@ -184,34 +238,15 @@ mod tests {
     #[tokio::test]
     async fn enter_on_connected_without_auth_is_noop() {
         let mut overlay = ServerStatusOverlay::new(sample_entries());
-        // index 0 = github (Connected)
 
-        let outcome =
-            overlay.on_event(&Event::Key(tui::KeyEvent::new(tui::KeyCode::Enter, tui::KeyModifiers::NONE))).await;
+        let outcome = overlay.on_event(&key(tui::KeyCode::Enter)).await;
         assert!(outcome.unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn enter_on_connected_oauth_server_emits_authenticate_for_reauth() {
-        let mut overlay = ServerStatusOverlay::new(vec![
-            McpServerStatusEntry::new("github", McpServerStatus::Connected { tool_count: 5 })
-                .with_auth_capability(McpServerAuthCapability::OAuth),
-        ]);
-
-        let outcome =
-            overlay.on_event(&Event::Key(tui::KeyEvent::new(tui::KeyCode::Enter, tui::KeyModifiers::NONE))).await;
-        let messages = outcome.unwrap();
-        match messages.as_slice() {
-            [ServerStatusMessage::Authenticate(name)] => assert_eq!(name, "github"),
-            _ => panic!("Expected Authenticate message"),
-        }
     }
 
     #[tokio::test]
     async fn esc_closes_overlay() {
         let mut overlay = ServerStatusOverlay::new(sample_entries());
-        let outcome =
-            overlay.on_event(&Event::Key(tui::KeyEvent::new(tui::KeyCode::Esc, tui::KeyModifiers::NONE))).await;
+        let outcome = overlay.on_event(&key(tui::KeyCode::Esc)).await;
         let messages = outcome.unwrap();
         assert!(matches!(messages.as_slice(), [ServerStatusMessage::Close]));
     }
@@ -226,11 +261,33 @@ mod tests {
     }
 
     #[test]
-    fn update_entries_clamps_index() {
-        let mut overlay = ServerStatusOverlay::new(sample_entries());
-        overlay.list.set_selected(2);
+    fn update_entries_preserves_selection_by_server_name() {
+        let mut overlay = ServerStatusOverlay::new(mixed_entries());
+        overlay.list.set_selected(5);
+
+        overlay.update_entries(vec![
+            McpServerStatusEntry::new("linear", McpServerStatus::Connected { tool_count: 7 }).with_proxied(true),
+            McpServerStatusEntry::new("github", McpServerStatus::Connected { tool_count: 3 }),
+        ]);
+
+        let selected = match overlay.list.selected_item() {
+            Some(ServerStatusRow::Server { entry, .. }) => Some(entry.name.as_str()),
+            _ => None,
+        };
+        assert_eq!(selected, Some("linear"));
+    }
+
+    #[test]
+    fn update_entries_falls_back_to_first_selectable_row() {
+        let mut overlay = ServerStatusOverlay::new(mixed_entries());
+        overlay.list.set_selected(5);
 
         overlay.update_entries(vec![McpServerStatusEntry::new("github", McpServerStatus::Connected { tool_count: 3 })]);
-        assert_eq!(overlay.list.selected_index(), 0);
+
+        let selected = match overlay.list.selected_item() {
+            Some(ServerStatusRow::Server { entry, .. }) => Some(entry.name.as_str()),
+            _ => None,
+        };
+        assert_eq!(selected, Some("github"));
     }
 }

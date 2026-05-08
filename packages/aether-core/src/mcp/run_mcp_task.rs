@@ -1,4 +1,4 @@
-use mcp_utils::client::{ConnectedServer, ConnectionError, McpClient, McpError, McpManager, McpServerStatusEntry};
+use mcp_utils::client::{McpClient, McpConnectAttempt, McpError, McpManager, McpServerStatusEntry};
 use mcp_utils::display_meta::ToolResultMeta;
 
 use futures::future::Either;
@@ -52,7 +52,7 @@ pub enum McpCommand {
 }
 
 pub async fn run_mcp_task(mut mcp: McpManager, mut command_rx: mpsc::Receiver<McpCommand>) {
-    let mut auth_tasks = JoinSet::<(String, Result<ConnectedServer, ConnectionError>)>::new();
+    let mut auth_tasks = JoinSet::<McpConnectAttempt>::new();
     loop {
         select! {
             command = command_rx.recv() => {
@@ -62,12 +62,8 @@ pub async fn run_mcp_task(mut mcp: McpManager, mut command_rx: mpsc::Receiver<Mc
 
             Some(joined) = auth_tasks.join_next(), if !auth_tasks.is_empty() => {
                 match joined {
-                    Ok((_name, attempt)) => {
-                        mcp.apply_connection_attempt(attempt).await;
-                    }
-                    Err(e) => {
-                        tracing::error!("MCP auth task did not complete normally: {e:?}");
-                    }
+                    Ok(attempt) => mcp.apply_connection_attempt(attempt).await,
+                    Err(e) => tracing::error!("MCP auth task did not complete normally: {e:?}"),
                 }
             }
         }
@@ -79,11 +75,7 @@ pub async fn run_mcp_task(mut mcp: McpManager, mut command_rx: mpsc::Receiver<Mc
     tracing::debug!("MCP manager task ended");
 }
 
-async fn on_command(
-    command: McpCommand,
-    mcp: &mut McpManager,
-    auth_tasks: &mut JoinSet<(String, Result<ConnectedServer, ConnectionError>)>,
-) {
+async fn on_command(command: McpCommand, mcp: &mut McpManager, auth_tasks: &mut JoinSet<McpConnectAttempt>) {
     match command {
         McpCommand::ExecuteTool { request, timeout, tx } => {
             let tool_id = request.id.clone();
@@ -132,14 +124,14 @@ async fn on_command(
             Ok(task) => {
                 let server_name = name.clone();
                 auth_tasks.spawn(async move {
-                    let attempt = match tokio::time::timeout(MCP_AUTH_TIMEOUT, task).await {
+                    match tokio::time::timeout(MCP_AUTH_TIMEOUT, task).await {
                         Ok(attempt) => attempt,
-                        Err(_) => Err(ConnectionError::Failed {
-                            name: server_name.clone(),
-                            error: McpError::ConnectionFailed("authentication timed out after 3 minutes".to_string()),
-                        }),
-                    };
-                    (server_name, attempt)
+                        Err(_) => McpConnectAttempt::failed(
+                            server_name,
+                            McpError::ConnectionFailed("authentication timed out after 3 minutes".to_string()),
+                            false,
+                        ),
+                    }
                 });
             }
             Err(e) => tracing::warn!("Authentication failed for '{name}': {e}"),

@@ -4,7 +4,7 @@ use super::{
     McpError, Result,
     config::McpServer,
     connection::{
-        ConnectContext, ConnectedServer, ConnectionError, McpServerConnection, ServerInstructions, Tool,
+        ConnectContext, McpConnectAttempt, McpConnectOutcome, McpServerConnection, ServerInstructions, Tool,
         authenticate_http, connect_server,
     },
     mcp_client::McpClient,
@@ -128,26 +128,30 @@ impl McpManager {
         };
 
         let ctx = self.connect_context();
-        let outcomes = join_all(servers.into_iter().map(|server| connect_server(server, &ctx))).await;
+        let attempts = join_all(servers.into_iter().map(|server| connect_server(server, &ctx))).await;
 
         let mut connected_proxied = Vec::new();
-        for outcome in outcomes {
+        for McpConnectAttempt { name, proxied, outcome } in attempts {
             match outcome {
-                Ok(ConnectedServer { name, conn, reauth_config }) => {
-                    let is_proxied = proxied_members.contains(&name);
-                    self.register_connection(&name, conn, reauth_config, is_proxied).await?;
-                    if is_proxied {
+                McpConnectOutcome::Connected { conn, reauth_config } => {
+                    self.register_connection(&name, conn, reauth_config, proxied).await?;
+                    if proxied {
                         connected_proxied.push(name);
                     }
                 }
-                Err(ConnectionError::NeedsOAuth { name, config, error }) => {
+                McpConnectOutcome::NeedsOAuth { config, error } => {
                     tracing::warn!("Server '{name}' needs OAuth: {error}");
-                    self.upsert_status(&name, McpServerStatus::NeedsOAuth, Some(config));
+                    self.register_record(&name, McpServerStatus::NeedsOAuth, Some(config), proxied);
                 }
-                Err(ConnectionError::Failed { name, error }) => {
+                McpConnectOutcome::Failed { error } => {
                     tracing::warn!("Failed to connect to MCP server '{name}': {error}");
                     if !self.servers.contains_key(&name) {
-                        self.upsert_status(&name, McpServerStatus::Failed { error: error.to_string() }, None);
+                        self.register_record(
+                            &name,
+                            McpServerStatus::Failed { error: error.to_string() },
+                            None,
+                            proxied,
+                        );
                     }
                 }
             }
@@ -237,7 +241,7 @@ impl McpManager {
     pub async fn authenticate_server_task(
         &mut self,
         name: &str,
-    ) -> Result<impl Future<Output = std::result::Result<ConnectedServer, ConnectionError>> + Send + 'static> {
+    ) -> Result<impl Future<Output = McpConnectAttempt> + Send + 'static> {
         let record = self
             .servers
             .get(name)
@@ -258,34 +262,33 @@ impl McpManager {
         let client_info = self.client_info.clone();
         let event_sender = self.event_sender.clone();
         let roots = Arc::clone(&self.roots);
+        let proxied = record.proxied;
 
-        self.upsert_status(&name, McpServerStatus::Authenticating, Some(config.clone()));
+        self.set_status(&name, McpServerStatus::Authenticating);
         self.emit_server_statuses_changed().await;
 
-        Ok(
-            async move { authenticate_http(name, config, client_info, event_sender, roots, oauth_handler_factory).await },
-        )
+        Ok(async move {
+            authenticate_http(name, config, client_info, event_sender, roots, oauth_handler_factory, proxied).await
+        })
     }
 
-    pub async fn apply_connection_attempt(&mut self, attempt: std::result::Result<ConnectedServer, ConnectionError>) {
-        match attempt {
-            Ok(ConnectedServer { name, conn, reauth_config }) => {
-                let is_proxied = self.proxy.as_ref().is_some_and(|proxy| proxy.contains_server(&name));
-                match self.register_connection(&name, conn, reauth_config, is_proxied).await {
+    pub async fn apply_connection_attempt(&mut self, attempt: McpConnectAttempt) {
+        let McpConnectAttempt { name, proxied, outcome } = attempt;
+        match outcome {
+            McpConnectOutcome::Connected { conn, reauth_config } => {
+                match self.register_connection(&name, conn, reauth_config, proxied).await {
                     Ok(tools) => {
-                        self.refresh_proxy_after_auth(&name, &tools, is_proxied).await;
+                        self.refresh_proxy_after_auth(&name, &tools, proxied).await;
                         self.emit_server_statuses_changed().await;
                         self.emit_tool_definitions_changed().await;
                     }
-                    Err(error) => {
-                        self.apply_authentication_failure(name, error.to_string()).await;
-                    }
+                    Err(error) => self.apply_authentication_failure(name, error.to_string()).await,
                 }
             }
-            Err(ConnectionError::Failed { name, error }) => {
+            McpConnectOutcome::Failed { error } => {
                 self.apply_authentication_failure(name, error.to_string()).await;
             }
-            Err(ConnectionError::NeedsOAuth { name, .. }) => {
+            McpConnectOutcome::NeedsOAuth { .. } => {
                 self.apply_authentication_failure(name, "internal error: auth task returned NeedsOAuth".to_string())
                     .await;
             }
@@ -465,13 +468,13 @@ impl McpManager {
         name: &str,
         conn: McpServerConnection,
         reauth_config: Option<StreamableHttpClientTransportConfig>,
-        is_proxied: bool,
+        proxied: bool,
     ) -> Result<Vec<RmcpTool>> {
         let tools = conn
             .list_tools()
             .await
             .map_err(|e| McpError::ToolDiscoveryFailed(format!("Failed to list tools for {name}: {e}")))?;
-        self.apply_connected(name, conn, &tools, reauth_config, is_proxied);
+        self.apply_connected(name, conn, &tools, reauth_config, proxied);
         Ok(tools)
     }
 
@@ -481,7 +484,7 @@ impl McpManager {
         conn: McpServerConnection,
         tools: &[RmcpTool],
         reauth_config: Option<StreamableHttpClientTransportConfig>,
-        is_proxied: bool,
+        proxied: bool,
     ) {
         self.remove_registered_tools_for_server(name);
 
@@ -493,7 +496,7 @@ impl McpManager {
             let namespaced_tool_name = create_namespaced_tool_name(name, &tool_name);
             let tool = Tool::from(rmcp_tool);
 
-            if !is_proxied {
+            if !proxied {
                 self.tool_definitions.push(ToolDefinition {
                     name: namespaced_tool_name.clone(),
                     description: tool.description.clone(),
@@ -505,7 +508,7 @@ impl McpManager {
         }
 
         self.remember_server_order(name);
-        self.servers.insert(name.to_string(), ServerRecord::connected(conn, tools.len(), final_reauth));
+        self.servers.insert(name.to_string(), ServerRecord::connected(conn, tools.len(), final_reauth, proxied));
         self.refresh_status_entries();
     }
 
@@ -523,11 +526,10 @@ impl McpManager {
         self.tool_definitions.push(call_tool_def);
 
         self.proxy = Some(ToolProxy::new(DEFAULT_PROXY_NAME.to_string(), members, tool_dir));
-        self.upsert_status(DEFAULT_PROXY_NAME, McpServerStatus::Connected { tool_count: 1 }, None);
     }
 
-    async fn refresh_proxy_after_auth(&mut self, name: &str, tools: &[RmcpTool], is_proxied: bool) {
-        if !is_proxied {
+    async fn refresh_proxy_after_auth(&mut self, name: &str, tools: &[RmcpTool], proxied: bool) {
+        if !proxied {
             return;
         }
 
@@ -571,31 +573,28 @@ impl McpManager {
     }
 
     async fn apply_authentication_failure(&mut self, name: String, error: String) {
-        self.mark_failed(&name, error.clone());
+        self.set_status(&name, McpServerStatus::Failed { error: error.clone() });
         self.emit_server_statuses_changed().await;
         self.emit_authentication_failed(name, error).await;
     }
 
-    fn mark_failed(&mut self, name: &str, error: String) {
-        let existing_reauth = self.servers.get(name).and_then(|record| record.reauth_config.clone());
-        self.upsert_status(name, McpServerStatus::Failed { error }, existing_reauth);
+    fn set_status(&mut self, name: &str, status: McpServerStatus) {
+        self.remember_server_order(name);
+        let record =
+            self.servers.entry(name.to_string()).or_insert_with(|| ServerRecord::new(status.clone(), None, false));
+        record.status = status;
+        self.refresh_status_entries();
     }
 
-    fn upsert_status(
+    fn register_record(
         &mut self,
         name: &str,
         status: McpServerStatus,
         reauth_config: Option<StreamableHttpClientTransportConfig>,
+        proxied: bool,
     ) {
         self.remember_server_order(name);
-        let record = self
-            .servers
-            .entry(name.to_string())
-            .or_insert_with(|| ServerRecord::new(status.clone(), reauth_config.clone()));
-        record.status = status;
-        if reauth_config.is_some() {
-            record.reauth_config = reauth_config;
-        }
+        self.servers.insert(name.to_string(), ServerRecord::new(status, reauth_config, proxied));
         self.refresh_status_entries();
     }
 
@@ -643,19 +642,21 @@ struct ServerRecord {
     connection: Option<McpServerConnection>,
     status: McpServerStatus,
     reauth_config: Option<StreamableHttpClientTransportConfig>,
+    proxied: bool,
 }
 
 impl ServerRecord {
-    fn new(status: McpServerStatus, reauth_config: Option<StreamableHttpClientTransportConfig>) -> Self {
-        Self { connection: None, status, reauth_config }
+    fn new(status: McpServerStatus, reauth_config: Option<StreamableHttpClientTransportConfig>, proxied: bool) -> Self {
+        Self { connection: None, status, reauth_config, proxied }
     }
 
     fn connected(
         connection: McpServerConnection,
         tool_count: usize,
         reauth_config: Option<StreamableHttpClientTransportConfig>,
+        proxied: bool,
     ) -> Self {
-        Self { connection: Some(connection), status: McpServerStatus::Connected { tool_count }, reauth_config }
+        Self { connection: Some(connection), status: McpServerStatus::Connected { tool_count }, reauth_config, proxied }
     }
 
     fn auth_capability(&self) -> McpServerAuthCapability {
@@ -667,15 +668,18 @@ impl ServerRecord {
     }
 
     fn status_entry(&self, name: &str) -> McpServerStatusEntry {
-        McpServerStatusEntry::new(name, self.status.clone()).with_auth_capability(self.auth_capability())
+        McpServerStatusEntry::new(name, self.status.clone())
+            .with_auth_capability(self.auth_capability())
+            .with_proxied(self.proxied)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{McpClientEvent, McpManager, McpServerStatus, Tool};
+    use super::{DEFAULT_PROXY_NAME, McpClientEvent, McpManager, McpServerStatus, Tool};
     use crate::client::OAuthHandlerFactory;
     use crate::client::config::{McpServer, McpTransport};
+    use crate::client::connection::{McpConnectAttempt, McpConnectOutcome};
     use crate::client::oauth::{OAuthCallback, OAuthError, OAuthHandler};
     use crate::status::McpServerAuthCapability;
     use futures::future::BoxFuture;
@@ -773,7 +777,7 @@ mod tests {
     async fn authenticate_server_task_rejects_record_without_reauth_config() {
         let (event_sender, _event_receiver) = mpsc::channel(1);
         let mut manager = McpManager::new(event_sender, Some(test_oauth_handler_factory()));
-        manager.upsert_status("public", McpServerStatus::Connected { tool_count: 1 }, None);
+        manager.register_record("public", McpServerStatus::Connected { tool_count: 1 }, None, false);
 
         let error = match manager.authenticate_server_task("public").await {
             Ok(_) => panic!("non-OAuth server should be rejected"),
@@ -786,10 +790,11 @@ mod tests {
     async fn authenticate_server_task_marks_server_authenticating_and_emits_status() {
         let (event_sender, mut event_receiver) = mpsc::channel(2);
         let mut manager = McpManager::new(event_sender, Some(test_oauth_handler_factory()));
-        manager.upsert_status(
+        manager.register_record(
             "remote",
             McpServerStatus::NeedsOAuth,
             Some(StreamableHttpClientTransportConfig::with_uri("http://localhost:19999/mcp")),
+            false,
         );
 
         let _task = manager.authenticate_server_task("remote").await.expect("auth should start");
@@ -808,10 +813,11 @@ mod tests {
     async fn authenticate_server_task_rejects_duplicate_same_server_while_in_flight() {
         let (event_sender, _event_receiver) = mpsc::channel(1);
         let mut manager = McpManager::new(event_sender, Some(test_oauth_handler_factory()));
-        manager.upsert_status(
+        manager.register_record(
             "remote",
             McpServerStatus::NeedsOAuth,
             Some(StreamableHttpClientTransportConfig::with_uri("http://localhost:19999/mcp")),
+            false,
         );
 
         let _task = manager.authenticate_server_task("remote").await.expect("first auth should start");
@@ -827,19 +833,23 @@ mod tests {
     async fn apply_connection_attempt_failure_allows_retry() {
         let (event_sender, mut event_receiver) = mpsc::channel(2);
         let mut manager = McpManager::new(event_sender, Some(test_oauth_handler_factory()));
-        manager.upsert_status(
+        manager.register_record(
             "remote",
             McpServerStatus::NeedsOAuth,
             Some(StreamableHttpClientTransportConfig::with_uri("http://localhost:19999/mcp")),
+            false,
         );
         let _task = manager.authenticate_server_task("remote").await.expect("auth should start");
         let _authenticating_event = event_receiver.recv().await.expect("authenticating status change event");
 
         manager
-            .apply_connection_attempt(Err(crate::client::ConnectionError::Failed {
+            .apply_connection_attempt(McpConnectAttempt {
                 name: "remote".to_string(),
-                error: crate::client::McpError::ConnectionFailed("boom".to_string()),
-            }))
+                proxied: false,
+                outcome: McpConnectOutcome::Failed {
+                    error: crate::client::McpError::ConnectionFailed("boom".to_string()),
+                },
+            })
             .await;
 
         let event = event_receiver.recv().await.expect("status change event");
@@ -864,16 +874,18 @@ mod tests {
         let (event_sender, _event_receiver) = mpsc::channel(1);
         let mut manager = McpManager::new(event_sender, Some(test_oauth_handler_factory()));
 
-        manager.upsert_status(
+        manager.register_record(
             "with-oauth",
             McpServerStatus::Connected { tool_count: 1 },
             Some(StreamableHttpClientTransportConfig::with_uri("http://localhost/mcp")),
+            false,
         );
-        manager.upsert_status("without-oauth", McpServerStatus::Connected { tool_count: 2 }, None);
-        manager.upsert_status(
+        manager.register_record("without-oauth", McpServerStatus::Connected { tool_count: 2 }, None, false);
+        manager.register_record(
             "needs-oauth",
             McpServerStatus::NeedsOAuth,
             Some(StreamableHttpClientTransportConfig::with_uri("http://localhost/mcp2")),
+            false,
         );
 
         let statuses = manager.server_statuses();
@@ -884,6 +896,25 @@ mod tests {
         assert_eq!(with_oauth.auth_capability, McpServerAuthCapability::OAuth);
         assert_eq!(without_oauth.auth_capability, McpServerAuthCapability::Unavailable);
         assert_eq!(needs_oauth.auth_capability, McpServerAuthCapability::OAuth);
+    }
+
+    #[tokio::test]
+    async fn server_statuses_mark_direct_and_proxied_servers_without_proxy_row() {
+        let (event_sender, _event_receiver) = mpsc::channel(1);
+        let mut manager = McpManager::new(event_sender, None);
+        manager
+            .add_mcps(vec![
+                McpServer::new("direct", McpTransport::InMemory { server: TestServer::default().into_dyn() }, false),
+                McpServer::new("math", McpTransport::InMemory { server: TestServer::default().into_dyn() }, true),
+            ])
+            .await
+            .unwrap();
+
+        let statuses = manager.server_statuses();
+        assert_eq!(statuses.iter().map(|status| status.name.as_str()).collect::<Vec<_>>(), vec!["direct", "math"]);
+        assert!(!statuses.iter().find(|status| status.name == "direct").unwrap().proxied);
+        assert!(statuses.iter().find(|status| status.name == "math").unwrap().proxied);
+        assert!(!statuses.iter().any(|status| status.name == DEFAULT_PROXY_NAME));
     }
 
     #[test]

@@ -13,7 +13,7 @@ pub use config::{
     HttpServerConfig, HttpType, InMemoryServerConfig, InMemoryType, McpConfig, McpServer, McpServerConfig,
     McpTransport, ParseError, ServerFactory, SseServerConfig, SseType, StdioServerConfig, StdioType,
 };
-pub use connection::{ConnectedServer, ConnectionError, McpServerConnection, ServerInstructions};
+pub use connection::{McpConnectAttempt, McpConnectOutcome, McpServerConnection, ServerInstructions};
 pub use error::{McpError, Result};
 pub use llm::oauth;
 pub use manager::{
