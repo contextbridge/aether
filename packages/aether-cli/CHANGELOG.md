@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.4.3...aether-agent-cli-v0.5.0) - 2026-05-08
+
+### Fixed
+
+- *(mcp-servers)* Allow concurrent mcp auth requests
+
+### Other
+
+- *(workspace)* Upgrade deps and to keyring 4.x
+- *(mcp-utils)* Rewrite mcp config to better use serde, schemars, and enforce 1 proxy instance
+
 ## [0.4.3](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.4.2...aether-agent-cli-v0.4.3) - 2026-05-05
 
 ### Other

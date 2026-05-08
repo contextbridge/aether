@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.4.1...aether-mcp-utils-v0.5.0) - 2026-05-08
+
+### Added
+
+- *(aether-cli)* Render proxied MCP servers in a separate list from non-proxied MCPs in settings menu
+
+### Fixed
+
+- *(mcp-servers)* Allow concurrent mcp auth requests
+
+### Other
+
+- *(mcp-utils)* Rewrite mcp config to better use serde, schemars, and enforce 1 proxy instance
+
 ## [0.4.1](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.4.0...aether-mcp-utils-v0.4.1) - 2026-05-05
 
 ### Other
