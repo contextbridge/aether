@@ -267,7 +267,7 @@ fn overlap_error(path: &str, insertion: &ResolvedEdit, replacement: &ResolvedEdi
 }
 
 fn edit_apply_rank(edit: &ResolvedEdit) -> usize {
-    if edit.start < edit.end { 0 } else { 1 }
+    usize::from(edit.start >= edit.end)
 }
 
 fn split_edit_text(text: &str) -> Vec<String> {

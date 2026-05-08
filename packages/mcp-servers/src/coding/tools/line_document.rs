@@ -65,7 +65,7 @@ impl LineDocument {
             return;
         }
 
-        let replacement_endings = self.replacement_line_endings(replacement_lines.len(), removed_final_ending);
+        let replacement_endings = self.replacement_line_endings(replacement_lines.len(), removed_final_ending.as_ref());
         self.lines.splice(start..end, replacement_lines);
         self.line_endings.splice(start..end, replacement_endings);
     }
@@ -78,11 +78,11 @@ impl LineDocument {
             .collect()
     }
 
-    fn replacement_line_endings(&self, line_count: usize, final_ending: Option<String>) -> Vec<Option<String>> {
+    fn replacement_line_endings(&self, line_count: usize, final_ending: Option<&String>) -> Vec<Option<String>> {
         (0..line_count)
             .map(
                 |index| {
-                    if index + 1 == line_count { final_ending.clone() } else { Some(self.default_line_ending.clone()) }
+                    if index + 1 == line_count { final_ending.cloned() } else { Some(self.default_line_ending.clone()) }
                 },
             )
             .collect()
