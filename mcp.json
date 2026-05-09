@@ -21,10 +21,9 @@
       "type": "in-memory",
       "args": ["contextbridge", "plan"]
     },
-    "playwright": {
-      "type": "stdio",
+    "chrome-devtools": {
       "command": "npx",
-      "args": ["@playwright/mcp@latest"],
+      "args": ["chrome-devtools-mcp@latest"],
       "proxy": true
     }
   }
