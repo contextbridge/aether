@@ -1,0 +1,104 @@
+---
+title: MCP Integration
+description: Connect MCP servers to agents programmatically.
+---
+
+The `McpBuilder` connects MCP servers — both built-in and external — to your agent. It handles server lifecycle, tool discovery, and message routing.
+
+```rust
+use aether_core::mcp::mcp;
+```
+
+## McpBuilder
+
+```rust
+let mcp_result = mcp()
+    .register_in_memory_server("coding", server_factory)
+    .from_json_files(&[".aether/mcp.json"]).await?
+    .with_roots(vec![PathBuf::from(".")])
+    .spawn()
+    .await?;
+```
+
+| Method | Description |
+|--------|-------------|
+| `register_in_memory_server(name, factory)` | Add a built-in MCP server |
+| `from_json_files(paths)` | Load and merge servers from one or more JSON config files (last file wins on collision) |
+| `with_servers(configs)` | Add servers from a `Vec<McpServerConfig>` |
+| `with_roots(paths)` | Set workspace roots for server discovery |
+| `with_oauth_handler(handler)` | Set OAuth handler for authenticated servers |
+| `spawn()` | Start all servers and discover tools |
+
+## McpSpawnResult
+
+`spawn()` returns everything needed to wire tools into an agent:
+
+```rust
+pub struct McpSpawnResult {
+    pub tool_definitions: Vec<ToolDefinition>,
+    pub instructions: Vec<ServerInstructions>,
+    pub server_statuses: Vec<McpServerStatusEntry>,
+    pub command_tx: Sender<McpCommand>,
+    pub elicitation_rx: Receiver<ElicitationRequest>,
+    pub handle: JoinHandle<()>,
+}
+```
+
+| Field | Purpose |
+|-------|---------|
+| `tool_definitions` | Tools discovered from all servers — pass to `AgentBuilder::tools()` |
+| `instructions` | Server-provided system prompt additions |
+| `command_tx` | Channel for routing tool calls — pass to `AgentBuilder::tools()` |
+| `handle` | Background task handle for the MCP manager |
+
+## Wiring tools to an agent
+
+```rust
+use aether_core::core::agent;
+use aether_core::mcp::mcp;
+
+// 1. Spawn MCP servers
+let mcp_result = mcp()
+    .from_json_files(&[".aether/mcp.json"]).await?
+    .spawn()
+    .await?;
+
+// 2. Create agent with tools
+let (user_tx, agent_rx, handle) = agent(provider)
+    .system_prompt(Prompt::text("You are a coding assistant."))
+    .tools(mcp_result.command_tx, mcp_result.tool_definitions)
+    .spawn()
+    .await?;
+```
+
+## Using in-memory servers
+
+Built-in servers from the `mcp_servers` crate can be registered directly:
+
+```rust
+use mcp_servers::CodingMcp;
+
+let mcp_result = mcp()
+    .register_in_memory_server("coding", || {
+        CodingMcp::new()
+            .with_root_dir("/my/project".into())
+            .into_dyn()
+    })
+    .spawn()
+    .await?;
+```
+
+See [Embedding Servers](/libraries/mcp-servers/embedding/) for details on constructing built-in servers.
+
+## Loading from config
+
+`from_json_files()` reads the standard MCP config format (`.aether/mcp.json`) from one or more files and merges them. On server name collisions across files, the rightmost path wins:
+
+```rust
+let mcp_result = mcp()
+    .from_json_files(&[".aether/mcp/base.json", ".aether/mcp/overrides.json"]).await?
+    .spawn()
+    .await?;
+```
+
+This handles both in-memory and stdio servers defined in the config. See [MCP Servers](/aether/configuration/mcp-servers/) for the config format.

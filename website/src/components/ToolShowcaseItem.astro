@@ -1,0 +1,20 @@
+---
+interface Props {
+    title: string;
+    description: string;
+    border?: boolean;
+}
+const { title, description, border = true } = Astro.props;
+---
+<div class:list={[
+    "grid grid-cols-1 lg:grid-cols-[7fr_5fr] gap-10 items-start",
+    border && "border-b border-gray-700/50 pb-6",
+]}>
+    <div class="order-2 lg:order-none">
+        <h4 class="font-mono text-lg text-accent-500 font-semibold mb-2">{title}</h4>
+        <div class="text-gray-400 text-sm leading-relaxed" set:html={description} />
+    </div>
+    <div class="min-w-0">
+        <slot />
+    </div>
+</div>

@@ -1,0 +1,135 @@
+---
+title: Provider Interface
+description: The StreamingModelProvider trait and core LLM types.
+---
+
+The `llm` crate provides a unified interface for streaming LLM responses across providers. The core abstraction is the `StreamingModelProvider` trait.
+
+```toml title="Cargo.toml"
+[dependencies]
+llm = { package = "aether-llm", version = "0.2.5" }
+```
+
+## StreamingModelProvider
+
+```rust
+pub trait StreamingModelProvider: Send + Sync {
+    fn stream_response(&self, context: &Context) -> LlmResponseStream;
+    fn display_name(&self) -> String;
+    fn context_window(&self) -> Option<u32>;
+    fn model(&self) -> Option<LlmModel> { None }
+}
+```
+
+| Method | Description |
+|--------|-------------|
+| `stream_response(context)` | Stream a response for the given conversation context |
+| `display_name()` | Human-readable provider + model name |
+| `context_window()` | Max context size in tokens (if known) |
+| `model()` | The model catalog entry (optional) |
+
+`LlmResponseStream` is `Pin<Box<dyn Stream<Item = Result<LlmResponse>> + Send>>`.
+
+## Creating a provider
+
+Use `ProviderFactory` to create providers from environment variables:
+
+```rust
+use llm::{ProviderFactory, providers::AnthropicProvider};
+
+let provider = AnthropicProvider::from_env().await?
+    .with_model("claude-sonnet-4-5");
+```
+
+:::note
+`from_env()` is async — it returns `impl Future<Output = LlmResult<Self>>`. Use `.await?` to unwrap it.
+:::
+
+Available providers: `AnthropicProvider`, `OpenAiProvider`, `OpenRouterProvider`, `GeminiProvider`, `OllamaProvider`, `LlamaCppProvider`, `BedrockProvider` (feature: `bedrock`), `CodexProvider` (feature: `codex`).
+
+## Core types
+
+### Context
+
+The conversation state passed to `stream_response`:
+
+```rust
+let mut ctx = Context::new(messages, tools);
+ctx.set_reasoning_effort(Some(ReasoningEffort::High));
+ctx.set_prompt_cache_key(Some("my-cache".into()));
+```
+
+| Method | Description |
+|--------|-------------|
+| `new(messages, tools)` | Create from messages and tool definitions |
+| `add_message(msg)` | Append a message |
+| `set_tools(tools)` | Replace tool definitions |
+| `set_reasoning_effort(effort)` | Set thinking budget |
+| `messages()` | Get all messages |
+| `tools()` | Get tool definitions |
+| `estimated_token_count()` | Rough token estimate |
+
+### ChatMessage
+
+```rust
+pub enum ChatMessage {
+    System { content, timestamp },
+    User { content, timestamp },
+    Assistant { content, reasoning, timestamp, tool_calls },
+    ToolCallResult(Result<ToolCallResult, ToolCallError>),
+    Error { message, timestamp },
+    Summary { content, timestamp, messages_compacted },
+}
+```
+
+### LlmResponse
+
+Chunks emitted by `stream_response`:
+
+| Variant | Description |
+|---------|-------------|
+| `Start { message_id }` | New response started |
+| `Text { chunk }` | Text content chunk |
+| `Reasoning { chunk }` | Extended thinking chunk |
+| `ToolRequestStart { id, name }` | Tool call beginning |
+| `ToolRequestArg { id, chunk }` | Streaming tool arguments |
+| `ToolRequestComplete { tool_call }` | Tool call fully formed |
+| `Usage { input_tokens, output_tokens, cached_input_tokens }` | Token usage |
+| `Done { stop_reason }` | Response complete |
+| `Error { message }` | Error during streaming |
+
+### StopReason
+
+Why the model stopped generating:
+
+`EndTurn`, `Length`, `ToolCalls`, `ContentFilter`, `Error`, `Unknown(String)`
+
+### ToolDefinition
+
+```rust
+pub struct ToolDefinition {
+    pub name: String,
+    pub description: String,
+    pub parameters: String,  // JSON Schema
+    pub server: Option<String>,
+}
+```
+
+## Error handling
+
+```rust
+pub enum LlmError {
+    MissingApiKey(String),
+    InvalidApiKey(String),
+    ApiRequest(String),
+    ApiError(String),
+    ContextOverflow(ContextOverflowError),
+    IoError(String),
+    JsonParsing(String),
+    ToolParameterParsing { tool_name, error },
+    OAuthError(String),
+    Other(String),
+}
+```
+
+`ContextOverflowError` provides `requested_tokens` and `max_tokens` for handling context limits.

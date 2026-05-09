@@ -1,0 +1,69 @@
+---
+import TerminalDemo from "./TerminalDemo.astro";
+import CodeTabs from "./CodeTabs.astro";
+import { Code } from "astro-expressive-code/components";
+import { Icon } from "astro-icon/components";
+import { GITHUB_URL } from "../consts";
+
+const installBrewCode = `$ brew install jcarver989/tap/aether`;
+const installShellCode = `$ curl -fsSL aether-agent.io/install | sh`;
+const installCargoCode = `$ cargo install aether-agent-cli`;
+---
+
+<section class="px-16 pt-16 pb-16 sm:pt-28 sm:pb-20">
+    <div class="max-w-350 mx-auto">
+        <div
+            class="grid grid-cols-1 gap-10 items-center lg:grid-cols-[5fr_7fr] lg:gap-16"
+        >
+            <div class="text-center lg:text-left">
+                <h1
+                    class="font-mono text-2xl sm:text-4xl lg:text-5xl font-semibold text-white mb-6"
+                >
+                    The open-source coding agent <span class="italic underline"
+                        >you</span
+                    > control
+                </h1>
+                <p
+                    class="text-base sm:text-lg lg:text-xl text-accent-400 font-mono font-medium mb-3"
+                >
+                    Many agents ship with hardcoded prompts and tools. Aether
+                    puts everything in config files you control, so every token
+                    in context is yours to mold.
+                </p>
+                <p class="text-sm sm:text-base text-gray-400 font-mono mb-6">
+                    Written in Rust, MIT licensed, batteries-included.
+                </p>
+
+                <div
+                    class="flex flex-wrap justify-center lg:justify-start gap-4 mb-8"
+                >
+                    <a
+                        href="/getting-started/overview/"
+                        class="inline-flex items-center gap-2 px-6 py-3 rounded-lg font-medium bg-accent-600 text-white hover:bg-accent-500 transition-all duration-200 shadow-lg shadow-accent-900/30 no-underline"
+                        ><Icon name="lucide:file-text" size={18} />
+                        Docs
+                        <Icon name="lucide:chevron-right" size={18} />
+                    </a>
+                    <a
+                        href={GITHUB_URL}
+                        class="inline-flex items-center gap-2 px-6 py-3 rounded-lg font-medium border border-gray-500 text-gray-200 hover:border-accent-400 hover:text-accent-400 transition-all duration-200 no-underline"
+                    >
+                        <Icon name="simple-icons:github" size={18} />
+                        GitHub
+                        <Icon name="lucide:chevron-right" size={18} />
+                    </a>
+                </div>
+
+                <div class="hero-install w-full max-w-lg">
+                    <CodeTabs labels={["Homebrew", "Shell", "Cargo"]}>
+                        <Code code={installBrewCode} lang="sh" />
+                        <Code code={installShellCode} lang="sh" />
+                        <Code code={installCargoCode} lang="sh" />
+                    </CodeTabs>
+                </div>
+            </div>
+
+            <TerminalDemo id="hero-player" src="/demos/demo.cast" />
+        </div>
+    </div>
+</section>

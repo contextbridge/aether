@@ -1,0 +1,198 @@
+---
+title: Components
+description: The Component trait and built-in TUI widgets.
+---
+
+The `tui` crate provides a component-based terminal UI framework. Every interactive element implements the `Component` trait, which handles events and renders frames.
+
+```toml title="Cargo.toml"
+[dependencies]
+tui = { package = "aether-tui", version = "0.2.2" }
+```
+
+## Component trait
+
+```rust
+pub trait Component {
+    type Message;
+
+    fn on_event(&mut self, event: &Event) -> impl Future<Output = Option<Vec<Self::Message>>>;
+    fn render(&mut self, ctx: &ViewContext) -> Frame;
+}
+```
+
+| Method | Description |
+|--------|-------------|
+| `on_event(event)` | Handle input, return messages (or `None` if unhandled) |
+| `render(ctx)` | Render the component into a `Frame` |
+
+`Message` is an associated type — each component defines its own message enum for communicating state changes upward.
+
+## Events
+
+```rust
+pub enum Event {
+    Key(KeyEvent),
+    Paste(String),
+    Mouse(MouseEvent),
+    Tick,
+    Resize(Size),
+}
+```
+
+## Built-in widgets
+
+| Widget | Feature | Description |
+|--------|---------|-------------|
+| `TextField` | — | Single-line text input |
+| `SelectList` | — | Scrollable selection list |
+| `RadioSelect` | — | Single-choice selection |
+| `MultiSelect` | — | Multi-choice selection |
+| `Checkbox` | — | Boolean toggle |
+| `NumberField` | — | Numeric input |
+| `Form` | — | Multi-field form container |
+| `Spinner` | — | Loading indicator |
+| `Panel` | — | Bordered container |
+| `BorderedTextField` | — | Single-line input with labeled border |
+| `Stepper` | — | Horizontal multi-step progress indicator |
+| `SplitPanel` | — | Two-panel layout with vertical divider |
+| `Gallery` | — | Browseable component list with preview pane |
+| `Combobox` | `picker` | Fuzzy-searchable dropdown |
+
+### TextField
+
+```rust
+use tui::text_field::TextField;
+
+let mut field = TextField::new("Enter your name:");
+// Handle events and render in your component loop
+```
+
+### SelectList
+
+```rust
+use tui::select_list::{SelectList, SelectItem};
+
+let items = vec![
+    SelectItem::new("opt1", "Option One"),
+    SelectItem::new("opt2", "Option Two"),
+];
+let mut list = SelectList::new(items);
+```
+
+### BorderedTextField
+
+A single-line text input rendered inside a box with the label intersecting the top border:
+
+```rust
+use tui::components::bordered_text_field::BorderedTextField;
+
+let mut field = BorderedTextField::new("Name", "my-agent".into());
+field.set_width(40);
+```
+
+### Stepper
+
+A horizontal multi-step progress indicator showing complete, current, and upcoming steps. Renders a single `Line`, not a full `Component`:
+
+```rust
+use tui::components::stepper::{Stepper, StepperItem, StepVisualState};
+
+let items = vec![
+    StepperItem { label: "Configure", state: StepVisualState::Complete },
+    StepperItem { label: "Install", state: StepVisualState::Current },
+    StepperItem { label: "Finish", state: StepVisualState::Upcoming },
+];
+let stepper = Stepper { items: &items, separator: " > ", leading_padding: 2 };
+let line = stepper.render(&ctx);
+```
+
+### SplitPanel
+
+A two-panel layout with a vertical divider:
+
+```rust
+use tui::components::split_panel::{SplitPanel, SplitLayout};
+
+let layout = SplitLayout::fraction(1, 3, 20, 60); // 1/3 of width, clamped [20, 60]
+let split = SplitPanel::new(left_component, right_component, layout);
+```
+
+### Gallery
+
+A browseable list of named components with a live preview pane (built on `SplitPanel`):
+
+```rust
+use tui::components::gallery::Gallery;
+
+let entries = vec![
+    ("TextField".into(), text_field_demo),
+    ("Checkbox".into(), checkbox_demo),
+];
+let gallery = Gallery::new(entries);
+```
+
+### Combobox (feature: `picker`)
+
+A searchable dropdown with fuzzy matching:
+
+```rust
+use tui::{Combobox, Searchable};
+
+#[derive(Clone)]
+struct MyItem { name: String }
+
+impl Searchable for MyItem {
+    fn search_text(&self) -> &str { &self.name }
+}
+
+let items = vec![MyItem { name: "foo".into() }];
+let mut picker = Combobox::new(items);
+```
+
+## FocusRing
+
+Manages focus across multiple components:
+
+```rust
+use tui::FocusRing;
+
+let mut focus = FocusRing::new(3); // 3 focusable elements
+focus.next(); // Move focus forward
+focus.prev(); // Move focus backward
+let current = focus.current(); // Current focused index
+```
+
+## Composing components
+
+Components compose by embedding child components and delegating events:
+
+```rust
+struct MyApp {
+    input: TextField,
+    list: SelectList<String>,
+}
+
+impl Component for MyApp {
+    type Message = AppMessage;
+
+    async fn on_event(&mut self, event: &Event) -> Option<Vec<AppMessage>> {
+        // Delegate to focused child
+        if let Some(msgs) = self.input.on_event(event).await {
+            // Handle TextField messages
+        }
+        None
+    }
+
+    fn render(&mut self, ctx: &ViewContext) -> Frame {
+        let input_frame = self.input.render(ctx);
+        let list_frame = self.list.render(ctx);
+        // Combine frames vertically
+        Frame::new(
+            input_frame.into_lines().into_iter()
+                .chain(list_frame.into_lines())
+                .collect()
+        )
+    }
+}
+```

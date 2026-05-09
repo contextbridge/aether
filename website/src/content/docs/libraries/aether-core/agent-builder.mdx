@@ -1,0 +1,132 @@
+---
+title: Agent Builder
+description: Create and run agents programmatically with aether-core.
+---
+
+The `aether_core` crate provides the agent runtime. The main entry point is the `agent()` function, which returns an `AgentBuilder` for configuring and spawning agents.
+
+```toml title="Cargo.toml"
+[dependencies]
+aether-core = { package = "aether-agent-core", version = "0.3.2" }
+llm = { package = "aether-llm", version = "0.2.5" }
+```
+
+## Creating an agent
+
+```rust
+use aether_core::core::agent;
+use llm::{ProviderFactory, providers::AnthropicProvider};
+
+let provider = AnthropicProvider::from_env().await?.with_model("claude-sonnet-4-5");
+
+let (user_tx, agent_rx, handle) = agent(provider)
+    .system_prompt(Prompt::text("You are a helpful assistant."))
+    .spawn()
+    .await?;
+```
+
+The `agent()` function takes any type implementing `StreamingModelProvider` and returns an `AgentBuilder`.
+
+## AgentBuilder
+
+Builder methods (all chainable):
+
+| Method | Description |
+|--------|-------------|
+| `system_prompt(prompt)` | Add a system prompt |
+| `tools(tx, tools)` | Attach MCP tools (channel + tool definitions) |
+| `tool_timeout(duration)` | Set timeout for tool calls |
+| `messages(messages)` | Pre-populate conversation history |
+| `compaction(config)` | Configure context compaction |
+| `disable_compaction()` | Turn off automatic compaction |
+| `max_auto_continues(n)` | Max auto-continue attempts when model hits tool calls |
+| `prompt_cache_key(key)` | Set prompt caching key |
+
+### `from_spec`
+
+Build an agent from an `AgentSpec` (loaded from `.aether/settings.json`). This is async because it parses the model spec and may perform provider setup:
+
+```rust
+use aether_core::core::AgentBuilder;
+
+let builder = AgentBuilder::from_spec(&agent_spec, base_prompts).await?;
+```
+
+### `spawn`
+
+`spawn()` returns three values:
+
+```rust
+let (user_tx, agent_rx, handle) = builder.spawn().await?;
+```
+
+| Value | Type | Purpose |
+|-------|------|---------|
+| `user_tx` | `Sender<UserMessage>` | Send messages to the agent |
+| `agent_rx` | `Receiver<AgentMessage>` | Receive events from the agent |
+| `handle` | `AgentHandle` | Control the agent lifecycle |
+
+## Sending messages
+
+```rust
+use aether_core::events::UserMessage;
+
+// Send a text message
+user_tx.send(UserMessage::text("What files are in this directory?")).await?;
+
+// Cancel the current operation
+user_tx.send(UserMessage::Cancel).await?;
+
+// Clear conversation context
+user_tx.send(UserMessage::ClearContext).await?;
+
+// Change reasoning effort
+user_tx.send(UserMessage::SetReasoningEffort(Some(ReasoningEffort::High))).await?;
+```
+
+## AgentHandle
+
+```rust
+// Check if the agent is still running
+if handle.is_finished() { /* ... */ }
+
+// Abort the agent
+handle.abort();
+
+// Wait for completion
+handle.await_completion().await;
+```
+
+## Full example
+
+```rust
+use aether_core::core::agent;
+use aether_core::events::{UserMessage, AgentMessage};
+use llm::{ProviderFactory, providers::AnthropicProvider};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let provider = AnthropicProvider::from_env().await?.with_model("claude-sonnet-4-5");
+
+    let (user_tx, mut agent_rx, handle) = agent(provider)
+        .system_prompt(Prompt::text("You are a concise assistant."))
+        .spawn()
+        .await?;
+
+    user_tx.send(UserMessage::text("What is Rust?")).await?;
+
+    while let Some(msg) = agent_rx.recv().await {
+        match msg {
+            AgentMessage::Text { chunk, .. } => print!("{chunk}"),
+            AgentMessage::Done => break,
+            AgentMessage::Error { message } => eprintln!("Error: {message}"),
+            _ => {}
+        }
+    }
+
+    handle.await_completion().await;
+    Ok(())
+}
+```
+
+See [Events & Streaming](/libraries/aether-core/events/) for the full list of `AgentMessage` variants, and [MCP Integration](/libraries/aether-core/mcp-integration/) for attaching tools.

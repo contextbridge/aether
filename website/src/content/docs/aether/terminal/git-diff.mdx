@@ -1,0 +1,57 @@
+---
+title: Git Diff View
+description: Review changes and add inline comments with the two-pane diff viewer.
+---
+
+Press `Ctrl+G` to open the git diff view. It shows a two-pane layout: changed files on the left, unified diff on the right. You can navigate the diff and add inline comments that get sent to the agent as a structured prompt.
+
+## Layout
+
+```
+┌─────────────────┬───────────────────────────┐
+│  Changed Files   │  Unified Diff             │
+│                  │                           │
+│  ● src/main.rs   │  @@ -10,6 +10,8 @@       │
+│    src/lib.rs    │   fn main() {             │
+│    Cargo.toml    │  +    let config = ...     │
+│                  │  +    setup(config);       │
+│                  │       run();               │
+│                  │   }                        │
+│                  │                           │
+├─────────────────┴───────────────────────────┤
+│  > Comment input (when active)              │
+└─────────────────────────────────────────────┘
+```
+
+## Navigation
+
+| Key | Action |
+|-----|--------|
+| `h` / `←` | Focus file list (left pane) |
+| `l` / `→` or `Enter` | Focus diff (right pane) |
+| `j` / `↓` | Move down |
+| `k` / `↑` | Move up |
+| `g g` | Jump to top |
+| `G` | Jump to bottom |
+| `c` | Add comment on current line |
+| `Enter` | Submit all queued comments |
+| `r` | Refresh the diff |
+| `Esc` | Close git diff view |
+
+## Inline comments
+
+1. Navigate to a diff line you want to comment on
+2. Press `c` to open the comment input
+3. Type your comment and press `Enter` to queue it
+4. Navigate to other lines and add more comments
+5. Press `Enter` (when not in comment input) to submit all comments
+
+All queued comments are sent as a single prompt to the agent, including the file path, line number, and surrounding diff context. This lets the agent understand exactly which changes you're commenting on.
+
+## Use case
+
+The git diff view is designed for reviewing agent-generated changes. After the agent modifies files, open the diff to:
+
+- See exactly what changed
+- Add targeted feedback on specific lines
+- Request fixes to particular hunks without describing them in prose

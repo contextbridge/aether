@@ -1,0 +1,183 @@
+---
+title: Headless CLI
+description: Run single prompts from the command line.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+The headless CLI runs a single prompt and exits — ideal for scripting, CI pipelines, and automation.
+
+```bash
+aether headless "Explain the main function in this project"
+```
+
+## Flags
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `[PROMPT]...` | positional | — | Prompt text (joined with spaces) |
+| `-m, --model` | `string` | — | Model spec (e.g., `anthropic:claude-sonnet-4-5`) |
+| `-a, --agent` | `string` | — | Named agent from settings.json |
+| `-C, --cwd` | `path` | `.` | Working directory |
+| `--settings-file` | `path` | — | Path to settings JSON (conflicts with `--settings-json`) |
+| `--settings-json` | `string` | — | Inline settings JSON (conflicts with `--settings-file`) |
+| `--mcp-config` | `path` | — | Path to MCP config file (repeatable) |
+| `--mcp-config-json` | `string` | — | Inline MCP config JSON (repeatable) |
+| `--system-prompt` | `string` | — | Additional system prompt text |
+| `--output` | `string` | `text` | Output format: `text`, `pretty`, `json` |
+| `-v, --verbose` | flag | — | Verbose logging to stderr |
+| `--events` | `string` | — | Comma-separated event filter (e.g. `tool_call,tool_result`). Omit to emit all. |
+
+:::note
+`--model` and `--agent` are mutually exclusive. If neither is set, Aether uses the first `userInvocable` agent from settings.json.
+:::
+
+## Output formats
+
+<Tabs>
+  <TabItem label="text">
+    Plain text output — just the agent's response.
+
+    ```bash
+    aether headless --output text "What does this project do?"
+    ```
+  </TabItem>
+  <TabItem label="pretty">
+    Formatted output with markdown rendering.
+
+    ```bash
+    aether headless --output pretty "Summarize the README"
+    ```
+  </TabItem>
+  <TabItem label="json">
+    Structured JSON output — useful for piping into other tools.
+
+    ```bash
+    aether headless --output json "List all TODO comments" | jq '.response'
+    ```
+  </TabItem>
+</Tabs>
+
+## Event filtering
+
+By default, headless mode emits all event types. Use `--events` to restrict output to specific event kinds:
+
+```bash
+aether headless --output json --events tool_call,tool_result "Refactor this module"
+```
+
+Available event kinds:
+
+| Event kind | Description |
+|------------|-------------|
+| `text` | Final text output |
+| `thought` | Extended thinking / reasoning |
+| `tool_call` | Tool invocation |
+| `tool_result` | Tool return value |
+| `tool_error` | Tool failure |
+| `error` | Agent-level error |
+| `cancelled` | Operation cancelled |
+| `auto_continue` | Agent auto-continuing |
+| `retrying` | Agent is retrying a failed operation |
+| `model_switched` | Model changed (alloying) |
+| `tool_progress` | Tool execution progress |
+| `context_compaction_started` | Compaction beginning |
+| `context_compaction_result` | Compaction completed |
+| `context_usage` | Token usage update |
+| `context_cleared` | Context was cleared |
+
+:::note
+When `--events` is set, `error` events are only shown if explicitly listed.
+:::
+
+## Reading from stdin
+
+If no prompt is given and stdin is not a TTY, Aether reads the prompt from stdin:
+
+```bash
+echo "Explain this code" | aether headless
+```
+
+```bash
+cat error.log | aether headless "What went wrong?"
+```
+
+This is useful for piping file contents or command output into Aether.
+
+## Examples
+
+### Quick question with a specific model
+
+```bash
+aether headless -m anthropic:claude-sonnet-4-5 "What does the Config struct do?"
+```
+
+### Using a named agent
+
+```bash
+aether headless -a researcher "Find all API endpoints in this project"
+```
+
+### CI pipeline
+
+```bash
+aether headless \
+  -m anthropic:claude-haiku-4-5 \
+  --output json \
+  "Review the staged changes and list any issues" \
+  > review.json
+```
+
+### Different working directory
+
+```bash
+aether headless -C /path/to/project "Summarize the architecture"
+```
+
+## Other subcommands
+
+### show-prompt
+
+Print the fully assembled system prompt (useful for debugging):
+
+```bash
+aether show-prompt
+# Inspect a specific agent
+aether show-prompt -a researcher
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `-C, --cwd` | `path` | `.` | Working directory |
+| `--settings-file` | `path` | — | Path to settings JSON |
+| `--settings-json` | `string` | — | Inline settings JSON |
+| `--mcp-config` | `path` | — | Path to MCP config file (repeatable) |
+| `--mcp-config-json` | `string` | — | Inline MCP config JSON (repeatable) |
+| `--system-prompt` | `string` | — | Additional system prompt text |
+| `-a, --agent` | `string` | — | Named agent to inspect |
+
+### agent new
+
+Initialize a new Aether project:
+
+```bash
+aether agent new [path]
+```
+
+See [Getting Started](/getting-started/overview/) for details.
+
+### agent list
+
+List all agents in the project:
+
+```bash
+aether agent list [path]
+```
+
+### agent remove
+
+Remove an agent from the project:
+
+```bash
+aether agent remove <name> [path]
+```

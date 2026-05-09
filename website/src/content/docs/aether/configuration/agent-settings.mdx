@@ -1,0 +1,107 @@
+---
+title: Agents
+description: Configure agents in .aether/settings.json.
+---
+
+import { FileTree } from '@astrojs/starlight/components';
+
+Agents are defined in `.aether/settings.json` — their model, prompts, tool access, and how they can be invoked.
+
+## File location
+
+<FileTree>
+
+- .aether/
+  - **settings.json** — Agent catalog
+  - mcp.json — MCP server config
+  - DEFAULT.md — Shared prompt scaffold
+- AGENTS.md — Project instructions
+
+</FileTree>
+
+## Example
+
+```json
+{
+  "prompts": [".aether/DEFAULT.md", "AGENTS.md"],
+  "mcps": [".aether/mcp.json"],
+  "agents": [
+    {
+      "name": "planner",
+      "description": "Plans implementation strategy",
+      "model": "anthropic:claude-sonnet-4-5",
+      "reasoningEffort": "high",
+      "userInvocable": true
+    }
+  ]
+}
+```
+
+## Top-level fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `agent` | `string` | Optional default user-invocable agent name |
+| `prompts` | `PromptSource[]` | Prompt sources inherited by all agents that don't define their own `prompts` |
+| `mcps` | `McpSource[]` | MCP config refs inherited by all agents that don't define their own `mcps`. Files are merged in order; on collisions, the last file wins. Use `{ "type": "file", "path": "...", "proxy": true }` to route a referenced config through Aether's tool proxy. |
+| `agents` | `AgentEntry[]` | Array of agent definitions |
+
+## Agent entry fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | `string` | *required* | Unique identifier for the agent |
+| `description` | `string` | *required* | Human-readable description shown in the UI |
+| `model` | `string` | *required* | Model spec — `provider:model-id` or comma-separated [alloy](/aether/configuration/llm-providers/#alloying) |
+| `reasoningEffort` | `string` | — | `"low"`, `"medium"`, `"high"`, or `"xhigh"` |
+| `userInvocable` | `boolean` | `false` | Appears as a mode in the TUI and ACP clients |
+| `agentInvocable` | `boolean` | `false` | Can be spawned as a [sub-agent](/aether/built-in-servers/subagents/) |
+| `prompts` | `PromptSource[]` | `[]` | Agent-specific prompt sources. When non-empty, replaces the inherited top-level prompt list. |
+| `mcps` | `McpSource[]` | `[]` | Agent-specific MCP config refs. When non-empty, replaces the inherited top-level MCP config list. |
+| `tools` | `object` | `{}` | [Tool filtering](/aether/configuration/mcp-servers/#tool-filtering) with `allow` and `deny` arrays |
+
+:::note
+If an agent omits `prompts` or `mcps`, it inherits the corresponding top-level list. If an agent provides a non-empty array, that array replaces the inherited list rather than appending to it.
+:::
+
+## Source formats
+
+Prompt sources can be file-path strings or typed objects:
+
+```json
+{
+  "prompts": [
+    "AGENTS.md",
+    { "type": "file", "path": ".aether/DEFAULT.md" },
+    { "type": "glob", "pattern": "prompts/*.md" },
+    { "type": "text", "text": "Always answer concisely." }
+  ]
+}
+```
+
+MCP sources can be file-path strings, typed file refs, or inline server configs:
+
+```json
+{
+  "mcps": [
+    ".aether/mcp.json",
+    { "type": "file", "path": ".aether/external-mcp.json", "proxy": true },
+    {
+      "type": "inline",
+      "servers": {
+        "coding": { "type": "in-memory" }
+      }
+    }
+  ]
+}
+```
+
+## Validation rules
+
+:::note
+- Agent names must be unique (whitespace is trimmed)
+- `"__default__"` is a reserved name
+- At least one of `userInvocable` or `agentInvocable` must be `true`
+- Prompt file paths and glob patterns must match at least one file
+- Referenced MCP config paths must point to existing files
+:::

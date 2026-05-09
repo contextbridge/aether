@@ -1,0 +1,162 @@
+---
+import "../styles/global.css";
+import "../styles/themes.css";
+import ThemeSwitcher from "../components/ThemeSwitcher.astro";
+
+const { title, description } = Astro.props.frontmatter;
+---
+
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>{title}</title>
+        <meta name="description" content={description} />
+        <link rel="sitemap" href="/sitemap-index.xml" />
+        <script is:inline>
+            (function () {
+                var t = localStorage.getItem("aether-color-theme");
+                if (t) document.documentElement.dataset.colorTheme = t;
+            })();
+        </script>
+    </head>
+    <body class="m-0 bg-gray-950 text-gray-50 font-sans antialiased">
+        <!-- Nav -->
+        <header
+            class="flex items-center justify-between px-6 py-4 border-b border-gray-400/20 bg-gray-900/80 backdrop-blur-md sticky top-0 z-50"
+        >
+            <a
+                href="/"
+                class="text-xl font-semibold text-gray-50 no-underline font-mono"
+                >Aether</a
+            >
+            <nav class="flex items-center gap-6">
+                <ThemeSwitcher />
+            </nav>
+        </header>
+
+        <main>
+            <slot />
+        </main>
+    </body>
+</html>
+
+<script>
+    import * as AsciinemaPlayer from "asciinema-player";
+
+    const players = new Map<
+        string,
+        ReturnType<typeof AsciinemaPlayer.create>
+    >();
+
+    function createPlayer(
+        containerId: string,
+        src: string,
+        opts?: Partial<Parameters<typeof AsciinemaPlayer.create>[2]>,
+    ) {
+        const container = document.getElementById(containerId);
+        if (!container) return;
+
+        const existing = players.get(containerId);
+        if (existing) {
+            existing.dispose();
+            container.innerHTML = "";
+        }
+
+        const player = AsciinemaPlayer.create(src, container, {
+            autoPlay: true,
+            loop: true,
+            speed: 1,
+            idleTimeLimit: 3,
+            fit: "width",
+            theme: "aether",
+            ...opts,
+        });
+        players.set(containerId, player);
+    }
+
+    function init() {
+        document
+            .querySelectorAll<HTMLElement>(".terminal-demo")
+            .forEach((container) => {
+                const src = container.dataset.src;
+                if (src && container.id)
+                    createPlayer(container.id, src);
+            });
+
+        const pills = document.querySelectorAll<HTMLButtonElement>(".pill");
+        pills.forEach((pill) => {
+            pill.addEventListener("click", () => {
+                pills.forEach((p) => p.classList.remove("active"));
+                pill.classList.add("active");
+                const src = pill.dataset.src;
+                if (src) createPlayer("hero-player", src);
+            });
+        });
+    }
+
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", init);
+    } else {
+        init();
+    }
+</script>
+
+<style is:global>
+    @import "asciinema-player/dist/bundle/asciinema-player.css";
+
+    .asciinema-player-theme-aether {
+        --term-color-foreground: #e6edf3;
+        --term-color-background: #0d1117;
+        --term-color-0: #484f58;
+        --term-color-1: #ff7b72;
+        --term-color-2: #3fb950;
+        --term-color-3: #d29922;
+        --term-color-4: #58a6ff;
+        --term-color-5: #bc8cff;
+        --term-color-6: #39d353;
+        --term-color-7: #b1bac4;
+        --term-color-8: #6e7681;
+        --term-color-9: #ffa198;
+        --term-color-10: #56d364;
+        --term-color-11: #e3b341;
+        --term-color-12: #79c0ff;
+        --term-color-13: #d2a8ff;
+        --term-color-14: #56d364;
+        --term-color-15: #f0f6fc;
+    }
+
+    .terminal-demo .ap-wrapper {
+        border-radius: 0;
+        border: none;
+    }
+
+    .terminal-demo .ap-control-bar {
+        display: none !important;
+    }
+</style>
+
+<style is:global>
+    @reference '../styles/global.css';
+
+    .pill {
+        @apply px-3 py-1 rounded-none text-xs font-mono font-medium border-none cursor-pointer transition-colors duration-100 text-gray-500 bg-transparent whitespace-nowrap;
+    }
+
+    .pill:hover:not(.active) {
+        @apply text-gray-200;
+    }
+
+    .pill.active {
+        @apply text-accent-400 bg-gray-800/60;
+    }
+
+    .pkg-card {
+        @apply bg-gray-900/60 border border-gray-400/20 rounded-lg p-5 transition-colors duration-200;
+    }
+
+    .pkg-card:hover {
+        @apply border-accent-500/30;
+    }
+</style>

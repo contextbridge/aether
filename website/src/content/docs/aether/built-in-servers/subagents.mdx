@@ -1,0 +1,71 @@
+---
+title: Sub-Agents
+description: Spawn child agents for parallel execution.
+---
+
+The `subagents` server lets agents spawn other agents as children, enabling delegation and parallel work. See [Tools](/aether/configuration/mcp-servers/) for configuration.
+
+## Tools
+
+| Tool | Description |
+|------|-------------|
+| `spawn_subagent` | Spawn one or more child agents in parallel |
+
+## Configuration
+
+Agents available for spawning must have `agentInvocable: true` in [settings.json](/aether/configuration/agent-settings/):
+
+```json title=".aether/settings.json"
+{
+  "agents": [
+    {
+      "name": "coder",
+      "description": "General coding agent",
+      "model": "anthropic:claude-sonnet-4-5",
+      "userInvocable": true,
+      "agentInvocable": true
+    },
+    {
+      "name": "researcher",
+      "description": "Read-only research agent",
+      "model": "anthropic:claude-haiku-4-5",
+      "agentInvocable": true,
+      "tools": {
+        "allow": ["coding__read_file", "coding__grep", "coding__find", "coding__web_*"]
+      }
+    }
+  ]
+}
+```
+
+## Example
+
+A parent agent can spawn multiple researchers in parallel:
+
+```json
+{
+  "tasks": [
+    {
+      "agentName": "researcher",
+      "prompt": "Find all database queries in the codebase and list them"
+    },
+    {
+      "agentName": "researcher",
+      "prompt": "Read the README and summarize the project architecture"
+    }
+  ]
+}
+```
+
+Each child agent runs independently with its own model, prompts, MCP server refs, and tool filters. Results are returned to the parent after all child agents complete.
+
+## Structured output
+
+Sub-agents are encouraged to return structured JSON so the parent can summarize their work. The recommended fields are:
+
+| Field | Description |
+|-------|-------------|
+| `summary` | Brief summary of what the agent accomplished |
+| `artifacts` | Files or resources the agent read or changed |
+| `decisions` | Key findings or decisions |
+| `nextSteps` | Recommended follow-up actions |

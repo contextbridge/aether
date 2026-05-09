@@ -1,0 +1,94 @@
+---
+title: Tasks
+description: Hierarchical task management for complex work.
+---
+
+The `tasks` server gives agents a structured way to break down complex work into trackable tasks with dependencies and status tracking. Tasks are stored as JSONL files in `.aether-tasks/`.
+
+## Tools
+
+| Tool | Description |
+|------|-------------|
+| `task_create` | Create a new task or subtask |
+| `task_get` | Get a task by ID |
+| `task_list` | List tasks with filters such as assignee, status, tree, or ready-only |
+| `task_update` | Update status, ownership, dependencies, or research metadata |
+
+:::note
+The primary task schema uses camelCase field names such as `parentId`, `treeId`, `readyOnly`, `nextSteps`, and `filesRead`. Snake_case aliases like `parent_id`, `tree_id`, `ready_only`, `next_steps`, and `files_read` are also accepted.
+:::
+
+## Task IDs
+
+- Root tasks: `at-a1b2c3d4`
+- Subtasks: `at-a1b2c3d4.1`, `at-a1b2c3d4.2`, etc.
+
+## Status values
+
+| Status | Meaning |
+|--------|---------|
+| `pending` | Not yet started |
+| `inProgress` | Currently being worked on |
+| `completed` | Done |
+| `blocked` | Waiting on dependencies |
+
+## Common examples
+
+Create a root task:
+
+```json
+{
+  "title": "Research multi-agent systems",
+  "description": "Investigate orchestration patterns",
+  "assignee": "orchestrator"
+}
+```
+
+Create a subtask:
+
+```json
+{
+  "title": "Analyze paper X",
+  "parentId": "at-a1b2c3d4",
+  "assignee": "worker-1"
+}
+```
+
+List ready work:
+
+```json
+{
+  "readyOnly": true
+}
+```
+
+Update progress and findings:
+
+```json
+{
+  "id": "at-a1b2c3d4.1",
+  "status": "completed",
+  "summary": "Found 5 issues",
+  "facts": ["All use deprecated API"],
+  "nextSteps": ["Migrate to the new API"],
+  "filesRead": ["src/auth.rs"]
+}
+```
+
+## Research metadata
+
+Tasks support structured metadata for long-running investigations and multi-step implementation work:
+
+| Field | Purpose |
+|-------|---------|
+| `summary` | High-level summary of findings |
+| `decisions` | Key decisions made |
+| `facts` | Important facts discovered |
+| `nextSteps` | What to do next |
+| `blockers` | What's blocking progress |
+| `filesRead` | Files that were examined |
+| `resources` | External resources referenced |
+
+## Storage format
+
+Each root task tree is stored as JSONL in `.aether-tasks/at-<hash>.jsonl`, which makes task state easy to inspect and version in git.

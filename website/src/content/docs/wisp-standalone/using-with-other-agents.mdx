@@ -1,0 +1,43 @@
+---
+title: Using Wisp with Other Agents
+description: Run the Wisp terminal UI as a standalone client for any ACP-compatible agent.
+---
+
+Wisp is the terminal UI that powers the `aether` command. It can also be installed and run standalone to work with any agent that speaks the [Agent Client Protocol (ACP)](https://github.com/anthropics/agent-client-protocol).
+
+## Install
+
+```bash
+cargo install aether-wisp
+```
+
+## Usage
+
+```bash
+# Default: uses Aether as the backend agent
+wisp
+
+# Use a custom ACP agent
+wisp --agent "my-custom-agent serve"
+```
+
+The `--agent` flag specifies the command Wisp runs as a subprocess. The agent must speak ACP over stdin/stdout.
+
+## CLI flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--agent <command>` | `aether acp` | Agent subprocess command |
+| `--log-dir <path>` | `/tmp/wisp-logs` | Log output directory |
+
+## Building an ACP-compatible agent
+
+Any process that speaks ACP over stdin/stdout can be used with Wisp. The handshake:
+
+1. Wisp sends `InitializeRequest` with client info
+2. Agent responds with its name and capabilities
+3. Wisp sends `NewSessionRequest` with the working directory
+4. Agent responds with session ID and config options
+5. Normal conversation begins — prompts in, events out
+
+See the [Agent Client Protocol](https://github.com/anthropics/agent-client-protocol) specification for the full protocol details.

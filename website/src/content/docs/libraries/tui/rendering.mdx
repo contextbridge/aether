@@ -1,0 +1,164 @@
+---
+title: Rendering
+description: Frame-based terminal rendering with diff updates.
+---
+
+The `tui` crate uses a frame-based rendering model. Components produce `Frame` values (a list of styled lines), and the `Renderer` efficiently updates the terminal by diffing frames.
+
+## Frame
+
+A `Frame` is a list of `Line` values with an optional cursor position:
+
+```rust
+use tui::{Frame, Line, Style, Cursor};
+
+let frame = Frame::new(vec![
+    Line::new("Hello, world!"),
+    Line::styled("Error!", Color::Red),
+])
+.with_cursor(Cursor::visible(0, 5));
+```
+
+| Method | Description |
+|--------|-------------|
+| `new(lines)` | Create from a vec of lines |
+| `with_cursor(cursor)` | Set cursor position |
+| `lines()` | Get lines slice |
+| `cursor()` | Get cursor state |
+| `into_lines()` | Consume into vec of lines |
+
+## Line and Span
+
+A `Line` contains styled `Span` segments:
+
+```rust
+use tui::{Line, Style};
+use crossterm::style::Color;
+
+// Plain text
+let line = Line::new("Hello");
+
+// Styled text
+let line = Line::styled("Error", Color::Red);
+
+// Multiple spans
+let mut line = Line::new("Status: ");
+line.push_styled("OK", Color::Green);
+
+// Methods
+line.display_width();  // Unicode-aware width
+line.plain_text();     // Strip styles
+line.soft_wrap(80);    // Wrap at column width
+```
+
+Span-level control:
+
+```rust
+use tui::rendering::span::Span;
+
+let span = Span::with_style("bold text", Style::fg(Color::White).bold());
+```
+
+## Style
+
+```rust
+use tui::Style;
+use crossterm::style::Color;
+
+let style = Style::fg(Color::Green)
+    .bold()
+    .italic()
+    .underline();
+
+// Available modifiers
+Style::fg(color)           // foreground color
+    .bg_color(color)       // background color
+    .bold()
+    .italic()
+    .underline()
+    .dim()
+    .strikethrough()
+```
+
+## Theme
+
+A `Theme` defines the full color palette for rendering:
+
+```rust
+use tui::Theme;
+use crossterm::style::Color;
+
+let theme = Theme::builder()
+    .fg(Color::White)
+    .bg(Color::Black)
+    .accent(Color::Cyan)
+    .error(Color::Red)
+    .success(Color::Green)
+    .warning(Color::Yellow)
+    .heading(Color::Blue)
+    .code_fg(Color::White)
+    .code_bg(Color::DarkGrey)
+    // ... all 24 color slots
+    .build()?;
+```
+
+The theme is passed to the `Renderer` and used by built-in components for consistent styling.
+
+## Renderer
+
+The `Renderer` manages terminal output with efficient diff-based updates:
+
+```rust
+use tui::Renderer;
+
+let mut renderer = Renderer::new(std::io::stdout(), theme, (80, 24));
+
+// Render a frame
+renderer.render_frame(|ctx| {
+    my_component.render(ctx)
+})?;
+
+// Handle terminal resize
+renderer.on_resize((new_width, new_height));
+
+// Push content to scrollback (above the viewport)
+renderer.push_to_scrollback(&lines)?;
+
+// Clear screen
+renderer.clear_screen()?;
+```
+
+The renderer only redraws lines that changed between frames, keeping terminal I/O minimal.
+
+## TerminalSession
+
+Manages raw mode, alternate screen, and cleanup:
+
+```rust
+use tui::TerminalSession;
+
+let session = TerminalSession::new()?;
+// Terminal is now in raw mode with alternate screen
+
+// ... render loop ...
+
+drop(session); // Restores terminal on drop
+```
+
+## Markdown rendering (feature: `syntax`)
+
+```rust
+use tui::render_markdown;
+
+let frame = render_markdown("# Hello\n\nSome **bold** text", 80, &theme);
+// Returns a Frame with styled lines
+```
+
+## Syntax highlighting (feature: `syntax`)
+
+```rust
+use tui::SyntaxHighlighter;
+
+let highlighter = SyntaxHighlighter::new(&theme);
+let lines = highlighter.highlight("fn main() {}", "rs");
+```

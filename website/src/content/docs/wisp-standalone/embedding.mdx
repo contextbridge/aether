@@ -1,0 +1,69 @@
+---
+title: Embedding Wisp
+description: Use Wisp as a library in your own application.
+---
+
+Wisp can be embedded in other Rust applications. There are two entry points depending on how much control you need.
+
+```toml title="Cargo.toml"
+[dependencies]
+aether-wisp = "0.3.2"
+```
+
+## `run_tui` — one-shot launch
+
+The simplest way to embed Wisp. Pass an agent command string and Wisp handles everything: subprocess spawning, ACP handshake, session creation, and the TUI event loop.
+
+```rust
+use wisp::run_tui;
+
+#[tokio::main]
+async fn main() -> Result<(), wisp::AppError> {
+    wisp::setup_logging(None);
+    run_tui("my-agent serve").await
+}
+```
+
+The command string is split and executed as a subprocess. The agent must speak ACP over stdin/stdout.
+
+## `run_with_state` — custom initialization
+
+For more control, initialize `RuntimeState` yourself and pass it in:
+
+```rust
+use wisp::{run_with_state, RuntimeState};
+
+let state = RuntimeState {
+    session_id,
+    agent_name: "my-agent".into(),
+    prompt_capabilities,
+    config_options: vec![],
+    auth_methods: vec![],
+    theme,
+    event_rx,
+    prompt_handle,
+    working_dir: std::env::current_dir()?,
+};
+
+run_with_state(state).await?;
+```
+
+This is useful when you want to:
+- Pre-configure the ACP connection
+- Use a custom transport (not stdin/stdout subprocess)
+- Set up logging or error handling differently
+- Run initialization logic before the TUI starts
+
+## RuntimeState
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `session_id` | `SessionId` | Active session identifier |
+| `agent_name` | `String` | Agent's display name (shown in status line) |
+| `prompt_capabilities` | `PromptCapabilities` | Prompt capabilities advertised by the agent |
+| `config_options` | `Vec<SessionConfigOption>` | Agent-advertised settings |
+| `auth_methods` | `Vec<AuthMethod>` | Available authentication methods |
+| `theme` | `Theme` | UI color theme |
+| `event_rx` | `UnboundedReceiver<AcpEvent>` | Channel receiving events from agent |
+| `prompt_handle` | `AcpPromptHandle` | Handle for sending prompts and commands |
+| `working_dir` | `PathBuf` | Working directory for file operations |

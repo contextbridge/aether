@@ -1,0 +1,17 @@
+---
+/**
+ * Custom Starlight Head that re-exports the default and injects
+ * a FOSC-prevention script to apply the saved color theme before
+ * the first paint.
+ */
+import type { Props } from "@astrojs/starlight/props";
+import StarlightHead from "@astrojs/starlight/components/Head.astro";
+---
+
+<StarlightHead {...Astro.props}><slot /></StarlightHead>
+<script is:inline>
+  (function () {
+    var t = localStorage.getItem("aether-color-theme");
+    if (t) document.documentElement.dataset.colorTheme = t;
+  })();
+</script>

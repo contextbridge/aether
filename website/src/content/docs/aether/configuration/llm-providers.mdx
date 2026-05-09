@@ -1,0 +1,180 @@
+---
+title: LLMs
+description: Configure models from Anthropic, OpenRouter, Ollama, and more.
+---
+
+Aether supports many LLM providers out of the box. And, you can provide your own via implementing a `trait`.
+
+You can specify the model an agent uses in your [agent settings](/aether/configuration/agent-settings/) file.
+
+```diff title="settings.json"
+ {
+   "name": "my-agent",
++  "model": "anthropic:claude-sonnet-4-5"
+ }
+```
+
+In the TUI, only LLM providers with configured credentials appear in the model selector.
+
+## Providers
+
+### Anthropic
+
+| | |
+|---|---|
+| **Credentials** | `ANTHROPIC_API_KEY` |
+| **Model syntax** | `anthropic:<model-id>` |
+
+### OpenRouter
+
+| | |
+|---|---|
+| **Credentials** | `OPENROUTER_API_KEY` |
+| **Model syntax** | `openrouter:<vendor>/<model-id>` |
+
+OpenRouter proxies 100+ models from various vendors. Use the `vendor/model` format from their [model list](https://openrouter.ai/models).
+
+### OpenAI
+
+| | |
+|---|---|
+| **Credentials** | `OPENAI_API_KEY` |
+| **Model syntax** | `openai:<model-id>` |
+
+### Codex
+
+| | |
+|---|---|
+| **Credentials** | OAuth login — no API key needed |
+| **Model syntax** | `codex:<model-id>` |
+
+Codex authenticates through a browser-based OAuth flow with OpenAI. In the TUI, select a Codex model and use the provider login flow; credentials are stored securely in your OS keychain.
+
+### Gemini
+
+| | |
+|---|---|
+| **Credentials** | `GEMINI_API_KEY` |
+| **Model syntax** | `gemini:<model-id>` |
+
+### DeepSeek
+
+| | |
+|---|---|
+| **Credentials** | `DEEPSEEK_API_KEY` |
+| **Model syntax** | `deepseek:<model-id>` |
+
+### AWS Bedrock
+
+| | |
+|---|---|
+| **Credentials** | AWS credential chain (environment, config file, or IAM role) |
+| **Model syntax** | `bedrock:<model-id>` |
+
+### Ollama
+
+| | |
+|---|---|
+| **Credentials** | None — requires a running [Ollama](https://ollama.com) server |
+| **Model syntax** | `ollama:<model-id>` |
+
+Aether auto-discovers models from your Ollama instance. Any model you've pulled with `ollama pull` will appear in the model selector.
+
+Set `OLLAMA_HOST` to override the default address (`http://localhost:11434`).
+
+### Llama.cpp
+
+| | |
+|---|---|
+| **Credentials** | None — requires a running [llama.cpp](https://github.com/ggml-org/llama.cpp) server |
+| **Model syntax** | `llamacpp:<model-id>` |
+
+Llama.cpp serves a single model at a time. Aether queries the server's `/v1/models` endpoint to discover the loaded model, which then appears in the model selector.
+
+Set `LLAMA_CPP_HOST` to override the default address (`http://localhost:8080`).
+
+### Moonshot (Kimi)
+
+| | |
+|---|---|
+| **Credentials** | `MOONSHOT_API_KEY` |
+| **Model syntax** | `moonshot:<model-id>` |
+
+### ZAI (Zhipu)
+
+| | |
+|---|---|
+| **Credentials** | `ZAI_API_KEY` |
+| **Model syntax** | `zai:<model-id>` |
+
+### Bring your own
+
+Aether's `llm` crate exposes the `StreamingModelProvider` trait, so you can integrate any LLM backend:
+
+```rust
+pub trait StreamingModelProvider: Send + Sync {
+    fn stream_response(&self, context: &Context) -> LlmResponseStream;
+    fn display_name(&self) -> String;
+    fn context_window(&self) -> Option<u32>;
+    fn model(&self) -> Option<LlmModel> { None }
+}
+```
+
+Implement this trait on your own struct, and it can be passed directly to the agent builder. See the [Custom Providers](/libraries/llm/custom-providers/) guide for a full walkthrough with examples.
+
+## Reasoning effort
+
+Some models support extended thinking. Set `reasoningEffort` on an agent to control the thinking budget:
+
+| Level | Description |
+|-------|-------------|
+| `"low"` | Minimal thinking — fastest responses |
+| `"medium"` | Moderate thinking |
+| `"high"` | Extended thinking for complex tasks |
+| `"xhigh"` | Maximum thinking budget |
+
+```json
+{
+  "name": "deep-thinker",
+  "model": "anthropic:claude-sonnet-4-5",
+  "reasoningEffort": "high",
+  "..."
+}
+```
+
+## Alloying
+
+Model alloying lets you combine multiple LLM providers into a single agent by comma-separating model specs. Each turn uses the next model in the list, cycling through in round-robin order.
+
+### Syntax
+
+```json
+"model": "provider1:model1,provider2:model2,provider3:model3"
+```
+
+### Example
+
+An agent that alternates between DeepSeek and Anthropic:
+
+```json
+{
+  "name": "alloy-coder",
+  "description": "Cost-optimized coding agent",
+  "model": "deepseek:deepseek-chat,anthropic:claude-sonnet-4-5",
+  "userInvocable": true
+}
+```
+
+Turn 1 uses DeepSeek, turn 2 uses Anthropic, turn 3 uses DeepSeek, and so on.
+
+### Use cases
+
+- **Cost optimization** — Alternate between expensive and cheaper models. Use a powerful model for complex turns and a lighter one for simple follow-ups.
+- **Redundancy** — If one provider has an outage, the other turns still work.
+- **Comparison** — See how different models handle the same conversation context.
+
+### Considerations
+
+- Each model in the alloy must have its corresponding API key set
+- Reasoning effort applies to all models in the alloy (models that don't support it will ignore it)
+- The conversation context is shared across all models — each model sees the full history regardless of which model generated previous turns

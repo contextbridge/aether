@@ -1,0 +1,65 @@
+---
+title: Survey
+description: Allow agents to ask structured questions via forms.
+---
+
+The `survey` server lets agents collect structured input from you during a workflow — confirmations, choices, text fields, numbers, and more — without relying on free-form conversation.
+
+## Tools
+
+| Tool | Description |
+|------|-------------|
+| `ask_user` | Present a form defined by a JSON Schema and collect structured responses |
+
+## Output
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `accepted` | `boolean` | `true` if the user submitted the form, `false` if they cancelled or declined |
+| `data` | `object \| null` | The structured response payload when accepted |
+
+## Examples
+
+An agent might call `ask_user` to confirm a destructive operation:
+
+```json
+{
+  "message": "This will delete 3 files. Continue?",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "confirm": {
+        "type": "boolean",
+        "description": "Confirm deletion"
+      }
+    }
+  }
+}
+```
+
+Or to gather multiple inputs at once:
+
+```json
+{
+  "message": "Configure the new service:",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "type": "string",
+        "description": "Service name"
+      },
+      "port": {
+        "type": "number",
+        "description": "Port number"
+      },
+      "public": {
+        "type": "boolean",
+        "description": "Expose publicly"
+      }
+    }
+  }
+}
+```
+
+The JSON Schema must describe an object with `properties`. The returned `data` object matches that schema when the user accepts the request.

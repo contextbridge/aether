@@ -1,0 +1,96 @@
+---
+/**
+ * Theme switcher dropdown. Renders inside the landing page header
+ * and replaces Starlight's ThemeSelect on doc pages.
+ */
+import { Icon } from "astro-icon/components";
+---
+
+<aether-theme-switcher>
+    <Icon name="lucide:palette" size={14} class="theme-icon" />
+    <span class="theme-label">Theme:</span>
+    <label class="sr-only" for="theme-select">Color theme</label>
+    <select id="theme-select">
+        <option value="">Sage</option>
+        <option value="dracula">Dracula</option>
+        <option value="nord">Nord</option>
+        <option value="catppuccin">Catppuccin</option>
+        <option value="tokyo-night">Tokyo Night</option>
+        <option value="rose-pine">Rosé Pine</option>
+        <option value="ayu-dark">Ayu Dark</option>
+        <option value="everforest-dark">Everforest Dark</option>
+    </select>
+</aether-theme-switcher>
+
+<style is:global>
+    @reference "../styles/global.css";
+</style>
+
+<style>
+    aether-theme-switcher {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.375rem;
+    }
+
+    .theme-icon {
+        color: var(--color-gray-400, #6b7280);
+        flex-shrink: 0;
+    }
+
+    .theme-label {
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 0.75rem;
+        color: var(--color-gray-400, #6b7280);
+        white-space: nowrap;
+    }
+
+    select {
+        appearance: none;
+        background: transparent;
+        border: 1px solid var(--color-gray-500, #444c5c);
+        border-radius: 0.375rem;
+        color: var(--color-gray-300, #8891a0);
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 0.75rem;
+        line-height: 1rem;
+        padding: 0.25rem 1.5rem 0.25rem 0.5rem;
+        cursor: pointer;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%238891a0' viewBox='0 0 16 16'%3E%3Cpath d='M4.646 6.646a.5.5 0 0 1 .708 0L8 9.293l2.646-2.647a.5.5 0 0 1 .708.708l-3 3a.5.5 0 0 1-.708 0l-3-3a.5.5 0 0 1 0-.708z'/%3E%3C/svg%3E");
+        background-repeat: no-repeat;
+        background-position: right 0.35rem center;
+        transition:
+            border-color 0.15s,
+            color 0.15s;
+    }
+
+    select:hover,
+    select:focus-visible {
+        border-color: var(--color-accent-500, #10b981);
+        color: var(--color-gray-50, #f0f1f4);
+        outline: none;
+    }
+</style>
+
+<script>
+    class AetherThemeSwitcher extends HTMLElement {
+        connectedCallback() {
+            const select = this.querySelector("select")!;
+            const stored = localStorage.getItem("aether-color-theme") ?? "";
+            select.value = stored;
+
+            select.addEventListener("change", () => {
+                const value = select.value;
+                if (value) {
+                    document.documentElement.dataset.colorTheme = value;
+                    localStorage.setItem("aether-color-theme", value);
+                } else {
+                    delete document.documentElement.dataset.colorTheme;
+                    localStorage.removeItem("aether-color-theme");
+                }
+            });
+        }
+    }
+
+    customElements.define("aether-theme-switcher", AetherThemeSwitcher);
+</script>

@@ -1,0 +1,98 @@
+---
+title: Embedding Servers
+description: Use built-in MCP servers as library components.
+---
+
+The `aether-mcp-servers` crate provides the same built-in servers used by the CLI as embeddable library components. You can selectively enable the servers you need and register them with `McpBuilder` in your own runtime.
+
+```toml title="Cargo.toml"
+[dependencies]
+aether-mcp-servers = { version = "0.3.2", default-features = false, features = ["coding", "plan"] }
+```
+
+The crate is imported in Rust as `mcp_servers`.
+
+## Feature flags
+
+| Feature | Exposes | Notes |
+|---------|---------|-------|
+| `default` | `CodingMcp`, `SkillsMcp`, `TasksMcp`, `SubAgentsMcp`, `PlanMcp` | Default bundle |
+| `coding` | `CodingMcp`, `LspMcp`, `LspRegistry` | File I/O, bash, search, web, and standalone LSP support |
+| `skills` | `SkillsMcp` | Slash commands, skills, and persisted notes |
+| `tasks` | `TasksMcp` | Hierarchical task management |
+| `subagents` | `SubAgentsMcp` | Child agent spawning and orchestration |
+| `survey` | `SurveyMcp` | Structured user questions |
+| `plan` | `PlanMcp` | Plan review and approval workflow |
+| `all` | All built-in servers | Explicit alias for the full set |
+
+## Constructing servers
+
+### CodingMcp
+
+```rust
+use mcp_servers::{CodingMcp, PermissionMode};
+
+let server = CodingMcp::new()
+    .with_root_dir("/my/project".into())
+    .with_permission_mode(PermissionMode::AlwaysAllow);
+```
+
+### Standalone LSP
+
+```rust
+use mcp_servers::LspMcp;
+
+let server = LspMcp::new("/my/project".into());
+```
+
+### PlanMcp
+
+```rust
+use mcp_servers::PlanMcp;
+
+let server = PlanMcp::new();
+let custom = PlanMcp::new().with_prompt_file("/my/project/.aether/prompts/plan-mode.md".into());
+```
+
+## Registering with `McpBuilder`
+
+Use `register_in_memory_server()` to expose the servers your runtime wants to support:
+
+```rust
+use aether_core::mcp::mcp;
+use futures::FutureExt;
+use mcp_servers::{CodingMcp, PlanMcp};
+
+let builder = mcp()
+    .register_in_memory_server("coding", Box::new(|_args, _input| {
+        async move {
+            CodingMcp::new()
+                .with_root_dir("/my/project".into())
+                .into_dyn()
+        }
+        .boxed()
+    }))
+    .register_in_memory_server("plan", Box::new(|args, _input| {
+        async move { PlanMcp::from_args(args).unwrap().into_dyn() }.boxed()
+    }));
+```
+
+If you want the same built-in server setup used by the CLI, look at `mcp_servers::setup::McpBuilderExt` in the main repository for a production-ready registration helper.
+
+## Custom CodingTools
+
+You can swap out the default filesystem-backed implementation by implementing the `CodingTools` trait yourself:
+
+```rust
+use mcp_servers::{CodingMcp, CodingTools};
+
+struct MySandboxedTools { /* ... */ }
+
+impl CodingTools for MySandboxedTools {
+    // Implement file operations, bash, search, and web behavior.
+}
+
+let server = CodingMcp::with_tools(MySandboxedTools::new());
+```
+
+This is useful for sandboxed environments, testing, or custom file-access policies.

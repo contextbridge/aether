@@ -1,0 +1,53 @@
+---
+title: Terminal UI
+description: Run Aether interactively in the terminal.
+---
+
+The default way to use Aether is through its built-in terminal UI — a full-screen interactive interface for chatting with agents, reviewing diffs, and managing sessions.
+
+```bash
+aether
+```
+
+## Features
+
+- **Streaming responses** — See model output as it arrives with syntax highlighting
+- **Tool tracking** — Live progress for running tool calls and sub-agents
+- **Plan visualization** — Task plans with status updates
+- **Inline diffs** — Review file changes in a two-pane [diff viewer](/aether/terminal/git-diff/)
+- **Slash commands** — Trigger skills and commands with `/name`
+- **File attachments** — Attach files to prompts via `@` picker
+- **Settings overlay** — Configure models, reasoning, MCP servers
+- **Session persistence** — Resume previous conversations
+
+## UI layout
+
+```
+┌──────────────────────────────────────────┐
+│  Conversation                            │
+│  ├─ User messages                        │
+│  ├─ Agent responses (streaming markdown) │
+│  ├─ Tool calls (with progress)           │
+│  └─ Plan entries                         │
+│                                          │
+├──────────────────────────────────────────┤
+│  Prompt input          [@file] [/command]│
+├──────────────────────────────────────────┤
+│  agent · mode · model   ░░░░ · 45%      │
+└──────────────────────────────────────────┘
+```
+
+The status line at the bottom shows the agent name, current mode, model, reasoning effort level, and context usage percentage.
+
+## Logging
+
+```bash
+# Default location
+/tmp/wisp-logs/wisp.log.2026-03-25
+
+# Custom directory
+aether --log-dir ./logs
+
+# Verbose logging
+RUST_LOG=debug aether
+```

@@ -1,0 +1,63 @@
+---
+title: Prompts
+description: Control agent behavior with prompt files.
+---
+
+Aether assembles system prompts from authored prompt sources and MCP server instructions into a single system prompt for each agent.
+
+## Prompt sources
+
+The `prompts` field in `settings.json` accepts four source types:
+
+- file-path strings such as `"AGENTS.md"`
+- typed file sources such as `{ "type": "file", "path": ".aether/DEFAULT.md" }`
+- typed glob sources such as `{ "type": "glob", "pattern": "prompts/*.md" }`
+- inline text sources such as `{ "type": "text", "text": "Always answer concisely." }`
+
+Top-level `prompts` are defaults. An agent inherits them only when its own `prompts` array is empty. If an agent provides a non-empty `prompts` array, that array replaces the top-level prompt list for that agent.
+
+```json title=".aether/settings.json"
+{
+  "prompts": ["AGENTS.md"],
+  "agents": [
+    {
+      "name": "coder",
+      "description": "Coding agent",
+      "model": "anthropic:claude-sonnet-4-5",
+      "userInvocable": true,
+      "prompts": [
+        ".aether/agents/coder/CODER.md",
+        { "type": "glob", "pattern": "prompts/*.md" }
+      ]
+    }
+  ]
+}
+```
+
+A common convention is to place an `AGENTS.md` at the project root with shared instructions:
+
+```markdown title="AGENTS.md"
+# Project Agent
+
+You are a coding assistant for this Rust project.
+
+## Rules
+- Always read files before editing them
+- Write tests for new functionality
+- Use `cargo clippy` to check for warnings
+```
+
+:::note
+Prompt file paths and glob patterns must match at least one file. Aether reports a validation error if a path or pattern matches nothing.
+:::
+
+## Debugging prompts
+
+Use `show-prompt` to see the fully assembled system prompt for any agent:
+
+```bash
+aether show-prompt
+# Inspect a specific agent
+aether show-prompt -a researcher
+aether show-prompt -C /path/to/project
+```

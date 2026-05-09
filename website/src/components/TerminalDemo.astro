@@ -1,0 +1,17 @@
+---
+interface Props {
+    id: string;
+    src: string;
+    class?: string;
+}
+const { id, src, class: className } = Astro.props;
+---
+<div
+    id={id}
+    class:list={[
+        "terminal-demo overflow-hidden rounded-lg border border-gray-400/30 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.5)]",
+        className,
+    ]}
+    data-src={src}
+>
+</div>

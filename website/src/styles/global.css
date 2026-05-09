@@ -1,0 +1,61 @@
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+/* IBM Plex fonts - weight 400 (body) and 600 (headings) */
+@import "@fontsource/ibm-plex-sans/400.css";
+@import "@fontsource/ibm-plex-sans/500.css";
+@import "@fontsource/ibm-plex-sans/600.css";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+@import "@fontsource/ibm-plex-mono/600.css";
+
+/* Tailwind theme tokens */
+@theme {
+    --font-sans: "IBM Plex Sans", sans-serif;
+    --font-mono: "IBM Plex Mono", monospace;
+
+    /* Green accent palette (emerald-ish) */
+    --color-accent-50: #ecfdf5;
+    --color-accent-100: #d1fae5;
+    --color-accent-200: #a7f3d0;
+    --color-accent-300: #6ee7b7;
+    --color-accent-400: #34d399;
+    --color-accent-500: #10b981;
+    --color-accent-600: #059669;
+    --color-accent-700: #047857;
+    --color-accent-800: #065f46;
+    --color-accent-900: #064e3b;
+    --color-accent-950: #022c22;
+
+    /* Editor highlight (Sage: blue selection) */
+    --color-highlight-bg: #1f6feb33;
+    --color-highlight-fg: #f0f1f4;
+
+    /* Cool dark grays (IDE-like, Sage inspired) */
+    --color-gray-50: #f0f1f4;
+    --color-gray-100: #d8dbe2;
+    --color-gray-200: #b0b8c4;
+    --color-gray-300: #8891a0;
+    --color-gray-400: #636c7c;
+    --color-gray-500: #444c5c;
+    --color-gray-600: #2d333b;
+    --color-gray-700: #22272e;
+    --color-gray-800: #1c2128;
+    --color-gray-900: #161b22;
+    --color-gray-950: #0d1117;
+}
+
+/* Make headings use IBM Plex Mono */
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+    font-family: "IBM Plex Mono", monospace;
+}
+
+/* Vertical spacing between adjacent expressive-code blocks */
+.expressive-code + .expressive-code {
+    margin-top: 0.75rem;
+}

@@ -1,0 +1,51 @@
+---
+title: Coding Tools
+description: File operations, bash, search, and web tools.
+---
+
+The `coding` server provides tools for reading and writing files, running shell commands, searching codebases, and fetching web content. See [Tools](/aether/configuration/mcp-servers/) for configuration.
+
+## File operations
+
+| Tool | Description |
+|------|-------------|
+| `read_file` | Read a file with optional line range (max 2000 lines per call) |
+| `write_file` | Write content to a file (creates or overwrites; requires prior `read_file`) |
+| `edit_file` | Find-and-replace within a file (requires prior `read_file`) |
+| `list_files` | List directory contents with metadata |
+
+:::caution
+`write_file` and `edit_file` require the file to be read first with `read_file`. This prevents agents from blindly overwriting files they haven't seen.
+:::
+
+## Search
+
+| Tool | Description |
+|------|-------------|
+| `grep` | Regex search across files with context and filtering |
+| `find` | Find files by glob pattern |
+
+## Bash
+
+| Tool | Description |
+|------|-------------|
+| `bash` | Execute a shell command (max 600s timeout, supports background mode) |
+| `read_background_bash` | Read output from a background process |
+
+## Web
+
+| Tool | Description |
+|------|-------------|
+| `web_fetch` | Fetch a URL and convert HTML to markdown |
+| `web_search` | Search the web via Brave Search API (requires `BRAVE_SEARCH_API_KEY`) |
+
+## LSP (Language Server Protocol)
+
+The `coding` server includes LSP tools by default. These same tools are also available as a standalone [LSP server](/aether/built-in-servers/lsp/) for agents that only need code intelligence.
+
+| Tool | Description |
+|------|-------------|
+| `lsp_symbol` | Go-to-definition, find references, hover, implementations, call hierarchy |
+| `lsp_document` | Get all symbols in a document |
+| `lsp_check_errors` | Get compiler diagnostics without running a build |
+| `lsp_rename` | Rename a symbol across the codebase |

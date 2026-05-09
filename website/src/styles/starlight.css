@@ -1,0 +1,38 @@
+@layer base, starlight, theme, components, utilities;
+@import '@astrojs/starlight-tailwind';
+
+/* Starlight CSS variable overrides for dark mode.
+ * Wired to Tailwind custom properties so they cascade with theme changes. */
+:root {
+  --sl-font: 'IBM Plex Sans', sans-serif;
+  --sl-font-mono: 'IBM Plex Mono', monospace;
+
+  --sl-color-white: var(--color-gray-50);
+  --sl-color-gray-1: var(--color-gray-100);
+  --sl-color-gray-2: var(--color-gray-300);
+  --sl-color-gray-3: var(--color-gray-400);
+  --sl-color-gray-4: var(--color-gray-500);
+  --sl-color-gray-5: var(--color-gray-600);
+  --sl-color-gray-6: var(--color-gray-700);
+  --sl-color-black: var(--color-gray-950);
+
+  --sl-color-accent-low: var(--color-accent-900);
+  --sl-color-accent: var(--color-accent-500);
+  --sl-color-accent-high: var(--color-accent-200);
+
+  --sl-color-bg: var(--sl-color-black);
+  --sl-color-bg-nav: var(--color-gray-900);
+  --sl-color-bg-sidebar: var(--color-gray-900);
+
+  --sl-color-bg-inline-code: var(--color-highlight-bg);
+}
+
+/* Inline code uses theme's editor selection colors */
+.sl-markdown-content code:not(pre code) {
+  color: var(--color-highlight-fg);
+}
+
+/* File tree: use highlight bg for the container */
+starlight-file-tree {
+  background-color: var(--color-highlight-bg) !important;
+}

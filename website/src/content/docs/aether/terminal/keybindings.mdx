@@ -1,0 +1,52 @@
+---
+title: Keybindings & Commands
+description: Keyboard shortcuts, slash commands, and file attachments.
+---
+
+## Keybindings
+
+| Key | Action |
+|-----|--------|
+| `Enter` | Send message |
+| `Esc` | Cancel current operation / close modal |
+| `Ctrl+C` | Exit |
+| `Tab` | Cycle reasoning effort (off → low → medium → high) |
+| `Shift+Tab` | Cycle agent mode |
+| `/` | Open command picker |
+| `@` | Open file picker |
+| `Ctrl+G` | Toggle [git diff view](/aether/terminal/git-diff/) |
+
+## Slash commands
+
+Type `/` to open the command picker. It supports fuzzy search — just start typing to filter.
+
+### Built-in commands
+
+| Command | Description |
+|---------|-------------|
+| `/clear` | Start a new [session](/aether/terminal/sessions/) |
+| `/settings` | Open the [settings overlay](/aether/terminal/settings/) |
+| `/resume` | Resume a previous [session](/aether/terminal/sessions/) |
+
+### Agent-provided commands
+
+Agents can register additional slash commands. These appear in the picker alongside built-in commands. Each command has a name, description, and optional argument hint.
+
+## File picker
+
+Type `@` to open the file picker. It indexes files in the working directory (respecting `.gitignore`) and supports fuzzy search.
+
+- Up to 50,000 files indexed
+- Respects `.gitignore`, `.git/info/exclude`, and global gitignore
+- Select a file to attach it to your next message
+
+### How attachments work
+
+Selected files are read and sent to the agent as content blocks alongside your message:
+
+- Maximum file size: 1 MB
+- Files are converted to UTF-8
+- Non-UTF-8 files are flagged with a warning
+- Truncated files include a notice
+
+You can attach multiple files to a single message by using `@` multiple times before sending.

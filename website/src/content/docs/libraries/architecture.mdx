@@ -1,0 +1,62 @@
+---
+title: Architecture
+description: Workspace structure and package responsibilities.
+---
+
+Aether is organized as a Cargo workspace with focused, single-responsibility packages. Each package can be used independently or composed together.
+
+## Package map
+
+| Package | Crate | Purpose |
+|---------|-------|---------|
+| **aether-core** | `aether_core` | Agent runtime — conversation loop, context management, tool dispatch, streaming |
+| **llm** | `llm` | Unified LLM provider interface — Anthropic, OpenRouter, OpenAI, DeepSeek, Gemini, Ollama, Bedrock, and more |
+| **mcp-servers** | `mcp_servers` | Built-in MCP tool servers — coding (files, bash, search, LSP), skills, tasks, sub-agents, survey, and plan |
+| **aether-cli** | `aether_cli` | CLI binaries — headless mode, ACP server, init wizard, show-prompt |
+| **aether-project** | `aether_project` | Project configuration — loads and validates `settings.json`, resolves MCP configs and prompt globs |
+| **wisp** | `wisp` | Interactive TUI — markdown rendering, syntax highlighting, inline diffs, command picker |
+| **crucible** | `crucible` | Evaluation framework — assertion-based testing of agent behavior |
+| **mcp-utils** | `mcp_utils` | MCP client utilities — connecting to and managing external MCP servers |
+| **tui** | `tui` | Low-level TUI rendering primitives used by Wisp |
+| **acp-utils** | `acp_utils` | Agent Client Protocol utilities — client and server helpers |
+| **aether-lspd** | `aether_lspd` | LSP server daemon — standalone language server integration |
+| **llm-codegen** | `llm_codegen` | Code generation for LLM provider model catalogs |
+| **utils** | `utils` | Shared utilities used across packages |
+
+## Dependency flow
+
+```
+aether-cli
+├── aether-core
+│   ├── llm (provider interface)
+│   ├── mcp-servers (built-in tools)
+│   └── mcp-utils (external server connections)
+├── aether-project (config loading)
+└── wisp
+    └── tui (rendering primitives)
+
+crucible (standalone — uses aether-core for eval runs)
+```
+
+## Key design decisions
+
+- **MCP for all tools** — There is no built-in tool system. Every tool comes through MCP, whether from in-memory servers or external processes. This keeps the core runtime minimal and tools composable.
+- **Provider abstraction** — The `llm` crate defines a unified interface. Adding a new provider means implementing a single trait, not touching the agent runtime.
+- **Config as data** — Agent definitions, tool access, and prompt composition are all declarative JSON/markdown. No code changes needed to reconfigure agents.
+- **Workspace isolation** — Each package has a focused responsibility. You can use `llm` without `mcp-servers`, or `aether-core` without `wisp`.
+
+## Library documentation
+
+Each package with a public API has its own documentation section:
+
+- [**aether-core**](/libraries/aether-core/agent-builder/) — Agent builder, events, MCP integration
+- [**llm**](/libraries/llm/provider-interface/) — Provider trait, creating and implementing providers
+- [**mcp-servers**](/libraries/mcp-servers/embedding/) — Embedding built-in servers in custom apps
+- [**tui**](/libraries/tui/components/) — Component trait, widgets, rendering
+- [**crucible**](/libraries/crucible/evals/) — Evaluation framework for testing agent behavior
+
+## Related docs
+
+- [Agent Settings](/aether/configuration/agent-settings/) — How to configure agents (CLI)
+- [MCP Servers](/aether/configuration/mcp-servers/) — How to configure tools (CLI)
+- [LLM Providers](/aether/configuration/llm-providers/) — Supported models and providers

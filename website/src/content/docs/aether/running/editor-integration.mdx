@@ -1,0 +1,76 @@
+---
+title: IDE (ACP)
+description: Use Aether as an AI agent inside your editor.
+---
+
+import { Steps } from '@astrojs/starlight/components';
+
+Aether can run as an ACP (Agent Client Protocol) server, integrating directly into editors that support the protocol. Currently, [Zed](https://zed.dev) is the primary supported editor.
+
+## Zed setup
+
+<Steps>
+
+1. **Install Aether**
+
+   ```bash
+   cargo install aether-agent-cli
+   ```
+
+   Or build from source:
+
+   ```bash
+   cargo build --release -p aether-agent-cli
+   ```
+
+2. **Configure Zed**
+
+   Add the following to your Zed `settings.json`:
+
+   ```json
+   {
+     "agent_servers": {
+       "Aether Agent": {
+         "command": "/path/to/aether",
+         "args": ["acp"],
+         "env": {
+           "RUST_LOG": "info",
+           "ANTHROPIC_API_KEY": "your-key-here"
+         }
+       }
+     }
+   }
+   ```
+
+3. **Open an agent thread**
+
+   In Zed, open the Agent Panel and select "New Aether Agent Thread" to start a conversation.
+
+</Steps>
+
+## ACP server flags
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--log-dir` | `path` | `/tmp/aether-acp-logs` | Log output directory |
+| `--agent` | `string` | — | Initial agent (mode) to select for new sessions. Conflicts with `--model` and `--reasoning-effort`. |
+| `--model` | `string` | — | Initial model id for new sessions. Conflicts with `--agent`. |
+| `--reasoning-effort` | `low\|medium\|high\|xhigh` | — | Initial reasoning effort for an explicit `--model`. |
+| `--settings-file` | `path` | — | Path to settings JSON (conflicts with `--settings-json`) |
+| `--settings-json` | `string` | — | Inline settings JSON (conflicts with `--settings-file`) |
+
+## Logging
+
+ACP server logs are written to the `--log-dir` directory. Increase verbosity with `RUST_LOG`:
+
+```json
+{
+  "env": {
+    "RUST_LOG": "debug"
+  }
+}
+```
+
+:::tip
+Check the logs at `/tmp/aether-acp-logs/` if the agent isn't responding or tools aren't working as expected.
+:::

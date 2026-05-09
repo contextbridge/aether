@@ -1,0 +1,20 @@
+---
+title: LSP
+description: Language-aware code intelligence tools powered by LSP.
+---
+
+The `lsp` server provides language-aware code intelligence — symbol lookup, diagnostics, document structure, workspace search, and rename — powered by Language Server Protocol servers.
+
+:::note
+The `coding` server also includes LSP tools (except `lsp_workspace_search`) when enabled. Use the standalone `lsp` server when you want code intelligence without file I/O, bash, or search tools.
+:::
+
+## Tools
+
+| Tool | Description |
+|------|-------------|
+| `lsp_symbol` | Go to definition, find references, hover info, implementations, call hierarchy |
+| `lsp_document` | List all symbols in a file (functions, structs, modules) |
+| `lsp_check_errors` | Get compiler errors and warnings without running a build |
+| `lsp_workspace_search` | Search for symbols across the entire workspace by name |
+| `lsp_rename` | Rename a symbol across the entire workspace |
