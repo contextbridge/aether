@@ -22,78 +22,78 @@
  * Official: bg #0b0e14, fg #bfbdb6, accent #e6b450,
  *           panel #0d1017, gutter #3d424d, guide #6c7380. */
 html[data-color-theme="ayu-dark"] {
-    --color-highlight-bg: #273747; /* editor.selectionBackground */
-    --color-highlight-fg: #bfbdb6; /* fg */
+  --color-highlight-bg: #273747; /* editor.selectionBackground */
+  --color-highlight-fg: #bfbdb6; /* fg */
 
-    --color-gray-50: #bfbdb6; /* fg */
-    --color-gray-100: #acb6bf;
-    --color-gray-200: #8b9199;
-    --color-gray-300: #6c7380; /* guide.active */
-    --color-gray-400: #565b66;
-    --color-gray-500: #3d424d; /* gutter.normal */
-    --color-gray-600: #2a2e38;
-    --color-gray-700: #1c2029;
-    --color-gray-800: #131721; /* line highlight */
-    --color-gray-900: #0d1017; /* panel.bg */
-    --color-gray-950: #0b0e14; /* editor.bg */
+  --color-gray-50: #bfbdb6; /* fg */
+  --color-gray-100: #acb6bf;
+  --color-gray-200: #8b9199;
+  --color-gray-300: #6c7380; /* guide.active */
+  --color-gray-400: #565b66;
+  --color-gray-500: #3d424d; /* gutter.normal */
+  --color-gray-600: #2a2e38;
+  --color-gray-700: #1c2029;
+  --color-gray-800: #131721; /* line highlight */
+  --color-gray-900: #0d1017; /* panel.bg */
+  --color-gray-950: #0b0e14; /* editor.bg */
 
-    --color-accent-50: #fdf8eb;
-    --color-accent-100: #f9ecc5;
-    --color-accent-200: #f5dda0;
-    --color-accent-300: #f0cc7a;
-    --color-accent-400: #ffb454; /* func */
-    --color-accent-500: #e6b450; /* accent */
-    --color-accent-600: #c99a3e;
-    --color-accent-700: #a47d32;
-    --color-accent-800: #7f6127;
-    --color-accent-900: #5a441c;
-    --color-accent-950: #362911;
+  --color-accent-50: #fdf8eb;
+  --color-accent-100: #f9ecc5;
+  --color-accent-200: #f5dda0;
+  --color-accent-300: #f0cc7a;
+  --color-accent-400: #ffb454; /* func */
+  --color-accent-500: #e6b450; /* accent */
+  --color-accent-600: #c99a3e;
+  --color-accent-700: #a47d32;
+  --color-accent-800: #7f6127;
+  --color-accent-900: #5a441c;
+  --color-accent-950: #362911;
 
-    --ec-tm-insBg: rgba(170, 217, 76, 0.15); /* green #aad94c */
-    --ec-tm-insBrdCol: rgba(170, 217, 76, 0.4);
-    --ec-tm-insDiffIndCol: #aad94c;
-    --ec-tm-delBg: rgba(217, 87, 87, 0.15); /* red #d95757 */
-    --ec-tm-delBrdCol: rgba(217, 87, 87, 0.4);
-    --ec-tm-delDiffIndCol: #d95757;
+  --ec-tm-insBg: rgba(170, 217, 76, 0.15); /* green #aad94c */
+  --ec-tm-insBrdCol: rgba(170, 217, 76, 0.4);
+  --ec-tm-insDiffIndCol: #aad94c;
+  --ec-tm-delBg: rgba(217, 87, 87, 0.15); /* red #d95757 */
+  --ec-tm-delBrdCol: rgba(217, 87, 87, 0.4);
+  --ec-tm-delDiffIndCol: #d95757;
 }
 
 /* ── Everforest Dark ─────────────────────────────────────
  * Official dark-medium: bg0–bg4, grey0–grey2, fg #d3c6aa.
  * All grays bg0–grey2 are official. 200/100 interpolated. */
 html[data-color-theme="everforest-dark"] {
-    --color-highlight-bg: #3d484d; /* bg2 / editor selection */
-    --color-highlight-fg: #d3c6aa; /* fg */
+  --color-highlight-bg: #3d484d; /* bg2 / editor selection */
+  --color-highlight-fg: #d3c6aa; /* fg */
 
-    --color-gray-50: #d3c6aa; /* fg */
-    --color-gray-100: #bec5b8;
-    --color-gray-200: #9da9a0; /* grey2 */
-    --color-gray-300: #859289; /* grey1 */
-    --color-gray-400: #7a8478; /* grey0 */
-    --color-gray-500: #4f585e; /* bg4 */
-    --color-gray-600: #475258; /* bg3 */
-    --color-gray-700: #3d484d; /* bg2 */
-    --color-gray-800: #2d353b; /* bg0 medium */
-    --color-gray-900: #272e33; /* bg0 hard */
-    --color-gray-950: #1a2026; /* bg_dim hard */
+  --color-gray-50: #d3c6aa; /* fg */
+  --color-gray-100: #bec5b8;
+  --color-gray-200: #9da9a0; /* grey2 */
+  --color-gray-300: #859289; /* grey1 */
+  --color-gray-400: #7a8478; /* grey0 */
+  --color-gray-500: #4f585e; /* bg4 */
+  --color-gray-600: #475258; /* bg3 */
+  --color-gray-700: #3d484d; /* bg2 */
+  --color-gray-800: #2d353b; /* bg0 medium */
+  --color-gray-900: #272e33; /* bg0 hard */
+  --color-gray-950: #1a2026; /* bg_dim hard */
 
-    --color-accent-50: #f3f7ee;
-    --color-accent-100: #e3edd8;
-    --color-accent-200: #d0dfbb;
-    --color-accent-300: #bdd09e;
-    --color-accent-400: #83c092; /* aqua */
-    --color-accent-500: #a7c080; /* green */
-    --color-accent-600: #8ba96b;
-    --color-accent-700: #708d58;
-    --color-accent-800: #587246;
-    --color-accent-900: #405634;
-    --color-accent-950: #283a22;
+  --color-accent-50: #f3f7ee;
+  --color-accent-100: #e3edd8;
+  --color-accent-200: #d0dfbb;
+  --color-accent-300: #bdd09e;
+  --color-accent-400: #83c092; /* aqua */
+  --color-accent-500: #a7c080; /* green */
+  --color-accent-600: #8ba96b;
+  --color-accent-700: #708d58;
+  --color-accent-800: #587246;
+  --color-accent-900: #405634;
+  --color-accent-950: #283a22;
 
-    --ec-tm-insBg: rgba(167, 192, 128, 0.15); /* green #a7c080 */
-    --ec-tm-insBrdCol: rgba(167, 192, 128, 0.4);
-    --ec-tm-insDiffIndCol: #a7c080;
-    --ec-tm-delBg: rgba(230, 126, 128, 0.15); /* red #e67e80 */
-    --ec-tm-delBrdCol: rgba(230, 126, 128, 0.4);
-    --ec-tm-delDiffIndCol: #e67e80;
+  --ec-tm-insBg: rgba(167, 192, 128, 0.15); /* green #a7c080 */
+  --ec-tm-insBrdCol: rgba(167, 192, 128, 0.4);
+  --ec-tm-insDiffIndCol: #a7c080;
+  --ec-tm-delBg: rgba(230, 126, 128, 0.15); /* red #e67e80 */
+  --ec-tm-delBrdCol: rgba(230, 126, 128, 0.4);
+  --ec-tm-delDiffIndCol: #e67e80;
 }
 
 /* ── Dracula ─────────────────────────────────────────────
@@ -101,156 +101,156 @@ html[data-color-theme="everforest-dark"] {
  *           Comment #6272a4, Foreground #f8f8f2, Purple #bd93f9
  * Intermediates are interpolated (palette has only 4 neutrals). */
 html[data-color-theme="dracula"] {
-    --color-highlight-bg: #44475a; /* Current Line / selection */
-    --color-highlight-fg: #f8f8f2; /* Foreground */
+  --color-highlight-bg: #44475a; /* Current Line / selection */
+  --color-highlight-fg: #f8f8f2; /* Foreground */
 
-    --color-gray-50: #f8f8f2; /* Foreground */
-    --color-gray-100: #dddfe8;
-    --color-gray-200: #c0c6d6;
-    --color-gray-300: #a0a9c5;
-    --color-gray-400: #7e8ab5;
-    --color-gray-500: #6272a4; /* Comment */
-    --color-gray-600: #565978;
-    --color-gray-700: #44475a; /* Current Line */
-    --color-gray-800: #3e4155;
-    --color-gray-900: #343746;
-    --color-gray-950: #282a36; /* Background */
+  --color-gray-50: #f8f8f2; /* Foreground */
+  --color-gray-100: #dddfe8;
+  --color-gray-200: #c0c6d6;
+  --color-gray-300: #a0a9c5;
+  --color-gray-400: #7e8ab5;
+  --color-gray-500: #6272a4; /* Comment */
+  --color-gray-600: #565978;
+  --color-gray-700: #44475a; /* Current Line */
+  --color-gray-800: #3e4155;
+  --color-gray-900: #343746;
+  --color-gray-950: #282a36; /* Background */
 
-    --color-accent-50: #f7f1ff;
-    --color-accent-100: #ede2fe;
-    --color-accent-200: #e2cefd;
-    --color-accent-300: #d5bafc;
-    --color-accent-400: #caa8fa;
-    --color-accent-500: #bd93f9; /* Purple */
-    --color-accent-600: #9a72e0;
-    --color-accent-700: #7550bb;
-    --color-accent-800: #553692;
-    --color-accent-900: #362062;
-    --color-accent-950: #1e0f36;
+  --color-accent-50: #f7f1ff;
+  --color-accent-100: #ede2fe;
+  --color-accent-200: #e2cefd;
+  --color-accent-300: #d5bafc;
+  --color-accent-400: #caa8fa;
+  --color-accent-500: #bd93f9; /* Purple */
+  --color-accent-600: #9a72e0;
+  --color-accent-700: #7550bb;
+  --color-accent-800: #553692;
+  --color-accent-900: #362062;
+  --color-accent-950: #1e0f36;
 
-    --ec-tm-insBg: rgba(80, 250, 123, 0.15); /* Green #50fa7b */
-    --ec-tm-insBrdCol: rgba(80, 250, 123, 0.4);
-    --ec-tm-insDiffIndCol: #50fa7b;
-    --ec-tm-delBg: rgba(255, 85, 85, 0.15); /* Red #ff5555 */
-    --ec-tm-delBrdCol: rgba(255, 85, 85, 0.4);
-    --ec-tm-delDiffIndCol: #ff5555;
+  --ec-tm-insBg: rgba(80, 250, 123, 0.15); /* Green #50fa7b */
+  --ec-tm-insBrdCol: rgba(80, 250, 123, 0.4);
+  --ec-tm-insDiffIndCol: #50fa7b;
+  --ec-tm-delBg: rgba(255, 85, 85, 0.15); /* Red #ff5555 */
+  --ec-tm-delBrdCol: rgba(255, 85, 85, 0.4);
+  --ec-tm-delDiffIndCol: #ff5555;
 }
 
 /* ── Nord ────────────────────────────────────────────────
  * Polar Night: nord0–3, Snow Storm: nord4–6, Frost: nord7–10.
  * Gray 200–600 interpolated (no official colors between nord3 and nord4). */
 html[data-color-theme="nord"] {
-    --color-highlight-bg: #434c5e; /* nord2 – selection */
-    --color-highlight-fg: #eceff4; /* nord6 */
+  --color-highlight-bg: #434c5e; /* nord2 – selection */
+  --color-highlight-fg: #eceff4; /* nord6 */
 
-    --color-gray-50: #eceff4; /* nord6 – Snow Storm */
-    --color-gray-100: #d8dee9; /* nord4 – Snow Storm */
-    --color-gray-200: #bfc5cf;
-    --color-gray-300: #a4acba;
-    --color-gray-400: #8b95a6;
-    --color-gray-500: #6e7a8c;
-    --color-gray-600: #5d677a;
-    --color-gray-700: #4c566a; /* nord3 – Polar Night */
-    --color-gray-800: #434c5e; /* nord2 – Polar Night */
-    --color-gray-900: #3b4252; /* nord1 – Polar Night */
-    --color-gray-950: #2e3440; /* nord0 – Polar Night */
+  --color-gray-50: #eceff4; /* nord6 – Snow Storm */
+  --color-gray-100: #d8dee9; /* nord4 – Snow Storm */
+  --color-gray-200: #bfc5cf;
+  --color-gray-300: #a4acba;
+  --color-gray-400: #8b95a6;
+  --color-gray-500: #6e7a8c;
+  --color-gray-600: #5d677a;
+  --color-gray-700: #4c566a; /* nord3 – Polar Night */
+  --color-gray-800: #434c5e; /* nord2 – Polar Night */
+  --color-gray-900: #3b4252; /* nord1 – Polar Night */
+  --color-gray-950: #2e3440; /* nord0 – Polar Night */
 
-    --color-accent-50: #eef7f9;
-    --color-accent-100: #d9edf1;
-    --color-accent-200: #c0dde3;
-    --color-accent-300: #a6cdd6;
-    --color-accent-400: #8fbcbb; /* nord7 – Frost */
-    --color-accent-500: #88c0d0; /* nord8 – Frost */
-    --color-accent-600: #81a1c1; /* nord9 – Frost */
-    --color-accent-700: #5e81ac; /* nord10 – Frost */
-    --color-accent-800: #3d6a8c;
-    --color-accent-900: #2d5468;
-    --color-accent-950: #172a30;
+  --color-accent-50: #eef7f9;
+  --color-accent-100: #d9edf1;
+  --color-accent-200: #c0dde3;
+  --color-accent-300: #a6cdd6;
+  --color-accent-400: #8fbcbb; /* nord7 – Frost */
+  --color-accent-500: #88c0d0; /* nord8 – Frost */
+  --color-accent-600: #81a1c1; /* nord9 – Frost */
+  --color-accent-700: #5e81ac; /* nord10 – Frost */
+  --color-accent-800: #3d6a8c;
+  --color-accent-900: #2d5468;
+  --color-accent-950: #172a30;
 
-    --ec-tm-insBg: rgba(163, 190, 140, 0.15); /* nord14 #a3be8c */
-    --ec-tm-insBrdCol: rgba(163, 190, 140, 0.4);
-    --ec-tm-insDiffIndCol: #a3be8c;
-    --ec-tm-delBg: rgba(191, 97, 106, 0.15); /* nord11 #bf616a */
-    --ec-tm-delBrdCol: rgba(191, 97, 106, 0.4);
-    --ec-tm-delDiffIndCol: #bf616a;
+  --ec-tm-insBg: rgba(163, 190, 140, 0.15); /* nord14 #a3be8c */
+  --ec-tm-insBrdCol: rgba(163, 190, 140, 0.4);
+  --ec-tm-insDiffIndCol: #a3be8c;
+  --ec-tm-delBg: rgba(191, 97, 106, 0.15); /* nord11 #bf616a */
+  --ec-tm-delBrdCol: rgba(191, 97, 106, 0.4);
+  --ec-tm-delDiffIndCol: #bf616a;
 }
 
 /* ── Catppuccin Mocha ────────────────────────────────────
  * All 11 grays are official Catppuccin Mocha semantic colors.
  * Mantle → Text, zero interpolation needed. */
 html[data-color-theme="catppuccin"] {
-    --color-highlight-bg: #45475a; /* Surface1 / selection */
-    --color-highlight-fg: #cdd6f4; /* Text */
+  --color-highlight-bg: #45475a; /* Surface1 / selection */
+  --color-highlight-fg: #cdd6f4; /* Text */
 
-    --color-gray-50: #cdd6f4; /* Text */
-    --color-gray-100: #bac2de; /* Subtext1 */
-    --color-gray-200: #a6adc8; /* Subtext0 */
-    --color-gray-300: #9399b2; /* Overlay2 */
-    --color-gray-400: #7f849c; /* Overlay1 */
-    --color-gray-500: #6c7086; /* Overlay0 */
-    --color-gray-600: #585b70; /* Surface2 */
-    --color-gray-700: #45475a; /* Surface1 */
-    --color-gray-800: #313244; /* Surface0 */
-    --color-gray-900: #1e1e2e; /* Base */
-    --color-gray-950: #181825; /* Mantle */
+  --color-gray-50: #cdd6f4; /* Text */
+  --color-gray-100: #bac2de; /* Subtext1 */
+  --color-gray-200: #a6adc8; /* Subtext0 */
+  --color-gray-300: #9399b2; /* Overlay2 */
+  --color-gray-400: #7f849c; /* Overlay1 */
+  --color-gray-500: #6c7086; /* Overlay0 */
+  --color-gray-600: #585b70; /* Surface2 */
+  --color-gray-700: #45475a; /* Surface1 */
+  --color-gray-800: #313244; /* Surface0 */
+  --color-gray-900: #1e1e2e; /* Base */
+  --color-gray-950: #181825; /* Mantle */
 
-    --color-accent-50: #f8f2ff;
-    --color-accent-100: #f0e5fd;
-    --color-accent-200: #e5d3fb;
-    --color-accent-300: #dbc0f9;
-    --color-accent-400: #f5c2e7; /* Pink */
-    --color-accent-500: #cba6f7; /* Mauve */
-    --color-accent-600: #a37ce4;
-    --color-accent-700: #8c55c8;
-    --color-accent-800: #6b3da5;
-    --color-accent-900: #4a2874;
-    --color-accent-950: #1f0f3a;
+  --color-accent-50: #f8f2ff;
+  --color-accent-100: #f0e5fd;
+  --color-accent-200: #e5d3fb;
+  --color-accent-300: #dbc0f9;
+  --color-accent-400: #f5c2e7; /* Pink */
+  --color-accent-500: #cba6f7; /* Mauve */
+  --color-accent-600: #a37ce4;
+  --color-accent-700: #8c55c8;
+  --color-accent-800: #6b3da5;
+  --color-accent-900: #4a2874;
+  --color-accent-950: #1f0f3a;
 
-    --ec-tm-insBg: rgba(166, 227, 161, 0.15); /* Green #a6e3a1 */
-    --ec-tm-insBrdCol: rgba(166, 227, 161, 0.4);
-    --ec-tm-insDiffIndCol: #a6e3a1;
-    --ec-tm-delBg: rgba(243, 139, 168, 0.15); /* Red #f38ba8 */
-    --ec-tm-delBrdCol: rgba(243, 139, 168, 0.4);
-    --ec-tm-delDiffIndCol: #f38ba8;
+  --ec-tm-insBg: rgba(166, 227, 161, 0.15); /* Green #a6e3a1 */
+  --ec-tm-insBrdCol: rgba(166, 227, 161, 0.4);
+  --ec-tm-insDiffIndCol: #a6e3a1;
+  --ec-tm-delBg: rgba(243, 139, 168, 0.15); /* Red #f38ba8 */
+  --ec-tm-delBrdCol: rgba(243, 139, 168, 0.4);
+  --ec-tm-delDiffIndCol: #f38ba8;
 }
 
 /* ── Tokyo Night ─────────────────────────────────────────
  * Official Night variant colors. Gray 300 and 50 interpolated
  * (no official color between dark5 and fg_dark, or above fg). */
 html[data-color-theme="tokyo-night"] {
-    --color-highlight-bg: #292e42; /* bg_highlight / selection */
-    --color-highlight-fg: #c0caf5; /* fg */
+  --color-highlight-bg: #292e42; /* bg_highlight / selection */
+  --color-highlight-fg: #c0caf5; /* fg */
 
-    --color-gray-50: #cad3f5;
-    --color-gray-100: #c0caf5; /* fg */
-    --color-gray-200: #a9b1d6; /* fg_dark */
-    --color-gray-300: #8d95b7;
-    --color-gray-400: #737aa2; /* dark5 */
-    --color-gray-500: #565f89; /* comment */
-    --color-gray-600: #414868; /* terminal_black */
-    --color-gray-700: #3b4261; /* fg_gutter */
-    --color-gray-800: #292e42; /* bg_highlight */
-    --color-gray-900: #1a1b26; /* bg */
-    --color-gray-950: #16161e; /* bg_dark */
+  --color-gray-50: #cad3f5;
+  --color-gray-100: #c0caf5; /* fg */
+  --color-gray-200: #a9b1d6; /* fg_dark */
+  --color-gray-300: #8d95b7;
+  --color-gray-400: #737aa2; /* dark5 */
+  --color-gray-500: #565f89; /* comment */
+  --color-gray-600: #414868; /* terminal_black */
+  --color-gray-700: #3b4261; /* fg_gutter */
+  --color-gray-800: #292e42; /* bg_highlight */
+  --color-gray-900: #1a1b26; /* bg */
+  --color-gray-950: #16161e; /* bg_dark */
 
-    --color-accent-50: #ecf1fe;
-    --color-accent-100: #d1e0fd;
-    --color-accent-200: #b5cdfb;
-    --color-accent-300: #99baf9;
-    --color-accent-400: #7dcfff; /* cyan */
-    --color-accent-500: #7aa2f7; /* blue */
-    --color-accent-600: #5d81d0;
-    --color-accent-700: #3d59a1; /* blue0 */
-    --color-accent-800: #2e4580;
-    --color-accent-900: #1c2b58;
-    --color-accent-950: #0f1530;
+  --color-accent-50: #ecf1fe;
+  --color-accent-100: #d1e0fd;
+  --color-accent-200: #b5cdfb;
+  --color-accent-300: #99baf9;
+  --color-accent-400: #7dcfff; /* cyan */
+  --color-accent-500: #7aa2f7; /* blue */
+  --color-accent-600: #5d81d0;
+  --color-accent-700: #3d59a1; /* blue0 */
+  --color-accent-800: #2e4580;
+  --color-accent-900: #1c2b58;
+  --color-accent-950: #0f1530;
 
-    --ec-tm-insBg: rgba(158, 206, 106, 0.15); /* green #9ece6a */
-    --ec-tm-insBrdCol: rgba(158, 206, 106, 0.4);
-    --ec-tm-insDiffIndCol: #9ece6a;
-    --ec-tm-delBg: rgba(247, 118, 142, 0.15); /* red #f7768e */
-    --ec-tm-delBrdCol: rgba(247, 118, 142, 0.4);
-    --ec-tm-delDiffIndCol: #f7768e;
+  --ec-tm-insBg: rgba(158, 206, 106, 0.15); /* green #9ece6a */
+  --ec-tm-insBrdCol: rgba(158, 206, 106, 0.4);
+  --ec-tm-insDiffIndCol: #9ece6a;
+  --ec-tm-delBg: rgba(247, 118, 142, 0.15); /* red #f7768e */
+  --ec-tm-delBrdCol: rgba(247, 118, 142, 0.4);
+  --ec-tm-delDiffIndCol: #f7768e;
 }
 
 /* ── Rosé Pine ───────────────────────────────────────────
@@ -258,37 +258,37 @@ html[data-color-theme="tokyo-night"] {
  *           Muted, Subtle, Text, Rose, Iris.
  * Gray 100–300 interpolated (no official colors between Subtle and Text). */
 html[data-color-theme="rose-pine"] {
-    --color-highlight-bg: #403d52; /* Highlight Med / selection */
-    --color-highlight-fg: #e0def4; /* Text */
+  --color-highlight-bg: #403d52; /* Highlight Med / selection */
+  --color-highlight-fg: #e0def4; /* Text */
 
-    --color-gray-50: #e0def4; /* Text */
-    --color-gray-100: #d2d0e6;
-    --color-gray-200: #c1bfd8;
-    --color-gray-300: #ada9c2;
-    --color-gray-400: #908caa; /* Subtle */
-    --color-gray-500: #6e6a86; /* Muted */
-    --color-gray-600: #524f67; /* Highlight High */
-    --color-gray-700: #403d52; /* Highlight Med */
-    --color-gray-800: #26233a; /* Overlay */
-    --color-gray-900: #1f1d2e; /* Surface */
-    --color-gray-950: #191724; /* Base */
+  --color-gray-50: #e0def4; /* Text */
+  --color-gray-100: #d2d0e6;
+  --color-gray-200: #c1bfd8;
+  --color-gray-300: #ada9c2;
+  --color-gray-400: #908caa; /* Subtle */
+  --color-gray-500: #6e6a86; /* Muted */
+  --color-gray-600: #524f67; /* Highlight High */
+  --color-gray-700: #403d52; /* Highlight Med */
+  --color-gray-800: #26233a; /* Overlay */
+  --color-gray-900: #1f1d2e; /* Surface */
+  --color-gray-950: #191724; /* Base */
 
-    --color-accent-50: #fdf7f7;
-    --color-accent-100: #f9edec;
-    --color-accent-200: #f5dddc;
-    --color-accent-300: #f0cccb;
-    --color-accent-400: #c4a7e7; /* Iris */
-    --color-accent-500: #ebbcba; /* Rose */
-    --color-accent-600: #d69996;
-    --color-accent-700: #b37573;
-    --color-accent-800: #875654;
-    --color-accent-900: #5a3836;
-    --color-accent-950: #2e1c1b;
+  --color-accent-50: #fdf7f7;
+  --color-accent-100: #f9edec;
+  --color-accent-200: #f5dddc;
+  --color-accent-300: #f0cccb;
+  --color-accent-400: #c4a7e7; /* Iris */
+  --color-accent-500: #ebbcba; /* Rose */
+  --color-accent-600: #d69996;
+  --color-accent-700: #b37573;
+  --color-accent-800: #875654;
+  --color-accent-900: #5a3836;
+  --color-accent-950: #2e1c1b;
 
-    --ec-tm-insBg: rgba(156, 207, 216, 0.15); /* Foam #9ccfd8 */
-    --ec-tm-insBrdCol: rgba(156, 207, 216, 0.4);
-    --ec-tm-insDiffIndCol: #9ccfd8;
-    --ec-tm-delBg: rgba(235, 111, 146, 0.15); /* Love #eb6f92 */
-    --ec-tm-delBrdCol: rgba(235, 111, 146, 0.4);
-    --ec-tm-delDiffIndCol: #eb6f92;
+  --ec-tm-insBg: rgba(156, 207, 216, 0.15); /* Foam #9ccfd8 */
+  --ec-tm-insBrdCol: rgba(156, 207, 216, 0.4);
+  --ec-tm-insDiffIndCol: #9ccfd8;
+  --ec-tm-delBg: rgba(235, 111, 146, 0.15); /* Love #eb6f92 */
+  --ec-tm-delBrdCol: rgba(235, 111, 146, 0.4);
+  --ec-tm-delDiffIndCol: #eb6f92;
 }

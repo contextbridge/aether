@@ -7,11 +7,16 @@
     "sdk:test": "pnpm --filter @aether-agent/sdk test",
     "sdk:e2e": "pnpm --filter @aether-agent/sdk e2e",
     "sdk:generate-settings-types": "pnpm --filter @aether-agent/sdk generate:settings-types",
-    "fmt": "prettier --write \"packages/aether-sdk/**/*.{ts,mts,cts,mjs,cjs,js,jsx,json}\"",
-    "fmt-check": "prettier --check \"packages/aether-sdk/**/*.{ts,mts,cts,mjs,cjs,js,jsx,json}\""
+    "website:dev": "pnpm --dir website dev",
+    "website:build": "pnpm --dir website build",
+    "website:preview": "pnpm --dir website preview",
+    "website:check": "pnpm --dir website astro check",
+    "fmt": "prettier --write \"packages/aether-sdk/**/*.{ts,mts,cts,mjs,cjs,js,jsx,json}\" \"website/**/*.{ts,mjs,astro,json,css}\"",
+    "fmt-check": "prettier --check \"packages/aether-sdk/**/*.{ts,mts,cts,mjs,cjs,js,jsx,json}\" \"website/**/*.{ts,mjs,astro,json,css}\""
   },
   "packageManager": "pnpm@10.28.0",
   "devDependencies": {
-    "prettier": "^3.8.3"
+    "prettier": "^3.8.3",
+    "prettier-plugin-astro": "^0.14.1"
   }
 }

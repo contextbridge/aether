@@ -1,11 +1,11 @@
 @layer base, starlight, theme, components, utilities;
-@import '@astrojs/starlight-tailwind';
+@import "@astrojs/starlight-tailwind";
 
 /* Starlight CSS variable overrides for dark mode.
  * Wired to Tailwind custom properties so they cascade with theme changes. */
 :root {
-  --sl-font: 'IBM Plex Sans', sans-serif;
-  --sl-font-mono: 'IBM Plex Mono', monospace;
+  --sl-font: "IBM Plex Sans", sans-serif;
+  --sl-font-mono: "IBM Plex Mono", monospace;
 
   --sl-color-white: var(--color-gray-50);
   --sl-color-gray-1: var(--color-gray-100);

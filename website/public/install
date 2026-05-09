@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+url="https://github.com/contextbridge/aether/releases/latest/download/aether-agent-cli-installer.sh"
+
+if command -v curl >/dev/null 2>&1; then
+  curl --proto '=https' --tlsv1.2 -LsSf "$url" | sh
+elif command -v wget >/dev/null 2>&1; then
+  wget -qO- "$url" | sh
+else
+  echo "error: need curl or wget to install aether" >&2
+  exit 1
+fi

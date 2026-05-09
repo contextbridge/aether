@@ -10,3 +10,6 @@ packages/aether-sdk/src/generated/
 plans/
 sweep.timestamp
 .astro/
+website/dist/
+website/.astro/
+website/*.log

@@ -1,1 +1,1 @@
-export const GITHUB_URL = "https://github.com/jcarver989/aether";
+export const GITHUB_URL = "https://github.com/contextbridge/aether";

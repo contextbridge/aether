@@ -1,113 +1,119 @@
 ---
 interface Props {
-    labels: string[];
+  labels: string[];
 }
 const { labels } = Astro.props;
 ---
 
 <div class="code-tabs" data-code-tabs>
-    <div class="code-tabs-bar" role="tablist">
-        {labels.map((label, i) => (
-            <button
-                role="tab"
-                aria-selected={i === 0 ? "true" : "false"}
-                data-tab-index={i}
-            >
-                {label}
-            </button>
-        ))}
-    </div>
-    <div class="code-tabs-panels">
-        <slot />
-    </div>
+  <div class="code-tabs-bar" role="tablist">
+    {
+      labels.map((label, i) => (
+        <button
+          role="tab"
+          aria-selected={i === 0 ? "true" : "false"}
+          data-tab-index={i}
+        >
+          {label}
+        </button>
+      ))
+    }
+  </div>
+  <div class="code-tabs-panels">
+    <slot />
+  </div>
 </div>
 
 <style>
-    .code-tabs-bar {
-        display: flex;
-        background: rgba(255, 255, 255, 0.03);
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        border-bottom: none;
-        border-radius: 0.5rem 0.5rem 0 0;
-        overflow: hidden;
-    }
+  .code-tabs-bar {
+    display: flex;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-bottom: none;
+    border-radius: 0.5rem 0.5rem 0 0;
+    overflow: hidden;
+  }
 
-    .code-tabs-bar button {
-        padding: 0.5rem 1.25rem;
-        font-family: 'IBM Plex Mono', monospace;
-        font-size: 0.8rem;
-        color: rgba(255, 255, 255, 0.4);
-        background: transparent;
-        border: none;
-        border-bottom: 2px solid transparent;
-        cursor: pointer;
-        transition: color 0.15s, border-color 0.15s;
-    }
+  .code-tabs-bar button {
+    padding: 0.5rem 1.25rem;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.8rem;
+    color: rgba(255, 255, 255, 0.4);
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    transition:
+      color 0.15s,
+      border-color 0.15s;
+  }
 
-    .code-tabs-bar button:hover {
-        color: rgba(255, 255, 255, 0.7);
-    }
+  .code-tabs-bar button:hover {
+    color: rgba(255, 255, 255, 0.7);
+  }
 
-    .code-tabs-bar button[aria-selected="true"] {
-        color: var(--sl-color-accent);
-        border-bottom-color: var(--sl-color-accent);
-    }
+  .code-tabs-bar button[aria-selected="true"] {
+    color: var(--sl-color-accent);
+    border-bottom-color: var(--sl-color-accent);
+  }
 
-    .code-tabs-panels {
-        position: relative;
-    }
+  .code-tabs-panels {
+    position: relative;
+  }
 
-    .code-tabs-panels :global(.expressive-code) {
-        border-top-left-radius: 0 !important;
-        border-top-right-radius: 0 !important;
-        margin-top: 0 !important;
-    }
+  .code-tabs-panels :global(.expressive-code) {
+    border-top-left-radius: 0 !important;
+    border-top-right-radius: 0 !important;
+    margin-top: 0 !important;
+  }
 
-    .code-tabs-panels :global(.expressive-code .frame) {
-        border-top-left-radius: 0 !important;
-        border-top-right-radius: 0 !important;
-    }
+  .code-tabs-panels :global(.expressive-code .frame) {
+    border-top-left-radius: 0 !important;
+    border-top-right-radius: 0 !important;
+  }
 
-    .code-tabs-panels :global(.expressive-code .frame.is-terminal .header) {
-        display: none !important;
-    }
+  .code-tabs-panels :global(.expressive-code .frame.is-terminal .header) {
+    display: none !important;
+  }
 
-    /* Hidden panels: visually hidden but preserve tallest panel's height */
-    .code-tabs-panels :global(.expressive-code[data-hidden]) {
-        visibility: hidden;
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        pointer-events: none;
-    }
+  /* Hidden panels: visually hidden but preserve tallest panel's height */
+  .code-tabs-panels :global(.expressive-code[data-hidden]) {
+    visibility: hidden;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    pointer-events: none;
+  }
 </style>
 
 <script>
-    document.querySelectorAll("[data-code-tabs]").forEach((root) => {
-        const buttons = root.querySelectorAll<HTMLButtonElement>("[role=tab]");
-        const panels = root.querySelectorAll<HTMLElement>(
-            ".code-tabs-panels > .expressive-code",
-        );
+  document.querySelectorAll("[data-code-tabs]").forEach((root) => {
+    const buttons = root.querySelectorAll<HTMLButtonElement>("[role=tab]");
+    const panels = root.querySelectorAll<HTMLElement>(
+      ".code-tabs-panels > .expressive-code",
+    );
 
-        function activate(index: number) {
-            buttons.forEach((btn, i) => {
-                btn.setAttribute("aria-selected", String(i === index));
-            });
-            panels.forEach((panel, i) => {
-                if (i === index) {
-                    panel.removeAttribute("data-hidden");
-                } else {
-                    panel.setAttribute("data-hidden", "");
-                }
-            });
+    function activate(index: number) {
+      buttons.forEach((btn, i) => {
+        btn.setAttribute("aria-selected", String(i === index));
+      });
+      panels.forEach((panel, i) => {
+        if (i === index) {
+          panel.removeAttribute("data-hidden");
+        } else {
+          panel.setAttribute("data-hidden", "");
         }
+      });
+    }
 
-        activate(0);
+    activate(0);
 
-        root.querySelector("[role=tablist]")!.addEventListener("click", (e) => {
-            const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("[role=tab]");
-            if (btn) activate(Number(btn.dataset.tabIndex));
-        });
+    root.querySelector("[role=tablist]")!.addEventListener("click", (e) => {
+      const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(
+        "[role=tab]",
+      );
+      if (btn) activate(Number(btn.dataset.tabIndex));
     });
+  });
 </script>

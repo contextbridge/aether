@@ -6,6 +6,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { GITHUB_URL } from "./src/consts.ts";
 
 export default defineConfig({
+  site: "https://aether-agent.io",
   integrations: [
     icon(),
     starlight({
@@ -30,9 +31,7 @@ export default defineConfig({
       sidebar: [
         {
           label: "Getting Started",
-          items: [
-            { label: "Introduction", slug: "getting-started/overview" },
-          ],
+          items: [{ label: "Introduction", slug: "getting-started/overview" }],
         },
         {
           label: "Aether",
@@ -40,9 +39,15 @@ export default defineConfig({
             {
               label: "Configuration",
               items: [
-                { label: "Agents", slug: "aether/configuration/agent-settings" },
+                {
+                  label: "Agents",
+                  slug: "aether/configuration/agent-settings",
+                },
                 { label: "LLMs", slug: "aether/configuration/llm-providers" },
-                { label: "Prompts", slug: "aether/configuration/system-prompts" },
+                {
+                  label: "Prompts",
+                  slug: "aether/configuration/system-prompts",
+                },
                 { label: "Tools", slug: "aether/configuration/mcp-servers" },
               ],
             },
@@ -51,9 +56,15 @@ export default defineConfig({
               items: [
                 { label: "Coding", slug: "aether/built-in-servers/coding" },
                 { label: "LSP", slug: "aether/built-in-servers/lsp" },
-                { label: "Skills & Commands", slug: "aether/built-in-servers/skills-commands" },
+                {
+                  label: "Skills & Commands",
+                  slug: "aether/built-in-servers/skills-commands",
+                },
                 { label: "Tasks", slug: "aether/built-in-servers/tasks" },
-                { label: "Sub-Agents", slug: "aether/built-in-servers/subagents" },
+                {
+                  label: "Sub-Agents",
+                  slug: "aether/built-in-servers/subagents",
+                },
                 { label: "Survey", slug: "aether/built-in-servers/survey" },
                 { label: "Plan", slug: "aether/built-in-servers/plan" },
               ],
@@ -62,9 +73,15 @@ export default defineConfig({
               label: "Terminal UI",
               items: [
                 { label: "Overview", slug: "aether/terminal/overview" },
-                { label: "Keybindings & Commands", slug: "aether/terminal/keybindings" },
+                {
+                  label: "Keybindings & Commands",
+                  slug: "aether/terminal/keybindings",
+                },
                 { label: "Git Diff View", slug: "aether/terminal/git-diff" },
-                { label: "Settings & Themes", slug: "aether/terminal/settings" },
+                {
+                  label: "Settings & Themes",
+                  slug: "aether/terminal/settings",
+                },
                 { label: "Sessions", slug: "aether/terminal/sessions" },
               ],
             },
@@ -76,8 +93,14 @@ export default defineConfig({
           label: "Wisp Standalone",
           collapsed: true,
           items: [
-            { label: "Using with Other Agents", slug: "wisp-standalone/using-with-other-agents" },
-            { label: "Embedding as a Library", slug: "wisp-standalone/embedding" },
+            {
+              label: "Using with Other Agents",
+              slug: "wisp-standalone/using-with-other-agents",
+            },
+            {
+              label: "Embedding as a Library",
+              slug: "wisp-standalone/embedding",
+            },
           ],
         },
         {
@@ -88,24 +111,42 @@ export default defineConfig({
               label: "aether-core",
               collapsed: true,
               items: [
-                { label: "Agent Builder", slug: "libraries/aether-core/agent-builder" },
-                { label: "Events & Streaming", slug: "libraries/aether-core/events" },
-                { label: "MCP Integration", slug: "libraries/aether-core/mcp-integration" },
+                {
+                  label: "Agent Builder",
+                  slug: "libraries/aether-core/agent-builder",
+                },
+                {
+                  label: "Events & Streaming",
+                  slug: "libraries/aether-core/events",
+                },
+                {
+                  label: "MCP Integration",
+                  slug: "libraries/aether-core/mcp-integration",
+                },
               ],
             },
             {
               label: "llm",
               collapsed: true,
               items: [
-                { label: "Provider Interface", slug: "libraries/llm/provider-interface" },
-                { label: "Custom Providers", slug: "libraries/llm/custom-providers" },
+                {
+                  label: "Provider Interface",
+                  slug: "libraries/llm/provider-interface",
+                },
+                {
+                  label: "Custom Providers",
+                  slug: "libraries/llm/custom-providers",
+                },
               ],
             },
             {
               label: "mcp-servers",
               collapsed: true,
               items: [
-                { label: "Embedding Servers", slug: "libraries/mcp-servers/embedding" },
+                {
+                  label: "Embedding Servers",
+                  slug: "libraries/mcp-servers/embedding",
+                },
               ],
             },
             {
