@@ -1,7 +1,7 @@
 ---
 import "../styles/global.css";
 import "../styles/themes.css";
-import ThemeSwitcher from "../components/ThemeSwitcher.astro";
+import LandingHeader from "../components/LandingHeader.astro";
 
 const { title, description } = Astro.props.frontmatter;
 ---
@@ -22,19 +22,7 @@ const { title, description } = Astro.props.frontmatter;
     </script>
   </head>
   <body class="m-0 bg-gray-950 text-gray-50 font-sans antialiased">
-    <!-- Nav -->
-    <header
-      class="flex items-center justify-between px-6 py-4 border-b border-gray-400/20 bg-gray-900/80 backdrop-blur-md sticky top-0 z-50"
-    >
-      <a
-        href="/"
-        class="text-xl font-semibold text-gray-50 no-underline font-mono"
-        >Aether</a
-      >
-      <nav class="flex items-center gap-6">
-        <ThemeSwitcher />
-      </nav>
-    </header>
+    <LandingHeader />
 
     <main>
       <slot />

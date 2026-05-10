@@ -1,15 +1,25 @@
 ---
 interface Props {
   labels: string[];
+  class?: string;
 }
-const { labels } = Astro.props;
+
+const { labels, class: className } = Astro.props;
+const hasFooter = Astro.slots.has("footer");
 ---
 
-<div class="code-tabs" data-code-tabs>
-  <div class="code-tabs-bar" role="tablist">
+<div
+  class:list={[
+    "code-tabs overflow-hidden rounded-lg border border-gray-500 bg-transparent",
+    className,
+  ]}
+  data-code-tabs
+>
+  <div class="flex gap-6 bg-transparent px-3" role="tablist">
     {
       labels.map((label, i) => (
         <button
+          class="cursor-pointer border-0 border-b-2 border-transparent bg-transparent py-3 pb-2 font-mono text-xs tracking-[0.08em] text-gray-400 uppercase transition-colors duration-150 hover:text-gray-200 aria-selected:border-accent-500 aria-selected:text-accent-500"
           role="tab"
           aria-selected={i === 0 ? "true" : "false"}
           data-tab-index={i}
@@ -19,70 +29,72 @@ const { labels } = Astro.props;
       ))
     }
   </div>
-  <div class="code-tabs-panels">
+  <div class="code-tabs-panels relative">
     <slot />
   </div>
+  {
+    hasFooter && (
+      <div class="flex items-center gap-3 border-t border-gray-700 bg-transparent px-3 py-2 font-mono text-xs leading-none font-medium tracking-[0.08em] text-gray-400 uppercase">
+        <slot name="footer" />
+      </div>
+    )
+  }
 </div>
 
 <style>
-  .code-tabs-bar {
-    display: flex;
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-bottom: none;
-    border-radius: 0.5rem 0.5rem 0 0;
-    overflow: hidden;
-  }
-
-  .code-tabs-bar button {
-    padding: 0.5rem 1.25rem;
-    font-family: "IBM Plex Mono", monospace;
-    font-size: 0.8rem;
-    color: rgba(255, 255, 255, 0.4);
-    background: transparent;
-    border: none;
-    border-bottom: 2px solid transparent;
-    cursor: pointer;
-    transition:
-      color 0.15s,
-      border-color 0.15s;
-  }
-
-  .code-tabs-bar button:hover {
-    color: rgba(255, 255, 255, 0.7);
-  }
-
-  .code-tabs-bar button[aria-selected="true"] {
-    color: var(--sl-color-accent);
-    border-bottom-color: var(--sl-color-accent);
-  }
-
-  .code-tabs-panels {
-    position: relative;
-  }
+  @reference '../styles/global.css';
 
   .code-tabs-panels :global(.expressive-code) {
-    border-top-left-radius: 0 !important;
-    border-top-right-radius: 0 !important;
     margin-top: 0 !important;
   }
 
-  .code-tabs-panels :global(.expressive-code .frame) {
-    border-top-left-radius: 0 !important;
-    border-top-right-radius: 0 !important;
+  .code-tabs-panels :global(.expressive-code .frame),
+  .code-tabs-panels :global(.expressive-code .header),
+  .code-tabs-panels :global(.expressive-code pre),
+  .code-tabs-panels :global(.expressive-code .code) {
+    @apply rounded-none border-0 shadow-none;
+  }
+
+  .code-tabs-panels :global(.expressive-code pre) {
+    @apply bg-transparent text-gray-50;
+  }
+
+  .code-tabs-panels :global(.expressive-code code span) {
+    @apply text-gray-50;
+  }
+
+  .code-tabs-panels :global(.expressive-code .ec-line .code > span:first-child) {
+    @apply text-accent-500;
+  }
+
+  .code-tabs-panels :global(.expressive-code .copy button) {
+    @apply bg-transparent;
+  }
+
+  .code-tabs-panels :global(.expressive-code .copy button div) {
+    @apply bg-gray-400;
+  }
+
+  .code-tabs-panels :global(.expressive-code .copy button:hover div) {
+    @apply bg-accent-500;
+  }
+
+  .code-tabs-panels :global(.expressive-code .copy) {
+    top: 50% !important;
+    right: 0.5rem !important;
+    bottom: auto !important;
+    transform: translateY(-50%);
   }
 
   .code-tabs-panels :global(.expressive-code .frame.is-terminal .header) {
     display: none !important;
   }
 
-  /* Hidden panels: visually hidden but preserve tallest panel's height */
   .code-tabs-panels :global(.expressive-code[data-hidden]) {
     visibility: hidden;
     position: absolute;
+    inset-inline: 0;
     top: 0;
-    left: 0;
-    right: 0;
     pointer-events: none;
   }
 </style>
