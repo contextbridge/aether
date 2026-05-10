@@ -18,19 +18,25 @@ import { GITHUB_URL } from "../consts";
           The open-source coding agent <span class="italic underline">you</span> control
         </h1>
         <p class="m-0 text-base text-gray-400 sm:text-lg lg:text-xl">
-          Aether is a modular agent that gives you control over every token in
-          context. Switch from minimal to batteries-included with a few lines of
-          config. Run it in a TUI, IDE, or headlessly.
+          Aether has no hardcoded system prompt or tools. It embraces <a
+            href="https://modelcontextprotocol.io/docs/getting-started/intro"
+            class="text-accent-500 underline underline-offset-4 transition-colors hover:text-accent-400"
+            target="_blank"
+            rel="noreferrer">MCP</a
+          >
+          without filling context and goes from minimal to batteries-included with
+          a few lines of config. Use it in a TUI, IDE, headlessly, or as a library
+          (Rust + TS supported).
         </p>
 
         <div class="mx-auto w-full max-w-lg lg:mx-0">
-          <InstallTabs />
+          <InstallTabs class="!border-0 !bg-gray-900" />
         </div>
 
         <div class="flex flex-wrap justify-center gap-4 lg:justify-start">
           <LandingButton href="/getting-started/overview/">
             <Icon slot="leading" name="lucide:file-text" size={18} />
-            Docs
+            Quickstart
             <Icon slot="trailing" name="lucide:chevron-right" size={18} />
           </LandingButton>
           <LandingButton href={GITHUB_URL} variant="secondary">

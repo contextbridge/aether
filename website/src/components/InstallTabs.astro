@@ -2,12 +2,18 @@
 import { Code } from "astro-expressive-code/components";
 import CodeTabs from "./CodeTabs.astro";
 
+interface Props {
+  class?: string;
+}
+
+const { class: className } = Astro.props;
+
 const installBrewCode = `$ brew install contextbridge/tap/aether`;
 const installShellCode = `$ curl -fsSL aether-agent.io/install | sh`;
 const installCargoCode = `$ cargo install aether-agent-cli`;
 ---
 
-<CodeTabs labels={["Homebrew", "Shell", "Cargo"]}>
+<CodeTabs labels={["Homebrew", "Shell", "Cargo"]} class={className}>
   <Code code={installBrewCode} lang="sh" />
   <Code code={installShellCode} lang="sh" />
   <Code code={installCargoCode} lang="sh" />

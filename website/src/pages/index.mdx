@@ -190,26 +190,6 @@ export const runAcpCode = `$ aether acp`;
 <section class="px-16 py-20">
     <div class="mx-auto max-w-350">
         <div class="text-center mb-16">
-            <h2 class="font-mono text-3xl sm:text-4xl font-bold text-white mb-3">Run in a TUI, Editor/IDE or Headless</h2>
-            <p class="text-gray-400 text-base sm:text-lg leading-relaxed max-w-2xl mx-auto">You'll be up and running in two commands</p>
-        </div>
-        <div class="flex flex-col gap-16">
-            <ToolShowcaseItem title="Run in a TUI" description="First run auto-scaffolds config files, tools, and a default agent prompt.">
-                <Code code={firstRunCode} lang="sh" title="First run (auto-scaffolds)" />
-            </ToolShowcaseItem>
-            <ToolShowcaseItem title="Run in your editor" description="Expose over ACP for VS Code, JetBrains, or any editor with agent support.">
-                <Code code={runAcpCode} lang="sh" title="Editor/IDE (via ACP)" />
-            </ToolShowcaseItem>
-            <ToolShowcaseItem title="Run headlessly" description="Run headless for scripts, CI, and automation." border={false}>
-                <Code code={runHeadlessCode} lang="sh" title="Headless" />
-            </ToolShowcaseItem>
-        </div>
-    </div>
-</section>
-
-<section class="px-16 py-20">
-    <div class="mx-auto max-w-350">
-        <div class="text-center mb-16">
             <h2 class="font-mono text-3xl sm:text-4xl font-bold text-white mb-3">Use any LLM you want, cloud or local</h2>
             <p class="text-gray-400 text-base sm:text-lg leading-relaxed max-w-2xl mx-auto">You can bring your own too.</p>
         </div>
@@ -267,6 +247,26 @@ export const runAcpCode = `$ aether acp`;
             </ToolShowcaseItem>
             <ToolShowcaseItem title="MCP tool proxy stops tools from eating your context" description="Aether can wrap external MCP servers in a built-in tool proxy, so agents discover nested tools on demand instead of loading every schema up front." border={false}>
                 <Code code={proxyConfigCode} lang="json" title=".aether/mcp.json" meta="ins={3-17}" />
+            </ToolShowcaseItem>
+        </div>
+    </div>
+</section>
+
+<section class="px-16 py-20">
+    <div class="mx-auto max-w-350">
+        <div class="text-center mb-16">
+            <h2 class="font-mono text-3xl sm:text-4xl font-bold text-white mb-3">Run in a TUI, Editor/IDE or Headless</h2>
+            <p class="text-gray-400 text-base sm:text-lg leading-relaxed max-w-2xl mx-auto">You'll be up and running in two commands</p>
+        </div>
+        <div class="flex flex-col gap-16">
+            <ToolShowcaseItem title="Run in a TUI" description="First run auto-scaffolds config files, tools, and a default agent prompt.">
+                <Code code={firstRunCode} lang="sh" title="First run (auto-scaffolds)" />
+            </ToolShowcaseItem>
+            <ToolShowcaseItem title="Run in your editor" description="Expose over ACP for VS Code, JetBrains, or any editor with agent support.">
+                <Code code={runAcpCode} lang="sh" title="Editor/IDE (via ACP)" />
+            </ToolShowcaseItem>
+            <ToolShowcaseItem title="Run headlessly" description="Run headless for scripts, CI, and automation." border={false}>
+                <Code code={runHeadlessCode} lang="sh" title="Headless" />
             </ToolShowcaseItem>
         </div>
     </div>
