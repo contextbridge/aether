@@ -32,6 +32,5 @@ let registry: Arc<LspRegistry> = LspRegistry::new_and_spawn("/my/project".into()
 
 # See also
 
-- [`LspMcp`](crate::lsp::LspMcp) -- Standalone MCP server using this registry.
-- [`CodingMcp`](crate::CodingMcp) -- Also uses this registry when constructed with [`with_lsp`](crate::CodingMcp::with_lsp).
+- [`CodingMcp`](crate::CodingMcp) -- Uses this registry when constructed with [`with_lsp`](crate::CodingMcp::with_lsp).
 - [`LspError`](crate::lsp::error::LspError) -- Error types for LSP operations.

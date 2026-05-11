@@ -7,21 +7,21 @@ Aether is organized as a Cargo workspace with focused, single-responsibility pac
 
 ## Package map
 
-| Package            | Crate            | Purpose                                                                                                                    |
-| ------------------ | ---------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| **aether-core**    | `aether_core`    | Agent runtime — conversation loop, context management, tool dispatch, streaming                                            |
-| **llm**            | `llm`            | Unified LLM provider interface — Anthropic, OpenRouter, OpenAI, DeepSeek, Gemini, Ollama, Bedrock, and more                |
-| **mcp-servers**    | `mcp_servers`    | Built-in MCP tool servers — coding (files, bash, search, LSP), standalone LSP, skills, tasks, sub-agents, survey, and plan |
-| **aether-cli**     | `aether_cli`     | CLI binaries — headless mode, ACP server, init wizard, show-prompt                                                         |
-| **aether-project** | `aether_project` | Project configuration — loads and validates `settings.json`, resolves MCP configs and prompt globs                         |
-| **wisp**           | `wisp`           | Interactive TUI — markdown rendering, syntax highlighting, inline diffs, command picker                                    |
-| **crucible**       | `crucible`       | Evaluation framework — assertion-based testing of agent behavior                                                           |
-| **mcp-utils**      | `mcp_utils`      | MCP client utilities — connecting to and managing external MCP servers                                                     |
-| **tui**            | `tui`            | Low-level TUI rendering primitives used by Wisp                                                                            |
-| **acp-utils**      | `acp_utils`      | Agent Client Protocol utilities — client and server helpers                                                                |
-| **aether-lspd**    | `aether_lspd`    | LSP server daemon — standalone language server integration                                                                 |
-| **llm-codegen**    | `llm_codegen`    | Code generation for LLM provider model catalogs                                                                            |
-| **utils**          | `utils`          | Shared utilities used across packages                                                                                      |
+| Package            | Crate            | Purpose                                                                                                         |
+| ------------------ | ---------------- | --------------------------------------------------------------------------------------------------------------- |
+| **aether-core**    | `aether_core`    | Agent runtime — conversation loop, context management, tool dispatch, streaming                                 |
+| **llm**            | `llm`            | Unified LLM provider interface — Anthropic, OpenRouter, OpenAI, DeepSeek, Gemini, Ollama, Bedrock, and more     |
+| **mcp-servers**    | `mcp_servers`    | Built-in MCP tool servers — coding (files, bash, search, web, LSP), skills, tasks, sub-agents, survey, and plan |
+| **aether-cli**     | `aether_cli`     | CLI binaries — headless mode, ACP server, init wizard, show-prompt                                              |
+| **aether-project** | `aether_project` | Project configuration — loads and validates `settings.json`, resolves MCP configs and prompt globs              |
+| **wisp**           | `wisp`           | Interactive TUI — markdown rendering, syntax highlighting, inline diffs, command picker                         |
+| **crucible**       | `crucible`       | Evaluation framework — assertion-based testing of agent behavior                                                |
+| **mcp-utils**      | `mcp_utils`      | MCP client utilities — connecting to and managing external MCP servers                                          |
+| **tui**            | `tui`            | Low-level TUI rendering primitives used by Wisp                                                                 |
+| **acp-utils**      | `acp_utils`      | Agent Client Protocol utilities — client and server helpers                                                     |
+| **aether-lspd**    | `aether_lspd`    | LSP server daemon — standalone language server integration                                                      |
+| **llm-codegen**    | `llm_codegen`    | Code generation for LLM provider model catalogs                                                                 |
+| **utils**          | `utils`          | Shared utilities used across packages                                                                           |
 
 ## Dependency flow
 

@@ -31,7 +31,6 @@ Full API documentation is available on [docs.rs](https://docs.rs/aether-mcp-serv
 Key entry points:
 - [`CodingMcp`] -- file I/O, shell, search, and LSP tools
 - [`CodingTools`](coding::CodingTools) -- trait for custom tool backends
-- [`LspMcp`](lsp::LspMcp) -- standalone LSP code intelligence server
 - [`LspRegistry`](lsp::LspRegistry) -- manages LSP daemon connections
 - [`TasksMcp`](tasks::TasksMcp) -- hierarchical task management
 - [`SkillsMcp`](skills::SkillsMcp) -- skill prompts and slash commands
@@ -132,10 +131,10 @@ let server = CodingMcp::new()
     .into_dyn();
 
 // Or with LSP support
-use mcp_servers::{DefaultCodingTools, LspCodingTools};
-
-let lsp_tools = LspCodingTools::new(DefaultCodingTools::new(), "/my/project".into());
-let server = CodingMcp::with_tools(lsp_tools).into_dyn();
+let server = CodingMcp::new()
+    .with_root_dir("/my/project".into())
+    .with_lsp("/my/project".into())
+    .into_dyn();
 ```
 
 ## Server Documentation

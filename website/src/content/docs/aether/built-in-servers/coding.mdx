@@ -3,7 +3,7 @@ title: Coding Tools
 description: File operations, bash, search, web, and LSP-backed coding tools.
 ---
 
-The `coding` server provides tools for reading and writing files, running shell commands, searching codebases, and fetching web content. See [Tools](/aether/configuration/mcp-servers/) for configuration.
+The `coding` server provides tools for reading and writing files, running shell commands, searching codebases, fetching web content, and using LSP-backed code intelligence. See [Tools](/aether/configuration/mcp-servers/) for configuration.
 
 ## Configuration
 
@@ -20,12 +20,12 @@ The `coding` server provides tools for reading and writing files, running shell 
 
 Supported args:
 
-| Arg                                                | Description                                                                                                                        |
-| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Arg                                                | Description                                                                     |
+| -------------------------------------------------- | ------------------------------------------------------------------------------- |
 | `--root-dir <path>`                                | Workspace root. Users don't need to set this as Aether sets this automatically. |
-| `--rules-dir <path>`                               | Directory to load Rules from. Repeatable.                        |
-| `--permission-mode always-allow\|auto\|always-ask` | Approval behavior for write/edit/bash tools. Default is `always-allow`.                                                            |
-| `--disable-lsp`                                    | Do not attach LSP-backed coding tools.                                                                                             |
+| `--rules-dir <path>`                               | Directory to load Rules from. Repeatable.                                       |
+| `--permission-mode always-allow\|auto\|always-ask` | Approval behavior for write/edit/bash tools. Default is `always-allow`.         |
+| `--disable-lsp`                                    | Do not attach LSP-backed coding tools.                                          |
 
 Permission modes:
 
@@ -69,9 +69,10 @@ Permission modes:
 
 Unless `--disable-lsp` is set, Aether wires LSP-backed tools into the `coding` server.
 
-| Tool               | Description                                                               |
-| ------------------ | ------------------------------------------------------------------------- |
-| `lsp_symbol`       | Definition, references, hover, implementation lookup, and call hierarchy. |
-| `lsp_document`     | Document symbol outline for a file.                                       |
-| `lsp_check_errors` | Compiler diagnostics without running a full build command.                |
-| `lsp_rename`       | Rename a symbol across the workspace.                                     |
+| Tool                   | Description                                                               |
+| ---------------------- | ------------------------------------------------------------------------- |
+| `lsp_symbol`           | Definition, references, hover, implementation lookup, and call hierarchy. |
+| `lsp_workspace_search` | Search for symbols across the workspace by name.                          |
+| `lsp_document`         | Document symbol outline for a file.                                       |
+| `lsp_check_errors`     | Compiler diagnostics without running a full build command.                |
+| `lsp_rename`           | Rename a symbol across the workspace.                                     |

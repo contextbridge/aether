@@ -142,7 +142,6 @@ export const toolsBuiltinCode = `{
       "type": "in-memory",
       "args": ["--rules-dir", ".aether/skills"]
     },
-    "lsp": { "type": "in-memory" },
     "skills": {
       "type": "in-memory",
       "args": ["--dir", ".aether/skills", "--notes-dir", ".aether/notes"]
@@ -300,7 +299,7 @@ export const runAcpCode = `$ aether acp`;
     <div class="flex flex-col gap-6">
       <ToolShowcaseItem
         title="Batteries included MCPs"
-        description='Aether includes several built-in MCP servers you can enable. They run in a custom in-memory transport. <ul class="mt-3 space-y-1 text-gray-400 text-sm list-none pl-0"><li><code class="text-white">coding</code> — file I/O, grep, bash, web, and LSP-backed coding tools</li><li><code class="text-white">lsp</code> — language-aware symbol lookup, diagnostics, workspace search, and rename</li><li><code class="text-white">skills</code> — reusable skills, rules, and notes</li><li><code class="text-white">subagents</code> — spawn parallel child agents with their own models and tools</li><li><code class="text-white">tasks</code> — task tracking for multi-step work, with optional persistence</li><li><code class="text-white">survey</code> — allow the agent to ask structured questions</li><li><code class="text-white">plan</code> — submit markdown plans for approval and feedback</li></ul>'
+        description='Aether includes several built-in MCP servers you can enable. They run in a custom in-memory transport. <ul class="mt-3 space-y-1 text-gray-400 text-sm list-none pl-0"><li><code class="text-white">coding</code> — file I/O, grep, bash, web, and LSP-backed coding tools</li><li><code class="text-white">skills</code> — reusable skills, rules, and notes</li><li><code class="text-white">subagents</code> — spawn parallel child agents with their own models and tools</li><li><code class="text-white">tasks</code> — task tracking for multi-step work, with optional persistence</li><li><code class="text-white">survey</code> — allow the agent to ask structured questions</li><li><code class="text-white">plan</code> — submit markdown plans for approval and feedback</li></ul>'
       >
         <Code
           code={toolsWireCode}

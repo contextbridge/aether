@@ -53,7 +53,6 @@ If a server entry has a `command` and no `type`, it is treated as `"type": "stdi
           "type": "in-memory",
           "args": ["--rules-dir", ".aether/skills"]
         },
-        "lsp": { "type": "in-memory" },
         "skills": {
           "type": "in-memory",
           "args": ["--dir", ".aether/skills", "--notes-dir", ".aether/notes"]
@@ -158,26 +157,20 @@ If a server entry has a `command` and no `type`, it is treated as `"type": "stdi
 
 ## Built-in servers
 
-| Server      | Purpose                                                                            | Args                                                                                                                  |
-| ----------- | ---------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `coding`    | File I/O, bash, grep/find, web fetch/search, and LSP-backed coding tools           | `--root-dir <path>`, repeat `--rules-dir <path>`, `--permission-mode always-allow\|auto\|always-ask`, `--disable-lsp` |
-| `lsp`       | Standalone language-aware symbol lookup, diagnostics, workspace search, and rename | No args in Aether's built-in registration; it uses the project root.                                                  |
-| `skills`    | Skill discovery, slash-command prompts, and notes                                  | Required: repeat `--dir <path>` and `--notes-dir <path>`                                                              |
-| `tasks`     | Hierarchical task management                                                       | Optional `--dir <base>` for persistent storage                                                                        |
-| `subagents` | Spawn child agents from loaded settings                                            | `--project-root <path>` (alias: `--dir`, defaults to `.`)                                                             |
-| `survey`    | Structured human-in-the-loop questions                                             | No args                                                                                                               |
-| `plan`      | Plan prompt and markdown plan review                                               | Optional `--prompt-file <path>`, plus optional trailing submit command                                                |
+| Server      | Purpose                                                                  | Args                                                                                                                  |
+| ----------- | ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| `coding`    | File I/O, bash, grep/find, web fetch/search, and LSP-backed coding tools | `--root-dir <path>`, repeat `--rules-dir <path>`, `--permission-mode always-allow\|auto\|always-ask`, `--disable-lsp` |
+| `skills`    | Skill discovery, slash-command prompts, and notes                        | Required: repeat `--dir <path>` and `--notes-dir <path>`                                                              |
+| `tasks`     | Hierarchical task management                                             | Optional `--dir <base>` for persistent storage                                                                        |
+| `subagents` | Spawn child agents from loaded settings                                  | `--project-root <path>` (alias: `--dir`, defaults to `.`)                                                             |
+| `survey`    | Structured human-in-the-loop questions                                   | No args                                                                                                               |
+| `plan`      | Plan prompt and markdown plan review                                     | Optional `--prompt-file <path>`, plus optional trailing submit command                                                |
 
 <CardGrid>
   <LinkCard
     title="Coding"
     description="File ops, bash, search, web, LSP"
     href="/aether/built-in-servers/coding/"
-  />
-  <LinkCard
-    title="LSP"
-    description="Language-aware symbol lookup, diagnostics, rename"
-    href="/aether/built-in-servers/lsp/"
   />
   <LinkCard
     title="Skills, Rules & Notes"

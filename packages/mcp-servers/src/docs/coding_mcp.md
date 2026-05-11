@@ -44,6 +44,7 @@ let server = CodingMcp::with_tools(my_custom_tools);
 
 **LSP** (requires [`with_lsp`](CodingMcp::with_lsp)):
 - `lsp_symbol` -- Go to definition, find references, find implementations
+- `lsp_workspace_search` -- Search for symbols across the workspace
 - `lsp_document` -- List symbols in a file
 - `lsp_check_errors` -- Get diagnostics for a file or workspace
 - `lsp_rename` -- Rename a symbol across the project

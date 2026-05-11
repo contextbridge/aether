@@ -31,7 +31,7 @@ pub mod plan;
 pub use coding::{CodingMcp, CodingMcpArgs, CodingTools, DefaultCodingTools, PermissionMode};
 
 #[cfg(feature = "coding")]
-pub use lsp::{LspMcp, LspMcpArgs, LspRegistry};
+pub use lsp::LspRegistry;
 
 #[cfg(feature = "skills")]
 pub use skills::{SkillsMcp, SkillsMcpArgs};

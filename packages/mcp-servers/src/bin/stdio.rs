@@ -1,5 +1,5 @@
 use clap::Parser;
-use mcp_servers::{CodingMcp, CodingMcpArgs, LspMcp, PlanMcp, SkillsMcp, SubAgentsMcp, SurveyMcp, TasksMcp};
+use mcp_servers::{CodingMcp, CodingMcpArgs, PlanMcp, SkillsMcp, SubAgentsMcp, SurveyMcp, TasksMcp};
 use mcp_utils::ServiceExt;
 use rmcp::ServerHandler;
 use rmcp::transport::io::stdio;
@@ -7,7 +7,7 @@ use rmcp::transport::io::stdio;
 #[derive(Parser)]
 #[command(name = "mcp-servers-stdio", about = "Run an MCP server over stdio")]
 struct Cli {
-    /// Which server to run: coding, lsp, skills, tasks, subagents, survey, plan
+    /// Which server to run: coding, skills, tasks, subagents, survey, plan
     #[arg(long)]
     server: String,
 
@@ -28,7 +28,7 @@ impl std::fmt::Display for StdioError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             StdioError::UnknownServer(name) => {
-                write!(f, "Unknown server: '{name}'. Available: coding, lsp, skills, tasks, subagents, survey, plan")
+                write!(f, "Unknown server: '{name}'. Available: coding, skills, tasks, subagents, survey, plan")
             }
             StdioError::ServerArgs(msg) => write!(f, "{msg}"),
             StdioError::Serve(msg) => write!(f, "Failed to start server: {msg}"),
@@ -57,10 +57,6 @@ async fn main() -> Result<(), StdioError> {
                 Some(root_dir) => server.with_root_dir(root_dir),
                 None => server,
             };
-            serve_stdio(server).await
-        }
-        "lsp" => {
-            let server = LspMcp::from_args(cli.args).map_err(StdioError::ServerArgs)?;
             serve_stdio(server).await
         }
         "skills" => {

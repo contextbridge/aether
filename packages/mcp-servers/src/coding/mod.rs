@@ -41,6 +41,9 @@ use crate::lsp::tools::check_errors::{
 use crate::lsp::tools::document_info::{LspDocumentInput, LspDocumentOutput, execute_lsp_document};
 use crate::lsp::tools::rename::{LspRenameInput, LspRenameOutput, execute_lsp_rename};
 use crate::lsp::tools::symbol_lookup::{LspSymbolInput, LspSymbolOutput, execute_lsp_symbol};
+use crate::lsp::tools::workspace_search::{
+    LspWorkspaceSearchInput, LspWorkspaceSearchOutput, execute_lsp_workspace_search,
+};
 use crate::{coding::prompt_rule_matcher::PromptRuleMatcher, lsp::registry::LspRegistry};
 
 use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename, truncate};
@@ -313,6 +316,7 @@ File I/O, search, shell, and optional LSP code intelligence tools for coding wor
             base.push_str(
                 r"- **Errors & warnings** (instant check without build): `lsp_check_errors`
 - **Code symbols** (definitions, usages, types): `lsp_symbol`
+- **Find symbol across workspace** (don't know the file?): `lsp_workspace_search`
 - **File structure** (what's in this file?): `lsp_document`
 - **Rename symbol** (refactor across codebase): `lsp_rename`
 ",
@@ -646,6 +650,19 @@ When using tools that take file paths, always use absolute paths from:
         notify_preview(&context, ToolDisplayMeta::new("LSP symbol", &input.symbol)).await;
         let lsp = self.lsp.as_ref().ok_or("LSP not configured")?;
         execute_lsp_symbol(input, lsp.as_ref()).await.map(Json)
+    }
+
+    #[doc = include_str!("../lsp/tools/workspace_search/description.md")]
+    #[tool]
+    pub async fn lsp_workspace_search(
+        &self,
+        request: Parameters<LspWorkspaceSearchInput>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<Json<LspWorkspaceSearchOutput>, String> {
+        let Parameters(input) = request;
+        notify_preview(&context, ToolDisplayMeta::new("LSP search", format!("'{}'", input.query))).await;
+        let lsp = self.lsp.as_ref().ok_or("LSP not configured")?;
+        execute_lsp_workspace_search(input, lsp.as_ref()).await.map(Json)
     }
 
     #[doc = include_str!("../lsp/tools/document_info/description.md")]

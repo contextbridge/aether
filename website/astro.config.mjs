@@ -55,7 +55,6 @@ export default defineConfig({
               label: "Built-in MCP Servers",
               items: [
                 { label: "Coding", slug: "aether/built-in-servers/coding" },
-                { label: "LSP", slug: "aether/built-in-servers/lsp" },
                 {
                   label: "Skills, Rules & Notes",
                   slug: "aether/built-in-servers/skills-commands",

@@ -69,7 +69,7 @@ Aether is an open-source AI coding agent that runs in a terminal UI, as an ACP s
 
    Adding another agent to an existing project creates agent-local files instead, for example `.aether/agents/researcher/RESEARCHER.md` and `.aether/agents/researcher/mcp.json` when that agent has its own MCP selection.
 
-   Built-in in-memory servers you can enable include `coding`, `lsp`, `skills`, `tasks`, `subagents`, `survey`, and `plan`.
+   Built-in in-memory servers you can enable include `coding`, `skills`, `tasks`, `subagents`, `survey`, and `plan`. LSP-backed code intelligence is included in `coding` unless you disable it.
 
    :::note[Set up your LLM credentials]
    Most cloud providers need an API key, for example `export ANTHROPIC_API_KEY=sk-ant-...` or `export OPENAI_API_KEY=sk-...`. Codex uses an OAuth flow triggered from the client, while local providers such as Ollama and llama.cpp are discovered from their running local servers.

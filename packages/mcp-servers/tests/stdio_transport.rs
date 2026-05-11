@@ -106,6 +106,8 @@ async fn coding_server_lists_tools_over_stdio() {
     assert!(names.contains(&"lsp_symbol"), "expected lsp_symbol in coding server, got: {names:?}");
     assert!(names.contains(&"lsp_document"), "expected lsp_document in coding server, got: {names:?}");
     assert!(names.contains(&"lsp_check_errors"), "expected lsp_check_errors in coding server, got: {names:?}");
+    assert!(names.contains(&"lsp_workspace_search"), "expected lsp_workspace_search in coding server, got: {names:?}");
+    assert!(names.contains(&"lsp_rename"), "expected lsp_rename in coding server, got: {names:?}");
 }
 
 #[tokio::test]
@@ -120,18 +122,14 @@ async fn coding_server_accepts_rules_dir_over_stdio() {
 }
 
 #[tokio::test]
-async fn lsp_server_lists_tools_over_stdio() {
-    let tmp = tempfile::tempdir().expect("create temp dir");
+async fn lsp_server_is_not_available_over_stdio() {
+    let mut cmd = stdio_binary();
+    cmd.arg("--server").arg("lsp");
 
-    let tools = connect_and_list_tools("lsp", &["--", "--root-dir", tmp.path().to_str().unwrap()]).await;
-    let names = tool_names(&tools);
+    let transport = TokioChildProcess::new(cmd).expect("spawn stdio server");
+    let result = ().serve(transport).await;
 
-    assert!(names.contains(&"lsp_symbol"), "expected lsp_symbol, got: {names:?}");
-    assert!(names.contains(&"lsp_document"), "expected lsp_document, got: {names:?}");
-    assert!(names.contains(&"lsp_check_errors"), "expected lsp_check_errors, got: {names:?}");
-    assert!(names.contains(&"lsp_workspace_search"), "expected lsp_workspace_search, got: {names:?}");
-    assert!(names.contains(&"lsp_rename"), "expected lsp_rename, got: {names:?}");
-    assert_eq!(names.len(), 5, "expected exactly 5 tools, got: {names:?}");
+    assert!(result.is_err(), "expected lsp server to be unavailable");
 }
 
 #[tokio::test]

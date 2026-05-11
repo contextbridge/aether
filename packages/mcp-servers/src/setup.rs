@@ -1,6 +1,4 @@
-use crate::{
-    CodingMcp, CodingMcpArgs, DefaultCodingTools, LspMcp, PlanMcp, SkillsMcp, SubAgentsMcp, SurveyMcp, TasksMcp,
-};
+use crate::{CodingMcp, CodingMcpArgs, DefaultCodingTools, PlanMcp, SkillsMcp, SubAgentsMcp, SurveyMcp, TasksMcp};
 use aether_core::mcp::McpBuilder;
 use futures::FutureExt;
 use mcp_utils::ServiceExt;
@@ -15,7 +13,6 @@ pub trait McpBuilderExt {
 
 impl McpBuilderExt for McpBuilder {
     fn with_builtin_servers(self, cwd: PathBuf, roots_path: &Path) -> Self {
-        let lsp_cwd = cwd.clone();
         self.register_in_memory_server(
             "coding",
             Box::new(move |args, _input| {
@@ -41,17 +38,6 @@ impl McpBuilderExt for McpBuilder {
                         .with_permission_mode(permission_mode);
                     let server = if disable_lsp { server } else { server.with_lsp(project_path) };
                     server.into_dyn()
-                }
-                .boxed()
-            }),
-        )
-        .register_in_memory_server(
-            "lsp",
-            Box::new(move |_args, _input| {
-                let project_path = lsp_cwd.clone();
-                async move {
-                    debug!("LspMcp created with own registry");
-                    LspMcp::new(project_path.clone()).with_root_dir(project_path).into_dyn()
                 }
                 .boxed()
             }),
