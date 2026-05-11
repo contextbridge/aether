@@ -33,7 +33,7 @@
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
-    "@types/node": "^25.6.0",
+    "@types/node": "^25.6.2",
     "quicktype-core": "^23.2.6",
     "typescript": "^6.0.3",
     "vitest": "^4.0.0"
