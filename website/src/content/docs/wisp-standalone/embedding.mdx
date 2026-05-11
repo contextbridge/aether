@@ -7,7 +7,7 @@ Wisp can be embedded in other Rust applications. There are two entry points depe
 
 ```toml title="Cargo.toml"
 [dependencies]
-aether-wisp = "0.3.2"
+aether-wisp = "0.4.4"
 ```
 
 ## `run_tui` — one-shot launch
@@ -19,7 +19,6 @@ use wisp::run_tui;
 
 #[tokio::main]
 async fn main() -> Result<(), wisp::AppError> {
-    wisp::setup_logging(None);
     run_tui("my-agent serve").await
 }
 ```
@@ -49,6 +48,7 @@ run_with_state(state).await?;
 ```
 
 This is useful when you want to:
+
 - Pre-configure the ACP connection
 - Use a custom transport (not stdin/stdout subprocess)
 - Set up logging or error handling differently
@@ -56,14 +56,14 @@ This is useful when you want to:
 
 ## RuntimeState
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `session_id` | `SessionId` | Active session identifier |
-| `agent_name` | `String` | Agent's display name (shown in status line) |
-| `prompt_capabilities` | `PromptCapabilities` | Prompt capabilities advertised by the agent |
-| `config_options` | `Vec<SessionConfigOption>` | Agent-advertised settings |
-| `auth_methods` | `Vec<AuthMethod>` | Available authentication methods |
-| `theme` | `Theme` | UI color theme |
-| `event_rx` | `UnboundedReceiver<AcpEvent>` | Channel receiving events from agent |
-| `prompt_handle` | `AcpPromptHandle` | Handle for sending prompts and commands |
-| `working_dir` | `PathBuf` | Working directory for file operations |
+| Field                 | Type                          | Description                                 |
+| --------------------- | ----------------------------- | ------------------------------------------- |
+| `session_id`          | `SessionId`                   | Active session identifier                   |
+| `agent_name`          | `String`                      | Agent's display name (shown in status line) |
+| `prompt_capabilities` | `PromptCapabilities`          | Prompt capabilities advertised by the agent |
+| `config_options`      | `Vec<SessionConfigOption>`    | Agent-advertised settings                   |
+| `auth_methods`        | `Vec<AuthMethod>`             | Available authentication methods            |
+| `theme`               | `Theme`                       | UI color theme                              |
+| `event_rx`            | `UnboundedReceiver<AcpEvent>` | Channel receiving events from agent         |
+| `prompt_handle`       | `AcpPromptHandle`             | Handle for sending prompts and commands     |
+| `working_dir`         | `PathBuf`                     | Working directory for file operations       |

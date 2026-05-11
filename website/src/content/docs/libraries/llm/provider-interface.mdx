@@ -7,7 +7,7 @@ The `llm` crate provides a unified interface for streaming LLM responses across 
 
 ```toml title="Cargo.toml"
 [dependencies]
-llm = { package = "aether-llm", version = "0.2.5" }
+llm = { package = "aether-llm", version = "0.3.0" }
 ```
 
 ## StreamingModelProvider
@@ -21,12 +21,12 @@ pub trait StreamingModelProvider: Send + Sync {
 }
 ```
 
-| Method | Description |
-|--------|-------------|
+| Method                     | Description                                          |
+| -------------------------- | ---------------------------------------------------- |
 | `stream_response(context)` | Stream a response for the given conversation context |
-| `display_name()` | Human-readable provider + model name |
-| `context_window()` | Max context size in tokens (if known) |
-| `model()` | The model catalog entry (optional) |
+| `display_name()`           | Human-readable provider + model name                 |
+| `context_window()`         | Max context size in tokens (if known)                |
+| `model()`                  | The model catalog entry (optional)                   |
 
 `LlmResponseStream` is `Pin<Box<dyn Stream<Item = Result<LlmResponse>> + Send>>`.
 
@@ -38,7 +38,7 @@ Use `ProviderFactory` to create providers from environment variables:
 use llm::{ProviderFactory, providers::AnthropicProvider};
 
 let provider = AnthropicProvider::from_env().await?
-    .with_model("claude-sonnet-4-5");
+    .with_model("claude-sonnet-4-5-20250929");
 ```
 
 :::note
@@ -59,15 +59,15 @@ ctx.set_reasoning_effort(Some(ReasoningEffort::High));
 ctx.set_prompt_cache_key(Some("my-cache".into()));
 ```
 
-| Method | Description |
-|--------|-------------|
-| `new(messages, tools)` | Create from messages and tool definitions |
-| `add_message(msg)` | Append a message |
-| `set_tools(tools)` | Replace tool definitions |
-| `set_reasoning_effort(effort)` | Set thinking budget |
-| `messages()` | Get all messages |
-| `tools()` | Get tool definitions |
-| `estimated_token_count()` | Rough token estimate |
+| Method                         | Description                               |
+| ------------------------------ | ----------------------------------------- |
+| `new(messages, tools)`         | Create from messages and tool definitions |
+| `add_message(msg)`             | Append a message                          |
+| `set_tools(tools)`             | Replace tool definitions                  |
+| `set_reasoning_effort(effort)` | Set thinking budget                       |
+| `messages()`                   | Get all messages                          |
+| `tools()`                      | Get tool definitions                      |
+| `estimated_token_count()`      | Rough token estimate                      |
 
 ### ChatMessage
 
@@ -86,23 +86,24 @@ pub enum ChatMessage {
 
 Chunks emitted by `stream_response`:
 
-| Variant | Description |
-|---------|-------------|
-| `Start { message_id }` | New response started |
-| `Text { chunk }` | Text content chunk |
-| `Reasoning { chunk }` | Extended thinking chunk |
-| `ToolRequestStart { id, name }` | Tool call beginning |
-| `ToolRequestArg { id, chunk }` | Streaming tool arguments |
-| `ToolRequestComplete { tool_call }` | Tool call fully formed |
-| `Usage { input_tokens, output_tokens, cached_input_tokens }` | Token usage |
-| `Done { stop_reason }` | Response complete |
-| `Error { message }` | Error during streaming |
+| Variant                              | Description                          |
+| ------------------------------------ | ------------------------------------ |
+| `Start { message_id }`               | New response started                 |
+| `Text { chunk }`                     | Text content chunk                   |
+| `Reasoning { chunk }`                | Extended thinking chunk              |
+| `EncryptedReasoning { id, content }` | Provider-encrypted reasoning payload |
+| `ToolRequestStart { id, name }`      | Tool call beginning                  |
+| `ToolRequestArg { id, chunk }`       | Streaming tool arguments             |
+| `ToolRequestComplete { tool_call }`  | Tool call fully formed               |
+| `Usage { tokens }`                   | Token usage (`TokenUsage`)           |
+| `Done { stop_reason }`               | Response complete                    |
+| `Error { message }`                  | Error during streaming               |
 
 ### StopReason
 
 Why the model stopped generating:
 
-`EndTurn`, `Length`, `ToolCalls`, `ContentFilter`, `Error`, `Unknown(String)`
+`EndTurn`, `Length`, `ToolCalls`, `ContentFilter`, `FunctionCall`, `Error`, `Unknown(String)`
 
 ### ToolDefinition
 
@@ -121,15 +122,22 @@ pub struct ToolDefinition {
 pub enum LlmError {
     MissingApiKey(String),
     InvalidApiKey(String),
+    HttpClientCreation(String),
     ApiRequest(String),
     ApiError(String),
+    RateLimited(String),
+    ServerError { status, message },
+    Timeout(String),
+    Network(String),
+    StreamInterrupted(String),
     ContextOverflow(ContextOverflowError),
     IoError(String),
     JsonParsing(String),
     ToolParameterParsing { tool_name, error },
     OAuthError(String),
+    UnsupportedContent(String),
     Other(String),
 }
 ```
 
-`ContextOverflowError` provides `requested_tokens` and `max_tokens` for handling context limits.
+`ContextOverflowError` includes `provider`, optional `model`, optional `requested_tokens`, and optional `max_tokens` for handling context limits.

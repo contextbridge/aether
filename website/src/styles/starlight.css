@@ -36,3 +36,43 @@
 starlight-file-tree {
   background-color: var(--color-highlight-bg) !important;
 }
+
+/* Asides: Starlight's defaults use a light-mode palette that renders as
+ * washed-out lavender against this site's dark background. Reground them
+ * on the theme's grays + a fixed hue per type so contrast holds in every
+ * color theme. */
+.starlight-aside {
+  background-color: var(--sl-color-gray-6);
+  color: var(--sl-color-white);
+  border-radius: 0.25rem;
+}
+
+.starlight-aside--note {
+  --sl-color-asides-text-accent: #93c5fd;
+  --sl-color-asides-border: #3b82f6;
+}
+
+.starlight-aside--tip {
+  --sl-color-asides-text-accent: var(--sl-color-accent-high);
+  --sl-color-asides-border: var(--sl-color-accent);
+}
+
+.starlight-aside--caution {
+  --sl-color-asides-text-accent: #fcd34d;
+  --sl-color-asides-border: #d97706;
+}
+
+.starlight-aside--danger {
+  --sl-color-asides-text-accent: #fca5a5;
+  --sl-color-asides-border: #dc2626;
+}
+
+/* Inline code inside asides shouldn't keep the editor selection bg —
+ * it clashes with the aside's own panel color. */
+.starlight-aside code:not(pre code) {
+  background-color: color-mix(
+    in srgb,
+    var(--sl-color-asides-border) 18%,
+    transparent
+  );
+}

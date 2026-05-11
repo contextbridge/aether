@@ -5,16 +5,16 @@ description: Keyboard shortcuts, slash commands, and file attachments.
 
 ## Keybindings
 
-| Key | Action |
-|-----|--------|
-| `Enter` | Send message |
-| `Esc` | Cancel current operation / close modal |
-| `Ctrl+C` | Exit |
-| `Tab` | Cycle reasoning effort (off → low → medium → high) |
-| `Shift+Tab` | Cycle agent mode |
-| `/` | Open command picker |
-| `@` | Open file picker |
-| `Ctrl+G` | Toggle [git diff view](/aether/terminal/git-diff/) |
+| Key         | Action                                                              |
+| ----------- | ------------------------------------------------------------------- |
+| `Enter`     | Send message                                                        |
+| `Esc`       | Cancel current operation / close modal                              |
+| `Ctrl+C`    | Show exit confirmation; press again within about one second to exit |
+| `Tab`       | Cycle the agent-advertised reasoning effort option (if available)   |
+| `Shift+Tab` | Cycle the agent-advertised mode option (if available)               |
+| `/`         | Open command picker                                                 |
+| `@`         | Open file picker                                                    |
+| `Ctrl+G`    | Toggle [git diff view](/aether/terminal/git-diff/)                  |
 
 ## Slash commands
 
@@ -22,11 +22,11 @@ Type `/` to open the command picker. It supports fuzzy search — just start typ
 
 ### Built-in commands
 
-| Command | Description |
-|---------|-------------|
-| `/clear` | Start a new [session](/aether/terminal/sessions/) |
+| Command     | Description                                             |
+| ----------- | ------------------------------------------------------- |
+| `/clear`    | Start a new [session](/aether/terminal/sessions/)       |
 | `/settings` | Open the [settings overlay](/aether/terminal/settings/) |
-| `/resume` | Resume a previous [session](/aether/terminal/sessions/) |
+| `/resume`   | Resume a previous [session](/aether/terminal/sessions/) |
 
 ### Agent-provided commands
 
@@ -38,15 +38,17 @@ Type `@` to open the file picker. It indexes files in the working directory (res
 
 - Up to 50,000 files indexed
 - Respects `.gitignore`, `.git/info/exclude`, and global gitignore
+- Excludes hidden paths plus common generated directories such as `node_modules` and `target`
 - Select a file to attach it to your next message
 
 ### How attachments work
 
 Selected files are read and sent to the agent as content blocks alongside your message:
 
-- Maximum file size: 1 MB
-- Files are converted to UTF-8
-- Non-UTF-8 files are flagged with a warning
-- Truncated files include a notice
+- Text files are embedded as ACP resources; text over 1 MB is truncated
+- Image and audio files can be sent as media content blocks when the agent advertises support
+- Media attachments are limited to 10 MB
+- Non-UTF-8 text or unsupported/binary files are skipped with a warning
+- Truncated files include a warning
 
 You can attach multiple files to a single message by using `@` multiple times before sending.

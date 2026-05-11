@@ -57,7 +57,7 @@ export default defineConfig({
                 { label: "Coding", slug: "aether/built-in-servers/coding" },
                 { label: "LSP", slug: "aether/built-in-servers/lsp" },
                 {
-                  label: "Skills & Commands",
+                  label: "Skills, Rules & Notes",
                   slug: "aether/built-in-servers/skills-commands",
                 },
                 { label: "Tasks", slug: "aether/built-in-servers/tasks" },

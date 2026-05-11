@@ -1,11 +1,13 @@
 ---
 title: IDE (ACP)
-description: Use Aether as an AI agent inside your editor.
+description: Run Aether as an Agent Client Protocol server for editors.
 ---
 
-import { Steps } from '@astrojs/starlight/components';
+import { Steps } from "@astrojs/starlight/components";
 
-Aether can run as an ACP (Agent Client Protocol) server, integrating directly into editors that support the protocol. Currently, [Zed](https://zed.dev) is the primary supported editor.
+Aether can run as an [Agent Client Protocol](https://agentclientprotocol.com/) server. Editors that speak ACP can start `aether acp`, create sessions, select Aether agents, stream tool progress, and handle MCP elicitation such as plan review and survey forms.
+
+Zed is the primary editor integration today.
 
 ## Zed setup
 
@@ -21,17 +23,18 @@ Aether can run as an ACP (Agent Client Protocol) server, integrating directly in
 
    ```bash
    cargo build --release -p aether-agent-cli
+   # binary: target/release/aether
    ```
 
 2. **Configure Zed**
 
-   Add the following to your Zed `settings.json`:
+   Add an ACP agent server entry to your Zed `settings.json`:
 
    ```json
    {
      "agent_servers": {
-       "Aether Agent": {
-         "command": "/path/to/aether",
+       "Aether": {
+         "command": "/absolute/path/to/aether",
          "args": ["acp"],
          "env": {
            "RUST_LOG": "info",
@@ -42,26 +45,63 @@ Aether can run as an ACP (Agent Client Protocol) server, integrating directly in
    }
    ```
 
+   Use the installed `aether` path, for example `~/.cargo/bin/aether` or the `target/release/aether` path from a source build.
+
 3. **Open an agent thread**
 
-   In Zed, open the Agent Panel and select "New Aether Agent Thread" to start a conversation.
+   In Zed, open the Agent Panel and choose the Aether server. Aether resolves agents from global and project settings just like the terminal UI and headless CLI.
 
 </Steps>
 
 ## ACP server flags
 
-| Flag | Type | Default | Description |
-|------|------|---------|-------------|
-| `--log-dir` | `path` | `/tmp/aether-acp-logs` | Log output directory |
-| `--agent` | `string` | — | Initial agent (mode) to select for new sessions. Conflicts with `--model` and `--reasoning-effort`. |
-| `--model` | `string` | — | Initial model id for new sessions. Conflicts with `--agent`. |
-| `--reasoning-effort` | `low\|medium\|high\|xhigh` | — | Initial reasoning effort for an explicit `--model`. |
-| `--settings-file` | `path` | — | Path to settings JSON (conflicts with `--settings-json`) |
-| `--settings-json` | `string` | — | Inline settings JSON (conflicts with `--settings-file`) |
+```bash
+aether acp [OPTIONS]
+```
+
+| Flag                 | Type                             | Description                                                                                                |
+| -------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `--log-dir`          | `path`                           | Log output directory. Defaults to `/tmp/aether-acp-logs`.                                                  |
+| `--agent`            | `string`                         | Initial agent/mode for new sessions. Mutually exclusive with `--model` and `--reasoning-effort`.           |
+| `--model`            | `string`                         | Initial model spec for new sessions. Mutually exclusive with `--agent`.                                    |
+| `--reasoning-effort` | `low \| medium \| high \| xhigh` | Initial reasoning effort for an explicit `--model`. Requires `--model`; mutually exclusive with `--agent`. |
+| `--settings-json`    | `string`                         | Inline settings JSON.                                                                                      |
+| `--settings-file`    | `path`                           | Settings JSON file.                                                                                        |
+| `--sandbox-image`    | `string`                         | Run inside a Docker sandbox using the given image.                                                         |
+
+Examples:
+
+```json title="Zed settings.json"
+{
+  "agent_servers": {
+    "Aether Researcher": {
+      "command": "/absolute/path/to/aether",
+      "args": ["acp", "--agent", "Researcher"]
+    }
+  }
+}
+```
+
+```json title="Zed settings.json"
+{
+  "agent_servers": {
+    "Aether Sonnet": {
+      "command": "/absolute/path/to/aether",
+      "args": [
+        "acp",
+        "--model",
+        "anthropic:claude-sonnet-4-5-20250929",
+        "--reasoning-effort",
+        "high"
+      ]
+    }
+  }
+}
+```
 
 ## Logging
 
-ACP server logs are written to the `--log-dir` directory. Increase verbosity with `RUST_LOG`:
+ACP logs are written under `--log-dir`. Increase verbosity with `RUST_LOG` in the editor server environment:
 
 ```json
 {
@@ -71,6 +111,8 @@ ACP server logs are written to the `--log-dir` directory. Increase verbosity wit
 }
 ```
 
-:::tip
-Check the logs at `/tmp/aether-acp-logs/` if the agent isn't responding or tools aren't working as expected.
-:::
+If the agent does not start, cannot find settings, or tools fail to initialize, check `/tmp/aether-acp-logs/` or your custom log directory first.
+
+## Relationship to the terminal UI
+
+Running plain `aether` starts onboarding if needed and then launches Aether's terminal UI. That UI is backed by the same ACP server path used by editors, so agent selection, MCP tools, elicitation, plan review, and model configuration behave consistently across the terminal and editor integrations.

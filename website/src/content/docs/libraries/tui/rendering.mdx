@@ -19,13 +19,13 @@ let frame = Frame::new(vec![
 .with_cursor(Cursor::visible(0, 5));
 ```
 
-| Method | Description |
-|--------|-------------|
-| `new(lines)` | Create from a vec of lines |
-| `with_cursor(cursor)` | Set cursor position |
-| `lines()` | Get lines slice |
-| `cursor()` | Get cursor state |
-| `into_lines()` | Consume into vec of lines |
+| Method                | Description                |
+| --------------------- | -------------------------- |
+| `new(lines)`          | Create from a vec of lines |
+| `with_cursor(cursor)` | Set cursor position        |
+| `lines()`             | Get lines slice            |
+| `cursor()`            | Get cursor state           |
+| `into_lines()`        | Consume into vec of lines  |
 
 ## Line and Span
 
@@ -98,7 +98,7 @@ let theme = Theme::builder()
     .heading(Color::Blue)
     .code_fg(Color::White)
     .code_bg(Color::DarkGrey)
-    // ... all 24 color slots
+    // ... all required color slots
     .build()?;
 ```
 
@@ -135,10 +135,10 @@ The renderer only redraws lines that changed between frames, keeping terminal I/
 Manages raw mode, alternate screen, and cleanup:
 
 ```rust
-use tui::TerminalSession;
+use tui::{MouseCapture, TerminalSession};
 
-let session = TerminalSession::new()?;
-// Terminal is now in raw mode with alternate screen
+let session = TerminalSession::new(true, MouseCapture::Disabled)?;
+// Terminal is now in raw mode, with bracketed paste enabled
 
 // ... render loop ...
 
@@ -148,10 +148,11 @@ drop(session); // Restores terminal on drop
 ## Markdown rendering (feature: `syntax`)
 
 ```rust
-use tui::render_markdown;
+use tui::{ViewContext, render_markdown_result};
 
-let frame = render_markdown("# Hello\n\nSome **bold** text", 80, &theme);
-// Returns a Frame with styled lines
+let ctx = ViewContext::new((80, 24));
+let result = render_markdown_result("# Hello\n\nSome **bold** text", &ctx);
+let lines = result.to_lines();
 ```
 
 ## Syntax highlighting (feature: `syntax`)

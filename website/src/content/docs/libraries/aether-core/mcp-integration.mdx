@@ -20,14 +20,14 @@ let mcp_result = mcp()
     .await?;
 ```
 
-| Method | Description |
-|--------|-------------|
-| `register_in_memory_server(name, factory)` | Add a built-in MCP server |
-| `from_json_files(paths)` | Load and merge servers from one or more JSON config files (last file wins on collision) |
-| `with_servers(configs)` | Add servers from a `Vec<McpServerConfig>` |
-| `with_roots(paths)` | Set workspace roots for server discovery |
-| `with_oauth_handler(handler)` | Set OAuth handler for authenticated servers |
-| `spawn()` | Start all servers and discover tools |
+| Method                                     | Description                                                                             |
+| ------------------------------------------ | --------------------------------------------------------------------------------------- |
+| `register_in_memory_server(name, factory)` | Add a built-in MCP server                                                               |
+| `from_json_files(paths)`                   | Load and merge servers from one or more JSON config files (last file wins on collision) |
+| `with_servers(servers)`                    | Add already constructed `McpServer` entries                                             |
+| `with_roots(paths)`                        | Set workspace roots for server discovery                                                |
+| `with_oauth_handler_factory(factory)`      | Set OAuth handler factory for authenticated servers                                     |
+| `spawn()`                                  | Start all servers and discover tools                                                    |
 
 ## McpSpawnResult
 
@@ -39,17 +39,18 @@ pub struct McpSpawnResult {
     pub instructions: Vec<ServerInstructions>,
     pub server_statuses: Vec<McpServerStatusEntry>,
     pub command_tx: Sender<McpCommand>,
-    pub elicitation_rx: Receiver<ElicitationRequest>,
+    pub event_rx: Receiver<McpClientEvent>,
     pub handle: JoinHandle<()>,
 }
 ```
 
-| Field | Purpose |
-|-------|---------|
+| Field              | Purpose                                                             |
+| ------------------ | ------------------------------------------------------------------- |
 | `tool_definitions` | Tools discovered from all servers — pass to `AgentBuilder::tools()` |
-| `instructions` | Server-provided system prompt additions |
-| `command_tx` | Channel for routing tool calls — pass to `AgentBuilder::tools()` |
-| `handle` | Background task handle for the MCP manager |
+| `instructions`     | Server-provided system prompt additions                             |
+| `command_tx`       | Channel for routing tool calls — pass to `AgentBuilder::tools()`    |
+| `event_rx`         | MCP client events, including elicitation/auth/status notifications  |
+| `handle`           | Background task handle for the MCP manager                          |
 
 ## Wiring tools to an agent
 
@@ -73,17 +74,26 @@ let (user_tx, agent_rx, handle) = agent(provider)
 
 ## Using in-memory servers
 
-Built-in servers from the `mcp_servers` crate can be registered directly:
+Built-in servers from the `mcp_servers` crate can be registered as factories, then instantiated by an MCP config source:
 
 ```rust
+use aether_core::agent_spec::McpConfigSource;
+use futures::FutureExt;
 use mcp_servers::CodingMcp;
 
 let mcp_result = mcp()
-    .register_in_memory_server("coding", || {
-        CodingMcp::new()
-            .with_root_dir("/my/project".into())
-            .into_dyn()
-    })
+    .register_in_memory_server("coding", Box::new(|_args, _input| {
+        async move {
+            CodingMcp::new()
+                .with_root_dir("/my/project".into())
+                .into_dyn()
+        }
+        .boxed()
+    }))
+    .from_mcp_config_sources(&[McpConfigSource::Json(
+        r#"{"servers":{"coding":{"type":"in-memory"}}}"#.to_string(),
+    )])
+    .await?
     .spawn()
     .await?;
 ```

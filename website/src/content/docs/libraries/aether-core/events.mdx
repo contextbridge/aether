@@ -7,41 +7,41 @@ When you spawn an agent, you get a `Receiver<AgentMessage>` channel. The agent p
 
 ## AgentMessage variants
 
-| Variant | Fields | Description |
-|---------|--------|-------------|
-| `Text` | `message_id`, `chunk`, `is_complete`, `model_name` | Streamed text output |
-| `Thought` | `message_id`, `chunk`, `is_complete`, `model_name` | Extended thinking / reasoning |
-| `ToolCall` | `request`, `model_name` | Agent is calling a tool |
-| `ToolCallUpdate` | `tool_call_id`, `chunk`, `model_name` | Streaming tool call arguments |
-| `ToolProgress` | `request`, `progress`, `total`, `message` | Tool execution progress |
-| `ToolResult` | `result`, `result_meta`, `model_name` | Tool returned a result |
-| `ToolError` | `error`, `model_name` | Tool call failed |
-| `Error` | `message` | Agent-level error |
-| `Cancelled` | `message` | Operation was cancelled |
-| `ContextCompactionStarted` | `message_count` | Context compaction beginning |
-| `ContextCompactionResult` | `summary`, `messages_removed` | Compaction completed |
-| `ContextUsageUpdate` | _see below_ | Token usage update |
-| `AutoContinue` | `attempt`, `max_attempts` | Agent auto-continuing after tool calls |
-| `ModelSwitched` | `previous`, `new` | Model changed (alloying) |
-| `ContextCleared` | — | Context was cleared |
-| `Done` | — | Agent finished processing |
+| Variant                    | Fields                                             | Description                            |
+| -------------------------- | -------------------------------------------------- | -------------------------------------- |
+| `Text`                     | `message_id`, `chunk`, `is_complete`, `model_name` | Streamed text output                   |
+| `Thought`                  | `message_id`, `chunk`, `is_complete`, `model_name` | Extended thinking / reasoning          |
+| `ToolCall`                 | `request`, `model_name`                            | Agent is calling a tool                |
+| `ToolCallUpdate`           | `tool_call_id`, `chunk`, `model_name`              | Streaming tool call arguments          |
+| `ToolProgress`             | `request`, `progress`, `total`, `message`          | Tool execution progress                |
+| `ToolResult`               | `result`, `result_meta`, `model_name`              | Tool returned a result                 |
+| `ToolError`                | `error`, `model_name`                              | Tool call failed                       |
+| `Error`                    | `message`                                          | Agent-level error                      |
+| `Cancelled`                | `message`                                          | Operation was cancelled                |
+| `ContextCompactionStarted` | `message_count`                                    | Context compaction beginning           |
+| `ContextCompactionResult`  | `summary`, `messages_removed`                      | Compaction completed                   |
+| `ContextUsageUpdate`       | _see below_                                        | Token usage update                     |
+| `AutoContinue`             | `attempt`, `max_attempts`                          | Agent auto-continuing after tool calls |
+| `ModelSwitched`            | `previous`, `new`                                  | Model changed (alloying)               |
+| `ContextCleared`           | —                                                  | Context was cleared                    |
+| `Done`                     | —                                                  | Agent finished processing              |
 
 ### ContextUsageUpdate fields
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `usage_ratio` | `Option<f64>` | Current usage ratio (0.0-1.0), if context window is known |
-| `context_limit` | `Option<u32>` | Maximum context limit, if known |
-| `input_tokens` | `u32` | Input tokens on the most recent API call |
-| `output_tokens` | `u32` | Output tokens on the most recent API call |
-| `cache_read_tokens` | `Option<u32>` | Prompt tokens served from cache |
-| `cache_creation_tokens` | `Option<u32>` | Prompt tokens written to cache |
-| `reasoning_tokens` | `Option<u32>` | Reasoning tokens spent |
-| `total_input_tokens` | `u64` | Cumulative input tokens since agent start |
-| `total_output_tokens` | `u64` | Cumulative output tokens since agent start |
-| `total_cache_read_tokens` | `u64` | Cumulative cache-read tokens |
-| `total_cache_creation_tokens` | `u64` | Cumulative cache-creation tokens |
-| `total_reasoning_tokens` | `u64` | Cumulative reasoning tokens |
+| Field                         | Type          | Description                                               |
+| ----------------------------- | ------------- | --------------------------------------------------------- |
+| `usage_ratio`                 | `Option<f64>` | Current usage ratio (0.0-1.0), if context window is known |
+| `context_limit`               | `Option<u32>` | Maximum context limit, if known                           |
+| `input_tokens`                | `u32`         | Input tokens on the most recent API call                  |
+| `output_tokens`               | `u32`         | Output tokens on the most recent API call                 |
+| `cache_read_tokens`           | `Option<u32>` | Prompt tokens served from cache                           |
+| `cache_creation_tokens`       | `Option<u32>` | Prompt tokens written to cache                            |
+| `reasoning_tokens`            | `Option<u32>` | Reasoning tokens spent                                    |
+| `total_input_tokens`          | `u64`         | Cumulative input tokens since agent start                 |
+| `total_output_tokens`         | `u64`         | Cumulative output tokens since agent start                |
+| `total_cache_read_tokens`     | `u64`         | Cumulative cache-read tokens                              |
+| `total_cache_creation_tokens` | `u64`         | Cumulative cache-creation tokens                          |
+| `total_reasoning_tokens`      | `u64`         | Cumulative reasoning tokens                               |
 
 ## Receiving events
 
@@ -77,14 +77,14 @@ while let Some(msg) = agent_rx.recv().await {
 
 Messages you can send to a running agent:
 
-| Variant | Description |
-|---------|-------------|
-| `Text { content }` | Send a user message |
-| `Cancel` | Cancel the current operation |
-| `ClearContext` | Clear the conversation context |
-| `SwitchModel(provider)` | Swap the LLM provider mid-conversation |
-| `UpdateTools(tools)` | Replace the available tool set |
-| `SetReasoningEffort(effort)` | Change reasoning effort level |
+| Variant                      | Description                            |
+| ---------------------------- | -------------------------------------- |
+| `Text { content }`           | Send a user message                    |
+| `Cancel`                     | Cancel the current operation           |
+| `ClearContext`               | Clear the conversation context         |
+| `SwitchModel(provider)`      | Swap the LLM provider mid-conversation |
+| `UpdateTools(tools)`         | Replace the available tool set         |
+| `SetReasoningEffort(effort)` | Change reasoning effort level          |
 
 ```rust
 // Convenience constructor

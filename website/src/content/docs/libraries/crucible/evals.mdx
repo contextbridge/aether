@@ -3,145 +3,143 @@ title: Writing Evals
 description: Test agent behavior with the Crucible evaluation framework.
 ---
 
-Crucible is Aether's evaluation framework. It lets you define test cases for agent behavior — prompts with expected outcomes — and run them against real or fake agents.
+Crucible is Aether's evaluation framework. It runs a prompt against an implementation of the `Agent` trait, captures the agent's messages, and returns an `EvalReport` you can assert against.
 
 ```toml title="Cargo.toml"
 [dependencies]
-crucible = "0.2.1"
+crucible = { path = "../packages/crucible" }
 ```
 
-## Defining an eval
+## Running an eval
 
-An `Eval` pairs a prompt with assertions about what the agent should do:
+The main entry point is `run_eval(agent, prompt, workspace)`:
 
 ```rust
-use crucible::{Eval, EvalAssertion, WorkingDirectory};
+use crucible::{FakeAgent, Workspace, assert_tool_called, run_eval};
 
-let eval = Eval::new(
-    "create-hello-world",
-    "Create a file called hello.rs with a main function that prints 'Hello, world!'",
-    WorkingDirectory::empty()?,
-    vec![
-        EvalAssertion::file_exists("hello.rs"),
-        EvalAssertion::command_succeeds("rustc hello.rs && ./hello"),
-        EvalAssertion::llm_judge(|ctx| {
-            format!(
-                "Does the file hello.rs contain a valid Rust main function \
-                 that prints 'Hello, world!'?\n\nFiles:\n{}",
-                ctx.git_diff(None).unwrap_or_default()
-            )
-        }),
-    ],
-);
+#[tokio::test]
+async fn calls_bash() {
+    let agent = FakeAgent::with_tool_call("bash", "ok");
+    let report = run_eval(&agent, "inspect the repository", Workspace::empty().unwrap())
+        .await
+        .unwrap();
+
+    assert_tool_called(&report, "bash");
+}
 ```
+
+`run_eval` returns an `EvalReport` with the prompt, isolated workspace, captured `AgentEvalMessage` values, and git diff metadata when the workspace came from a git repo.
+
+## Workspaces
+
+Each eval runs in an isolated temporary workspace:
+
+```rust
+use crucible::{GitRepoSpec, Workspace};
+
+// Empty temp directory
+let workspace = Workspace::empty()?;
+
+// Copy the contents of a local fixture directory
+let workspace = Workspace::from_dir("./test-fixtures/my-project")?;
+
+// Clone a repo, check out a starting commit, and optionally run in a subdir
+let workspace = Workspace::from_git_repo(GitRepoSpec {
+    url: "https://github.com/user/repo".into(),
+    start_commit: "start-commit-sha".into(),
+    gold_commit: "gold-commit-sha".into(),
+    subdir: Some("packages/app".into()),
+})?;
+```
+
+For git workspaces, `EvalReport::agent_diff()` captures the agent's unstaged changes and `EvalReport::reference_diff()` captures the diff between `start_commit` and `gold_commit`.
 
 ## Assertions
 
-| Constructor | What it checks |
-|-------------|---------------|
-| `file_exists(path)` | File was created |
-| `file_matches(path, content)` | File has exact content |
-| `command_succeeds(cmd)` | Command exits with code 0 |
-| `command_exit_code(cmd, code)` | Command exits with specific code |
-| `tool_call(name)` | Agent called this tool at least once |
-| `tool_call_with_args(name, args)` | Agent called tool with specific arguments |
-| `tool_call_exact(name, n)` | Agent called tool exactly n times |
-| `tool_call_at_least(name, n)` | Agent called tool at least n times |
-| `tool_call_at_most(name, n)` | Agent called tool at most n times |
-| `llm_judge(fn)` | An LLM evaluates the result (pass/fail) |
+Crucible ships assertion helpers for common report checks:
 
-### LLM judge
+| Helper                                             | What it checks                            |
+| -------------------------------------------------- | ----------------------------------------- |
+| `assert_tool_called(&report, name)`                | Tool was called at least once             |
+| `assert_tool_call_count(&report, name, count)`     | Tool was called exactly `count` times     |
+| `assert_tool_call_with_args(&report, name, &json)` | Tool was called with exact JSON arguments |
 
-The `llm_judge` assertion uses a second LLM to evaluate the agent's output. The closure receives an `LlmJudgeContext`:
+You can also assert directly against the public `EvalReport` API:
 
 ```rust
-EvalAssertion::llm_judge(|ctx| {
-    // ctx.working_dir — the eval's working directory
-    // ctx.original_prompt — the prompt given to the agent
-    // ctx.messages — full conversation history
-    // ctx.git_diff(commit) — git diff of changes made
+assert_eq!(report.prompt(), "inspect the repository");
+assert!(report.workspace().path().exists());
+assert!(report.tool_called("bash"));
+assert_eq!(report.tool_call_count("bash"), 1);
 
-    format!("Did the agent correctly implement the feature? Diff:\n{}",
-        ctx.git_diff(None).unwrap_or_default())
-})
+for call in report.tool_calls("bash") {
+    let args = call.arguments_json()?;
+    assert_eq!(call.name, "bash");
+}
 ```
 
-## Working directories
+When an assertion fails, the helpers include `report.failure_context()` with the workspace path, prompt, diff summary, and captured agent messages.
 
-Each eval runs in an isolated working directory:
+## FakeAgent
 
-```rust
-// Empty temp directory
-WorkingDirectory::empty()?
-
-// Copy of a local directory
-WorkingDirectory::local("./test-fixtures/my-project")?
-
-// Git repo checked out at a specific commit
-WorkingDirectory::git_repo(
-    "https://github.com/user/repo",
-    "start-commit-sha",
-    "gold-commit-sha",  // reference solution
-    Some("subdirectory"),
-)?
-```
-
-## Running evals
+Use `FakeAgent` for deterministic tests of your eval harness:
 
 ```rust
-use crucible::{EvalRunner, EvalsConfig, AetherRunner, FileSystemStore};
+use crucible::{AgentEvalMessage, FakeAgent};
 
-// Create the agent runner
-let runner = AetherRunner::new(agent_config);
-
-// Create the results store
-let store = FileSystemStore::new("./eval-results");
-
-// Configure and run
-let run_id = EvalRunner::new(runner, store)
-    .with_agent_prompt("You are a coding assistant.")
-    .with_output_dir("./eval-output".into())
-    .run_evals(evals, EvalsConfig::new(judge_llm)
-        .with_batch_size(4)
-    )
-    .await?;
-```
-
-### EvalsConfig
-
-| Method | Description |
-|--------|-------------|
-| `new(judge_llm)` | Create config with the judge LLM |
-| `with_batch_size(n)` | Run n evals concurrently |
-| `with_batch_delay(duration)` | Delay between batches |
-| `with_serve(bool)` | Start HTTP server for live results |
-
-## Hooks
-
-Run setup code before the agent starts or before assertions run:
-
-```rust
-let eval = Eval::new(name, prompt, working_dir, assertions)
-    .setup(|dir| async move {
-        // Run before the agent — e.g., create test fixtures
-        std::fs::write(dir.join("existing.txt"), "content")?;
-        Ok(())
-    })
-    .before_assertions(|dir| async move {
-        // Run after the agent, before assertions — e.g., build the project
-        Ok(())
-    });
-```
-
-## Testing without an LLM
-
-Use `FakeAgentRunner` for deterministic testing of your eval setup:
-
-```rust
-use crucible::FakeAgentRunner;
-
-let runner = FakeAgentRunner::new(vec![
-    AgentRunnerMessage::text("I'll create the file now"),
-    AgentRunnerMessage::tool_call("write_file", r#"{"path":"hello.rs","content":"..."}"#),
+let agent = FakeAgent::new(vec![
+    AgentEvalMessage::AgentText("I'll create the file".into()),
+    AgentEvalMessage::ToolCall {
+        name: "write_file".into(),
+        arguments: r#"{"filePath":"hello.rs"}"#.into(),
+    },
+    AgentEvalMessage::Done,
 ]);
+
+let agent = FakeAgent::writes_file("hello.rs", "fn main() {}\n");
+```
+
+`FakeAgent::writes_file` writes into the eval workspace before sending its messages, so you can assert on real file state without invoking an LLM.
+
+## AetherAgent
+
+`AetherAgent` adapts the real Aether runtime to the `Agent` trait:
+
+```rust
+use crucible::{AetherAgent, Prompt};
+use futures::FutureExt;
+use mcp_servers::CodingMcp;
+
+let llm = /* any StreamingModelProvider + Clone */;
+let agent = AetherAgent::new(llm)
+    .with_system_prompt(Prompt::text("You are a careful coding agent."))
+    .with_mcp_server_factory("coding", Box::new(|_args, _input| {
+        async move { CodingMcp::new().into_dyn() }.boxed()
+    }));
+```
+
+Registered in-memory MCP factories are exposed to the agent automatically. You can also add external MCP servers with `.with_mcp_json(".aether/mcp.json")`.
+
+## LLM judge
+
+`EvalReport::judge` runs a second LLM over the report and expects a JSON metric response:
+
+```rust
+let judgment = report
+    .judge(&judge_llm, |ctx| {
+        format!(
+            "Did the agent satisfy the prompt?\n\nPrompt:\n{}\n\nMessages:\n{:?}",
+            ctx.original_prompt,
+            ctx.messages
+        )
+    })
+    .await?;
+
+assert!(judgment.passed(), "{}", judgment.reason());
+```
+
+The judge response must deserialize into an eval metric, for example:
+
+```json
+{ "type": "binary", "success": true, "reason": "implemented correctly" }
 ```

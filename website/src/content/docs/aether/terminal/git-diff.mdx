@@ -3,7 +3,7 @@ title: Git Diff View
 description: Review changes and add inline comments with the two-pane diff viewer.
 ---
 
-Press `Ctrl+G` to open the git diff view. It shows a two-pane layout: changed files on the left, unified diff on the right. You can navigate the diff and add inline comments that get sent to the agent as a structured prompt.
+Press `Ctrl+G` to open or close the git diff view. It shows changed files on the left and the working-tree diff relative to `HEAD` on the right. You can navigate hunks, queue inline comments, and submit those comments back to the agent as a structured prompt.
 
 ## Layout
 
@@ -19,34 +19,40 @@ Press `Ctrl+G` to open the git diff view. It shows a two-pane layout: changed fi
 │                  │   }                        │
 │                  │                           │
 ├─────────────────┴───────────────────────────┤
-│  > Comment input (when active)              │
+│  j/k:move  n/p:hunk  c:comment  s:submit    │
 └─────────────────────────────────────────────┘
 ```
 
 ## Navigation
 
-| Key | Action |
-|-----|--------|
-| `h` / `←` | Focus file list (left pane) |
-| `l` / `→` or `Enter` | Focus diff (right pane) |
-| `j` / `↓` | Move down |
-| `k` / `↑` | Move up |
-| `g g` | Jump to top |
-| `G` | Jump to bottom |
-| `c` | Add comment on current line |
-| `Enter` | Submit all queued comments |
-| `r` | Refresh the diff |
-| `Esc` | Close git diff view |
+| Key                   | Action                                                                              |
+| --------------------- | ----------------------------------------------------------------------------------- |
+| `Tab` / `Shift+Tab`   | Move focus between the file list and diff pane                                      |
+| `h` / `←`             | In the diff pane, focus the file list; in the file list, collapse or move to parent |
+| `l` / `→` or `Enter`  | In the file list, expand/open the selected entry and focus the diff                 |
+| `j` / `↓`             | Move down                                                                           |
+| `k` / `↑`             | Move up                                                                             |
+| `g`                   | Jump to top of the diff pane                                                        |
+| `G`                   | Jump to bottom of the diff pane                                                     |
+| `PageDown` / `PageUp` | Page through the diff pane                                                          |
+| `n` / `p`             | Jump to next / previous hunk in the diff pane                                       |
+| `c`                   | Add a comment at the current diff location                                          |
+| `Enter`               | Submit a comment while editing that comment                                         |
+| `s`                   | Submit all queued comments to the agent                                             |
+| `u`                   | Undo the last queued comment                                                        |
+| `r`                   | Refresh the diff                                                                    |
+| `<` / `>`             | Resize the split panes                                                              |
+| `Esc`                 | Close git diff view                                                                 |
 
 ## Inline comments
 
-1. Navigate to a diff line you want to comment on
-2. Press `c` to open the comment input
-3. Type your comment and press `Enter` to queue it
-4. Navigate to other lines and add more comments
-5. Press `Enter` (when not in comment input) to submit all comments
+1. Navigate to a diff line you want to comment on.
+2. Press `c` to open the comment editor.
+3. Type your comment and press `Enter` to queue it.
+4. Add more comments if needed.
+5. Press `s` from the diff pane to submit all queued comments.
 
-All queued comments are sent as a single prompt to the agent, including the file path, line number, and surrounding diff context. This lets the agent understand exactly which changes you're commenting on.
+All queued comments are sent as a single prompt to the agent, grouped by file and including the line number, line kind, line text, and your feedback. This lets the agent understand exactly which changes you're commenting on.
 
 ## Use case
 

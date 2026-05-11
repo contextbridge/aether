@@ -3,26 +3,28 @@ title: Terminal UI
 description: Run Aether interactively in the terminal.
 ---
 
-The default way to use Aether is through its built-in terminal UI — a full-screen interactive interface for chatting with agents, reviewing diffs, and managing sessions.
+The default way to use Aether is its terminal UI: a full-screen ACP client for chatting with project-local agents, reviewing tool progress, attaching files, changing settings, and resuming sessions.
 
 ```bash
 aether
 ```
 
+If the current directory does not have `.aether/settings.json`, Aether starts onboarding first. After onboarding, the terminal UI launches against the same `aether acp` server used by editor integrations.
+
 ## Features
 
-- **Streaming responses** — See model output as it arrives with syntax highlighting
-- **Tool tracking** — Live progress for running tool calls and sub-agents
-- **Plan visualization** — Task plans with status updates
-- **Inline diffs** — Review file changes in a two-pane [diff viewer](/aether/terminal/git-diff/)
-- **Slash commands** — Trigger skills and commands with `/name`
-- **File attachments** — Attach files to prompts via `@` picker
-- **Settings overlay** — Configure models, reasoning, MCP servers
-- **Session persistence** — Resume previous conversations
+- **Streaming responses** — See model output as it arrives with markdown and syntax highlighting.
+- **Tool tracking** — Follow running tool calls and sub-agent progress.
+- **Plan visualization** — View task/plan status updates emitted by tools.
+- **Inline diffs** — Review file changes in a two-pane [diff viewer](/aether/terminal/git-diff/).
+- **Slash commands** — Trigger built-in commands and user-invocable MCP prompts with `/name`.
+- **File attachments** — Attach files to prompts with the `@` picker.
+- **Settings overlay** — Configure model, mode, reasoning, theme, and MCP server auth/status.
+- **Session resume** — Resume previous ACP sessions.
 
 ## UI layout
 
-```
+```text
 ┌──────────────────────────────────────────┐
 │  Conversation                            │
 │  ├─ User messages                        │
@@ -37,17 +39,14 @@ aether
 └──────────────────────────────────────────┘
 ```
 
-The status line at the bottom shows the agent name, current mode, model, reasoning effort level, and context usage percentage.
+The status line shows the active agent/mode, model, reasoning effort, MCP state, and context usage.
 
-## Logging
+## Logs
+
+When launched through `aether`, the terminal UI writes Wisp logs under `/tmp/wisp-logs` and uses `RUST_LOG` for verbosity.
 
 ```bash
-# Default location
-/tmp/wisp-logs/wisp.log.2026-03-25
-
-# Custom directory
-aether --log-dir ./logs
-
-# Verbose logging
 RUST_LOG=debug aether
 ```
+
+The lower-level standalone `wisp` binary has its own `--log-dir` flag. See [Wisp standalone](/wisp-standalone/using-with-other-agents/) if you are embedding Wisp with a non-Aether ACP agent.

@@ -3,9 +3,9 @@ title: Settings & Themes
 description: Configure appearance and agent options in the terminal UI.
 ---
 
-import { FileTree } from '@astrojs/starlight/components';
+import { FileTree } from "@astrojs/starlight/components";
 
-The terminal UI has two layers of settings: its own UI preferences (themes), and agent configuration options (models, reasoning, servers) that the agent advertises through ACP.
+Aether's terminal UI is powered by Wisp, so UI preferences use Wisp's settings file. Agent configuration options (models, reasoning, servers) are advertised by the Aether ACP server at runtime.
 
 ## UI settings
 
@@ -30,12 +30,14 @@ export WISP_HOME=~/my-wisp-config
 Themes are TextMate `.tmTheme` files. Place them in `~/.wisp/themes/` and reference by filename in settings.
 
 <FileTree>
+
 - ~/.wisp/
   - settings.json
   - themes/
     - catppuccin.tmTheme
     - dracula.tmTheme
     - nord.tmTheme
+
 </FileTree>
 
 The theme colors the entire UI: conversation text, syntax highlighting, diff rendering, status line, and overlays.

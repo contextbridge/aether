@@ -1,45 +1,78 @@
 ---
 title: Plan
-description: Plan-mode prompt and markdown plan review via elicitation.
+description: Plan-mode prompts and markdown plan review.
 ---
 
-The `plan` server supports plan-first workflows in Aether. It exposes:
+The `plan` server gives Aether a "plan mode".
 
-- a `plan` MCP prompt for putting an agent into planning mode
-- a `submit_plan` tool for sending a finished markdown plan to the client for approval or feedback
+## Configuration
 
-See [Tools](/aether/configuration/mcp-servers/) for configuration.
+```json title=".aether/mcp.json"
+{
+  "servers": {
+    "plan": {
+      "type": "in-memory"
+    }
+  }
+}
+```
 
-## Prompt
+Pass `--prompt-file` to provide your own prompt for plan mode:
 
-When the server is enabled it advertises a `plan` prompt. The prompt accepts a single `ARGUMENTS` parameter containing the task to plan.
+```json title=".aether/mcp.json"
+{
+  "servers": {
+    "plan": {
+      "type": "in-memory",
+      "args": ["--prompt-file", ".aether/prompts/plan-mode.md"]
+    }
+  }
+}
+```
 
-By default the prompt returns Aether's built-in planner instructions. You can override that behavior with `--prompt-file <path>` to load your own markdown prompt body instead. You can also provide a trailing submit command (for example `"args": ["contextbridge", "plan"]`) to handle `submit_plan` outside MCP elicitation.
+## Plan prompt
 
-:::note
-If the configured prompt file is missing at runtime, the server falls back to the built-in default planner prompt.
-:::
+The server advertises one MCP prompt named `plan`. It accepts one required `ARGUMENTS` parameter containing the task to plan. Aether substitutes prompt parameters into the configured prompt body.
+
+## Submit command override
+
+Any trailing args after plan flags are treated as an external submit command. When `submit_plan` is called, Aether appends the absolute plan path as the final command argument and returns the command's stdout as feedback.
+
+```json title=".aether/mcp.json"
+{
+  "servers": {
+    "plan": {
+      "type": "in-memory",
+      "args": ["contextbridge", "plan", "--project", "aether"]
+    }
+  }
+}
+```
+
+Without a submit command, `submit_plan` uses MCP elicitation and the client displays a plan review UI.
 
 ## Tools
 
-| Tool | Description |
-|------|-------------|
-| `submit_plan` | Submit a markdown plan file for review and approval. |
+| Tool          | Description                                            |
+| ------------- | ------------------------------------------------------ |
+| `submit_plan` | Submit an absolute-path markdown plan file for review. |
 
 ## `submit_plan`
 
 ### Input
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `planPath` | `string` | Absolute path to the markdown plan file to review. |
+| Field      | Type     | Description                                              |
+| ---------- | -------- | -------------------------------------------------------- |
+| `planPath` | `string` | Absolute path to the non-empty UTF-8 markdown plan file. |
+
+`plan_path` is accepted as an input alias.
 
 ### Output
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `approved` | `boolean` | `true` when the reviewer approved the plan. |
-| `feedback` | `string \| null` | Optional feedback from the reviewer, typically present on denial. |
+| Field      | Type      | Description                                                                                     |
+| ---------- | --------- | ----------------------------------------------------------------------------------------------- |
+| `approved` | `boolean` | `true` when the reviewer approved the plan.                                                     |
+| `feedback` | `string`  | Present when the reviewer requested changes or when an external submit command returned stdout. |
 
 ### Example request
 
@@ -53,50 +86,22 @@ If the configured prompt file is missing at runtime, the server falls back to th
 
 ```json
 {
-  "approved": true,
-  "feedback": null
+  "approved": true
 }
 ```
 
 ```json
 {
   "approved": false,
-  "feedback": "Split the rollout and testing steps into separate sections."
+  "feedback": "Split validation and publishing into separate steps."
 }
 ```
 
-## Configuration
+## Typical review flow
 
-Enable the built-in plan server in `.aether/mcp.json`:
-
-```json title=".aether/mcp.json"
-{
-  "servers": {
-    "plan": {
-      "type": "in-memory"
-    }
-  }
-}
-```
-
-To customize the planning prompt:
-
-```json title=".aether/mcp.json"
-{
-  "servers": {
-    "plan": {
-      "type": "in-memory",
-      "args": ["--prompt-file", ".aether/prompts/plan-mode.md"]
-    }
-  }
-}
-```
-
-## Typical MCP review flow
-
-1. The planner writes a markdown file such as `feature-plan.md`.
+1. The planner writes a markdown file, such as `feature-plan.md`.
 2. The planner calls `submit_plan` with the absolute file path.
-3. The client shows an approve / deny review form, including the plan path and rendered markdown.
-4. The tool returns `{ approved, feedback }` so the planner can either continue or revise the plan.
+3. The client shows an approve / request-changes review form with the rendered markdown.
+4. The tool returns `{ approved, feedback }` so the planner can continue or revise the plan.
 
-This makes plan approval part of the MCP workflow instead of relying on free-form chat alone. If you configure a submit command, Aether appends the absolute plan path to that command and returns the command's stdout as the tool feedback.
+A relative path, missing file, invalid UTF-8 file, or empty plan is rejected before review.

@@ -3,9 +3,9 @@ title: Agents
 description: Configure agents in .aether/settings.json.
 ---
 
-import { FileTree } from '@astrojs/starlight/components';
+import { FileTree } from "@astrojs/starlight/components";
 
-Agents are defined in `.aether/settings.json` — their model, prompts, tool access, and how they can be invoked.
+Agents are defined in `.aether/settings.json`. Each agent chooses a model, prompt sources, MCP config sources, tool filters, and whether it is visible to users, other agents, or both.
 
 ## File location
 
@@ -13,75 +13,144 @@ Agents are defined in `.aether/settings.json` — their model, prompts, tool acc
 
 - .aether/
   - **settings.json** — Agent catalog
-  - mcp.json — MCP server config
-  - DEFAULT.md — Shared prompt scaffold
-- AGENTS.md — Project instructions
+  - mcp.json — MCP server config referenced from `mcps`
+  - BUILD.md — Example agent prompt scaffold (filename follows the agent name)
+  - agents/
+    - researcher/
+      - RESEARCHER.md — Prompt created when adding another agent
+      - mcp.json — Optional per-agent MCP config
+- AGENTS.md — Optional project instructions when selected or authored by you
 
 </FileTree>
 
-## Example
+The onboarding wizard creates `.aether/<AGENT>.md` for the first scaffolded agent. The prompt filename follows the agent name; there is no special shared default prompt filename.
 
-```json
+## Minimal user-invocable agent
+
+```json title=".aether/settings.json"
 {
-  "prompts": [".aether/DEFAULT.md", "AGENTS.md"],
+  "agent": "Build",
   "mcps": [".aether/mcp.json"],
   "agents": [
     {
-      "name": "planner",
-      "description": "Plans implementation strategy",
-      "model": "anthropic:claude-sonnet-4-5",
+      "name": "Build",
+      "description": "Builds features and fixes bugs",
+      "model": "anthropic:claude-sonnet-4-5-20250929",
       "reasoningEffort": "high",
+      "userInvocable": true,
+      "prompts": [".aether/BUILD.md", "AGENTS.md"]
+    }
+  ]
+}
+```
+
+`agent` selects the default user-invocable agent. If it is omitted, Aether uses the first `userInvocable: true` agent.
+
+## Settings schema
+
+`AetherSettings` is camelCase JSON and rejects unknown fields.
+
+| Field     | Type              | Description                                                                     |
+| --------- | ----------------- | ------------------------------------------------------------------------------- |
+| `agent`   | `string \| null`  | Optional default user-invocable agent name                                      |
+| `prompts` | `PromptSource[]`  | Top-level prompt sources inherited by agents whose own `prompts` array is empty |
+| `mcps`    | `McpSourceSpec[]` | Top-level MCP sources inherited by agents whose own `mcps` array is empty       |
+| `agents`  | `AgentConfig[]`   | Authored agent definitions                                                      |
+
+Regenerate the reference schema from source with:
+
+```bash
+cargo run -p aether-project --bin aether-settings-schema > /tmp/aether-settings.schema.json
+```
+
+## Agent fields
+
+`AgentConfig` is also camelCase and rejects unknown fields.
+
+| Field             | Type                                             | Default  | Description                                                                          |
+| ----------------- | ------------------------------------------------ | -------- | ------------------------------------------------------------------------------------ |
+| `name`            | `string`                                         | required | Agent identifier. Names are trimmed for merge and lookup.                            |
+| `description`     | `string`                                         | required | Human-readable description shown in UIs and sub-agent listings.                      |
+| `model`           | `string`                                         | required | Model spec: `provider:model-id` or comma-separated alloy spec.                       |
+| `reasoningEffort` | `"low" \| "medium" \| "high" \| "xhigh" \| null` | `null`   | Optional thinking budget for providers that support it.                              |
+| `userInvocable`   | `boolean`                                        | `false`  | Exposes the agent as a user-selectable TUI/ACP/headless mode.                        |
+| `agentInvocable`  | `boolean`                                        | `false`  | Makes the agent available to the `subagents` MCP server.                             |
+| `prompts`         | `PromptSource[]`                                 | `[]`     | Agent-specific prompt sources. A non-empty array replaces the top-level prompt list. |
+| `mcps`            | `McpSourceSpec[]`                                | `[]`     | Agent-specific MCP sources. A non-empty array replaces the top-level MCP list.       |
+| `tools`           | `{ allow?: string[], deny?: string[] }`          | `{}`     | Tool filter applied after MCP tools are discovered.                                  |
+
+Every authored agent must have at least one invocation surface: `userInvocable: true`, `agentInvocable: true`, or both.
+
+## Sub-agent example
+
+Only `agentInvocable: true` agents can be spawned by the [subagents server](/aether/built-in-servers/subagents/):
+
+```json title=".aether/settings.json"
+{
+  "agents": [
+    {
+      "name": "Build",
+      "description": "Primary coding agent",
+      "model": "codex:gpt-5.5",
+      "userInvocable": true,
+      "prompts": [".aether/BUILD.md", "AGENTS.md"],
+      "mcps": [".aether/mcp.json"]
+    },
+    {
+      "name": "Explorer",
+      "description": "Read-only codebase explorer",
+      "model": "openai:gpt-5.5",
+      "agentInvocable": true,
+      "prompts": [".aether/agents/explorer/EXPLORER.md", "AGENTS.md"],
+      "mcps": [".aether/mcp.json"],
+      "tools": {
+        "allow": [
+          "coding__read_file",
+          "coding__list_files",
+          "coding__grep",
+          "coding__find",
+          "coding__lsp_*",
+          "coding__web_*"
+        ]
+      }
+    }
+  ]
+}
+```
+
+## Prompt source formats
+
+`PromptSource` accepts a string shorthand or a typed object:
+
+```json title=".aether/settings.json"
+{
+  "prompts": [
+    "AGENTS.md",
+    { "type": "file", "path": ".aether/BUILD.md" },
+    { "type": "glob", "pattern": ".aether/rules/*.md" },
+    {
+      "type": "text",
+      "text": "Always explain risky changes before editing files."
+    }
+  ],
+  "agents": [
+    {
+      "name": "Build",
+      "description": "Builds features",
+      "model": "zai:glm-5.1",
       "userInvocable": true
     }
   ]
 }
 ```
 
-## Top-level fields
+Prompt file paths and glob patterns are resolved from the project root for project settings. Prompt files may contain shell interpolation markers such as `` !`git branch --show-current` ``; Aether runs the command from the prompt cwd with `$SHELL -c`, substitutes trimmed stdout, and substitutes an empty string if the command fails.
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `agent` | `string` | Optional default user-invocable agent name |
-| `prompts` | `PromptSource[]` | Prompt sources inherited by all agents that don't define their own `prompts` |
-| `mcps` | `McpSource[]` | MCP config refs inherited by all agents that don't define their own `mcps`. Files are merged in order; on collisions, the last file wins. Use `{ "type": "file", "path": "...", "proxy": true }` to route a referenced config through Aether's tool proxy. |
-| `agents` | `AgentEntry[]` | Array of agent definitions |
+## MCP source formats
 
-## Agent entry fields
+`McpSourceSpec` also accepts a string shorthand or a typed object:
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `name` | `string` | *required* | Unique identifier for the agent |
-| `description` | `string` | *required* | Human-readable description shown in the UI |
-| `model` | `string` | *required* | Model spec — `provider:model-id` or comma-separated [alloy](/aether/configuration/llm-providers/#alloying) |
-| `reasoningEffort` | `string` | — | `"low"`, `"medium"`, `"high"`, or `"xhigh"` |
-| `userInvocable` | `boolean` | `false` | Appears as a mode in the TUI and ACP clients |
-| `agentInvocable` | `boolean` | `false` | Can be spawned as a [sub-agent](/aether/built-in-servers/subagents/) |
-| `prompts` | `PromptSource[]` | `[]` | Agent-specific prompt sources. When non-empty, replaces the inherited top-level prompt list. |
-| `mcps` | `McpSource[]` | `[]` | Agent-specific MCP config refs. When non-empty, replaces the inherited top-level MCP config list. |
-| `tools` | `object` | `{}` | [Tool filtering](/aether/configuration/mcp-servers/#tool-filtering) with `allow` and `deny` arrays |
-
-:::note
-If an agent omits `prompts` or `mcps`, it inherits the corresponding top-level list. If an agent provides a non-empty array, that array replaces the inherited list rather than appending to it.
-:::
-
-## Source formats
-
-Prompt sources can be file-path strings or typed objects:
-
-```json
-{
-  "prompts": [
-    "AGENTS.md",
-    { "type": "file", "path": ".aether/DEFAULT.md" },
-    { "type": "glob", "pattern": "prompts/*.md" },
-    { "type": "text", "text": "Always answer concisely." }
-  ]
-}
-```
-
-MCP sources can be file-path strings, typed file refs, or inline server configs:
-
-```json
+```json title=".aether/settings.json"
 {
   "mcps": [
     ".aether/mcp.json",
@@ -89,19 +158,72 @@ MCP sources can be file-path strings, typed file refs, or inline server configs:
     {
       "type": "inline",
       "servers": {
-        "coding": { "type": "in-memory" }
+        "coding": {
+          "type": "in-memory",
+          "args": ["--rules-dir", ".aether/skills"]
+        }
+      }
+    }
+  ],
+  "agents": [
+    {
+      "name": "Build",
+      "description": "Builds features",
+      "model": "zai:glm-5.1",
+      "userInvocable": true,
+      "prompts": [".aether/BUILD.md"]
+    }
+  ]
+}
+```
+
+A file source with `"proxy": true` marks every server loaded from that file as proxied. Later MCP sources can still override a server by name and replace its `proxy` flag.
+
+## Tool filters
+
+Tool filters match the names exposed to the model, in `server__tool` form. They support exact matches and trailing `*` prefix wildcards only.
+
+```json title=".aether/settings.json"
+{
+  "agents": [
+    {
+      "name": "SafeBuild",
+      "description": "Can edit files but cannot run shell commands",
+      "model": "anthropic:claude-sonnet-4-5-20250929",
+      "userInvocable": true,
+      "prompts": [".aether/SAFEBUILD.md"],
+      "mcps": [".aether/mcp.json"],
+      "tools": {
+        "allow": ["coding__*", "tasks__*", "plan__submit_plan"],
+        "deny": ["coding__bash", "coding__read_background_bash"]
       }
     }
   ]
 }
 ```
 
+Valid patterns include `coding__*`, `coding__bash`, and `coding__web_*`. Wildcards are only valid at the end of a pattern.
+
+`allow` is applied first. If `allow` is empty or omitted, all discovered tools are initially allowed. `deny` then removes matching tools from that set.
+
+## Global and project settings
+
+Aether loads default settings in this order:
+
+1. Global `$AETHER_HOME/settings.json` (or the default Aether home when `AETHER_HOME` is unset)
+2. Project `.aether/settings.json`
+
+Later sources win for `agent`. Non-empty top-level `prompts` and `mcps` replace earlier top-level lists. `agents` merge by trimmed `name`; if a later source defines the same name, the later agent definition replaces the earlier one.
+
+When a settings file is loaded from the global Aether home, relative prompt and MCP paths inside that file are normalized relative to the global home before merging. Project settings paths stay project-relative.
+
 ## Validation rules
 
 :::note
-- Agent names must be unique (whitespace is trimmed)
-- `"__default__"` is a reserved name
-- At least one of `userInvocable` or `agentInvocable` must be `true`
-- Prompt file paths and glob patterns must match at least one file
-- Referenced MCP config paths must point to existing files
-:::
+
+- Unknown JSON fields are rejected.
+- `"__default__"` is reserved for an internal ad-hoc agent.
+- The selected top-level `agent` must refer to a `userInvocable: true` agent.
+- Prompt file paths and glob patterns must match at least one file.
+- Referenced MCP config paths must point to existing files.
+  :::

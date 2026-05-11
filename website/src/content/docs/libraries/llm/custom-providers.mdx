@@ -81,11 +81,12 @@ Your `stream_response` must emit events in this order:
 2. Content chunks — any mix of:
    - `LlmResponse::text(chunk)` — text output
    - `LlmResponse::reasoning(chunk)` — extended thinking
+   - `LlmResponse::encrypted_reasoning(id, content)` — provider-encrypted reasoning payload
    - `LlmResponse::tool_request_start(id, name)` → `tool_request_arg(id, chunk)` → `tool_request_complete(tool_call)` — tool calls
 3. `LlmResponse::usage(input, output)` — token counts (optional but recommended)
 4. `LlmResponse::done()` or `LlmResponse::done_with_stop_reason(reason)` — must be last
 
-If an error occurs mid-stream, yield `LlmResponse::Error { message }`.
+If an error occurs mid-stream, yield `Ok(LlmResponse::Error { message })` for a model-reported error, or `Err(LlmError)` for a provider/transport error.
 
 ## Tool call streaming
 

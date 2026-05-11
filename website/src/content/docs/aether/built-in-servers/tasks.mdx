@@ -1,94 +1,120 @@
 ---
 title: Tasks
-description: Hierarchical task management for complex work.
+description: Hierarchical task management for long-running agent work.
 ---
 
-The `tasks` server gives agents a structured way to break down complex work into trackable tasks with dependencies and status tracking. Tasks are stored as JSONL files in `.aether-tasks/`.
+The `tasks` server gives agents a structured way to decompose work into task trees, dependencies, assignees, status, and handoff metadata.
+
+## Configuration
+
+The default in-memory server is session-scoped: tasks are stored in a temporary directory and cleaned up when the server exits.
+
+```json title=".aether/mcp.json"
+{
+  "servers": {
+    "tasks": {
+      "type": "in-memory"
+    }
+  }
+}
+```
+
+For persistent task storage, pass `--dir`. Aether stores JSONL task files under `<dir>/.aether-tasks/`.
+
+```json title=".aether/mcp.json"
+{
+  "servers": {
+    "tasks": {
+      "type": "in-memory",
+      "args": ["--dir", "."]
+    }
+  }
+}
+```
 
 ## Tools
 
-| Tool | Description |
-|------|-------------|
-| `task_create` | Create a new task or subtask |
-| `task_get` | Get a task by ID |
-| `task_list` | List tasks with filters such as assignee, status, tree, or ready-only |
-| `task_update` | Update status, ownership, dependencies, or research metadata |
-
-:::note
-The primary task schema uses camelCase field names such as `parentId`, `treeId`, `readyOnly`, `nextSteps`, and `filesRead`. Snake_case aliases like `parent_id`, `tree_id`, `ready_only`, `next_steps`, and `files_read` are also accepted.
-:::
+| Tool          | Description                                                              |
+| ------------- | ------------------------------------------------------------------------ |
+| `task_create` | Create a root task tree or subtask.                                      |
+| `task_get`    | Get full details for one task by ID.                                     |
+| `task_list`   | List tasks, optionally filtered by assignee, status, tree, or readiness. |
+| `task_update` | Update status, ownership, dependencies, or handoff metadata.             |
 
 ## Task IDs
 
 - Root tasks: `at-a1b2c3d4`
 - Subtasks: `at-a1b2c3d4.1`, `at-a1b2c3d4.2`, etc.
 
+Each root task tree is stored in one JSONL file when persistent storage is enabled.
+
 ## Status values
 
-| Status | Meaning |
-|--------|---------|
-| `pending` | Not yet started |
-| `inProgress` | Currently being worked on |
-| `completed` | Done |
-| `blocked` | Waiting on dependencies |
+| Status       | Meaning                    |
+| ------------ | -------------------------- |
+| `pending`    | Not yet started.           |
+| `inProgress` | Currently being worked on. |
+| `completed`  | Done.                      |
+| `blocked`    | Not ready to proceed.      |
 
-## Common examples
+`in_progress` is accepted as an input alias for `inProgress`.
+
+## Examples
 
 Create a root task:
 
-```json
+```json title="task_create"
 {
-  "title": "Research multi-agent systems",
-  "description": "Investigate orchestration patterns",
+  "title": "Refresh website docs",
+  "description": "Update public docs from Rust source facts.",
   "assignee": "orchestrator"
 }
 ```
 
-Create a subtask:
+Create a subtask with a dependency:
 
-```json
+```json title="task_create"
 {
-  "title": "Analyze paper X",
+  "title": "Validate docs build",
   "parentId": "at-a1b2c3d4",
-  "assignee": "worker-1"
+  "assignee": "worker-1",
+  "deps": ["at-a1b2c3d4.1"]
 }
 ```
 
 List ready work:
 
-```json
+```json title="task_list"
 {
   "readyOnly": true
 }
 ```
 
-Update progress and findings:
+Complete a task and attach handoff context:
 
-```json
+```json title="task_update"
 {
   "id": "at-a1b2c3d4.1",
   "status": "completed",
-  "summary": "Found 5 issues",
-  "facts": ["All use deprecated API"],
-  "nextSteps": ["Migrate to the new API"],
-  "filesRead": ["src/auth.rs"]
+  "summary": "Updated MCP configuration docs from source.",
+  "facts": ["Tool filters support exact names and trailing * only."],
+  "nextSteps": ["Run website checks."],
+  "filesRead": ["packages/mcp-utils/src/client/config.rs"]
 }
 ```
 
-## Research metadata
+## Handoff fields
 
-Tasks support structured metadata for long-running investigations and multi-step implementation work:
+| Field       | Purpose                                 |
+| ----------- | --------------------------------------- |
+| `summary`   | Short summary of work done or findings. |
+| `decisions` | Key decisions made.                     |
+| `facts`     | Important facts discovered.             |
+| `nextSteps` | Suggested follow-up actions.            |
+| `blockers`  | Unresolved blockers.                    |
+| `filesRead` | Files examined.                         |
+| `resources` | External resources referenced.          |
 
-| Field | Purpose |
-|-------|---------|
-| `summary` | High-level summary of findings |
-| `decisions` | Key decisions made |
-| `facts` | Important facts discovered |
-| `nextSteps` | What to do next |
-| `blockers` | What's blocking progress |
-| `filesRead` | Files that were examined |
-| `resources` | External resources referenced |
+## Input names
 
-## Storage format
-
-Each root task tree is stored as JSONL in `.aether-tasks/at-<hash>.jsonl`, which makes task state easy to inspect and version in git.
+The canonical MCP wire format is camelCase: `parentId`, `treeId`, `readyOnly`, `nextSteps`, and `filesRead`. The server also accepts snake_case aliases for several inputs, including `parent_id`, `tree_id`, `ready_only`, `next_steps`, and `files_read`.

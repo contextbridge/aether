@@ -7,23 +7,23 @@ The `aether-mcp-servers` crate provides the same built-in servers used by the CL
 
 ```toml title="Cargo.toml"
 [dependencies]
-aether-mcp-servers = { version = "0.3.2", default-features = false, features = ["coding", "plan"] }
+aether-mcp-servers = { version = "0.3.6", default-features = false, features = ["coding", "plan"] }
 ```
 
 The crate is imported in Rust as `mcp_servers`.
 
 ## Feature flags
 
-| Feature | Exposes | Notes |
-|---------|---------|-------|
-| `default` | `CodingMcp`, `SkillsMcp`, `TasksMcp`, `SubAgentsMcp`, `PlanMcp` | Default bundle |
-| `coding` | `CodingMcp`, `LspMcp`, `LspRegistry` | File I/O, bash, search, web, and standalone LSP support |
-| `skills` | `SkillsMcp` | Slash commands, skills, and persisted notes |
-| `tasks` | `TasksMcp` | Hierarchical task management |
-| `subagents` | `SubAgentsMcp` | Child agent spawning and orchestration |
-| `survey` | `SurveyMcp` | Structured user questions |
-| `plan` | `PlanMcp` | Plan review and approval workflow |
-| `all` | All built-in servers | Explicit alias for the full set |
+| Feature     | Exposes                                                                      | Notes                                                   |
+| ----------- | ---------------------------------------------------------------------------- | ------------------------------------------------------- |
+| `default`   | `CodingMcp`, `SkillsMcp`, `TasksMcp`, `SubAgentsMcp`, `SurveyMcp`, `PlanMcp` | Default bundle                                          |
+| `coding`    | `CodingMcp`, `LspMcp`, `LspRegistry`                                         | File I/O, bash, search, web, and standalone LSP support |
+| `skills`    | `SkillsMcp`                                                                  | Slash commands, skills, and persisted notes             |
+| `tasks`     | `TasksMcp`                                                                   | Hierarchical task management                            |
+| `subagents` | `SubAgentsMcp`                                                               | Child agent spawning and orchestration                  |
+| `survey`    | `SurveyMcp`                                                                  | Structured user questions                               |
+| `plan`      | `PlanMcp`                                                                    | Plan review and approval workflow                       |
+| `all`       | All built-in servers                                                         | Explicit alias for the full set                         |
 
 ## Constructing servers
 

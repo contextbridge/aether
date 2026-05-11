@@ -1,18 +1,20 @@
 ---
 title: Prompts
-description: Control agent behavior with prompt files.
+description: Control agent behavior with prompt sources.
 ---
 
-Aether assembles system prompts from authored prompt sources and MCP server instructions into a single system prompt for each agent.
+Aether assembles each agent's system prompt from authored prompt sources plus MCP server instructions. There is no built-in prompt file name to target; use the files and inline text you list in `.aether/settings.json`.
 
 ## Prompt sources
 
-The `prompts` field in `settings.json` accepts four source types:
+The `prompts` field accepts four formats:
 
-- file-path strings such as `"AGENTS.md"`
-- typed file sources such as `{ "type": "file", "path": ".aether/DEFAULT.md" }`
-- typed glob sources such as `{ "type": "glob", "pattern": "prompts/*.md" }`
-- inline text sources such as `{ "type": "text", "text": "Always answer concisely." }`
+| Form                  | Example                                                  |
+| --------------------- | -------------------------------------------------------- |
+| String path shorthand | `"AGENTS.md"`                                            |
+| Typed file            | `{ "type": "file", "path": ".aether/BUILD.md" }`         |
+| Typed glob            | `{ "type": "glob", "pattern": ".aether/rules/*.md" }`    |
+| Inline text           | `{ "type": "text", "text": "Always answer concisely." }` |
 
 Top-level `prompts` are defaults. An agent inherits them only when its own `prompts` array is empty. If an agent provides a non-empty `prompts` array, that array replaces the top-level prompt list for that agent.
 
@@ -21,43 +23,80 @@ Top-level `prompts` are defaults. An agent inherits them only when its own `prom
   "prompts": ["AGENTS.md"],
   "agents": [
     {
-      "name": "coder",
+      "name": "Build",
       "description": "Coding agent",
-      "model": "anthropic:claude-sonnet-4-5",
+      "model": "anthropic:claude-sonnet-4-5-20250929",
       "userInvocable": true,
       "prompts": [
-        ".aether/agents/coder/CODER.md",
-        { "type": "glob", "pattern": "prompts/*.md" }
+        ".aether/BUILD.md",
+        "AGENTS.md",
+        { "type": "glob", "pattern": ".aether/rules/*.md" },
+        { "type": "text", "text": "Prefer small, reviewable patches." }
       ]
     }
   ]
 }
 ```
 
-A common convention is to place an `AGENTS.md` at the project root with shared instructions:
+Prompt file paths and glob patterns are resolved relative to the project root unless they are absolute. They must match at least one file during settings resolution.
+
+## Agent prompt files
+
+The onboarding wizard writes an agent-name-derived prompt file, for example `.aether/BUILD.md` for an agent named `Build`:
+
+```markdown title=".aether/BUILD.md"
+# Build
+
+Build features and fix bugs in this project.
+
+## System Env
+
+Working directory: !`pwd`\
+Platform: !`uname -s`\
+Today's date: !`date +%Y-%m-%d`\
+Git branch: !`git rev-parse --abbrev-ref HEAD`
+```
+
+Additional files such as `AGENTS.md`, `CLAUDE.md`, or `GEMINI.md` are ordinary prompt sources. Include them when you want to reuse instructions already authored for other tools.
 
 ```markdown title="AGENTS.md"
-# Project Agent
+# Project Instructions
 
 You are a coding assistant for this Rust project.
 
 ## Rules
-- Always read files before editing them
-- Write tests for new functionality
-- Use `cargo clippy` to check for warnings
+
+- Always read files before editing them.
+- Write tests for new behavior.
+- Use the project `just` commands when available.
 ```
 
-:::note
-Prompt file paths and glob patterns must match at least one file. Aether reports a validation error if a path or pattern matches nothing.
-:::
+## Shell interpolation
+
+Prompt files support shell interpolation markers:
+
+```markdown
+Current branch: !`git branch --show-current`
+Crate count: !`find packages -name Cargo.toml | wc -l`
+```
+
+Aether runs each marker with `$SHELL -c` from the prompt cwd, substitutes trimmed stdout, and removes the marker if the command fails. Use interpolation for small, deterministic context such as dates, branch names, or environment summaries; avoid expensive commands in prompts because they run when the prompt is assembled.
+
+Inline text sources do not run shell interpolation. Globbed markdown files do.
+
+## Prompt ordering
+
+Prompt sources are resolved in the order listed. Glob matches are sorted before their file contents are joined. The final system prompt joins non-empty prompt parts with blank lines, followed by MCP server instructions when tools are connected.
 
 ## Debugging prompts
 
-Use `show-prompt` to see the fully assembled system prompt for any agent:
+Use `show-prompt` to see the fully assembled prompt and the MCP tool summary for any agent:
 
 ```bash
 aether show-prompt
 # Inspect a specific agent
-aether show-prompt -a researcher
+aether show-prompt -a Build
 aether show-prompt -C /path/to/project
 ```
+
+`show-prompt` accepts the same settings and MCP override flags as headless mode: `--settings-json`, `--settings-file`, `--mcp-config`, `--mcp-config-json`, and `--system-prompt`.

@@ -1,30 +1,53 @@
 ---
 title: Survey
-description: Allow agents to ask structured questions via forms.
+description: Ask structured user questions through MCP elicitation.
 ---
 
-The `survey` server lets agents collect structured input from you during a workflow — confirmations, choices, text fields, numbers, and more — without relying on free-form conversation.
+The `survey` server lets agents collect structured input from the user during a workflow: confirmations, choices, text fields, numbers, booleans, and more.
+
+It uses MCP elicitation, so the client renders a form and returns structured JSON instead of relying on free-form chat.
+
+## Configuration
+
+```json title=".aether/mcp.json"
+{
+  "servers": {
+    "survey": {
+      "type": "in-memory"
+    }
+  }
+}
+```
+
+The built-in survey server does not read any args.
 
 ## Tools
 
-| Tool | Description |
-|------|-------------|
-| `ask_user` | Present a form defined by a JSON Schema and collect structured responses |
+| Tool       | Description                                                 |
+| ---------- | ----------------------------------------------------------- |
+| `ask_user` | Present a JSON Schema-backed form and collect the response. |
+
+## Input
+
+| Field     | Type                    | Description                                                                 |
+| --------- | ----------------------- | --------------------------------------------------------------------------- |
+| `message` | `string`                | Prompt shown to the user.                                                   |
+| `schema`  | `object` or JSON string | JSON Schema for the form. Must describe an object schema with `properties`. |
 
 ## Output
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `accepted` | `boolean` | `true` if the user submitted the form, `false` if they cancelled or declined |
-| `data` | `object \| null` | The structured response payload when accepted |
+| Field      | Type             | Description                                       |
+| ---------- | ---------------- | ------------------------------------------------- |
+| `accepted` | `boolean`        | `true` when the user accepted/submitted the form. |
+| `data`     | `object \| null` | Structured response data when accepted.           |
 
 ## Examples
 
-An agent might call `ask_user` to confirm a destructive operation:
+Confirm a destructive operation:
 
-```json
+```json title="ask_user"
 {
-  "message": "This will delete 3 files. Continue?",
+  "message": "This will delete 3 generated files. Continue?",
   "schema": {
     "type": "object",
     "properties": {
@@ -37,9 +60,9 @@ An agent might call `ask_user` to confirm a destructive operation:
 }
 ```
 
-Or to gather multiple inputs at once:
+Collect multiple fields:
 
-```json
+```json title="ask_user"
 {
   "message": "Configure the new service:",
   "schema": {
@@ -62,4 +85,4 @@ Or to gather multiple inputs at once:
 }
 ```
 
-The JSON Schema must describe an object with `properties`. The returned `data` object matches that schema when the user accepts the request.
+Use `survey` when an agent needs a precise decision or value before it can safely continue.

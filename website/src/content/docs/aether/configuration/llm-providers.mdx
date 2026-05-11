@@ -1,180 +1,189 @@
 ---
 title: LLMs
-description: Configure models from Anthropic, OpenRouter, Ollama, and more.
+description: Configure model specs, credentials, and reasoning effort.
 ---
 
-Aether supports many LLM providers out of the box. And, you can provide your own via implementing a `trait`.
+Aether stores each agent's model as a string in [agent settings](/aether/configuration/agent-settings/). A model spec is usually `provider:model-id`.
 
-You can specify the model an agent uses in your [agent settings](/aether/configuration/agent-settings/) file.
-
-```diff title="settings.json"
- {
-   "name": "my-agent",
-+  "model": "anthropic:claude-sonnet-4-5"
- }
+```json title=".aether/settings.json"
+{
+  "agents": [
+    {
+      "name": "Build",
+      "description": "Builds features and fixes bugs",
+      "model": "anthropic:claude-sonnet-4-5-20250929",
+      "reasoningEffort": "high",
+      "userInvocable": true,
+      "prompts": [".aether/BUILD.md"]
+    }
+  ]
+}
 ```
 
-In the TUI, only LLM providers with configured credentials appear in the model selector.
+## Model spec syntax
 
-## Providers
+| Form         | Example                                | Meaning                                                 |
+| ------------ | -------------------------------------- | ------------------------------------------------------- |
+| Single model | `anthropic:claude-sonnet-4-5-20250929` | Use one provider/model pair.                            |
+| Local model  | `ollama:llama3.2`                      | Use a model discovered from a local provider.           |
+| Alloy        | `zai:glm-5.1,openai:gpt-5.5`           | Round-robin between model specs each conversation turn. |
+
+For providers that accept arbitrary model IDs, the part after the first colon is passed to the provider. For catalog providers, use IDs from `packages/llm/models.json`.
+
+## Common provider specs
+
+These examples are verified against the current parser or model catalog.
+
+| Provider    | Example spec                           | Credentials / setup                          |
+| ----------- | -------------------------------------- | -------------------------------------------- |
+| Anthropic   | `anthropic:claude-sonnet-4-5-20250929` | `ANTHROPIC_API_KEY`                          |
+| Anthropic   | `anthropic:claude-opus-4-6`            | `ANTHROPIC_API_KEY`                          |
+| OpenAI      | `openai:gpt-5.5`                       | `OPENAI_API_KEY`                             |
+| Codex       | `codex:gpt-5.5`                        | OAuth credentials stored in the OS keychain  |
+| ZAI         | `zai:glm-5.1`                          | `ZAI_API_KEY`                                |
+| DeepSeek    | `deepseek:deepseek-chat`               | `DEEPSEEK_API_KEY`                           |
+| Moonshot    | `moonshot:moonshot-v1-8k`              | `MOONSHOT_API_KEY`                           |
+| Gemini      | `gemini:<model-id>`                    | `GEMINI_API_KEY`                             |
+| OpenRouter  | `openrouter:<vendor>/<model-id>`       | `OPENROUTER_API_KEY`                         |
+| AWS Bedrock | `bedrock:<model-id>`                   | AWS credential chain                         |
+| Ollama      | `ollama:llama3.2`                      | A running Ollama server                      |
+| llama.cpp   | `llamacpp:<loaded-model-id>`           | A running llama.cpp OpenAI-compatible server |
+
+The current CLI registers built-in provider factories for Anthropic, OpenAI, Codex, Gemini, OpenRouter, Ollama, llama.cpp, DeepSeek, Moonshot, ZAI, and Bedrock. The generated catalog is larger and is used for model metadata and availability; avoid copying a catalog-only provider into `settings.json` unless the runtime parser can create that provider.
+
+## Availability in the UI
+
+The model selector is built from catalog models whose required environment variables are set, plus locally discovered models.
+
+- Catalog models with `required_env_var` only appear when that environment variable is present.
+- Ollama models are discovered from the running Ollama server (`OLLAMA_HOST` overrides the default host).
+- llama.cpp models are discovered from the server's `/v1/models` endpoint (`LLAMA_CPP_HOST` overrides the default host).
+- Codex uses OAuth credentials. In the TUI or ACP client, selecting a Codex model can trigger the provider login flow. There is no current top-level `aether auth codex` command.
+
+## Provider details
 
 ### Anthropic
 
-| | |
-|---|---|
-| **Credentials** | `ANTHROPIC_API_KEY` |
-| **Model syntax** | `anthropic:<model-id>` |
-
-### OpenRouter
-
-| | |
-|---|---|
-| **Credentials** | `OPENROUTER_API_KEY` |
-| **Model syntax** | `openrouter:<vendor>/<model-id>` |
-
-OpenRouter proxies 100+ models from various vendors. Use the `vendor/model` format from their [model list](https://openrouter.ai/models).
+|                            |                              |
+| -------------------------- | ---------------------------- |
+| **Credentials**            | `ANTHROPIC_API_KEY`          |
+| **Model syntax**           | `anthropic:<model-id>`       |
+| **Default provider model** | `claude-sonnet-4-5-20250929` |
 
 ### OpenAI
 
-| | |
-|---|---|
-| **Credentials** | `OPENAI_API_KEY` |
+|                  |                     |
+| ---------------- | ------------------- |
+| **Credentials**  | `OPENAI_API_KEY`    |
 | **Model syntax** | `openai:<model-id>` |
 
 ### Codex
 
-| | |
-|---|---|
-| **Credentials** | OAuth login — no API key needed |
-| **Model syntax** | `codex:<model-id>` |
+|                  |                                        |
+| ---------------- | -------------------------------------- |
+| **Credentials**  | OAuth login stored in your OS keychain |
+| **Model syntax** | `codex:<model-id>`                     |
+| **Common model** | `codex:gpt-5.5`                        |
 
-Codex authenticates through a browser-based OAuth flow with OpenAI. In the TUI, select a Codex model and use the provider login flow; credentials are stored securely in your OS keychain.
+Codex uses OpenAI's Codex OAuth flow through the client. If no Codex credentials are available, Aether asks you to log in when the model is selected.
+
+### OpenRouter
+
+|                  |                                  |
+| ---------------- | -------------------------------- |
+| **Credentials**  | `OPENROUTER_API_KEY`             |
+| **Model syntax** | `openrouter:<vendor>/<model-id>` |
+
+Use the `vendor/model` format from the [OpenRouter model list](https://openrouter.ai/models).
+
+### OpenAI-compatible providers
+
+Aether has built-in OpenAI-compatible provider configs for:
+
+| Provider | Syntax                | Env var            |
+| -------- | --------------------- | ------------------ |
+| DeepSeek | `deepseek:<model-id>` | `DEEPSEEK_API_KEY` |
+| Moonshot | `moonshot:<model-id>` | `MOONSHOT_API_KEY` |
+| ZAI      | `zai:<model-id>`      | `ZAI_API_KEY`      |
 
 ### Gemini
 
-| | |
-|---|---|
-| **Credentials** | `GEMINI_API_KEY` |
+|                  |                     |
+| ---------------- | ------------------- |
+| **Credentials**  | `GEMINI_API_KEY`    |
 | **Model syntax** | `gemini:<model-id>` |
-
-### DeepSeek
-
-| | |
-|---|---|
-| **Credentials** | `DEEPSEEK_API_KEY` |
-| **Model syntax** | `deepseek:<model-id>` |
 
 ### AWS Bedrock
 
-| | |
-|---|---|
-| **Credentials** | AWS credential chain (environment, config file, or IAM role) |
-| **Model syntax** | `bedrock:<model-id>` |
+|                  |                                                                 |
+| ---------------- | --------------------------------------------------------------- |
+| **Credentials**  | AWS credential chain (environment, config file, IAM role, etc.) |
+| **Model syntax** | `bedrock:<model-id>`                                            |
 
 ### Ollama
 
-| | |
-|---|---|
-| **Credentials** | None — requires a running [Ollama](https://ollama.com) server |
-| **Model syntax** | `ollama:<model-id>` |
+|                   |                     |
+| ----------------- | ------------------- |
+| **Credentials**   | None                |
+| **Model syntax**  | `ollama:<model-id>` |
+| **Host override** | `OLLAMA_HOST`       |
 
-Aether auto-discovers models from your Ollama instance. Any model you've pulled with `ollama pull` will appear in the model selector.
+Aether discovers models you have pulled into Ollama.
 
-Set `OLLAMA_HOST` to override the default address (`http://localhost:11434`).
+### llama.cpp
 
-### Llama.cpp
+|                   |                       |
+| ----------------- | --------------------- |
+| **Credentials**   | None                  |
+| **Model syntax**  | `llamacpp:<model-id>` |
+| **Host override** | `LLAMA_CPP_HOST`      |
 
-| | |
-|---|---|
-| **Credentials** | None — requires a running [llama.cpp](https://github.com/ggml-org/llama.cpp) server |
-| **Model syntax** | `llamacpp:<model-id>` |
-
-Llama.cpp serves a single model at a time. Aether queries the server's `/v1/models` endpoint to discover the loaded model, which then appears in the model selector.
-
-Set `LLAMA_CPP_HOST` to override the default address (`http://localhost:8080`).
-
-### Moonshot (Kimi)
-
-| | |
-|---|---|
-| **Credentials** | `MOONSHOT_API_KEY` |
-| **Model syntax** | `moonshot:<model-id>` |
-
-### ZAI (Zhipu)
-
-| | |
-|---|---|
-| **Credentials** | `ZAI_API_KEY` |
-| **Model syntax** | `zai:<model-id>` |
-
-### Bring your own
-
-Aether's `llm` crate exposes the `StreamingModelProvider` trait, so you can integrate any LLM backend:
-
-```rust
-pub trait StreamingModelProvider: Send + Sync {
-    fn stream_response(&self, context: &Context) -> LlmResponseStream;
-    fn display_name(&self) -> String;
-    fn context_window(&self) -> Option<u32>;
-    fn model(&self) -> Option<LlmModel> { None }
-}
-```
-
-Implement this trait on your own struct, and it can be passed directly to the agent builder. See the [Custom Providers](/libraries/llm/custom-providers/) guide for a full walkthrough with examples.
+Aether queries the server's `/v1/models` endpoint for the currently loaded model.
 
 ## Reasoning effort
 
-Some models support extended thinking. Set `reasoningEffort` on an agent to control the thinking budget:
+Some providers support extended thinking. Set `reasoningEffort` on an agent to request a thinking budget:
 
-| Level | Description |
-|-------|-------------|
-| `"low"` | Minimal thinking — fastest responses |
-| `"medium"` | Moderate thinking |
-| `"high"` | Extended thinking for complex tasks |
-| `"xhigh"` | Maximum thinking budget |
+| Value      | Meaning                                                          |
+| ---------- | ---------------------------------------------------------------- |
+| `"low"`    | Minimal thinking                                                 |
+| `"medium"` | Moderate thinking                                                |
+| `"high"`   | Extended thinking                                                |
+| `"xhigh"`  | Maximum thinking budget for providers that expose a fourth level |
 
-```json
+```json title=".aether/settings.json"
 {
-  "name": "deep-thinker",
-  "model": "anthropic:claude-sonnet-4-5",
-  "reasoningEffort": "high",
-  "..."
+  "agents": [
+    {
+      "name": "Plan",
+      "description": "Plans implementation strategy",
+      "model": "codex:gpt-5.5",
+      "reasoningEffort": "xhigh",
+      "userInvocable": true,
+      "prompts": [".aether/PLAN.md"]
+    }
+  ]
 }
 ```
+
+Providers that do not support the requested effort ignore it or map it to their closest available setting.
 
 ## Alloying
 
-Model alloying lets you combine multiple LLM providers into a single agent by comma-separating model specs. Each turn uses the next model in the list, cycling through in round-robin order.
+An alloy spec is a comma-separated list of model specs. Each conversation turn uses the next provider in the list, cycling round-robin.
 
-### Syntax
-
-```json
-"model": "provider1:model1,provider2:model2,provider3:model3"
-```
-
-### Example
-
-An agent that alternates between DeepSeek and Anthropic:
-
-```json
+```json title=".aether/settings.json"
 {
-  "name": "alloy-coder",
-  "description": "Cost-optimized coding agent",
-  "model": "deepseek:deepseek-chat,anthropic:claude-sonnet-4-5",
-  "userInvocable": true
+  "agents": [
+    {
+      "name": "Alloy",
+      "description": "Alternates between cloud and local models",
+      "model": "zai:glm-5.1,ollama:llama3.2",
+      "userInvocable": true,
+      "prompts": [".aether/ALLOY.md"]
+    }
+  ]
 }
 ```
 
-Turn 1 uses DeepSeek, turn 2 uses Anthropic, turn 3 uses DeepSeek, and so on.
-
-### Use cases
-
-- **Cost optimization** — Alternate between expensive and cheaper models. Use a powerful model for complex turns and a lighter one for simple follow-ups.
-- **Redundancy** — If one provider has an outage, the other turns still work.
-- **Comparison** — See how different models handle the same conversation context.
-
-### Considerations
-
-- Each model in the alloy must have its corresponding API key set
-- Reasoning effort applies to all models in the alloy (models that don't support it will ignore it)
-- The conversation context is shared across all models — each model sees the full history regardless of which model generated previous turns
+Every model in the alloy must be usable in the current runtime environment: required credentials must be set, and local servers must be running.

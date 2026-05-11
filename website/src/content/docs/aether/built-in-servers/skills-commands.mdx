@@ -1,117 +1,151 @@
 ---
-title: Skills & Commands
-description: Create slash commands and reusable skill prompts.
+title: Skills, Rules & Notes
+description: Load prompt artifacts and save durable agent notes.
 ---
 
-import { Tabs, TabItem, FileTree } from '@astrojs/starlight/components';
+import { FileTree, Tabs, TabItem } from "@astrojs/starlight/components";
 
-The `skills` server lets you load slash commands and skills from local files on disk.
+The `skills` server loads prompt artifacts from configured directories and exposes them in two ways:
 
-## Directory structure
+- **MCP prompts** for `user-invocable` slash-command style workflows.
+- **MCP tools** for `agent-invocable` skills and persisted notes.
+
+A single markdown artifact can be a user prompt, an agent skill, a read-triggered rule, or any combination of those surfaces.
+
+## Configuration
+
+Aether's project scaffold wires `skills` to `.aether/skills` and `.aether/notes`:
+
+```json title=".aether/mcp.json"
+{
+  "servers": {
+    "skills": {
+      "type": "in-memory",
+      "args": ["--dir", ".aether/skills", "--notes-dir", ".aether/notes"]
+    }
+  }
+}
+```
+
+`--dir` is repeatable. On name collision, the last directory wins. `--notes-dir` is required for `save_note` and `search_notes`.
+
+## Directory shape
+
+Prompt artifacts can be directory-backed `SKILL.md` files or flat markdown files directly under a configured `--dir`.
 
 <FileTree>
-- .aether/ (or ~/.aether/ for global)
-  - commands/
-    - commit.md
-    - review.md
-    - plan.md
+
+- .aether/
   - skills/
     - rust/
       - SKILL.md
       - traits.md
       - error-handling.md
-    - testing/
-      - SKILL.md
+    - commit.md
+    - rust-rules.md
+  - notes/
+    - coding-style.md
+
 </FileTree>
+
+Directory-backed skills can include auxiliary files that agents load on demand with `get_skills`. Flat markdown prompt files are useful for small prompts or rules and do not support auxiliary relative paths.
+
+## Prompt artifact frontmatter
+
+```markdown title=".aether/skills/rust/SKILL.md"
+---
+name: rust
+description: Rust conventions for this project
+user-invocable: false
+agent-invocable: true
+tags: [rust, coding]
+triggers:
+  read:
+    - "**/*.rs"
+---
+
+Use project-specific Rust conventions.
+
+See `traits.md` and `error-handling.md` for detailed patterns.
+```
+
+| Field             | Description                                                                                                                |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `name`            | Optional identifier. Defaults to the directory name for `SKILL.md` or filename stem for flat `.md` files.                  |
+| `description`     | Discovery text. Empty descriptions default to the resolved name.                                                           |
+| `user-invocable`  | Exposes the artifact as an MCP prompt. Directory-backed `SKILL.md` files default to `true`; flat files default to `false`. |
+| `agent-invocable` | Makes the artifact discoverable through `list_skills` and loadable with `get_skills`. Defaults to `true`.                  |
+| `argument-hint`   | Optional argument hint for user-invocable prompts.                                                                         |
+| `tags`            | Tags returned by `list_skills` and saved in note metadata.                                                                 |
+| `triggers.read`   | Project-relative glob patterns used as read-triggered rules by the coding server.                                          |
+| `globs`, `paths`  | Compatibility aliases that also feed `triggers.read`.                                                                      |
+
+Every authored artifact must have at least one activation surface: `user-invocable`, `agent-invocable`, `triggers.read`, `globs`, or `paths`.
 
 ## Tools
 
-| Tool | Description |
-|------|-------------|
-| `list_skills` | List all available skills with metadata for discovery |
-| `get_skills` | Load a skill or one of its auxiliary files |
-| `save_note` | Append a learning to a topic-based note file |
-| `search_notes` | Search notes by topic or tags |
+| Tool           | Description                                                             |
+| -------------- | ----------------------------------------------------------------------- |
+| `list_skills`  | Return lightweight metadata for all `agent-invocable` skills.           |
+| `get_skills`   | Load skill content by exact name and optional relative auxiliary path.  |
+| `save_note`    | Append a learning to a topic note under the configured notes directory. |
+| `search_notes` | Search notes by topic substring or exact tag.                           |
 
 <Tabs>
-  <TabItem label="Writing a command">
-    Commands are markdown files in the `commands/` directory. The filename (minus `.md`) becomes the command name.
+  <TabItem label="Skill discovery">
+    Recommended flow:
 
-    ```markdown title="commands/commit.md"
+    1. Call `search_notes` for prior learnings relevant to the task.
+    2. Call `list_skills` to discover available skills.
+    3. Call `get_skills` only for the exact skills needed.
+
+    ```json title="get_skills"
+    {
+      "requests": [
+        { "name": "rust" },
+        { "name": "rust", "path": "traits.md" }
+      ]
+    }
+    ```
+
+    Loading a directory-backed `SKILL.md` returns `availableFiles`, excluding hidden files and `SKILL.md` itself. Auxiliary paths must be relative, must not contain `..`, and must stay inside the skill directory.
+
+  </TabItem>
+  <TabItem label="User prompts">
+    User-invocable artifacts are exposed through the MCP prompts protocol.
+
+    ```markdown title=".aether/skills/commit.md"
     ---
     description: Generate a commit message for staged changes
-    argument-hint: [optional context]
-    allowed-tools:
-      - bash
-      - grep
+    user-invocable: true
+    agent-invocable: false
+    argument-hint: "[optional context]"
     ---
 
     Generate a concise commit message for the currently staged git changes.
 
-    The user provided: $ARGUMENTS
-
-    Rules:
-    - Use conventional commit format
-    - Keep the subject line under 72 characters
+    Context: $ARGUMENTS
     ```
 
-    ### Frontmatter fields
+    `$ARGUMENTS` and named MCP prompt parameters are substituted when the prompt is requested.
 
-    | Field | Description |
-    |-------|-------------|
-    | `description` | Shown in the command picker UI |
-    | `argument-hint` | Placeholder text for the argument input |
-    | `allowed-tools` | Tools the agent can use while executing the command |
-
-    ### Template variables
-
-    | Variable | Description |
-    |----------|-------------|
-    | `$ARGUMENTS` | The full argument string passed by the user |
-    | `$1`, `$2`, ... | Positional arguments (space-separated) |
   </TabItem>
-  <TabItem label="Writing a skill">
-    Skills are directories containing a `SKILL.md` file and optional auxiliary files.
+  <TabItem label="Notes">
+    Notes are markdown files with frontmatter. `save_note` normalizes the topic to a kebab-case filename, creates the notes directory if needed, appends to existing notes, and merges tags case-insensitively.
 
-    ```markdown title="skills/rust/SKILL.md"
-    ---
-    name: rust
-    description: Rust coding conventions and best practices
-    tags: [rust, coding, testing]
-    ---
-
-    # Rust Conventions
-
-    ## Error Handling
-    - Use specific enum types, not `Box<dyn Error>`
-    - Never add `anyhow` as a dependency
-
-    ## Testing
-    - Use `Fake` prefix, never `Mock`
-    - Prefer in-memory fakes over side-effect mocks
-
-    See [error-handling](./error-handling.md) for detailed patterns.
+    ```json title="save_note"
+    {
+      "topic": "Coding Style",
+      "content": "- Prefer integration tests with fakes over mocks.",
+      "tags": ["testing", "style"]
+    }
     ```
 
-    ### SKILL.md frontmatter
+    `search_notes` is case-insensitive. It matches topic substrings and exact tags.
 
-    | Field | Description |
-    |-------|-------------|
-    | `name` | Skill identifier |
-    | `description` | What this skill covers (used for discovery) |
-    | `tags` | Search tags for finding relevant skills |
-
-    ### Auxiliary files
-
-    Additional markdown files in the skill directory can be loaded on demand via `get_skills`. When a client loads `SKILL.md`, the response also includes a manifest of available auxiliary files.
   </TabItem>
 </Tabs>
 
-## Global vs project skills
+## Shell interpolation
 
-- **Project skills** — Place them in `.aether/commands/` and `.aether/skills/` inside your project
-- **Global skills** — Place them in `~/.aether/commands/` and `~/.aether/skills/` to make them available everywhere
-
-## Notes
-
-`save_note` and `search_notes` let agents persist concise learnings between sessions.
+Loaded skill files and MCP prompt bodies support Aether prompt shell interpolation such as ``!`git branch --show-current` ``. Commands execute relative to the prompt file directory for `get_skills`, and relative to the workspace root for MCP prompts.
