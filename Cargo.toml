@@ -34,7 +34,7 @@ aws-sdk-bedrockruntime = "1.130.0"
 aws-smithy-types = "1.4.7"
 
 # Async runtime
-tokio = { version = "^1.52.2", features = ["full"] }
+tokio = { version = "^1.52.3", features = ["full"] }
 tokio-stream = { version = "^0.1.18", features = ["io-util"] }
 tokio-util = "^0.7.18"
 futures = "^0.3.32"
