@@ -12,16 +12,16 @@
     "check": "astro check"
   },
   "dependencies": {
-    "@astrojs/starlight": "^0.38.1",
+    "@astrojs/starlight": "^0.39.2",
     "@astrojs/starlight-tailwind": "^5.0.0",
     "@fontsource/ibm-plex-mono": "^5.2.7",
     "@fontsource/ibm-plex-sans": "^5.2.8",
-    "@iconify-json/lucide": "^1.2.102",
+    "@iconify-json/lucide": "^1.2.106",
     "@iconify-json/simple-icons": "^1.2.77",
-    "@tailwindcss/vite": "4.2.1",
+    "@tailwindcss/vite": "4.3.0",
     "asciinema-player": "^3.15.1",
     "astro": "^6.0.1",
-    "astro-expressive-code": "^0.41.7",
+    "astro-expressive-code": "^0.42.0",
     "astro-icon": "^1.1.5",
     "sharp": "^0.34.2",
     "tailwindcss": "^4.2.1"
