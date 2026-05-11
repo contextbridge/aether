@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.2](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.5.1...aether-agent-cli-v0.5.2) - 2026-05-11
+
+### Other
+
+- updated the following local packages: aether-mcp-servers
+
 ## [0.5.1](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.5.0...aether-agent-cli-v0.5.1) - 2026-05-08
 
 ### Other

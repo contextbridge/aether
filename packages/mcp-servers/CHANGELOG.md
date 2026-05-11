@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.3.6...aether-mcp-servers-v0.4.0) - 2026-05-11
+
+### Added
+
+- *(mcp-servers)* Coding mcp gains lsp workspace search, and remove confusing lsp/coding server overlap
+
 ## [0.3.6](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.3.5...aether-mcp-servers-v0.3.6) - 2026-05-08
 
 ### Other
