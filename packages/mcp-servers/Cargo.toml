@@ -1,6 +1,6 @@
 [package]
 name = "aether-mcp-servers"
-version = "0.3.6"
+version = "0.4.0"
 edition = "2024"
 description = "Built-in MCP tool servers for the Aether AI agent framework"
 license = "MIT"
