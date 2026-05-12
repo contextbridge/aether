@@ -11,7 +11,6 @@ pub enum StopReason {
     ToolCalls,
     ContentFilter,
     FunctionCall,
-    Error,
     Unknown(String),
 }
 

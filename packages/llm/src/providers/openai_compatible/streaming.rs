@@ -103,14 +103,24 @@ pub fn process_compatible_stream<E: Into<LlmError> + Send>(
                         }
 
                         if let Some(finish_reason) = choice.finish_reason {
-                            let finish_reason_str = format!("{finish_reason:?}");
-                            debug!("Received finish reason: {finish_reason_str}");
-                            last_stop_reason = Some(map_openai_compatible_finish_reason(finish_reason));
+                            debug!("Received finish reason: {finish_reason:?}");
 
-                            for tool_call in collector.complete_all() {
-                                yield Ok(LlmResponse::ToolRequestComplete { tool_call });
+                            match map_finish_reason(finish_reason) {
+                                Ok(stop_reason) => {
+                                    last_stop_reason = Some(stop_reason);
+                                    for tool_call in collector.complete_all() {
+                                        yield Ok(LlmResponse::ToolRequestComplete { tool_call });
+                                    }
+                                }
+
+                                Err(err) => {
+                                    for tool_call in collector.complete_all() {
+                                        yield Ok(LlmResponse::ToolRequestComplete { tool_call });
+                                    }
+                                    yield Err(err);
+                                    return;
+                                }
                             }
-                            // Continue stream to capture usage chunks after finish_reason.
                         }
                     } else {
                         // No choices in this chunk - could be:
@@ -144,14 +154,16 @@ pub fn process_compatible_stream<E: Into<LlmError> + Send>(
     }
 }
 
-fn map_openai_compatible_finish_reason(reason: FinishReason) -> StopReason {
+fn map_finish_reason(reason: FinishReason) -> Result<StopReason> {
     match reason {
-        FinishReason::Stop => StopReason::EndTurn,
-        FinishReason::Length | FinishReason::ModelContextWindowExceeded => StopReason::Length,
-        FinishReason::ToolCalls => StopReason::ToolCalls,
-        FinishReason::ContentFilter => StopReason::ContentFilter,
-        FinishReason::FunctionCall => StopReason::FunctionCall,
-        FinishReason::Error | FinishReason::NetworkError => StopReason::Error,
+        FinishReason::Stop => Ok(StopReason::EndTurn),
+        FinishReason::Length | FinishReason::ModelContextWindowExceeded => Ok(StopReason::Length),
+        FinishReason::ToolCalls => Ok(StopReason::ToolCalls),
+        FinishReason::ContentFilter => Ok(StopReason::ContentFilter),
+        FinishReason::FunctionCall => Ok(StopReason::FunctionCall),
+        FinishReason::Error | FinishReason::NetworkError => {
+            Err(LlmError::ServerError { status: None, message: format!("Provider reported {reason:?} finish reason") })
+        }
     }
 }
 
@@ -165,41 +177,28 @@ mod tests {
     };
     use tokio_stream::StreamExt;
 
-    fn usage_chunk(usage: Usage) -> ChatCompletionStreamResponse {
-        ChatCompletionStreamResponse {
-            id: "chunk_usage".to_string(),
-            choices: vec![],
-            created: 1,
-            model: "test".to_string(),
-            system_fingerprint: None,
-            object: "chat.completion.chunk".to_string(),
-            usage: Some(usage),
-        }
+    #[tokio::test]
+    async fn test_finish_reason_error_yields_retryable_server_error() {
+        let events = run(vec![finish_chunk(FinishReason::Error)]).await;
+        let last = events.last().expect("expected at least one event");
+        let err = last.as_ref().expect_err("FinishReason::Error must surface as Err");
+        assert!(matches!(err, LlmError::ServerError { status: None, .. }), "got {err:?}");
+        assert!(err.is_retryable(), "FinishReason::Error must be retryable so the agent recovers");
+        assert!(!events.iter().any(|e| matches!(e, Ok(LlmResponse::Done { .. }))), "must not emit Done after error");
     }
 
-    async fn collect_first_usage(stream: Vec<ChatCompletionStreamResponse>) -> Option<TokenUsage> {
-        let stream_items =
-            stream.into_iter().map(Ok::<ChatCompletionStreamResponse, std::io::Error>).collect::<Vec<_>>();
-        let mut processed = Box::pin(process_compatible_stream(tokio_stream::iter(stream_items)));
-        let mut events = Vec::new();
-        while let Some(event) = processed.next().await {
-            events.push(event.unwrap());
-        }
-        events.into_iter().find_map(|e| match e {
-            LlmResponse::Usage { tokens } => Some(tokens),
-            _ => None,
-        })
+    #[tokio::test]
+    async fn test_finish_reason_network_error_yields_retryable_server_error() {
+        let events = run(vec![finish_chunk(FinishReason::NetworkError)]).await;
+        let last = events.last().expect("expected at least one event");
+        let err = last.as_ref().expect_err("FinishReason::NetworkError must surface as Err");
+        assert!(matches!(err, LlmError::ServerError { status: None, .. }), "got {err:?}");
+        assert!(err.is_retryable(), "FinishReason::NetworkError must be retryable");
     }
 
     #[tokio::test]
     async fn test_process_compatible_stream_yields_stream_interrupted_on_empty_input() {
-        let stream_items: Vec<std::result::Result<ChatCompletionStreamResponse, std::io::Error>> = vec![];
-        let mut processed = Box::pin(process_compatible_stream(tokio_stream::iter(stream_items)));
-
-        let mut events = Vec::new();
-        while let Some(event) = processed.next().await {
-            events.push(event);
-        }
+        let events = run(vec![]).await;
 
         assert!(matches!(events.first(), Some(Ok(LlmResponse::Start { .. }))), "expected leading Start event");
         let last = events.last().expect("stream must yield at least one event");
@@ -208,84 +207,40 @@ mod tests {
             "empty stream must terminate with StreamInterrupted (retryable), got {last:?}"
         );
         assert!(last.as_ref().err().unwrap().is_retryable(), "StreamInterrupted must be retryable");
-
-        let has_done = events.iter().any(|e| matches!(e, Ok(LlmResponse::Done { .. })));
-        assert!(!has_done, "empty stream must NOT yield Done — that was the pre-fix behavior");
+        assert!(!events.iter().any(|e| matches!(e, Ok(LlmResponse::Done { .. }))), "empty stream must NOT yield Done");
     }
 
     #[tokio::test]
     async fn test_process_compatible_stream_emits_reasoning_chunks() {
-        let stream_items = vec![Ok::<ChatCompletionStreamResponse, std::io::Error>(ChatCompletionStreamResponse {
-            id: "chunk_1".to_string(),
-            choices: vec![ChatCompletionStreamChoice {
-                index: 0,
-                delta: ChatCompletionStreamResponseDelta {
-                    role: None,
-                    content: None,
-                    reasoning_content: Some("thinking".to_string()),
-                    tool_calls: None,
-                },
-                finish_reason: None,
-                logprobs: None,
-            }],
-            created: 1,
-            model: "kimi-k2.5".to_string(),
-            system_fingerprint: None,
-            object: "chat.completion.chunk".to_string(),
-            usage: None,
-        })];
-
-        let mut processed = Box::pin(process_compatible_stream(tokio_stream::iter(stream_items)));
-
-        let mut events = Vec::new();
-        while let Some(event) = processed.next().await {
-            events.push(event.unwrap());
-        }
+        let events = run_ok(vec![chunk(
+            ChatCompletionStreamResponseDelta { reasoning_content: Some("thinking".to_string()), ..Default::default() },
+            None,
+        )])
+        .await;
 
         assert!(matches!(events[0], LlmResponse::Start { .. }));
-        assert!(matches!(
-            events[1],
-            LlmResponse::Reasoning { ref chunk } if chunk == "thinking"
-        ));
+        assert!(matches!(events[1], LlmResponse::Reasoning { ref chunk } if chunk == "thinking"));
         assert!(matches!(events.last(), Some(LlmResponse::Done { stop_reason: None })));
     }
 
     #[tokio::test]
     async fn test_process_compatible_stream_handles_tool_calls() {
-        let stream_items = vec![Ok::<ChatCompletionStreamResponse, std::io::Error>(ChatCompletionStreamResponse {
-            id: "chunk_1".to_string(),
-            choices: vec![ChatCompletionStreamChoice {
-                index: 0,
-                delta: ChatCompletionStreamResponseDelta {
-                    role: None,
-                    content: None,
-                    reasoning_content: None,
-                    tool_calls: Some(vec![ToolCallDelta {
-                        index: 0,
-                        id: Some("call_1".to_string()),
-                        tool_type: Some("function".to_string()),
-                        function: Some(FunctionCallDelta {
-                            name: Some("tool".to_string()),
-                            arguments: Some("{}".to_string()),
-                        }),
-                    }]),
-                },
-                finish_reason: Some(FinishReason::ToolCalls),
-                logprobs: None,
-            }],
-            created: 1,
-            model: "kimi-k2.5".to_string(),
-            system_fingerprint: None,
-            object: "chat.completion.chunk".to_string(),
-            usage: None,
-        })];
-
-        let mut processed = Box::pin(process_compatible_stream(tokio_stream::iter(stream_items)));
-
-        let mut events = Vec::new();
-        while let Some(event) = processed.next().await {
-            events.push(event.unwrap());
-        }
+        let events = run_ok(vec![chunk(
+            ChatCompletionStreamResponseDelta {
+                tool_calls: Some(vec![ToolCallDelta {
+                    index: 0,
+                    id: Some("call_1".to_string()),
+                    tool_type: Some("function".to_string()),
+                    function: Some(FunctionCallDelta {
+                        name: Some("tool".to_string()),
+                        arguments: Some("{}".to_string()),
+                    }),
+                }]),
+                ..Default::default()
+            },
+            Some(FinishReason::ToolCalls),
+        )])
+        .await;
 
         assert!(
             events
@@ -298,15 +253,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_zai_shape_only_populates_cache_read() {
-        let chunk = usage_chunk(Usage {
+        let tokens = collect_first_usage(vec![usage_chunk(Usage {
             prompt_tokens: 100,
             completion_tokens: 50,
             total_tokens: 150,
             prompt_tokens_details: Some(PromptTokensDetails { cached_tokens: Some(30), ..Default::default() }),
             completion_tokens_details: None,
-        });
+        })])
+        .await
+        .expect("usage event");
 
-        let tokens = collect_first_usage(vec![chunk]).await.expect("usage event");
         assert_eq!(
             tokens,
             TokenUsage { input_tokens: 100, output_tokens: 50, cache_read_tokens: Some(30), ..TokenUsage::default() }
@@ -315,7 +271,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_openrouter_shape_populates_all_fields() {
-        let chunk = usage_chunk(Usage {
+        let tokens = collect_first_usage(vec![usage_chunk(Usage {
             prompt_tokens: 1000,
             completion_tokens: 500,
             total_tokens: 1500,
@@ -331,9 +287,10 @@ mod tests {
                 accepted_prediction_tokens: Some(2),
                 rejected_prediction_tokens: Some(1),
             }),
-        });
+        })])
+        .await
+        .expect("usage event");
 
-        let tokens = collect_first_usage(vec![chunk]).await.expect("usage event");
         assert_eq!(
             tokens,
             TokenUsage {
@@ -353,7 +310,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_openai_shape_populates_input_audio_and_completion_details() {
-        let chunk = usage_chunk(Usage {
+        let tokens = collect_first_usage(vec![usage_chunk(Usage {
             prompt_tokens: 200,
             completion_tokens: 100,
             total_tokens: 300,
@@ -367,9 +324,10 @@ mod tests {
                 accepted_prediction_tokens: Some(5),
                 ..Default::default()
             }),
-        });
+        })])
+        .await
+        .expect("usage event");
 
-        let tokens = collect_first_usage(vec![chunk]).await.expect("usage event");
         assert_eq!(tokens.cache_read_tokens, Some(80));
         assert_eq!(tokens.cache_creation_tokens, None);
         assert_eq!(tokens.input_audio_tokens, Some(12));
@@ -396,17 +354,62 @@ mod tests {
         )
         .expect("response should deserialize");
 
-        let mut processed = Box::pin(process_compatible_stream(tokio_stream::iter(vec![Ok::<
-            ChatCompletionStreamResponse,
-            std::io::Error,
-        >(response)])));
-
-        let mut events = Vec::new();
-        while let Some(event) = processed.next().await {
-            events.push(event.unwrap());
-        }
+        let events = run_ok(vec![response]).await;
 
         assert!(matches!(events[0], LlmResponse::Start { .. }));
         assert!(matches!(events.last(), Some(LlmResponse::Done { stop_reason: Some(StopReason::Length) })));
+    }
+
+    fn chunk(
+        delta: ChatCompletionStreamResponseDelta,
+        finish_reason: Option<FinishReason>,
+    ) -> ChatCompletionStreamResponse {
+        ChatCompletionStreamResponse {
+            id: "chunk".to_string(),
+            choices: vec![ChatCompletionStreamChoice { index: 0, delta, finish_reason, logprobs: None }],
+            created: 1,
+            model: "test".to_string(),
+            system_fingerprint: None,
+            object: "chat.completion.chunk".to_string(),
+            usage: None,
+        }
+    }
+
+    fn finish_chunk(reason: FinishReason) -> ChatCompletionStreamResponse {
+        chunk(ChatCompletionStreamResponseDelta::default(), Some(reason))
+    }
+
+    fn usage_chunk(usage: Usage) -> ChatCompletionStreamResponse {
+        ChatCompletionStreamResponse {
+            id: "chunk_usage".to_string(),
+            choices: vec![],
+            created: 1,
+            model: "test".to_string(),
+            system_fingerprint: None,
+            object: "chat.completion.chunk".to_string(),
+            usage: Some(usage),
+        }
+    }
+
+    async fn run(chunks: Vec<ChatCompletionStreamResponse>) -> Vec<Result<LlmResponse>> {
+        let stream_items =
+            chunks.into_iter().map(Ok::<ChatCompletionStreamResponse, std::io::Error>).collect::<Vec<_>>();
+        let mut processed = Box::pin(process_compatible_stream(tokio_stream::iter(stream_items)));
+        let mut events = Vec::new();
+        while let Some(event) = processed.next().await {
+            events.push(event);
+        }
+        events
+    }
+
+    async fn run_ok(chunks: Vec<ChatCompletionStreamResponse>) -> Vec<LlmResponse> {
+        run(chunks).await.into_iter().map(|e| e.expect("expected Ok event")).collect()
+    }
+
+    async fn collect_first_usage(chunks: Vec<ChatCompletionStreamResponse>) -> Option<TokenUsage> {
+        run_ok(chunks).await.into_iter().find_map(|e| match e {
+            LlmResponse::Usage { tokens } => Some(tokens),
+            _ => None,
+        })
     }
 }
