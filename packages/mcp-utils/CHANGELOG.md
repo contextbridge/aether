@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.1](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.5.0...aether-mcp-utils-v0.5.1) - 2026-05-12
+
+### Other
+
+- update Cargo.toml dependencies
+
 ## [0.5.0](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.4.1...aether-mcp-utils-v0.5.0) - 2026-05-08
 
 ### Added

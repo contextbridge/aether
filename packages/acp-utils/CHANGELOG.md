@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.7](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.3.6...aether-acp-utils-v0.3.7) - 2026-05-12
+
+### Other
+
+- update Cargo.toml dependencies
+
 ## [0.3.6](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.3.5...aether-acp-utils-v0.3.6) - 2026-05-08
 
 ### Added
