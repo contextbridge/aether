@@ -188,7 +188,7 @@ pub struct ChatCompletionStreamChoice {
     pub logprobs: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ChatCompletionStreamResponseDelta {
     pub role: Option<Role>,
     pub content: Option<String>,

@@ -4,7 +4,6 @@
 pub mod testing;
 
 mod client_connection;
-mod daemonize;
 mod diagnostics_store;
 mod document_lifecycle;
 mod file_watcher;
@@ -65,8 +64,6 @@ pub struct LspdArgs {
 
 pub fn run_lspd(args: LspdArgs) -> Result<(), String> {
     let idle_timeout = if args.idle_timeout == 0 { None } else { Some(Duration::from_secs(args.idle_timeout)) };
-
-    daemonize::daemonize()?;
 
     let runtime = tokio::runtime::Runtime::new().map_err(|e| format!("Failed to create tokio runtime: {e}"))?;
 

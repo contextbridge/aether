@@ -132,9 +132,8 @@ fn test_deserialize_zai_network_error_finish_reason() {
 }
 
 #[test]
-fn test_zai_network_error_maps_to_stop_reason_error() {
-    use llm::LlmResponse;
-    use llm::StopReason;
+fn test_zai_network_error_yields_retryable_server_error() {
+    use llm::LlmError;
     use llm::providers::openai_compatible::process_compatible_stream;
 
     let json = r#"{
@@ -162,9 +161,12 @@ fn test_zai_network_error_maps_to_stop_reason_error() {
 
         let mut events = Vec::new();
         while let Some(event) = processed.next().await {
-            events.push(event.unwrap());
+            events.push(event);
         }
 
-        assert!(matches!(events.last(), Some(LlmResponse::Done { stop_reason: Some(StopReason::Error) })));
+        let last = events.last().expect("stream must yield at least one event");
+        let err = last.as_ref().expect_err("network_error finish reason must surface as Err");
+        assert!(matches!(err, LlmError::ServerError { status: None, .. }), "got {err:?}");
+        assert!(err.is_retryable(), "network_error must be retryable so the agent recovers without user input");
     });
 }

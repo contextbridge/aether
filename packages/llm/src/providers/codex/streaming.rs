@@ -26,7 +26,7 @@ where
                     }
                 }
                 Err(e) => {
-                    yield Err(LlmError::ApiError(e.to_string()));
+                    yield Err(LlmError::StreamInterrupted(e.to_string()));
                     break;
                 }
             }
@@ -91,7 +91,8 @@ fn process_event(
             }
         }
         ResponseStreamEvent::ResponseError(e) => {
-            responses.push(Err(LlmError::ApiError(format!("Codex API error: {}", e.message))));
+            responses
+                .push(Err(LlmError::ServerError { status: None, message: format!("Codex API error: {}", e.message) }));
         }
         // Events we don't need to act on
         _ => {}
@@ -258,7 +259,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_error_event() {
+    async fn test_error_event_is_retryable_server_error() {
         let events = vec![ResponseStreamEvent::ResponseError(ResponseErrorEvent {
             sequence_number: 1,
             code: None,
@@ -274,8 +275,10 @@ mod tests {
             responses.push(result);
         }
 
-        assert!(responses[0].is_ok()); // Start
-        assert!(responses[1].is_err()); // Error
+        assert!(responses[0].is_ok());
+        let err = responses[1].as_ref().expect_err("expected ResponseError to surface as Err");
+        assert!(matches!(err, LlmError::ServerError { status: None, .. }), "got {err:?}");
+        assert!(err.is_retryable(), "ResponseError must be retryable so the agent can recover");
     }
 
     #[tokio::test]
@@ -332,8 +335,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_stream_error_propagation() {
-        let events: Vec<Result<ResponseStreamEvent>> = vec![Err(LlmError::ApiError("connection lost".to_string()))];
+    async fn test_stream_error_propagation_is_retryable() {
+        let events: Vec<Result<ResponseStreamEvent>> =
+            vec![Err(LlmError::StreamInterrupted("connection lost".to_string()))];
 
         let stream = tokio_stream::iter(events);
         let mut response_stream = Box::pin(process_response_stream(stream));
@@ -343,8 +347,10 @@ mod tests {
             responses.push(result);
         }
 
-        assert!(responses[0].is_ok()); // Start
-        assert!(responses[1].is_err()); // Stream error
+        assert!(responses[0].is_ok());
+        let err = responses[1].as_ref().expect_err("expected upstream Err to surface as Err");
+        assert!(matches!(err, LlmError::StreamInterrupted(_)), "got {err:?}");
+        assert!(err.is_retryable(), "mid-stream interrupts must be retryable");
     }
 
     #[test]

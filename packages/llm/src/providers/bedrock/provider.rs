@@ -4,6 +4,8 @@ use crate::provider::{LlmResponseStream, ProviderFactory, StreamingModelProvider
 use crate::{Context, LlmError, Result};
 use aws_config::Region;
 use aws_sdk_bedrockruntime::config::{BehaviorVersion, Credentials};
+use aws_sdk_bedrockruntime::error::SdkError;
+use aws_sdk_bedrockruntime::operation::converse_stream::ConverseStreamError;
 use aws_sdk_bedrockruntime::primitives::event_stream::EventReceiver;
 use aws_sdk_bedrockruntime::types::error::ConverseStreamOutputError;
 use aws_sdk_bedrockruntime::types::{ConverseStreamOutput, InferenceConfiguration};
@@ -96,7 +98,7 @@ impl BedrockProvider {
 
         let response = request.send().await.map_err(|e| {
             error!(model = %self.model, error = ?e, "Bedrock API error");
-            LlmError::ApiError(format!("Bedrock API error: {e}"))
+            LlmError::from(e)
         })?;
 
         Ok(response.stream)
@@ -143,6 +145,31 @@ impl StreamingModelProvider for BedrockProvider {
 
     fn display_name(&self) -> String {
         format!("Bedrock ({})", self.model)
+    }
+}
+
+impl From<SdkError<ConverseStreamError>> for LlmError {
+    fn from(e: SdkError<ConverseStreamError>) -> Self {
+        let message = format!("Bedrock API error: {e}");
+        match e {
+            SdkError::TimeoutError(_) => LlmError::Timeout(message),
+            SdkError::DispatchFailure(_) => LlmError::Network(message),
+            SdkError::ResponseError(_) => LlmError::ServerError { status: None, message },
+            SdkError::ServiceError(svc) => {
+                let inner = svc.err();
+                if inner.is_throttling_exception() {
+                    LlmError::RateLimited(message)
+                } else if inner.is_service_unavailable_exception()
+                    || inner.is_internal_server_exception()
+                    || inner.is_model_stream_error_exception()
+                {
+                    LlmError::ServerError { status: None, message }
+                } else {
+                    LlmError::ApiError(message)
+                }
+            }
+            _ => LlmError::ApiError(message),
+        }
     }
 }
 

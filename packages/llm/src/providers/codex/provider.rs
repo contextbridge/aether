@@ -89,24 +89,22 @@ impl CodexProvider {
             serde_json::to_string(&request).unwrap_or_else(|_| "<failed to serialize>".to_string())
         );
 
-        let response = self
-            .client
-            .post(&url)
-            .headers(headers)
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| LlmError::ApiRequest(e.to_string()))?;
+        let response = self.client.post(&url).headers(headers).json(&request).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
 
-            if status.as_u16() == 401 || status.as_u16() == 403 {
+            if matches!(status.as_u16(), 401 | 403) {
                 self.token_manager.clear_cache().await;
             }
 
-            return Err(LlmError::ApiError(format!("Codex API request failed with status {status}: {error_text}")));
+            let message = format!("Codex API request failed with status {status}: {error_text}");
+            return Err(match status.as_u16() {
+                429 => LlmError::RateLimited(message),
+                s if (500..600).contains(&s) => LlmError::ServerError { status: Some(s), message },
+                _ => LlmError::ApiError(message),
+            });
         }
 
         let event_stream = response.bytes_stream().eventsource().filter_map(|result| {
@@ -119,7 +117,7 @@ impl CodexProvider {
                         None
                     }
                 },
-                Err(e) => Some(Err(LlmError::IoError(e.to_string()))),
+                Err(e) => Some(Err(LlmError::StreamInterrupted(e.to_string()))),
             })
         });
 

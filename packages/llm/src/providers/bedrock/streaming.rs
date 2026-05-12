@@ -1,9 +1,11 @@
+use aws_sdk_bedrockruntime::error::SdkError;
 use aws_sdk_bedrockruntime::primitives::event_stream::EventReceiver;
 use aws_sdk_bedrockruntime::types::error::ConverseStreamOutputError;
 use aws_sdk_bedrockruntime::types::{
     ContentBlockDelta, ContentBlockStart, ConverseStreamOutput, StopReason as BedrockStopReason,
     TokenUsage as BedrockTokenUsage,
 };
+use aws_smithy_types::event_stream::RawMessage;
 use futures::Stream;
 use std::collections::HashMap;
 use tracing::{debug, error, info, warn};
@@ -59,7 +61,7 @@ pub fn process_bedrock_stream(
                 }
                 Err(e) => {
                     error!("Bedrock stream recv error: {e}");
-                    yield Err(LlmError::ApiError(format!("Bedrock stream error: {e}")));
+                    yield Err(LlmError::from(e));
                     break;
                 }
             }
@@ -182,6 +184,28 @@ fn handle_content_block_stop(index: i32, active_tool_calls: &mut HashMap<i32, Pe
     } else {
         debug!("Content block stopped at index {index}");
         StreamEvent::Skip
+    }
+}
+
+impl From<SdkError<ConverseStreamOutputError, RawMessage>> for LlmError {
+    fn from(e: SdkError<ConverseStreamOutputError, RawMessage>) -> Self {
+        let message = format!("Bedrock stream error: {e}");
+        match e {
+            SdkError::ServiceError(svc) => {
+                let inner = svc.err();
+                if inner.is_throttling_exception() {
+                    LlmError::RateLimited(message)
+                } else if inner.is_service_unavailable_exception()
+                    || inner.is_internal_server_exception()
+                    || inner.is_model_stream_error_exception()
+                {
+                    LlmError::StreamInterrupted(message)
+                } else {
+                    LlmError::ApiError(message)
+                }
+            }
+            _ => LlmError::StreamInterrupted(message),
+        }
     }
 }
 
