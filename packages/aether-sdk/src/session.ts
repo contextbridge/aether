@@ -7,7 +7,11 @@ import * as acp from "@agentclientprotocol/sdk";
 import { AsyncQueue } from "./asyncQueue.js";
 import { AetherSdkError } from "./errors.js";
 import { startMcpServersForSession } from "./mcp/index.js";
-import { spawnAetherProcess, stopChild } from "./spawnAetherProcess.js";
+import {
+  resolveAetherCommand,
+  spawnAetherProcess,
+  stopChild,
+} from "./spawnAetherProcess.js";
 import type {
   AetherElicitationRequest,
   AetherElicitationResponse,
@@ -80,7 +84,7 @@ export class AetherSession {
       abortSignal,
       externalMcpServers,
       tools,
-      binaryPath: aetherPath = "aether",
+      binaryPath,
       agent,
       model,
       reasoningEffort,
@@ -120,7 +124,8 @@ export class AetherSession {
         "agent and model cannot both be supplied",
       );
 
-    const args = ["acp"];
+    const resolved = resolveAetherCommand(binaryPath);
+    const args = [...resolved.prefixArgs, "acp"];
     if (settings) args.push("--settings-json", JSON.stringify(settings));
     if (settingsFile) args.push("--settings-file", settingsFile);
     if (agent) args.push("--agent", agent);
@@ -136,7 +141,7 @@ export class AetherSession {
     if (logDir) args.push("--log-dir", logDir);
 
     const spawned = spawnAetherProcess({
-      command: aetherPath,
+      command: resolved.command,
       args,
       cwd,
       env,

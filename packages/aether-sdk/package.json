@@ -26,6 +26,7 @@
     "e2e": "node scripts/e2e.mjs"
   },
   "dependencies": {
+    "@aether-agent/cli": "^0.5.2",
     "@agentclientprotocol/sdk": "^0.21.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "express": "^5.1.0",

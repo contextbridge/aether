@@ -29,8 +29,10 @@ pnpm add @aether-agent/sdk
 # or: npm install @aether-agent/sdk
 ```
 
-You also need the `aether` CLI on your `PATH` or an explicit `aetherPath`.
-See the [Aether install docs](https://aether-agent.io/getting-started/overview/).
+The SDK depends on `@aether-agent/cli`, which bundles the `aether` binary for
+your platform, so no separate install is required. Pass `binaryPath` to
+`AetherSession.start()` if you want to point at a system or custom-built
+`aether` instead (an absolute path or any name resolvable on `PATH`).
 
 ## Basic session
 
@@ -66,6 +68,7 @@ yourself in a `finally` block.
 | `settings`        | Inline Aether settings object using the `.aether/settings.json` shape. |
 | `settingsFile`    | Path to an alternate settings JSON file.                              |
 | `cwd`             | Working directory for the spawned `aether acp` process.              |
+| `binaryPath`      | Override the bundled `@aether-agent/cli` binary (absolute path or name on `PATH`). |
 | `tools`           | Closure-backed TypeScript tool groups keyed by Aether tool prefix.   |
 | `externalMcpServers` | External stdio/http/sse MCP servers keyed by Aether tool prefix.   |
 | `abortSignal`     | Cancel the active session and tear the subprocess down.              |

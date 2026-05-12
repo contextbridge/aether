@@ -1,5 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import type { AsyncQueue } from "./asyncQueue.js";
@@ -20,6 +22,34 @@ export interface SpawnedAetherProcess {
   child: ChildProcess;
   stdin: NonNullable<ChildProcess["stdin"]>;
   stdout: NonNullable<ChildProcess["stdout"]>;
+}
+
+export interface ResolvedAetherCommand {
+  command: string;
+  prefixArgs: string[];
+}
+
+/**
+ * Pick the aether executable to spawn.
+ *
+ * When `binaryPath` is given, it is used verbatim. Otherwise the bundled
+ * `@aether-agent/cli` shim is resolved through Node's module resolution and
+ * launched with the current Node binary so the lookup works cross-platform
+ * without relying on a shebang.
+ */
+export function resolveAetherCommand(
+  binaryPath: string | undefined,
+): ResolvedAetherCommand {
+  if (binaryPath) return { command: binaryPath, prefixArgs: [] };
+  const require = createRequire(import.meta.url);
+  const pkgJsonPath = require.resolve("@aether-agent/cli/package.json");
+  const pkg = require("@aether-agent/cli/package.json") as {
+    bin: { aether: string };
+  };
+  return {
+    command: process.execPath,
+    prefixArgs: [join(dirname(pkgJsonPath), pkg.bin.aether)],
+  };
 }
 
 export function spawnAetherProcess({
