@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.13](https://github.com/contextbridge/aether/compare/aether-lspd-v0.1.12...aether-lspd-v0.1.13) - 2026-05-12
+
+### Fixed
+
+- *(aether-lspd)* Don't double fork, fork then setsid
+
 ## [0.1.12](https://github.com/contextbridge/aether/compare/aether-lspd-v0.1.11...aether-lspd-v0.1.12) - 2026-05-08
 
 ### Other

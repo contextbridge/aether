@@ -1,6 +1,6 @@
 [package]
 name = "aether-llm"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 description = "Multi-provider LLM abstraction layer for the Aether AI agent framework"
 license = "MIT"
@@ -62,7 +62,7 @@ serde_json = { workspace = true }
 
 tracing = { workspace = true }
 
-utils = { package = "aether-utils", path = "../utils", version = "0.2.3" }
+utils = { package = "aether-utils", path = "../utils", version = "0.2.4" }
 
 # OAuth/Codex deps
 rmcp = { workspace = true, optional = true }
@@ -81,7 +81,7 @@ windows-native-keyring-store = { workspace = true, optional = true }
 dbus-secret-service-keyring-store = { workspace = true, optional = true }
 
 [build-dependencies]
-llm-codegen = { package = "aether-llm-codegen", path = "../llm-codegen", version = "0.2.5" }
+llm-codegen = { package = "aether-llm-codegen", path = "../llm-codegen", version = "0.2.6" }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -1,6 +1,6 @@
 [package]
 name = "aether-acp-utils"
-version = "0.3.6"
+version = "0.3.7"
 edition = "2024"
 description = "Agent Client Protocol (ACP) utilities for the Aether AI agent framework"
 license = "MIT"
@@ -37,10 +37,10 @@ tokio-util = { workspace = true, features = ["compat"], optional = true }
 rmcp = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.5.0" }
+mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.5.1" }
 tokio = { workspace = true }
 tracing = { workspace = true }
-utils = { package = "aether-utils", path = "../utils", version = "0.2.3" }
+utils = { package = "aether-utils", path = "../utils", version = "0.2.4" }
 async-trait = { workspace = true }
 
 # Optional (feature-gated)

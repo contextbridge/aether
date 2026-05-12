@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.1](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.4.0...aether-agent-core-v0.4.1) - 2026-05-12
+
+### Other
+
+- update Cargo.toml dependencies
+
 ## [0.4.0](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.3.5...aether-agent-core-v0.4.0) - 2026-05-08
 
 ### Added

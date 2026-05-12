@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.4](https://github.com/contextbridge/aether/compare/aether-project-v0.4.3...aether-project-v0.4.4) - 2026-05-12
+
+### Other
+
+- update Cargo.toml dependencies
+
 ## [0.4.3](https://github.com/contextbridge/aether/compare/aether-project-v0.4.2...aether-project-v0.4.3) - 2026-05-08
 
 ### Other

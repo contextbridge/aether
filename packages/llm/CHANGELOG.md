@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0](https://github.com/contextbridge/aether/compare/aether-llm-v0.3.0...aether-llm-v0.4.0) - 2026-05-12
+
+### Fixed
+
+- *(llm)* Retry llm calls on more retryable failures for bedrock, codex and openai compatible providers
+
 ## [0.3.0](https://github.com/contextbridge/aether/compare/aether-llm-v0.2.7...aether-llm-v0.3.0) - 2026-05-08
 
 ### Other
