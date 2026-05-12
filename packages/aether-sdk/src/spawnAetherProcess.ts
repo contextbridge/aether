@@ -63,7 +63,7 @@ export function spawnAetherProcess({
   try {
     child = spawn(command, args, {
       cwd,
-      env: mergeEnv(env),
+      env: resolveEnv(env),
       stdio: ["pipe", "pipe", "inherit"],
     });
   } catch (err) {
@@ -133,13 +133,14 @@ function hasExited(child: ChildProcess): boolean {
   return child.exitCode !== null || child.signalCode !== null;
 }
 
-function mergeEnv(
-  overrides: Record<string, string | undefined> | undefined,
+function resolveEnv(
+  provided: Record<string, string | undefined> | undefined,
 ): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  for (const [key, value] of Object.entries(overrides ?? {})) {
-    if (value === undefined) delete env[key];
-    else env[key] = value;
+  if (provided === undefined) return process.env;
+
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(provided)) {
+    if (value !== undefined) env[key] = value;
   }
   return env;
 }

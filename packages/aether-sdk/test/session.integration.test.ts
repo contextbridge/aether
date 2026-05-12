@@ -85,6 +85,40 @@ describe("AetherSession with a fake ACP agent", () => {
     }
   });
 
+  it("uses provided env instead of inheriting process.env", async () => {
+    const originalExtraChunks = process.env.FAKE_AETHER_EXTRA_CHUNKS;
+    process.env.FAKE_AETHER_EXTRA_CHUNKS = "1";
+
+    let session: AetherSession | null = null;
+    try {
+      session = await AetherSession.start({
+        binaryPath: FAKE_AETHER,
+        env: { PATH: process.env.PATH },
+      });
+
+      const messages: AetherMessage[] = [];
+      for await (const message of session.prompt("test prompt")) {
+        messages.push(message);
+      }
+
+      const updateTexts = messages.flatMap((m) =>
+        m.type === "session_update" &&
+        m.update.sessionUpdate === "agent_message_chunk" &&
+        m.update.content.type === "text"
+          ? [m.update.content.text]
+          : [],
+      );
+      expect(updateTexts).toEqual(["hello from fake aether"]);
+    } finally {
+      if (originalExtraChunks === undefined) {
+        delete process.env.FAKE_AETHER_EXTRA_CHUNKS;
+      } else {
+        process.env.FAKE_AETHER_EXTRA_CHUNKS = originalExtraChunks;
+      }
+      await session?.close();
+    }
+  });
+
   it("does not surface stale events from an abandoned prompt on the next prompt", async () => {
     const session = await AetherSession.start({
       binaryPath: FAKE_AETHER,
