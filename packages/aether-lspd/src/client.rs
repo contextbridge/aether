@@ -380,6 +380,13 @@ async fn spawn_daemon(socket_path: &Path) -> ClientResult<()> {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
 
+    #[cfg(unix)]
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        cmd.as_std_mut()
+            .pre_exec(|| nix::unistd::setsid().map(|_| ()).map_err(|e| std::io::Error::from_raw_os_error(e as i32)));
+    }
+
     let mut child = cmd.spawn().map_err(ClientError::SpawnFailed)?;
 
     for _ in 0..50 {
