@@ -61,7 +61,7 @@ mod tests {
         let anthropic: LlmModel = "anthropic:claude-opus-4-6".parse().unwrap();
         assert_eq!(anthropic.provider_display_name(), "Anthropic");
 
-        let bedrock: LlmModel = "bedrock:anthropic.claude-3-5-haiku-20241022-v1:0".parse().unwrap();
+        let bedrock: LlmModel = "bedrock:anthropic.claude-haiku-4-5-20251001-v1:0".parse().unwrap();
         assert_eq!(bedrock.provider_display_name(), "AWS Bedrock");
 
         let zai: LlmModel = "zai:glm-4.5".parse().unwrap();
