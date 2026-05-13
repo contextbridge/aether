@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.3](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.6.2...aether-agent-cli-v0.6.3) - 2026-05-13
+
+### Fixed
+
+- *(aether-cli)* When --agent is passed, also resolve bedrock model inference arns and unify how --agent and --model check to see if a model exists
+
 ## [0.6.2](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.6.1...aether-agent-cli-v0.6.2) - 2026-05-13
 
 ### Fixed
