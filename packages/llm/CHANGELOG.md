@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0](https://github.com/contextbridge/aether/compare/aether-llm-v0.4.0...aether-llm-v0.5.0) - 2026-05-13
+
+### Other
+
+- *(keyring)* Add aether-keyring crate, extract OAuthCredentialStorage, and make creds store lazily initialized
+- *(llm)* Updatem models and async openai
+- *(llm)* Update models
+
 ## [0.4.0](https://github.com/contextbridge/aether/compare/aether-llm-v0.3.0...aether-llm-v0.4.0) - 2026-05-12
 
 ### Fixed

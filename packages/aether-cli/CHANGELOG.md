@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.5.3...aether-agent-cli-v0.6.0) - 2026-05-13
+
+### Other
+
+- *(keyring)* Add aether-keyring crate, extract OAuthCredentialStorage, and make creds store lazily initialized
+
 ## [0.5.3](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.5.2...aether-agent-cli-v0.5.3) - 2026-05-12
 
 ### Other

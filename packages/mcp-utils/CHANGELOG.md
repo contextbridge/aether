@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.2](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.5.1...aether-mcp-utils-v0.5.2) - 2026-05-13
+
+### Other
+
+- *(keyring)* Add aether-keyring crate, extract OAuthCredentialStorage, and make creds store lazily initialized
+
 ## [0.5.1](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.5.0...aether-mcp-utils-v0.5.1) - 2026-05-12
 
 ### Other
