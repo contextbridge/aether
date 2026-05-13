@@ -9,7 +9,7 @@ use agent_client_protocol::schema::{
     SessionUpdate, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
 };
 use agent_client_protocol::{Client, ConnectionTo};
-use llm::catalog::{LlmModel, get_local_models};
+use llm::catalog::{BedrockModel, LlmModel, get_local_models};
 use llm::types::IsoString;
 use llm::{ContentBlock, ReasoningEffort};
 use std::collections::HashSet;
@@ -326,7 +326,10 @@ fn parse_available_model(model: &str, available: &[LlmModel]) -> Result<LlmModel
         warn!("Failed to parse --model `{model}`: {e}");
         acp::Error::invalid_params()
     })?;
-    if available.iter().any(|available| available == &parsed) {
+
+    if matches!(&parsed, LlmModel::Bedrock(BedrockModel::Profile(_)))
+        || available.iter().any(|available| available == &parsed)
+    {
         Ok(parsed)
     } else {
         warn!("Requested model `{model}` is not available");
@@ -375,6 +378,8 @@ mod tests {
 
     const SONNET: &str = "anthropic:claude-sonnet-4-5";
     const DEEPSEEK: &str = "deepseek:deepseek-chat";
+    const BEDROCK_PROFILE_ARN: &str =
+        "bedrock:arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/000000000000";
 
     fn mock_oauth_store() -> Arc<dyn OAuthCredentialStorage> {
         Arc::new(aether_auth::FakeOAuthCredentialStore::new())
@@ -433,6 +438,27 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn parse_available_model_accepts_bedrock_inference_profile_arn() {
+        let available: Vec<LlmModel> = Vec::new();
+        let parsed = parse_available_model(BEDROCK_PROFILE_ARN, &available)
+            .expect("Bedrock inference-profile ARN should be accepted");
+        assert!(matches!(parsed, LlmModel::Bedrock(BedrockModel::Profile(_))));
+    }
+
+    #[test]
+    fn parse_available_model_rejects_unknown_catalog_model() {
+        let available: Vec<LlmModel> = vec![DEEPSEEK.parse().unwrap()];
+        assert!(parse_available_model(SONNET, &available).is_err());
+    }
+
+    #[test]
+    fn parse_available_model_accepts_catalog_model_when_present() {
+        let sonnet: LlmModel = SONNET.parse().unwrap();
+        let available = vec![sonnet.clone()];
+        assert_eq!(parse_available_model(SONNET, &available).unwrap(), sonnet);
     }
 }
 
