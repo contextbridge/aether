@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0](https://github.com/contextbridge/aether/compare/aether-llm-v0.5.0...aether-llm-v0.6.0) - 2026-05-13
+
+### Added
+
+- *(llm)* Support bedrock inferance profile arns in model strings
+
 ## [0.5.0](https://github.com/contextbridge/aether/compare/aether-llm-v0.4.0...aether-llm-v0.5.0) - 2026-05-13
 
 ### Other

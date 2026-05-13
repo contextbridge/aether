@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.7](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.6...aether-llm-codegen-v0.2.7) - 2026-05-13
+
+### Added
+
+- *(llm)* Support bedrock inferance profile arns in model strings
+
 ## [0.2.6](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.5...aether-llm-codegen-v0.2.6) - 2026-05-12
 
 ### Other
