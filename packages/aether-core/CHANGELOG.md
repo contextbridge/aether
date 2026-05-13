@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.4.1...aether-agent-core-v0.5.0) - 2026-05-13
+
+### Fixed
+
+- *(aether-core)* Enable codex provider feature
+
+### Other
+
+- *(keyring)* Add aether-keyring crate, extract OAuthCredentialStorage, and make creds store lazily initialized
+
 ## [0.4.1](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.4.0...aether-agent-core-v0.4.1) - 2026-05-12
 
 ### Other
