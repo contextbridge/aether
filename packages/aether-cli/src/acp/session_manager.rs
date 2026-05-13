@@ -9,7 +9,7 @@ use agent_client_protocol::schema::{
     SessionUpdate, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
 };
 use agent_client_protocol::{Client, ConnectionTo};
-use llm::catalog::{BedrockModel, LlmModel, get_local_models};
+use llm::catalog::{LlmModel, get_local_models};
 use llm::types::IsoString;
 use llm::{ContentBlock, ReasoningEffort};
 use std::collections::HashSet;
@@ -22,7 +22,7 @@ use tracing::{error, info, warn};
 use super::config_setting::ConfigSetting;
 use super::mappers::{map_acp_mcp_servers, replay_to_client};
 use super::model_config::{
-    ValidatedMode, build_config_options_from_modes, pick_default_model, supports_prompt_audio,
+    ValidatedMode, build_config_options_from_modes, model_exists, pick_default_model, supports_prompt_audio,
     validated_modes_from_specs,
 };
 use super::relay::{SessionCommand, spawn_relay};
@@ -327,9 +327,7 @@ fn parse_available_model(model: &str, available: &[LlmModel]) -> Result<LlmModel
         acp::Error::invalid_params()
     })?;
 
-    if matches!(&parsed, LlmModel::Bedrock(BedrockModel::Profile(_)))
-        || available.iter().any(|available| available == &parsed)
-    {
+    if model_exists(available, model) {
         Ok(parsed)
     } else {
         warn!("Requested model `{model}` is not available");
@@ -375,6 +373,7 @@ fn validate_prompt_support(model_value: &str, content: &[ContentBlock]) -> Resul
 mod tests {
     use super::*;
     use agent_client_protocol::schema::{InitializeRequest, ProtocolVersion};
+    use llm::catalog::BedrockModel;
 
     const SONNET: &str = "anthropic:claude-sonnet-4-5";
     const DEEPSEEK: &str = "deepseek:deepseek-chat";
