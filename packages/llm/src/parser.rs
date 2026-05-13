@@ -13,8 +13,12 @@ use crate::providers::{
     openrouter::OpenRouterProvider,
 };
 use crate::{LlmError, ProviderFactory, StreamingModelProvider, alloyed::AlloyedModelProvider};
+#[cfg(feature = "codex")]
+use aether_auth::OAuthCredentialStorage;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
+#[cfg(feature = "codex")]
+use std::sync::Arc;
 
 #[doc = include_str!("docs/parser.md")]
 pub struct ModelProviderParser {
@@ -45,9 +49,6 @@ impl Default for ModelProviderParser {
         #[cfg(feature = "bedrock")]
         let parser = parser.with_provider::<BedrockProvider>("bedrock");
 
-        #[cfg(feature = "codex")]
-        let parser = parser.with_provider::<CodexProvider>("codex");
-
         parser
     }
 }
@@ -62,6 +63,19 @@ impl ModelProviderParser {
             Box::new(|model: &str| {
                 let model = model.to_string();
                 Box::pin(async move { Ok(Box::new(P::from_env().await?.with_model(&model)) as _) })
+            }),
+        );
+        self
+    }
+
+    #[cfg(feature = "codex")]
+    pub fn with_codex_provider(mut self, store: Arc<dyn OAuthCredentialStorage>) -> Self {
+        self.factories.insert(
+            "codex".to_string(),
+            Box::new(move |model: &str| {
+                let store = Arc::clone(&store);
+                let model = model.to_string();
+                Box::pin(async move { Ok(Box::new(CodexProvider::new(store).with_model(&model)) as _) })
             }),
         );
         self

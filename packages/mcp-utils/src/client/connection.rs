@@ -2,9 +2,9 @@ use super::{
     McpClientEvent, McpError, OAuthHandlerFactory, Result,
     config::{McpServer, McpTransport},
     mcp_client::McpClient,
-    oauth::{create_auth_manager_from_store, perform_oauth_flow},
 };
 use crate::transport::create_in_memory_transport;
+use aether_auth::{OAuthCredentialStorage, create_auth_manager_from_store, perform_oauth_flow};
 use rmcp::{
     RoleClient, RoleServer, ServiceExt,
     model::{ClientInfo, Root, Tool as RmcpTool},
@@ -59,6 +59,7 @@ pub(super) struct ConnectContext<'a> {
     pub event_sender: &'a mpsc::Sender<McpClientEvent>,
     pub roots: &'a Arc<RwLock<Vec<Root>>>,
     pub oauth_handler_factory: Option<&'a OAuthHandlerFactory>,
+    pub oauth_credential_store: Option<&'a Arc<dyn OAuthCredentialStorage>>,
 }
 
 /// The result of attempting to connect (or authenticate) to an MCP server.
@@ -124,12 +125,15 @@ pub(super) async fn connect_server(server: McpServer, ctx: &ConnectContext<'_>) 
     let outcome = match transport {
         McpTransport::Stdio { command, args, env } => connect_stdio(command, args, env, mcp_client).await,
         McpTransport::InMemory { server } => connect_in_memory(&name, server, mcp_client).await,
-        McpTransport::Http { config } => connect_http(&name, config, mcp_client, ctx.oauth_handler_factory).await,
+        McpTransport::Http { config } => {
+            connect_http(&name, config, mcp_client, ctx.oauth_handler_factory, ctx.oauth_credential_store).await
+        }
     };
 
     McpConnectAttempt { name, proxied, outcome: outcome.with_reauth(reauth_config) }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn authenticate_http(
     name: String,
     config: StreamableHttpClientTransportConfig,
@@ -137,11 +141,12 @@ pub async fn authenticate_http(
     event_sender: mpsc::Sender<McpClientEvent>,
     roots: Arc<RwLock<Vec<Root>>>,
     oauth_handler_factory: OAuthHandlerFactory,
+    oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
     proxied: bool,
 ) -> McpConnectAttempt {
     let outcome = match async {
         let handler = oauth_handler_factory()?;
-        let auth_client = perform_oauth_flow(&name, &config.uri, handler.as_ref())
+        let auth_client = perform_oauth_flow(&name, &config.uri, handler.as_ref(), oauth_credential_store)
             .await
             .map_err(|e| McpError::ConnectionFailed(format!("OAuth failed for '{name}': {e}")))?;
 
@@ -211,11 +216,17 @@ async fn connect_http(
     config: StreamableHttpClientTransportConfig,
     mcp_client: McpClient,
     oauth_handler_factory: Option<&OAuthHandlerFactory>,
+    oauth_credential_store: Option<&Arc<dyn OAuthCredentialStorage>>,
 ) -> McpConnectOutcome {
     let conn_err = |e| McpError::ConnectionFailed(format!("HTTP MCP server {name}: {e}"));
-    let result = if config.auth_header.is_none()
-        && let Ok(Some(auth_manager)) = create_auth_manager_from_store(name, &config.uri).await
+    let stored_auth_manager = if let Some(store) = oauth_credential_store
+        && config.auth_header.is_none()
     {
+        create_auth_manager_from_store(name, &config.uri, Arc::clone(store)).await.ok().flatten()
+    } else {
+        None
+    };
+    let result = if let Some(auth_manager) = stored_auth_manager {
         tracing::debug!("Using OAuth for server '{name}'");
         let auth_client = AuthClient::new(reqwest::Client::default(), auth_manager);
         let transport = StreamableHttpClientTransport::with_client(auth_client, config.clone());

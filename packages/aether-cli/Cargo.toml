@@ -29,6 +29,7 @@ name = "aether"
 path = "src/main.rs"
 
 [dependencies]
+aether-auth = { path = "../aether-auth", version = "0.1.0", features = ["keyring"] }
 aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.4.1" }
 aether-project = { path = "../aether-project", version = "0.4.4" }
 llm = { package = "aether-llm", path = "../llm", features = ["bedrock", "codex"], version = "0.4.0" }

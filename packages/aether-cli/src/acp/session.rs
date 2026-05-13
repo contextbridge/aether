@@ -1,10 +1,11 @@
 use super::mappers::map_mcp_prompt_to_available_command;
+use aether_auth::OAuthCredentialStorage;
+use aether_auth::{BrowserOAuthHandler, OAuthHandler};
 use aether_core::agent_spec::AgentSpec;
 use aether_core::core::AgentHandle;
 use aether_core::events::{AgentMessage, UserMessage};
 use aether_core::mcp::run_mcp_task::McpCommand;
 use llm::ChatMessage;
-use mcp_utils::client::oauth::{BrowserOAuthHandler, OAuthHandler};
 use mcp_utils::client::{McpClientEvent, McpError, McpServer, OAuthHandlerFactory};
 use mcp_utils::status::McpServerStatusEntry;
 
@@ -39,6 +40,7 @@ impl Session {
         extra_mcp_servers: Vec<McpServer>,
         restored_messages: Option<Vec<ChatMessage>>,
         prompt_cache_key: Option<String>,
+        oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         debug!("MCP configs: {:?}", spec.mcp_config_sources);
         debug!("Using project root: {:?}", cwd);
@@ -50,6 +52,7 @@ impl Session {
         }
 
         rb = rb.oauth_handler_factory(browser_oauth_handler_factory());
+        rb = rb.oauth_credential_store(oauth_credential_store);
 
         let agent = rb.build(None, restored_messages).await?;
 

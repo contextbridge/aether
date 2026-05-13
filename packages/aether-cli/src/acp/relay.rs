@@ -1,5 +1,6 @@
 use acp_utils::notifications::{ElicitationParams, McpNotification, McpRequest};
 use acp_utils::server::AcpServerError;
+use aether_auth::OAuthCredentialStorage;
 use aether_core::events::{AgentMessage, UserMessage};
 use aether_core::mcp::run_mcp_task::McpCommand;
 use agent_client_protocol::schema::{self as acp, SessionId};
@@ -84,6 +85,7 @@ pub(crate) fn spawn_relay(
     connection: ConnectionTo<Client>,
     acp_session_id: SessionId,
     session_store: Arc<SessionStore>,
+    oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
 ) -> RelayHandle {
     let (cmd_tx, cmd_rx) = mpsc::channel(50);
     let (mcp_request_tx, mcp_request_rx) = mpsc::channel(50);
@@ -95,11 +97,13 @@ pub(crate) fn spawn_relay(
         connection,
         acp_session_id,
         session_store,
+        oauth_credential_store,
         cancel.clone(),
     ));
     RelayHandle { cmd_tx, mcp_request_tx, cancel, join }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_session_relay(
     session: Session,
     mut cmd_rx: mpsc::Receiver<SessionCommand>,
@@ -107,6 +111,7 @@ async fn run_session_relay(
     connection: ConnectionTo<Client>,
     acp_session_id: SessionId,
     session_store: Arc<SessionStore>,
+    oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
     cancel: CancellationToken,
 ) {
     let Session {
@@ -147,6 +152,7 @@ async fn run_session_relay(
                             connection: &connection,
                             acp_session_id: &acp_session_id,
                             session_store: &session_store,
+                            oauth_credential_store: &oauth_credential_store,
                             cancel: &cancel,
                         };
                         let result = handle_prompt(&mut ctx, content, switch_model, reasoning_effort).await;
@@ -182,6 +188,7 @@ struct PromptContext<'a> {
     connection: &'a ConnectionTo<Client>,
     acp_session_id: &'a SessionId,
     session_store: &'a Arc<SessionStore>,
+    oauth_credential_store: &'a Arc<dyn OAuthCredentialStorage>,
     cancel: &'a CancellationToken,
 }
 
@@ -192,7 +199,7 @@ async fn handle_prompt(
     reasoning_effort: Option<ReasoningEffort>,
 ) -> Result<acp::StopReason, RelayError> {
     if let Some(model) = switch_model {
-        let parser = ModelProviderParser::default();
+        let parser = ModelProviderParser::default().with_codex_provider(Arc::clone(ctx.oauth_credential_store));
         let (provider, _) = parser.parse(&model).await.map_err(|e| RelayError::SwitchModelFailed(format!("{e}")))?;
         ctx.agent_tx
             .send(UserMessage::SwitchModel(provider))
@@ -564,6 +571,8 @@ mod tests {
                 let (_event_tx, mut event_rx) = mpsc::channel(1);
                 let (_mcp_req_tx, mut mcp_request_rx) = mpsc::channel(1);
                 let (_cmd_tx, mut cmd_rx) = mpsc::channel(1);
+                let oauth_credential_store: Arc<dyn OAuthCredentialStorage> =
+                    Arc::new(aether_auth::FakeOAuthCredentialStore::new());
 
                 let mut ctx = PromptContext {
                     agent_tx: &agent_tx,
@@ -575,6 +584,7 @@ mod tests {
                     connection: &cx,
                     acp_session_id: &acp_session_id,
                     session_store: &session_store,
+                    oauth_credential_store: &oauth_credential_store,
                     cancel: &cancel,
                 };
 

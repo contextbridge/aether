@@ -4,6 +4,7 @@ use crate::context::CompactionConfig;
 use crate::core::{Agent, Prompt, Result};
 use crate::events::{AgentMessage, UserMessage};
 use crate::mcp::run_mcp_task::McpCommand;
+use aether_auth::OAuthCredentialStorage;
 use llm::parser::ModelProviderParser;
 use llm::types::IsoString;
 use llm::{ChatMessage, Context, StreamingModelProvider, ToolDefinition};
@@ -69,8 +70,17 @@ impl AgentBuilder {
     ///
     /// The LLM provider is derived from `spec.model` via `ModelProviderParser`.
     /// `base_prompts` are prepended before the spec's own prompts.
-    pub async fn from_spec(spec: &AgentSpec, base_prompts: Vec<Prompt>) -> Result<Self> {
-        let (provider, _) = ModelProviderParser::default().parse(&spec.model).await?;
+    pub async fn from_spec(
+        spec: &AgentSpec,
+        base_prompts: Vec<Prompt>,
+        oauth_store: Option<Arc<dyn OAuthCredentialStorage>>,
+    ) -> Result<Self> {
+        let parser = ModelProviderParser::default();
+        let parser = match oauth_store {
+            Some(store) => parser.with_codex_provider(store),
+            None => parser,
+        };
+        let (provider, _) = parser.parse(&spec.model).await?;
         let mut builder = Self::new(Arc::from(provider));
         for prompt in base_prompts {
             builder = builder.system_prompt(prompt);
@@ -273,7 +283,7 @@ mod tests {
             tools: ToolFilter::default(),
         };
 
-        let builder = AgentBuilder::from_spec(&spec, vec![]).await;
+        let builder = AgentBuilder::from_spec(&spec, vec![], None).await;
         assert!(builder.is_ok());
     }
 }

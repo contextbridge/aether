@@ -1,14 +1,12 @@
 use crate::LlmError;
-use crate::oauth::BrowserOAuthHandler;
-use crate::oauth::OAuthError;
-use crate::oauth::OAuthHandler;
-use crate::oauth::credential_store::{OAuthCredential, OAuthCredentialStorage, OAuthCredentialStore};
+use aether_auth::{BrowserOAuthHandler, OAuthCredential, OAuthCredentialStorage, OAuthError, OAuthHandler};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use oauth2::TokenResponse;
 use oauth2::basic::BasicClient;
 use oauth2::reqwest::redirect::Policy;
 use oauth2::{AuthUrl, AuthorizationCode, ClientId, PkceCodeChallenge, RedirectUrl, TokenUrl};
+use std::sync::Arc;
 use tokio::sync::Mutex;
 use url::Url;
 
@@ -20,13 +18,7 @@ const SCOPE: &str = "openid profile email offline_access";
 
 /// Run the full Codex OAuth flow: open browser, capture callback, exchange token, save credentials.
 ///
-/// This is designed to be called from `aether auth codex` CLI command.
-pub async fn perform_codex_oauth_flow() -> Result<(), LlmError> {
-    let store = OAuthCredentialStore::with_platform_store()?;
-    perform_codex_oauth_flow_with_store(&store).await
-}
-
-pub async fn perform_codex_oauth_flow_with_store(store: &impl OAuthCredentialStorage) -> Result<(), LlmError> {
+pub async fn perform_codex_oauth_flow(store: &dyn OAuthCredentialStorage) -> Result<(), LlmError> {
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
     let state = generate_random_state();
 
@@ -126,16 +118,16 @@ impl CachedToken {
 
 /// Manages OAuth tokens for the Codex backend API.
 ///
-/// Generic over `OAuthCredentialStorage` so tests can inject an in-memory fake
-/// instead of hitting the OS keychain.
-pub struct CodexTokenManager<T: OAuthCredentialStorage> {
-    store: T,
+/// Holds an `Arc<dyn OAuthCredentialStorage>` so callers can swap in keyring-backed,
+/// file-backed, or in-memory stores without changing this type.
+pub struct CodexTokenManager {
+    store: Arc<dyn OAuthCredentialStorage>,
     credential_key: String,
     cached: Mutex<Option<CachedToken>>,
 }
 
-impl<T: OAuthCredentialStorage> CodexTokenManager<T> {
-    pub fn new(store: T, credential_key: &str) -> Self {
+impl CodexTokenManager {
+    pub fn new(store: Arc<dyn OAuthCredentialStorage>, credential_key: &str) -> Self {
         Self { store, credential_key: credential_key.to_string(), cached: Mutex::new(None) }
     }
 

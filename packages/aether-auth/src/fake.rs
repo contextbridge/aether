@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use crate::oauth::OAuthError;
-use crate::oauth::credential_store::{OAuthCredential, OAuthCredentialStorage};
+use async_trait::async_trait;
+
+use crate::credential::{OAuthCredential, OAuthCredentialStorage};
+use crate::error::OAuthError;
 
 #[derive(Default)]
 pub struct FakeOAuthCredentialStore {
@@ -20,6 +22,7 @@ impl FakeOAuthCredentialStore {
     }
 }
 
+#[async_trait]
 impl OAuthCredentialStorage for FakeOAuthCredentialStore {
     async fn load_credential(&self, server_id: &str) -> Result<Option<OAuthCredential>, OAuthError> {
         Ok(self.credentials.lock().unwrap().get(server_id).cloned())
@@ -27,6 +30,11 @@ impl OAuthCredentialStorage for FakeOAuthCredentialStore {
 
     async fn save_credential(&self, key: &str, credential: OAuthCredential) -> Result<(), OAuthError> {
         self.credentials.lock().unwrap().insert(key.to_string(), credential);
+        Ok(())
+    }
+
+    async fn delete_credential(&self, key: &str) -> Result<(), OAuthError> {
+        self.credentials.lock().unwrap().remove(key);
         Ok(())
     }
 
@@ -39,10 +47,10 @@ impl OAuthCredentialStorage for FakeOAuthCredentialStore {
 mod tests {
     use super::*;
 
-    #[test]
-    fn load_returns_none_when_empty() {
+    #[tokio::test]
+    async fn load_returns_none_when_empty() {
         let store = FakeOAuthCredentialStore::new();
-        let result = tokio::runtime::Runtime::new().unwrap().block_on(store.load_credential("unknown"));
+        let result = store.load_credential("unknown").await;
         assert!(result.unwrap().is_none());
     }
 
@@ -62,6 +70,22 @@ mod tests {
         assert_eq!(loaded.client_id, "client_1");
         assert_eq!(loaded.access_token, "tok_abc");
         assert_eq!(loaded.refresh_token.as_deref(), Some("ref_xyz"));
+    }
+
+    #[tokio::test]
+    async fn delete_removes_credential() {
+        let store = FakeOAuthCredentialStore::new();
+        let cred = OAuthCredential {
+            client_id: "c".to_string(),
+            access_token: "t".to_string(),
+            refresh_token: None,
+            expires_at: None,
+        };
+        store.save_credential("x", cred).await.unwrap();
+        assert!(store.has_credential("x"));
+
+        store.delete_credential("x").await.unwrap();
+        assert!(!store.has_credential("x"));
     }
 
     #[test]

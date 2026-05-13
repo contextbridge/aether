@@ -1,4 +1,5 @@
 use crate::error::CliError;
+use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::{AgentSpec, McpConfigSource};
 use aether_core::core::{AgentBuilder, AgentHandle, Prompt};
 use aether_core::events::{AgentMessage, UserMessage};
@@ -11,6 +12,7 @@ use mcp_servers::McpBuilderExt;
 use mcp_utils::client::{McpClientEvent, McpServer, OAuthHandlerFactory};
 use mcp_utils::status::McpServerStatusEntry;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::task::JoinHandle;
 use tracing::debug;
@@ -21,6 +23,7 @@ pub struct RuntimeBuilder {
     mcp_config_sources: Vec<McpConfigSource>,
     extra_mcp_servers: Vec<McpServer>,
     oauth_applicator: Option<Box<dyn FnOnce(McpBuilder) -> McpBuilder + Send>>,
+    oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
     prompt_cache_key: Option<String>,
 }
 
@@ -51,6 +54,7 @@ impl RuntimeBuilder {
             mcp_config_sources: Vec::new(),
             extra_mcp_servers: Vec::new(),
             oauth_applicator: None,
+            oauth_credential_store: None,
             prompt_cache_key: None,
         })
     }
@@ -62,6 +66,7 @@ impl RuntimeBuilder {
             mcp_config_sources: Vec::new(),
             extra_mcp_servers: Vec::new(),
             oauth_applicator: None,
+            oauth_credential_store: None,
             prompt_cache_key: None,
         }
     }
@@ -88,16 +93,22 @@ impl RuntimeBuilder {
         self
     }
 
+    pub fn oauth_credential_store(mut self, store: Arc<dyn OAuthCredentialStorage>) -> Self {
+        self.oauth_credential_store = Some(store);
+        self
+    }
+
     pub async fn build(
         self,
         custom_prompt: Option<Prompt>,
         messages: Option<Vec<ChatMessage>>,
     ) -> Result<Runtime, CliError> {
         let prompt_cache_key = self.prompt_cache_key.clone();
+        let oauth_credential_store = self.oauth_credential_store.clone();
         let mcp = self.spawn_mcp().await?;
 
         let filtered_tools = mcp.spec.tools.apply(mcp.tool_definitions);
-        let mut agent_builder = AgentBuilder::from_spec(&mcp.spec, vec![])
+        let mut agent_builder = AgentBuilder::from_spec(&mcp.spec, vec![], oauth_credential_store)
             .await
             .map_err(|e| CliError::AgentError(e.to_string()))?
             .tools(mcp.mcp_tx.clone(), filtered_tools);
@@ -143,6 +154,10 @@ impl RuntimeBuilder {
 
         if let Some(apply_oauth) = self.oauth_applicator {
             builder = apply_oauth(builder);
+        }
+
+        if let Some(store) = self.oauth_credential_store {
+            builder = builder.with_oauth_credential_store(store);
         }
 
         let mcp_config_sources: Vec<McpConfigSource> = if self.mcp_config_sources.is_empty() {

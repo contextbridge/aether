@@ -7,8 +7,6 @@ mod context;
 mod credential;
 pub mod error;
 mod llm_response;
-#[cfg(feature = "oauth")]
-pub mod oauth;
 pub mod parser;
 pub mod provider;
 pub mod providers;
@@ -29,4 +27,4 @@ pub use reasoning::ReasoningEffort;
 pub use tools::*;
 
 #[cfg(feature = "codex")]
-pub use providers::codex::{perform_codex_oauth_flow, perform_codex_oauth_flow_with_store};
+pub use providers::codex::{CodexProvider, perform_codex_oauth_flow};

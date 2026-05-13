@@ -1,13 +1,13 @@
 use acp_utils::config_meta::{ConfigOptionMeta, SelectOptionMeta};
 use acp_utils::config_option_id::ConfigOptionId;
+use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::AgentSpec;
 use agent_client_protocol::schema::{self as acp, SessionConfigOption, SessionConfigOptionCategory};
 use llm::ReasoningEffort;
 use llm::catalog::LlmModel;
-use llm::oauth::OAuthCredentialStorage;
 use std::collections::{BTreeMap, HashSet};
 
-fn needs_oauth_login(model: &LlmModel, store: &impl OAuthCredentialStorage) -> bool {
+fn needs_oauth_login(model: &LlmModel, store: &dyn OAuthCredentialStorage) -> bool {
     model.oauth_provider_id().is_some_and(|id| !store.has_credential(id))
 }
 
@@ -19,7 +19,7 @@ pub(crate) fn supports_prompt_audio(model: &LlmModel) -> bool {
     model.supports_audio()
 }
 
-pub(crate) fn unavailable_reason(model: &LlmModel, store: &impl OAuthCredentialStorage) -> String {
+pub(crate) fn unavailable_reason(model: &LlmModel, store: &dyn OAuthCredentialStorage) -> String {
     if needs_oauth_login(model, store) {
         return "Needs login".to_string();
     }
@@ -48,7 +48,7 @@ pub(crate) fn build_model_config_option(
     available: &[LlmModel],
     current_model: &str,
     all_models: &[LlmModel],
-    credential_store: &impl OAuthCredentialStorage,
+    credential_store: &dyn OAuthCredentialStorage,
 ) -> SessionConfigOption {
     let available_models: HashSet<String> = available.iter().map(ToString::to_string).collect();
 
@@ -209,7 +209,7 @@ pub(crate) fn build_config_options_from_modes(
     current_model: &str,
     reasoning_effort: Option<ReasoningEffort>,
     all_models: &[LlmModel],
-    credential_store: &impl OAuthCredentialStorage,
+    credential_store: &dyn OAuthCredentialStorage,
 ) -> Vec<SessionConfigOption> {
     let mut options = Vec::new();
 
@@ -254,10 +254,10 @@ pub(crate) fn pick_default_model(available: &[LlmModel]) -> Option<&LlmModel> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aether_auth::FakeOAuthCredentialStore;
     use aether_core::agent_spec::{AgentSpecExposure, ToolFilter};
     use agent_client_protocol::schema::{SessionConfigKind, SessionConfigSelectOption, SessionConfigSelectOptions};
     use llm::catalog::{AnthropicModel, DeepSeekModel, GeminiModel};
-    use llm::testing::FakeOAuthCredentialStore;
 
     fn test_models() -> Vec<LlmModel> {
         vec![

@@ -23,7 +23,7 @@ use tracing::info;
 use tracing_appender::rolling::daily;
 use tracing_subscriber::EnvFilter;
 
-use llm::oauth::OAuthCredentialStore;
+use aether_auth::OAuthCredentialStorage;
 use session_manager::{InitialSessionSelection, SessionManagerConfig};
 use session_registry::SessionRegistry;
 use session_store::SessionStore;
@@ -62,14 +62,12 @@ pub enum AcpRunOutcome {
 #[derive(Debug)]
 pub enum AcpRunError {
     Protocol(acp::Error),
-    OAuth(llm::oauth::OAuthError),
 }
 
 impl std::fmt::Display for AcpRunError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             AcpRunError::Protocol(e) => write!(f, "ACP protocol error: {e}"),
-            AcpRunError::OAuth(e) => write!(f, "ACP OAuth error: {e}"),
         }
     }
 }
@@ -78,7 +76,6 @@ impl std::error::Error for AcpRunError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             AcpRunError::Protocol(e) => Some(e),
-            AcpRunError::OAuth(e) => Some(e),
         }
     }
 }
@@ -97,7 +94,8 @@ pub async fn run_acp(args: AcpArgs) -> Result<AcpRunOutcome, AcpRunError> {
     };
     let session_store =
         SessionStore::new().map_or_else(|e| panic!("Failed to initialize session store: {e}"), Arc::new);
-    let oauth_credential_store = OAuthCredentialStore::with_platform_store().map_err(AcpRunError::OAuth)?;
+    let oauth_credential_store: Arc<dyn OAuthCredentialStorage> =
+        Arc::new(aether_auth::OsKeyringStore::with_platform_store());
     let manager = Arc::new(SessionManager::new(SessionManagerConfig {
         registry: Arc::new(SessionRegistry::new()),
         session_store,

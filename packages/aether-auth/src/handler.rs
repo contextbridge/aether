@@ -1,4 +1,4 @@
-use super::error::OAuthError;
+use crate::error::OAuthError;
 use futures::future::BoxFuture;
 
 /// OAuth callback data containing both the authorization code and state (CSRF token)

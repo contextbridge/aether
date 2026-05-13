@@ -336,7 +336,7 @@ async fn spawn_agent(
     mcp_tx: mpsc::Sender<McpCommand>,
     tools: Vec<ToolDefinition>,
 ) -> Result<(mpsc::Sender<UserMessage>, mpsc::Receiver<AgentMessage>, AgentHandle), String> {
-    AgentBuilder::from_spec(&spec, vec![])
+    AgentBuilder::from_spec(&spec, vec![], None)
         .await
         .map_err(|e| format!("Failed to build agent from spec: {e}"))?
         .tools(mcp_tx, tools)

@@ -159,9 +159,9 @@ impl From<async_openai::error::OpenAIError> for LlmError {
     }
 }
 
-#[cfg(feature = "oauth")]
-impl From<crate::oauth::OAuthError> for LlmError {
-    fn from(error: crate::oauth::OAuthError) -> Self {
+#[cfg(feature = "codex")]
+impl From<aether_auth::OAuthError> for LlmError {
+    fn from(error: aether_auth::OAuthError) -> Self {
         LlmError::OAuthError(error.to_string())
     }
 }

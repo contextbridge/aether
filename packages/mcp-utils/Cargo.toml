@@ -26,8 +26,9 @@ workspace = true
 [features]
 default = ["client"]
 client = [
+    "dep:aether-auth",
+    "aether-auth/mcp",
     "dep:llm",
-    "llm/oauth",
     "dep:reqwest",
     "dep:thiserror",
     "dep:schemars",
@@ -44,6 +45,7 @@ tracing = { workspace = true }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.4" }
 
 # client-only deps
+aether-auth = { path = "../aether-auth", version = "0.1.0", optional = true }
 llm = { package = "aether-llm", path = "../llm", optional = true, version = "0.4.0" }
 serde_json = { workspace = true }
 regex = { workspace = true }

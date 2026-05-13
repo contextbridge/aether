@@ -1,0 +1,51 @@
+[package]
+name = "aether-auth"
+version = "0.1.0"
+edition = "2024"
+description = "OAuth credential storage and authorization flows for the Aether AI agent framework"
+license = "MIT"
+repository = "https://github.com/contextbridge/aether"
+readme = "README.md"
+
+[package.metadata.dist]
+dist = false
+
+[lints]
+workspace = true
+
+[features]
+default = []
+keyring = [
+    "dep:keyring-core",
+    "dep:apple-native-keyring-store",
+    "dep:windows-native-keyring-store",
+    "dep:dbus-secret-service-keyring-store",
+]
+mcp = ["dep:rmcp", "dep:oauth2", "dep:reqwest", "dep:url"]
+
+[dependencies]
+async-trait = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+# keyring feature
+keyring-core = { workspace = true, optional = true }
+
+# mcp feature
+rmcp = { workspace = true, optional = true }
+oauth2 = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+url = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-native-keyring-store = { workspace = true, optional = true }
+
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
+dbus-secret-service-keyring-store = { workspace = true, optional = true }

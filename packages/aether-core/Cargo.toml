@@ -43,6 +43,7 @@ agent-client-protocol = { workspace = true }
 acp_utils = { package = "aether-acp-utils", path = "../acp-utils", default-features = false, version = "0.3.7" }
 glob = { workspace = true }
 regex = { workspace = true }
+aether-auth = { path = "../aether-auth", version = "0.1.0" }
 mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.5.1" }
 llm = { package = "aether-llm", path = "../llm", version = "0.4.0" }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.4" }

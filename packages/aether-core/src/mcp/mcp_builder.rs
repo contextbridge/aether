@@ -1,3 +1,4 @@
+use aether_auth::OAuthCredentialStorage;
 use llm::ToolDefinition;
 
 use mcp_utils::client::{
@@ -10,6 +11,7 @@ use crate::agent_spec::McpConfigSource;
 use super::run_mcp_task::{McpCommand, run_mcp_task};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tokio::{
     sync::mpsc::{self, Receiver, Sender},
     task::JoinHandle,
@@ -34,6 +36,7 @@ pub struct McpBuilder {
     mcp_channel_capacity: usize,
     roots: Vec<PathBuf>,
     oauth_handler_factory: Option<OAuthHandlerFactory>,
+    oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
     aether_home: Option<PathBuf>,
 }
 
@@ -45,6 +48,7 @@ impl Default for McpBuilder {
             mcp_channel_capacity: 1000,
             roots: Vec::new(),
             oauth_handler_factory: None,
+            oauth_credential_store: None,
             aether_home: None,
         }
     }
@@ -72,6 +76,11 @@ impl McpBuilder {
 
     pub fn with_oauth_handler_factory(mut self, factory: OAuthHandlerFactory) -> Self {
         self.oauth_handler_factory = Some(factory);
+        self
+    }
+
+    pub fn with_oauth_credential_store(mut self, store: Arc<dyn OAuthCredentialStorage>) -> Self {
+        self.oauth_credential_store = Some(store);
         self
     }
 
@@ -119,6 +128,9 @@ impl McpBuilder {
         let (event_tx, event_rx) = mpsc::channel::<McpClientEvent>(self.mcp_channel_capacity);
 
         let mut mcp_manager = McpManager::new(event_tx, self.oauth_handler_factory);
+        if let Some(store) = self.oauth_credential_store {
+            mcp_manager = mcp_manager.with_oauth_credential_store(store);
+        }
         if let Some(aether_home) = self.aether_home {
             mcp_manager = mcp_manager.with_aether_home(aether_home);
         }

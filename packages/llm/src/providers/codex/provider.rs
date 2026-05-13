@@ -1,9 +1,9 @@
 use super::mappers::{map_messages, map_tools};
 use super::oauth::CodexTokenManager;
 use super::streaming::process_response_stream;
-use crate::oauth::credential_store::OAuthCredentialStore;
-use crate::provider::{LlmResponseStream, ProviderFactory, StreamingModelProvider, get_context_window};
+use crate::provider::{LlmResponseStream, StreamingModelProvider, get_context_window};
 use crate::{Context, LlmError, Result};
+use aether_auth::OAuthCredentialStorage;
 use async_openai::types::responses::{
     CreateResponse, IncludeEnum, InputParam, Reasoning, ReasoningEffort, ReasoningSummary, ResponseStreamEvent,
     ResponseTextParam, TextResponseFormatConfiguration, Verbosity,
@@ -20,12 +20,18 @@ const CODEX_API_BASE: &str = "https://chatgpt.com/backend-api/codex";
 pub struct CodexProvider {
     client: reqwest::Client,
     model: String,
-    token_manager: Arc<CodexTokenManager<OAuthCredentialStore>>,
+    token_manager: Arc<CodexTokenManager>,
 }
 
 impl CodexProvider {
-    pub fn new(token_manager: CodexTokenManager<OAuthCredentialStore>) -> Self {
+    pub fn new(store: Arc<dyn OAuthCredentialStorage>) -> Self {
+        let token_manager = CodexTokenManager::new(store, super::PROVIDER_ID);
         Self { client: reqwest::Client::new(), model: "gpt-5.5".to_string(), token_manager: Arc::new(token_manager) }
+    }
+
+    pub fn with_model(mut self, model: &str) -> Self {
+        self.model = model.to_string();
+        self
     }
 
     fn build_request(&self, context: &Context) -> Result<CreateResponse> {
@@ -125,19 +131,6 @@ impl CodexProvider {
     }
 }
 
-impl ProviderFactory for CodexProvider {
-    async fn from_env() -> Result<Self> {
-        let store = OAuthCredentialStore::with_platform_store()?;
-        let token_manager = CodexTokenManager::new(store, super::PROVIDER_ID);
-        Ok(Self::new(token_manager))
-    }
-
-    fn with_model(mut self, model: &str) -> Self {
-        self.model = model.to_string();
-        self
-    }
-}
-
 impl StreamingModelProvider for CodexProvider {
     fn model(&self) -> Option<crate::LlmModel> {
         format!("{}:{}", super::PROVIDER_ID, self.model).parse().ok()
@@ -207,6 +200,7 @@ mod tests {
     use crate::ContentBlock;
     use crate::ToolDefinition;
     use crate::types::IsoString;
+    use aether_auth::FakeOAuthCredentialStore;
 
     #[test]
     fn build_request_simple() {
@@ -340,9 +334,7 @@ mod tests {
     }
 
     fn create_test_provider() -> CodexProvider {
-        let keyring_store: Arc<keyring_core::CredentialStore> = keyring_core::mock::Store::new().unwrap();
-        let store = OAuthCredentialStore::new(keyring_store);
-        let tm = CodexTokenManager::new(store, "codex-test");
-        CodexProvider::new(tm).with_model("gpt-5.5")
+        let store: Arc<dyn OAuthCredentialStorage> = Arc::new(FakeOAuthCredentialStore::new());
+        CodexProvider::new(store).with_model("gpt-5.5")
     }
 }

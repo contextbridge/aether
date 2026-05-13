@@ -15,7 +15,6 @@ pub use config::{
 };
 pub use connection::{McpConnectAttempt, McpConnectOutcome, McpServerConnection, ServerInstructions};
 pub use error::{McpError, Result};
-pub use llm::oauth;
 pub use manager::{
     ElicitationRequest, McpClientEvent, McpManager, McpServerStatus, McpServerStatusEntry, OAuthHandlerFactory,
     UrlElicitationCompleteParams,

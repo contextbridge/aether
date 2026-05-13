@@ -1,5 +1,5 @@
-use super::error::OAuthError;
-use super::handler::{OAuthCallback, OAuthHandler};
+use crate::error::OAuthError;
+use crate::handler::{OAuthCallback, OAuthHandler};
 use futures::future::BoxFuture;
 use std::process::Command;
 use std::time::Duration;

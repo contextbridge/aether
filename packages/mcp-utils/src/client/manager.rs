@@ -9,9 +9,9 @@ use super::{
     },
     mcp_client::McpClient,
     naming::{create_namespaced_tool_name, split_on_server_name},
-    oauth::OAuthHandler,
     tool_proxy::ToolProxy,
 };
+use aether_auth::{OAuthCredentialStorage, OAuthHandler};
 use futures::future::join_all;
 use rmcp::{
     RoleClient,
@@ -80,6 +80,7 @@ pub struct McpManager {
     /// Roots shared with all MCP clients
     roots: Arc<RwLock<Vec<Root>>>,
     oauth_handler_factory: Option<OAuthHandlerFactory>,
+    oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
     server_statuses: Vec<McpServerStatusEntry>,
 }
 
@@ -102,12 +103,18 @@ impl McpManager {
             event_sender,
             roots: Arc::new(RwLock::new(Vec::new())),
             oauth_handler_factory,
+            oauth_credential_store: None,
             server_statuses: Vec::new(),
         }
     }
 
     pub fn with_aether_home(mut self, aether_home: impl Into<PathBuf>) -> Self {
         self.aether_home = Some(aether_home.into());
+        self
+    }
+
+    pub fn with_oauth_credential_store(mut self, store: Arc<dyn OAuthCredentialStorage>) -> Self {
+        self.oauth_credential_store = Some(store);
         self
     }
 
@@ -257,6 +264,7 @@ impl McpManager {
             .oauth_handler_factory
             .clone()
             .ok_or_else(|| McpError::ConnectionFailed(format!("No OAuth handler factory available for '{name}'")))?;
+        let oauth_credential_store = self.oauth_credential_store.clone();
         let name = name.to_string();
         let config = record.reauth_config.clone().expect("checked above");
         let client_info = self.client_info.clone();
@@ -268,7 +276,17 @@ impl McpManager {
         self.emit_server_statuses_changed().await;
 
         Ok(async move {
-            authenticate_http(name, config, client_info, event_sender, roots, oauth_handler_factory, proxied).await
+            authenticate_http(
+                name,
+                config,
+                client_info,
+                event_sender,
+                roots,
+                oauth_handler_factory,
+                oauth_credential_store,
+                proxied,
+            )
+            .await
         })
     }
 
@@ -453,6 +471,7 @@ impl McpManager {
             event_sender: &self.event_sender,
             roots: &self.roots,
             oauth_handler_factory: self.oauth_handler_factory.as_ref(),
+            oauth_credential_store: self.oauth_credential_store.as_ref(),
         }
     }
 
@@ -680,8 +699,8 @@ mod tests {
     use crate::client::OAuthHandlerFactory;
     use crate::client::config::{McpServer, McpTransport};
     use crate::client::connection::{McpConnectAttempt, McpConnectOutcome};
-    use crate::client::oauth::{OAuthCallback, OAuthError, OAuthHandler};
     use crate::status::McpServerAuthCapability;
+    use aether_auth::{OAuthCallback, OAuthError, OAuthHandler};
     use futures::future::BoxFuture;
     use llm::ToolDefinition;
     use rmcp::{

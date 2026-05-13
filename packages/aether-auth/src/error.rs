@@ -1,6 +1,7 @@
+use std::sync::Arc;
 use thiserror::Error;
 
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum OAuthError {
     #[error("User cancelled authorization")]
     UserCancelled,
@@ -8,14 +9,11 @@ pub enum OAuthError {
     #[error("OAuth credential storage error: {0}")]
     CredentialStore(String),
 
-    #[error("OS keychain error: {0}")]
-    Keychain(#[from] keyring_core::Error),
-
     #[error("rmcp auth error: {0}")]
     Rmcp(String),
 
     #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
+    Io(Arc<std::io::Error>),
 
     #[error("Invalid OAuth callback: {0}")]
     InvalidCallback(String),
@@ -31,4 +29,10 @@ pub enum OAuthError {
 
     #[error("No credentials found: {0}")]
     NoCredentials(String),
+}
+
+impl From<std::io::Error> for OAuthError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(Arc::new(error))
+    }
 }

@@ -1,21 +1,18 @@
-use super::OAuthError;
-use super::credential_store::OAuthCredentialStore;
-use super::handler::OAuthHandler;
+use super::credential_store::mcp_credential_store;
+use crate::{OAuthCredentialStorage, OAuthError, OAuthHandler};
 use rmcp::transport::auth::{AuthClient, AuthorizationManager, OAuthState};
+use std::sync::Arc;
 
 const OAUTH_CLIENT_NAME: &str = "Aether MCP Client";
-
-fn create_credential_store() -> Result<OAuthCredentialStore, OAuthError> {
-    OAuthCredentialStore::with_platform_store()
-}
 
 /// Returns `Ok(Some(manager))` if credentials were found and initialized successfully,
 /// `Ok(None)` if no stored credentials exist, or `Err` on failure.
 pub async fn create_auth_manager_from_store(
     server_id: &str,
     base_url: &str,
+    store: Arc<dyn OAuthCredentialStorage>,
 ) -> Result<Option<AuthorizationManager>, OAuthError> {
-    let credential_store = create_credential_store()?.mcp_store(server_id);
+    let credential_store = mcp_credential_store(store, server_id.to_string());
 
     let mut auth_manager = AuthorizationManager::new(base_url).await.map_err(|e| OAuthError::Rmcp(e.to_string()))?;
     auth_manager.set_credential_store(credential_store);
@@ -31,18 +28,23 @@ pub async fn create_auth_manager_from_store(
 ///
 /// Creates the `OAuthState`, starts authorization using the handler's redirect URI,
 /// opens the browser (via the handler), handles the callback, and returns an `AuthClient`
-/// ready for authenticated HTTP transport.
+/// ready for authenticated HTTP transport. When `store` is `Some`, the resulting tokens
+/// are persisted via the store; when `None`, tokens live only for the lifetime of the
+/// returned `AuthClient`.
 pub async fn perform_oauth_flow(
     server_id: &str,
     base_url: &str,
     handler: &dyn OAuthHandler,
+    store: Option<Arc<dyn OAuthCredentialStorage>>,
 ) -> Result<AuthClient<reqwest::Client>, OAuthError> {
     let mut oauth_state =
         OAuthState::new(base_url, None).await.map_err(|e| OAuthError::Rmcp(format!("OAuth init failed: {e}")))?;
 
-    let credential_store = create_credential_store()?.mcp_store(server_id);
-    if let OAuthState::Unauthorized(ref mut manager) = oauth_state {
-        manager.set_credential_store(credential_store);
+    if let Some(store) = store {
+        let credential_store = mcp_credential_store(store, server_id.to_string());
+        if let OAuthState::Unauthorized(ref mut manager) = oauth_state {
+            manager.set_credential_store(credential_store);
+        }
     }
 
     oauth_state

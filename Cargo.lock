@@ -45,6 +45,7 @@ version = "0.5.3"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
+ "aether-auth",
  "aether-llm",
  "aether-lspd",
  "aether-mcp-servers",
@@ -76,6 +77,7 @@ version = "0.4.1"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
+ "aether-auth",
  "aether-llm",
  "aether-mcp-utils",
  "aether-utils",
@@ -102,6 +104,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "aether-auth"
+version = "0.1.0"
+dependencies = [
+ "apple-native-keyring-store",
+ "async-trait",
+ "dbus-secret-service-keyring-store",
+ "futures",
+ "keyring-core",
+ "oauth2",
+ "reqwest 0.13.3",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "url",
+ "windows-native-keyring-store",
+]
+
+[[package]]
 name = "aether-evals"
 version = "0.1.0"
 dependencies = [
@@ -118,24 +141,20 @@ dependencies = [
 name = "aether-llm"
 version = "0.4.0"
 dependencies = [
+ "aether-auth",
  "aether-llm-codegen",
  "aether-utils",
- "apple-native-keyring-store",
  "async-openai",
  "async-stream",
- "async-trait",
  "aws-config",
  "aws-sdk-bedrockruntime",
  "aws-smithy-types",
  "base64",
  "chrono",
- "dbus-secret-service-keyring-store",
  "eventsource-stream",
  "futures",
- "keyring-core",
  "oauth2",
  "reqwest 0.13.3",
- "rmcp",
  "schemars 1.2.1",
  "serde",
  "serde_json",
@@ -147,7 +166,6 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
- "windows-native-keyring-store",
 ]
 
 [[package]]
@@ -224,6 +242,7 @@ dependencies = [
 name = "aether-mcp-utils"
 version = "0.5.1"
 dependencies = [
+ "aether-auth",
  "aether-llm",
  "aether-utils",
  "futures",
@@ -2434,7 +2453,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "tokio",
  "tower-service",
  "tracing",
@@ -3443,7 +3462,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls 0.23.40",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -3481,7 +3500,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "tracing",
  "windows-sys 0.60.2",
 ]

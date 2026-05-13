@@ -6,18 +6,18 @@ use super::session_registry::SessionRegistry;
 use super::session_store::SessionStore;
 use crate::settings_args::SettingsSourceArgs;
 use acp_utils::testing::{TestPeer, duplex_pair};
+use aether_auth::OAuthCredentialStorage;
 use aether_core::core::AgentHandle;
 use aether_core::events::{AgentMessage, UserMessage};
 use agent_client_protocol::schema::SessionId;
 use agent_client_protocol::{Agent, Client, ConnectionTo};
-use llm::oauth::OAuthCredentialStore;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::spawn_local;
 
-fn mock_oauth_store() -> OAuthCredentialStore {
-    OAuthCredentialStore::with_mock_store().unwrap()
+fn mock_oauth_store() -> Arc<dyn OAuthCredentialStorage> {
+    Arc::new(aether_auth::FakeOAuthCredentialStore::new())
 }
 
 /// In-memory ACP harness running the real `acp_agent_builder` against a
@@ -101,7 +101,8 @@ impl AcpTestHarness {
             event_rx,
             initial_server_statuses: vec![],
         };
-        let relay = spawn_relay(session, self.agent_cx.clone(), id.clone(), self.session_store.clone());
+        let relay =
+            spawn_relay(session, self.agent_cx.clone(), id.clone(), self.session_store.clone(), mock_oauth_store());
         self.registry.insert(id.0.to_string(), relay, model.to_string(), None, None, vec![]).await;
     }
 }

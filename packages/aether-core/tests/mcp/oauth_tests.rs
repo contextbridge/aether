@@ -1,7 +1,7 @@
+use aether_auth::{OAuthCallback, OAuthError, OAuthHandler, accept_oauth_callback};
 use aether_core::mcp::{McpSpawnResult, mcp};
 use aether_core::testing::{FakeMcpServer, fake_mcp_with_proxy};
 use futures::future::BoxFuture;
-use mcp_utils::client::oauth::{OAuthCallback, OAuthError, OAuthHandler, accept_oauth_callback};
 use mcp_utils::client::{McpClientEvent, McpManager, McpServer, McpTransport, OAuthHandlerFactory};
 use mcp_utils::status::{McpServerAuthCapability, McpServerStatus};
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
