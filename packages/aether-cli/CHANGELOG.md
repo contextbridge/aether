@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.2](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.6.1...aether-agent-cli-v0.6.2) - 2026-05-13
+
+### Fixed
+
+- *(aether-cli)* Support bedrock instance profile arns, which was fixed upstream in llm package
+
 ## [0.6.1](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.6.0...aether-agent-cli-v0.6.1) - 2026-05-13
 
 ### Other
