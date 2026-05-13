@@ -122,7 +122,7 @@ describe("AetherSession with a fake ACP agent", () => {
   it("does not surface stale events from an abandoned prompt on the next prompt", async () => {
     const session = await AetherSession.start({
       binaryPath: FAKE_AETHER,
-      env: { FAKE_AETHER_EXTRA_CHUNKS: "2" },
+      env: { PATH: process.env.PATH, FAKE_AETHER_EXTRA_CHUNKS: "2" },
     });
 
     try {
@@ -194,6 +194,7 @@ describe("AetherSession with a fake ACP agent", () => {
     const session = await AetherSession.start({
       binaryPath: FAKE_AETHER,
       env: {
+        PATH: process.env.PATH,
         FAKE_AETHER_CALL_MCP_SERVER: "custom",
         FAKE_AETHER_TOOL: "submit",
         FAKE_AETHER_TOOL_ARGS: JSON.stringify({ answer: "42" }),

@@ -14,7 +14,7 @@ describe("default permission handler", () => {
   it("auto-selects the first allow_* option when no handler is supplied", async () => {
     const session = await AetherSession.start({
       binaryPath: FAKE_AETHER,
-      env: { FAKE_AETHER_REQUEST_PERMISSION: "1" },
+      env: { PATH: process.env.PATH, FAKE_AETHER_REQUEST_PERMISSION: "1" },
     });
     const messages: AetherMessage[] = [];
 
@@ -43,7 +43,7 @@ describe("default permission handler", () => {
   it("uses the user-supplied permission handler when provided", async () => {
     const session = await AetherSession.start({
       binaryPath: FAKE_AETHER,
-      env: { FAKE_AETHER_REQUEST_PERMISSION: "1" },
+      env: { PATH: process.env.PATH, FAKE_AETHER_REQUEST_PERMISSION: "1" },
       onPermissionRequest: async () => ({
         outcome: { outcome: "selected", optionId: "reject" },
       }),
