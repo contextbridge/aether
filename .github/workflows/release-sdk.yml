@@ -18,15 +18,22 @@ jobs:
       id-token: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev
 
-      - uses: jdx/mise-action@v4
+      # zizmor cache-poisoning fires here because this is a publishing
+      # workflow with cache-enabled actions. The threat is bounded:
+      # GitHub Actions cache scoping prevents PR-scope caches from
+      # propagating up to tag builds, so an attacker would need a merged
+      # PR to poison the cache that this workflow reads.
+      - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1 # zizmor: ignore[cache-poisoning]
 
       - name: Setup npm registry
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0 # zizmor: ignore[cache-poisoning]
         with:
           node-version-file: .tool-versions
           registry-url: "https://registry.npmjs.org"
