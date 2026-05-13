@@ -265,4 +265,44 @@ mod tests {
         let provider = BedrockProvider::from_config(None, Some("eu-west-1"));
         assert_eq!(provider.model, DEFAULT_MODEL);
     }
+
+    #[test]
+    fn catalog_foundation_id_resolves_context_window() {
+        let provider = test_provider().with_model("anthropic.claude-sonnet-4-5-20250929-v1:0");
+        assert!(provider.context_window().is_some());
+        assert_eq!(provider.model().unwrap().to_string(), "bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0");
+    }
+
+    #[test]
+    fn cross_region_profile_id_in_catalog_resolves() {
+        let provider = test_provider().with_model("us.anthropic.claude-opus-4-6-v1");
+        assert!(provider.context_window().is_some());
+    }
+
+    #[test]
+    fn unknown_cross_region_profile_id_falls_through_to_profile() {
+        let id = "us.anthropic.claude-future-model-v99:0";
+        let provider = test_provider().with_model(id);
+        assert_eq!(provider.context_window(), None);
+        assert_eq!(provider.model().unwrap().to_string(), format!("bedrock:{id}"));
+        assert_eq!(provider.display_name(), format!("Bedrock ({id})"));
+    }
+
+    #[test]
+    fn inference_profile_arn_is_passed_through_as_profile() {
+        let arn = "arn:aws:bedrock:us-west-2:000000000000:inference-profile/us.anthropic.claude-opus-4-7";
+        let provider = test_provider().with_model(arn);
+        assert_eq!(provider.context_window(), None);
+        assert_eq!(provider.model, arn);
+        assert_eq!(provider.model().unwrap().to_string(), format!("bedrock:{arn}"));
+    }
+
+    #[test]
+    fn application_inference_profile_arn_is_passed_through_as_profile() {
+        let arn = "arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/000000000000";
+        let provider = test_provider().with_model(arn);
+        assert_eq!(provider.context_window(), None);
+        assert_eq!(provider.model, arn);
+        assert_eq!(provider.display_name(), format!("Bedrock ({arn})"));
+    }
 }

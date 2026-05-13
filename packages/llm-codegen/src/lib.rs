@@ -86,6 +86,10 @@ struct ProviderConfig {
     oauth_provider_id: Option<&'static str>,
     /// Default reasoning levels for models that support reasoning (empty = use standard 3)
     default_reasoning_levels: &'static [&'static str],
+    /// Emit a hybrid `{Enum}Model` that wraps `{Enum}FoundationModel` (catalog) plus
+    /// a `Profile(String)` variant. Used for Bedrock to accept arbitrary inference
+    /// profile IDs and ARNs at runtime.
+    is_hybrid_dynamic: bool,
 }
 
 impl ProviderConfig {
@@ -109,7 +113,23 @@ impl ProviderConfig {
             env_var,
             oauth_provider_id: None,
             default_reasoning_levels: &["low", "medium", "high"],
+            is_hybrid_dynamic: false,
         }
+    }
+
+    /// Inner catalog-enum name. For hybrid providers the outer `{enum_name}Model`
+    /// is a wrapper; the catalog enum is `{enum_name}FoundationModel`.
+    fn inner_enum_name(&self) -> String {
+        if self.is_hybrid_dynamic {
+            format!("{}FoundationModel", self.enum_name)
+        } else {
+            format!("{}Model", self.enum_name)
+        }
+    }
+
+    /// Outer enum name as referenced by `LlmModel::{enum_name}(...)`.
+    fn outer_enum_name(&self) -> String {
+        format!("{}Model", self.enum_name)
     }
 
     /// The models.dev key to look up in the JSON data.
@@ -143,6 +163,7 @@ const PROVIDERS: &[ProviderConfig] = &[
         env_var: None,
         oauth_provider_id: Some("codex"),
         default_reasoning_levels: &["low", "medium", "high", "xhigh"],
+        is_hybrid_dynamic: false,
     },
     ProviderConfig::standard("deepseek", "DeepSeek", "deepseek", "DeepSeek", Some("DEEPSEEK_API_KEY")),
     ProviderConfig::standard("google", "Gemini", "gemini", "Gemini", Some("GEMINI_API_KEY")),
@@ -153,7 +174,10 @@ const PROVIDERS: &[ProviderConfig] = &[
         extra_source_ids: &["zai-coding-plan"],
         ..ProviderConfig::standard("zai", "ZAi", "zai", "ZAI", Some("ZAI_API_KEY"))
     },
-    ProviderConfig::standard("amazon-bedrock", "Bedrock", "bedrock", "AWS Bedrock", None),
+    ProviderConfig {
+        is_hybrid_dynamic: true,
+        ..ProviderConfig::standard("amazon-bedrock", "Bedrock", "bedrock", "AWS Bedrock", None)
+    },
 ];
 
 const DYNAMIC_PROVIDERS: &[DynamicProviderConfig] = &[
@@ -320,20 +344,31 @@ fn emit_header(out: &mut String) {
 
 fn emit_provider_enums(out: &mut String, provider_models: &ProviderModels) {
     for cfg in PROVIDERS {
+        let inner = cfg.inner_enum_name();
         pushln(out, "#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]");
-        pushln(out, format!("pub enum {}Model {{", cfg.enum_name));
+        pushln(out, format!("pub enum {inner} {{"));
         for model in &provider_models[cfg.dev_id] {
             pushln(out, format!("    {},", model.variant_name));
         }
         pushln(out, "}");
         blank(out);
+
+        if cfg.is_hybrid_dynamic {
+            let outer = cfg.outer_enum_name();
+            pushln(out, "#[derive(Debug, Clone, PartialEq, Eq, Hash)]");
+            pushln(out, format!("pub enum {outer} {{"));
+            pushln(out, format!("    Foundation({inner}),"));
+            pushln(out, "    Profile(String),");
+            pushln(out, "}");
+            blank(out);
+        }
     }
 }
 
 fn emit_provider_impls(out: &mut String, provider_models: &ProviderModels) {
     for cfg in PROVIDERS {
         let models = &provider_models[cfg.dev_id];
-        let enum_name = format!("{}Model", cfg.enum_name);
+        let enum_name = cfg.inner_enum_name();
 
         pushln(out, format!("impl {enum_name} {{"));
 
@@ -410,7 +445,80 @@ fn emit_provider_impls(out: &mut String, provider_models: &ProviderModels) {
         blank(out);
 
         emit_from_str_impl(out, &enum_name, cfg.parser_name, models);
+
+        if cfg.is_hybrid_dynamic {
+            emit_hybrid_wrapper_impl(out, &cfg.outer_enum_name(), cfg.enum_name);
+            emit_hybrid_wrapper_from_str(out, &cfg.outer_enum_name(), &enum_name);
+        }
     }
+}
+
+fn emit_hybrid_wrapper_impl(out: &mut String, outer_name: &str, display_prefix: &str) {
+    pushln(out, format!("impl {outer_name} {{"));
+
+    pushln(out, "    pub fn model_id(&self) -> Cow<'static, str> {");
+    pushln(out, "        match self {");
+    pushln(out, "            Self::Foundation(m) => Cow::Borrowed(m.model_id()),");
+    pushln(out, "            Self::Profile(s) => Cow::Owned(s.clone()),");
+    pushln(out, "        }");
+    pushln(out, "    }");
+    blank(out);
+
+    pushln(out, "    pub fn display_name(&self) -> Cow<'static, str> {");
+    pushln(out, "        match self {");
+    pushln(out, "            Self::Foundation(m) => Cow::Borrowed(m.display_name()),");
+    pushln(out, format!("            Self::Profile(s) => Cow::Owned(format!(\"{display_prefix} {{s}}\")),"));
+    pushln(out, "        }");
+    pushln(out, "    }");
+    blank(out);
+
+    pushln(out, "    pub fn context_window(&self) -> Option<u32> {");
+    pushln(out, "        match self {");
+    pushln(out, "            Self::Foundation(m) => Some(m.context_window()),");
+    pushln(out, "            Self::Profile(_) => None,");
+    pushln(out, "        }");
+    pushln(out, "    }");
+    blank(out);
+
+    pushln(out, "    pub fn reasoning_levels(&self) -> &'static [ReasoningEffort] {");
+    pushln(out, "        match self {");
+    pushln(out, "            Self::Foundation(m) => m.reasoning_levels(),");
+    pushln(out, "            Self::Profile(_) => &[],");
+    pushln(out, "        }");
+    pushln(out, "    }");
+    blank(out);
+
+    pushln(out, "    pub fn supports_reasoning(&self) -> bool {");
+    pushln(out, "        !self.reasoning_levels().is_empty()");
+    pushln(out, "    }");
+    blank(out);
+
+    for modality in ["image", "audio"] {
+        pushln(out, format!("    pub fn supports_{modality}(&self) -> bool {{"));
+        pushln(out, "        match self {");
+        pushln(out, format!("            Self::Foundation(m) => m.supports_{modality}(),"));
+        pushln(out, "            Self::Profile(_) => false,");
+        pushln(out, "        }");
+        pushln(out, "    }");
+        blank(out);
+    }
+
+    pushln(out, "}");
+    blank(out);
+}
+
+fn emit_hybrid_wrapper_from_str(out: &mut String, outer_name: &str, inner_name: &str) {
+    pushln(out, format!("impl std::str::FromStr for {outer_name} {{"));
+    pushln(out, "    type Err = String;");
+    blank(out);
+    pushln(out, "    fn from_str(s: &str) -> Result<Self, Self::Err> {");
+    pushln(out, format!("        match s.parse::<{inner_name}>() {{"));
+    pushln(out, "            Ok(m) => Ok(Self::Foundation(m)),");
+    pushln(out, "            Err(_) => Ok(Self::Profile(s.to_string())),");
+    pushln(out, "        }");
+    pushln(out, "    }");
+    pushln(out, "}");
+    blank(out);
 }
 
 fn emit_from_str_impl(out: &mut String, enum_name: &str, parser_name: &str, models: &[ModelInfo]) {
@@ -532,7 +640,11 @@ fn emit_llm_model_id(out: &mut String) {
     pushln(out, "    pub fn model_id(&self) -> Cow<'static, str> {");
     pushln(out, "        match self {");
     for cfg in PROVIDERS {
-        pushln(out, format!("            Self::{}(m) => Cow::Borrowed(m.model_id()),", cfg.enum_name));
+        if cfg.is_hybrid_dynamic {
+            pushln(out, format!("            Self::{}(m) => m.model_id(),", cfg.enum_name));
+        } else {
+            pushln(out, format!("            Self::{}(m) => Cow::Borrowed(m.model_id()),", cfg.enum_name));
+        }
     }
     pushln(out, format!("            {} => Cow::Owned(s.clone()),", dynamic_pattern_with_binding("s")));
     pushln(out, "        }");
@@ -545,7 +657,11 @@ fn emit_llm_display_name(out: &mut String) {
     pushln(out, "    pub fn display_name(&self) -> Cow<'static, str> {");
     pushln(out, "        match self {");
     for cfg in PROVIDERS {
-        pushln(out, format!("            Self::{}(m) => Cow::Borrowed(m.display_name()),", cfg.enum_name));
+        if cfg.is_hybrid_dynamic {
+            pushln(out, format!("            Self::{}(m) => m.display_name(),", cfg.enum_name));
+        } else {
+            pushln(out, format!("            Self::{}(m) => Cow::Borrowed(m.display_name()),", cfg.enum_name));
+        }
     }
     for dyn_cfg in DYNAMIC_PROVIDERS {
         pushln(
@@ -596,7 +712,11 @@ fn emit_llm_context_window(out: &mut String) {
     pushln(out, "    pub fn context_window(&self) -> Option<u32> {");
     pushln(out, "        match self {");
     for cfg in PROVIDERS {
-        pushln(out, format!("            Self::{}(m) => Some(m.context_window()),", cfg.enum_name));
+        if cfg.is_hybrid_dynamic {
+            pushln(out, format!("            Self::{}(m) => m.context_window(),", cfg.enum_name));
+        } else {
+            pushln(out, format!("            Self::{}(m) => Some(m.context_window()),", cfg.enum_name));
+        }
     }
     pushln(out, format!("            {} => None,", dynamic_pattern_with_binding("_")));
     pushln(out, "        }");
@@ -697,13 +817,25 @@ fn emit_llm_all(out: &mut String) {
     pushln(out, "        static ALL: LazyLock<Vec<LlmModel>> = LazyLock::new(|| {");
     pushln(out, "            let mut v = Vec::new();");
     for cfg in PROVIDERS {
-        pushln(
-            out,
-            format!(
-                "            v.extend({}Model::ALL.iter().copied().map(LlmModel::{}));",
-                cfg.enum_name, cfg.enum_name
-            ),
-        );
+        if cfg.is_hybrid_dynamic {
+            pushln(
+                out,
+                format!(
+                    "            v.extend({inner}::ALL.iter().copied().map({outer}::Foundation).map(LlmModel::{variant}));",
+                    inner = cfg.inner_enum_name(),
+                    outer = cfg.outer_enum_name(),
+                    variant = cfg.enum_name,
+                ),
+            );
+        } else {
+            pushln(
+                out,
+                format!(
+                    "            v.extend({}Model::ALL.iter().copied().map(LlmModel::{}));",
+                    cfg.enum_name, cfg.enum_name
+                ),
+            );
+        }
     }
     pushln(out, "            v");
     pushln(out, "        });");
@@ -947,6 +1079,62 @@ mod tests {
         assert!(source.contains("pub enum CodexModel {"));
         assert!(source.contains("\"codex\" => model_str.parse::<CodexModel>().map(Self::Codex),"));
         assert!(source.contains("Self::Codex(m) => Some(m.context_window()),"));
+    }
+
+    #[test]
+    fn generate_bedrock_is_hybrid_provider() {
+        let mut data = minimal_models_dev_json();
+        let root = data.as_object_mut().unwrap();
+        let bedrock = root.get_mut("amazon-bedrock").and_then(Value::as_object_mut).unwrap();
+
+        bedrock.insert(
+            "models".to_string(),
+            json!({
+                "anthropic.foo-v1:0": {
+                    "id": "anthropic.foo-v1:0",
+                    "name": "Foo Model",
+                    "tool_call": true,
+                    "limit": {"context": 200_000, "output": 0}
+                }
+            }),
+        );
+
+        let source = generate_from_value(&data);
+
+        assert!(source.contains("pub enum BedrockFoundationModel {"));
+        assert!(source.contains("AnthropicFooV10"));
+        assert!(source.contains("pub enum BedrockModel {"));
+        assert!(source.contains("Foundation(BedrockFoundationModel)"));
+        assert!(source.contains("Profile(String)"));
+        assert!(source.contains("impl std::str::FromStr for BedrockFoundationModel"));
+        assert!(source.contains("\"anthropic.foo-v1:0\" => Ok(Self::AnthropicFooV10),"));
+        assert!(source.contains("Unknown bedrock model"));
+
+        assert!(source.contains("impl std::str::FromStr for BedrockModel"));
+        assert!(source.contains("Err(_) => Ok(Self::Profile(s.to_string())),"));
+        assert!(source.contains("Self::Profile(s) => Cow::Owned(s.clone()),"));
+        assert!(source.contains("Self::Profile(_) => None,"));
+        assert!(source.contains("Self::Profile(_) => &[],"));
+        assert!(source.contains("Self::Profile(_) => false,"));
+        assert!(source.contains("Self::Profile(s) => Cow::Owned(format!(\"Bedrock {s}\"))"));
+
+        assert!(source.contains(
+            "BedrockFoundationModel::ALL.iter().copied().map(BedrockModel::Foundation).map(LlmModel::Bedrock)"
+        ));
+
+        assert!(source.contains("Self::Bedrock(m) => m.model_id(),"));
+        assert!(source.contains("Self::Bedrock(m) => m.display_name(),"));
+        assert!(source.contains("Self::Bedrock(m) => m.context_window(),"));
+    }
+
+    #[test]
+    fn generate_non_hybrid_providers_keep_flat_enum() {
+        let source = generate_from_value(&minimal_models_dev_json());
+        assert!(source.contains("pub enum AnthropicModel {"));
+        assert!(!source.contains("AnthropicFoundationModel"));
+        assert!(!source.contains("Foundation(AnthropicModel)"));
+        assert!(source.contains("Self::Anthropic(m) => Cow::Borrowed(m.model_id()),"));
+        assert!(source.contains("Self::Anthropic(m) => Some(m.context_window()),"));
     }
 
     #[test]

@@ -64,3 +64,8 @@ llm-codegen = { package = "aether-llm-codegen", path = "../llm-codegen", version
 
 [dev-dependencies]
 tempfile = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[[example]]
+name = "bedrock_inference_profile"
+required-features = ["bedrock"]

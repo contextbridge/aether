@@ -231,6 +231,33 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[cfg(feature = "bedrock")]
+    #[tokio::test]
+    async fn test_parse_bedrock_inference_profile_arn() {
+        // ARNs (including those with extra `:` separators) must round-trip through the parser
+        // without being misinterpreted as `provider:model` splits — the parser splits on the
+        // first `:` only, so everything after `bedrock:` becomes the model string.
+        let parser = ModelProviderParser::default();
+        let arn = "arn:aws:bedrock:us-west-2:000000000000:inference-profile/us.anthropic.claude-opus-4-7";
+        let spec = format!("bedrock:{arn}");
+        let (provider, model) = parser.parse(&spec).await.expect("Bedrock ARN should parse");
+
+        assert_eq!(model.to_string(), spec);
+        assert_eq!(provider.display_name(), format!("Bedrock ({arn})"));
+    }
+
+    #[cfg(feature = "bedrock")]
+    #[tokio::test]
+    async fn test_parse_bedrock_application_inference_profile_arn() {
+        let parser = ModelProviderParser::default();
+        let arn = "arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/000000000000";
+        let spec = format!("bedrock:{arn}");
+
+        let (_, model) = parser.parse(&spec).await.expect("Application inference profile ARN should parse");
+        assert_eq!(model.to_string(), spec);
+        assert_eq!(model.context_window(), None);
+    }
+
     #[tokio::test]
     async fn test_parse_unknown_provider() {
         let parser = ModelProviderParser::default();
