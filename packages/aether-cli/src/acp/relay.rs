@@ -6,7 +6,7 @@ use aether_core::mcp::run_mcp_task::McpCommand;
 use agent_client_protocol::schema::{self as acp, SessionId};
 use agent_client_protocol::{Client, ConnectionTo};
 use llm::parser::ModelProviderParser;
-use llm::{ContentBlock, ReasoningEffort};
+use llm::{ContentBlock, ProviderConnectionOverrides, ReasoningEffort};
 use mcp_utils::client::{ElicitationRequest, McpClientEvent, cancel_result};
 use rmcp::model::CreateElicitationRequestParams;
 use rmcp::model::CreateElicitationResult;
@@ -122,6 +122,7 @@ async fn run_session_relay(
         mcp_tx,
         mut event_rx,
         initial_server_statuses,
+        provider_connections,
     } = session;
 
     if let Err(e) = connection
@@ -153,6 +154,7 @@ async fn run_session_relay(
                             acp_session_id: &acp_session_id,
                             session_store: &session_store,
                             oauth_credential_store: &oauth_credential_store,
+                            provider_connections: &provider_connections,
                             cancel: &cancel,
                         };
                         let result = handle_prompt(&mut ctx, content, switch_model, reasoning_effort).await;
@@ -189,6 +191,7 @@ struct PromptContext<'a> {
     acp_session_id: &'a SessionId,
     session_store: &'a Arc<SessionStore>,
     oauth_credential_store: &'a Arc<dyn OAuthCredentialStorage>,
+    provider_connections: &'a ProviderConnectionOverrides,
     cancel: &'a CancellationToken,
 }
 
@@ -199,7 +202,9 @@ async fn handle_prompt(
     reasoning_effort: Option<ReasoningEffort>,
 ) -> Result<acp::StopReason, RelayError> {
     if let Some(model) = switch_model {
-        let parser = ModelProviderParser::default().with_codex_provider(Arc::clone(ctx.oauth_credential_store));
+        let parser = ModelProviderParser::default()
+            .with_provider_connections(ctx.provider_connections.clone())
+            .with_codex_provider(Arc::clone(ctx.oauth_credential_store));
         let (provider, _) = parser.parse(&model).await.map_err(|e| RelayError::SwitchModelFailed(format!("{e}")))?;
         ctx.agent_tx
             .send(UserMessage::SwitchModel(provider))
@@ -573,6 +578,7 @@ mod tests {
                 let (_cmd_tx, mut cmd_rx) = mpsc::channel(1);
                 let oauth_credential_store: Arc<dyn OAuthCredentialStorage> =
                     Arc::new(aether_auth::FakeOAuthCredentialStore::new());
+                let provider_connections = ProviderConnectionOverrides::default();
 
                 let mut ctx = PromptContext {
                     agent_tx: &agent_tx,
@@ -585,6 +591,7 @@ mod tests {
                     acp_session_id: &acp_session_id,
                     session_store: &session_store,
                     oauth_credential_store: &oauth_credential_store,
+                    provider_connections: &provider_connections,
                     cancel: &cancel,
                 };
 

@@ -77,6 +77,7 @@ lsp-types = "0.97"
 
 # Schema and validation
 schemars = { version = "^1.2.1", features = ["derive"] }
+secrecy = "0.10"
 
 # Utilities
 chrono = { version = "^0.4.44", features = ["serde"] }

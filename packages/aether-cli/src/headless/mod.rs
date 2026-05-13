@@ -4,11 +4,13 @@ pub mod run;
 use aether_core::agent_spec::AgentSpec;
 use aether_project::{AetherSettings, AgentCatalog};
 use error::CliError;
+use llm::ProviderConnectionOverrides;
 use std::io::{IsTerminal, Read as _, stdin};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use crate::mcp_config_args::McpConfigArgs;
+use crate::provider_connection_args::ProviderConnectionArgs;
 use crate::resolve::resolve_agent_spec;
 use crate::settings_args::SettingsSourceArgs;
 
@@ -75,7 +77,9 @@ pub struct RunConfig {
 pub async fn run_headless(args: HeadlessArgs) -> Result<ExitCode, CliError> {
     let prompt = resolve_prompt(&args)?;
     let cwd = args.cwd.canonicalize().map_err(CliError::IoError)?;
-    let spec = resolve_spec(args.agent.as_deref(), args.model.as_deref(), &cwd, &args.settings_source)?;
+    let provider_connections = args.provider_connection.clone().into_overrides();
+    let spec =
+        resolve_spec(args.agent.as_deref(), args.model.as_deref(), &cwd, &args.settings_source, provider_connections)?;
 
     let output = match args.output {
         CliOutputFormat::Text => OutputFormat::Text,
@@ -127,6 +131,9 @@ pub struct HeadlessArgs {
     pub settings_source: SettingsSourceArgs,
 
     #[command(flatten)]
+    pub provider_connection: ProviderConnectionArgs,
+
+    #[command(flatten)]
     pub mcp_config: McpConfigArgs,
 
     /// Additional system prompt
@@ -169,6 +176,7 @@ fn resolve_spec(
     model: Option<&str>,
     cwd: &std::path::Path,
     settings_source: &SettingsSourceArgs,
+    provider_connections: ProviderConnectionOverrides,
 ) -> Result<AgentSpec, CliError> {
     if agent.is_some() && model.is_some() {
         return Err(CliError::ConflictingArgs("Cannot specify both --agent and --model".to_string()));
@@ -186,13 +194,15 @@ fn resolve_spec(
         AgentCatalog::from_settings(cwd, config).map_err(|e| CliError::AgentError(e.to_string()))?
     };
 
-    match model {
+    let mut spec = match model {
         Some(m) => {
-            let parsed = m.parse().map_err(|e: String| CliError::ModelError(e))?;
-            Ok(AgentSpec::default_spec(&parsed, None, Vec::new()))
+            let parsed = m.parse().map_err(CliError::ModelError)?;
+            AgentSpec::default_spec(&parsed, None, Vec::new())
         }
-        None => resolve_agent_spec(&catalog, agent),
-    }
+        None => resolve_agent_spec(&catalog, agent)?,
+    };
+    spec.provider_connections.merge(provider_connections);
+    Ok(spec)
 }
 
 #[cfg(test)]
@@ -204,29 +214,45 @@ mod tests {
     #[test]
     fn resolve_spec_with_named_agent() {
         let dir = setup_dir_with_agents();
-        let spec = resolve_spec(Some("beta"), None, dir.path(), &project_settings_args()).unwrap();
+        let spec = resolve_spec(
+            Some("beta"),
+            None,
+            dir.path(),
+            &project_settings_args(),
+            ProviderConnectionOverrides::default(),
+        )
+        .unwrap();
         assert_eq!(spec.name, "beta");
     }
 
     #[test]
     fn resolve_spec_with_model_creates_default() {
         let dir = setup_dir_with_agents();
-        let spec =
-            resolve_spec(None, Some("anthropic:claude-sonnet-4-5"), dir.path(), &project_settings_args()).unwrap();
+        let spec = resolve_spec(
+            None,
+            Some("anthropic:claude-sonnet-4-5"),
+            dir.path(),
+            &project_settings_args(),
+            ProviderConnectionOverrides::default(),
+        )
+        .unwrap();
         assert_eq!(spec.name, "__default__");
     }
 
     #[test]
     fn resolve_spec_defaults_to_first_user_invocable() {
         let dir = setup_dir_with_agents();
-        let spec = resolve_spec(None, None, dir.path(), &project_settings_args()).unwrap();
+        let spec =
+            resolve_spec(None, None, dir.path(), &project_settings_args(), ProviderConnectionOverrides::default())
+                .unwrap();
         assert_eq!(spec.name, "alpha");
     }
 
     #[test]
     fn resolve_spec_defaults_to_fallback_without_settings() {
         let dir = tempfile::tempdir().unwrap();
-        let spec = resolve_spec(None, None, dir.path(), &empty_settings_args()).unwrap();
+        let spec = resolve_spec(None, None, dir.path(), &empty_settings_args(), ProviderConnectionOverrides::default())
+            .unwrap();
         assert_eq!(spec.name, "__default__");
     }
 
@@ -238,6 +264,7 @@ mod tests {
             Some("anthropic:claude-sonnet-4-5"),
             dir.path(),
             &SettingsSourceArgs::default(),
+            ProviderConnectionOverrides::default(),
         )
         .unwrap_err();
         assert!(err.to_string().contains("Cannot specify both"), "unexpected error: {err}");
@@ -246,14 +273,28 @@ mod tests {
     #[test]
     fn resolve_spec_rejects_invalid_model() {
         let dir = tempfile::tempdir().unwrap();
-        let err = resolve_spec(None, Some("not-a-valid-model"), dir.path(), &empty_settings_args()).unwrap_err();
+        let err = resolve_spec(
+            None,
+            Some("not-a-valid-model"),
+            dir.path(),
+            &empty_settings_args(),
+            ProviderConnectionOverrides::default(),
+        )
+        .unwrap_err();
         assert!(matches!(err, CliError::ModelError(_)));
     }
 
     #[test]
     fn resolve_spec_rejects_unknown_agent() {
         let dir = setup_dir_with_agents();
-        let err = resolve_spec(Some("nonexistent"), None, dir.path(), &project_settings_args()).unwrap_err();
+        let err = resolve_spec(
+            Some("nonexistent"),
+            None,
+            dir.path(),
+            &project_settings_args(),
+            ProviderConnectionOverrides::default(),
+        )
+        .unwrap_err();
         assert!(matches!(err, CliError::AgentError(_)));
     }
 

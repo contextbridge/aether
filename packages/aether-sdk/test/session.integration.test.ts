@@ -1,4 +1,6 @@
 import { fileURLToPath } from "node:url";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -40,6 +42,53 @@ describe("AetherSession with a fake ACP agent", () => {
         model: "anthropic:claude-sonnet-4-5",
       } as never),
     ).rejects.toMatchObject({ code: "invalid_options" });
+  });
+
+  it("forwards provider URL and auth overrides to the CLI", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "aether-sdk-"));
+    const logFile = path.join(dir, "fake-aether.log");
+    const session = await AetherSession.start({
+      binaryPath: FAKE_AETHER,
+      providers: { bedrock: { url: "http://127.0.0.1:8787", auth: "none" } },
+      env: { PATH: process.env.PATH, FAKE_AETHER_LOG_FILE: logFile },
+    });
+
+    try {
+      const lines = (await readFile(logFile, "utf8")).trim().split("\n");
+      const argv = lines.map((line) => JSON.parse(line)).find((event) => event.event === "argv");
+      expect(argv.args).toContain("--provider");
+      expect(argv.args).toContain("bedrock.url=http://127.0.0.1:8787");
+      expect(argv.args).toContain("bedrock.auth=none");
+    } finally {
+      await session.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts per-agent contextWindow in inline settings", async () => {
+    const session = await AetherSession.start({
+      binaryPath: FAKE_AETHER,
+      agent: "planner",
+      settings: {
+        agents: [
+          {
+            name: "planner",
+            description: "Planner agent",
+            model:
+              "bedrock:arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/planner-profile",
+            contextWindow: 200000,
+            userInvocable: true,
+            prompts: [{ type: "text", text: "Plan carefully." }],
+          },
+        ],
+      },
+    });
+
+    try {
+      expect(session.sessionId).toMatch(/^fake-session-/);
+    } finally {
+      await session.close();
+    }
   });
 
   it("starts an explicit session and streams a final result", async () => {

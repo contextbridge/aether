@@ -47,6 +47,7 @@ pub struct AgentBuilder {
     max_auto_continues: u32,
     retry_config: RetryConfig,
     prompt_cache_key: Option<String>,
+    context_window: Option<u32>,
 }
 
 impl AgentBuilder {
@@ -63,6 +64,7 @@ impl AgentBuilder {
             max_auto_continues: 3,
             retry_config: RetryConfig::default(),
             prompt_cache_key: None,
+            context_window: None,
         }
     }
 
@@ -75,13 +77,13 @@ impl AgentBuilder {
         base_prompts: Vec<Prompt>,
         oauth_store: Option<Arc<dyn OAuthCredentialStorage>>,
     ) -> Result<Self> {
-        let parser = ModelProviderParser::default();
+        let parser = ModelProviderParser::default().with_provider_connections(spec.provider_connections.clone());
         let parser = match oauth_store {
             Some(store) => parser.with_codex_provider(store),
             None => parser,
         };
         let (provider, _) = parser.parse(&spec.model).await?;
-        let mut builder = Self::new(Arc::from(provider));
+        let mut builder = Self::new(Arc::from(provider)).context_window(spec.context_window);
         for prompt in base_prompts {
             builder = builder.system_prompt(prompt);
         }
@@ -188,6 +190,12 @@ impl AgentBuilder {
         self
     }
 
+    /// Override the effective model context window in tokens.
+    pub fn context_window(mut self, context_window: Option<u32>) -> Self {
+        self.context_window = context_window;
+        self
+    }
+
     /// Pre-populate the context with conversation history (e.g. from a restored session).
     ///
     /// These messages are inserted after the system prompt.
@@ -223,6 +231,7 @@ impl AgentBuilder {
             compaction_config: self.compaction_config,
             auto_continue: AutoContinue::new(self.max_auto_continues),
             retry_config: self.retry_config,
+            context_window: self.context_window,
         };
 
         let agent = Agent::new(config, user_message_rx, message_tx);
@@ -237,6 +246,8 @@ impl AgentBuilder {
 mod tests {
     use super::*;
     use crate::agent_spec::{AgentSpecExposure, ToolFilter};
+    use llm::testing::FakeLlmProvider;
+    use llm::{ContentBlock, LlmResponse, ProviderConnectionOverrides};
 
     #[tokio::test]
     async fn test_agent_handle_is_finished() {
@@ -259,6 +270,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn context_window_override_supplies_unknown_provider_limit() {
+        let llm = Arc::new(FakeLlmProvider::with_single_response(vec![
+            LlmResponse::start("msg"),
+            LlmResponse::usage(100_000, 10),
+            LlmResponse::done(),
+        ]));
+
+        let (tx, mut rx, handle) = AgentBuilder::new(llm).context_window(Some(200_000)).spawn().await.unwrap();
+        tx.send(UserMessage::Text { content: vec![ContentBlock::text("hello")] }).await.unwrap();
+
+        let update = next_context_usage(&mut rx).await;
+        assert_eq!(update.context_limit, Some(200_000));
+        assert_eq!(update.usage_ratio, Some(0.5));
+        assert_eq!(update.input_tokens, 100_000);
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn context_window_override_beats_provider_limit() {
+        let llm = Arc::new(
+            FakeLlmProvider::with_single_response(vec![
+                LlmResponse::start("msg"),
+                LlmResponse::usage(100_000, 10),
+                LlmResponse::done(),
+            ])
+            .with_context_window(Some(128_000)),
+        );
+
+        let (tx, mut rx, handle) = AgentBuilder::new(llm).context_window(Some(200_000)).spawn().await.unwrap();
+        tx.send(UserMessage::Text { content: vec![ContentBlock::text("hello")] }).await.unwrap();
+
+        let update = next_context_usage(&mut rx).await;
+        assert_eq!(update.context_limit, Some(200_000));
+        assert_eq!(update.usage_ratio, Some(0.5));
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn context_window_override_survives_model_switch() {
+        let llm = Arc::new(FakeLlmProvider::new(vec![]).with_context_window(Some(128_000)));
+        let (tx, mut rx, handle) = AgentBuilder::new(llm).context_window(Some(200_000)).spawn().await.unwrap();
+
+        tx.send(UserMessage::SwitchModel(Box::new(
+            FakeLlmProvider::new(vec![]).with_display_name("new fake").with_context_window(Some(32_000)),
+        )))
+        .await
+        .unwrap();
+
+        let update = next_context_usage(&mut rx).await;
+        assert_eq!(update.context_limit, Some(200_000));
+        assert_eq!(update.usage_ratio, Some(0.0));
+        handle.abort();
+    }
+
+    async fn next_context_usage(rx: &mut Receiver<AgentMessage>) -> ContextUsageUpdate {
+        loop {
+            if let AgentMessage::ContextUsageUpdate { usage_ratio, context_limit, input_tokens, .. } =
+                rx.recv().await.expect("agent should emit context usage")
+            {
+                return ContextUsageUpdate { usage_ratio, context_limit, input_tokens };
+            }
+        }
+    }
+
+    struct ContextUsageUpdate {
+        usage_ratio: Option<f64>,
+        context_limit: Option<u32>,
+        input_tokens: u32,
+    }
+
+    #[tokio::test]
     async fn system_prompt_preserves_add_order() {
         let builder = AgentBuilder::new(Arc::new(llm::testing::FakeLlmProvider::new(vec![])))
             .system_prompt(Prompt::text("first"))
@@ -271,13 +353,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn from_spec_applies_context_window() {
+        let spec = AgentSpec {
+            name: "alloy".to_string(),
+            description: "alloy".to_string(),
+            model: "ollama:llama3.2,llamacpp:local".to_string(),
+            reasoning_effort: None,
+            context_window: Some(200_000),
+            prompts: vec![],
+            provider_connections: ProviderConnectionOverrides::default(),
+            mcp_config_sources: Vec::new(),
+            exposure: AgentSpecExposure::both(),
+            tools: ToolFilter::default(),
+        };
+
+        let builder = AgentBuilder::from_spec(&spec, vec![], None).await.unwrap();
+
+        assert_eq!(builder.context_window, Some(200_000));
+    }
+
+    #[tokio::test]
     async fn from_spec_accepts_alloy_model_specs() {
         let spec = AgentSpec {
             name: "alloy".to_string(),
             description: "alloy".to_string(),
             model: "ollama:llama3.2,llamacpp:local".to_string(),
             reasoning_effort: None,
+            context_window: None,
             prompts: vec![],
+            provider_connections: ProviderConnectionOverrides::default(),
             mcp_config_sources: Vec::new(),
             exposure: AgentSpecExposure::both(),
             tools: ToolFilter::default(),

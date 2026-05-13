@@ -2,7 +2,7 @@ use super::types::ChatCompletionStreamResponse;
 use super::types::FinishReason;
 use crate::providers::tool_call_collector::ToolCallCollector;
 use crate::{LlmError, LlmResponse, LlmResponseStream, Result, StopReason};
-use async_openai::{Client, config::OpenAIConfig};
+use async_openai::{Client, config::Config};
 use async_stream;
 use serde::Serialize;
 use tokio_stream::{Stream, StreamExt};
@@ -10,16 +10,17 @@ use tracing::{debug, info, warn};
 
 /// Generic streaming function that accepts any serializable request type.
 /// This enables providers to use custom request types while reusing the streaming logic.
-pub fn create_custom_stream_generic<R: Serialize + Send + 'static>(
-    client: &Client<OpenAIConfig>,
-    request: R,
-) -> LlmResponseStream {
+pub fn create_custom_stream_generic<T, U>(client: &Client<T>, request: U) -> LlmResponseStream
+where
+    T: Config + Clone + 'static,
+    U: Serialize + Send + 'static,
+{
     let client = client.clone();
 
     Box::pin(async_stream::stream! {
         let stream = match client
             .chat()
-            .create_stream_byot::<R, ChatCompletionStreamResponse>(request)
+            .create_stream_byot::<U, ChatCompletionStreamResponse>(request)
             .await {
             Ok(stream) => stream,
             Err(e) => {

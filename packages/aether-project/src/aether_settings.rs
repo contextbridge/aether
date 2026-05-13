@@ -3,6 +3,7 @@ use utils::SettingsStore;
 use crate::agent_config::AgentConfig;
 use crate::error::SettingsError;
 use crate::{McpSourceSpec, PromptSource};
+use llm::ProviderConnectionOverrides;
 use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
 
@@ -17,6 +18,8 @@ pub struct AetherSettings {
     pub prompts: Vec<PromptSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mcps: Vec<McpSourceSpec>,
+    #[serde(default, skip_serializing_if = "ProviderConnectionOverrides::is_empty")]
+    pub providers: ProviderConnectionOverrides,
     #[schemars(length(min = 1))]
     pub agents: Vec<AgentConfig>,
 }
@@ -67,6 +70,7 @@ impl AetherSettings {
         if !next.mcps.is_empty() {
             self.mcps = next.mcps;
         }
+        self.providers.merge(next.providers);
 
         for next_agent in next.agents {
             if let Some(existing) = self.agents.iter_mut().find(|agent| agent.name.trim() == next_agent.name.trim()) {

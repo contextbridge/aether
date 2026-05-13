@@ -1,4 +1,5 @@
 use crate::LlmModel;
+use crate::ProviderConnectionConfig;
 use crate::Result as LlmResult;
 use std::future::Future;
 use std::pin::Pin;
@@ -18,6 +19,14 @@ pub type LlmResponseStream = Pin<Box<dyn Stream<Item = LlmResult<LlmResponse>> +
 pub trait ProviderFactory: Sized {
     /// Create provider from environment variables and default configuration
     fn from_env() -> impl Future<Output = LlmResult<Self>> + Send;
+
+    /// Create provider from environment variables with provider connection overrides.
+    fn from_env_with_connection(connection: ProviderConnectionConfig) -> impl Future<Output = LlmResult<Self>> + Send {
+        async move {
+            let _ = connection;
+            Self::from_env().await
+        }
+    }
 
     /// Set or update the model for this provider (builder pattern)
     fn with_model(self, model: &str) -> Self;

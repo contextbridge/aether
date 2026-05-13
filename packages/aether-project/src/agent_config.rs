@@ -1,6 +1,6 @@
 use crate::{McpSourceSpec, PromptSource};
 use aether_core::agent_spec::ToolFilter;
-use llm::ReasoningEffort;
+use llm::{ProviderConnectionOverrides, ReasoningEffort};
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -14,10 +14,15 @@ pub struct AgentConfig {
     pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<ReasoningEffort>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
+    pub context_window: Option<u32>,
     #[serde(default)]
     pub user_invocable: bool,
     #[serde(default)]
     pub agent_invocable: bool,
+    #[serde(default, skip_serializing_if = "ProviderConnectionOverrides::is_empty")]
+    pub providers: ProviderConnectionOverrides,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schemars(length(min = 1))]
     pub prompts: Vec<PromptSource>,

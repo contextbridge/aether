@@ -2,7 +2,7 @@
 
 use super::util::get_local_config;
 use crate::providers::openai::OpenAiChatProvider;
-use crate::{ProviderFactory, Result};
+use crate::{ProviderConnectionConfig, ProviderFactory, Result};
 use async_openai::{Client, config::OpenAIConfig};
 
 pub struct LlamaCppProvider {
@@ -23,7 +23,12 @@ impl Default for LlamaCppProvider {
 
 impl ProviderFactory for LlamaCppProvider {
     async fn from_env() -> Result<Self> {
-        Ok(Self::default())
+        Self::from_env_with_connection(ProviderConnectionConfig::default()).await
+    }
+
+    async fn from_env_with_connection(connection: ProviderConnectionConfig) -> Result<Self> {
+        let base_url = connection.base_url.as_deref().unwrap_or("http://localhost:8080/v1");
+        Ok(Self { client: Client::with_config(get_local_config(base_url)) })
     }
 
     fn with_model(self, _model: &str) -> Self {

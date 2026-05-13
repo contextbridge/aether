@@ -39,6 +39,7 @@ pub(crate) struct AgentConfig {
     pub compaction_config: Option<CompactionConfig>,
     pub auto_continue: AutoContinue,
     pub retry_config: RetryConfig,
+    pub context_window: Option<u32>,
 }
 
 pub struct Agent {
@@ -54,6 +55,7 @@ pub struct Agent {
     retry_config: RetryConfig,
     active_requests: HashMap<String, ToolCallRequest>,
     queued_user_messages: VecDeque<Vec<llm::ContentBlock>>,
+    context_window: Option<u32>,
 }
 
 impl Agent {
@@ -68,7 +70,7 @@ impl Agent {
             Box::pin(ReceiverStream::new(user_message_rx).map(StreamEvent::UserMessage)),
         );
 
-        let context_limit = config.llm.context_window();
+        let context_limit = config.context_window.or_else(|| config.llm.context_window());
 
         Self {
             llm: config.llm,
@@ -83,6 +85,7 @@ impl Agent {
             retry_config: config.retry_config,
             active_requests: HashMap::new(),
             queued_user_messages: VecDeque::new(),
+            context_window: config.context_window,
         }
     }
 
@@ -258,7 +261,7 @@ impl Agent {
 
     async fn on_switch_model(&mut self, new_provider: Box<dyn StreamingModelProvider>) {
         let previous = self.llm.display_name();
-        let new_context_limit = new_provider.context_window();
+        let new_context_limit = self.context_window.or_else(|| new_provider.context_window());
         self.llm = Arc::from(new_provider);
         self.token_tracker.reset_current_usage();
         self.token_tracker.set_context_limit(new_context_limit);
@@ -785,6 +788,7 @@ mod tests {
                 compaction_config: Some(CompactionConfig::with_threshold(0.85)),
                 auto_continue: AutoContinue::new(0),
                 retry_config: RetryConfig::disabled(),
+                context_window: None,
             },
             user_rx,
             message_tx,

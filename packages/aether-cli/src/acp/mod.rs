@@ -12,6 +12,7 @@ pub mod testing;
 pub use mappers::map_mcp_prompt_to_available_command;
 pub use session_manager::SessionManager;
 
+use crate::provider_connection_args::ProviderConnectionArgs;
 use crate::settings_args::SettingsSourceArgs;
 use agent_client_protocol::{self as acp, ByteStreams};
 use llm::ReasoningEffort;
@@ -46,6 +47,9 @@ pub struct AcpArgs {
     /// Initial reasoning effort for an explicit model session. Requires `--model` and is mutually exclusive with `--agent`.
     #[clap(long, value_name = "low|medium|high|xhigh", requires = "model", conflicts_with = "agent")]
     pub reasoning_effort: Option<ReasoningEffort>,
+
+    #[command(flatten)]
+    pub provider_connection: ProviderConnectionArgs,
 
     #[command(flatten)]
     pub settings_source: SettingsSourceArgs,
@@ -96,12 +100,14 @@ pub async fn run_acp(args: AcpArgs) -> Result<AcpRunOutcome, AcpRunError> {
         SessionStore::new().map_or_else(|e| panic!("Failed to initialize session store: {e}"), Arc::new);
     let oauth_credential_store: Arc<dyn OAuthCredentialStorage> =
         Arc::new(aether_auth::OsKeyringStore::with_platform_store());
+    let provider_connections = args.provider_connection.into_overrides();
     let manager = Arc::new(SessionManager::new(SessionManagerConfig {
         registry: Arc::new(SessionRegistry::new()),
         session_store,
         oauth_credential_store,
         initial_selection,
         settings_source: args.settings_source,
+        provider_connections,
     }));
 
     let transport = ByteStreams::new(stdout().compat_write(), stdin().compat());

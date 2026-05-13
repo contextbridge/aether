@@ -3,9 +3,12 @@ use schemars::Schema;
 
 use crate::provider::get_context_window;
 use crate::tool_schema::normalize_for_moonshot;
-use crate::{Context, LlmError, LlmModel, LlmResponseStream, Result, StreamingModelProvider};
+use crate::{
+    Context, LlmError, LlmModel, LlmResponseStream, ProviderAuthMode, ProviderConnectionConfig, Result,
+    StreamingModelProvider,
+};
 
-use super::{build_chat_request, create_custom_stream_generic};
+use super::{AetherOpenAiConfig, build_chat_request, create_custom_stream_generic};
 
 /// Configuration for an OpenAI-compatible provider.
 ///
@@ -49,19 +52,41 @@ pub const ZAI: ProviderConfig = ProviderConfig {
 
 /// A generic provider for APIs that are fully OpenAI-compatible.
 pub struct GenericOpenAiProvider {
-    client: Client<OpenAIConfig>,
+    client: Client<AetherOpenAiConfig>,
     model: String,
     config: &'static ProviderConfig,
 }
 
 impl GenericOpenAiProvider {
     pub fn from_env(config: &'static ProviderConfig) -> Result<Self> {
-        let api_key = std::env::var(config.env_var).map_err(|_| LlmError::MissingApiKey(config.env_var.to_string()))?;
-        Ok(Self::new(api_key, config))
+        Self::from_env_with_connection(config, ProviderConnectionConfig::default())
+    }
+
+    pub fn from_env_with_connection(
+        config: &'static ProviderConfig,
+        connection: ProviderConnectionConfig,
+    ) -> Result<Self> {
+        let api_key = match connection.auth_mode {
+            ProviderAuthMode::Default => {
+                std::env::var(config.env_var).map_err(|_| LlmError::MissingApiKey(config.env_var.to_string()))?
+            }
+            ProviderAuthMode::None => String::new(),
+        };
+        Ok(Self::new_with_connection(api_key, config, connection))
     }
 
     pub fn new(api_key: String, config: &'static ProviderConfig) -> Self {
-        let openai_config = OpenAIConfig::new().with_api_key(api_key).with_api_base(config.api_base.to_string());
+        Self::new_with_connection(api_key, config, ProviderConnectionConfig::default())
+    }
+
+    pub fn new_with_connection(
+        api_key: String,
+        config: &'static ProviderConfig,
+        connection: ProviderConnectionConfig,
+    ) -> Self {
+        let api_base = connection.base_url.unwrap_or_else(|| config.api_base.to_string());
+        let openai_config = OpenAIConfig::new().with_api_key(api_key).with_api_base(api_base);
+        let openai_config = AetherOpenAiConfig::new(openai_config, connection.auth_mode);
 
         Self { client: Client::with_config(openai_config), model: config.default_model.to_string(), config }
     }

@@ -11,6 +11,7 @@ use aether_core::core::AgentHandle;
 use aether_core::events::{AgentMessage, UserMessage};
 use agent_client_protocol::schema::SessionId;
 use agent_client_protocol::{Agent, Client, ConnectionTo};
+use llm::ProviderConnectionOverrides;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::sync::{mpsc, oneshot};
@@ -45,6 +46,7 @@ impl AcpTestHarness {
             oauth_credential_store: mock_oauth_store(),
             initial_selection: InitialSessionSelection::default(),
             settings_source: SettingsSourceArgs::default(),
+            provider_connections: ProviderConnectionOverrides::default(),
         }));
 
         let (peer, client_builder) = TestPeer::new();
@@ -100,6 +102,7 @@ impl AcpTestHarness {
             mcp_tx,
             event_rx,
             initial_server_statuses: vec![],
+            provider_connections: ProviderConnectionOverrides::default(),
         };
         let relay =
             spawn_relay(session, self.agent_cx.clone(), id.clone(), self.session_store.clone(), mock_oauth_store());

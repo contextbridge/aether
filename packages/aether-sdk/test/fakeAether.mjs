@@ -31,6 +31,8 @@ const writable = Writable.toWeb(process.stdout);
 const readable = Readable.toWeb(process.stdin);
 const stream = ndJsonStream(writable, readable);
 
+log(JSON.stringify({ event: "argv", args: process.argv.slice(2) }));
+
 let capturedSessionId = null;
 let capturedMcpServers = [];
 let capturedMeta = null;

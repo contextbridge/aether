@@ -2,7 +2,7 @@ use super::mappers::{map_messages, map_tools};
 use super::streaming::process_anthropic_stream;
 use super::types::{Request, Thinking};
 use crate::provider::{LlmResponseStream, ProviderFactory, StreamingModelProvider, get_context_window};
-use crate::{Context, LlmError, ReasoningEffort, Result};
+use crate::{Context, LlmError, ProviderAuthMode, ProviderConnectionConfig, ReasoningEffort, Result};
 use async_stream;
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
@@ -17,6 +17,7 @@ pub struct AnthropicProvider {
     client: Client,
     model: String,
     base_url: Option<String>,
+    auth_mode: ProviderAuthMode,
     temperature: Option<f32>,
     max_tokens: u32,
     api_key: Option<String>,
@@ -30,6 +31,7 @@ impl AnthropicProvider {
             client,
             model: "claude-sonnet-4-5-20250929".to_string(),
             base_url: Some("https://api.anthropic.com".to_string()),
+            auth_mode: ProviderAuthMode::Default,
             temperature: None,
             max_tokens: 16_384,
             api_key,
@@ -43,6 +45,14 @@ impl AnthropicProvider {
 
     pub fn with_base_url(mut self, base_url: &str) -> Self {
         self.base_url = Some(base_url.to_string());
+        self
+    }
+
+    pub fn with_connection(mut self, connection: ProviderConnectionConfig) -> Self {
+        if let Some(base_url) = connection.base_url {
+            self.base_url = Some(base_url);
+        }
+        self.auth_mode = connection.auth_mode;
         self
     }
 
@@ -110,8 +120,10 @@ impl AnthropicProvider {
         let mut headers = HeaderMap::new();
         headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        let api_key = self.get_api_key()?;
-        headers.insert("x-api-key", HeaderValue::from_str(&api_key)?);
+        if self.auth_mode != ProviderAuthMode::None {
+            let api_key = self.get_api_key()?;
+            headers.insert("x-api-key", HeaderValue::from_str(&api_key)?);
+        }
         Ok(headers)
     }
 
@@ -161,6 +173,10 @@ impl AnthropicProvider {
 impl ProviderFactory for AnthropicProvider {
     async fn from_env() -> Result<Self> {
         Self::new(None)
+    }
+
+    async fn from_env_with_connection(connection: ProviderConnectionConfig) -> Result<Self> {
+        Ok(Self::new(None)?.with_connection(connection))
     }
 
     fn with_model(self, model: &str) -> Self {
@@ -280,6 +296,16 @@ mod tests {
         assert_eq!(headers.get("x-api-key").and_then(|value| value.to_str().ok()), Some("test-api-key"));
         assert!(headers.get(AUTHORIZATION).is_none());
         assert!(headers.get("anthropic-beta").is_none());
+    }
+
+    #[test]
+    fn build_headers_skips_api_key_when_auth_is_none() {
+        let provider = AnthropicProvider::new(None)
+            .unwrap()
+            .with_connection(ProviderConnectionConfig { base_url: None, auth_mode: ProviderAuthMode::None });
+        let headers = provider.build_headers().expect("headers");
+        assert!(headers.get("x-api-key").is_none());
+        assert_eq!(headers.get("anthropic-version").and_then(|value| value.to_str().ok()), Some("2023-06-01"));
     }
 
     #[test]

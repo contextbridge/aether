@@ -71,12 +71,24 @@ yourself in a `finally` block.
 | `binaryPath`      | Override the bundled `@aether-agent/cli` binary (absolute path or name on `PATH`). |
 | `tools`           | Closure-backed TypeScript tool groups keyed by Aether tool prefix.   |
 | `externalMcpServers` | External stdio/http/sse MCP servers keyed by Aether tool prefix.   |
+| `providers`       | Provider connection overrides, keyed by provider (for example `{ bedrock: { url: "http://127.0.0.1:8787", auth: "none" } }`). |
 | `abortSignal`     | Cancel the active session and tear the subprocess down.              |
 
 `agent` and `model` are mutually exclusive. `settings` and `settingsFile` are
 mutually exclusive. These are forwarded to the spawned `aether acp` process as
 `--settings-json` and `--settings-file`, where the CLI resolves the initial
 system prompt and tool filter before the session is constructed.
+
+Provider connection overrides route a provider to a custom endpoint and can also
+change auth behavior. Set `auth: "none"` only when a trusted proxy injects or
+signs auth:
+
+```ts
+await AetherSession.start({
+  model: "bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0",
+  providers: { bedrock: { url: "http://127.0.0.1:8787", auth: "none" } },
+});
+```
 
 ## Multi-turn usage
 

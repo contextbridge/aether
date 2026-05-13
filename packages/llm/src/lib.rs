@@ -9,6 +9,7 @@ pub mod error;
 mod llm_response;
 pub mod parser;
 pub mod provider;
+pub mod provider_connection;
 pub mod providers;
 mod reasoning;
 pub mod testing;
@@ -23,6 +24,9 @@ pub use credential::ProviderCredential;
 pub use error::{ContextOverflowError, LlmError, Result};
 pub use llm_response::{LlmResponse, StopReason, TokenUsage};
 pub use provider::{LlmResponseStream, ProviderFactory, StreamingModelProvider};
+pub use provider_connection::{
+    ProviderAuthMode, ProviderConnectionConfig, ProviderConnectionOverride, ProviderConnectionOverrides,
+};
 pub use reasoning::ReasoningEffort;
 pub use tools::*;
 

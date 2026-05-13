@@ -68,6 +68,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "url",
  "uuid",
 ]
 
@@ -156,6 +157,7 @@ dependencies = [
  "oauth2",
  "reqwest 0.13.3",
  "schemars 1.2.1",
+ "secrecy",
  "serde",
  "serde_json",
  "tempfile",

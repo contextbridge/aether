@@ -12,7 +12,10 @@ use crate::providers::{
     openai_compatible::generic::{self, GenericOpenAiProvider},
     openrouter::OpenRouterProvider,
 };
-use crate::{LlmError, ProviderFactory, StreamingModelProvider, alloyed::AlloyedModelProvider};
+use crate::{
+    LlmError, ProviderConnectionConfig, ProviderConnectionOverrides, ProviderFactory, StreamingModelProvider,
+    alloyed::AlloyedModelProvider,
+};
 #[cfg(feature = "codex")]
 use aether_auth::OAuthCredentialStorage;
 use futures::future::BoxFuture;
@@ -23,12 +26,13 @@ use std::sync::Arc;
 #[doc = include_str!("docs/parser.md")]
 pub struct ModelProviderParser {
     factories: HashMap<String, CreateProviderFn>,
+    provider_connections: ProviderConnectionOverrides,
 }
 
 impl ModelProviderParser {
     /// Create a new parser with custom provider factories
     pub fn new(factories: HashMap<String, CreateProviderFn>) -> Self {
-        Self { factories }
+        Self { factories, provider_connections: ProviderConnectionOverrides::default() }
     }
 }
 
@@ -54,15 +58,22 @@ impl Default for ModelProviderParser {
 }
 
 impl ModelProviderParser {
+    pub fn with_provider_connections(mut self, connections: ProviderConnectionOverrides) -> Self {
+        self.provider_connections = connections;
+        self
+    }
+
     pub fn with_provider<P: ProviderFactory + StreamingModelProvider + 'static>(
         mut self,
         name: impl Into<String>,
     ) -> Self {
         self.factories.insert(
             name.into(),
-            Box::new(|model: &str| {
+            Box::new(|model: &str, connection: ProviderConnectionConfig| {
                 let model = model.to_string();
-                Box::pin(async move { Ok(Box::new(P::from_env().await?.with_model(&model)) as _) })
+                Box::pin(
+                    async move { Ok(Box::new(P::from_env_with_connection(connection).await?.with_model(&model)) as _) },
+                )
             }),
         );
         self
@@ -72,7 +83,7 @@ impl ModelProviderParser {
     pub fn with_codex_provider(mut self, store: Arc<dyn OAuthCredentialStorage>) -> Self {
         self.factories.insert(
             "codex".to_string(),
-            Box::new(move |model: &str| {
+            Box::new(move |model: &str, _connection: ProviderConnectionConfig| {
                 let store = Arc::clone(&store);
                 let model = model.to_string();
                 Box::pin(async move { Ok(Box::new(CodexProvider::new(store).with_model(&model)) as _) })
@@ -84,9 +95,15 @@ impl ModelProviderParser {
     pub fn with_openai_provider(mut self, name: impl Into<String>, config: &'static generic::ProviderConfig) -> Self {
         self.factories.insert(
             name.into(),
-            Box::new(move |model: &str| {
+            Box::new(move |model: &str, connection: ProviderConnectionConfig| {
                 let model = model.to_string();
-                Box::pin(async move { Ok(Box::new(GenericOpenAiProvider::from_env(config)?.with_model(&model)) as _) })
+                Box::pin(async move {
+                    Ok(
+                        Box::new(
+                            GenericOpenAiProvider::from_env_with_connection(config, connection)?.with_model(&model),
+                        ) as _,
+                    )
+                })
             }),
         );
         self
@@ -96,7 +113,7 @@ impl ModelProviderParser {
     pub async fn create_provider(&self, model: &LlmModel) -> Result<Box<dyn StreamingModelProvider>> {
         let key = model.provider();
         let factory = self.factories.get(key).ok_or_else(|| LlmError::Other(format!("Unknown provider: {key}")))?;
-        factory(&model.model_id()).await
+        factory(&model.model_id(), self.provider_connections.config_for(key)).await
     }
 
     /// Parse a model specification string and create a provider instance.
@@ -126,7 +143,8 @@ impl ModelProviderParser {
                 .get(provider_name)
                 .ok_or_else(|| LlmError::Other(format!("Unknown provider: {provider_name}")))?;
 
-            providers.push(factory(model).await?);
+            let connection = self.provider_connections.config_for(provider_name);
+            providers.push(factory(model, connection).await?);
 
             if first_identity.is_none() {
                 first_identity = Some(pair.parse::<LlmModel>().map_err(LlmError::Other)?);
@@ -148,8 +166,9 @@ impl ModelProviderParser {
 /// Factory function type for creating model providers
 ///
 /// Takes a model name and returns a boxed future that resolves to a `StreamingModelProvider`
-pub type CreateProviderFn =
-    Box<dyn Fn(&str) -> BoxFuture<'static, Result<Box<dyn StreamingModelProvider>>> + Send + Sync>;
+pub type CreateProviderFn = Box<
+    dyn Fn(&str, ProviderConnectionConfig) -> BoxFuture<'static, Result<Box<dyn StreamingModelProvider>>> + Send + Sync,
+>;
 
 #[cfg(test)]
 mod tests {

@@ -4,7 +4,7 @@
 //! It represents a resolved runtime type, not a raw settings DTO.
 
 use crate::core::Prompt;
-use llm::{LlmModel, ReasoningEffort, ToolDefinition};
+use llm::{LlmModel, ProviderConnectionOverrides, ReasoningEffort, ToolDefinition};
 use mcp_utils::client::McpConfig;
 use std::path::PathBuf;
 
@@ -47,14 +47,12 @@ pub struct AgentSpec {
     pub model: String,
     /// Optional reasoning effort level for models that support it.
     pub reasoning_effort: Option<ReasoningEffort>,
+    /// Effective context window in tokens for this agent.
+    pub context_window: Option<u32>,
     /// The prompt stack for this agent.
-    ///
-    /// For authored `AgentSpec`s resolved from settings, this contains authored prompt
-    /// variants (e.g., `Prompt::PromptGlobs`). Prompt files may include
-    /// `` !`<shell command>` `` markers which are replaced by the trimmed stdout of
-    /// the command at prompt-load time. `Prompt::McpInstructions` is added separately
-    /// during agent construction.
     pub prompts: Vec<Prompt>,
+    /// Provider connection overrides keyed by model provider name.
+    pub provider_connections: ProviderConnectionOverrides,
     /// Resolved MCP config sources for this agent, applied in order.
     ///
     /// Direct server name collisions use last-source-wins semantics. Proxy-enabled
@@ -74,7 +72,9 @@ impl AgentSpec {
             description: "Default agent".to_string(),
             model: model.to_string(),
             reasoning_effort,
+            context_window: None,
             prompts,
+            provider_connections: ProviderConnectionOverrides::default(),
             mcp_config_sources: Vec::new(),
             exposure: AgentSpecExposure::none(),
             tools: ToolFilter::default(),

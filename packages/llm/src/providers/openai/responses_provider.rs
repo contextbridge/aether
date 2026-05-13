@@ -12,9 +12,11 @@ use tokio_stream::StreamExt;
 use tracing::{debug, error};
 
 use crate::provider::get_context_window;
+use crate::providers::openai_compatible::AetherOpenAiConfig;
 use crate::{
-    ChatMessage, ContentBlock, Context, LlmError, LlmModel, LlmResponse, LlmResponseStream, ProviderFactory,
-    ReasoningEffort, Result, StopReason, StreamingModelProvider, TokenUsage, ToolDefinition,
+    ChatMessage, ContentBlock, Context, LlmError, LlmModel, LlmResponse, LlmResponseStream, ProviderAuthMode,
+    ProviderConnectionConfig, ProviderFactory, ReasoningEffort, Result, StopReason, StreamingModelProvider, TokenUsage,
+    ToolDefinition,
 };
 
 impl From<ResponseUsage> for TokenUsage {
@@ -52,16 +54,28 @@ pub(crate) fn map_user_content_for_responses(parts: &[ContentBlock]) -> Result<E
 }
 
 pub struct OpenAiProvider {
-    client: Client<OpenAIConfig>,
+    client: Client<AetherOpenAiConfig>,
     model: String,
 }
 
 impl ProviderFactory for OpenAiProvider {
     async fn from_env() -> Result<Self> {
-        let api_key =
-            std::env::var("OPENAI_API_KEY").map_err(|_| LlmError::MissingApiKey("OPENAI_API_KEY".to_string()))?;
+        Self::from_env_with_connection(ProviderConnectionConfig::default()).await
+    }
 
-        let config = OpenAIConfig::new().with_api_key(api_key);
+    async fn from_env_with_connection(connection: ProviderConnectionConfig) -> Result<Self> {
+        let api_key = match connection.auth_mode {
+            ProviderAuthMode::Default => {
+                std::env::var("OPENAI_API_KEY").map_err(|_| LlmError::MissingApiKey("OPENAI_API_KEY".to_string()))?
+            }
+            ProviderAuthMode::None => String::new(),
+        };
+
+        let mut config = OpenAIConfig::new().with_api_key(api_key);
+        if let Some(base_url) = connection.base_url {
+            config = config.with_api_base(base_url);
+        }
+        let config = AetherOpenAiConfig::new(config, connection.auth_mode);
 
         Ok(Self { client: Client::with_config(config), model: "gpt-4.1".to_string() })
     }
@@ -475,7 +489,8 @@ mod tests {
 
     #[test]
     fn test_provider_display_name() {
-        let provider = OpenAiProvider { client: Client::new(), model: "gpt-4.1".to_string() };
+        let config = AetherOpenAiConfig::new(OpenAIConfig::new().with_api_key("test"), ProviderAuthMode::Default);
+        let provider = OpenAiProvider { client: Client::with_config(config), model: "gpt-4.1".to_string() };
         assert_eq!(provider.display_name(), "OpenAI (gpt-4.1)");
     }
 }

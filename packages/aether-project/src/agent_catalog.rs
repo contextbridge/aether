@@ -2,7 +2,7 @@ use crate::error::SettingsError;
 use crate::{AetherSettings, AgentConfig, McpSourceSpec};
 use aether_core::agent_spec::{AgentSpec, AgentSpecExposure, McpConfigSource};
 use aether_core::core::Prompt;
-use llm::LlmModel;
+use llm::{LlmModel, ProviderConnectionOverrides};
 use mcp_utils::client::McpConfig;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -22,19 +22,11 @@ impl AgentCatalog {
         validate_selected_agent(&settings)?;
         let selected_agent =
             settings.agent.as_deref().map(str::trim).filter(|name| !name.is_empty()).map(str::to_string);
-        let default_prompts = settings.prompts;
-        let default_mcps = settings.mcps;
+        let defaults = AgentDefaults { prompts: settings.prompts, mcps: settings.mcps, providers: settings.providers };
         let mut seen_names = HashSet::new();
         let mut specs = Vec::with_capacity(settings.agents.len());
         for (index, entry) in settings.agents.into_iter().enumerate() {
-            specs.push(resolve_agent_entry(
-                project_root,
-                entry,
-                &default_prompts,
-                &default_mcps,
-                index,
-                &mut seen_names,
-            )?);
+            specs.push(resolve_agent_entry(project_root, entry, &defaults, index, &mut seen_names)?);
         }
 
         Ok(Self::new(project_root.to_path_buf(), specs, selected_agent))
@@ -94,6 +86,12 @@ impl AgentCatalog {
     }
 }
 
+struct AgentDefaults {
+    prompts: Vec<crate::PromptSource>,
+    mcps: Vec<McpSourceSpec>,
+    providers: ProviderConnectionOverrides,
+}
+
 fn validate_selected_agent(settings: &AetherSettings) -> Result<(), SettingsError> {
     if settings.agents.is_empty() {
         return Err(SettingsError::EmptyAgents);
@@ -116,8 +114,7 @@ fn validate_selected_agent(settings: &AetherSettings) -> Result<(), SettingsErro
 fn resolve_agent_entry(
     project_root: &Path,
     entry: AgentConfig,
-    default_prompts: &[crate::PromptSource],
-    default_mcps: &[McpSourceSpec],
+    defaults: &AgentDefaults,
     index: usize,
     seen_names: &mut HashSet<String>,
 ) -> Result<AgentSpec, SettingsError> {
@@ -138,25 +135,32 @@ fn resolve_agent_entry(
     }
 
     let model = parse_model(&name, &entry.model)?;
+    if entry.context_window == Some(0) {
+        return Err(SettingsError::InvalidContextWindow { agent: name.clone(), context_window: 0 });
+    }
     if !entry.user_invocable && !entry.agent_invocable {
         return Err(SettingsError::NoInvocationSurface { agent: name.clone() });
     }
-    let prompt_sources = if entry.prompts.is_empty() { default_prompts } else { &entry.prompts };
+    let prompt_sources = if entry.prompts.is_empty() { &defaults.prompts } else { &entry.prompts };
     if prompt_sources.is_empty() {
         return Err(SettingsError::NoPrompts { agent: name.clone() });
     }
 
     let prompts = Prompt::from_sources(project_root, prompt_sources)
         .map_err(|source| SettingsError::AgentPromptSource { agent: name.clone(), source })?;
-    let mcp_sources = if entry.mcps.is_empty() { default_mcps } else { &entry.mcps };
+    let mcp_sources = if entry.mcps.is_empty() { &defaults.mcps } else { &entry.mcps };
     let mcp_config_sources = resolve_mcp_config_sources(project_root, mcp_sources)?;
+    let mut provider_connections = defaults.providers.clone();
+    provider_connections.merge(entry.providers);
 
     Ok(AgentSpec {
         name,
         description,
         model,
         reasoning_effort: entry.reasoning_effort,
+        context_window: entry.context_window,
         prompts,
+        provider_connections,
         mcp_config_sources,
         exposure: AgentSpecExposure { user_invocable: entry.user_invocable, agent_invocable: entry.agent_invocable },
         tools: entry.tools,
@@ -233,7 +237,9 @@ mod tests {
             description: format!("{name} agent"),
             model: "anthropic:claude-sonnet-4-5".to_string(),
             reasoning_effort: None,
+            context_window: None,
             prompts: vec![],
+            provider_connections: ProviderConnectionOverrides::default(),
             mcp_config_sources: Vec::new(),
             exposure,
             tools: ToolFilter::default(),
@@ -331,6 +337,52 @@ mod tests {
         let catalog = create_test_catalog(dir.path().to_path_buf());
         let result = catalog.get("nonexistent");
         assert!(matches!(result, Err(SettingsError::AgentNotFound { .. })));
+    }
+
+    #[test]
+    fn agent_context_window_is_resolved_into_spec() {
+        let dir = create_temp_project();
+        write_file(dir.path(), "BASE.md", "Base instructions");
+
+        let config = AetherSettings {
+            agents: vec![AgentConfig {
+                name: "planner".to_string(),
+                description: "Planner agent".to_string(),
+                model: "anthropic:claude-sonnet-4-5".to_string(),
+                context_window: Some(200_000),
+                user_invocable: true,
+                prompts: vec![crate::PromptSource::file("BASE.md")],
+                ..AgentConfig::default()
+            }],
+            ..AetherSettings::default()
+        };
+
+        let catalog = AgentCatalog::from_settings(dir.path(), config).unwrap();
+        let spec = catalog.resolve("planner").unwrap();
+
+        assert_eq!(spec.context_window, Some(200_000));
+    }
+
+    #[test]
+    fn agent_context_window_rejects_zero() {
+        let config = AetherSettings {
+            agents: vec![AgentConfig {
+                name: "planner".to_string(),
+                description: "Planner agent".to_string(),
+                model: "anthropic:claude-sonnet-4-5".to_string(),
+                context_window: Some(0),
+                user_invocable: true,
+                ..AgentConfig::default()
+            }],
+            ..AetherSettings::default()
+        };
+
+        let err = AgentCatalog::from_settings(Path::new("/tmp"), config).unwrap_err();
+
+        assert!(matches!(
+            err,
+            SettingsError::InvalidContextWindow { agent, context_window: 0 } if agent == "planner"
+        ));
     }
 
     #[test]

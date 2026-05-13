@@ -1,7 +1,7 @@
 use super::mappers::{map_messages, map_tools};
 use super::streaming::process_bedrock_stream;
 use crate::provider::{LlmResponseStream, ProviderFactory, StreamingModelProvider, get_context_window};
-use crate::{Context, LlmError, Result};
+use crate::{Context, LlmError, ProviderAuthMode, ProviderConnectionConfig, Result};
 use aws_config::Region;
 use aws_sdk_bedrockruntime::config::{BehaviorVersion, Credentials};
 use aws_sdk_bedrockruntime::error::SdkError;
@@ -37,8 +37,37 @@ impl BedrockProvider {
     /// Create a provider using the default AWS credential chain
     /// (env vars, `~/.aws/credentials`, IAM roles, SSO).
     pub async fn new() -> Self {
-        let config = aws_config::defaults(BehaviorVersion::latest()).load().await;
-        let client = Client::new(&config);
+        Self::new_with_connection(ProviderConnectionConfig::default()).await
+    }
+
+    pub async fn new_with_connection(connection: ProviderConnectionConfig) -> Self {
+        if connection == ProviderConnectionConfig::default() {
+            let config = aws_config::defaults(BehaviorVersion::latest()).load().await;
+            let client = Client::new(&config);
+            return Self {
+                client,
+                model: DEFAULT_MODEL.to_string(),
+                max_tokens: DEFAULT_MAX_TOKENS,
+                temperature: None,
+            };
+        }
+
+        let mut loader = aws_config::defaults(BehaviorVersion::latest());
+        if connection.auth_mode == ProviderAuthMode::None {
+            loader = loader.no_credentials();
+        }
+
+        if let Some(url) = &connection.base_url {
+            loader = loader.endpoint_url(url.clone());
+        }
+
+        let sdk_config = loader.load().await;
+        let mut builder = aws_sdk_bedrockruntime::config::Builder::from(&sdk_config);
+        if connection.auth_mode == ProviderAuthMode::None {
+            builder = builder.allow_no_auth();
+        }
+
+        let client = Client::from_conf(builder.build());
 
         Self { client, model: DEFAULT_MODEL.to_string(), max_tokens: DEFAULT_MAX_TOKENS, temperature: None }
     }
@@ -108,6 +137,10 @@ impl BedrockProvider {
 impl ProviderFactory for BedrockProvider {
     async fn from_env() -> Result<Self> {
         Ok(Self::new().await)
+    }
+
+    async fn from_env_with_connection(connection: ProviderConnectionConfig) -> Result<Self> {
+        Ok(Self::new_with_connection(connection).await)
     }
 
     fn with_model(self, model: &str) -> Self {

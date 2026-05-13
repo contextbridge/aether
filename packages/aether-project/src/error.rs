@@ -18,6 +18,10 @@ pub enum SettingsError {
     #[error("Agent '{agent}' is missing required field: {field}")]
     MissingField { agent: String, field: String },
 
+    /// An agent entry has an invalid context window.
+    #[error("Agent '{agent}' has invalid contextWindow {context_window}; expected a positive integer")]
+    InvalidContextWindow { agent: String, context_window: u32 },
+
     /// An agent entry has an empty name.
     #[error("Agent at index {index} has an empty name")]
     EmptyAgentName { index: usize },

@@ -5,7 +5,7 @@ use aether_core::agent_spec::AgentSpec;
 use aether_core::core::AgentHandle;
 use aether_core::events::{AgentMessage, UserMessage};
 use aether_core::mcp::run_mcp_task::McpCommand;
-use llm::ChatMessage;
+use llm::{ChatMessage, ProviderConnectionOverrides};
 use mcp_utils::client::{McpClientEvent, McpError, McpServer, OAuthHandlerFactory};
 use mcp_utils::status::McpServerStatusEntry;
 
@@ -28,6 +28,7 @@ pub struct Session {
     pub mcp_tx: mpsc::Sender<McpCommand>,
     pub event_rx: mpsc::Receiver<McpClientEvent>,
     pub initial_server_statuses: Vec<McpServerStatusEntry>,
+    pub provider_connections: ProviderConnectionOverrides,
 }
 
 impl Session {
@@ -44,6 +45,7 @@ impl Session {
     ) -> Result<Self, Box<dyn std::error::Error>> {
         debug!("MCP configs: {:?}", spec.mcp_config_sources);
         debug!("Using project root: {:?}", cwd);
+        let provider_connections = spec.provider_connections.clone();
 
         let mut rb = RuntimeBuilder::from_spec(cwd, spec).extra_servers(extra_mcp_servers);
 
@@ -64,6 +66,7 @@ impl Session {
             mcp_tx: agent.mcp_tx,
             event_rx: agent.event_rx,
             initial_server_statuses: agent.server_statuses,
+            provider_connections,
         })
     }
 

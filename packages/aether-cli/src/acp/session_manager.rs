@@ -11,7 +11,7 @@ use agent_client_protocol::schema::{
 use agent_client_protocol::{Client, ConnectionTo};
 use llm::catalog::{LlmModel, get_local_models};
 use llm::types::IsoString;
-use llm::{ContentBlock, ReasoningEffort};
+use llm::{ContentBlock, ProviderConnectionOverrides, ReasoningEffort};
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
@@ -65,6 +65,7 @@ pub struct SessionManager {
     oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
     initial_selection: InitialSessionSelection,
     settings_source: SettingsSourceArgs,
+    provider_connections: ProviderConnectionOverrides,
 }
 
 pub(crate) struct SessionManagerConfig {
@@ -73,6 +74,7 @@ pub(crate) struct SessionManagerConfig {
     pub(crate) oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
     pub(crate) initial_selection: InitialSessionSelection,
     pub(crate) settings_source: SettingsSourceArgs,
+    pub(crate) provider_connections: ProviderConnectionOverrides,
 }
 
 struct SessionModeCatalog {
@@ -113,7 +115,13 @@ impl SessionManager {
             oauth_credential_store: deps.oauth_credential_store,
             initial_selection: deps.initial_selection,
             settings_source: deps.settings_source,
+            provider_connections: deps.provider_connections,
         }
+    }
+
+    fn apply_provider_connection_overrides(&self, mut spec: AgentSpec) -> AgentSpec {
+        spec.provider_connections.merge(self.provider_connections.clone());
+        spec
     }
 
     fn resolve_initial_session(
@@ -121,7 +129,7 @@ impl SessionManager {
         mode_catalog: &SessionModeCatalog,
         default_model: &LlmModel,
     ) -> Result<ResolvedInitialSession, acp::Error> {
-        match &self.initial_selection {
+        let mut resolved = match &self.initial_selection {
             InitialSessionSelection::Default => resolve_default_initial_session(mode_catalog, default_model),
             InitialSessionSelection::Agent(agent) => {
                 if !mode_catalog.modes.iter().any(|mode| mode.name == *agent) {
@@ -138,7 +146,9 @@ impl SessionManager {
                     selected_mode: None,
                 })
             }
-        }
+        }?;
+        resolved.spec = self.apply_provider_connection_overrides(resolved.spec);
+        Ok(resolved)
     }
 
     async fn load_mode_catalog(&self, cwd: &Path) -> Result<SessionModeCatalog, acp::Error> {
@@ -394,6 +404,7 @@ mod tests {
             oauth_credential_store: mock_oauth_store(),
             initial_selection: InitialSessionSelection::default(),
             settings_source: SettingsSourceArgs::default(),
+            provider_connections: ProviderConnectionOverrides::default(),
         });
         let response =
             manager.initialize(InitializeRequest::new(ProtocolVersion::LATEST)).await.expect("initialize succeeds");
@@ -631,7 +642,7 @@ impl SessionManager {
         let context = Context::from_events(&events);
         let mode_catalog = self.load_mode_catalog(&args.cwd).await?;
 
-        let spec = if let Some(mode_name) = meta.selected_mode.as_deref() {
+        let spec = self.apply_provider_connection_overrides(if let Some(mode_name) = meta.selected_mode.as_deref() {
             resolve_agent_spec(&mode_catalog.catalog, mode_name)?
         } else {
             let parsed_model: LlmModel = meta.model.parse().map_err(|e: String| {
@@ -639,7 +650,7 @@ impl SessionManager {
                 acp::Error::invalid_params()
             })?;
             AgentSpec::default_spec(&parsed_model, None, Vec::new())
-        };
+        });
 
         let model = spec.model.clone();
 

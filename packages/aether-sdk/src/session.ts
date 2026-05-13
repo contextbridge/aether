@@ -1,4 +1,7 @@
-import type { AetherSettings } from "./generated/aether-settings.js";
+import type {
+  AetherSettings,
+  ProviderConnectionOverride,
+} from "./generated/aether-settings.js";
 import type { ChildProcess } from "node:child_process";
 import { addAbortListener } from "node:events";
 import path from "node:path";
@@ -39,6 +42,7 @@ export interface CommonAetherSessionOptions {
   logDir?: string;
   tools?: AetherToolGroups;
   externalMcpServers?: Record<string, ExternalMcpServerConfig>;
+  providers?: Record<string, ProviderConnectionOverride>;
   abortSignal?: AbortSignal;
   /** Defaults to {@link autoApprovePermissions}. */
   onPermissionRequest?: PermissionRequestHandler;
@@ -90,6 +94,7 @@ export class AetherSession {
       reasoningEffort,
       settings,
       settingsFile,
+      providers,
       logDir,
       cwd = process.cwd(),
       env,
@@ -137,6 +142,10 @@ export class AetherSession {
         "invalid_options",
         "reasoningEffort requires model",
       );
+    }
+    for (const [provider, connection] of Object.entries(providers ?? {}).sort()) {
+      if (connection.url) args.push("--provider", `${provider}.url=${connection.url}`);
+      if (connection.auth) args.push("--provider", `${provider}.auth=${connection.auth}`);
     }
     if (logDir) args.push("--log-dir", logDir);
 
