@@ -47,10 +47,22 @@ impl CredentialStore for McpCredentialStore {
             now_ms.saturating_add(duration_ms)
         });
 
+        let refresh_token = match token.refresh_token() {
+            Some(refresh) => Some(refresh.secret().clone()),
+            None => self
+                .store
+                .load_credential(&self.server_id)
+                .await
+                .map_err(|e| AuthError::InternalError(e.to_string()))?
+                .and_then(|credential| {
+                    (credential.client_id == credentials.client_id).then_some(credential.refresh_token).flatten()
+                }),
+        };
+
         let credential = OAuthCredential {
             client_id: credentials.client_id,
             access_token: token.access_token().secret().clone(),
-            refresh_token: token.refresh_token().map(|t| t.secret().clone()),
+            refresh_token,
             expires_at,
         };
 
@@ -104,6 +116,8 @@ fn build_token_response(cred: &OAuthCredential) -> OAuthTokenResponse {
 
 #[cfg(test)]
 mod tests {
+    use oauth2::basic::BasicTokenType;
+
     use super::*;
     use crate::FakeOAuthCredentialStore;
 
@@ -130,6 +144,27 @@ mod tests {
         let token = loaded.token_response.unwrap();
         assert_eq!(loaded.client_id, "client");
         assert_eq!(token.access_token().secret(), "access");
+        assert_eq!(token.refresh_token().map(|t| t.secret().as_str()), Some("refresh"));
+    }
+
+    #[tokio::test]
+    async fn mcp_store_preserves_existing_refresh_token_when_save_omits_one() {
+        let store = Arc::new(FakeOAuthCredentialStore::new());
+        store.save_credential("server", credential()).await.unwrap();
+        let mcp_store = mcp_credential_store(store.clone(), "server".to_string());
+        let stored = build_stored_credentials(
+            "client",
+            Some(&OAuthTokenResponse::new(
+                AccessToken::new("token".to_string()),
+                BasicTokenType::Bearer,
+                VendorExtraTokenFields::default(),
+            )),
+        );
+
+        CredentialStore::save(&mcp_store, stored).await.unwrap();
+        let loaded = CredentialStore::load(&mcp_store).await.unwrap().unwrap();
+        let token = loaded.token_response.unwrap();
+        assert_eq!(token.access_token().secret(), "token");
         assert_eq!(token.refresh_token().map(|t| t.secret().as_str()), Some("refresh"));
     }
 
