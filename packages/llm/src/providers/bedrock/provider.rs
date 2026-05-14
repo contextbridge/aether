@@ -41,33 +41,16 @@ impl BedrockProvider {
     }
 
     pub async fn new_with_connection(connection: ProviderConnectionConfig) -> Self {
-        if connection == ProviderConnectionConfig::default() {
-            let config = aws_config::defaults(BehaviorVersion::latest()).load().await;
-            let client = Client::new(&config);
-            return Self {
-                client,
-                model: DEFAULT_MODEL.to_string(),
-                max_tokens: DEFAULT_MAX_TOKENS,
-                temperature: None,
-            };
-        }
-
-        let mut loader = aws_config::defaults(BehaviorVersion::latest());
-        if connection.auth_mode == ProviderAuthMode::None {
-            loader = loader.no_credentials();
-        }
-
-        if let Some(url) = &connection.base_url {
-            loader = loader.endpoint_url(url.clone());
-        }
-
-        let sdk_config = loader.load().await;
-        let mut builder = aws_sdk_bedrockruntime::config::Builder::from(&sdk_config);
-        if connection.auth_mode == ProviderAuthMode::None {
-            builder = builder.allow_no_auth();
-        }
-
-        let client = Client::from_conf(builder.build());
+        let client = if connection.auth_mode == ProviderAuthMode::None {
+            build_no_auth_client(connection.base_url.as_deref(), region_from_env().as_deref())
+        } else {
+            let mut loader = aws_config::defaults(BehaviorVersion::latest());
+            if let Some(url) = &connection.base_url {
+                loader = loader.endpoint_url(url.clone());
+            }
+            let config = loader.load().await;
+            Client::new(&config)
+        };
 
         Self { client, model: DEFAULT_MODEL.to_string(), max_tokens: DEFAULT_MAX_TOKENS, temperature: None }
     }
@@ -224,9 +207,40 @@ fn build_client(credentials: Option<AwsCredentials>, region: Option<&str>) -> Cl
     Client::from_conf(config.build())
 }
 
+fn build_no_auth_client(base_url: Option<&str>, region: Option<&str>) -> Client {
+    let mut config = Config::builder()
+        .behavior_version(BehaviorVersion::latest())
+        .allow_no_auth()
+        .region(Region::new(region.unwrap_or(DEFAULT_REGION).to_string()));
+
+    if let Some(url) = base_url {
+        config = config.endpoint_url(url);
+    }
+
+    Client::from_conf(config.build())
+}
+
+fn region_from_env() -> Option<String> {
+    ["AWS_REGION", "AWS_DEFAULT_REGION"].into_iter().find_map(|name| match std::env::var(name) {
+        Ok(value) if !value.is_empty() => Some(value),
+        _ => None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::IsoString;
+    use crate::{ChatMessage, ContentBlock};
+    use axum::Router;
+    use axum::body::Body;
+    use axum::extract::State;
+    use axum::http::{HeaderMap, Method, Request, StatusCode};
+    use axum::response::IntoResponse;
+    use axum::routing::any;
+    use std::sync::Arc;
+    use tokio::net::TcpListener;
+    use tokio::sync::{Mutex, oneshot};
 
     fn test_provider() -> BedrockProvider {
         BedrockProvider::from_config(None, None)
@@ -261,6 +275,34 @@ mod tests {
         assert_eq!(provider.model, "anthropic.claude-sonnet-4-5-20250929-v1:0");
         assert_eq!(provider.max_tokens, 16_384);
         assert!(provider.temperature.is_none());
+    }
+
+    #[tokio::test]
+    async fn auth_none_sends_unsigned_request_to_custom_endpoint() {
+        let endpoint = FakeBedrockEndpoint::start().await;
+        let provider = BedrockProvider::new_with_connection(ProviderConnectionConfig {
+            base_url: Some(endpoint.url.clone()),
+            auth_mode: ProviderAuthMode::None,
+        })
+        .await;
+
+        let context = Context::new(
+            vec![ChatMessage::User { content: vec![ContentBlock::text("hello")], timestamp: IsoString::now() }],
+            vec![],
+        );
+
+        let result = provider.send_converse_stream(&context).await;
+        let request = endpoint.request.await.expect("fake Bedrock endpoint received no request");
+
+        assert!(result.is_err());
+        assert_eq!(request.method, Method::POST);
+        assert!(request.path.starts_with("/model/"), "{}", request.path);
+        assert!(!request.headers.contains_key("authorization"), "request was signed: {:?}", request.headers);
+        assert!(
+            !request.headers.contains_key("x-amz-security-token"),
+            "request included session token: {:?}",
+            request.headers
+        );
     }
 
     #[test]
@@ -337,5 +379,65 @@ mod tests {
         assert_eq!(provider.context_window(), None);
         assert_eq!(provider.model, arn);
         assert_eq!(provider.display_name(), format!("Bedrock ({arn})"));
+    }
+
+    struct FakeBedrockEndpoint {
+        url: String,
+        request: oneshot::Receiver<CapturedRequest>,
+    }
+
+    struct CapturedRequest {
+        method: Method,
+        path: String,
+        headers: HeaderMap,
+    }
+
+    #[derive(Clone)]
+    struct FakeBedrockState {
+        request_tx: Arc<Mutex<Option<oneshot::Sender<CapturedRequest>>>>,
+        shutdown_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
+    }
+
+    impl FakeBedrockEndpoint {
+        async fn start() -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind fake Bedrock endpoint");
+            let url = format!("http://{}", listener.local_addr().expect("fake Bedrock endpoint address"));
+            let (request_tx, request) = oneshot::channel();
+            let (shutdown_tx, shutdown) = oneshot::channel();
+            let state = FakeBedrockState {
+                request_tx: Arc::new(Mutex::new(Some(request_tx))),
+                shutdown_tx: Arc::new(Mutex::new(Some(shutdown_tx))),
+            };
+
+            let app = Router::new().fallback(any(capture_bedrock_request)).with_state(state);
+            tokio::spawn(async move {
+                axum::serve(listener, app)
+                    .with_graceful_shutdown(async {
+                        let _ = shutdown.await;
+                    })
+                    .await
+                    .expect("serve fake Bedrock endpoint");
+            });
+
+            Self { url, request }
+        }
+    }
+
+    async fn capture_bedrock_request(
+        State(state): State<FakeBedrockState>,
+        request: Request<Body>,
+    ) -> impl IntoResponse {
+        let (parts, _) = request.into_parts();
+        if let Some(tx) = state.request_tx.lock().await.take() {
+            let _ = tx.send(CapturedRequest {
+                method: parts.method,
+                path: parts.uri.path().to_string(),
+                headers: parts.headers,
+            });
+        }
+        if let Some(tx) = state.shutdown_tx.lock().await.take() {
+            let _ = tx.send(());
+        }
+        (StatusCode::FORBIDDEN, "{}")
     }
 }
