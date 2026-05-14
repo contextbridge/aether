@@ -24,6 +24,13 @@ repos:
         pass_filenames: false
         stages: [pre-push]
 
+      - id: pnpm-fmt-check
+        name: pnpm fmt-check
+        entry: pnpm fmt-check
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
       - id: lint
         name: just lint
         entry: just lint
