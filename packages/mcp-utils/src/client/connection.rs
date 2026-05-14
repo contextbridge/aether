@@ -17,9 +17,11 @@ use rmcp::{
 };
 use serde_json::Value;
 use std::collections::HashMap;
+use std::process::Stdio;
 use std::sync::Arc;
 use tokio::{
-    process::Command,
+    io::{AsyncBufReadExt, BufReader},
+    process::{ChildStderr, Command},
     sync::{RwLock, mpsc},
     task::JoinHandle,
 };
@@ -123,7 +125,7 @@ pub(super) async fn connect_server(server: McpServer, ctx: &ConnectContext<'_>) 
         McpClient::new(ctx.client_info.clone(), name.clone(), ctx.event_sender.clone(), Arc::clone(ctx.roots));
 
     let outcome = match transport {
-        McpTransport::Stdio { command, args, env } => connect_stdio(command, args, env, mcp_client).await,
+        McpTransport::Stdio { command, args, env } => connect_stdio(&name, command, args, env, mcp_client).await,
         McpTransport::InMemory { server } => connect_in_memory(&name, server, mcp_client).await,
         McpTransport::Http { config } => {
             connect_http(&name, config, mcp_client, ctx.oauth_handler_factory, ctx.oauth_credential_store).await
@@ -172,29 +174,49 @@ impl McpConnectOutcome {
 }
 
 async fn connect_stdio(
+    server_name: &str,
     command: String,
     args: Vec<String>,
     env: HashMap<String, String>,
     mcp_client: McpClient,
 ) -> McpConnectOutcome {
-    let cmd = {
-        let mut cmd = Command::new(&command);
-        cmd.args(&args);
-        cmd.envs(&env);
-        cmd
-    };
+    let mut cmd = Command::new(&command);
+    cmd.args(&args).envs(&env);
 
-    let child = match TokioChildProcess::new(cmd) {
-        Ok(child) => child,
+    let (proc, stderr) = match TokioChildProcess::builder(cmd).stderr(Stdio::piped()).spawn() {
+        Ok(parts) => parts,
         Err(e) => return McpConnectOutcome::Failed { error: McpError::SpawnFailed { command, reason: e.to_string() } },
     };
+    let stderr_task = stderr.map(|stderr| spawn_stderr_logger(server_name.to_string(), stderr));
 
-    match mcp_client.serve(child).await {
-        Ok(client) => {
-            McpConnectOutcome::Connected { conn: McpServerConnection::from_parts(client, None), reauth_config: None }
+    match serve_client(mcp_client, proc).await {
+        Ok(client) => McpConnectOutcome::Connected {
+            conn: McpServerConnection::from_parts(client, stderr_task),
+            reauth_config: None,
+        },
+        Err(e) => {
+            if let Some(task) = stderr_task {
+                task.abort();
+            }
+            McpConnectOutcome::Failed { error: McpError::from(e) }
         }
-        Err(e) => McpConnectOutcome::Failed { error: McpError::from(e) },
     }
+}
+
+fn spawn_stderr_logger(server_name: String, stderr: ChildStderr) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut lines = BufReader::new(stderr).lines();
+        loop {
+            match lines.next_line().await {
+                Ok(Some(line)) => tracing::info!(server = %server_name, stderr = %line, "MCP server stderr"),
+                Ok(None) => break,
+                Err(error) => {
+                    tracing::warn!(server = %server_name, %error, "failed to read MCP server stderr");
+                    break;
+                }
+            }
+        }
+    })
 }
 
 async fn connect_in_memory(
