@@ -55,7 +55,9 @@ describe("AetherSession with a fake ACP agent", () => {
 
     try {
       const lines = (await readFile(logFile, "utf8")).trim().split("\n");
-      const argv = lines.map((line) => JSON.parse(line)).find((event) => event.event === "argv");
+      const argv = lines
+        .map((line) => JSON.parse(line))
+        .find((event) => event.event === "argv");
       expect(argv.args).toContain("--provider");
       expect(argv.args).toContain("bedrock.url=http://127.0.0.1:8787");
       expect(argv.args).toContain("bedrock.auth=none");

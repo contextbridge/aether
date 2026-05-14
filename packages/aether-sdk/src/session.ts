@@ -143,9 +143,13 @@ export class AetherSession {
         "reasoningEffort requires model",
       );
     }
-    for (const [provider, connection] of Object.entries(providers ?? {}).sort()) {
-      if (connection.url) args.push("--provider", `${provider}.url=${connection.url}`);
-      if (connection.auth) args.push("--provider", `${provider}.auth=${connection.auth}`);
+    for (const [provider, connection] of Object.entries(
+      providers ?? {},
+    ).sort()) {
+      if (connection.url)
+        args.push("--provider", `${provider}.url=${connection.url}`);
+      if (connection.auth)
+        args.push("--provider", `${provider}.auth=${connection.auth}`);
     }
     if (logDir) args.push("--log-dir", logDir);
 
