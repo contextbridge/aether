@@ -1,10 +1,10 @@
 use crate::LlmError;
-use aether_auth::{BrowserOAuthHandler, OAuthCredential, OAuthCredentialStorage, OAuthError, OAuthHandler};
+use aether_auth::{
+    BrowserOAuthHandler, OAuthCredential, OAuthCredentialStorage, OAuthError, OAuthHandler, oauth_http_client,
+};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use oauth2::TokenResponse;
 use oauth2::basic::BasicClient;
-use oauth2::reqwest::redirect::Policy;
 use oauth2::{AuthUrl, AuthorizationCode, ClientId, PkceCodeChallenge, RedirectUrl, TokenUrl};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -62,10 +62,7 @@ pub async fn perform_codex_oauth_flow(store: &dyn OAuthCredentialStorage) -> Res
                 .map_err(|e| OAuthError::TokenExchange(format!("invalid redirect URI: {e}")))?,
         );
 
-    let http_client = oauth2::reqwest::Client::builder()
-        .redirect(Policy::none())
-        .build()
-        .map_err(|e| OAuthError::TokenExchange(format!("failed to build HTTP client: {e}")))?;
+    let http_client = oauth_http_client()?;
 
     let token_response = oauth_client
         .exchange_code(AuthorizationCode::new(callback.code))
@@ -74,46 +71,16 @@ pub async fn perform_codex_oauth_flow(store: &dyn OAuthCredentialStorage) -> Res
         .await
         .map_err(|e| OAuthError::TokenExchange(e.to_string()))?;
 
-    let expires_at = token_response.expires_in().map(|duration| {
-        let now_ms = u64::try_from(
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis(),
-        )
-        .unwrap_or(u64::MAX);
-        let duration_ms = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
-        now_ms.saturating_add(duration_ms)
-    });
-
-    let credential = OAuthCredential {
-        client_id: CLIENT_ID.to_string(),
-        access_token: token_response.access_token().secret().clone(),
-        refresh_token: token_response.refresh_token().map(|t| t.secret().clone()),
-        expires_at,
-    };
-
+    let credential = OAuthCredential::from_token_response(CLIENT_ID.to_string(), &token_response);
     store.save_credential(super::PROVIDER_ID, credential).await?;
 
     Ok(())
 }
 
-/// Cached token with optional expiry.
+/// In-memory cache of the most recently validated credential and its derived account ID.
 struct CachedToken {
-    access_token: String,
+    credential: OAuthCredential,
     account_id: String,
-    /// Unix timestamp in milliseconds when the token expires
-    expires_at: Option<u64>,
-}
-
-impl CachedToken {
-    fn is_expired(&self) -> bool {
-        let Some(expires_at) = self.expires_at else {
-            return false;
-        };
-        let now_ms = u64::try_from(
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis(),
-        )
-        .unwrap_or(u64::MAX);
-        now_ms >= expires_at
-    }
 }
 
 /// Manages OAuth tokens for the Codex backend API.
@@ -123,12 +90,21 @@ impl CachedToken {
 pub struct CodexTokenManager {
     store: Arc<dyn OAuthCredentialStorage>,
     credential_key: String,
+    token_url: TokenUrl,
     cached: Mutex<Option<CachedToken>>,
 }
 
 impl CodexTokenManager {
     pub fn new(store: Arc<dyn OAuthCredentialStorage>, credential_key: &str) -> Self {
-        Self { store, credential_key: credential_key.to_string(), cached: Mutex::new(None) }
+        Self::new_with_token_url(
+            store,
+            credential_key,
+            TokenUrl::new(TOKEN_URL.to_string()).expect("hardcoded Codex token URL is valid"),
+        )
+    }
+
+    fn new_with_token_url(store: Arc<dyn OAuthCredentialStorage>, credential_key: &str, token_url: TokenUrl) -> Self {
+        Self { store, credential_key: credential_key.to_string(), token_url, cached: Mutex::new(None) }
     }
 
     /// Get a valid access token and account ID.
@@ -136,38 +112,35 @@ impl CodexTokenManager {
     /// Returns `(access_token, account_id)`. The account ID is extracted from
     /// the JWT's `https://api.openai.com/auth` claim field `chatgpt_account_id`.
     pub async fn get_valid_token(&self) -> Result<(String, String), LlmError> {
-        // Check cache first — return if present and not expired
+        let mut cache = self.cached.lock().await;
+        if let Some(cached) = cache.as_ref()
+            && !cached.credential.needs_refresh()
         {
-            let guard = self.cached.lock().await;
-            if let Some(cached) = guard.as_ref()
-                && !cached.is_expired()
-            {
-                return Ok((cached.access_token.clone(), cached.account_id.clone()));
-            }
+            return Ok((cached.credential.access_token.clone(), cached.account_id.clone()));
         }
 
-        let credential = self
-            .store
-            .load_credential(&self.credential_key)
-            .await
-            .map_err(|e| OAuthError::NoCredentials(e.to_string()))?
-            .ok_or_else(|| {
-                OAuthError::NoCredentials(
-                    "No Codex OAuth credentials found. Run `aether` and select a codex model to trigger OAuth login."
-                        .to_string(),
-                )
-            })?;
-
+        let credential = self.load_or_refresh().await?;
         let account_id = extract_account_id(&credential.access_token)?;
+        let access_token = credential.access_token.clone();
+        *cache = Some(CachedToken { credential, account_id: account_id.clone() });
+        Ok((access_token, account_id))
+    }
 
-        let cached = CachedToken {
-            access_token: credential.access_token.clone(),
-            account_id: account_id.clone(),
-            expires_at: credential.expires_at,
-        };
-        *self.cached.lock().await = Some(cached);
+    async fn load_or_refresh(&self) -> Result<OAuthCredential, LlmError> {
+        let stored = self.store.load_credential(&self.credential_key).await?.ok_or_else(|| {
+            OAuthError::NoCredentials(
+                "No Codex OAuth credentials found. Run `aether` and select a codex model to trigger OAuth login."
+                    .to_string(),
+            )
+        })?;
 
-        Ok((credential.access_token, account_id))
+        if !stored.needs_refresh() {
+            return Ok(stored);
+        }
+
+        let refreshed = stored.refresh(&self.token_url).await?;
+        self.store.save_credential(&self.credential_key, refreshed.clone()).await?;
+        Ok(refreshed)
     }
 
     /// Clear the cached token (e.g. after a 401 response)
@@ -209,6 +182,16 @@ fn generate_random_state() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aether_auth::{FakeOAuthCredentialStore, OAuthCredential};
+    use axum::Router;
+    use axum::body::{Body, to_bytes};
+    use axum::extract::State;
+    use axum::http::{HeaderMap, Method, Request, StatusCode};
+    use axum::response::IntoResponse;
+    use axum::routing::post;
+    use std::collections::HashMap;
+    use tokio::net::TcpListener;
+    use tokio::sync::{Mutex as TokioMutex, oneshot};
 
     /// Create a test JWT with a given payload
     fn make_test_jwt(payload: &serde_json::Value) -> String {
@@ -305,33 +288,223 @@ mod tests {
         assert!(SCOPE.contains("openid"));
     }
 
-    #[test]
-    fn cached_token_not_expired_when_no_expiry() {
-        let token = CachedToken { access_token: "tok".to_string(), account_id: "acct".to_string(), expires_at: None };
-        assert!(!token.is_expired());
+    #[tokio::test]
+    async fn codex_token_manager_refreshes_expired_credential() {
+        let new_access_token = test_jwt_for_account("acct_new");
+        let endpoint = FakeTokenEndpoint::start(TokenEndpointResponse::success(&new_access_token, None)).await;
+        let store = Arc::new(
+            FakeOAuthCredentialStore::new()
+                .with_credential("codex", expired_credential("old-access", Some("refresh-old"))),
+        );
+
+        let manager = CodexTokenManager::new_with_token_url(store.clone(), "codex", endpoint.url.clone());
+        let (access_token, account_id) = manager.get_valid_token().await.unwrap();
+        let request = endpoint.request.await.expect("token endpoint request");
+        let saved = store.load_credential("codex").await.unwrap().unwrap();
+
+        assert_eq!(access_token, new_access_token);
+        assert_eq!(account_id, "acct_new");
+        assert_eq!(saved.access_token, new_access_token);
+        assert_eq!(saved.refresh_token.as_deref(), Some("refresh-old"));
+        assert_eq!(request.method, Method::POST);
+        assert_eq!(request.path, "/oauth/token");
+        assert_eq!(request.form.get("grant_type").map(String::as_str), Some("refresh_token"));
+        assert_eq!(request.form.get("refresh_token").map(String::as_str), Some("refresh-old"));
+        assert_eq!(request.form.get("client_id").map(String::as_str), Some(CLIENT_ID));
+        assert!(request.headers.get("accept").is_some());
     }
 
-    #[test]
-    fn cached_token_not_expired_when_future() {
-        let future_ms =
-            u64::try_from(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis())
-                .unwrap()
-                + 3_600_000; // 1 hour from now
-        let token = CachedToken {
-            access_token: "tok".to_string(),
-            account_id: "acct".to_string(),
-            expires_at: Some(future_ms),
-        };
-        assert!(!token.is_expired());
+    #[tokio::test]
+    async fn codex_token_manager_saves_rotated_refresh_token() {
+        let new_access_token = test_jwt_for_account("acct_new");
+        let endpoint =
+            FakeTokenEndpoint::start(TokenEndpointResponse::success(&new_access_token, Some("refresh-new"))).await;
+        let store = Arc::new(
+            FakeOAuthCredentialStore::new()
+                .with_credential("codex", expired_credential("old-access", Some("refresh-old"))),
+        );
+        let manager = CodexTokenManager::new_with_token_url(store.clone(), "codex", endpoint.url.clone());
+        manager.get_valid_token().await.unwrap();
+        let saved = store.load_credential("codex").await.unwrap().unwrap();
+
+        assert_eq!(saved.access_token, new_access_token);
+        assert_eq!(saved.refresh_token.as_deref(), Some("refresh-new"));
     }
 
-    #[test]
-    fn cached_token_expired_when_past() {
-        let token = CachedToken {
-            access_token: "tok".to_string(),
-            account_id: "acct".to_string(),
-            expires_at: Some(1000), // way in the past
-        };
-        assert!(token.is_expired());
+    #[tokio::test]
+    async fn codex_token_manager_uses_unexpired_credential_without_refresh() {
+        let access_token = test_jwt_for_account("acct_existing");
+        let store = Arc::new(FakeOAuthCredentialStore::new().with_credential(
+            "codex",
+            OAuthCredential {
+                client_id: CLIENT_ID.to_string(),
+                access_token: access_token.clone(),
+                refresh_token: Some("refresh-old".to_string()),
+                expires_at: Some(u64::MAX),
+            },
+        ));
+
+        let manager = CodexTokenManager::new_with_token_url(
+            store,
+            "codex",
+            TokenUrl::new("http://127.0.0.1:9/oauth/token".to_string()).unwrap(),
+        );
+
+        let (returned_token, account_id) = manager.get_valid_token().await.unwrap();
+        assert_eq!(returned_token, access_token);
+        assert_eq!(account_id, "acct_existing");
+    }
+
+    #[tokio::test]
+    async fn codex_token_manager_errors_when_credential_is_missing() {
+        let store = Arc::new(FakeOAuthCredentialStore::new());
+        let manager = CodexTokenManager::new_with_token_url(
+            store,
+            "codex",
+            TokenUrl::new("http://127.0.0.1:9/oauth/token".to_string()).unwrap(),
+        );
+
+        let error = manager.get_valid_token().await.unwrap_err();
+        assert!(error.to_string().contains("No Codex OAuth credentials found"));
+        assert!(error.to_string().contains("select a codex model"));
+    }
+
+    #[tokio::test]
+    async fn codex_token_manager_errors_when_expired_without_refresh_token() {
+        let original = expired_credential("old-access", None);
+        let store = Arc::new(FakeOAuthCredentialStore::new().with_credential("codex", original.clone()));
+        let manager = CodexTokenManager::new_with_token_url(
+            store.clone(),
+            "codex",
+            TokenUrl::new("http://127.0.0.1:9/oauth/token".to_string()).unwrap(),
+        );
+
+        let error = manager.get_valid_token().await.unwrap_err();
+        let saved = store.load_credential("codex").await.unwrap().unwrap();
+
+        assert!(error.to_string().contains("Re-run OAuth login"));
+        assert_eq!(saved.access_token, original.access_token);
+        assert_eq!(saved.refresh_token, original.refresh_token);
+    }
+
+    #[tokio::test]
+    async fn codex_token_manager_does_not_overwrite_credential_when_refresh_fails() {
+        let endpoint = FakeTokenEndpoint::start(TokenEndpointResponse::failure()).await;
+        let original = expired_credential("old-access", Some("refresh-old"));
+        let store = Arc::new(FakeOAuthCredentialStore::new().with_credential("codex", original.clone()));
+        let manager = CodexTokenManager::new_with_token_url(store.clone(), "codex", endpoint.url.clone());
+
+        let result = manager.get_valid_token().await;
+        let saved = store.load_credential("codex").await.unwrap().unwrap();
+
+        assert!(result.is_err());
+        assert_eq!(saved.access_token, original.access_token);
+        assert_eq!(saved.refresh_token, original.refresh_token);
+    }
+
+    struct FakeTokenEndpoint {
+        url: TokenUrl,
+        request: oneshot::Receiver<CapturedTokenRequest>,
+    }
+
+    struct CapturedTokenRequest {
+        method: Method,
+        path: String,
+        headers: HeaderMap,
+        form: HashMap<String, String>,
+    }
+
+    #[derive(Clone)]
+    struct FakeTokenState {
+        response: TokenEndpointResponse,
+        request_tx: Arc<TokioMutex<Option<oneshot::Sender<CapturedTokenRequest>>>>,
+        shutdown_tx: Arc<TokioMutex<Option<oneshot::Sender<()>>>>,
+    }
+
+    #[derive(Clone)]
+    struct TokenEndpointResponse {
+        status: StatusCode,
+        body: serde_json::Value,
+    }
+
+    impl TokenEndpointResponse {
+        fn success(access_token: &str, refresh_token: Option<&str>) -> Self {
+            let mut body = serde_json::json!({
+                "access_token": access_token,
+                "token_type": "Bearer",
+                "expires_in": 3600
+            });
+            if let Some(refresh_token) = refresh_token {
+                body["refresh_token"] = serde_json::Value::String(refresh_token.to_string());
+            }
+            Self { status: StatusCode::OK, body }
+        }
+
+        fn failure() -> Self {
+            Self { status: StatusCode::BAD_REQUEST, body: serde_json::json!({ "error": "invalid_grant" }) }
+        }
+    }
+
+    impl FakeTokenEndpoint {
+        async fn start(response: TokenEndpointResponse) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind fake token endpoint");
+            let url = TokenUrl::new(format!(
+                "http://{}/oauth/token",
+                listener.local_addr().expect("fake token endpoint address")
+            ))
+            .expect("fake token endpoint URL is valid");
+            let (request_tx, request) = oneshot::channel();
+            let (shutdown_tx, shutdown) = oneshot::channel();
+            let state = FakeTokenState {
+                response,
+                request_tx: Arc::new(TokioMutex::new(Some(request_tx))),
+                shutdown_tx: Arc::new(TokioMutex::new(Some(shutdown_tx))),
+            };
+            let app = Router::new().route("/oauth/token", post(capture_token_request)).with_state(state);
+            tokio::spawn(async move {
+                axum::serve(listener, app)
+                    .with_graceful_shutdown(async {
+                        let _ = shutdown.await;
+                    })
+                    .await
+                    .expect("serve fake token endpoint");
+            });
+            Self { url, request }
+        }
+    }
+
+    async fn capture_token_request(State(state): State<FakeTokenState>, request: Request<Body>) -> impl IntoResponse {
+        let (parts, body) = request.into_parts();
+        let body = to_bytes(body, usize::MAX).await.expect("read token request body");
+        let form = url::form_urlencoded::parse(&body).into_owned().collect();
+        if let Some(tx) = state.request_tx.lock().await.take() {
+            let _ = tx.send(CapturedTokenRequest {
+                method: parts.method,
+                path: parts.uri.path().to_string(),
+                headers: parts.headers,
+                form,
+            });
+        }
+        if let Some(tx) = state.shutdown_tx.lock().await.take() {
+            let _ = tx.send(());
+        }
+        (state.response.status, axum::Json(state.response.body))
+    }
+
+    fn expired_credential(access_token: &str, refresh_token: Option<&str>) -> OAuthCredential {
+        OAuthCredential {
+            client_id: CLIENT_ID.to_string(),
+            access_token: access_token.to_string(),
+            refresh_token: refresh_token.map(str::to_string),
+            expires_at: Some(0),
+        }
+    }
+
+    fn test_jwt_for_account(account_id: &str) -> String {
+        make_test_jwt(&serde_json::json!({
+            "https://api.openai.com/auth": {
+                "chatgpt_account_id": account_id
+            }
+        }))
     }
 }

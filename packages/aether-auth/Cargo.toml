@@ -21,7 +21,7 @@ keyring = [
     "dep:windows-native-keyring-store",
     "dep:dbus-secret-service-keyring-store",
 ]
-mcp = ["dep:rmcp", "dep:oauth2", "dep:reqwest", "dep:url"]
+mcp = ["dep:rmcp", "dep:url"]
 
 [dependencies]
 async-trait = { workspace = true }
@@ -37,8 +37,8 @@ keyring-core = { workspace = true, optional = true }
 
 # mcp feature
 rmcp = { workspace = true, optional = true }
-oauth2 = { workspace = true, optional = true }
-reqwest = { workspace = true, optional = true }
+oauth2 = { workspace = true }
+reqwest = { workspace = true }
 url = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
