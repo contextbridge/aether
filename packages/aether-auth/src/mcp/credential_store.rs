@@ -1,10 +1,9 @@
 use async_trait::async_trait;
-use oauth2::{AccessToken, RefreshToken, TokenResponse};
+use oauth2::{AccessToken, RefreshToken};
 use rmcp::transport::auth::{
     AuthError, CredentialStore, OAuthTokenResponse, StoredCredentials, VendorExtraTokenFields,
 };
 use std::sync::Arc;
-use std::time::Duration;
 
 use crate::{OAuthCredential, OAuthCredentialStorage};
 
@@ -38,34 +37,15 @@ impl CredentialStore for McpCredentialStore {
             .token_response
             .ok_or_else(|| AuthError::InternalError("No token response to save".to_string()))?;
 
-        let expires_at = token.expires_in().map(|duration| {
-            let now_ms = u64::try_from(
-                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis(),
-            )
-            .unwrap_or(u64::MAX);
-            let duration_ms = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
-            now_ms.saturating_add(duration_ms)
-        });
-
-        let refresh_token = match token.refresh_token() {
-            Some(refresh) => Some(refresh.secret().clone()),
-            None => self
-                .store
-                .load_credential(&self.server_id)
-                .await
-                .map_err(|e| AuthError::InternalError(e.to_string()))?
-                .and_then(|credential| {
-                    (credential.client_id == credentials.client_id).then_some(credential.refresh_token).flatten()
-                }),
-        };
-
-        let credential = OAuthCredential {
-            client_id: credentials.client_id,
-            access_token: token.access_token().secret().clone(),
-            refresh_token,
-            expires_at,
-        };
-
+        let preserved_refresh_token = self
+            .store
+            .load_credential(&self.server_id)
+            .await
+            .map_err(|e| AuthError::InternalError(e.to_string()))?
+            .and_then(|cred| (cred.client_id == credentials.client_id).then_some(cred.refresh_token).flatten());
+        let credential = OAuthCredential::from_token_response(credentials.client_id, &token);
+        let credential =
+            OAuthCredential { refresh_token: credential.refresh_token.or(preserved_refresh_token), ..credential };
         self.store
             .save_credential(&self.server_id, credential)
             .await
@@ -100,15 +80,8 @@ fn build_token_response(cred: &OAuthCredential) -> OAuthTokenResponse {
         response.set_refresh_token(Some(RefreshToken::new(refresh.clone())));
     }
 
-    if let Some(expires_at_millis) = cred.expires_at {
-        let now_millis = u64::try_from(
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis(),
-        )
-        .unwrap_or(u64::MAX);
-
-        if expires_at_millis > now_millis {
-            response.set_expires_in(Some(&Duration::from_millis(expires_at_millis - now_millis)));
-        }
+    if let Some(duration) = cred.expires_in() {
+        response.set_expires_in(Some(&duration));
     }
 
     response
@@ -116,6 +89,7 @@ fn build_token_response(cred: &OAuthCredential) -> OAuthTokenResponse {
 
 #[cfg(test)]
 mod tests {
+    use oauth2::TokenResponse;
     use oauth2::basic::BasicTokenType;
 
     use super::*;
