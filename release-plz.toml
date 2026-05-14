@@ -4,6 +4,7 @@ git_tag_name = "{{ package }}-v{{ version }}"
 pr_branch_prefix = "release-plz/"
 pr_name = "chore: release"
 dependencies_update = true
+semver_check = false
 
 [[package]]
 name = "crucible"
