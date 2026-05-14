@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.5](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.4...aether-mcp-servers-v0.4.5) - 2026-05-14
+
+### Other
+
+- *(mcp-servers)* Update default plan prompt ([#52](https://github.com/contextbridge/aether/pull/52))
+
 ## [0.4.4](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.3...aether-mcp-servers-v0.4.4) - 2026-05-14
 
 ### Other

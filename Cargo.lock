@@ -21,7 +21,7 @@ dependencies = [
 
 [[package]]
 name = "aether-acp-utils"
-version = "0.3.10"
+version = "0.3.11"
 dependencies = [
  "aether-mcp-utils",
  "aether-utils",
@@ -41,7 +41,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-cli"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
@@ -74,7 +74,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-core"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
@@ -140,7 +140,7 @@ dependencies = [
 
 [[package]]
 name = "aether-llm"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "aether-auth",
  "aether-llm-codegen",
@@ -208,7 +208,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp-servers"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -244,7 +244,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp-utils"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "aether-auth",
  "aether-llm",
@@ -265,7 +265,7 @@ dependencies = [
 
 [[package]]
 name = "aether-project"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -319,7 +319,7 @@ dependencies = [
 
 [[package]]
 name = "aether-wisp"
-version = "0.4.8"
+version = "0.4.9"
 dependencies = [
  "aether-acp-utils",
  "aether-tui",
@@ -2844,9 +2844,9 @@ dependencies = [
 
 [[package]]
 name = "kqueue-sys"
-version = "1.1.1"
+version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "285efcf12ef41bec907b3000d5ffaeb54191d4d9d83c0d6157e6cbc2db255e64"
+checksum = "07293a4e297ac234359b510362495713f75ea345d5307140414f20c69ffeb087"
 dependencies = [
  "bitflags 2.11.1",
  "libc",

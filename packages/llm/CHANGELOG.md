@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.1](https://github.com/contextbridge/aether/compare/aether-llm-v0.7.0...aether-llm-v0.7.1) - 2026-05-14
+
+### Fixed
+
+- *(llm)* When bedrock provider is requested to have no auth (e.g. for a proxy), construct the bedrock client with no credentials
+
 ## [0.7.0](https://github.com/contextbridge/aether/compare/aether-llm-v0.6.0...aether-llm-v0.7.0) - 2026-05-14
 
 ### Fixed
