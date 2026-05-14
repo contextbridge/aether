@@ -20,7 +20,7 @@ First you must:
 
 ### Step 3: Generate Implementation Plan
 
-Generate an implementation plan and save it to a markdown file in the `cwd` with a `-plan.md` suffix. Then present your plan to the user via the `submit_plan` tool. It must include the following sections:
+Generate an implementation plan and save it to a markdown file in a subdirectory named `plans/`. within the `cwd`. Save your plan file with a `-plan.md` suffix. Then present your plan to the user via the `submit_plan` tool. It must include the following sections:
 
 **Overview**
 - Clear problem statement
