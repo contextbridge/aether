@@ -13,3 +13,4 @@ sweep.timestamp
 website/dist/
 website/.astro/
 website/*.log
+examples/bedrock-proxy/.env

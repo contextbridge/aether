@@ -117,6 +117,70 @@ install:
 release-pr-preview:
     release-plz release-pr --dry-run
 
+# Run Aether headless through the local Bedrock SigV4 proxy
+bedrock-proxy-run:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    example_dir="examples/bedrock-proxy"
+    env_file="$example_dir/.env"
+    if [ ! -f "$env_file" ]; then
+        echo "Missing $env_file. Copy $example_dir/.env.example to $env_file and fill in AETHER_BEDROCK_MODEL." >&2
+        exit 1
+    fi
+
+    prompt_override_set=false
+    if [ "${AETHER_BEDROCK_PROMPT+x}" = x ]; then
+        prompt_override_set=true
+        prompt_override="$AETHER_BEDROCK_PROMPT"
+    fi
+
+    set -a
+    . "$env_file"
+    set +a
+
+    if [ "$prompt_override_set" = true ]; then
+        export AETHER_BEDROCK_PROMPT="$prompt_override"
+    fi
+
+    if [ -z "${AETHER_BEDROCK_MODEL:-}" ] || [[ "$AETHER_BEDROCK_MODEL" == *REPLACE_ME* ]]; then
+        echo "Set AETHER_BEDROCK_MODEL in $env_file to a Bedrock model ID or inference profile ARN." >&2
+        exit 1
+    fi
+
+    if [ -z "${AWS_ACCESS_KEY_ID:-}" ] && [ -z "${AWS_SESSION_TOKEN:-}" ]; then
+        export AWS_PROFILE="${AWS_PROFILE:-Development-PowerUser}"
+        if ! aws sts get-caller-identity --profile "$AWS_PROFILE" >/dev/null 2>&1; then
+            echo "SSO session expired for $AWS_PROFILE — logging in..." >&2
+            aws sso login --profile "$AWS_PROFILE"
+        fi
+        eval "$(aws configure export-credentials --profile "$AWS_PROFILE" --format env)"
+    fi
+
+    export AWS_REGION="${AWS_REGION:-us-west-2}"
+    export BEDROCK_PROXY_PORT="${BEDROCK_PROXY_PORT:-8080}"
+    compose=(docker compose -f "$example_dir/docker-compose.yml" --env-file "$env_file")
+    cleanup() {
+        "${compose[@]}" down >/dev/null 2>&1 || true
+    }
+    trap cleanup EXIT
+
+    "${compose[@]}" up -d bedrock-proxy
+
+    model="$AETHER_BEDROCK_MODEL"
+    if [[ "$model" != bedrock:* ]]; then
+        model="bedrock:$model"
+    fi
+
+    cargo run -p aether-agent-cli -- headless \
+        --model "$model" \
+        --provider "bedrock.url=http://127.0.0.1:$BEDROCK_PROXY_PORT" \
+        --provider bedrock.auth=none \
+        "${AETHER_BEDROCK_PROMPT:-Say hello in one sentence.}"
+
+# Stop the local Bedrock SigV4 proxy example
+bedrock-proxy-down:
+    docker compose -f examples/bedrock-proxy/docker-compose.yml --env-file examples/bedrock-proxy/.env down
+
 # Clean everything
 clean:
     cargo clean

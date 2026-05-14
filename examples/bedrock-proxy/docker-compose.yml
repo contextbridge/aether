@@ -1,0 +1,20 @@
+services:
+  bedrock-proxy:
+    image: public.ecr.aws/aws-observability/aws-sigv4-proxy:1.10
+    command:
+      - --name
+      - bedrock
+      - --region
+      - ${AWS_REGION:-us-west-2}
+      - --host
+      - bedrock-runtime.${AWS_REGION:-us-west-2}.amazonaws.com
+      - --port
+      - :8080
+      - --log-failed-requests
+    environment:
+      AWS_REGION: ${AWS_REGION:-us-west-2}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+    ports:
+      - "127.0.0.1:${BEDROCK_PROXY_PORT:-8080}:8080"
