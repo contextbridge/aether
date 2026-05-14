@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.0](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.6.3...aether-agent-cli-v0.7.0) - 2026-05-14
+
+### Fixed
+
+- *(aether-core)* Give users escape hatch to set custom context window limit and set provider urls disable auth (useful for bedrock sigv4 proxy)
+
 ## [0.6.3](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.6.2...aether-agent-cli-v0.6.3) - 2026-05-13
 
 ### Fixed
