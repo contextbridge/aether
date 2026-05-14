@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.0](https://github.com/contextbridge/aether/compare/aether-llm-v0.6.0...aether-llm-v0.7.0) - 2026-05-14
+
+### Fixed
+
+- *(aether-core)* Give users escape hatch to set custom context window limit and set provider urls disable auth (useful for bedrock sigv4 proxy)
+
 ## [0.6.0](https://github.com/contextbridge/aether/compare/aether-llm-v0.5.0...aether-llm-v0.6.0) - 2026-05-13
 
 ### Added

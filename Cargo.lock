@@ -21,7 +21,7 @@ dependencies = [
 
 [[package]]
 name = "aether-acp-utils"
-version = "0.3.9"
+version = "0.3.10"
 dependencies = [
  "aether-mcp-utils",
  "aether-utils",
@@ -41,7 +41,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-cli"
-version = "0.6.3"
+version = "0.7.0"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
@@ -74,7 +74,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-core"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
@@ -140,7 +140,7 @@ dependencies = [
 
 [[package]]
 name = "aether-llm"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "aether-auth",
  "aether-llm-codegen",
@@ -207,7 +207,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp-servers"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -243,7 +243,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp-utils"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "aether-auth",
  "aether-llm",
@@ -264,7 +264,7 @@ dependencies = [
 
 [[package]]
 name = "aether-project"
-version = "0.4.6"
+version = "0.5.0"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -318,7 +318,7 @@ dependencies = [
 
 [[package]]
 name = "aether-wisp"
-version = "0.4.7"
+version = "0.4.8"
 dependencies = [
  "aether-acp-utils",
  "aether-tui",
@@ -494,9 +494,9 @@ dependencies = [
 
 [[package]]
 name = "async-openai"
-version = "0.38.1"
+version = "0.38.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d60171eea6e36038af16be8f55a952737a0e45df1338ca4514ac653f8a319e5"
+checksum = "2bb666d696156a8da537278ecb3195806d885edf25a573ce23ceec4dee2b0eee"
 dependencies = [
  "async-openai-macros",
  "base64",
