@@ -3,9 +3,9 @@
 # Only contains the toolchain needed for agents to run this repo's just targets.
 
 ARG RUST_VERSION=1.95.0
-ARG DEBIAN_VERSION=12.12
+ARG DEBIAN_VERSION=13.4
 
-FROM rust:${RUST_VERSION}-slim-bookworm AS rust-toolchain
+FROM rust:${RUST_VERSION}-slim-trixie AS rust-toolchain
 
 ARG RUST_VERSION
 ARG RUST_TOOLCHAIN=stable
@@ -60,7 +60,7 @@ RUN apt-get update \
   && install -m 0755 -d /etc/apt/keyrings \
   && curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg \
   && chmod a+r /etc/apt/keyrings/docker.gpg \
-  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian bookworm stable" > /etc/apt/sources.list.d/docker.list \
+  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian trixie stable" > /etc/apt/sources.list.d/docker.list \
   && apt-get update \
   && apt-get install -y --no-install-recommends docker-ce-cli docker-compose-plugin \
   && rm -rf /var/lib/apt/lists/*
