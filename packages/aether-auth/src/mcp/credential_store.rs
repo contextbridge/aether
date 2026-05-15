@@ -125,6 +125,12 @@ mod tests {
         }
     }
 
+    /// Helper: current time as milliseconds since Unix epoch.
+    fn now_epoch_millis() -> u64 {
+        let d = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap();
+        d.as_secs() * 1000 + u64::from(d.subsec_millis())
+    }
+
     /// Helper: build a credential that expires far in the future.
     fn unexpired_credential() -> OAuthCredential {
         OAuthCredential {
@@ -132,10 +138,7 @@ mod tests {
             access_token: "access".to_string(),
             refresh_token: Some("refresh".to_string()),
             // 1 hour from now (in milliseconds)
-            expires_at: Some(
-                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64
-                    + 3_600_000,
-            ),
+            expires_at: Some(now_epoch_millis() + 3_600_000),
         }
     }
 
@@ -146,10 +149,7 @@ mod tests {
             access_token: "stale_access".to_string(),
             refresh_token: Some("refresh".to_string()),
             // Expired 10 minutes ago (in milliseconds)
-            expires_at: Some(
-                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64
-                    - 600_000,
-            ),
+            expires_at: Some(now_epoch_millis() - 600_000),
         }
     }
 
