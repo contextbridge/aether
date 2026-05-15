@@ -7,19 +7,20 @@ pub(crate) mod session;
 pub(crate) mod session_manager;
 pub(crate) mod session_registry;
 pub(crate) mod session_store;
+pub(crate) mod stdio;
 pub mod testing;
 
 pub use mappers::map_mcp_prompt_to_available_command;
 pub use session_manager::SessionManager;
 
+use crate::acp::handlers::acp_agent_builder;
+use crate::acp::stdio::Stdio;
 use crate::provider_connection_args::ProviderConnectionArgs;
 use crate::settings_args::SettingsSourceArgs;
-use agent_client_protocol::{self as acp, ByteStreams};
+use agent_client_protocol as acp;
 use llm::ReasoningEffort;
 use std::sync::Arc;
 use std::{fs::create_dir_all, path::PathBuf};
-use tokio::io::{stdin, stdout};
-use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use tracing::info;
 use tracing_appender::rolling::daily;
 use tracing_subscriber::EnvFilter;
@@ -110,9 +111,7 @@ pub async fn run_acp(args: AcpArgs) -> Result<AcpRunOutcome, AcpRunError> {
         provider_connections,
     }));
 
-    let transport = ByteStreams::new(stdout().compat_write(), stdin().compat());
-    let connect_result = handlers::acp_agent_builder(manager.clone()).connect_to(transport).await;
-
+    let connect_result = acp_agent_builder(manager.clone()).connect_to(Stdio::new()).await;
     manager.shutdown_all_sessions().await;
 
     match connect_result {
