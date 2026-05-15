@@ -230,7 +230,15 @@ impl Component for TextField {
                         self.cursor_pos = self.word_start_backward();
                         Some(vec![])
                     }
+                    KeyCode::Char('b') if alt => {
+                        self.cursor_pos = self.word_start_backward();
+                        Some(vec![])
+                    }
                     KeyCode::Right if alt || ctrl => {
+                        self.word_end_forward();
+                        Some(vec![])
+                    }
+                    KeyCode::Char('f') if alt => {
                         self.word_end_forward();
                         Some(vec![])
                     }

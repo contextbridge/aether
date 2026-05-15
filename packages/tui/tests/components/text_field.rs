@@ -1,5 +1,5 @@
 use super::*;
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use tui::Renderer;
 use tui::TextField;
 
@@ -44,6 +44,25 @@ async fn backspace_on_empty_renders_cursor() {
 }
 
 #[tokio::test]
+async fn option_left_escape_b_moves_backward_by_word() {
+    let mut tf = TextField::new("hello world".to_string());
+    tf.on_event(&alt_key(KeyCode::Char('b'))).await;
+
+    assert_eq!(tf.value, "hello world");
+    assert_eq!(tf.cursor_pos(), 6);
+}
+
+#[tokio::test]
+async fn option_right_escape_f_moves_forward_by_word() {
+    let mut tf = TextField::new("hello world".to_string());
+    tf.set_cursor_pos(0);
+    tf.on_event(&alt_key(KeyCode::Char('f'))).await;
+
+    assert_eq!(tf.value, "hello world");
+    assert_eq!(tf.cursor_pos(), 6);
+}
+
+#[tokio::test]
 async fn terminal_state_diff_after_mutation() {
     let mut tf = TextField::new("ab".to_string());
     let terminal = TestTerminal::new(80, 24);
@@ -57,6 +76,10 @@ async fn terminal_state_diff_after_mutation() {
     tf.on_event(&Event::Key(key(KeyCode::Char('c')))).await;
     render_component_with_renderer(|ctx| tf.render(ctx), &mut renderer, 80, 24);
     assert_buffer_eq(renderer.writer(), &["abc▏"]);
+}
+
+fn alt_key(code: KeyCode) -> Event {
+    Event::Key(KeyEvent::new(code, KeyModifiers::ALT))
 }
 
 #[test]
