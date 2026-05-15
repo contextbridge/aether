@@ -11,7 +11,7 @@ use crate::notifications::{
 
 /// Events forwarded from the ACP connection to the main event loop.
 pub enum AcpEvent {
-    SessionUpdate(Box<SessionUpdate>),
+    SessionUpdate { session_id: SessionId, update: Box<SessionUpdate> },
     ContextCleared(ContextClearedParams),
     ContextUsage(ContextUsageParams),
     SubAgentProgress(SubAgentProgressParams),

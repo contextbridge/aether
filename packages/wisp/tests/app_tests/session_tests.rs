@@ -208,3 +208,39 @@ async fn test_prompt_not_garbled_after_resize_with_completed_content() {
     assert_eq!(turn_one_count, 1, "Turn one should appear exactly once after resize.\nBuffer:\n{}", lines.join("\n"));
     assert_eq!(turn_two_count, 1, "Turn two should appear exactly once after resize.\nBuffer:\n{}", lines.join("\n"));
 }
+
+#[tokio::test]
+async fn test_replay_history_only_visible_after_session_loaded() {
+    let mut renderer = new_test_renderer((TEST_WIDTH, 40));
+    let resumed = acp::SessionId::new("resumed-session");
+    load_session_via_picker(&mut renderer, resumed.clone(), std::path::PathBuf::from("/project")).await;
+
+    let first_msg = "1st";
+    let second_msg = "2nd";
+    renderer
+        .on_session_update_for(
+            resumed.clone(),
+            acp::SessionUpdate::UserMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(
+                acp::TextContent::new(first_msg),
+            ))),
+        )
+        .unwrap();
+
+    renderer
+        .on_session_update_for(
+            resumed.clone(),
+            acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(
+                acp::TextContent::new(second_msg),
+            ))),
+        )
+        .unwrap();
+
+    assert_buffer_not_contains(renderer.writer(), first_msg);
+    assert_buffer_not_contains(renderer.writer(), second_msg);
+    renderer.on_session_loaded(resumed, vec![]).unwrap();
+
+    let lines = renderer.writer().get_lines();
+    let early_idx = lines.iter().position(|l| l.contains(first_msg)).expect("early line present");
+    let late_idx = lines.iter().position(|l| l.contains(second_msg)).expect("late line present");
+    assert!(early_idx < late_idx);
+}

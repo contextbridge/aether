@@ -15,7 +15,6 @@ use llm::{ContentBlock, ProviderConnectionOverrides, ReasoningEffort};
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
-use tokio::spawn;
 use tokio::sync::oneshot;
 use tracing::{error, info, warn};
 
@@ -693,13 +692,7 @@ impl SessionManager {
         info!("Session {session_id} loaded successfully");
 
         let response = LoadSessionResponse::new().config_options(config_options);
-
-        let cx_clone = cx.clone();
-        let replay_session_id = acp_session_id.clone();
-        spawn(async move {
-            replay_to_client(&events, &cx_clone, &replay_session_id).await;
-        });
-
+        replay_to_client(&events, cx, &acp_session_id).await;
         Self::send_available_commands_notification(available_commands, acp_session_id, &session_id, cx);
 
         Ok(response)

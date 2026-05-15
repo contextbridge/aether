@@ -10,7 +10,7 @@ use agent_client_protocol::schema::{
     InitializeResponse, ListSessionsRequest, LoadSessionRequest, NewSessionRequest, NewSessionResponse,
     PermissionOptionId, PermissionOptionKind, PromptCapabilities, PromptRequest, RequestPermissionOutcome,
     RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome, SessionConfigOption, SessionId,
-    SessionNotification, SetSessionConfigOptionRequest, TextContent,
+    SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, TextContent,
 };
 use agent_client_protocol::{self as acp, Client, ConnectionTo};
 use agent_client_protocol_tokio::AcpAgent;
@@ -105,8 +105,8 @@ async fn run_client_connection(
         .on_receive_notification(
             {
                 let event_tx = event_tx.clone();
-                async move |notif: SessionNotification, _cx| {
-                    let _ = event_tx.send(AcpEvent::SessionUpdate(Box::new(notif.update)));
+                async move |SessionNotification { session_id, update, .. }: SessionNotification, _cx| {
+                    let _ = event_tx.send(AcpEvent::SessionUpdate { session_id, update: Box::new(update) });
                     Ok(())
                 }
             },
@@ -285,13 +285,14 @@ async fn handle_side_command(
             let _ = cx.send_notification(CancelNotification::new(session_id));
         }
         PromptCommand::SetConfigOption { session_id, config_id, value } => {
-            let req = SetSessionConfigOptionRequest::new(session_id, config_id, value);
+            let req = SetSessionConfigOptionRequest::new(session_id.clone(), config_id, value);
             match cx.send_request(req).block_task().await {
                 Ok(resp) => {
                     let update = ConfigOptionUpdate::new(resp.config_options);
-                    let _ = event_tx.send(AcpEvent::SessionUpdate(Box::new(
-                        acp::schema::SessionUpdate::ConfigOptionUpdate(update),
-                    )));
+                    let _ = event_tx.send(AcpEvent::SessionUpdate {
+                        session_id,
+                        update: Box::new(SessionUpdate::ConfigOptionUpdate(update)),
+                    });
                 }
                 Err(e) => {
                     tracing::warn!("set_session_config_option failed: {e:?}");
