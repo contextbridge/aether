@@ -70,8 +70,7 @@ impl Default for FilePicker {
 
 fn should_exclude_path(path: &Path) -> bool {
     path.components().any(|component| {
-        let value = component.as_os_str().to_string_lossy();
-        value.starts_with('.') || matches!(value.as_ref(), "node_modules" | "target")
+        matches!(component.as_os_str().to_string_lossy().as_ref(), ".git" | ".hg" | ".svn" | "node_modules" | "target")
     })
 }
 
@@ -131,12 +130,15 @@ mod tests {
     }
 
     #[test]
-    fn excludes_hidden_and_build_paths() {
+    fn excludes_vcs_and_build_paths() {
         assert!(should_exclude_path(Path::new(".git/config")));
+        assert!(should_exclude_path(Path::new(".hg/store")));
+        assert!(should_exclude_path(Path::new(".svn/entries")));
         assert!(should_exclude_path(Path::new("node_modules/react/index.js")));
         assert!(should_exclude_path(Path::new("target/debug/wisp")));
-        assert!(should_exclude_path(Path::new("src/.cache/file.txt")));
         assert!(!should_exclude_path(Path::new("src/main.rs")));
+        assert!(!should_exclude_path(Path::new(".github/pull_request_template.md")));
+        assert!(!should_exclude_path(Path::new(".vscode/settings.json")));
     }
 
     #[tokio::test]
