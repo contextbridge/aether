@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.2](https://github.com/contextbridge/aether/compare/aether-llm-v0.7.1...aether-llm-v0.7.2) - 2026-05-15
+
+### Fixed
+
+- *(llm)* Refresh Codex auth tokens ([#59](https://github.com/contextbridge/aether/pull/59))
+
 ## [0.7.1](https://github.com/contextbridge/aether/compare/aether-llm-v0.7.0...aether-llm-v0.7.1) - 2026-05-14
 
 ### Fixed

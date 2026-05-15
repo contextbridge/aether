@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.12](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.3.11...aether-acp-utils-v0.3.12) - 2026-05-15
+
+### Fixed
+
+- *(wisp)* Improve perf of /resume session by buffering updates instead of individually rendering each update ([#61](https://github.com/contextbridge/aether/pull/61))
+
 ## [0.3.11](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.3.10...aether-acp-utils-v0.3.11) - 2026-05-14
 
 ### Other

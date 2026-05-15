@@ -1,6 +1,6 @@
 [package]
 name = "aether-agent-cli"
-version = "0.7.1"
+version = "0.7.2"
 edition = "2024"
 description = "CLI and ACP server for the Aether AI coding agent"
 license = "MIT"
@@ -29,17 +29,17 @@ name = "aether"
 path = "src/main.rs"
 
 [dependencies]
-aether-auth = { path = "../aether-auth", version = "0.1.0", features = ["keyring"] }
-aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.6.1" }
-aether-project = { path = "../aether-project", version = "0.5.1" }
-llm = { package = "aether-llm", path = "../llm", features = ["bedrock", "codex"], version = "0.7.1" }
-mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.5.5" }
-mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", features = ["all"], version = "0.4.5" }
-wisp = { package = "aether-wisp", path = "../wisp", version = "0.4.9" }
-tui = { package = "aether-tui", path = "../tui", default-features = false, features = ["syntax"], version = "0.2.6" }
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["server", "testing"], version = "0.3.11" }
+aether-auth = { path = "../aether-auth", version = "0.1.1", features = ["keyring"] }
+aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.6.2" }
+aether-project = { path = "../aether-project", version = "0.5.2" }
+llm = { package = "aether-llm", path = "../llm", features = ["bedrock", "codex"], version = "0.7.2" }
+mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.5.6" }
+mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", features = ["all"], version = "0.4.6" }
+wisp = { package = "aether-wisp", path = "../wisp", version = "0.4.10" }
+tui = { package = "aether-tui", path = "../tui", default-features = false, features = ["syntax"], version = "0.2.7" }
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["server", "testing"], version = "0.3.12" }
 agent-client-protocol = { workspace = true }
-aether-lspd = { path = "../aether-lspd", version = "0.1.13" }
+aether-lspd = { path = "../aether-lspd", version = "0.1.14" }
 rmcp = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true, features = ["compat"] }
@@ -58,4 +58,4 @@ crossterm = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["testing"], version = "0.3.11" }
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["testing"], version = "0.3.12" }
