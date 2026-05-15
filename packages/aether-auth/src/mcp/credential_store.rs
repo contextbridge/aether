@@ -8,32 +8,28 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::{OAuthCredential, OAuthCredentialStorage};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Seconds(pub u64);
-
 /// Per-server adapter that binds an [`OAuthCredentialStorage`] to a single MCP server id
 /// and implements `rmcp::transport::auth::CredentialStore`.
 #[derive(Clone)]
 pub struct McpCredentialStore {
     server_id: String,
     store: Arc<dyn OAuthCredentialStorage>,
-    now_fn: fn() -> Seconds,
-}
-
-/// Build an `McpCredentialStore` bound to a specific MCP server id.
-pub fn mcp_credential_store(store: Arc<dyn OAuthCredentialStorage>, server_id: String) -> McpCredentialStore {
-    McpCredentialStore { server_id, store, now_fn: default_now }
+    now_fn: fn() -> SystemTime,
 }
 
 impl McpCredentialStore {
-    pub fn with_now_fn(mut self, f: fn() -> Seconds) -> Self {
+    pub fn new(store: Arc<dyn OAuthCredentialStorage>, server_id: String) -> Self {
+        Self { server_id, store, now_fn: SystemTime::now }
+    }
+
+    pub fn with_now_fn(mut self, f: fn() -> SystemTime) -> Self {
         self.now_fn = f;
         self
     }
-}
 
-fn default_now() -> Seconds {
-    Seconds(SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs())
+    fn now_secs(&self) -> u64 {
+        (self.now_fn)().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
+    }
 }
 
 trait StoredCredentialsExt {
@@ -62,7 +58,7 @@ impl CredentialStore for McpCredentialStore {
 
         Ok(cred.map(|c| {
             let token_response = build_token_response(&c);
-            let token_received_at = c.expires_at.map(|_| (self.now_fn)().0);
+            let token_received_at = c.expires_at.map(|_| self.now_secs());
             StoredCredentials::from_parts(&c.client_id, Some(&token_response), token_received_at)
         }))
     }
@@ -131,11 +127,12 @@ mod tests {
 
     #[tokio::test]
     async fn mcp_store_round_trips_stored_credentials() {
-        let store: Arc<dyn OAuthCredentialStorage> = Arc::new(FakeOAuthCredentialStore::new());
-        let mcp_store = mcp_credential_store(store.clone(), "server".to_string());
+        let store = Arc::new(FakeOAuthCredentialStore::new());
+        let mcp_store = McpCredentialStore::new(store.clone(), "server".to_string());
         let cred = credential();
         let token_response = build_token_response(&cred);
-        let stored = StoredCredentials::from_parts(&cred.client_id, Some(&token_response), Some(default_now().0));
+        let now_secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+        let stored = StoredCredentials::from_parts(&cred.client_id, Some(&token_response), Some(now_secs));
 
         CredentialStore::save(&mcp_store, stored).await.unwrap();
 
@@ -150,7 +147,8 @@ mod tests {
     async fn mcp_store_preserves_existing_refresh_token_when_save_omits_one() {
         let store = Arc::new(FakeOAuthCredentialStore::new());
         store.save_credential("server", credential()).await.unwrap();
-        let mcp_store = mcp_credential_store(store.clone(), "server".to_string());
+        let mcp_store = McpCredentialStore::new(store.clone(), "server".to_string());
+        let now_secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
         let stored = StoredCredentials::from_parts(
             "client",
             Some(&OAuthTokenResponse::new(
@@ -158,7 +156,7 @@ mod tests {
                 BasicTokenType::Bearer,
                 VendorExtraTokenFields::default(),
             )),
-            Some(default_now().0),
+            Some(now_secs),
         );
 
         CredentialStore::save(&mcp_store, stored).await.unwrap();
@@ -170,10 +168,10 @@ mod tests {
 
     #[tokio::test]
     async fn mcp_store_clear_removes_credential() {
-        let store: Arc<dyn OAuthCredentialStorage> = Arc::new(FakeOAuthCredentialStore::new());
+        let store = Arc::new(FakeOAuthCredentialStore::new());
         store.save_credential("server", credential()).await.unwrap();
 
-        let mcp_store = mcp_credential_store(store.clone(), "server".to_string());
+        let mcp_store = McpCredentialStore::new(store.clone(), "server".to_string());
         CredentialStore::clear(&mcp_store).await.unwrap();
 
         assert!(store.load_credential("server").await.unwrap().is_none());
@@ -181,17 +179,17 @@ mod tests {
 
     #[tokio::test]
     async fn load_populates_token_received_at_when_expiry_info_present() {
-        let store: Arc<dyn OAuthCredentialStorage> = Arc::new(FakeOAuthCredentialStore::new());
+        let store = Arc::new(FakeOAuthCredentialStore::new());
         store.save_credential("server", unexpired_credential()).await.unwrap();
 
-        let mcp_store = mcp_credential_store(store.clone(), "server".to_string());
+        let mcp_store = McpCredentialStore::new(store.clone(), "server".to_string());
         let loaded = CredentialStore::load(&mcp_store).await.unwrap().unwrap();
 
         assert!(
             loaded.token_received_at.is_some(),
             "token_received_at must be populated when credential has expiry info"
         );
-        let now = default_now().0;
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
         let received_at = loaded.token_received_at.unwrap();
         assert!(now.abs_diff(received_at) < 5, "token_received_at should be close to current time");
     }
@@ -204,10 +202,10 @@ mod tests {
             refresh_token: Some("refresh".to_string()),
             expires_at: None,
         };
-        let store: Arc<dyn OAuthCredentialStorage> = Arc::new(FakeOAuthCredentialStore::new());
+        let store = Arc::new(FakeOAuthCredentialStore::new());
         store.save_credential("server", cred).await.unwrap();
 
-        let mcp_store = mcp_credential_store(store.clone(), "server".to_string());
+        let mcp_store = McpCredentialStore::new(store.clone(), "server".to_string());
         let loaded = CredentialStore::load(&mcp_store).await.unwrap().unwrap();
 
         assert!(
@@ -218,10 +216,10 @@ mod tests {
 
     #[tokio::test]
     async fn expired_credential_with_refresh_token_sets_zero_expires_in() {
-        let store: Arc<dyn OAuthCredentialStorage> = Arc::new(FakeOAuthCredentialStore::new());
+        let store = Arc::new(FakeOAuthCredentialStore::new());
         store.save_credential("server", expired_credential_with_refresh()).await.unwrap();
 
-        let mcp_store = mcp_credential_store(store.clone(), "server".to_string());
+        let mcp_store = McpCredentialStore::new(store.clone(), "server".to_string());
         let loaded = CredentialStore::load(&mcp_store).await.unwrap().unwrap();
         let token = loaded.token_response.as_ref().unwrap();
 
@@ -239,10 +237,10 @@ mod tests {
 
     #[tokio::test]
     async fn unexpired_credential_sets_positive_expires_in() {
-        let store: Arc<dyn OAuthCredentialStorage> = Arc::new(FakeOAuthCredentialStore::new());
+        let store = Arc::new(FakeOAuthCredentialStore::new());
         store.save_credential("server", unexpired_credential()).await.unwrap();
 
-        let mcp_store = mcp_credential_store(store.clone(), "server".to_string());
+        let mcp_store = McpCredentialStore::new(store.clone(), "server".to_string());
         let loaded = CredentialStore::load(&mcp_store).await.unwrap().unwrap();
         let token = loaded.token_response.as_ref().unwrap();
 
@@ -253,14 +251,14 @@ mod tests {
 
     #[tokio::test]
     async fn with_now_fn_overrides_time_source() {
-        fn fake_now() -> Seconds {
-            Seconds(1_000_000)
+        fn fake_now() -> SystemTime {
+            UNIX_EPOCH + Duration::from_secs(1_000_000)
         }
 
-        let store: Arc<dyn OAuthCredentialStorage> = Arc::new(FakeOAuthCredentialStore::new());
+        let store = Arc::new(FakeOAuthCredentialStore::new());
         store.save_credential("server", unexpired_credential()).await.unwrap();
 
-        let mcp_store = mcp_credential_store(store.clone(), "server".to_string()).with_now_fn(fake_now);
+        let mcp_store = McpCredentialStore::new(store.clone(), "server".to_string()).with_now_fn(fake_now);
         let loaded = CredentialStore::load(&mcp_store).await.unwrap().unwrap();
 
         assert_eq!(loaded.token_received_at, Some(1_000_000));

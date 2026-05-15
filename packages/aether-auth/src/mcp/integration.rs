@@ -1,4 +1,4 @@
-use super::credential_store::mcp_credential_store;
+use super::credential_store::McpCredentialStore;
 use crate::{OAuthCredentialStorage, OAuthError, OAuthHandler};
 use rmcp::transport::auth::{AuthClient, AuthorizationManager, OAuthState};
 use std::sync::Arc;
@@ -12,7 +12,7 @@ pub async fn create_auth_manager_from_store(
     base_url: &str,
     store: Arc<dyn OAuthCredentialStorage>,
 ) -> Result<Option<AuthorizationManager>, OAuthError> {
-    let credential_store = mcp_credential_store(store, server_id.to_string());
+    let credential_store = McpCredentialStore::new(store, server_id.to_string());
 
     let mut auth_manager = AuthorizationManager::new(base_url).await.map_err(|e| OAuthError::Rmcp(e.to_string()))?;
     auth_manager.set_credential_store(credential_store);
@@ -41,7 +41,7 @@ pub async fn perform_oauth_flow(
         OAuthState::new(base_url, None).await.map_err(|e| OAuthError::Rmcp(format!("OAuth init failed: {e}")))?;
 
     if let Some(store) = store {
-        let credential_store = mcp_credential_store(store, server_id.to_string());
+        let credential_store = McpCredentialStore::new(store, server_id.to_string());
         if let OAuthState::Unauthorized(ref mut manager) = oauth_state {
             manager.set_credential_store(credential_store);
         }

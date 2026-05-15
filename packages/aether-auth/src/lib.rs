@@ -20,4 +20,4 @@ pub use keyring::OsKeyringStore;
 #[cfg(feature = "mcp")]
 pub mod mcp;
 #[cfg(feature = "mcp")]
-pub use mcp::{McpCredentialStore, Seconds, create_auth_manager_from_store, mcp_credential_store, perform_oauth_flow};
+pub use mcp::{McpCredentialStore, create_auth_manager_from_store, perform_oauth_flow};
