@@ -13,7 +13,7 @@ The main chat UI screen.
 The screen can display one modal at a time:
 
 - **`ElicitationForm`** — agent-requested structured input (e.g. confirmation dialogs)
-- **`SessionPicker`** — list of previous sessions for `/resume`
+- **`SessionPicker`** — boxed fuzzy-search input for filtering previous `/resume` sessions by title/path
 
 # See also
 

@@ -118,6 +118,13 @@ impl Renderer {
         Ok(())
     }
 
+    pub(super) fn on_sessions_listed(
+        &mut self,
+        sessions: Vec<acp::SessionInfo>,
+    ) -> Result<LoopAction, Box<dyn std::error::Error>> {
+        self.handle_acp_event(AcpEvent::SessionsListed { sessions })
+    }
+
     pub(super) fn on_prompt_done(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         self.handle_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn))?;
         Ok(())

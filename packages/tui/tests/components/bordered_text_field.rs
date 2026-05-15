@@ -1,6 +1,6 @@
 use super::*;
 use crossterm::event::KeyCode;
-use tui::{BorderedTextField, Color};
+use tui::{BorderedTextField, Color, display_width_text};
 
 #[test]
 fn empty_focused_renders_heavy_box_with_label_and_cursor() {
@@ -8,14 +8,7 @@ fn empty_focused_renders_heavy_box_with_label_and_cursor() {
     let ctx = ViewContext::new((40, 10));
     let lines = field.render_field(&ctx, true);
     let term = render_lines(&lines, 40, 10);
-    assert_buffer_eq(
-        &term,
-        &[
-            "┏━ Name ━━━━━━━━━━━┓", //
-            "┃ ▏                ┃",
-            "┗━━━━━━━━━━━━━━━━━━┛",
-        ],
-    );
+    assert_buffer_eq(&term, &bordered_box("Name", "▏", 20, true));
 }
 
 #[test]
@@ -24,14 +17,7 @@ fn value_renders_inside_box() {
     let ctx = ViewContext::new((40, 10));
     let lines = field.render_field(&ctx, true);
     let term = render_lines(&lines, 40, 10);
-    assert_buffer_eq(
-        &term,
-        &[
-            "┏━ Name ━━━━━━━━━━━┓", //
-            "┃ my-agent▏        ┃",
-            "┗━━━━━━━━━━━━━━━━━━┛",
-        ],
-    );
+    assert_buffer_eq(&term, &bordered_box("Name", "my-agent▏", 20, true));
 }
 
 #[test]
@@ -41,20 +27,31 @@ fn unfocused_uses_light_box_and_dimmer_border_color() {
     let lines = field.render_field(&ctx, false);
 
     let term = render_lines(&lines, 40, 10);
-    assert_buffer_eq(
-        &term,
-        &[
-            "┌─ Name ───────────┐", //
-            "│ hello            │",
-            "└──────────────────┘",
-        ],
-    );
+    assert_buffer_eq(&term, &bordered_box("Name", "hello", 20, false));
 
     let theme = tui::Theme::default();
     let top_spans = lines[0].spans();
     assert_eq!(top_spans[0].style().fg, Some(theme.text_secondary()), "unfocused top border is text_secondary");
     let bottom_spans = lines[2].spans();
     assert_eq!(bottom_spans[0].style().fg, Some(theme.text_secondary()), "unfocused bottom border is text_secondary");
+}
+
+#[test]
+fn placeholder_renders_when_value_is_empty() {
+    let field = make_field("Name", "", 20).placeholder("placeholder");
+    let ctx = ViewContext::new((40, 10));
+    let lines = field.render_field(&ctx, false);
+    let term = render_lines(&lines, 40, 10);
+    assert_buffer_eq(&term, &bordered_box("Name", "placeholder", 20, false));
+}
+
+#[test]
+fn placeholder_does_not_render_when_value_is_non_empty() {
+    let field = make_field("Name", "hello", 20).placeholder("placeholder");
+    let ctx = ViewContext::new((40, 10));
+    let lines = field.render_field(&ctx, false);
+    let term = render_lines(&lines, 40, 10);
+    assert_buffer_eq(&term, &bordered_box("Name", "hello", 20, false));
 }
 
 #[test]
@@ -87,14 +84,7 @@ fn long_value_clips_at_inner_width() {
     let ctx = ViewContext::new((40, 10));
     let lines = field.render_field(&ctx, false);
     let term = render_lines(&lines, 40, 10);
-    assert_buffer_eq(
-        &term,
-        &[
-            "┌─ Name ───────────┐", //
-            "│ abcdefghijklmnop │",
-            "└──────────────────┘",
-        ],
-    );
+    assert_buffer_eq(&term, &bordered_box("Name", "abcdefghijklmnop", 20, false));
 }
 
 #[test]
@@ -154,6 +144,21 @@ fn border_color_is_not_affected_by_theme_bg() {
             assert_ne!(span.style().bg, Some(Color::Red), "unexpected red bg");
         }
     }
+}
+
+fn bordered_box(label: &str, content: &str, width: usize, focused: bool) -> [String; 3] {
+    let (top_left, top_right, bottom_left, bottom_right, horizontal, vertical) =
+        if focused { ("┏", "┓", "┗", "┛", "━", "┃") } else { ("┌", "┐", "└", "┘", "─", "│") };
+    let label_width = display_width_text(label);
+    let dash_cols = width.saturating_sub(label_width + 5);
+    let content_width = width.saturating_sub(4);
+    let pad_cols = content_width.saturating_sub(display_width_text(content));
+
+    [
+        format!("{top_left}{horizontal} {label} {}{top_right}", horizontal.repeat(dash_cols)),
+        format!("{vertical} {content}{} {vertical}", " ".repeat(pad_cols)),
+        format!("{bottom_left}{}{bottom_right}", horizontal.repeat(width.saturating_sub(2))),
+    ]
 }
 
 fn make_field(label: &str, value: &str, width: usize) -> BorderedTextField {
