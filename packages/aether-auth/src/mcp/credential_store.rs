@@ -179,19 +179,21 @@ mod tests {
 
     #[tokio::test]
     async fn load_populates_token_received_at_when_expiry_info_present() {
+        fn fake_now() -> SystemTime {
+            UNIX_EPOCH + Duration::from_secs(2_000_000)
+        }
+
         let store = Arc::new(FakeOAuthCredentialStore::new());
         store.save_credential("server", unexpired_credential()).await.unwrap();
 
-        let mcp_store = McpCredentialStore::new(store.clone(), "server".to_string());
+        let mcp_store = McpCredentialStore::new(store.clone(), "server".to_string()).with_now_fn(fake_now);
         let loaded = CredentialStore::load(&mcp_store).await.unwrap().unwrap();
 
-        assert!(
-            loaded.token_received_at.is_some(),
-            "token_received_at must be populated when credential has expiry info"
+        assert_eq!(
+            loaded.token_received_at,
+            Some(2_000_000),
+            "token_received_at must equal the time returned by now_fn when credential has expiry info"
         );
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-        let received_at = loaded.token_received_at.unwrap();
-        assert!(now.abs_diff(received_at) < 5, "token_received_at should be close to current time");
     }
 
     #[tokio::test]
