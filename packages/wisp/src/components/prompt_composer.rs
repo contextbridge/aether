@@ -7,8 +7,7 @@ use crate::components::text_input::{SelectedFileMention, TextInput, TextInputMes
 use crate::keybindings::Keybindings;
 use std::collections::HashSet;
 use std::path::PathBuf;
-use tui::KeyCode;
-use tui::{Component, Cursor, Event, Frame, Line, PickerMessage, ViewContext};
+use tui::{Component, Cursor, Event, Frame, KeyCode, KeyModifiers, Line, PickerMessage, ViewContext};
 
 use super::app::PromptAttachment;
 
@@ -263,6 +262,12 @@ impl Component for PromptComposer {
                 Some(vec![])
             }
             Event::Key(key_event) => {
+                if key_event.code == KeyCode::Enter && key_event.modifiers.contains(KeyModifiers::SHIFT) {
+                    self.close_all();
+                    let outcome = self.text_input.on_event(event).await;
+                    return self.handle_text_input_outcome(outcome);
+                }
+
                 if let Some(ref mut picker) = self.file_picker {
                     let outcome = picker.on_event(event).await;
                     if outcome.is_some() {
@@ -377,7 +382,11 @@ mod tests {
     use tui::{KeyEvent, KeyModifiers};
 
     fn key(code: KeyCode) -> Event {
-        Event::Key(KeyEvent::new(code, KeyModifiers::NONE))
+        key_with_modifiers(code, KeyModifiers::NONE)
+    }
+
+    fn key_with_modifiers(code: KeyCode, modifiers: KeyModifiers) -> Event {
+        Event::Key(KeyEvent::new(code, modifiers))
     }
 
     fn cmd(name: &str, has_input: bool, builtin: bool) -> CommandEntry {
@@ -451,6 +460,32 @@ mod tests {
         assert_eq!(attachments.len(), 1);
         assert_eq!(attachments[0].display_name, "keep.rs");
         assert_eq!(attachments[0].path, PathBuf::from("/tmp/keep.rs"));
+    }
+
+    #[tokio::test]
+    async fn submit_preserves_internal_hard_newlines() {
+        let mut composer = PromptComposer::default();
+        type_chars(&mut composer, "first").await;
+        composer.on_event(&key_with_modifiers(KeyCode::Enter, KeyModifiers::SHIFT)).await;
+        type_chars(&mut composer, "second").await;
+
+        let msgs = composer.on_event(&key(KeyCode::Enter)).await.unwrap();
+        assert!(matches!(
+            msgs.as_slice(),
+            [PromptComposerMessage::SubmitRequested { user_input, .. }] if user_input == "first\nsecond"
+        ));
+    }
+
+    #[tokio::test]
+    async fn shift_enter_closes_command_picker_and_inserts_newline() {
+        let mut composer = PromptComposer::default();
+        type_chars(&mut composer, "/").await;
+        assert!(composer.has_command_picker());
+
+        let msgs = composer.on_event(&key_with_modifiers(KeyCode::Enter, KeyModifiers::SHIFT)).await.unwrap();
+        assert!(msgs.is_empty());
+        assert!(!composer.has_command_picker());
+        assert_eq!(composer.buffer(), "/\n");
     }
 
     #[tokio::test]

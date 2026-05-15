@@ -207,3 +207,22 @@ async fn test_cursor_position_after_multi_mention_wrap() {
     assert_eq!(cursor_row, 2, "cursor should be on the second content row (row 2)");
     assert_eq!(cursor_col, 9, "cursor should be at col 9 (2 prefix + 7 for '@bbbbbb')");
 }
+
+#[tokio::test]
+async fn test_shift_enter_creates_hard_line_break() {
+    let terminal = TestTerminal::new(80, 24);
+    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (80, 24));
+    renderer.initial_render().unwrap();
+
+    type_string(&mut renderer, "line one").await;
+    press_shift_enter(&mut renderer).await;
+    type_string(&mut renderer, "line two").await;
+
+    let rule = "─".repeat(80);
+    let expected = vec![rule.clone(), "> line one".to_string(), "  line two".to_string(), rule, p(TEST_AGENT)];
+    assert_buffer_eq(renderer.writer(), &expected);
+
+    let (cursor_col, cursor_row) = renderer.writer().cursor_position();
+    assert_eq!(cursor_row, 2);
+    assert_eq!(cursor_col, 10);
+}
