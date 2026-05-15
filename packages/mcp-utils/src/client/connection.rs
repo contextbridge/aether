@@ -244,7 +244,17 @@ async fn connect_http(
     let stored_auth_manager = if let Some(store) = oauth_credential_store
         && config.auth_header.is_none()
     {
-        create_auth_manager_from_store(name, &config.uri, Arc::clone(store)).await.ok().flatten()
+        match create_auth_manager_from_store(name, &config.uri, Arc::clone(store)).await {
+            Ok(manager) => manager,
+            Err(e) => {
+                tracing::warn!(
+                    server = %name,
+                    error = %e,
+                    "Failed to initialize auth manager from stored credentials, proceeding without auth"
+                );
+                None
+            }
+        }
     } else {
         None
     };
