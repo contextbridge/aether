@@ -1,6 +1,6 @@
 use crate::keybindings::Keybindings;
 use std::path::PathBuf;
-use tui::{Component, Event, Frame, KeyCode, KeyEvent, Line, TextField, ViewContext};
+use tui::{Component, Event, Frame, KeyCode, KeyEvent, KeyModifiers, Line, TextField, ViewContext};
 
 #[doc = include_str!("../docs/text_input.md")]
 pub struct TextInput {
@@ -221,6 +221,12 @@ impl Component for TextInput {
 
 impl TextInput {
     async fn handle_key(&mut self, key_event: &KeyEvent) -> Option<Vec<TextInputMessage>> {
+        if key_event.code == KeyCode::Enter && key_event.modifiers.contains(KeyModifiers::SHIFT) {
+            self.history.reset();
+            self.field.insert_at_cursor('\n');
+            return Some(vec![]);
+        }
+
         if self.keybindings.submit.matches(*key_event) {
             return Some(vec![TextInputMessage::Submit]);
         }
@@ -273,7 +279,11 @@ mod tests {
     use tui::KeyModifiers;
 
     fn key(code: KeyCode) -> Event {
-        Event::Key(KeyEvent::new(code, KeyModifiers::NONE))
+        key_with_modifiers(code, KeyModifiers::NONE)
+    }
+
+    fn key_with_modifiers(code: KeyCode, modifiers: KeyModifiers) -> Event {
+        Event::Key(KeyEvent::new(code, modifiers))
     }
 
     fn input_with(text: &str, cursor: Option<usize>) -> TextInput {
@@ -387,6 +397,26 @@ mod tests {
         let mut input = input_with("hello", None);
         let outcome = input.on_event(&key(KeyCode::Enter)).await;
         assert!(matches!(outcome.as_deref(), Some([TextInputMessage::Submit])));
+    }
+
+    #[tokio::test]
+    async fn shift_enter_inserts_newline() {
+        let mut input = input_with("hello", None);
+        let outcome = input.on_event(&key_with_modifiers(KeyCode::Enter, KeyModifiers::SHIFT)).await;
+
+        assert!(matches!(outcome.as_deref(), Some([])));
+        assert_eq!(input.buffer(), "hello\n");
+        assert_eq!(cursor(&input), 6);
+    }
+
+    #[tokio::test]
+    async fn shift_enter_inserts_newline_at_cursor() {
+        let mut input = input_with("helloworld", Some(5));
+        let outcome = input.on_event(&key_with_modifiers(KeyCode::Enter, KeyModifiers::SHIFT)).await;
+
+        assert!(matches!(outcome.as_deref(), Some([])));
+        assert_eq!(input.buffer(), "hello\nworld");
+        assert_eq!(cursor(&input), 6);
     }
 
     #[test]
