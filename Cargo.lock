@@ -21,7 +21,7 @@ dependencies = [
 
 [[package]]
 name = "aether-acp-utils"
-version = "0.3.11"
+version = "0.3.12"
 dependencies = [
  "aether-mcp-utils",
  "aether-utils",
@@ -41,7 +41,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-cli"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
@@ -74,7 +74,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-core"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
@@ -106,7 +106,7 @@ dependencies = [
 
 [[package]]
 name = "aether-auth"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "apple-native-keyring-store",
  "async-trait",
@@ -140,7 +140,7 @@ dependencies = [
 
 [[package]]
 name = "aether-llm"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "aether-auth",
  "aether-llm-codegen",
@@ -184,7 +184,7 @@ dependencies = [
 
 [[package]]
 name = "aether-lspd"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "aether-lspd",
  "clap",
@@ -208,7 +208,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp-servers"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -244,7 +244,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp-utils"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "aether-auth",
  "aether-llm",
@@ -265,7 +265,7 @@ dependencies = [
 
 [[package]]
 name = "aether-project"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -285,7 +285,7 @@ dependencies = [
 
 [[package]]
 name = "aether-tui"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "aether-tui",
  "crossterm",
@@ -319,7 +319,7 @@ dependencies = [
 
 [[package]]
 name = "aether-wisp"
-version = "0.4.9"
+version = "0.4.10"
 dependencies = [
  "aether-acp-utils",
  "aether-tui",

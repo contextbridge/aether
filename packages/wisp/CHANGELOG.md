@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.10](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.9...aether-wisp-v0.4.10) - 2026-05-15
+
+### Fixed
+
+- *(wisp)* More visible search bar in resume session ([#62](https://github.com/contextbridge/aether/pull/62))
+- *(wisp)* Show dot files in "@" search ([#63](https://github.com/contextbridge/aether/pull/63))
+- *(wisp)* Improve perf of /resume session by buffering updates instead of individually rendering each update ([#61](https://github.com/contextbridge/aether/pull/61))
+
 ## [0.4.9](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.8...aether-wisp-v0.4.9) - 2026-05-14
 
 ### Other

@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.7](https://github.com/contextbridge/aether/compare/aether-tui-v0.2.6...aether-tui-v0.2.7) - 2026-05-15
+
+### Fixed
+
+- *(tui)* Skip word keyboard shortcuts now work in user prompt with option + left/right arrow ([#64](https://github.com/contextbridge/aether/pull/64))
+- *(wisp)* More visible search bar in resume session ([#62](https://github.com/contextbridge/aether/pull/62))
+
 ## [0.2.6](https://github.com/contextbridge/aether/compare/aether-tui-v0.2.5...aether-tui-v0.2.6) - 2026-05-12
 
 ### Other

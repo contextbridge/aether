@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.6](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.5.5...aether-mcp-utils-v0.5.6) - 2026-05-15
+
+### Fixed
+
+- *(mcp-utils)* Pipe stdio MCP server stderr to tracing instead of inheriting, which prevnts MCP stderr showing up in terminal ([#60](https://github.com/contextbridge/aether/pull/60))
+
 ## [0.5.5](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.5.4...aether-mcp-utils-v0.5.5) - 2026-05-14
 
 ### Other
