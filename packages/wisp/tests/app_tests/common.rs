@@ -1,12 +1,13 @@
 use acp_utils::client::AcpEvent;
 use acp_utils::client::AcpPromptHandle;
 use agent_client_protocol::schema as acp;
+use std::path::PathBuf;
 use tui::Renderer as FrameRenderer;
 use tui::RendererCommand;
 use tui::Theme;
 use tui::testing::TestTerminal;
 use tui::{Component, Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
-use wisp::components::app::App;
+use wisp::components::app::{App, EventOutcome};
 use wisp::settings::DEFAULT_CONTENT_PADDING;
 
 pub(super) const TEST_AGENT: &str = "test-agent";
@@ -88,7 +89,32 @@ impl Renderer {
     }
 
     pub(super) fn on_session_update(&mut self, update: acp::SessionUpdate) -> Result<(), Box<dyn std::error::Error>> {
-        self.handle_acp_event(AcpEvent::SessionUpdate(Box::new(update)))?;
+        self.on_session_update_for(acp::SessionId::new("test"), update)
+    }
+
+    pub(super) fn on_session_update_for(
+        &mut self,
+        session_id: acp::SessionId,
+        update: acp::SessionUpdate,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.handle_acp_event(AcpEvent::SessionUpdate { session_id, update: Box::new(update) })?;
+        Ok(())
+    }
+
+    pub(super) fn on_sessions_listed(
+        &mut self,
+        sessions: Vec<acp::SessionInfo>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.handle_acp_event(AcpEvent::SessionsListed { sessions })?;
+        Ok(())
+    }
+
+    pub(super) fn on_session_loaded(
+        &mut self,
+        session_id: acp::SessionId,
+        config_options: Vec<acp::SessionConfigOption>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.handle_acp_event(AcpEvent::SessionLoaded { session_id, config_options })?;
         Ok(())
     }
 
@@ -160,8 +186,15 @@ impl Renderer {
     }
 
     fn handle_acp_event(&mut self, event: AcpEvent) -> Result<LoopAction, Box<dyn std::error::Error>> {
-        self.app.on_acp_event(event);
-        self.drain_and_render(vec![])
+        let outcome = self.app.on_acp_event(event);
+        if self.app.exit_requested() {
+            return Ok(LoopAction::Exit);
+        }
+
+        if matches!(outcome, EventOutcome::Render) {
+            self.render()?;
+        }
+        Ok(LoopAction::Continue)
     }
 
     fn drain_and_render(&mut self, commands: Vec<RendererCommand>) -> Result<LoopAction, Box<dyn std::error::Error>> {
@@ -260,6 +293,15 @@ pub(super) fn command_picker_visible_names(terminal: &TestTerminal) -> Vec<Strin
         }
     }
     names
+}
+
+/// Build a renderer with the default test agent and config and run the initial frame so
+/// keystroke-driven tests start from a clean rendered state.
+pub(super) fn new_test_renderer(size: (u16, u16)) -> Renderer {
+    let terminal = TestTerminal::new(size.0, size.1);
+    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], size);
+    renderer.initial_render().unwrap();
+    renderer
 }
 
 pub(super) fn render_with_size(events: Vec<TestEvent>, size: (u16, u16)) -> Renderer {
@@ -420,6 +462,14 @@ pub(super) async fn press_down(renderer: &mut Renderer) {
 
 pub(super) async fn press_esc(renderer: &mut Renderer) {
     send_key(renderer, KeyCode::Esc, KeyModifiers::empty()).await;
+}
+
+pub(super) async fn load_session_via_picker(renderer: &mut Renderer, session_id: acp::SessionId, cwd: PathBuf) {
+    type_string(renderer, "/resume").await;
+    press_enter(renderer).await;
+    let info = acp::SessionInfo::new(session_id, cwd).title("Resumable session".to_string());
+    renderer.on_sessions_listed(vec![info]).unwrap();
+    press_enter(renderer).await;
 }
 
 /// Assert that any terminal line contains the given text, panicking with a buffer dump.

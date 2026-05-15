@@ -4,6 +4,8 @@ mod plan_review_mode;
 mod screen_router;
 mod view;
 
+use crate::session_loading_buffer::SessionLoadingBuffer;
+use agent_client_protocol::schema::SessionUpdate;
 pub use git_diff_mode::{GitDiffLoadState, GitDiffMode, GitDiffViewMessage};
 pub use plan_review_mode::{PlanReviewAction, PlanReviewInput, PlanReviewMode};
 use screen_router::ScreenRouter;
@@ -35,6 +37,13 @@ pub struct PromptAttachment {
     pub display_name: String,
 }
 
+/// Result of processing a single ACP event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventOutcome {
+    Render,
+    DontRender,
+}
+
 #[doc = include_str!("../../docs/app.md")]
 pub struct App {
     agent_name: String,
@@ -51,6 +60,7 @@ pub struct App {
     pending_plan_review_response: Option<Responder<ElicitationResponse>>,
     keybindings: Keybindings,
     session_id: SessionId,
+    session_loading_buffer: SessionLoadingBuffer,
     prompt_handle: AcpPromptHandle,
     working_dir: PathBuf,
     content_padding: usize,
@@ -84,6 +94,7 @@ impl App {
             pending_plan_review_response: None,
             keybindings,
             session_id,
+            session_loading_buffer: SessionLoadingBuffer::new(),
             prompt_handle,
             working_dir,
             content_padding,
@@ -114,9 +125,11 @@ impl App {
         self.screen_router.git_diff_mode_mut()
     }
 
-    pub fn on_acp_event(&mut self, event: AcpEvent) {
+    pub fn on_acp_event(&mut self, event: AcpEvent) -> EventOutcome {
         match event {
-            AcpEvent::SessionUpdate(update) => self.on_session_update(&update),
+            AcpEvent::SessionUpdate { session_id, update } => {
+                return self.on_acp_session_update(&session_id, *update);
+            }
             AcpEvent::ContextCleared(_) => {
                 self.conversation_screen.reset_after_context_cleared();
                 self.context_usage = None;
@@ -127,26 +140,17 @@ impl App {
                     .filter(|limit| *limit > 0)
                     .map(|limit| ContextUsageDisplay::new(params.input_tokens, limit));
             }
-            AcpEvent::SubAgentProgress(progress) => {
-                self.conversation_screen.on_sub_agent_progress(&progress);
-            }
-            AcpEvent::AuthMethodsUpdated(params) => {
-                self.update_auth_methods(params.auth_methods);
-            }
-            AcpEvent::McpNotification(notification) => {
-                self.on_mcp_notification(notification);
-            }
+            AcpEvent::SubAgentProgress(progress) => self.conversation_screen.on_sub_agent_progress(&progress),
+            AcpEvent::AuthMethodsUpdated(params) => self.update_auth_methods(params.auth_methods),
+            AcpEvent::McpNotification(notification) => self.on_mcp_notification(notification),
             AcpEvent::PromptDone(stop_reason) => self.on_prompt_done(stop_reason),
             AcpEvent::PromptError(error) => {
+                self.session_loading_buffer.clear();
                 self.conversation_screen.on_prompt_error(&error);
             }
             AcpEvent::ElicitationRequest { params, responder } => self.on_elicitation_request(params, responder),
-            AcpEvent::AuthenticateComplete { method_id } => {
-                self.on_authenticate_complete(&method_id);
-            }
-            AcpEvent::AuthenticateFailed { method_id, error } => {
-                self.on_authenticate_failed(&method_id, &error);
-            }
+            AcpEvent::AuthenticateComplete { method_id } => self.on_authenticate_complete(&method_id),
+            AcpEvent::AuthenticateFailed { method_id, error } => self.on_authenticate_failed(&method_id, &error),
             AcpEvent::SessionsListed { sessions } => {
                 let current_id = &self.session_id;
                 let filtered: Vec<_> = sessions.into_iter().filter(|s| s.session_id != *current_id).collect();
@@ -156,10 +160,15 @@ impl App {
             // when the user loads an existing session, the server's stored config for
             // that session is authoritative.
             AcpEvent::SessionLoaded { session_id, config_options } => {
+                let replay_updates = self.session_loading_buffer.take(&session_id);
                 self.session_id = session_id;
+                for update in replay_updates {
+                    self.on_session_update(&update);
+                }
                 self.update_config_options(&config_options);
             }
             AcpEvent::NewSessionCreated { session_id, config_options } => {
+                self.session_loading_buffer.clear();
                 let previous_selections = current_config_selections(&self.config_options);
                 self.session_id = session_id;
                 self.update_config_options(&config_options);
@@ -167,9 +176,11 @@ impl App {
                 self.restore_config_selections(&previous_selections);
             }
             AcpEvent::ConnectionClosed => {
+                self.session_loading_buffer.clear();
                 self.exit_requested = true;
             }
         }
+        EventOutcome::Render
     }
 
     async fn handle_key(&mut self, commands: &mut Vec<RendererCommand>, key_event: KeyEvent) {
@@ -258,7 +269,9 @@ impl App {
                     let _ = self.prompt_handle.list_sessions();
                 }
                 ConversationScreenMessage::LoadSession { session_id, cwd } => {
+                    self.session_loading_buffer.begin_load(session_id.clone());
                     if let Err(e) = self.prompt_handle.load_session(&session_id, &cwd) {
+                        self.session_loading_buffer.remove(&session_id);
                         tracing::warn!("Failed to load session: {e}");
                     }
                 }
@@ -376,6 +389,14 @@ impl App {
             }
         }
         let _ = commands;
+    }
+
+    fn on_acp_session_update(&mut self, session_id: &SessionId, update: SessionUpdate) -> EventOutcome {
+        let Some(update) = self.session_loading_buffer.push(session_id, update) else {
+            return EventOutcome::DontRender;
+        };
+        self.on_session_update(&update);
+        EventOutcome::Render
     }
 
     fn on_session_update(&mut self, update: &acp::SessionUpdate) {

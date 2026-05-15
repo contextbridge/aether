@@ -7,11 +7,13 @@ pub mod error;
 pub mod git_diff;
 pub mod keybindings;
 pub mod runtime_state;
+mod session_loading_buffer;
 pub mod settings;
 #[cfg(test)]
 pub(crate) mod test_helpers;
 
-use components::app::App;
+use acp_utils::client::AcpEvent;
+use components::app::{App, EventOutcome};
 use error::AppError;
 use runtime_state::RuntimeState;
 use std::fs::create_dir_all;
@@ -80,26 +82,21 @@ fn render(terminal: &mut TerminalRuntime<impl io::Write>, app: &mut App) -> Resu
 }
 
 const MAX_TERMINAL_EVENTS_PER_FRAME: usize = 128;
+const MAX_ACP_EVENTS_PER_FRAME: usize = 1_000;
 
-fn collect_terminal_event_batch(
-    first: CrosstermEvent,
-    mut try_next: impl FnMut() -> Option<CrosstermEvent>,
-) -> Vec<CrosstermEvent> {
-    let mut events = Vec::new();
-    events.push(first);
-
-    while events.len() < MAX_TERMINAL_EVENTS_PER_FRAME {
-        let Some(event) = try_next() else {
-            break;
-        };
-        events.push(event);
+fn collect_batch<T>(first: T, max: usize, mut try_next: impl FnMut() -> Option<T>) -> Vec<T> {
+    let mut events = vec![first];
+    while events.len() < max {
+        match try_next() {
+            Some(event) => events.push(event),
+            None => break,
+        }
     }
-
     events
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TerminalBatchOutcome {
+enum BatchOutcome {
     Continue { should_render: bool },
     Exit,
 }
@@ -108,7 +105,7 @@ async fn process_terminal_event_batch(
     terminal: &mut TerminalRuntime<impl io::Write>,
     app: &mut App,
     events: Vec<CrosstermEvent>,
-) -> Result<TerminalBatchOutcome, AppError> {
+) -> Result<BatchOutcome, AppError> {
     let mut should_render = false;
 
     for event in events {
@@ -131,11 +128,24 @@ async fn process_terminal_event_batch(
         }
 
         if app.exit_requested() {
-            return Ok(TerminalBatchOutcome::Exit);
+            return Ok(BatchOutcome::Exit);
         }
     }
 
-    Ok(TerminalBatchOutcome::Continue { should_render })
+    Ok(BatchOutcome::Continue { should_render })
+}
+
+fn process_acp_event_batch(app: &mut App, events: Vec<AcpEvent>) -> BatchOutcome {
+    let mut should_render = false;
+    for event in events {
+        if matches!(app.on_acp_event(event), EventOutcome::Render) {
+            should_render = true;
+        }
+        if app.exit_requested() {
+            return BatchOutcome::Exit;
+        }
+    }
+    BatchOutcome::Continue { should_render }
 }
 
 async fn run_app(
@@ -172,26 +182,28 @@ async fn run_app(
                     return Ok(());
                 };
 
-                let events = collect_terminal_event_batch(first_event, || terminal.try_next_event());
+                let events = collect_batch(first_event, MAX_TERMINAL_EVENTS_PER_FRAME, || terminal.try_next_event());
                 if events.len() > 1 {
                     tracing::debug!(count = events.len(), "processing terminal event batch");
                 }
 
                 match process_terminal_event_batch(&mut terminal, &mut app, events).await? {
-                    TerminalBatchOutcome::Exit => return Ok(()),
-                    TerminalBatchOutcome::Continue { should_render } if should_render => render(&mut terminal, &mut app)?,
-                    TerminalBatchOutcome::Continue { .. } => {}
+                    BatchOutcome::Exit => return Ok(()),
+                    BatchOutcome::Continue { should_render: true } => render(&mut terminal, &mut app)?,
+                    BatchOutcome::Continue { .. } => {}
                 }
             }
 
             app_event = event_rx.recv() => {
-                match app_event {
-                    Some(event) => {
-                        app.on_acp_event(event);
-                        if app.exit_requested() { return Ok(()); }
-                        render(&mut terminal, &mut app)?;
-                    }
-                    None => return Ok(()),
+                let Some(event) = app_event else { return Ok(()); };
+                let events = collect_batch(event, MAX_ACP_EVENTS_PER_FRAME, || event_rx.try_recv().ok());
+                if events.len() > 1 {
+                    tracing::debug!(count = events.len(), "processing ACP event batch");
+                }
+                match process_acp_event_batch(&mut app, events) {
+                    BatchOutcome::Exit => return Ok(()),
+                    BatchOutcome::Continue { should_render: true } => render(&mut terminal, &mut app)?,
+                    BatchOutcome::Continue { .. } => {}
                 }
             }
 
@@ -212,40 +224,69 @@ async fn run_app(
 
 #[cfg(test)]
 mod tests {
+    use acp_utils::notifications::ContextClearedParams;
+
+    use crate::components::app::test_helpers::make_app;
+
     use super::*;
     use std::collections::VecDeque;
 
     #[test]
-    fn collect_terminal_event_batch_includes_first_event() {
-        let events = collect_terminal_event_batch(CrosstermEvent::Resize(80, 24), || None);
+    fn collect_batch_includes_first_event() {
+        let events = collect_batch(CrosstermEvent::Resize(80, 24), 16, || None);
 
         assert_eq!(events, vec![CrosstermEvent::Resize(80, 24)]);
     }
 
     #[test]
-    fn collect_terminal_event_batch_drains_until_empty() {
+    fn collect_batch_drains_until_empty() {
         let mut queued = VecDeque::from([
             CrosstermEvent::Resize(81, 24),
             CrosstermEvent::Resize(82, 24),
             CrosstermEvent::Resize(83, 24),
         ]);
 
-        let events = collect_terminal_event_batch(CrosstermEvent::Resize(80, 24), || queued.pop_front());
+        let events = collect_batch(CrosstermEvent::Resize(80, 24), 16, || queued.pop_front());
 
         assert_eq!(events.len(), 4);
         assert_eq!(events[0], CrosstermEvent::Resize(80, 24));
-        assert_eq!(events[1], CrosstermEvent::Resize(81, 24));
         assert_eq!(events[3], CrosstermEvent::Resize(83, 24));
     }
 
     #[test]
-    fn collect_terminal_event_batch_respects_max() {
+    fn collect_batch_respects_max() {
         let mut next_width = 1;
-        let events = collect_terminal_event_batch(CrosstermEvent::Resize(0, 24), || {
+        let events = collect_batch(CrosstermEvent::Resize(0, 24), 4, || {
             next_width += 1;
             Some(CrosstermEvent::Resize(next_width, 24))
         });
 
-        assert_eq!(events.len(), MAX_TERMINAL_EVENTS_PER_FRAME);
+        assert_eq!(events.len(), 4);
+    }
+
+    #[test]
+    fn process_acp_event_batch_exits_on_connection_closed() {
+        let mut app = make_app();
+        let outcome = process_acp_event_batch(
+            &mut app,
+            vec![AcpEvent::ContextCleared(ContextClearedParams::default()), AcpEvent::ConnectionClosed],
+        );
+
+        assert_eq!(outcome, BatchOutcome::Exit);
+    }
+
+    #[test]
+    fn process_acp_event_batch_continue_renders_when_any_event_dirties() {
+        let mut app = make_app();
+        let outcome =
+            process_acp_event_batch(&mut app, vec![AcpEvent::ContextCleared(ContextClearedParams::default())]);
+        assert_eq!(outcome, BatchOutcome::Continue { should_render: true });
+    }
+
+    #[test]
+    fn process_acp_event_batch_empty_input_does_not_render() {
+        let mut app = make_app();
+        let outcome = process_acp_event_batch(&mut app, vec![]);
+        assert_eq!(outcome, BatchOutcome::Continue { should_render: false });
     }
 }
