@@ -39,6 +39,7 @@ tokio = { version = "^1.52.3", features = ["full"] }
 tokio-stream = { version = "^0.1.18", features = ["io-util"] }
 tokio-util = "^0.7.18"
 futures = "^0.3.32"
+blocking = "1.6.2"
 async-stream = "^0.3.6"
 eventsource-stream = "^0.2"
 
