@@ -62,6 +62,7 @@ mod tests {
             access_token: "tok_abc".to_string(),
             refresh_token: Some("ref_xyz".to_string()),
             expires_at: Some(9_999_999_999_999),
+            granted_scopes: Vec::new(),
         };
 
         store.save_credential("my-server", cred.clone()).await.unwrap();
@@ -80,6 +81,7 @@ mod tests {
             access_token: "t".to_string(),
             refresh_token: None,
             expires_at: None,
+            granted_scopes: Vec::new(),
         };
         store.save_credential("x", cred).await.unwrap();
         assert!(store.has_credential("x"));
@@ -97,6 +99,7 @@ mod tests {
                 access_token: "t".to_string(),
                 refresh_token: None,
                 expires_at: None,
+                granted_scopes: Vec::new(),
             },
         );
 

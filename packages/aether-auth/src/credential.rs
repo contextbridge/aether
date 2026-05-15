@@ -17,6 +17,9 @@ pub struct OAuthCredential {
     pub refresh_token: Option<String>,
     /// Unix timestamp in milliseconds when the token expires.
     pub expires_at: Option<u64>,
+    /// Scopes the authorization server granted with this token.
+    #[serde(default)]
+    pub granted_scopes: Vec<String>,
 }
 
 impl OAuthCredential {
@@ -27,6 +30,10 @@ impl OAuthCredential {
             access_token: token_response.access_token().secret().clone(),
             refresh_token: token_response.refresh_token().map(|token| token.secret().clone()),
             expires_at: expires_at_from_duration(token_response.expires_in()),
+            granted_scopes: token_response
+                .scopes()
+                .map(|scopes| scopes.iter().map(|scope| scope.to_string()).collect())
+                .unwrap_or_default(),
         }
     }
 
@@ -64,8 +71,11 @@ impl OAuthCredential {
             .await
             .map_err(|e| OAuthError::TokenExchange(e.to_string()))?;
 
-        let refreshed = Self::from_token_response(self.client_id, &token_response);
-        Ok(Self { refresh_token: refreshed.refresh_token.or(Some(old_refresh_token)), ..refreshed })
+        let mut refreshed = Self::from_token_response(self.client_id, &token_response);
+        if refreshed.refresh_token.is_none() {
+            refreshed.refresh_token = Some(old_refresh_token);
+        }
+        Ok(refreshed)
     }
 }
 
@@ -153,6 +163,7 @@ mod tests {
             access_token: "access".to_string(),
             refresh_token: None,
             expires_at,
+            granted_scopes: Vec::new(),
         }
     }
 }

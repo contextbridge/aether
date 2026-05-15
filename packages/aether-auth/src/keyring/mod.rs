@@ -175,6 +175,7 @@ mod tests {
             access_token: "access".to_string(),
             refresh_token: Some("refresh".to_string()),
             expires_at: Some(1234),
+            granted_scopes: Vec::new(),
         }
     }
 
