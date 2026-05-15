@@ -86,7 +86,7 @@ fn style_mentions(input: &str, context: &ViewContext) -> Line {
 
         styled.push_styled(&input[last_pos..at_pos], context.theme.text_primary());
 
-        let mention_end = input[at_pos..].find(' ').map_or(input.len(), |i| at_pos + i);
+        let mention_end = input[at_pos..].find(char::is_whitespace).map_or(input.len(), |i| at_pos + i);
         styled.push_styled(&input[at_pos..mention_end], context.theme.info());
         last_pos = mention_end;
     }
@@ -191,11 +191,52 @@ mod tests {
     }
 
     #[test]
+    fn hard_newline_renders_continuation_row() {
+        let prompt = InputPrompt { input: "one\ntwo", cursor_index: "one\ntwo".len() };
+        let ctx = ViewContext::new((80, 24));
+        let layout = prompt.layout(&ctx);
+        let line_text = layout.lines.iter().map(Line::plain_text).collect::<Vec<_>>();
+        assert_eq!(line_text, vec!["─".repeat(80), "> one".to_owned(), "  two".to_owned(), "─".repeat(80)]);
+        assert_eq!((layout.cursor_row, layout.cursor_col), (2, 5));
+    }
+
+    #[test]
+    fn cursor_after_hard_newline_starts_continuation_row() {
+        let prompt = InputPrompt { input: "one\ntwo", cursor_index: 4 };
+        let ctx = ViewContext::new((80, 24));
+        let layout = prompt.layout(&ctx);
+        assert_eq!((layout.cursor_row, layout.cursor_col), (2, 2));
+    }
+
+    #[test]
     fn mention_and_plain_text_both_render() {
         let prompt = InputPrompt { input: "@main.rs explain this", cursor_index: 20 };
         let ctx = ViewContext::new((80, 24));
         let lines = prompt.render(&ctx);
         assert!(lines[1].plain_text().contains("@main.rs"));
         assert!(lines[1].plain_text().contains("explain this"));
+    }
+
+    #[test]
+    fn hard_newline_terminates_mention_styling() {
+        let prompt = InputPrompt { input: "@main.rs\nhello", cursor_index: 14 };
+        let ctx = ViewContext::new((80, 24));
+        let layout = prompt.layout(&ctx);
+
+        let styled_spans = layout
+            .lines
+            .iter()
+            .map(|line| line.spans().iter().map(|span| (span.text().to_owned(), span.style().fg)).collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            styled_spans,
+            vec![
+                vec![("─".repeat(80), Some(ctx.theme.muted()))],
+                vec![("> ".to_owned(), Some(ctx.theme.primary())), ("@main.rs".to_owned(), Some(ctx.theme.info()))],
+                vec![("  ".to_owned(), Some(ctx.theme.muted())), ("hello".to_owned(), Some(ctx.theme.text_primary()))],
+                vec![("─".repeat(80), Some(ctx.theme.muted()))],
+            ]
+        );
     }
 }

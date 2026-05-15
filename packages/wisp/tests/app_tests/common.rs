@@ -408,6 +408,10 @@ pub(super) async fn press_enter(renderer: &mut Renderer) {
     renderer.on_key_event(enter_event).await.unwrap();
 }
 
+pub(super) async fn press_shift_enter(renderer: &mut Renderer) {
+    send_key(renderer, KeyCode::Enter, KeyModifiers::SHIFT).await;
+}
+
 pub(super) async fn press_backspace(renderer: &mut Renderer) {
     let backspace_event = KeyEvent {
         code: KeyCode::Backspace,
