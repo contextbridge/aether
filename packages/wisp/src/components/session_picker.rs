@@ -2,8 +2,8 @@ use agent_client_protocol::schema as acp;
 use chrono::{DateTime, Utc};
 use std::path::PathBuf;
 use tui::{
-    Combobox, Component, Cursor, Event, Frame, Line, MouseEventKind, PickerMessage, Searchable, Style, ViewContext,
-    display_width_text, pad_text_to_width, truncate_text,
+    BorderedTextField, Combobox, Component, Cursor, Event, Frame, Line, MouseEventKind, PickerMessage, Searchable,
+    Style, ViewContext, display_width_text, pad_text_to_width, truncate_text,
 };
 
 #[derive(Clone)]
@@ -20,6 +20,7 @@ impl Searchable for SessionEntry {
 
 pub struct SessionPicker {
     combobox: Combobox<SessionEntry>,
+    has_sessions: bool,
 }
 
 pub enum SessionPickerMessage {
@@ -29,7 +30,8 @@ pub enum SessionPickerMessage {
 
 impl SessionPicker {
     pub fn new(sessions: Vec<SessionEntry>) -> Self {
-        Self { combobox: Combobox::new(sessions) }
+        let has_sessions = !sessions.is_empty();
+        Self { combobox: Combobox::new(sessions), has_sessions }
     }
 }
 
@@ -66,16 +68,18 @@ impl Component for SessionPicker {
     }
 
     fn render(&mut self, context: &ViewContext) -> Frame {
-        if self.combobox.is_empty() {
+        if !self.has_sessions {
             return Frame::new(vec![Line::new(String::new()), Line::new("  No previous sessions found.")]);
         }
 
         let now = Utc::now();
+        let search = search_box_frame(self.combobox.query(), context);
+        let mut list_lines = vec![Line::new(String::new())];
 
-        let mut lines = vec![Line::new(String::new())];
-        let header = format!("  Resume a previous session: {}", self.combobox.query());
-        lines.push(Line::new(&header));
-        lines.push(Line::new(String::new()));
+        if self.combobox.is_empty() {
+            list_lines.push(Line::new("  (no matching sessions)"));
+            return Frame::vstack([search, Frame::new(list_lines)]);
+        }
 
         let max_title_width = self
             .combobox
@@ -109,10 +113,27 @@ impl Component for SessionPicker {
                 line
             }
         });
-        lines.extend(item_lines);
-        let cursor = Cursor::visible(1, display_width_text(&header));
-        Frame::new(lines).with_cursor(cursor)
+        list_lines.extend(item_lines);
+        Frame::vstack([search, Frame::new(list_lines)])
     }
+}
+
+const SEARCH_BOX_MAX_WIDTH: usize = 56;
+const SEARCH_BOX_INDENT: u16 = 2;
+const SEARCH_LABEL: &str = "🔍 Search";
+const SEARCH_PLACEHOLDER: &str = "type to search title or path";
+
+fn search_box_frame(query: &str, context: &ViewContext) -> Frame {
+    let width = (context.size.width as usize).saturating_sub(usize::from(SEARCH_BOX_INDENT)).min(SEARCH_BOX_MAX_WIDTH);
+    let input_width = width.saturating_sub(4);
+    let visible_query = truncate_text(query, input_width);
+
+    let mut field = BorderedTextField::new(SEARCH_LABEL, query.to_string()).placeholder(SEARCH_PLACEHOLDER);
+    field.set_width(width);
+
+    Frame::new(field.render_field(context, false))
+        .with_cursor(Cursor::visible(1, 2 + display_width_text(&visible_query)))
+        .indent(SEARCH_BOX_INDENT)
 }
 
 fn display_title(info: &acp::SessionInfo) -> String {
@@ -165,6 +186,27 @@ mod tests {
         format_relative_time(iso, Utc::now())
     }
 
+    fn expected_picker_lines(rows: Vec<String>) -> Vec<String> {
+        let mut lines = Vec::from(rendered_search_box(SEARCH_PLACEHOLDER));
+        lines.push(String::new());
+        lines.extend(rows);
+        lines
+    }
+
+    fn rendered_search_box(content: &str) -> [String; 3] {
+        let indent = " ".repeat(usize::from(SEARCH_BOX_INDENT));
+        let width = (W as usize).saturating_sub(usize::from(SEARCH_BOX_INDENT)).min(SEARCH_BOX_MAX_WIDTH);
+        let dash_cols = width.saturating_sub(display_width_text(SEARCH_LABEL) + 5);
+        let content_width = width.saturating_sub(4);
+        let pad_cols = content_width.saturating_sub(display_width_text(content));
+
+        [
+            format!("{indent}┌─ {SEARCH_LABEL} {}┐", "─".repeat(dash_cols)),
+            format!("{indent}│ {content}{} │", " ".repeat(pad_cols)),
+            format!("{indent}└{}┘", "─".repeat(width.saturating_sub(2))),
+        ]
+    }
+
     #[test]
     fn empty_sessions_shows_message() {
         let mut picker = SessionPicker::new(vec![]);
@@ -173,21 +215,53 @@ mod tests {
     }
 
     #[test]
+    fn renders_search_box_when_query_empty() {
+        let mut picker = SessionPicker::new(sample_sessions());
+        let term = render_component(|ctx| picker.render(ctx), W, H);
+        let lines = term.get_lines();
+        assert!(lines.iter().any(|line| line.contains("🔍 Search")));
+        assert!(lines.iter().any(|line| line.contains("type to search title or path")));
+        assert!(!lines.iter().any(|line| line.contains("Resume a previous session")),);
+    }
+
+    #[tokio::test]
+    async fn query_displayed_in_search_box() {
+        let mut picker = SessionPicker::new(sample_sessions());
+        picker.on_event(&key(KeyCode::Char('f'))).await;
+        picker.on_event(&key(KeyCode::Char('i'))).await;
+        picker.on_event(&key(KeyCode::Char('x'))).await;
+        let term = render_component(|ctx| picker.render(ctx), W, H);
+        let lines = term.get_lines();
+        assert!(lines.iter().any(|line| line.contains("🔍 Search")));
+        assert!(lines.iter().any(|line| line.contains("│ fix")));
+        assert!(!lines.iter().any(|line| line.contains("type to search title or path")),);
+    }
+
+    #[tokio::test]
+    async fn no_matches_keeps_search_box_visible() {
+        let mut picker = SessionPicker::new(sample_sessions());
+        for ch in "zzzz".chars() {
+            picker.on_event(&key(KeyCode::Char(ch))).await;
+        }
+
+        let term = render_component(|ctx| picker.render(ctx), W, H);
+        let lines = term.get_lines();
+        assert!(lines.iter().any(|line| line.contains("🔍 Search")));
+        assert!(lines.iter().any(|line| line.contains("(no matching sessions)")),);
+        assert!(!lines.iter().any(|line| line.contains("No previous sessions found.")));
+    }
+
+    #[test]
     fn renders_titles_and_dates_with_first_selected() {
         let mut picker = SessionPicker::new(sample_sessions());
         let d1 = expected_date("2026-03-10T10:00:00Z");
         let d2 = expected_date("2026-03-09T10:00:00Z");
         let term = render_component(|ctx| picker.render(ctx), W, H);
-        assert_buffer_eq(
-            &term,
-            &[
-                "",
-                "  Resume a previous session:",
-                "",
-                &format!("  Fix the login page redirect bug   {d1}"),
-                &format!("  Add unit tests for session store  {d2}"),
-            ],
-        );
+        let expected = expected_picker_lines(vec![
+            format!("  Fix the login page redirect bug   {d1}"),
+            format!("  Add unit tests for session store  {d2}"),
+        ]);
+        assert_buffer_eq(&term, &expected);
     }
 
     #[tokio::test]
@@ -197,16 +271,11 @@ mod tests {
         let d1 = expected_date("2026-03-10T10:00:00Z");
         let d2 = expected_date("2026-03-09T10:00:00Z");
         let term = render_component(|ctx| picker.render(ctx), W, H);
-        assert_buffer_eq(
-            &term,
-            &[
-                "",
-                "  Resume a previous session:",
-                "",
-                &format!("  Fix the login page redirect bug   {d1}"),
-                &format!("  Add unit tests for session store  {d2}"),
-            ],
-        );
+        let expected = expected_picker_lines(vec![
+            format!("  Fix the login page redirect bug   {d1}"),
+            format!("  Add unit tests for session store  {d2}"),
+        ]);
+        assert_buffer_eq(&term, &expected);
     }
 
     #[tokio::test]
@@ -234,19 +303,6 @@ mod tests {
         assert_eq!(picker.combobox.selected_index(), 0);
     }
 
-    #[tokio::test]
-    async fn query_displayed_in_header() {
-        let mut picker = SessionPicker::new(sample_sessions());
-        picker.on_event(&key(KeyCode::Char('f'))).await;
-        picker.on_event(&key(KeyCode::Char('i'))).await;
-        picker.on_event(&key(KeyCode::Char('x'))).await;
-
-        let term = render_component(|ctx| picker.render(ctx), W, H);
-        let lines = term.get_lines();
-        let header = &lines[1];
-        assert!(header.contains("fix"), "header should contain query text, got: {header}");
-    }
-
     #[test]
     fn falls_back_to_cwd_basename_when_no_title() {
         let sessions = vec![SessionEntry(
@@ -256,6 +312,7 @@ mod tests {
         let mut picker = SessionPicker::new(sessions);
         let d = expected_date("2026-03-10T10:00:00Z");
         let term = render_component(|ctx| picker.render(ctx), W, H);
-        assert_buffer_eq(&term, &["", "  Resume a previous session:", "", &format!("  my-project  {d}")]);
+        let expected = expected_picker_lines(vec![format!("  my-project  {d}")]);
+        assert_buffer_eq(&term, &expected);
     }
 }

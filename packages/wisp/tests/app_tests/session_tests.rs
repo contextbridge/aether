@@ -1,8 +1,33 @@
 use agent_client_protocol::schema as acp;
+use std::path::PathBuf;
 use tui::testing::{TestTerminal, assert_buffer_eq};
 use tui::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::common::*;
+
+#[tokio::test]
+async fn test_resume_picker_shows_search_box_and_filters() {
+    let terminal = TestTerminal::new(TEST_WIDTH, 40);
+    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (TEST_WIDTH, 40));
+    renderer.initial_render().unwrap();
+
+    type_string(&mut renderer, "/resume").await;
+    press_enter(&mut renderer).await;
+    renderer
+        .on_sessions_listed(vec![
+            acp::SessionInfo::new("session-login", PathBuf::from("/repo/auth")).title("Fix login redirect".to_string()),
+            acp::SessionInfo::new("session-billing", PathBuf::from("/repo/billing"))
+                .title("Billing cleanup".to_string()),
+        ])
+        .unwrap();
+
+    assert_buffer_contains(renderer.writer(), "🔍 Search");
+    assert_buffer_contains(renderer.writer(), "type to search title or path");
+    assert_buffer_not_contains(renderer.writer(), "Resume a previous session");
+    type_string(&mut renderer, "login").await;
+    assert_buffer_contains(renderer.writer(), "Fix login redirect");
+    assert_buffer_not_contains(renderer.writer(), "Billing cleanup");
+}
 
 #[tokio::test]
 async fn test_prompt_done_clears_running_tool_spinner() {

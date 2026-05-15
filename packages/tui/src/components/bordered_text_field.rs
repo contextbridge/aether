@@ -21,11 +21,17 @@ pub struct BorderedTextField {
     pub inner: TextField,
     label: String,
     width: usize,
+    placeholder: Option<String>,
 }
 
 impl BorderedTextField {
     pub fn new(label: impl Into<String>, value: String) -> Self {
-        Self { inner: TextField::new(value), label: label.into(), width: 0 }
+        Self { inner: TextField::new(value), label: label.into(), width: 0, placeholder: None }
+    }
+
+    pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {
+        self.placeholder = Some(placeholder.into());
+        self
     }
 
     pub fn set_width(&mut self, width: usize) {
@@ -89,7 +95,10 @@ impl BorderedTextField {
         focused: bool,
     ) -> Line {
         let content_width = width.saturating_sub(HORIZONTAL_PADDING);
-        let inner_line = self.inner.render_field(context, focused).into_iter().next().unwrap_or_default();
+        let inner_line = self.placeholder.as_ref().filter(|_| self.inner.value.is_empty()).map_or_else(
+            || self.inner.render_field(context, focused).into_iter().next().unwrap_or_default(),
+            |placeholder| Line::with_style(placeholder.clone(), Style::fg(context.theme.muted())),
+        );
         let clipped = truncate_line(&inner_line, content_width);
 
         let mut row = Line::default();
