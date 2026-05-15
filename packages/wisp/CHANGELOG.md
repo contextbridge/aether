@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.11](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.10...aether-wisp-v0.4.11) - 2026-05-15
+
+### Fixed
+
+- *(wisp)* Allow multi line input in prompt via shift+tab ([#73](https://github.com/contextbridge/aether/pull/73))
+- make Tab key confirm selection in picker components ([#69](https://github.com/contextbridge/aether/pull/69))
+
 ## [0.4.10](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.9...aether-wisp-v0.4.10) - 2026-05-15
 
 ### Fixed

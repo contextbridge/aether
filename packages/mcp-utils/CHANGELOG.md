@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.7](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.5.6...aether-mcp-utils-v0.5.7) - 2026-05-15
+
+### Fixed
+
+- *(mcp)* populate token_received_at in MCP credential store to enable rmcp refresh ([#72](https://github.com/contextbridge/aether/pull/72))
+
 ## [0.5.6](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.5.5...aether-mcp-utils-v0.5.6) - 2026-05-15
 
 ### Fixed
