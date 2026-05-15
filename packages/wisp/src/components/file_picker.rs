@@ -248,6 +248,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn handle_key_tab_requests_confirmation() {
+        let mut picker = FilePicker::new_with_entries(vec![file_match("src/main.rs")]);
+
+        let outcome = picker.on_event(&Event::Key(key(KeyCode::Tab))).await;
+
+        assert!(outcome.is_some());
+
+        assert!(matches!(outcome.unwrap().as_slice(), [PickerMessage::Confirm(_)]));
+    }
+
+    #[tokio::test]
+    async fn handle_key_tab_with_no_matches_closes() {
+        let mut picker = FilePicker::new_with_entries(vec![]);
+
+        let outcome = picker.on_event(&Event::Key(key(KeyCode::Tab))).await;
+
+        assert!(outcome.is_some());
+
+        assert!(matches!(outcome.unwrap().as_slice(), [PickerMessage::Close]));
+    }
+
+    #[tokio::test]
     async fn backspace_with_empty_query_closes_and_pops() {
         let mut picker = FilePicker::new_with_entries(vec![file_match("src/main.rs")]);
 

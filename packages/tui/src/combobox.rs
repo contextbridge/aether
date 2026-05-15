@@ -167,7 +167,7 @@ impl<T: Searchable + Send + Sync + 'static> Combobox<T> {
 
     /// Standard event dispatch for picker-style components.
     ///
-    /// Handles Escape, Up/Down, Enter (confirm), Char (query + whitespace-close),
+    /// Handles Escape, Up/Down, Tab/Enter (confirm), Char (query + whitespace-close),
     /// Backspace, and `BackspaceOnEmpty`. Returns `PickerMessage<T>` for each action.
     pub fn handle_picker_event(&mut self, event: &crate::components::Event) -> Option<Vec<PickerMessage<T>>> {
         let crate::components::Event::Key(key_event) = event else {
@@ -184,7 +184,7 @@ impl<T: Searchable + Send + Sync + 'static> Combobox<T> {
                 self.move_down();
                 Some(vec![])
             }
-            PickerKey::Confirm => {
+            PickerKey::Tab | PickerKey::Confirm => {
                 if let Some(item) = self.selected().cloned() {
                     Some(vec![PickerMessage::Confirm(item)])
                 } else {
@@ -204,7 +204,6 @@ impl<T: Searchable + Send + Sync + 'static> Combobox<T> {
             }
             PickerKey::MoveLeft
             | PickerKey::MoveRight
-            | PickerKey::Tab
             | PickerKey::BackTab
             | PickerKey::ControlChar
             | PickerKey::Other => Some(vec![]),
