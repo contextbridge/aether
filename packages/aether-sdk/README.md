@@ -60,19 +60,19 @@ yourself in a `finally` block.
 
 `AetherSessionOptions` lets you pick the initial agent or model:
 
-| Option            | Notes                                                                |
-| ----------------- | -------------------------------------------------------------------- |
-| `agent`           | Mode name from `.aether/settings.json` (e.g. `planner`).             |
-| `model`           | Direct model id (e.g. `anthropic:claude-sonnet-4-5`).                |
-| `reasoningEffort` | `"low"`, `"medium"`, `"high"`, `"xhigh"`.                            |
-| `settings`        | Inline Aether settings object using the `.aether/settings.json` shape. |
-| `settingsFile`    | Path to an alternate settings JSON file.                              |
-| `cwd`             | Working directory for the spawned `aether acp` process.              |
-| `binaryPath`      | Override the bundled `@aether-agent/cli` binary (absolute path or name on `PATH`). |
-| `tools`           | Closure-backed TypeScript tool groups keyed by Aether tool prefix.   |
-| `externalMcpServers` | External stdio/http/sse MCP servers keyed by Aether tool prefix.   |
-| `providers`       | Provider connection overrides, keyed by provider (for example `{ bedrock: { url: "http://127.0.0.1:8787", auth: "none" } }`). |
-| `abortSignal`     | Cancel the active session and tear the subprocess down.              |
+| Option               | Notes                                                                                                                         |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `agent`              | Mode name from `.aether/settings.json` (e.g. `planner`).                                                                      |
+| `model`              | Direct model id (e.g. `anthropic:claude-sonnet-4-5`).                                                                         |
+| `reasoningEffort`    | `"low"`, `"medium"`, `"high"`, `"xhigh"`.                                                                                     |
+| `settings`           | Inline Aether settings object using the `.aether/settings.json` shape.                                                        |
+| `settingsFile`       | Path to an alternate settings JSON file.                                                                                      |
+| `cwd`                | Working directory for the spawned `aether acp` process.                                                                       |
+| `binaryPath`         | Override the bundled `@aether-agent/cli` binary (absolute path or name on `PATH`).                                            |
+| `tools`              | Closure-backed TypeScript tool groups keyed by Aether tool prefix.                                                            |
+| `externalMcpServers` | External stdio/http/sse MCP servers keyed by Aether tool prefix.                                                              |
+| `providers`          | Provider connection overrides, keyed by provider (for example `{ bedrock: { url: "http://127.0.0.1:8787", auth: "none" } }`). |
+| `abortSignal`        | Cancel the active session and tear the subprocess down.                                                                       |
 
 `agent` and `model` are mutually exclusive. `settings` and `settingsFile` are
 mutually exclusive. These are forwarded to the spawned `aether acp` process as
@@ -87,6 +87,21 @@ signs auth:
 await AetherSession.start({
   model: "bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0",
   providers: { bedrock: { url: "http://127.0.0.1:8787", auth: "none" } },
+});
+```
+
+For Bedrock inference profiles, keep `model` as the Bedrock foundation model ID
+and pass the profile ARN as the Bedrock provider request target:
+
+```ts
+await AetherSession.start({
+  model: "bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0",
+  providers: {
+    bedrock: {
+      inferenceProfileArn:
+        "arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/000000000000",
+    },
+  },
 });
 ```
 
@@ -130,7 +145,9 @@ const submit = createSubmitTool();
     },
   });
 
-  for await (const _message of session.prompt("Call custom__submit_answer with the final answer.")) {
+  for await (const _message of session.prompt(
+    "Call custom__submit_answer with the final answer.",
+  )) {
     void _message;
   }
 }
@@ -203,7 +220,9 @@ await AetherSession.start({ onPermissionRequest: autoApprovePermissions });
 // Custom policy.
 await AetherSession.start({
   onPermissionRequest: async (request) => {
-    return { outcome: { outcome: "selected", optionId: request.options[0].optionId } };
+    return {
+      outcome: { outcome: "selected", optionId: request.options[0].optionId },
+    };
   },
 });
 ```
