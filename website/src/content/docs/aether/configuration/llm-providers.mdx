@@ -120,6 +120,30 @@ Aether has built-in OpenAI-compatible provider configs for:
 | **Credentials**  | AWS credential chain (environment, config file, IAM role, etc.) |
 | **Model syntax** | `bedrock:<model-id>`                                            |
 
+Use the Bedrock foundation model or system profile model ID as the Aether model identity. Aether uses this value for context windows, multimodal/reasoning capability checks, and Bedrock prompt caching decisions.
+
+If you route traffic through an inference profile, configure the profile ARN as a provider override instead of putting the ARN in `model`:
+
+```json title=".aether/settings.json"
+{
+  "agents": [
+    {
+      "name": "BedrockProfile",
+      "description": "Routes Bedrock requests through an application inference profile",
+      "model": "bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "providers": {
+        "bedrock": {
+          "inferenceProfileArn": "arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/000000000000"
+        }
+      },
+      "userInvocable": true
+    }
+  ]
+}
+```
+
+Do not use `bedrock:arn:aws:bedrock:...` as the model. The ARN only identifies the request target; it does not tell Aether which model capabilities or context window to use.
+
 ### Ollama
 
 |                   |                     |
