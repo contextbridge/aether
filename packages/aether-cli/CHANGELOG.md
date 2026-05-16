@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.4](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.3...aether-agent-cli-v0.7.4) - 2026-05-16
+
+### Fixed
+
+- *(llm)* Use prompt caching on Bedrock models that support prompt caching ([#75](https://github.com/contextbridge/aether/pull/75))
+
 ## [0.7.3](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.2...aether-agent-cli-v0.7.3) - 2026-05-15
 
 ### Fixed

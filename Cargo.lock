@@ -21,7 +21,7 @@ dependencies = [
 
 [[package]]
 name = "aether-acp-utils"
-version = "0.3.13"
+version = "0.3.14"
 dependencies = [
  "aether-mcp-utils",
  "aether-utils",
@@ -41,7 +41,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-cli"
-version = "0.7.3"
+version = "0.7.4"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
@@ -75,7 +75,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-core"
-version = "0.6.3"
+version = "0.6.4"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
@@ -141,7 +141,7 @@ dependencies = [
 
 [[package]]
 name = "aether-llm"
-version = "0.7.3"
+version = "0.7.4"
 dependencies = [
  "aether-auth",
  "aether-llm-codegen",
@@ -175,7 +175,7 @@ dependencies = [
 
 [[package]]
 name = "aether-llm-codegen"
-version = "0.2.7"
+version = "0.2.8"
 dependencies = [
  "aether-utils",
  "prettyplease",
@@ -213,7 +213,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp-servers"
-version = "0.4.7"
+version = "0.4.8"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -249,7 +249,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp-utils"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "aether-auth",
  "aether-llm",
@@ -270,7 +270,7 @@ dependencies = [
 
 [[package]]
 name = "aether-project"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -324,7 +324,7 @@ dependencies = [
 
 [[package]]
 name = "aether-wisp"
-version = "0.4.11"
+version = "0.4.12"
 dependencies = [
  "aether-acp-utils",
  "aether-tui",
