@@ -132,11 +132,24 @@ impl ModelProviderParser {
             return Err(LlmError::Other("No models provided".to_string()));
         }
 
+        let bedrock_has_inference_profile_arn =
+            self.provider_connections.config_for("bedrock").inference_profile_arn.is_some();
+        let mut seen_bedrock = false;
         let mut providers = Vec::new();
         let mut first_identity: Option<LlmModel> = None;
 
         for pair in provider_model_pairs {
             let (provider_name, model) = pair.split_once(':').unwrap_or((pair, ""));
+
+            if provider_name == "bedrock" && bedrock_has_inference_profile_arn {
+                if seen_bedrock {
+                    return Err(LlmError::Other(
+                        "providers.bedrock.inferenceProfileArn cannot be used with multiple bedrock models in one alloy spec"
+                            .to_string(),
+                    ));
+                }
+                seen_bedrock = true;
+            }
 
             let factory = self
                 .factories
@@ -252,29 +265,30 @@ mod tests {
 
     #[cfg(feature = "bedrock")]
     #[tokio::test]
-    async fn test_parse_bedrock_inference_profile_arn() {
-        // ARNs (including those with extra `:` separators) must round-trip through the parser
-        // without being misinterpreted as `provider:model` splits — the parser splits on the
-        // first `:` only, so everything after `bedrock:` becomes the model string.
+    async fn test_parse_rejects_bedrock_inference_profile_arn() {
         let parser = ModelProviderParser::default();
-        let arn = "arn:aws:bedrock:us-west-2:000000000000:inference-profile/us.anthropic.claude-opus-4-7";
-        let spec = format!("bedrock:{arn}");
-        let (provider, model) = parser.parse(&spec).await.expect("Bedrock ARN should parse");
+        let spec = "bedrock:arn:aws:bedrock:us-west-2:000000000000:inference-profile/us.anthropic.claude-opus-4-7";
 
-        assert_eq!(model.to_string(), spec);
-        assert_eq!(provider.display_name(), format!("Bedrock ({arn})"));
+        let error = match parser.parse(spec).await {
+            Ok(_) => panic!("Bedrock ARN should be rejected"),
+            Err(error) => error.to_string(),
+        };
+
+        assert!(error.contains("providers.bedrock.inferenceProfileArn"), "{error}");
     }
 
     #[cfg(feature = "bedrock")]
     #[tokio::test]
-    async fn test_parse_bedrock_application_inference_profile_arn() {
+    async fn test_parse_rejects_bedrock_application_inference_profile_arn() {
         let parser = ModelProviderParser::default();
-        let arn = "arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/000000000000";
-        let spec = format!("bedrock:{arn}");
+        let spec = "bedrock:arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/000000000000";
 
-        let (_, model) = parser.parse(&spec).await.expect("Application inference profile ARN should parse");
-        assert_eq!(model.to_string(), spec);
-        assert_eq!(model.context_window(), None);
+        let error = match parser.parse(spec).await {
+            Ok(_) => panic!("Bedrock ARN should be rejected"),
+            Err(error) => error.to_string(),
+        };
+
+        assert!(error.contains("providers.bedrock.inferenceProfileArn"), "{error}");
     }
 
     #[tokio::test]
