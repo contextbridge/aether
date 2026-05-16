@@ -5,7 +5,10 @@ use llm::{ProviderAuthMode, ProviderConnectionOverride, ProviderConnectionOverri
 
 #[derive(Clone, Debug, Default, clap::Args)]
 pub struct ProviderConnectionArgs {
-    #[arg(long = "provider", value_name = "PROVIDER.url=URL|PROVIDER.auth=default|none")]
+    #[arg(
+        long = "provider",
+        value_name = "PROVIDER.url=URL|PROVIDER.auth=default|none|bedrock.inference-profile-arn=ARN"
+    )]
     pub providers: Vec<ProviderArg>,
 }
 
@@ -32,7 +35,8 @@ impl FromStr for ProviderArg {
         let (key, setting) = split_key_value(value)?;
         let (provider, field) = key
             .split_once('.')
-            .ok_or_else(|| "provider override must be PROVIDER.url=URL or PROVIDER.auth=default|none".to_string())?;
+            .ok_or_else(|| "provider override must be PROVIDER.url=URL, PROVIDER.auth=default|none, or bedrock.inference-profile-arn=ARN".to_string())?;
+
         validate_provider(provider)?;
         if setting.trim().is_empty() {
             return Err("provider value cannot be empty".to_string());
@@ -44,7 +48,13 @@ impl FromStr for ProviderArg {
                 ProviderConnectionOverride::url(setting)
             }
             "auth" => ProviderConnectionOverride::auth(parse_auth_mode(setting)?),
-            _ => return Err("provider override field must be url or auth".to_string()),
+            "inference-profile-arn" => {
+                if provider != "bedrock" {
+                    return Err("inference-profile-arn is only supported for the bedrock provider".to_string());
+                }
+                ProviderConnectionOverride::inference_profile_arn(setting)
+            }
+            _ => return Err("provider override field must be url, auth, or inference-profile-arn".to_string()),
         };
 
         Ok(Self { provider: provider.to_string(), connection })
@@ -104,13 +114,39 @@ mod tests {
     #[test]
     fn combines_repeated_provider_overrides() {
         let args = ProviderConnectionArgs {
-            providers: vec!["bedrock.url=http://127.0.0.1:8787".parse().unwrap(), "bedrock.auth=none".parse().unwrap()],
+            providers: vec![
+                "bedrock.url=http://127.0.0.1:8787".parse().unwrap(),
+                "bedrock.auth=none".parse().unwrap(),
+                "bedrock.inference-profile-arn=arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/000000000000"
+                    .parse()
+                    .unwrap(),
+            ],
         };
 
         let config = args.into_overrides().config_for("bedrock");
 
         assert_eq!(config.base_url.as_deref(), Some("http://127.0.0.1:8787"));
         assert_eq!(config.auth_mode, ProviderAuthMode::None);
+        assert_eq!(
+            config.inference_profile_arn.as_deref(),
+            Some("arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/000000000000")
+        );
+    }
+
+    #[test]
+    fn parses_bedrock_inference_profile_arn() {
+        let arg: ProviderArg =
+            "bedrock.inference-profile-arn=arn:aws:bedrock:us-west-2:000000000000:inference-profile/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+                .parse()
+                .unwrap();
+
+        assert_eq!(arg.provider, "bedrock");
+        assert_eq!(
+            arg.connection.inference_profile_arn.as_deref(),
+            Some(
+                "arn:aws:bedrock:us-west-2:000000000000:inference-profile/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+            )
+        );
     }
 
     #[test]
@@ -122,5 +158,6 @@ mod tests {
         assert!("bedrock.url=file:///tmp/proxy".parse::<ProviderArg>().is_err());
         assert!("bedrock.auth=disabled".parse::<ProviderArg>().is_err());
         assert!("bedrock.region=us-west-2".parse::<ProviderArg>().is_err());
+        assert!("openai.inference-profile-arn=arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/000000000000".parse::<ProviderArg>().is_err());
     }
 }
