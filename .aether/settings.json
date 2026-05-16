@@ -4,16 +4,16 @@
   "agents": [
     {
       "name": "Planner",
-      "description": "Codex GPT-5.5 with high reasoning",
+      "description": "Codex GPT-5.5 with xhigh reasoning",
       "model": "codex:gpt-5.5",
-      "reasoningEffort": "high",
+      "reasoningEffort": "xhigh",
       "userInvocable": true
     },
     {
-      "name": "Builder",
-      "description": "Codex GPT-5.3 Codex with high reasoning",
-      "model": "codex:gpt-5.3-codex",
-      "reasoningEffort": "high",
+      "name": "Implementor",
+      "description": "Codex GPT-5.5 with medium reasoning",
+      "model": "codex:gpt-5.5",
+      "reasoningEffort": "medium",
       "userInvocable": true
     },
     {
