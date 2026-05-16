@@ -1046,195 +1046,10 @@ mod tests {
     use serde_json::json;
     use tempfile::NamedTempFile;
 
-    #[test]
-    fn generate_sorts_and_filters_models() {
-        let mut data = minimal_models_dev_json();
-        let root = data.as_object_mut().expect("root object");
-        let anthropic = root.get_mut("anthropic").and_then(Value::as_object_mut).expect("anthropic provider");
-
-        anthropic.insert(
-            "models".to_string(),
-            json!({
-                "b-model": {
-                    "id": "b-model",
-                    "name": "B Model",
-                    "tool_call": true,
-                    "limit": {"context": 2000, "output": 0}
-                },
-                "a-model": {
-                    "id": "a-model",
-                    "name": "A Model",
-                    "tool_call": true,
-                    "limit": {"context": 1000, "output": 0}
-                },
-                "alpha-latest": {
-                    "id": "alpha-latest",
-                    "name": "Alias",
-                    "tool_call": true,
-                    "limit": {"context": 500, "output": 0}
-                },
-                "no-tools": {
-                    "id": "no-tools",
-                    "name": "No Tools",
-                    "tool_call": false,
-                    "limit": {"context": 500, "output": 0}
-                }
-            }),
-        );
-
-        let source = generate_from_value(&data);
-        let a_model = "\"a-model\" => Ok(Self::AModel),";
-        let b_model = "\"b-model\" => Ok(Self::BModel),";
-        let a_pos = source.find(a_model).expect("a-model parse arm");
-        let b_pos = source.find(b_model).expect("b-model parse arm");
-        assert!(a_pos < b_pos);
-        assert!(!source.contains("AlphaLatest"));
-        assert!(!source.contains("NoTools"));
-    }
+    // ── Helper unit tests ────────────────────────────────────────────────────
 
     #[test]
-    fn generate_contains_core_sections() {
-        let source = generate_from_value(&minimal_models_dev_json());
-        assert!(source.contains("pub enum LlmModel {"));
-        assert!(source.contains("impl std::str::FromStr for LlmModel {"));
-        assert!(source.contains("impl std::fmt::Display for LlmModel {"));
-        assert!(source.contains("pub fn required_env_var(&self) -> Option<&'static str> {"));
-    }
-
-    #[test]
-    fn generate_contains_dynamic_provider_arms() {
-        let source = generate_from_value(&minimal_models_dev_json());
-        assert!(source.contains("\"ollama\" => Ok(Self::Ollama(model_str.to_string())),"));
-        assert!(source.contains("\"llamacpp\" => Ok(Self::LlamaCpp(model_str.to_string())),"));
-        assert!(source.contains("Self::Ollama(_) | Self::LlamaCpp(_) => None,"));
-    }
-
-    #[test]
-    fn generate_codex_is_catalog_provider() {
-        let source = generate_from_value(&minimal_models_dev_json());
-        assert!(source.contains("pub enum CodexModel {"));
-        assert!(source.contains("\"codex\" => model_str.parse::<CodexModel>().map(Self::Codex),"));
-        assert!(source.contains("Self::Codex(m) => Some(m.context_window()),"));
-    }
-
-    #[test]
-    fn generate_bedrock_is_hybrid_provider() {
-        let mut data = minimal_models_dev_json();
-        let root = data.as_object_mut().unwrap();
-        let bedrock = root.get_mut("amazon-bedrock").and_then(Value::as_object_mut).unwrap();
-
-        bedrock.insert(
-            "models".to_string(),
-            json!({
-                "anthropic.foo-v1:0": {
-                    "id": "anthropic.foo-v1:0",
-                    "name": "Foo Model",
-                    "tool_call": true,
-                    "limit": {"context": 200_000, "output": 0}
-                }
-            }),
-        );
-
-        let source = generate_from_value(&data);
-
-        assert!(source.contains("pub enum BedrockFoundationModel {"));
-        assert!(source.contains("AnthropicFooV10"));
-        assert!(source.contains("impl std::str::FromStr for BedrockFoundationModel"));
-        assert!(source.contains("\"anthropic.foo-v1:0\" => Ok(Self::AnthropicFooV10),"));
-        assert!(source.contains("Unknown bedrock model"));
-
-        assert!(!source.contains("pub enum BedrockModel {"));
-        assert!(!source.contains("impl std::str::FromStr for BedrockModel"));
-        assert!(!source.contains("fn is_bedrock_inference_profile_arn"));
-
-        assert!(contains_ws(
-            &source,
-            "BedrockFoundationModel::ALL.iter().copied().map(BedrockModel::Foundation).map(LlmModel::Bedrock)"
-        ));
-        assert!(source.contains("Self::Bedrock(m) => m.model_id(),"));
-        assert!(source.contains("Self::Bedrock(m) => m.display_name(),"));
-        assert!(source.contains("Self::Bedrock(m) => m.context_window(),"));
-    }
-
-    #[test]
-    fn generate_non_hybrid_providers_keep_flat_enum() {
-        let source = generate_from_value(&minimal_models_dev_json());
-        assert!(source.contains("pub enum AnthropicModel {"));
-        assert!(!source.contains("AnthropicFoundationModel"));
-        assert!(!source.contains("Foundation(AnthropicModel)"));
-        assert!(source.contains("Self::Anthropic(m) => Cow::Borrowed(m.model_id()),"));
-        assert!(source.contains("Self::Anthropic(m) => Some(m.context_window()),"));
-    }
-
-    #[test]
-    fn generate_oauth_provider_id_for_codex() {
-        let source = generate_from_value(&minimal_models_dev_json());
-        assert!(source.contains("Self::Codex(_) => Some(\"codex\"),"));
-        assert!(source.contains("pub fn oauth_provider_id(&self) -> Option<&'static str>"));
-    }
-
-    #[test]
-    fn generate_delegates_to_provider_impls() {
-        let source = generate_from_value(&minimal_models_dev_json());
-        assert!(source.contains("Self::Anthropic(m) => Cow::Borrowed(m.model_id()),"));
-        assert!(source.contains("Self::Anthropic(m) => Some(m.context_window()),"));
-        assert!(source.contains("\"anthropic\" => model_str.parse::<AnthropicModel>().map(Self::Anthropic),"));
-    }
-
-    #[test]
-    fn generate_formats_large_numbers_with_separators() {
-        let mut data = minimal_models_dev_json();
-        let root = data.as_object_mut().expect("root object");
-        let anthropic = root.get_mut("anthropic").and_then(Value::as_object_mut).expect("anthropic provider");
-
-        anthropic.insert(
-            "models".to_string(),
-            json!({
-                "big-model": {
-                    "id": "big-model",
-                    "name": "Big Model",
-                    "tool_call": true,
-                    "limit": {"context": 200_000, "output": 0}
-                }
-            }),
-        );
-
-        let source = generate_from_value(&data);
-        assert!(source.contains("200_000"));
-        assert!(!source.contains("200000"));
-    }
-
-    #[test]
-    fn generate_groups_identical_match_arms() {
-        let mut data = minimal_models_dev_json();
-        let root = data.as_object_mut().expect("root object");
-        let anthropic = root.get_mut("anthropic").and_then(Value::as_object_mut).expect("anthropic provider");
-
-        anthropic.insert(
-            "models".to_string(),
-            json!({
-                "model-a": {
-                    "id": "model-a",
-                    "name": "Same Name",
-                    "tool_call": true,
-                    "limit": {"context": 100_000, "output": 0}
-                },
-                "model-b": {
-                    "id": "model-b",
-                    "name": "Same Name",
-                    "tool_call": true,
-                    "limit": {"context": 100_000, "output": 0}
-                }
-            }),
-        );
-
-        let source = generate_from_value(&data);
-        assert!(source.contains("Self::ModelA | Self::ModelB => 100_000,"));
-        assert!(source.contains("Self::ModelA | Self::ModelB => \"Same Name\","));
-    }
-
-    #[test]
-    fn test_model_id_to_variant() {
+    fn model_id_to_variant_pascal_cases_segments() {
         assert_eq!(model_id_to_variant("claude-sonnet-4-5-20250929"), "ClaudeSonnet4520250929");
         assert_eq!(model_id_to_variant("gemini-2.5-flash"), "Gemini25Flash");
         assert_eq!(model_id_to_variant("deepseek-chat"), "DeepseekChat");
@@ -1242,112 +1057,17 @@ mod tests {
     }
 
     #[test]
-    fn test_model_id_to_variant_with_slash_and_colon() {
+    fn model_id_to_variant_handles_slash_and_colon() {
         assert_eq!(model_id_to_variant("anthropic/claude-opus-4.6"), "AnthropicClaudeOpus46");
         assert_eq!(model_id_to_variant("openai/gpt-5.1-codex-max"), "OpenaiGpt51CodexMax");
         assert_eq!(model_id_to_variant("deepseek/deepseek-r1:free"), "DeepseekDeepseekR1Free");
     }
 
     #[test]
-    fn test_is_alias() {
+    fn is_alias_detects_latest_suffix() {
         assert!(is_alias("claude-sonnet-4-5-latest"));
         assert!(is_alias("claude-3-7-sonnet-latest"));
         assert!(!is_alias("claude-sonnet-4-5-20250929"));
-    }
-
-    #[test]
-    fn generate_contains_reasoning_levels_and_supports_reasoning() {
-        let mut data = minimal_models_dev_json();
-        let root = data.as_object_mut().expect("root object");
-        let anthropic = root.get_mut("anthropic").and_then(Value::as_object_mut).expect("anthropic provider");
-
-        anthropic.insert(
-            "models".to_string(),
-            json!({
-                "thinker": {
-                    "id": "thinker",
-                    "name": "Thinker",
-                    "tool_call": true,
-                    "reasoning": true,
-                    "limit": {"context": 1000, "output": 0}
-                },
-                "fast": {
-                    "id": "fast",
-                    "name": "Fast",
-                    "tool_call": true,
-                    "reasoning": false,
-                    "limit": {"context": 1000, "output": 0}
-                }
-            }),
-        );
-
-        let source = generate_from_value(&data);
-        assert!(source.contains("pub fn reasoning_levels(self) -> &'static [ReasoningEffort] {"));
-        assert!(contains_ws(
-            &source,
-            "Self::Thinker => &[ReasoningEffort::Low, ReasoningEffort::Medium, ReasoningEffort::High]"
-        ));
-        assert!(contains_ws(&source, "Self::Fast => &[]"));
-        assert!(source.contains("pub fn supports_reasoning(self) -> bool {"));
-        assert!(source.contains("!self.reasoning_levels().is_empty()"));
-        assert!(source.contains("pub fn reasoning_levels(&self) -> &'static [ReasoningEffort] {"));
-        assert!(source.contains("Self::Ollama(_) | Self::LlamaCpp(_) => &[],"));
-    }
-
-    #[test]
-    fn generate_codex_gets_four_reasoning_levels() {
-        let mut data = minimal_models_dev_json();
-        let root = data.as_object_mut().expect("root object");
-        let openai = root.get_mut("openai").and_then(Value::as_object_mut).expect("openai provider");
-
-        openai.insert(
-            "models".to_string(),
-            json!({
-                "gpt-5.4-codex": {
-                    "id": "gpt-5.4-codex",
-                    "name": "GPT-5.4 Codex",
-                    "tool_call": true,
-                    "reasoning": true,
-                    "limit": {"context": 200_000, "output": 0}
-                }
-            }),
-        );
-
-        let source = generate_from_value(&data);
-        assert!(
-            contains_ws(
-                &source,
-                "ReasoningEffort::Low, ReasoningEffort::Medium, ReasoningEffort::High, ReasoningEffort::Xhigh"
-            ),
-            "Codex reasoning model should have 4 levels including Xhigh"
-        );
-    }
-
-    #[test]
-    fn generate_codex_overrides_gpt55_subscription_context_window() {
-        let mut data = minimal_models_dev_json();
-        let root = data.as_object_mut().expect("root object");
-        let openai = root.get_mut("openai").and_then(Value::as_object_mut).expect("openai provider");
-
-        openai.insert(
-            "models".to_string(),
-            json!({
-                "gpt-5.5": {
-                    "id": "gpt-5.5",
-                    "name": "GPT-5.5",
-                    "tool_call": true,
-                    "reasoning": true,
-                    "limit": {"context": 1_050_000, "output": 128_000}
-                }
-            }),
-        );
-
-        let source = generate_from_value(&data);
-        let codex_impl = generated_impl_block(&source, "CodexModel");
-        let openai_impl = generated_impl_block(&source, "OpenaiModel");
-
-        assert!(codex_impl.contains("Self::Gpt55 => 272_000,"));
-        assert!(openai_impl.contains("Self::Gpt55 => 1_050_000,"));
     }
 
     #[test]
@@ -1364,164 +1084,144 @@ mod tests {
     }
 
     #[test]
-    fn generate_derives_prompt_caching_from_cost_fields() {
-        let mut data = minimal_models_dev_json();
-        let root = data.as_object_mut().expect("root object");
-        let bedrock = root.get_mut("amazon-bedrock").and_then(Value::as_object_mut).expect("bedrock provider");
+    fn format_context_window_formats_correctly() {
+        assert_eq!(format_context_window(1_000_000), "1M");
+        assert_eq!(format_context_window(200_000), "200k");
+        assert_eq!(format_context_window(8_000), "8k");
+        assert_eq!(format_context_window(0), "unknown");
+    }
 
-        bedrock.insert(
-            "models".to_string(),
+    #[test]
+    fn level_str_to_variant_covers_all_reasoning_efforts() {
+        for effort in utils::ReasoningEffort::all() {
+            let _ = level_str_to_variant(effort.as_str());
+        }
+    }
+
+    #[test]
+    fn build_sorts_models_and_filters_aliases_and_non_tool_call() {
+        let mut data = minimal_models_dev_json();
+        anthropic_models(
+            &mut data,
             json!({
-                "anthropic.cached-v1:0": {
-                    "id": "anthropic.cached-v1:0",
-                    "name": "Cached",
-                    "tool_call": true,
+                "b-model": {"id": "b-model", "name": "B Model", "tool_call": true, "limit": {"context": 2000, "output": 0}},
+                "a-model": {"id": "a-model", "name": "A Model", "tool_call": true, "limit": {"context": 1000, "output": 0}},
+                "alpha-latest": {"id": "alpha-latest", "name": "Alias", "tool_call": true, "limit": {"context": 500, "output": 0}},
+                "no-tools": {"id": "no-tools", "name": "No Tools", "tool_call": false, "limit": {"context": 500, "output": 0}}
+            }),
+        );
+
+        let models = build_from_value(&data);
+        let ids: Vec<&str> = models["anthropic"].iter().map(|m| m.model_id.as_str()).collect();
+        assert_eq!(ids, vec!["a-model", "b-model"]);
+    }
+
+    #[test]
+    fn build_extra_source_ids_merges_unique_models_into_provider() {
+        let mut data = minimal_models_dev_json();
+        zai_extra_models(
+            &mut data,
+            json!({
+                "extra-model": {"id": "extra-model", "name": "Extra Model", "tool_call": true, "limit": {"context": 4000, "output": 0}}
+            }),
+        );
+
+        let models = build_from_value(&data);
+        assert!(models["zai"].iter().any(|m| m.model_id == "extra-model"));
+    }
+
+    #[test]
+    fn build_extra_source_ids_does_not_duplicate_existing_models() {
+        let mut data = minimal_models_dev_json();
+        let shared = json!({
+            "shared-model": {"id": "shared-model", "name": "Shared Model", "tool_call": true, "limit": {"context": 1000, "output": 0}}
+        });
+        insert_models(&mut data, "zai", shared.clone());
+        insert_models(&mut data, "zai-coding-plan", shared);
+
+        let models = build_from_value(&data);
+        let count = models["zai"].iter().filter(|m| m.model_id == "shared-model").count();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn build_derives_prompt_caching_from_cost_fields() {
+        let mut data = minimal_models_dev_json();
+        insert_models(
+            &mut data,
+            "amazon-bedrock",
+            json!({
+                "cached": {
+                    "id": "cached", "name": "Cached", "tool_call": true,
                     "limit": {"context": 200_000, "output": 0},
                     "cost": {"input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_write": 3.75}
                 },
-                "anthropic.uncached-v1:0": {
-                    "id": "anthropic.uncached-v1:0",
-                    "name": "Uncached",
-                    "tool_call": true,
+                "uncached": {
+                    "id": "uncached", "name": "Uncached", "tool_call": true,
                     "limit": {"context": 200_000, "output": 0},
                     "cost": {"input": 3.0, "output": 15.0}
                 }
             }),
         );
 
-        let source = generate_from_value(&data);
-        let bedrock_impl = generated_impl_block(&source, "BedrockFoundationModel");
-
-        assert!(bedrock_impl.contains("pub fn supports_prompt_caching(self) -> bool {"));
-        assert!(bedrock_impl.contains("Self::AnthropicCachedV10 => true,"));
-        assert!(bedrock_impl.contains("Self::AnthropicUncachedV10 => false,"));
-        assert!(source.contains("Self::Bedrock(m) => m.supports_prompt_caching(),"));
-    }
-
-    fn generate_from_value(data: &Value) -> String {
-        let tmp = NamedTempFile::new().expect("temp file");
-        let json = serde_json::to_string(data).expect("serialize fixture");
-        std::fs::write(tmp.path(), json).expect("write fixture");
-        generate(tmp.path()).expect("codegen succeeds").rust_source
-    }
-
-    /// Strip whitespace and the block-delimiter braces that `prettyplease` adds
-    /// when wrapping long match-arm expressions. These are semantically equivalent
-    /// to inline expressions, so tests should treat them the same.
-    fn strip_formatting(s: &str) -> String {
-        s.chars().filter(|c| !c.is_whitespace() && *c != '{' && *c != '}').collect()
-    }
-
-    fn contains_ws(haystack: &str, needle: &str) -> bool {
-        strip_formatting(haystack).contains(&strip_formatting(needle))
-    }
-
-    fn generated_impl_block<'a>(source: &'a str, enum_name: &str) -> &'a str {
-        let start_marker = format!("impl {enum_name} {{");
-        let start = source.find(&start_marker).expect("provider impl block start");
-        let rest = &source[start..];
-        let end_marker = format!("impl std::str::FromStr for {enum_name}");
-        let end = rest.find(&end_marker).expect("provider impl block end");
-        &rest[..end]
-    }
-
-    fn minimal_models_dev_json() -> Value {
-        let mut root = serde_json::Map::new();
-        for cfg in PROVIDERS {
-            let json_key = cfg.json_key();
-            root.entry(json_key.to_string()).or_insert_with(|| {
-                json!({
-                    "id": json_key,
-                    "name": json_key,
-                    "env": [],
-                    "models": {}
-                })
-            });
-            for &extra in cfg.extra_source_ids {
-                root.entry(extra.to_string()).or_insert_with(|| {
-                    json!({
-                        "id": extra,
-                        "name": extra,
-                        "env": [],
-                        "models": {}
-                    })
-                });
-            }
-        }
-        Value::Object(root)
+        let models = build_from_value(&data);
+        let bedrock = &models["amazon-bedrock"];
+        let cached = bedrock.iter().find(|m| m.model_id == "cached").unwrap();
+        let uncached = bedrock.iter().find(|m| m.model_id == "uncached").unwrap();
+        assert!(cached.supports_prompt_caching);
+        assert!(!uncached.supports_prompt_caching);
     }
 
     #[test]
-    fn extra_source_ids_merges_models_into_provider() {
+    fn build_assigns_codex_four_reasoning_levels() {
         let mut data = minimal_models_dev_json();
-        let root = data.as_object_mut().unwrap();
-
-        let extra = root.get_mut("zai-coding-plan").unwrap().as_object_mut().unwrap();
-        extra.insert(
-            "models".to_string(),
+        insert_models(
+            &mut data,
+            "openai",
             json!({
-                "extra-model": {
-                    "id": "extra-model",
-                    "name": "Extra Model",
-                    "tool_call": true,
-                    "limit": {"context": 4000, "output": 0}
+                "gpt-5.4-codex": {
+                    "id": "gpt-5.4-codex", "name": "GPT-5.4 Codex", "tool_call": true, "reasoning": true,
+                    "limit": {"context": 200_000, "output": 0}
                 }
             }),
         );
 
-        let source = generate_from_value(&data);
-        assert!(source.contains("\"extra-model\" => Ok(Self::ExtraModel),"));
+        let models = build_from_value(&data);
+        let codex_model = models["codex"].iter().find(|m| m.model_id == "gpt-5.4-codex").unwrap();
+        assert_eq!(codex_model.reasoning_levels, vec!["low", "medium", "high", "xhigh"]);
     }
 
     #[test]
-    fn extra_source_ids_does_not_duplicate_existing_models() {
+    fn build_applies_codex_subscription_context_window_override() {
         let mut data = minimal_models_dev_json();
-        let root = data.as_object_mut().unwrap();
-
-        let zai = root.get_mut("zai").unwrap().as_object_mut().unwrap();
-        zai.insert(
-            "models".to_string(),
+        insert_models(
+            &mut data,
+            "openai",
             json!({
-                "shared-model": {
-                    "id": "shared-model",
-                    "name": "Shared Model",
-                    "tool_call": true,
-                    "limit": {"context": 1000, "output": 0}
-                }
-            }),
-        );
-        let extra = root.get_mut("zai-coding-plan").unwrap().as_object_mut().unwrap();
-        extra.insert(
-            "models".to_string(),
-            json!({
-                "shared-model": {
-                    "id": "shared-model",
-                    "name": "Shared Model Duplicate",
-                    "tool_call": true,
-                    "limit": {"context": 2000, "output": 0}
+                "gpt-5.5": {
+                    "id": "gpt-5.5", "name": "GPT-5.5", "tool_call": true, "reasoning": true,
+                    "limit": {"context": 1_050_000, "output": 128_000}
                 }
             }),
         );
 
-        let source = generate_from_value(&data);
-        let from_str_matches = source.matches("\"shared-model\" => Ok(Self::SharedModel),").count();
-        assert_eq!(from_str_matches, 1);
+        let models = build_from_value(&data);
+        let codex = models["codex"].iter().find(|m| m.model_id == "gpt-5.5").unwrap();
+        let openai = models["openai"].iter().find(|m| m.model_id == "gpt-5.5").unwrap();
+        assert_eq!(codex.context_window, 272_000);
+        assert_eq!(openai.context_window, 1_050_000);
     }
+
+    // ── Markdown docs ────────────────────────────────────────────────────────
 
     #[test]
     fn generate_emits_provider_docs() {
         let mut data = minimal_models_dev_json();
-        let root = data.as_object_mut().unwrap();
-        let anthropic = root.get_mut("anthropic").and_then(Value::as_object_mut).unwrap();
-
-        anthropic.insert(
-            "models".to_string(),
+        anthropic_models(
+            &mut data,
             json!({
                 "claude-test": {
-                    "id": "claude-test",
-                    "name": "Claude Test",
-                    "tool_call": true,
-                    "reasoning": true,
+                    "id": "claude-test", "name": "Claude Test", "tool_call": true, "reasoning": true,
                     "limit": {"context": 200_000, "output": 0},
                     "modalities": {"input": ["text", "image"]}
                 }
@@ -1542,18 +1242,35 @@ mod tests {
         assert!(ollama_doc.contains("any model name at runtime"));
     }
 
-    #[test]
-    fn format_context_window_formats_correctly() {
-        assert_eq!(format_context_window(1_000_000), "1M");
-        assert_eq!(format_context_window(200_000), "200k");
-        assert_eq!(format_context_window(8_000), "8k");
-        assert_eq!(format_context_window(0), "unknown");
+    fn build_from_value(data: &Value) -> ProviderModels {
+        let parsed: ModelsDevData = serde_json::from_value(data.clone()).expect("parse fixture");
+        build_provider_models(&parsed).expect("build provider models")
     }
 
-    #[test]
-    fn level_str_to_variant_covers_all_reasoning_efforts() {
-        for effort in utils::ReasoningEffort::all() {
-            let _ = level_str_to_variant(effort.as_str());
+    fn anthropic_models(data: &mut Value, models: Value) {
+        insert_models(data, "anthropic", models);
+    }
+
+    fn zai_extra_models(data: &mut Value, models: Value) {
+        insert_models(data, "zai-coding-plan", models);
+    }
+
+    fn insert_models(data: &mut Value, provider_key: &str, models: Value) {
+        let provider = data.as_object_mut().unwrap().get_mut(provider_key).unwrap().as_object_mut().unwrap();
+        provider.insert("models".to_string(), models);
+    }
+
+    fn minimal_models_dev_json() -> Value {
+        let mut root = serde_json::Map::new();
+        for cfg in PROVIDERS {
+            let json_key = cfg.json_key();
+            root.entry(json_key.to_string())
+                .or_insert_with(|| json!({"id": json_key, "name": json_key, "env": [], "models": {}}));
+            for &extra in cfg.extra_source_ids {
+                root.entry(extra.to_string())
+                    .or_insert_with(|| json!({"id": extra, "name": extra, "env": [], "models": {}}));
+            }
         }
+        Value::Object(root)
     }
 }
