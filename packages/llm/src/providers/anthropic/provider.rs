@@ -302,7 +302,7 @@ mod tests {
     fn build_headers_skips_api_key_when_auth_is_none() {
         let provider = AnthropicProvider::new(None)
             .unwrap()
-            .with_connection(ProviderConnectionConfig { base_url: None, auth_mode: ProviderAuthMode::None });
+            .with_connection(ProviderConnectionConfig { auth_mode: ProviderAuthMode::None, ..Default::default() });
         let headers = provider.build_headers().expect("headers");
         assert!(headers.get("x-api-key").is_none());
         assert_eq!(headers.get("anthropic-version").and_then(|value| value.to_str().ok()), Some("2023-06-01"));

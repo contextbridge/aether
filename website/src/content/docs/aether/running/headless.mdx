@@ -43,23 +43,31 @@ aether headless --model anthropic:claude-sonnet-4-5-20250929 \
   "Summarize the architecture"
 ```
 
+Use `--provider` for provider-specific request routing and connection overrides. For Bedrock inference profiles, keep `--model` as the Bedrock model ID and pass the ARN separately:
+
+```bash
+aether headless --model bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0 \
+  --provider bedrock.inference-profile-arn=arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/000000000000 \
+  "Summarize the architecture"
+```
+
 ## Flags
 
-| Flag                | Type                     | Description                                                        |
-| ------------------- | ------------------------ | ------------------------------------------------------------------ |
-| `[PROMPT]...`       | positional               | Prompt text. Reads stdin if omitted and stdin is not a TTY.        |
-| `-a, --agent`       | `string`                 | Named agent from settings. Defaults to first user-invocable agent. |
-| `-m, --model`       | `string`                 | Ad-hoc model spec. Mutually exclusive with `--agent`.              |
-| `-C, --cwd`         | `path`                   | Working directory. Defaults to `.`.                                |
-| `--settings-json`   | `string`                 | Inline settings JSON.                                              |
-| `--settings-file`   | `path`                   | Settings JSON file.                                                |
-| `--mcp-config`      | `path`                   | Additional MCP config file. Repeatable.                            |
-| `--mcp-config-json` | `string`                 | Additional inline MCP config JSON. Repeatable.                     |
-| `--system-prompt`   | `string`                 | Additional system prompt text.                                     |
-| `--output`          | `text \| pretty \| json` | Output format. Defaults to `text`.                                 |
-| `-v, --verbose`     | flag                     | Verbose diagnostic logging to stderr.                              |
-| `--events`          | comma-separated list     | Event kinds to emit. Omit to emit all.                             |
-| `--sandbox-image`   | `string`                 | Run inside a Docker sandbox using the given image.                 |
+| Flag                | Type                     | Description                                                                                       |
+| ------------------- | ------------------------ | ------------------------------------------------------------------------------------------------- |
+| `[PROMPT]...`       | positional               | Prompt text. Reads stdin if omitted and stdin is not a TTY.                                       |
+| `-a, --agent`       | `string`                 | Named agent from settings. Defaults to first user-invocable agent.                                |
+| `-m, --model`       | `string`                 | Ad-hoc model spec. Mutually exclusive with `--agent`.                                             |
+| `-C, --cwd`         | `path`                   | Working directory. Defaults to `.`.                                                               |
+| `--settings-json`   | `string`                 | Inline settings JSON.                                                                             |
+| `--settings-file`   | `path`                   | Settings JSON file.                                                                               |
+| `--mcp-config`      | `path`                   | Additional MCP config file. Repeatable.                                                           |
+| `--mcp-config-json` | `string`                 | Additional inline MCP config JSON. Repeatable.                                                    |
+| `--system-prompt`   | `string`                 | Additional system prompt text.                                                                    |
+| `--output`          | `text \| pretty \| json` | Output format. Defaults to `text`.                                                                |
+| `-v, --verbose`     | flag                     | Verbose diagnostic logging to stderr.                                                             |
+| `--events`          | comma-separated list     | Event kinds to emit. Omit to emit all.                                                            |
+| `--provider`        | `provider.field=value`   | Provider override. Supports `PROVIDER.url`, `PROVIDER.auth`, and `bedrock.inference-profile-arn`. |
 
 `--sandbox-image` is a global CLI flag, so it can appear before the subcommand or in the subcommand options shown by help.
 

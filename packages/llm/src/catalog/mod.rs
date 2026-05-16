@@ -2,6 +2,10 @@
 
 use crate::providers::local::discovery::discover_local_models;
 
+mod bedrock;
+
+pub use bedrock::BedrockModel;
+
 include!(concat!(env!("OUT_DIR"), "/generated.rs"));
 
 /// Returns models whose provider env var is set
@@ -54,6 +58,25 @@ mod tests {
     fn openai_gpt55_keeps_api_context_window() {
         let model: LlmModel = "openai:gpt-5.5".parse().unwrap();
         assert_eq!(model.context_window(), Some(1_050_000));
+    }
+
+    #[test]
+    fn bedrock_foundation_model_parses() {
+        let model: LlmModel = "bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0".parse().unwrap();
+
+        assert_eq!(model.to_string(), "bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0");
+        assert_eq!(model.context_window(), Some(200_000));
+    }
+
+    #[test]
+    fn bedrock_prompt_caching_support_comes_from_catalog() {
+        let claude: LlmModel = "bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0".parse().unwrap();
+        let nova: LlmModel = "bedrock:amazon.nova-lite-v1:0".parse().unwrap();
+        let profile: LlmModel = "bedrock:us.anthropic.claude-future-model-v99:0".parse().unwrap();
+
+        assert!(claude.supports_prompt_caching());
+        assert!(nova.supports_prompt_caching());
+        assert!(!profile.supports_prompt_caching());
     }
 
     #[test]

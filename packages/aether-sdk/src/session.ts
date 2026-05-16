@@ -150,6 +150,11 @@ export class AetherSession {
         args.push("--provider", `${provider}.url=${connection.url}`);
       if (connection.auth)
         args.push("--provider", `${provider}.auth=${connection.auth}`);
+      if (connection.inferenceProfileArn)
+        args.push(
+          "--provider",
+          `${provider}.inference-profile-arn=${connection.inferenceProfileArn}`,
+        );
     }
     if (logDir) args.push("--log-dir", logDir);
 

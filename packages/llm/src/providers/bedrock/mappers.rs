@@ -1,7 +1,7 @@
 use aws_sdk_bedrockruntime::types::{
-    ContentBlock as BedrockContentBlock, ConversationRole, ImageBlock, ImageFormat, ImageSource, Message,
-    SystemContentBlock, Tool, ToolConfiguration, ToolInputSchema, ToolResultBlock, ToolResultContentBlock,
-    ToolResultStatus, ToolSpecification, ToolUseBlock,
+    CachePointBlock, CachePointType, ContentBlock as BedrockContentBlock, ConversationRole, ImageBlock, ImageFormat,
+    ImageSource, Message, SystemContentBlock, Tool, ToolConfiguration, ToolInputSchema, ToolResultBlock,
+    ToolResultContentBlock, ToolResultStatus, ToolSpecification, ToolUseBlock,
 };
 use aws_smithy_types::{Blob, Document, Number};
 use base64::Engine;
@@ -15,7 +15,10 @@ fn bedrock_err(e: impl Display) -> LlmError {
     LlmError::Other(e.to_string())
 }
 
-pub fn map_messages(messages: &[ChatMessage]) -> Result<(Vec<SystemContentBlock>, Vec<Message>)> {
+pub fn map_messages(
+    messages: &[ChatMessage],
+    cache_point: Option<&CachePointBlock>,
+) -> Result<(Vec<SystemContentBlock>, Vec<Message>)> {
     let mut system_blocks = Vec::new();
     let mut bedrock_messages = Vec::new();
     let mut pending_tool_results = Vec::new();
@@ -54,12 +57,25 @@ pub fn map_messages(messages: &[ChatMessage]) -> Result<(Vec<SystemContentBlock>
     }
 
     flush_tool_results(&mut pending_tool_results, &mut bedrock_messages)?;
+    if let Some(cache_point) = cache_point {
+        if !system_blocks.is_empty() {
+            system_blocks.push(SystemContentBlock::CachePoint(cache_point.clone()));
+        }
+        if let Some(last) = bedrock_messages.pop() {
+            let mut builder = Message::builder().role(last.role().clone());
+            for block in last.content() {
+                builder = builder.content(block.clone());
+            }
+            builder = builder.content(BedrockContentBlock::CachePoint(cache_point.clone()));
+            bedrock_messages.push(builder.build().map_err(bedrock_err)?);
+        }
+    }
 
     Ok((system_blocks, bedrock_messages))
 }
 
-pub fn map_tools(tools: &[ToolDefinition]) -> Result<ToolConfiguration> {
-    let bedrock_tools: Vec<Tool> = tools
+pub fn map_tools(tools: &[ToolDefinition], cache_point: Option<&CachePointBlock>) -> Result<ToolConfiguration> {
+    let mut bedrock_tools: Vec<Tool> = tools
         .iter()
         .map(|tool| {
             let schema_value: serde_json::Value = serde_json::from_str(&tool.parameters)
@@ -74,7 +90,17 @@ pub fn map_tools(tools: &[ToolDefinition]) -> Result<ToolConfiguration> {
         })
         .collect::<Result<_>>()?;
 
+    if let Some(cache_point) = cache_point
+        && !bedrock_tools.is_empty()
+    {
+        bedrock_tools.push(Tool::CachePoint(cache_point.clone()));
+    }
+
     ToolConfiguration::builder().set_tools(Some(bedrock_tools)).build().map_err(bedrock_err)
+}
+
+pub fn default_cache_point() -> Result<CachePointBlock> {
+    CachePointBlock::builder().r#type(CachePointType::Default).build().map_err(bedrock_err)
 }
 
 fn build_user_message(content: &str) -> Result<Message> {
@@ -212,12 +238,46 @@ mod tests {
     use crate::tools::{ToolCallError, ToolCallRequest, ToolCallResult};
     use crate::types::IsoString;
 
+    fn user_message(text: &str) -> ChatMessage {
+        ChatMessage::User { content: vec![ContentBlock::text(text)], timestamp: IsoString::now() }
+    }
+
+    fn assistant_message(content: &str, tool_calls: Vec<ToolCallRequest>) -> ChatMessage {
+        ChatMessage::Assistant {
+            content: content.to_string(),
+            reasoning: AssistantReasoning::default(),
+            timestamp: IsoString::now(),
+            tool_calls,
+        }
+    }
+
+    fn tool_call(id: &str, name: &str, arguments: &str) -> ToolCallRequest {
+        ToolCallRequest { id: id.to_string(), name: name.to_string(), arguments: arguments.to_string() }
+    }
+
+    fn tool_result_ok(id: &str, name: &str, arguments: &str, result: &str) -> ChatMessage {
+        ChatMessage::ToolCallResult(Ok(ToolCallResult {
+            id: id.to_string(),
+            name: name.to_string(),
+            arguments: arguments.to_string(),
+            result: result.to_string(),
+        }))
+    }
+
+    fn tool_result_err(id: &str, name: &str, error: &str) -> ChatMessage {
+        ChatMessage::ToolCallResult(Err(ToolCallError {
+            id: id.to_string(),
+            name: name.to_string(),
+            arguments: None,
+            error: error.to_string(),
+        }))
+    }
+
     #[test]
     fn test_map_simple_user_message() {
-        let messages =
-            vec![ChatMessage::User { content: vec![ContentBlock::text("Hello")], timestamp: IsoString::now() }];
+        let messages = vec![user_message("Hello")];
 
-        let (system, mapped) = map_messages(&messages).unwrap();
+        let (system, mapped) = map_messages(&messages, None).unwrap();
         assert!(system.is_empty());
         assert_eq!(mapped.len(), 1);
         assert_eq!(mapped[0].role(), &ConversationRole::User);
@@ -235,7 +295,7 @@ mod tests {
             timestamp: IsoString::now(),
         }];
 
-        let (_system, mapped) = map_messages(&messages).unwrap();
+        let (_system, mapped) = map_messages(&messages, None).unwrap();
         assert_eq!(mapped[0].content().len(), 2);
         assert!(mapped[0].content()[0].is_text());
         assert!(mapped[0].content()[1].is_image());
@@ -251,17 +311,17 @@ mod tests {
             timestamp: IsoString::now(),
         }];
 
-        assert!(matches!(map_messages(&messages), Err(LlmError::UnsupportedContent(_))));
+        assert!(matches!(map_messages(&messages, None), Err(LlmError::UnsupportedContent(_))));
     }
 
     #[test]
     fn test_map_system_message() {
         let messages = vec![
             ChatMessage::System { content: "You are helpful".to_string(), timestamp: IsoString::now() },
-            ChatMessage::User { content: vec![ContentBlock::text("Hello")], timestamp: IsoString::now() },
+            user_message("Hello"),
         ];
 
-        let (system, mapped) = map_messages(&messages).unwrap();
+        let (system, mapped) = map_messages(&messages, None).unwrap();
         assert_eq!(system.len(), 1);
         assert!(system[0].is_text());
         assert_eq!(mapped.len(), 1);
@@ -269,18 +329,10 @@ mod tests {
 
     #[test]
     fn test_map_assistant_with_tool_calls() {
-        let messages = vec![ChatMessage::Assistant {
-            content: "I'll help".to_string(),
-            reasoning: AssistantReasoning::default(),
-            timestamp: IsoString::now(),
-            tool_calls: vec![ToolCallRequest {
-                id: "call_1".to_string(),
-                name: "search".to_string(),
-                arguments: r#"{"query": "test"}"#.to_string(),
-            }],
-        }];
+        let messages =
+            vec![assistant_message("I'll help", vec![tool_call("call_1", "search", r#"{"query": "test"}"#)])];
 
-        let (_system, mapped) = map_messages(&messages).unwrap();
+        let (_system, mapped) = map_messages(&messages, None).unwrap();
         assert_eq!(mapped.len(), 1);
         assert_eq!(mapped[0].role(), &ConversationRole::Assistant);
 
@@ -292,18 +344,9 @@ mod tests {
 
     #[test]
     fn test_map_assistant_tool_calls_without_text() {
-        let messages = vec![ChatMessage::Assistant {
-            content: String::new(),
-            reasoning: AssistantReasoning::default(),
-            timestamp: IsoString::now(),
-            tool_calls: vec![ToolCallRequest {
-                id: "call_1".to_string(),
-                name: "search".to_string(),
-                arguments: r#"{"query": "test"}"#.to_string(),
-            }],
-        }];
+        let messages = vec![assistant_message("", vec![tool_call("call_1", "search", r#"{"query": "test"}"#)])];
 
-        let (_system, mapped) = map_messages(&messages).unwrap();
+        let (_system, mapped) = map_messages(&messages, None).unwrap();
         let content = mapped[0].content();
         // Empty text should not be included
         assert_eq!(content.len(), 1);
@@ -312,14 +355,9 @@ mod tests {
 
     #[test]
     fn test_map_tool_result_success() {
-        let messages = vec![ChatMessage::ToolCallResult(Ok(ToolCallResult {
-            id: "call_1".to_string(),
-            name: "search".to_string(),
-            arguments: "{}".to_string(),
-            result: "found it".to_string(),
-        }))];
+        let messages = vec![tool_result_ok("call_1", "search", "{}", "found it")];
 
-        let (_system, mapped) = map_messages(&messages).unwrap();
+        let (_system, mapped) = map_messages(&messages, None).unwrap();
         assert_eq!(mapped.len(), 1);
         assert_eq!(mapped[0].role(), &ConversationRole::User);
 
@@ -330,14 +368,9 @@ mod tests {
 
     #[test]
     fn test_map_tool_result_error() {
-        let messages = vec![ChatMessage::ToolCallResult(Err(ToolCallError {
-            id: "call_1".to_string(),
-            name: "search".to_string(),
-            arguments: None,
-            error: "not found".to_string(),
-        }))];
+        let messages = vec![tool_result_err("call_1", "search", "not found")];
 
-        let (_system, mapped) = map_messages(&messages).unwrap();
+        let (_system, mapped) = map_messages(&messages, None).unwrap();
         assert_eq!(mapped.len(), 1);
 
         let content = mapped[0].content();
@@ -348,38 +381,18 @@ mod tests {
     #[test]
     fn test_map_consecutive_tool_results_into_single_user_message() {
         let messages = vec![
-            ChatMessage::Assistant {
-                content: String::new(),
-                reasoning: AssistantReasoning::default(),
-                timestamp: IsoString::now(),
-                tool_calls: vec![
-                    ToolCallRequest {
-                        id: "call_1".to_string(),
-                        name: "find".to_string(),
-                        arguments: r#"{"pattern":"**/*.ts"}"#.to_string(),
-                    },
-                    ToolCallRequest {
-                        id: "call_2".to_string(),
-                        name: "find".to_string(),
-                        arguments: r#"{"pattern":"**/package.json"}"#.to_string(),
-                    },
+            assistant_message(
+                "",
+                vec![
+                    tool_call("call_1", "find", r#"{"pattern":"**/*.ts"}"#),
+                    tool_call("call_2", "find", r#"{"pattern":"**/package.json"}"#),
                 ],
-            },
-            ChatMessage::ToolCallResult(Ok(ToolCallResult {
-                id: "call_1".to_string(),
-                name: "find".to_string(),
-                arguments: r#"{"pattern":"**/*.ts"}"#.to_string(),
-                result: "17 files".to_string(),
-            })),
-            ChatMessage::ToolCallResult(Ok(ToolCallResult {
-                id: "call_2".to_string(),
-                name: "find".to_string(),
-                arguments: r#"{"pattern":"**/package.json"}"#.to_string(),
-                result: "2 files".to_string(),
-            })),
+            ),
+            tool_result_ok("call_1", "find", r#"{"pattern":"**/*.ts"}"#, "17 files"),
+            tool_result_ok("call_2", "find", r#"{"pattern":"**/package.json"}"#, "2 files"),
         ];
 
-        let (_system, mapped) = map_messages(&messages).unwrap();
+        let (_system, mapped) = map_messages(&messages, None).unwrap();
         assert_eq!(mapped.len(), 2);
         assert_eq!(mapped[0].role(), &ConversationRole::Assistant);
         assert_eq!(mapped[1].role(), &ConversationRole::User);
@@ -395,7 +408,7 @@ mod tests {
     fn test_map_error_message() {
         let messages = vec![ChatMessage::Error { message: "something broke".to_string(), timestamp: IsoString::now() }];
 
-        let (_system, mapped) = map_messages(&messages).unwrap();
+        let (_system, mapped) = map_messages(&messages, None).unwrap();
         assert_eq!(mapped.len(), 1);
         assert_eq!(mapped[0].role(), &ConversationRole::User);
         match &mapped[0].content()[0] {
@@ -412,7 +425,7 @@ mod tests {
             messages_compacted: 10,
         }];
 
-        let (_system, mapped) = map_messages(&messages).unwrap();
+        let (_system, mapped) = map_messages(&messages, None).unwrap();
         assert_eq!(mapped.len(), 1);
         match &mapped[0].content()[0] {
             BedrockContentBlock::Text(text) => {
@@ -432,7 +445,7 @@ mod tests {
             server: None,
         }];
 
-        let config = map_tools(&tools).unwrap();
+        let config = map_tools(&tools, None).unwrap();
         assert_eq!(config.tools().len(), 1);
         match &config.tools()[0] {
             Tool::ToolSpec(spec) => {
@@ -444,6 +457,100 @@ mod tests {
     }
 
     #[test]
+    fn system_cache_point_is_added_when_cache_point_provided() {
+        let messages = vec![
+            ChatMessage::System { content: "You are helpful".to_string(), timestamp: IsoString::now() },
+            user_message("Hello"),
+        ];
+        let cache_point = default_cache_point().unwrap();
+
+        let (system, _mapped) = map_messages(&messages, Some(&cache_point)).unwrap();
+
+        assert_eq!(system.len(), 2);
+        assert!(system[0].is_text());
+        assert!(system[1].is_cache_point());
+    }
+
+    #[test]
+    fn system_cache_point_is_not_added_without_system_content() {
+        let messages = vec![user_message("Hello")];
+        let cache_point = default_cache_point().unwrap();
+
+        let (system, _mapped) = map_messages(&messages, Some(&cache_point)).unwrap();
+
+        assert!(system.is_empty());
+    }
+
+    #[test]
+    fn message_cache_point_is_added_to_last_user_message() {
+        let messages = vec![user_message("Hello")];
+        let cache_point = default_cache_point().unwrap();
+
+        let (_system, mapped) = map_messages(&messages, Some(&cache_point)).unwrap();
+
+        assert_eq!(mapped.len(), 1);
+        let content = mapped[0].content();
+        assert_eq!(content.len(), 2);
+        assert!(content[0].is_text());
+        assert!(content[1].is_cache_point());
+    }
+
+    #[test]
+    fn message_cache_point_is_added_only_to_last_message_in_multi_turn_history() {
+        let messages = vec![user_message("turn 1"), assistant_message("ack", vec![]), user_message("turn 2")];
+        let cache_point = default_cache_point().unwrap();
+
+        let (_system, mapped) = map_messages(&messages, Some(&cache_point)).unwrap();
+
+        assert!(mapped[0].content().iter().all(|b| !b.is_cache_point()));
+        assert!(mapped[1].content().iter().all(|b| !b.is_cache_point()));
+        assert!(mapped[2].content().last().unwrap().is_cache_point());
+    }
+
+    #[test]
+    fn message_cache_point_is_added_to_tool_result_message() {
+        let messages = vec![
+            user_message("search please"),
+            assistant_message("", vec![tool_call("call_1", "search", "{}")]),
+            tool_result_ok("call_1", "search", "{}", "found"),
+        ];
+        let cache_point = default_cache_point().unwrap();
+        let (_system, mapped) = map_messages(&messages, Some(&cache_point)).unwrap();
+
+        let last = mapped.last().unwrap();
+        assert_eq!(last.role(), &ConversationRole::User);
+        assert!(last.content().last().unwrap().is_cache_point());
+    }
+
+    #[test]
+    fn message_cache_points_not_added_when_cache_point_is_none() {
+        let messages = vec![user_message("turn 1"), assistant_message("ack", vec![]), user_message("turn 2")];
+
+        let (_system, mapped) = map_messages(&messages, None).unwrap();
+
+        for msg in &mapped {
+            assert!(msg.content().iter().all(|b| !b.is_cache_point()));
+        }
+    }
+
+    #[test]
+    fn tool_cache_point_is_added_when_cache_point_provided() {
+        let tools = vec![ToolDefinition {
+            name: "search".to_string(),
+            description: "Search for information".to_string(),
+            parameters: r#"{"type": "object", "properties": {"query": {"type": "string"}}}"#.to_string(),
+            server: None,
+        }];
+        let cache_point = default_cache_point().unwrap();
+
+        let config = map_tools(&tools, Some(&cache_point)).unwrap();
+
+        assert_eq!(config.tools().len(), 2);
+        assert!(config.tools()[0].is_tool_spec());
+        assert!(config.tools()[1].is_cache_point());
+    }
+
+    #[test]
     fn test_map_tools_invalid_json() {
         let tools = vec![ToolDefinition {
             name: "broken".to_string(),
@@ -452,7 +559,7 @@ mod tests {
             server: None,
         }];
 
-        let result = map_tools(&tools);
+        let result = map_tools(&tools, None);
         assert!(result.is_err());
         match result.unwrap_err() {
             LlmError::ToolParameterParsing { tool_name, .. } => {

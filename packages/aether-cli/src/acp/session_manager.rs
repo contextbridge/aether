@@ -382,11 +382,10 @@ fn validate_prompt_support(model_value: &str, content: &[ContentBlock]) -> Resul
 mod tests {
     use super::*;
     use agent_client_protocol::schema::{InitializeRequest, ProtocolVersion};
-    use llm::catalog::BedrockModel;
 
     const SONNET: &str = "anthropic:claude-sonnet-4-5";
     const DEEPSEEK: &str = "deepseek:deepseek-chat";
-    const BEDROCK_PROFILE_ARN: &str =
+    const BEDROCK_ARN_AS_MODEL_REJECTED: &str =
         "bedrock:arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/000000000000";
 
     fn mock_oauth_store() -> Arc<dyn OAuthCredentialStorage> {
@@ -450,11 +449,10 @@ mod tests {
     }
 
     #[test]
-    fn parse_available_model_accepts_bedrock_inference_profile_arn() {
+    fn parse_available_model_rejects_bedrock_inference_profile_arn() {
         let available: Vec<LlmModel> = Vec::new();
-        let parsed = parse_available_model(BEDROCK_PROFILE_ARN, &available)
-            .expect("Bedrock inference-profile ARN should be accepted");
-        assert!(matches!(parsed, LlmModel::Bedrock(BedrockModel::Profile(_))));
+        let error = parse_available_model(BEDROCK_ARN_AS_MODEL_REJECTED, &available).unwrap_err();
+        assert_eq!(error, acp::Error::invalid_params());
     }
 
     #[test]

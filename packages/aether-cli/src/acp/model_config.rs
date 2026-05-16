@@ -4,7 +4,7 @@ use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::AgentSpec;
 use agent_client_protocol::schema::{self as acp, SessionConfigOption, SessionConfigOptionCategory};
 use llm::ReasoningEffort;
-use llm::catalog::{BedrockModel, LlmModel};
+use llm::catalog::LlmModel;
 use std::collections::{BTreeMap, HashSet};
 
 fn needs_oauth_login(model: &LlmModel, store: &dyn OAuthCredentialStorage) -> bool {
@@ -29,12 +29,7 @@ pub(crate) fn unavailable_reason(model: &LlmModel, store: &dyn OAuthCredentialSt
 }
 
 pub(crate) fn model_exists(available: &[LlmModel], model_str: &str) -> bool {
-    model_str.split(',').map(str::trim).all(|part| {
-        if matches!(part.parse::<LlmModel>(), Ok(LlmModel::Bedrock(BedrockModel::Profile(_)))) {
-            return true;
-        }
-        available.iter().any(|m| m.to_string() == part)
-    })
+    model_str.split(',').map(str::trim).all(|part| available.iter().any(|m| m.to_string() == part))
 }
 
 pub(crate) fn effective_model<'a>(active_model: &'a str, pending_model: Option<&'a str>) -> &'a str {
@@ -262,13 +257,14 @@ mod tests {
     use aether_auth::FakeOAuthCredentialStore;
     use aether_core::agent_spec::{AgentSpecExposure, ToolFilter};
     use agent_client_protocol::schema::{SessionConfigKind, SessionConfigSelectOption, SessionConfigSelectOptions};
-    use llm::catalog::{AnthropicModel, DeepSeekModel, GeminiModel};
+    use llm::catalog::{AnthropicModel, BedrockFoundationModel, BedrockModel, DeepSeekModel, GeminiModel};
 
     fn test_models() -> Vec<LlmModel> {
         vec![
             LlmModel::Anthropic(AnthropicModel::ClaudeSonnet45),
             LlmModel::Anthropic(AnthropicModel::ClaudeOpus46),
             LlmModel::DeepSeek(DeepSeekModel::DeepseekChat),
+            LlmModel::Bedrock(BedrockModel::Foundation(BedrockFoundationModel::AnthropicClaudeSonnet4520250929V10)),
             LlmModel::Gemini(GeminiModel::Gemini25Pro),
         ]
     }
@@ -409,20 +405,13 @@ mod tests {
     }
 
     #[test]
-    fn model_exists_accepts_bedrock_inference_profile_arn() {
-        let models = test_models();
-        let arn = "bedrock:arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/000000000000";
-        assert!(model_exists(&models, arn), "Bedrock inference-profile ARN should be accepted");
-    }
-
-    #[test]
-    fn validated_modes_from_specs_keeps_agent_with_bedrock_profile_arn() {
-        let arn = "bedrock:arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/000000000000";
-        let specs = vec![spec("BedrockAgent", arn, None)];
+    fn validated_modes_from_specs_keeps_agent_with_bedrock_foundation_model() {
+        let bedrock_model = "bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0";
+        let specs = vec![spec("BedrockAgent", bedrock_model, None)];
         let modes = validated_modes_from_specs(&specs, &test_models());
         assert_eq!(modes.len(), 1);
         assert_eq!(modes[0].name, "BedrockAgent");
-        assert_eq!(modes[0].model, arn);
+        assert_eq!(modes[0].model, bedrock_model);
     }
 
     #[test]

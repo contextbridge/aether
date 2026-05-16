@@ -16,17 +16,21 @@ async fn main() -> ExitCode {
 
     let mut args = env::args().skip(1);
     let Some(model) = args.next() else {
-        eprintln!("usage: bedrock_inference_profile <arn-or-profile-id> [prompt]");
+        eprintln!("usage: bedrock_inference_profile <model-id> <inference-profile-arn> [prompt]");
+        return ExitCode::from(2);
+    };
+    let Some(arn) = args.next() else {
+        eprintln!("usage: bedrock_inference_profile <model-id> <inference-profile-arn> [prompt]");
         return ExitCode::from(2);
     };
     let prompt = args.next().unwrap_or_else(|| "Say hello in one sentence.".to_string());
 
-    let provider = BedrockProvider::new().await.with_model(&model);
+    let provider = BedrockProvider::new().await.with_model(&model).with_inference_profile_arn(&arn);
     println!("→ {}", provider.display_name());
 
     match provider.context_window() {
         Some(n) => println!("  context window: {n} (resolved from catalog)"),
-        None => println!("  context window: unknown (Profile pass-through)"),
+        None => println!("  context window: unknown (model not in catalog)"),
     }
     println!("  prompt: {prompt}\n");
 

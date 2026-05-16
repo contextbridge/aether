@@ -51,6 +51,10 @@ struct CostData {
     input: f64,
     #[serde(default)]
     output: f64,
+    #[serde(default)]
+    cache_read: Option<f64>,
+    #[serde(default)]
+    cache_write: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -60,6 +64,12 @@ struct LimitData {
     #[serde(default)]
     #[allow(dead_code)]
     output: u32,
+}
+
+impl CostData {
+    fn has_prompt_caching(&self) -> bool {
+        self.cache_read.is_some() || self.cache_write.is_some()
+    }
 }
 
 /// Provider configuration for codegen (catalog providers with known model lists)
@@ -86,9 +96,11 @@ struct ProviderConfig {
     oauth_provider_id: Option<&'static str>,
     /// Default reasoning levels for models that support reasoning (empty = use standard 3)
     default_reasoning_levels: &'static [&'static str],
-    /// Emit a hybrid `{Enum}Model` that wraps `{Enum}FoundationModel` (catalog) plus
-    /// a `Profile(String)` variant. Used for Bedrock to accept arbitrary inference
-    /// profile IDs and ARNs at runtime.
+    /// When true, the inner catalog enum is named `{Enum}FoundationModel` and
+    /// `LlmModel::{Enum}` carries a hand-written `{Enum}Model` wrapper (defined
+    /// outside of codegen) that adds a `Profile(String)` fall-through plus any
+    /// provider-specific parsing policy. Used for Bedrock to accept arbitrary
+    /// inference profile IDs at runtime while keeping ARNs out of model identity.
     is_hybrid_dynamic: bool,
 }
 
@@ -204,6 +216,7 @@ struct ModelInfo {
     context_window: u32,
     reasoning_levels: Vec<String>,
     input_modalities: Vec<String>,
+    supports_prompt_caching: bool,
 }
 
 type ProviderModels = BTreeMap<&'static str, Vec<ModelInfo>>;
@@ -284,6 +297,7 @@ fn collect_models_from(cfg: &ProviderConfig, models: &HashMap<String, ModelData>
                 context_window,
                 reasoning_levels,
                 input_modalities,
+                supports_prompt_caching: m.cost.as_ref().is_some_and(CostData::has_prompt_caching),
             }
         })
         .collect()
@@ -352,16 +366,6 @@ fn emit_provider_enums(out: &mut String, provider_models: &ProviderModels) {
         }
         pushln(out, "}");
         blank(out);
-
-        if cfg.is_hybrid_dynamic {
-            let outer = cfg.outer_enum_name();
-            pushln(out, "#[derive(Debug, Clone, PartialEq, Eq, Hash)]");
-            pushln(out, format!("pub enum {outer} {{"));
-            pushln(out, format!("    Foundation({inner}),"));
-            pushln(out, "    Profile(String),");
-            pushln(out, "}");
-            blank(out);
-        }
     }
 }
 
@@ -419,6 +423,14 @@ fn emit_provider_impls(out: &mut String, provider_models: &ProviderModels) {
         pushln(out, "    }");
         blank(out);
 
+        // supports_prompt_caching — derived from models.dev cache pricing fields
+        pushln(out, "    pub fn supports_prompt_caching(self) -> bool {");
+        pushln(out, "        match self {");
+        emit_grouped_arms(out, models, |m| m.supports_prompt_caching.to_string(), std::string::ToString::to_string);
+        pushln(out, "        }");
+        pushln(out, "    }");
+        blank(out);
+
         for modality in ["image", "audio"] {
             pushln(out, format!("    pub fn supports_{modality}(self) -> bool {{"));
             pushln(out, "        match self {");
@@ -445,80 +457,7 @@ fn emit_provider_impls(out: &mut String, provider_models: &ProviderModels) {
         blank(out);
 
         emit_from_str_impl(out, &enum_name, cfg.parser_name, models);
-
-        if cfg.is_hybrid_dynamic {
-            emit_hybrid_wrapper_impl(out, &cfg.outer_enum_name(), cfg.enum_name);
-            emit_hybrid_wrapper_from_str(out, &cfg.outer_enum_name(), &enum_name);
-        }
     }
-}
-
-fn emit_hybrid_wrapper_impl(out: &mut String, outer_name: &str, display_prefix: &str) {
-    pushln(out, format!("impl {outer_name} {{"));
-
-    pushln(out, "    pub fn model_id(&self) -> Cow<'static, str> {");
-    pushln(out, "        match self {");
-    pushln(out, "            Self::Foundation(m) => Cow::Borrowed(m.model_id()),");
-    pushln(out, "            Self::Profile(s) => Cow::Owned(s.clone()),");
-    pushln(out, "        }");
-    pushln(out, "    }");
-    blank(out);
-
-    pushln(out, "    pub fn display_name(&self) -> Cow<'static, str> {");
-    pushln(out, "        match self {");
-    pushln(out, "            Self::Foundation(m) => Cow::Borrowed(m.display_name()),");
-    pushln(out, format!("            Self::Profile(s) => Cow::Owned(format!(\"{display_prefix} {{s}}\")),"));
-    pushln(out, "        }");
-    pushln(out, "    }");
-    blank(out);
-
-    pushln(out, "    pub fn context_window(&self) -> Option<u32> {");
-    pushln(out, "        match self {");
-    pushln(out, "            Self::Foundation(m) => Some(m.context_window()),");
-    pushln(out, "            Self::Profile(_) => None,");
-    pushln(out, "        }");
-    pushln(out, "    }");
-    blank(out);
-
-    pushln(out, "    pub fn reasoning_levels(&self) -> &'static [ReasoningEffort] {");
-    pushln(out, "        match self {");
-    pushln(out, "            Self::Foundation(m) => m.reasoning_levels(),");
-    pushln(out, "            Self::Profile(_) => &[],");
-    pushln(out, "        }");
-    pushln(out, "    }");
-    blank(out);
-
-    pushln(out, "    pub fn supports_reasoning(&self) -> bool {");
-    pushln(out, "        !self.reasoning_levels().is_empty()");
-    pushln(out, "    }");
-    blank(out);
-
-    for modality in ["image", "audio"] {
-        pushln(out, format!("    pub fn supports_{modality}(&self) -> bool {{"));
-        pushln(out, "        match self {");
-        pushln(out, format!("            Self::Foundation(m) => m.supports_{modality}(),"));
-        pushln(out, "            Self::Profile(_) => false,");
-        pushln(out, "        }");
-        pushln(out, "    }");
-        blank(out);
-    }
-
-    pushln(out, "}");
-    blank(out);
-}
-
-fn emit_hybrid_wrapper_from_str(out: &mut String, outer_name: &str, inner_name: &str) {
-    pushln(out, format!("impl std::str::FromStr for {outer_name} {{"));
-    pushln(out, "    type Err = String;");
-    blank(out);
-    pushln(out, "    fn from_str(s: &str) -> Result<Self, Self::Err> {");
-    pushln(out, format!("        match s.parse::<{inner_name}>() {{"));
-    pushln(out, "            Ok(m) => Ok(Self::Foundation(m)),");
-    pushln(out, "            Err(_) => Ok(Self::Profile(s.to_string())),");
-    pushln(out, "        }");
-    pushln(out, "    }");
-    pushln(out, "}");
-    blank(out);
 }
 
 fn emit_from_str_impl(out: &mut String, enum_name: &str, parser_name: &str, models: &[ModelInfo]) {
@@ -627,6 +566,7 @@ fn emit_llm_model_impl(out: &mut String) {
     emit_llm_oauth_provider_id(out);
     emit_llm_reasoning_levels(out);
     emit_llm_supports_reasoning(out);
+    emit_llm_supports_prompt_caching(out);
     for modality in ["image", "audio"] {
         emit_llm_supports_modality(out, modality);
     }
@@ -794,6 +734,19 @@ fn emit_llm_supports_reasoning(out: &mut String) {
     pushln(out, "    /// Whether this model supports reasoning/extended thinking");
     pushln(out, "    pub fn supports_reasoning(&self) -> bool {");
     pushln(out, "        !self.reasoning_levels().is_empty()");
+    pushln(out, "    }");
+    blank(out);
+}
+
+fn emit_llm_supports_prompt_caching(out: &mut String) {
+    pushln(out, "    /// Whether this model supports provider-side prompt caching");
+    pushln(out, "    pub fn supports_prompt_caching(&self) -> bool {");
+    pushln(out, "        match self {");
+    for cfg in PROVIDERS {
+        pushln(out, format!("            Self::{}(m) => m.supports_prompt_caching(),", cfg.enum_name));
+    }
+    pushln(out, format!("            {} => false,", dynamic_pattern_with_binding("_")));
+    pushln(out, "        }");
     pushln(out, "    }");
     blank(out);
 }
@@ -1103,25 +1056,19 @@ mod tests {
 
         assert!(source.contains("pub enum BedrockFoundationModel {"));
         assert!(source.contains("AnthropicFooV10"));
-        assert!(source.contains("pub enum BedrockModel {"));
-        assert!(source.contains("Foundation(BedrockFoundationModel)"));
-        assert!(source.contains("Profile(String)"));
         assert!(source.contains("impl std::str::FromStr for BedrockFoundationModel"));
         assert!(source.contains("\"anthropic.foo-v1:0\" => Ok(Self::AnthropicFooV10),"));
         assert!(source.contains("Unknown bedrock model"));
 
-        assert!(source.contains("impl std::str::FromStr for BedrockModel"));
-        assert!(source.contains("Err(_) => Ok(Self::Profile(s.to_string())),"));
-        assert!(source.contains("Self::Profile(s) => Cow::Owned(s.clone()),"));
-        assert!(source.contains("Self::Profile(_) => None,"));
-        assert!(source.contains("Self::Profile(_) => &[],"));
-        assert!(source.contains("Self::Profile(_) => false,"));
-        assert!(source.contains("Self::Profile(s) => Cow::Owned(format!(\"Bedrock {s}\"))"));
+        // Wrapper enum is hand-written in catalog::bedrock — codegen must NOT emit it.
+        assert!(!source.contains("pub enum BedrockModel {"));
+        assert!(!source.contains("impl std::str::FromStr for BedrockModel"));
+        assert!(!source.contains("fn is_bedrock_inference_profile_arn"));
 
+        // LlmModel still delegates to the (hand-written) wrapper.
         assert!(source.contains(
             "BedrockFoundationModel::ALL.iter().copied().map(BedrockModel::Foundation).map(LlmModel::Bedrock)"
         ));
-
         assert!(source.contains("Self::Bedrock(m) => m.model_id(),"));
         assert!(source.contains("Self::Bedrock(m) => m.display_name(),"));
         assert!(source.contains("Self::Bedrock(m) => m.context_window(),"));
@@ -1342,6 +1289,41 @@ mod tests {
     fn codex_subscription_context_window_leaves_unknown_models_unchanged() {
         assert_eq!(codex_subscription_context_window("gpt-5.3-codex-spark", 128_000), 128_000);
         assert_eq!(codex_subscription_context_window("some-future-model", 400_000), 400_000);
+    }
+
+    #[test]
+    fn generate_derives_prompt_caching_from_cost_fields() {
+        let mut data = minimal_models_dev_json();
+        let root = data.as_object_mut().expect("root object");
+        let bedrock = root.get_mut("amazon-bedrock").and_then(Value::as_object_mut).expect("bedrock provider");
+
+        bedrock.insert(
+            "models".to_string(),
+            json!({
+                "anthropic.cached-v1:0": {
+                    "id": "anthropic.cached-v1:0",
+                    "name": "Cached",
+                    "tool_call": true,
+                    "limit": {"context": 200_000, "output": 0},
+                    "cost": {"input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_write": 3.75}
+                },
+                "anthropic.uncached-v1:0": {
+                    "id": "anthropic.uncached-v1:0",
+                    "name": "Uncached",
+                    "tool_call": true,
+                    "limit": {"context": 200_000, "output": 0},
+                    "cost": {"input": 3.0, "output": 15.0}
+                }
+            }),
+        );
+
+        let source = generate_from_value(&data);
+        let bedrock_impl = generated_impl_block(&source, "BedrockFoundationModel");
+
+        assert!(bedrock_impl.contains("pub fn supports_prompt_caching(self) -> bool {"));
+        assert!(bedrock_impl.contains("Self::AnthropicCachedV10 => true,"));
+        assert!(bedrock_impl.contains("Self::AnthropicUncachedV10 => false,"));
+        assert!(source.contains("Self::Bedrock(m) => m.supports_prompt_caching(),"));
     }
 
     fn generate_from_value(data: &Value) -> String {

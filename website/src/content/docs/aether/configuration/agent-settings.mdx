@@ -50,12 +50,13 @@ The onboarding wizard creates `.aether/<AGENT>.md` for the first scaffolded agen
 
 `AetherSettings` is camelCase JSON and rejects unknown fields.
 
-| Field     | Type              | Description                                                                     |
-| --------- | ----------------- | ------------------------------------------------------------------------------- |
-| `agent`   | `string \| null`  | Optional default user-invocable agent name                                      |
-| `prompts` | `PromptSource[]`  | Top-level prompt sources inherited by agents whose own `prompts` array is empty |
-| `mcps`    | `McpSourceSpec[]` | Top-level MCP sources inherited by agents whose own `mcps` array is empty       |
-| `agents`  | `AgentConfig[]`   | Authored agent definitions                                                      |
+| Field       | Type              | Description                                                                     |
+| ----------- | ----------------- | ------------------------------------------------------------------------------- |
+| `agent`     | `string \| null`  | Optional default user-invocable agent name                                      |
+| `prompts`   | `PromptSource[]`  | Top-level prompt sources inherited by agents whose own `prompts` array is empty |
+| `mcps`      | `McpSourceSpec[]` | Top-level MCP sources inherited by agents whose own `mcps` array is empty       |
+| `agents`    | `AgentConfig[]`   | Authored agent definitions                                                      |
+| `providers` | `object`          | Optional provider-specific connection/request overrides keyed by provider       |
 
 Regenerate the reference schema from source with:
 
@@ -78,8 +79,31 @@ cargo run -p aether-project --bin aether-settings-schema > /tmp/aether-settings.
 | `prompts`         | `PromptSource[]`                                 | `[]`     | Agent-specific prompt sources. A non-empty array replaces the top-level prompt list. |
 | `mcps`            | `McpSourceSpec[]`                                | `[]`     | Agent-specific MCP sources. A non-empty array replaces the top-level MCP list.       |
 | `tools`           | `{ allow?: string[], deny?: string[] }`          | `{}`     | Tool filter applied after MCP tools are discovered.                                  |
+| `providers`       | `object`                                         | `{}`     | Agent-specific provider overrides merged with top-level `providers`.                 |
 
 Every authored agent must have at least one invocation surface: `userInvocable: true`, `agentInvocable: true`, or both.
+
+Provider overrides can be set globally or per agent. For Bedrock inference profiles, keep `model` as the foundation model ID and put the profile ARN in `providers.bedrock.inferenceProfileArn`:
+
+```json title=".aether/settings.json"
+{
+  "providers": {
+    "bedrock": {
+      "inferenceProfileArn": "arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/000000000000"
+    }
+  },
+  "agents": [
+    {
+      "name": "BedrockBuild",
+      "description": "Uses a Bedrock application inference profile",
+      "model": "bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "userInvocable": true
+    }
+  ]
+}
+```
+
+Per-agent `providers` values override matching top-level provider values for that agent.
 
 ## Sub-agent example
 
