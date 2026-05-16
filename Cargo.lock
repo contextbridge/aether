@@ -178,8 +178,12 @@ name = "aether-llm-codegen"
 version = "0.2.7"
 dependencies = [
  "aether-utils",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
  "serde",
  "serde_json",
+ "syn",
  "tempfile",
 ]
 

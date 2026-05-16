@@ -24,8 +24,12 @@ rustdoc-args = ["--cfg", "docsrs"]
 workspace = true
 
 [dependencies]
+prettyplease = "0.2.37"
+proc-macro2 = "1.0.106"
+quote = "1.0.45"
 serde = { workspace = true }
 serde_json = { workspace = true }
+syn = { version = "2.0.117", features = ["full"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
