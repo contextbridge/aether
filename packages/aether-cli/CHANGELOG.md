@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.3](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.2...aether-agent-cli-v0.7.3) - 2026-05-15
+
+### Fixed
+
+- *(aether-cli)* Crashes due to tokio stdin surfacing eagin and acp transport treating that as fatal ([#74](https://github.com/contextbridge/aether/pull/74))
+
 ## [0.7.2](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.1...aether-agent-cli-v0.7.2) - 2026-05-15
 
 ### Fixed

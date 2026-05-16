@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2](https://github.com/contextbridge/aether/compare/aether-auth-v0.1.1...aether-auth-v0.1.2) - 2026-05-15
+
+### Fixed
+
+- *(mcp)* populate token_received_at in MCP credential store to enable rmcp refresh ([#72](https://github.com/contextbridge/aether/pull/72))
+
 ## [0.1.1](https://github.com/contextbridge/aether/compare/aether-auth-v0.1.0...aether-auth-v0.1.1) - 2026-05-15
 
 ### Fixed
