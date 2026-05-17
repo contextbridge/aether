@@ -21,6 +21,7 @@ use agent_client_protocol as acp;
 use llm::ReasoningEffort;
 use std::sync::Arc;
 use std::{fs::create_dir_all, path::PathBuf};
+use thiserror::Error;
 use tracing::info;
 use tracing_appender::rolling::daily;
 use tracing_subscriber::EnvFilter;
@@ -64,25 +65,10 @@ pub enum AcpRunOutcome {
 }
 
 /// Errors that terminate the ACP server run.
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum AcpRunError {
-    Protocol(acp::Error),
-}
-
-impl std::fmt::Display for AcpRunError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            AcpRunError::Protocol(e) => write!(f, "ACP protocol error: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for AcpRunError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            AcpRunError::Protocol(e) => Some(e),
-        }
-    }
+    #[error("ACP protocol error: {0}")]
+    Protocol(#[from] acp::Error),
 }
 
 pub async fn run_acp(args: AcpArgs) -> Result<AcpRunOutcome, AcpRunError> {

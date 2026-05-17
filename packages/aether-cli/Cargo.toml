@@ -41,6 +41,7 @@ acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["
 agent-client-protocol = { workspace = true }
 aether-lspd = { path = "../aether-lspd", version = "0.1.14" }
 rmcp = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 blocking = { workspace = true }

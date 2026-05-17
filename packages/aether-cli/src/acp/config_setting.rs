@@ -1,6 +1,6 @@
 use acp_utils::config_option_id::ConfigOptionId;
 use llm::ReasoningEffort;
-use std::fmt;
+use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigSetting {
@@ -36,24 +36,13 @@ impl ConfigSetting {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ConfigSettingError {
+    #[error("Unknown config option: {0}")]
     UnknownConfigId(String),
+    #[error("Invalid value '{value}' for config option '{config_id}'")]
     InvalidValue { config_id: String, value: String },
 }
-
-impl fmt::Display for ConfigSettingError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnknownConfigId(id) => write!(f, "Unknown config option: {id}"),
-            Self::InvalidValue { config_id, value } => {
-                write!(f, "Invalid value '{value}' for config option '{config_id}'")
-            }
-        }
-    }
-}
-
-impl std::error::Error for ConfigSettingError {}
 
 #[cfg(test)]
 mod tests {

@@ -1,52 +1,34 @@
 use std::env;
-use std::fmt;
 use std::io;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 use llm::LlmModel;
+use thiserror::Error;
 
 const EXTRA_FORWARDED_KEYS: &[&str] = &["OLLAMA_HOST"];
 
 const AETHER_ENV_PREFIX: &str = "AETHER_";
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum SandboxError {
+    #[error("Docker is not installed or not in PATH")]
     DockerNotFound,
+    #[error("Docker daemon is not running: {0}")]
     DockerNotRunning(String),
+    #[error(
+        "Sandbox image '{0}' not found. Build it with:\n\
+             cargo build --release -p aether-agent-cli\n\
+             cp target/release/aether docker/\n\
+             docker build -t {0} -f docker/Dockerfile.sandbox docker/"
+    )]
     ImageNotFound(String),
-    ExecFailed(io::Error),
+    #[error("Failed to exec docker: {0}")]
+    ExecFailed(#[from] io::Error),
+    #[error("Could not determine home directory")]
     HomeNotResolvable,
 }
-
-impl fmt::Display for SandboxError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            SandboxError::DockerNotFound => {
-                write!(f, "Docker is not installed or not in PATH")
-            }
-            SandboxError::DockerNotRunning(msg) => {
-                write!(f, "Docker daemon is not running: {msg}")
-            }
-            SandboxError::ImageNotFound(image) => {
-                write!(
-                    f,
-                    "Sandbox image '{image}' not found. Build it with:\n\
-                     cargo build --release -p aether-agent-cli\n\
-                     cp target/release/aether docker/\n\
-                     docker build -t {image} -f docker/Dockerfile.sandbox docker/"
-                )
-            }
-            SandboxError::ExecFailed(err) => write!(f, "Failed to exec docker: {err}"),
-            SandboxError::HomeNotResolvable => {
-                write!(f, "Could not determine home directory")
-            }
-        }
-    }
-}
-
-impl std::error::Error for SandboxError {}
 
 /// Entry point called from `main()` when `--sandbox-image` is present.
 pub fn exec_in_container(image: &str) -> ExitCode {
