@@ -11,13 +11,40 @@ use mcp_utils::status::McpServerStatusEntry;
 
 use agent_client_protocol::schema as acp;
 use std::collections::HashSet;
+use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tracing::debug;
 
+use crate::error::CliError;
 use crate::runtime::RuntimeBuilder;
+
+#[derive(Debug)]
+pub enum SessionError {
+    Build(CliError),
+    CommandChannel(String),
+    McpOperation(String),
+}
+
+impl fmt::Display for SessionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Build(e) => write!(f, "failed to build session: {e}"),
+            Self::CommandChannel(e) => write!(f, "command channel error: {e}"),
+            Self::McpOperation(e) => write!(f, "MCP operation failed: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for SessionError {}
+
+impl From<CliError> for SessionError {
+    fn from(e: CliError) -> Self {
+        Self::Build(e)
+    }
+}
 
 /// Represents an active Aether agent session
 pub struct Session {
@@ -42,7 +69,7 @@ impl Session {
         restored_messages: Option<Vec<ChatMessage>>,
         prompt_cache_key: Option<String>,
         oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self, SessionError> {
         debug!("MCP configs: {:?}", spec.mcp_config_sources);
         debug!("Using project root: {:?}", cwd);
         let provider_connections = spec.provider_connections.clone();
@@ -71,15 +98,18 @@ impl Session {
     }
 
     /// Lists available slash commands by querying MCP prompts
-    pub async fn list_available_commands(&self) -> Result<Vec<acp::AvailableCommand>, Box<dyn std::error::Error>> {
+    pub async fn list_available_commands(&self) -> Result<Vec<acp::AvailableCommand>, SessionError> {
         let (tx, rx) = oneshot::channel();
 
         self.mcp_tx
             .send(McpCommand::ListPrompts { tx })
             .await
-            .map_err(|e| format!("Failed to send ListPrompts command: {e}"))?;
+            .map_err(|e| SessionError::CommandChannel(format!("failed to send ListPrompts command: {e}")))?;
 
-        let prompts = rx.await.map_err(|e| format!("Failed to receive prompts: {e}"))??;
+        let prompts = rx
+            .await
+            .map_err(|e| SessionError::CommandChannel(format!("failed to receive prompts: {e}")))?
+            .map_err(SessionError::McpOperation)?;
 
         let prompt_commands: Vec<_> = prompts.iter().map(map_mcp_prompt_to_available_command).collect();
 

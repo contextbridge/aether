@@ -142,23 +142,17 @@ mod tests {
 
     #[test]
     fn test_git_diff_between_commits() {
-        // Create a temporary directory for the test
         let temp_dir = tempfile::tempdir().unwrap();
         let repo_path = temp_dir.path();
 
-        // Initialize a git repo
         Command::new("git").args(["init"]).current_dir(repo_path).output().unwrap();
-
-        // Configure git user for commits
         Command::new("git").args(["config", "user.email", "test@example.com"]).current_dir(repo_path).output().unwrap();
         Command::new("git").args(["config", "user.name", "Test User"]).current_dir(repo_path).output().unwrap();
 
-        // Create initial file and commit
         fs::write(repo_path.join("test.txt"), "initial content\n").unwrap();
         Command::new("git").args(["add", "test.txt"]).current_dir(repo_path).output().unwrap();
         Command::new("git").args(["commit", "-m", "Initial commit"]).current_dir(repo_path).output().unwrap();
 
-        // Get the first commit hash
         let first_commit = String::from_utf8(
             Command::new("git").args(["rev-parse", "HEAD"]).current_dir(repo_path).output().unwrap().stdout,
         )
@@ -166,13 +160,11 @@ mod tests {
         .trim()
         .to_string();
 
-        // Make changes and create second commit
         fs::write(repo_path.join("test.txt"), "modified content\n").unwrap();
         fs::write(repo_path.join("new.txt"), "new file\n").unwrap();
         Command::new("git").args(["add", "."]).current_dir(repo_path).output().unwrap();
         Command::new("git").args(["commit", "-m", "Second commit"]).current_dir(repo_path).output().unwrap();
 
-        // Get the second commit hash
         let second_commit = String::from_utf8(
             Command::new("git").args(["rev-parse", "HEAD"]).current_dir(repo_path).output().unwrap().stdout,
         )
@@ -180,11 +172,9 @@ mod tests {
         .trim()
         .to_string();
 
-        // Test the diff function
         let git_repo = GitRepo::from_path(repo_path);
         let diff = git_repo.diff(&first_commit, &second_commit).unwrap();
 
-        // Verify the diff contains expected changes
         assert!(diff.contains("test.txt"), "Diff should mention test.txt");
         assert!(diff.contains("new.txt"), "Diff should mention new.txt");
         assert!(
@@ -195,18 +185,13 @@ mod tests {
 
     #[test]
     fn test_unified_diff_function() {
-        // Create a temporary directory for the test
         let temp_dir = tempfile::tempdir().unwrap();
         let repo_path = temp_dir.path();
 
-        // Initialize a git repo
         Command::new("git").args(["init"]).current_dir(repo_path).output().unwrap();
-
-        // Configure git user for commits
         Command::new("git").args(["config", "user.email", "test@example.com"]).current_dir(repo_path).output().unwrap();
         Command::new("git").args(["config", "user.name", "Test User"]).current_dir(repo_path).output().unwrap();
 
-        // Create initial file and commit
         fs::write(repo_path.join("test.txt"), "initial content\n").unwrap();
         Command::new("git").args(["add", "test.txt"]).current_dir(repo_path).output().unwrap();
         Command::new("git").args(["commit", "-m", "Initial commit"]).current_dir(repo_path).output().unwrap();
@@ -218,7 +203,6 @@ mod tests {
         .trim()
         .to_string();
 
-        // Make changes and create second commit
         fs::write(repo_path.join("test.txt"), "modified content\n").unwrap();
         Command::new("git").args(["add", "test.txt"]).current_dir(repo_path).output().unwrap();
         Command::new("git").args(["commit", "-m", "Second commit"]).current_dir(repo_path).output().unwrap();
@@ -230,34 +214,26 @@ mod tests {
         .trim()
         .to_string();
 
-        // Make unstaged changes
         fs::write(repo_path.join("test.txt"), "unstaged content\n").unwrap();
 
         let git_repo = GitRepo::from_path(repo_path);
 
-        // Test: diff between two specific commits
         let diff = git_repo.diff_range(&first_commit, Some(&second_commit)).unwrap();
         assert!(diff.contains("modified content") || diff.contains("+modified content"));
 
-        // Test: diff unstaged changes (from HEAD to working directory)
         let unstaged_diff = git_repo.diff_range("HEAD", None).unwrap();
         assert!(unstaged_diff.contains("unstaged content") || unstaged_diff.contains("+unstaged content"));
 
-        // Test: diff from specific commit to working directory
         let from_commit_diff = git_repo.diff_range(&first_commit, None).unwrap();
         assert!(from_commit_diff.contains("unstaged content") || from_commit_diff.contains("+unstaged content"));
     }
 
     #[test]
     fn test_blobless_clone_and_checkout() {
-        // Create a test repository to clone from
         let source_dir = tempfile::tempdir().unwrap();
         let source_path = source_dir.path();
 
-        // Initialize source repo
         Command::new("git").args(["init"]).current_dir(source_path).output().unwrap();
-
-        // Configure git user
         Command::new("git")
             .args(["config", "user.email", "test@example.com"])
             .current_dir(source_path)
@@ -265,7 +241,6 @@ mod tests {
             .unwrap();
         Command::new("git").args(["config", "user.name", "Test User"]).current_dir(source_path).output().unwrap();
 
-        // Create a file and commit
         fs::write(source_path.join("test.txt"), "initial content\n").unwrap();
         Command::new("git").args(["add", "test.txt"]).current_dir(source_path).output().unwrap();
         Command::new("git").args(["commit", "-m", "Initial commit"]).current_dir(source_path).output().unwrap();
@@ -277,7 +252,6 @@ mod tests {
         .trim()
         .to_string();
 
-        // Create another commit
         fs::write(source_path.join("test.txt"), "modified content\n").unwrap();
         Command::new("git").args(["add", "test.txt"]).current_dir(source_path).output().unwrap();
         Command::new("git").args(["commit", "-m", "Second commit"]).current_dir(source_path).output().unwrap();
@@ -289,11 +263,9 @@ mod tests {
         .trim()
         .to_string();
 
-        // Clone the repo (blobless clone with --no-checkout)
         let clone_dir = tempfile::tempdir().unwrap();
         let repo = GitRepo::clone(source_path.to_str().unwrap(), clone_dir.path()).unwrap();
 
-        // Verify working directory is empty (no files checked out)
         let entries: Vec<_> = fs::read_dir(clone_dir.path())
             .unwrap()
             .filter_map(std::result::Result::ok)
@@ -301,14 +273,11 @@ mod tests {
             .collect();
         assert_eq!(entries.len(), 0, "Working directory should be empty after blobless clone");
 
-        // Checkout the first commit
         repo.checkout(&first_commit).unwrap();
 
-        // Verify file is now present with correct content
         let content = fs::read_to_string(clone_dir.path().join("test.txt")).unwrap();
         assert_eq!(content, "initial content\n");
 
-        // Verify we can get diffs between commits (tests lazy blob fetching)
         let diff = repo.diff(&first_commit, &second_commit).unwrap();
         assert!(diff.contains("modified content") || diff.contains("+modified content"));
     }

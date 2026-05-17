@@ -52,6 +52,24 @@ impl fmt::Display for RelayError {
     }
 }
 
+enum SlashCommandError {
+    CommandChannel(String),
+    McpOperation(String),
+    NotFound(String),
+    NoTextContent,
+}
+
+impl fmt::Display for SlashCommandError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CommandChannel(e) => write!(f, "command channel error: {e}"),
+            Self::McpOperation(e) => write!(f, "MCP operation failed: {e}"),
+            Self::NotFound(name) => write!(f, "slash command '/{name}' not found"),
+            Self::NoTextContent => write!(f, "prompt result contains no text content"),
+        }
+    }
+}
+
 pub(crate) struct RelayHandle {
     pub cmd_tx: mpsc::Sender<SessionCommand>,
     pub mcp_request_tx: mpsc::Sender<McpRequest>,
@@ -382,21 +400,24 @@ async fn expand_slash_command(
     mcp_tx: &mpsc::Sender<McpCommand>,
     command_name: &str,
     args_text: &str,
-) -> Result<String, Box<dyn std::error::Error>> {
+) -> Result<String, SlashCommandError> {
     let arguments = parse_slash_command_arguments(args_text);
 
     let (tx_list, rx_list) = oneshot::channel();
     mcp_tx
         .send(McpCommand::ListPrompts { tx: tx_list })
         .await
-        .map_err(|e| format!("Failed to send ListPrompts command: {e}"))?;
+        .map_err(|e| SlashCommandError::CommandChannel(format!("failed to send ListPrompts: {e}")))?;
 
-    let prompts = rx_list.await.map_err(|e| format!("Failed to receive prompts: {e}"))??;
+    let prompts = rx_list
+        .await
+        .map_err(|e| SlashCommandError::CommandChannel(format!("failed to receive prompts: {e}")))?
+        .map_err(SlashCommandError::McpOperation)?;
 
     let matching_prompt = prompts
         .iter()
         .find(|p| p.name.split("__").last().unwrap_or("") == command_name)
-        .ok_or_else(|| format!("Slash command '{command_name}' not found"))?;
+        .ok_or_else(|| SlashCommandError::NotFound(command_name.to_string()))?;
 
     let namespaced_name = matching_prompt.name.clone();
 
@@ -404,18 +425,21 @@ async fn expand_slash_command(
     mcp_tx
         .send(McpCommand::GetPrompt { name: namespaced_name.clone(), arguments, tx: tx_get })
         .await
-        .map_err(|e| format!("Failed to send GetPrompt command: {e}"))?;
+        .map_err(|e| SlashCommandError::CommandChannel(format!("failed to send GetPrompt: {e}")))?;
 
-    let prompt_result = rx_get.await.map_err(|e| format!("Failed to receive prompt: {e}"))??;
+    let prompt_result = rx_get
+        .await
+        .map_err(|e| SlashCommandError::CommandChannel(format!("failed to receive prompt: {e}")))?
+        .map_err(SlashCommandError::McpOperation)?;
 
-    if let Some(message) = prompt_result.messages.first() {
-        match &message.content {
-            rmcp::model::PromptMessageContent::Text { text } => Ok(text.clone()),
-            _ => Err("Prompt message does not contain text content".into()),
-        }
-    } else {
-        Err("Prompt result contains no messages".into())
-    }
+    prompt_result
+        .messages
+        .first()
+        .and_then(|message| match &message.content {
+            rmcp::model::PromptMessageContent::Text { text } => Some(text.clone()),
+            _ => None,
+        })
+        .ok_or(SlashCommandError::NoTextContent)
 }
 
 /// Parse slash command arguments into a map with both positional and special variables.
