@@ -243,10 +243,8 @@ mod tests {
         let context = ViewContext::new((120, 40));
         let frame = status.render(&context);
         let text = frame.lines()[0].plain_text();
-        assert!(
-            text.contains("reasoning"),
-            "reasoning bar should be visible when reasoning_effort option exists, got: {text}"
-        );
+        assert!(text.contains("medium"), "reasoning bar should use current reasoning effort as its label, got: {text}");
+        assert!(!text.contains("reasoning"), "reasoning bar should not use a generic reasoning label, got: {text}");
     }
 
     #[test]

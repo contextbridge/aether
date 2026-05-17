@@ -190,12 +190,13 @@ fn renders_elements_with_correct_colors() {
 fn renders_reasoning_bar() {
     // Medium effort
     let line = StatusBuilder::new("wisp").model("gpt-4o").reasoning("medium").line();
-    assert!(line.contains("reasoning [■■·]"));
-    assert!(line.find("gpt-4o").unwrap() < line.find("reasoning").unwrap());
+    assert!(line.contains("medium [■■·]"));
+    assert!(line.find("gpt-4o").unwrap() < line.find("medium").unwrap());
+    assert!(!line.contains("reasoning"));
 
     // None effort shows empty bar
     let line = StatusBuilder::new("wisp").model("gpt-4o").reasoning("none").line();
-    assert!(line.contains("reasoning [···]"));
+    assert!(line.contains("none [···]"));
 
     // No model = no reasoning bar even with reasoning set
     let line = StatusBuilder::new("wisp").reasoning("high").line();

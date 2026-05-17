@@ -154,13 +154,16 @@ impl SettingsOverlay {
         matches!(self.active_pane, SettingsPane::Picker(_))
     }
 
-    fn footer_text(&self) -> &'static str {
+    fn footer_text(&self) -> String {
         match &self.active_pane {
-            SettingsPane::ModelSelector(_) => "[Space/Enter] Toggle  [Tab] Reasoning  [Esc] Done",
-            SettingsPane::Picker(_) => "[Enter] Confirm  [Esc] Back",
-            SettingsPane::ServerStatus(_) => "[Enter] Authenticate OAuth servers  [Esc] Back",
-            SettingsPane::ProviderLogin(_) => "[Enter] Authenticate  [Esc] Back",
-            SettingsPane::Menu => "[Enter] Select  [Esc] Close",
+            SettingsPane::ModelSelector(selector) => {
+                let effort = utils::ReasoningEffort::config_str(selector.reasoning_effort());
+                format!("[Space/Enter] Toggle  [Tab] Effort: {effort}  [Esc] Done")
+            }
+            SettingsPane::Picker(_) => "[Enter] Confirm  [Esc] Back".to_string(),
+            SettingsPane::ServerStatus(_) => "[Enter] Authenticate OAuth servers  [Esc] Back".to_string(),
+            SettingsPane::ProviderLogin(_) => "[Enter] Authenticate  [Esc] Back".to_string(),
+            SettingsPane::Menu => "[Enter] Select  [Esc] Close".to_string(),
         }
     }
 }
@@ -603,9 +606,10 @@ mod tests {
             SettingsOverlay::new(menu, vec![], vec![]).with_reasoning_effort_from_options(&reasoning_options);
 
         send_keys(&mut overlay, &[KeyCode::Enter]).await;
-        assert_footer_contains(&mut overlay, "Toggle");
+        assert_footer_contains(&mut overlay, "Effort: medium");
 
         send_keys(&mut overlay, &[KeyCode::Tab]).await;
+        assert_footer_contains(&mut overlay, "Effort: high");
         let messages = overlay.on_event(&Event::Key(key(KeyCode::Esc))).await.unwrap();
 
         let reasoning_msg = messages.iter().find(
