@@ -44,12 +44,20 @@ describe("AetherSession with a fake ACP agent", () => {
     ).rejects.toMatchObject({ code: "invalid_options" });
   });
 
-  it("forwards provider URL and auth overrides to the CLI", async () => {
+  it("forwards provider URL, auth, and inference profile overrides to the CLI", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "aether-sdk-"));
     const logFile = path.join(dir, "fake-aether.log");
+    const arn =
+      "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/planner-profile";
     const session = await AetherSession.start({
       binaryPath: FAKE_AETHER,
-      providers: { bedrock: { url: "http://127.0.0.1:8787", auth: "none" } },
+      providers: {
+        bedrock: {
+          url: "http://127.0.0.1:8787",
+          auth: "none",
+          inferenceProfileArn: arn,
+        },
+      },
       env: { PATH: process.env.PATH, FAKE_AETHER_LOG_FILE: logFile },
     });
 
@@ -61,6 +69,7 @@ describe("AetherSession with a fake ACP agent", () => {
       expect(argv.args).toContain("--provider");
       expect(argv.args).toContain("bedrock.url=http://127.0.0.1:8787");
       expect(argv.args).toContain("bedrock.auth=none");
+      expect(argv.args).toContain(`bedrock.inference-profile-arn=${arn}`);
     } finally {
       await session.close();
       await rm(dir, { recursive: true, force: true });
@@ -76,8 +85,13 @@ describe("AetherSession with a fake ACP agent", () => {
           {
             name: "planner",
             description: "Planner agent",
-            model:
-              "bedrock:arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/planner-profile",
+            model: "bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0",
+            providers: {
+              bedrock: {
+                inferenceProfileArn:
+                  "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/planner-profile",
+              },
+            },
             contextWindow: 200000,
             userInvocable: true,
             prompts: [{ type: "text", text: "Plan carefully." }],

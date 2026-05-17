@@ -18,8 +18,8 @@ importers:
   packages/aether-sdk:
     dependencies:
       '@aether-agent/cli':
-        specifier: ^0.7.0
-        version: 0.7.0
+        specifier: ^0.7.4
+        version: 0.7.4
       '@agentclientprotocol/sdk':
         specifier: ^0.21.0
         version: 0.21.0(zod@4.4.3)
@@ -103,8 +103,8 @@ importers:
 
 packages:
 
-  '@aether-agent/cli@0.7.0':
-    resolution: {integrity: sha512-ChExNnu6XUJKJLckW3PVGGguwbo0Ppz+FGoC9II6sYwtw+CC6a764HC2Fved1jH5OHIwGbJnU+2UdpiZElJT7Q==}
+  '@aether-agent/cli@0.7.4':
+    resolution: {integrity: sha512-aAa5AeV9l+V3jy8MHd4PlgT1FNhG+2VUr1IpeDFSVb7miPewli0Pfl9/h0vHX2tI1wT4Ku9nCwnAJmHmG2fxoA==}
     engines: {node: '>=14', npm: '>=6'}
     hasBin: true
 
@@ -3417,7 +3417,7 @@ packages:
 
 snapshots:
 
-  '@aether-agent/cli@0.7.0':
+  '@aether-agent/cli@0.7.4':
     dependencies:
       axios: 1.16.0
       axios-proxy-builder: 0.1.2

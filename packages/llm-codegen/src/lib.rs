@@ -1,5 +1,7 @@
 #![doc = include_str!("../README.md")]
 
+use proc_macro2::TokenStream;
+use quote::{ToTokens, format_ident, quote};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
@@ -51,6 +53,10 @@ struct CostData {
     input: f64,
     #[serde(default)]
     output: f64,
+    #[serde(default)]
+    cache_read: Option<f64>,
+    #[serde(default)]
+    cache_write: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -60,6 +66,12 @@ struct LimitData {
     #[serde(default)]
     #[allow(dead_code)]
     output: u32,
+}
+
+impl CostData {
+    fn has_prompt_caching(&self) -> bool {
+        self.cache_read.is_some() || self.cache_write.is_some()
+    }
 }
 
 /// Provider configuration for codegen (catalog providers with known model lists)
@@ -86,9 +98,11 @@ struct ProviderConfig {
     oauth_provider_id: Option<&'static str>,
     /// Default reasoning levels for models that support reasoning (empty = use standard 3)
     default_reasoning_levels: &'static [&'static str],
-    /// Emit a hybrid `{Enum}Model` that wraps `{Enum}FoundationModel` (catalog) plus
-    /// a `Profile(String)` variant. Used for Bedrock to accept arbitrary inference
-    /// profile IDs and ARNs at runtime.
+    /// When true, the inner catalog enum is named `{Enum}FoundationModel` and
+    /// `LlmModel::{Enum}` carries a hand-written `{Enum}Model` wrapper (defined
+    /// outside of codegen) that adds a `Profile(String)` fall-through plus any
+    /// provider-specific parsing policy. Used for Bedrock to accept arbitrary
+    /// inference profile IDs at runtime while keeping ARNs out of model identity.
     is_hybrid_dynamic: bool,
 }
 
@@ -204,6 +218,7 @@ struct ModelInfo {
     context_window: u32,
     reasoning_levels: Vec<String>,
     input_modalities: Vec<String>,
+    supports_prompt_caching: bool,
 }
 
 type ProviderModels = BTreeMap<&'static str, Vec<ModelInfo>>;
@@ -284,6 +299,7 @@ fn collect_models_from(cfg: &ProviderConfig, models: &HashMap<String, ModelData>
                 context_window,
                 reasoning_levels,
                 input_modalities,
+                supports_prompt_caching: m.cost.as_ref().is_some_and(CostData::has_prompt_caching),
             }
         })
         .collect()
@@ -311,7 +327,6 @@ fn model_id_to_variant(id: &str) -> String {
         }
     }
 
-    // If the variant starts with a digit, prefix with underscore
     if result.starts_with(|c: char| c.is_ascii_digit()) {
         result.insert(0, '_');
     }
@@ -320,268 +335,213 @@ fn model_id_to_variant(id: &str) -> String {
 }
 
 fn emit_generated_source(ctx: &CodegenCtx) -> String {
-    let mut out = String::with_capacity(64_000);
-    emit_header(&mut out);
-    emit_provider_enums(&mut out, &ctx.provider_models);
-    emit_provider_impls(&mut out, &ctx.provider_models);
-    emit_llm_model_enum(&mut out);
-    emit_from_impls(&mut out);
-    emit_llm_model_impl(&mut out);
-    emit_display_impl(&mut out);
-    emit_fromstr_impl(&mut out);
-    out
+    let provider_enums = emit_provider_enums(&ctx.provider_models);
+    let provider_impls = emit_provider_impls(&ctx.provider_models);
+    let llm_model_enum = emit_llm_model_enum();
+    let from_impls = emit_from_impls();
+    let llm_model_impl = emit_llm_model_impl();
+    let display_impl = emit_display_impl();
+    let fromstr_impl = emit_fromstr_impl();
+
+    let file_tokens = quote! {
+        use std::borrow::Cow;
+        use std::sync::LazyLock;
+        use crate::ReasoningEffort;
+
+        #provider_enums
+        #provider_impls
+        #llm_model_enum
+        #from_impls
+        #llm_model_impl
+        #display_impl
+        #fromstr_impl
+    };
+
+    let file: syn::File = syn::parse2(file_tokens).expect("generated tokens parse as Rust");
+    let formatted = prettyplease::unparse(&file);
+    format!(
+        "// Auto-generated from models.dev — do not edit manually\n// Regenerated automatically by build.rs\n\n{formatted}"
+    )
 }
 
-fn emit_header(out: &mut String) {
-    pushln(out, "// Auto-generated from models.dev — do not edit manually");
-    pushln(out, "// Regenerated automatically by build.rs");
-    blank(out);
-    pushln(out, "use std::borrow::Cow;");
-    pushln(out, "use std::sync::LazyLock;");
-    pushln(out, "use crate::ReasoningEffort;");
-    blank(out);
-}
-
-fn emit_provider_enums(out: &mut String, provider_models: &ProviderModels) {
-    for cfg in PROVIDERS {
-        let inner = cfg.inner_enum_name();
-        pushln(out, "#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]");
-        pushln(out, format!("pub enum {inner} {{"));
-        for model in &provider_models[cfg.dev_id] {
-            pushln(out, format!("    {},", model.variant_name));
+fn emit_provider_enums(provider_models: &ProviderModels) -> TokenStream {
+    let enums = PROVIDERS.iter().map(|cfg| {
+        let inner = format_ident!("{}", cfg.inner_enum_name());
+        let variants = provider_models[cfg.dev_id].iter().map(|m| format_ident!("{}", m.variant_name));
+        quote! {
+            #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+            pub enum #inner {
+                #(#variants,)*
+            }
         }
-        pushln(out, "}");
-        blank(out);
-
-        if cfg.is_hybrid_dynamic {
-            let outer = cfg.outer_enum_name();
-            pushln(out, "#[derive(Debug, Clone, PartialEq, Eq, Hash)]");
-            pushln(out, format!("pub enum {outer} {{"));
-            pushln(out, format!("    Foundation({inner}),"));
-            pushln(out, "    Profile(String),");
-            pushln(out, "}");
-            blank(out);
-        }
-    }
+    });
+    quote! { #(#enums)* }
 }
 
-fn emit_provider_impls(out: &mut String, provider_models: &ProviderModels) {
-    for cfg in PROVIDERS {
+fn emit_provider_impls(provider_models: &ProviderModels) -> TokenStream {
+    let impls = PROVIDERS.iter().map(|cfg| {
         let models = &provider_models[cfg.dev_id];
-        let enum_name = cfg.inner_enum_name();
+        let enum_ident = format_ident!("{}", cfg.inner_enum_name());
 
-        pushln(out, format!("impl {enum_name} {{"));
+        let model_id_arms = models.iter().map(|m| {
+            let v = format_ident!("{}", m.variant_name);
+            let id = &m.model_id;
+            quote! { Self::#v => #id, }
+        });
 
-        // model_id — each model has a unique ID, no grouping needed
-        pushln(out, "    #[allow(clippy::too_many_lines)]");
-        pushln(out, "    fn model_id(self) -> &'static str {");
-        pushln(out, "        match self {");
-        for model in models {
-            pushln(out, format!("            Self::{} => \"{}\",", model.variant_name, model.model_id));
-        }
-        pushln(out, "        }");
-        pushln(out, "    }");
-        blank(out);
-
-        // display_name — group variants that share the same name
-        pushln(out, "    #[allow(clippy::too_many_lines)]");
-        pushln(out, "    fn display_name(self) -> &'static str {");
-        pushln(out, "        match self {");
-        emit_grouped_arms(out, models, |m| escape_rust_string(&m.display_name), |name| format!("\"{name}\""));
-        pushln(out, "        }");
-        pushln(out, "    }");
-        blank(out);
-
-        // context_window — group variants that share the same value
-        pushln(out, "    fn context_window(self) -> u32 {");
-        pushln(out, "        match self {");
-        emit_grouped_arms(
-            out,
+        let display_name_arms = grouped_arms(
             models,
-            |m| m.context_window.to_string(),
-            |val| format_number(val.parse::<u32>().unwrap()),
+            |m| m.display_name.clone(),
+            |m| {
+                let s = &m.display_name;
+                quote! { #s }
+            },
         );
-        pushln(out, "        }");
-        pushln(out, "    }");
-        blank(out);
 
-        // reasoning_levels — per-model reasoning level list
-        pushln(out, "    pub fn reasoning_levels(self) -> &'static [ReasoningEffort] {");
-        pushln(out, "        match self {");
-        emit_grouped_arms(out, models, |m| m.reasoning_levels.join(","), format_reasoning_levels_rhs);
-        pushln(out, "        }");
-        pushln(out, "    }");
-        blank(out);
+        let context_window_arms =
+            grouped_arms(models, |m| m.context_window, |m| num_lit_with_underscores(m.context_window));
 
-        // supports_reasoning — derived from reasoning_levels
-        pushln(out, "    pub fn supports_reasoning(self) -> bool {");
-        pushln(out, "        !self.reasoning_levels().is_empty()");
-        pushln(out, "    }");
-        blank(out);
+        let reasoning_levels_arms = emit_reasoning_levels_arms(models);
 
-        for modality in ["image", "audio"] {
-            pushln(out, format!("    pub fn supports_{modality}(self) -> bool {{"));
-            pushln(out, "        match self {");
-            let mod_owned = modality.to_string();
-            emit_grouped_arms(
-                out,
-                models,
-                |m| m.input_modalities.contains(&mod_owned).to_string(),
-                std::string::ToString::to_string,
-            );
-            pushln(out, "        }");
-            pushln(out, "    }");
-            blank(out);
+        let prompt_caching_arms = grouped_arms(
+            models,
+            |m| m.supports_prompt_caching,
+            |m| {
+                let b = m.supports_prompt_caching;
+                quote! { #b }
+            },
+        );
+
+        let modality_methods = ["image", "audio"].iter().map(|modality| {
+            let method = format_ident!("supports_{}", modality);
+            let mod_owned = (*modality).to_string();
+            let arms = grouped_arms(models, move |m| m.input_modalities.contains(&mod_owned), {
+                let mod_owned = (*modality).to_string();
+                move |m| {
+                    let b = m.input_modalities.contains(&mod_owned);
+                    quote! { #b }
+                }
+            });
+            quote! {
+                #[allow(clippy::too_many_lines)]
+                pub fn #method(self) -> bool {
+                    match self { #arms }
+                }
+            }
+        });
+
+        let all_variants = models.iter().map(|m| format_ident!("{}", m.variant_name));
+
+        let from_str_impl = emit_from_str_impl(&enum_ident, cfg.parser_name, models);
+
+        quote! {
+            impl #enum_ident {
+                #[allow(clippy::too_many_lines)]
+                fn model_id(self) -> &'static str {
+                    match self { #(#model_id_arms)* }
+                }
+
+                #[allow(clippy::too_many_lines)]
+                fn display_name(self) -> &'static str {
+                    match self { #display_name_arms }
+                }
+
+                #[allow(clippy::too_many_lines)]
+                fn context_window(self) -> u32 {
+                    match self { #context_window_arms }
+                }
+
+                #[allow(clippy::too_many_lines)]
+                pub fn reasoning_levels(self) -> &'static [ReasoningEffort] {
+                    match self { #reasoning_levels_arms }
+                }
+
+                pub fn supports_reasoning(self) -> bool {
+                    !self.reasoning_levels().is_empty()
+                }
+
+                #[allow(clippy::too_many_lines)]
+                pub fn supports_prompt_caching(self) -> bool {
+                    match self { #prompt_caching_arms }
+                }
+
+                #(#modality_methods)*
+
+                const ALL: &[#enum_ident] = &[#(Self::#all_variants),*];
+            }
+
+            #from_str_impl
         }
-
-        // ALL constant
-        pushln(out, format!("    const ALL: &[{enum_name}] = &["));
-        for model in models {
-            pushln(out, format!("        Self::{},", model.variant_name));
-        }
-        pushln(out, "    ];");
-
-        pushln(out, "}");
-        blank(out);
-
-        emit_from_str_impl(out, &enum_name, cfg.parser_name, models);
-
-        if cfg.is_hybrid_dynamic {
-            emit_hybrid_wrapper_impl(out, &cfg.outer_enum_name(), cfg.enum_name);
-            emit_hybrid_wrapper_from_str(out, &cfg.outer_enum_name(), &enum_name);
-        }
-    }
+    });
+    quote! { #(#impls)* }
 }
 
-fn emit_hybrid_wrapper_impl(out: &mut String, outer_name: &str, display_prefix: &str) {
-    pushln(out, format!("impl {outer_name} {{"));
+fn emit_from_str_impl(enum_ident: &proc_macro2::Ident, parser_name: &str, models: &[ModelInfo]) -> TokenStream {
+    let arms = models.iter().map(|m| {
+        let id = &m.model_id;
+        let v = format_ident!("{}", m.variant_name);
+        quote! { #id => Ok(Self::#v), }
+    });
+    let err_msg = format!("Unknown {parser_name} model: '{{s}}'");
+    quote! {
+        impl std::str::FromStr for #enum_ident {
+            type Err = String;
 
-    pushln(out, "    pub fn model_id(&self) -> Cow<'static, str> {");
-    pushln(out, "        match self {");
-    pushln(out, "            Self::Foundation(m) => Cow::Borrowed(m.model_id()),");
-    pushln(out, "            Self::Profile(s) => Cow::Owned(s.clone()),");
-    pushln(out, "        }");
-    pushln(out, "    }");
-    blank(out);
-
-    pushln(out, "    pub fn display_name(&self) -> Cow<'static, str> {");
-    pushln(out, "        match self {");
-    pushln(out, "            Self::Foundation(m) => Cow::Borrowed(m.display_name()),");
-    pushln(out, format!("            Self::Profile(s) => Cow::Owned(format!(\"{display_prefix} {{s}}\")),"));
-    pushln(out, "        }");
-    pushln(out, "    }");
-    blank(out);
-
-    pushln(out, "    pub fn context_window(&self) -> Option<u32> {");
-    pushln(out, "        match self {");
-    pushln(out, "            Self::Foundation(m) => Some(m.context_window()),");
-    pushln(out, "            Self::Profile(_) => None,");
-    pushln(out, "        }");
-    pushln(out, "    }");
-    blank(out);
-
-    pushln(out, "    pub fn reasoning_levels(&self) -> &'static [ReasoningEffort] {");
-    pushln(out, "        match self {");
-    pushln(out, "            Self::Foundation(m) => m.reasoning_levels(),");
-    pushln(out, "            Self::Profile(_) => &[],");
-    pushln(out, "        }");
-    pushln(out, "    }");
-    blank(out);
-
-    pushln(out, "    pub fn supports_reasoning(&self) -> bool {");
-    pushln(out, "        !self.reasoning_levels().is_empty()");
-    pushln(out, "    }");
-    blank(out);
-
-    for modality in ["image", "audio"] {
-        pushln(out, format!("    pub fn supports_{modality}(&self) -> bool {{"));
-        pushln(out, "        match self {");
-        pushln(out, format!("            Self::Foundation(m) => m.supports_{modality}(),"));
-        pushln(out, "            Self::Profile(_) => false,");
-        pushln(out, "        }");
-        pushln(out, "    }");
-        blank(out);
+            #[allow(clippy::too_many_lines)]
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                match s {
+                    #(#arms)*
+                    _ => Err(format!(#err_msg)),
+                }
+            }
+        }
     }
-
-    pushln(out, "}");
-    blank(out);
-}
-
-fn emit_hybrid_wrapper_from_str(out: &mut String, outer_name: &str, inner_name: &str) {
-    pushln(out, format!("impl std::str::FromStr for {outer_name} {{"));
-    pushln(out, "    type Err = String;");
-    blank(out);
-    pushln(out, "    fn from_str(s: &str) -> Result<Self, Self::Err> {");
-    pushln(out, format!("        match s.parse::<{inner_name}>() {{"));
-    pushln(out, "            Ok(m) => Ok(Self::Foundation(m)),");
-    pushln(out, "            Err(_) => Ok(Self::Profile(s.to_string())),");
-    pushln(out, "        }");
-    pushln(out, "    }");
-    pushln(out, "}");
-    blank(out);
-}
-
-fn emit_from_str_impl(out: &mut String, enum_name: &str, parser_name: &str, models: &[ModelInfo]) {
-    pushln(out, format!("impl std::str::FromStr for {enum_name} {{"));
-    pushln(out, "    type Err = String;");
-    blank(out);
-    pushln(out, "    #[allow(clippy::too_many_lines)]");
-    pushln(out, "    fn from_str(s: &str) -> Result<Self, Self::Err> {");
-    pushln(out, "        match s {");
-    for model in models {
-        pushln(out, format!("            \"{}\" => Ok(Self::{}),", model.model_id, model.variant_name));
-    }
-    pushln(out, format!("            _ => Err(format!(\"Unknown {parser_name} model: '{{s}}'\")),"));
-    pushln(out, "        }");
-    pushln(out, "    }");
-    pushln(out, "}");
-    blank(out);
 }
 
 /// Emit match arms grouped by value to avoid clippy `match_same_arms`.
-///
-/// `key_fn` extracts a grouping key from each model (e.g. `context_window` as string).
-/// `fmt_val` formats the key into the match arm's RHS.
-fn emit_grouped_arms(
-    out: &mut String,
+fn grouped_arms<K, R>(
     models: &[ModelInfo],
-    key_fn: impl Fn(&ModelInfo) -> String,
-    fmt_val: impl Fn(&str) -> String,
-) {
-    // Group variants by value, preserving insertion order via BTreeMap
-    let mut groups: BTreeMap<String, Vec<&str>> = BTreeMap::new();
-    for model in models {
-        groups.entry(key_fn(model)).or_default().push(&model.variant_name);
+    key_fn: impl Fn(&ModelInfo) -> K,
+    rhs_fn: impl Fn(&ModelInfo) -> R,
+) -> TokenStream
+where
+    K: Eq + Ord,
+    R: ToTokens,
+{
+    let mut groups: BTreeMap<K, Vec<&ModelInfo>> = BTreeMap::new();
+    for m in models {
+        groups.entry(key_fn(m)).or_default().push(m);
     }
-
-    for (key, variants) in &groups {
-        let rhs = fmt_val(key);
-        if variants.len() == 1 {
-            pushln(out, format!("            Self::{} => {rhs},", variants[0]));
-        } else {
-            let patterns: Vec<String> = variants.iter().map(|v| format!("Self::{v}")).collect();
-            pushln(out, format!("            {} => {rhs},", patterns.join(" | ")));
-        }
-    }
+    let arms = groups.values().map(|members| {
+        let pats = members.iter().map(|m| {
+            let v = format_ident!("{}", m.variant_name);
+            quote! { Self::#v }
+        });
+        let rhs = rhs_fn(members[0]);
+        quote! { #(#pats)|* => #rhs, }
+    });
+    quote! { #(#arms)* }
 }
 
-/// Format the RHS of a `reasoning_levels()` match arm from a comma-joined key.
-fn format_reasoning_levels_rhs(key: &str) -> String {
-    if key.is_empty() {
-        return "&[]".to_string();
-    }
-    let items: Vec<String> = key
-        .split(',')
-        .map(|l| {
-            let variant = level_str_to_variant(l);
-            format!("ReasoningEffort::{variant}")
-        })
-        .collect();
-    format!("&[{}]", items.join(", "))
+fn emit_reasoning_levels_arms(models: &[ModelInfo]) -> TokenStream {
+    grouped_arms(
+        models,
+        |m| m.reasoning_levels.clone(),
+        |m| {
+            if m.reasoning_levels.is_empty() {
+                quote! { &[] }
+            } else {
+                let items = m.reasoning_levels.iter().map(|l| {
+                    let variant = format_ident!("{}", level_str_to_variant(l));
+                    quote! { ReasoningEffort::#variant }
+                });
+                quote! { &[#(#items),*] }
+            }
+        },
+    )
 }
 
 /// Map a reasoning level string to its `ReasoningEffort` variant name.
-/// Panics at build time if an unknown level is encountered.
 fn level_str_to_variant(level: &str) -> &'static str {
     match level {
         "low" => "Low",
@@ -592,302 +552,391 @@ fn level_str_to_variant(level: &str) -> &'static str {
     }
 }
 
-fn emit_llm_model_enum(out: &mut String) {
-    pushln(out, "/// A model from a specific provider");
-    pushln(out, "#[derive(Debug, Clone, PartialEq, Eq, Hash)]");
-    pushln(out, "pub enum LlmModel {");
-    for cfg in PROVIDERS {
-        pushln(out, format!("    {provider}({provider}Model),", provider = cfg.enum_name));
-    }
-    for dyn_cfg in DYNAMIC_PROVIDERS {
-        pushln(out, format!("    {}(String),", dyn_cfg.enum_name));
-    }
-    pushln(out, "}");
-    blank(out);
-}
-
-fn emit_from_impls(out: &mut String) {
-    for cfg in PROVIDERS {
-        pushln(out, format!("impl From<{}Model> for LlmModel {{", cfg.enum_name));
-        pushln(out, format!("    fn from(m: {}Model) -> Self {{ LlmModel::{}(m) }}", cfg.enum_name, cfg.enum_name));
-        pushln(out, "}");
-        blank(out);
-    }
-}
-
-fn emit_llm_model_impl(out: &mut String) {
-    pushln(out, "impl LlmModel {");
-    emit_llm_model_id(out);
-    emit_llm_display_name(out);
-    emit_llm_provider(out);
-    emit_llm_provider_display_name(out);
-    emit_llm_context_window(out);
-    emit_llm_required_env_var(out);
-    emit_llm_all_required_env_vars(out);
-    emit_llm_oauth_provider_id(out);
-    emit_llm_reasoning_levels(out);
-    emit_llm_supports_reasoning(out);
-    for modality in ["image", "audio"] {
-        emit_llm_supports_modality(out, modality);
-    }
-    emit_llm_all(out);
-    pushln(out, "}");
-    blank(out);
-}
-
-fn emit_llm_model_id(out: &mut String) {
-    pushln(out, "    /// Raw model ID (e.g. `claude-opus-4-6`, `llama3.2`)");
-    pushln(out, "    pub fn model_id(&self) -> Cow<'static, str> {");
-    pushln(out, "        match self {");
-    for cfg in PROVIDERS {
-        if cfg.is_hybrid_dynamic {
-            pushln(out, format!("            Self::{}(m) => m.model_id(),", cfg.enum_name));
-        } else {
-            pushln(out, format!("            Self::{}(m) => Cow::Borrowed(m.model_id()),", cfg.enum_name));
+fn emit_llm_model_enum() -> TokenStream {
+    let catalog_variants = PROVIDERS.iter().map(|cfg| {
+        let v = format_ident!("{}", cfg.enum_name);
+        let inner = format_ident!("{}Model", cfg.enum_name);
+        quote! { #v(#inner) }
+    });
+    let dynamic_variants = DYNAMIC_PROVIDERS.iter().map(|d| {
+        let v = format_ident!("{}", d.enum_name);
+        quote! { #v(String) }
+    });
+    quote! {
+        /// A model from a specific provider
+        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+        pub enum LlmModel {
+            #(#catalog_variants,)*
+            #(#dynamic_variants,)*
         }
     }
-    pushln(out, format!("            {} => Cow::Owned(s.clone()),", dynamic_pattern_with_binding("s")));
-    pushln(out, "        }");
-    pushln(out, "    }");
-    blank(out);
 }
 
-fn emit_llm_display_name(out: &mut String) {
-    pushln(out, "    /// Human-readable display name (e.g. `Claude Opus 4.6`)");
-    pushln(out, "    pub fn display_name(&self) -> Cow<'static, str> {");
-    pushln(out, "        match self {");
-    for cfg in PROVIDERS {
-        if cfg.is_hybrid_dynamic {
-            pushln(out, format!("            Self::{}(m) => m.display_name(),", cfg.enum_name));
-        } else {
-            pushln(out, format!("            Self::{}(m) => Cow::Borrowed(m.display_name()),", cfg.enum_name));
+fn emit_from_impls() -> TokenStream {
+    let impls = PROVIDERS.iter().map(|cfg| {
+        let outer = format_ident!("{}Model", cfg.enum_name);
+        let v = format_ident!("{}", cfg.enum_name);
+        quote! {
+            impl From<#outer> for LlmModel {
+                fn from(m: #outer) -> Self {
+                    LlmModel::#v(m)
+                }
+            }
+        }
+    });
+    quote! { #(#impls)* }
+}
+
+fn emit_llm_model_impl() -> TokenStream {
+    let model_id = emit_llm_model_id();
+    let display_name = emit_llm_display_name();
+    let provider = emit_llm_provider();
+    let provider_display_name = emit_llm_provider_display_name();
+    let context_window = emit_llm_context_window();
+    let required_env_var = emit_llm_required_env_var();
+    let all_required_env_vars = emit_llm_all_required_env_vars();
+    let oauth_provider_id = emit_llm_oauth_provider_id();
+    let reasoning_levels = emit_llm_reasoning_levels();
+    let supports_reasoning = emit_llm_supports_reasoning();
+    let supports_prompt_caching = emit_llm_supports_prompt_caching();
+    let modality_methods = ["image", "audio"].iter().map(|m| emit_llm_supports_modality(m));
+    let all = emit_llm_all();
+
+    quote! {
+        impl LlmModel {
+            #model_id
+            #display_name
+            #provider
+            #provider_display_name
+            #context_window
+            #required_env_var
+            #all_required_env_vars
+            #oauth_provider_id
+            #reasoning_levels
+            #supports_reasoning
+            #supports_prompt_caching
+            #(#modality_methods)*
+            #all
         }
     }
-    for dyn_cfg in DYNAMIC_PROVIDERS {
-        pushln(
-            out,
-            format!(
-                "            Self::{}(s) => Cow::Owned(format!(\"{} {{s}}\")),",
-                dyn_cfg.enum_name, dyn_cfg.enum_name
-            ),
-        );
-    }
-    pushln(out, "        }");
-    pushln(out, "    }");
-    blank(out);
 }
 
-fn emit_llm_provider(out: &mut String) {
-    pushln(out, "    /// Provider identifier (e.g. `anthropic`)");
-    pushln(out, "    pub fn provider(&self) -> &'static str {");
-    pushln(out, "        match self {");
-    for cfg in PROVIDERS {
-        pushln(out, format!("            Self::{}(_) => \"{}\",", cfg.enum_name, cfg.parser_name));
-    }
-    for dyn_cfg in DYNAMIC_PROVIDERS {
-        pushln(out, format!("            Self::{}(_) => \"{}\",", dyn_cfg.enum_name, dyn_cfg.parser_name));
-    }
-    pushln(out, "        }");
-    pushln(out, "    }");
-    blank(out);
-}
-
-fn emit_llm_provider_display_name(out: &mut String) {
-    pushln(out, "    /// Human-readable provider name (e.g. `AWS Bedrock`)");
-    pushln(out, "    pub fn provider_display_name(&self) -> &'static str {");
-    pushln(out, "        match self {");
-    for cfg in PROVIDERS {
-        pushln(out, format!("            Self::{}(_) => \"{}\",", cfg.enum_name, cfg.display_name));
-    }
-    for dyn_cfg in DYNAMIC_PROVIDERS {
-        pushln(out, format!("            Self::{}(_) => \"{}\",", dyn_cfg.enum_name, dyn_cfg.display_name));
-    }
-    pushln(out, "        }");
-    pushln(out, "    }");
-    blank(out);
-}
-
-fn emit_llm_context_window(out: &mut String) {
-    pushln(out, "    /// Context window size in tokens (None for dynamic providers)");
-    pushln(out, "    pub fn context_window(&self) -> Option<u32> {");
-    pushln(out, "        match self {");
-    for cfg in PROVIDERS {
+fn emit_llm_model_id() -> TokenStream {
+    let catalog_arms = PROVIDERS.iter().map(|cfg| {
+        let v = format_ident!("{}", cfg.enum_name);
         if cfg.is_hybrid_dynamic {
-            pushln(out, format!("            Self::{}(m) => m.context_window(),", cfg.enum_name));
+            quote! { Self::#v(m) => m.model_id(), }
         } else {
-            pushln(out, format!("            Self::{}(m) => Some(m.context_window()),", cfg.enum_name));
+            quote! { Self::#v(m) => Cow::Borrowed(m.model_id()), }
+        }
+    });
+    let dyn_pats = dynamic_pattern_with_binding("s");
+    quote! {
+        /// Raw model ID (e.g. `claude-opus-4-6`, `llama3.2`)
+        pub fn model_id(&self) -> Cow<'static, str> {
+            match self {
+                #(#catalog_arms)*
+                #dyn_pats => Cow::Owned(s.clone()),
+            }
         }
     }
-    pushln(out, format!("            {} => None,", dynamic_pattern_with_binding("_")));
-    pushln(out, "        }");
-    pushln(out, "    }");
-    blank(out);
 }
 
-fn emit_llm_required_env_var(out: &mut String) {
-    pushln(out, "    /// Required env var for this model's provider (None for local providers)");
-    pushln(out, "    pub fn required_env_var(&self) -> Option<&'static str> {");
-    pushln(out, "        match self {");
-    let mut none_arms: Vec<String> = Vec::new();
+fn emit_llm_display_name() -> TokenStream {
+    let catalog_arms = PROVIDERS.iter().map(|cfg| {
+        let v = format_ident!("{}", cfg.enum_name);
+        if cfg.is_hybrid_dynamic {
+            quote! { Self::#v(m) => m.display_name(), }
+        } else {
+            quote! { Self::#v(m) => Cow::Borrowed(m.display_name()), }
+        }
+    });
+    let dyn_arms = DYNAMIC_PROVIDERS.iter().map(|d| {
+        let v = format_ident!("{}", d.enum_name);
+        let fmt = format!("{} {{s}}", d.enum_name);
+        quote! { Self::#v(s) => Cow::Owned(format!(#fmt)), }
+    });
+    quote! {
+        /// Human-readable display name (e.g. `Claude Opus 4.6`)
+        pub fn display_name(&self) -> Cow<'static, str> {
+            match self {
+                #(#catalog_arms)*
+                #(#dyn_arms)*
+            }
+        }
+    }
+}
+
+fn emit_llm_provider() -> TokenStream {
+    let catalog_arms = PROVIDERS.iter().map(|cfg| {
+        let v = format_ident!("{}", cfg.enum_name);
+        let name = cfg.parser_name;
+        quote! { Self::#v(_) => #name, }
+    });
+    let dyn_arms = DYNAMIC_PROVIDERS.iter().map(|d| {
+        let v = format_ident!("{}", d.enum_name);
+        let name = d.parser_name;
+        quote! { Self::#v(_) => #name, }
+    });
+    quote! {
+        /// Provider identifier (e.g. `anthropic`)
+        pub fn provider(&self) -> &'static str {
+            match self {
+                #(#catalog_arms)*
+                #(#dyn_arms)*
+            }
+        }
+    }
+}
+
+fn emit_llm_provider_display_name() -> TokenStream {
+    let catalog_arms = PROVIDERS.iter().map(|cfg| {
+        let v = format_ident!("{}", cfg.enum_name);
+        let name = cfg.display_name;
+        quote! { Self::#v(_) => #name, }
+    });
+    let dyn_arms = DYNAMIC_PROVIDERS.iter().map(|d| {
+        let v = format_ident!("{}", d.enum_name);
+        let name = d.display_name;
+        quote! { Self::#v(_) => #name, }
+    });
+    quote! {
+        /// Human-readable provider name (e.g. `AWS Bedrock`)
+        pub fn provider_display_name(&self) -> &'static str {
+            match self {
+                #(#catalog_arms)*
+                #(#dyn_arms)*
+            }
+        }
+    }
+}
+
+fn emit_llm_context_window() -> TokenStream {
+    let catalog_arms = PROVIDERS.iter().map(|cfg| {
+        let v = format_ident!("{}", cfg.enum_name);
+        if cfg.is_hybrid_dynamic {
+            quote! { Self::#v(m) => m.context_window(), }
+        } else {
+            quote! { Self::#v(m) => Some(m.context_window()), }
+        }
+    });
+    let dyn_pats = dynamic_pattern_with_binding("_");
+    quote! {
+        /// Context window size in tokens (None for dynamic providers)
+        pub fn context_window(&self) -> Option<u32> {
+            match self {
+                #(#catalog_arms)*
+                #dyn_pats => None,
+            }
+        }
+    }
+}
+
+fn emit_llm_required_env_var() -> TokenStream {
+    let mut some_arms = Vec::new();
+    let mut none_pats = Vec::new();
     for cfg in PROVIDERS {
+        let v = format_ident!("{}", cfg.enum_name);
         match cfg.env_var {
-            Some(var) => pushln(out, format!("            Self::{}(_) => Some(\"{}\"),", cfg.enum_name, var)),
-            None => none_arms.push(format!("Self::{}(_)", cfg.enum_name)),
+            Some(var) => some_arms.push(quote! { Self::#v(_) => Some(#var), }),
+            None => none_pats.push(quote! { Self::#v(_) }),
         }
     }
-    for dyn_cfg in DYNAMIC_PROVIDERS {
-        none_arms.push(format!("Self::{}(_)", dyn_cfg.enum_name));
+    for d in DYNAMIC_PROVIDERS {
+        let v = format_ident!("{}", d.enum_name);
+        none_pats.push(quote! { Self::#v(_) });
     }
-    pushln(out, format!("            {} => None,", none_arms.join(" | ")));
-    pushln(out, "        }");
-    pushln(out, "    }");
-    blank(out);
+    quote! {
+        /// Required env var for this model's provider (None for local providers)
+        pub fn required_env_var(&self) -> Option<&'static str> {
+            match self {
+                #(#some_arms)*
+                #(#none_pats)|* => None,
+            }
+        }
+    }
 }
 
-fn emit_llm_all_required_env_vars(out: &mut String) {
-    let vars: Vec<&str> = PROVIDERS.iter().filter_map(|cfg| cfg.env_var).collect();
-    pushln(out, "    /// All provider API key env var names (deduplicated, static)");
-    pushln(
-        out,
-        format!(
-            "    pub const ALL_REQUIRED_ENV_VARS: &[&str] = &[{}];",
-            vars.iter().map(|v| format!("\"{v}\"")).collect::<Vec<_>>().join(", ")
-        ),
-    );
-    blank(out);
+fn emit_llm_all_required_env_vars() -> TokenStream {
+    let vars = PROVIDERS.iter().filter_map(|cfg| cfg.env_var);
+    quote! {
+        /// All provider API key env var names (deduplicated, static)
+        pub const ALL_REQUIRED_ENV_VARS: &[&str] = &[#(#vars),*];
+    }
 }
 
-fn emit_llm_oauth_provider_id(out: &mut String) {
-    pushln(out, "    /// OAuth provider ID if this model requires OAuth login (e.g. `\"codex\"`)");
-    pushln(out, "    pub fn oauth_provider_id(&self) -> Option<&'static str> {");
-    pushln(out, "        match self {");
-    let mut none_arms: Vec<String> = Vec::new();
+fn emit_llm_oauth_provider_id() -> TokenStream {
+    let mut some_arms = Vec::new();
+    let mut none_pats = Vec::new();
     for cfg in PROVIDERS {
+        let v = format_ident!("{}", cfg.enum_name);
         match cfg.oauth_provider_id {
-            Some(id) => pushln(out, format!("            Self::{}(_) => Some(\"{}\"),", cfg.enum_name, id)),
-            None => none_arms.push(format!("Self::{}(_)", cfg.enum_name)),
+            Some(id) => some_arms.push(quote! { Self::#v(_) => Some(#id), }),
+            None => none_pats.push(quote! { Self::#v(_) }),
         }
     }
-    for dyn_cfg in DYNAMIC_PROVIDERS {
-        none_arms.push(format!("Self::{}(_)", dyn_cfg.enum_name));
+    for d in DYNAMIC_PROVIDERS {
+        let v = format_ident!("{}", d.enum_name);
+        none_pats.push(quote! { Self::#v(_) });
     }
-    pushln(out, format!("            {} => None,", none_arms.join(" | ")));
-    pushln(out, "        }");
-    pushln(out, "    }");
-    blank(out);
-}
-
-fn emit_llm_reasoning_levels(out: &mut String) {
-    pushln(out, "    /// Reasoning levels supported by this model (empty if not a reasoning model)");
-    pushln(out, "    pub fn reasoning_levels(&self) -> &'static [ReasoningEffort] {");
-    pushln(out, "        match self {");
-    for cfg in PROVIDERS {
-        pushln(out, format!("            Self::{}(m) => m.reasoning_levels(),", cfg.enum_name));
+    quote! {
+        /// OAuth provider ID if this model requires OAuth login (e.g. `"codex"`)
+        pub fn oauth_provider_id(&self) -> Option<&'static str> {
+            match self {
+                #(#some_arms)*
+                #(#none_pats)|* => None,
+            }
+        }
     }
-    pushln(out, format!("            {} => &[],", dynamic_pattern_with_binding("_")));
-    pushln(out, "        }");
-    pushln(out, "    }");
-    blank(out);
 }
 
-fn emit_llm_supports_reasoning(out: &mut String) {
-    pushln(out, "    /// Whether this model supports reasoning/extended thinking");
-    pushln(out, "    pub fn supports_reasoning(&self) -> bool {");
-    pushln(out, "        !self.reasoning_levels().is_empty()");
-    pushln(out, "    }");
-    blank(out);
-}
-
-fn emit_llm_supports_modality(out: &mut String, modality: &str) {
-    pushln(out, format!("    /// Whether this model supports {modality} input"));
-    pushln(out, format!("    pub fn supports_{modality}(&self) -> bool {{"));
-    pushln(out, "        match self {");
-    for cfg in PROVIDERS {
-        pushln(out, format!("            Self::{}(m) => m.supports_{modality}(),", cfg.enum_name));
+fn emit_llm_reasoning_levels() -> TokenStream {
+    let catalog_arms = PROVIDERS.iter().map(|cfg| {
+        let v = format_ident!("{}", cfg.enum_name);
+        quote! { Self::#v(m) => m.reasoning_levels(), }
+    });
+    let dyn_pats = dynamic_pattern_with_binding("_");
+    quote! {
+        /// Reasoning levels supported by this model (empty if not a reasoning model)
+        pub fn reasoning_levels(&self) -> &'static [ReasoningEffort] {
+            match self {
+                #(#catalog_arms)*
+                #dyn_pats => &[],
+            }
+        }
     }
-    pushln(out, format!("            {} => false,", dynamic_pattern_with_binding("_")));
-    pushln(out, "        }");
-    pushln(out, "    }");
-    blank(out);
 }
 
-fn emit_llm_all(out: &mut String) {
-    pushln(out, "    /// All catalog models (excludes dynamic providers)");
-    pushln(out, "    pub fn all() -> &'static [LlmModel] {");
-    pushln(out, "        static ALL: LazyLock<Vec<LlmModel>> = LazyLock::new(|| {");
-    pushln(out, "            let mut v = Vec::new();");
-    for cfg in PROVIDERS {
+fn emit_llm_supports_reasoning() -> TokenStream {
+    quote! {
+        /// Whether this model supports reasoning/extended thinking
+        pub fn supports_reasoning(&self) -> bool {
+            !self.reasoning_levels().is_empty()
+        }
+    }
+}
+
+fn emit_llm_supports_prompt_caching() -> TokenStream {
+    let catalog_arms = PROVIDERS.iter().map(|cfg| {
+        let v = format_ident!("{}", cfg.enum_name);
+        quote! { Self::#v(m) => m.supports_prompt_caching(), }
+    });
+    let dyn_pats = dynamic_pattern_with_binding("_");
+    quote! {
+        /// Whether this model supports provider-side prompt caching
+        pub fn supports_prompt_caching(&self) -> bool {
+            match self {
+                #(#catalog_arms)*
+                #dyn_pats => false,
+            }
+        }
+    }
+}
+
+fn emit_llm_supports_modality(modality: &str) -> TokenStream {
+    let method = format_ident!("supports_{}", modality);
+    let doc = format!(" Whether this model supports {modality} input");
+    let catalog_arms = PROVIDERS.iter().map(|cfg| {
+        let v = format_ident!("{}", cfg.enum_name);
+        quote! { Self::#v(m) => m.#method(), }
+    });
+    let dyn_pats = dynamic_pattern_with_binding("_");
+    quote! {
+        #[doc = #doc]
+        pub fn #method(&self) -> bool {
+            match self {
+                #(#catalog_arms)*
+                #dyn_pats => false,
+            }
+        }
+    }
+}
+
+fn emit_llm_all() -> TokenStream {
+    let pushes = PROVIDERS.iter().map(|cfg| {
+        let inner = format_ident!("{}", cfg.inner_enum_name());
+        let outer = format_ident!("{}", cfg.outer_enum_name());
+        let v = format_ident!("{}", cfg.enum_name);
         if cfg.is_hybrid_dynamic {
-            pushln(
-                out,
-                format!(
-                    "            v.extend({inner}::ALL.iter().copied().map({outer}::Foundation).map(LlmModel::{variant}));",
-                    inner = cfg.inner_enum_name(),
-                    outer = cfg.outer_enum_name(),
-                    variant = cfg.enum_name,
-                ),
-            );
+            quote! {
+                v.extend(#inner::ALL.iter().copied().map(#outer::Foundation).map(LlmModel::#v));
+            }
         } else {
-            pushln(
-                out,
-                format!(
-                    "            v.extend({}Model::ALL.iter().copied().map(LlmModel::{}));",
-                    cfg.enum_name, cfg.enum_name
-                ),
-            );
+            quote! {
+                v.extend(#inner::ALL.iter().copied().map(LlmModel::#v));
+            }
+        }
+    });
+    quote! {
+        /// All catalog models (excludes dynamic providers)
+        pub fn all() -> &'static [LlmModel] {
+            static ALL: LazyLock<Vec<LlmModel>> = LazyLock::new(|| {
+                let mut v = Vec::new();
+                #(#pushes)*
+                v
+            });
+            &ALL
         }
     }
-    pushln(out, "            v");
-    pushln(out, "        });");
-    pushln(out, "        &ALL");
-    pushln(out, "    }");
 }
 
-fn emit_display_impl(out: &mut String) {
-    pushln(out, "impl std::fmt::Display for LlmModel {");
-    pushln(out, "    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {");
-    pushln(out, "        write!(f, \"{}:{}\", self.provider(), self.model_id())");
-    pushln(out, "    }");
-    pushln(out, "}");
-    blank(out);
-}
-
-fn emit_fromstr_impl(out: &mut String) {
-    pushln(out, "impl std::str::FromStr for LlmModel {");
-    pushln(out, "    type Err = String;");
-    blank(out);
-    pushln(out, "    /// Parse a `provider:model` string into an `LlmModel`");
-    pushln(out, "    fn from_str(s: &str) -> Result<Self, Self::Err> {");
-    pushln(out, "        let (provider_str, model_str) = s.split_once(':').unwrap_or((s, \"\"));");
-    pushln(out, "        match provider_str {");
-    for cfg in PROVIDERS {
-        pushln(
-            out,
-            format!(
-                "            \"{}\" => model_str.parse::<{}Model>().map(Self::{}),",
-                cfg.parser_name, cfg.enum_name, cfg.enum_name
-            ),
-        );
+fn emit_display_impl() -> TokenStream {
+    quote! {
+        impl std::fmt::Display for LlmModel {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}:{}", self.provider(), self.model_id())
+            }
+        }
     }
-    for dyn_cfg in DYNAMIC_PROVIDERS {
-        pushln(
-            out,
-            format!(
-                "            \"{}\" => Ok(Self::{}(model_str.to_string())),",
-                dyn_cfg.parser_name, dyn_cfg.enum_name
-            ),
-        );
-    }
-    pushln(out, "            _ => Err(format!(\"Unknown provider: '{provider_str}'\")),");
-    pushln(out, "        }");
-    pushln(out, "    }");
-    pushln(out, "}");
 }
 
-/// Build a combined `|` pattern for all dynamic providers with a binding variable.
-/// e.g. `Self::Ollama(s) | Self::LlamaCpp(s)` or `Self::Ollama(_) | Self::LlamaCpp(_)`
-fn dynamic_pattern_with_binding(binding: &str) -> String {
-    DYNAMIC_PROVIDERS.iter().map(|d| format!("Self::{}({binding})", d.enum_name)).collect::<Vec<_>>().join(" | ")
+fn emit_fromstr_impl() -> TokenStream {
+    let catalog_arms = PROVIDERS.iter().map(|cfg| {
+        let name = cfg.parser_name;
+        let outer = format_ident!("{}Model", cfg.enum_name);
+        let v = format_ident!("{}", cfg.enum_name);
+        quote! { #name => model_str.parse::<#outer>().map(Self::#v), }
+    });
+    let dyn_arms = DYNAMIC_PROVIDERS.iter().map(|d| {
+        let name = d.parser_name;
+        let v = format_ident!("{}", d.enum_name);
+        quote! { #name => Ok(Self::#v(model_str.to_string())), }
+    });
+    quote! {
+        impl std::str::FromStr for LlmModel {
+            type Err = String;
+
+            /// Parse a `provider:model` string into an `LlmModel`
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                let (provider_str, model_str) = s.split_once(':').unwrap_or((s, ""));
+                match provider_str {
+                    #(#catalog_arms)*
+                    #(#dyn_arms)*
+                    _ => Err(format!("Unknown provider: '{provider_str}'")),
+                }
+            }
+        }
+    }
+}
+
+/// Build a `Self::Ollama(b) | Self::LlamaCpp(b)` pattern for all dynamic providers.
+fn dynamic_pattern_with_binding(binding: &str) -> TokenStream {
+    let binding_ident = if binding == "_" {
+        quote! { _ }
+    } else {
+        let b = format_ident!("{}", binding);
+        quote! { #b }
+    };
+    let pats = DYNAMIC_PROVIDERS.iter().map(|d| {
+        let v = format_ident!("{}", d.enum_name);
+        quote! { Self::#v(#binding_ident) }
+    });
+    quote! { #(#pats)|* }
+}
+
+/// Emit a `u32` literal with underscore separators (e.g. `200_000`).
+fn num_lit_with_underscores(n: u32) -> TokenStream {
+    format_number(n).parse().expect("formatted number parses as a token")
 }
 
 /// Format a number with underscore separators (e.g. `200000` → `200_000`).
@@ -906,10 +955,6 @@ fn format_number(n: u32) -> String {
     result
 }
 
-fn escape_rust_string(raw: &str) -> String {
-    raw.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
 fn emit_provider_docs(ctx: &CodegenCtx) -> HashMap<String, String> {
     let mut docs = HashMap::new();
 
@@ -920,7 +965,6 @@ fn emit_provider_docs(ctx: &CodegenCtx) -> HashMap<String, String> {
         pushln(&mut doc, format!("`{}` LLM provider.", cfg.display_name));
         blank(&mut doc);
 
-        // Authentication
         pushln(&mut doc, "# Authentication");
         blank(&mut doc);
         match cfg.env_var {
@@ -937,7 +981,6 @@ fn emit_provider_docs(ctx: &CodegenCtx) -> HashMap<String, String> {
         }
         blank(&mut doc);
 
-        // Supported models table
         pushln(&mut doc, "# Supported models");
         blank(&mut doc);
         pushln(&mut doc, "| Model ID | Name | Context | Reasoning | Image | Audio |");
@@ -959,7 +1002,6 @@ fn emit_provider_docs(ctx: &CodegenCtx) -> HashMap<String, String> {
         docs.insert(cfg.dev_id.to_string(), doc);
     }
 
-    // Dynamic providers
     for dyn_cfg in DYNAMIC_PROVIDERS {
         let mut doc = String::new();
         pushln(&mut doc, format!("`{}` LLM provider.", dyn_cfg.display_name));
@@ -997,8 +1039,6 @@ fn blank(out: &mut String) {
     pushln(out, "");
 }
 
-// ── Tests ────────────────────────────────────────────────────────────────
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1006,211 +1046,10 @@ mod tests {
     use serde_json::json;
     use tempfile::NamedTempFile;
 
-    #[test]
-    fn generate_sorts_and_filters_models() {
-        let mut data = minimal_models_dev_json();
-        let root = data.as_object_mut().expect("root object");
-        let anthropic = root.get_mut("anthropic").and_then(Value::as_object_mut).expect("anthropic provider");
-
-        anthropic.insert(
-            "models".to_string(),
-            json!({
-                "b-model": {
-                    "id": "b-model",
-                    "name": "B Model",
-                    "tool_call": true,
-                    "limit": {"context": 2000, "output": 0}
-                },
-                "a-model": {
-                    "id": "a-model",
-                    "name": "A Model",
-                    "tool_call": true,
-                    "limit": {"context": 1000, "output": 0}
-                },
-                "alpha-latest": {
-                    "id": "alpha-latest",
-                    "name": "Alias",
-                    "tool_call": true,
-                    "limit": {"context": 500, "output": 0}
-                },
-                "no-tools": {
-                    "id": "no-tools",
-                    "name": "No Tools",
-                    "tool_call": false,
-                    "limit": {"context": 500, "output": 0}
-                }
-            }),
-        );
-
-        let source = generate_from_value(&data);
-        // Provider-level FromStr: sorted model IDs
-        let a_model = "\"a-model\" => Ok(Self::AModel),";
-        let b_model = "\"b-model\" => Ok(Self::BModel),";
-        let a_pos = source.find(a_model).expect("a-model parse arm");
-        let b_pos = source.find(b_model).expect("b-model parse arm");
-        assert!(a_pos < b_pos);
-        // Aliases and non-tool-call models are excluded
-        assert!(!source.contains("AlphaLatest"));
-        assert!(!source.contains("NoTools"));
-    }
+    // ── Helper unit tests ────────────────────────────────────────────────────
 
     #[test]
-    fn generate_contains_core_sections() {
-        let source = generate_from_value(&minimal_models_dev_json());
-        assert!(source.contains("pub enum LlmModel {"));
-        assert!(source.contains("impl std::str::FromStr for LlmModel {"));
-        assert!(source.contains("impl std::fmt::Display for LlmModel {"));
-        assert!(source.contains("pub fn required_env_var(&self) -> Option<&'static str> {"));
-    }
-
-    #[test]
-    fn generate_contains_dynamic_provider_arms() {
-        let source = generate_from_value(&minimal_models_dev_json());
-        assert!(source.contains("\"ollama\" => Ok(Self::Ollama(model_str.to_string())),"));
-        assert!(source.contains("\"llamacpp\" => Ok(Self::LlamaCpp(model_str.to_string())),"));
-        // Dynamic providers are combined with | for None-returning arms
-        assert!(source.contains("Self::Ollama(_) | Self::LlamaCpp(_) => None,"));
-    }
-
-    #[test]
-    fn generate_codex_is_catalog_provider() {
-        let source = generate_from_value(&minimal_models_dev_json());
-        // Codex is a catalog provider, not dynamic
-        assert!(source.contains("pub enum CodexModel {"));
-        assert!(source.contains("\"codex\" => model_str.parse::<CodexModel>().map(Self::Codex),"));
-        assert!(source.contains("Self::Codex(m) => Some(m.context_window()),"));
-    }
-
-    #[test]
-    fn generate_bedrock_is_hybrid_provider() {
-        let mut data = minimal_models_dev_json();
-        let root = data.as_object_mut().unwrap();
-        let bedrock = root.get_mut("amazon-bedrock").and_then(Value::as_object_mut).unwrap();
-
-        bedrock.insert(
-            "models".to_string(),
-            json!({
-                "anthropic.foo-v1:0": {
-                    "id": "anthropic.foo-v1:0",
-                    "name": "Foo Model",
-                    "tool_call": true,
-                    "limit": {"context": 200_000, "output": 0}
-                }
-            }),
-        );
-
-        let source = generate_from_value(&data);
-
-        assert!(source.contains("pub enum BedrockFoundationModel {"));
-        assert!(source.contains("AnthropicFooV10"));
-        assert!(source.contains("pub enum BedrockModel {"));
-        assert!(source.contains("Foundation(BedrockFoundationModel)"));
-        assert!(source.contains("Profile(String)"));
-        assert!(source.contains("impl std::str::FromStr for BedrockFoundationModel"));
-        assert!(source.contains("\"anthropic.foo-v1:0\" => Ok(Self::AnthropicFooV10),"));
-        assert!(source.contains("Unknown bedrock model"));
-
-        assert!(source.contains("impl std::str::FromStr for BedrockModel"));
-        assert!(source.contains("Err(_) => Ok(Self::Profile(s.to_string())),"));
-        assert!(source.contains("Self::Profile(s) => Cow::Owned(s.clone()),"));
-        assert!(source.contains("Self::Profile(_) => None,"));
-        assert!(source.contains("Self::Profile(_) => &[],"));
-        assert!(source.contains("Self::Profile(_) => false,"));
-        assert!(source.contains("Self::Profile(s) => Cow::Owned(format!(\"Bedrock {s}\"))"));
-
-        assert!(source.contains(
-            "BedrockFoundationModel::ALL.iter().copied().map(BedrockModel::Foundation).map(LlmModel::Bedrock)"
-        ));
-
-        assert!(source.contains("Self::Bedrock(m) => m.model_id(),"));
-        assert!(source.contains("Self::Bedrock(m) => m.display_name(),"));
-        assert!(source.contains("Self::Bedrock(m) => m.context_window(),"));
-    }
-
-    #[test]
-    fn generate_non_hybrid_providers_keep_flat_enum() {
-        let source = generate_from_value(&minimal_models_dev_json());
-        assert!(source.contains("pub enum AnthropicModel {"));
-        assert!(!source.contains("AnthropicFoundationModel"));
-        assert!(!source.contains("Foundation(AnthropicModel)"));
-        assert!(source.contains("Self::Anthropic(m) => Cow::Borrowed(m.model_id()),"));
-        assert!(source.contains("Self::Anthropic(m) => Some(m.context_window()),"));
-    }
-
-    #[test]
-    fn generate_oauth_provider_id_for_codex() {
-        let source = generate_from_value(&minimal_models_dev_json());
-        // Codex models return Some("codex") for oauth_provider_id
-        assert!(source.contains("Self::Codex(_) => Some(\"codex\"),"));
-        // Non-OAuth providers return None
-        assert!(source.contains("pub fn oauth_provider_id(&self) -> Option<&'static str>"));
-    }
-
-    #[test]
-    fn generate_delegates_to_provider_impls() {
-        let source = generate_from_value(&minimal_models_dev_json());
-        // LlmModel delegates to per-provider methods
-        assert!(source.contains("Self::Anthropic(m) => Cow::Borrowed(m.model_id()),"));
-        assert!(source.contains("Self::Anthropic(m) => Some(m.context_window()),"));
-        // Provider-level FromStr is used by LlmModel::FromStr
-        assert!(source.contains("\"anthropic\" => model_str.parse::<AnthropicModel>().map(Self::Anthropic),"));
-    }
-
-    #[test]
-    fn generate_formats_large_numbers_with_separators() {
-        let mut data = minimal_models_dev_json();
-        let root = data.as_object_mut().expect("root object");
-        let anthropic = root.get_mut("anthropic").and_then(Value::as_object_mut).expect("anthropic provider");
-
-        anthropic.insert(
-            "models".to_string(),
-            json!({
-                "big-model": {
-                    "id": "big-model",
-                    "name": "Big Model",
-                    "tool_call": true,
-                    "limit": {"context": 200_000, "output": 0}
-                }
-            }),
-        );
-
-        let source = generate_from_value(&data);
-        assert!(source.contains("200_000"));
-        assert!(!source.contains("200000"));
-    }
-
-    #[test]
-    fn generate_groups_identical_match_arms() {
-        let mut data = minimal_models_dev_json();
-        let root = data.as_object_mut().expect("root object");
-        let anthropic = root.get_mut("anthropic").and_then(Value::as_object_mut).expect("anthropic provider");
-
-        anthropic.insert(
-            "models".to_string(),
-            json!({
-                "model-a": {
-                    "id": "model-a",
-                    "name": "Same Name",
-                    "tool_call": true,
-                    "limit": {"context": 100_000, "output": 0}
-                },
-                "model-b": {
-                    "id": "model-b",
-                    "name": "Same Name",
-                    "tool_call": true,
-                    "limit": {"context": 100_000, "output": 0}
-                }
-            }),
-        );
-
-        let source = generate_from_value(&data);
-        // Both context_window and display_name should combine arms
-        assert!(source.contains("Self::ModelA | Self::ModelB => 100_000,"));
-        assert!(source.contains("Self::ModelA | Self::ModelB => \"Same Name\","));
-    }
-
-    #[test]
-    fn test_model_id_to_variant() {
+    fn model_id_to_variant_pascal_cases_segments() {
         assert_eq!(model_id_to_variant("claude-sonnet-4-5-20250929"), "ClaudeSonnet4520250929");
         assert_eq!(model_id_to_variant("gemini-2.5-flash"), "Gemini25Flash");
         assert_eq!(model_id_to_variant("deepseek-chat"), "DeepseekChat");
@@ -1218,117 +1057,17 @@ mod tests {
     }
 
     #[test]
-    fn test_model_id_to_variant_with_slash_and_colon() {
+    fn model_id_to_variant_handles_slash_and_colon() {
         assert_eq!(model_id_to_variant("anthropic/claude-opus-4.6"), "AnthropicClaudeOpus46");
         assert_eq!(model_id_to_variant("openai/gpt-5.1-codex-max"), "OpenaiGpt51CodexMax");
         assert_eq!(model_id_to_variant("deepseek/deepseek-r1:free"), "DeepseekDeepseekR1Free");
     }
 
     #[test]
-    fn test_is_alias() {
+    fn is_alias_detects_latest_suffix() {
         assert!(is_alias("claude-sonnet-4-5-latest"));
         assert!(is_alias("claude-3-7-sonnet-latest"));
         assert!(!is_alias("claude-sonnet-4-5-20250929"));
-    }
-
-    #[test]
-    fn generate_contains_reasoning_levels_and_supports_reasoning() {
-        let mut data = minimal_models_dev_json();
-        let root = data.as_object_mut().expect("root object");
-        let anthropic = root.get_mut("anthropic").and_then(Value::as_object_mut).expect("anthropic provider");
-
-        anthropic.insert(
-            "models".to_string(),
-            json!({
-                "thinker": {
-                    "id": "thinker",
-                    "name": "Thinker",
-                    "tool_call": true,
-                    "reasoning": true,
-                    "limit": {"context": 1000, "output": 0}
-                },
-                "fast": {
-                    "id": "fast",
-                    "name": "Fast",
-                    "tool_call": true,
-                    "reasoning": false,
-                    "limit": {"context": 1000, "output": 0}
-                }
-            }),
-        );
-
-        let source = generate_from_value(&data);
-        // Provider enum should have reasoning_levels method
-        assert!(source.contains("pub fn reasoning_levels(self) -> &'static [ReasoningEffort] {"));
-        // Thinker (anthropic) gets standard 3 levels
-        assert!(
-            source
-                .contains("Self::Thinker => &[ReasoningEffort::Low, ReasoningEffort::Medium, ReasoningEffort::High],")
-        );
-        // Fast gets empty
-        assert!(source.contains("Self::Fast => &[],"));
-        // supports_reasoning delegates to reasoning_levels
-        assert!(source.contains("pub fn supports_reasoning(self) -> bool {"));
-        assert!(source.contains("!self.reasoning_levels().is_empty()"));
-        // LlmModel level
-        assert!(source.contains("pub fn reasoning_levels(&self) -> &'static [ReasoningEffort] {"));
-        // Dynamic providers return empty
-        assert!(source.contains("Self::Ollama(_) | Self::LlamaCpp(_) => &[],"));
-    }
-
-    #[test]
-    fn generate_codex_gets_four_reasoning_levels() {
-        let mut data = minimal_models_dev_json();
-        let root = data.as_object_mut().expect("root object");
-        let openai = root.get_mut("openai").and_then(Value::as_object_mut).expect("openai provider");
-
-        openai.insert(
-            "models".to_string(),
-            json!({
-                "gpt-5.4-codex": {
-                    "id": "gpt-5.4-codex",
-                    "name": "GPT-5.4 Codex",
-                    "tool_call": true,
-                    "reasoning": true,
-                    "limit": {"context": 200_000, "output": 0}
-                }
-            }),
-        );
-
-        let source = generate_from_value(&data);
-        assert!(
-            source.contains(
-                "ReasoningEffort::Low, ReasoningEffort::Medium, ReasoningEffort::High, ReasoningEffort::Xhigh"
-            ),
-            "Codex reasoning model should have 4 levels including Xhigh"
-        );
-    }
-
-    #[test]
-    fn generate_codex_overrides_gpt55_subscription_context_window() {
-        let mut data = minimal_models_dev_json();
-        let root = data.as_object_mut().expect("root object");
-        let openai = root.get_mut("openai").and_then(Value::as_object_mut).expect("openai provider");
-
-        openai.insert(
-            "models".to_string(),
-            json!({
-                "gpt-5.5": {
-                    "id": "gpt-5.5",
-                    "name": "GPT-5.5",
-                    "tool_call": true,
-                    "reasoning": true,
-                    "limit": {"context": 1_050_000, "output": 128_000}
-                }
-            }),
-        );
-
-        let source = generate_from_value(&data);
-        let codex_impl = generated_impl_block(&source, "CodexModel");
-        let openai_impl = generated_impl_block(&source, "OpenaiModel");
-
-        assert!(codex_impl.contains("Self::Gpt55 => 272_000,"));
-        assert!(openai_impl.contains("Self::Gpt55 => 1_050_000,"));
     }
 
     #[test]
@@ -1344,121 +1083,145 @@ mod tests {
         assert_eq!(codex_subscription_context_window("some-future-model", 400_000), 400_000);
     }
 
-    fn generate_from_value(data: &Value) -> String {
-        let tmp = NamedTempFile::new().expect("temp file");
-        let json = serde_json::to_string(data).expect("serialize fixture");
-        std::fs::write(tmp.path(), json).expect("write fixture");
-        generate(tmp.path()).expect("codegen succeeds").rust_source
+    #[test]
+    fn format_context_window_formats_correctly() {
+        assert_eq!(format_context_window(1_000_000), "1M");
+        assert_eq!(format_context_window(200_000), "200k");
+        assert_eq!(format_context_window(8_000), "8k");
+        assert_eq!(format_context_window(0), "unknown");
     }
 
-    fn generated_impl_block<'a>(source: &'a str, enum_name: &str) -> &'a str {
-        let start_marker = format!("impl {enum_name} {{");
-        let start = source.find(&start_marker).expect("provider impl block start");
-        let rest = &source[start..];
-        let end_marker = format!("impl std::str::FromStr for {enum_name}");
-        let end = rest.find(&end_marker).expect("provider impl block end");
-        &rest[..end]
-    }
-    fn minimal_models_dev_json() -> Value {
-        let mut root = serde_json::Map::new();
-        for cfg in PROVIDERS {
-            let json_key = cfg.json_key();
-            root.entry(json_key.to_string()).or_insert_with(|| {
-                json!({
-                    "id": json_key,
-                    "name": json_key,
-                    "env": [],
-                    "models": {}
-                })
-            });
-            for &extra in cfg.extra_source_ids {
-                root.entry(extra.to_string()).or_insert_with(|| {
-                    json!({
-                        "id": extra,
-                        "name": extra,
-                        "env": [],
-                        "models": {}
-                    })
-                });
-            }
+    #[test]
+    fn level_str_to_variant_covers_all_reasoning_efforts() {
+        for effort in utils::ReasoningEffort::all() {
+            let _ = level_str_to_variant(effort.as_str());
         }
-        Value::Object(root)
     }
 
     #[test]
-    fn extra_source_ids_merges_models_into_provider() {
+    fn build_sorts_models_and_filters_aliases_and_non_tool_call() {
         let mut data = minimal_models_dev_json();
-        let root = data.as_object_mut().unwrap();
-
-        // Add a model to the zai-coding-plan extra source that doesn't exist in zai
-        let extra = root.get_mut("zai-coding-plan").unwrap().as_object_mut().unwrap();
-        extra.insert(
-            "models".to_string(),
+        anthropic_models(
+            &mut data,
             json!({
-                "extra-model": {
-                    "id": "extra-model",
-                    "name": "Extra Model",
-                    "tool_call": true,
-                    "limit": {"context": 4000, "output": 0}
-                }
+                "b-model": {"id": "b-model", "name": "B Model", "tool_call": true, "limit": {"context": 2000, "output": 0}},
+                "a-model": {"id": "a-model", "name": "A Model", "tool_call": true, "limit": {"context": 1000, "output": 0}},
+                "alpha-latest": {"id": "alpha-latest", "name": "Alias", "tool_call": true, "limit": {"context": 500, "output": 0}},
+                "no-tools": {"id": "no-tools", "name": "No Tools", "tool_call": false, "limit": {"context": 500, "output": 0}}
             }),
         );
 
-        let source = generate_from_value(&data);
-        // The extra model should appear under ZAi
-        assert!(source.contains("\"extra-model\" => Ok(Self::ExtraModel),"));
+        let models = build_from_value(&data);
+        let ids: Vec<&str> = models["anthropic"].iter().map(|m| m.model_id.as_str()).collect();
+        assert_eq!(ids, vec!["a-model", "b-model"]);
     }
 
     #[test]
-    fn extra_source_ids_does_not_duplicate_existing_models() {
+    fn build_extra_source_ids_merges_unique_models_into_provider() {
         let mut data = minimal_models_dev_json();
-        let root = data.as_object_mut().unwrap();
-
-        // Add same model ID to both zai and zai-coding-plan
-        let zai = root.get_mut("zai").unwrap().as_object_mut().unwrap();
-        zai.insert(
-            "models".to_string(),
+        zai_extra_models(
+            &mut data,
             json!({
-                "shared-model": {
-                    "id": "shared-model",
-                    "name": "Shared Model",
-                    "tool_call": true,
-                    "limit": {"context": 1000, "output": 0}
-                }
-            }),
-        );
-        let extra = root.get_mut("zai-coding-plan").unwrap().as_object_mut().unwrap();
-        extra.insert(
-            "models".to_string(),
-            json!({
-                "shared-model": {
-                    "id": "shared-model",
-                    "name": "Shared Model Duplicate",
-                    "tool_call": true,
-                    "limit": {"context": 2000, "output": 0}
-                }
+                "extra-model": {"id": "extra-model", "name": "Extra Model", "tool_call": true, "limit": {"context": 4000, "output": 0}}
             }),
         );
 
-        let source = generate_from_value(&data);
-        let from_str_matches = source.matches("\"shared-model\" => Ok(Self::SharedModel),").count();
-        assert_eq!(from_str_matches, 1);
+        let models = build_from_value(&data);
+        assert!(models["zai"].iter().any(|m| m.model_id == "extra-model"));
     }
+
+    #[test]
+    fn build_extra_source_ids_does_not_duplicate_existing_models() {
+        let mut data = minimal_models_dev_json();
+        let shared = json!({
+            "shared-model": {"id": "shared-model", "name": "Shared Model", "tool_call": true, "limit": {"context": 1000, "output": 0}}
+        });
+        insert_models(&mut data, "zai", shared.clone());
+        insert_models(&mut data, "zai-coding-plan", shared);
+
+        let models = build_from_value(&data);
+        let count = models["zai"].iter().filter(|m| m.model_id == "shared-model").count();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn build_derives_prompt_caching_from_cost_fields() {
+        let mut data = minimal_models_dev_json();
+        insert_models(
+            &mut data,
+            "amazon-bedrock",
+            json!({
+                "cached": {
+                    "id": "cached", "name": "Cached", "tool_call": true,
+                    "limit": {"context": 200_000, "output": 0},
+                    "cost": {"input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_write": 3.75}
+                },
+                "uncached": {
+                    "id": "uncached", "name": "Uncached", "tool_call": true,
+                    "limit": {"context": 200_000, "output": 0},
+                    "cost": {"input": 3.0, "output": 15.0}
+                }
+            }),
+        );
+
+        let models = build_from_value(&data);
+        let bedrock = &models["amazon-bedrock"];
+        let cached = bedrock.iter().find(|m| m.model_id == "cached").unwrap();
+        let uncached = bedrock.iter().find(|m| m.model_id == "uncached").unwrap();
+        assert!(cached.supports_prompt_caching);
+        assert!(!uncached.supports_prompt_caching);
+    }
+
+    #[test]
+    fn build_assigns_codex_four_reasoning_levels() {
+        let mut data = minimal_models_dev_json();
+        insert_models(
+            &mut data,
+            "openai",
+            json!({
+                "gpt-5.4-codex": {
+                    "id": "gpt-5.4-codex", "name": "GPT-5.4 Codex", "tool_call": true, "reasoning": true,
+                    "limit": {"context": 200_000, "output": 0}
+                }
+            }),
+        );
+
+        let models = build_from_value(&data);
+        let codex_model = models["codex"].iter().find(|m| m.model_id == "gpt-5.4-codex").unwrap();
+        assert_eq!(codex_model.reasoning_levels, vec!["low", "medium", "high", "xhigh"]);
+    }
+
+    #[test]
+    fn build_applies_codex_subscription_context_window_override() {
+        let mut data = minimal_models_dev_json();
+        insert_models(
+            &mut data,
+            "openai",
+            json!({
+                "gpt-5.5": {
+                    "id": "gpt-5.5", "name": "GPT-5.5", "tool_call": true, "reasoning": true,
+                    "limit": {"context": 1_050_000, "output": 128_000}
+                }
+            }),
+        );
+
+        let models = build_from_value(&data);
+        let codex = models["codex"].iter().find(|m| m.model_id == "gpt-5.5").unwrap();
+        let openai = models["openai"].iter().find(|m| m.model_id == "gpt-5.5").unwrap();
+        assert_eq!(codex.context_window, 272_000);
+        assert_eq!(openai.context_window, 1_050_000);
+    }
+
+    // ── Markdown docs ────────────────────────────────────────────────────────
 
     #[test]
     fn generate_emits_provider_docs() {
         let mut data = minimal_models_dev_json();
-        let root = data.as_object_mut().unwrap();
-        let anthropic = root.get_mut("anthropic").and_then(Value::as_object_mut).unwrap();
-
-        anthropic.insert(
-            "models".to_string(),
+        anthropic_models(
+            &mut data,
             json!({
                 "claude-test": {
-                    "id": "claude-test",
-                    "name": "Claude Test",
-                    "tool_call": true,
-                    "reasoning": true,
+                    "id": "claude-test", "name": "Claude Test", "tool_call": true, "reasoning": true,
                     "limit": {"context": 200_000, "output": 0},
                     "modalities": {"input": ["text", "image"]}
                 }
@@ -1474,25 +1237,40 @@ mod tests {
         assert!(anthropic_doc.contains("`ANTHROPIC_API_KEY`"));
         assert!(anthropic_doc.contains("| `claude-test` | `Claude Test` | `200k` | yes | yes |  |"));
 
-        // Dynamic providers get a short doc
         let ollama_doc = &output.provider_docs["ollama"];
         assert!(ollama_doc.contains("`Ollama` LLM provider."));
         assert!(ollama_doc.contains("any model name at runtime"));
     }
 
-    #[test]
-    fn format_context_window_formats_correctly() {
-        assert_eq!(format_context_window(1_000_000), "1M");
-        assert_eq!(format_context_window(200_000), "200k");
-        assert_eq!(format_context_window(8_000), "8k");
-        assert_eq!(format_context_window(0), "unknown");
+    fn build_from_value(data: &Value) -> ProviderModels {
+        let parsed: ModelsDevData = serde_json::from_value(data.clone()).expect("parse fixture");
+        build_provider_models(&parsed).expect("build provider models")
     }
 
-    #[test]
-    fn level_str_to_variant_covers_all_reasoning_efforts() {
-        for effort in utils::ReasoningEffort::all() {
-            // Should not panic for any known variant
-            let _ = level_str_to_variant(effort.as_str());
+    fn anthropic_models(data: &mut Value, models: Value) {
+        insert_models(data, "anthropic", models);
+    }
+
+    fn zai_extra_models(data: &mut Value, models: Value) {
+        insert_models(data, "zai-coding-plan", models);
+    }
+
+    fn insert_models(data: &mut Value, provider_key: &str, models: Value) {
+        let provider = data.as_object_mut().unwrap().get_mut(provider_key).unwrap().as_object_mut().unwrap();
+        provider.insert("models".to_string(), models);
+    }
+
+    fn minimal_models_dev_json() -> Value {
+        let mut root = serde_json::Map::new();
+        for cfg in PROVIDERS {
+            let json_key = cfg.json_key();
+            root.entry(json_key.to_string())
+                .or_insert_with(|| json!({"id": json_key, "name": json_key, "env": [], "models": {}}));
+            for &extra in cfg.extra_source_ids {
+                root.entry(extra.to_string())
+                    .or_insert_with(|| json!({"id": extra, "name": extra, "env": [], "models": {}}));
+            }
         }
+        Value::Object(root)
     }
 }

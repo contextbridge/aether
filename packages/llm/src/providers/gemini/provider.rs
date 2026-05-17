@@ -128,14 +128,14 @@ mod tests {
     #[test]
     fn get_api_key_returns_empty_when_auth_is_none() {
         let provider = GeminiProvider::new(Some("real-key".to_string()))
-            .with_connection(ProviderConnectionConfig { base_url: None, auth_mode: ProviderAuthMode::None });
+            .with_connection(ProviderConnectionConfig { auth_mode: ProviderAuthMode::None, ..Default::default() });
         assert_eq!(provider.get_api_key().unwrap(), "");
     }
 
     #[test]
     fn build_openai_client_strips_authorization_when_auth_is_none() {
         let provider = GeminiProvider::new(Some("real-key".to_string()))
-            .with_connection(ProviderConnectionConfig { base_url: None, auth_mode: ProviderAuthMode::None });
+            .with_connection(ProviderConnectionConfig { auth_mode: ProviderAuthMode::None, ..Default::default() });
         let api_key = provider.get_api_key().unwrap();
         let client = provider.build_openai_client(&api_key);
         assert!(!client.config().headers().contains_key(AUTHORIZATION));

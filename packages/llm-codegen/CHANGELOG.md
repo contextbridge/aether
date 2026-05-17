@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.8](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.7...aether-llm-codegen-v0.2.8) - 2026-05-16
+
+### Fixed
+
+- *(llm)* Use prompt caching on Bedrock models that support prompt caching ([#75](https://github.com/contextbridge/aether/pull/75))
+
+### Other
+
+- *(llm-codegen)* Cleanup string munging and use quote crate ([#77](https://github.com/contextbridge/aether/pull/77))
+
 ## [0.2.7](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.6...aether-llm-codegen-v0.2.7) - 2026-05-13
 
 ### Added

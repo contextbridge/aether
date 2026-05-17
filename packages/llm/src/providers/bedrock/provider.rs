@@ -1,4 +1,4 @@
-use super::mappers::{map_messages, map_tools};
+use super::mappers::{default_cache_point, map_messages, map_tools};
 use super::streaming::process_bedrock_stream;
 use crate::provider::{LlmResponseStream, ProviderFactory, StreamingModelProvider, get_context_window};
 use crate::{Context, LlmError, ProviderAuthMode, ProviderConnectionConfig, Result};
@@ -29,6 +29,7 @@ pub struct AwsCredentials {
 pub struct BedrockProvider {
     client: Client,
     model: String,
+    inference_profile_arn: Option<String>,
     max_tokens: i32,
     temperature: Option<f32>,
 }
@@ -52,14 +53,26 @@ impl BedrockProvider {
             Client::new(&config)
         };
 
-        Self { client, model: DEFAULT_MODEL.to_string(), max_tokens: DEFAULT_MAX_TOKENS, temperature: None }
+        Self {
+            client,
+            model: DEFAULT_MODEL.to_string(),
+            inference_profile_arn: connection.inference_profile_arn,
+            max_tokens: DEFAULT_MAX_TOKENS,
+            temperature: None,
+        }
     }
 
     /// Create a provider from explicit configuration without async credential discovery.
     pub fn from_config(credentials: Option<AwsCredentials>, region: Option<&str>) -> Self {
         let client = build_client(credentials, region);
 
-        Self { client, model: DEFAULT_MODEL.to_string(), max_tokens: DEFAULT_MAX_TOKENS, temperature: None }
+        Self {
+            client,
+            model: DEFAULT_MODEL.to_string(),
+            inference_profile_arn: None,
+            max_tokens: DEFAULT_MAX_TOKENS,
+            temperature: None,
+        }
     }
 
     pub fn with_model(mut self, model: &str) -> Self {
@@ -77,11 +90,22 @@ impl BedrockProvider {
         self
     }
 
+    pub fn with_inference_profile_arn(mut self, arn: impl Into<String>) -> Self {
+        self.inference_profile_arn = Some(arn.into());
+        self
+    }
+
+    fn request_model_id(&self) -> &str {
+        self.inference_profile_arn.as_deref().unwrap_or(&self.model)
+    }
+
     async fn send_converse_stream(
         &self,
         context: &Context,
     ) -> Result<EventReceiver<ConverseStreamOutput, ConverseStreamOutputError>> {
-        let (system_blocks, messages) = map_messages(context.messages())?;
+        let cache_point =
+            self.model().is_some_and(|m| m.supports_prompt_caching()).then(default_cache_point).transpose()?;
+        let (system_blocks, messages) = map_messages(context.messages(), cache_point.as_ref())?;
         let mut inference_config = InferenceConfiguration::builder().max_tokens(self.max_tokens);
 
         if let Some(temp) = self.temperature {
@@ -93,7 +117,7 @@ impl BedrockProvider {
         let mut request = self
             .client
             .converse_stream()
-            .model_id(&self.model)
+            .model_id(self.request_model_id())
             .set_messages(Some(messages))
             .inference_config(inference_config);
 
@@ -102,11 +126,15 @@ impl BedrockProvider {
         }
 
         if !context.tools().is_empty() {
-            let tool_config = map_tools(context.tools())?;
+            let tool_config = map_tools(context.tools(), cache_point.as_ref())?;
             request = request.tool_config(tool_config);
         }
 
-        info!(model = %self.model, "Sending Bedrock converse_stream request");
+        if let Some(arn) = self.inference_profile_arn.as_deref() {
+            info!(model = %self.model, inference_profile_arn = %arn, "Sending Bedrock converse_stream request");
+        } else {
+            info!(model = %self.model, "Sending Bedrock converse_stream request");
+        }
 
         let response = request.send().await.map_err(|e| {
             error!(model = %self.model, error = ?e, "Bedrock API error");
@@ -242,6 +270,14 @@ mod tests {
     use tokio::net::TcpListener;
     use tokio::sync::{Mutex, oneshot};
 
+    fn inference_profile_arn(model: &str) -> String {
+        format!("arn:aws:bedrock:us-west-2:000000000000:inference-profile/{model}")
+    }
+
+    fn application_inference_profile_arn() -> &'static str {
+        "arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/000000000000"
+    }
+
     fn test_provider() -> BedrockProvider {
         BedrockProvider::from_config(None, None)
     }
@@ -283,6 +319,7 @@ mod tests {
         let provider = BedrockProvider::new_with_connection(ProviderConnectionConfig {
             base_url: Some(endpoint.url.clone()),
             auth_mode: ProviderAuthMode::None,
+            ..Default::default()
         })
         .await;
 
@@ -363,22 +400,52 @@ mod tests {
         assert_eq!(provider.display_name(), format!("Bedrock ({id})"));
     }
 
-    #[test]
-    fn inference_profile_arn_is_passed_through_as_profile() {
-        let arn = "arn:aws:bedrock:us-west-2:000000000000:inference-profile/us.anthropic.claude-opus-4-7";
-        let provider = test_provider().with_model(arn);
-        assert_eq!(provider.context_window(), None);
-        assert_eq!(provider.model, arn);
-        assert_eq!(provider.model().unwrap().to_string(), format!("bedrock:{arn}"));
+    #[tokio::test]
+    async fn separate_inference_profile_arn_is_used_as_request_model_id() {
+        let endpoint = FakeBedrockEndpoint::start().await;
+        let provider = BedrockProvider::new_with_connection(ProviderConnectionConfig {
+            base_url: Some(endpoint.url.clone()),
+            auth_mode: ProviderAuthMode::None,
+            inference_profile_arn: Some(application_inference_profile_arn().to_string()),
+        })
+        .await
+        .with_model("anthropic.claude-sonnet-4-5-20250929-v1:0");
+        let context = Context::new(
+            vec![ChatMessage::User { content: vec![ContentBlock::text("hello")], timestamp: IsoString::now() }],
+            vec![],
+        );
+
+        let result = provider.send_converse_stream(&context).await;
+        let request = endpoint.request.await.expect("fake Bedrock endpoint received no request");
+
+        assert!(result.is_err());
+        assert!(
+            request.path.contains("arn%3Aaws%3Abedrock%3Aus-west-2%3A000000000000%3Aapplication-inference-profile"),
+            "{}",
+            request.path
+        );
+        assert_eq!(provider.context_window(), Some(200_000));
+        assert_eq!(provider.model().unwrap().to_string(), "bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0");
     }
 
     #[test]
-    fn application_inference_profile_arn_is_passed_through_as_profile() {
-        let arn = "arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/000000000000";
-        let provider = test_provider().with_model(arn);
-        assert_eq!(provider.context_window(), None);
-        assert_eq!(provider.model, arn);
-        assert_eq!(provider.display_name(), format!("Bedrock ({arn})"));
+    fn with_inference_profile_arn_keeps_canonical_model_identity() {
+        let arn = inference_profile_arn("us.anthropic.claude-sonnet-4-5-20250929-v1:0");
+        let provider =
+            test_provider().with_model("anthropic.claude-sonnet-4-5-20250929-v1:0").with_inference_profile_arn(&arn);
+
+        assert_eq!(provider.request_model_id(), arn);
+        assert_eq!(provider.context_window(), Some(200_000));
+        assert_eq!(provider.model().unwrap().to_string(), "bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0");
+    }
+
+    #[test]
+    fn prompt_caching_support_comes_from_canonical_model() {
+        let cached = test_provider().with_model("anthropic.claude-sonnet-4-5-20250929-v1:0");
+        assert!(cached.model().unwrap().supports_prompt_caching());
+
+        let unknown_profile = test_provider().with_model("us.anthropic.claude-future-model-v99:0");
+        assert!(!unknown_profile.model().unwrap().supports_prompt_caching());
     }
 
     struct FakeBedrockEndpoint {
