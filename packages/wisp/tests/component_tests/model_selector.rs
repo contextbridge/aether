@@ -310,7 +310,8 @@ fn render_shows_bar_on_focused_reasoning_row() {
         .find(|(i, _)| term.get_style_at(*i, 0).bg == Some(ctx.theme.highlight_bg()))
         .map(|(_, l)| l)
         .expect("should have focused line");
-    assert!(focused_line.contains("reasoning [■■·]"), "expected reasoning bar, got: {focused_line}");
+    assert!(focused_line.contains("medium [■■·]"), "expected reasoning bar with effort label, got: {focused_line}");
+    assert!(!focused_line.contains("reasoning"), "expected no generic reasoning label, got: {focused_line}");
 }
 
 #[tokio::test]

@@ -5,16 +5,43 @@ use std::path::PathBuf;
 use tui::Renderer as FrameRenderer;
 use tui::RendererCommand;
 use tui::Theme;
+use tui::display_width_text;
 use tui::testing::TestTerminal;
 use tui::{Component, Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
-use wisp::components::app::{App, EventOutcome};
+use wisp::components::app::{App, AppInfo, EventOutcome};
 use wisp::settings::DEFAULT_CONTENT_PADDING;
+use wisp::workspace_status::WorkspaceStatus;
 
 pub(super) const TEST_AGENT: &str = "test-agent";
 pub(super) const TEST_WIDTH: u16 = 200;
+pub(super) const TEST_WORKSPACE_DIR: &str = "~/code/foo";
+pub(super) const TEST_GIT_REF: &str = "main";
+
+pub(super) fn test_workspace_status() -> WorkspaceStatus {
+    WorkspaceStatus::new(TEST_WORKSPACE_DIR, Some(TEST_GIT_REF.to_string()))
+}
 
 pub(super) fn p(s: &str) -> String {
     format!("{}{s}", " ".repeat(DEFAULT_CONTENT_PADDING))
+}
+
+pub(super) fn expected_status_line(width: u16, agent_name: &str) -> String {
+    let left = format!("{}{} · {}", " ".repeat(DEFAULT_CONTENT_PADDING), TEST_WORKSPACE_DIR, TEST_GIT_REF);
+    let padding = usize::from(width).saturating_sub(display_width_text(&left) + display_width_text(agent_name));
+    let line = format!("{left}{}{agent_name}", " ".repeat(padding));
+    truncate_to_display_width(&line, usize::from(width))
+}
+
+fn truncate_to_display_width(text: &str, width: usize) -> String {
+    let mut truncated = String::new();
+    for ch in text.chars() {
+        let next = format!("{truncated}{ch}");
+        if display_width_text(&next) > width {
+            break;
+        }
+        truncated = next;
+    }
+    truncated
 }
 /// Expected progress-indicator line for the first inactive→active transition.
 pub(super) const PROGRESS_LINE: &str =
@@ -48,15 +75,16 @@ impl Renderer {
         auth_methods: Vec<acp::AuthMethod>,
         size: (u16, u16),
     ) -> Self {
-        let app = App::new(
-            acp::SessionId::new("test"),
+        let app = App::new(AppInfo {
+            session_id: acp::SessionId::new("test"),
             agent_name,
-            acp::PromptCapabilities::new(),
-            config_options,
+            prompt_capabilities: acp::PromptCapabilities::new(),
+            config_options: config_options.to_vec(),
             auth_methods,
-            std::path::PathBuf::from("."),
-            AcpPromptHandle::noop(),
-        );
+            working_dir: std::path::PathBuf::from("."),
+            workspace_status: test_workspace_status(),
+            prompt_handle: AcpPromptHandle::noop(),
+        });
         let frame_renderer = FrameRenderer::new(terminal, Theme::default(), size);
         Self { app, frame_renderer }
     }
@@ -222,7 +250,7 @@ pub(super) fn expected_prompt(width: u16, input: &str, agent_name: &str) -> Vec<
     let top = "─".repeat(w);
     let middle = format!("> {input}").trim_end().to_string();
     let bottom = "─".repeat(w);
-    let status = p(agent_name);
+    let status = expected_status_line(width, agent_name);
     vec![top, middle, bottom, status]
 }
 

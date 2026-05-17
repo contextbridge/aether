@@ -216,7 +216,8 @@ async fn render_model_selector_hides_top_level_rows() {
     assert!(!text.contains("Provider: OpenRouter"), "rendered:\n{text}");
     assert!(!text.contains("Model: GPT-4o"), "rendered:\n{text}");
     assert!(text.contains("Toggle"), "rendered:\n{text}");
-    assert!(text.contains("Reasoning"), "rendered:\n{text}");
+    assert!(text.contains("Effort: none"), "rendered:\n{text}");
+    assert!(!text.contains("[Tab] Reasoning"), "rendered:\n{text}");
     assert!(text.contains("[Esc] Done"), "rendered:\n{text}");
 }
 
@@ -353,6 +354,8 @@ async fn footer_shows_toggle_when_model_selector_open() {
     let output = term.get_lines();
     let footer = &output[21];
     assert!(footer.contains("Toggle"), "footer: {footer}");
+    assert!(footer.contains("Effort: none"), "footer: {footer}");
+    assert!(!footer.contains("[Tab] Reasoning"), "footer: {footer}");
     assert!(footer.contains("[Esc] Done"), "footer: {footer}");
 }
 
@@ -410,6 +413,7 @@ async fn multi_select_entry_opens_model_selector() {
 
     let footer = render_footer(&mut overlay);
     assert!(footer.contains("Toggle"), "expected model selector, got: {footer}");
+    assert!(footer.contains("Effort: none"), "expected effort label, got: {footer}");
 }
 
 #[tokio::test]

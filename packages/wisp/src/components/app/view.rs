@@ -19,6 +19,7 @@ pub fn build_frame(app: &mut App, context: &ViewContext) -> Frame {
 
 fn make_status_line(app: &App) -> StatusLine<'_> {
     StatusLine {
+        workspace_status: &app.workspace_status,
         agent_name: &app.agent_name,
         config_options: &app.config_options,
         context_usage: app.context_usage,

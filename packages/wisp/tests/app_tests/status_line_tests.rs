@@ -6,6 +6,21 @@ use tui::testing::TestTerminal;
 use super::common::*;
 
 #[tokio::test]
+async fn test_status_line_shows_workspace_on_left() {
+    let terminal = TestTerminal::new(TEST_WIDTH, 24);
+    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (TEST_WIDTH, 24));
+
+    renderer.initial_render().unwrap();
+
+    let lines = renderer.writer().get_lines();
+    let status_line = lines
+        .iter()
+        .find(|line| line.contains(TEST_WORKSPACE_DIR) && line.contains(TEST_GIT_REF) && line.contains(TEST_AGENT))
+        .unwrap_or_else(|| panic!("Status line should show workspace and agent.\nBuffer:\n{}", lines.join("\n")));
+    assert!(status_line.find(TEST_WORKSPACE_DIR).unwrap() < status_line.find(TEST_AGENT).unwrap());
+}
+
+#[tokio::test]
 async fn test_status_line_shows_agent_name() {
     let terminal = TestTerminal::new(80, 24);
     let mut renderer = Renderer::new(terminal, "claude-code".to_string(), &[], (80, 24));

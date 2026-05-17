@@ -18,6 +18,7 @@ use crate::components::status_line::ContextUsageDisplay;
 use crate::keybindings::Keybindings;
 use crate::settings;
 use crate::settings::overlay::{SettingsMessage, SettingsOverlay};
+use crate::workspace_status::WorkspaceStatus;
 use acp_utils::client::{AcpEvent, AcpPromptHandle};
 use acp_utils::config_meta::SelectOptionMeta;
 use acp_utils::config_option_id::ConfigOptionId;
@@ -44,6 +45,17 @@ pub enum EventOutcome {
     DontRender,
 }
 
+pub struct AppInfo {
+    pub session_id: SessionId,
+    pub agent_name: String,
+    pub prompt_capabilities: acp::PromptCapabilities,
+    pub config_options: Vec<acp::SessionConfigOption>,
+    pub auth_methods: Vec<acp::AuthMethod>,
+    pub working_dir: PathBuf,
+    pub workspace_status: WorkspaceStatus,
+    pub prompt_handle: AcpPromptHandle,
+}
+
 #[doc = include_str!("../../docs/app.md")]
 pub struct App {
     agent_name: String,
@@ -63,19 +75,22 @@ pub struct App {
     session_loading_buffer: SessionLoadingBuffer,
     prompt_handle: AcpPromptHandle,
     working_dir: PathBuf,
+    workspace_status: WorkspaceStatus,
     content_padding: usize,
 }
 
 impl App {
-    pub fn new(
-        session_id: SessionId,
-        agent_name: String,
-        prompt_capabilities: acp::PromptCapabilities,
-        config_options: &[acp::SessionConfigOption],
-        auth_methods: Vec<acp::AuthMethod>,
-        working_dir: PathBuf,
-        prompt_handle: AcpPromptHandle,
-    ) -> Self {
+    pub fn new(info: AppInfo) -> Self {
+        let AppInfo {
+            session_id,
+            agent_name,
+            prompt_capabilities,
+            config_options,
+            auth_methods,
+            working_dir,
+            workspace_status,
+            prompt_handle,
+        } = info;
         let keybindings = Keybindings::default();
         let wisp_settings = settings::load_or_create_settings();
         let content_padding = settings::resolve_content_padding(&wisp_settings);
@@ -86,7 +101,7 @@ impl App {
             ctrl_c_pressed_at: None,
             conversation_screen: ConversationScreen::new(keybindings.clone(), content_padding),
             prompt_capabilities,
-            config_options: config_options.to_vec(),
+            config_options,
             server_statuses: Vec::new(),
             auth_methods,
             settings_overlay: None,
@@ -97,6 +112,7 @@ impl App {
             session_loading_buffer: SessionLoadingBuffer::new(),
             prompt_handle,
             working_dir,
+            workspace_status,
             content_padding,
         }
     }
@@ -616,68 +632,32 @@ pub(crate) mod test_helpers {
     use acp_utils::client::PromptCommand;
     use tokio::sync::mpsc;
 
+    pub fn test_workspace_status() -> WorkspaceStatus {
+        WorkspaceStatus::new("~/code/foo", Some("main".to_string()))
+    }
+
     pub fn make_app() -> App {
-        App::new(
-            SessionId::new("test"),
-            "test-agent".to_string(),
-            acp::PromptCapabilities::new(),
-            &[],
-            vec![],
-            PathBuf::from("."),
-            AcpPromptHandle::noop(),
-        )
+        make_app_with_options("test", acp::PromptCapabilities::new(), &[], vec![], AcpPromptHandle::noop())
     }
 
     pub fn make_app_with_config(config_options: &[acp::SessionConfigOption]) -> App {
-        App::new(
-            SessionId::new("test"),
-            "test-agent".to_string(),
-            acp::PromptCapabilities::new(),
-            config_options,
-            vec![],
-            PathBuf::from("."),
-            AcpPromptHandle::noop(),
-        )
+        make_app_with_options("test", acp::PromptCapabilities::new(), config_options, vec![], AcpPromptHandle::noop())
     }
 
     pub fn make_app_with_auth(auth_methods: Vec<acp::AuthMethod>) -> App {
-        App::new(
-            SessionId::new("test"),
-            "test-agent".to_string(),
-            acp::PromptCapabilities::new(),
-            &[],
-            auth_methods,
-            PathBuf::from("."),
-            AcpPromptHandle::noop(),
-        )
+        make_app_with_options("test", acp::PromptCapabilities::new(), &[], auth_methods, AcpPromptHandle::noop())
     }
 
     pub fn make_app_with_config_recording(
         config_options: &[acp::SessionConfigOption],
     ) -> (App, mpsc::UnboundedReceiver<PromptCommand>) {
         let (handle, rx) = AcpPromptHandle::recording();
-        let app = App::new(
-            SessionId::new("test"),
-            "test-agent".to_string(),
-            acp::PromptCapabilities::new(),
-            config_options,
-            vec![],
-            PathBuf::from("."),
-            handle,
-        );
+        let app = make_app_with_options("test", acp::PromptCapabilities::new(), config_options, vec![], handle);
         (app, rx)
     }
 
     pub fn make_app_with_session_id(session_id: &str) -> App {
-        App::new(
-            SessionId::new(session_id),
-            "test-agent".to_string(),
-            acp::PromptCapabilities::new(),
-            &[],
-            vec![],
-            PathBuf::from("."),
-            AcpPromptHandle::noop(),
-        )
+        make_app_with_options(session_id, acp::PromptCapabilities::new(), &[], vec![], AcpPromptHandle::noop())
     }
 
     pub fn make_app_with_config_and_capabilities_recording(
@@ -685,16 +665,27 @@ pub(crate) mod test_helpers {
         prompt_capabilities: acp::PromptCapabilities,
     ) -> (App, mpsc::UnboundedReceiver<PromptCommand>) {
         let (handle, rx) = AcpPromptHandle::recording();
-        let app = App::new(
-            SessionId::new("test"),
-            "test-agent".to_string(),
-            prompt_capabilities,
-            config_options,
-            vec![],
-            PathBuf::from("."),
-            handle,
-        );
+        let app = make_app_with_options("test", prompt_capabilities, config_options, vec![], handle);
         (app, rx)
+    }
+
+    fn make_app_with_options(
+        session_id: &str,
+        prompt_capabilities: acp::PromptCapabilities,
+        config_options: &[acp::SessionConfigOption],
+        auth_methods: Vec<acp::AuthMethod>,
+        prompt_handle: AcpPromptHandle,
+    ) -> App {
+        App::new(AppInfo {
+            session_id: SessionId::new(session_id),
+            agent_name: "test-agent".to_string(),
+            prompt_capabilities,
+            config_options: config_options.to_vec(),
+            auth_methods,
+            working_dir: PathBuf::from("."),
+            workspace_status: test_workspace_status(),
+            prompt_handle,
+        })
     }
 }
 
@@ -1568,7 +1559,9 @@ mod tests {
             "m1",
             vec![acp::SessionConfigSelectOption::new("m1", "M1")],
         )];
+        let workspace_status = test_workspace_status();
         let status = StatusLine {
+            workspace_status: &workspace_status,
             agent_name: "test-agent",
             config_options: &options,
             context_usage: None,

@@ -13,6 +13,7 @@ Holds everything needed to start the TUI after the ACP handshake completes.
 - **`event_rx`** — channel receiver for streamed [`AcpEvent`](acp_utils::client::AcpEvent)s.
 - **`prompt_handle`** — handle for sending user prompts back to the agent.
 - **`working_dir`** — the working directory passed to the agent session.
+- **`workspace_status`** — pre-resolved display metadata for the status line's workspace segment.
 
 # See also
 

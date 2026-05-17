@@ -1,13 +1,15 @@
-The bottom status bar showing agent state at a glance.
+The bottom status bar showing workspace and agent state at a glance.
 
-Renders a single line with left-aligned identity info and right-aligned indicators:
+Renders a single line with current workspace context on the left and session indicators on the right:
 
 **Left side:**
+- Current working directory, shortened relative to the user's home directory when possible
+- Current git branch or detached HEAD short SHA when the working directory is in a git repo/worktree
+
+**Right side:**
 - Agent name
 - Current mode/profile (if configured)
 - Active model name
-
-**Right side:**
 - Reasoning effort bar (visual level indicator)
 - Context window usage bar (shows current context usage against the model limit)
 - Unhealthy MCP server count (when not waiting for a response)
