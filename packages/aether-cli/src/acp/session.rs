@@ -11,9 +11,9 @@ use mcp_utils::status::McpServerStatusEntry;
 
 use agent_client_protocol::schema as acp;
 use std::collections::HashSet;
-use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
+use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tracing::debug;
@@ -21,29 +21,14 @@ use tracing::debug;
 use crate::error::CliError;
 use crate::runtime::RuntimeBuilder;
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum SessionError {
-    Build(CliError),
+    #[error("failed to build session: {0}")]
+    Build(#[from] CliError),
+    #[error("command channel error: {0}")]
     CommandChannel(String),
+    #[error("MCP operation failed: {0}")]
     McpOperation(String),
-}
-
-impl fmt::Display for SessionError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Build(e) => write!(f, "failed to build session: {e}"),
-            Self::CommandChannel(e) => write!(f, "command channel error: {e}"),
-            Self::McpOperation(e) => write!(f, "MCP operation failed: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for SessionError {}
-
-impl From<CliError> for SessionError {
-    fn from(e: CliError) -> Self {
-        Self::Build(e)
-    }
 }
 
 /// Represents an active Aether agent session

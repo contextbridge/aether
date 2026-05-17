@@ -1,27 +1,18 @@
-use std::fmt::Display;
 use std::io;
+use thiserror::Error;
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum CliError {
+    #[error("No prompt provided. Pass a prompt as an argument or pipe via stdin.")]
     NoPrompt,
+    #[error("{0}")]
     ConflictingArgs(String),
+    #[error("Model error: {0}")]
     ModelError(String),
+    #[error("MCP error: {0}")]
     McpError(String),
-    IoError(io::Error),
+    #[error("IO error: {0}")]
+    IoError(#[from] io::Error),
+    #[error("Agent error: {0}")]
     AgentError(String),
 }
-
-impl Display for CliError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NoPrompt => write!(f, "No prompt provided. Pass a prompt as an argument or pipe via stdin."),
-            Self::ConflictingArgs(e) => write!(f, "{e}"),
-            Self::ModelError(e) => write!(f, "Model error: {e}"),
-            Self::McpError(e) => write!(f, "MCP error: {e}"),
-            Self::IoError(e) => write!(f, "IO error: {e}"),
-            Self::AgentError(e) => write!(f, "Agent error: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for CliError {}

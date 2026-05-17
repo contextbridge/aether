@@ -10,8 +10,8 @@ use llm::{ContentBlock, ProviderConnectionOverrides, ReasoningEffort};
 use mcp_utils::client::{ElicitationRequest, McpClientEvent, cancel_result};
 use rmcp::model::CreateElicitationRequestParams;
 use rmcp::model::CreateElicitationResult;
-use std::fmt;
 use std::sync::Arc;
+use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -36,38 +36,26 @@ pub(crate) enum SessionCommand {
     Cancel,
 }
 
+#[derive(Error, Debug)]
 pub(crate) enum RelayError {
+    #[error("switch model failed: {0}")]
     SwitchModelFailed(String),
+    #[error("send prompt failed: {0}")]
     SendPromptFailed(String),
+    #[error("agent channel closed")]
     ChannelClosed,
 }
 
-impl fmt::Display for RelayError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            RelayError::SwitchModelFailed(e) => write!(f, "switch model failed: {e}"),
-            RelayError::SendPromptFailed(e) => write!(f, "send prompt failed: {e}"),
-            RelayError::ChannelClosed => write!(f, "agent channel closed"),
-        }
-    }
-}
-
+#[derive(Error, Debug)]
 enum SlashCommandError {
+    #[error("command channel error: {0}")]
     CommandChannel(String),
+    #[error("MCP operation failed: {0}")]
     McpOperation(String),
+    #[error("slash command '/{0}' not found")]
     NotFound(String),
+    #[error("prompt result contains no text content")]
     NoTextContent,
-}
-
-impl fmt::Display for SlashCommandError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::CommandChannel(e) => write!(f, "command channel error: {e}"),
-            Self::McpOperation(e) => write!(f, "MCP operation failed: {e}"),
-            Self::NotFound(name) => write!(f, "slash command '/{name}' not found"),
-            Self::NoTextContent => write!(f, "prompt result contains no text content"),
-        }
-    }
 }
 
 pub(crate) struct RelayHandle {
