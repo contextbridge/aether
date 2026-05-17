@@ -11,9 +11,10 @@ mod session_loading_buffer;
 pub mod settings;
 #[cfg(test)]
 pub(crate) mod test_helpers;
+pub mod workspace_status;
 
 use acp_utils::client::AcpEvent;
-use components::app::{App, EventOutcome};
+use components::app::{App, AppInfo, EventOutcome};
 use error::AppError;
 use runtime_state::RuntimeState;
 use std::fs::create_dir_all;
@@ -51,17 +52,19 @@ pub async fn run_with_state(state: RuntimeState) -> Result<(), AppError> {
         event_rx,
         prompt_handle,
         working_dir,
+        workspace_status,
     } = state;
 
-    let app = App::new(
+    let app = App::new(AppInfo {
         session_id,
         agent_name,
         prompt_capabilities,
-        &config_options,
+        config_options,
         auth_methods,
         working_dir,
+        workspace_status,
         prompt_handle,
-    );
+    });
 
     run_app(app, theme, event_rx).await
 }

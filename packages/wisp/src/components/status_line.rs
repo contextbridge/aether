@@ -1,16 +1,18 @@
 use crate::components::context_bar::{context_bar, context_color};
 use crate::components::reasoning_bar::{reasoning_bar, reasoning_color};
+use crate::workspace_status::WorkspaceStatus;
 use acp_utils::config_option_id::ConfigOptionId;
 use agent_client_protocol::schema::{
     self as acp, SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOptions,
 };
-use tui::{Color, Frame, Line, ViewContext, display_width_text};
+use tui::{Color, FitOptions, Frame, Line, ViewContext, display_width_text};
 use utils::ReasoningEffort;
 
 pub use crate::components::context_bar::ContextUsageDisplay;
 
 #[doc = include_str!("../docs/status_line.md")]
 pub struct StatusLine<'a> {
+    pub workspace_status: &'a WorkspaceStatus,
     pub agent_name: &'a str,
     pub config_options: &'a [SessionConfigOption],
     pub context_usage: Option<ContextUsageDisplay>,
@@ -23,67 +25,84 @@ pub struct StatusLine<'a> {
 impl StatusLine<'_> {
     #[allow(clippy::similar_names)]
     pub fn render(&self, context: &ViewContext) -> Frame {
-        let mode_display = extract_mode_display(self.config_options);
-        let model_display = extract_model_display(self.config_options);
-        let reasoning_effort = extract_reasoning_effort(self.config_options);
-
-        let mut left_line = Line::default();
-        let sep = context.theme.text_secondary();
-
-        left_line.push_text(" ".repeat(self.content_padding));
-
-        if self.exit_confirmation_active {
-            left_line.push_styled("Ctrl-C again to exit", context.theme.warning());
-        } else {
-            left_line.push_styled(self.agent_name, context.theme.info());
-
-            if let Some(ref mode) = mode_display {
-                left_line.push_styled(" · ", sep);
-                left_line.push_styled(mode.as_str(), context.theme.secondary());
-            }
-
-            if let Some(ref model) = model_display {
-                left_line.push_styled(" · ", sep);
-                left_line.push_styled(model.as_str(), context.theme.success());
-            }
-        }
-
-        let mut right_parts: Vec<(String, Color)> = Vec::new();
-
-        let reasoning_levels = extract_reasoning_levels(self.config_options);
-        if model_display.is_some() && !reasoning_levels.is_empty() {
-            right_parts.push((
-                reasoning_bar(reasoning_effort, reasoning_levels.len()),
-                reasoning_color(reasoning_effort, reasoning_levels.len(), &context.theme),
-            ));
-        }
-
-        if let Some(usage) = self.context_usage {
-            if !right_parts.is_empty() {
-                right_parts.push((" · ".to_string(), sep));
-            }
-            right_parts.push((context_bar(usage), context_color(usage, &context.theme)));
-        }
-
-        if !self.waiting_for_response && self.unhealthy_server_count > 0 {
-            let count = self.unhealthy_server_count;
-            let msg = if count == 1 { "1 server needs auth".to_string() } else { format!("{count} servers unhealthy") };
-            if !right_parts.is_empty() {
-                right_parts.push((" · ".to_string(), sep));
-            }
-            right_parts.push((msg, context.theme.warning()));
-        }
-
+        let mut line = render_left(self.workspace_status, context, self.content_padding);
+        let right_parts = render_right(self, context);
         let width = context.size.width as usize;
         let right_len: usize = right_parts.iter().map(|(s, _)| display_width_text(s)).sum();
-        let left_len = left_line.display_width();
+        let left_len = line.display_width();
 
         let padding = width.saturating_sub(left_len + right_len);
-        left_line.push_text(" ".repeat(padding));
+        line.push_text(" ".repeat(padding));
         for (text, color) in right_parts {
-            left_line.push_styled(text, color);
+            line.push_styled(text, color);
         }
-        Frame::new(vec![left_line])
+
+        Frame::new(vec![line]).fit(context.size.width, FitOptions::truncate())
+    }
+}
+
+fn render_left(status: &WorkspaceStatus, context: &ViewContext, content_padding: usize) -> Line {
+    let mut line = Line::default();
+    line.push_text(" ".repeat(content_padding));
+    line.push_styled(status.display_dir.as_str(), context.theme.secondary());
+    if let Some(ref git_ref) = status.git_ref {
+        line.push_styled(" · ", context.theme.text_secondary());
+        line.push_styled(git_ref.as_str(), context.theme.success());
+    }
+    line
+}
+
+fn render_right(status: &StatusLine<'_>, context: &ViewContext) -> Vec<(String, Color)> {
+    let sep = context.theme.text_secondary();
+    let mode_text = extract_mode_display(status.config_options);
+    let model_summary = extract_model_display(status.config_options);
+    let reasoning_effort = extract_reasoning_effort(status.config_options);
+
+    let mut parts = Vec::new();
+
+    if status.exit_confirmation_active {
+        parts.push(("Ctrl-C again to exit".to_string(), context.theme.warning()));
+    } else {
+        parts.push((status.agent_name.to_string(), context.theme.info()));
+
+        if let Some(ref mode) = mode_text {
+            push_separator(&mut parts, sep);
+            parts.push((mode.clone(), context.theme.secondary()));
+        }
+
+        if let Some(ref model) = model_summary {
+            push_separator(&mut parts, sep);
+            parts.push((model.clone(), context.theme.success()));
+        }
+    }
+
+    let reasoning_levels = extract_reasoning_levels(status.config_options);
+    if model_summary.is_some() && !reasoning_levels.is_empty() {
+        push_separator(&mut parts, sep);
+        parts.push((
+            reasoning_bar(reasoning_effort, reasoning_levels.len()),
+            reasoning_color(reasoning_effort, reasoning_levels.len(), &context.theme),
+        ));
+    }
+
+    if let Some(usage) = status.context_usage {
+        push_separator(&mut parts, sep);
+        parts.push((context_bar(usage), context_color(usage, &context.theme)));
+    }
+
+    if !status.waiting_for_response && status.unhealthy_server_count > 0 {
+        let count = status.unhealthy_server_count;
+        let msg = if count == 1 { "1 server needs auth".to_string() } else { format!("{count} servers unhealthy") };
+        push_separator(&mut parts, sep);
+        parts.push((msg, context.theme.warning()));
+    }
+
+    parts
+}
+
+fn push_separator(parts: &mut Vec<(String, Color)>, color: Color) {
+    if !parts.is_empty() {
+        parts.push((" · ".to_string(), color));
     }
 }
 
@@ -182,6 +201,11 @@ pub(crate) fn extract_reasoning_effort(config_options: &[SessionConfigOption]) -
 mod tests {
     use super::*;
     use crate::settings::DEFAULT_CONTENT_PADDING;
+    use crate::workspace_status::WorkspaceStatus;
+
+    fn test_workspace_status() -> WorkspaceStatus {
+        WorkspaceStatus::new("~/code/aether-2", Some("main".to_string()))
+    }
 
     fn model_option() -> SessionConfigOption {
         acp::SessionConfigOption::select(
@@ -208,7 +232,9 @@ mod tests {
     #[test]
     fn reasoning_bar_hidden_without_reasoning_option() {
         let options = vec![model_option()];
+        let workspace_status = test_workspace_status();
         let status = StatusLine {
+            workspace_status: &workspace_status,
             agent_name: "test-agent",
             config_options: &options,
             context_usage: None,
@@ -230,7 +256,9 @@ mod tests {
     #[test]
     fn reasoning_bar_shown_with_reasoning_option() {
         let options = vec![model_option(), reasoning_option()];
+        let workspace_status = test_workspace_status();
         let status = StatusLine {
+            workspace_status: &workspace_status,
             agent_name: "test-agent",
             config_options: &options,
             context_usage: None,

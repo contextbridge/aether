@@ -4,6 +4,7 @@ use tui::ViewContext;
 use tui::testing::render_lines;
 use wisp::components::status_line::{ContextUsageDisplay, StatusLine};
 use wisp::settings::DEFAULT_CONTENT_PADDING;
+use wisp::workspace_status::WorkspaceStatus;
 
 fn mode_option(value: impl Into<String>, name: impl Into<String>) -> SessionConfigOption {
     let value = value.into();
@@ -41,11 +42,20 @@ struct StatusBuilder<'a> {
     waiting: bool,
     unhealthy: usize,
     width: u16,
+    workspace_status: WorkspaceStatus,
 }
 
 impl<'a> StatusBuilder<'a> {
     fn new(name: &'a str) -> Self {
-        Self { name, options: vec![], ctx_usage: None, waiting: false, unhealthy: 0, width: 80 }
+        Self {
+            name,
+            options: vec![],
+            ctx_usage: None,
+            waiting: false,
+            unhealthy: 0,
+            width: 80,
+            workspace_status: WorkspaceStatus::new("~/code/aether-2", Some("main".to_string())),
+        }
     }
 
     fn model(mut self, m: &str) -> Self {
@@ -76,9 +86,14 @@ impl<'a> StatusBuilder<'a> {
         self.width = w;
         self
     }
+    fn workspace(mut self, dir: &str, git_ref: Option<&str>) -> Self {
+        self.workspace_status = WorkspaceStatus::new(dir, git_ref.map(str::to_string));
+        self
+    }
 
     fn render(&self) -> (String, tui::testing::TestTerminal) {
         let status = StatusLine {
+            workspace_status: &self.workspace_status,
             agent_name: self.name,
             config_options: &self.options,
             context_usage: self.ctx_usage,
@@ -100,10 +115,88 @@ impl<'a> StatusBuilder<'a> {
 }
 
 #[test]
-fn renders_agent_name_and_indentation() {
+fn renders_workspace_on_left_and_existing_status_on_right() {
+    let line = StatusBuilder::new("Aether")
+        .mode("planner", "Planner")
+        .model("Codex: GPT-5.5")
+        .reasoning("medium")
+        .ctx_usage(164_000, 272_000)
+        .width(140)
+        .line();
+
+    let workspace_at = line.find("~/code/aether-2 · main").unwrap();
+    let agent_at = line.find("Aether").unwrap();
+    assert!(workspace_at < agent_at);
+    assert!(line.contains("Planner"));
+    assert!(line.contains("Codex: GPT-5.5"));
+    assert!(line.contains("medium [■■·]"));
+    assert!(line.contains("ctx"));
+}
+
+#[test]
+fn renders_workspace_without_git_ref() {
+    let line = StatusBuilder::new("aether").workspace("~/scratch", None).line();
+    assert!(line.contains("~/scratch"));
+    assert!(!line.contains("main"));
+}
+
+#[test]
+fn renders_workspace_with_expected_colors() {
+    let ctx = ViewContext::new((80, 24));
+    let (_, term) = StatusBuilder::new("wisp").render();
+
+    assert_eq!(term.style_of_text(0, "~/code/aether-2").unwrap().fg, Some(ctx.theme.secondary()));
+    assert_eq!(term.style_of_text(0, " · ").unwrap().fg, Some(ctx.theme.text_secondary()));
+    assert_eq!(term.style_of_text(0, "main").unwrap().fg, Some(ctx.theme.success()));
+}
+
+#[test]
+fn keeps_status_area_to_one_line_when_narrow() {
+    let workspace_status = WorkspaceStatus::new(
+        "~/very/long/path/that/would/wrap/without/truncation",
+        Some("feature/very-long-branch".to_string()),
+    );
+    let options = vec![model_option("model", "very-long-model-name")];
+    let status = StatusLine {
+        workspace_status: &workspace_status,
+        agent_name: "agent-name",
+        config_options: &options,
+        context_usage: Some(ContextUsageDisplay::new(100_000, 200_000)),
+        waiting_for_response: false,
+        unhealthy_server_count: 0,
+        content_padding: DEFAULT_CONTENT_PADDING,
+        exit_confirmation_active: false,
+    };
+    let ctx = ViewContext::new((24, 24));
+
+    assert_eq!(status.render(&ctx).lines().len(), 1);
+}
+
+#[test]
+fn exit_confirmation_keeps_workspace_and_moves_warning_right() {
+    let workspace_status = WorkspaceStatus::new("~/code/aether-2", Some("main".to_string()));
+    let status = StatusLine {
+        workspace_status: &workspace_status,
+        agent_name: "agent-name",
+        config_options: &[],
+        context_usage: None,
+        waiting_for_response: false,
+        unhealthy_server_count: 0,
+        content_padding: DEFAULT_CONTENT_PADDING,
+        exit_confirmation_active: true,
+    };
+    let ctx = ViewContext::new((100, 24));
+    let text = status.render(&ctx).lines()[0].plain_text();
+
+    assert!(text.contains("~/code/aether-2 · main"));
+    assert!(text.contains("Ctrl-C again to exit"));
+    assert!(!text.contains("agent-name"));
+}
+
+#[test]
+fn renders_agent_name() {
     let line = StatusBuilder::new("test-agent").line();
-    let padding = " ".repeat(DEFAULT_CONTENT_PADDING);
-    assert!(line.contains(&format!("{padding}test-agent")));
+    assert!(line.contains("test-agent"));
 }
 
 #[test]
@@ -115,7 +208,7 @@ fn renders_model_display() {
 
 #[test]
 fn renders_without_model_when_none() {
-    let line = StatusBuilder::new("aether-acp").line();
+    let line = StatusBuilder::new("aether-acp").workspace("~/code/aether-2", None).line();
     assert!(line.contains("aether-acp"));
     assert!(!line.contains("·"), "no separator when no model");
 }
