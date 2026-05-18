@@ -7,17 +7,16 @@ pub(crate) mod session;
 pub(crate) mod session_manager;
 pub(crate) mod session_registry;
 pub(crate) mod session_store;
-pub(crate) mod stdio;
 pub mod testing;
 
 pub use mappers::map_mcp_prompt_to_available_command;
 pub use session_manager::SessionManager;
 
 use crate::acp::handlers::acp_agent_builder;
-use crate::acp::stdio::Stdio;
 use crate::provider_connection_args::ProviderConnectionArgs;
 use crate::settings_args::SettingsSourceArgs;
 use agent_client_protocol as acp;
+use agent_client_protocol::Stdio;
 use llm::ReasoningEffort;
 use std::sync::Arc;
 use std::{fs::create_dir_all, path::PathBuf};
