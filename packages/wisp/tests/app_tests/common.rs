@@ -1,5 +1,8 @@
 use acp_utils::client::AcpEvent;
 use acp_utils::client::AcpPromptHandle;
+use acp_utils::notifications::ElicitationParams;
+use acp_utils::notifications::ElicitationResponse;
+use agent_client_protocol::Responder;
 use agent_client_protocol::schema as acp;
 use std::path::PathBuf;
 use tui::Renderer as FrameRenderer;
@@ -193,6 +196,15 @@ impl Renderer {
         params: acp_utils::notifications::AuthMethodsUpdatedParams,
     ) -> Result<(), Box<dyn std::error::Error>> {
         self.handle_acp_event(AcpEvent::AuthMethodsUpdated(params))?;
+        Ok(())
+    }
+
+    pub(super) fn on_elicitation_request(
+        &mut self,
+        params: ElicitationParams,
+        responder: Responder<ElicitationResponse>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.handle_acp_event(AcpEvent::ElicitationRequest { params, responder })?;
         Ok(())
     }
 

@@ -41,6 +41,5 @@ impl McpServerStatusEntry {
 
     pub fn can_authenticate(&self) -> bool {
         self.auth_capability == McpServerAuthCapability::OAuth
-            && !matches!(self.status, McpServerStatus::Authenticating)
     }
 }

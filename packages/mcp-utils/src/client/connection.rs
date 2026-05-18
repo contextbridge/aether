@@ -3,7 +3,7 @@ use super::{
     config::{McpServer, McpTransport},
     mcp_client::McpClient,
 };
-use crate::transport::create_in_memory_transport;
+use crate::{client::OAuthHandlerContext, transport::create_in_memory_transport};
 use aether_auth::{OAuthCredentialStorage, create_auth_manager_from_store, perform_oauth_flow};
 use rmcp::{
     RoleClient, RoleServer, ServiceExt,
@@ -147,7 +147,9 @@ pub async fn authenticate_http(
     proxied: bool,
 ) -> McpConnectAttempt {
     let outcome = match async {
-        let handler = oauth_handler_factory()?;
+        let handler =
+            oauth_handler_factory(OAuthHandlerContext { server_name: name.clone(), tx: event_sender.clone() })?;
+
         let auth_client = perform_oauth_flow(&name, &config.uri, handler.as_ref(), oauth_credential_store)
             .await
             .map_err(|e| McpError::ConnectionFailed(format!("OAuth failed for '{name}': {e}")))?;

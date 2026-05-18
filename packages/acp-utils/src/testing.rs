@@ -122,6 +122,12 @@ impl TestPeer {
         self.elicitation_responses.lock().unwrap().push_back(response);
     }
 
+    pub fn capture_next_elicitation(&self) -> oneshot::Receiver<Responder<ElicitationResponse>> {
+        let (responder_tx, responder_rx) = oneshot::channel::<Responder<ElicitationResponse>>();
+        *self.responder_capture.lock().unwrap() = Some(responder_tx);
+        responder_rx
+    }
+
     /// Kick off a placeholder elicitation request from the agent side of `cx`,
     /// hand back the [`Responder<ElicitationResponse>`] captured on the client
     /// side, and return a receiver that resolves when the responder is

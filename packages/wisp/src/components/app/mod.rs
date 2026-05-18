@@ -130,7 +130,8 @@ impl App {
     }
 
     pub fn needs_mouse_capture(&self) -> bool {
-        self.settings_overlay.is_some() || self.screen_router.is_full_screen_mode()
+        self.settings_overlay.as_ref().is_some_and(SettingsOverlay::needs_mouse_capture)
+            || self.screen_router.is_full_screen_mode()
     }
 
     pub fn wants_tick(&self) -> bool {
@@ -432,9 +433,8 @@ impl App {
         params: acp_utils::notifications::ElicitationParams,
         responder: Responder<ElicitationResponse>,
     ) {
-        self.settings_overlay = None;
-
         if let Some(meta) = plan_review_meta_from_request(&params.request) {
+            self.settings_overlay = None;
             if let Some(existing) = self.pending_plan_review_response.replace(responder) {
                 let _ = existing.respond(cancel_response());
             }
@@ -444,7 +444,11 @@ impl App {
             return;
         }
 
-        self.conversation_screen.on_elicitation_request(params, responder);
+        if let Some(ref mut overlay) = self.settings_overlay {
+            overlay.on_elicitation_request(params, responder);
+        } else {
+            self.conversation_screen.on_elicitation_request(params, responder);
+        }
     }
 
     fn on_mcp_notification(&mut self, notification: acp_utils::notifications::McpNotification) {
@@ -457,6 +461,9 @@ impl App {
                 self.server_statuses = servers;
             }
             McpNotification::UrlElicitationComplete(params) => {
+                if let Some(ref mut overlay) = self.settings_overlay {
+                    overlay.on_url_elicitation_complete(&params);
+                }
                 self.conversation_screen.on_url_elicitation_complete(&params);
             }
         }
@@ -698,7 +705,8 @@ mod tests {
     use crate::components::conversation_window::SegmentContent;
     use crate::components::elicitation_form::ElicitationForm;
     use crate::settings::{DEFAULT_CONTENT_PADDING, ThemeSettings as WispThemeSettings, WispSettings, save_settings};
-    use crate::test_helpers::with_wisp_home;
+    use crate::test_helpers::{elicitation_params, modified_key, url_elicitation_params, with_wisp_home};
+    use acp_utils::ElicitationSchema;
     use acp_utils::testing::test_connection;
     use std::fs;
     use std::path::Path;
@@ -723,7 +731,7 @@ mod tests {
     }
 
     async fn send_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
-        app.on_event(&Event::Key(KeyEvent::new(code, modifiers))).await;
+        app.on_event(&modified_key(code, modifiers)).await;
     }
 
     fn setup_themes_dir(files: &[&str]) -> TempDir {
@@ -1006,14 +1014,7 @@ mod tests {
                 let (cx, mut peer) = test_connection().await;
                 let (responder, _rx) = peer.fake_elicitation(&cx).await;
                 app.conversation_screen.active_modal = Some(Modal::Elicitation(ElicitationForm::from_params(
-                    acp_utils::notifications::ElicitationParams {
-                        server_name: "test-server".to_string(),
-                        request: acp_utils::notifications::CreateElicitationRequestParams::FormElicitationParams {
-                            meta: None,
-                            message: "test".to_string(),
-                            requested_schema: acp_utils::ElicitationSchema::builder().build().unwrap(),
-                        },
-                    },
+                    elicitation_params("test-server", "test", ElicitationSchema::builder().build().unwrap()),
                     responder,
                 )));
 
@@ -1048,14 +1049,7 @@ mod tests {
                 let (responder, _rx) = peer.fake_elicitation(&cx).await;
 
                 app.on_elicitation_request(
-                    acp_utils::notifications::ElicitationParams {
-                        server_name: "test-server".to_string(),
-                        request: acp_utils::notifications::CreateElicitationRequestParams::FormElicitationParams {
-                            meta: None,
-                            message: "regular form".to_string(),
-                            requested_schema: acp_utils::ElicitationSchema::builder().build().unwrap(),
-                        },
-                    },
+                    elicitation_params("test-server", "regular form", ElicitationSchema::builder().build().unwrap()),
                     responder,
                 );
 
@@ -1492,15 +1486,7 @@ mod tests {
                 let (cx, mut peer) = test_connection().await;
                 let (responder, _rx) = peer.fake_elicitation(&cx).await;
                 app.conversation_screen.active_modal = Some(Modal::Elicitation(ElicitationForm::from_params(
-                    acp_utils::notifications::ElicitationParams {
-                        server_name: "test-server".to_string(),
-                        request: acp_utils::notifications::CreateElicitationRequestParams::UrlElicitationParams {
-                            meta: None,
-                            message: "Auth".to_string(),
-                            url: "https://example.com/auth".to_string(),
-                            elicitation_id: "el-1".to_string(),
-                        },
-                    },
+                    url_elicitation_params("test-server", "el-1", "https://example.com/auth"),
                     responder,
                 )));
 

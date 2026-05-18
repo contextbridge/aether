@@ -4,6 +4,7 @@ mod app_tests {
     mod git_diff_tests;
     mod input_prompt_tests;
     mod lifecycle_tests;
+    mod mcp_oauth_elicitation_tests;
     mod message_streaming_tests;
     mod mode_cycling_tests;
     mod notifications_tests;

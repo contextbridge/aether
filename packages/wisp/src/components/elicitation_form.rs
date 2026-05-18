@@ -1,15 +1,17 @@
 use acp_utils::notifications::{
     CreateElicitationRequestParams, ElicitationAction, ElicitationParams, ElicitationResponse,
+    UrlElicitationCompleteParams,
 };
 use acp_utils::{
     ConstTitle, ElicitationSchema, EnumSchema, MultiSelectEnumSchema, PrimitiveSchema, SingleSelectEnumSchema,
 };
 use agent_client_protocol::Responder;
-use std::process::Command;
+use std::io::Write;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use tui::{
-    Checkbox, Component, Event, Form, FormField, FormFieldKind, FormMessage, Frame, MultiSelect, NumberField,
-    RadioSelect, SelectOption, TextField, ViewContext,
+    Checkbox, Component, Event, Form, FormField, FormFieldKind, FormMessage, Frame, KeyCode, KeyEvent, KeyModifiers,
+    MultiSelect, NumberField, RadioSelect, SelectOption, TextField, ViewContext,
 };
 
 pub enum ElicitationMessage {
@@ -34,14 +36,23 @@ pub struct UrlPrompt {
     pub host: Option<String>,
     pub warnings: Vec<String>,
     pub launch_error: Option<String>,
+    pub copy_message: Option<String>,
 }
 
-type BrowserOpener = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
+pub enum UrlPromptOutcome {
+    Opened,
+    Copied,
+    Cancelled,
+}
+
+pub type BrowserOpener = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
+pub type ClipboardWriter = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
 
 pub struct ElicitationForm {
     pub ui: ElicitationUi,
     browser_opener: BrowserOpener,
-    pub(crate) responder: Option<Responder<ElicitationResponse>>,
+    clipboard_writer: ClipboardWriter,
+    responder: Option<Responder<ElicitationResponse>>,
 }
 
 impl UrlPrompt {
@@ -69,7 +80,34 @@ impl UrlPrompt {
             }
         }
 
-        Self { server_name, elicitation_id, message, url, host, warnings, launch_error: None }
+        Self { server_name, elicitation_id, message, url, host, warnings, launch_error: None, copy_message: None }
+    }
+
+    pub fn on_key(
+        &mut self,
+        key: &KeyEvent,
+        browser_opener: &BrowserOpener,
+        clipboard_writer: &ClipboardWriter,
+    ) -> Option<UrlPromptOutcome> {
+        let plain_key = key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT;
+        match key.code {
+            KeyCode::Enter => match browser_opener(&self.url) {
+                Ok(()) => Some(UrlPromptOutcome::Opened),
+                Err(e) => {
+                    self.launch_error = Some(format!("Failed to open browser: {e}"));
+                    None
+                }
+            },
+            KeyCode::Char('c' | 'C') if plain_key => {
+                self.copy_message = Some(match clipboard_writer(&self.url) {
+                    Ok(()) => "Copied URL to clipboard.".to_string(),
+                    Err(e) => format!("Failed to copy URL: {e}"),
+                });
+                Some(UrlPromptOutcome::Copied)
+            }
+            KeyCode::Esc => Some(UrlPromptOutcome::Cancelled),
+            _ => None,
+        }
     }
 }
 
@@ -99,34 +137,20 @@ impl Component for ElicitationForm {
                 let Event::Key(key) = event else {
                     return Some(vec![]);
                 };
-                match key.code {
-                    tui::KeyCode::Enter => match (self.browser_opener)(&prompt.url) {
-                        Ok(()) => {
-                            let server_name = prompt.server_name.clone();
-                            let elicitation_id = prompt.elicitation_id.clone();
-                            let _ = self.responder.take().map(|r| {
-                                r.respond(ElicitationResponse { action: ElicitationAction::Accept, content: None })
-                            });
-                            return Some(vec![
-                                ElicitationMessage::Responded,
-                                ElicitationMessage::UrlOpened { elicitation_id, server_name },
-                            ]);
-                        }
-                        Err(e) => {
-                            prompt.launch_error = Some(format!("Failed to open browser: {e}"));
-                        }
-                    },
-                    tui::KeyCode::Char('d' | 'D') => {
-                        let _ = self.responder.take().map(|r| r.respond(Self::decline()));
-                        return Some(vec![ElicitationMessage::Responded]);
-                    }
-                    tui::KeyCode::Esc => {
+                let Some(outcome) = prompt.on_key(key, &self.browser_opener, &self.clipboard_writer) else {
+                    return Some(vec![]);
+                };
+                match outcome {
+                    UrlPromptOutcome::Opened => Some(vec![ElicitationMessage::UrlOpened {
+                        elicitation_id: prompt.elicitation_id.clone(),
+                        server_name: prompt.server_name.clone(),
+                    }]),
+                    UrlPromptOutcome::Copied => Some(vec![]),
+                    UrlPromptOutcome::Cancelled => {
                         let _ = self.responder.take().map(|r| r.respond(Self::cancel()));
-                        return Some(vec![ElicitationMessage::Responded]);
+                        Some(vec![ElicitationMessage::Responded])
                     }
-                    _ => {}
                 }
-                Some(vec![])
             }
         }
     }
@@ -141,16 +165,29 @@ impl Component for ElicitationForm {
 
 impl ElicitationForm {
     pub fn from_params(params: ElicitationParams, responder: Responder<ElicitationResponse>) -> Self {
-        Self::with_browser_opener(params, responder, default_browser_opener)
+        Self::with_url_handlers(params, responder, default_browser_opener, default_clipboard_writer)
     }
 
-    pub fn with_browser_opener<F>(
+    pub fn with_browser_opener<T>(
         params: ElicitationParams,
         responder: Responder<ElicitationResponse>,
-        browser_opener: F,
+        browser_opener: T,
     ) -> Self
     where
-        F: Fn(&str) -> Result<(), String> + Send + Sync + 'static,
+        T: Fn(&str) -> Result<(), String> + Send + Sync + 'static,
+    {
+        Self::with_url_handlers(params, responder, browser_opener, default_clipboard_writer)
+    }
+
+    pub fn with_url_handlers<T, U>(
+        params: ElicitationParams,
+        responder: Responder<ElicitationResponse>,
+        browser_opener: T,
+        clipboard_writer: U,
+    ) -> Self
+    where
+        T: Fn(&str) -> Result<(), String> + Send + Sync + 'static,
+        U: Fn(&str) -> Result<(), String> + Send + Sync + 'static,
     {
         let ui = match params.request {
             CreateElicitationRequestParams::FormElicitationParams { message, requested_schema, .. } => {
@@ -161,7 +198,12 @@ impl ElicitationForm {
                 ElicitationUi::Url(UrlPrompt::new(params.server_name, elicitation_id, message, url))
             }
         };
-        Self { ui, browser_opener: Arc::new(browser_opener), responder: Some(responder) }
+        Self {
+            ui,
+            browser_opener: Arc::new(browser_opener),
+            clipboard_writer: Arc::new(clipboard_writer),
+            responder: Some(responder),
+        }
     }
 
     pub fn confirm(&self) -> ElicitationResponse {
@@ -173,34 +215,44 @@ impl ElicitationForm {
         }
     }
 
-    pub fn decline() -> ElicitationResponse {
-        ElicitationResponse { action: ElicitationAction::Decline, content: None }
-    }
-
     pub fn cancel() -> ElicitationResponse {
         ElicitationResponse { action: ElicitationAction::Cancel, content: None }
     }
+
+    /// Send `Cancel` to the responder if one is still attached. Used when the
+    /// owning container is displacing this form before the user responded.
+    pub fn cancel_pending(&mut self) {
+        if let Some(responder) = self.responder.take() {
+            let _ = responder.respond(Self::cancel());
+        }
+    }
+
+    /// If this form is showing the URL prompt that `params` refers to, accept
+    /// it and consume the responder. Returns true iff the form was answered.
+    pub fn accept_url_complete(&mut self, params: &UrlElicitationCompleteParams) -> bool {
+        let ElicitationUi::Url(prompt) = &self.ui else {
+            return false;
+        };
+        if prompt.server_name != params.server_name || prompt.elicitation_id != params.elicitation_id {
+            return false;
+        }
+        let response = self.confirm();
+        if let Some(responder) = self.responder.take() {
+            let _ = responder.respond(response);
+        }
+        true
+    }
 }
 
-fn render_url_prompt(prompt: &UrlPrompt, ctx: &ViewContext) -> Frame {
+pub fn render_url_prompt(prompt: &UrlPrompt, ctx: &ViewContext) -> Frame {
     use tui::{Line, Style};
 
     let mut lines = Vec::new();
-    let primary = ctx.theme.primary();
     let text_primary = ctx.theme.text_primary();
     let text_secondary = ctx.theme.text_secondary();
     let warning_color = ctx.theme.warning();
-    let muted = ctx.theme.muted();
-
-    lines.push(Line::with_style(
-        format!("{} requests you to open a URL", prompt.server_name),
-        Style::fg(primary).bold(),
-    ));
     lines.push(Line::default());
     lines.push(Line::with_style(&prompt.message, Style::fg(text_primary)));
-    lines.push(Line::default());
-    lines.push(Line::with_style("URL:", Style::fg(text_secondary)));
-    lines.push(Line::with_style(&prompt.url, Style::fg(primary)));
 
     if let Some(ref host) = prompt.host {
         lines.push(Line::with_style(format!("Host: {host}"), Style::fg(text_secondary)));
@@ -213,13 +265,15 @@ fn render_url_prompt(prompt: &UrlPrompt, ctx: &ViewContext) -> Frame {
         }
     }
 
+    if let Some(ref message) = prompt.copy_message {
+        lines.push(Line::default());
+        lines.push(Line::with_style(message, Style::fg(text_secondary)));
+    }
+
     if let Some(ref error) = prompt.launch_error {
         lines.push(Line::default());
         lines.push(Line::styled(error, ctx.theme.error()));
     }
-
-    lines.push(Line::default());
-    lines.push(Line::styled("Enter to open URL · D to decline · Esc to cancel", muted));
 
     Frame::new(lines)
 }
@@ -253,6 +307,40 @@ fn default_browser_opener(url: &str) -> Result<(), String> {
 
     #[allow(unreachable_code)]
     Err("Unsupported platform for opening URLs".to_string())
+}
+
+fn default_clipboard_writer(text: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        return cmd("pbcopy", &[], text);
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        return cmd("wl-copy", &[], text)
+            .or_else(|_| cmd("xclip", &["-selection", "clipboard"], text))
+            .or_else(|_| cmd("xsel", &["--clipboard", "--input"], text));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        return cmd("clip", &[], text);
+    }
+
+    #[allow(unreachable_code)]
+    Err("Unsupported platform for copying URLs".to_string())
+}
+
+fn cmd(command: &str, args: &[&str], text: &str) -> Result<(), String> {
+    let mut child = Command::new(command).args(args).stdin(Stdio::piped()).spawn().map_err(|e| e.to_string())?;
+    child
+        .stdin
+        .as_mut()
+        .ok_or_else(|| format!("{command} stdin unavailable"))?
+        .write_all(text.as_bytes())
+        .map_err(|e| e.to_string())?;
+    let status = child.wait().map_err(|e| e.to_string())?;
+    status.success().then_some(()).ok_or_else(|| format!("{command} exited with status {status}"))
 }
 
 fn parse_schema(schema: &ElicitationSchema) -> Vec<FormField> {
@@ -376,10 +464,11 @@ fn options_from_const_titles(items: &[ConstTitle]) -> Vec<SelectOption> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_helpers::{elicitation_params, key};
     use acp_utils::EnumSchema;
     use acp_utils::testing::test_connection;
     use std::collections::BTreeMap;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
     use tokio::task::LocalSet;
 
     fn test_schema() -> ElicitationSchema {
@@ -474,26 +563,20 @@ mod tests {
             .run_until(async {
                 let (cx, mut peer) = test_connection().await;
                 let (responder, _rx) = peer.fake_elicitation(&cx).await;
-                let params = ElicitationParams {
-                    server_name: "test-server".to_string(),
-                    request: CreateElicitationRequestParams::FormElicitationParams {
-                        meta: None,
-                        message: "Test".to_string(),
-                        requested_schema: ElicitationSchema::builder()
-                            .optional_string("name")
-                            .optional_bool("approved", true)
-                            .optional_enum_schema(
-                                "color",
-                                EnumSchema::builder(vec!["red".into(), "green".into()])
-                                    .untitled()
-                                    .with_default("green")
-                                    .unwrap()
-                                    .build(),
-                            )
-                            .build()
-                            .unwrap(),
-                    },
-                };
+                let schema = ElicitationSchema::builder()
+                    .optional_string("name")
+                    .optional_bool("approved", true)
+                    .optional_enum_schema(
+                        "color",
+                        EnumSchema::builder(vec!["red".into(), "green".into()])
+                            .untitled()
+                            .with_default("green")
+                            .unwrap()
+                            .build(),
+                    )
+                    .build()
+                    .unwrap();
+                let params = elicitation_params("test-server", "Test", schema);
 
                 let form = ElicitationForm::from_params(params, responder);
                 let response = form.confirm();
@@ -511,13 +594,6 @@ mod tests {
     fn esc_returns_cancel() {
         let response = ElicitationForm::cancel();
         assert_eq!(response.action, ElicitationAction::Cancel);
-        assert!(response.content.is_none());
-    }
-
-    #[test]
-    fn decline_returns_decline() {
-        let response = ElicitationForm::decline();
-        assert_eq!(response.action, ElicitationAction::Decline);
         assert!(response.content.is_none());
     }
 
@@ -597,37 +673,19 @@ mod tests {
         assert!(prompt.warnings.iter().any(|w| w.contains("HTTPS")));
     }
 
-    fn url_params(server: &str, id: &str, url: &str) -> ElicitationParams {
-        ElicitationParams {
-            server_name: server.to_string(),
-            request: CreateElicitationRequestParams::UrlElicitationParams {
-                meta: None,
-                message: "Auth".to_string(),
-                url: url.to_string(),
-                elicitation_id: id.to_string(),
-            },
-        }
-    }
-
     fn permission_like_params() -> ElicitationParams {
-        ElicitationParams {
-            server_name: "coding".to_string(),
-            request: CreateElicitationRequestParams::FormElicitationParams {
-                meta: None,
-                message: "Allow bash: rm -rf /tmp?".to_string(),
-                requested_schema: ElicitationSchema::builder()
-                    .required_enum_schema(
-                        "decision",
-                        EnumSchema::builder(vec!["allow".into(), "deny".into()])
-                            .untitled()
-                            .with_default("deny")
-                            .unwrap()
-                            .build(),
-                    )
-                    .build()
-                    .unwrap(),
-            },
-        }
+        let schema = ElicitationSchema::builder()
+            .required_enum_schema(
+                "decision",
+                EnumSchema::builder(vec!["allow".into(), "deny".into()])
+                    .untitled()
+                    .with_default("deny")
+                    .unwrap()
+                    .build(),
+            )
+            .build()
+            .unwrap();
+        elicitation_params("coding", "Allow bash: rm -rf /tmp?", schema)
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -638,8 +696,7 @@ mod tests {
                 let (responder, rx) = peer.fake_elicitation(&cx).await;
                 let mut form = ElicitationForm::from_params(permission_like_params(), responder);
 
-                let outcome =
-                    form.on_event(&Event::Key(tui::KeyEvent::new(tui::KeyCode::Enter, tui::KeyModifiers::NONE))).await;
+                let outcome = form.on_event(&key(tui::KeyCode::Enter)).await;
                 let messages = outcome.expect("enter should be handled");
 
                 assert!(messages.iter().any(|m| matches!(m, ElicitationMessage::Responded)));
@@ -667,122 +724,14 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn url_modal_enter_returns_accept_with_carried_id() {
-        LocalSet::new()
-            .run_until(async {
-                let opened_urls = Arc::new(Mutex::new(Vec::new()));
-                let opened_urls_for_opener = Arc::clone(&opened_urls);
-                let (cx, mut peer) = test_connection().await;
-                let (responder, rx) = peer.fake_elicitation(&cx).await;
-                let params = url_params("github", "el-123", "https://github.com/login/oauth");
-                let mut form = ElicitationForm::with_browser_opener(params, responder, move |url| {
-                    opened_urls_for_opener.lock().unwrap().push(url.to_string());
-                    Ok(())
-                });
-                let outcome =
-                    form.on_event(&Event::Key(tui::KeyEvent::new(tui::KeyCode::Enter, tui::KeyModifiers::NONE))).await;
-                let messages = outcome.unwrap();
-
-                assert_eq!(opened_urls.lock().unwrap().as_slice(), ["https://github.com/login/oauth"]);
-                assert!(messages.iter().any(|m| matches!(m, ElicitationMessage::Responded)));
-                let opened = messages.iter().find_map(|m| match m {
-                    ElicitationMessage::UrlOpened { elicitation_id, server_name } => {
-                        Some((elicitation_id.clone(), server_name.clone()))
-                    }
-                    ElicitationMessage::Responded => None,
-                });
-                let (id, server) = opened.expect("UrlOpened message should be emitted");
-                assert_eq!(id, "el-123", "elicitation_id must come from request, not URL re-parsing");
-                assert_eq!(server, "github");
-
-                let response = rx.await.unwrap();
-                assert_eq!(response.action, ElicitationAction::Accept);
-                assert!(response.content.is_none());
-            })
-            .await;
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn url_modal_launch_failure_keeps_modal_open_and_shows_error() {
-        LocalSet::new()
-            .run_until(async {
-                let (cx, mut peer) = test_connection().await;
-                let (responder, mut rx) = peer.fake_elicitation(&cx).await;
-                let params = url_params("github", "el-fail", "https://github.com/login/oauth");
-                let mut form = ElicitationForm::with_browser_opener(params, responder, |_| Err("boom".to_string()));
-
-                let outcome =
-                    form.on_event(&Event::Key(tui::KeyEvent::new(tui::KeyCode::Enter, tui::KeyModifiers::NONE))).await;
-                let messages = outcome.expect("URL opener failure should still produce an event result");
-                assert!(messages.is_empty(), "modal should remain open on launch failure");
-                assert!(rx.try_recv().is_err(), "response should not be sent when browser launch fails");
-
-                let ElicitationUi::Url(prompt) = &form.ui else {
-                    panic!("expected URL prompt");
-                };
-                assert_eq!(prompt.launch_error.as_deref(), Some("Failed to open browser: boom"));
-            })
-            .await;
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn url_modal_d_returns_decline() {
-        LocalSet::new()
-            .run_until(async {
-                let (cx, mut peer) = test_connection().await;
-                let (responder, rx) = peer.fake_elicitation(&cx).await;
-                let params = url_params("github", "el-456", "https://github.com/login/oauth");
-                let mut form = ElicitationForm::from_params(params, responder);
-                let outcome = form
-                    .on_event(&Event::Key(tui::KeyEvent::new(tui::KeyCode::Char('d'), tui::KeyModifiers::NONE)))
-                    .await;
-                let messages = outcome.unwrap();
-
-                assert!(messages.iter().any(|m| matches!(m, ElicitationMessage::Responded)));
-
-                let response = rx.await.unwrap();
-                assert_eq!(response.action, ElicitationAction::Decline);
-            })
-            .await;
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn url_modal_esc_returns_cancel() {
-        LocalSet::new()
-            .run_until(async {
-                let (cx, mut peer) = test_connection().await;
-                let (responder, rx) = peer.fake_elicitation(&cx).await;
-                let params = url_params("github", "el-789", "https://github.com/login/oauth");
-                let mut form = ElicitationForm::from_params(params, responder);
-                let outcome =
-                    form.on_event(&Event::Key(tui::KeyEvent::new(tui::KeyCode::Esc, tui::KeyModifiers::NONE))).await;
-                let messages = outcome.unwrap();
-
-                assert!(messages.iter().any(|m| matches!(m, ElicitationMessage::Responded)));
-
-                let response = rx.await.unwrap();
-                assert_eq!(response.action, ElicitationAction::Cancel);
-            })
-            .await;
-    }
-
-    #[tokio::test(flavor = "current_thread")]
     async fn form_modal_esc_returns_cancel() {
         LocalSet::new()
             .run_until(async {
                 let (cx, mut peer) = test_connection().await;
                 let (responder, rx) = peer.fake_elicitation(&cx).await;
-                let params = ElicitationParams {
-                    server_name: "test".to_string(),
-                    request: CreateElicitationRequestParams::FormElicitationParams {
-                        meta: None,
-                        message: "Test".to_string(),
-                        requested_schema: ElicitationSchema::builder().build().unwrap(),
-                    },
-                };
+                let params = elicitation_params("test", "Test", ElicitationSchema::builder().build().unwrap());
                 let mut form = ElicitationForm::from_params(params, responder);
-                let outcome =
-                    form.on_event(&Event::Key(tui::KeyEvent::new(tui::KeyCode::Esc, tui::KeyModifiers::NONE))).await;
+                let outcome = form.on_event(&key(tui::KeyCode::Esc)).await;
                 let messages = outcome.unwrap();
 
                 assert!(messages.iter().any(|m| matches!(m, ElicitationMessage::Responded)));
@@ -829,7 +778,7 @@ mod tests {
     }
 
     #[test]
-    fn url_modal_renders_server_name_and_url() {
+    fn url_modal_renders_server_name_without_url_or_controls() {
         use tui::testing::render_component;
 
         let prompt = UrlPrompt::new(
@@ -839,13 +788,17 @@ mod tests {
             "https://github.com/login/oauth".to_string(),
         );
         let ui = ElicitationUi::Url(prompt);
-        let mut form = ElicitationForm { ui, browser_opener: Arc::new(default_browser_opener), responder: None };
+        let mut form = ElicitationForm {
+            ui,
+            browser_opener: Arc::new(default_browser_opener),
+            clipboard_writer: Arc::new(default_clipboard_writer),
+            responder: None,
+        };
 
         let lines = render_component(|ctx| form.render(ctx), 80, 20).get_lines();
         let text: String = lines.join("\n");
         assert!(text.contains("github"), "should show server name");
-        assert!(text.contains("https://github.com/login/oauth"), "should show full URL");
+        assert!(text.contains("Authorize GitHub"), "should show request message");
         assert!(text.contains("github.com"), "should show host");
-        assert!(text.contains("Enter to open URL"), "should show footer hint");
     }
 }

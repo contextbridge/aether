@@ -343,6 +343,16 @@ async fn handle_elicitation_request(connection: &ConnectionTo<Client>, elicitati
     }
 }
 
+fn spawn_url_elicitation_request(connection: &ConnectionTo<Client>, elicitation: ElicitationRequest) {
+    let connection = connection.clone();
+    if let Err(e) = connection.clone().spawn(async move {
+        handle_elicitation_request(&connection, elicitation).await;
+        Ok(())
+    }) {
+        error!("Failed to spawn URL elicitation request handler: {e:?}");
+    }
+}
+
 fn build_elicitation_params(server_name: &str, request: &CreateElicitationRequestParams) -> ElicitationParams {
     ElicitationParams { server_name: server_name.to_string(), request: request.clone() }
 }
@@ -503,6 +513,14 @@ async fn handle_mcp_client_event(
     event: McpClientEvent,
 ) {
     match event {
+        McpClientEvent::Elicitation(
+            elicitation @ ElicitationRequest {
+                request: CreateElicitationRequestParams::UrlElicitationParams { .. },
+                ..
+            },
+        ) => {
+            spawn_url_elicitation_request(connection, elicitation);
+        }
         McpClientEvent::Elicitation(elicitation) => {
             handle_elicitation_request(connection, elicitation).await;
         }
@@ -791,6 +809,58 @@ mod tests {
 
                 let received = peer.next_elicitation_request().await;
                 assert_eq!(received.server_name, "test-server");
+            })
+            .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn url_elicitation_request_does_not_block_completion_notifications() {
+        LocalSet::new()
+            .run_until(async {
+                let (cx, mut peer) = test_connection().await;
+                let (agent_tx, _agent_rx) = mpsc::channel(1);
+                let responder_rx = peer.capture_next_elicitation();
+                let (tx, rx) = oneshot::channel();
+                let elicitation = ElicitationRequest {
+                    server_name: "github".to_string(),
+                    request: CreateElicitationRequestParams::UrlElicitationParams {
+                        meta: None,
+                        message: "Authorize".to_string(),
+                        url: "https://example.com/oauth".to_string(),
+                        elicitation_id: "el-1".to_string(),
+                    },
+                    response_sender: tx,
+                };
+
+                handle_mcp_client_event(&cx, &agent_tx, McpClientEvent::Elicitation(elicitation)).await;
+                let responder = responder_rx.await.expect("URL elicitation request should reach peer");
+
+                handle_mcp_client_event(
+                    &cx,
+                    &agent_tx,
+                    McpClientEvent::UrlElicitationComplete(mcp_utils::client::UrlElicitationCompleteParams {
+                        server_name: "github".to_string(),
+                        elicitation_id: "el-1".to_string(),
+                    }),
+                )
+                .await;
+
+                match peer.next_mcp_notification().await {
+                    McpNotification::UrlElicitationComplete(params) => {
+                        assert_eq!(params.server_name, "github");
+                        assert_eq!(params.elicitation_id, "el-1");
+                    }
+                    other @ McpNotification::ServerStatus { .. } => {
+                        panic!("expected URL completion notification, got {other:?}")
+                    }
+                }
+
+                let _ = responder.respond(acp_utils::notifications::ElicitationResponse {
+                    action: rmcp::model::ElicitationAction::Accept,
+                    content: None,
+                });
+                let result = rx.await.expect("spawned URL request should forward response");
+                assert_eq!(result.action, rmcp::model::ElicitationAction::Accept);
             })
             .await;
     }

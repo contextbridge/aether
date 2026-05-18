@@ -9,6 +9,7 @@ use crate::components::prompt_composer::{PromptComposer, PromptComposerMessage};
 use crate::components::session_picker::{SessionEntry, SessionPicker, SessionPickerMessage};
 use crate::components::tool_call_statuses::ToolCallStatuses;
 use crate::keybindings::Keybindings;
+use acp_utils::CreateElicitationRequestParams;
 use acp_utils::notifications::ElicitationResponse;
 use agent_client_protocol::Responder;
 use agent_client_protocol::schema::{self as acp, SessionId};
@@ -182,6 +183,9 @@ impl ConversationScreen {
         params: acp_utils::notifications::ElicitationParams,
         responder: Responder<ElicitationResponse>,
     ) {
+        if let CreateElicitationRequestParams::UrlElicitationParams { elicitation_id, .. } = &params.request {
+            self.pending_url_elicitations.insert((params.server_name.clone(), elicitation_id.clone()));
+        }
         self.active_modal = Some(Modal::Elicitation(ElicitationForm::from_params(params, responder)));
     }
 
@@ -192,6 +196,11 @@ impl ConversationScreen {
     pub fn on_url_elicitation_complete(&mut self, params: &acp_utils::notifications::UrlElicitationCompleteParams) {
         let key = (params.server_name.clone(), params.elicitation_id.clone());
         if self.pending_url_elicitations.remove(&key) {
+            if let Some(Modal::Elicitation(form)) = self.active_modal.as_mut()
+                && form.accept_url_complete(params)
+            {
+                self.active_modal = None;
+            }
             self.conversation.push_user_message(&format!(
                 "[wisp] {} finished the browser flow. Retry the previous request if it did not resume automatically.",
                 params.server_name
