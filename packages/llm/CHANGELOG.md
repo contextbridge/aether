@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.5](https://github.com/contextbridge/aether/compare/aether-llm-v0.7.4...aether-llm-v0.7.5) - 2026-05-18
+
+### Other
+
+- update Cargo.toml dependencies
+
 ## [0.7.4](https://github.com/contextbridge/aether/compare/aether-llm-v0.7.3...aether-llm-v0.7.4) - 2026-05-16
 
 ### Fixed

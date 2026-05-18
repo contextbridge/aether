@@ -1,6 +1,6 @@
 [package]
 name = "aether-llm"
-version = "0.7.4"
+version = "0.7.5"
 edition = "2024"
 description = "Multi-provider LLM abstraction layer for the Aether AI agent framework"
 license = "MIT"
@@ -56,7 +56,7 @@ tracing = { workspace = true }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.4" }
 
 # Codex deps
-aether-auth = { path = "../aether-auth", version = "0.1.2", optional = true }
+aether-auth = { path = "../aether-auth", version = "0.1.3", optional = true }
 oauth2 = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
 

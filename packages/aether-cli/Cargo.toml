@@ -1,6 +1,6 @@
 [package]
 name = "aether-agent-cli"
-version = "0.7.5"
+version = "0.7.6"
 edition = "2024"
 description = "CLI and ACP server for the Aether AI coding agent"
 license = "MIT"
@@ -29,15 +29,15 @@ name = "aether"
 path = "src/main.rs"
 
 [dependencies]
-aether-auth = { path = "../aether-auth", version = "0.1.2", features = ["keyring"] }
-aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.6.5" }
-aether-project = { path = "../aether-project", version = "0.5.5" }
-llm = { package = "aether-llm", path = "../llm", features = ["bedrock", "codex"], version = "0.7.4" }
-mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.5.9" }
-mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", features = ["all"], version = "0.4.9" }
-wisp = { package = "aether-wisp", path = "../wisp", version = "0.4.13" }
+aether-auth = { path = "../aether-auth", version = "0.1.3", features = ["keyring"] }
+aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.6.6" }
+aether-project = { path = "../aether-project", version = "0.5.6" }
+llm = { package = "aether-llm", path = "../llm", features = ["bedrock", "codex"], version = "0.7.5" }
+mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.5.10" }
+mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", features = ["all"], version = "0.4.10" }
+wisp = { package = "aether-wisp", path = "../wisp", version = "0.4.14" }
 tui = { package = "aether-tui", path = "../tui", default-features = false, features = ["syntax"], version = "0.2.9" }
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["server", "testing"], version = "0.3.15" }
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["server", "testing"], version = "0.3.16" }
 agent-client-protocol = { workspace = true }
 aether-lspd = { path = "../aether-lspd", version = "0.1.14" }
 rmcp = { workspace = true }
@@ -59,4 +59,4 @@ crossterm = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["testing"], version = "0.3.15" }
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["testing"], version = "0.3.16" }

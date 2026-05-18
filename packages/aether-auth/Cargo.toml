@@ -1,6 +1,6 @@
 [package]
 name = "aether-auth"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 description = "OAuth credential storage and authorization flows for the Aether AI agent framework"
 license = "MIT"
