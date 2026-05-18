@@ -43,7 +43,7 @@ aether-lspd = { path = "../aether-lspd", version = "0.1.14" }
 rmcp = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
-tokio-util = { workspace = true }
+tokio-util = { workspace = true, features = ["compat"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 async-trait = { workspace = true }
