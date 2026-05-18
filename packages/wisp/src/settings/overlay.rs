@@ -1,10 +1,14 @@
 use super::menu::{SettingMenuMessage, SettingsMenu};
 use super::picker::{SettingsPicker, SettingsPickerMessage};
+use crate::components::elicitation_form::{ElicitationForm, ElicitationMessage, ElicitationUi, UrlPrompt};
 use crate::components::model_selector::{ModelEntry, ModelSelector, ModelSelectorMessage};
 use crate::components::provider_login::{ProviderLoginMessage, ProviderLoginOverlay};
 use crate::components::server_status::{ServerStatusMessage, ServerStatusOverlay};
 use acp_utils::config_option_id::ConfigOptionId;
-use acp_utils::notifications::McpServerStatusEntry;
+use acp_utils::notifications::{
+    ElicitationParams, ElicitationResponse, McpServerStatusEntry, UrlElicitationCompleteParams,
+};
+use agent_client_protocol::Responder;
 use agent_client_protocol::schema::{self as acp, SessionConfigKind, SessionConfigOption};
 use tui::Panel;
 use tui::{Component, Cursor, Event, Frame, Line, ViewContext};
@@ -30,6 +34,7 @@ enum SettingsPane {
 pub struct SettingsOverlay {
     menu: SettingsMenu,
     active_pane: SettingsPane,
+    pending_elicitation: Option<ElicitationForm>,
     server_statuses: Vec<McpServerStatusEntry>,
     auth_methods: Vec<acp::AuthMethod>,
     current_reasoning_effort: Option<String>,
@@ -50,7 +55,14 @@ impl SettingsOverlay {
         server_statuses: Vec<McpServerStatusEntry>,
         auth_methods: Vec<acp::AuthMethod>,
     ) -> Self {
-        Self { menu, active_pane: SettingsPane::Menu, server_statuses, auth_methods, current_reasoning_effort: None }
+        Self {
+            menu,
+            active_pane: SettingsPane::Menu,
+            pending_elicitation: None,
+            server_statuses,
+            auth_methods,
+            current_reasoning_effort: None,
+        }
     }
 
     pub fn with_reasoning_effort_from_options(mut self, options: &[SessionConfigOption]) -> Self {
@@ -127,6 +139,23 @@ impl SettingsOverlay {
         }
     }
 
+    pub fn on_elicitation_request(&mut self, params: ElicitationParams, responder: Responder<ElicitationResponse>) {
+        if let Some(mut prior) = self.pending_elicitation.take() {
+            prior.cancel_pending();
+        }
+        self.pending_elicitation = Some(ElicitationForm::from_params(params, responder));
+    }
+
+    pub fn on_url_elicitation_complete(&mut self, params: &UrlElicitationCompleteParams) {
+        if self.pending_elicitation.as_mut().is_some_and(|form| form.accept_url_complete(params)) {
+            self.pending_elicitation = None;
+        }
+    }
+
+    pub fn needs_mouse_capture(&self) -> bool {
+        self.pending_elicitation.is_none()
+    }
+
     pub fn cursor_col(&self) -> usize {
         match &self.active_pane {
             SettingsPane::Picker(picker) => {
@@ -154,8 +183,17 @@ impl SettingsOverlay {
         matches!(self.active_pane, SettingsPane::Picker(_))
     }
 
-    fn footer_text(&self) -> String {
-        match &self.active_pane {
+    fn footer_line(&self, context: &ViewContext) -> Line {
+        if let Some(form) = &self.pending_elicitation {
+            return match &form.ui {
+                ElicitationUi::Url(_) => shortcut_footer(
+                    &[("[Enter]", " Open Browser  "), ("[C]", " Copy Link  "), ("[Esc]", " Cancel")],
+                    context,
+                ),
+                ElicitationUi::Form(_) => shortcut_footer(&[("[Enter]", " Submit  "), ("[Esc]", " Cancel")], context),
+            };
+        }
+        let text = match &self.active_pane {
             SettingsPane::ModelSelector(selector) => {
                 let effort = utils::ReasoningEffort::config_str(selector.reasoning_effort());
                 format!("[Space/Enter] Toggle  [Tab] Effort: {effort}  [Esc] Done")
@@ -164,8 +202,18 @@ impl SettingsOverlay {
             SettingsPane::ServerStatus(_) => "[Enter] Authenticate OAuth servers  [Esc] Back".to_string(),
             SettingsPane::ProviderLogin(_) => "[Enter] Authenticate  [Esc] Back".to_string(),
             SettingsPane::Menu => "[Enter] Select  [Esc] Close".to_string(),
-        }
+        };
+        Line::new(text)
     }
+}
+
+fn shortcut_footer(parts: &[(&str, &str)], context: &ViewContext) -> Line {
+    let mut line = Line::default();
+    for (shortcut, label) in parts {
+        line.push_with_style(*shortcut, tui::Style::fg(context.theme.warning()).bold());
+        line.push_with_style(*label, tui::Style::fg(context.theme.muted()));
+    }
+    line
 }
 
 impl Component for SettingsOverlay {
@@ -175,6 +223,14 @@ impl Component for SettingsOverlay {
     async fn on_event(&mut self, event: &Event) -> Option<Vec<Self::Message>> {
         if !matches!(event, Event::Key(_) | Event::Mouse(_)) {
             return None;
+        }
+
+        if let Some(form) = self.pending_elicitation.as_mut() {
+            let outcome = form.on_event(event).await;
+            if outcome.unwrap_or_default().into_iter().any(|msg| matches!(msg, ElicitationMessage::Responded)) {
+                self.pending_elicitation = None;
+            }
+            return Some(vec![]);
         }
 
         match &mut self.active_pane {
@@ -298,7 +354,7 @@ impl Component for SettingsOverlay {
             return Frame::new(vec![Line::new("(terminal too small)")]);
         }
 
-        let footer = self.footer_text();
+        let footer = self.footer_line(context);
         #[allow(clippy::cast_possible_truncation)]
         let child_max_height = height.saturating_sub(4) as u16;
         let inner_w = Panel::inner_width(context.size.width);
@@ -313,10 +369,44 @@ impl Component for SettingsOverlay {
         };
 
         let mut container =
-            Panel::new(context.theme.muted()).title(" Configuration ").footer(footer).fill_height(height).gap(GAP);
+            Panel::new(context.theme.muted()).title(" Configuration ").footer_line(footer).fill_height(height).gap(GAP);
         container.push(child_lines);
+        if let Some(form) = self.pending_elicitation.as_mut() {
+            container.push(render_settings_elicitation(form, &child_context).into_lines());
+        }
         container.render(context)
     }
+}
+
+fn render_settings_elicitation(form: &mut ElicitationForm, context: &ViewContext) -> Frame {
+    if let ElicitationUi::Url(prompt) = &form.ui {
+        render_settings_url_prompt(prompt, context)
+    } else {
+        form.render(context)
+    }
+}
+
+fn render_settings_url_prompt(prompt: &UrlPrompt, context: &ViewContext) -> Frame {
+    let mut lines = vec![
+        Line::new(format!("    ↳ Open browser to authorize {} MCP access", prompt.server_name)),
+        Line::new(format!("      {}", prompt.host.as_deref().unwrap_or(&prompt.url))),
+    ];
+
+    if !prompt.warnings.is_empty() {
+        for warning in &prompt.warnings {
+            lines.push(Line::with_style(format!("      {warning}"), tui::Style::fg(context.theme.warning())));
+        }
+    }
+
+    if let Some(message) = &prompt.copy_message {
+        lines.push(Line::with_style(format!("      {message}"), tui::Style::fg(context.theme.muted())));
+    }
+
+    if let Some(error) = &prompt.launch_error {
+        lines.push(Line::styled(format!("      {error}"), context.theme.error()));
+    }
+
+    Frame::new(lines)
 }
 
 #[cfg(test)]
@@ -324,10 +414,11 @@ mod tests {
     use super::*;
     use crate::components::provider_login::ProviderLoginStatus;
     use crate::settings::types::SettingsMenuEntryKind;
+    use crate::test_helpers::key;
     use acp_utils::config_option_id::THEME_CONFIG_ID;
     use acp_utils::notifications::{McpServerAuthCapability, McpServerStatus};
     use agent_client_protocol::schema::{SessionConfigOption, SessionConfigSelectOption};
-    use tui::{KeyCode, KeyEvent, KeyModifiers};
+    use tui::KeyCode;
 
     fn select_opt(id: &'static str, name: &'static str) -> SessionConfigSelectOption {
         SessionConfigSelectOption::new(id, name)
@@ -386,13 +477,9 @@ mod tests {
         ]
     }
 
-    fn key(code: KeyCode) -> KeyEvent {
-        KeyEvent::new(code, KeyModifiers::NONE)
-    }
-
     async fn send_keys(overlay: &mut SettingsOverlay, codes: &[KeyCode]) {
         for code in codes {
-            overlay.on_event(&Event::Key(key(*code))).await;
+            overlay.on_event(&key(*code)).await;
         }
     }
 
@@ -433,14 +520,14 @@ mod tests {
     #[tokio::test]
     async fn esc_closes_overlay() {
         let mut overlay = new_overlay();
-        let messages = overlay.on_event(&Event::Key(key(KeyCode::Esc))).await.unwrap();
+        let messages = overlay.on_event(&key(KeyCode::Esc)).await.unwrap();
         assert!(matches!(messages.as_slice(), [SettingsMessage::Close]));
     }
 
     #[tokio::test]
     async fn enter_opens_picker() {
         let mut overlay = new_overlay();
-        let outcome = overlay.on_event(&Event::Key(key(KeyCode::Enter))).await;
+        let outcome = overlay.on_event(&key(KeyCode::Enter)).await;
         assert!(outcome.is_some());
         assert!(overlay.has_picker());
     }
@@ -451,7 +538,7 @@ mod tests {
         send_keys(&mut overlay, &[KeyCode::Enter]).await;
         assert!(overlay.has_picker());
 
-        let messages = overlay.on_event(&Event::Key(key(KeyCode::Esc))).await.unwrap();
+        let messages = overlay.on_event(&key(KeyCode::Esc)).await.unwrap();
         assert!(!overlay.has_picker());
         assert!(messages.is_empty(), "overlay should remain open");
     }
@@ -460,7 +547,7 @@ mod tests {
     async fn picker_confirm_returns_settings_change_action() {
         let mut overlay = new_overlay();
         send_keys(&mut overlay, &[KeyCode::Enter, KeyCode::Down]).await;
-        let messages = overlay.on_event(&Event::Key(key(KeyCode::Enter))).await.unwrap();
+        let messages = overlay.on_event(&key(KeyCode::Enter)).await.unwrap();
 
         match messages.as_slice() {
             [SettingsMessage::SetConfigOption { config_id, value }] => {
@@ -522,7 +609,7 @@ mod tests {
     #[tokio::test]
     async fn model_selector_esc_without_toggle_returns_no_change() {
         let mut overlay = open_model_selector().await;
-        let messages = overlay.on_event(&Event::Key(key(KeyCode::Esc))).await.unwrap();
+        let messages = overlay.on_event(&key(KeyCode::Esc)).await.unwrap();
         assert_footer_contains(&mut overlay, "[Enter] Select");
         assert!(messages.is_empty(), "escape without toggling should produce no change");
     }
@@ -532,7 +619,7 @@ mod tests {
         let mut overlay = open_model_selector().await;
         send_keys(&mut overlay, &[KeyCode::Char(' ')]).await; // deselect pre-selected
 
-        let messages = overlay.on_event(&Event::Key(key(KeyCode::Esc))).await.unwrap();
+        let messages = overlay.on_event(&key(KeyCode::Esc)).await.unwrap();
         assert_footer_contains(&mut overlay, "[Enter] Select");
         assert!(messages.is_empty());
     }
@@ -610,7 +697,7 @@ mod tests {
 
         send_keys(&mut overlay, &[KeyCode::Tab]).await;
         assert_footer_contains(&mut overlay, "Effort: high");
-        let messages = overlay.on_event(&Event::Key(key(KeyCode::Esc))).await.unwrap();
+        let messages = overlay.on_event(&key(KeyCode::Esc)).await.unwrap();
 
         let reasoning_msg = messages.iter().find(
             |m| matches!(m, SettingsMessage::SetConfigOption { config_id, .. } if config_id == "reasoning_effort"),
@@ -698,7 +785,7 @@ mod tests {
         let mut overlay = SettingsOverlay::new(menu, statuses, vec![]);
         send_keys(&mut overlay, &[KeyCode::Down, KeyCode::Down, KeyCode::Enter]).await;
 
-        let messages = overlay.on_event(&Event::Key(key(KeyCode::Enter))).await.unwrap();
+        let messages = overlay.on_event(&key(KeyCode::Enter)).await.unwrap();
         match messages.as_slice() {
             [SettingsMessage::AuthenticateServer(name)] => assert_eq!(name, "remote"),
             other => panic!("expected AuthenticateServer, got: {other:?}"),

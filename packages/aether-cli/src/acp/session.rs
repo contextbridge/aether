@@ -1,12 +1,12 @@
 use super::mappers::map_mcp_prompt_to_available_command;
 use aether_auth::OAuthCredentialStorage;
-use aether_auth::{BrowserOAuthHandler, OAuthHandler};
+use aether_auth::OAuthHandler;
 use aether_core::agent_spec::AgentSpec;
 use aether_core::core::AgentHandle;
 use aether_core::events::{AgentMessage, UserMessage};
 use aether_core::mcp::run_mcp_task::McpCommand;
 use llm::{ChatMessage, ProviderConnectionOverrides};
-use mcp_utils::client::{McpClientEvent, McpError, McpServer, OAuthHandlerFactory};
+use mcp_utils::client::{ElicitingOAuthHandler, McpClientEvent, McpError, McpServer, OAuthHandlerFactory};
 use mcp_utils::status::McpServerStatusEntry;
 
 use agent_client_protocol::schema as acp;
@@ -65,7 +65,7 @@ impl Session {
             rb = rb.prompt_cache_key(key);
         }
 
-        rb = rb.oauth_handler_factory(browser_oauth_handler_factory());
+        rb = rb.oauth_handler_factory(mcp_oauth_handler_factory());
         rb = rb.oauth_credential_store(oauth_credential_store);
 
         let agent = rb.build(None, restored_messages).await?;
@@ -102,11 +102,11 @@ impl Session {
     }
 }
 
-fn browser_oauth_handler_factory() -> OAuthHandlerFactory {
-    Arc::new(|| {
-        BrowserOAuthHandler::new()
+fn mcp_oauth_handler_factory() -> OAuthHandlerFactory {
+    Arc::new(|ctx| {
+        ElicitingOAuthHandler::new(ctx)
             .map(|handler| Arc::new(handler) as Arc<dyn OAuthHandler>)
-            .map_err(|e| McpError::ConnectionFailed(format!("failed to initialize browser OAuth handler: {e}")))
+            .map_err(|e| McpError::ConnectionFailed(format!("failed to initialize OAuth handler: {e}")))
     })
 }
 

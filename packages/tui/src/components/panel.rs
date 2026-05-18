@@ -27,10 +27,15 @@ pub const BORDER_H_PAD: u16 = 4;
 pub struct Panel {
     blocks: Vec<Vec<Line>>,
     title: Option<String>,
-    footer: Option<String>,
+    footer: Option<PanelFooter>,
     border_color: Color,
     fill_height: Option<usize>,
     gap: usize,
+}
+
+enum PanelFooter {
+    Text(String),
+    Line(Line),
 }
 
 impl Panel {
@@ -44,7 +49,12 @@ impl Panel {
     }
 
     pub fn footer(mut self, footer: impl Into<String>) -> Self {
-        self.footer = Some(footer.into());
+        self.footer = Some(PanelFooter::Text(footer.into()));
+        self
+    }
+
+    pub fn footer_line(mut self, footer: Line) -> Self {
+        self.footer = Some(PanelFooter::Line(footer));
         self
     }
 
@@ -112,10 +122,8 @@ impl Panel {
         }
 
         let mut chrome: Vec<Frame> = Vec::with_capacity(2);
-        if let Some(ref footer_text) = self.footer {
-            let footer_pad = inner_width.saturating_sub(UnicodeWidthStr::width(footer_text.as_str()));
-            let footer_line_str = format!("│ {footer_text}{:footer_pad$} │", "", footer_pad = footer_pad);
-            chrome.push(Frame::new(vec![Line::with_style(footer_line_str, border_style)]));
+        if let Some(footer) = &self.footer {
+            chrome.push(Frame::new(vec![render_footer(footer, inner_width, border_style)]));
         }
         let bottom_inner = width.saturating_sub(2); // └ and ┘
         let bottom_line = format!("└{:─>bottom_inner$}┘", "", bottom_inner = bottom_inner);
@@ -127,6 +135,23 @@ impl Panel {
             result.truncate_height(u16::try_from(target_height).unwrap_or(u16::MAX))
         } else {
             result
+        }
+    }
+}
+
+fn render_footer(footer: &PanelFooter, inner_width: usize, border_style: Style) -> Line {
+    match footer {
+        PanelFooter::Text(text) => {
+            let footer_pad = inner_width.saturating_sub(UnicodeWidthStr::width(text.as_str()));
+            let footer_line = format!("│ {text}{:footer_pad$} │", "", footer_pad = footer_pad);
+            Line::with_style(footer_line, border_style)
+        }
+        PanelFooter::Line(line) => {
+            let footer_pad = inner_width.saturating_sub(line.display_width());
+            let mut footer_line = Line::with_style("│ ", border_style);
+            footer_line.append_line(line);
+            footer_line.push_with_style(format!("{:footer_pad$} │", "", footer_pad = footer_pad), border_style);
+            footer_line
         }
     }
 }

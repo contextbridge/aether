@@ -34,7 +34,15 @@ pub use crate::status::{McpServerAuthCapability, McpServerStatus, McpServerStatu
 
 pub const DEFAULT_PROXY_NAME: &str = "proxy";
 
-pub type OAuthHandlerFactory = Arc<dyn Fn() -> Result<Arc<dyn OAuthHandler>> + Send + Sync>;
+pub type OAuthHandlerFactory = Arc<dyn Fn(OAuthHandlerContext) -> Result<Arc<dyn OAuthHandler>> + Send + Sync>;
+
+/// Context passed to an `OAuthHandlerFactory` so the constructed handler can
+/// dispatch user-facing prompts back to the host through the MCP event channel.
+#[derive(Clone)]
+pub struct OAuthHandlerContext {
+    pub server_name: String,
+    pub tx: mpsc::Sender<McpClientEvent>,
+}
 
 #[derive(Debug)]
 pub struct ElicitationRequest {
@@ -255,9 +263,6 @@ impl McpManager {
             .ok_or_else(|| McpError::ConnectionFailed(format!("server '{name}' is not OAuth-authenticatable")))?;
         if !record.can_authenticate() {
             return Err(McpError::ConnectionFailed(format!("server '{name}' is not OAuth-authenticatable")));
-        }
-        if matches!(record.status, McpServerStatus::Authenticating) {
-            return Err(McpError::ConnectionFailed(format!("server '{name}' is already authenticating")));
         }
 
         let oauth_handler_factory = self
@@ -789,7 +794,7 @@ mod tests {
     }
 
     fn test_oauth_handler_factory() -> OAuthHandlerFactory {
-        Arc::new(|| Ok(Arc::new(TestOAuthHandler)))
+        Arc::new(|_ctx| Ok(Arc::new(TestOAuthHandler)))
     }
 
     #[tokio::test]
@@ -826,26 +831,6 @@ mod tests {
         let status = servers.iter().find(|entry| entry.name == "remote").expect("remote status");
         assert!(matches!(status.status, McpServerStatus::Authenticating));
         assert_eq!(status.auth_capability, McpServerAuthCapability::OAuth);
-    }
-
-    #[tokio::test]
-    async fn authenticate_server_task_rejects_duplicate_same_server_while_in_flight() {
-        let (event_sender, _event_receiver) = mpsc::channel(1);
-        let mut manager = McpManager::new(event_sender, Some(test_oauth_handler_factory()));
-        manager.register_record(
-            "remote",
-            McpServerStatus::NeedsOAuth,
-            Some(StreamableHttpClientTransportConfig::with_uri("http://localhost:19999/mcp")),
-            false,
-        );
-
-        let _task = manager.authenticate_server_task("remote").await.expect("first auth should start");
-        let error = match manager.authenticate_server_task("remote").await {
-            Ok(_) => panic!("duplicate auth should be rejected"),
-            Err(error) => error.to_string(),
-        };
-
-        assert!(error.contains("already authenticating"));
     }
 
     #[tokio::test]

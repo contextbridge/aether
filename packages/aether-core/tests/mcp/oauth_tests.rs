@@ -50,7 +50,7 @@ impl OAuthHandler for CancellingOAuthHandler {
 }
 
 fn fake_oauth_handler_factory() -> OAuthHandlerFactory {
-    Arc::new(|| Ok(Arc::new(CancellingOAuthHandler)))
+    Arc::new(|_ctx| Ok(Arc::new(CancellingOAuthHandler)))
 }
 
 #[tokio::test]
@@ -74,7 +74,7 @@ async fn builder_with_oauth_handler_factory_spawns_successfully() {
     let handler = Arc::new(FakeOAuthHandler::new("code", "state"));
 
     let McpSpawnResult { tool_definitions, instructions, event_rx: _, .. } = mcp()
-        .with_oauth_handler_factory(Arc::new(move || Ok(handler.clone())))
+        .with_oauth_handler_factory(Arc::new(move |_ctx| Ok(handler.clone())))
         .with_servers(vec![])
         .spawn()
         .await
