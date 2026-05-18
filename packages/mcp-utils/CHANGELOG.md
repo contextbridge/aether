@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.9](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.5.8...aether-mcp-utils-v0.5.9) - 2026-05-18
+
+### Fixed
+
+- *(wisp)* Allow copying URLs when performing MCP auth  ([#82](https://github.com/contextbridge/aether/pull/82))
+
 ## [0.5.8](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.5.7...aether-mcp-utils-v0.5.8) - 2026-05-16
 
 ### Other

@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.13](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.12...aether-wisp-v0.4.13) - 2026-05-18
+
+### Fixed
+
+- *(wisp)* Allow copying URLs when performing MCP auth  ([#82](https://github.com/contextbridge/aether/pull/82))
+- *(wisp)* Show cwd and git branch to avoid confusing users with multiple terminal tabs open ([#79](https://github.com/contextbridge/aether/pull/79))
+
 ## [0.4.12](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.11...aether-wisp-v0.4.12) - 2026-05-16
 
 ### Other
