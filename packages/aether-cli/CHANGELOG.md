@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.5](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.4...aether-agent-cli-v0.7.5) - 2026-05-18
+
+### Fixed
+
+- *(wisp)* Allow copying URLs when performing MCP auth  ([#82](https://github.com/contextbridge/aether/pull/82))
+
+### Other
+
+- replace Box<dyn Error> with typed error enums, remove excessive comments ([#81](https://github.com/contextbridge/aether/pull/81))
+
 ## [0.7.4](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.3...aether-agent-cli-v0.7.4) - 2026-05-16
 
 ### Fixed

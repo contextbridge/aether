@@ -1,6 +1,6 @@
 [package]
 name = "aether-mcp-utils"
-version = "0.5.8"
+version = "0.5.9"
 edition = "2024"
 description = "MCP client and server utilities for the Aether AI agent framework"
 license = "MIT"

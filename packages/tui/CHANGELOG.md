@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.9](https://github.com/contextbridge/aether/compare/aether-tui-v0.2.8...aether-tui-v0.2.9) - 2026-05-18
+
+### Fixed
+
+- *(wisp)* Allow copying URLs when performing MCP auth  ([#82](https://github.com/contextbridge/aether/pull/82))
+
 ## [0.2.8](https://github.com/contextbridge/aether/compare/aether-tui-v0.2.7...aether-tui-v0.2.8) - 2026-05-15
 
 ### Fixed
