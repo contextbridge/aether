@@ -3,7 +3,7 @@ use tui::{FitOptions, Frame, Line, Style, ViewContext};
 
 const MESSAGES: &[&str] = &[
     "Tip: Hit Tab to adjust reasoning level (off → low → medium → high)",
-    "Tip: Hit Shift+Tab to cycle through agent modes",
+    "Tip: Hit Shift+Tab to cycle through agents defined in your settings.json file",
     "Tip: Press @ to attach files to your prompt",
     "Tip: Type / to open the command picker",
     "Tip: Use /resume to pick up a previous session",
