@@ -39,7 +39,6 @@ tokio = { version = "^1.52.3", features = ["full"] }
 tokio-stream = { version = "^0.1.18", features = ["io-util"] }
 tokio-util = "^0.7.18"
 futures = "^0.3.32"
-blocking = "1.6.2"
 async-stream = "^0.3.6"
 eventsource-stream = "^0.2"
 
@@ -56,12 +55,11 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
 
 # ACP
-agent-client-protocol = "0.11.1"
-agent-client-protocol-tokio = "0.11.1"
+agent-client-protocol = "0.12.1"
 
 # MCP and API clients
-rmcp = { version = "^1.6.0", features = ["client", "server", "macros", "schemars", "auth", "elicitation", "transport-io"] }
-async-openai = { version = "^0.38.1", features = ["byot", "chat-completion", "responses"] }
+rmcp = { version = "^1.7.0", features = ["client", "server", "macros", "schemars", "auth", "elicitation", "transport-io"] }
+async-openai = { version = "^0.38.2", features = ["byot", "chat-completion", "responses"] }
 reqwest = { version = "^0.13.3", default-features = false, features = ["json", "query", "rustls", "http2", "stream"] }
 oauth2 = "5.0"
 keyring-core = "1.0.0"

@@ -25,13 +25,12 @@ workspace = true
 
 [features]
 default = ["client", "server"]
-client = ["dep:thiserror", "dep:agent-client-protocol-tokio"]
+client = ["dep:thiserror"]
 server = ["dep:thiserror"]
 testing = ["client", "dep:tokio-util"]
 
 [dependencies]
 agent-client-protocol = { workspace = true }
-agent-client-protocol-tokio = { workspace = true, optional = true }
 futures = { workspace = true }
 tokio-util = { workspace = true, features = ["compat"], optional = true }
 rmcp = { workspace = true }

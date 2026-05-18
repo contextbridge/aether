@@ -12,8 +12,7 @@ use agent_client_protocol::schema::{
     RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome, SessionConfigOption, SessionId,
     SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, TextContent,
 };
-use agent_client_protocol::{self as acp, Client, ConnectionTo};
-use agent_client_protocol_tokio::AcpAgent;
+use agent_client_protocol::{self as acp, AcpAgent, Client, ConnectionTo};
 use std::str::FromStr;
 use tokio::sync::mpsc;
 use tracing::info;
