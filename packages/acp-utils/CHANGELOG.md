@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.16](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.3.15...aether-acp-utils-v0.3.16) - 2026-05-18
+
+### Other
+
+- Upgrade dependencies to latest ([#83](https://github.com/contextbridge/aether/pull/83))
+
 ## [0.3.15](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.3.14...aether-acp-utils-v0.3.15) - 2026-05-18
 
 ### Fixed
