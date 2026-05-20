@@ -7,11 +7,11 @@
 use agent_client_protocol::schema::{McpServer, McpServerStdio};
 use agent_client_protocol::util::internal_error;
 use agent_client_protocol::{AcpAgent, ByteStreams, ConnectTo, Error, Role, util};
-use std::pin::pin;
 use std::process::Stdio;
 use std::str::FromStr;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
+use tokio::sync::oneshot;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 pub struct TokioAcpAgent {
@@ -63,37 +63,33 @@ async fn connect_stdio<T: Role>(server: McpServerStdio, client: impl ConnectTo<T
         (stdin, stdout, stderr, child)
     };
 
-    let bytes = ByteStreams::new(stdin.compat_write(), stdout.compat());
-    let mut wait = pin!(child.wait());
-    let mut protocol = pin!(ConnectTo::<T>::connect_to(bytes, client));
-    let mut stderr_lines = BufReader::new(stderr).lines();
-    let mut stderr_buf = String::new();
-    let mut stderr_open = true;
-
-    loop {
-        tokio::select! {
-            result = &mut protocol => return result,
-            status = &mut wait => {
-                while let Ok(Some(line)) = stderr_lines.next_line().await {
-                    stderr_buf.push_str(&line);
-                    stderr_buf.push('\n');
-                }
-
-                return match status {
-                    Ok(s) if s.success() => Ok(()),
-                    Ok(s) => Err(util::internal_error(format!("agent process exited ({s}): {stderr_buf}"))),
-                    Err(e) => Err(Error::into_internal_error(e)),
-                };
+    let (stderr_tx, stderr_rx) = oneshot::channel::<String>();
+    tokio::spawn(async move {
+        let mut lines = BufReader::new(stderr).lines();
+        let mut buf = String::new();
+        while let Ok(Some(line)) = lines.next_line().await {
+            if !buf.is_empty() {
+                buf.push('\n');
             }
-
-            line = stderr_lines.next_line(), if stderr_open => match line {
-                Ok(Some(line)) => {
-                    stderr_buf.push_str(&line);
-                    stderr_buf.push('\n');
-                }
-
-                Ok(None) | Err(_) => stderr_open = false,
-            }
+            buf.push_str(&line);
         }
+        let _ = stderr_tx.send(buf);
+    });
+
+    let child_fut = async move {
+        match child.wait().await {
+            Ok(s) if s.success() => Ok(()),
+            Ok(s) => {
+                let stderr = stderr_rx.await.unwrap_or_default();
+                Err(util::internal_error(format!("agent process exited ({s}): {stderr}")))
+            }
+            Err(e) => Err(Error::into_internal_error(e)),
+        }
+    };
+
+    let bytes = ByteStreams::new(stdin.compat_write(), stdout.compat());
+    tokio::select! {
+        result = ConnectTo::<T>::connect_to(bytes, client) => result,
+        result = child_fut => result,
     }
 }
