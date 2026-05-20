@@ -1,6 +1,7 @@
 use super::error::AcpClientError;
 use super::event::AcpEvent;
 use super::prompt_handle::{AcpPromptHandle, PromptCommand};
+use super::tokio_agent::TokioAcpAgent;
 use crate::notifications::{
     AuthMethodsUpdatedParams, ContextClearedParams, ContextUsageParams, ElicitationParams, McpNotification, McpRequest,
     SubAgentProgressParams,
@@ -12,7 +13,7 @@ use agent_client_protocol::schema::{
     RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome, SessionConfigOption, SessionId,
     SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, TextContent,
 };
-use agent_client_protocol::{self as acp, AcpAgent, Client, ConnectionTo};
+use agent_client_protocol::{self as acp, Client, ConnectionTo};
 use std::str::FromStr;
 use tokio::sync::mpsc;
 use tracing::info;
@@ -40,7 +41,7 @@ pub async fn spawn_acp_session(
     init_request: InitializeRequest,
     new_session_request: NewSessionRequest,
 ) -> Result<AcpSession, AcpClientError> {
-    let agent = AcpAgent::from_str(agent_command).map_err(AcpClientError::InvalidAgentCommand)?;
+    let agent = TokioAcpAgent::from_str(agent_command).map_err(AcpClientError::InvalidAgentCommand)?;
     let (event_tx, event_rx) = mpsc::unbounded_channel::<AcpEvent>();
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<PromptCommand>();
     let (init_tx, mut init_rx) = mpsc::unbounded_channel::<InitializeResult>();
@@ -69,7 +70,7 @@ pub async fn spawn_acp_session(
 
 #[allow(clippy::too_many_lines)]
 async fn run_client_connection(
-    agent: AcpAgent,
+    agent: TokioAcpAgent,
     event_tx: mpsc::UnboundedSender<AcpEvent>,
     cmd_rx: mpsc::UnboundedReceiver<PromptCommand>,
     init_tx: mpsc::UnboundedSender<InitializeResult>,

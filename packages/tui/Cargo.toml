@@ -37,6 +37,7 @@ testing = []
 
 [dependencies]
 crossterm = { workspace = true }
+futures = { workspace = true }
 syntect = { workspace = true, optional = true }
 two-face = { workspace = true, optional = true }
 pulldown-cmark = { workspace = true, optional = true }

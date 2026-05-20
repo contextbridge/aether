@@ -27,12 +27,12 @@ workspace = true
 default = ["client", "server"]
 client = ["dep:thiserror"]
 server = ["dep:thiserror"]
-testing = ["client", "dep:tokio-util"]
+testing = ["client"]
 
 [dependencies]
 agent-client-protocol = { workspace = true }
 futures = { workspace = true }
-tokio-util = { workspace = true, features = ["compat"], optional = true }
+tokio-util = { workspace = true, features = ["compat"] }
 rmcp = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
