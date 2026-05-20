@@ -293,6 +293,7 @@ version = "0.2.9"
 dependencies = [
  "aether-tui",
  "crossterm",
+ "futures",
  "nucleo",
  "pulldown-cmark",
  "serde_json",
