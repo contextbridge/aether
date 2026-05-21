@@ -3,8 +3,10 @@ use crate::components::command_picker::{CommandEntry, CommandPicker, CommandPick
 use crate::components::dropped_files::parse_dropped_file_paths;
 use crate::components::file_picker::{FilePicker, FilePickerMessage};
 use crate::components::input_prompt::{InputPrompt, prompt_content_width};
+use crate::components::prompt_search_picker::{PromptSearchPicker, PromptSearchPickerMessage, cursor_at_match_end};
 use crate::components::text_input::{SelectedFileMention, TextInput, TextInputMessage};
 use crate::keybindings::Keybindings;
+use acp_utils::notifications::{PromptSearchParams, PromptSearchResponse};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use tui::{Component, Cursor, Event, Frame, KeyCode, KeyModifiers, Line, PickerMessage, ViewContext};
@@ -17,31 +19,126 @@ pub enum PromptComposerMessage {
     OpenSettings,
     OpenSessionPicker,
     NewSession,
+    SearchPrompts(PromptSearchParams),
 }
 
 pub struct PromptComposer {
     text_input: TextInput,
     available_commands: Vec<CommandEntry>,
-    file_picker: Option<FilePicker>,
-    command_picker: Option<CommandPicker>,
+    active_overlay: Option<Overlay>,
     pending_media: Vec<PromptAttachment>,
+    prompt_search_enabled: bool,
+    keybindings: Keybindings,
+}
+
+enum Overlay {
+    File(FilePicker),
+    Command(CommandPicker),
+    PromptSearch { picker: PromptSearchPicker, draft: String },
 }
 
 impl Default for PromptComposer {
     fn default() -> Self {
-        Self::new(Keybindings::default())
+        Self::new(Keybindings::default(), true)
     }
 }
 
 impl PromptComposer {
-    pub fn new(keybindings: Keybindings) -> Self {
+    pub fn new(keybindings: Keybindings, prompt_search_enabled: bool) -> Self {
         Self {
-            text_input: TextInput::new(keybindings),
+            text_input: TextInput::new(keybindings.clone()),
             available_commands: Vec::new(),
-            file_picker: None,
-            command_picker: None,
+            active_overlay: None,
             pending_media: Vec::new(),
+            prompt_search_enabled,
+            keybindings,
         }
+    }
+
+    pub fn on_prompt_search_results(&mut self, response: PromptSearchResponse) {
+        let Some(Overlay::PromptSearch { picker, .. }) = self.active_overlay.as_mut() else {
+            return;
+        };
+        if picker.on_results(response) {
+            self.apply_selected_search_result_to_input();
+        }
+    }
+
+    pub fn on_prompt_search_failed(&mut self, query: &str, error: String) {
+        let Some(Overlay::PromptSearch { picker, .. }) = self.active_overlay.as_mut() else {
+            return;
+        };
+        let _ = picker.on_failed(query, error);
+    }
+
+    fn apply_selected_search_result_to_input(&mut self) {
+        let Some(Overlay::PromptSearch { picker, .. }) = self.active_overlay.as_ref() else {
+            return;
+        };
+        if let Some(result) = picker.selected_result() {
+            let cursor = cursor_at_match_end(&result.prompt, result.match_end);
+            self.text_input.set_input(result.prompt.clone());
+            self.text_input.set_cursor_pos(cursor);
+        }
+    }
+
+    fn issue_search_request(&mut self, query: String) -> Option<PromptComposerMessage> {
+        if query.trim().is_empty() {
+            self.restore_draft_in_input();
+            return None;
+        }
+        Some(PromptComposerMessage::SearchPrompts(PromptSearchParams { query, limit: None }))
+    }
+
+    fn restore_draft_in_input(&mut self) {
+        let Some(Overlay::PromptSearch { draft, .. }) = &self.active_overlay else {
+            return;
+        };
+        self.text_input.set_input(draft.clone());
+    }
+
+    fn open_prompt_search(&mut self) {
+        let draft = self.text_input.buffer().to_string();
+        self.active_overlay = Some(Overlay::PromptSearch { picker: PromptSearchPicker::new(), draft });
+    }
+
+    fn close_prompt_search(&mut self, confirmed: bool) {
+        let Some(Overlay::PromptSearch { draft, .. }) = self.active_overlay.take() else {
+            return;
+        };
+        if !confirmed {
+            self.text_input.set_input(draft);
+        }
+    }
+
+    /// Highlight range derived from the picker's currently-selected match.
+    /// Overlays onto the input at render time so `TextInput` never has to
+    /// know about search state.
+    fn current_search_highlight(&self) -> Option<std::ops::Range<usize>> {
+        match &self.active_overlay {
+            Some(Overlay::PromptSearch { picker, .. }) => picker.selected_result().map(|r| r.match_start..r.match_end),
+            _ => None,
+        }
+    }
+
+    fn handle_prompt_search_outcome(
+        &mut self,
+        outcome: Option<Vec<PromptSearchPickerMessage>>,
+    ) -> Vec<PromptComposerMessage> {
+        let mut messages = Vec::new();
+        for message in outcome.unwrap_or_default() {
+            match message {
+                PromptSearchPickerMessage::Cancel => self.close_prompt_search(false),
+                PromptSearchPickerMessage::Confirm => self.close_prompt_search(true),
+                PromptSearchPickerMessage::QueryChanged(query) => {
+                    if let Some(message) = self.issue_search_request(query) {
+                        messages.push(message);
+                    }
+                }
+                PromptSearchPickerMessage::SelectionChanged => self.apply_selected_search_result_to_input(),
+            }
+        }
+        messages
     }
 
     pub fn set_available_commands(&mut self, commands: Vec<CommandEntry>) {
@@ -50,7 +147,7 @@ impl PromptComposer {
 
     #[cfg(test)]
     pub fn has_active_picker(&self) -> bool {
-        self.file_picker.is_some() || self.command_picker.is_some()
+        self.active_overlay.is_some()
     }
 
     #[cfg(test)]
@@ -65,7 +162,10 @@ impl PromptComposer {
 
     #[cfg(test)]
     pub(crate) fn cursor_index(&self) -> usize {
-        let picker_query_len = self.file_picker.as_ref().map(|picker| picker.query().len());
+        let picker_query_len = match &self.active_overlay {
+            Some(Overlay::File(picker)) => Some(picker.query().len()),
+            _ => None,
+        };
         self.text_input.cursor_index(picker_query_len)
     }
 
@@ -76,7 +176,7 @@ impl PromptComposer {
 
     #[cfg(test)]
     pub(crate) fn open_command_picker_with_entries(&mut self, commands: Vec<CommandEntry>) {
-        self.command_picker = Some(CommandPicker::new(commands));
+        self.active_overlay = Some(Overlay::Command(CommandPicker::new(commands)));
     }
 
     #[cfg(test)]
@@ -85,15 +185,19 @@ impl PromptComposer {
     }
 
     pub fn close_all(&mut self) {
-        self.file_picker = None;
-        self.command_picker = None;
+        self.close_prompt_search(false);
+        self.active_overlay = None;
     }
 
     pub fn cursor(&self, context: &ViewContext) -> Cursor {
-        let picker_query_len = self.file_picker.as_ref().map(|picker| picker.query().len());
+        let picker_query_len = match &self.active_overlay {
+            Some(Overlay::File(picker)) => Some(picker.query().len()),
+            _ => None,
+        };
         let layout = InputPrompt {
             input: self.text_input.buffer(),
             cursor_index: self.text_input.cursor_index(picker_query_len),
+            highlight_range: self.current_search_highlight(),
         }
         .layout(context);
 
@@ -102,12 +206,12 @@ impl PromptComposer {
 
     #[cfg(test)]
     pub(crate) fn has_file_picker(&self) -> bool {
-        self.file_picker.is_some()
+        matches!(self.active_overlay, Some(Overlay::File(_)))
     }
 
     #[cfg(test)]
     pub(crate) fn has_command_picker(&self) -> bool {
-        self.command_picker.is_some()
+        matches!(self.active_overlay, Some(Overlay::Command(_)))
     }
 
     fn handle_picker_outcome<T>(&mut self, outcome: Option<Vec<PickerMessage<T>>>) -> (bool, Option<T>) {
@@ -139,10 +243,10 @@ impl PromptComposer {
     fn handle_file_picker_outcome(&mut self, outcome: Option<Vec<FilePickerMessage>>) -> Vec<PromptComposerMessage> {
         let (close, confirmed) = self.handle_picker_outcome(outcome);
         if let Some(file_match) = confirmed {
-            self.file_picker = None;
+            self.active_overlay = None;
             self.text_input.apply_file_selection(file_match.path, file_match.display_name);
         } else if close {
-            self.file_picker = None;
+            self.active_overlay = None;
         }
         vec![]
     }
@@ -153,10 +257,10 @@ impl PromptComposer {
     ) -> Vec<PromptComposerMessage> {
         let (close, confirmed) = self.handle_picker_outcome(outcome);
         if let Some(cmd) = confirmed {
-            self.command_picker = None;
+            self.active_overlay = None;
             return self.apply_command(&cmd);
         } else if close {
-            self.command_picker = None;
+            self.active_overlay = None;
         }
         vec![]
     }
@@ -171,11 +275,11 @@ impl PromptComposer {
             Some(TextInputMessage::OpenCommandPicker) => {
                 let mut commands = builtin_commands();
                 commands.extend(self.available_commands.clone());
-                self.command_picker = Some(CommandPicker::new(commands));
+                self.active_overlay = Some(Overlay::Command(CommandPicker::new(commands)));
                 Some(vec![])
             }
             Some(TextInputMessage::OpenFilePicker) => {
-                self.file_picker = Some(FilePicker::new());
+                self.active_overlay = Some(Overlay::File(FilePicker::new()));
                 Some(vec![])
             }
             None => Some(vec![]),
@@ -254,6 +358,10 @@ impl Component for PromptComposer {
     async fn on_event(&mut self, event: &Event) -> Option<Vec<Self::Message>> {
         match event {
             Event::Paste(text) => {
+                if let Some(Overlay::PromptSearch { picker, .. }) = self.active_overlay.as_mut() {
+                    let outcome = picker.on_event(event).await;
+                    return Some(self.handle_prompt_search_outcome(outcome));
+                }
                 self.close_all();
                 let added = parse_dropped_file_paths(text).is_some_and(|paths| self.add_dropped_media(paths));
                 if !added {
@@ -262,32 +370,51 @@ impl Component for PromptComposer {
                 Some(vec![])
             }
             Event::Key(key_event) => {
+                if self.prompt_search_enabled
+                    && self.keybindings.open_prompt_search.matches(*key_event)
+                    && self.active_overlay.is_none()
+                {
+                    self.open_prompt_search();
+                    return Some(vec![]);
+                }
+
                 if key_event.code == KeyCode::Enter && key_event.modifiers.contains(KeyModifiers::SHIFT) {
                     self.close_all();
                     let outcome = self.text_input.on_event(event).await;
                     return self.handle_text_input_outcome(outcome);
                 }
 
-                if let Some(ref mut picker) = self.file_picker {
-                    let outcome = picker.on_event(event).await;
-                    if outcome.is_some() {
-                        return Some(self.handle_file_picker_outcome(outcome));
-                    }
+                if let Some(active_overlay) = self.active_overlay.as_mut() {
+                    match active_overlay {
+                        Overlay::PromptSearch { picker, .. } => {
+                            let outcome = picker.on_event(event).await;
+                            return Some(self.handle_prompt_search_outcome(outcome));
+                        }
+                        Overlay::File(picker) => {
+                            let outcome = picker.on_event(event).await;
+                            if outcome.is_some() {
+                                return Some(self.handle_file_picker_outcome(outcome));
+                            }
 
-                    if matches!(
-                        key_event.code,
-                        KeyCode::Left | KeyCode::Right | KeyCode::Home | KeyCode::End | KeyCode::Up | KeyCode::Down
-                    ) {
-                        return Some(vec![]);
+                            if matches!(
+                                key_event.code,
+                                KeyCode::Left
+                                    | KeyCode::Right
+                                    | KeyCode::Home
+                                    | KeyCode::End
+                                    | KeyCode::Up
+                                    | KeyCode::Down
+                            ) {
+                                return Some(vec![]);
+                            }
+                        }
+                        Overlay::Command(picker) => {
+                            let outcome = picker.on_event(event).await;
+                            return Some(self.handle_command_picker_outcome(outcome));
+                        }
                     }
                 }
 
-                if let Some(ref mut picker) = self.command_picker {
-                    let outcome = picker.on_event(event).await;
-                    return Some(self.handle_command_picker_outcome(outcome));
-                }
-
-                // Backspace on empty prompt removes the last dropped media attachment
                 if key_event.code == KeyCode::Backspace
                     && self.text_input.buffer().is_empty()
                     && !self.pending_media.is_empty()
@@ -307,10 +434,15 @@ impl Component for PromptComposer {
         let content_width = prompt_content_width(usize::from(context.size.width));
         self.text_input.set_content_width(content_width);
 
-        let picker_query_len = self.file_picker.as_ref().map(|picker| picker.query().len());
+        let picker_query_len = match &self.active_overlay {
+            Some(Overlay::File(picker)) => Some(picker.query().len()),
+            _ => None,
+        };
+        let highlight_range = self.current_search_highlight();
         let mut lines = InputPrompt {
             input: self.text_input.buffer(),
             cursor_index: self.text_input.cursor_index(picker_query_len),
+            highlight_range,
         }
         .layout(context)
         .lines;
@@ -327,12 +459,12 @@ impl Component for PromptComposer {
             lines.push(line);
         }
 
-        if let Some(ref mut picker) = self.file_picker {
-            lines.extend(picker.render(context).into_lines());
-        }
-
-        if let Some(ref mut picker) = self.command_picker {
-            lines.extend(picker.render(context).into_lines());
+        if let Some(active_overlay) = &mut self.active_overlay {
+            match active_overlay {
+                Overlay::File(picker) => lines.extend(picker.render(context).into_lines()),
+                Overlay::Command(picker) => lines.extend(picker.render(context).into_lines()),
+                Overlay::PromptSearch { picker, .. } => lines.extend(picker.render(context).into_lines()),
+            }
         }
 
         Frame::new(lines).with_cursor(self.cursor(context))

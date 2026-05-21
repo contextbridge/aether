@@ -1,10 +1,16 @@
+use super::prompt_history_index::PromptHistoryIndex;
+use acp_utils::notifications::{PromptSearchParams, PromptSearchResponse};
 use aether_core::context::ext::{SessionEvent, UserEvent};
 use aether_core::events::AgentMessage;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use tracing::warn;
+
+const PROMPT_HISTORY_FILE: &str = "prompt-history.jsonl";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -25,28 +31,39 @@ pub struct SessionSummary {
 
 pub struct SessionStore {
     dir: PathBuf,
+    prompt_history: PromptHistoryIndex,
+    meta_cache: Mutex<HashMap<String, SessionMeta>>,
 }
 
 impl SessionStore {
     pub fn new() -> io::Result<Self> {
         let home =
             dirs::home_dir().ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Home directory not found"))?;
-        Ok(Self { dir: home.join(".aether/sessions") })
+        Ok(Self::from_path(home.join(".aether/sessions")))
     }
 
     pub(crate) fn from_path(dir: PathBuf) -> Self {
-        Self { dir }
+        let prompt_history = PromptHistoryIndex::new(dir.join(PROMPT_HISTORY_FILE));
+        Self { dir, prompt_history, meta_cache: Mutex::new(HashMap::new()) }
     }
 
     pub fn append_meta(&self, session_id: &str, meta: &SessionMeta) -> io::Result<()> {
-        self.append_line(session_id, meta)
+        self.append_line(session_id, meta)?;
+        self.cache_meta(session_id, meta.clone());
+        Ok(())
     }
 
     pub fn append_event(&self, session_id: &str, event: &SessionEvent) -> io::Result<()> {
         if is_streaming_event(event) {
             return Ok(());
         }
-        self.append_line(session_id, event)
+        self.append_line(session_id, event)?;
+        if let Some(prompt) = user_prompt_text_from_event(event)
+            && let Some(meta) = self.session_meta(session_id)
+        {
+            self.prompt_history.append_prompt(&meta, prompt)?;
+        }
+        Ok(())
     }
 
     pub fn load(&self, session_id: &str) -> Option<(SessionMeta, Vec<SessionEvent>)> {
@@ -82,41 +99,77 @@ impl SessionStore {
     }
 
     pub fn list(&self) -> Vec<SessionSummary> {
+        self.read_metas_sorted()
+            .into_iter()
+            .map(|meta| {
+                let title = self.title_for_session(&meta.session_id);
+                SessionSummary { meta, title }
+            })
+            .collect()
+    }
+
+    pub fn search_prompts(&self, params: &PromptSearchParams) -> io::Result<PromptSearchResponse> {
+        self.prompt_history.search(params)
+    }
+
+    fn session_meta(&self, session_id: &str) -> Option<SessionMeta> {
+        if let Some(meta) = self.lock_meta_cache().get(session_id) {
+            return Some(meta.clone());
+        }
+        let file = File::open(self.session_path(session_id)).ok()?;
+        let mut reader = BufReader::new(file);
+        let mut first_line = String::new();
+        reader.read_line(&mut first_line).ok()?;
+        let meta: SessionMeta = serde_json::from_str(first_line.trim()).ok()?;
+        self.cache_meta(session_id, meta.clone());
+        Some(meta)
+    }
+
+    fn cache_meta(&self, session_id: &str, meta: SessionMeta) {
+        self.lock_meta_cache().insert(session_id.to_string(), meta);
+    }
+
+    fn lock_meta_cache(&self) -> MutexGuard<'_, HashMap<String, SessionMeta>> {
+        self.meta_cache.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn read_metas_sorted(&self) -> Vec<SessionMeta> {
         let Ok(entries) = fs::read_dir(&self.dir) else {
             return Vec::new();
         };
 
-        let mut sessions: Vec<SessionSummary> = entries
+        let mut metas: Vec<SessionMeta> = entries
             .filter_map(|entry| {
-                let entry = entry.ok()?;
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                let path = entry.ok()?.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("jsonl")
+                    || self.prompt_history.is_index_path(&path)
+                {
                     return None;
                 }
-                let file = File::open(&path).ok()?;
-                let mut reader = BufReader::new(file);
-
                 let mut first_line = String::new();
-                reader.read_line(&mut first_line).ok()?;
-                let meta = serde_json::from_str::<SessionMeta>(first_line.trim()).ok()?;
-
-                let mut second_line = String::new();
-                let title = reader
-                    .read_line(&mut second_line)
-                    .ok()
-                    .and_then(|n| (n > 0).then_some(()))
-                    .and_then(|()| serde_json::from_str::<SessionEvent>(second_line.trim()).ok())
-                    .and_then(|event| match event {
-                        SessionEvent::User(UserEvent::Message { content }) => Some(extract_title(&content)),
-                        _ => None,
-                    });
-
-                Some(SessionSummary { meta, title })
+                BufReader::new(File::open(&path).ok()?).read_line(&mut first_line).ok()?;
+                serde_json::from_str::<SessionMeta>(first_line.trim()).ok()
             })
             .collect();
 
-        sessions.sort_by(|a, b| b.meta.created_at.cmp(&a.meta.created_at));
-        sessions
+        metas.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        metas
+    }
+
+    fn title_for_session(&self, session_id: &str) -> Option<String> {
+        let file = File::open(self.session_path(session_id)).ok()?;
+        let mut reader = BufReader::new(file);
+        let mut first = String::new();
+        reader.read_line(&mut first).ok()?;
+        let mut second = String::new();
+        let read = reader.read_line(&mut second).ok()?;
+        if read == 0 {
+            return None;
+        }
+        match serde_json::from_str::<SessionEvent>(second.trim()).ok()? {
+            SessionEvent::User(UserEvent::Message { content }) => Some(extract_title(&content)),
+            _ => None,
+        }
     }
 
     fn append_line<T: Serialize>(&self, session_id: &str, value: &T) -> io::Result<()> {
@@ -144,6 +197,16 @@ fn extract_title(content: &[llm::ContentBlock]) -> String {
         format!("{}…", &first_line[..end])
     } else {
         first_line.to_string()
+    }
+}
+
+fn user_prompt_text_from_event(event: &SessionEvent) -> Option<String> {
+    match event {
+        SessionEvent::User(UserEvent::Message { content }) => {
+            let joined = llm::ContentBlock::join_text(content);
+            if joined.is_empty() { None } else { Some(joined) }
+        }
+        _ => None,
     }
 }
 
@@ -189,14 +252,12 @@ mod tests {
         })
     }
 
-    /// Create a temp dir and store; returns both so the dir lives long enough.
     fn temp_store() -> (tempfile::TempDir, SessionStore) {
         let dir = tempfile::tempdir().unwrap();
         let store = SessionStore::from_path(dir.path().to_path_buf());
         (dir, store)
     }
 
-    /// Append default meta + an optional user message, return listed title.
     fn listed_title(content: Option<&str>) -> Option<String> {
         let (_dir, store) = temp_store();
         store.append_meta("s1", &default_meta()).unwrap();
@@ -329,6 +390,77 @@ mod tests {
     }
 
     #[test]
+    fn list_ignores_prompt_history_file() {
+        let (dir, store) = temp_store();
+        store.append_meta("s1", &default_meta()).unwrap();
+        store.append_event("s1", &user_msg("hello world")).unwrap();
+
+        let listed = store.list();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].meta.session_id, "s1");
+        assert!(dir.path().join(PROMPT_HISTORY_FILE).exists());
+    }
+
+    #[test]
+    fn prompt_history_searches_recent_user_prompts() {
+        let (_dir, store) = temp_store();
+        store.append_meta("s1", &default_meta()).unwrap();
+        store.append_event("s1", &user_msg("hello world")).unwrap();
+        store.append_event("s1", &agent_text("msg", "hello from agent", true)).unwrap();
+
+        let response = store.search_prompts(&PromptSearchParams { query: "hello".to_string(), limit: None }).unwrap();
+        assert_eq!(response.results.len(), 1);
+        assert_eq!(response.results[0].prompt, "hello world");
+        assert_eq!(
+            &response.results[0].prompt[response.results[0].match_start..response.results[0].match_end],
+            "hello"
+        );
+    }
+
+    #[test]
+    fn prompt_history_keeps_only_last_entries() {
+        let (_dir, store) = temp_store();
+        store.append_meta("s1", &default_meta()).unwrap();
+        for i in 0..105 {
+            store.append_event("s1", &user_msg(&format!("prompt {i}"))).unwrap();
+        }
+
+        let old = store.search_prompts(&PromptSearchParams { query: "prompt 0".to_string(), limit: None }).unwrap();
+        assert!(old.results.is_empty());
+
+        let newest =
+            store.search_prompts(&PromptSearchParams { query: "prompt 104".to_string(), limit: None }).unwrap();
+        assert_eq!(newest.results.len(), 1);
+    }
+
+    #[test]
+    fn prompt_history_matching_is_literal_smart_case_and_unicode_safe() {
+        let (_dir, store) = temp_store();
+        store.append_meta("s1", &default_meta()).unwrap();
+        store.append_event("s1", &user_msg("hello world")).unwrap();
+        store.append_event("s1", &user_msg("HELLO world")).unwrap();
+        store.append_event("s1", &user_msg("hello.world")).unwrap();
+        store.append_event("s1", &user_msg("café hello")).unwrap();
+
+        let literal =
+            store.search_prompts(&PromptSearchParams { query: "hello.world".to_string(), limit: None }).unwrap();
+        assert_eq!(literal.results.len(), 1);
+        assert_eq!(literal.results[0].prompt, "hello.world");
+
+        let lower = store.search_prompts(&PromptSearchParams { query: "hello".to_string(), limit: None }).unwrap();
+        assert!(lower.results.iter().any(|hit| hit.prompt == "hello world"));
+        assert!(lower.results.iter().any(|hit| hit.prompt == "HELLO world"));
+
+        let upper = store.search_prompts(&PromptSearchParams { query: "Hello".to_string(), limit: None }).unwrap();
+        assert!(upper.results.is_empty());
+
+        let unicode = store.search_prompts(&PromptSearchParams { query: "fé".to_string(), limit: None }).unwrap();
+        assert_eq!(unicode.results.len(), 1);
+        let hit = &unicode.results[0];
+        assert_eq!(&hit.prompt[hit.match_start..hit.match_end], "fé");
+    }
+
+    #[test]
     fn list_title_extraction() {
         let cases: &[(&str, Option<&str>)] =
             &[("Fix the login bug", Some("Fix the login bug")), ("First line\nSecond\nThird", Some("First line"))];
@@ -345,7 +477,7 @@ mod tests {
     #[test]
     fn list_truncates_long_title() {
         let title = listed_title(Some(&"a".repeat(120))).unwrap();
-        assert!(title.len() <= 84); // 80 chars + "…" (3 bytes)
+        assert!(title.len() <= 84);
         assert!(title.ends_with('…'));
     }
 

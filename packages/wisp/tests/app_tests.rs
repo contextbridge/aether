@@ -8,6 +8,7 @@ mod app_tests {
     mod mode_cycling_tests;
     mod notifications_tests;
     mod progress_indicator_tests;
+    mod prompt_search_tests;
     mod session_tests;
     mod settings_menu_tests;
     mod small_terminal_tests;

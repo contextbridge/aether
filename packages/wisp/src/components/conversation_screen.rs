@@ -9,7 +9,7 @@ use crate::components::prompt_composer::{PromptComposer, PromptComposerMessage};
 use crate::components::session_picker::{SessionEntry, SessionPicker, SessionPickerMessage};
 use crate::components::tool_call_statuses::ToolCallStatuses;
 use crate::keybindings::Keybindings;
-use acp_utils::notifications::ElicitationResponse;
+use acp_utils::notifications::{ElicitationResponse, PromptSearchParams, PromptSearchResponse};
 use agent_client_protocol::Responder;
 use agent_client_protocol::schema::{self as acp, SessionId};
 use std::collections::HashSet;
@@ -24,6 +24,7 @@ pub enum ConversationScreenMessage {
     OpenSettings,
     OpenSessionPicker,
     LoadSession { session_id: SessionId, cwd: PathBuf },
+    SearchPrompts(PromptSearchParams),
 }
 
 pub(crate) enum Modal {
@@ -45,11 +46,11 @@ pub struct ConversationScreen {
 }
 
 impl ConversationScreen {
-    pub fn new(keybindings: Keybindings, content_padding: usize) -> Self {
+    pub fn new(keybindings: Keybindings, content_padding: usize, prompt_search_enabled: bool) -> Self {
         Self {
             conversation: ConversationBuffer::new(),
             tool_call_statuses: ToolCallStatuses::new(),
-            prompt_composer: PromptComposer::new(keybindings),
+            prompt_composer: PromptComposer::new(keybindings, prompt_search_enabled),
             plan_tracker: PlanTracker::default(),
             progress_indicator: ProgressIndicator::default(),
             waiting_for_response: false,
@@ -266,9 +267,20 @@ impl ConversationScreen {
                     self.waiting_for_response = true;
                     out.push(ConversationScreenMessage::SendPrompt { user_input, attachments });
                 }
+                PromptComposerMessage::SearchPrompts(params) => {
+                    out.push(ConversationScreenMessage::SearchPrompts(params));
+                }
             }
         }
         Some(out)
+    }
+
+    pub fn on_prompt_search_results(&mut self, response: PromptSearchResponse) {
+        self.prompt_composer.on_prompt_search_results(response);
+    }
+
+    pub fn on_prompt_search_failed(&mut self, query: &str, error: String) {
+        self.prompt_composer.on_prompt_search_failed(query, error);
     }
 }
 

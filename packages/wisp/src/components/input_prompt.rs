@@ -1,3 +1,4 @@
+use std::ops::Range;
 use tui::{Line, ViewContext};
 
 pub fn prompt_content_width(terminal_width: usize) -> usize {
@@ -11,6 +12,7 @@ pub fn prompt_text_start_col(_terminal_width: usize) -> usize {
 pub struct InputPrompt<'a> {
     pub input: &'a str,
     pub cursor_index: usize,
+    pub highlight_range: Option<Range<usize>>,
 }
 
 pub struct InputPromptLayout {
@@ -25,7 +27,7 @@ impl InputPrompt<'_> {
     pub fn layout(&self, context: &ViewContext) -> InputPromptLayout {
         let width = usize::from(context.size.width);
         let cursor_index = clamp_to_char_boundary(self.input, self.cursor_index);
-        let styled_input = style_input(self.input, context);
+        let styled_input = style_input(self.input, context, self.highlight_range.as_ref());
 
         let content_width = prompt_content_width(width);
         let content_width_u16 = u16::try_from(content_width).unwrap_or(u16::MAX);
@@ -68,34 +70,62 @@ impl InputPrompt<'_> {
     }
 }
 
-fn style_input(input: &str, context: &ViewContext) -> Line {
-    if !input.contains('@') {
+fn style_input(input: &str, context: &ViewContext, highlight: Option<&Range<usize>>) -> Line {
+    let highlight = highlight
+        .filter(|r| r.start < r.end && r.end <= input.len())
+        .filter(|r| input.is_char_boundary(r.start) && input.is_char_boundary(r.end));
+
+    if highlight.is_none() && !input.contains('@') {
         return Line::styled(input, context.theme.text_primary());
     }
-    style_mentions(input, context)
+
+    let mentions = mention_ranges(input);
+    let base = context.theme.text_primary();
+    let info = context.theme.info();
+    let warning = context.theme.warning();
+
+    let color_at = |byte: usize| -> tui::Color {
+        if let Some(r) = &highlight
+            && r.contains(&byte)
+        {
+            return warning;
+        }
+        if mentions.iter().any(|m| m.contains(&byte)) {
+            return info;
+        }
+        base
+    };
+
+    let mut line = Line::default();
+    let mut run_start = 0;
+    let mut current = color_at(0);
+    for (i, _) in input.char_indices().skip(1) {
+        let c = color_at(i);
+        if c != current {
+            line.push_styled(&input[run_start..i], current);
+            run_start = i;
+            current = c;
+        }
+    }
+    line.push_styled(&input[run_start..], current);
+    line
 }
 
-fn style_mentions(input: &str, context: &ViewContext) -> Line {
-    let mut styled = Line::default();
-    let mut last_pos = 0;
-
+fn mention_ranges(input: &str) -> Vec<Range<usize>> {
+    if !input.contains('@') {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut last_end = 0;
     for (at_pos, _) in input.match_indices('@') {
-        if at_pos < last_pos {
+        if at_pos < last_end {
             continue;
         }
-
-        styled.push_styled(&input[last_pos..at_pos], context.theme.text_primary());
-
-        let mention_end = input[at_pos..].find(char::is_whitespace).map_or(input.len(), |i| at_pos + i);
-        styled.push_styled(&input[at_pos..mention_end], context.theme.info());
-        last_pos = mention_end;
+        let end = input[at_pos..].find(char::is_whitespace).map_or(input.len(), |i| at_pos + i);
+        out.push(at_pos..end);
+        last_end = end;
     }
-
-    if last_pos < input.len() {
-        styled.push_styled(&input[last_pos..], context.theme.text_primary());
-    }
-
-    styled
+    out
 }
 
 fn clamp_to_char_boundary(text: &str, mut idx: usize) -> usize {
@@ -120,7 +150,7 @@ mod tests {
 
     #[test]
     fn renders_three_lines() {
-        let prompt = InputPrompt { input: "", cursor_index: 0 };
+        let prompt = InputPrompt { input: "", cursor_index: 0, highlight_range: None };
         let ctx = ViewContext::new((80, 24));
         let lines = prompt.render(&ctx);
         assert_eq!(lines.len(), 3);
@@ -128,7 +158,7 @@ mod tests {
 
     #[test]
     fn top_rule_is_horizontal_line() {
-        let prompt = InputPrompt { input: "", cursor_index: 0 };
+        let prompt = InputPrompt { input: "", cursor_index: 0, highlight_range: None };
         let ctx = ViewContext::new((80, 24));
         let lines = prompt.render(&ctx);
         assert!(lines[0].plain_text().chars().all(|c| c == '─'));
@@ -137,7 +167,7 @@ mod tests {
 
     #[test]
     fn bottom_rule_is_horizontal_line() {
-        let prompt = InputPrompt { input: "", cursor_index: 0 };
+        let prompt = InputPrompt { input: "", cursor_index: 0, highlight_range: None };
         let ctx = ViewContext::new((80, 24));
         let lines = prompt.render(&ctx);
         assert!(lines[2].plain_text().chars().all(|c| c == '─'));
@@ -145,7 +175,7 @@ mod tests {
 
     #[test]
     fn middle_line_contains_prompt() {
-        let prompt = InputPrompt { input: "", cursor_index: 0 };
+        let prompt = InputPrompt { input: "", cursor_index: 0, highlight_range: None };
         let ctx = ViewContext::new((80, 24));
         let lines = prompt.render(&ctx);
         assert!(lines[1].plain_text().starts_with("> "));
@@ -153,7 +183,7 @@ mod tests {
 
     #[test]
     fn renders_input_text() {
-        let prompt = InputPrompt { input: "hello", cursor_index: 5 };
+        let prompt = InputPrompt { input: "hello", cursor_index: 5, highlight_range: None };
         let ctx = ViewContext::new((80, 24));
         let lines = prompt.render(&ctx);
         assert!(lines[1].plain_text().contains("hello"));
@@ -161,7 +191,7 @@ mod tests {
 
     #[test]
     fn renders_consistently() {
-        let prompt = InputPrompt { input: "test", cursor_index: 4 };
+        let prompt = InputPrompt { input: "test", cursor_index: 4, highlight_range: None };
         let ctx = ViewContext::new((80, 24));
         let a = prompt.render(&ctx);
         let b = prompt.render(&ctx);
@@ -170,7 +200,7 @@ mod tests {
 
     #[test]
     fn adapts_to_terminal_width() {
-        let prompt = InputPrompt { input: "", cursor_index: 0 };
+        let prompt = InputPrompt { input: "", cursor_index: 0, highlight_range: None };
         let narrow = ViewContext::new((40, 24));
         let wide = ViewContext::new((120, 24));
         let narrow_lines = prompt.render(&narrow);
@@ -184,7 +214,11 @@ mod tests {
 
     #[test]
     fn wraps_long_input() {
-        let prompt = InputPrompt { input: "this is a very long input that should wrap", cursor_index: 41 };
+        let prompt = InputPrompt {
+            input: "this is a very long input that should wrap",
+            cursor_index: 41,
+            highlight_range: None,
+        };
         let ctx = ViewContext::new((20, 24));
         let lines = prompt.render(&ctx);
         assert!(lines.len() > 3);
@@ -192,7 +226,7 @@ mod tests {
 
     #[test]
     fn hard_newline_renders_continuation_row() {
-        let prompt = InputPrompt { input: "one\ntwo", cursor_index: "one\ntwo".len() };
+        let prompt = InputPrompt { input: "one\ntwo", cursor_index: "one\ntwo".len(), highlight_range: None };
         let ctx = ViewContext::new((80, 24));
         let layout = prompt.layout(&ctx);
         let line_text = layout.lines.iter().map(Line::plain_text).collect::<Vec<_>>();
@@ -202,7 +236,7 @@ mod tests {
 
     #[test]
     fn cursor_after_hard_newline_starts_continuation_row() {
-        let prompt = InputPrompt { input: "one\ntwo", cursor_index: 4 };
+        let prompt = InputPrompt { input: "one\ntwo", cursor_index: 4, highlight_range: None };
         let ctx = ViewContext::new((80, 24));
         let layout = prompt.layout(&ctx);
         assert_eq!((layout.cursor_row, layout.cursor_col), (2, 2));
@@ -210,7 +244,7 @@ mod tests {
 
     #[test]
     fn mention_and_plain_text_both_render() {
-        let prompt = InputPrompt { input: "@main.rs explain this", cursor_index: 20 };
+        let prompt = InputPrompt { input: "@main.rs explain this", cursor_index: 20, highlight_range: None };
         let ctx = ViewContext::new((80, 24));
         let lines = prompt.render(&ctx);
         assert!(lines[1].plain_text().contains("@main.rs"));
@@ -219,7 +253,7 @@ mod tests {
 
     #[test]
     fn hard_newline_terminates_mention_styling() {
-        let prompt = InputPrompt { input: "@main.rs\nhello", cursor_index: 14 };
+        let prompt = InputPrompt { input: "@main.rs\nhello", cursor_index: 14, highlight_range: None };
         let ctx = ViewContext::new((80, 24));
         let layout = prompt.layout(&ctx);
 

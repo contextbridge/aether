@@ -22,7 +22,9 @@ use crate::workspace_status::WorkspaceStatus;
 use acp_utils::client::{AcpEvent, AcpPromptHandle};
 use acp_utils::config_meta::SelectOptionMeta;
 use acp_utils::config_option_id::ConfigOptionId;
-use acp_utils::notifications::{CreateElicitationRequestParams, ElicitationAction, ElicitationResponse};
+use acp_utils::notifications::{
+    CreateElicitationRequestParams, ElicitationAction, ElicitationResponse, prompt_search_capability,
+};
 use agent_client_protocol::Responder;
 use agent_client_protocol::schema::{self as acp, SessionId};
 use attachments::build_attachment_blocks;
@@ -94,12 +96,13 @@ impl App {
         let keybindings = Keybindings::default();
         let wisp_settings = settings::load_or_create_settings();
         let content_padding = settings::resolve_content_padding(&wisp_settings);
+        let prompt_search_enabled = prompt_search_capability::is_advertised(prompt_capabilities.meta.as_ref());
         Self {
             agent_name,
             context_usage: None,
             exit_requested: false,
             ctrl_c_pressed_at: None,
-            conversation_screen: ConversationScreen::new(keybindings.clone(), content_padding),
+            conversation_screen: ConversationScreen::new(keybindings.clone(), content_padding, prompt_search_enabled),
             prompt_capabilities,
             config_options,
             server_statuses: Vec::new(),
@@ -195,6 +198,12 @@ impl App {
                 self.session_loading_buffer.clear();
                 self.exit_requested = true;
             }
+            AcpEvent::PromptSearchResults(response) => {
+                self.conversation_screen.on_prompt_search_results(response);
+            }
+            AcpEvent::PromptSearchFailed { query, error } => {
+                self.conversation_screen.on_prompt_search_failed(&query, error);
+            }
         }
         EventOutcome::Render
     }
@@ -289,6 +298,11 @@ impl App {
                     if let Err(e) = self.prompt_handle.load_session(&session_id, &cwd) {
                         self.session_loading_buffer.remove(&session_id);
                         tracing::warn!("Failed to load session: {e}");
+                    }
+                }
+                ConversationScreenMessage::SearchPrompts(params) => {
+                    if let Err(e) = self.prompt_handle.search_prompts(params) {
+                        tracing::warn!("Failed to send prompt search: {e}");
                     }
                 }
             }

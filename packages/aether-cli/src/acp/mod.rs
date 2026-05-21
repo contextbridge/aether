@@ -2,6 +2,7 @@ pub(crate) mod config_setting;
 pub(crate) mod handlers;
 pub(crate) mod mappers;
 pub(crate) mod model_config;
+pub(crate) mod prompt_history_index;
 pub(crate) mod relay;
 pub(crate) mod session;
 pub(crate) mod session_manager;

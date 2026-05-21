@@ -328,6 +328,17 @@ async fn handle_side_command(
                 }
             }
         }
+        PromptCommand::SearchPrompts(params) => {
+            let query = params.query.clone();
+            match cx.send_request(params).block_task().await {
+                Ok(resp) => {
+                    let _ = event_tx.send(AcpEvent::PromptSearchResults(resp));
+                }
+                Err(e) => {
+                    let _ = event_tx.send(AcpEvent::PromptSearchFailed { query, error: format!("{e}") });
+                }
+            }
+        }
     }
 }
 

@@ -75,10 +75,44 @@ impl Renderer {
         auth_methods: Vec<acp::AuthMethod>,
         size: (u16, u16),
     ) -> Self {
+        Self::new_with_prompt_capabilities_and_auth_methods(
+            terminal,
+            agent_name,
+            config_options,
+            acp::PromptCapabilities::new(),
+            auth_methods,
+            size,
+        )
+    }
+
+    pub(super) fn new_with_prompt_capabilities(
+        terminal: TestTerminal,
+        agent_name: String,
+        prompt_capabilities: acp::PromptCapabilities,
+        size: (u16, u16),
+    ) -> Self {
+        Self::new_with_prompt_capabilities_and_auth_methods(
+            terminal,
+            agent_name,
+            &[],
+            prompt_capabilities,
+            vec![],
+            size,
+        )
+    }
+
+    fn new_with_prompt_capabilities_and_auth_methods(
+        terminal: TestTerminal,
+        agent_name: String,
+        config_options: &[acp::SessionConfigOption],
+        prompt_capabilities: acp::PromptCapabilities,
+        auth_methods: Vec<acp::AuthMethod>,
+        size: (u16, u16),
+    ) -> Self {
         let app = App::new(AppInfo {
             session_id: acp::SessionId::new("test"),
             agent_name,
-            prompt_capabilities: acp::PromptCapabilities::new(),
+            prompt_capabilities,
             config_options: config_options.to_vec(),
             auth_methods,
             working_dir: std::path::PathBuf::from("."),
@@ -193,6 +227,23 @@ impl Renderer {
         params: acp_utils::notifications::AuthMethodsUpdatedParams,
     ) -> Result<(), Box<dyn std::error::Error>> {
         self.handle_acp_event(AcpEvent::AuthMethodsUpdated(params))?;
+        Ok(())
+    }
+
+    pub(super) fn on_prompt_search_results(
+        &mut self,
+        response: acp_utils::notifications::PromptSearchResponse,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.handle_acp_event(AcpEvent::PromptSearchResults(response))?;
+        Ok(())
+    }
+
+    pub(super) fn on_prompt_search_failed(
+        &mut self,
+        query: &str,
+        error: impl Into<String>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.handle_acp_event(AcpEvent::PromptSearchFailed { query: query.to_string(), error: error.into() })?;
         Ok(())
     }
 

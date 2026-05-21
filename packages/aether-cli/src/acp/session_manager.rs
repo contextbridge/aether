@@ -1,4 +1,6 @@
-use acp_utils::notifications::{AuthMethodsUpdatedParams, McpRequest};
+use acp_utils::notifications::{
+    AuthMethodsUpdatedParams, McpRequest, PromptSearchParams, PromptSearchResponse, prompt_search_capability,
+};
 use acp_utils::server::AcpServerError;
 use aether_auth::OAuthCredentialStorage;
 use agent_client_protocol::schema::{
@@ -410,6 +412,24 @@ mod tests {
         assert!(json.contains("\"loadSession\":true"));
     }
 
+    #[tokio::test]
+    async fn initialize_advertises_prompt_search_capability() {
+        let session_store =
+            SessionStore::new().map_or_else(|e| panic!("Failed to initialize session store: {e}"), Arc::new);
+        let manager = SessionManager::new(SessionManagerConfig {
+            registry: Arc::new(SessionRegistry::new()),
+            session_store,
+            oauth_credential_store: mock_oauth_store(),
+            initial_selection: InitialSessionSelection::default(),
+            settings_source: SettingsSourceArgs::default(),
+            provider_connections: ProviderConnectionOverrides::default(),
+        });
+
+        let response =
+            manager.initialize(InitializeRequest::new(ProtocolVersion::LATEST)).await.expect("initialize succeeds");
+
+        assert!(prompt_search_capability::is_advertised(response.agent_capabilities.prompt_capabilities.meta.as_ref()));
+    }
     #[test]
     fn prompt_capabilities_reflect_available_modalities() {
         let image_only = prompt_capabilities_for_models(&["anthropic:claude-sonnet-4-5".parse().unwrap()]);
@@ -474,6 +494,9 @@ impl SessionManager {
         info!("Received initialize request: {:?}", args);
         let auth_methods = build_auth_methods(self.oauth_credential_store.as_ref());
         let available = get_local_models().await;
+        let prompt_capabilities =
+            prompt_capabilities_for_models(&available).meta(Some(prompt_search_capability::to_meta()));
+
         Ok(InitializeResponse::new(ProtocolVersion::V1)
             .agent_info(Implementation::new("Aether", "0.1.0"))
             .agent_capabilities(
@@ -481,9 +504,16 @@ impl SessionManager {
                     .load_session(true)
                     .mcp_capabilities(McpCapabilities::new().http(true).sse(true))
                     .session_capabilities(acp::SessionCapabilities::new().list(acp::SessionListCapabilities::new()))
-                    .prompt_capabilities(prompt_capabilities_for_models(&available)),
+                    .prompt_capabilities(prompt_capabilities),
             )
             .auth_methods(auth_methods))
+    }
+
+    pub fn search_prompts(&self, params: &PromptSearchParams) -> Result<PromptSearchResponse, acp::Error> {
+        self.session_store.search_prompts(params).map_err(|e| {
+            error!("Prompt search failed: {e}");
+            acp::Error::internal_error()
+        })
     }
 
     pub async fn authenticate(
