@@ -4,14 +4,17 @@ use super::session::Session;
 use super::session_manager::{InitialSessionSelection, SessionManager, SessionManagerConfig};
 use super::session_registry::SessionRegistry;
 use super::session_store::SessionStore;
+use crate::acp::session_store::SessionMeta;
 use crate::settings_args::SettingsSourceArgs;
 use acp_utils::testing::{TestPeer, duplex_pair};
 use aether_auth::OAuthCredentialStorage;
+use aether_core::context::ext::{SessionEvent, UserEvent};
 use aether_core::core::AgentHandle;
 use aether_core::events::{AgentMessage, UserMessage};
 use agent_client_protocol::schema::SessionId;
 use agent_client_protocol::{Agent, Client, ConnectionTo};
 use llm::ProviderConnectionOverrides;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::sync::{mpsc, oneshot};
@@ -107,5 +110,44 @@ impl AcpTestHarness {
         let relay =
             spawn_relay(session, self.agent_cx.clone(), id.clone(), self.session_store.clone(), mock_oauth_store());
         self.registry.insert(id.0.to_string(), relay, model.to_string(), None, None, vec![]).await;
+    }
+
+    pub fn append_stored_session(&self, session_id: &str, created_at: &str) {
+        let meta = SessionMeta {
+            session_id: session_id.to_string(),
+            cwd: PathBuf::from("/tmp"),
+            model: "test-model".to_string(),
+            selected_mode: None,
+            created_at: created_at.to_string(),
+        };
+
+        self.session_store.append_meta(session_id, &meta).expect("stored session meta appends");
+    }
+
+    pub fn append_stored_prompt(&self, session_id: &str, prompt: &str) {
+        self.append_stored_event(
+            session_id,
+            &SessionEvent::User(UserEvent::Message { content: vec![llm::ContentBlock::text(prompt)] }),
+        );
+    }
+
+    pub fn append_stored_user_blocks(&self, session_id: &str, blocks: Vec<llm::ContentBlock>) {
+        self.append_stored_event(session_id, &SessionEvent::User(UserEvent::Message { content: blocks }));
+    }
+
+    pub fn append_stored_agent_text(&self, session_id: &str, text: &str) {
+        self.append_stored_event(
+            session_id,
+            &SessionEvent::Agent(AgentMessage::Text {
+                message_id: "msg".to_string(),
+                chunk: text.to_string(),
+                is_complete: true,
+                model_name: "test".to_string(),
+            }),
+        );
+    }
+
+    fn append_stored_event(&self, session_id: &str, event: &SessionEvent) {
+        self.session_store.append_event(session_id, event).expect("stored session event appends");
     }
 }
