@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.15](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.14...aether-wisp-v0.4.15) - 2026-05-21
+
+### Fixed
+
+- *(wisp)* Make multi line prompt composer work properly on a Mac ([#95](https://github.com/contextbridge/aether/pull/95))
+
 ## [0.4.14](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.13...aether-wisp-v0.4.14) - 2026-05-18
 
 ### Other

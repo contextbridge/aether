@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.6](https://github.com/contextbridge/aether/compare/aether-llm-v0.7.5...aether-llm-v0.7.6) - 2026-05-21
+
+### Other
+
+- update models to get Gemini 3.5 flash ([#91](https://github.com/contextbridge/aether/pull/91))
+
 ## [0.7.5](https://github.com/contextbridge/aether/compare/aether-llm-v0.7.4...aether-llm-v0.7.5) - 2026-05-18
 
 ### Other
