@@ -19,6 +19,7 @@ pub(crate) mod plan_tracker;
 pub mod plan_view;
 pub mod progress_indicator;
 pub(crate) mod prompt_composer;
+pub(crate) mod prompt_search_picker;
 pub mod provider_login;
 pub(crate) mod reasoning_bar;
 pub(crate) mod review_comments;

@@ -133,7 +133,6 @@ impl TextInput {
         self.field.set_value(s);
     }
 
-    #[cfg(test)]
     pub fn set_cursor_pos(&mut self, pos: usize) {
         self.field.set_cursor_pos(pos);
     }

@@ -1,5 +1,7 @@
 //! Typed wire-format types for Aether's custom ACP extension requests and
 //! notifications.
+use std::path::PathBuf;
+
 use agent_client_protocol::schema::AuthMethod;
 use agent_client_protocol::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 pub use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
@@ -7,6 +9,9 @@ pub use rmcp::model::CreateElicitationRequestParams;
 use serde::{Deserialize, Serialize};
 
 pub use mcp_utils::status::{McpServerAuthCapability, McpServerStatus, McpServerStatusEntry};
+
+pub const AETHER_META_NAMESPACE: &str = "contextbridge/aether";
+pub const PROMPT_SEARCH_CAPABILITY_KEY: &str = "promptSearch";
 
 /// Parameters for `_aether/context_usage` notifications.
 ///
@@ -66,6 +71,64 @@ pub struct ElicitationParams {
 }
 
 pub use rmcp::model::ElicitationAction;
+
+/// Parameters for the `_aether/prompt_search` request.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonRpcRequest)]
+#[request(method = "_aether/prompt_search", response = PromptSearchResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptSearchParams {
+    pub query: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+}
+
+/// Response for the `_aether/prompt_search` request.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonRpcResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptSearchResponse {
+    pub query: String,
+    pub results: Vec<PromptSearchResult>,
+    pub truncated: bool,
+}
+
+/// A single prompt-history search hit.
+///
+/// `match_start` and `match_end` are UTF-8 byte offsets into `prompt` and are
+/// guaranteed to fall on char boundaries.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptSearchResult {
+    pub session_id: String,
+    pub cwd: PathBuf,
+    pub session_created_at: String,
+    pub prompt: String,
+    pub match_start: usize,
+    pub match_end: usize,
+}
+
+/// Metadata advertised on `PromptCapabilities::_meta` when the agent supports
+/// `_aether/prompt_search`.
+pub mod prompt_search_capability {
+    use super::{AETHER_META_NAMESPACE, PROMPT_SEARCH_CAPABILITY_KEY};
+    use agent_client_protocol::schema::Meta;
+    use serde_json::{Value, json};
+
+    #[must_use]
+    pub fn to_meta() -> Meta {
+        let mut meta = Meta::new();
+        meta.insert(AETHER_META_NAMESPACE.to_string(), json!({ PROMPT_SEARCH_CAPABILITY_KEY: true }));
+        meta
+    }
+
+    #[must_use]
+    pub fn is_advertised(meta: Option<&Meta>) -> bool {
+        meta.and_then(|m| m.get(AETHER_META_NAMESPACE))
+            .and_then(Value::as_object)
+            .and_then(|aether| aether.get(PROMPT_SEARCH_CAPABILITY_KEY))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }
+}
 
 /// Response returned from the client for an elicitation request.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonRpcResponse)]
@@ -160,6 +223,15 @@ mod tests {
             McpRequest::Authenticate { session_id: String::new(), server_name: String::new() }.method()
                 == "_aether/mcp_request"
         );
+        assert_eq!(PromptSearchParams { query: String::new(), limit: None }.method(), "_aether/prompt_search");
+    }
+
+    #[test]
+    fn prompt_search_capability_meta_roundtrip() {
+        let meta = prompt_search_capability::to_meta();
+        assert!(prompt_search_capability::is_advertised(Some(&meta)));
+        assert!(!prompt_search_capability::is_advertised(None));
+        assert!(!prompt_search_capability::is_advertised(Some(&agent_client_protocol::schema::Meta::new())));
     }
 
     #[test]

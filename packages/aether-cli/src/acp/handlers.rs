@@ -1,5 +1,5 @@
 use super::session_manager::SessionManager;
-use acp_utils::notifications::McpRequest;
+use acp_utils::notifications::{McpRequest, PromptSearchParams};
 use agent_client_protocol::schema::{
     AuthenticateRequest, CancelNotification, InitializeRequest, ListSessionsRequest, LoadSessionRequest,
     NewSessionRequest, PromptRequest, SetSessionConfigOptionRequest,
@@ -10,6 +10,7 @@ use agent_client_protocol::{
 use std::future::Future;
 use std::sync::Arc;
 
+#[allow(clippy::too_many_lines)]
 pub(crate) fn acp_agent_builder(
     manager: Arc<SessionManager>,
 ) -> Builder<Agent, impl HandleDispatchFrom<Client>, NullRun> {
@@ -84,6 +85,16 @@ pub(crate) fn acp_agent_builder(
                 async move |req: SetSessionConfigOptionRequest, responder, cx| {
                     let mgr = mgr.clone();
                     spawn_task(&cx, responder, async move { mgr.set_session_config_option(req).await })
+                }
+            },
+            acp::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let mgr = manager.clone();
+                async move |req: PromptSearchParams, responder, cx| {
+                    let mgr = mgr.clone();
+                    spawn_task(&cx, responder, async move { mgr.search_prompts(&req) })
                 }
             },
             acp::on_receive_request!(),
