@@ -5,8 +5,10 @@ use crossterm::terminal::{BeginSynchronizedUpdate, Clear, ClearType, EndSynchron
 use std::io::{self, Write};
 
 use super::line::Line;
+use crate::terminal_codes::BELL;
 
 pub(crate) enum TerminalCommand<'a> {
+    Bell,
     ClearAll,
     SetCursorVisible(bool),
     SetMouseCapture(bool),
@@ -39,6 +41,10 @@ impl<W: Write> TerminalScreen<W> {
 
     pub(crate) fn execute(&mut self, command: &TerminalCommand<'_>) -> io::Result<()> {
         match command {
+            TerminalCommand::Bell => {
+                self.writer.write_all(&[BELL])?;
+                self.writer.flush()?;
+            }
             TerminalCommand::ClearAll => {
                 self.writer.queue(Clear(ClearType::All))?;
                 self.writer.queue(Clear(ClearType::Purge))?;

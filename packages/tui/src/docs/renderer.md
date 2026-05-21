@@ -35,6 +35,7 @@ renderer.render_frame(|ctx| {
 
 Commands that can be batched via [`apply_commands`](Renderer::apply_commands):
 
+- **`Bell`** — Emit a terminal BEL (`\x07`).
 - **`ClearScreen`** — Clear viewport and scrollback.
 - **`SetTheme(Theme)`** — Replace the active theme.
 - **`SetMouseCapture(bool)`** — Enable or disable mouse capture.

@@ -34,6 +34,20 @@ async fn test_user_message_submission() {
 }
 
 #[tokio::test]
+async fn prompt_done_bells_after_submitted_prompt_without_changing_buffer() {
+    let terminal = TestTerminal::new(TEST_WIDTH, 40);
+    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (TEST_WIDTH, 40));
+
+    renderer.initial_render().unwrap();
+    type_string(&mut renderer, "Hello world").await;
+    press_enter(&mut renderer).await;
+    assert_eq!(renderer.writer().bell_count(), 0);
+
+    renderer.on_prompt_done().unwrap();
+    assert_eq!(renderer.writer().bell_count(), 1);
+}
+
+#[tokio::test]
 async fn test_typing_renders_within_bordered_input() {
     let terminal = TestTerminal::new(80, 24);
     let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (80, 24));

@@ -8,6 +8,7 @@ pub(crate) mod rendering;
 pub(crate) use rendering::line;
 pub(crate) use rendering::span;
 pub(crate) use rendering::style;
+pub(crate) mod terminal_codes;
 pub(crate) mod theme;
 
 // Feature-gated modules

@@ -2,6 +2,7 @@ use crossterm::style::{Color, force_color_output};
 use std::io::{self, Write};
 
 use crate::Style;
+use crate::terminal_codes::BELL;
 
 /// A single cell in the terminal buffer, storing both a character and its style.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +48,7 @@ pub struct TestTerminal {
     pending_wrap: bool,
     /// Current SGR style applied to newly written characters
     current_style: Style,
+    bell_count: usize,
 }
 
 impl TestTerminal {
@@ -63,7 +65,12 @@ impl TestTerminal {
             escape_buffer: Vec::new(),
             pending_wrap: false,
             current_style: Style::default(),
+            bell_count: 0,
         }
+    }
+
+    pub fn bell_count(&self) -> usize {
+        self.bell_count
     }
 
     /// Resize terminal without preserving prior transcript content.
@@ -290,6 +297,8 @@ impl TestTerminal {
                         self.cursor = saved;
                     }
                 }
+            } else if ch == char::from(BELL) {
+                self.bell_count += 1;
             } else {
                 self.write_char(ch);
             }
