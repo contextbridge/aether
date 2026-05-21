@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.10](https://github.com/contextbridge/aether/compare/aether-tui-v0.2.9...aether-tui-v0.2.10) - 2026-05-21
+
+### Fixed
+
+- *(wisp)* Make multi line prompt composer work properly on a Mac ([#95](https://github.com/contextbridge/aether/pull/95))
+- *(acp)* Spawn parent acp process via tokio to avoid spinning cpu ([#90](https://github.com/contextbridge/aether/pull/90))
+
 ## [0.2.9](https://github.com/contextbridge/aether/compare/aether-tui-v0.2.8...aether-tui-v0.2.9) - 2026-05-18
 
 ### Fixed

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.17](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.3.16...aether-acp-utils-v0.3.17) - 2026-05-21
+
+### Fixed
+
+- *(acp)* Spawn parent acp process via tokio to avoid spinning cpu ([#90](https://github.com/contextbridge/aether/pull/90))
+
 ## [0.3.16](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.3.15...aether-acp-utils-v0.3.16) - 2026-05-18
 
 ### Other
