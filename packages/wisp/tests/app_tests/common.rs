@@ -504,6 +504,10 @@ pub(super) async fn press_down(renderer: &mut Renderer) {
     send_key(renderer, KeyCode::Down, KeyModifiers::empty()).await;
 }
 
+pub(super) async fn press_up(renderer: &mut Renderer) {
+    send_key(renderer, KeyCode::Up, KeyModifiers::empty()).await;
+}
+
 pub(super) async fn press_esc(renderer: &mut Renderer) {
     send_key(renderer, KeyCode::Esc, KeyModifiers::empty()).await;
 }

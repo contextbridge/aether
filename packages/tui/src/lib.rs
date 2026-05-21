@@ -66,7 +66,9 @@ pub use runtime::terminal::terminal_size;
 pub use runtime::{MouseCapture, TerminalConfig, TerminalRuntime, TerminalSession};
 
 // &str text utilities
-pub use rendering::soft_wrap::{display_width_text, pad_text_to_width, soft_wrap_line, truncate_line, truncate_text};
+pub use rendering::soft_wrap::{
+    display_width_text, pad_text_to_width, soft_wrap_line, soft_wrap_text_position, truncate_line, truncate_text,
+};
 
 // Span type
 pub use rendering::span::Span;

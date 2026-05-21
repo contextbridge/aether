@@ -1,8 +1,64 @@
 use std::borrow::Cow;
+use std::iter::Sum;
+use std::ops::{Add, AddAssign, Range};
 
-use super::{line::Line, style::Style};
+use super::line::Line;
 use crossterm::style::Color;
 use unicode_width::UnicodeWidthChar;
+
+/// Returns `(row, col)` for `byte_offset` after applying the same soft-wrap
+/// rules used by [`soft_wrap_line`].
+pub fn soft_wrap_text_position(text: &str, offset: usize, max_width: usize) -> (usize, usize) {
+    let byte_offset = clamp_to_char_boundary(text, offset);
+    let max_width = Col(max_width);
+    if max_width.0 == 0 {
+        return (0, display_width_text(text.slice_to(byte_offset)));
+    }
+
+    let mut row_index = Row::ZERO;
+    let mut row_start = ByteOffset::ZERO;
+
+    loop {
+        let (row, next_row_start) = next_text_row(text, row_start, max_width);
+        if byte_offset < row.end
+            || byte_offset == row.end && next_row_start != Some(row.end)
+            || next_row_start.is_none()
+        {
+            return (row_index.0, display_width_text_until(text, row, byte_offset).0);
+        }
+
+        let Some(next_row_start) = next_row_start else {
+            return (row_index.0, 0);
+        };
+        row_start = next_row_start;
+        row_index += 1;
+    }
+}
+
+pub(crate) fn soft_wrap_text_byte_offset(text: &str, target_row: usize, target_col: usize, max_width: usize) -> usize {
+    let target_row = Row(target_row);
+    let target_col = Col(target_col);
+    let max_width = Col(max_width);
+    if max_width.0 == 0 {
+        return byte_offset_for_col(text, ByteOffset::ZERO..ByteOffset::end_of(text), target_col).0;
+    }
+
+    let mut row_index = Row::ZERO;
+    let mut row_start = ByteOffset::ZERO;
+
+    loop {
+        let (row, next_row_start) = next_text_row(text, row_start, max_width);
+        if row_index == target_row {
+            return byte_offset_for_col(text, row, target_col).0;
+        }
+
+        let Some(next_row_start) = next_row_start else {
+            return text.len();
+        };
+        row_start = next_row_start;
+        row_index += 1;
+    }
+}
 
 /// Truncates text to fit within `max_width` display columns, appending "..." if truncated.
 /// Returns the original string borrowed when no truncation is needed.
@@ -111,64 +167,22 @@ pub fn soft_wrap_line(line: &Line, width: u16) -> Vec<Line> {
         return vec![empty];
     }
 
-    let max_width = width as usize;
-    if max_width == 0 {
+    let max_width = Col(width as usize);
+    if max_width.0 == 0 {
         return vec![line.clone()];
     }
 
-    let cells = to_cells(line);
+    let text = line.plain_text();
     let mut rows = Vec::new();
-    let mut row_start = 0usize;
-    let mut row_width = 0usize;
-    let mut last_ws = None;
-    let mut i = 0usize;
-
-    while i < cells.len() {
-        let cell = cells[i];
-
-        if cell.ch == '\n' {
-            rows.push(to_line(&cells[row_start..i], line.fill()));
-            row_start = i + 1;
-            row_width = 0;
-            last_ws = None;
-            i += 1;
-            continue;
-        }
-
-        if cell.width > 0 && row_width + cell.width > max_width && row_width > 0 {
-            let split_start = row_start;
-            let (row_end, next_row_start) = if cell.ch.is_whitespace() {
-                (i, i + 1)
-            } else if let Some(ws) = last_ws {
-                (ws, ws + 1)
-            } else {
-                (i, i)
-            };
-
-            rows.push(to_line(&cells[split_start..row_end], line.fill()));
-            row_start = next_row_start;
-
-            if row_start > i {
-                row_width = 0;
-                last_ws = None;
-                i += 1;
-                continue;
-            }
-
-            row_width = display_width_cells(&cells[row_start..i]);
-            last_ws = last_whitespace_index(&cells[row_start..i]).map(|offset| row_start + offset);
-            continue;
-        }
-
-        row_width += cell.width;
-        if cell.ch.is_whitespace() {
-            last_ws = Some(i);
-        }
-        i += 1;
+    let mut row_start = ByteOffset::ZERO;
+    loop {
+        let (range, next_row_start) = next_text_row(&text, row_start, max_width);
+        rows.push(slice_line(line, range, line.fill()));
+        let Some(next_row_start) = next_row_start else {
+            return rows;
+        };
+        row_start = next_row_start;
     }
-
-    rows.push(to_line(&cells[row_start..], line.fill()));
-    rows
 }
 
 pub fn soft_wrap_lines_with_map(lines: &[Line], width: u16) -> (Vec<Line>, Vec<usize>) {
@@ -183,44 +197,181 @@ pub fn soft_wrap_lines_with_map(lines: &[Line], width: u16) -> (Vec<Line>, Vec<u
     (out, starts)
 }
 
-#[derive(Clone, Copy)]
-struct SoftWrapCell {
-    ch: char,
-    style: Style,
-    width: usize,
-}
+fn slice_line(line: &Line, range: Range<ByteOffset>, fill: Option<Color>) -> Line {
+    let mut result = Line::default();
+    let mut cursor = ByteOffset::ZERO;
 
-fn to_cells(line: &Line) -> Vec<SoftWrapCell> {
-    line.spans()
-        .iter()
-        .flat_map(|span| {
-            let style = span.style();
-            span.text().chars().map(move |ch| SoftWrapCell {
-                ch,
-                style,
-                width: UnicodeWidthChar::width(ch).unwrap_or(0),
-            })
-        })
-        .collect()
-}
+    for span in line.spans() {
+        let span_start = cursor;
+        let span_end = cursor + span.text().len();
+        cursor = span_end;
 
-fn to_line(cells: &[SoftWrapCell], fill: Option<Color>) -> Line {
-    let mut line = Line::default();
-    for cell in cells {
-        let mut ch = [0; 4];
-        line.push_with_style(cell.ch.encode_utf8(&mut ch), cell.style);
+        let start = range.start.max(span_start);
+        let end = range.end.min(span_end);
+        if start < end {
+            result.push_with_style(&span.text()[start.0 - span_start.0..end.0 - span_start.0], span.style());
+        }
     }
 
-    line.set_fill(fill);
-    line
+    result.set_fill(fill);
+    result
 }
 
-fn display_width_cells(cells: &[SoftWrapCell]) -> usize {
-    cells.iter().map(|cell| cell.width).sum()
+fn next_text_row(text: &str, row_start: ByteOffset, max_width: Col) -> (Range<ByteOffset>, Option<ByteOffset>) {
+    if row_start.0 >= text.len() {
+        let end = ByteOffset::end_of(text);
+        return (end..end, None);
+    }
+
+    let mut row_width = Col::ZERO;
+    let mut last_ws: Option<Range<ByteOffset>> = None;
+
+    for (offset, ch) in text.slice_from(row_start).char_indices() {
+        let byte_start = row_start + offset;
+        let byte_end = byte_start + ch.len_utf8();
+
+        if ch == '\n' {
+            return (row_start..byte_start, Some(byte_end));
+        }
+
+        let width = col_of(ch);
+        if width.0 > 0 && row_width + width > max_width && row_width.0 > 0 {
+            return if ch.is_whitespace() {
+                (row_start..byte_start, Some(byte_end))
+            } else if let Some(ws) = last_ws {
+                (row_start..ws.start, Some(ws.end))
+            } else {
+                (row_start..byte_start, Some(byte_start))
+            };
+        }
+
+        row_width += width;
+        if ch.is_whitespace() {
+            last_ws = Some(byte_start..byte_end);
+        }
+    }
+
+    (row_start..ByteOffset::end_of(text), None)
 }
 
-fn last_whitespace_index(cells: &[SoftWrapCell]) -> Option<usize> {
-    cells.iter().rposition(|cell| cell.ch.is_whitespace())
+fn byte_offset_for_col(text: &str, range: Range<ByteOffset>, target_col: Col) -> ByteOffset {
+    let mut col = Col::ZERO;
+    let mut byte = range.start;
+    for ch in text.slice(range.clone()).chars() {
+        if col >= target_col {
+            return byte;
+        }
+        col += col_of(ch);
+        byte += ch.len_utf8();
+        if col >= target_col {
+            return byte;
+        }
+    }
+    range.end
+}
+
+fn clamp_to_char_boundary(text: &str, byte_offset: usize) -> ByteOffset {
+    let mut byte_offset = byte_offset.min(text.len());
+    while !text.is_char_boundary(byte_offset) {
+        byte_offset = byte_offset.saturating_sub(1);
+    }
+    ByteOffset(byte_offset)
+}
+
+fn display_width_text_until(text: &str, range: Range<ByteOffset>, byte_offset: ByteOffset) -> Col {
+    text.slice(range.clone())
+        .char_indices()
+        .take_while(|(offset, ch)| range.start + *offset + ch.len_utf8() <= byte_offset)
+        .map(|(_, ch)| col_of(ch))
+        .sum()
+}
+
+fn col_of(ch: char) -> Col {
+    Col(UnicodeWidthChar::width(ch).unwrap_or(0))
+}
+
+/// Byte offset into a UTF-8 string.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct ByteOffset(usize);
+
+impl ByteOffset {
+    const ZERO: Self = Self(0);
+    fn end_of(text: &str) -> Self {
+        Self(text.len())
+    }
+}
+
+impl Add<usize> for ByteOffset {
+    type Output = Self;
+    fn add(self, rhs: usize) -> Self {
+        Self(self.0 + rhs)
+    }
+}
+
+impl AddAssign<usize> for ByteOffset {
+    fn add_assign(&mut self, rhs: usize) {
+        self.0 += rhs;
+    }
+}
+
+/// Display column / unicode display-width count.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct Col(usize);
+
+impl Col {
+    const ZERO: Self = Self(0);
+}
+
+impl Add for Col {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self {
+        Self(self.0 + rhs.0)
+    }
+}
+
+impl AddAssign for Col {
+    fn add_assign(&mut self, rhs: Self) {
+        self.0 += rhs.0;
+    }
+}
+
+impl Sum for Col {
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        Self(iter.map(|c| c.0).sum())
+    }
+}
+
+/// Visual row index in the wrapped grid.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct Row(usize);
+
+impl Row {
+    const ZERO: Self = Self(0);
+}
+
+impl AddAssign<usize> for Row {
+    fn add_assign(&mut self, rhs: usize) {
+        self.0 += rhs;
+    }
+}
+
+/// Slice `&str` with [`Bytes`]-typed offsets.
+trait ByteSlice {
+    fn slice(&self, range: Range<ByteOffset>) -> &str;
+    fn slice_from(&self, start: ByteOffset) -> &str;
+    fn slice_to(&self, end: ByteOffset) -> &str;
+}
+
+impl ByteSlice for str {
+    fn slice(&self, range: Range<ByteOffset>) -> &str {
+        &self[range.start.0..range.end.0]
+    }
+    fn slice_from(&self, start: ByteOffset) -> &str {
+        &self[start.0..]
+    }
+    fn slice_to(&self, end: ByteOffset) -> &str {
+        &self[..end.0]
+    }
 }
 
 #[cfg(test)]
@@ -412,6 +563,28 @@ mod tests {
         let line = Line::new("hello");
         let result = truncate_line(&line, 0);
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn soft_wrap_text_position_uses_word_boundaries() {
+        assert_eq!(soft_wrap_text_position("hello world", "hello ".len(), 7), (1, 0));
+        assert_eq!(soft_wrap_text_position("hello world", "hello world".len(), 7), (1, 5));
+    }
+
+    #[test]
+    fn soft_wrap_text_byte_offset_uses_word_boundaries() {
+        assert_eq!(soft_wrap_text_byte_offset("hello world", 0, 5, 7), 5);
+        assert_eq!(soft_wrap_text_byte_offset("hello world", 1, 3, 7), 9);
+    }
+
+    #[test]
+    fn soft_wrap_text_position_handles_trailing_newline() {
+        assert_eq!(soft_wrap_text_position("hello\n", "hello\n".len(), 10), (1, 0));
+    }
+
+    #[test]
+    fn soft_wrap_text_position_places_hard_wrap_boundary_on_next_row() {
+        assert_eq!(soft_wrap_text_position("abcdef", 3, 3), (1, 0));
     }
 
     #[test]

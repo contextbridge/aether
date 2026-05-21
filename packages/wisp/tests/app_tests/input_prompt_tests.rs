@@ -3,6 +3,19 @@ use tui::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
 use super::common::*;
 
+fn expected_multiline_prompt(width: u16, lines: &[&str]) -> Vec<String> {
+    let rule = "─".repeat(width as usize);
+    let mut expected = Vec::with_capacity(lines.len() + 3);
+    expected.push(rule.clone());
+    for (index, line) in lines.iter().enumerate() {
+        let prefix = if index == 0 { "> " } else { "  " };
+        expected.push(format!("{prefix}{line}").trim_end().to_string());
+    }
+    expected.push(rule);
+    expected.push(expected_status_line(width, TEST_AGENT));
+    expected
+}
+
 #[tokio::test]
 async fn test_user_message_submission() {
     let terminal = TestTerminal::new(TEST_WIDTH, 40);
@@ -230,17 +243,93 @@ async fn test_shift_enter_creates_hard_line_break() {
     press_shift_enter(&mut renderer).await;
     type_string(&mut renderer, "line two").await;
 
-    let rule = "─".repeat(80);
-    let expected = vec![
-        rule.clone(),
-        "> line one".to_string(),
-        "  line two".to_string(),
-        rule,
-        expected_status_line(80, TEST_AGENT),
-    ];
+    let expected = expected_multiline_prompt(80, &["line one", "line two"]);
     assert_buffer_eq(renderer.writer(), &expected);
 
     let (cursor_col, cursor_row) = renderer.writer().cursor_position();
     assert_eq!(cursor_row, 2);
     assert_eq!(cursor_col, 10);
+}
+
+#[tokio::test]
+async fn test_alt_enter_creates_hard_line_break() {
+    let terminal = TestTerminal::new(80, 24);
+    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (80, 24));
+    renderer.initial_render().unwrap();
+
+    type_string(&mut renderer, "hello").await;
+    send_key(&mut renderer, KeyCode::Enter, KeyModifiers::ALT).await;
+
+    let expected = expected_multiline_prompt(80, &["hello", ""]);
+    assert_buffer_eq(renderer.writer(), &expected);
+    assert_eq!(renderer.writer().cursor_position(), (2, 2));
+}
+
+#[tokio::test]
+async fn test_alt_enter_closes_command_picker_and_inserts_newline() {
+    let terminal = TestTerminal::new(80, 24);
+    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (80, 24));
+    renderer.initial_render().unwrap();
+
+    type_string(&mut renderer, "/").await;
+    assert!(has_command_picker(renderer.writer()));
+    send_key(&mut renderer, KeyCode::Enter, KeyModifiers::ALT).await;
+
+    let expected = expected_multiline_prompt(80, &["/", ""]);
+    assert_buffer_eq(renderer.writer(), &expected);
+}
+
+#[tokio::test]
+async fn test_up_arrow_moves_cursor_across_hard_newline() {
+    let terminal = TestTerminal::new(80, 24);
+    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (80, 24));
+    renderer.initial_render().unwrap();
+
+    type_string(&mut renderer, "line one").await;
+    press_shift_enter(&mut renderer).await;
+    type_string(&mut renderer, "line two").await;
+    press_up(&mut renderer).await;
+    type_string(&mut renderer, "!").await;
+
+    let expected = expected_multiline_prompt(80, &["line one!", "line two"]);
+    assert_buffer_eq(renderer.writer(), &expected);
+    assert_eq!(renderer.writer().cursor_position(), (11, 1));
+}
+
+#[tokio::test]
+async fn test_down_arrow_moves_cursor_across_hard_newline() {
+    let terminal = TestTerminal::new(80, 24);
+    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (80, 24));
+    renderer.initial_render().unwrap();
+
+    type_string(&mut renderer, "line one").await;
+    press_shift_enter(&mut renderer).await;
+    type_string(&mut renderer, "line two").await;
+    press_up(&mut renderer).await;
+    press_down(&mut renderer).await;
+    type_string(&mut renderer, "!").await;
+
+    let expected = expected_multiline_prompt(80, &["line one", "line two!"]);
+    assert_buffer_eq(renderer.writer(), &expected);
+    assert_eq!(renderer.writer().cursor_position(), (11, 2));
+}
+
+#[tokio::test]
+async fn test_ctrl_a_and_ctrl_e_move_within_hard_newline() {
+    let terminal = TestTerminal::new(80, 24);
+    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (80, 24));
+    renderer.initial_render().unwrap();
+
+    type_string(&mut renderer, "line one").await;
+    press_shift_enter(&mut renderer).await;
+    type_string(&mut renderer, "line two").await;
+
+    send_key(&mut renderer, KeyCode::Char('a'), KeyModifiers::CONTROL).await;
+    type_string(&mut renderer, "[").await;
+    send_key(&mut renderer, KeyCode::Char('e'), KeyModifiers::CONTROL).await;
+    type_string(&mut renderer, "]").await;
+
+    let expected = expected_multiline_prompt(80, &["line one", "[line two]"]);
+    assert_buffer_eq(renderer.writer(), &expected);
+    assert_eq!(renderer.writer().cursor_position(), (12, 2));
 }

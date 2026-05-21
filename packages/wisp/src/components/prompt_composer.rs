@@ -3,11 +3,11 @@ use crate::components::command_picker::{CommandEntry, CommandPicker, CommandPick
 use crate::components::dropped_files::parse_dropped_file_paths;
 use crate::components::file_picker::{FilePicker, FilePickerMessage};
 use crate::components::input_prompt::{InputPrompt, prompt_content_width};
-use crate::components::text_input::{SelectedFileMention, TextInput, TextInputMessage};
+use crate::components::text_input::{SelectedFileMention, TextInput, TextInputMessage, is_newline_modifier};
 use crate::keybindings::Keybindings;
 use std::collections::HashSet;
 use std::path::PathBuf;
-use tui::{Component, Cursor, Event, Frame, KeyCode, KeyModifiers, Line, PickerMessage, ViewContext};
+use tui::{Component, Cursor, Event, Frame, KeyCode, Line, PickerMessage, ViewContext};
 
 use super::app::PromptAttachment;
 
@@ -262,7 +262,7 @@ impl Component for PromptComposer {
                 Some(vec![])
             }
             Event::Key(key_event) => {
-                if key_event.code == KeyCode::Enter && key_event.modifiers.contains(KeyModifiers::SHIFT) {
+                if key_event.code == KeyCode::Enter && is_newline_modifier(key_event.modifiers) {
                     self.close_all();
                     let outcome = self.text_input.on_event(event).await;
                     return self.handle_text_input_outcome(outcome);

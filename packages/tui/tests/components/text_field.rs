@@ -78,8 +78,80 @@ async fn terminal_state_diff_after_mutation() {
     assert_buffer_eq(renderer.writer(), &["abc▏"]);
 }
 
+#[tokio::test]
+async fn ctrl_a_and_ctrl_e_move_to_hard_line_boundaries() {
+    let mut tf = TextField::new("hello\nworld".to_string());
+    tf.set_cursor_pos("hello\nwor".len());
+
+    tf.on_event(&ctrl_key(KeyCode::Char('a'))).await;
+    tf.on_event(&Event::Key(key(KeyCode::Char('X')))).await;
+    assert_eq!(tf.value, "hello\nXworld");
+    assert_eq!(tf.cursor_pos(), "hello\nX".len());
+
+    tf.on_event(&ctrl_key(KeyCode::Char('e'))).await;
+    tf.on_event(&Event::Key(key(KeyCode::Char('!')))).await;
+    assert_eq!(tf.value, "hello\nXworld!");
+    assert_eq!(tf.cursor_pos(), "hello\nXworld!".len());
+}
+
+#[tokio::test]
+async fn vertical_movement_crosses_hard_newlines() {
+    let cases = [
+        ("hello\nworld", 9, 10, KeyCode::Up, 3),
+        ("hello\nworld", 2, 10, KeyCode::Down, 8),
+        ("ab\nlonger", 7, 10, KeyCode::Up, 2),
+        ("longer\nab", 4, 10, KeyCode::Down, 9),
+        ("hello world\nshort", 14, 5, KeyCode::Up, 8),
+        ("hello world\nshort", 3, 5, KeyCode::Down, 9),
+    ];
+
+    for (text, cursor, width, key_code, expected) in cases {
+        let mut tf = TextField::new(text.to_string());
+        tf.set_cursor_pos(cursor);
+        tf.set_content_width(width);
+        tf.on_event(&Event::Key(key(key_code))).await;
+        assert_eq!(tf.cursor_pos(), expected);
+    }
+}
+
+#[tokio::test]
+async fn vertical_movement_uses_soft_wrap_word_boundaries() {
+    let cases = [("hello world", 11, 7, KeyCode::Up, 5), ("hello world", 3, 7, KeyCode::Down, 9)];
+
+    for (text, cursor, width, key_code, expected) in cases {
+        let mut tf = TextField::new(text.to_string());
+        tf.set_cursor_pos(cursor);
+        tf.set_content_width(width);
+        tf.on_event(&Event::Key(key(key_code))).await;
+        assert_eq!(tf.cursor_pos(), expected);
+    }
+}
+
+#[test]
+fn visual_line_boundaries_use_soft_wrap_word_boundaries() {
+    let mut tf = TextField::new("hello world".to_string());
+    tf.set_content_width(7);
+    tf.set_cursor_pos(6);
+
+    assert!(!tf.is_cursor_on_first_visual_line());
+    assert!(tf.is_cursor_on_last_visual_line());
+}
+
+#[test]
+fn trailing_newline_cursor_is_on_last_visual_line() {
+    let mut tf = TextField::new("hello\n".to_string());
+    tf.set_content_width(10);
+
+    assert!(tf.is_cursor_on_last_visual_line());
+    assert!(!tf.is_cursor_on_first_visual_line());
+}
+
 fn alt_key(code: KeyCode) -> Event {
     Event::Key(KeyEvent::new(code, KeyModifiers::ALT))
+}
+
+fn ctrl_key(code: KeyCode) -> Event {
+    Event::Key(KeyEvent::new(code, KeyModifiers::CONTROL))
 }
 
 #[test]

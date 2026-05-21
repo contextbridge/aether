@@ -221,7 +221,7 @@ impl Component for TextInput {
 
 impl TextInput {
     async fn handle_key(&mut self, key_event: &KeyEvent) -> Option<Vec<TextInputMessage>> {
-        if key_event.code == KeyCode::Enter && key_event.modifiers.contains(KeyModifiers::SHIFT) {
+        if key_event.code == KeyCode::Enter && is_newline_modifier(key_event.modifiers) {
             self.history.reset();
             self.field.insert_at_cursor('\n');
             return Some(vec![]);
@@ -264,6 +264,10 @@ impl TextInput {
         }
         result.map(|_| vec![])
     }
+}
+
+pub(crate) fn is_newline_modifier(modifiers: KeyModifiers) -> bool {
+    modifiers.contains(KeyModifiers::SHIFT) || modifiers.contains(KeyModifiers::ALT)
 }
 
 fn mention_start(input: &str) -> Option<usize> {
@@ -448,11 +452,9 @@ mod tests {
 
     #[tokio::test]
     async fn vertical_cursor_movement_in_wrapped_text() {
-        // "hello world" with width 5 → row 0: "hello", row 1: " worl", row 2: "d"
-        // (cursor, key, expected, label)
         let cases = [
-            (8, KeyCode::Up, 3, "up from row 1 col 3 -> row 0 col 3"),
-            (3, KeyCode::Down, 8, "down from row 0 col 3 -> row 1 col 3"),
+            (8, KeyCode::Up, 2, "up from wrapped row to same visual column"),
+            (3, KeyCode::Down, 9, "down to wrapped row at same visual column"),
         ];
         for (cur, code, expected, label) in cases {
             let mut input = input_with_width("hello world", cur, 5);
@@ -591,11 +593,11 @@ mod tests {
         input.set_content_width(5);
         input.record_submission("old entry");
         input.set_input("hello world".to_string());
-        input.set_cursor_pos(8); // on row 1
+        input.set_cursor_pos(8);
         input.on_event(&key(KeyCode::Up)).await;
 
         assert_eq!(input.buffer(), "hello world");
-        assert_eq!(cursor(&input), 3); // moved up to row 0, same column
+        assert_eq!(cursor(&input), 2);
     }
 
     #[tokio::test]
@@ -624,11 +626,11 @@ mod tests {
         let mut input = TextInput::default();
         input.set_content_width(5);
         input.set_input("hello world".to_string());
-        input.set_cursor_pos(3); // on row 0
+        input.set_cursor_pos(3);
         input.on_event(&key(KeyCode::Down)).await;
 
         assert_eq!(input.buffer(), "hello world");
-        assert_eq!(cursor(&input), 8); // moved down to row 1
+        assert_eq!(cursor(&input), 9);
     }
 
     #[tokio::test]
