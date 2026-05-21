@@ -231,7 +231,8 @@ impl Renderer {
             return Ok(LoopAction::Exit);
         }
 
-        if matches!(outcome, EventOutcome::Render) {
+        if let EventOutcome::Render { commands } = outcome {
+            self.frame_renderer.apply_commands(commands)?;
             self.render()?;
         }
         Ok(LoopAction::Continue)

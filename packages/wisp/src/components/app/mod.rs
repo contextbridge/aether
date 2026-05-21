@@ -39,10 +39,19 @@ pub struct PromptAttachment {
 }
 
 /// Result of processing a single ACP event.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EventOutcome {
-    Render,
+    Render { commands: Vec<RendererCommand> },
     DontRender,
+}
+
+impl EventOutcome {
+    pub fn render() -> Self {
+        Self::Render { commands: Vec::new() }
+    }
+
+    pub fn dont_render() -> Self {
+        Self::DontRender
+    }
 }
 
 pub struct AppInfo {
@@ -143,6 +152,7 @@ impl App {
     }
 
     pub fn on_acp_event(&mut self, event: AcpEvent) -> EventOutcome {
+        let mut commands = Vec::new();
         match event {
             AcpEvent::SessionUpdate { session_id, update } => {
                 return self.on_acp_session_update(&session_id, *update);
@@ -160,7 +170,7 @@ impl App {
             AcpEvent::SubAgentProgress(progress) => self.conversation_screen.on_sub_agent_progress(&progress),
             AcpEvent::AuthMethodsUpdated(params) => self.update_auth_methods(params.auth_methods),
             AcpEvent::McpNotification(notification) => self.on_mcp_notification(notification),
-            AcpEvent::PromptDone(stop_reason) => self.on_prompt_done(stop_reason),
+            AcpEvent::PromptDone(stop_reason) => self.on_prompt_done(stop_reason, &mut commands),
             AcpEvent::PromptError(error) => {
                 self.session_loading_buffer.clear();
                 self.conversation_screen.on_prompt_error(&error);
@@ -197,7 +207,7 @@ impl App {
                 self.exit_requested = true;
             }
         }
-        EventOutcome::Render
+        EventOutcome::Render { commands }
     }
 
     async fn handle_key(&mut self, commands: &mut Vec<RendererCommand>, key_event: KeyEvent) {
@@ -408,10 +418,10 @@ impl App {
 
     fn on_acp_session_update(&mut self, session_id: &SessionId, update: SessionUpdate) -> EventOutcome {
         let Some(update) = self.session_loading_buffer.push(session_id, update) else {
-            return EventOutcome::DontRender;
+            return EventOutcome::dont_render();
         };
         self.on_session_update(&update);
-        EventOutcome::Render
+        EventOutcome::render()
     }
 
     fn on_session_update(&mut self, update: &acp::SessionUpdate) {
@@ -422,8 +432,13 @@ impl App {
         }
     }
 
-    fn on_prompt_done(&mut self, stop_reason: acp::StopReason) {
+    fn on_prompt_done(&mut self, stop_reason: acp::StopReason, commands: &mut Vec<RendererCommand>) {
+        let was_waiting = self.conversation_screen.is_waiting();
+        let cancelled = matches!(stop_reason, acp::StopReason::Cancelled);
         self.conversation_screen.on_prompt_done(stop_reason);
+        if was_waiting && !cancelled {
+            commands.push(RendererCommand::Bell);
+        }
     }
 
     fn on_elicitation_request(
@@ -1311,6 +1326,24 @@ mod tests {
             prog_after.lines()[1].plain_text(),
             "tick should advance progress spinner"
         );
+    }
+
+    #[test]
+    fn prompt_done_does_not_bell_when_not_waiting_or_cancelled() {
+        let mut app = make_app();
+        let outcome = app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+        match outcome {
+            EventOutcome::Render { commands } => assert!(commands.is_empty(), "duplicate PromptDone should not bell"),
+            EventOutcome::DontRender => panic!("prompt done should render"),
+        }
+
+        let mut app = make_app();
+        app.conversation_screen.waiting_for_response = true;
+        let outcome = app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::Cancelled));
+        match outcome {
+            EventOutcome::Render { commands } => assert!(commands.is_empty(), "cancelled prompt should not bell"),
+            EventOutcome::DontRender => panic!("prompt done should render"),
+        }
     }
 
     #[test]

@@ -12,6 +12,7 @@ use std::sync::Arc;
 use crate::syntax_highlighting::SyntaxHighlighter;
 
 pub enum RendererCommand {
+    Bell,
     ClearScreen,
     SetTheme(Theme),
     SetMouseCapture(bool),
@@ -92,6 +93,7 @@ impl<W: Write> Renderer<W> {
     pub fn apply_commands(&mut self, commands: Vec<RendererCommand>) -> io::Result<()> {
         for cmd in commands {
             match cmd {
+                RendererCommand::Bell => self.terminal.execute(&TerminalCommand::Bell)?,
                 RendererCommand::ClearScreen => self.clear_screen()?,
                 RendererCommand::SetTheme(theme) => self.set_theme(theme),
                 RendererCommand::SetMouseCapture(enable) => {

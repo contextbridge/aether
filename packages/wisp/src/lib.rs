@@ -98,9 +98,8 @@ fn collect_batch<T>(first: T, max: usize, mut try_next: impl FnMut() -> Option<T
     events
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BatchOutcome {
-    Continue { should_render: bool },
+    Continue { should_render: bool, commands: Vec<RendererCommand> },
     Exit,
 }
 
@@ -135,20 +134,25 @@ async fn process_terminal_event_batch(
         }
     }
 
-    Ok(BatchOutcome::Continue { should_render })
+    Ok(BatchOutcome::Continue { should_render, commands: Vec::new() })
 }
 
 fn process_acp_event_batch(app: &mut App, events: Vec<AcpEvent>) -> BatchOutcome {
     let mut should_render = false;
+    let mut commands = Vec::new();
     for event in events {
-        if matches!(app.on_acp_event(event), EventOutcome::Render) {
-            should_render = true;
+        match app.on_acp_event(event) {
+            EventOutcome::Render { commands: event_commands } => {
+                should_render = true;
+                commands.extend(event_commands);
+            }
+            EventOutcome::DontRender => {}
         }
         if app.exit_requested() {
             return BatchOutcome::Exit;
         }
     }
-    BatchOutcome::Continue { should_render }
+    BatchOutcome::Continue { should_render, commands }
 }
 
 async fn run_app(
@@ -192,8 +196,12 @@ async fn run_app(
 
                 match process_terminal_event_batch(&mut terminal, &mut app, events).await? {
                     BatchOutcome::Exit => return Ok(()),
-                    BatchOutcome::Continue { should_render: true } => render(&mut terminal, &mut app)?,
-                    BatchOutcome::Continue { .. } => {}
+                    BatchOutcome::Continue { commands, should_render } => {
+                        terminal.apply_commands(commands)?;
+                        if should_render {
+                            render(&mut terminal, &mut app)?;
+                        }
+                    }
                 }
             }
 
@@ -205,8 +213,12 @@ async fn run_app(
                 }
                 match process_acp_event_batch(&mut app, events) {
                     BatchOutcome::Exit => return Ok(()),
-                    BatchOutcome::Continue { should_render: true } => render(&mut terminal, &mut app)?,
-                    BatchOutcome::Continue { .. } => {}
+                    BatchOutcome::Continue { commands, should_render } => {
+                        terminal.apply_commands(commands)?;
+                        if should_render {
+                            render(&mut terminal, &mut app)?;
+                        }
+                    }
                 }
             }
 
@@ -275,7 +287,10 @@ mod tests {
             vec![AcpEvent::ContextCleared(ContextClearedParams::default()), AcpEvent::ConnectionClosed],
         );
 
-        assert_eq!(outcome, BatchOutcome::Exit);
+        match outcome {
+            BatchOutcome::Exit => {}
+            BatchOutcome::Continue { .. } => panic!("expected exit"),
+        }
     }
 
     #[test]
@@ -283,13 +298,25 @@ mod tests {
         let mut app = make_app();
         let outcome =
             process_acp_event_batch(&mut app, vec![AcpEvent::ContextCleared(ContextClearedParams::default())]);
-        assert_eq!(outcome, BatchOutcome::Continue { should_render: true });
+        match outcome {
+            BatchOutcome::Continue { should_render, commands } => {
+                assert!(should_render);
+                assert!(commands.is_empty());
+            }
+            BatchOutcome::Exit => panic!("expected continue"),
+        }
     }
 
     #[test]
     fn process_acp_event_batch_empty_input_does_not_render() {
         let mut app = make_app();
         let outcome = process_acp_event_batch(&mut app, vec![]);
-        assert_eq!(outcome, BatchOutcome::Continue { should_render: false });
+        match outcome {
+            BatchOutcome::Continue { should_render, commands } => {
+                assert!(!should_render);
+                assert!(commands.is_empty());
+            }
+            BatchOutcome::Exit => panic!("expected continue"),
+        }
     }
 }
