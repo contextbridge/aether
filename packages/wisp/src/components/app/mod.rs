@@ -202,13 +202,11 @@ impl App {
 
     async fn handle_key(&mut self, commands: &mut Vec<RendererCommand>, key_event: KeyEvent) {
         if self.keybindings.exit.matches(key_event) {
-            match self.ctrl_c_pressed_at {
-                Some(_) => {
-                    self.exit_requested = true;
-                }
-                None => {
-                    self.ctrl_c_pressed_at = Some(Instant::now());
-                }
+            if self.ctrl_c_pressed_at.is_some() {
+                self.exit_requested = true;
+            } else {
+                self.conversation_screen.clear_prompt_composer();
+                self.ctrl_c_pressed_at = Some(Instant::now());
             }
             return;
         }
@@ -1508,6 +1506,18 @@ mod tests {
             app.conversation_screen.pending_url_elicitations.is_empty(),
             "pending URL elicitations should be cleared on reset"
         );
+    }
+
+    #[tokio::test]
+    async fn first_ctrl_c_clears_prompt_input() {
+        let mut app = make_app();
+        app.conversation_screen.prompt_composer.set_input("draft prompt".to_string());
+
+        send_key(&mut app, KeyCode::Char('c'), KeyModifiers::CONTROL).await;
+
+        assert_eq!(app.conversation_screen.prompt_composer.buffer(), "");
+        assert!(!app.exit_requested(), "first Ctrl-C should not exit");
+        assert!(app.exit_confirmation_active(), "first Ctrl-C should activate confirmation");
     }
 
     #[tokio::test]

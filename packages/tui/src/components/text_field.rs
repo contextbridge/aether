@@ -1,10 +1,9 @@
 use crossterm::event::{KeyCode, KeyModifiers};
-use unicode_width::UnicodeWidthChar;
 
 use crate::components::{Component, Event, ViewContext};
 use crate::line::Line;
 use crate::rendering::frame::Frame;
-use crate::rendering::soft_wrap::display_width_text;
+use crate::rendering::soft_wrap::{soft_wrap_text_byte_offset, soft_wrap_text_position};
 
 /// Single-line text input with cursor tracking and navigation.
 pub struct TextField {
@@ -107,14 +106,11 @@ impl TextField {
         if content_width == 0 {
             return;
         }
-        let cursor_width = self.display_width_up_to(self.cursor_pos);
-        let row = cursor_width / content_width;
+        let (row, col) = self.visual_position(self.cursor_pos, content_width);
         if row == 0 {
             self.cursor_pos = 0;
         } else {
-            let col = cursor_width % content_width;
-            let target = (row - 1) * content_width + col;
-            self.cursor_pos = self.byte_offset_for_display_width(target);
+            self.cursor_pos = self.byte_pos_at_visual(row - 1, col, content_width);
         }
     }
 
@@ -122,16 +118,12 @@ impl TextField {
         if content_width == 0 {
             return;
         }
-        let cursor_width = self.display_width_up_to(self.cursor_pos);
-        let total_width = self.display_width_up_to(self.value.len());
-        let row = cursor_width / content_width;
-        let max_row = total_width / content_width;
+        let (row, col) = self.visual_position(self.cursor_pos, content_width);
+        let max_row = self.visual_position(self.value.len(), content_width).0;
         if row >= max_row {
             self.cursor_pos = self.value.len();
         } else {
-            let col = cursor_width % content_width;
-            let target = ((row + 1) * content_width + col).min(total_width);
-            self.cursor_pos = self.byte_offset_for_display_width(target);
+            self.cursor_pos = self.byte_pos_at_visual(row + 1, col, content_width);
         }
     }
 
@@ -154,41 +146,30 @@ impl TextField {
         pos
     }
 
+    fn hard_line_start(&self) -> usize {
+        self.value[..self.cursor_pos].rfind('\n').map_or(0, |pos| pos + '\n'.len_utf8())
+    }
+
+    fn hard_line_end(&self) -> usize {
+        self.value[self.cursor_pos..].find('\n').map_or(self.value.len(), |pos| self.cursor_pos + pos)
+    }
+
     pub fn is_cursor_on_first_visual_line(&self) -> bool {
-        self.cursor_visual_row() == 0
+        self.visual_position(self.cursor_pos, self.content_width).0 == 0
     }
 
     pub fn is_cursor_on_last_visual_line(&self) -> bool {
-        self.cursor_visual_row() >= self.max_visual_row()
+        let cursor_row = self.visual_position(self.cursor_pos, self.content_width).0;
+        let max_row = self.visual_position(self.value.len(), self.content_width).0;
+        cursor_row >= max_row
     }
 
-    fn cursor_visual_row(&self) -> usize {
-        if self.content_width == 0 {
-            return 0;
-        }
-        self.display_width_up_to(self.cursor_pos) / self.content_width
+    fn visual_position(&self, byte_pos: usize, content_width: usize) -> (usize, usize) {
+        soft_wrap_text_position(&self.value, byte_pos, content_width)
     }
 
-    fn max_visual_row(&self) -> usize {
-        if self.content_width == 0 {
-            return 0;
-        }
-        self.display_width_up_to(self.value.len()) / self.content_width
-    }
-
-    fn display_width_up_to(&self, byte_pos: usize) -> usize {
-        display_width_text(&self.value[..byte_pos])
-    }
-
-    fn byte_offset_for_display_width(&self, target_width: usize) -> usize {
-        let mut width = 0;
-        for (i, ch) in self.value.char_indices() {
-            if width >= target_width {
-                return i;
-            }
-            width += UnicodeWidthChar::width(ch).unwrap_or(0);
-        }
-        self.value.len()
+    fn byte_pos_at_visual(&self, target_row: usize, target_col: usize, content_width: usize) -> usize {
+        soft_wrap_text_byte_offset(&self.value, target_row, target_col, content_width)
     }
 }
 
@@ -202,11 +183,11 @@ impl Component for TextField {
                 let alt = key.modifiers.contains(KeyModifiers::ALT);
                 match key.code {
                     KeyCode::Char('a') if ctrl => {
-                        self.cursor_pos = 0;
+                        self.cursor_pos = self.hard_line_start();
                         Some(vec![])
                     }
                     KeyCode::Char('e') if ctrl => {
-                        self.cursor_pos = self.value.len();
+                        self.cursor_pos = self.hard_line_end();
                         Some(vec![])
                     }
                     KeyCode::Char('w') if ctrl => {
@@ -532,11 +513,8 @@ mod tests {
     #[test]
     fn move_cursor_up_cases() {
         // (text, cursor, width, expected)
-        let cases: Vec<(&str, Option<usize>, usize, usize)> = vec![
-            ("hello world", Some(3), 10, 0), // first row goes home
-            ("hello world", Some(8), 5, 3),  // multi-row: row1->row0
-            ("hello", Some(3), 0, 3),        // zero width is no-op
-        ];
+        let cases: Vec<(&str, Option<usize>, usize, usize)> =
+            vec![("hello world", Some(3), 10, 0), ("hello world", Some(8), 5, 2), ("hello", Some(3), 0, 3)];
         for (text, cursor, width, expected) in cases {
             let mut f = cursor.map_or_else(|| field(text), |c| field_at(text, c));
             f.move_cursor_up(width);
@@ -546,10 +524,6 @@ mod tests {
 
     #[test]
     fn move_cursor_up_wide_chars() {
-        // '中' is 2 display-width columns
-        // "中中中中中" = 10 display cols, content_width=5 -> 2 rows
-        // Cursor at end: byte 15, display 10, row 2, col 0
-        // byte_offset_for_display_width(5): wide chars can't land exactly on boundary
         let mut f = field("中中中中中");
         f.move_cursor_up(5);
         assert_eq!(f.cursor_pos(), 9);
@@ -559,10 +533,10 @@ mod tests {
     fn move_cursor_down_cases() {
         // (text, cursor, width, expected)
         let cases: Vec<(&str, Option<usize>, usize, usize)> = vec![
-            ("hello world", Some(0), 20, 11), // last row goes end
-            ("hello world", Some(3), 5, 8),   // multi-row: row0->row1
-            ("hello world", Some(8), 5, 11),  // clamps to total width
-            ("", None, 10, 0),                // empty string
+            ("hello world", Some(0), 20, 11),
+            ("hello world", Some(3), 5, 9),
+            ("hello world", Some(8), 5, 11),
+            ("", None, 10, 0),
         ];
         for (text, cursor, width, expected) in cases {
             let mut f = cursor.map_or_else(|| field(text), |c| field_at(text, c));
@@ -573,30 +547,28 @@ mod tests {
 
     #[test]
     fn is_cursor_on_first_visual_line() {
-        // "hello world" with width 5 → row 0: "hello", row 1: " worl", row 2: "d"
         let mut f = field_at("hello world", 3);
         f.set_content_width(5);
-        assert!(f.is_cursor_on_first_visual_line()); // cursor on row 0
+        assert!(f.is_cursor_on_first_visual_line());
 
         let mut f = field_at("hello world", 8);
         f.set_content_width(5);
-        assert!(!f.is_cursor_on_first_visual_line()); // cursor on row 1
+        assert!(!f.is_cursor_on_first_visual_line());
     }
 
     #[test]
     fn is_cursor_on_last_visual_line() {
-        // "hello world" with width 5 → row 0: "hello", row 1: " worl", row 2: "d"
         let mut f = field_at("hello world", 11);
         f.set_content_width(5);
-        assert!(f.is_cursor_on_last_visual_line()); // cursor at end, row 2
+        assert!(f.is_cursor_on_last_visual_line());
 
         let mut f = field_at("hello world", 3);
         f.set_content_width(5);
-        assert!(!f.is_cursor_on_last_visual_line()); // cursor on row 0
+        assert!(!f.is_cursor_on_last_visual_line());
 
         let mut f = field_at("hello world", 8);
         f.set_content_width(5);
-        assert!(!f.is_cursor_on_last_visual_line()); // cursor on row 1
+        assert!(f.is_cursor_on_last_visual_line());
     }
 
     #[test]

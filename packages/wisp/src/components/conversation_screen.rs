@@ -64,6 +64,10 @@ impl ConversationScreen {
         self.active_modal.is_some()
     }
 
+    pub fn clear_prompt_composer(&mut self) {
+        self.prompt_composer.clear_content();
+    }
+
     pub fn is_waiting(&self) -> bool {
         self.waiting_for_response
     }

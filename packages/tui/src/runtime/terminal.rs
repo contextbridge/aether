@@ -26,8 +26,10 @@ impl TerminalSession {
     pub fn new(enable_bracketed_paste: bool, mouse_capture: MouseCapture) -> io::Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        let keyboard_enhancement_enabled =
-            execute!(stdout, PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)).is_ok();
+        let flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+            | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+            | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES;
+        let keyboard_enhancement_enabled = execute!(stdout, PushKeyboardEnhancementFlags(flags)).is_ok();
 
         if enable_bracketed_paste {
             execute!(stdout, EnableBracketedPaste)?;

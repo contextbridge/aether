@@ -1,4 +1,4 @@
-use tui::{Line, ViewContext};
+use tui::{Line, ViewContext, soft_wrap_text_position};
 
 pub fn prompt_content_width(terminal_width: usize) -> usize {
     terminal_width.saturating_sub(2).max(1)
@@ -24,7 +24,6 @@ pub struct InputPromptLayout {
 impl InputPrompt<'_> {
     pub fn layout(&self, context: &ViewContext) -> InputPromptLayout {
         let width = usize::from(context.size.width);
-        let cursor_index = clamp_to_char_boundary(self.input, self.cursor_index);
         let styled_input = style_input(self.input, context);
 
         let content_width = prompt_content_width(width);
@@ -32,7 +31,7 @@ impl InputPrompt<'_> {
         let wrapped_chunks = styled_input.soft_wrap(content_width_u16);
 
         let (cursor_content_row, cursor_content_col) =
-            wrapped_cursor_position(self.input, cursor_index, content_width_u16);
+            soft_wrap_text_position(self.input, self.cursor_index, content_width);
 
         let content_rows = wrapped_chunks.len().max(cursor_content_row + 1);
 
@@ -96,22 +95,6 @@ fn style_mentions(input: &str, context: &ViewContext) -> Line {
     }
 
     styled
-}
-
-fn clamp_to_char_boundary(text: &str, mut idx: usize) -> usize {
-    idx = idx.min(text.len());
-    while !text.is_char_boundary(idx) {
-        idx = idx.saturating_sub(1);
-    }
-    idx
-}
-
-fn wrapped_cursor_position(input: &str, cursor_index: usize, content_width: u16) -> (usize, usize) {
-    let cursor_index = clamp_to_char_boundary(input, cursor_index);
-    let wrapped_prefix = Line::new(&input[..cursor_index]).soft_wrap(content_width);
-    let row = wrapped_prefix.len().saturating_sub(1);
-    let col = wrapped_prefix.last().map_or(0, Line::display_width);
-    (row, col)
 }
 
 #[cfg(test)]
@@ -205,6 +188,17 @@ mod tests {
         let prompt = InputPrompt { input: "one\ntwo", cursor_index: 4 };
         let ctx = ViewContext::new((80, 24));
         let layout = prompt.layout(&ctx);
+        assert_eq!((layout.cursor_row, layout.cursor_col), (2, 2));
+    }
+
+    #[test]
+    fn cursor_after_wrapped_space_uses_rendered_row() {
+        let prompt = InputPrompt { input: "hello world", cursor_index: "hello ".len() };
+        let ctx = ViewContext::new((9, 24));
+        let layout = prompt.layout(&ctx);
+        let line_text = layout.lines.iter().map(Line::plain_text).collect::<Vec<_>>();
+
+        assert_eq!(line_text, vec!["─".repeat(9), "> hello".to_owned(), "  world".to_owned(), "─".repeat(9)]);
         assert_eq!((layout.cursor_row, layout.cursor_col), (2, 2));
     }
 
