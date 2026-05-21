@@ -89,6 +89,12 @@ impl PromptComposer {
         self.command_picker = None;
     }
 
+    pub fn clear_content(&mut self) {
+        self.text_input.clear();
+        self.pending_media.clear();
+        self.close_all();
+    }
+
     pub fn cursor(&self, context: &ViewContext) -> Cursor {
         let picker_query_len = self.file_picker.as_ref().map(|picker| picker.query().len());
         let layout = InputPrompt {

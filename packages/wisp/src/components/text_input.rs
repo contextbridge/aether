@@ -140,6 +140,7 @@ impl TextInput {
 
     pub fn clear(&mut self) {
         self.history.reset();
+        self.mentions.clear();
         self.field.clear();
     }
 
