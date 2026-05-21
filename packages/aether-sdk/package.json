@@ -26,18 +26,18 @@
     "e2e": "node scripts/e2e.mjs"
   },
   "dependencies": {
-    "@aether-agent/cli": "^0.7.4",
-    "@agentclientprotocol/sdk": "^0.21.0",
+    "@aether-agent/cli": "^0.7.5",
+    "@agentclientprotocol/sdk": "^0.21.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "express": "^5.1.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
-    "@types/node": "^25.6.2",
+    "@types/node": "^25.8.0",
     "quicktype-core": "^23.2.6",
     "typescript": "^6.0.3",
-    "vitest": "^4.0.0"
+    "vitest": "^4.1.6"
   },
   "engines": {
     "node": ">=24"
