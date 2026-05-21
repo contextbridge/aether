@@ -1,6 +1,6 @@
 [package]
 name = "aether-tui"
-version = "0.2.9"
+version = "0.2.10"
 edition = "2024"
 description = "A lightweight terminal UI rendering library for building rich CLI applications"
 license = "MIT"

@@ -1,6 +1,6 @@
 [package]
 name = "aether-agent-core"
-version = "0.6.6"
+version = "0.6.7"
 edition = "2024"
 description = "A minimal Rust library for building AI agents with MCP tool integration"
 license = "MIT"
@@ -40,12 +40,12 @@ tracing-subscriber = { workspace = true }
 clap = { workspace = true }
 thiserror = { workspace = true }
 agent-client-protocol = { workspace = true }
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", default-features = false, version = "0.3.16" }
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", default-features = false, version = "0.3.17" }
 glob = { workspace = true }
 regex = { workspace = true }
 aether-auth = { path = "../aether-auth", version = "0.1.3" }
-mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.5.10" }
-llm = { package = "aether-llm", path = "../llm", version = "0.7.5", features = ["codex"] }
+mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.5.11" }
+llm = { package = "aether-llm", path = "../llm", version = "0.7.6", features = ["codex"] }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.4" }
 
 [features]
