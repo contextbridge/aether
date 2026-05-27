@@ -3,26 +3,21 @@ use glob::glob;
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, HashMap};
-use std::env;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 use tokio::fs;
 use tracing::warn;
 use utils::shell_expander::ShellExpander;
 use utils::substitution::substitute_parameters;
+use utils::variables::VarError;
+use utils::{PathOrObject, ResourcePath, is_false, string_or_object_schema};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Prompt {
     Text(String),
     File {
-        path: String,
+        path: PathBuf,
         args: Option<HashMap<String, String>>,
-        cwd: Option<PathBuf>,
-    },
-    /// Resolve prompt files from glob patterns relative to cwd.
-    /// Absolute paths are also supported.
-    PromptGlobs {
-        patterns: Vec<String>,
         cwd: PathBuf,
     },
     /// MCP server instructions keyed by server name. `BTreeMap` gives a
@@ -37,77 +32,41 @@ pub enum Prompt {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PromptSource {
     Text { text: String },
-    File { path: String },
-    Glob { pattern: String },
-}
-
-#[derive(serde::Deserialize)]
-#[serde(untagged)]
-enum PromptSourceInput {
-    Path(String),
-    Object(PromptSourceObject),
-}
-
-#[derive(schemars::JsonSchema, serde::Deserialize, serde::Serialize)]
-#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
-enum PromptSourceObject {
-    Text { text: String },
-    File { path: String },
-    Glob { pattern: String },
-}
-
-impl<'de> Deserialize<'de> for PromptSource {
-    fn deserialize<T: Deserializer<'de>>(deserializer: T) -> std::result::Result<Self, T::Error> {
-        match serde::Deserialize::deserialize(deserializer)? {
-            PromptSourceInput::Path(path) | PromptSourceInput::Object(PromptSourceObject::File { path }) => {
-                Ok(Self::File { path })
-            }
-            PromptSourceInput::Object(PromptSourceObject::Text { text }) => Ok(Self::Text { text }),
-            PromptSourceInput::Object(PromptSourceObject::Glob { pattern }) => Ok(Self::Glob { pattern }),
-        }
-    }
-}
-
-impl Serialize for PromptSource {
-    fn serialize<T: Serializer>(&self, serializer: T) -> std::result::Result<T::Ok, T::Error> {
-        match self {
-            Self::File { path } => serializer.serialize_str(path),
-            Self::Text { text } => Serialize::serialize(&PromptSourceObject::Text { text: text.clone() }, serializer),
-            Self::Glob { pattern } => {
-                Serialize::serialize(&PromptSourceObject::Glob { pattern: pattern.clone() }, serializer)
-            }
-        }
-    }
-}
-
-impl JsonSchema for PromptSource {
-    fn schema_name() -> std::borrow::Cow<'static, str> {
-        "PromptSource".into()
-    }
-
-    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
-        let object_schema = generator.subschema_for::<PromptSourceObject>().to_value();
-        Schema::try_from(serde_json::json!({
-            "description": "Authored description of a prompt source — either a file path string or a typed text, file, or glob object.",
-            "oneOf": [
-                { "type": "string" },
-                object_schema
-            ]
-        }))
-        .expect("prompt source schema must be valid")
-    }
+    File { path: ResourcePath, optional: bool },
+    Glob { pattern: ResourcePath, optional: bool },
 }
 
 impl PromptSource {
-    pub fn file(path: impl Into<String>) -> Self {
-        Self::File { path: path.into() }
+    pub fn file(path: impl Into<ResourcePath>) -> Self {
+        Self::File { path: path.into(), optional: false }
     }
 
+    pub fn glob(pattern: impl Into<ResourcePath>) -> Self {
+        Self::Glob { pattern: pattern.into(), optional: false }
+    }
+
+    #[must_use]
+    pub fn optional(self) -> Self {
+        match self {
+            Self::File { path, .. } => Self::File { path, optional: true },
+            Self::Glob { pattern, .. } => Self::Glob { pattern, optional: true },
+            Self::Text { .. } => self,
+        }
+    }
+
+    /// The authored path/pattern string, if this source has one.
     pub fn path(&self) -> Option<&str> {
         match self {
-            Self::File { path } => Some(path.as_str()),
-            Self::Glob { pattern } => Some(pattern.as_str()),
+            Self::File { path, .. } => Some(path.as_authored()),
+            Self::Glob { pattern, .. } => Some(pattern.as_authored()),
             Self::Text { .. } => None,
+        }
+    }
+
+    pub fn is_optional(&self) -> bool {
+        match self {
+            Self::File { optional, .. } | Self::Glob { optional, .. } => *optional,
+            Self::Text { .. } => false,
         }
     }
 }
@@ -124,16 +83,90 @@ impl From<String> for PromptSource {
     }
 }
 
-/// Validation failures raised while resolving [`PromptSource`] values into [`Prompt`]s.
+impl From<PromptSourceObject> for PromptSource {
+    fn from(object: PromptSourceObject) -> Self {
+        match object {
+            PromptSourceObject::Text { text } => Self::Text { text },
+            PromptSourceObject::File { path, optional } => Self::File { path, optional },
+            PromptSourceObject::Glob { pattern, optional } => Self::Glob { pattern, optional },
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for PromptSource {
+    fn deserialize<T: Deserializer<'de>>(deserializer: T) -> std::result::Result<Self, T::Error> {
+        Ok(match PathOrObject::<PromptSourceObject>::deserialize(deserializer)? {
+            PathOrObject::Path(path) => Self::File { path, optional: false },
+            PathOrObject::Object(object) => object.into(),
+        })
+    }
+}
+
+impl Serialize for PromptSource {
+    fn serialize<T: Serializer>(&self, serializer: T) -> std::result::Result<T::Ok, T::Error> {
+        match self {
+            Self::File { path, optional: false } => path.serialize(serializer),
+            Self::File { path, optional } => {
+                Serialize::serialize(&PromptSourceObject::File { path: path.clone(), optional: *optional }, serializer)
+            }
+            Self::Text { text } => Serialize::serialize(&PromptSourceObject::Text { text: text.clone() }, serializer),
+            Self::Glob { pattern, optional } => Serialize::serialize(
+                &PromptSourceObject::Glob { pattern: pattern.clone(), optional: *optional },
+                serializer,
+            ),
+        }
+    }
+}
+
+impl JsonSchema for PromptSource {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "PromptSource".into()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        string_or_object_schema(
+            "Authored description of a prompt source — either a file path string or a typed text, file, or glob object.",
+            &generator.subschema_for::<PromptSourceObject>().to_value(),
+        )
+    }
+}
+
+#[derive(schemars::JsonSchema, serde::Deserialize, serde::Serialize)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+enum PromptSourceObject {
+    Text {
+        text: String,
+    },
+    File {
+        path: ResourcePath,
+        #[serde(default, skip_serializing_if = "is_false")]
+        optional: bool,
+    },
+    Glob {
+        pattern: ResourcePath,
+        #[serde(default, skip_serializing_if = "is_false")]
+        optional: bool,
+    },
+}
+
+/// Errors raised while resolving [`PromptSource`] values into [`Prompt`]s.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum PromptSourceError {
     /// A glob pattern is syntactically invalid.
     #[error("Invalid glob pattern '{pattern}': {error}")]
     InvalidGlobPattern { pattern: String, error: String },
 
-    /// A prompt file or glob did not match any files on disk.
-    #[error("Prompt entry '{pattern}' resolves to no files")]
+    /// A prompt file does not exist on disk.
+    #[error("Prompt file '{path}' does not exist")]
+    Missing { path: String },
+
+    /// A prompt glob matched no files.
+    #[error("Prompt glob '{pattern}' matched no files")]
     ZeroMatch { pattern: String },
+
+    /// A `${VAR}` reference in a prompt path could not be resolved.
+    #[error("Prompt entry '{pattern}' references undefined variable '{variable}'")]
+    UnresolvedVariable { pattern: String, variable: String },
 }
 
 impl Prompt {
@@ -141,44 +174,38 @@ impl Prompt {
         Self::Text(str.to_string())
     }
 
-    pub fn file(path: &str) -> Self {
-        Self::File { path: path.to_string(), args: None, cwd: None }
-    }
-
-    pub fn file_with_args(path: &str, args: HashMap<String, String>) -> Self {
-        Self::File { path: path.to_string(), args: Some(args), cwd: None }
-    }
-
-    pub fn from_globs(patterns: Vec<String>, cwd: PathBuf) -> Self {
-        Self::PromptGlobs { patterns, cwd }
+    pub fn file(path: impl Into<PathBuf>, cwd: impl Into<PathBuf>) -> Self {
+        Self::File { path: path.into(), args: None, cwd: cwd.into() }
     }
 
     /// Resolve a slice of [`PromptSource`] declarations into runtime [`Prompt`] values.
-    ///
-    /// Validates that file paths and glob patterns produce at least one matching file
-    /// under `project_root`. Text sources pass through unchanged.
     pub fn from_sources(
-        project_root: &Path,
+        workspace_root: &Path,
         sources: &[PromptSource],
     ) -> std::result::Result<Vec<Prompt>, PromptSourceError> {
-        sources
-            .iter()
-            .map(|source| match source {
-                PromptSource::Text { text } => Ok(Prompt::text(text)),
-                PromptSource::File { path } => validate_prompt_file(project_root, path)
-                    .map(|()| Prompt::file(path).with_cwd(project_root.to_path_buf())),
-                PromptSource::Glob { pattern } => validate_prompt_glob(project_root, pattern)
-                    .map(|()| Prompt::from_globs(vec![pattern.clone()], project_root.to_path_buf())),
-            })
-            .collect()
-    }
-
-    pub fn with_cwd(self, cwd: PathBuf) -> Self {
-        match self {
-            Self::File { path, args, .. } => Self::File { path, args, cwd: Some(cwd) },
-            Self::PromptGlobs { patterns, .. } => Self::PromptGlobs { patterns, cwd },
-            Self::Text(_) | Self::McpInstructions(_) => self,
+        let mut prompts = Vec::new();
+        for source in sources {
+            if let PromptSource::Text { text } = source {
+                prompts.push(Prompt::text(text));
+                continue;
+            }
+            match resolve_source_files(workspace_root, source) {
+                Ok(paths) => {
+                    for path in paths {
+                        prompts.push(Prompt::file(path, workspace_root.to_path_buf()));
+                    }
+                }
+                Err(PromptSourceError::Missing { .. }) if source.is_optional() => {}
+                Err(PromptSourceError::UnresolvedVariable { variable, .. }) if source.is_optional() => {
+                    warn!(
+                        "Skipping optional prompt entry '{}': variable '{variable}' is not defined",
+                        source.path().unwrap_or_default()
+                    );
+                }
+                Err(error) => return Err(error),
+            }
         }
+        Ok(prompts)
     }
 
     /// Resolve this `SystemPrompt` to a String
@@ -186,12 +213,11 @@ impl Prompt {
         match self {
             Prompt::Text(text) => Ok(text.clone()),
             Prompt::File { path, args, cwd } => {
-                let content = Self::resolve_file(&PathBuf::from(path)).await?;
+                let content = Self::resolve_file(path).await?;
                 let substituted = substitute_parameters(&content, args);
                 let expander = ShellExpander::new();
-                Self::expand_builtins(&substituted, cwd.as_deref(), &expander).await
+                Ok(expander.expand(&substituted, cwd).await)
             }
-            Prompt::PromptGlobs { patterns, cwd } => Self::resolve_prompt_globs(patterns, cwd).await,
             Prompt::McpInstructions(instructions) => Ok(format_mcp_instructions(instructions)),
         }
     }
@@ -213,75 +239,47 @@ impl Prompt {
             .await
             .map_err(|e| AgentError::IoError(format!("Failed to read file '{}': {e}", path.display())))
     }
+}
 
-    async fn resolve_prompt_globs(patterns: &[String], cwd: &Path) -> Result<String> {
-        let mut contents = Vec::new();
-        let expander = ShellExpander::new();
-
-        for pattern in patterns {
-            let full_pattern = if Path::new(pattern).is_absolute() {
-                pattern.clone()
+fn resolve_source_files(
+    workspace_root: &Path,
+    source: &PromptSource,
+) -> std::result::Result<Vec<PathBuf>, PromptSourceError> {
+    match source {
+        PromptSource::Text { .. } => Ok(Vec::new()),
+        PromptSource::File { path, .. } => {
+            let full_path = resolve_path(path, workspace_root)?;
+            if full_path.is_file() {
+                Ok(vec![full_path])
             } else {
-                cwd.join(pattern).to_string_lossy().to_string()
-            };
-
-            let paths = glob(&full_pattern)
-                .map_err(|e| AgentError::IoError(format!("Invalid glob pattern '{pattern}': {e}")))?;
-
-            let mut matched: Vec<PathBuf> = paths.filter_map(std::result::Result::ok).collect();
-            matched.sort();
-
-            for path in matched {
-                if path.is_file() {
-                    match fs::read_to_string(&path).await {
-                        Ok(content) => {
-                            let resolved = Self::expand_builtins(&content, Some(cwd), &expander).await?;
-                            contents.push(resolved);
-                        }
-                        Err(e) => {
-                            warn!("Failed to read prompt file '{}': {e}", path.display());
-                        }
-                    }
-                }
+                Err(PromptSourceError::Missing { path: path.as_authored().to_string() })
             }
         }
-
-        Ok(contents.join("\n\n"))
-    }
-
-    /// Expand `` !`command` `` shell-interpolation markers in prompt content.
-    ///
-    /// Thin wrapper around [`ShellExpander::expand`] that resolves `cwd` from
-    /// the process working directory when `None`.
-    async fn expand_builtins(content: &str, cwd: Option<&Path>, expander: &ShellExpander) -> Result<String> {
-        let cwd = match cwd {
-            Some(dir) => dir.to_path_buf(),
-            None => {
-                env::current_dir().map_err(|e| AgentError::IoError(format!("Failed to get current directory: {e}")))?
+        PromptSource::Glob { pattern, optional } => {
+            let full_pattern = resolve_path(pattern, workspace_root)?;
+            let mut paths: Vec<PathBuf> = glob(&full_pattern.to_string_lossy())
+                .map_err(|e| PromptSourceError::InvalidGlobPattern {
+                    pattern: pattern.as_authored().to_string(),
+                    error: e.to_string(),
+                })?
+                .filter_map(std::result::Result::ok)
+                .filter(|path| path.is_file())
+                .collect();
+            paths.sort();
+            if paths.is_empty() && !*optional {
+                Err(PromptSourceError::ZeroMatch { pattern: pattern.as_authored().to_string() })
+            } else {
+                Ok(paths)
             }
-        };
-        Ok(expander.expand(content, &cwd).await)
+        }
     }
 }
 
-fn validate_prompt_file(project_root: &Path, path: &str) -> std::result::Result<(), PromptSourceError> {
-    let full_path = project_root.join(path);
-    if full_path.is_file() { Ok(()) } else { Err(PromptSourceError::ZeroMatch { pattern: path.to_string() }) }
-}
-
-fn validate_prompt_glob(project_root: &Path, pattern: &str) -> std::result::Result<(), PromptSourceError> {
-    let full_pattern = if Path::new(pattern).is_absolute() {
-        pattern.to_string()
-    } else {
-        project_root.join(pattern).to_string_lossy().to_string()
-    };
-
-    let has_file_match = glob(&full_pattern)
-        .map_err(|e| PromptSourceError::InvalidGlobPattern { pattern: pattern.to_string(), error: e.to_string() })?
-        .filter_map(std::result::Result::ok)
-        .any(|path| path.is_file());
-
-    if has_file_match { Ok(()) } else { Err(PromptSourceError::ZeroMatch { pattern: pattern.to_string() }) }
+fn resolve_path(path: &ResourcePath, workspace_root: &Path) -> std::result::Result<PathBuf, PromptSourceError> {
+    path.resolve(workspace_root).map_err(|VarError::NotFound(variable)| PromptSourceError::UnresolvedVariable {
+        pattern: path.as_authored().to_string(),
+        variable,
+    })
 }
 
 pub struct PromptCache {
@@ -354,6 +352,8 @@ fn format_mcp_instructions(instructions: &BTreeMap<String, String>) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::{create_dir_all, write};
+
     use super::*;
     use crate::testing::mcp_instructions as instructions;
 
@@ -372,58 +372,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prompt_globs_resolves_single_file() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("AGENTS.md"), "# Instructions\nBe helpful").unwrap();
-
-        let prompt = Prompt::from_globs(vec!["AGENTS.md".to_string()], dir.path().to_path_buf());
-        let result = prompt.build().await.unwrap();
-        assert_eq!(result, "# Instructions\nBe helpful");
-    }
-
-    #[tokio::test]
-    async fn prompt_globs_resolves_glob_pattern() {
-        let dir = tempfile::tempdir().unwrap();
-        let rules_dir = dir.path().join(".aether/rules");
-        std::fs::create_dir_all(&rules_dir).unwrap();
-        std::fs::write(rules_dir.join("a-coding.md"), "Use Rust").unwrap();
-        std::fs::write(rules_dir.join("b-testing.md"), "Write tests").unwrap();
-
-        let prompt = Prompt::from_globs(vec![".aether/rules/*.md".to_string()], dir.path().to_path_buf());
-        let result = prompt.build().await.unwrap();
-        assert!(result.contains("Use Rust"));
-        assert!(result.contains("Write tests"));
-    }
-
-    #[tokio::test]
-    async fn prompt_globs_returns_empty_for_no_matches() {
-        let dir = tempfile::tempdir().unwrap();
-
-        let prompt = Prompt::from_globs(vec!["nonexistent*.md".to_string()], dir.path().to_path_buf());
-        let result = prompt.build().await.unwrap();
-        assert!(result.is_empty());
-    }
-
-    #[tokio::test]
-    async fn prompt_globs_supports_absolute_paths() {
-        let dir = tempfile::tempdir().unwrap();
-        let file_path = dir.path().join("rules.md");
-        std::fs::write(&file_path, "Absolute rule").unwrap();
-
-        let prompt = Prompt::from_globs(vec![file_path.to_string_lossy().to_string()], PathBuf::from("/tmp"));
-        let result = prompt.build().await.unwrap();
-        assert_eq!(result, "Absolute rule");
-    }
-
-    #[tokio::test]
-    async fn prompt_globs_concatenates_multiple_patterns() {
+    async fn build_all_concatenates_multiple_files() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("AGENTS.md"), "Agent instructions").unwrap();
         std::fs::write(dir.path().join("SYSTEM.md"), "System prompt").unwrap();
 
-        let prompt =
-            Prompt::from_globs(vec!["AGENTS.md".to_string(), "SYSTEM.md".to_string()], dir.path().to_path_buf());
-        let result = prompt.build().await.unwrap();
+        let prompts = vec![
+            Prompt::file(dir.path().join("AGENTS.md"), dir.path()),
+            Prompt::file(dir.path().join("SYSTEM.md"), dir.path()),
+        ];
+        let result = Prompt::build_all(&prompts).await.unwrap();
         assert!(result.contains("Agent instructions"));
         assert!(result.contains("System prompt"));
         assert!(result.contains("\n\n"));
@@ -434,52 +392,6 @@ mod tests {
         let prompts = vec![Prompt::text("Part one"), Prompt::text(""), Prompt::text("Part two")];
         let result = Prompt::build_all(&prompts).await.unwrap();
         assert_eq!(result, "Part one\n\nPart two");
-    }
-
-    #[tokio::test]
-    async fn expand_builtins_no_op_without_marker() {
-        let content = "Just some plain content with no directives";
-        let expander = ShellExpander::new();
-        let result = Prompt::expand_builtins(content, None, &expander).await.unwrap();
-        assert_eq!(result, content);
-    }
-
-    #[tokio::test]
-    async fn expand_builtins_runs_shell_command() {
-        let expander = ShellExpander::new();
-        let result = Prompt::expand_builtins("branch: !`echo main`", None, &expander).await.unwrap();
-        assert_eq!(result, "branch: main");
-    }
-
-    #[tokio::test]
-    async fn expand_builtins_runs_command_in_cwd() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("sentinel.txt"), "").unwrap();
-
-        let expander = ShellExpander::new();
-        let result = Prompt::expand_builtins("files: !`ls`", Some(dir.path()), &expander).await.unwrap();
-        assert!(result.contains("sentinel.txt"), "expected sentinel.txt in output: {result}");
-    }
-
-    #[tokio::test]
-    async fn expand_builtins_handles_multiple_commands() {
-        let expander = ShellExpander::new();
-        let result = Prompt::expand_builtins("a=!`echo one`, b=!`echo two`", None, &expander).await.unwrap();
-        assert_eq!(result, "a=one, b=two");
-    }
-
-    #[tokio::test]
-    async fn expand_builtins_substitutes_empty_on_failure() {
-        let expander = ShellExpander::new();
-        let result = Prompt::expand_builtins("before !`exit 1` after", None, &expander).await.unwrap();
-        assert_eq!(result, "before  after");
-    }
-
-    #[tokio::test]
-    async fn expand_builtins_trims_trailing_whitespace() {
-        let expander = ShellExpander::new();
-        let result = Prompt::expand_builtins("!`printf 'hi\\n\\n'`", None, &expander).await.unwrap();
-        assert_eq!(result, "hi");
     }
 
     #[tokio::test]
@@ -499,12 +411,12 @@ mod tests {
         use std::fs::{remove_file, write};
 
         let dir = tempfile::tempdir().unwrap();
+        write(dir.path().join("AGENTS.md"), "cached body").unwrap();
         let mut cache = PromptCache::new(vec![
-            Prompt::from_globs(vec!["AGENTS.md".into()], dir.path().to_path_buf()),
+            Prompt::file(dir.path().join("AGENTS.md"), dir.path()),
             Prompt::McpInstructions(BTreeMap::new()),
         ]);
 
-        write(dir.path().join("AGENTS.md"), "cached body").unwrap();
         cache.render().await.unwrap();
 
         // Remove the source file to prove we cached things
@@ -528,15 +440,176 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prompt_globs_expands_shell_in_file() {
+    async fn build_file_expands_shell_commands() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("AGENTS.md"), "Instructions\n\nbranch: !`echo main`\n\nRules").unwrap();
+        write(dir.path().join("AGENTS.md"), "Instructions\n\nbranch: !`echo main`\n\nRules").unwrap();
 
-        let prompt = Prompt::from_globs(vec!["AGENTS.md".to_string()], dir.path().to_path_buf());
+        let prompt = Prompt::file(dir.path().join("AGENTS.md"), dir.path().to_path_buf());
         let result = prompt.build().await.unwrap();
         assert!(result.contains("Instructions"));
         assert!(result.contains("branch: main"));
         assert!(result.contains("Rules"));
         assert!(!result.contains("!`"));
+    }
+
+    #[tokio::test]
+    async fn build_file_runs_shell_in_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path().join("sentinel.txt"), "").unwrap();
+        let prompt_path = dir.path().join("AGENTS.md");
+        write(&prompt_path, "files: !`ls`").unwrap();
+
+        let prompt = Prompt::file(prompt_path, dir.path().to_path_buf());
+        let result = prompt.build().await.unwrap();
+        assert!(result.contains("sentinel.txt"), "expected sentinel.txt in output: {result}");
+    }
+
+    #[tokio::test]
+    async fn build_file_handles_multiple_commands() {
+        let dir = tempfile::tempdir().unwrap();
+        let prompt_path = dir.path().join("AGENTS.md");
+        write(&prompt_path, "a=!`echo one`, b=!`echo two`").unwrap();
+
+        let prompt = Prompt::file(prompt_path, dir.path().to_path_buf());
+        let result = prompt.build().await.unwrap();
+        assert_eq!(result, "a=one, b=two");
+    }
+
+    #[tokio::test]
+    async fn build_file_substitutes_empty_on_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let prompt_path = dir.path().join("AGENTS.md");
+        write(&prompt_path, "before !`exit 1` after").unwrap();
+
+        let prompt = Prompt::file(prompt_path, dir.path().to_path_buf());
+        let result = prompt.build().await.unwrap();
+        assert_eq!(result, "before  after");
+    }
+
+    #[tokio::test]
+    async fn build_file_trims_trailing_whitespace() {
+        let dir = tempfile::tempdir().unwrap();
+        let prompt_path = dir.path().join("AGENTS.md");
+        write(&prompt_path, "!`printf 'hi\\n\\n'`").unwrap();
+
+        let prompt = Prompt::file(prompt_path, dir.path().to_path_buf());
+        let result = prompt.build().await.unwrap();
+        assert_eq!(result, "hi");
+    }
+
+    #[test]
+    fn optional_file_source_skips_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path().join("EXISTS.md"), "exists").unwrap();
+
+        let sources = vec![PromptSource::file("EXISTS.md"), PromptSource::file("MISSING.md").optional()];
+        let prompts = Prompt::from_sources(dir.path(), &sources).unwrap();
+        assert_eq!(prompts.len(), 1);
+    }
+
+    #[test]
+    fn optional_glob_source_skips_zero_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path().join("EXISTS.md"), "exists").unwrap();
+
+        let sources = vec![PromptSource::file("EXISTS.md"), PromptSource::glob("nonexistent*.md").optional()];
+        let prompts = Prompt::from_sources(dir.path(), &sources).unwrap();
+        assert_eq!(prompts.len(), 1);
+    }
+
+    #[test]
+    fn required_glob_source_expands_to_one_prompt_per_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let rules_dir = dir.path().join(".aether/rules");
+        create_dir_all(&rules_dir).unwrap();
+        write(rules_dir.join("a.md"), "a").unwrap();
+        write(rules_dir.join("b.md"), "b").unwrap();
+
+        let sources = vec![PromptSource::glob(".aether/rules/*.md")];
+        let prompts = Prompt::from_sources(dir.path(), &sources).unwrap();
+        assert_eq!(prompts.len(), 2);
+    }
+
+    #[test]
+    fn required_glob_source_with_no_matches_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let sources = vec![PromptSource::glob("nonexistent*.md")];
+        let err = Prompt::from_sources(dir.path(), &sources).unwrap_err();
+        assert!(matches!(err, PromptSourceError::ZeroMatch { .. }));
+    }
+
+    #[test]
+    fn optional_glob_source_still_errors_on_invalid_pattern() {
+        let dir = tempfile::tempdir().unwrap();
+        let sources = vec![PromptSource::glob("[invalid").optional()];
+        let err = Prompt::from_sources(dir.path(), &sources).unwrap_err();
+        assert!(matches!(err, PromptSourceError::InvalidGlobPattern { .. }));
+    }
+
+    #[test]
+    fn optional_file_source_skips_unresolved_variable() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path().join("EXISTS.md"), "exists").unwrap();
+
+        let sources = vec![
+            PromptSource::file("EXISTS.md"),
+            PromptSource::file("${DEFINITELY_NOT_SET_VAR_PROMPT_FILE}/foo.md").optional(),
+        ];
+        let prompts = Prompt::from_sources(dir.path(), &sources).unwrap();
+        assert_eq!(prompts.len(), 1);
+    }
+
+    #[test]
+    fn optional_glob_source_skips_unresolved_variable() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path().join("EXISTS.md"), "exists").unwrap();
+
+        let sources = vec![
+            PromptSource::file("EXISTS.md"),
+            PromptSource::glob("${DEFINITELY_NOT_SET_VAR_PROMPT_GLOB}/*.md").optional(),
+        ];
+        let prompts = Prompt::from_sources(dir.path(), &sources).unwrap();
+        assert_eq!(prompts.len(), 1);
+    }
+
+    #[test]
+    fn required_file_source_errors_on_unresolved_variable() {
+        let dir = tempfile::tempdir().unwrap();
+        let sources = vec![PromptSource::file("${DEFINITELY_NOT_SET_VAR_PROMPT_REQ}/foo.md")];
+        let err = Prompt::from_sources(dir.path(), &sources).unwrap_err();
+        assert!(matches!(err, PromptSourceError::UnresolvedVariable { .. }));
+    }
+
+    #[test]
+    fn prompt_source_string_shorthand_is_required_file() {
+        let source: PromptSource = serde_json::from_str(r#""SYSTEM.md""#).unwrap();
+        assert_eq!(source, PromptSource::file("SYSTEM.md"));
+    }
+
+    #[test]
+    fn optional_prompt_source_serializes_as_typed_object() {
+        let source = PromptSource::file("${WORKSPACE}/AGENTS.md").optional();
+        let value = serde_json::to_value(&source).unwrap();
+        assert_eq!(value, serde_json::json!({"type":"file","path":"${WORKSPACE}/AGENTS.md","optional":true}));
+
+        // Non-optional file stays as string shorthand
+        let source = PromptSource::file("SYSTEM.md");
+        let value = serde_json::to_value(&source).unwrap();
+        assert_eq!(value, serde_json::json!("SYSTEM.md"));
+    }
+
+    #[test]
+    fn optional_prompt_source_deserializes_from_typed_object() {
+        let source: PromptSource =
+            serde_json::from_str(r#"{"type":"file","path":"${WORKSPACE}/AGENTS.md","optional":true}"#).unwrap();
+        assert_eq!(source, PromptSource::file("${WORKSPACE}/AGENTS.md").optional());
+    }
+
+    #[test]
+    fn optional_glob_source_deserializes_from_typed_object() {
+        let source: PromptSource =
+            serde_json::from_str(r#"{"type":"glob","pattern":"${WORKSPACE}/.aether/rules/*.md","optional":true}"#)
+                .unwrap();
+        assert_eq!(source, PromptSource::glob("${WORKSPACE}/.aether/rules/*.md").optional());
     }
 }

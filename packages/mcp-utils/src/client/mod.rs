@@ -9,7 +9,6 @@ mod mcp_client;
 mod naming;
 mod roots;
 mod tool_proxy;
-mod variables;
 
 pub use config::{
     HttpServerConfig, HttpType, InMemoryServerConfig, InMemoryType, McpConfig, McpServer, McpServerConfig,

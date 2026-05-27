@@ -50,13 +50,21 @@ pub enum SettingsError {
     #[error(transparent)]
     PromptSource(#[from] PromptSourceError),
 
-    /// An agent has no prompts after inheritance.
-    #[error("Agent '{agent}' has no prompts after inheritance (neither inherited nor local)")]
-    NoPrompts { agent: String },
+    /// An agent has no prompts declared (neither inherited nor local).
+    #[error("Agent '{agent}' has no prompts declared (neither inherited nor local)")]
+    NoPromptsDeclared { agent: String },
+
+    /// An agent declared prompts but every entry was optional and matched no files.
+    #[error("Agent '{agent}': all prompt entries were optional and matched no files")]
+    AllOptionalPromptsMissing { agent: String },
 
     /// An MCP config path does not exist or is invalid.
     #[error("MCP config path '{path}' does not exist or is not a file")]
     InvalidMcpConfigPath { path: String },
+
+    /// A `${VAR}` reference in an MCP config path could not be resolved.
+    #[error("MCP config path '{path}' references undefined variable '{variable}'")]
+    UnresolvedMcpConfigVariable { path: String, variable: String },
 
     /// I/O error while reading files.
     #[error("I/O error: {0}")]

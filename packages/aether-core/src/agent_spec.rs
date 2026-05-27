@@ -161,7 +161,7 @@ mod tests {
     #[test]
     fn default_spec_has_expected_fields() {
         let model: LlmModel = "anthropic:claude-sonnet-4-5".parse().unwrap();
-        let prompts = vec![Prompt::from_globs(vec!["BASE.md".to_string()], PathBuf::from("/tmp"))];
+        let prompts = vec![Prompt::file(PathBuf::from("/tmp/BASE.md"), PathBuf::from("/tmp"))];
         let spec = AgentSpec::default_spec(&model, None, prompts.clone());
 
         assert_eq!(spec.name, "__default__");

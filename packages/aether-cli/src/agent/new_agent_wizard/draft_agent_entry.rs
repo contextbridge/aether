@@ -40,7 +40,7 @@ impl DraftAgentEntry {
     pub fn to_agent_config(&self, mode: &NewAgentMode, inherited_prompts: &[String]) -> AgentConfig {
         let paths = self.generated_paths(mode);
 
-        let mut prompts = vec![PromptSource::file(paths.system_md.to_string_lossy())];
+        let mut prompts = vec![PromptSource::file(paths.system_md.to_string_lossy().into_owned())];
         match mode {
             NewAgentMode::ScaffoldProject => {
                 prompts.extend(self.entry.prompts.iter().cloned());
@@ -59,10 +59,10 @@ impl DraftAgentEntry {
         let mut mcp = if self.selected_mcp_servers.is_empty() {
             vec![]
         } else {
-            vec![McpSourceSpec::file(paths.mcp_json.to_string_lossy())]
+            vec![McpSourceSpec::file(paths.mcp_json.to_string_lossy().into_owned())]
         };
 
-        mcp.extend(self.workspace_mcp_configs.iter().map(McpSourceSpec::file));
+        mcp.extend(self.workspace_mcp_configs.iter().map(|s| McpSourceSpec::file(s.as_str())));
 
         AgentConfig { prompts, mcps: mcp, ..self.entry.clone() }
     }
@@ -113,7 +113,7 @@ impl DraftAgentEntry {
             })
             .collect::<BTreeMap<_, _>>();
 
-        let config = McpConfig { servers };
+        let config = McpConfig::new(servers);
         serde_json::to_string_pretty(&config).expect("mcp serialization cannot fail")
     }
 }

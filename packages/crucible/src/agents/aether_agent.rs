@@ -71,8 +71,8 @@ impl<T: StreamingModelProvider + 'static> AetherAgent<T> {
         self
     }
 
-    async fn create_mcp_builder(&self) -> Result<McpBuilder, RunError> {
-        let mut mcp_builder = mcp();
+    async fn create_mcp_builder(&self, workspace: &Path) -> Result<McpBuilder, RunError> {
+        let mut mcp_builder = mcp(workspace);
         let mut sources: Vec<McpConfigSource> = Vec::new();
 
         for (name, factory) in &self.factories {
@@ -226,7 +226,7 @@ async fn stream_agent_messages(mut rx: Receiver<AgentMessage>, tx: Sender<AgentE
 
 impl<T: StreamingModelProvider + Clone + 'static> Agent for AetherAgent<T> {
     async fn run(&self, config: AgentConfig<'_>, tx: Sender<AgentEvalMessage>) -> Result<(), RunError> {
-        let mcp_builder = self.create_mcp_builder().await?;
+        let mcp_builder = self.create_mcp_builder(config.workspace).await?;
         let mut spawn =
             mcp_builder.spawn().await.map_err(|e| RunError::ExecutionFailed(format!("Failed to spawn MCP: {e}")))?;
         let connection_details = spawn

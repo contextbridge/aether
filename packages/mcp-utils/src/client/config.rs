@@ -1,4 +1,3 @@
-use super::variables::{VarError, expand_env_vars};
 use futures::future::BoxFuture;
 use rmcp::{RoleServer, service::DynService, transport::streamable_http_client::StreamableHttpClientTransportConfig};
 use schemars::JsonSchema;
@@ -7,6 +6,8 @@ use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Debug, Formatter};
 use std::path::Path;
+use utils::is_false;
+use utils::variables::{VarError, Vars};
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
 pub struct McpConfig {
@@ -174,6 +175,10 @@ pub enum ParseError {
 }
 
 impl McpConfig {
+    pub fn new(servers: BTreeMap<String, McpServerConfig>) -> Self {
+        Self { servers }
+    }
+
     pub fn from_json_file(path: impl AsRef<Path>) -> Result<Self, ParseError> {
         let content = std::fs::read_to_string(path)?;
         Self::from_json(&content)
@@ -185,25 +190,30 @@ impl McpConfig {
             let raw = Self::from_json_file(path)?;
             merged.extend(raw.servers);
         }
-        Ok(Self { servers: merged })
+        Ok(Self::new(merged))
     }
 
     pub fn from_json(json: &str) -> Result<Self, ParseError> {
         Ok(serde_json::from_str(json)?)
     }
 
-    pub async fn into_servers(self, factories: &HashMap<String, ServerFactory>) -> Result<Vec<McpServer>, ParseError> {
-        self.into_servers_with_proxy(factories, false).await
+    pub async fn into_servers(
+        self,
+        factories: &HashMap<String, ServerFactory>,
+        vars: &Vars,
+    ) -> Result<Vec<McpServer>, ParseError> {
+        self.into_servers_with_proxy(factories, vars, false).await
     }
 
     pub async fn into_servers_with_proxy(
         self,
         factories: &HashMap<String, ServerFactory>,
+        vars: &Vars,
         force_proxy: bool,
     ) -> Result<Vec<McpServer>, ParseError> {
         let mut servers = Vec::with_capacity(self.servers.len());
         for (name, config) in self.servers {
-            servers.push(config.into_server(name, factories, force_proxy).await?);
+            servers.push(config.into_server(name, factories, vars, force_proxy).await?);
         }
         Ok(servers)
     }
@@ -238,10 +248,11 @@ impl McpServerConfig {
         self,
         name: String,
         factories: &HashMap<String, ServerFactory>,
+        vars: &Vars,
         force_proxy: bool,
     ) -> Result<McpServer, ParseError> {
         let proxy = force_proxy || self.proxy();
-        let transport = self.into_transport(name.clone(), factories).await?;
+        let transport = self.into_transport(name.clone(), factories, vars).await?;
         Ok(McpServer::new(name, transport, proxy))
     }
 
@@ -249,21 +260,22 @@ impl McpServerConfig {
         self,
         name: String,
         factories: &HashMap<String, ServerFactory>,
+        vars: &Vars,
     ) -> Result<McpTransport, ParseError> {
         match self {
             McpServerConfig::Stdio(StdioServerConfig { command, args, env, .. }) => Ok(McpTransport::Stdio {
-                command: expand_env_vars(&command)?,
-                args: args.into_iter().map(|a| expand_env_vars(&a)).collect::<Result<Vec<_>, _>>()?,
+                command: vars.expand(&command)?,
+                args: args.into_iter().map(|a| vars.expand(&a)).collect::<Result<Vec<_>, _>>()?,
                 env: env
                     .into_iter()
-                    .map(|(k, v)| Ok((k, expand_env_vars(&v)?)))
+                    .map(|(k, v)| Ok((k, vars.expand(&v)?)))
                     .collect::<Result<HashMap<_, _>, VarError>>()?,
             }),
 
             McpServerConfig::Http(HttpServerConfig { url, headers, .. })
             | McpServerConfig::Sse(SseServerConfig { url, headers, .. }) => {
-                let auth_header = headers.get("Authorization").map(|v| expand_env_vars(v)).transpose()?;
-                let mut config = StreamableHttpClientTransportConfig::with_uri(expand_env_vars(&url)?);
+                let auth_header = headers.get("Authorization").map(|v| vars.expand(v)).transpose()?;
+                let mut config = StreamableHttpClientTransportConfig::with_uri(vars.expand(&url)?);
                 if let Some(auth) = auth_header {
                     config = config.auth_header(auth);
                 }
@@ -272,18 +284,12 @@ impl McpServerConfig {
 
             McpServerConfig::InMemory(InMemoryServerConfig { args, input, .. }) => {
                 let server_factory = factories.get(&name).ok_or_else(|| ParseError::FactoryNotFound(name.clone()))?;
-                let expanded_args =
-                    args.into_iter().map(|a| expand_env_vars(&a)).collect::<Result<Vec<_>, VarError>>()?;
+                let expanded_args = args.into_iter().map(|a| vars.expand(&a)).collect::<Result<Vec<_>, VarError>>()?;
                 let server = server_factory(expanded_args, input).await;
                 Ok(McpTransport::InMemory { server })
             }
         }
     }
-}
-
-#[allow(clippy::trivially_copy_pass_by_ref)]
-fn is_false(value: &bool) -> bool {
-    !*value
 }
 
 #[cfg(test)]
@@ -457,7 +463,7 @@ mod tests {
             }
         }"#;
         let config = McpConfig::from_json(json).unwrap();
-        let servers = config.into_servers(&HashMap::new()).await.unwrap();
+        let servers = config.into_servers(&HashMap::new(), &Vars::new()).await.unwrap();
 
         assert_eq!(servers.len(), 2);
         assert!(!servers.iter().find(|s| s.name == "github").unwrap().proxy);
@@ -468,7 +474,24 @@ mod tests {
     async fn into_servers_with_proxy_forces_proxy_flags() {
         let config =
             McpConfig::from_json(r#"{"servers":{"github":{"type":"stdio","command":"g","proxy":false}}}"#).unwrap();
-        let servers = config.into_servers_with_proxy(&HashMap::new(), true).await.unwrap();
+        let servers = config.into_servers_with_proxy(&HashMap::new(), &Vars::new(), true).await.unwrap();
         assert!(servers[0].proxy);
+    }
+
+    #[tokio::test]
+    async fn into_transport_expands_workspace_var_in_stdio_args() {
+        let config = McpConfig::from_json(
+            r#"{"servers":{"coding":{"type":"stdio","command":"server","args":["--root","${WORKSPACE}/src"]}}}"#,
+        )
+        .unwrap();
+        let vars = Vars::new().with("WORKSPACE", "/workspace");
+        let servers = config.into_servers(&HashMap::new(), &vars).await.unwrap();
+
+        match &servers[0].transport {
+            McpTransport::Stdio { args, .. } => {
+                assert_eq!(args, &["--root", "/workspace/src"]);
+            }
+            other => panic!("expected Stdio transport, got {other:?}"),
+        }
     }
 }

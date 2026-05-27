@@ -4,6 +4,7 @@ use mcp_utils::client::{
     McpClientEvent, McpConfig, McpConnectionDetails, McpError, McpManager, McpServer, OAuthHandlerFactory, ParseError,
     ServerFactory, root_from_path,
 };
+use utils::variables::Vars;
 
 use crate::agent_spec::McpConfigSource;
 
@@ -16,8 +17,8 @@ use tokio::{
     task::JoinHandle,
 };
 
-pub fn mcp() -> McpBuilder {
-    McpBuilder::new()
+pub fn mcp(workspace_root: impl AsRef<Path>) -> McpBuilder {
+    McpBuilder::new(workspace_root)
 }
 
 /// Handle to the spawned MCP manager task. Consumers receive incremental
@@ -53,10 +54,11 @@ pub struct McpBuilder {
     oauth_handler_factory: Option<OAuthHandlerFactory>,
     oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
     aether_home: Option<PathBuf>,
+    vars: Vars,
 }
 
-impl Default for McpBuilder {
-    fn default() -> Self {
+impl McpBuilder {
+    pub fn new(workspace_root: impl AsRef<Path>) -> Self {
         Self {
             servers: Vec::new(),
             factories: HashMap::new(),
@@ -65,13 +67,8 @@ impl Default for McpBuilder {
             oauth_handler_factory: None,
             oauth_credential_store: None,
             aether_home: None,
+            vars: Vars::new().with("WORKSPACE", workspace_root.as_ref().to_string_lossy().into_owned()),
         }
-    }
-}
-
-impl McpBuilder {
-    pub fn new() -> Self {
-        Self::default()
     }
 
     pub fn with_servers(mut self, servers: Vec<McpServer>) -> Self {
@@ -109,7 +106,7 @@ impl McpBuilder {
             return Ok(self);
         }
         let raw = McpConfig::from_json_files(paths)?;
-        self.servers.extend(raw.into_servers(&self.factories).await?);
+        self.servers.extend(raw.into_servers(&self.factories, &self.vars).await?);
         Ok(self)
     }
 
@@ -134,7 +131,7 @@ impl McpBuilder {
             merged.servers.extend(config.servers);
         }
 
-        self.servers.extend(merged.into_servers(&self.factories).await?);
+        self.servers.extend(merged.into_servers(&self.factories, &self.vars).await?);
         Ok(self)
     }
 
@@ -178,25 +175,23 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("mcp.json");
         std::fs::write(&file_path, r#"{"servers":{"coding":{"type":"stdio","command":"from_file"}}}"#).unwrap();
-        let inline = McpConfig {
-            servers: BTreeMap::from([(
-                "coding".to_string(),
-                McpServerConfig::Stdio(StdioServerConfig {
-                    type_: StdioType::Stdio,
-                    command: "from_inline".to_string(),
-                    args: Vec::new(),
-                    env: HashMap::new(),
-                    proxy: false,
-                }),
-            )]),
-        };
+        let inline = McpConfig::new(BTreeMap::from([(
+            "coding".to_string(),
+            McpServerConfig::Stdio(StdioServerConfig {
+                type_: StdioType::Stdio,
+                command: "from_inline".to_string(),
+                args: Vec::new(),
+                env: HashMap::new(),
+                proxy: false,
+            }),
+        )]));
         let sources = vec![
             McpConfigSource::direct(file_path.clone()),
             McpConfigSource::Json(r#"{"servers":{"coding":{"type":"stdio","command":"from_json"}}}"#.to_string()),
             McpConfigSource::Inline(inline),
         ];
 
-        let builder = McpBuilder::new().from_mcp_config_sources(&sources).await.unwrap();
+        let builder = McpBuilder::new("/workspace").from_mcp_config_sources(&sources).await.unwrap();
 
         assert_eq!(command_for(&builder, "coding"), Some("from_inline"));
         assert_eq!(proxy_for(&builder, "coding"), Some(false));
@@ -212,7 +207,7 @@ mod tests {
             McpConfigSource::direct(file_path),
         ];
 
-        let builder = McpBuilder::new().from_mcp_config_sources(&sources).await.unwrap();
+        let builder = McpBuilder::new("/workspace").from_mcp_config_sources(&sources).await.unwrap();
 
         assert_eq!(command_for(&builder, "coding"), Some("from_file"));
     }
@@ -227,7 +222,7 @@ mod tests {
         )
         .unwrap();
 
-        let builder = McpBuilder::new()
+        let builder = McpBuilder::new("/workspace")
             .from_mcp_config_sources(&[McpConfigSource::File { path: file_path, proxy: true }])
             .await
             .unwrap();
@@ -248,7 +243,7 @@ mod tests {
             ),
         ];
 
-        let builder = McpBuilder::new().from_mcp_config_sources(&sources).await.unwrap();
+        let builder = McpBuilder::new("/workspace").from_mcp_config_sources(&sources).await.unwrap();
 
         assert_eq!(command_for(&builder, "coding"), Some("from_json"));
         assert_eq!(proxy_for(&builder, "coding"), Some(false));
@@ -260,7 +255,7 @@ mod tests {
             r#"{"servers":{"slow":{"type":"stdio","command":"sleep","args":["30"]}}}"#.to_string(),
         )];
 
-        let mut spawn = McpBuilder::new()
+        let mut spawn = McpBuilder::new("/workspace")
             .from_mcp_config_sources(&sources)
             .await
             .unwrap()
@@ -276,9 +271,26 @@ mod tests {
         spawn.handle.abort();
     }
 
+    #[tokio::test]
+    async fn from_mcp_config_sources_expands_workspace_var_in_stdio_args() {
+        let json = r#"{"servers":{"notes":{"type":"stdio","command":"server","args":["--dir","${WORKSPACE}/notes"]}}}"#;
+
+        let builder =
+            McpBuilder::new("/work").from_mcp_config_sources(&[McpConfigSource::Json(json.to_string())]).await.unwrap();
+
+        assert_eq!(args_for(&builder, "notes"), Some(vec!["--dir".to_string(), "/work/notes".to_string()]));
+    }
+
     fn command_for<'a>(builder: &'a McpBuilder, name: &str) -> Option<&'a str> {
         builder.servers.iter().find_map(|server| match &server.transport {
             McpTransport::Stdio { command, .. } if server.name == name => Some(command.as_str()),
+            _ => None,
+        })
+    }
+
+    fn args_for(builder: &McpBuilder, name: &str) -> Option<Vec<String>> {
+        builder.servers.iter().find_map(|server| match &server.transport {
+            McpTransport::Stdio { args, .. } if server.name == name => Some(args.clone()),
             _ => None,
         })
     }

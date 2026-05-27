@@ -96,7 +96,7 @@ impl TestAgentBuilder {
         let llm = FakeLlmProvider::from_results(self.responses);
         let captured_contexts = llm.captured_contexts();
 
-        let mut spawn = mcp().with_servers(vec![fake_mcp("test", FakeMcpServer::new())]).spawn().await?;
+        let mut spawn = mcp("/workspace").with_servers(vec![fake_mcp("test", FakeMcpServer::new())]).spawn().await?;
         let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
         let mut builder = agent(llm).tools(spawn.command_tx, snapshot.tool_definitions);

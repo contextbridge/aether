@@ -1,11 +1,12 @@
 use crate::error::SettingsError;
-use crate::{AetherSettings, AgentConfig, McpSourceSpec};
+use crate::{AetherSettings, AgentConfig, McpFileSpec, McpSourceSpec};
 use aether_core::agent_spec::{AgentSpec, AgentSpecExposure, McpConfigSource};
 use aether_core::core::Prompt;
 use llm::{LlmModel, ProviderConnectionOverrides};
 use mcp_utils::client::McpConfig;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use utils::variables::VarError;
 
 /// A resolved catalog of agents from a project.
 ///
@@ -142,12 +143,15 @@ fn resolve_agent_entry(
         return Err(SettingsError::NoInvocationSurface { agent: name.clone() });
     }
     let prompt_sources = if entry.prompts.is_empty() { &defaults.prompts } else { &entry.prompts };
-    if prompt_sources.is_empty() {
-        return Err(SettingsError::NoPrompts { agent: name.clone() });
-    }
-
     let prompts = Prompt::from_sources(project_root, prompt_sources)
         .map_err(|source| SettingsError::AgentPromptSource { agent: name.clone(), source })?;
+    if prompts.is_empty() {
+        return Err(if prompt_sources.is_empty() {
+            SettingsError::NoPromptsDeclared { agent: name.clone() }
+        } else {
+            SettingsError::AllOptionalPromptsMissing { agent: name.clone() }
+        });
+    }
     let mcp_sources = if entry.mcps.is_empty() { &defaults.mcps } else { &entry.mcps };
     let mcp_config_sources = resolve_mcp_config_sources(project_root, mcp_sources)?;
     let mut provider_connections = defaults.providers.clone();
@@ -168,21 +172,35 @@ fn resolve_agent_entry(
 }
 
 fn resolve_mcp_config_sources(
-    project_root: &Path,
+    workspace_root: &Path,
     entries: &[McpSourceSpec],
 ) -> Result<Vec<McpConfigSource>, SettingsError> {
     entries
         .iter()
-        .map(|entry| match entry {
-            McpSourceSpec::File { path, proxy } => {
-                let full_path = project_root.join(path);
-                if full_path.is_file() {
-                    Ok(McpConfigSource::file(full_path, *proxy))
-                } else {
-                    Err(SettingsError::InvalidMcpConfigPath { path: path.clone() })
+        .filter_map(|entry| match entry {
+            McpSourceSpec::File(McpFileSpec { path, proxy, optional }) => match path.resolve(workspace_root) {
+                Ok(full_path) => {
+                    if full_path.is_file() {
+                        Some(Ok(McpConfigSource::file(full_path, *proxy)))
+                    } else if *optional {
+                        None
+                    } else {
+                        Some(Err(SettingsError::InvalidMcpConfigPath { path: path.as_authored().to_string() }))
+                    }
                 }
-            }
-            McpSourceSpec::Inline { servers } => Ok(McpConfigSource::Inline(McpConfig { servers: servers.clone() })),
+                Err(VarError::NotFound(variable)) if *optional => {
+                    tracing::warn!(
+                        "Skipping optional MCP config '{}': variable '{variable}' is not defined",
+                        path.as_authored()
+                    );
+                    None
+                }
+                Err(VarError::NotFound(variable)) => Some(Err(SettingsError::UnresolvedMcpConfigVariable {
+                    path: path.as_authored().to_string(),
+                    variable,
+                })),
+            },
+            McpSourceSpec::Inline { servers } => Some(Ok(McpConfigSource::Inline(McpConfig::new(servers.clone())))),
         })
         .collect()
 }
@@ -263,8 +281,8 @@ mod tests {
 
     fn has_prompt_file(spec: &AgentSpec, expected: &str) -> bool {
         spec.prompts.iter().any(|prompt| match prompt {
-            Prompt::File { path, .. } => path == expected,
-            Prompt::Text(_) | Prompt::PromptGlobs { .. } | Prompt::McpInstructions(_) => false,
+            Prompt::File { path, .. } => path.ends_with(expected),
+            Prompt::Text(_) | Prompt::McpInstructions(_) => false,
         })
     }
 
@@ -501,7 +519,7 @@ mod tests {
 
         let err = AgentCatalog::from_settings(Path::new("/tmp"), config).unwrap_err();
 
-        assert!(matches!(err, SettingsError::NoPrompts { agent } if agent == "planner"));
+        assert!(matches!(err, SettingsError::NoPromptsDeclared { agent } if agent == "planner"));
     }
 
     #[test]

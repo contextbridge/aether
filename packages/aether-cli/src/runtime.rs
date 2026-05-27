@@ -140,7 +140,7 @@ impl RuntimeBuilder {
     }
 
     async fn spawn_mcp(self) -> Result<(AgentSpec, McpSpawnResult), CliError> {
-        let mut builder = mcp().with_builtin_servers(self.cwd.clone(), &self.cwd);
+        let mut builder = mcp(&self.cwd).with_builtin_servers(self.cwd.clone(), &self.cwd);
 
         if !self.extra_mcp_servers.is_empty() {
             builder = builder.with_servers(self.extra_mcp_servers);

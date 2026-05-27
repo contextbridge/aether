@@ -13,6 +13,6 @@ pub use aether_settings::{AetherSettings, AetherSettingsSource, SettingsFileSour
 pub use agent_catalog::AgentCatalog;
 pub use agent_config::AgentConfig;
 pub use error::SettingsError;
-pub use mcp_config_source_config::McpSourceSpec;
+pub use mcp_config_source_config::{McpFileSpec, McpSourceSpec};
 pub use prompt_catalog::PromptCatalog;
 pub use prompt_file::{PromptFile, PromptFileError, PromptTriggers, SKILL_FILENAME};

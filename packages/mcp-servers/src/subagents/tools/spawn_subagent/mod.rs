@@ -322,7 +322,7 @@ async fn spawn_mcps(
     roots: Vec<PathBuf>,
     project_root: &Path,
 ) -> Result<McpSpawnResult, String> {
-    let mut builder = mcp().with_builtin_servers(project_root.to_path_buf(), project_root);
+    let mut builder = mcp(project_root).with_builtin_servers(project_root.to_path_buf(), project_root);
     builder = builder.with_roots(roots);
 
     if !effective_mcp_config_sources.is_empty() {
