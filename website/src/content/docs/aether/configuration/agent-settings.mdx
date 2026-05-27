@@ -1,29 +1,27 @@
 ---
 title: Agents
-description: Configure agents in .aether/settings.json.
+description: Configure user and workspace agents in Aether settings.
 ---
 
 import { FileTree } from "@astrojs/starlight/components";
 
-Agents are defined in `.aether/settings.json`. Each agent chooses a model, prompt sources, MCP config sources, tool filters, and whether it is visible to users, other agents, or both.
+Agents are defined in user settings (`$HOME/.aether/settings.json`) and project settings (`.aether/settings.json`). Each agent chooses a model, prompt sources, MCP config sources, tool filters, and whether it is visible to users, other agents, or both.
 
-## File location
+## File locations
+
+Aether loads settings from two scopes:
 
 <FileTree>
 
-- .aether/
-  - **settings.json** — Agent catalog
-  - mcp.json — MCP server config referenced from `mcps`
-  - BUILD.md — Example agent prompt scaffold (filename follows the agent name)
-  - agents/
-    - researcher/
-      - RESEARCHER.md — Prompt created when adding another agent
-      - mcp.json — Optional per-agent MCP config
-- AGENTS.md — Optional project instructions when selected or authored by you
+- $HOME/.aether/
+  - **settings.json** — User-level defaults shared across workspaces
+- my-project/
+  - .aether/
+    - **settings.json** — Project/workspace settings
 
 </FileTree>
 
-The onboarding wizard creates `.aether/<AGENT>.md` for the first scaffolded agent. The prompt filename follows the agent name; there is no special shared default prompt filename.
+User settings are optional and default to `$HOME/.aether/settings.json`. Set `AETHER_HOME` to use a different Aether home directory. Prompt and MCP files can live anywhere you reference from settings. The onboarding wizard creates `.aether/<AGENT>.md` for the first scaffolded project agent.
 
 ## Minimal user-invocable agent
 
@@ -57,6 +55,8 @@ The onboarding wizard creates `.aether/<AGENT>.md` for the first scaffolded agen
 | `mcps`      | `McpSourceSpec[]` | Top-level MCP sources inherited by agents whose own `mcps` array is empty       |
 | `agents`    | `AgentConfig[]`   | Authored agent definitions                                                      |
 | `providers` | `object`          | Optional provider-specific connection/request overrides keyed by provider       |
+
+The same schema is valid in both `$HOME/.aether/settings.json` and `.aether/settings.json`. Put reusable agents, provider defaults, prompts, and MCP references in user settings; put workspace-specific overrides in project settings.
 
 Regenerate the reference schema from source with:
 
@@ -125,7 +125,7 @@ Only `agentInvocable: true` agents can be spawned by the [subagents server](/aet
       "description": "Read-only codebase explorer",
       "model": "openai:gpt-5.5",
       "agentInvocable": true,
-      "prompts": [".aether/agents/explorer/EXPLORER.md", "AGENTS.md"],
+      "prompts": [".aether/EXPLORER.md", "AGENTS.md"],
       "mcps": [".aether/mcp.json"],
       "tools": {
         "allow": [
@@ -151,7 +151,8 @@ Only `agentInvocable: true` agents can be spawned by the [subagents server](/aet
   "prompts": [
     "AGENTS.md",
     { "type": "file", "path": ".aether/BUILD.md" },
-    { "type": "glob", "pattern": ".aether/rules/*.md" },
+    { "type": "file", "path": "${WORKSPACE}/AGENTS.md", "optional": true },
+    { "type": "glob", "pattern": ".aether/rules/*.md", "optional": true },
     {
       "type": "text",
       "text": "Always explain risky changes before editing files."
@@ -168,7 +169,15 @@ Only `agentInvocable: true` agents can be spawned by the [subagents server](/aet
 }
 ```
 
-Prompt file paths and glob patterns are resolved from the project root for project settings. Prompt files may contain shell interpolation markers such as `` !`git branch --show-current` ``; Aether runs the command from the prompt cwd with `$SHELL -c`, substitutes trimmed stdout, and substitutes an empty string if the command fails.
+Prompt file paths and glob patterns use resource path resolution:
+
+- In project settings, plain relative paths resolve from the workspace root.
+- In user settings, plain relative paths are promoted to paths under the Aether home (`$HOME/.aether` by default).
+- `${WORKSPACE}` always resolves to the current workspace root, even inside user settings.
+- Other `$VAR` and `${VAR}` references fall through to the process environment.
+- `optional: true` skips a missing file, zero-match glob, or unresolved variable instead of failing that source.
+
+Prompt files may contain shell interpolation markers such as `` !`git branch --show-current` ``; Aether runs the command from the prompt cwd with `$SHELL -c`, substitutes trimmed stdout, and substitutes an empty string if the command fails.
 
 ## MCP source formats
 
@@ -178,6 +187,7 @@ Prompt file paths and glob patterns are resolved from the project root for proje
 {
   "mcps": [
     ".aether/mcp.json",
+    { "type": "file", "path": "${WORKSPACE}/.aether/local-mcp.json", "optional": true },
     { "type": "file", "path": ".aether/external-mcp.json", "proxy": true },
     {
       "type": "inline",
@@ -201,7 +211,7 @@ Prompt file paths and glob patterns are resolved from the project root for proje
 }
 ```
 
-A file source with `"proxy": true` marks every server loaded from that file as proxied. Later MCP sources can still override a server by name and replace its `proxy` flag.
+A file source with `"proxy": true` marks every server loaded from that file as proxied. A file source with `"optional": true` is skipped when the path does not exist or a referenced variable is undefined. Later MCP sources can still override a server by name and replace its `proxy` flag.
 
 ## Tool filters
 
@@ -230,16 +240,39 @@ Valid patterns include `coding__*`, `coding__bash`, and `coding__web_*`. Wildcar
 
 `allow` is applied first. If `allow` is empty or omitted, all discovered tools are initially allowed. `deny` then removes matching tools from that set.
 
-## Global and project settings
+## User and project settings
 
 Aether loads default settings in this order:
 
-1. Global `$AETHER_HOME/settings.json` (or the default Aether home when `AETHER_HOME` is unset)
+1. User `$HOME/.aether/settings.json` (or `$AETHER_HOME/settings.json` when `AETHER_HOME` is set)
 2. Project `.aether/settings.json`
 
-Later sources win for `agent`. Non-empty top-level `prompts` and `mcps` replace earlier top-level lists. `agents` merge by trimmed `name`; if a later source defines the same name, the later agent definition replaces the earlier one.
+Later sources win for `agent`. Non-empty top-level `prompts` and `mcps` replace earlier top-level lists. `providers` merge, with later values overriding matching earlier values. `agents` merge by trimmed `name`; if a later source defines the same name, the later agent definition replaces the earlier one.
 
-When a settings file is loaded from the global Aether home, relative prompt and MCP paths inside that file are normalized relative to the global home before merging. Project settings paths stay project-relative.
+Use user settings for reusable agents and defaults:
+
+```json title="$HOME/.aether/settings.json"
+{
+  "agent": "Planner",
+  "agents": [
+    {
+      "name": "Planner",
+      "description": "Plans work across any workspace",
+      "model": "anthropic:claude-sonnet-4-5-20250929",
+      "userInvocable": true,
+      "prompts": [
+        "PLANNER.md",
+        { "type": "file", "path": "${WORKSPACE}/AGENTS.md", "optional": true }
+      ],
+      "mcps": [
+        { "type": "file", "path": "${WORKSPACE}/.aether/mcp.json", "optional": true }
+      ]
+    }
+  ]
+}
+```
+
+In user settings, `PLANNER.md` resolves from the Aether home, while `${WORKSPACE}/AGENTS.md` and `${WORKSPACE}/.aether/mcp.json` resolve from the project you opened. In project settings, plain relative prompt and MCP paths resolve from the workspace root. This lets a user-level agent combine reusable personal instructions with project-local prompts and tools.
 
 ## Validation rules
 
@@ -248,6 +281,7 @@ When a settings file is loaded from the global Aether home, relative prompt and 
 - Unknown JSON fields are rejected.
 - `"__default__"` is reserved for an internal ad-hoc agent.
 - The selected top-level `agent` must refer to a `userInvocable: true` agent.
-- Prompt file paths and glob patterns must match at least one file.
-- Referenced MCP config paths must point to existing files.
+- Prompt file paths and glob patterns must match at least one file unless `optional: true` is set.
+- Referenced MCP config paths must point to existing files unless `optional: true` is set.
+- `$VAR` and `${VAR}` references in prompt and MCP resource paths must resolve unless the source is optional.
   :::
