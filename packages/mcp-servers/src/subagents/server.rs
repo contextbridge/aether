@@ -1,3 +1,4 @@
+use aether_auth::{OAuthCredentialStorage, OsKeyringStore};
 use aether_core::events::AgentMessage;
 use aether_core::events::SubAgentProgressPayload;
 use aether_project::{AetherSettings, AgentCatalog};
@@ -43,6 +44,7 @@ pub struct SubAgentsMcp {
     catalog: AgentCatalog,
     tool_router: ToolRouter<Self>,
     roots: Arc<RwLock<Vec<PathBuf>>>,
+    oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
 }
 
 impl SubAgentsMcp {
@@ -58,7 +60,17 @@ impl SubAgentsMcp {
     }
 
     pub fn new(catalog: AgentCatalog, project_root: PathBuf) -> Self {
-        Self { catalog, tool_router: Self::tool_router(), roots: Arc::new(RwLock::new(vec![project_root])) }
+        Self {
+            catalog,
+            tool_router: Self::tool_router(),
+            roots: Arc::new(RwLock::new(vec![project_root])),
+            oauth_credential_store: Arc::new(OsKeyringStore::with_platform_store()),
+        }
+    }
+
+    pub fn with_oauth_credential_store(mut self, store: Arc<dyn OAuthCredentialStorage>) -> Self {
+        self.oauth_credential_store = store;
+        self
     }
 
     pub fn from_args(args: Vec<String>) -> Result<Self, String> {
@@ -159,7 +171,9 @@ impl SubAgentsMcp {
         };
 
         let roots = self.roots.read().await.clone();
-        let executor = AgentExecutor::new(self.catalog.clone(), roots).with_progress_callback(progress_callback);
+        let executor = AgentExecutor::new(self.catalog.clone(), roots)
+            .with_oauth_credential_store(Arc::clone(&self.oauth_credential_store))
+            .with_progress_callback(progress_callback);
 
         let output = executor.execute_tasks(args.tasks).await;
         Ok(Json(output))
