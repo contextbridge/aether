@@ -7,7 +7,6 @@ use aether_core::events::{AgentMessage, UserMessage};
 use aether_core::mcp::run_mcp_task::McpCommand;
 use llm::{ChatMessage, ProviderConnectionOverrides};
 use mcp_utils::client::{ElicitingOAuthHandler, McpClientEvent, McpError, McpServer, OAuthHandlerFactory};
-use mcp_utils::status::McpServerStatusEntry;
 
 use agent_client_protocol::schema as acp;
 use std::collections::HashSet;
@@ -39,7 +38,6 @@ pub struct Session {
     pub _mcp_handle: JoinHandle<()>,
     pub mcp_tx: mpsc::Sender<McpCommand>,
     pub event_rx: mpsc::Receiver<McpClientEvent>,
-    pub initial_server_statuses: Vec<McpServerStatusEntry>,
     pub provider_connections: ProviderConnectionOverrides,
 }
 
@@ -77,7 +75,6 @@ impl Session {
             _mcp_handle: agent.mcp_handle,
             mcp_tx: agent.mcp_tx,
             event_rx: agent.event_rx,
-            initial_server_statuses: agent.server_statuses,
             provider_connections,
         })
     }

@@ -104,7 +104,6 @@ impl AcpTestHarness {
             _mcp_handle: tokio::spawn(async {}),
             mcp_tx,
             event_rx,
-            initial_server_statuses: vec![],
             provider_connections: ProviderConnectionOverrides::default(),
         };
         let relay =

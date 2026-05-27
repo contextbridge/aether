@@ -1,5 +1,5 @@
 use mcp_utils::client::{
-    McpClient, McpConnectAttempt, McpConnectionAttemptManager, McpError, McpManager, McpServerStatusEntry,
+    McpClient, McpConnectAttempt, McpConnectionAttemptManager, McpError, McpManager, McpServer, McpServerStatusEntry,
 };
 use mcp_utils::display_meta::ToolResultMeta;
 
@@ -12,6 +12,7 @@ use rmcp::model::{
     Prompt,
 };
 use rmcp::service::RunningService;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::select;
@@ -52,8 +53,22 @@ pub enum McpCommand {
     },
 }
 
-pub async fn run_mcp_task(mut mcp: McpManager, mut command_rx: mpsc::Receiver<McpCommand>) {
+pub async fn run_mcp_task(
+    mut mcp: McpManager,
+    mut command_rx: mpsc::Receiver<McpCommand>,
+    pending_servers: Vec<McpServer>,
+) {
     let mut mcp_connection_attempts = McpConnectionAttemptManager::default();
+    let mut pending_connections: HashSet<String> = pending_servers.iter().map(|server| server.name.clone()).collect();
+    for server in pending_servers {
+        let name = server.name.clone();
+        let task = mcp.connect_pending_task(server);
+        mcp_connection_attempts.spawn(name, task);
+    }
+    if pending_connections.is_empty() {
+        mcp.emit_connection_ready().await;
+    }
+
     loop {
         select! {
             command = command_rx.recv() => {
@@ -63,7 +78,13 @@ pub async fn run_mcp_task(mut mcp: McpManager, mut command_rx: mpsc::Receiver<Mc
 
             Some(joined) = mcp_connection_attempts.join_next(), if !mcp_connection_attempts.is_empty() => {
                 match joined {
-                    Ok(attempt) => mcp.apply_connection_attempt(attempt).await,
+                    Ok(attempt) => {
+                        let was_bootstrap = pending_connections.remove(&attempt.name);
+                        mcp.apply_connection_attempt(attempt).await;
+                        if was_bootstrap && pending_connections.is_empty() {
+                            mcp.emit_connection_ready().await;
+                        }
+                    }
                     Err(e) => tracing::error!("MCP auth task did not complete normally: {e:?}"),
                 }
             }

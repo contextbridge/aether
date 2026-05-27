@@ -241,10 +241,14 @@ async fn execute_single_agent(
             return Err(format!("Agent '{}' is not agent-invocable", task.agent_name));
         }
 
-        let McpSpawnResult { tool_definitions, instructions, server_statuses: _, command_tx, event_rx: _, handle: _ } =
-            spawn_mcps(&spec.mcp_config_sources, roots, catalog.project_root()).await?;
-        let filtered_tools = spec.tools.apply(tool_definitions);
-        spec.prompts.push(Prompt::mcp_instructions(instructions));
+        let mut spawn_result = spawn_mcps(&spec.mcp_config_sources, roots, catalog.project_root()).await?;
+        let snapshot = spawn_result
+            .block_until_ready()
+            .await
+            .ok_or_else(|| "MCP bootstrap aborted before completion".to_string())?;
+        let filtered_tools = spec.tools.apply(snapshot.tool_definitions);
+        spec.prompts.push(Prompt::McpInstructions(snapshot.instructions));
+        let command_tx = spawn_result.command_tx;
 
         let (user_tx, mut agent_rx, _agent_handle) = spawn_agent(spec, command_tx, filtered_tools).await?;
 

@@ -1,5 +1,5 @@
+use aether_core::mcp::mcp;
 use aether_core::mcp::run_mcp_task::{McpCommand, ToolExecutionEvent};
-use aether_core::mcp::{McpSpawnResult, mcp};
 use mcp_utils::client::{McpServer, McpTransport};
 use rmcp::{
     RoleServer, ServerHandler,
@@ -170,7 +170,10 @@ async fn spawn_scripted(
     let server = UrlElicitationRequiredServer::new(elicitation_id, url);
     let config = fake_url_elicit_mcp("browser_server", server);
 
-    let McpSpawnResult { command_tx, mut event_rx, .. } = mcp().with_servers(vec![config]).spawn().await.unwrap();
+    let mut spawn = mcp().with_servers(vec![config]).spawn().await.unwrap();
+    let _snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
+    let command_tx = spawn.command_tx;
+    let mut event_rx = spawn.event_rx;
 
     let script_handle = tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
@@ -195,7 +198,9 @@ async fn malformed_url_elicitation_required_data_returns_protocol_error() {
     let server = MalformedUrlElicitationRequiredServer::new(json!({ "elicitations": "not-an-array" }));
     let config = McpServer::new("browser_server", McpTransport::InMemory { server: server.into_dyn() }, false);
 
-    let McpSpawnResult { command_tx, .. } = mcp().with_servers(vec![config]).spawn().await.unwrap();
+    let mut spawn = mcp().with_servers(vec![config]).spawn().await.unwrap();
+    let _snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
+    let command_tx = spawn.command_tx;
 
     let (event_tx, mut event_rx) = mpsc::channel(10);
     command_tx

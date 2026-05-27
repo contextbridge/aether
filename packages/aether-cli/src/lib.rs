@@ -5,7 +5,6 @@ pub mod agent;
 pub mod error;
 pub mod headless;
 pub mod mcp_config_args;
-pub mod prompt;
 pub mod provider_connection_args;
 pub mod resolve;
 pub mod runtime;

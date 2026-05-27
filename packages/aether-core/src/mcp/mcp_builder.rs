@@ -1,9 +1,8 @@
 use aether_auth::OAuthCredentialStorage;
-use llm::ToolDefinition;
 
 use mcp_utils::client::{
-    McpClientEvent, McpConfig, McpError, McpManager, McpServer, McpServerStatusEntry, OAuthHandlerFactory, ParseError,
-    ServerFactory, ServerInstructions, root_from_path,
+    McpClientEvent, McpConfig, McpConnectionDetails, McpError, McpManager, McpServer, OAuthHandlerFactory, ParseError,
+    ServerFactory, root_from_path,
 };
 
 use crate::agent_spec::McpConfigSource;
@@ -21,13 +20,29 @@ pub fn mcp() -> McpBuilder {
     McpBuilder::new()
 }
 
+/// Handle to the spawned MCP manager task. Consumers receive incremental
+/// updates over `event_rx` (starting with an initial `ServerStatusesChanged`
+/// reflecting every configured server in `Connecting`) and can call
+/// `block_until_ready()` to block until every server has finished its initial
+/// connection attempt.
 pub struct McpSpawnResult {
-    pub tool_definitions: Vec<ToolDefinition>,
-    pub instructions: Vec<ServerInstructions>,
-    pub server_statuses: Vec<McpServerStatusEntry>,
     pub command_tx: Sender<McpCommand>,
     pub event_rx: Receiver<McpClientEvent>,
     pub handle: JoinHandle<()>,
+}
+
+impl McpSpawnResult {
+    /// Block until the manager finishes bootstrapping every initially-configured
+    /// server, then return the consolidated snapshot. Returns `None` if the
+    /// event channel closes before `ConnectionReady` is received.
+    pub async fn block_until_ready(&mut self) -> Option<McpConnectionDetails> {
+        while let Some(event) = self.event_rx.recv().await {
+            if let McpClientEvent::ConnectionReady(snapshot) = event {
+                return Some(snapshot);
+            }
+        }
+        None
+    }
 }
 
 pub struct McpBuilder {
@@ -134,33 +149,28 @@ impl McpBuilder {
         if let Some(aether_home) = self.aether_home {
             mcp_manager = mcp_manager.with_aether_home(aether_home);
         }
-        mcp_manager.add_mcps(self.servers).await?;
 
         if !self.roots.is_empty() {
             let roots = self.roots.into_iter().map(|path| root_from_path(&path, None)).collect();
             mcp_manager.set_roots(roots).await?;
         }
 
-        let tool_definitions = mcp_manager.tool_definitions();
-        let instructions = mcp_manager.server_instructions();
-        let server_statuses = mcp_manager.server_statuses().to_vec();
-        let mcp_handle = tokio::spawn(run_mcp_task(mcp_manager, mcp_command_rx));
+        mcp_manager.bootstrap_proxy_setup(&self.servers).await?;
+        let pending = mcp_manager.register_pending(self.servers).await?;
 
-        Ok(McpSpawnResult {
-            tool_definitions,
-            instructions,
-            server_statuses,
-            command_tx: mcp_command_tx,
-            event_rx,
-            handle: mcp_handle,
-        })
+        let mcp_handle = tokio::spawn(run_mcp_task(mcp_manager, mcp_command_rx, pending));
+
+        Ok(McpSpawnResult { command_tx: mcp_command_tx, event_rx, handle: mcp_handle })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mcp_utils::client::{McpServerConfig, McpTransport, StdioServerConfig, StdioType};
+    use mcp_utils::{
+        client::{McpServerConfig, McpTransport, StdioServerConfig, StdioType},
+        status::McpServerStatus,
+    };
     use std::collections::{BTreeMap, HashMap};
 
     #[tokio::test]
@@ -242,6 +252,28 @@ mod tests {
 
         assert_eq!(command_for(&builder, "coding"), Some("from_json"));
         assert_eq!(proxy_for(&builder, "coding"), Some(false));
+    }
+
+    #[tokio::test]
+    async fn spawn_returns_immediately_and_emits_initial_connecting_status() {
+        let sources = vec![McpConfigSource::Json(
+            r#"{"servers":{"slow":{"type":"stdio","command":"sleep","args":["30"]}}}"#.to_string(),
+        )];
+
+        let mut spawn = McpBuilder::new()
+            .from_mcp_config_sources(&sources)
+            .await
+            .unwrap()
+            .spawn()
+            .await
+            .expect("spawn should succeed");
+
+        let event = spawn.event_rx.try_recv().expect("spawn() should buffer an initial ServerStatusesChanged");
+        let McpClientEvent::ServerStatusesChanged(statuses) = event else {
+            panic!("expected ServerStatusesChanged, got {event:?}");
+        };
+        assert!(matches!(statuses[0].status, McpServerStatus::Connecting));
+        spawn.handle.abort();
     }
 
     fn command_for<'a>(builder: &'a McpBuilder, name: &str) -> Option<&'a str> {
