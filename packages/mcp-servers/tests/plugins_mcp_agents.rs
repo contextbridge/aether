@@ -39,7 +39,7 @@ async fn test_spawn_agent_with_coding_mcp_from_settings_catalog() {
 #[tokio::test]
 async fn test_spawn_subagent_codex_uses_oauth_store() {
     let temp_dir = create_project_with_codex_agent();
-    let (_, client) = connect(
+    let (_server_handle, client) = connect(
         create_test_server(temp_dir.path()).with_oauth_credential_store(Arc::new(FakeOAuthCredentialStore::new())),
         ClientInfo::new(ClientCapabilities::default(), Implementation::new("test-client", "0.1.0")),
     )
