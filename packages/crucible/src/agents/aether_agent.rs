@@ -1,7 +1,7 @@
 use aether_core::agent_spec::McpConfigSource;
 use aether_core::core::{Prompt, agent};
 use aether_core::events::{AgentMessage, UserMessage};
-use aether_core::mcp::{McpBuilder, McpSpawnResult, mcp};
+use aether_core::mcp::{McpBuilder, mcp};
 use llm::{StreamingModelProvider, ToolCallRequest};
 use mcp_utils::client::ServerFactory;
 use std::collections::HashMap;
@@ -227,18 +227,19 @@ async fn stream_agent_messages(mut rx: Receiver<AgentMessage>, tx: Sender<AgentE
 impl<T: StreamingModelProvider + Clone + 'static> Agent for AetherAgent<T> {
     async fn run(&self, config: AgentConfig<'_>, tx: Sender<AgentEvalMessage>) -> Result<(), RunError> {
         let mcp_builder = self.create_mcp_builder().await?;
-        let McpSpawnResult {
-            tool_definitions,
-            instructions,
-            command_tx,
-            event_rx: _,
-            handle: _mcp_handle,
-            server_statuses: _,
-        } = mcp_builder.spawn().await.map_err(|e| RunError::ExecutionFailed(format!("Failed to spawn MCP: {e}")))?;
+        let mut spawn =
+            mcp_builder.spawn().await.map_err(|e| RunError::ExecutionFailed(format!("Failed to spawn MCP: {e}")))?;
+        let connection_details = spawn
+            .block_until_ready()
+            .await
+            .ok_or_else(|| RunError::ExecutionFailed("MCP bootstrap aborted before completion".to_string()))?;
+
+        let _mcp_handle = spawn.handle;
 
         let llm = self.llm.clone();
-        let mut agent_builder =
-            agent(llm).system_prompt(Prompt::mcp_instructions(instructions)).tools(command_tx, tool_definitions);
+        let mut agent_builder = agent(llm)
+            .system_prompt(Prompt::McpInstructions(connection_details.instructions))
+            .tools(spawn.command_tx, connection_details.tool_definitions);
 
         for prompt in &self.system_prompts {
             agent_builder = agent_builder.system_prompt(prompt.clone());

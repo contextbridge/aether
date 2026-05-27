@@ -27,12 +27,6 @@ use tokio::{
 };
 
 #[derive(Debug, Clone)]
-pub struct ServerInstructions {
-    pub server_name: String,
-    pub instructions: String,
-}
-
-#[derive(Debug, Clone)]
 pub struct Tool {
     pub description: String,
     pub parameters: Value,
@@ -56,12 +50,12 @@ impl From<&RmcpTool> for Tool {
     }
 }
 
-pub(super) struct ConnectContext<'a> {
-    pub client_info: &'a ClientInfo,
-    pub event_sender: &'a mpsc::Sender<McpClientEvent>,
-    pub roots: &'a Arc<RwLock<Vec<Root>>>,
-    pub oauth_handler_factory: Option<&'a OAuthHandlerFactory>,
-    pub oauth_credential_store: Option<&'a Arc<dyn OAuthCredentialStorage>>,
+pub(super) struct ConnectConfig {
+    pub client_info: ClientInfo,
+    pub event_sender: mpsc::Sender<McpClientEvent>,
+    pub roots: Arc<RwLock<Vec<Root>>>,
+    pub oauth_handler_factory: Option<OAuthHandlerFactory>,
+    pub oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
 }
 
 /// The result of attempting to connect (or authenticate) to an MCP server.
@@ -118,43 +112,49 @@ impl McpServerConnection {
     }
 }
 
-pub(super) async fn connect_server(server: McpServer, ctx: &ConnectContext<'_>) -> McpConnectAttempt {
+pub(super) async fn connect_server(server: McpServer, ctx: &ConnectConfig) -> McpConnectAttempt {
     let McpServer { name, transport, proxy: proxied } = server;
-    let reauth_config = reauth_config_for(&transport, ctx.oauth_handler_factory);
+    let reauth_config = reauth_config_for(&transport, ctx.oauth_handler_factory.as_ref());
     let mcp_client =
-        McpClient::new(ctx.client_info.clone(), name.clone(), ctx.event_sender.clone(), Arc::clone(ctx.roots));
+        McpClient::new(ctx.client_info.clone(), name.clone(), ctx.event_sender.clone(), Arc::clone(&ctx.roots));
 
     let outcome = match transport {
         McpTransport::Stdio { command, args, env } => connect_stdio(&name, command, args, env, mcp_client).await,
         McpTransport::InMemory { server } => connect_in_memory(&name, server, mcp_client).await,
         McpTransport::Http { config } => {
-            connect_http(&name, config, mcp_client, ctx.oauth_handler_factory, ctx.oauth_credential_store).await
+            connect_http(
+                &name,
+                config,
+                mcp_client,
+                ctx.oauth_handler_factory.as_ref(),
+                ctx.oauth_credential_store.as_ref(),
+            )
+            .await
         }
     };
 
     McpConnectAttempt { name, proxied, outcome: outcome.with_reauth(reauth_config) }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub async fn authenticate_http(
     name: String,
     config: StreamableHttpClientTransportConfig,
-    client_info: ClientInfo,
-    event_sender: mpsc::Sender<McpClientEvent>,
-    roots: Arc<RwLock<Vec<Root>>>,
-    oauth_handler_factory: OAuthHandlerFactory,
-    oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
+    ctx: Arc<ConnectConfig>,
     proxied: bool,
 ) -> McpConnectAttempt {
     let outcome = match async {
-        let handler =
-            oauth_handler_factory(OAuthHandlerContext { server_name: name.clone(), tx: event_sender.clone() })?;
+        let factory = ctx
+            .oauth_handler_factory
+            .as_ref()
+            .ok_or_else(|| McpError::ConnectionFailed(format!("No OAuth handler factory available for '{name}'")))?;
+        let handler = factory(OAuthHandlerContext { server_name: name.clone(), tx: ctx.event_sender.clone() })?;
 
-        let auth_client = perform_oauth_flow(&name, &config.uri, handler.as_ref(), oauth_credential_store)
+        let auth_client = perform_oauth_flow(&name, &config.uri, handler.as_ref(), ctx.oauth_credential_store.clone())
             .await
             .map_err(|e| McpError::ConnectionFailed(format!("OAuth failed for '{name}': {e}")))?;
 
-        let mcp_client = McpClient::new(client_info, name.clone(), event_sender, roots);
+        let mcp_client =
+            McpClient::new(ctx.client_info.clone(), name.clone(), ctx.event_sender.clone(), Arc::clone(&ctx.roots));
         McpServerConnection::reconnect_with_auth(&name, config.clone(), auth_client, mcp_client).await
     }
     .await

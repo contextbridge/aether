@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -6,13 +7,16 @@ use futures::future::join_all;
 
 use crate::core::{RetryConfig, agent};
 use crate::events::{AgentMessage, UserMessage};
-use crate::mcp::McpSpawnResult;
 use crate::mcp::mcp;
 use crate::testing::FakeMcpServer;
 use crate::testing::fake_mcp::fake_mcp;
 use llm::{Context, LlmError, LlmResponse};
 
 use llm::testing::FakeLlmProvider;
+
+pub fn mcp_instructions(entries: &[(&str, &str)]) -> BTreeMap<String, String> {
+    entries.iter().map(|(k, v)| ((*k).to_string(), (*v).to_string())).collect()
+}
 
 pub fn test_agent() -> TestAgentBuilder {
     TestAgentBuilder::new()
@@ -92,16 +96,10 @@ impl TestAgentBuilder {
         let llm = FakeLlmProvider::from_results(self.responses);
         let captured_contexts = llm.captured_contexts();
 
-        let McpSpawnResult {
-            tool_definitions,
-            instructions: _,
-            server_statuses: _,
-            command_tx: mcp_tx,
-            event_rx: _,
-            handle: _mcp_handle,
-        } = mcp().with_servers(vec![fake_mcp("test", FakeMcpServer::new())]).spawn().await?;
+        let mut spawn = mcp().with_servers(vec![fake_mcp("test", FakeMcpServer::new())]).spawn().await?;
+        let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
-        let mut builder = agent(llm).tools(mcp_tx, tool_definitions);
+        let mut builder = agent(llm).tools(spawn.command_tx, snapshot.tool_definitions);
         if let Some(timeout) = self.timeout {
             builder = builder.tool_timeout(timeout);
         }

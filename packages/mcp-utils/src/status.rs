@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum McpServerStatus {
+    Connecting,
     Connected { tool_count: usize },
     Authenticating,
     Failed { error: String },

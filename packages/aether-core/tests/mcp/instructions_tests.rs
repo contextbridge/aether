@@ -1,62 +1,38 @@
 use aether_core::core::Prompt;
 use aether_core::events::{AgentMessage, UserMessage};
-use aether_core::mcp::{McpSpawnResult, mcp};
-use aether_core::testing::{FakeMcpServer, fake_mcp};
+use aether_core::mcp::mcp;
+use aether_core::testing::{FakeMcpServer, fake_mcp, mcp_instructions as instructions};
 use llm::testing::FakeLlmProvider;
-use mcp_utils::client::ServerInstructions;
 
 #[tokio::test]
 async fn test_fake_mcp_server_has_instructions() {
     // FakeMcpServer has instructions set to "A fake MCP server for testing"
-    let McpSpawnResult {
-        tool_definitions: _,
-        instructions,
-        server_statuses: _,
-        command_tx: _,
-        event_rx: _,
-        handle: _,
-        ..
-    } = mcp().with_servers(vec![fake_mcp("test", FakeMcpServer::new())]).spawn().await.unwrap();
+    let mut spawn = mcp().with_servers(vec![fake_mcp("test", FakeMcpServer::new())]).spawn().await.unwrap();
+    let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
     // FakeMcpServer does provide instructions, so we should get them
-    assert_eq!(instructions.len(), 1);
-    assert_eq!(instructions[0].server_name, "test");
-    assert!(instructions[0].instructions.contains("A fake MCP server for testing"));
+    assert_eq!(snapshot.instructions.len(), 1);
+    assert!(snapshot.instructions.get("test").unwrap().contains("A fake MCP server for testing"));
 }
 
 #[tokio::test]
 async fn test_multiple_servers_with_instructions() {
-    let McpSpawnResult {
-        tool_definitions: _,
-        instructions,
-        server_statuses: _,
-        command_tx: _,
-        event_rx: _,
-        handle: _,
-        ..
-    } = mcp()
+    let mut spawn = mcp()
         .with_servers(vec![fake_mcp("server1", FakeMcpServer::new()), fake_mcp("server2", FakeMcpServer::new())])
         .spawn()
         .await
         .unwrap();
+    let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
     // Both servers should have instructions
-    assert_eq!(instructions.len(), 2);
-
-    // Find server1 and server2 instructions
-    let server1_instr = instructions.iter().find(|i| i.server_name == "server1").unwrap();
-    let server2_instr = instructions.iter().find(|i| i.server_name == "server2").unwrap();
-
-    assert!(server1_instr.instructions.contains("A fake MCP server for testing"));
-    assert!(server2_instr.instructions.contains("A fake MCP server for testing"));
+    assert_eq!(snapshot.instructions.len(), 2);
+    assert!(snapshot.instructions.get("server1").unwrap().contains("A fake MCP server for testing"));
+    assert!(snapshot.instructions.get("server2").unwrap().contains("A fake MCP server for testing"));
 }
 
 #[tokio::test]
 async fn test_format_mcp_instructions_xml_structure() {
-    let instructions =
-        vec![ServerInstructions { server_name: "coding".to_string(), instructions: "Use absolute paths.".to_string() }];
-
-    let formatted = Prompt::mcp_instructions(instructions).build().await.unwrap();
+    let formatted = Prompt::McpInstructions(instructions(&[("coding", "Use absolute paths.")])).build().await.unwrap();
 
     // Check for XML tags with server names
     assert!(formatted.contains("<mcp-server name=\"coding\">"));
@@ -67,49 +43,43 @@ async fn test_format_mcp_instructions_xml_structure() {
 
 #[tokio::test]
 async fn test_format_mcp_instructions_multiple_servers() {
-    let instructions = vec![
-        ServerInstructions { server_name: "coding".to_string(), instructions: "Use absolute paths.".to_string() },
-        ServerInstructions {
-            server_name: "plugins".to_string(),
-            instructions: "Always confirm before spawning.".to_string(),
-        },
-    ];
-
-    let formatted = Prompt::mcp_instructions(instructions).build().await.unwrap();
+    let formatted =
+        Prompt::McpInstructions(instructions(&[("coding", "Use absolute paths."), ("plugins", "Always confirm.")]))
+            .build()
+            .await
+            .unwrap();
 
     // Check for XML tags with both server names
     assert!(formatted.contains("<mcp-server name=\"coding\">"));
     assert!(formatted.contains("<mcp-server name=\"plugins\">"));
     assert!(formatted.contains("Use absolute paths."));
-    assert!(formatted.contains("Always confirm before spawning."));
+    assert!(formatted.contains("Always confirm."));
+}
+
+#[tokio::test]
+async fn test_format_mcp_instructions_is_deterministically_ordered() {
+    let a = Prompt::McpInstructions(instructions(&[("zebra", "Z"), ("alpha", "A")])).build().await.unwrap();
+    let b = Prompt::McpInstructions(instructions(&[("alpha", "A"), ("zebra", "Z")])).build().await.unwrap();
+    assert_eq!(a, b);
+    let alpha_pos = a.find("name=\"alpha\"").unwrap();
+    let zebra_pos = a.find("name=\"zebra\"").unwrap();
+    assert!(alpha_pos < zebra_pos, "alphabetical order: alpha before zebra");
 }
 
 #[tokio::test]
 async fn test_agent_builder_includes_mcp_instructions_in_system_prompt() {
     use aether_core::core::agent;
 
-    let instructions = vec![ServerInstructions {
-        server_name: "test-server".to_string(),
-        instructions: "Test instructions".to_string(),
-    }];
-
     let llm = FakeLlmProvider::new(vec![]);
     let captured_contexts = llm.captured_contexts();
 
-    let McpSpawnResult {
-        tool_definitions,
-        instructions: _,
-        server_statuses: _,
-        command_tx: mcp_tx,
-        event_rx: _,
-        handle: _,
-        ..
-    } = mcp().with_servers(vec![fake_mcp("test", FakeMcpServer::new())]).spawn().await.unwrap();
+    let mut spawn = mcp().with_servers(vec![fake_mcp("test", FakeMcpServer::new())]).spawn().await.unwrap();
+    let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
     let (tx, mut rx, _handle) = agent(llm)
         .system_prompt(Prompt::text("You are a test agent"))
-        .system_prompt(Prompt::mcp_instructions(instructions))
-        .tools(mcp_tx, tool_definitions)
+        .system_prompt(Prompt::McpInstructions(instructions(&[("test-server", "Test instructions")])))
+        .tools(spawn.command_tx, snapshot.tool_definitions)
         .spawn()
         .await
         .unwrap();
@@ -149,20 +119,13 @@ async fn test_agent_builder_works_without_mcp_instructions() {
     let llm = FakeLlmProvider::new(vec![]);
     let captured_contexts = llm.captured_contexts();
 
-    let McpSpawnResult {
-        tool_definitions,
-        instructions: _,
-        server_statuses: _,
-        command_tx: mcp_tx,
-        event_rx: _,
-        handle: _,
-        ..
-    } = mcp().with_servers(vec![fake_mcp("test", FakeMcpServer::new())]).spawn().await.unwrap();
+    let mut spawn = mcp().with_servers(vec![fake_mcp("test", FakeMcpServer::new())]).spawn().await.unwrap();
+    let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
     // No mcp_instructions provided - should still work
     let (tx, mut rx, _handle) = agent(llm)
         .system_prompt(Prompt::text("You are a test agent"))
-        .tools(mcp_tx, tool_definitions)
+        .tools(spawn.command_tx, snapshot.tool_definitions)
         .spawn()
         .await
         .unwrap();

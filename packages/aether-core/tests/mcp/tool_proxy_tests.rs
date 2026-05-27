@@ -1,4 +1,4 @@
-use aether_core::mcp::{McpSpawnResult, mcp};
+use aether_core::mcp::mcp;
 use aether_core::testing::{FakeMcpServer, fake_mcp_with_proxy};
 use tokio::sync::mpsc;
 
@@ -7,20 +7,13 @@ async fn test_tool_proxy_exposes_only_call_tool() {
     let aether_home = tempfile::tempdir().unwrap();
     let servers = vec![fake_mcp_with_proxy("math", FakeMcpServer::new(), true)];
 
-    let McpSpawnResult {
-        tool_definitions,
-        instructions: _,
-        server_statuses: _,
-        command_tx: _,
-        event_rx: _,
-        handle: _,
-        ..
-    } = mcp().with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
+    let mut spawn = mcp().with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
+    let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
     // The proxy should expose exactly one tool: proxy__call_tool
-    assert_eq!(tool_definitions.len(), 1);
-    assert_eq!(tool_definitions[0].name, "proxy__call_tool");
-    assert!(tool_definitions[0].description.contains("Execute a tool on a nested MCP server"));
+    assert_eq!(snapshot.tool_definitions.len(), 1);
+    assert_eq!(snapshot.tool_definitions[0].name, "proxy__call_tool");
+    assert!(snapshot.tool_definitions[0].description.contains("Execute a tool on a nested MCP server"));
 }
 
 #[tokio::test]
@@ -28,39 +21,18 @@ async fn test_tool_proxy_instructions_mention_tool_directory() {
     let aether_home = tempfile::tempdir().unwrap();
     let servers = vec![fake_mcp_with_proxy("math", FakeMcpServer::new(), true)];
 
-    let McpSpawnResult {
-        tool_definitions: _,
-        instructions,
-        server_statuses: _,
-        command_tx: _,
-        event_rx: _,
-        handle: _,
-        ..
-    } = mcp().with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
+    let mut spawn = mcp().with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
+    let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
-    let proxy_instr =
-        instructions.iter().find(|i| i.server_name == "proxy").expect("Expected instructions from tool-proxy 'ext'");
+    let proxy_instr = snapshot.instructions.get("proxy").expect("Expected instructions from tool-proxy 'ext'");
 
+    assert!(proxy_instr.contains("tool-proxy"), "Instructions should mention tool-proxy directory: {proxy_instr}");
+    assert!(proxy_instr.contains("call_tool"), "Instructions should mention call_tool: {proxy_instr}");
     assert!(
-        proxy_instr.instructions.contains("tool-proxy"),
-        "Instructions should mention tool-proxy directory: {}",
-        proxy_instr.instructions
+        proxy_instr.contains("## Connected Servers"),
+        "Instructions should contain Connected Servers section: {proxy_instr}"
     );
-    assert!(
-        proxy_instr.instructions.contains("call_tool"),
-        "Instructions should mention call_tool: {}",
-        proxy_instr.instructions
-    );
-    assert!(
-        proxy_instr.instructions.contains("## Connected Servers"),
-        "Instructions should contain Connected Servers section: {}",
-        proxy_instr.instructions
-    );
-    assert!(
-        proxy_instr.instructions.contains("**math**"),
-        "Instructions should list the 'math' server: {}",
-        proxy_instr.instructions
-    );
+    assert!(proxy_instr.contains("**math**"), "Instructions should list the 'math' server: {proxy_instr}");
 }
 
 #[tokio::test]
@@ -68,25 +40,18 @@ async fn test_tool_proxy_does_not_expose_nested_server_tools() {
     let aether_home = tempfile::tempdir().unwrap();
     let servers = vec![fake_mcp_with_proxy("math", FakeMcpServer::new(), true)];
 
-    let McpSpawnResult {
-        tool_definitions,
-        instructions: _,
-        server_statuses: _,
-        command_tx: _,
-        event_rx: _,
-        handle: _,
-        ..
-    } = mcp().with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
+    let mut spawn = mcp().with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
+    let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
     // The agent should NOT see individual tools like math__add_numbers
-    for td in &tool_definitions {
+    for td in &snapshot.tool_definitions {
         assert!(!td.name.contains("add_numbers"), "Nested tool should not be exposed: {}", td.name);
         assert!(!td.name.contains("divide_numbers"), "Nested tool should not be exposed: {}", td.name);
     }
 
     // Only the proxy's call_tool
-    assert_eq!(tool_definitions.len(), 1);
-    assert_eq!(tool_definitions[0].name, "proxy__call_tool");
+    assert_eq!(snapshot.tool_definitions.len(), 1);
+    assert_eq!(snapshot.tool_definitions[0].name, "proxy__call_tool");
 }
 
 #[tokio::test]
@@ -94,24 +59,17 @@ async fn test_tool_proxy_does_not_leak_nested_instructions() {
     let aether_home = tempfile::tempdir().unwrap();
     let servers = vec![fake_mcp_with_proxy("math", FakeMcpServer::new(), true)];
 
-    let McpSpawnResult {
-        tool_definitions: _,
-        instructions,
-        server_statuses: _,
-        command_tx: _,
-        event_rx: _,
-        handle: _,
-        ..
-    } = mcp().with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
+    let mut spawn = mcp().with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
+    let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
     // Nested server instructions should NOT appear as top-level entries
     assert!(
-        !instructions.iter().any(|i| i.server_name == "math"),
+        !snapshot.instructions.contains_key("math"),
         "Nested server 'math' should not have its own instructions entry"
     );
 
     // Only the proxy should have instructions
-    assert!(instructions.iter().any(|i| i.server_name == "proxy"), "Proxy 'noleak' should have instructions");
+    assert!(snapshot.instructions.contains_key("proxy"), "Proxy 'noleak' should have instructions");
 }
 
 #[tokio::test]
@@ -119,22 +77,12 @@ async fn test_tool_proxy_writes_tool_files_to_disk() {
     let aether_home = tempfile::tempdir().unwrap();
     let servers = vec![fake_mcp_with_proxy("math", FakeMcpServer::new(), true)];
 
-    let McpSpawnResult {
-        tool_definitions: _,
-        instructions,
-        server_statuses: _,
-        command_tx: _,
-        event_rx: _,
-        handle: _,
-        ..
-    } = mcp().with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
+    let mut spawn = mcp().with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
+    let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
-    let proxy_instr = instructions
-        .iter()
-        .find(|i| i.server_name == "proxy")
-        .expect("Expected instructions from tool-proxy 'filetest'");
+    let proxy_instr = snapshot.instructions.get("proxy").expect("Expected instructions from tool-proxy 'filetest'");
 
-    let tool_dir = extract_tool_dir(&proxy_instr.instructions).expect("Should find tool directory in instructions");
+    let tool_dir = extract_tool_dir(proxy_instr).expect("Should find tool directory in instructions");
     let tool_dir = std::path::Path::new(&tool_dir);
     assert!(tool_dir.exists(), "Tool directory should exist: {tool_dir:?}");
 
@@ -170,15 +118,8 @@ async fn test_tool_proxy_call_tool_routes_to_nested_server() {
     let aether_home = tempfile::tempdir().unwrap();
     let servers = vec![fake_mcp_with_proxy("math", FakeMcpServer::new(), true)];
 
-    let McpSpawnResult {
-        tool_definitions: _,
-        instructions,
-        server_statuses: _,
-        command_tx,
-        event_rx: _,
-        handle: _,
-        ..
-    } = mcp().with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
+    let mut spawn = mcp().with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
+    let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
     // Call add_numbers through the proxy using ExecuteTool
     let arguments = serde_json::json!({
@@ -192,7 +133,11 @@ async fn test_tool_proxy_call_tool_routes_to_nested_server() {
         llm::ToolCallRequest { id: "test_call_1".to_string(), name: "proxy__call_tool".to_string(), arguments };
 
     let (event_tx, mut event_rx) = mpsc::channel(10);
-    command_tx.send(McpCommand::ExecuteTool { request, timeout: Duration::from_secs(10), tx: event_tx }).await.unwrap();
+    spawn
+        .command_tx
+        .send(McpCommand::ExecuteTool { request, timeout: Duration::from_secs(10), tx: event_tx })
+        .await
+        .unwrap();
 
     // Collect events until we get Complete
     let mut result_text = String::new();
@@ -210,7 +155,7 @@ async fn test_tool_proxy_call_tool_routes_to_nested_server() {
     assert!(result_text.contains('7'), "Expected result to contain sum of 3+4=7, got: {result_text}");
 
     // Cleanup
-    cleanup_tool_dir(&instructions, "proxy");
+    cleanup_tool_dir(&snapshot.instructions, "proxy");
 }
 
 #[tokio::test]
@@ -220,15 +165,8 @@ async fn test_tool_proxy_call_tool_unknown_server_returns_error() {
     let aether_home = tempfile::tempdir().unwrap();
     let servers = vec![fake_mcp_with_proxy("math", FakeMcpServer::new(), true)];
 
-    let McpSpawnResult {
-        tool_definitions: _,
-        instructions,
-        server_statuses: _,
-        command_tx,
-        event_rx: _,
-        handle: _,
-        ..
-    } = mcp().with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
+    let mut spawn = mcp().with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
+    let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
     let arguments = serde_json::json!({
         "server": "nonexistent",
@@ -241,7 +179,11 @@ async fn test_tool_proxy_call_tool_unknown_server_returns_error() {
         llm::ToolCallRequest { id: "test_call_2".to_string(), name: "proxy__call_tool".to_string(), arguments };
 
     let (event_tx, mut event_rx) = mpsc::channel(10);
-    command_tx.send(McpCommand::ExecuteTool { request, timeout: Duration::from_secs(10), tx: event_tx }).await.unwrap();
+    spawn
+        .command_tx
+        .send(McpCommand::ExecuteTool { request, timeout: Duration::from_secs(10), tx: event_tx })
+        .await
+        .unwrap();
 
     while let Some(event) = event_rx.recv().await {
         if let ToolExecutionEvent::Complete { result, .. } = event {
@@ -264,7 +206,7 @@ async fn test_tool_proxy_call_tool_unknown_server_returns_error() {
         }
     }
 
-    cleanup_tool_dir(&instructions, "proxy");
+    cleanup_tool_dir(&snapshot.instructions, "proxy");
 }
 
 #[tokio::test]
@@ -275,24 +217,17 @@ async fn test_tool_proxy_multiple_nested_servers() {
         fake_mcp_with_proxy("server_b", FakeMcpServer::new(), true),
     ];
 
-    let McpSpawnResult {
-        tool_definitions,
-        instructions,
-        server_statuses: _,
-        command_tx: _,
-        event_rx: _,
-        handle: _,
-        ..
-    } = mcp().with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
+    let mut spawn = mcp().with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
+    let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
     // Still only one tool exposed
-    assert_eq!(tool_definitions.len(), 1);
-    assert_eq!(tool_definitions[0].name, "proxy__call_tool");
+    assert_eq!(snapshot.tool_definitions.len(), 1);
+    assert_eq!(snapshot.tool_definitions[0].name, "proxy__call_tool");
 
     // Verify both server directories exist
-    let proxy_instr = instructions.iter().find(|i| i.server_name == "proxy").expect("Expected instructions");
+    let proxy_instr = snapshot.instructions.get("proxy").expect("Expected instructions");
 
-    let tool_dir = extract_tool_dir(&proxy_instr.instructions).expect("Should find tool directory");
+    let tool_dir = extract_tool_dir(proxy_instr).expect("Should find tool directory");
     let tool_dir = std::path::Path::new(&tool_dir);
 
     assert!(tool_dir.join("server_a").exists());
@@ -310,23 +245,16 @@ async fn test_tool_proxy_member_server_status_shows_connected_and_proxied() {
     let aether_home = tempfile::tempdir().unwrap();
     let servers = vec![fake_mcp_with_proxy("math", FakeMcpServer::new(), true)];
 
-    let McpSpawnResult {
-        tool_definitions: _,
-        instructions,
-        server_statuses,
-        command_tx: _,
-        event_rx: _,
-        handle: _,
-        ..
-    } = mcp().with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
+    let mut spawn = mcp().with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
+    let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
-    assert!(!server_statuses.iter().any(|s| s.name == "proxy"));
+    assert!(!snapshot.server_statuses.iter().any(|s| s.name == "proxy"));
 
-    let math_status = server_statuses.iter().find(|s| s.name == "math").expect("Expected 'math' status entry");
+    let math_status = snapshot.server_statuses.iter().find(|s| s.name == "math").expect("Expected 'math' status entry");
     assert!(matches!(math_status.status, mcp_utils::status::McpServerStatus::Connected { .. }),);
     assert!(math_status.proxied);
 
-    cleanup_tool_dir(&instructions, "proxy");
+    cleanup_tool_dir(&snapshot.instructions, "proxy");
 }
 
 /// Extract the tool directory path from proxy instructions.
@@ -337,9 +265,9 @@ fn extract_tool_dir(instructions: &str) -> Option<String> {
     Some(instructions[start..end].to_string())
 }
 
-fn cleanup_tool_dir(instructions: &[mcp_utils::client::ServerInstructions], proxy_name: &str) {
-    if let Some(instr) = instructions.iter().find(|i| i.server_name == proxy_name)
-        && let Some(tool_dir) = extract_tool_dir(&instr.instructions)
+fn cleanup_tool_dir(instructions: &std::collections::BTreeMap<String, String>, proxy_name: &str) {
+    if let Some(instr) = instructions.get(proxy_name)
+        && let Some(tool_dir) = extract_tool_dir(instr)
     {
         let _ = std::fs::remove_dir_all(tool_dir);
     }

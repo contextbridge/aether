@@ -7,6 +7,7 @@ pub enum UserMessage {
     ClearContext,
     SwitchModel(Box<dyn StreamingModelProvider>),
     UpdateTools(Vec<ToolDefinition>),
+    UpdateMcpInstructions { server: String, body: Option<String> },
     SetReasoningEffort(Option<ReasoningEffort>),
 }
 
@@ -18,6 +19,11 @@ impl std::fmt::Debug for UserMessage {
             UserMessage::ClearContext => write!(f, "ClearContext"),
             UserMessage::SwitchModel(provider) => f.debug_tuple("SwitchModel").field(&provider.display_name()).finish(),
             UserMessage::UpdateTools(tools) => f.debug_tuple("UpdateTools").field(&tools.len()).finish(),
+            UserMessage::UpdateMcpInstructions { server, body } => f
+                .debug_struct("UpdateInstruction")
+                .field("server", server)
+                .field("body", &body.as_ref().map(String::len))
+                .finish(),
             UserMessage::SetReasoningEffort(effort) => f.debug_tuple("SetReasoningEffort").field(effort).finish(),
         }
     }

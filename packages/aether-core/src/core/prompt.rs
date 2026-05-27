@@ -297,7 +297,7 @@ impl PromptCache {
         Self { prompts, entries: Vec::new() }
     }
 
-    pub async fn update_mcp_instruction(&mut self, server: String, body: Option<String>) {
+    pub fn update_mcp_instruction(&mut self, server: String, body: Option<String>) {
         for prompt in &mut self.prompts {
             if let Prompt::McpInstructions(map) = prompt {
                 match body {
@@ -509,7 +509,7 @@ mod tests {
 
         // Remove the source file to prove we cached things
         remove_file(dir.path().join("AGENTS.md")).unwrap();
-        cache.update_mcp_instruction("srv".into(), Some("instr".into())).await;
+        cache.update_mcp_instruction("srv".into(), Some("instr".into()));
 
         let rendered = cache.render().await.unwrap();
         assert!(rendered.contains("cached body"));

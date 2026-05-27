@@ -10,7 +10,6 @@ use aether_core::mcp::run_mcp_task::McpCommand;
 use llm::{ChatMessage, LlmModel, ToolDefinition};
 use mcp_servers::McpBuilderExt;
 use mcp_utils::client::{McpClientEvent, McpServer, OAuthHandlerFactory};
-use mcp_utils::status::McpServerStatusEntry;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -33,7 +32,6 @@ pub struct Runtime {
     pub agent_handle: AgentHandle,
     pub mcp_tx: Sender<McpCommand>,
     pub event_rx: Receiver<McpClientEvent>,
-    pub server_statuses: Vec<McpServerStatusEntry>,
     pub mcp_handle: JoinHandle<()>,
 }
 
@@ -105,13 +103,13 @@ impl RuntimeBuilder {
     ) -> Result<Runtime, CliError> {
         let prompt_cache_key = self.prompt_cache_key.clone();
         let oauth_credential_store = self.oauth_credential_store.clone();
-        let mcp = self.spawn_mcp().await?;
+        let (spec, spawn) = self.spawn_mcp().await?;
+        let McpSpawnResult { command_tx: mcp_tx, event_rx, handle: mcp_handle } = spawn;
 
-        let filtered_tools = mcp.spec.tools.apply(mcp.tool_definitions);
-        let mut agent_builder = AgentBuilder::from_spec(&mcp.spec, vec![], oauth_credential_store)
+        let mut agent_builder = AgentBuilder::from_spec(&spec, vec![], oauth_credential_store)
             .await
             .map_err(|e| CliError::AgentError(e.to_string()))?
-            .tools(mcp.mcp_tx.clone(), filtered_tools);
+            .tools(mcp_tx.clone(), Vec::new());
 
         if let Some(key) = prompt_cache_key {
             agent_builder = agent_builder.prompt_cache_key(key);
@@ -128,24 +126,20 @@ impl RuntimeBuilder {
         let (agent_tx, agent_rx, agent_handle) =
             agent_builder.spawn().await.map_err(|e| CliError::AgentError(e.to_string()))?;
 
-        Ok(Runtime {
-            agent_tx,
-            agent_rx,
-            agent_handle,
-            mcp_tx: mcp.mcp_tx,
-            event_rx: mcp.event_rx,
-            server_statuses: mcp.server_statuses,
-            mcp_handle: mcp.mcp_handle,
-        })
+        Ok(Runtime { agent_tx, agent_rx, agent_handle, mcp_tx, event_rx, mcp_handle })
     }
 
     pub async fn build_prompt_info(self) -> Result<PromptInfo, CliError> {
-        let mcp = self.spawn_mcp().await?;
-        let filtered_tools = mcp.spec.tools.apply(mcp.tool_definitions);
-        Ok(PromptInfo { spec: mcp.spec, tool_definitions: filtered_tools })
+        let (spec, mut spawn) = self.spawn_mcp().await?;
+        let details = spawn
+            .block_until_ready()
+            .await
+            .ok_or_else(|| CliError::McpError("MCP bootstrap aborted before completion".to_string()))?;
+        let filtered_tools = spec.tools.apply(details.tool_definitions);
+        Ok(PromptInfo { spec, tool_definitions: filtered_tools })
     }
 
-    async fn spawn_mcp(self) -> Result<McpParts, CliError> {
+    async fn spawn_mcp(self) -> Result<(AgentSpec, McpSpawnResult), CliError> {
         let mut builder = mcp().with_builtin_servers(self.cwd.clone(), &self.cwd);
 
         if !self.extra_mcp_servers.is_empty() {
@@ -174,27 +168,7 @@ impl RuntimeBuilder {
                 .map_err(|e| CliError::McpError(e.to_string()))?;
         }
 
-        let McpSpawnResult {
-            tool_definitions,
-            instructions,
-            server_statuses,
-            command_tx: mcp_tx,
-            event_rx,
-            handle: mcp_handle,
-        } = builder.spawn().await.map_err(|e| CliError::McpError(e.to_string()))?;
-
-        let mut spec = self.spec;
-        spec.prompts.push(Prompt::mcp_instructions(instructions));
-
-        Ok(McpParts { spec, tool_definitions, mcp_tx, event_rx, server_statuses, mcp_handle })
+        let spawn = builder.spawn().await.map_err(|e| CliError::McpError(e.to_string()))?;
+        Ok((self.spec, spawn))
     }
-}
-
-struct McpParts {
-    spec: AgentSpec,
-    tool_definitions: Vec<ToolDefinition>,
-    mcp_tx: Sender<McpCommand>,
-    event_rx: Receiver<McpClientEvent>,
-    server_statuses: Vec<McpServerStatusEntry>,
-    mcp_handle: JoinHandle<()>,
 }

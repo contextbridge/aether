@@ -47,6 +47,14 @@ impl Context {
         self.tools = tools;
     }
 
+    pub fn set_system_content(&mut self, content: String) {
+        if let Some(ChatMessage::System { content: existing, .. }) = self.messages.first_mut() {
+            *existing = content;
+        } else {
+            self.messages.insert(0, ChatMessage::System { content, timestamp: IsoString::now() });
+        }
+    }
+
     pub fn messages(&self) -> &Vec<ChatMessage> {
         &self.messages
     }

@@ -270,7 +270,7 @@ impl Agent {
     }
 
     async fn on_update_instruction(&mut self, server: String, body: Option<String>) {
-        self.prompt_cache.update_mcp_instruction(server, body).await;
+        self.prompt_cache.update_mcp_instruction(server, body);
         match self.prompt_cache.render().await {
             Ok(content) => self.context.set_system_content(content),
             Err(e) => tracing::warn!("Failed to rebuild system prompt after instructions update: {e}"),
