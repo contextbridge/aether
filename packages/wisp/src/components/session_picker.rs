@@ -31,7 +31,7 @@ pub enum SessionPickerMessage {
 impl SessionPicker {
     pub fn new(sessions: Vec<SessionEntry>) -> Self {
         let has_sessions = !sessions.is_empty();
-        Self { combobox: Combobox::new(sessions), has_sessions }
+        Self { combobox: Combobox::new(sessions).close_on_whitespace(false), has_sessions }
     }
 }
 
@@ -235,6 +235,24 @@ mod tests {
         assert!(lines.iter().any(|line| line.contains("🔍 Search")));
         assert!(lines.iter().any(|line| line.contains("│ fix")));
         assert!(!lines.iter().any(|line| line.contains("type to search title or path")),);
+    }
+
+    #[tokio::test]
+    async fn spacebar_is_appended_to_query() {
+        let mut picker = SessionPicker::new(sample_sessions());
+        for ch in "fix".chars() {
+            picker.on_event(&key(KeyCode::Char(ch))).await;
+        }
+        let outcome = picker.on_event(&key(KeyCode::Char(' '))).await;
+        assert!(outcome.is_some(), "space should be consumed by the picker");
+        assert!(
+            outcome.unwrap().is_empty(),
+            "space should not emit Close/LoadSession messages while the picker is open"
+        );
+        for ch in "log".chars() {
+            picker.on_event(&key(KeyCode::Char(ch))).await;
+        }
+        assert_eq!(picker.combobox.query(), "fix log");
     }
 
     #[tokio::test]
