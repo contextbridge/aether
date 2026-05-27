@@ -1,5 +1,5 @@
 use aether_auth::{OAuthCallback, OAuthError, OAuthHandler, accept_oauth_callback};
-use aether_core::mcp::{McpSpawnResult, mcp};
+use aether_core::mcp::mcp;
 use aether_core::testing::{FakeMcpServer, fake_mcp_with_proxy};
 use futures::future::BoxFuture;
 use mcp_utils::client::{McpClientEvent, McpManager, McpServer, McpTransport, OAuthHandlerFactory};
@@ -73,15 +73,16 @@ async fn cancelling_handler_returns_user_cancelled() {
 async fn builder_with_oauth_handler_factory_spawns_successfully() {
     let handler = Arc::new(FakeOAuthHandler::new("code", "state"));
 
-    let McpSpawnResult { tool_definitions, instructions, event_rx: _, .. } = mcp()
+    let mut spawn = mcp()
         .with_oauth_handler_factory(Arc::new(move |_ctx| Ok(handler.clone())))
         .with_servers(vec![])
         .spawn()
         .await
         .unwrap();
+    let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
-    assert!(tool_definitions.is_empty());
-    assert!(instructions.is_empty());
+    assert!(snapshot.tool_definitions.is_empty());
+    assert!(snapshot.instructions.is_empty());
 }
 
 #[tokio::test]
@@ -222,6 +223,6 @@ async fn tool_proxy_partial_connection_works() {
 
     // Instructions should mention the working server
     let instructions = manager.server_instructions();
-    let proxy_instr = instructions.iter().find(|i| i.server_name == "proxy").expect("Expected proxy instructions");
-    assert!(proxy_instr.instructions.contains("working"), "Instructions should mention the connected server");
+    let proxy_instr = instructions.get("proxy").expect("Expected proxy instructions");
+    assert!(proxy_instr.contains("working"), "Instructions should mention the connected server");
 }

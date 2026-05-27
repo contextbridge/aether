@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use aether_core::core::agent;
 use aether_core::events::{AgentMessage, UserMessage};
-use aether_core::mcp::McpSpawnResult;
 use aether_core::mcp::mcp;
 use aether_core::testing::{AddNumbersRequest, FakeMcpServer, fake_mcp};
 use llm::testing::{FakeLlmProvider, llm_response};
@@ -53,10 +52,12 @@ async fn user_message_during_tool_execution_is_queued() {
     let llm = FakeLlmProvider::new(turns).pause_turn_after(0, 1, Arc::clone(&release));
     let captured = llm.captured_contexts();
 
-    let McpSpawnResult { tool_definitions, command_tx: mcp_tx, .. } =
+    let mut spawn =
         mcp().with_servers(vec![fake_mcp("test", FakeMcpServer::new())]).spawn().await.expect("MCP should spawn");
+    let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
-    let (tx, mut rx, _handle) = agent(llm).tools(mcp_tx, tool_definitions).spawn().await.expect("Agent should spawn");
+    let (tx, mut rx, _handle) =
+        agent(llm).tools(spawn.command_tx, snapshot.tool_definitions).spawn().await.expect("Agent should spawn");
     tx.send(UserMessage::text("add 2 and 3")).await.expect("Initial prompt should send");
 
     drain_until(&mut rx, |m| matches!(m, AgentMessage::ToolCall { request, .. } if request.id == "call_1")).await;

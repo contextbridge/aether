@@ -1,6 +1,6 @@
 use tui::testing::render_lines;
-use tui::{Combobox, Line, PickerKey, Searchable, ViewContext, classify_key};
-use tui::{KeyCode, KeyEvent, KeyModifiers};
+use tui::{Combobox, Line, PickerKey, PickerMessage, Searchable, ViewContext, classify_key};
+use tui::{Event, KeyCode, KeyEvent, KeyModifiers};
 
 #[derive(Debug, Clone, PartialEq)]
 struct FakeItem {
@@ -310,4 +310,25 @@ fn move_down_where_noop_when_all_filtered() {
     let mut combobox = Combobox::from_matches(items);
     combobox.move_down_where(|item| !item.disabled);
     assert_eq!(combobox.selected_index(), 0);
+}
+
+#[test]
+fn handle_picker_event_whitespace_closes_by_default() {
+    let mut combobox = combo(&["alpha", "beta"]);
+    let event = Event::Key(key(KeyCode::Char(' ')));
+    let outcome = combobox.handle_picker_event(&event).expect("space consumed");
+    assert!(matches!(outcome.as_slice(), [PickerMessage::CloseWithChar(' ')]));
+    assert_eq!(combobox.query(), "");
+}
+
+#[test]
+fn handle_picker_event_whitespace_appended_when_disabled() {
+    let mut combobox = combo(&["fix login", "add tests"]).close_on_whitespace(false);
+    combobox.push_query_char('f');
+    combobox.push_query_char('i');
+    combobox.push_query_char('x');
+    let event = Event::Key(key(KeyCode::Char(' ')));
+    let outcome = combobox.handle_picker_event(&event).expect("space consumed");
+    assert!(matches!(outcome.as_slice(), [PickerMessage::CharTyped(' ')]));
+    assert_eq!(combobox.query(), "fix ");
 }

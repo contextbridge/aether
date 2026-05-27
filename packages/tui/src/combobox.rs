@@ -29,11 +29,18 @@ pub struct Combobox<T: Searchable + Send + Sync + 'static> {
     selected_index: usize,
     scroll_offset: usize,
     max_visible: usize,
+    close_on_whitespace: bool,
 }
 
 impl<T: Searchable + Send + Sync + 'static> Combobox<T> {
     pub fn new(items: Vec<T>) -> Self {
-        Self { fuzzy: FuzzyMatcher::new(items), selected_index: 0, scroll_offset: 0, max_visible: DEFAULT_MAX_VISIBLE }
+        Self {
+            fuzzy: FuzzyMatcher::new(items),
+            selected_index: 0,
+            scroll_offset: 0,
+            max_visible: DEFAULT_MAX_VISIBLE,
+            close_on_whitespace: true,
+        }
     }
 
     pub fn from_matches(matches: Vec<T>) -> Self {
@@ -42,7 +49,22 @@ impl<T: Searchable + Send + Sync + 'static> Combobox<T> {
             selected_index: 0,
             scroll_offset: 0,
             max_visible: DEFAULT_MAX_VISIBLE,
+            close_on_whitespace: true,
         }
+    }
+
+    /// Configure whether typing a whitespace character closes the picker and
+    /// forwards the char to the parent (the default), or treats it as a regular
+    /// query character.
+    ///
+    /// Inline pickers (e.g. autocompletion popups embedded in a text input)
+    /// typically want `true` so that pressing space ends the popup. Modal
+    /// pickers (e.g. a full-screen session picker) typically want `false` so
+    /// users can type multi-word queries.
+    #[must_use]
+    pub fn close_on_whitespace(mut self, close: bool) -> Self {
+        self.close_on_whitespace = close;
+        self
     }
 
     pub fn query(&self) -> &str {
@@ -192,7 +214,7 @@ impl<T: Searchable + Send + Sync + 'static> Combobox<T> {
                 }
             }
             PickerKey::Char(c) => {
-                if c.is_whitespace() {
+                if c.is_whitespace() && self.close_on_whitespace {
                     return Some(vec![PickerMessage::CloseWithChar(c)]);
                 }
                 self.push_query_char(c);

@@ -127,16 +127,8 @@ async fn run_session_relay(
         _mcp_handle,
         mcp_tx,
         mut event_rx,
-        initial_server_statuses,
         provider_connections,
     } = session;
-
-    if let Err(e) = connection
-        .send_notification(McpNotification::ServerStatus { servers: initial_server_statuses })
-        .map_err(|e| AcpServerError::protocol("_aether/mcp_event", e))
-    {
-        error!("Failed to send initial MCP server status: {:?}", e);
-    }
 
     loop {
         tokio::select! {
@@ -544,6 +536,14 @@ async fn handle_mcp_client_event(
             if let Err(e) = agent_tx.send(UserMessage::UpdateTools(tool_definitions)).await {
                 error!("Failed to send updated tools to agent: {:?}", e);
             }
+        }
+        McpClientEvent::ServerInstructionsUpdated { server, instructions } => {
+            if let Err(e) = agent_tx.send(UserMessage::UpdateMcpInstructions { server, body: instructions }).await {
+                error!("Failed to send updated instruction to agent: {:?}", e);
+            }
+        }
+        McpClientEvent::ConnectionReady(_) => {
+            tracing::debug!("MCP connection ready");
         }
         McpClientEvent::AuthenticationFailed { server, error } => {
             error!("MCP server authentication failed for '{server}': {error}");

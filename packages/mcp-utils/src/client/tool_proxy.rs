@@ -116,20 +116,6 @@ impl ToolProxy {
         }
     }
 
-    /// Discover tools from a connected MCP server and write them as JSON files
-    /// to `tool_dir/<server_name>/`, replacing any existing files for that server.
-    pub async fn write_tools_to_dir(
-        server_name: &str,
-        client: &RunningService<RoleClient, McpClient>,
-        tool_dir: &Path,
-    ) -> Result<(), McpError> {
-        let tools_response = client.list_tools(None).await.map_err(|e| {
-            McpError::ToolDiscoveryFailed(format!("Failed to list tools for nested server '{server_name}': {e}"))
-        })?;
-
-        Self::write_tool_entries_to_dir(server_name, &tools_response.tools, tool_dir).await
-    }
-
     /// Write tool entries to `tool_dir/<server_name>/`, removing any stale files first.
     pub(super) async fn write_tool_entries_to_dir(
         server_name: &str,

@@ -1,7 +1,7 @@
 use aether_core::{
     core::{Prompt, agent},
     events::{AgentMessage, UserMessage},
-    mcp::{McpSpawnResult, mcp},
+    mcp::mcp,
 };
 use llm::providers::openrouter::OpenRouterProvider;
 
@@ -13,19 +13,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
     let llm = OpenRouterProvider::default("z-ai/glm-4.5-air")?;
-    let McpSpawnResult {
-        tool_definitions: tools,
-        instructions: _,
-        server_statuses: _,
-        command_tx: mcp_tx,
-        event_rx: _,
-        handle: _mcp_handle,
-        ..
-    } = mcp().from_json_files(&["examples/mcp.json"]).await?.spawn().await?;
+    let mut spawn = mcp().from_json_files(&["examples/mcp.json"]).await?.spawn().await?;
+    let connection_details = spawn.block_until_ready().await.ok_or("MCP bootstrap aborted before completion")?;
+    let _mcp_handle = spawn.handle;
 
     let (tx, mut rx, _handle) = agent(llm)
         .system_prompt(Prompt::text("You are a helpful assistant with access to web browsing tools via Playwright."))
-        .tools(mcp_tx, tools)
+        .tools(spawn.command_tx, connection_details.tool_definitions)
         .spawn()
         .await?;
 

@@ -38,21 +38,32 @@ pub fn server_status_summary(statuses: &[McpServerStatusEntry]) -> String {
     if statuses.is_empty() {
         return "none".to_string();
     }
-    let (mut c, mut a, mut n, mut f) = (0usize, 0usize, 0usize, 0usize);
-    for s in statuses {
-        match &s.status {
-            McpServerStatus::Connected { .. } => c += 1,
-            McpServerStatus::Authenticating => a += 1,
-            McpServerStatus::NeedsOAuth => n += 1,
-            McpServerStatus::Failed { .. } => f += 1,
+    let mut connected = 0usize;
+    let mut connecting = 0usize;
+    let mut authenticating = 0usize;
+    let mut needs_auth = 0usize;
+    let mut failed = 0usize;
+    for entry in statuses {
+        match &entry.status {
+            McpServerStatus::Connected { .. } => connected += 1,
+            McpServerStatus::Connecting => connecting += 1,
+            McpServerStatus::Authenticating => authenticating += 1,
+            McpServerStatus::NeedsOAuth => needs_auth += 1,
+            McpServerStatus::Failed { .. } => failed += 1,
         }
     }
-    [(c, "connected"), (a, "authenticating"), (n, "needs auth"), (f, "failed")]
-        .iter()
-        .filter(|(count, _)| *count > 0)
-        .map(|(count, label)| format!("{count} {label}"))
-        .collect::<Vec<_>>()
-        .join(", ")
+    [
+        (connected, "connected"),
+        (connecting, "connecting"),
+        (authenticating, "authenticating"),
+        (needs_auth, "needs auth"),
+        (failed, "failed"),
+    ]
+    .iter()
+    .filter(|(count, _)| *count > 0)
+    .map(|(count, label)| format!("{count} {label}"))
+    .collect::<Vec<_>>()
+    .join(", ")
 }
 
 impl ServerStatusOverlay {
@@ -118,13 +129,14 @@ fn render_server_entry(entry: &McpServerStatusEntry, selected: bool, indented: b
         }
         McpServerStatus::Connected { tool_count } => ("✓", format!("{tool_count} tools")),
         McpServerStatus::Failed { error } => ("✗", error.clone()),
+        McpServerStatus::Connecting => ("…", "connecting".to_string()),
         McpServerStatus::Authenticating => ("…", "authenticating".to_string()),
         McpServerStatus::NeedsOAuth => ("⚡", "needs authentication".to_string()),
     };
     let prefix = if indented { "  " } else { "" };
     let text = format!("{prefix}{}  {indicator} {detail}", entry.name);
     match &entry.status {
-        McpServerStatus::Connected { .. } => {
+        McpServerStatus::Connected { .. } | McpServerStatus::Connecting => {
             if selected {
                 Line::with_style(text, context.theme.selected_row_style())
             } else {

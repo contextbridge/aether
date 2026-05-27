@@ -15,12 +15,12 @@ pub use config::{
     HttpServerConfig, HttpType, InMemoryServerConfig, InMemoryType, McpConfig, McpServer, McpServerConfig,
     McpTransport, ParseError, ServerFactory, SseServerConfig, SseType, StdioServerConfig, StdioType,
 };
-pub use connection::{McpConnectAttempt, McpConnectOutcome, McpServerConnection, ServerInstructions};
+pub use connection::{McpConnectAttempt, McpConnectOutcome, McpServerConnection};
 pub use connection_attempt_manager::McpConnectionAttemptManager;
 pub use error::{McpError, Result};
 pub use manager::{
-    ElicitationRequest, McpClientEvent, McpManager, McpServerStatus, McpServerStatusEntry, OAuthHandlerContext,
-    OAuthHandlerFactory, UrlElicitationCompleteParams,
+    ElicitationRequest, McpClientEvent, McpConnectionDetails, McpManager, McpServerStatus, McpServerStatusEntry,
+    OAuthHandlerContext, OAuthHandlerFactory, UrlElicitationCompleteParams,
 };
 pub use mcp_client::{McpClient, cancel_result};
 pub use naming::{SERVERNAME_DELIMITER, split_on_server_name};

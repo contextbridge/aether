@@ -59,12 +59,12 @@ agent-client-protocol = "0.12.1"
 
 # MCP and API clients
 rmcp = { version = "^1.7.0", features = ["client", "server", "macros", "schemars", "auth", "elicitation", "transport-io"] }
-async-openai = { version = "^0.38.2", features = ["byot", "chat-completion", "responses"] }
+async-openai = { version = "^0.40.2", features = ["byot", "chat-completion", "responses"] }
 reqwest = { version = "^0.13.3", default-features = false, features = ["json", "query", "rustls", "http2", "stream"] }
 oauth2 = "5.0"
 keyring-core = "1.0.0"
 apple-native-keyring-store = { version = "1.0.0", features = ["keychain"] }
-windows-native-keyring-store = "1.0.0"
+windows-native-keyring-store = "1.1.0"
 dbus-secret-service-keyring-store = { version = "1.0.0", features = ["crypto-rust"] }
 url = "2.5"
 axum = "0.8.9"
@@ -111,7 +111,7 @@ syntect = { version = "5.3", default-features = false, features = ["default-fanc
 two-face = { version = "0.5.1", default-features = false, features = ["syntect-fancy"] }
 nucleo = "0.5.0"
 mime_guess = "2"
-similar = "3.1.0"
+similar = "3.1.1"
 unicode-width = "0.2.2"
 
 # Testing

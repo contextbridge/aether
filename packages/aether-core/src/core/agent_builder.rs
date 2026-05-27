@@ -1,7 +1,7 @@
 use super::agent::{AgentConfig, AutoContinue, RetryConfig};
 use crate::agent_spec::AgentSpec;
 use crate::context::CompactionConfig;
-use crate::core::{Agent, Prompt, Result};
+use crate::core::{Agent, Prompt, PromptCache, Result};
 use crate::events::{AgentMessage, UserMessage};
 use crate::mcp::run_mcp_task::McpCommand;
 use aether_auth::OAuthCredentialStorage;
@@ -205,13 +205,12 @@ impl AgentBuilder {
     }
 
     pub async fn spawn(self) -> Result<(Sender<UserMessage>, Receiver<AgentMessage>, AgentHandle)> {
-        let mut messages = Vec::new();
+        let mut prompt_cache = PromptCache::new(self.prompts);
+        let system_content = prompt_cache.render().await?;
 
-        if !self.prompts.is_empty() {
-            let system_content = Prompt::build_all(&self.prompts).await?;
-            if !system_content.is_empty() {
-                messages.push(ChatMessage::System { content: system_content, timestamp: IsoString::now() });
-            }
+        let mut messages = Vec::new();
+        if !system_content.is_empty() {
+            messages.push(ChatMessage::System { content: system_content, timestamp: IsoString::now() });
         }
 
         messages.extend(self.initial_messages);
@@ -232,6 +231,7 @@ impl AgentBuilder {
             auto_continue: AutoContinue::new(self.max_auto_continues),
             retry_config: self.retry_config,
             context_window: self.context_window,
+            prompt_cache,
         };
 
         let agent = Agent::new(config, user_message_rx, message_tx);

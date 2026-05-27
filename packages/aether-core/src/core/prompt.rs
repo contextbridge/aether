@@ -1,9 +1,8 @@
 use crate::core::{AgentError, Result};
 use glob::glob;
-use mcp_utils::client::ServerInstructions;
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -12,7 +11,7 @@ use tracing::warn;
 use utils::shell_expander::ShellExpander;
 use utils::substitution::substitute_parameters;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Prompt {
     Text(String),
     File {
@@ -26,7 +25,9 @@ pub enum Prompt {
         patterns: Vec<String>,
         cwd: PathBuf,
     },
-    McpInstructions(Vec<ServerInstructions>),
+    /// MCP server instructions keyed by server name. `BTreeMap` gives a
+    /// stable render order, which is useful for prompt-caching
+    McpInstructions(BTreeMap<String, String>),
 }
 
 /// Authored description of a prompt source — text, a file path, or a glob pattern.
@@ -180,10 +181,6 @@ impl Prompt {
         }
     }
 
-    pub fn mcp_instructions(instructions: Vec<ServerInstructions>) -> Self {
-        Self::McpInstructions(instructions)
-    }
-
     /// Resolve this `SystemPrompt` to a String
     pub async fn build(&self) -> Result<String> {
         match self {
@@ -287,8 +284,60 @@ fn validate_prompt_glob(project_root: &Path, pattern: &str) -> std::result::Resu
     if has_file_match { Ok(()) } else { Err(PromptSourceError::ZeroMatch { pattern: pattern.to_string() }) }
 }
 
+pub struct PromptCache {
+    prompts: Vec<Prompt>,
+    entries: Vec<(Prompt, String)>,
+}
+
+impl PromptCache {
+    pub fn new(mut prompts: Vec<Prompt>) -> Self {
+        if !prompts.iter().any(|p| matches!(p, Prompt::McpInstructions(_))) {
+            prompts.push(Prompt::McpInstructions(BTreeMap::new()));
+        }
+        Self { prompts, entries: Vec::new() }
+    }
+
+    pub fn update_mcp_instruction(&mut self, server: String, body: Option<String>) {
+        for prompt in &mut self.prompts {
+            if let Prompt::McpInstructions(map) = prompt {
+                match body {
+                    Some(text) => {
+                        map.insert(server, text);
+                    }
+                    None => {
+                        map.remove(&server);
+                    }
+                }
+                return;
+            }
+        }
+    }
+
+    pub async fn render(&mut self) -> Result<String> {
+        self.entries.truncate(self.prompts.len());
+        let mut rendered_prompt = String::new();
+        for i in 0..self.prompts.len() {
+            let prompt = &self.prompts[i];
+            match self.entries.get_mut(i) {
+                Some((cached, _)) if *cached == *prompt => {}
+                Some(entry) => *entry = (prompt.clone(), prompt.build().await?),
+                None => self.entries.push((prompt.clone(), prompt.build().await?)),
+            }
+
+            let (_, body) = &self.entries[i];
+            if !body.is_empty() {
+                if !rendered_prompt.is_empty() {
+                    rendered_prompt.push_str("\n\n");
+                }
+                rendered_prompt.push_str(body);
+            }
+        }
+        Ok(rendered_prompt)
+    }
+}
+
 /// Format MCP instructions with XML tags for the system prompt.
-fn format_mcp_instructions(instructions: &[ServerInstructions]) -> String {
+fn format_mcp_instructions(instructions: &BTreeMap<String, String>) -> String {
     if instructions.is_empty() {
         return String::new();
     }
@@ -296,8 +345,8 @@ fn format_mcp_instructions(instructions: &[ServerInstructions]) -> String {
     let mut parts = vec!["# MCP Server Instructions\n".to_string()];
     parts.push("You are connected to the following MCP servers:\n".to_string());
 
-    for instr in instructions {
-        parts.push(format!("<mcp-server name=\"{}\">\n{}\n</mcp-server>\n", instr.server_name, instr.instructions));
+    for (server_name, body) in instructions {
+        parts.push(format!("<mcp-server name=\"{server_name}\">\n{body}\n</mcp-server>\n"));
     }
 
     parts.join("\n")
@@ -306,6 +355,7 @@ fn format_mcp_instructions(instructions: &[ServerInstructions]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::mcp_instructions as instructions;
 
     #[tokio::test]
     async fn build_text_prompt() {
@@ -430,6 +480,51 @@ mod tests {
         let expander = ShellExpander::new();
         let result = Prompt::expand_builtins("!`printf 'hi\\n\\n'`", None, &expander).await.unwrap();
         assert_eq!(result, "hi");
+    }
+
+    #[tokio::test]
+    async fn prompt_cache_render_matches_build_all_on_first_render() {
+        let prompts = vec![
+            Prompt::text("first"),
+            Prompt::McpInstructions(instructions(&[("srv", "body")])),
+            Prompt::text("last"),
+        ];
+        let expected = Prompt::build_all(&prompts).await.unwrap();
+        let mut cache = PromptCache::new(prompts);
+        assert_eq!(cache.render().await.unwrap(), expected);
+    }
+
+    #[tokio::test]
+    async fn prompt_cache_reuses_unchanged_slots() {
+        use std::fs::{remove_file, write};
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut cache = PromptCache::new(vec![
+            Prompt::from_globs(vec!["AGENTS.md".into()], dir.path().to_path_buf()),
+            Prompt::McpInstructions(BTreeMap::new()),
+        ]);
+
+        write(dir.path().join("AGENTS.md"), "cached body").unwrap();
+        cache.render().await.unwrap();
+
+        // Remove the source file to prove we cached things
+        remove_file(dir.path().join("AGENTS.md")).unwrap();
+        cache.update_mcp_instruction("srv".into(), Some("instr".into()));
+
+        let rendered = cache.render().await.unwrap();
+        assert!(rendered.contains("cached body"));
+        assert!(rendered.contains("instr"));
+    }
+
+    #[tokio::test]
+    async fn prompt_cache_empty_renders_empty() {
+        assert_eq!(PromptCache::new(vec![]).render().await.unwrap(), "");
+    }
+
+    #[tokio::test]
+    async fn prompt_cache_drops_empty_slots() {
+        let mut cache = PromptCache::new(vec![Prompt::text("a"), Prompt::text("b")]);
+        assert_eq!(cache.render().await.unwrap(), "a\n\nb");
     }
 
     #[tokio::test]
