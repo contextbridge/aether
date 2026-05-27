@@ -239,9 +239,6 @@ mod tests {
 
     #[tokio::test]
     async fn spacebar_is_appended_to_query() {
-        // Regression test for A-18: pressing space inside the /resume picker
-        // should be treated as a query character (so multi-word fuzzy queries
-        // like "login redirect" work) rather than closing the picker.
         let mut picker = SessionPicker::new(sample_sessions());
         for ch in "fix".chars() {
             picker.on_event(&key(KeyCode::Char(ch))).await;
