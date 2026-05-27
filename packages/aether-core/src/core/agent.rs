@@ -1,4 +1,5 @@
 use crate::context::{CompactionConfig, Compactor, TokenTracker};
+use crate::core::PromptCache;
 pub use crate::core::retry_config::RetryConfig;
 use crate::events::{AgentMessage, UserMessage};
 use crate::mcp::run_mcp_task::{McpCommand, ToolExecutionEvent};
@@ -40,6 +41,7 @@ pub(crate) struct AgentConfig {
     pub auto_continue: AutoContinue,
     pub retry_config: RetryConfig,
     pub context_window: Option<u32>,
+    pub prompt_cache: PromptCache,
 }
 
 pub struct Agent {
@@ -56,6 +58,7 @@ pub struct Agent {
     active_requests: HashMap<String, ToolCallRequest>,
     queued_user_messages: VecDeque<Vec<llm::ContentBlock>>,
     context_window: Option<u32>,
+    prompt_cache: PromptCache,
 }
 
 impl Agent {
@@ -86,6 +89,7 @@ impl Agent {
             active_requests: HashMap::new(),
             queued_user_messages: VecDeque::new(),
             context_window: config.context_window,
+            prompt_cache: config.prompt_cache,
         }
     }
 
@@ -102,7 +106,9 @@ impl Agent {
         let mut state = IterationState::new();
 
         while let Some((_, event)) = self.streams.next().await {
-            use UserMessage::{Cancel, ClearContext, SetReasoningEffort, SwitchModel, Text, UpdateTools};
+            use UserMessage::{
+                Cancel, ClearContext, SetReasoningEffort, SwitchModel, Text, UpdateMcpInstructions, UpdateTools,
+            };
             match event {
                 StreamEvent::UserMessage(Cancel) => {
                     self.on_user_cancel(&mut state).await;
@@ -127,6 +133,10 @@ impl Agent {
 
                 StreamEvent::UserMessage(UpdateTools(tools)) => {
                     self.context.set_tools(tools);
+                }
+
+                StreamEvent::UserMessage(UpdateMcpInstructions { server, body }) => {
+                    self.on_update_instruction(server, body).await;
                 }
 
                 StreamEvent::UserMessage(SetReasoningEffort(effort)) => {
@@ -257,6 +267,14 @@ impl Agent {
         self.context.add_message(ChatMessage::User { content, timestamp: IsoString::now() });
         self.auto_continue.reset();
         self.start_llm_stream(None);
+    }
+
+    async fn on_update_instruction(&mut self, server: String, body: Option<String>) {
+        self.prompt_cache.update_mcp_instruction(server, body).await;
+        match self.prompt_cache.render().await {
+            Ok(content) => self.context.set_system_content(content),
+            Err(e) => tracing::warn!("Failed to rebuild system prompt after instructions update: {e}"),
+        }
     }
 
     async fn on_switch_model(&mut self, new_provider: Box<dyn StreamingModelProvider>) {
@@ -789,6 +807,7 @@ mod tests {
                 auto_continue: AutoContinue::new(0),
                 retry_config: RetryConfig::disabled(),
                 context_window: None,
+                prompt_cache: PromptCache::new(vec![]),
             },
             user_rx,
             message_tx,
