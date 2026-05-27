@@ -1,50 +1,78 @@
 use mcp_utils::client::McpServerConfig;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
+use utils::{PathOrObject, ResourcePath, is_false, string_or_object_schema};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum McpSourceSpec {
-    File { path: String, proxy: bool },
+    File(McpFileSpec),
     Inline { servers: BTreeMap<String, McpServerConfig> },
 }
 
-#[derive(serde::Deserialize)]
-#[serde(untagged)]
-enum McpSourceSpecInput {
-    Path(String),
-    Object(McpSourceSpecObject),
+#[derive(Debug, Clone, PartialEq)]
+pub struct McpFileSpec {
+    pub path: ResourcePath,
+    pub proxy: bool,
+    pub optional: bool,
 }
 
-#[derive(schemars::JsonSchema, serde::Deserialize, serde::Serialize)]
-#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
-enum McpSourceSpecObject {
-    File {
-        path: String,
-        #[serde(default)]
-        proxy: bool,
-    },
-    Inline {
-        servers: BTreeMap<String, McpServerConfig>,
-    },
+impl McpFileSpec {
+    pub fn new(path: impl Into<ResourcePath>) -> Self {
+        Self { path: path.into(), proxy: false, optional: false }
+    }
+
+    #[must_use]
+    pub fn proxy(mut self) -> Self {
+        self.proxy = true;
+        self
+    }
+
+    #[must_use]
+    pub fn optional(mut self) -> Self {
+        self.optional = true;
+        self
+    }
+}
+
+impl McpSourceSpec {
+    pub fn file(path: impl Into<ResourcePath>) -> Self {
+        Self::File(McpFileSpec::new(path))
+    }
+
+    pub fn path(&self) -> Option<&str> {
+        match self {
+            Self::File(file) => Some(file.path.as_authored()),
+            Self::Inline { .. } => None,
+        }
+    }
+}
+
+impl From<McpFileSpec> for McpSourceSpec {
+    fn from(spec: McpFileSpec) -> Self {
+        Self::File(spec)
+    }
 }
 
 impl<'de> Deserialize<'de> for McpSourceSpec {
     fn deserialize<T: Deserializer<'de>>(deserializer: T) -> Result<Self, T::Error> {
-        match Deserialize::deserialize(deserializer)? {
-            McpSourceSpecInput::Path(path) => Ok(Self::File { path, proxy: false }),
-            McpSourceSpecInput::Object(McpSourceSpecObject::File { path, proxy }) => Ok(Self::File { path, proxy }),
-            McpSourceSpecInput::Object(McpSourceSpecObject::Inline { servers }) => Ok(Self::Inline { servers }),
-        }
+        Ok(match PathOrObject::<McpSourceSpecObject>::deserialize(deserializer)? {
+            PathOrObject::Path(path) => Self::File(McpFileSpec::new(path)),
+            PathOrObject::Object(McpSourceSpecObject::File { path, proxy, optional }) => {
+                Self::File(McpFileSpec { path, proxy, optional })
+            }
+            PathOrObject::Object(McpSourceSpecObject::Inline { servers }) => Self::Inline { servers },
+        })
     }
 }
 
 impl Serialize for McpSourceSpec {
     fn serialize<T: Serializer>(&self, serializer: T) -> Result<T::Ok, T::Error> {
         match self {
-            Self::File { path, proxy: false } => serializer.serialize_str(path),
-            Self::File { path, proxy } => {
-                Serialize::serialize(&McpSourceSpecObject::File { path: path.clone(), proxy: *proxy }, serializer)
-            }
+            Self::File(McpFileSpec { path, proxy: false, optional: false }) => path.serialize(serializer),
+            Self::File(McpFileSpec { path, proxy, optional }) => Serialize::serialize(
+                &McpSourceSpecObject::File { path: path.clone(), proxy: *proxy, optional: *optional },
+                serializer,
+            ),
             Self::Inline { servers } => {
                 Serialize::serialize(&McpSourceSpecObject::Inline { servers: servers.clone() }, serializer)
             }
@@ -58,27 +86,24 @@ impl schemars::JsonSchema for McpSourceSpec {
     }
 
     fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        let object_schema = generator.subschema_for::<McpSourceSpecObject>().to_value();
-        schemars::Schema::try_from(serde_json::json!({
-            "description": "MCP config source — either a file path string or a typed file or inline object.",
-            "oneOf": [
-                { "type": "string" },
-                object_schema
-            ]
-        }))
-        .expect("mcp source schema must be valid")
+        string_or_object_schema(
+            "MCP config source — either a file path string or a typed file or inline object.",
+            &generator.subschema_for::<McpSourceSpecObject>().to_value(),
+        )
     }
 }
 
-impl McpSourceSpec {
-    pub fn file(path: impl Into<String>) -> Self {
-        Self::File { path: path.into(), proxy: false }
-    }
-
-    pub fn path(&self) -> Option<&str> {
-        match self {
-            Self::File { path, .. } => Some(path.as_str()),
-            Self::Inline { .. } => None,
-        }
-    }
+#[derive(schemars::JsonSchema, serde::Deserialize, serde::Serialize)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+enum McpSourceSpecObject {
+    File {
+        path: ResourcePath,
+        #[serde(default, skip_serializing_if = "is_false")]
+        proxy: bool,
+        #[serde(default, skip_serializing_if = "is_false")]
+        optional: bool,
+    },
+    Inline {
+        servers: BTreeMap<String, McpServerConfig>,
+    },
 }

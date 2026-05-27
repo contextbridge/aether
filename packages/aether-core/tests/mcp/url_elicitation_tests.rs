@@ -170,7 +170,7 @@ async fn spawn_scripted(
     let server = UrlElicitationRequiredServer::new(elicitation_id, url);
     let config = fake_url_elicit_mcp("browser_server", server);
 
-    let mut spawn = mcp().with_servers(vec![config]).spawn().await.unwrap();
+    let mut spawn = mcp("/workspace").with_servers(vec![config]).spawn().await.unwrap();
     let _snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
     let command_tx = spawn.command_tx;
     let mut event_rx = spawn.event_rx;
@@ -198,7 +198,7 @@ async fn malformed_url_elicitation_required_data_returns_protocol_error() {
     let server = MalformedUrlElicitationRequiredServer::new(json!({ "elicitations": "not-an-array" }));
     let config = McpServer::new("browser_server", McpTransport::InMemory { server: server.into_dyn() }, false);
 
-    let mut spawn = mcp().with_servers(vec![config]).spawn().await.unwrap();
+    let mut spawn = mcp("/workspace").with_servers(vec![config]).spawn().await.unwrap();
     let _snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
     let command_tx = spawn.command_tx;
 

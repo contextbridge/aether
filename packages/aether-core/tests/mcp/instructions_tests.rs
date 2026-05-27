@@ -7,7 +7,7 @@ use llm::testing::FakeLlmProvider;
 #[tokio::test]
 async fn test_fake_mcp_server_has_instructions() {
     // FakeMcpServer has instructions set to "A fake MCP server for testing"
-    let mut spawn = mcp().with_servers(vec![fake_mcp("test", FakeMcpServer::new())]).spawn().await.unwrap();
+    let mut spawn = mcp("/workspace").with_servers(vec![fake_mcp("test", FakeMcpServer::new())]).spawn().await.unwrap();
     let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
     // FakeMcpServer does provide instructions, so we should get them
@@ -17,7 +17,7 @@ async fn test_fake_mcp_server_has_instructions() {
 
 #[tokio::test]
 async fn test_multiple_servers_with_instructions() {
-    let mut spawn = mcp()
+    let mut spawn = mcp("/workspace")
         .with_servers(vec![fake_mcp("server1", FakeMcpServer::new()), fake_mcp("server2", FakeMcpServer::new())])
         .spawn()
         .await
@@ -73,7 +73,7 @@ async fn test_agent_builder_includes_mcp_instructions_in_system_prompt() {
     let llm = FakeLlmProvider::new(vec![]);
     let captured_contexts = llm.captured_contexts();
 
-    let mut spawn = mcp().with_servers(vec![fake_mcp("test", FakeMcpServer::new())]).spawn().await.unwrap();
+    let mut spawn = mcp("/workspace").with_servers(vec![fake_mcp("test", FakeMcpServer::new())]).spawn().await.unwrap();
     let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
     let (tx, mut rx, _handle) = agent(llm)
@@ -119,7 +119,7 @@ async fn test_agent_builder_works_without_mcp_instructions() {
     let llm = FakeLlmProvider::new(vec![]);
     let captured_contexts = llm.captured_contexts();
 
-    let mut spawn = mcp().with_servers(vec![fake_mcp("test", FakeMcpServer::new())]).spawn().await.unwrap();
+    let mut spawn = mcp("/workspace").with_servers(vec![fake_mcp("test", FakeMcpServer::new())]).spawn().await.unwrap();
     let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
     // No mcp_instructions provided - should still work

@@ -1,9 +1,10 @@
 use mcp_utils::client::{McpConfig, McpServer, McpTransport, ParseError};
 use std::collections::HashMap;
 use std::env;
+use utils::variables::Vars;
 
 async fn parse_servers(json: &str) -> Result<Vec<McpServer>, ParseError> {
-    McpConfig::from_json(json).unwrap().into_servers(&HashMap::new()).await
+    McpConfig::from_json(json).unwrap().into_servers(&HashMap::new(), &Vars::new()).await
 }
 
 async fn parse_one(json: &str) -> McpServer {

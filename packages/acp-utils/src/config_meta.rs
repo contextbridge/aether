@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use utils::ReasoningEffort;
+use utils::{ReasoningEffort, is_false};
 
 type Meta = serde_json::Map<String, serde_json::Value>;
 
@@ -8,11 +8,6 @@ type Meta = serde_json::Map<String, serde_json::Value>;
 pub struct ConfigOptionMeta {
     #[serde(default, skip_serializing_if = "is_false")]
     pub multi_select: bool,
-}
-
-#[allow(clippy::trivially_copy_pass_by_ref)] // serde requires &T
-fn is_false(b: &bool) -> bool {
-    !b
 }
 
 /// Meta for an individual `SessionConfigSelectOption` (e.g. one model choice).

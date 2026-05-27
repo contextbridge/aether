@@ -10,7 +10,7 @@ import {
   LinkCard,
 } from "@astrojs/starlight/components";
 
-Agents get tools from MCP (Model Context Protocol) servers. In scaffolded projects, `.aether/settings.json` references one or more MCP sources via `mcps`, and the default project source is usually `.aether/mcp.json`.
+Agents get tools from MCP (Model Context Protocol) servers. Settings can reference MCP sources from either user settings (`$HOME/.aether/settings.json`) or project settings (`.aether/settings.json`) via `mcps`, and the default project source is usually `.aether/mcp.json`.
 
 ## MCP config files
 
@@ -201,12 +201,13 @@ If a server entry has a `command` and no `type`, it is treated as `"type": "stdi
 
 ## MCP sources in settings
 
-The `mcps` array in `.aether/settings.json` can reference files, inline configs, or proxied files:
+The `mcps` array in user or project settings can reference files, inline configs, optional files, or proxied files:
 
 ```json title=".aether/settings.json"
 {
   "mcps": [
     ".aether/mcp.json",
+    { "type": "file", "path": "${WORKSPACE}/.aether/local-mcp.json", "optional": true },
     { "type": "file", "path": ".aether/external-mcp.json", "proxy": true },
     {
       "type": "inline",
@@ -230,16 +231,50 @@ The `mcps` array in `.aether/settings.json` can reference files, inline configs,
 }
 ```
 
-Agent-level `mcps` replace the top-level list when the agent's array is non-empty.
+Agent-level `mcps` replace the top-level list when the agent's array is non-empty. String shorthand entries are required file sources. Use a typed file object when you need `proxy` or `optional`.
+
+## User, project, and MCP source resolution
+
+Aether first merges user settings from `$HOME/.aether/settings.json` and project settings from `.aether/settings.json`. Set `AETHER_HOME` to use a different user settings directory. Project settings win when they define the same agent, and a non-empty project top-level `mcps` list replaces a user top-level `mcps` list. Within the selected agent, agent-level `mcps` replace top-level `mcps` when non-empty.
+
+MCP file paths use resource path resolution:
+
+- In project settings, plain relative paths resolve from the workspace root.
+- In user settings, plain relative paths resolve from the Aether home (`$HOME/.aether` by default).
+- `${WORKSPACE}` always resolves to the current workspace root. This is the preferred way for a user-level agent to load a project's `.aether/mcp.json`.
+- Other `$VAR` and `${VAR}` references fall through to the process environment.
+- `optional: true` skips a missing MCP file or unresolved variable instead of failing settings resolution.
+
+```json title="$HOME/.aether/settings.json"
+{
+  "agents": [
+    {
+      "name": "Build",
+      "description": "Reusable coding agent",
+      "model": "anthropic:claude-sonnet-4-5-20250929",
+      "userInvocable": true,
+      "prompts": ["BUILD.md"],
+      "mcps": [
+        "mcp.json",
+        { "type": "file", "path": "${WORKSPACE}/.aether/mcp.json", "optional": true }
+      ]
+    }
+  ]
+}
+```
+
+In this user-level example, `mcp.json` resolves to `$HOME/.aether/mcp.json` by default, while `${WORKSPACE}/.aether/mcp.json` resolves to the project MCP config.
 
 ## Merging and proxy behavior
 
-Multiple MCP sources are loaded in order. Server names are unique keys; when two sources define the same server, the later source wins, including its `proxy` flag.
+Multiple MCP sources are loaded in order after settings resolution. Server names are unique keys; when two sources define the same server, the later source wins, including its `proxy` flag.
 
 A server can be proxied in two ways:
 
 1. Set `"proxy": true` on the server entry in an MCP config file.
 2. Reference a file source with `{ "type": "file", "path": "...", "proxy": true }`, which marks every server loaded from that file as proxied.
+
+`proxy` and `optional` can be combined: `{ "type": "file", "path": "${WORKSPACE}/.aether/external-mcp.json", "proxy": true, "optional": true }`.
 
 ```json title=".aether/external-mcp.json"
 {
@@ -259,11 +294,11 @@ A server can be proxied in two ways:
 }
 ```
 
-When any server is proxied, Aether exposes one virtual tool named `proxy__call_tool`, writes nested tool definitions under `$AETHER_HOME/tool-proxy/proxy` (or the default Aether home), and adds instructions telling the agent how to browse those files. The server name `proxy` is reserved when proxied servers are present.
+When any server is proxied, Aether exposes one virtual tool named `proxy__call_tool`, writes nested tool definitions under `$HOME/.aether/tool-proxy/proxy` by default, or `$AETHER_HOME/tool-proxy/proxy` when `AETHER_HOME` is set, and adds instructions telling the agent how to browse those files. The server name `proxy` is reserved when proxied servers are present.
 
 ## Variable expansion
 
-Environment variables are expanded in stdio `command`, stdio `args`, stdio `env` values, in-memory `args`, HTTP/SSE `url`, and the HTTP/SSE `Authorization` header value.
+Variables are expanded in two places: MCP source paths in settings, and server fields inside MCP JSON files. Environment variables are expanded in stdio `command`, stdio `args`, stdio `env` values, in-memory `args`, HTTP/SSE `url`, and the HTTP/SSE `Authorization` header value. `${WORKSPACE}` is also available when server configs are converted into running MCP servers.
 
 Supported syntax:
 
@@ -273,7 +308,7 @@ Supported syntax:
 | `${VAR}` | Expand `VAR` |
 | `$$`     | Literal `$`  |
 
-Missing variables are errors; they are not replaced with an empty string.
+Missing variables are errors; they are not replaced with an empty string. For MCP source paths only, `optional: true` skips the missing source when a variable is undefined.
 
 ```json title=".aether/mcp.json"
 {

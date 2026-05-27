@@ -7,7 +7,7 @@ async fn test_tool_proxy_exposes_only_call_tool() {
     let aether_home = tempfile::tempdir().unwrap();
     let servers = vec![fake_mcp_with_proxy("math", FakeMcpServer::new(), true)];
 
-    let mut spawn = mcp().with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
+    let mut spawn = mcp("/workspace").with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
     let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
     // The proxy should expose exactly one tool: proxy__call_tool
@@ -21,7 +21,7 @@ async fn test_tool_proxy_instructions_mention_tool_directory() {
     let aether_home = tempfile::tempdir().unwrap();
     let servers = vec![fake_mcp_with_proxy("math", FakeMcpServer::new(), true)];
 
-    let mut spawn = mcp().with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
+    let mut spawn = mcp("/workspace").with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
     let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
     let proxy_instr = snapshot.instructions.get("proxy").expect("Expected instructions from tool-proxy 'ext'");
@@ -40,7 +40,7 @@ async fn test_tool_proxy_does_not_expose_nested_server_tools() {
     let aether_home = tempfile::tempdir().unwrap();
     let servers = vec![fake_mcp_with_proxy("math", FakeMcpServer::new(), true)];
 
-    let mut spawn = mcp().with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
+    let mut spawn = mcp("/workspace").with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
     let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
     // The agent should NOT see individual tools like math__add_numbers
@@ -59,7 +59,7 @@ async fn test_tool_proxy_does_not_leak_nested_instructions() {
     let aether_home = tempfile::tempdir().unwrap();
     let servers = vec![fake_mcp_with_proxy("math", FakeMcpServer::new(), true)];
 
-    let mut spawn = mcp().with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
+    let mut spawn = mcp("/workspace").with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
     let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
     // Nested server instructions should NOT appear as top-level entries
@@ -77,7 +77,7 @@ async fn test_tool_proxy_writes_tool_files_to_disk() {
     let aether_home = tempfile::tempdir().unwrap();
     let servers = vec![fake_mcp_with_proxy("math", FakeMcpServer::new(), true)];
 
-    let mut spawn = mcp().with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
+    let mut spawn = mcp("/workspace").with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
     let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
     let proxy_instr = snapshot.instructions.get("proxy").expect("Expected instructions from tool-proxy 'filetest'");
@@ -118,7 +118,7 @@ async fn test_tool_proxy_call_tool_routes_to_nested_server() {
     let aether_home = tempfile::tempdir().unwrap();
     let servers = vec![fake_mcp_with_proxy("math", FakeMcpServer::new(), true)];
 
-    let mut spawn = mcp().with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
+    let mut spawn = mcp("/workspace").with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
     let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
     // Call add_numbers through the proxy using ExecuteTool
@@ -165,7 +165,7 @@ async fn test_tool_proxy_call_tool_unknown_server_returns_error() {
     let aether_home = tempfile::tempdir().unwrap();
     let servers = vec![fake_mcp_with_proxy("math", FakeMcpServer::new(), true)];
 
-    let mut spawn = mcp().with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
+    let mut spawn = mcp("/workspace").with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
     let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
     let arguments = serde_json::json!({
@@ -217,7 +217,7 @@ async fn test_tool_proxy_multiple_nested_servers() {
         fake_mcp_with_proxy("server_b", FakeMcpServer::new(), true),
     ];
 
-    let mut spawn = mcp().with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
+    let mut spawn = mcp("/workspace").with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
     let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
     // Still only one tool exposed
@@ -245,7 +245,7 @@ async fn test_tool_proxy_member_server_status_shows_connected_and_proxied() {
     let aether_home = tempfile::tempdir().unwrap();
     let servers = vec![fake_mcp_with_proxy("math", FakeMcpServer::new(), true)];
 
-    let mut spawn = mcp().with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
+    let mut spawn = mcp("/workspace").with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
     let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
     assert!(!snapshot.server_statuses.iter().any(|s| s.name == "proxy"));

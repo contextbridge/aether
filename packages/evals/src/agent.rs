@@ -17,7 +17,7 @@ pub async fn create_aether_agent(workspace_path: &Path) -> Result<Agent, EvalHar
     let provider = Arc::from(provider);
 
     let prompt_path = format!("{}/prompts/coding_agent.md", env!("CARGO_MANIFEST_DIR"));
-    let system_prompt = Prompt::file(&prompt_path).with_cwd(workspace_path.to_path_buf());
+    let system_prompt = Prompt::file(prompt_path, workspace_path.to_path_buf());
 
     Ok(AetherAgent::new(provider)
         .with_mcp_server_factory("coding", coding_server_factory(workspace_path.to_path_buf()))

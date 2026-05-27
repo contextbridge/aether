@@ -73,7 +73,7 @@ async fn cancelling_handler_returns_user_cancelled() {
 async fn builder_with_oauth_handler_factory_spawns_successfully() {
     let handler = Arc::new(FakeOAuthHandler::new("code", "state"));
 
-    let mut spawn = mcp()
+    let mut spawn = mcp("/workspace")
         .with_oauth_handler_factory(Arc::new(move |_ctx| Ok(handler.clone())))
         .with_servers(vec![])
         .spawn()

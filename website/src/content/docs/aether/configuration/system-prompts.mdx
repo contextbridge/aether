@@ -3,17 +3,18 @@ title: Prompts
 description: Control agent behavior with prompt sources.
 ---
 
-Aether assembles each agent's system prompt from authored prompt sources plus MCP server instructions. There is no built-in prompt file name to target; use the files and inline text you list in `.aether/settings.json`.
+Aether assembles each agent's system prompt from authored prompt sources plus MCP server instructions. There is no built-in prompt file name to target; use the files and inline text you list in user settings (`$HOME/.aether/settings.json`) or project settings (`.aether/settings.json`).
 
 ## Prompt sources
 
-The `prompts` field accepts four formats:
+The `prompts` field accepts these formats:
 
 | Form                  | Example                                                  |
 | --------------------- | -------------------------------------------------------- |
 | String path shorthand | `"AGENTS.md"`                                            |
 | Typed file            | `{ "type": "file", "path": ".aether/BUILD.md" }`         |
 | Typed glob            | `{ "type": "glob", "pattern": ".aether/rules/*.md" }`    |
+| Optional file/glob    | `{ "type": "file", "path": "AGENTS.md", "optional": true }` |
 | Inline text           | `{ "type": "text", "text": "Always answer concisely." }` |
 
 Top-level `prompts` are defaults. An agent inherits them only when its own `prompts` array is empty. If an agent provides a non-empty `prompts` array, that array replaces the top-level prompt list for that agent.
@@ -30,7 +31,8 @@ Top-level `prompts` are defaults. An agent inherits them only when its own `prom
       "prompts": [
         ".aether/BUILD.md",
         "AGENTS.md",
-        { "type": "glob", "pattern": ".aether/rules/*.md" },
+        { "type": "file", "path": "${WORKSPACE}/AGENTS.md", "optional": true },
+        { "type": "glob", "pattern": ".aether/rules/*.md", "optional": true },
         { "type": "text", "text": "Prefer small, reviewable patches." }
       ]
     }
@@ -38,7 +40,33 @@ Top-level `prompts` are defaults. An agent inherits them only when its own `prom
 }
 ```
 
-Prompt file paths and glob patterns are resolved relative to the project root unless they are absolute. They must match at least one file during settings resolution.
+Prompt file paths and glob patterns use resource path resolution:
+
+- In project settings (`.aether/settings.json`), plain relative paths resolve from the workspace root.
+- In user settings (`$HOME/.aether/settings.json` by default), plain relative paths resolve from the Aether home (`$HOME/.aether` by default). Set `AETHER_HOME` to use a different Aether home directory.
+- `${WORKSPACE}` always resolves to the current workspace root, so user-level agents can include project files such as `${WORKSPACE}/AGENTS.md`.
+- Other `$VAR` and `${VAR}` references are expanded from the process environment.
+- Required files must exist, and required globs must match at least one file. Add `"optional": true` to skip a missing file, zero-match glob, or unresolved variable.
+
+```json title="$HOME/.aether/settings.json"
+{
+  "agents": [
+    {
+      "name": "Planner",
+      "description": "Plans work across any workspace",
+      "model": "anthropic:claude-sonnet-4-5-20250929",
+      "userInvocable": true,
+      "prompts": [
+        "PLANNER.md",
+        { "type": "file", "path": "${WORKSPACE}/AGENTS.md", "optional": true },
+        { "type": "glob", "pattern": "${WORKSPACE}/.aether/rules/*.md", "optional": true }
+      ]
+    }
+  ]
+}
+```
+
+In this user-level example, `PLANNER.md` is loaded from the Aether home, while the `AGENTS.md` and rules glob are loaded from whichever workspace is currently open.
 
 ## Agent prompt files
 
@@ -90,7 +118,7 @@ Prompt sources are resolved in the order listed. Glob matches are sorted before 
 
 ## Debugging prompts
 
-Use `show-prompt` to see the fully assembled prompt and the MCP tool summary for any agent:
+Use `show-prompt` to see the fully assembled prompt and the MCP tool summary for any agent after user and project settings have been merged and all resource paths have been resolved:
 
 ```bash
 aether show-prompt
