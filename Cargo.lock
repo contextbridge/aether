@@ -215,6 +215,7 @@ name = "aether-mcp-servers"
 version = "0.4.11"
 dependencies = [
  "aether-agent-core",
+ "aether-auth",
  "aether-llm",
  "aether-lspd",
  "aether-mcp-servers",

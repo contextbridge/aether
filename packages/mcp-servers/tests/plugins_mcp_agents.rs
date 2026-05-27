@@ -1,3 +1,4 @@
+use aether_auth::FakeOAuthCredentialStore;
 use aether_project::{AetherSettings, AetherSettingsSource, AgentCatalog, SettingsFileSource};
 use mcp_servers::subagents::SubAgentsMcp;
 use mcp_utils::testing::connect;
@@ -6,6 +7,7 @@ use rmcp::service::RunningService;
 use rmcp::{RoleClient, RoleServer};
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 use tempfile::TempDir;
 
 #[tokio::test]
@@ -32,6 +34,33 @@ async fn test_spawn_agent_with_coding_mcp_from_settings_catalog() {
 
     let temp_dir = create_test_files(&test_files);
     let (_server_handle, _client) = create_test_client(temp_dir.path()).await;
+}
+
+#[tokio::test]
+async fn test_spawn_subagent_codex_uses_oauth_store() {
+    let temp_dir = create_project_with_codex_agent();
+    let (_, client) = connect(
+        create_test_server(temp_dir.path()).with_oauth_credential_store(Arc::new(FakeOAuthCredentialStore::new())),
+        ClientInfo::new(ClientCapabilities::default(), Implementation::new("test-client", "0.1.0")),
+    )
+    .await
+    .expect("Failed to connect MCP server and client");
+
+    let args = {
+        let mut args = serde_json::Map::new();
+        args.insert("tasks".to_string(), serde_json::json!([{ "agentName": "explorer", "prompt": "Read README.md" }]));
+        args
+    };
+
+    let result = client
+        .call_tool(CallToolRequestParams::new("spawn_subagent").with_arguments(args))
+        .await
+        .expect("Failed to call spawn_subagent tool");
+
+    let text = result.content.first().and_then(|c| c.as_text()).expect("Expected text content");
+    let parsed: serde_json::Value = serde_json::from_str(&text.text).expect("Invalid JSON response");
+    let error = parsed["results"][0]["error"].as_str().expect("Expected sub-agent error");
+    assert!(error.contains("No Codex OAuth credentials found"),);
 }
 
 #[tokio::test]
@@ -197,6 +226,23 @@ fn create_project_with_invocable_agent() -> TempDir {
         ),
         (".aether/prompts/coder.md", "You are a coding assistant."),
     ])
+}
+
+fn create_project_with_codex_agent() -> TempDir {
+    create_test_files(&[(
+        ".aether/settings.json",
+        r#"{
+  "agents": [
+    {
+      "name": "explorer",
+      "description": "A Codex sub-agent",
+      "model": "codex:gpt-5.4-mini",
+      "agentInvocable": true,
+      "prompts": [{"type":"text","text":"You are a codebase explorer."}]
+    }
+  ]
+}"#,
+    )])
 }
 
 fn create_test_server(test_dir: &Path) -> SubAgentsMcp {

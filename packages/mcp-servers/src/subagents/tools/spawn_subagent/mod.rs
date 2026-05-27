@@ -1,4 +1,5 @@
 use crate::setup::McpBuilderExt;
+use aether_auth::{OAuthCredentialStorage, OsKeyringStore};
 use aether_core::{
     agent_spec::McpConfigSource,
     core::{AgentBuilder, AgentHandle, Prompt},
@@ -156,12 +157,23 @@ pub struct AgentExecutor {
     catalog: Arc<AgentCatalog>,
     progress_callback: Option<Arc<ProgressCallback>>,
     roots: Vec<PathBuf>,
+    oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
 }
 
 impl AgentExecutor {
     /// Create a new `AgentExecutor` with the given agent catalog and workspace roots
     pub fn new(catalog: AgentCatalog, roots: Vec<PathBuf>) -> Self {
-        Self { catalog: Arc::new(catalog), progress_callback: None, roots }
+        Self {
+            catalog: Arc::new(catalog),
+            progress_callback: None,
+            roots,
+            oauth_credential_store: Arc::new(OsKeyringStore::with_platform_store()),
+        }
+    }
+
+    pub fn with_oauth_credential_store(mut self, store: Arc<dyn OAuthCredentialStorage>) -> Self {
+        self.oauth_credential_store = store;
+        self
     }
 
     /// Set a callback for receiving progress updates during agent execution
@@ -186,6 +198,7 @@ impl AgentExecutor {
         let catalog = Arc::clone(&self.catalog);
         let progress_callback = self.progress_callback.clone();
         let roots = self.roots.clone();
+        let oauth_credential_store = Arc::clone(&self.oauth_credential_store);
         let handles: Vec<_> = tasks
             .into_iter()
             .enumerate()
@@ -194,7 +207,10 @@ impl AgentExecutor {
                 let catalog = Arc::clone(&catalog);
                 let progress_callback = progress_callback.clone();
                 let roots = roots.clone();
-                spawn(async move { execute_single_agent(task_id, task, catalog, progress_callback, roots).await })
+                let oauth_credential_store = Arc::clone(&oauth_credential_store);
+                spawn(async move {
+                    execute_single_agent(task_id, task, catalog, progress_callback, roots, oauth_credential_store).await
+                })
             })
             .collect();
 
@@ -231,6 +247,7 @@ async fn execute_single_agent(
     catalog: Arc<AgentCatalog>,
     progress_callback: Option<Arc<ProgressCallback>>,
     roots: Vec<PathBuf>,
+    oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
 ) -> SubAgentResult {
     let agent_name = task.agent_name.clone();
 
@@ -246,7 +263,8 @@ async fn execute_single_agent(
         let filtered_tools = spec.tools.apply(tool_definitions);
         spec.prompts.push(Prompt::mcp_instructions(instructions));
 
-        let (user_tx, mut agent_rx, _agent_handle) = spawn_agent(spec, command_tx, filtered_tools).await?;
+        let (user_tx, mut agent_rx, _agent_handle) =
+            spawn_agent(spec, command_tx, filtered_tools, oauth_credential_store).await?;
 
         let prompt_with_instructions = format!("{}\n\n{}", task.prompt, STRUCTURED_OUTPUT_INSTRUCTIONS);
         user_tx
@@ -335,8 +353,9 @@ async fn spawn_agent(
     spec: aether_core::agent_spec::AgentSpec,
     mcp_tx: mpsc::Sender<McpCommand>,
     tools: Vec<ToolDefinition>,
+    oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
 ) -> Result<(mpsc::Sender<UserMessage>, mpsc::Receiver<AgentMessage>, AgentHandle), String> {
-    AgentBuilder::from_spec(&spec, vec![], None)
+    AgentBuilder::from_spec(&spec, vec![], Some(oauth_credential_store))
         .await
         .map_err(|e| format!("Failed to build agent from spec: {e}"))?
         .tools(mcp_tx, tools)
