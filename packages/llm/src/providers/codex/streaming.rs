@@ -1,14 +1,78 @@
-use async_openai::types::responses::{OutputItem, ResponseStreamEvent, Status};
+use async_openai::types::responses::{OutputItem, ResponseUsage, Status};
+use futures::Stream;
+use serde::Deserialize;
+use tokio_stream::StreamExt;
 
 use crate::providers::tool_call_collector::ToolCallCollector;
 use crate::{LlmError, LlmResponse, Result, StopReason};
-use futures::Stream;
-use tokio_stream::StreamExt;
 
-/// Process a typed `ResponseStreamEvent` stream into `LlmResponse` items.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+pub enum CodexStreamEvent {
+    #[serde(rename = "response.output_text.delta")]
+    OutputTextDelta(CodexTextDeltaEvent),
+    #[serde(rename = "response.output_item.added")]
+    OutputItemAdded(CodexOutputItemEvent),
+    #[serde(rename = "response.output_item.done")]
+    OutputItemDone(CodexOutputItemEvent),
+    #[serde(rename = "response.function_call_arguments.delta")]
+    FunctionCallArgumentsDelta(CodexFunctionCallArgumentsDeltaEvent),
+    #[serde(rename = "response.function_call_arguments.done")]
+    FunctionCallArgumentsDone(CodexFunctionCallArgumentsDoneEvent),
+    #[serde(rename = "response.reasoning_summary_text.delta")]
+    ReasoningSummaryTextDelta(CodexTextDeltaEvent),
+    #[serde(rename = "response.completed")]
+    Completed(CodexResponseCompletedEvent),
+    #[serde(rename = "error")]
+    Error(CodexErrorEvent),
+    #[serde(other)]
+    Ignored,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CodexTextDeltaEvent {
+    pub delta: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CodexOutputItemEvent {
+    pub output_index: u32,
+    pub item: OutputItem,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CodexFunctionCallArgumentsDeltaEvent {
+    pub output_index: u32,
+    pub delta: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CodexFunctionCallArgumentsDoneEvent {
+    pub output_index: u32,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CodexResponseCompletedEvent {
+    pub response: CodexResponseCompleted,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CodexResponseCompleted {
+    #[serde(default)]
+    pub usage: Option<ResponseUsage>,
+    #[serde(default)]
+    pub status: Option<Status>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CodexErrorEvent {
+    pub message: String,
+}
+
+/// Process a Codex response stream into `LlmResponse` items.
 pub fn process_response_stream<T>(stream: T) -> impl Stream<Item = Result<LlmResponse>> + Send
 where
-    T: Stream<Item = Result<ResponseStreamEvent>> + Send + Unpin,
+    T: Stream<Item = Result<CodexStreamEvent>> + Send + Unpin,
 {
     async_stream::stream! {
         let message_id = uuid::Uuid::new_v4().to_string();
@@ -32,7 +96,6 @@ where
             }
         }
 
-        // Complete any pending tool calls
         for tc in tool_collector.complete_all() {
             yield Ok(LlmResponse::ToolRequestComplete { tool_call: tc });
         }
@@ -44,35 +107,35 @@ where
 }
 
 fn process_event(
-    event: ResponseStreamEvent,
+    event: CodexStreamEvent,
     tool_collector: &mut ToolCallCollector<u32>,
     last_stop_reason: &mut Option<StopReason>,
 ) -> Vec<Result<LlmResponse>> {
     let mut responses = Vec::new();
 
     match event {
-        ResponseStreamEvent::ResponseOutputTextDelta(e) if !e.delta.is_empty() => {
+        CodexStreamEvent::OutputTextDelta(e) if !e.delta.is_empty() => {
             responses.push(Ok(LlmResponse::Text { chunk: e.delta }));
         }
-        ResponseStreamEvent::ResponseOutputItemAdded(e) => {
+        CodexStreamEvent::OutputItemAdded(e) => {
             if let OutputItem::FunctionCall(call) = e.item {
                 let tool_responses = tool_collector.handle_delta(e.output_index, call.id, Some(call.name), None);
                 responses.extend(tool_responses.into_iter().map(Ok));
             }
         }
-        ResponseStreamEvent::ResponseFunctionCallArgumentsDelta(e) => {
+        CodexStreamEvent::FunctionCallArgumentsDelta(e) => {
             let tool_responses = tool_collector.handle_delta(e.output_index, None, None, Some(e.delta));
             responses.extend(tool_responses.into_iter().map(Ok));
         }
-        ResponseStreamEvent::ResponseFunctionCallArgumentsDone(e) => {
+        CodexStreamEvent::FunctionCallArgumentsDone(e) => {
             if let Some(tc) = tool_collector.complete_one(e.output_index) {
                 responses.push(Ok(LlmResponse::ToolRequestComplete { tool_call: tc }));
             }
         }
-        ResponseStreamEvent::ResponseReasoningSummaryTextDelta(e) if !e.delta.is_empty() => {
+        CodexStreamEvent::ReasoningSummaryTextDelta(e) if !e.delta.is_empty() => {
             responses.push(Ok(LlmResponse::Reasoning { chunk: e.delta }));
         }
-        ResponseStreamEvent::ResponseOutputItemDone(e) => {
+        CodexStreamEvent::OutputItemDone(e) => {
             if let OutputItem::Reasoning(reasoning) = e.item
                 && let Some(id) = reasoning.id
                 && let Some(encrypted) = reasoning.encrypted_content
@@ -80,22 +143,23 @@ fn process_event(
                 responses.push(Ok(LlmResponse::EncryptedReasoning { id, content: encrypted }));
             }
         }
-        ResponseStreamEvent::ResponseCompleted(e) => {
+        CodexStreamEvent::Completed(e) => {
             if let Some(usage) = e.response.usage {
                 responses.push(Ok(LlmResponse::Usage { tokens: usage.into() }));
             }
             match e.response.status {
-                Status::Completed => *last_stop_reason = Some(StopReason::EndTurn),
-                Status::Incomplete => *last_stop_reason = Some(StopReason::Length),
+                Some(Status::Completed) => *last_stop_reason = Some(StopReason::EndTurn),
+                Some(Status::Incomplete) => *last_stop_reason = Some(StopReason::Length),
                 _ => {}
             }
         }
-        ResponseStreamEvent::ResponseError(e) => {
+        CodexStreamEvent::Error(e) => {
             responses
                 .push(Err(LlmError::ServerError { status: None, message: format!("Codex API error: {}", e.message) }));
         }
-        // Events we don't need to act on
-        _ => {}
+        CodexStreamEvent::Ignored
+        | CodexStreamEvent::OutputTextDelta(_)
+        | CodexStreamEvent::ReasoningSummaryTextDelta(_) => {}
     }
 
     responses
@@ -105,84 +169,27 @@ fn process_event(
 mod tests {
     use super::*;
     use crate::TokenUsage;
-    use async_openai::types::responses::{
-        FunctionToolCall, ReasoningItem, Response, ResponseCompletedEvent, ResponseErrorEvent,
-        ResponseFunctionCallArgumentsDeltaEvent, ResponseFunctionCallArgumentsDoneEvent, ResponseOutputItemAddedEvent,
-        ResponseOutputItemDoneEvent, ResponseReasoningSummaryTextDeltaEvent, ResponseTextDeltaEvent, ResponseUsage,
-    };
-    /// Build a minimal `Response` with given status and optional usage via JSON deserialization.
-    fn make_response(status: &Status, usage: Option<ResponseUsage>) -> Response {
-        let status_str = serde_json::to_value(status).unwrap();
-        let mut json = serde_json::json!({
-            "id": "resp_1",
-            "object": "response",
-            "status": status_str,
-            "output": [],
-            "model": "test",
-            "created_at": 0
-        });
-        if let Some(u) = usage {
-            json["usage"] = serde_json::to_value(u).unwrap();
-        }
-        serde_json::from_value(json).unwrap()
-    }
+    use async_openai::types::responses::{FunctionToolCall, ReasoningItem};
+    use serde_json::json;
 
-    fn make_usage(input_tokens: u32, output_tokens: u32) -> ResponseUsage {
-        make_usage_full(input_tokens, output_tokens, 0, 0)
-    }
-
-    fn make_usage_full(
-        input_tokens: u32,
-        output_tokens: u32,
-        cached_tokens: u32,
-        reasoning_tokens: u32,
-    ) -> ResponseUsage {
-        serde_json::from_value(serde_json::json!({
-            "input_tokens": input_tokens,
-            "input_tokens_details": { "cached_tokens": cached_tokens },
-            "output_tokens": output_tokens,
-            "output_tokens_details": { "reasoning_tokens": reasoning_tokens },
-            "total_tokens": input_tokens + output_tokens
-        }))
-        .unwrap()
-    }
-
-    fn make_stream(events: Vec<ResponseStreamEvent>) -> impl Stream<Item = Result<ResponseStreamEvent>> + Send + Unpin {
-        tokio_stream::iter(events.into_iter().map(Ok).collect::<Vec<_>>())
-    }
-
-    #[tokio::test]
-    async fn test_text_stream() {
-        let events = vec![
-            ResponseStreamEvent::ResponseOutputTextDelta(ResponseTextDeltaEvent {
-                output_index: 0,
-                content_index: 0,
-                delta: "Hello".to_string(),
-                sequence_number: 1,
-                item_id: "msg_1".to_string(),
-                logprobs: None,
-            }),
-            ResponseStreamEvent::ResponseOutputTextDelta(ResponseTextDeltaEvent {
-                output_index: 0,
-                content_index: 0,
-                delta: " world".to_string(),
-                sequence_number: 2,
-                item_id: "msg_1".to_string(),
-                logprobs: None,
-            }),
-            ResponseStreamEvent::ResponseCompleted(ResponseCompletedEvent {
-                sequence_number: 3,
-                response: make_response(&Status::Completed, Some(make_usage(10, 5))),
-            }),
-        ];
-
+    async fn collect_responses(events: Vec<CodexStreamEvent>) -> Vec<LlmResponse> {
         let stream = make_stream(events);
         let mut response_stream = Box::pin(process_response_stream(stream));
-
         let mut responses = Vec::new();
         while let Some(result) = response_stream.next().await {
             responses.push(result.unwrap());
         }
+        responses
+    }
+
+    #[tokio::test]
+    async fn test_text_stream() {
+        let responses = collect_responses(vec![
+            text_delta("Hello"),
+            text_delta(" world"),
+            completed(Status::Completed, Some(make_usage(10, 5))),
+        ])
+        .await;
 
         assert!(matches!(responses[0], LlmResponse::Start { .. }));
         assert!(matches!(responses[1], LlmResponse::Text { ref chunk } if chunk == "Hello"));
@@ -196,9 +203,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_call_stream() {
-        let events = vec![
-            ResponseStreamEvent::ResponseOutputItemAdded(ResponseOutputItemAddedEvent {
-                sequence_number: 1,
+        let responses = collect_responses(vec![
+            CodexStreamEvent::OutputItemAdded(CodexOutputItemEvent {
                 output_index: 0,
                 item: OutputItem::FunctionCall(FunctionToolCall {
                     id: Some("fc_1".to_string()),
@@ -209,38 +215,12 @@ mod tests {
                     namespace: None,
                 }),
             }),
-            ResponseStreamEvent::ResponseFunctionCallArgumentsDelta(ResponseFunctionCallArgumentsDeltaEvent {
-                sequence_number: 2,
-                item_id: "fc_1".to_string(),
-                output_index: 0,
-                delta: r#"{"path":"#.to_string(),
-            }),
-            ResponseStreamEvent::ResponseFunctionCallArgumentsDelta(ResponseFunctionCallArgumentsDeltaEvent {
-                sequence_number: 3,
-                item_id: "fc_1".to_string(),
-                output_index: 0,
-                delta: r#""foo.rs"}"#.to_string(),
-            }),
-            ResponseStreamEvent::ResponseFunctionCallArgumentsDone(ResponseFunctionCallArgumentsDoneEvent {
-                sequence_number: 4,
-                item_id: "fc_1".to_string(),
-                output_index: 0,
-                arguments: r#"{"path":"foo.rs"}"#.to_string(),
-                name: None,
-            }),
-            ResponseStreamEvent::ResponseCompleted(ResponseCompletedEvent {
-                sequence_number: 5,
-                response: make_response(&Status::Completed, Some(make_usage(20, 10))),
-            }),
-        ];
-
-        let stream = make_stream(events);
-        let mut response_stream = Box::pin(process_response_stream(stream));
-
-        let mut responses = Vec::new();
-        while let Some(result) = response_stream.next().await {
-            responses.push(result.unwrap());
-        }
+            function_call_delta(r#"{"path":"#),
+            function_call_delta(r#""foo.rs"}"#),
+            CodexStreamEvent::FunctionCallArgumentsDone(CodexFunctionCallArgumentsDoneEvent { output_index: 0 }),
+            completed(Status::Completed, Some(make_usage(20, 10))),
+        ])
+        .await;
 
         assert!(matches!(responses[0], LlmResponse::Start { .. }));
         assert!(
@@ -260,14 +240,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_error_event_is_retryable_server_error() {
-        let events = vec![ResponseStreamEvent::ResponseError(ResponseErrorEvent {
-            sequence_number: 1,
-            code: None,
-            message: "Rate limit exceeded".to_string(),
-            param: None,
-        })];
-
-        let stream = make_stream(events);
+        let stream =
+            make_stream(vec![CodexStreamEvent::Error(CodexErrorEvent { message: "Rate limit exceeded".to_string() })]);
         let mut response_stream = Box::pin(process_response_stream(stream));
 
         let mut responses = Vec::new();
@@ -276,41 +250,19 @@ mod tests {
         }
 
         assert!(responses[0].is_ok());
-        let err = responses[1].as_ref().expect_err("expected ResponseError to surface as Err");
+        let err = responses[1].as_ref().expect_err("expected error event to surface as Err");
         assert!(matches!(err, LlmError::ServerError { status: None, .. }), "got {err:?}");
         assert!(err.is_retryable(), "ResponseError must be retryable so the agent can recover");
     }
 
     #[tokio::test]
     async fn test_reasoning_delta() {
-        let events = vec![
-            ResponseStreamEvent::ResponseReasoningSummaryTextDelta(ResponseReasoningSummaryTextDeltaEvent {
-                sequence_number: 1,
-                item_id: "r_1".to_string(),
-                output_index: 0,
-                summary_index: 0,
-                delta: "Thinking about".to_string(),
-            }),
-            ResponseStreamEvent::ResponseReasoningSummaryTextDelta(ResponseReasoningSummaryTextDeltaEvent {
-                sequence_number: 2,
-                item_id: "r_1".to_string(),
-                output_index: 0,
-                summary_index: 0,
-                delta: " the problem".to_string(),
-            }),
-            ResponseStreamEvent::ResponseCompleted(ResponseCompletedEvent {
-                sequence_number: 3,
-                response: make_response(&Status::Completed, None),
-            }),
-        ];
-
-        let stream = make_stream(events);
-        let mut response_stream = Box::pin(process_response_stream(stream));
-
-        let mut responses = Vec::new();
-        while let Some(result) = response_stream.next().await {
-            responses.push(result.unwrap());
-        }
+        let responses = collect_responses(vec![
+            reasoning_delta("Thinking about"),
+            reasoning_delta(" the problem"),
+            completed(Status::Completed, None),
+        ])
+        .await;
 
         assert!(matches!(responses[1], LlmResponse::Reasoning { ref chunk } if chunk == "Thinking about"));
         assert!(matches!(responses[2], LlmResponse::Reasoning { ref chunk } if chunk == " the problem"));
@@ -318,25 +270,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_incomplete_status_gives_length_stop_reason() {
-        let events = vec![ResponseStreamEvent::ResponseCompleted(ResponseCompletedEvent {
-            sequence_number: 1,
-            response: make_response(&Status::Incomplete, None),
-        })];
-
-        let stream = make_stream(events);
-        let mut response_stream = Box::pin(process_response_stream(stream));
-
-        let mut responses = Vec::new();
-        while let Some(result) = response_stream.next().await {
-            responses.push(result.unwrap());
-        }
+        let responses = collect_responses(vec![completed(Status::Incomplete, None)]).await;
 
         assert!(matches!(responses.last().unwrap(), LlmResponse::Done { stop_reason: Some(StopReason::Length) }));
     }
 
     #[tokio::test]
     async fn test_stream_error_propagation_is_retryable() {
-        let events: Vec<Result<ResponseStreamEvent>> =
+        let events: Vec<Result<CodexStreamEvent>> =
             vec![Err(LlmError::StreamInterrupted("connection lost".to_string()))];
 
         let stream = tokio_stream::iter(events);
@@ -355,16 +296,9 @@ mod tests {
 
     #[test]
     fn test_encrypted_reasoning_from_output_item_done() {
-        let event = ResponseStreamEvent::ResponseOutputItemDone(ResponseOutputItemDoneEvent {
-            sequence_number: 1,
+        let event = CodexStreamEvent::OutputItemDone(CodexOutputItemEvent {
             output_index: 0,
-            item: OutputItem::Reasoning(ReasoningItem {
-                id: Some("r_1".to_string()),
-                summary: vec![],
-                encrypted_content: Some("enc-blob-data".to_string()),
-                content: None,
-                status: None,
-            }),
+            item: reasoning_item(Some("enc-blob-data")),
         });
 
         let mut tool_collector = ToolCallCollector::<u32>::new();
@@ -379,18 +313,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_usage_forwards_reasoning_and_cache_read() {
-        let events = vec![ResponseStreamEvent::ResponseCompleted(ResponseCompletedEvent {
-            sequence_number: 1,
-            response: make_response(&Status::Completed, Some(make_usage_full(120, 80, 50, 30))),
-        })];
-
-        let stream = make_stream(events);
-        let mut response_stream = Box::pin(process_response_stream(stream));
-
-        let mut responses = Vec::new();
-        while let Some(result) = response_stream.next().await {
-            responses.push(result.unwrap());
-        }
+        let responses =
+            collect_responses(vec![completed(Status::Completed, Some(make_usage_full(120, 80, 50, 30)))]).await;
 
         let usage = responses.iter().find_map(|r| match r {
             LlmResponse::Usage { tokens } => Some(*tokens),
@@ -409,24 +333,107 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_completed_without_output_deserializes_usage_and_stop_reason() {
+        let event: CodexStreamEvent = serde_json::from_value(json!({
+            "type": "response.completed",
+            "sequence_number": 1,
+            "response": {
+                "id": "resp_1",
+                "object": "response",
+                "created_at": 1_000_u64,
+                "status": "completed",
+                "background": false,
+                "completed_at": 2_000_u64,
+                "error": null,
+                "model": "test-model",
+                "usage": make_usage_json(100, 20, 0, 10)
+            }
+        }))
+        .unwrap();
+        let responses = collect_responses(vec![event]).await;
+
+        assert!(matches!(
+            responses.iter().find(|response| matches!(response, LlmResponse::Usage { .. })),
+            Some(LlmResponse::Usage {
+                tokens: TokenUsage { input_tokens: 100, output_tokens: 20, reasoning_tokens: Some(10), .. }
+            })
+        ));
+        assert!(matches!(responses.last().unwrap(), LlmResponse::Done { stop_reason: Some(StopReason::EndTurn) }));
+    }
+
     #[test]
     fn test_output_item_done_without_encrypted_content_is_ignored() {
-        let event = ResponseStreamEvent::ResponseOutputItemDone(ResponseOutputItemDoneEvent {
-            sequence_number: 1,
-            output_index: 0,
-            item: OutputItem::Reasoning(ReasoningItem {
-                id: Some("r_2".to_string()),
-                summary: vec![],
-                encrypted_content: None,
-                content: None,
-                status: None,
-            }),
-        });
+        let event =
+            CodexStreamEvent::OutputItemDone(CodexOutputItemEvent { output_index: 0, item: reasoning_item(None) });
 
         let mut tool_collector = ToolCallCollector::<u32>::new();
         let mut stop_reason = None;
         let responses = process_event(event, &mut tool_collector, &mut stop_reason);
 
         assert!(responses.is_empty());
+    }
+
+    fn text_delta(delta: &str) -> CodexStreamEvent {
+        CodexStreamEvent::OutputTextDelta(CodexTextDeltaEvent { delta: delta.to_string() })
+    }
+
+    fn reasoning_delta(delta: &str) -> CodexStreamEvent {
+        CodexStreamEvent::ReasoningSummaryTextDelta(CodexTextDeltaEvent { delta: delta.to_string() })
+    }
+
+    fn function_call_delta(delta: &str) -> CodexStreamEvent {
+        CodexStreamEvent::FunctionCallArgumentsDelta(CodexFunctionCallArgumentsDeltaEvent {
+            output_index: 0,
+            delta: delta.to_string(),
+        })
+    }
+
+    fn completed(status: Status, usage: Option<ResponseUsage>) -> CodexStreamEvent {
+        CodexStreamEvent::Completed(CodexResponseCompletedEvent {
+            response: CodexResponseCompleted { usage, status: Some(status) },
+        })
+    }
+
+    fn reasoning_item(encrypted_content: Option<&str>) -> OutputItem {
+        OutputItem::Reasoning(ReasoningItem {
+            id: Some("r_1".to_string()),
+            summary: vec![],
+            encrypted_content: encrypted_content.map(ToString::to_string),
+            content: None,
+            status: None,
+        })
+    }
+
+    fn make_stream(events: Vec<CodexStreamEvent>) -> impl Stream<Item = Result<CodexStreamEvent>> + Send + Unpin {
+        tokio_stream::iter(events.into_iter().map(Ok).collect::<Vec<_>>())
+    }
+
+    fn make_usage(input_tokens: u32, output_tokens: u32) -> ResponseUsage {
+        make_usage_full(input_tokens, output_tokens, 0, 0)
+    }
+
+    fn make_usage_full(
+        input_tokens: u32,
+        output_tokens: u32,
+        cached_tokens: u32,
+        reasoning_tokens: u32,
+    ) -> ResponseUsage {
+        serde_json::from_value(make_usage_json(input_tokens, output_tokens, cached_tokens, reasoning_tokens)).unwrap()
+    }
+
+    fn make_usage_json(
+        input_tokens: u32,
+        output_tokens: u32,
+        cached_tokens: u32,
+        reasoning_tokens: u32,
+    ) -> serde_json::Value {
+        json!({
+            "input_tokens": input_tokens,
+            "input_tokens_details": { "cached_tokens": cached_tokens },
+            "output_tokens": output_tokens,
+            "output_tokens_details": { "reasoning_tokens": reasoning_tokens },
+            "total_tokens": input_tokens + output_tokens
+        })
     }
 }

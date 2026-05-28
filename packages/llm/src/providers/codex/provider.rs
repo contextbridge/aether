@@ -1,12 +1,12 @@
 use super::mappers::{map_messages, map_tools};
 use super::oauth::CodexTokenManager;
-use super::streaming::process_response_stream;
+use super::streaming::{CodexStreamEvent, process_response_stream};
 use crate::provider::{LlmResponseStream, StreamingModelProvider, get_context_window};
 use crate::{Context, LlmError, Result};
 use aether_auth::OAuthCredentialStorage;
 use async_openai::types::responses::{
-    CreateResponse, IncludeEnum, InputParam, Reasoning, ReasoningEffort, ReasoningSummary, ResponseStreamEvent,
-    ResponseTextParam, TextResponseFormatConfiguration, Verbosity,
+    CreateResponse, IncludeEnum, InputParam, Reasoning, ReasoningEffort, ReasoningSummary, ResponseTextParam,
+    TextResponseFormatConfiguration, Verbosity,
 };
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
@@ -86,7 +86,7 @@ impl CodexProvider {
         &self,
         request: CreateResponse,
         headers: HeaderMap,
-    ) -> Result<impl futures::Stream<Item = Result<ResponseStreamEvent>>> {
+    ) -> Result<impl futures::Stream<Item = Result<CodexStreamEvent>>> {
         let url = format!("{CODEX_API_BASE}/responses");
 
         debug!("Sending request to Codex API: {url}");
@@ -116,7 +116,7 @@ impl CodexProvider {
         let event_stream = response.bytes_stream().eventsource().filter_map(|result| {
             std::future::ready(match result {
                 Ok(event) if event.data == "[DONE]" => None,
-                Ok(event) => match serde_json::from_str::<ResponseStreamEvent>(&event.data) {
+                Ok(event) => match serde_json::from_str::<CodexStreamEvent>(&event.data) {
                     Ok(parsed) => Some(Ok(parsed)),
                     Err(e) => {
                         debug!("Failed to parse Codex SSE line: {} - Error: {e}", event.data);
