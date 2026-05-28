@@ -1,12 +1,11 @@
-//! Fixture-driven Codex / `OpenAI` Responses streaming tests.
+//! Fixture-driven Codex Responses streaming tests.
 //!
-//! Loads raw SSE bodies captured from `api.openai.com/v1/responses` and feeds
-//! them through `process_response_stream`. The Codex provider and the
-//! `OpenAI` Responses provider both consume the same `ResponseStreamEvent` wire
-//! format, so a single fixture set covers the deserialization path for both.
+//! Loads raw SSE bodies captured from Responses endpoints and feeds them
+//! through `process_response_stream`. Codex parses the stream with a loose
+//! event envelope because the `ChatGPT` Codex API can omit fields required by
+//! the public `OpenAI` schema.
 
-use async_openai::types::responses::ResponseStreamEvent;
-use llm::providers::codex::streaming::process_response_stream;
+use llm::providers::codex::streaming::{CodexStreamEvent, process_response_stream};
 use llm::{LlmError, LlmResponse, Result, StopReason};
 use tokio_stream::StreamExt;
 
@@ -15,14 +14,11 @@ use crate::providers::common::{assert_minimal_usage, find_usage, parse_sse_data_
 async fn parse_fixture(scenario: &str) -> Vec<LlmResponse> {
     let bytes = read_fixture("openai_responses", scenario);
     let lines = parse_sse_data_lines(&bytes);
-    let events: Vec<Result<ResponseStreamEvent>> = lines
+    let events: Vec<Result<CodexStreamEvent>> = lines
         .into_iter()
-        .filter_map(|line| match serde_json::from_str::<ResponseStreamEvent>(&line) {
+        .filter_map(|line| match serde_json::from_str::<CodexStreamEvent>(&line) {
             Ok(event) => Some(Ok(event)),
             Err(e) => {
-                // Some Responses event types may not yet be modeled in async_openai;
-                // skipping unknown events keeps the test forward-compatible while
-                // still exercising the events we do parse.
                 eprintln!("openai_responses/{scenario}: skipping unparseable event: {e}");
                 None
             }
