@@ -107,6 +107,7 @@ impl SettingsOverlay {
 
     pub fn update_server_statuses(&mut self, statuses: Vec<McpServerStatusEntry>) {
         self.server_statuses = statuses;
+        super::refresh_mcp_servers_entry(&mut self.menu, &self.server_statuses);
         if let SettingsPane::ServerStatus(ref mut overlay) = self.active_pane {
             overlay.update_entries(self.server_statuses.clone());
         }
@@ -709,6 +710,38 @@ mod tests {
             }
             other => panic!("expected SetConfigOption, got: {other:?}"),
         }
+    }
+
+    #[test]
+    fn update_server_statuses_updates_menu_summary() {
+        let mut menu = make_menu();
+        menu.add_mcp_servers_entry("1 connected");
+        let mut overlay = SettingsOverlay::new(menu, make_server_statuses(), vec![]);
+
+        overlay.update_server_statuses(vec![]);
+
+        let entry = overlay
+            .menu
+            .options()
+            .iter()
+            .find(|entry| entry.entry_kind == SettingsMenuEntryKind::McpServers)
+            .expect("MCP servers row exists");
+        assert_eq!(entry.values[0].name, "none");
+    }
+
+    #[tokio::test]
+    async fn update_server_statuses_updates_open_server_status_pane() {
+        let mut menu = make_menu();
+        menu.add_mcp_servers_entry("1 connected");
+        let mut overlay = SettingsOverlay::new(menu, make_server_statuses(), vec![]);
+        send_keys(&mut overlay, &[KeyCode::Down, KeyCode::Down, KeyCode::Enter]).await;
+        assert!(matches!(overlay.active_pane, SettingsPane::ServerStatus(_)));
+
+        overlay.update_server_statuses(vec![]);
+
+        let frame = overlay.render(&ViewContext::new((80, 24)));
+        let text = frame.lines().iter().map(Line::plain_text).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("no MCP servers configured"), "frame text: {text}");
     }
 
     #[test]

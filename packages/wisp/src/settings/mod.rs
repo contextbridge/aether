@@ -155,14 +155,17 @@ pub(crate) fn decorate_menu(
     let theme_files = list_theme_files();
     menu.add_theme_entry(settings.theme.file.as_deref(), &theme_files);
 
-    let summary = server_status_summary(server_statuses);
-    menu.add_mcp_servers_entry(&summary);
+    refresh_mcp_servers_entry(menu, server_statuses);
 
     if !auth_methods.is_empty() {
         let login_entries = build_login_entries(auth_methods);
         let login_summary = provider_login_summary(&login_entries);
         menu.add_provider_logins_entry(&login_summary);
     }
+}
+
+pub(crate) fn refresh_mcp_servers_entry(menu: &mut menu::SettingsMenu, server_statuses: &[McpServerStatusEntry]) {
+    menu.upsert_mcp_servers_entry(&server_status_summary(server_statuses));
 }
 
 pub(crate) fn process_config_changes(changes: Vec<types::SettingsChange>) -> Vec<overlay::SettingsMessage> {

@@ -1,7 +1,7 @@
 use crate::context::{CompactionConfig, Compactor, TokenTracker};
 use crate::core::PromptCache;
 pub use crate::core::retry_config::RetryConfig;
-use crate::events::{AgentMessage, UserMessage};
+use crate::events::{AgentCommand, AgentMessage, Command, UserCommand};
 use crate::mcp::run_mcp_task::{McpCommand, ToolExecutionEvent};
 use futures::Stream;
 use llm::types::IsoString;
@@ -24,7 +24,7 @@ use tokio_stream::wrappers::ReceiverStream;
 enum StreamEvent {
     Llm(Result<LlmResponse, LlmError>),
     ToolExecution(ToolExecutionEvent),
-    UserMessage(UserMessage),
+    Command(Command),
 }
 
 type EventStream = Pin<Box<dyn Stream<Item = StreamEvent> + Send>>;
@@ -64,14 +64,12 @@ pub struct Agent {
 impl Agent {
     pub(crate) fn new(
         config: AgentConfig,
-        user_message_rx: mpsc::Receiver<UserMessage>,
+        command_rx: mpsc::Receiver<Command>,
         message_tx: mpsc::Sender<AgentMessage>,
     ) -> Self {
         let mut streams: StreamMap<String, EventStream> = StreamMap::new();
-        streams.insert(
-            USER_STREAM_KEY.to_string(),
-            Box::pin(ReceiverStream::new(user_message_rx).map(StreamEvent::UserMessage)),
-        );
+        streams
+            .insert(USER_STREAM_KEY.to_string(), Box::pin(ReceiverStream::new(command_rx).map(StreamEvent::Command)));
 
         let context_limit = config.context_window.or_else(|| config.llm.context_window());
 
@@ -106,19 +104,16 @@ impl Agent {
         let mut state = IterationState::new();
 
         while let Some((_, event)) = self.streams.next().await {
-            use UserMessage::{
-                Cancel, ClearContext, SetReasoningEffort, SwitchModel, Text, UpdateMcpInstructions, UpdateTools,
-            };
             match event {
-                StreamEvent::UserMessage(Cancel) => {
+                StreamEvent::Command(Command::UserCommand(UserCommand::Cancel)) => {
                     self.on_user_cancel(&mut state).await;
                 }
 
-                StreamEvent::UserMessage(ClearContext) => {
+                StreamEvent::Command(Command::UserCommand(UserCommand::ClearContext)) => {
                     self.on_user_clear_context(&mut state).await;
                 }
 
-                StreamEvent::UserMessage(Text { content }) => {
+                StreamEvent::Command(Command::UserCommand(UserCommand::Text { content })) => {
                     if self.is_busy() {
                         self.queued_user_messages.push_back(content);
                     } else {
@@ -127,20 +122,24 @@ impl Agent {
                     }
                 }
 
-                StreamEvent::UserMessage(SwitchModel(new_provider)) => {
+                StreamEvent::Command(Command::AgentCommand(AgentCommand::SwitchModel(new_provider))) => {
                     self.on_switch_model(new_provider).await;
                 }
 
-                StreamEvent::UserMessage(UpdateTools(tools)) => {
+                StreamEvent::Command(Command::AgentCommand(AgentCommand::UpdateTools(tools))) => {
                     self.context.set_tools(tools);
                 }
 
-                StreamEvent::UserMessage(UpdateMcpInstructions { server, body }) => {
+                StreamEvent::Command(Command::AgentCommand(AgentCommand::UpdateMcpInstructions { server, body })) => {
                     self.on_update_instruction(server, body).await;
                 }
 
-                StreamEvent::UserMessage(SetReasoningEffort(effort)) => {
+                StreamEvent::Command(Command::AgentCommand(AgentCommand::SetReasoningEffort(effort))) => {
                     self.context.set_reasoning_effort(effort);
+                }
+
+                StreamEvent::Command(Command::AgentCommand(AgentCommand::ReplaceConversation(messages))) => {
+                    self.on_replace_conversation(messages, &mut state).await;
                 }
 
                 StreamEvent::Llm(llm_event) => {
@@ -261,6 +260,14 @@ impl Agent {
         *state = IterationState::new();
 
         let _ = self.message_tx.send(AgentMessage::ContextCleared).await;
+    }
+
+    async fn on_replace_conversation(&mut self, messages: Vec<ChatMessage>, state: &mut IterationState) {
+        self.abort_in_flight_work();
+        self.context.replace_conversation(messages);
+        self.auto_continue.reset();
+        *state = IterationState::new();
+        let _ = self.message_tx.send(self.context_usage_message()).await;
     }
 
     fn on_user_text(&mut self, content: Vec<llm::ContentBlock>) {
@@ -772,9 +779,90 @@ impl IterationState {
 
 #[cfg(test)]
 mod tests {
+    use crate::core::{AgentBuilder, Prompt};
+
     use super::*;
-    use llm::testing::FakeLlmProvider;
+    use llm::{ContentBlock, testing::FakeLlmProvider};
     use tokio::sync::mpsc;
+
+    #[tokio::test]
+    async fn replace_conversation_preserves_system_prompt_for_next_request() {
+        let llm = FakeLlmProvider::with_single_response(vec![LlmResponse::start("msg"), LlmResponse::done()]);
+
+        let captured_contexts = llm.captured_contexts();
+        let (tx, mut rx, handle) =
+            AgentBuilder::new(Arc::new(llm)).system_prompt(Prompt::text("original system")).spawn().await.unwrap();
+
+        tx.send(Command::AgentCommand(AgentCommand::ReplaceConversation(vec![
+            ChatMessage::User { content: vec![ContentBlock::text("old user")], timestamp: IsoString::now() },
+            ChatMessage::Assistant {
+                content: "old assistant".to_string(),
+                reasoning: AssistantReasoning::default(),
+                timestamp: IsoString::now(),
+                tool_calls: vec![],
+            },
+        ])))
+        .await
+        .unwrap();
+
+        tx.send(Command::UserCommand(UserCommand::Text { content: vec![ContentBlock::text("new user")] }))
+            .await
+            .unwrap();
+
+        while let Some(message) = rx.recv().await {
+            if matches!(message, AgentMessage::Done) {
+                break;
+            }
+        }
+
+        let contexts = captured_contexts.lock().unwrap();
+        let messages = contexts.last().expect("provider should receive a context").messages();
+        assert!(matches!(messages[0], ChatMessage::System { ref content, .. } if content == "original system"));
+        assert!(
+            matches!(messages[1], ChatMessage::User { ref content, .. } if content == &vec![llm::ContentBlock::text("old user")])
+        );
+        assert!(matches!(messages[2], ChatMessage::Assistant { ref content, .. } if content == "old assistant"));
+        assert!(
+            matches!(messages[3], ChatMessage::User { ref content, .. } if content == &vec![llm::ContentBlock::text("new user")])
+        );
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn replace_conversation_preserves_token_usage() {
+        let llm = FakeLlmProvider::new(vec![vec![
+            LlmResponse::start("msg"),
+            LlmResponse::usage(800, 10),
+            LlmResponse::done(),
+        ]])
+        .with_context_window(Some(1000));
+        let (tx, mut rx, handle) = AgentBuilder::new(Arc::new(llm)).spawn().await.unwrap();
+
+        tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("first user")] }))
+            .await
+            .unwrap();
+
+        while let Some(message) = rx.recv().await {
+            if matches!(message, AgentMessage::Done) {
+                break;
+            }
+        }
+
+        tx.send(Command::AgentCommand(AgentCommand::ReplaceConversation(vec![ChatMessage::User {
+            content: vec![ContentBlock::text("replacement user")],
+            timestamp: IsoString::now(),
+        }])))
+        .await
+        .unwrap();
+
+        let Some(AgentMessage::ContextUsageUpdate { input_tokens, usage_ratio, .. }) = rx.recv().await else {
+            panic!("expected context usage update after conversation replacement");
+        };
+
+        assert_eq!(input_tokens, 800);
+        assert_eq!(usage_ratio, Some(0.8));
+        handle.abort();
+    }
 
     #[tokio::test]
     async fn test_preflight_compaction_uses_configured_threshold() {

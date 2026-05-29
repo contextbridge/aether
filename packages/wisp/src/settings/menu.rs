@@ -198,6 +198,19 @@ impl SettingsMenu {
         });
     }
 
+    pub fn upsert_mcp_servers_entry(&mut self, summary: &str) {
+        if let Some(entry) =
+            self.list.items_mut().iter_mut().find(|entry| entry.entry_kind == SettingsMenuEntryKind::McpServers)
+        {
+            if let Some(value) = entry.values.first_mut() {
+                value.name = summary.to_string();
+            }
+            return;
+        }
+
+        self.add_mcp_servers_entry(summary);
+    }
+
     pub fn add_provider_logins_entry(&mut self, summary: &str) {
         self.list.push(SettingsMenuEntry {
             config_id: "__provider_logins".to_string(),
@@ -355,6 +368,35 @@ mod tests {
         let m = menu(&[opt]);
         assert_eq!(m.options().len(), 1);
         assert_eq!(m.options()[0].title, "Model");
+    }
+
+    #[test]
+    fn upsert_mcp_servers_entry_adds_when_missing() {
+        let mut m = menu(&[]);
+        m.upsert_mcp_servers_entry("none");
+
+        let entries = m
+            .options()
+            .iter()
+            .filter(|entry| entry.entry_kind == SettingsMenuEntryKind::McpServers)
+            .collect::<Vec<_>>();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].values[0].name, "none");
+    }
+
+    #[test]
+    fn upsert_mcp_servers_entry_updates_existing_without_duplicate() {
+        let mut m = menu(&[]);
+        m.upsert_mcp_servers_entry("1 connected");
+        m.upsert_mcp_servers_entry("none");
+
+        let entries = m
+            .options()
+            .iter()
+            .filter(|entry| entry.entry_kind == SettingsMenuEntryKind::McpServers)
+            .collect::<Vec<_>>();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].values[0].name, "none");
     }
 
     #[tokio::test]

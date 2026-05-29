@@ -1,5 +1,6 @@
 use aether_core::core::{Prompt, agent};
-use aether_core::events::{AgentMessage, UserMessage};
+use aether_core::events::{AgentMessage, Command, UserCommand};
+use llm::ContentBlock;
 use llm::providers::openrouter::OpenRouterProvider;
 use std::io::{self, Write};
 
@@ -11,7 +12,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let llm = OpenRouterProvider::default("z-ai/glm-4.5-air")?;
     let (tx, mut rx, _handle) = agent(llm).system_prompt(Prompt::text("You are a helpful assistant.")).spawn().await?;
 
-    tx.send(UserMessage::text("Write one paragraph about a unicorn")).await?;
+    tx.send(Command::UserCommand(UserCommand::Text {
+        content: vec![ContentBlock::text("Write one paragraph about a unicorn")],
+    }))
+    .await?;
 
     loop {
         use AgentMessage::{

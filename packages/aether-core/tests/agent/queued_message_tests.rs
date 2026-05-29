@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use aether_core::core::agent;
-use aether_core::events::{AgentMessage, UserMessage};
+use aether_core::events::{AgentMessage, Command, UserCommand};
 use aether_core::mcp::mcp;
 use aether_core::testing::{AddNumbersRequest, FakeMcpServer, fake_mcp};
 use llm::testing::{FakeLlmProvider, llm_response};
@@ -61,10 +61,14 @@ async fn user_message_during_tool_execution_is_queued() {
 
     let (tx, mut rx, _handle) =
         agent(llm).tools(spawn.command_tx, snapshot.tool_definitions).spawn().await.expect("Agent should spawn");
-    tx.send(UserMessage::text("add 2 and 3")).await.expect("Initial prompt should send");
+    tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("add 2 and 3")] }))
+        .await
+        .expect("Initial prompt should send");
 
     drain_until(&mut rx, |m| matches!(m, AgentMessage::ToolCall { request, .. } if request.id == "call_1")).await;
-    tx.send(UserMessage::text("now add 10 and 20")).await.expect("Queued message should send");
+    tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("now add 10 and 20")] }))
+        .await
+        .expect("Queued message should send");
     release.notify_one();
 
     drain_until(&mut rx, |m| matches!(m, AgentMessage::Done)).await;
@@ -123,11 +127,15 @@ async fn scenario(first_stop_reason: Option<StopReason>, queued: &[&str]) -> Sce
 
     let (tx, mut rx, _handle) = agent(llm).spawn().await.expect("Agent should spawn");
 
-    tx.send(UserMessage::text("original prompt")).await.expect("Initial prompt should send");
+    tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("original prompt")] }))
+        .await
+        .expect("Initial prompt should send");
     let mut messages = drain_until(&mut rx, |m| is_partial_text(m, "msg_1", "hello")).await;
 
     for text in queued {
-        tx.send(UserMessage::text(text)).await.expect("Queued message should send");
+        tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text(*text)] }))
+            .await
+            .expect("Queued message should send");
     }
     release.notify_one();
 

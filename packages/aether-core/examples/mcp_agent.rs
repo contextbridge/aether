@@ -1,9 +1,9 @@
 use aether_core::{
     core::{Prompt, agent},
-    events::{AgentMessage, UserMessage},
+    events::{AgentMessage, Command, UserCommand},
     mcp::mcp,
 };
-use llm::providers::openrouter::OpenRouterProvider;
+use llm::{ContentBlock, providers::openrouter::OpenRouterProvider};
 
 use std::io::{self, Write};
 
@@ -23,7 +23,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .spawn()
         .await?;
 
-    tx.send(UserMessage::text("Visit https://contextbridge.ai and tell me what you see")).await?;
+    tx.send(Command::UserCommand(UserCommand::Text {
+        content: vec![ContentBlock::text("Visit https://contextbridge.ai and tell me what you see")],
+    }))
+    .await?;
 
     loop {
         use AgentMessage::{

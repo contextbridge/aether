@@ -28,22 +28,21 @@ use tokio::{
 
 #[derive(Debug, Clone)]
 pub struct Tool {
+    pub name: String,
     pub description: String,
     pub parameters: Value,
 }
 
 impl From<RmcpTool> for Tool {
     fn from(tool: RmcpTool) -> Self {
-        Self {
-            description: tool.description.unwrap_or_default().to_string(),
-            parameters: serde_json::Value::Object((*tool.input_schema).clone()),
-        }
+        Self::from(&tool)
     }
 }
 
 impl From<&RmcpTool> for Tool {
     fn from(tool: &RmcpTool) -> Self {
         Self {
+            name: tool.name.to_string(),
             description: tool.description.clone().unwrap_or_default().to_string(),
             parameters: serde_json::Value::Object((*tool.input_schema).clone()),
         }

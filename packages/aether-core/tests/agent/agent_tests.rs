@@ -2,7 +2,7 @@ use std::error::Error;
 use std::time::Duration;
 
 use aether_core::{
-    events::{AgentMessage, UserMessage},
+    events::{AgentMessage, Command, UserCommand},
     testing::{
         agent_message, test_agent, {AddNumbersRequest, AddNumbersResult, DivideNumbersRequest, SlowToolRequest},
     },
@@ -23,8 +23,11 @@ async fn test_text_message() -> Result<(), Box<dyn Error>> {
     let mut expected_messages = agent_message(id).text(&chunks).build();
     expected_messages.push(AgentMessage::Done);
 
-    let messages =
-        test_agent().llm_responses(&llm_responses).user_messages(vec![UserMessage::text("hi")]).run().await?;
+    let messages = test_agent()
+        .llm_responses(&llm_responses)
+        .user_messages(vec![Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("hi")] })])
+        .run()
+        .await?;
     assert_eq!(messages, expected_messages);
     Ok(())
 }
@@ -51,8 +54,13 @@ async fn test_single_tool_call() -> Result<(), Box<dyn Error>> {
         messages
     };
 
-    let messages =
-        test_agent().llm_responses(&llm_responses).user_messages(vec![UserMessage::text("3+5 = ?")]).run().await?;
+    let messages = test_agent()
+        .llm_responses(&llm_responses)
+        .user_messages(vec![Command::UserCommand(UserCommand::Text {
+            content: vec![llm::ContentBlock::text("3+5 = ?")],
+        })])
+        .run()
+        .await?;
     assert_eq!(messages, expected_messages);
     Ok(())
 }
@@ -65,8 +73,13 @@ async fn test_tool_request_arg_emits_tool_call_update() -> Result<(), Box<dyn Er
     let llm_responses =
         [llm_response("message_1").tool_call("call_1", "test__add_numbers", &[arg_chunk_1, arg_chunk_2]).build()];
 
-    let messages =
-        test_agent().llm_responses(&llm_responses).user_messages(vec![UserMessage::text("3+5 = ?")]).run().await?;
+    let messages = test_agent()
+        .llm_responses(&llm_responses)
+        .user_messages(vec![Command::UserCommand(UserCommand::Text {
+            content: vec![llm::ContentBlock::text("3+5 = ?")],
+        })])
+        .run()
+        .await?;
 
     let tool_call_count = messages
         .iter()
@@ -126,8 +139,13 @@ async fn test_tool_call_failure() -> Result<(), Box<dyn Error>> {
         messages
     };
 
-    let messages =
-        test_agent().llm_responses(&llm_responses).user_messages(vec![UserMessage::text("10 / 0 = ?")]).run().await?;
+    let messages = test_agent()
+        .llm_responses(&llm_responses)
+        .user_messages(vec![Command::UserCommand(UserCommand::Text {
+            content: vec![llm::ContentBlock::text("10 / 0 = ?")],
+        })])
+        .run()
+        .await?;
     assert_eq!(messages, expected_messages);
     Ok(())
 }
@@ -151,7 +169,10 @@ async fn test_cancellation() -> Result<(), Box<dyn Error>> {
     let llm_responses = [llm_response("message_1").text(&chunks).build()];
     let messages = test_agent()
         .llm_responses(&llm_responses)
-        .user_messages(vec![UserMessage::text("hi"), UserMessage::Cancel])
+        .user_messages(vec![
+            Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("hi")] }),
+            Command::UserCommand(UserCommand::Cancel),
+        ])
         .run()
         .await?;
 
@@ -186,7 +207,9 @@ async fn test_tool_timeout() -> Result<(), Box<dyn Error>> {
 
     let messages = test_agent()
         .llm_responses(&llm_responses)
-        .user_messages(vec![UserMessage::text("run slow tool")])
+        .user_messages(vec![Command::UserCommand(UserCommand::Text {
+            content: vec![llm::ContentBlock::text("run slow tool")],
+        })])
         .tool_timeout(Duration::from_millis(tool_timeout))
         .run()
         .await?;
@@ -210,7 +233,9 @@ async fn test_simple_message_content() -> Result<(), Box<dyn Error>> {
 
     let result = test_agent()
         .llm_responses(&llm_responses)
-        .user_messages(vec![UserMessage::text("Just a simple message")])
+        .user_messages(vec![Command::UserCommand(UserCommand::Text {
+            content: vec![llm::ContentBlock::text("Just a simple message")],
+        })])
         .run_with_context()
         .await?;
 
@@ -238,7 +263,9 @@ async fn test_auto_continue_not_triggered_for_end_turn() -> Result<(), Box<dyn E
 
     let messages = test_agent()
         .llm_responses(&llm_responses)
-        .user_messages(vec![UserMessage::text("do something")])
+        .user_messages(vec![Command::UserCommand(UserCommand::Text {
+            content: vec![llm::ContentBlock::text("do something")],
+        })])
         .max_auto_continues(3)
         .run()
         .await?;
@@ -259,7 +286,9 @@ async fn test_auto_continue_not_triggered_for_opening_message() -> Result<(), Bo
 
     let messages = test_agent()
         .llm_responses(&llm_responses)
-        .user_messages(vec![UserMessage::text("hello")])
+        .user_messages(vec![Command::UserCommand(UserCommand::Text {
+            content: vec![llm::ContentBlock::text("hello")],
+        })])
         .max_auto_continues(3)
         .run()
         .await?;
@@ -296,7 +325,9 @@ async fn test_auto_continue_triggers_on_length_stop_reason() -> Result<(), Box<d
 
     let messages = test_agent()
         .llm_responses(&llm_responses)
-        .user_messages(vec![UserMessage::text("do something")])
+        .user_messages(vec![Command::UserCommand(UserCommand::Text {
+            content: vec![llm::ContentBlock::text("do something")],
+        })])
         .max_auto_continues(5)
         .run()
         .await?;
@@ -332,7 +363,9 @@ async fn test_auto_continue_triggers_on_empty_length_stop_reason() -> Result<(),
 
     let messages = test_agent()
         .llm_responses(&llm_responses)
-        .user_messages(vec![UserMessage::text("do something")])
+        .user_messages(vec![Command::UserCommand(UserCommand::Text {
+            content: vec![llm::ContentBlock::text("do something")],
+        })])
         .max_auto_continues(3)
         .run()
         .await?;
@@ -378,7 +411,9 @@ async fn test_auto_continue_respects_max_limit() -> Result<(), Box<dyn Error>> {
 
     let messages = test_agent()
         .llm_responses(&llm_responses)
-        .user_messages(vec![UserMessage::text("do something")])
+        .user_messages(vec![Command::UserCommand(UserCommand::Text {
+            content: vec![llm::ContentBlock::text("do something")],
+        })])
         .max_auto_continues(2)
         .run()
         .await?;
@@ -409,7 +444,9 @@ async fn test_auto_continue_disabled_with_zero() -> Result<(), Box<dyn Error>> {
 
     let messages = test_agent()
         .llm_responses(&llm_responses)
-        .user_messages(vec![UserMessage::text("do something")])
+        .user_messages(vec![Command::UserCommand(UserCommand::Text {
+            content: vec![llm::ContentBlock::text("do something")],
+        })])
         .max_auto_continues(0)
         .run()
         .await?;
@@ -440,7 +477,9 @@ async fn test_reasoning_content_is_saved_in_context_after_tool_call() -> Result<
 
     let result = test_agent()
         .llm_responses(&llm_responses)
-        .user_messages(vec![UserMessage::text("do something")])
+        .user_messages(vec![Command::UserCommand(UserCommand::Text {
+            content: vec![llm::ContentBlock::text("do something")],
+        })])
         .run_with_context()
         .await?;
 
@@ -472,8 +511,13 @@ async fn test_reasoning_chunks_emit_thought_messages() -> Result<(), Box<dyn Err
         LlmResponse::done(),
     ]];
 
-    let messages =
-        test_agent().llm_responses(&llm_responses).user_messages(vec![UserMessage::text("do something")]).run().await?;
+    let messages = test_agent()
+        .llm_responses(&llm_responses)
+        .user_messages(vec![Command::UserCommand(UserCommand::Text {
+            content: vec![llm::ContentBlock::text("do something")],
+        })])
+        .run()
+        .await?;
 
     assert!(
         messages.iter().any(|m| matches!(

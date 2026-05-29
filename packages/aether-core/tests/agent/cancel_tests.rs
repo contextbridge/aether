@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use aether_core::core::agent;
-use aether_core::events::{AgentMessage, UserMessage};
+use aether_core::events::{AgentMessage, Command, UserCommand};
 use llm::LlmResponse;
 use llm::testing::FakeLlmProvider;
 
@@ -31,10 +31,12 @@ async fn test_prompt_after_cancel_produces_response() {
     let (tx, mut rx, _handle) = agent(llm).spawn().await.unwrap();
 
     // Send first prompt
-    tx.send(UserMessage::text("first question")).await.unwrap();
+    tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("first question")] }))
+        .await
+        .unwrap();
 
     // Send cancel immediately
-    tx.send(UserMessage::Cancel).await.unwrap();
+    tx.send(Command::UserCommand(UserCommand::Cancel)).await.unwrap();
 
     // Drain until Done (from the cancel)
     loop {
@@ -46,7 +48,9 @@ async fn test_prompt_after_cancel_produces_response() {
     }
 
     // Send second prompt
-    tx.send(UserMessage::text("second question")).await.unwrap();
+    tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("second question")] }))
+        .await
+        .unwrap();
 
     // Collect messages from the second prompt, with a timeout to catch the hang
     let mut got_text = false;

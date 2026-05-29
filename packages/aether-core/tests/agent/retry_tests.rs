@@ -2,7 +2,7 @@ use std::error::Error;
 use std::time::Duration;
 
 use aether_core::core::RetryConfig;
-use aether_core::events::{AgentMessage, UserMessage};
+use aether_core::events::{AgentMessage, Command, UserCommand};
 use aether_core::testing::test_agent;
 use llm::{LlmError, LlmResponse};
 
@@ -21,7 +21,7 @@ async fn retries_then_succeeds_on_third_attempt() -> Result<(), Box<dyn Error>> 
     let result = test_agent()
         .retry_config(fast_retry(5))
         .llm_result_responses(&attempts)
-        .user_messages(vec![UserMessage::text("go")])
+        .user_messages(vec![Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("go")] })])
         .run_with_context()
         .await?;
 
@@ -60,7 +60,7 @@ async fn exhausts_retries_then_emits_error() -> Result<(), Box<dyn Error>> {
     let result = test_agent()
         .retry_config(fast_retry(3))
         .llm_result_responses(&attempts)
-        .user_messages(vec![UserMessage::text("go")])
+        .user_messages(vec![Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("go")] })])
         .run_with_context()
         .await?;
 
@@ -84,7 +84,7 @@ async fn non_retryable_error_surfaces_immediately() -> Result<(), Box<dyn Error>
     let result = test_agent()
         .retry_config(fast_retry(5))
         .llm_result_responses(&attempts)
-        .user_messages(vec![UserMessage::text("go")])
+        .user_messages(vec![Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("go")] })])
         .run_with_context()
         .await?;
 
@@ -108,7 +108,7 @@ async fn retry_disabled_surfaces_retryable_error_immediately() -> Result<(), Box
     let result = test_agent()
         .retry_config(RetryConfig::disabled())
         .llm_result_responses(&attempts)
-        .user_messages(vec![UserMessage::text("go")])
+        .user_messages(vec![Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("go")] })])
         .run_with_context()
         .await?;
 
@@ -145,7 +145,7 @@ async fn mid_stream_interrupts_consume_retry_budget() -> Result<(), Box<dyn Erro
     let result = test_agent()
         .retry_config(fast_retry(3))
         .llm_result_responses(&attempts)
-        .user_messages(vec![UserMessage::text("go")])
+        .user_messages(vec![Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("go")] })])
         .run_with_context()
         .await?;
 
@@ -176,7 +176,7 @@ async fn rate_limited_error_is_retried() -> Result<(), Box<dyn Error>> {
     let result = test_agent()
         .retry_config(fast_retry(5))
         .llm_result_responses(&attempts)
-        .user_messages(vec![UserMessage::text("go")])
+        .user_messages(vec![Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("go")] })])
         .run_with_context()
         .await?;
 
@@ -205,7 +205,7 @@ async fn cancel_during_retry_wait_aborts_pending_retry() -> Result<(), Box<dyn E
 
     let (tx, mut rx, _handle) = agent(llm).retry(retry).spawn().await?;
 
-    tx.send(UserMessage::text("go")).await?;
+    tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("go")] })).await?;
 
     loop {
         match rx.recv().await {
@@ -215,7 +215,7 @@ async fn cancel_during_retry_wait_aborts_pending_retry() -> Result<(), Box<dyn E
         }
     }
 
-    tx.send(UserMessage::Cancel).await?;
+    tx.send(Command::UserCommand(UserCommand::Cancel)).await?;
 
     let mut messages = Vec::new();
     while let Some(msg) = rx.recv().await {

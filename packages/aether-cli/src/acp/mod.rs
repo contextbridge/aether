@@ -1,20 +1,25 @@
+pub(crate) mod agent;
+pub(crate) mod agent_key;
+pub(crate) mod agent_runtime;
 pub(crate) mod config_setting;
-pub(crate) mod handlers;
-pub(crate) mod mappers;
+pub(crate) mod error;
+pub(crate) mod fake_prompt_mcp;
 pub(crate) mod model_config;
 pub(crate) mod prompt_history_index;
-pub(crate) mod relay;
-pub(crate) mod session;
-pub(crate) mod session_manager;
-pub(crate) mod session_registry;
+pub(crate) mod protocol;
+pub(crate) mod session_actor;
+pub(crate) mod session_config_state;
+pub(crate) mod session_factory;
 pub(crate) mod session_store;
+pub(crate) mod slash_commands;
+pub(crate) mod state;
 pub(crate) mod stdio;
 pub mod testing;
 
-pub use mappers::map_mcp_prompt_to_available_command;
-pub use session_manager::SessionManager;
+pub use protocol::map_mcp_prompt_to_available_command;
 
-use crate::acp::handlers::acp_agent_builder;
+use crate::acp::agent::acp_agent_builder;
+use crate::acp::state::{AcpState, AcpStateConfig};
 use crate::acp::stdio::Stdio;
 use crate::provider_connection_args::ProviderConnectionArgs;
 use crate::settings_args::SettingsSourceArgs;
@@ -28,8 +33,7 @@ use tracing_appender::rolling::daily;
 use tracing_subscriber::EnvFilter;
 
 use aether_auth::OAuthCredentialStorage;
-use session_manager::{InitialSessionSelection, SessionManagerConfig};
-use session_registry::SessionRegistry;
+use session_factory::InitialSessionSelection;
 use session_store::SessionStore;
 
 #[derive(clap::Args, Debug)]
@@ -89,8 +93,7 @@ pub async fn run_acp(args: AcpArgs) -> Result<AcpRunOutcome, AcpRunError> {
     let oauth_credential_store: Arc<dyn OAuthCredentialStorage> =
         Arc::new(aether_auth::OsKeyringStore::with_platform_store());
     let provider_connections = args.provider_connection.into_overrides();
-    let manager = Arc::new(SessionManager::new(SessionManagerConfig {
-        registry: Arc::new(SessionRegistry::new()),
+    let state = Arc::new(AcpState::new(AcpStateConfig {
         session_store,
         oauth_credential_store,
         initial_selection,
@@ -98,8 +101,8 @@ pub async fn run_acp(args: AcpArgs) -> Result<AcpRunOutcome, AcpRunError> {
         provider_connections,
     }));
 
-    let connect_result = acp_agent_builder(manager.clone()).connect_to(Stdio::new()).await;
-    manager.shutdown_all_sessions().await;
+    let connect_result = acp_agent_builder(state.clone()).connect_to(Stdio::new()).await;
+    state.shutdown_all().await;
 
     match connect_result {
         Ok(()) => Ok(AcpRunOutcome::CleanDisconnect),

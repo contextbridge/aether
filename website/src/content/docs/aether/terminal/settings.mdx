@@ -46,9 +46,9 @@ The theme colors the entire UI: conversation text, syntax highlighting, diff ren
 
 Open with `/settings`. The overlay shows all configurable options:
 
-- **Model** — Select which LLM model to use (if the agent supports multiple)
+- **Model** — Override the model used by the currently active agent runtime
 - **Reasoning effort** — Set thinking budget (also cyclable with `Tab`)
-- **Mode** — Switch agent modes (also cyclable with `Shift+Tab`)
+- **Mode** — Switch to a different user-invocable agent profile, including its prompts, MCP servers, tools, model, and provider settings (also cyclable with `Shift+Tab`)
 - **MCP servers** — View connected servers and their status
 - **Provider logins** — Authenticate with providers that require it
 
@@ -63,7 +63,7 @@ The terminal UI doesn't know about models or reasoning levels directly. Instead:
 3. When you change a value, the selection is sent back to the agent
 4. The agent applies the change
 
-The `Tab` (reasoning) and `Shift+Tab` (mode) shortcuts cycle through the most common agent-provided options.
+The `Tab` (reasoning) and `Shift+Tab` (mode) shortcuts cycle through the most common agent-provided options. In Aether-backed sessions, mode changes are applied at the next safe prompt boundary. The current turn completes or is cancelled normally, and the next prompt uses the selected agent profile. Model changes remain scoped to the currently active agent runtime.
 
 ## Authentication
 

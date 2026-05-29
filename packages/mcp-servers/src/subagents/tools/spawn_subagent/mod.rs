@@ -3,7 +3,7 @@ use aether_auth::{OAuthCredentialStorage, OsKeyringStore};
 use aether_core::{
     agent_spec::McpConfigSource,
     core::{AgentBuilder, AgentHandle, Prompt},
-    events::{AgentMessage, UserMessage},
+    events::{AgentMessage, Command, UserCommand},
     mcp::{McpSpawnResult, mcp, run_mcp_task::McpCommand},
 };
 use aether_project::AgentCatalog;
@@ -272,7 +272,9 @@ async fn execute_single_agent(
 
         let prompt_with_instructions = format!("{}\n\n{}", task.prompt, STRUCTURED_OUTPUT_INSTRUCTIONS);
         user_tx
-            .send(UserMessage::text(&prompt_with_instructions))
+            .send(Command::UserCommand(UserCommand::Text {
+                content: vec![llm::ContentBlock::text(&prompt_with_instructions)],
+            }))
             .await
             .map_err(|e| format!("Failed to send message to agent: {e}"))?;
 
@@ -358,7 +360,7 @@ async fn spawn_agent(
     mcp_tx: mpsc::Sender<McpCommand>,
     tools: Vec<ToolDefinition>,
     oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
-) -> Result<(mpsc::Sender<UserMessage>, mpsc::Receiver<AgentMessage>, AgentHandle), String> {
+) -> Result<(mpsc::Sender<Command>, mpsc::Receiver<AgentMessage>, AgentHandle), String> {
     AgentBuilder::from_spec(&spec, vec![], Some(oauth_credential_store))
         .await
         .map_err(|e| format!("Failed to build agent from spec: {e}"))?

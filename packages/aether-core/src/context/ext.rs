@@ -10,12 +10,34 @@ pub enum UserEvent {
     ClearContext,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum SessionControlEvent {
+    AgentSwitched { from: Option<String>, to: Option<String> },
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "data", rename_all = "camelCase")]
 #[allow(clippy::large_enum_variant)]
 pub enum SessionEvent {
     User(UserEvent),
     Agent(AgentMessage),
+    Control(SessionControlEvent),
+}
+
+pub fn conversation_messages_from_events(events: &[SessionEvent]) -> Vec<ChatMessage> {
+    Context::from_events(events).messages().iter().filter(|message| !message.is_system()).cloned().collect()
+}
+
+pub fn last_agent_from_events(initial: Option<String>, events: &[SessionEvent]) -> Option<String> {
+    events
+        .iter()
+        .rev()
+        .find_map(|event| match event {
+            SessionEvent::Control(SessionControlEvent::AgentSwitched { to, .. }) => Some(to.clone()),
+            _ => None,
+        })
+        .unwrap_or(initial)
 }
 
 pub trait ContextExt {
@@ -32,6 +54,7 @@ impl ContextExt for Context {
             match event {
                 SessionEvent::User(e) => apply_user_event(&mut context, e),
                 SessionEvent::Agent(m) => apply_agent_event(&mut context, m, &mut acc),
+                SessionEvent::Control(_) => {}
             }
         }
         context
@@ -141,6 +164,49 @@ mod tests {
             apply_agent_event(&mut ctx, event, &mut acc);
         }
         ctx
+    }
+
+    #[test]
+    fn from_events_ignores_control_events() {
+        let ctx = Context::from_events(&[
+            user_session("Hello"),
+            SessionEvent::Control(SessionControlEvent::AgentSwitched {
+                from: Some("Planner".to_string()),
+                to: Some("Coder".to_string()),
+            }),
+            agent_session(text_complete("Hi there!")),
+            agent_session(AgentMessage::Done),
+        ]);
+
+        assert_eq!(ctx.message_count(), 2);
+        assert!(matches!(ctx.messages()[0], ChatMessage::User { .. }));
+        assert!(matches!(ctx.messages()[1], ChatMessage::Assistant { .. }));
+    }
+
+    #[test]
+    fn conversation_messages_from_events_filters_system_messages() {
+        let messages = conversation_messages_from_events(&[
+            user_session("Hello"),
+            agent_session(text_complete("Hi there!")),
+            agent_session(AgentMessage::Done),
+        ]);
+
+        assert_eq!(messages.len(), 2);
+        assert!(messages.iter().all(|message| !message.is_system()));
+    }
+
+    #[test]
+    fn last_agent_from_events_returns_last_switched_agent() {
+        let events = [
+            SessionEvent::Control(SessionControlEvent::AgentSwitched { from: None, to: Some("Planner".to_string()) }),
+            user_session("Hello"),
+            SessionEvent::Control(SessionControlEvent::AgentSwitched {
+                from: Some("Planner".to_string()),
+                to: Some("Coder".to_string()),
+            }),
+        ];
+
+        assert_eq!(last_agent_from_events(Some("Default".to_string()), &events), Some("Coder".to_string()));
     }
 
     #[test]

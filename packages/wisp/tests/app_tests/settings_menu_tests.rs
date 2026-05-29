@@ -296,3 +296,21 @@ async fn test_server_status_notification_updates_overlay_state() {
     r.on_mcp_notification(notification).unwrap();
     assert!(has_settings_menu(r.writer()));
 }
+
+#[tokio::test]
+async fn test_empty_server_status_notification_clears_open_settings_menu_summary() {
+    let mut r = open_settings(&[], (TEST_WIDTH, 40)).await;
+    r.on_mcp_notification(acp_utils::notifications::McpNotification::ServerStatus {
+        servers: vec![acp_utils::notifications::McpServerStatusEntry::new(
+            "docs",
+            acp_utils::notifications::McpServerStatus::Connected { tool_count: 0 },
+        )],
+    })
+    .unwrap();
+    assert_buffer_contains(r.writer(), "MCP Servers: 1 connected");
+
+    r.on_mcp_notification(acp_utils::notifications::McpNotification::ServerStatus { servers: vec![] }).unwrap();
+
+    assert_buffer_contains(r.writer(), "MCP Servers: none");
+    assert_buffer_not_contains(r.writer(), "MCP Servers: 1 connected");
+}
