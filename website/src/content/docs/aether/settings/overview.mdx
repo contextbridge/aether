@@ -1,0 +1,255 @@
+---
+title: Overview
+description: Where Aether settings live and how settings files are structured.
+---
+
+import { FileTree } from "@astrojs/starlight/components";
+
+Aether uses JSON for configuration. **Agents**, along with thier **models** (LLM), **prompts**, and **tools** are configured via a `.aether/settings.json` file, which looks like this:
+
+```json title=".aether/settings.json"
+{
+  "agent": "Build",
+  "prompts": ["AGENTS.md"],
+  "mcps": [".aether/mcp.json"],
+  "agents": [
+    {
+      "name": "Build",
+      "description": "Builds features and fixes bugs",
+      "model": "anthropic:claude-sonnet-4-5-20250929",
+      "reasoningEffort": "high",
+      "userInvocable": true,
+      "prompts": [".aether/BUILD.md", "AGENTS.md"]
+    }
+  ]
+}
+```
+
+## Where do settings live?
+
+Settings can be defined at the **user** level (`$HOME/.aether/settings.json`), the **project** level (`.aether/settings.json`), or passed inline to the CLI via `--settings-json`. User and project settings are merged, with project-level taking priority in the case of a collision.
+
+You can boostrap user-level or project-level settings with a single command:
+
+```bash
+# Generate a user-level settings file
+aether settings init --user
+
+# Generate a project-level settings file
+aether settings init --project
+```
+
+See [User and Project Settings](/aether/settings/user-project-settings/) for more details.
+
+## How do I define an Agent?
+
+Agents (LLM + model + tools) are defined in an `agents` array.
+
+### Creating your 1st Agent
+
+#### Name
+
+Start with a `name`, and short `description`.
+
+```json {4-5} title=".aether/settings.json"
+{
+  "agents": [
+    {
+      "name": "Build",
+      "description": "Builds features and fixes bugs"
+    }
+  ]
+}
+```
+
+#### Model
+
+Set the LLM your agent uses via the `model` field using a string of the format `provider:model`, e.g. `zai:glm-5.1`.
+
+```json {7} title=".aether/settings.json"
+{
+  "agent": "Build",
+  "agents": [
+    {
+      "name": "Build",
+      "description": "Builds features and fixes bugs",
+      "model": "zai:glm-5.1",
+      "reasoningEffort": "high"
+    }
+  ]
+}
+```
+
+If you selected a model with reasoning capabilities, use the `reasoningEffort` field to control it.
+
+```json {8} title=".aether/settings.json"
+{
+  "agent": "Build",
+  "agents": [
+    {
+      "name": "Build",
+      "description": "Builds features and fixes bugs",
+      "model": "zai:glm-5.1",
+      "reasoningEffort": "high" // low, medium, high, or xhigh
+    }
+  ]
+}
+```
+
+See [LLMs](/aether/settings/llm-providers/) for more information on LLM and provider settings.
+
+### System Prompt
+
+Set your agent's system prompt via the `prompts` field, which is specified as an array of sources (file paths, globs, text, etc). Aether agents have no built-in system prompt, so what's in `prompts` is the _full_ system prompt.
+
+Prompt sources are concatenated in the order provided.
+
+```json {9-14} title=".aether/settings.json"
+{
+  "agent": "Build",
+  "agents": [
+    {
+      "name": "Build",
+      "description": "Builds features and fixes bugs",
+      "model": "zai:glm-5.1",
+      "reasoningEffort": "high",
+      "prompts": [
+        "SYSTEM.md",
+        { "type": "file", "path": "AGENTS.md", "optional": true },
+        { "type": "glob", "pattern": "instructions/*.md", "optional": true },
+        {
+          "type": "text",
+          "text": "After every conversation turn, refer to the user as Mr. Bossman."
+        }
+      ]
+    }
+  ]
+}
+```
+
+See [Prompts](/aether/settings/system-prompts/) for source formats, path resolution, optional files, globs, and shell interpolation.
+
+### Tools
+
+Give your agent tools via the `mcps` field (Aether agents get tools exclusively via MCP). This example adds Aether's 1st-party in-memory "coding" server, which gives the agent fileystem + shell tools.
+
+```json {15-25} title=".aether/settings.json"
+{
+  "agent": "Build",
+  "agents": [
+    {
+      "name": "Build",
+      "description": "Builds features and fixes bugs",
+      "model": "zai:glm-5.1",
+      "reasoningEffort": "high",
+      "prompts": [
+        "SYSTEM.md",
+        { "type": "file", "path": "AGENTS.md", "optional": true },
+        { "type": "glob", "pattern": "instructions/*.md", "optional": true },
+        { "type": "text", "text": "Prefer small, reviewable patches." }
+      ],
+      "mcps": [
+        {
+          "type": "inline",
+          "servers": {
+            "coding": {
+              "type": "in-memory",
+              "args": ["--rules-dir", ".aether/rules"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+Aether can load `mcp.json` files. To enable dynamic tool discovery and prevent MCP tools definitions from being loaded directly into context, set `proxy: true` (this is usually what you want).
+
+```json {15-17} title=".aether/settings.json"
+{
+  "agent": "Build",
+  "agents": [
+    {
+      "name": "Build",
+      "description": "Builds features and fixes bugs",
+      "model": "zai:glm-5.1",
+      "reasoningEffort": "high",
+      "prompts": [
+        "SYSTEM.md",
+        { "type": "file", "path": "AGENTS.md", "optional": true },
+        { "type": "glob", "pattern": "instructions/*.md", "optional": true },
+        { "type": "text", "text": "Prefer small, reviewable patches." }
+      ],
+      "mcps": [{ "type": "file", "path": "mcp.json", "proxy": true }]
+    }
+  ]
+}
+```
+
+```json title=".aether/mcp.json"
+{
+  "servers": {
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"]
+    },
+    "linear": {
+      "type": "http",
+      "url": "https://mcp.linear.app/mcp"
+    }
+  }
+}
+```
+
+See [Tools](/aether/settings/mcp-servers/) for MCP source formats, server types, proxying, and path resolution.
+
+#### Restricting access to tools
+
+Add `tools` when the agent should use only a subset of the tools exposed by its MCP servers. Filters match fully qualified tool names like `coding__read_file`; wildcard patterns may end in `*`. See [Tools](/aether/settings/mcp-servers/#tool-filtering) for allow and deny semantics and more examples.
+
+```json {19-25} title=".aether/settings.json"
+{
+  "agent": "Build",
+  "agents": [
+    {
+      "name": "Build",
+      "description": "Builds features and fixes bugs",
+      "model": "anthropic:claude-sonnet-4-5-20250929",
+      "reasoningEffort": "high",
+      "prompts": [
+        ".aether/BUILD.md",
+        "AGENTS.md",
+        { "type": "glob", "pattern": ".aether/rules/*.md", "optional": true },
+        { "type": "text", "text": "Prefer small, reviewable patches." }
+      ],
+      "mcps": [
+        ".aether/mcp.json",
+        { "type": "file", "path": ".aether/local-mcp.json", "optional": true }
+      ],
+      "tools": {
+        "allow": ["coding__*", "tasks__*"],
+        "deny": ["coding__bash", "coding__read_background_bash"]
+      },
+      "userInvocable": true
+    }
+  ]
+}
+```
+
+If `tools` is omitted, the agent can use every tool from its configured MCP servers.
+
+Use `agentInvocable` instead of, or in addition to, `userInvocable` when another agent should be able to spawn this one through the [subagents server](/aether/built-in-servers/subagents/).
+
+## For full schema
+
+See the [field reference](/aether/settings/reference/#agentconfig).
+
+### Related settings
+
+The fields agents point at are documented in detail on their own pages:
+
+- [LLMs](/aether/settings/llm-providers/) covers model specs, credentials, reasoning effort, and provider overrides.
+- [Prompts](/aether/settings/system-prompts/) covers prompt source formats, path resolution, optional files, globs, and shell interpolation.
+- [Tools](/aether/settings/mcp-servers/) covers MCP source formats, server configuration, proxying, and tool filters.
+- [Subagents](/aether/built-in-servers/subagents/) covers how agents spawn other agents.

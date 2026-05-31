@@ -125,7 +125,7 @@ impl JsonSchema for PromptSource {
 
     fn json_schema(generator: &mut SchemaGenerator) -> Schema {
         string_or_object_schema(
-            "Authored description of a prompt source — either a file path string or a typed text, file, or glob object.",
+            include_str!("../docs/prompt_source.md"),
             &generator.subschema_for::<PromptSourceObject>().to_value(),
         )
     }
@@ -135,15 +135,20 @@ impl JsonSchema for PromptSource {
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 enum PromptSourceObject {
     Text {
+        /// Literal prompt text included verbatim.
         text: String,
     },
     File {
+        /// Path to a prompt file, resolved as a resource path.
         path: ResourcePath,
+        /// When true, a missing file is skipped instead of raising an error.
         #[serde(default, skip_serializing_if = "is_false")]
         optional: bool,
     },
     Glob {
+        /// Glob pattern matching prompt files, resolved as a resource path.
         pattern: ResourcePath,
+        /// When true, a zero-match glob is skipped instead of raising an error.
         #[serde(default, skip_serializing_if = "is_false")]
         optional: bool,
     },

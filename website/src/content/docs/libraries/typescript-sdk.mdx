@@ -1,0 +1,195 @@
+---
+title: TypeScript SDK
+description: Run Aether from Node.js with the TypeScript SDK.
+---
+
+The TypeScript SDK allows you to programatically define agents, start sessions, send prompts, stream updates, and attach MCP tools.
+
+## Install
+
+```bash
+npm install @aether-agent/sdk
+```
+
+The package depends on `@aether-agent/cli`, which bundles the `aether` binary for your platform. You do not need to install the CLI separately.
+
+## Run an agent
+
+```ts
+import { AetherSession } from "@aether-agent/sdk";
+
+await using session = await AetherSession.start({
+  cwd: process.cwd(),
+  agent: "planner",
+});
+
+for await (const message of session.prompt("Find TODOs in this repo")) {
+  if (message.type === "session_update") {
+    console.log(message.update);
+  }
+
+  if (message.type === "result") {
+    console.log(`Agent stopped: ${message.stopReason}`);
+  }
+}
+```
+
+## Selecting an agent or model
+
+`AetherSession.start()` accepts either an Aether agent name from `.aether/settings.json` or a direct model id.
+
+```ts
+await AetherSession.start({
+  cwd: "/path/to/repo",
+  agent: "codebase-explorer",
+});
+
+await AetherSession.start({
+  cwd: "/path/to/repo",
+  model: "anthropic:claude-sonnet-4-5",
+  reasoningEffort: "high",
+});
+```
+
+`agent` and `model` are mutually exclusive. `reasoningEffort` requires `model`.
+
+## Session options
+
+| Option                | Description                                                                           |
+| --------------------- | ------------------------------------------------------------------------------------- |
+| `cwd`                 | Working directory for the spawned `aether acp` process. Defaults to `process.cwd()`.  |
+| `agent`               | Agent name from `.aether/settings.json`.                                              |
+| `model`               | Direct model id, such as `anthropic:claude-sonnet-4-5`.                               |
+| `reasoningEffort`     | `"low"`, `"medium"`, `"high"`, or `"xhigh"` when using a direct model.                |
+| `settings`            | Inline Aether settings object using the `.aether/settings.json` shape.                |
+| `settingsFile`        | Path to an alternate settings JSON file.                                              |
+| `binaryPath`          | Override the bundled CLI binary with an absolute path or command available on `PATH`. |
+| `tools`               | Closure-backed TypeScript MCP tool groups keyed by Aether tool prefix.                |
+| `externalMcpServers`  | External stdio, HTTP, or SSE MCP servers keyed by Aether tool prefix.                 |
+| `providers`           | Provider connection overrides, such as custom Bedrock endpoints or auth behavior.     |
+| `abortSignal`         | Cancel the active session and tear down the subprocess.                               |
+| `onPermissionRequest` | Custom policy for ACP permission requests. Defaults to `autoApprovePermissions`.      |
+| `onElicitation`       | Handler for Aether's `_aether/elicitation` extension request.                         |
+
+`settings` and `settingsFile` are mutually exclusive.
+
+## Multi-turn sessions
+
+A session is stateful. Send follow-up prompts on the same session to continue the conversation.
+
+```ts
+await using session = await AetherSession.start({ cwd: process.cwd() });
+
+for await (const message of session.prompt("Explain the architecture")) {
+  console.log(message);
+}
+
+for await (const message of session.prompt("Now list likely refactors")) {
+  console.log(message);
+}
+```
+
+Only one prompt can be in progress per session.
+
+## TypeScript tools
+
+Use `tool()` and the `tools` session option to expose TypeScript functions as MCP tools. Tool handlers run in your Node.js process, so closures and in-memory state work normally.
+
+```ts
+import { AetherSession, tool } from "@aether-agent/sdk";
+import { z } from "zod";
+
+let submitted: { answer: string } | null = null;
+
+const submitAnswer = tool({
+  name: "submit_answer",
+  description: "Submit the final answer",
+  input: { answer: z.string() },
+  handler: async ({ answer }) => {
+    submitted = { answer };
+    return { content: [{ type: "text", text: "Submitted." }] };
+  },
+});
+
+await using session = await AetherSession.start({
+  cwd: process.cwd(),
+  tools: {
+    custom: [submitAnswer],
+  },
+});
+
+for await (const _message of session.prompt(
+  "Call custom__submit_answer with the final answer.",
+)) {
+  // Consume streamed agent updates until the prompt completes.
+}
+
+console.log(submitted);
+```
+
+Aether names MCP tools as `server__tool`. In the example above, the `custom` group exposes `submit_answer` as `custom__submit_answer`.
+
+Each tool group starts a local Streamable HTTP MCP server on `127.0.0.1` for the lifetime of the session. The SDK protects these local servers with a per-session bearer token and host-header validation.
+
+## External MCP servers
+
+You can also attach external MCP servers. Object keys become the Aether tool prefix.
+
+```ts
+await using session = await AetherSession.start({
+  cwd: process.cwd(),
+  externalMcpServers: {
+    filesystem: {
+      type: "stdio",
+      command: "uvx",
+      args: ["mcp-server-filesystem", process.cwd()],
+    },
+    remote: {
+      type: "http",
+      url: "https://mcp.example.com/mcp",
+      headers: { Authorization: "Bearer ..." },
+    },
+  },
+});
+```
+
+## Permissions and elicitation
+
+By default, the SDK uses `autoApprovePermissions`, which selects the first `allow_*` permission option. That is convenient for trusted development contexts. For production or untrusted prompts, provide an explicit permission policy.
+
+```ts
+import { AetherSession } from "@aether-agent/sdk";
+
+await AetherSession.start({
+  onPermissionRequest: async (request) => {
+    const safeOption = request.options.find(
+      (option) => option.kind === "allow_once",
+    );
+    return safeOption
+      ? { outcome: { outcome: "selected", optionId: safeOption.optionId } }
+      : { outcome: { outcome: "cancelled" } };
+  },
+  onElicitation: async (request) => {
+    console.log(request.params);
+    return { action: "cancel" };
+  },
+});
+```
+
+## Provider overrides
+
+Provider overrides can route a provider to a custom endpoint or change auth behavior.
+
+```ts
+await AetherSession.start({
+  model: "bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0",
+  providers: {
+    bedrock: {
+      url: "http://127.0.0.1:8787",
+      auth: "none",
+    },
+  },
+});
+```
+
+Set `auth: "none"` only when a trusted proxy injects or signs provider authentication.

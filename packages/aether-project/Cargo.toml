@@ -34,5 +34,6 @@ glob = { workspace = true }
 globset = { workspace = true }
 
 [dev-dependencies]
+aether-doctest = { path = "../doctest" }
 tempfile = { workspace = true }
 tokio = { workspace = true }

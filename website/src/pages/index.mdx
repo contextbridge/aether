@@ -188,37 +188,38 @@ use aether_core::events::{AgentMessage, UserMessage};
 use llm::{ProviderFactory, providers::AnthropicProvider};
 
 let provider = AnthropicProvider::from_env()
-    .await?
-    .with_model("claude-sonnet-4-5");
+.await?
+.with_model("claude-sonnet-4-5");
 
 let (user_tx, mut agent_rx, handle) = agent(provider)
-    .system_prompt(Prompt::text("You are a concise assistant."))
-    .spawn()
-    .await?;
+.system_prompt(Prompt::text("You are a concise assistant."))
+.spawn()
+.await?;
 
 user_tx.send(UserMessage::text("Review this diff")).await?;
 
-while let Some(message) = agent_rx.recv().await {
-    match message {
-        AgentMessage::Text { chunk, .. } => print!("{chunk}"),
-        AgentMessage::Done => break,
-        _ => {}
-    }
-}
+while let Some(message) = agent\*rx.recv().await {
+match message {
+AgentMessage::Text { chunk, .. } => print!("{chunk}"),
+AgentMessage::Done => break,
+
+- => {}
+  }
+  }
 
 handle.await_completion().await;`;
 
 export const typescriptLibraryCode = `import { AetherSession } from "@aether-agent/sdk";
 
 await using session = await AetherSession.start({
-  cwd: process.cwd(),
-  agent: "Build",
+cwd: process.cwd(),
+agent: "Build",
 });
 
 for await (const message of session.prompt("Review this diff")) {
-  if (message.type === "session_update") {
-    console.log(message.update);
-  }
+if (message.type === "session_update") {
+console.log(message.update);
+}
 }`;
 
 <Hero />
@@ -423,7 +424,8 @@ for await (const message of session.prompt("Review this diff")) {
         Use as a Library
       </h2>
       <p class="text-gray-400 text-base sm:text-lg leading-relaxed max-w-2xl mx-auto">
-        Embed Aether directly into your app with the Rust runtime or the TypeScript SDK.
+        Embed Aether directly into your app with the Rust runtime or the
+        TypeScript SDK.
       </p>
     </div>
     <div class="flex flex-col gap-16">

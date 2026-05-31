@@ -15,13 +15,18 @@ pub struct ProviderConnectionConfig {
     pub inference_profile_arn: Option<String>,
 }
 
+#[doc = include_str!("docs/provider_connection_override.md")]
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProviderConnectionOverride {
+    /// Base URL override for the provider's API endpoint.
     #[serde(default, rename = "url", skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
+    /// Authentication mode. `default` uses the provider's normal credential
+    /// chain; `none` disables auth, for local or unauthenticated servers.
     #[serde(default, rename = "auth", skip_serializing_if = "Option::is_none")]
     pub auth_mode: Option<ProviderAuthMode>,
+    /// AWS Bedrock application inference profile ARN to route requests through.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inference_profile_arn: Option<String>,
 }

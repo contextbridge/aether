@@ -1,0 +1,22 @@
+[package]
+name = "aether-doctest"
+version = "0.1.0"
+edition = "2024"
+description = "Test helpers for validating fenced examples embedded in Aether's `src/docs/*.md` files"
+license = "MIT"
+repository = "https://github.com/contextbridge/aether"
+publish = false
+
+[package.metadata.dist]
+dist = false
+
+[lib]
+name = "aether_doctest"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }

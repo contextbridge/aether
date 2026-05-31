@@ -14,6 +14,7 @@ pub use retry_config::RetryConfig;
 use llm::StreamingModelProvider;
 use std::sync::Arc;
 
+#[doc = include_str!("../docs/basic_agent.md")]
 pub fn agent(llm: impl StreamingModelProvider + 'static) -> AgentBuilder {
     AgentBuilder::new(Arc::new(llm))
 }

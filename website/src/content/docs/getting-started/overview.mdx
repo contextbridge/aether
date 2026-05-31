@@ -3,104 +3,107 @@ title: Quickstart
 description: What Aether is and how to get started.
 ---
 
-import { Steps, CardGrid, LinkCard, Tabs, TabItem } from "@astrojs/starlight/components";
+import {
+    CardGrid,
+    LinkCard,
+    Tabs,
+    TabItem,
+} from "@astrojs/starlight/components";
 
-<Steps>
+## 1. Install
 
-1. **Install**
+<Tabs syncKey="install">
+<TabItem label="Homebrew">
 
-   <Tabs syncKey="install">
-   <TabItem label="Homebrew">
+```bash
+brew install contextbridge/tap/aether
+```
 
-   ```bash
-   brew install contextbridge/tap/aether
-   ```
+</TabItem>
+<TabItem label="Shell">
 
-   </TabItem>
-   <TabItem label="Shell">
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/contextbridge/aether/releases/latest/download/aether-agent-cli-installer.sh | sh
+```
 
-   ```bash
-   curl --proto '=https' --tlsv1.2 -LsSf https://github.com/contextbridge/aether/releases/latest/download/aether-agent-cli-installer.sh | sh
-   ```
+</TabItem>
+<TabItem label="Cargo">
 
-   </TabItem>
-   <TabItem label="Cargo">
+```bash
+cargo install aether-agent-cli
+```
 
-   ```bash
-   cargo install aether-agent-cli
-   ```
+Requires **Rust 1.85+**. Install via [rustup](https://rustup.rs).
 
-   Requires **Rust 1.85+**. Install via [rustup](https://rustup.rs).
-   </TabItem>
-   <TabItem label="Source">
+</TabItem>
+<TabItem label="Source">
 
-   ```bash
-   git clone https://github.com/contextbridge/aether.git
-   cd aether
-   cargo build --release
-   ```
-   </TabItem>
-   </Tabs>
+```bash
+git clone https://github.com/contextbridge/aether.git
+cd aether
+cargo build --release
+```
 
-2. **Init**
+</TabItem>
+</Tabs>
 
-   ```bash
-   cd your-project
-   aether agent new .
-   ```
-3. **Run**
+## 2. Init
 
-   <Tabs syncKey="run">
-   <TabItem label="Interactive TUI">
+```bash
+aether settings init --user # bootstrap user-level settings
+```
 
-   ```bash
-   aether
-   ```
+## 3. Run
 
-   </TabItem>
-   <TabItem label="IDE / editor">
+<Tabs syncKey="run">
+<TabItem label="TUI">
 
-   ```bash
-   aether acp
-   ```
+```bash
+aether
+```
 
-   Exposes agents over [ACP](https://agentclientprotocol.com/get-started/introduction) for [editor integration](/aether/running/editor-integration/).
+</TabItem>
+<TabItem label="IDE / editor">
 
-   </TabItem>
-   <TabItem label="Headless">
+```bash
+aether acp
+```
 
-   ```bash
-   aether headless "Explain the main function in this project"
-   ```
+Exposes agents over [ACP](https://agentclientprotocol.com/get-started/introduction) for [editor integration](/aether/running/editor-integration/).
 
-   Run a single prompt and exit — ideal for scripts and CI. See [Headless CLI](/aether/running/headless/) for all flags and output formats.
+</TabItem>
+<TabItem label="Headless">
 
-   </TabItem>
-   </Tabs>
+```bash
+aether headless "Explain the main function in this project"
+```
 
-</Steps>
+See [Headless CLI](/aether/running/headless/) for all flags and output formats.
+
+</TabItem>
+</Tabs>
 
 ## Next steps
 
 <CardGrid>
   <LinkCard
-    title="Agent Settings"
+    title="Settings"
     description="Define agents, models, prompts, and tool filters"
-    href="/aether/configuration/agent-settings/"
+    href="/aether/settings/overview/#agents"
   />
   <LinkCard
     title="MCP Servers"
     description="Configure built-in and external tools"
-    href="/aether/configuration/mcp-servers/"
+    href="/aether/settings/mcp-servers/"
   />
   <LinkCard
     title="LLM Providers"
     description="Model specs, credentials, and availability"
-    href="/aether/configuration/llm-providers/"
+    href="/aether/settings/llm-providers/"
   />
   <LinkCard
     title="System Prompts"
     description="Compose prompt sources from files, globs, and text"
-    href="/aether/configuration/system-prompts/"
+    href="/aether/settings/system-prompts/"
   />
 </CardGrid>

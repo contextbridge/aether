@@ -87,6 +87,8 @@ impl AgentSpec {
 /// Supports `allow` (allowlist) and `deny` (blocklist) with trailing `*` wildcards.
 /// If both are set, allow is applied first, then deny removes from the result.
 /// An empty filter (the default) allows all tools.
+#[doc = ""]
+#[doc = include_str!("docs/tool_filter.md")]
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 pub struct ToolFilter {
     /// If non-empty, only tools matching these patterns are allowed.

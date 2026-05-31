@@ -1,0 +1,213 @@
+---
+title: User and Project Settings
+description: How user-level and project-level settings merge, resolve paths, and expand variables.
+---
+
+import { FileTree } from "@astrojs/starlight/components";
+
+Aether loads settings from two locations — **user** level and **project** level — and merges them into a single resolved configuration.
+
+## User settings
+
+<FileTree>
+
+- $HOME/.aether/
+  - **settings.json** — Shared across all projects
+
+</FileTree>
+
+User-level settings live in `$HOME/.aether/settings.json`. Set the `AETHER_HOME` environment variable to use a different directory:
+
+```bash
+export AETHER_HOME=/custom/path/.aether
+```
+
+Generate a user-level settings file with the interactive wizard:
+
+```bash
+aether settings init --user
+```
+
+#### Path resolution
+
+Paths in user settings resolve from the **Aether home** directory (`$HOME/.aether` by default):
+
+```json title="$HOME/.aether/settings.json"
+{
+  "agents": [
+    {
+      "name": "Planner",
+      "description": "Plans work across any workspace",
+      "model": "anthropic:claude-sonnet-4-5-20250929",
+      "userInvocable": true,
+      "prompts": ["planner/SYSTEM.md", "mcp.json"]
+    }
+  ]
+}
+```
+
+Here `planner/SYSTEM.md` resolves to `$HOME/.aether/planner/SYSTEM.md` and `mcp.json` resolves to `$HOME/.aether/mcp.json`.
+
+## Project settings
+
+<FileTree>
+
+- my-project/.aether/
+  - **settings.json** — Specific to this project
+
+</FileTree>
+
+Project-level settings are optional and live in `my-project/.aether/settings.json`.
+
+Generate a project-level settings file with the interactive wizard:
+
+```bash
+aether settings init --project
+```
+
+#### Path resolution
+
+Plain relative paths in project settings resolve from the **workspace root** (the directory containing `.aether/`):
+
+```json title=".aether/settings.json"
+{
+  "agents": [
+    {
+      "name": "Build",
+      "description": "Builds features",
+      "model": "anthropic:claude-sonnet-4-5-20250929",
+      "userInvocable": true,
+      "prompts": ["AGENTS.md"],
+      "mcps": [".aether/mcp.json"]
+    }
+  ]
+}
+```
+
+Here `AGENTS.md` resolves to `<workspace-root>/AGENTS.md`.
+
+## Variable expansion
+
+All resource paths support `$VAR` / `${VAR}` variable expansion. This lets user-level settings reference project files without knowing the project's location.
+
+### `${WORKSPACE}`
+
+`${WORKSPACE}` always resolves to the current workspace root — the project directory you launched Aether from.
+
+```json title="$HOME/.aether/settings.json"
+{
+  "agents": [
+    {
+      ...
+      "prompts": [
+        "BUILD.md",
+        { "type": "file", "path": "${WORKSPACE}/AGENTS.md", "optional": true },
+        {
+          "type": "glob",
+          "pattern": "${WORKSPACE}/.aether/rules/*.md",
+          "optional": true
+        }
+      ],
+      "mcps": [
+        "mcp.json",
+        { "type": "file", "path": "${WORKSPACE}/.aether/mcp.json", "optional": true }
+      ]
+    }
+  ]
+}
+```
+
+In this example:
+
+- `BUILD.md` loads from `$HOME/.aether/BUILD.md` (user home).
+- `${WORKSPACE}/AGENTS.md` loads from the current project's root.
+- `${WORKSPACE}/.aether/mcp.json` loads the project's MCP config.
+- The `optional` flag means the agent still works in projects that don't have these files.
+
+## Inline settings
+
+Settings can be passed directly via the `--settings-json` CLI flag. This bypasses file loading and uses the same schema:
+
+```bash
+aether headless \
+  --settings-json '{
+    "agent": "Hello",
+    "agents": [
+      {
+        "name": "Hello",
+        "description": "A minimal hello world agent",
+        "model": "zai:glm-5.1",
+        "userInvocable": true,
+        "prompts": [
+          {
+            "type": "text",
+            "text": "You are a friendly assistant."
+          }
+        ]
+      }
+    ]
+  }' \
+  "Say hello"
+```
+
+Inline settings are merged on top of file-based settings using the same rightmost-wins rules.
+
+## Typical patterns
+
+### Shared agent with project overrides
+
+Define a general-purpose agent in user settings and let projects extend it:
+
+```json title="$HOME/.aether/settings.json"
+{
+  "agents": [
+    {
+      "name": "Build",
+      "description": "Builds features and fixes bugs",
+      "model": "anthropic:claude-sonnet-4-5-20250929",
+      "reasoningEffort": "high",
+      "userInvocable": true,
+      "prompts": [
+        "BUILD.md",
+        { "type": "file", "path": "${WORKSPACE}/AGENTS.md", "optional": true },
+        {
+          "type": "glob",
+          "pattern": "${WORKSPACE}/.aether/rules/*.md",
+          "optional": true
+        }
+      ],
+      "mcps": [
+        { "type": "file", "path": "mcp.json", "proxy": true },
+        {
+          "type": "file",
+          "path": "${WORKSPACE}/.aether/mcp.json",
+          "optional": true,
+          "proxy": true
+        }
+      ]
+    }
+  ]
+}
+```
+
+This agent loads its system prompt and MCP config from the user's Aether home, then optionally adds project-level instructions and MCP servers when they exist.
+
+### Team-shared project config
+
+Commit `.aether/settings.json` and `.aether/mcp.json` to version control so every team member gets the same agent configuration:
+
+```json title=".aether/settings.json"
+{
+  "agent": "Build",
+  "agents": [
+    {
+      "name": "Build",
+      "description": "Builds features for this project",
+      "model": "anthropic:claude-sonnet-4-5-20250929",
+      "userInvocable": true,
+      "prompts": [".aether/BUILD.md", "AGENTS.md"],
+      "mcps": [".aether/mcp.json"]
+    }
+  ]
+}
+```

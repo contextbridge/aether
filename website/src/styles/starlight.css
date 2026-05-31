@@ -21,13 +21,23 @@
   --sl-color-accent-high: var(--color-accent-200);
 
   --sl-color-bg: var(--sl-color-black);
-  --sl-color-bg-nav: var(--color-gray-900);
-  --sl-color-bg-sidebar: var(--color-gray-900);
+  --sl-color-bg-nav: var(--sl-color-bg);
+  --sl-color-bg-sidebar: var(--sl-color-bg);
 
   --sl-color-bg-inline-code: var(--color-highlight-bg);
 }
 
-/* Inline code uses theme's editor selection colors */
+.site-title {
+  color: var(--sl-color-white);
+}
+
+.content-panel + .content-panel {
+  border-top: 0;
+}
+
+.right-sidebar {
+  border-inline-start: 0;
+}
 .sl-markdown-content code:not(pre code) {
   color: var(--color-highlight-fg);
 }
@@ -75,4 +85,72 @@ starlight-file-tree {
     var(--sl-color-asides-border) 18%,
     transparent
   );
+}
+
+/* Mermaid diagrams: override Mermaid's default palette with the active
+ * Starlight theme tokens. Keep this in CSS instead of Mermaid `style` lines
+ * so diagrams remain valid Mermaid syntax. */
+.sl-markdown-content .mermaid {
+  color: var(--sl-color-white);
+}
+
+.sl-markdown-content .mermaid svg {
+  max-width: 100%;
+}
+
+.sl-markdown-content .mermaid svg .node rect,
+.sl-markdown-content .mermaid svg .node circle,
+.sl-markdown-content .mermaid svg .node ellipse,
+.sl-markdown-content .mermaid svg .node polygon,
+.sl-markdown-content .mermaid svg .node path {
+  fill: var(--sl-color-bg-nav) !important;
+  stroke: var(--sl-color-gray-4) !important;
+}
+
+.sl-markdown-content .mermaid svg .node[id*="ACPAgent"] rect,
+.sl-markdown-content .mermaid svg .node[id*="ACPAgent"] circle,
+.sl-markdown-content .mermaid svg .node[id*="ACPAgent"] ellipse,
+.sl-markdown-content .mermaid svg .node[id*="ACPAgent"] polygon,
+.sl-markdown-content .mermaid svg .node[id*="ACPAgent"] path,
+.sl-markdown-content .mermaid svg .node[id*="Runtime"] rect,
+.sl-markdown-content .mermaid svg .node[id*="Runtime"] circle,
+.sl-markdown-content .mermaid svg .node[id*="Runtime"] ellipse,
+.sl-markdown-content .mermaid svg .node[id*="Runtime"] polygon,
+.sl-markdown-content .mermaid svg .node[id*="Runtime"] path,
+.sl-markdown-content .mermaid svg .node[id*="Context"] rect,
+.sl-markdown-content .mermaid svg .node[id*="Context"] circle,
+.sl-markdown-content .mermaid svg .node[id*="Context"] ellipse,
+.sl-markdown-content .mermaid svg .node[id*="Context"] polygon,
+.sl-markdown-content .mermaid svg .node[id*="Context"] path {
+  fill: var(--sl-color-accent-low) !important;
+  stroke: var(--sl-color-accent) !important;
+}
+
+.sl-markdown-content .mermaid svg .cluster rect {
+  fill: var(--sl-color-bg-nav) !important;
+  stroke: var(--sl-color-gray-5) !important;
+}
+
+.sl-markdown-content .mermaid svg .edgePath .path,
+.sl-markdown-content .mermaid svg .flowchart-link {
+  stroke: var(--sl-color-gray-3) !important;
+}
+
+.sl-markdown-content .mermaid svg marker path {
+  fill: var(--sl-color-gray-3) !important;
+  stroke: var(--sl-color-gray-3) !important;
+}
+
+.sl-markdown-content .mermaid svg text,
+.sl-markdown-content .mermaid svg .label,
+.sl-markdown-content .mermaid svg .nodeLabel,
+.sl-markdown-content .mermaid svg .edgeLabel,
+.sl-markdown-content .mermaid svg .cluster-label {
+  color: var(--sl-color-white) !important;
+  fill: var(--sl-color-white) !important;
+}
+
+.sl-markdown-content .mermaid svg .edgeLabel,
+.sl-markdown-content .mermaid svg .edgeLabel p {
+  background-color: var(--sl-color-bg) !important;
 }

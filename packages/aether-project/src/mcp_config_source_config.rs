@@ -87,7 +87,7 @@ impl schemars::JsonSchema for McpSourceSpec {
 
     fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
         string_or_object_schema(
-            "MCP config source — either a file path string or a typed file or inline object.",
+            include_str!("docs/mcp_source_spec.md"),
             &generator.subschema_for::<McpSourceSpecObject>().to_value(),
         )
     }

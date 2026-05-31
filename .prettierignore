@@ -2,3 +2,6 @@ pnpm-lock.yaml
 dist/
 node_modules/
 coverage/
+
+# Generated from the AetherSettings Rust struct by `just gen-schema`
+website/src/data/aether-settings.schema.json

@@ -26,17 +26,27 @@ pub fn project_settings_exist(project_root: &Path) -> bool {
     project_settings_path(project_root).is_file()
 }
 
+#[doc = include_str!("docs/aether_settings.md")]
 #[derive(Debug, Clone, Default, PartialEq, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AetherSettings {
+    /// Name of the agent to launch by default. Must match a `name` in `agents`.
+    /// When unset, Aether falls back to the first user-invocable agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
+    /// Default prompt sources shared by all agents. An agent inherits these only
+    /// when its own `prompts` array is empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub prompts: Vec<PromptSource>,
+    /// Default MCP sources shared by all agents. An agent inherits these only when
+    /// its own `mcps` array is empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mcps: Vec<McpSourceSpec>,
+    /// Provider connection overrides (credentials, base URLs, inference profiles)
+    /// applied to every agent unless overridden per-agent.
     #[serde(default, skip_serializing_if = "ProviderConnectionOverrides::is_empty")]
     pub providers: ProviderConnectionOverrides,
+    /// The agents defined for this project. At least one agent is required.
     #[schemars(length(min = 1))]
     pub agents: Vec<AgentConfig>,
 }
