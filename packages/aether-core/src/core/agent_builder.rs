@@ -2,7 +2,7 @@ use super::agent::{AgentConfig, AutoContinue, RetryConfig};
 use crate::agent_spec::AgentSpec;
 use crate::context::CompactionConfig;
 use crate::core::{Agent, Prompt, PromptCache, Result};
-use crate::events::{AgentMessage, UserMessage};
+use crate::events::{AgentMessage, Command};
 use crate::mcp::run_mcp_task::McpCommand;
 use aether_auth::OAuthCredentialStorage;
 use llm::parser::ModelProviderParser;
@@ -204,7 +204,7 @@ impl AgentBuilder {
         self
     }
 
-    pub async fn spawn(self) -> Result<(Sender<UserMessage>, Receiver<AgentMessage>, AgentHandle)> {
+    pub async fn spawn(self) -> Result<(Sender<Command>, Receiver<AgentMessage>, AgentHandle)> {
         let mut prompt_cache = PromptCache::new(self.prompts);
         let system_content = prompt_cache.render().await?;
 
@@ -215,7 +215,7 @@ impl AgentBuilder {
 
         messages.extend(self.initial_messages);
 
-        let (user_message_tx, user_message_rx) = mpsc::channel::<UserMessage>(self.channel_capacity);
+        let (command_tx, command_rx) = mpsc::channel::<Command>(self.channel_capacity);
 
         let (message_tx, agent_message_rx) = mpsc::channel::<AgentMessage>(self.channel_capacity);
 
@@ -234,11 +234,11 @@ impl AgentBuilder {
             prompt_cache,
         };
 
-        let agent = Agent::new(config, user_message_rx, message_tx);
+        let agent = Agent::new(config, command_rx, message_tx);
 
         let agent_handle = tokio::spawn(agent.run());
 
-        Ok((user_message_tx, agent_message_rx, AgentHandle { handle: agent_handle }))
+        Ok((command_tx, agent_message_rx, AgentHandle { handle: agent_handle }))
     }
 }
 
@@ -246,8 +246,9 @@ impl AgentBuilder {
 mod tests {
     use super::*;
     use crate::agent_spec::{AgentSpecExposure, ToolFilter};
+    use crate::events::{AgentCommand, UserCommand};
     use llm::testing::FakeLlmProvider;
-    use llm::{ContentBlock, LlmResponse, ProviderConnectionOverrides};
+    use llm::{LlmResponse, ProviderConnectionOverrides};
 
     #[tokio::test]
     async fn test_agent_handle_is_finished() {
@@ -278,7 +279,9 @@ mod tests {
         ]));
 
         let (tx, mut rx, handle) = AgentBuilder::new(llm).context_window(Some(200_000)).spawn().await.unwrap();
-        tx.send(UserMessage::Text { content: vec![ContentBlock::text("hello")] }).await.unwrap();
+        tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("hello")] }))
+            .await
+            .unwrap();
 
         let update = next_context_usage(&mut rx).await;
         assert_eq!(update.context_limit, Some(200_000));
@@ -299,7 +302,9 @@ mod tests {
         );
 
         let (tx, mut rx, handle) = AgentBuilder::new(llm).context_window(Some(200_000)).spawn().await.unwrap();
-        tx.send(UserMessage::Text { content: vec![ContentBlock::text("hello")] }).await.unwrap();
+        tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("hello")] }))
+            .await
+            .unwrap();
 
         let update = next_context_usage(&mut rx).await;
         assert_eq!(update.context_limit, Some(200_000));
@@ -312,9 +317,9 @@ mod tests {
         let llm = Arc::new(FakeLlmProvider::new(vec![]).with_context_window(Some(128_000)));
         let (tx, mut rx, handle) = AgentBuilder::new(llm).context_window(Some(200_000)).spawn().await.unwrap();
 
-        tx.send(UserMessage::SwitchModel(Box::new(
+        tx.send(Command::AgentCommand(AgentCommand::SwitchModel(Box::new(
             FakeLlmProvider::new(vec![]).with_display_name("new fake").with_context_window(Some(32_000)),
-        )))
+        ))))
         .await
         .unwrap();
 

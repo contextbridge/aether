@@ -33,7 +33,7 @@ aether-agent-core = "0.1"
 ### Minimal Agent (No Tools)
 
 ```rust,no_run
-use aether_core::core::{AgentMessage, Prompt, UserMessage, agent};
+use aether_core::core::{AgentMessage, Command, Prompt, agent};
 use llm::providers::openrouter::OpenRouterProvider;
 use std::io::{self, Write};
 
@@ -50,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     // 3. Send the agent a message
-    tx.send(UserMessage::text("Explain async Rust in one paragraph"))
+    tx.send(Command::text("Explain async Rust in one paragraph"))
         .await?;
 
     // 4. Stream the agent's response back
@@ -99,8 +99,8 @@ You are Mr. BotBot, a kickass coding agent equipped with SOTA filesystem and web
 And bring Mr. `BotBot` to life!
 
 ```rust,no_run
-use aether_core::core::{AgentMessage, UserMessage, Prompt, agent};
-use aether_core::mcp::{mcp, McpSpawnResult};
+use aether_core::core::{AgentMessage, Command, Prompt, agent};
+use aether_core::mcp::mcp;
 use llm::providers::openrouter::OpenRouterProvider;
 use std::io::{self, Write};
 
@@ -109,28 +109,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let llm = OpenRouterProvider::default("z-ai/glm-4.6")?;
 
     // 1. Connect to MCP servers
-    let McpSpawnResult {
-        tool_definitions: tools,
-        instructions: _,
-        command_tx: mcp_tx,
-        event_rx: _,
-        handle: _mcp_handle,
-        ..
-    } = mcp()
+    let mut mcp_runtime = mcp(".")
         .from_json_files(&["mcp.json"]) // <-- Load MCP servers from one or more JSON files
         .await?
         .spawn() // <-- Spawn the MCP client into a tokio task (multiple agents can use it)
         .await?;
+    let snapshot = mcp_runtime.block_until_ready().await.expect("MCP should initialize");
 
     // 2. Create Agent
     let (tx, mut rx, _handle) = agent(llm)
-        .system_prompt(Prompt::from_globs(vec!["AGENTS.md".into()], ".".into())) // <-- Load system prompt from AGENTS.md
-        .tools(mcp_tx, tools) // <-- Give the agent MCP tools
+        .system_prompt(Prompt::file("AGENTS.md", ".")) // <-- Load system prompt from AGENTS.md
+        .tools(mcp_runtime.command_tx, snapshot.tool_definitions) // <-- Give the agent MCP tools
         .spawn()
         .await?;
 
    // Send your agent a message and stream the results back
-    tx.send(UserMessage::text(
+    tx.send(Command::text(
         "Read the README.md file and summarize it",
     ))
     .await?;

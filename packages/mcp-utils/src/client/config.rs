@@ -129,7 +129,25 @@ impl McpServer {
     pub fn new(name: impl Into<String>, transport: McpTransport, proxy: bool) -> Self {
         Self { name: name.into(), transport, proxy }
     }
+
+    /// Clone this server config. Fails for [`McpTransport::InMemory`], whose
+    /// boxed service cannot be duplicated and so cannot be shared across
+    /// independently-spawned MCP managers.
+    pub fn try_clone(&self) -> Result<Self, McpServerCloneError> {
+        let transport = match &self.transport {
+            McpTransport::Stdio { command, args, env } => {
+                McpTransport::Stdio { command: command.clone(), args: args.clone(), env: env.clone() }
+            }
+            McpTransport::Http { config } => McpTransport::Http { config: config.clone() },
+            McpTransport::InMemory { .. } => return Err(McpServerCloneError(self.name.clone())),
+        };
+        Ok(Self { name: self.name.clone(), transport, proxy: self.proxy })
+    }
 }
+
+#[derive(Debug, thiserror::Error)]
+#[error("in-memory MCP server `{0}` cannot be cloned across runtimes")]
+pub struct McpServerCloneError(pub String);
 
 impl Debug for McpServer {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {

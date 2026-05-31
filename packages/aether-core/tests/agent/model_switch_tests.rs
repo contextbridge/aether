@@ -1,5 +1,5 @@
 use aether_core::core::agent;
-use aether_core::events::{AgentMessage, UserMessage};
+use aether_core::events::{AgentCommand, AgentMessage, Command, UserCommand};
 use llm::LlmResponse;
 use llm::testing::FakeLlmProvider;
 
@@ -17,7 +17,7 @@ async fn test_switch_model_emits_model_switched() {
     let (tx, mut rx, _handle) = agent(llm).spawn().await.unwrap();
 
     // Send initial message
-    tx.send(UserMessage::text("hi")).await.unwrap();
+    tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("hi")] })).await.unwrap();
 
     // Wait for initial response to complete
     let mut got_initial_done = false;
@@ -30,10 +30,12 @@ async fn test_switch_model_emits_model_switched() {
     assert!(got_initial_done, "Expected Done after initial message");
 
     // Switch models by sending a ready-to-use provider
-    tx.send(UserMessage::SwitchModel(Box::new(new_provider))).await.unwrap();
+    tx.send(Command::AgentCommand(AgentCommand::SwitchModel(Box::new(new_provider)))).await.unwrap();
 
     // Send a follow-up message to exercise the new provider
-    tx.send(UserMessage::text("after switch")).await.unwrap();
+    tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("after switch")] }))
+        .await
+        .unwrap();
     drop(tx);
 
     // Collect remaining messages
@@ -71,14 +73,14 @@ async fn test_switch_model_unknown_context_limit_resets_context_meter() {
 
     let (tx, mut rx, _handle) = agent(initial_provider).spawn().await.unwrap();
 
-    tx.send(UserMessage::text("hi")).await.unwrap();
+    tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("hi")] })).await.unwrap();
     while let Some(msg) = rx.recv().await {
         if matches!(msg, AgentMessage::Done) {
             break;
         }
     }
 
-    tx.send(UserMessage::SwitchModel(Box::new(unknown_limit_provider))).await.unwrap();
+    tx.send(Command::AgentCommand(AgentCommand::SwitchModel(Box::new(unknown_limit_provider)))).await.unwrap();
     drop(tx);
 
     let mut messages = Vec::new();

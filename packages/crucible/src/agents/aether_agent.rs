@@ -1,6 +1,6 @@
 use aether_core::agent_spec::McpConfigSource;
 use aether_core::core::{Prompt, agent};
-use aether_core::events::{AgentMessage, UserMessage};
+use aether_core::events::{AgentMessage, Command, UserCommand};
 use aether_core::mcp::{McpBuilder, mcp};
 use llm::{StreamingModelProvider, ToolCallRequest};
 use mcp_utils::client::ServerFactory;
@@ -252,7 +252,7 @@ impl<T: StreamingModelProvider + Clone + 'static> Agent for AetherAgent<T> {
 
         let task_prompt = build_aether_task_prompt(config.task_prompt, config.workspace);
         agent_tx
-            .send(UserMessage::text(&task_prompt))
+            .send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text(&task_prompt)] }))
             .await
             .map_err(|e| RunError::ChannelSendFailed(format!("Failed to send task: {e}")))?;
 

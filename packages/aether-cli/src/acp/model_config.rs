@@ -6,6 +6,7 @@ use agent_client_protocol::schema::{self as acp, SessionConfigOption, SessionCon
 use llm::ReasoningEffort;
 use llm::catalog::LlmModel;
 use std::collections::{BTreeMap, HashSet};
+use std::ops::Deref;
 
 fn needs_oauth_login(model: &LlmModel, store: &dyn OAuthCredentialStorage) -> bool {
     model.oauth_provider_id().is_some_and(|id| !store.has_credential(id))
@@ -30,10 +31,6 @@ pub(crate) fn unavailable_reason(model: &LlmModel, store: &dyn OAuthCredentialSt
 
 pub(crate) fn model_exists(available: &[LlmModel], model_str: &str) -> bool {
     model_str.split(',').map(str::trim).all(|part| available.iter().any(|m| m.to_string() == part))
-}
-
-pub(crate) fn effective_model<'a>(active_model: &'a str, pending_model: Option<&'a str>) -> &'a str {
-    pending_model.unwrap_or(active_model)
 }
 
 /// Build the "Model" select config option with all models from all providers.
@@ -145,87 +142,99 @@ pub(crate) struct ValidatedMode {
     pub(crate) reasoning_effort: Option<ReasoningEffort>,
 }
 
-pub(crate) fn validated_modes_from_specs(specs: &[AgentSpec], available: &[LlmModel]) -> Vec<ValidatedMode> {
-    specs
-        .iter()
-        .filter(|spec| spec.exposure.user_invocable)
-        .filter_map(|spec| {
-            let model = spec.model.clone();
-            if !model_exists(available, &model) {
-                return None;
-            }
+/// The user-invocable modes for a session: agent specs whose model is currently
+/// available, projected to the `(name, model, reasoning_effort)` a session needs
+/// for selection and config-option rendering. Owns all mode lookup/rendering.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Modes(Vec<ValidatedMode>);
 
-            Some(ValidatedMode { name: spec.name.clone(), model, reasoning_effort: spec.reasoning_effort })
-        })
-        .collect()
+impl Deref for Modes {
+    type Target = [ValidatedMode];
+
+    fn deref(&self) -> &[ValidatedMode] {
+        &self.0
+    }
 }
 
-pub(crate) fn build_mode_config_option_from_modes(
-    validated_modes: &[ValidatedMode],
-    selected_mode: Option<&str>,
-) -> Option<SessionConfigOption> {
-    if validated_modes.is_empty() {
-        return None;
+impl Modes {
+    pub(crate) fn new(modes: Vec<ValidatedMode>) -> Self {
+        Self(modes)
     }
 
-    let options: Vec<_> = validated_modes
-        .iter()
-        .map(|mode| acp::SessionConfigSelectOption::new(mode.name.clone(), mode.name.clone()))
-        .collect();
-
-    let current = selected_mode
-        .filter(|selected| validated_modes.iter().any(|mode| mode.name == *selected))
-        .map(ToOwned::to_owned)
-        .or_else(|| validated_modes.first().map(|mode| mode.name.clone()))?;
-
-    Some(
-        SessionConfigOption::select(ConfigOptionId::Mode.as_str(), "Mode", current, options)
-            .category(SessionConfigOptionCategory::Mode),
-    )
-}
-
-pub(crate) fn resolve_mode_from_modes(
-    validated_modes: &[ValidatedMode],
-    mode_name: &str,
-) -> Option<(String, Option<ReasoningEffort>)> {
-    validated_modes.iter().find(|mode| mode.name == mode_name).map(|mode| (mode.model.clone(), mode.reasoning_effort))
-}
-
-pub(crate) fn mode_name_for_state_from_modes(
-    validated_modes: &[ValidatedMode],
-    model: &str,
-    reasoning_effort: Option<ReasoningEffort>,
-) -> Option<String> {
-    validated_modes
-        .iter()
-        .find(|mode| mode.model == model && mode.reasoning_effort == reasoning_effort)
-        .map(|mode| mode.name.clone())
-}
-
-pub(crate) fn build_config_options_from_modes(
-    validated_modes: &[ValidatedMode],
-    available: &[LlmModel],
-    selected_mode: Option<&str>,
-    current_model: &str,
-    reasoning_effort: Option<ReasoningEffort>,
-    all_models: &[LlmModel],
-    credential_store: &dyn OAuthCredentialStorage,
-) -> Vec<SessionConfigOption> {
-    let mut options = Vec::new();
-
-    if let Some(mode_option) = build_mode_config_option_from_modes(validated_modes, selected_mode) {
-        options.push(mode_option);
+    pub(crate) fn from_specs(specs: &[AgentSpec], available: &[LlmModel]) -> Self {
+        Self(
+            specs
+                .iter()
+                .filter(|spec| spec.exposure.user_invocable)
+                .filter_map(|spec| {
+                    let model = spec.model.clone();
+                    model_exists(available, &model).then(|| ValidatedMode {
+                        name: spec.name.clone(),
+                        model,
+                        reasoning_effort: spec.reasoning_effort,
+                    })
+                })
+                .collect(),
+        )
     }
 
-    options.push(build_model_config_option(available, current_model, all_models, credential_store));
-
-    let levels = intersect_reasoning_levels(current_model);
-
-    if let Some(opt) = build_reasoning_effort_config_option(reasoning_effort, &levels) {
-        options.push(opt);
+    /// The model and reasoning effort backing a mode, if it exists.
+    pub(crate) fn resolve(&self, mode_name: &str) -> Option<(String, Option<ReasoningEffort>)> {
+        self.iter().find(|mode| mode.name == mode_name).map(|mode| (mode.model.clone(), mode.reasoning_effort))
     }
 
-    options
+    /// The mode whose `(model, reasoning_effort)` matches the given selection, if
+    /// any — used to keep the Mode dropdown in sync after a Model change.
+    pub(crate) fn name_for(&self, model: &str, reasoning_effort: Option<ReasoningEffort>) -> Option<String> {
+        self.iter()
+            .find(|mode| mode.model == model && mode.reasoning_effort == reasoning_effort)
+            .map(|mode| mode.name.clone())
+    }
+
+    fn config_option(&self, selected_mode: Option<&str>) -> Option<SessionConfigOption> {
+        if self.is_empty() {
+            return None;
+        }
+
+        let options: Vec<_> =
+            self.iter().map(|mode| acp::SessionConfigSelectOption::new(mode.name.clone(), mode.name.clone())).collect();
+
+        let current = selected_mode
+            .filter(|selected| self.iter().any(|mode| mode.name == *selected))
+            .map(ToOwned::to_owned)
+            .or_else(|| self.first().map(|mode| mode.name.clone()))?;
+
+        Some(
+            SessionConfigOption::select(ConfigOptionId::Mode.as_str(), "Mode", current, options)
+                .category(SessionConfigOptionCategory::Mode),
+        )
+    }
+
+    pub(crate) fn config_options(
+        &self,
+        available: &[LlmModel],
+        selected_mode: Option<&str>,
+        current_model: &str,
+        reasoning_effort: Option<ReasoningEffort>,
+        all_models: &[LlmModel],
+        credential_store: &dyn OAuthCredentialStorage,
+    ) -> Vec<SessionConfigOption> {
+        let mut options = Vec::new();
+
+        if let Some(mode_option) = self.config_option(selected_mode) {
+            options.push(mode_option);
+        }
+
+        options.push(build_model_config_option(available, current_model, all_models, credential_store));
+
+        let levels = intersect_reasoning_levels(current_model);
+
+        if let Some(opt) = build_reasoning_effort_config_option(reasoning_effort, &levels) {
+            options.push(opt);
+        }
+
+        options
+    }
 }
 
 /// Compute the intersection of reasoning levels across all selected models.
@@ -249,6 +258,16 @@ fn intersect_reasoning_levels(current_model: &str) -> Vec<ReasoningEffort> {
 pub(crate) fn pick_default_model(available: &[LlmModel]) -> Option<&LlmModel> {
     // Prefer claude-sonnet-4-5 (latest alias)
     available.iter().find(|m| m.model_id() == "claude-sonnet-4-5").or_else(|| available.first())
+}
+
+pub(crate) fn get_all_models(discovered: &[LlmModel]) -> Vec<LlmModel> {
+    let mut all = LlmModel::all().to_vec();
+    for m in discovered {
+        if !all.contains(m) {
+            all.push(m.clone());
+        }
+    }
+    all
 }
 
 #[cfg(test)]
@@ -291,8 +310,8 @@ mod tests {
         ]
     }
 
-    fn test_validated_modes() -> Vec<ValidatedMode> {
-        validated_modes_from_specs(&test_specs_with_modes(), &test_models())
+    fn test_validated_modes() -> Modes {
+        Modes::from_specs(&test_specs_with_modes(), &test_models())
     }
 
     fn select_options(opt: &SessionConfigOption) -> &[SessionConfigSelectOption] {
@@ -325,38 +344,37 @@ mod tests {
     }
 
     fn config_opts(model: &str, effort: Option<ReasoningEffort>) -> Vec<SessionConfigOption> {
-        let validated = test_validated_modes();
-        build_config_options_from_modes(&validated, &test_models(), None, model, effort, LlmModel::all(), &fake_store())
+        test_validated_modes().config_options(&test_models(), None, model, effort, LlmModel::all(), &fake_store())
     }
 
     #[test]
-    fn build_mode_config_option_from_modes_has_mode_category() {
-        let option = build_mode_config_option_from_modes(&test_validated_modes(), Some("Planner"))
-            .expect("mode option should exist");
-        assert_eq!(option.id.0.as_ref(), "mode");
-        assert_eq!(option.category, Some(SessionConfigOptionCategory::Mode));
-    }
-
-    #[test]
-    fn resolve_mode_from_modes_rejects_unknown_mode() {
-        assert!(resolve_mode_from_modes(&test_validated_modes(), "Unknown").is_none());
-    }
-
-    #[test]
-    fn mode_name_for_state_from_modes_matches_valid_tuple() {
-        let selected = mode_name_for_state_from_modes(
-            &test_validated_modes(),
+    fn mode_config_option_has_mode_category() {
+        let option = test_validated_modes().config_options(
+            &test_models(),
+            Some("Planner"),
             "anthropic:claude-sonnet-4-5",
             Some(ReasoningEffort::High),
+            LlmModel::all(),
+            &fake_store(),
         );
+        let mode = find_option(&option, "mode");
+        assert_eq!(mode.category, Some(SessionConfigOptionCategory::Mode));
+    }
+
+    #[test]
+    fn resolve_rejects_unknown_mode() {
+        assert!(test_validated_modes().resolve("Unknown").is_none());
+    }
+
+    #[test]
+    fn name_for_matches_valid_tuple() {
+        let selected = test_validated_modes().name_for("anthropic:claude-sonnet-4-5", Some(ReasoningEffort::High));
         assert_eq!(selected.as_deref(), Some("Planner"));
     }
 
     #[test]
-    fn build_config_options_from_modes_includes_mode_option_when_configured() {
-        let modes = test_validated_modes();
-        let options = build_config_options_from_modes(
-            &modes,
+    fn config_options_includes_mode_option_when_configured() {
+        let options = test_validated_modes().config_options(
             &test_models(),
             Some("Planner"),
             "anthropic:claude-sonnet-4-5",
@@ -368,9 +386,8 @@ mod tests {
     }
 
     #[test]
-    fn build_config_options_from_modes_returns_single_model_option() {
-        let opts = build_config_options_from_modes(
-            &[],
+    fn config_options_returns_single_model_option_without_modes() {
+        let opts = Modes::default().config_options(
             &test_models(),
             None,
             "deepseek:deepseek-chat",
@@ -405,10 +422,10 @@ mod tests {
     }
 
     #[test]
-    fn validated_modes_from_specs_keeps_agent_with_bedrock_foundation_model() {
+    fn from_specs_keeps_agent_with_bedrock_foundation_model() {
         let bedrock_model = "bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0";
         let specs = vec![spec("BedrockAgent", bedrock_model, None)];
-        let modes = validated_modes_from_specs(&specs, &test_models());
+        let modes = Modes::from_specs(&specs, &test_models());
         assert_eq!(modes.len(), 1);
         assert_eq!(modes[0].name, "BedrockAgent");
         assert_eq!(modes[0].model, bedrock_model);
@@ -419,16 +436,6 @@ mod tests {
         let opt =
             build_model_config_option(&test_models(), "anthropic:claude-sonnet-4-5", LlmModel::all(), &fake_store());
         assert!(ConfigOptionMeta::from_meta(opt.meta.as_ref()).multi_select);
-    }
-
-    #[test]
-    fn effective_model_prefers_pending_falls_back_to_active() {
-        for (active, pending, expected) in [
-            ("anthropic:claude-sonnet-4-5", Some("deepseek:deepseek-chat"), "deepseek:deepseek-chat"),
-            ("anthropic:claude-sonnet-4-5", None, "anthropic:claude-sonnet-4-5"),
-        ] {
-            assert_eq!(effective_model(active, pending), expected);
-        }
     }
 
     #[test]

@@ -6,7 +6,7 @@ use std::time::Duration;
 use futures::future::join_all;
 
 use crate::core::{RetryConfig, agent};
-use crate::events::{AgentMessage, UserMessage};
+use crate::events::{AgentMessage, Command};
 use crate::mcp::mcp;
 use crate::testing::FakeMcpServer;
 use crate::testing::fake_mcp::fake_mcp;
@@ -29,7 +29,7 @@ pub struct TestAgentResult {
 }
 
 pub struct TestAgentBuilder {
-    messages: Vec<UserMessage>,
+    messages: Vec<Command>,
     responses: Vec<Vec<Result<LlmResponse, LlmError>>>,
     timeout: Option<Duration>,
     max_auto_continues: Option<u32>,
@@ -53,7 +53,7 @@ impl TestAgentBuilder {
         }
     }
 
-    pub fn user_messages(mut self, user_messages: Vec<UserMessage>) -> Self {
+    pub fn user_messages(mut self, user_messages: Vec<Command>) -> Self {
         self.messages = user_messages;
         self
     }

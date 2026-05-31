@@ -1,5 +1,5 @@
 use aether_core::core::Prompt;
-use aether_core::events::{AgentMessage, UserMessage};
+use aether_core::events::{AgentMessage, Command};
 use std::io;
 use std::process::ExitCode;
 use tokio::sync::mpsc;
@@ -18,7 +18,7 @@ pub async fn run(config: RunConfig) -> Result<ExitCode, CliError> {
 
     agent
         .agent_tx
-        .send(UserMessage::text(&config.prompt))
+        .send(Command::text(&config.prompt))
         .await
         .map_err(|e| CliError::AgentError(format!("Failed to send prompt: {e}")))?;
 

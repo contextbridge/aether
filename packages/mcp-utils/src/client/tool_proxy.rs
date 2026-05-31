@@ -104,6 +104,11 @@ impl ToolProxy {
         Arc::new(value.as_object().expect("schema is always an object").clone())
     }
 
+    /// The namespaced name of this proxy's `call_tool` virtual tool.
+    pub fn call_tool_name(&self) -> String {
+        format!("{}__call_tool", self.name)
+    }
+
     /// Build a `ToolDefinition` for the proxy's `call_tool` virtual tool.
     pub fn call_tool_definition(proxy_name: &str) -> ToolDefinition {
         let schema = Self::call_tool_schema();

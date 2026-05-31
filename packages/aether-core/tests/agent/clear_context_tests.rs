@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use aether_core::core::{Prompt, agent};
-use aether_core::events::{AgentMessage, UserMessage};
+use aether_core::events::{AgentMessage, Command, UserCommand};
 use llm::LlmResponse;
 use llm::testing::FakeLlmProvider;
 use llm::{ChatMessage, ContentBlock};
@@ -19,17 +19,21 @@ async fn test_clear_context_resets_history_and_preserves_system_prompt() {
 
     let (tx, mut rx, _handle) = agent(llm).system_prompt(Prompt::text("You are a test agent.")).spawn().await.unwrap();
 
-    tx.send(UserMessage::text("first question")).await.unwrap();
+    tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("first question")] }))
+        .await
+        .unwrap();
     drain_until_done(&mut rx).await;
 
-    tx.send(UserMessage::ClearContext).await.unwrap();
+    tx.send(Command::UserCommand(UserCommand::ClearContext)).await.unwrap();
     let cleared = tokio::time::timeout(Duration::from_secs(2), rx.recv())
         .await
         .expect("Timed out waiting for ContextCleared")
         .expect("Channel closed before ContextCleared");
     assert!(matches!(cleared, AgentMessage::ContextCleared), "Expected ContextCleared, got: {cleared:?}");
 
-    tx.send(UserMessage::text("second question")).await.unwrap();
+    tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("second question")] }))
+        .await
+        .unwrap();
     drain_until_done(&mut rx).await;
 
     let contexts = captured_contexts.lock().unwrap();

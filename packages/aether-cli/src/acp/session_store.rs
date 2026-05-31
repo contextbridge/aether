@@ -192,7 +192,7 @@ fn user_prompt_text_from_event(event: &SessionEvent) -> Option<String> {
     }
 }
 
-fn is_streaming_event(event: &SessionEvent) -> bool {
+pub(crate) fn is_streaming_event(event: &SessionEvent) -> bool {
     matches!(
         event,
         SessionEvent::Agent(
@@ -204,7 +204,7 @@ fn is_streaming_event(event: &SessionEvent) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aether_core::context::ext::UserEvent;
+    use aether_core::context::ext::{SessionControlEvent, UserEvent};
     use llm::ToolCallResult;
 
     fn meta(id: &str, created_at: &str, mode: Option<&str>) -> SessionMeta {
@@ -231,6 +231,13 @@ mod tests {
             chunk: chunk.to_string(),
             is_complete: complete,
             model_name: "test".to_string(),
+        })
+    }
+
+    fn switch_agent(from: Option<&str>, to: Option<&str>) -> SessionEvent {
+        SessionEvent::Control(SessionControlEvent::AgentSwitched {
+            from: from.map(str::to_string),
+            to: to.map(str::to_string),
         })
     }
 
@@ -271,6 +278,29 @@ mod tests {
         let (loaded, events) = store.load("s1").unwrap();
         assert_eq!(loaded, m);
         assert_eq!(events, vec![user, agent]);
+    }
+
+    #[test]
+    fn control_events_roundtrip() {
+        let (_dir, store) = temp_store();
+        let m = default_meta();
+        let control = switch_agent(Some("Planner"), Some("Coder"));
+        store.append_meta("s1", &m).unwrap();
+        store.append_event("s1", &control).unwrap();
+
+        let (loaded, events) = store.load("s1").unwrap();
+        assert_eq!(loaded, m);
+        assert_eq!(events, vec![control]);
+    }
+
+    #[test]
+    fn prompt_history_ignores_control_events() {
+        let (_dir, store) = temp_store();
+        store.append_meta("s1", &default_meta()).unwrap();
+        store.append_event("s1", &switch_agent(Some("Planner"), Some("Coder"))).unwrap();
+
+        let response = store.search_prompts(&PromptSearchParams { query: "Coder".to_string(), limit: None }).unwrap();
+        assert!(response.results.is_empty());
     }
 
     #[test]

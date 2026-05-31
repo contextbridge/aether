@@ -147,6 +147,16 @@ impl Context {
         self.messages.retain(super::chat_message::ChatMessage::is_system);
     }
 
+    /// Replace all non-system messages while preserving the system prompt and runtime state.
+    pub fn replace_conversation(&mut self, messages: Vec<ChatMessage>) {
+        self.messages = self
+            .messages
+            .drain(..)
+            .filter(ChatMessage::is_system)
+            .chain(messages.into_iter().filter(|m| !m.is_system()))
+            .collect();
+    }
+
     /// Get all non-system messages for summarization
     pub fn messages_for_summary(&self) -> Vec<&ChatMessage> {
         self.messages.iter().filter(|msg| !msg.is_system()).collect()
@@ -214,6 +224,73 @@ mod tests {
             })),
         ];
         Context::new(messages, vec![])
+    }
+
+    #[test]
+    fn replace_conversation_preserves_system_message() {
+        let mut ctx = create_test_context();
+        ctx.replace_conversation(vec![ChatMessage::User {
+            content: vec![ContentBlock::text("new")],
+            timestamp: IsoString::now(),
+        }]);
+
+        assert_eq!(ctx.message_count(), 2);
+        assert!(ctx.messages()[0].is_system());
+        assert!(matches!(ctx.messages()[1], ChatMessage::User { .. }));
+    }
+
+    #[test]
+    fn replace_conversation_replaces_old_non_system_messages() {
+        let mut ctx = create_test_context();
+        ctx.replace_conversation(vec![ChatMessage::Assistant {
+            content: "replacement".to_string(),
+            reasoning: AssistantReasoning::default(),
+            timestamp: IsoString::now(),
+            tool_calls: vec![],
+        }]);
+
+        assert_eq!(ctx.message_count(), 2);
+        assert!(
+            ctx.messages()
+                .iter()
+                .all(|message| { !matches!(message, ChatMessage::User { .. } | ChatMessage::ToolCallResult(_)) })
+        );
+        assert!(matches!(ctx.messages()[1], ChatMessage::Assistant { ref content, .. } if content == "replacement"));
+    }
+
+    #[test]
+    fn replace_conversation_filters_incoming_system_messages() {
+        let mut ctx = create_test_context();
+        ctx.replace_conversation(vec![
+            ChatMessage::System { content: "wrong system".to_string(), timestamp: IsoString::now() },
+            ChatMessage::User { content: vec![ContentBlock::text("kept")], timestamp: IsoString::now() },
+        ]);
+
+        assert_eq!(ctx.message_count(), 2);
+        assert!(
+            matches!(ctx.messages()[0], ChatMessage::System { ref content, .. } if content == "You are a helpful assistant.")
+        );
+        assert!(matches!(ctx.messages()[1], ChatMessage::User { .. }));
+    }
+
+    #[test]
+    fn replace_conversation_does_not_change_tools() {
+        let tool = ToolDefinition {
+            name: "read_file".to_string(),
+            description: "Reads a file".to_string(),
+            parameters: "{}".to_string(),
+            server: None,
+        };
+        let mut ctx = Context::new(
+            vec![ChatMessage::System { content: "system".to_string(), timestamp: IsoString::now() }],
+            vec![tool.clone()],
+        );
+        ctx.replace_conversation(vec![ChatMessage::User {
+            content: vec![ContentBlock::text("new")],
+            timestamp: IsoString::now(),
+        }]);
+
+        assert_eq!(ctx.tools(), &vec![tool]);
     }
 
     #[test]

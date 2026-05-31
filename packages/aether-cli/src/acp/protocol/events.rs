@@ -1,98 +1,12 @@
 use acp_utils::notifications::{ContextClearedParams, ContextUsageParams, SubAgentProgressParams};
-use acp_utils::server::AcpServerError;
 use aether_core::events::{AgentMessage, SubAgentProgressPayload};
 use agent_client_protocol::schema::{
-    self as acp, Content, ContentBlock, ContentChunk, Diff, HttpHeader, McpServer, PlanEntry, PlanEntryPriority,
-    PlanEntryStatus, SessionId, SessionNotification, SessionUpdate, StopReason, TextContent, ToolCall, ToolCallContent,
-    ToolCallId, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
+    self as acp, Content, ContentBlock, ContentChunk, Diff, PlanEntry, PlanEntryPriority, PlanEntryStatus, SessionId,
+    SessionNotification, SessionUpdate, StopReason, TextContent, ToolCall, ToolCallContent, ToolCallId, ToolCallStatus,
+    ToolCallUpdate, ToolCallUpdateFields,
 };
-use agent_client_protocol::{Client, ConnectionTo};
 use llm::{ToolCallError, ToolCallRequest, ToolCallResult};
-use mcp_utils::client::{McpServer as RuntimeMcpServer, McpTransport};
 use mcp_utils::display_meta::{PlanMetaStatus, ToolResultMeta};
-use rmcp::model::Prompt as McpPrompt;
-use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
-
-use aether_core::context::ext::{SessionEvent, UserEvent};
-
-/// Converts an MCP Prompt to an ACP `AvailableCommand`
-///
-/// Strips the MCP namespace from the prompt name (e.g., "`coding__web`" -> "web")
-/// and creates a slash command that clients can invoke.
-pub fn map_mcp_prompt_to_available_command(prompt: &McpPrompt) -> acp::AvailableCommand {
-    // Extract the base command name by removing the namespace prefix
-    let command_name = prompt.name.split("__").last().unwrap_or(prompt.name.as_ref()).to_string();
-
-    // Extract the input hint from the unified prompt format's ARGUMENTS parameter,
-    // falling back to a generic hint.
-    let hint = prompt
-        .arguments
-        .as_ref()
-        .and_then(|args| args.iter().find(|a| a.name.as_str() == "ARGUMENTS").and_then(|a| a.description.as_deref()))
-        .unwrap_or("optional arguments");
-    let input = Some(acp::AvailableCommandInput::Unstructured(acp::UnstructuredCommandInput::new(hint)));
-
-    let description = prompt.description.clone().unwrap_or_else(|| "No description available".to_string());
-
-    acp::AvailableCommand::new(command_name, description).input(input)
-}
-
-/// Maps ACP MCP server definitions to internal MCP servers, skipping unsupported transports.
-pub fn map_acp_mcp_servers(servers: Vec<McpServer>) -> Vec<RuntimeMcpServer> {
-    servers
-        .into_iter()
-        .filter_map(|s| {
-            try_map_mcp_server(s).or_else(|| {
-                tracing::warn!("Unsupported ACP MCP server transport, skipping");
-                None
-            })
-        })
-        .collect()
-}
-
-fn try_map_mcp_server(server: McpServer) -> Option<RuntimeMcpServer> {
-    use McpServer::{Http, Sse, Stdio};
-    match server {
-        Stdio(stdio) => Some(RuntimeMcpServer::new(
-            stdio.name,
-            McpTransport::Stdio {
-                command: stdio.command.to_string_lossy().into_owned(),
-                args: stdio.args,
-                env: stdio.env.into_iter().map(|e| (e.name, e.value)).collect(),
-            },
-            false,
-        )),
-
-        Http(http) => Some(RuntimeMcpServer::new(
-            http.name,
-            McpTransport::Http { config: http_config(http.url, &http.headers) },
-            false,
-        )),
-
-        Sse(sse) => Some(RuntimeMcpServer::new(
-            sse.name,
-            McpTransport::Http { config: http_config(sse.url, &sse.headers) },
-            false,
-        )),
-
-        _ => None,
-    }
-}
-
-fn http_config(url: String, headers: &[HttpHeader]) -> StreamableHttpClientTransportConfig {
-    let auth_header = headers.iter().find(|h| h.name.eq_ignore_ascii_case("authorization")).map(|h| h.value.clone());
-
-    let mut config = StreamableHttpClientTransportConfig::with_uri(url);
-    if let Some(auth) = auth_header {
-        // rmcp's `auth_header` wants the bare token; it adds the `Bearer ` prefix itself.
-        let token = auth
-            .split_once(' ')
-            .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("Bearer"))
-            .map_or(auth.as_str(), |(_, rest)| rest);
-        config = config.auth_header(token.to_string());
-    }
-    config
-}
 
 /// Converts Aether `AgentMessage` to ACP `SessionUpdate`
 pub fn map_agent_message_to_session_notification(
@@ -102,62 +16,15 @@ pub fn map_agent_message_to_session_notification(
     map_agent_message_to_notification(session_id, msg, NotificationMode::Live)
 }
 
-#[derive(Clone, Copy)]
-enum NotificationMode {
-    Live,
-    Replay,
-}
-
-fn map_agent_message_to_notification(
-    session_id: SessionId,
-    msg: &AgentMessage,
-    mode: NotificationMode,
-) -> Option<SessionNotification> {
+/// Determines the stop reason from the final agent message
+pub fn map_agent_message_to_stop_reason(msg: &AgentMessage) -> acp::StopReason {
     match msg {
-        AgentMessage::Text { chunk, is_complete, .. } => {
-            map_chunk_to_notification(session_id, chunk, *is_complete, mode, SessionUpdate::AgentMessageChunk)
-        }
-
-        AgentMessage::Thought { chunk, is_complete, .. } => {
-            map_chunk_to_notification(session_id, chunk, *is_complete, mode, SessionUpdate::AgentThoughtChunk)
-        }
-
-        AgentMessage::ToolCall { request, .. } => Some(map_tool_call_to_notification(session_id, request)),
-
-        AgentMessage::ToolCallUpdate { tool_call_id, chunk, .. } => {
-            Some(map_tool_call_update_to_notification(session_id, tool_call_id, chunk))
-        }
-
-        AgentMessage::ToolResult { result, result_meta, .. } => {
-            Some(map_tool_result_to_notification(session_id, result, result_meta.as_ref()))
-        }
-
-        AgentMessage::ToolError { error, .. } => Some(map_tool_error_to_notification(session_id, error)),
-
-        AgentMessage::ToolProgress { request, progress, total, message } => {
-            map_tool_progress_to_notification(session_id, request, *progress, *total, message.as_ref())
-        }
-
-        AgentMessage::Error { message } => Some(acp::SessionNotification::new(
-            session_id,
-            SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(format!(
-                "[Error] {message}"
-            ))))),
-        )),
-
-        AgentMessage::ContextUsageUpdate { .. }
-        | AgentMessage::ContextCleared
-        | AgentMessage::Cancelled { .. }
-        | AgentMessage::Done
-        | AgentMessage::ContextCompactionStarted { .. }
-        | AgentMessage::ContextCompactionResult { .. }
-        | AgentMessage::AutoContinue { .. }
-        | AgentMessage::Retrying { .. }
-        | AgentMessage::ModelSwitched { .. } => None,
+        AgentMessage::Cancelled { .. } => StopReason::Cancelled,
+        _ => StopReason::EndTurn,
     }
 }
 
-/// Typed union of agent-side extension notifications that the relay forwards
+/// Typed union of agent-side extension notifications that the actor forwards
 /// to the client. Each variant serializes to its own `_aether/*` wire method
 /// and is sent via [`ConnectionTo<Client>::send_notification`].
 pub enum AgentExtNotification {
@@ -219,20 +86,67 @@ pub fn try_extract_plan_notification(
     Some(SessionNotification::new(session_id, SessionUpdate::Plan(acp::Plan::new(entries))))
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum NotificationMode {
+    Live,
+    Replay,
+}
+
+pub(crate) fn map_agent_message_to_notification(
+    session_id: SessionId,
+    msg: &AgentMessage,
+    mode: NotificationMode,
+) -> Option<SessionNotification> {
+    match msg {
+        AgentMessage::Text { chunk, is_complete, .. } => {
+            map_chunk_to_notification(session_id, chunk, *is_complete, mode, SessionUpdate::AgentMessageChunk)
+        }
+
+        AgentMessage::Thought { chunk, is_complete, .. } => {
+            map_chunk_to_notification(session_id, chunk, *is_complete, mode, SessionUpdate::AgentThoughtChunk)
+        }
+
+        AgentMessage::ToolCall { request, .. } => Some(map_tool_call_to_notification(session_id, request)),
+
+        AgentMessage::ToolCallUpdate { tool_call_id, chunk, .. } => {
+            Some(map_tool_call_update_to_notification(session_id, tool_call_id, chunk))
+        }
+
+        AgentMessage::ToolResult { result, result_meta, .. } => {
+            Some(map_tool_result_to_notification(session_id, result, result_meta.as_ref()))
+        }
+
+        AgentMessage::ToolError { error, .. } => Some(map_tool_error_to_notification(session_id, error)),
+
+        AgentMessage::ToolProgress { request, progress, total, message } => {
+            map_tool_progress_to_notification(session_id, request, *progress, *total, message.as_ref())
+        }
+
+        AgentMessage::Error { message } => Some(acp::SessionNotification::new(
+            session_id,
+            SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(format!(
+                "[Error] {message}"
+            ))))),
+        )),
+
+        AgentMessage::ContextUsageUpdate { .. }
+        | AgentMessage::ContextCleared
+        | AgentMessage::Cancelled { .. }
+        | AgentMessage::Done
+        | AgentMessage::ContextCompactionStarted { .. }
+        | AgentMessage::ContextCompactionResult { .. }
+        | AgentMessage::AutoContinue { .. }
+        | AgentMessage::Retrying { .. }
+        | AgentMessage::ModelSwitched { .. } => None,
+    }
+}
+
 /// Convert internal plan status to ACP protocol status.
 fn plan_status_to_acp(status: PlanMetaStatus) -> PlanEntryStatus {
     match status {
         PlanMetaStatus::InProgress => PlanEntryStatus::InProgress,
         PlanMetaStatus::Completed => PlanEntryStatus::Completed,
         PlanMetaStatus::Pending => PlanEntryStatus::Pending,
-    }
-}
-
-/// Determines the stop reason from the final agent message
-pub fn map_agent_message_to_stop_reason(msg: &AgentMessage) -> acp::StopReason {
-    match msg {
-        AgentMessage::Cancelled { .. } => StopReason::Cancelled,
-        _ => StopReason::EndTurn,
     }
 }
 
@@ -384,48 +298,6 @@ fn map_tool_progress_to_notification(
     ))
 }
 
-/// Replay session events to the client as ACP notifications.
-pub async fn replay_to_client(events: &[SessionEvent], connection: &ConnectionTo<Client>, session_id: &SessionId) {
-    for notif in replay_events_to_notifications(events, session_id) {
-        if let Err(e) = connection.send_notification(notif).map_err(|e| AcpServerError::protocol("session/update", e)) {
-            tracing::error!("Failed to send replay notification: {e:?}");
-        }
-    }
-}
-
-pub fn replay_events_to_notifications(events: &[SessionEvent], session_id: &SessionId) -> Vec<SessionNotification> {
-    let mut out = Vec::new();
-    for event in events {
-        match event {
-            SessionEvent::User(UserEvent::Message { content }) => {
-                for block in content {
-                    out.push(SessionNotification::new(
-                        session_id.clone(),
-                        SessionUpdate::UserMessageChunk(ContentChunk::new(map_user_content_block(block))),
-                    ));
-                }
-            }
-            SessionEvent::Agent(message) => {
-                out.extend(map_agent_message_to_notification(session_id.clone(), message, NotificationMode::Replay));
-            }
-            SessionEvent::User(_) => {}
-        }
-    }
-    out
-}
-
-fn map_user_content_block(block: &llm::ContentBlock) -> ContentBlock {
-    match block {
-        llm::ContentBlock::Text { text } => ContentBlock::Text(TextContent::new(text.clone())),
-        llm::ContentBlock::Image { data, mime_type } => {
-            ContentBlock::Image(acp::ImageContent::new(data.clone(), mime_type.clone()))
-        }
-        llm::ContentBlock::Audio { data, mime_type } => {
-            ContentBlock::Audio(acp::AudioContent::new(data.clone(), mime_type.clone()))
-        }
-    }
-}
-
 fn try_parse_display_meta(message: &str) -> Option<ToolResultMeta> {
     serde_json::from_str::<ToolResultMeta>(message).ok()
 }
@@ -489,36 +361,6 @@ mod tests {
             }
             _ => panic!("expected SubAgentProgress"),
         }
-    }
-
-    #[test]
-    fn replay_emits_user_media_chunks_in_order() {
-        let session_id = acp::SessionId::new("test-session");
-        let events = vec![SessionEvent::User(UserEvent::Message {
-            content: vec![
-                llm::ContentBlock::text("hello"),
-                llm::ContentBlock::Image { data: "aW1n".to_string(), mime_type: "image/png".to_string() },
-                llm::ContentBlock::Audio { data: "YXVkaW8=".to_string(), mime_type: "audio/wav".to_string() },
-            ],
-        })];
-
-        let notifications = replay_events_to_notifications(&events, &session_id);
-        let updates: Vec<_> = notifications.into_iter().map(|n| n.update).collect();
-        assert!(matches!(
-            &updates[0],
-            acp::SessionUpdate::UserMessageChunk(chunk)
-                if matches!(&chunk.content, acp::ContentBlock::Text(text) if text.text == "hello")
-        ));
-        assert!(matches!(
-            &updates[1],
-            acp::SessionUpdate::UserMessageChunk(chunk)
-                if matches!(&chunk.content, acp::ContentBlock::Image(_))
-        ));
-        assert!(matches!(
-            &updates[2],
-            acp::SessionUpdate::UserMessageChunk(chunk)
-                if matches!(&chunk.content, acp::ContentBlock::Audio(_))
-        ));
     }
 
     #[test]
@@ -700,93 +542,6 @@ mod tests {
     }
 
     #[test]
-    fn test_map_acp_stdio_server() {
-        let server = acp::McpServer::Stdio(
-            acp::McpServerStdio::new("my-server", "/usr/bin/server")
-                .args(vec!["--port".into(), "8080".into()])
-                .env(vec![acp::EnvVariable::new("FOO", "bar")]),
-        );
-
-        let configs = map_acp_mcp_servers(vec![server]);
-        assert_eq!(configs.len(), 1);
-
-        match &configs[0].transport {
-            McpTransport::Stdio { command, args, env } => {
-                assert_eq!(configs[0].name, "my-server");
-                assert_eq!(command, "/usr/bin/server");
-                assert_eq!(args, &["--port", "8080"]);
-                assert_eq!(env.get("FOO").unwrap(), "bar");
-            }
-            other => panic!("Expected Stdio, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_map_acp_http_server() {
-        let server = acp::McpServer::Http(
-            acp::McpServerHttp::new("http-server", "https://example.com/mcp")
-                .headers(vec![acp::HttpHeader::new("Authorization", "Bearer token123")]),
-        );
-
-        let configs = map_acp_mcp_servers(vec![server]);
-        assert_eq!(configs.len(), 1);
-
-        match &configs[0].transport {
-            McpTransport::Http { config } => {
-                assert_eq!(configs[0].name, "http-server");
-                assert_eq!(config.uri.as_ref(), "https://example.com/mcp");
-                assert_eq!(config.auth_header.as_deref(), Some("token123"));
-            }
-            other => panic!("Expected Http, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_http_auth_header_strips_bearer_case_insensitively() {
-        let cases = [
-            ("Bearer token123", "token123"),
-            ("bearer token123", "token123"),
-            ("BEARER token123", "token123"),
-            ("bEaReR token123", "token123"),
-            // Non-Bearer scheme: pass through verbatim. rmcp will then prefix
-            // with "Bearer ", which is the contract for non-bearer auth too.
-            ("Token foo", "Token foo"),
-            ("token123", "token123"),
-        ];
-
-        for (input, expected) in cases {
-            let server = acp::McpServer::Http(
-                acp::McpServerHttp::new("http-server", "https://example.com/mcp")
-                    .headers(vec![acp::HttpHeader::new("Authorization", input)]),
-            );
-            let configs = map_acp_mcp_servers(vec![server]);
-            match &configs[0].transport {
-                McpTransport::Http { config } => {
-                    assert_eq!(config.auth_header.as_deref(), Some(expected), "input was {input:?}");
-                }
-                other => panic!("Expected Http, got {other:?}"),
-            }
-        }
-    }
-
-    #[test]
-    fn test_map_acp_sse_server() {
-        let server = acp::McpServer::Sse(acp::McpServerSse::new("sse-server", "https://example.com/sse"));
-
-        let configs = map_acp_mcp_servers(vec![server]);
-        assert_eq!(configs.len(), 1);
-
-        match &configs[0].transport {
-            McpTransport::Http { config } => {
-                assert_eq!(configs[0].name, "sse-server");
-                assert_eq!(config.uri.as_ref(), "https://example.com/sse");
-                assert_eq!(config.auth_header, None);
-            }
-            other => panic!("Expected Http, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn test_humanize_tool_name() {
         assert_eq!(humanize_tool_name("coding__read_file"), "Read file");
         assert_eq!(humanize_tool_name("read_file"), "Read file");
@@ -915,30 +670,5 @@ mod tests {
             }
             other => panic!("Expected ToolCallUpdate, got {other:?}"),
         }
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn replay_to_client_forwards_each_event_as_session_notification() {
-        use acp_utils::testing::test_connection;
-        use llm::ContentBlock as LlmContentBlock;
-        use tokio::task::LocalSet;
-
-        LocalSet::new()
-            .run_until(async {
-                let (cx, mut peer) = test_connection().await;
-                let session_id = acp::SessionId::new("test-session");
-                let events = vec![SessionEvent::User(UserEvent::Message {
-                    content: vec![LlmContentBlock::text("hello"), LlmContentBlock::text("world")],
-                })];
-
-                replay_to_client(&events, &cx, &session_id).await;
-
-                for _ in 0..2 {
-                    let notif = peer.next_session_notification().await;
-                    assert_eq!(notif.session_id, session_id);
-                    assert!(matches!(notif.update, SessionUpdate::UserMessageChunk(_)));
-                }
-            })
-            .await;
     }
 }

@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use aether_core::{
-    events::{AgentMessage, UserMessage},
+    events::{AgentMessage, Command, UserCommand},
     testing::test_agent,
 };
 use llm::{ChatMessage, LlmError, LlmResponse};
@@ -23,7 +23,9 @@ async fn test_api_error_mid_stream_does_not_add_empty_assistant_message() -> Res
     // After the error + Done cycle, we manually inspect captured contexts.
     let result = test_agent()
         .llm_result_responses(&[error_response, success_response])
-        .user_messages(vec![UserMessage::text("first message")])
+        .user_messages(vec![Command::UserCommand(UserCommand::Text {
+            content: vec![llm::ContentBlock::text("first message")],
+        })])
         .run_with_context()
         .await?;
 

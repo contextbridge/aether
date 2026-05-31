@@ -138,7 +138,7 @@ async fn on_command(command: McpCommand, mcp: &mut McpManager, auth_tasks: &mut 
         }
 
         McpCommand::GetServerStatuses { tx } => {
-            let _ = tx.send(mcp.server_statuses().to_vec());
+            let _ = tx.send(mcp.server_statuses());
         }
 
         McpCommand::AuthenticateServer { name } => match mcp.authenticate_server_task(&name).await {

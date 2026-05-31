@@ -2,14 +2,14 @@ use crate::error::CliError;
 use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::{AgentSpec, McpConfigSource};
 use aether_core::core::{AgentBuilder, AgentHandle, Prompt};
-use aether_core::events::{AgentMessage, UserMessage};
+use aether_core::events::{AgentMessage, Command};
 use aether_core::mcp::McpBuilder;
 use aether_core::mcp::McpSpawnResult;
 use aether_core::mcp::mcp;
 use aether_core::mcp::run_mcp_task::McpCommand;
 use llm::{ChatMessage, LlmModel, ToolDefinition};
 use mcp_servers::McpBuilderExt;
-use mcp_utils::client::{McpClientEvent, McpServer, OAuthHandlerFactory};
+use mcp_utils::client::{McpClientEvent, McpConnectionDetails, McpServer, OAuthHandlerFactory};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -27,7 +27,7 @@ pub struct RuntimeBuilder {
 }
 
 pub struct Runtime {
-    pub agent_tx: Sender<UserMessage>,
+    pub agent_tx: Sender<Command>,
     pub agent_rx: Receiver<AgentMessage>,
     pub agent_handle: AgentHandle,
     pub mcp_tx: Sender<McpCommand>,
@@ -127,6 +127,42 @@ impl RuntimeBuilder {
             agent_builder.spawn().await.map_err(|e| CliError::AgentError(e.to_string()))?;
 
         Ok(Runtime { agent_tx, agent_rx, agent_handle, mcp_tx, event_rx, mcp_handle })
+    }
+
+    /// Spawn MCP, block until every server finishes its initial connection,
+    /// then build an agent pre-seeded with the connection's filtered tools and
+    /// MCP instructions. Returns the live [`Runtime`] plus the bootstrap
+    /// snapshot. Unlike [`build`](Self::build) (which starts with no tools and
+    /// relies on the MCP event stream to populate them later), this is for
+    /// callers that need the agent ready to use tools on its first turn.
+    pub async fn build_ready(self, messages: Vec<ChatMessage>) -> Result<(Runtime, McpConnectionDetails), CliError> {
+        let prompt_cache_key = self.prompt_cache_key.clone();
+        let oauth_credential_store = self.oauth_credential_store.clone();
+        let (spec, mut spawn) = self.spawn_mcp().await?;
+        let snapshot = spawn
+            .block_until_ready()
+            .await
+            .ok_or_else(|| CliError::McpError("MCP bootstrap aborted before completion".to_string()))?;
+        let McpSpawnResult { command_tx: mcp_tx, event_rx, handle: mcp_handle } = spawn;
+
+        let filtered_tools = spec.tools.apply(snapshot.tool_definitions.clone());
+        let mut runtime_spec = spec;
+        runtime_spec.prompts.push(Prompt::McpInstructions(snapshot.instructions.clone()));
+
+        let mut agent_builder = AgentBuilder::from_spec(&runtime_spec, vec![], oauth_credential_store)
+            .await
+            .map_err(|e| CliError::AgentError(e.to_string()))?
+            .tools(mcp_tx.clone(), filtered_tools)
+            .messages(messages);
+
+        if let Some(key) = prompt_cache_key {
+            agent_builder = agent_builder.prompt_cache_key(key);
+        }
+
+        let (agent_tx, agent_rx, agent_handle) =
+            agent_builder.spawn().await.map_err(|e| CliError::AgentError(e.to_string()))?;
+
+        Ok((Runtime { agent_tx, agent_rx, agent_handle, mcp_tx, event_rx, mcp_handle }, snapshot))
     }
 
     pub async fn build_prompt_info(self) -> Result<PromptInfo, CliError> {

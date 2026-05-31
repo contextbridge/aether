@@ -1,5 +1,5 @@
 use aether_core::core::Prompt;
-use aether_core::events::{AgentMessage, UserMessage};
+use aether_core::events::{AgentMessage, Command, UserCommand};
 use aether_core::mcp::mcp;
 use aether_core::testing::{FakeMcpServer, fake_mcp, mcp_instructions as instructions};
 use llm::testing::FakeLlmProvider;
@@ -85,7 +85,7 @@ async fn test_agent_builder_includes_mcp_instructions_in_system_prompt() {
         .unwrap();
 
     // Send a simple message to trigger context capture
-    tx.send(UserMessage::text("test")).await.unwrap();
+    tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("test")] })).await.unwrap();
     drop(tx);
 
     // Wait for the agent to process
@@ -131,7 +131,7 @@ async fn test_agent_builder_works_without_mcp_instructions() {
         .unwrap();
 
     // Send a simple message
-    tx.send(UserMessage::text("test")).await.unwrap();
+    tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("test")] })).await.unwrap();
     drop(tx);
 
     // Wait for the agent to process

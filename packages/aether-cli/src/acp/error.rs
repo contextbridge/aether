@@ -1,0 +1,31 @@
+use thiserror::Error;
+
+use crate::error::CliError;
+
+#[derive(Debug, Error)]
+pub enum SessionError {
+    #[error("failed to build session: {0}")]
+    Build(#[from] CliError),
+    #[error("command channel error: {0}")]
+    CommandChannel(String),
+    #[error("MCP operation failed: {0}")]
+    McpOperation(String),
+    #[error("unsupported MCP server for agent runtime: {0}")]
+    UnsupportedMcpServer(String),
+    #[error("agent runtime not found: {0}")]
+    AgentNotFound(String),
+    #[error("active agent runtime is not running")]
+    ActiveRuntimeNotRunning,
+}
+
+#[derive(Error, Debug)]
+pub(super) enum SlashCommandError {
+    #[error("command channel error: {0}")]
+    CommandChannel(String),
+    #[error("MCP operation failed: {0}")]
+    McpOperation(String),
+    #[error("slash command '/{0}' not found")]
+    NotFound(String),
+    #[error("prompt result contains no text content")]
+    NoTextContent,
+}
