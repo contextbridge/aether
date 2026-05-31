@@ -19,7 +19,7 @@ Aether is an AI coding agent harness, written in Rust, that gives _you_ control 
 - [Why Aether?](#why-aether)
 - [Quick Start](#quick-start)
   - [1. **Install**](#1-install)
-  - [2. **Create your first agent**](#2-create-your-first-agent)
+  - [2. **Create your first project settings**](#2-create-your-first-project-settings)
   - [3. **Run it**](#3-run-it)
 - [Using Aether as a library](#using-aether-as-a-library)
 - [Packages](#packages)
@@ -67,18 +67,19 @@ Aether takes a different approach. Agents begin as blank slates with _no_ system
    cargo install aether-agent-cli
    ```
 
-### 2. **Create your first agent**
+### 2. **Create your first project settings**
 
    ```bash
    cd your-project
-   aether agent new
+   aether settings init --project
    ```
+
+   For personal defaults that apply outside a project, run `aether settings init --user`.
 
    ```
    ✓ Created .aether/settings.json   — agent definitions (model, prompts, tools)
-   ✓ Created .aether/mcp.json        — MCP server config
    ✓ Created .aether/SYSTEM.md       — base system prompt
-   ✓ Created AGENTS.md               — project-level instructions
+   ✓ Created .aether/agents/...      — preset agent assets when selected
    ```
    
 ### 3. **Run it**

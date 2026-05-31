@@ -335,6 +335,10 @@ fn model_id_to_variant(id: &str) -> String {
 }
 
 fn emit_generated_source(ctx: &CodegenCtx) -> String {
+    let provider_enum = emit_provider_enum();
+    let provider_enum_impl = emit_provider_enum_impl();
+    let provider_enum_display = emit_provider_enum_display();
+    let provider_enum_fromstr = emit_provider_enum_fromstr();
     let provider_enums = emit_provider_enums(&ctx.provider_models);
     let provider_impls = emit_provider_impls(&ctx.provider_models);
     let llm_model_enum = emit_llm_model_enum();
@@ -348,6 +352,10 @@ fn emit_generated_source(ctx: &CodegenCtx) -> String {
         use std::sync::LazyLock;
         use crate::ReasoningEffort;
 
+        #provider_enum
+        #provider_enum_impl
+        #provider_enum_display
+        #provider_enum_fromstr
         #provider_enums
         #provider_impls
         #llm_model_enum
@@ -362,6 +370,129 @@ fn emit_generated_source(ctx: &CodegenCtx) -> String {
     format!(
         "// Auto-generated from models.dev — do not edit manually\n// Regenerated automatically by build.rs\n\n{formatted}"
     )
+}
+
+fn emit_provider_enum() -> TokenStream {
+    let catalog_variants = PROVIDERS.iter().map(|cfg| format_ident!("{}", cfg.enum_name));
+    let dynamic_variants = DYNAMIC_PROVIDERS.iter().map(|d| format_ident!("{}", d.enum_name));
+    quote! {
+        /// Typed provider identifier — covers both catalog providers
+        /// (`Anthropic`, `Codex`, …) and dynamic providers whose model name is
+        /// user-supplied (`Ollama`, `LlamaCpp`).
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub enum Provider {
+            #(#catalog_variants,)*
+            #(#dynamic_variants,)*
+        }
+    }
+}
+
+fn emit_provider_enum_impl() -> TokenStream {
+    let parser_arms = provider_match_arms(|cfg| cfg.parser_name, |d| d.parser_name);
+    let display_arms = provider_match_arms(|cfg| cfg.display_name, |d| d.display_name);
+
+    let env_var_some = PROVIDERS.iter().filter_map(|cfg| {
+        cfg.env_var.map(|var| {
+            let v = format_ident!("{}", cfg.enum_name);
+            quote! { Self::#v => Some(#var), }
+        })
+    });
+
+    let env_var_none = provider_or_pats(|cfg| cfg.env_var.is_none(), |_| true);
+    let oauth_some = PROVIDERS.iter().filter_map(|cfg| {
+        cfg.oauth_provider_id.map(|id| {
+            let v = format_ident!("{}", cfg.enum_name);
+            quote! { Self::#v => Some(#id), }
+        })
+    });
+    let oauth_none = provider_or_pats(|cfg| cfg.oauth_provider_id.is_none(), |_| true);
+
+    let is_local_true = provider_or_pats(|_| false, |_| true);
+    let is_local_false = provider_or_pats(|_| true, |_| false);
+
+    let all_variants = PROVIDERS
+        .iter()
+        .map(|cfg| format_ident!("{}", cfg.enum_name))
+        .chain(DYNAMIC_PROVIDERS.iter().map(|d| format_ident!("{}", d.enum_name)));
+
+    quote! {
+        impl Provider {
+            /// All providers — catalog and dynamic — in declaration order.
+            pub const ALL: &[Provider] = &[#(Self::#all_variants),*];
+
+            /// Parser name used in `provider:model` strings (e.g. `"anthropic"`).
+            pub fn parser_name(self) -> &'static str {
+                match self { #parser_arms }
+            }
+
+            /// Human-readable provider name (e.g. `"AWS Bedrock"`).
+            pub fn display_name(self) -> &'static str {
+                match self { #display_arms }
+            }
+
+            /// API-key env var the provider requires, if any.
+            pub fn required_env_var(self) -> Option<&'static str> {
+                match self {
+                    #(#env_var_some)*
+                    #env_var_none => None,
+                }
+            }
+
+            /// OAuth provider ID if this provider authenticates via OAuth.
+            pub fn oauth_provider_id(self) -> Option<&'static str> {
+                match self {
+                    #(#oauth_some)*
+                    #oauth_none => None,
+                }
+            }
+
+            /// Local providers run models on the user's machine — there's no
+            /// remote API to call and no env var to satisfy.
+            pub fn is_local(self) -> bool {
+                match self {
+                    #is_local_true => true,
+                    #is_local_false => false,
+                }
+            }
+        }
+    }
+}
+
+fn emit_provider_enum_display() -> TokenStream {
+    quote! {
+        impl std::fmt::Display for Provider {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(self.parser_name())
+            }
+        }
+    }
+}
+
+fn emit_provider_enum_fromstr() -> TokenStream {
+    let catalog_arms = PROVIDERS.iter().map(|cfg| {
+        let v = format_ident!("{}", cfg.enum_name);
+        let name = cfg.parser_name;
+        quote! { #name => Ok(Self::#v), }
+    });
+
+    let dynamic_arms = DYNAMIC_PROVIDERS.iter().map(|d| {
+        let v = format_ident!("{}", d.enum_name);
+        let name = d.parser_name;
+        quote! { #name => Ok(Self::#v), }
+    });
+
+    quote! {
+        impl std::str::FromStr for Provider {
+            type Err = String;
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                match s {
+                    #(#catalog_arms)*
+                    #(#dynamic_arms)*
+                    other => Err(format!("Unknown provider: '{other}'")),
+                }
+            }
+        }
+    }
 }
 
 fn emit_provider_enums(provider_models: &ProviderModels) -> TokenStream {
@@ -591,6 +722,7 @@ fn emit_llm_model_impl() -> TokenStream {
     let model_id = emit_llm_model_id();
     let display_name = emit_llm_display_name();
     let provider = emit_llm_provider();
+    let provider_enum = emit_llm_provider_enum();
     let provider_display_name = emit_llm_provider_display_name();
     let context_window = emit_llm_context_window();
     let required_env_var = emit_llm_required_env_var();
@@ -607,6 +739,7 @@ fn emit_llm_model_impl() -> TokenStream {
             #model_id
             #display_name
             #provider
+            #provider_enum
             #provider_display_name
             #context_window
             #required_env_var
@@ -668,45 +801,40 @@ fn emit_llm_display_name() -> TokenStream {
 }
 
 fn emit_llm_provider() -> TokenStream {
-    let catalog_arms = PROVIDERS.iter().map(|cfg| {
-        let v = format_ident!("{}", cfg.enum_name);
-        let name = cfg.parser_name;
-        quote! { Self::#v(_) => #name, }
-    });
-    let dyn_arms = DYNAMIC_PROVIDERS.iter().map(|d| {
-        let v = format_ident!("{}", d.enum_name);
-        let name = d.parser_name;
-        quote! { Self::#v(_) => #name, }
-    });
+    let arms = llm_match_arms_ignored(|cfg| cfg.parser_name, |d| d.parser_name);
     quote! {
         /// Provider identifier (e.g. `anthropic`)
         pub fn provider(&self) -> &'static str {
-            match self {
-                #(#catalog_arms)*
-                #(#dyn_arms)*
-            }
+            match self { #arms }
+        }
+    }
+}
+
+fn emit_llm_provider_enum() -> TokenStream {
+    let arms = llm_match_arms_ignored(
+        |cfg| {
+            let v = format_ident!("{}", cfg.enum_name);
+            quote! { Provider::#v }
+        },
+        |d| {
+            let v = format_ident!("{}", d.enum_name);
+            quote! { Provider::#v }
+        },
+    );
+    quote! {
+        /// Typed provider identifier.
+        pub fn provider_enum(&self) -> Provider {
+            match self { #arms }
         }
     }
 }
 
 fn emit_llm_provider_display_name() -> TokenStream {
-    let catalog_arms = PROVIDERS.iter().map(|cfg| {
-        let v = format_ident!("{}", cfg.enum_name);
-        let name = cfg.display_name;
-        quote! { Self::#v(_) => #name, }
-    });
-    let dyn_arms = DYNAMIC_PROVIDERS.iter().map(|d| {
-        let v = format_ident!("{}", d.enum_name);
-        let name = d.display_name;
-        quote! { Self::#v(_) => #name, }
-    });
+    let arms = llm_match_arms_ignored(|cfg| cfg.display_name, |d| d.display_name);
     quote! {
         /// Human-readable provider name (e.g. `AWS Bedrock`)
         pub fn provider_display_name(&self) -> &'static str {
-            match self {
-                #(#catalog_arms)*
-                #(#dyn_arms)*
-            }
+            match self { #arms }
         }
     }
 }
@@ -733,25 +861,19 @@ fn emit_llm_context_window() -> TokenStream {
 }
 
 fn emit_llm_required_env_var() -> TokenStream {
-    let mut some_arms = Vec::new();
-    let mut none_pats = Vec::new();
-    for cfg in PROVIDERS {
-        let v = format_ident!("{}", cfg.enum_name);
-        match cfg.env_var {
-            Some(var) => some_arms.push(quote! { Self::#v(_) => Some(#var), }),
-            None => none_pats.push(quote! { Self::#v(_) }),
-        }
-    }
-    for d in DYNAMIC_PROVIDERS {
-        let v = format_ident!("{}", d.enum_name);
-        none_pats.push(quote! { Self::#v(_) });
-    }
+    let some_arms = PROVIDERS.iter().filter_map(|cfg| {
+        cfg.env_var.map(|var| {
+            let v = format_ident!("{}", cfg.enum_name);
+            quote! { Self::#v(_) => Some(#var), }
+        })
+    });
+    let none_pats = llm_or_pats(|cfg| cfg.env_var.is_none(), |_| true);
     quote! {
         /// Required env var for this model's provider (None for local providers)
         pub fn required_env_var(&self) -> Option<&'static str> {
             match self {
                 #(#some_arms)*
-                #(#none_pats)|* => None,
+                #none_pats => None,
             }
         }
     }
@@ -766,43 +888,30 @@ fn emit_llm_all_required_env_vars() -> TokenStream {
 }
 
 fn emit_llm_oauth_provider_id() -> TokenStream {
-    let mut some_arms = Vec::new();
-    let mut none_pats = Vec::new();
-    for cfg in PROVIDERS {
-        let v = format_ident!("{}", cfg.enum_name);
-        match cfg.oauth_provider_id {
-            Some(id) => some_arms.push(quote! { Self::#v(_) => Some(#id), }),
-            None => none_pats.push(quote! { Self::#v(_) }),
-        }
-    }
-    for d in DYNAMIC_PROVIDERS {
-        let v = format_ident!("{}", d.enum_name);
-        none_pats.push(quote! { Self::#v(_) });
-    }
+    let some_arms = PROVIDERS.iter().filter_map(|cfg| {
+        cfg.oauth_provider_id.map(|id| {
+            let v = format_ident!("{}", cfg.enum_name);
+            quote! { Self::#v(_) => Some(#id), }
+        })
+    });
+    let none_pats = llm_or_pats(|cfg| cfg.oauth_provider_id.is_none(), |_| true);
     quote! {
         /// OAuth provider ID if this model requires OAuth login (e.g. `"codex"`)
         pub fn oauth_provider_id(&self) -> Option<&'static str> {
             match self {
                 #(#some_arms)*
-                #(#none_pats)|* => None,
+                #none_pats => None,
             }
         }
     }
 }
 
 fn emit_llm_reasoning_levels() -> TokenStream {
-    let catalog_arms = PROVIDERS.iter().map(|cfg| {
-        let v = format_ident!("{}", cfg.enum_name);
-        quote! { Self::#v(m) => m.reasoning_levels(), }
-    });
-    let dyn_pats = dynamic_pattern_with_binding("_");
+    let body = llm_delegate_with_dynamic_default("reasoning_levels", &quote! { &[] });
     quote! {
         /// Reasoning levels supported by this model (empty if not a reasoning model)
         pub fn reasoning_levels(&self) -> &'static [ReasoningEffort] {
-            match self {
-                #(#catalog_arms)*
-                #dyn_pats => &[],
-            }
+            #body
         }
     }
 }
@@ -817,37 +926,24 @@ fn emit_llm_supports_reasoning() -> TokenStream {
 }
 
 fn emit_llm_supports_prompt_caching() -> TokenStream {
-    let catalog_arms = PROVIDERS.iter().map(|cfg| {
-        let v = format_ident!("{}", cfg.enum_name);
-        quote! { Self::#v(m) => m.supports_prompt_caching(), }
-    });
-    let dyn_pats = dynamic_pattern_with_binding("_");
+    let body = llm_delegate_with_dynamic_default("supports_prompt_caching", &quote! { false });
     quote! {
         /// Whether this model supports provider-side prompt caching
         pub fn supports_prompt_caching(&self) -> bool {
-            match self {
-                #(#catalog_arms)*
-                #dyn_pats => false,
-            }
+            #body
         }
     }
 }
 
 fn emit_llm_supports_modality(modality: &str) -> TokenStream {
-    let method = format_ident!("supports_{}", modality);
+    let method = format!("supports_{modality}");
+    let method_ident = format_ident!("{}", method);
     let doc = format!(" Whether this model supports {modality} input");
-    let catalog_arms = PROVIDERS.iter().map(|cfg| {
-        let v = format_ident!("{}", cfg.enum_name);
-        quote! { Self::#v(m) => m.#method(), }
-    });
-    let dyn_pats = dynamic_pattern_with_binding("_");
+    let body = llm_delegate_with_dynamic_default(&method, &quote! { false });
     quote! {
         #[doc = #doc]
-        pub fn #method(&self) -> bool {
-            match self {
-                #(#catalog_arms)*
-                #dyn_pats => false,
-            }
+        pub fn #method_ident(&self) -> bool {
+            #body
         }
     }
 }
@@ -932,6 +1028,99 @@ fn dynamic_pattern_with_binding(binding: &str) -> TokenStream {
         quote! { Self::#v(#binding_ident) }
     });
     quote! { #(#pats)|* }
+}
+
+/// Build `Self::A => va, Self::B => vb, ...` arms for every `Provider` variant
+/// (catalog + dynamic). The `Provider` enum carries no inner data so there is
+/// no binding.
+fn provider_match_arms<V: ToTokens>(
+    catalog_value: impl Fn(&ProviderConfig) -> V,
+    dynamic_value: impl Fn(&DynamicProviderConfig) -> V,
+) -> TokenStream {
+    let catalog = PROVIDERS.iter().map(|cfg| {
+        let v = format_ident!("{}", cfg.enum_name);
+        let val = catalog_value(cfg);
+        quote! { Self::#v => #val, }
+    });
+    let dynamic = DYNAMIC_PROVIDERS.iter().map(|d| {
+        let v = format_ident!("{}", d.enum_name);
+        let val = dynamic_value(d);
+        quote! { Self::#v => #val, }
+    });
+    quote! { #(#catalog)* #(#dynamic)* }
+}
+
+/// Build `Self::A | Self::B | ...` patterns selecting `Provider` variants by
+/// predicate, across catalog + dynamic.
+fn provider_or_pats(
+    include_catalog: impl Fn(&ProviderConfig) -> bool,
+    include_dynamic: impl Fn(&DynamicProviderConfig) -> bool,
+) -> TokenStream {
+    let catalog = PROVIDERS.iter().filter(|cfg| include_catalog(cfg)).map(|cfg| {
+        let v = format_ident!("{}", cfg.enum_name);
+        quote! { Self::#v }
+    });
+    let dynamic = DYNAMIC_PROVIDERS.iter().filter(|d| include_dynamic(d)).map(|d| {
+        let v = format_ident!("{}", d.enum_name);
+        quote! { Self::#v }
+    });
+    let pats = catalog.chain(dynamic);
+    quote! { #(#pats)|* }
+}
+
+/// Build `Self::A(_) => va, ...` arms for every `LlmModel` variant — the
+/// wrapped inner value is ignored.
+fn llm_match_arms_ignored<V: ToTokens>(
+    catalog_value: impl Fn(&ProviderConfig) -> V,
+    dynamic_value: impl Fn(&DynamicProviderConfig) -> V,
+) -> TokenStream {
+    let catalog = PROVIDERS.iter().map(|cfg| {
+        let v = format_ident!("{}", cfg.enum_name);
+        let val = catalog_value(cfg);
+        quote! { Self::#v(_) => #val, }
+    });
+    let dynamic = DYNAMIC_PROVIDERS.iter().map(|d| {
+        let v = format_ident!("{}", d.enum_name);
+        let val = dynamic_value(d);
+        quote! { Self::#v(_) => #val, }
+    });
+    quote! { #(#catalog)* #(#dynamic)* }
+}
+
+/// Build `Self::A(_) | Self::B(_) | ...` patterns selecting `LlmModel`
+/// variants by predicate, across catalog + dynamic.
+fn llm_or_pats(
+    include_catalog: impl Fn(&ProviderConfig) -> bool,
+    include_dynamic: impl Fn(&DynamicProviderConfig) -> bool,
+) -> TokenStream {
+    let catalog = PROVIDERS.iter().filter(|cfg| include_catalog(cfg)).map(|cfg| {
+        let v = format_ident!("{}", cfg.enum_name);
+        quote! { Self::#v(_) }
+    });
+    let dynamic = DYNAMIC_PROVIDERS.iter().filter(|d| include_dynamic(d)).map(|d| {
+        let v = format_ident!("{}", d.enum_name);
+        quote! { Self::#v(_) }
+    });
+    let pats = catalog.chain(dynamic);
+    quote! { #(#pats)|* }
+}
+
+/// Build the body of an `LlmModel` method that delegates to a same-named
+/// method on the inner catalog enum, with a single combined arm for all
+/// dynamic providers.
+fn llm_delegate_with_dynamic_default(method: &str, dynamic_value: &TokenStream) -> TokenStream {
+    let method_ident = format_ident!("{}", method);
+    let catalog_arms = PROVIDERS.iter().map(|cfg| {
+        let v = format_ident!("{}", cfg.enum_name);
+        quote! { Self::#v(m) => m.#method_ident(), }
+    });
+    let dyn_pat = dynamic_pattern_with_binding("_");
+    quote! {
+        match self {
+            #(#catalog_arms)*
+            #dyn_pat => #dynamic_value,
+        }
+    }
 }
 
 /// Emit a `u32` literal with underscore separators (e.g. `200_000`).

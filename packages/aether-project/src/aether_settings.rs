@@ -8,6 +8,23 @@ use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
 
 const PROJECT_SETTINGS_PATH: &str = ".aether/settings.json";
+const USER_SETTINGS_FILENAME: &str = "settings.json";
+
+pub fn user_settings_path() -> Option<PathBuf> {
+    SettingsStore::new("AETHER_HOME", ".aether").map(|store| store.home().join(USER_SETTINGS_FILENAME))
+}
+
+pub fn user_settings_exist() -> bool {
+    user_settings_path().is_some_and(|p| p.is_file())
+}
+
+pub fn project_settings_path(project_root: &Path) -> PathBuf {
+    project_root.join(PROJECT_SETTINGS_PATH)
+}
+
+pub fn project_settings_exist(project_root: &Path) -> bool {
+    project_settings_path(project_root).is_file()
+}
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -180,6 +197,19 @@ mod tests {
     use aether_core::core::Prompt;
     use std::collections::BTreeMap;
     use std::fs::{create_dir_all, write};
+
+    #[test]
+    fn project_settings_path_points_at_project_aether_settings() {
+        assert_eq!(project_settings_path(Path::new("/repo")), PathBuf::from("/repo/.aether/settings.json"));
+    }
+
+    #[test]
+    fn project_settings_exist_checks_project_settings_file() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!project_settings_exist(dir.path()));
+        write_file(dir.path(), PROJECT_SETTINGS_PATH, "{}");
+        assert!(project_settings_exist(dir.path()));
+    }
 
     #[test]
     fn resolves_selected_agent() {

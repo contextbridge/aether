@@ -373,6 +373,7 @@ mod tests {
 
     const SONNET: &str = "anthropic:claude-sonnet-4-5";
     const DEEPSEEK: &str = "deepseek:deepseek-chat";
+    const AUDIO_ONLY: &str = "bedrock:mistral.voxtral-small-24b-2507";
 
     fn fake_oauth_store() -> Arc<dyn OAuthCredentialStorage> {
         Arc::new(aether_auth::FakeOAuthCredentialStore::new())
@@ -413,8 +414,7 @@ mod tests {
         assert!(image_only.image);
         assert!(!image_only.audio);
 
-        let audio_capable =
-            prompt_capabilities_for_models(&["gemini:gemini-live-2.5-flash-preview-native-audio".parse().unwrap()]);
+        let audio_capable = prompt_capabilities_for_models(&[AUDIO_ONLY.parse().unwrap()]);
         assert!(!audio_capable.image);
         assert!(audio_capable.audio);
 
@@ -431,15 +431,9 @@ mod tests {
 
         assert!(validate_prompt_support(SONNET, &image_content).is_ok());
         assert!(validate_prompt_support(DEEPSEEK, &image_content).is_err());
-        assert!(validate_prompt_support("gemini:gemini-live-2.5-flash-preview-native-audio", &audio_content).is_ok());
+        assert!(validate_prompt_support(AUDIO_ONLY, &audio_content).is_ok());
         assert!(validate_prompt_support(SONNET, &audio_content).is_err());
-        assert!(validate_prompt_support("anthropic:claude-sonnet-4-5,deepseek:deepseek-chat", &image_content).is_err());
-        assert!(
-            validate_prompt_support(
-                "gemini:gemini-live-2.5-flash-preview-native-audio,deepseek:deepseek-chat",
-                &audio_content,
-            )
-            .is_err()
-        );
+        assert!(validate_prompt_support(format!("{SONNET},{DEEPSEEK}").as_str(), &image_content).is_err());
+        assert!(validate_prompt_support(format!("{AUDIO_ONLY},{DEEPSEEK}").as_str(), &audio_content).is_err());
     }
 }

@@ -1,48 +1,30 @@
 {
-  "prompts": [".aether/SYSTEM.md", "AGENTS.md"],
-  "mcps": ["mcp.json"],
   "agents": [
-    {
-      "name": "Planner",
-      "description": "Codex GPT-5.5 with xhigh reasoning",
-      "model": "codex:gpt-5.5",
-      "reasoningEffort": "xhigh",
-      "userInvocable": true
-    },
-    {
-      "name": "Implementor",
-      "description": "Codex GPT-5.5 with medium reasoning",
-      "model": "codex:gpt-5.5",
-      "reasoningEffort": "medium",
-      "userInvocable": true
-    },
     {
       "name": "Cheap",
       "description": "ZAI GLM-5 with high reasoning",
       "model": "zai:glm-5.1",
       "reasoningEffort": "high",
-      "userInvocable": true
+      "userInvocable": true,
+      "prompts": [".aether/SYSTEM.md", "AGENTS.md"],
+      "mcps": ["mcp.json"]
     },
     {
       "name": "Fast",
       "description": "MiniMax M2.7 with high reasoning",
       "model": "openrouter:minimax/minimax-m2.7",
       "reasoningEffort": "high",
-      "userInvocable": true
+      "userInvocable": true,
+      "prompts": [".aether/SYSTEM.md", "AGENTS.md"],
+      "mcps": ["mcp.json"]
     },
     {
       "name": "Local",
       "description": "Llama.cpp",
       "model": "llamacpp:unsloth/Qwen3.5-9B-GGUF",
-      "userInvocable": true
-    },
-    {
-      "name": "Explorer",
-      "description": "Explores codebases to find relevant files, patterns, and integration points",
-      "model": "codex:gpt-5.4-mini",
-      "agentInvocable": true,
-      "prompts": [".aether/agents/codebase-explorer/AGENTS.md"],
-      "mcps": [".aether/agents/codebase-explorer/mcp.json"]
+      "userInvocable": true,
+      "prompts": [".aether/SYSTEM.md", "AGENTS.md"],
+      "mcps": ["mcp.json"]
     }
   ]
 }
