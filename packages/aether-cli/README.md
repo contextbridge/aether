@@ -5,7 +5,7 @@ The Aether CLI ships as a single binary, **`aether`**, with subcommands for each
 - `aether` — interactive TUI (default when run with no args)
 - `aether headless` — single-prompt headless run for scripting/CI
 - `aether acp` — [Agent Client Protocol (ACP)](https://agentclientprotocol.com/overview/introduction) server for editor/IDE integration (e.g. Zed)
-- `aether agent new|list|remove` — manage project agents
+- `aether settings init --user|--project` — initialize user or project settings
 - `aether show-prompt` — print the fully-assembled system prompt (debugging)
 
 ## Table of Contents
@@ -63,7 +63,7 @@ cargo build --release -p aether-agent-cli
 aether
 ```
 
-If the project has no `.aether/settings.json`, the binary launches an onboarding wizard before starting the TUI.
+If neither user settings nor project settings exist, the binary launches user-level onboarding before starting the TUI. To initialize explicitly, run `aether settings init --user` for personal defaults or `aether settings init --project` from a repository root for project-local agents.
 
 ### Headless
 
@@ -185,7 +185,7 @@ $ARGUMENTS
 
 ## Settings
 
-Project-level agent configuration lives in `.aether/settings.json` at your project root. This file defines agents (modes and sub-agents), default prompts, and default MCP server configuration.
+User-level settings live in `$AETHER_HOME/settings.json` or `~/.aether/settings.json`. Project-level agent configuration lives in `.aether/settings.json` at your project root. Aether loads user settings first, then project settings; project agents with matching names override user agents. Settings define agents (modes and sub-agents), default prompts, and default MCP server configuration.
 
 ### Agents (Modes and Sub-agents)
 
@@ -239,7 +239,7 @@ Define agents with specific model, prompts, and tool configurations:
 - **`agentInvocable: true`** — Agent can be spawned as a sub-agent
 - **`tools`** — Filter which MCP tools the agent can use (optional). Supports `allow` (allowlist) and `deny` (blocklist) with trailing `*` wildcards. If both are set, `allow` is applied first, then `deny` removes from the result. Omit or leave empty to allow all tools.
 
-You can scaffold settings interactively via `aether agent new`, list current agents with `aether agent list`, and remove one with `aether agent remove <name>`.
+You can scaffold settings interactively via `aether settings init --user` or `aether settings init --project`. Edit the generated settings JSON directly to customize agents.
 
 ## Logs
 

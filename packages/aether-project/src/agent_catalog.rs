@@ -1,3 +1,4 @@
+use crate::aether_settings::{project_settings_exist, user_settings_exist};
 use crate::error::SettingsError;
 use crate::{AetherSettings, AgentConfig, McpFileSpec, McpSourceSpec};
 use aether_core::agent_spec::{AgentSpec, AgentSpecExposure, McpConfigSource};
@@ -19,6 +20,21 @@ pub struct AgentCatalog {
 }
 
 impl AgentCatalog {
+    pub fn load_default(project_root: &Path) -> Result<Option<Self>, SettingsError> {
+        let has_default_settings = user_settings_exist() || project_settings_exist(project_root);
+        let settings = AetherSettings::load_default(project_root)?;
+        if settings.agents.is_empty() && !has_default_settings {
+            return Ok(None);
+        }
+
+        let catalog = Self::from_settings(project_root, settings)?;
+        if catalog.user_invocable().next().is_none() {
+            return Err(SettingsError::NoUserInvocableAgents);
+        }
+
+        Ok(Some(catalog))
+    }
+
     pub fn from_settings(project_root: &Path, settings: AetherSettings) -> Result<Self, SettingsError> {
         validate_selected_agent(&settings)?;
         let selected_agent =

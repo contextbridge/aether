@@ -78,6 +78,10 @@ pub enum SettingsError {
     #[error("Aether config must contain at least one agent")]
     EmptyAgents,
 
+    /// The authored config contains no user-invocable agents.
+    #[error("Aether config must contain at least one user-invocable agent")]
+    NoUserInvocableAgents,
+
     /// The configured agent selector did not match an agent.
     #[error("Configured agent selector '{name}' did not match any agent")]
     InvalidAgentSelector { name: String },

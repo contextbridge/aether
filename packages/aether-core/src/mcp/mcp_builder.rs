@@ -4,7 +4,7 @@ use mcp_utils::client::{
     McpClientEvent, McpConfig, McpConnectionDetails, McpError, McpManager, McpServer, OAuthHandlerFactory, ParseError,
     ServerFactory, root_from_path,
 };
-use utils::variables::Vars;
+use utils::{SettingsStore, variables::Vars};
 
 use crate::agent_spec::McpConfigSource;
 
@@ -59,6 +59,12 @@ pub struct McpBuilder {
 
 impl McpBuilder {
     pub fn new(workspace_root: impl AsRef<Path>) -> Self {
+        let mut vars = Vars::new().with("WORKSPACE", workspace_root.as_ref().to_string_lossy().into_owned());
+
+        if let Some(store) = SettingsStore::new("AETHER_HOME", ".aether") {
+            vars.insert("AETHER_HOME", store.home().to_string_lossy().into_owned());
+        }
+
         Self {
             servers: Vec::new(),
             factories: HashMap::new(),
@@ -67,7 +73,7 @@ impl McpBuilder {
             oauth_handler_factory: None,
             oauth_credential_store: None,
             aether_home: None,
-            vars: Vars::new().with("WORKSPACE", workspace_root.as_ref().to_string_lossy().into_owned()),
+            vars,
         }
     }
 
@@ -97,7 +103,9 @@ impl McpBuilder {
     }
 
     pub fn with_aether_home(mut self, aether_home: impl Into<PathBuf>) -> Self {
-        self.aether_home = Some(aether_home.into());
+        let aether_home = aether_home.into();
+        self.vars.insert("AETHER_HOME", aether_home.to_string_lossy().into_owned());
+        self.aether_home = Some(aether_home);
         self
     }
 
@@ -279,6 +287,24 @@ mod tests {
             McpBuilder::new("/work").from_mcp_config_sources(&[McpConfigSource::Json(json.to_string())]).await.unwrap();
 
         assert_eq!(args_for(&builder, "notes"), Some(vec!["--dir".to_string(), "/work/notes".to_string()]));
+    }
+
+    #[tokio::test]
+    async fn from_mcp_config_sources_expands_aether_home_var_in_stdio_args() {
+        let json =
+            r#"{"servers":{"skills":{"type":"stdio","command":"server","args":["--dir","${AETHER_HOME}/skills"]}}}"#;
+        let home = tempfile::tempdir().unwrap();
+
+        let builder = McpBuilder::new("/work")
+            .with_aether_home(home.path())
+            .from_mcp_config_sources(&[McpConfigSource::Json(json.to_string())])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            args_for(&builder, "skills"),
+            Some(vec!["--dir".to_string(), home.path().join("skills").to_string_lossy().into_owned()])
+        );
     }
 
     fn command_for<'a>(builder: &'a McpBuilder, name: &str) -> Option<&'a str> {

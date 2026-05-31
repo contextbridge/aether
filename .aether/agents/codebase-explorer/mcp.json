@@ -1,7 +1,0 @@
-{
-  "servers": {
-    "coding": {
-      "type": "in-memory"
-    }
-  }
-}
