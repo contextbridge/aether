@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.18](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.3.17...aether-acp-utils-v0.3.18) - 2026-05-31
+
+### Added
+
+- Add user level settings resolution  ([#99](https://github.com/contextbridge/aether/pull/99))
+
 ## [0.3.17](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.3.16...aether-acp-utils-v0.3.17) - 2026-05-21
 
 ### Added

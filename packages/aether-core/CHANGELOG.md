@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.8](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.6.7...aether-agent-core-v0.6.8) - 2026-05-31
+
+### Added
+
+- Add user level settings resolution  ([#99](https://github.com/contextbridge/aether/pull/99))
+
+### Fixed
+
+- *(aether-cli)* Onboarding ([#112](https://github.com/contextbridge/aether/pull/112))
+- *(aether-cli)* Update system prompts and mcp server connections when switching agents ([#110](https://github.com/contextbridge/aether/pull/110))
+- *(aether-cli)* Start MCP servers concurrently to avoid blocking TUI ([#106](https://github.com/contextbridge/aether/pull/106))
+
 ## [0.6.7](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.6.6...aether-agent-core-v0.6.7) - 2026-05-21
 
 ### Other

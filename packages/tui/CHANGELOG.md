@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.11](https://github.com/contextbridge/aether/compare/aether-tui-v0.2.10...aether-tui-v0.2.11) - 2026-05-31
+
+### Added
+
+- *(wisp)* Terminal bell on agent idle ([#98](https://github.com/contextbridge/aether/pull/98))
+
+### Fixed
+
+- *(wisp)* allow spacebar in /resume session picker ([#105](https://github.com/contextbridge/aether/pull/105))
+
 ## [0.2.10](https://github.com/contextbridge/aether/compare/aether-tui-v0.2.9...aether-tui-v0.2.10) - 2026-05-21
 
 ### Fixed

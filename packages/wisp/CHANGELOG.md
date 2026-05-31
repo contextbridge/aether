@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.16](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.15...aether-wisp-v0.4.16) - 2026-05-31
+
+### Added
+
+- *(wisp)* Terminal bell on agent idle ([#98](https://github.com/contextbridge/aether/pull/98))
+
+### Fixed
+
+- *(aether-cli)* Update system prompts and mcp server connections when switching agents ([#110](https://github.com/contextbridge/aether/pull/110))
+- *(wisp)* allow spacebar in /resume session picker ([#105](https://github.com/contextbridge/aether/pull/105))
+- *(aether-cli)* Start MCP servers concurrently to avoid blocking TUI ([#106](https://github.com/contextbridge/aether/pull/106))
+
 ## [0.4.15](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.14...aether-wisp-v0.4.15) - 2026-05-21
 
 ### Added
