@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.9](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.8...aether-llm-codegen-v0.2.9) - 2026-05-31
+
+### Fixed
+
+- *(aether-cli)* Onboarding ([#112](https://github.com/contextbridge/aether/pull/112))
+
 ## [0.2.8](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.7...aether-llm-codegen-v0.2.8) - 2026-05-16
 
 ### Fixed

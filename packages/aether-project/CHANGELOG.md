@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.8](https://github.com/contextbridge/aether/compare/aether-project-v0.5.7...aether-project-v0.5.8) - 2026-05-31
+
+### Added
+
+- Add user level settings resolution  ([#99](https://github.com/contextbridge/aether/pull/99))
+
+### Fixed
+
+- *(aether-cli)* Onboarding ([#112](https://github.com/contextbridge/aether/pull/112))
+
 ## [0.5.7](https://github.com/contextbridge/aether/compare/aether-project-v0.5.6...aether-project-v0.5.7) - 2026-05-21
 
 ### Other

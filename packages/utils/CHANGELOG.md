@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.5](https://github.com/contextbridge/aether/compare/aether-utils-v0.2.4...aether-utils-v0.2.5) - 2026-05-31
+
+### Added
+
+- Add user level settings resolution  ([#99](https://github.com/contextbridge/aether/pull/99))
+
 ## [0.2.4](https://github.com/contextbridge/aether/compare/aether-utils-v0.2.3...aether-utils-v0.2.4) - 2026-05-12
 
 ### Other

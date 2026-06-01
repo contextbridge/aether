@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.12](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.11...aether-mcp-servers-v0.4.12) - 2026-05-31
+
+### Added
+
+- Add user level settings resolution  ([#99](https://github.com/contextbridge/aether/pull/99))
+
+### Fixed
+
+- *(aether-cli)* Onboarding ([#112](https://github.com/contextbridge/aether/pull/112))
+- *(aether-cli)* Update system prompts and mcp server connections when switching agents ([#110](https://github.com/contextbridge/aether/pull/110))
+- *(mcp-servers)* Make sub-agents MCP work with LLM providers that require an OAuth store ([#107](https://github.com/contextbridge/aether/pull/107))
+- *(aether-cli)* Start MCP servers concurrently to avoid blocking TUI ([#106](https://github.com/contextbridge/aether/pull/106))
+
 ## [0.4.11](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.10...aether-mcp-servers-v0.4.11) - 2026-05-21
 
 ### Other

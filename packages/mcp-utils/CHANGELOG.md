@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.12](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.5.11...aether-mcp-utils-v0.5.12) - 2026-05-31
+
+### Added
+
+- Add user level settings resolution  ([#99](https://github.com/contextbridge/aether/pull/99))
+
+### Fixed
+
+- *(aether-cli)* Update system prompts and mcp server connections when switching agents ([#110](https://github.com/contextbridge/aether/pull/110))
+- *(aether-cli)* Start MCP servers concurrently to avoid blocking TUI ([#106](https://github.com/contextbridge/aether/pull/106))
+
 ## [0.5.11](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.5.10...aether-mcp-utils-v0.5.11) - 2026-05-21
 
 ### Other

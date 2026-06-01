@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.7](https://github.com/contextbridge/aether/compare/aether-llm-v0.7.6...aether-llm-v0.7.7) - 2026-05-31
+
+### Fixed
+
+- *(aether-cli)* Onboarding ([#112](https://github.com/contextbridge/aether/pull/112))
+- *(aether-cli)* Update system prompts and mcp server connections when switching agents ([#110](https://github.com/contextbridge/aether/pull/110))
+- *(llm)* Codex provider streaming / parsing ([#108](https://github.com/contextbridge/aether/pull/108))
+- *(aether-cli)* Start MCP servers concurrently to avoid blocking TUI ([#106](https://github.com/contextbridge/aether/pull/106))
+
 ## [0.7.6](https://github.com/contextbridge/aether/compare/aether-llm-v0.7.5...aether-llm-v0.7.6) - 2026-05-21
 
 ### Other
