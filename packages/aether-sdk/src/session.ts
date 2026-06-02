@@ -39,6 +39,7 @@ export interface CommonAetherSessionOptions {
   cwd?: string;
   binaryPath?: string;
   env?: Record<string, string | undefined>;
+  oauthCredentialStore?: "platform" | "memory";
   logDir?: string;
   tools?: AetherToolGroups;
   externalMcpServers?: Record<string, ExternalMcpServerConfig>;
@@ -98,6 +99,7 @@ export class AetherSession {
       logDir,
       cwd = process.cwd(),
       env,
+      oauthCredentialStore,
       onPermissionRequest = autoApprovePermissions,
       onElicitation,
     } = options;
@@ -157,6 +159,8 @@ export class AetherSession {
         );
     }
     if (logDir) args.push("--log-dir", logDir);
+    if (oauthCredentialStore)
+      args.push("--credential-store", oauthCredentialStore);
 
     const spawned = spawnAetherProcess({
       command: resolved.command,

@@ -50,6 +50,11 @@ doc-check *PKGS:
 sdk-install:
     pnpm install --frozen-lockfile
 
+# Build the cli debug binary, then run SDK tests (incl. the real-binary stdio e2e test).
+sdk-test:
+    cargo build -p aether-agent-cli
+    pnpm sdk:test
+
 # End-to-end probe: build aether + SDK, then run one prompt through the real binary.
 # Forwards extra args to the script (e.g. `just sdk-e2e -- --model anthropic:claude-sonnet-4-5`).
 sdk-e2e *ARGS:
