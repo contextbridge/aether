@@ -88,8 +88,10 @@ jobs:
         run: pnpm fmt-check
       - name: Typecheck
         run: pnpm sdk:typecheck
-      - name: Build
+      - name: Build SDK
         run: pnpm sdk:build
+      - name: Build aether CLI
+        run: cargo build -p aether-agent-cli
       - name: Test
         run: pnpm sdk:test
 
