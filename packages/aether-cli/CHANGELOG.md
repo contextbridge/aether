@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.9](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.8...aether-agent-cli-v0.7.9) - 2026-06-02
+
+### Fixed
+
+- *(aether-cli)* Detect stdio file descriptors and use unix streams o… ([#118](https://github.com/contextbridge/aether/pull/118))
+
 ## [0.7.8](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.7...aether-agent-cli-v0.7.8) - 2026-05-31
 
 ### Added
