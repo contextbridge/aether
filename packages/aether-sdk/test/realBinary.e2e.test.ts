@@ -37,6 +37,7 @@ describe("E2E tests", () => {
             },
           ],
         },
+        oauthCredentialStore: "memory",
         env: {
           ...process.env,
           ANTHROPIC_API_KEY: "sk-ant-e2e-dummy",

@@ -32,9 +32,15 @@ use tracing::info;
 use tracing_appender::rolling::daily;
 use tracing_subscriber::EnvFilter;
 
-use aether_auth::OAuthCredentialStorage;
+use aether_auth::{FakeOAuthCredentialStore, OAuthCredentialStorage, OsKeyringStore};
 use session_factory::InitialSessionSelection;
 use session_store::SessionStore;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
+pub enum OAuthCredentialStoreKind {
+    Keyring,
+    Memory,
+}
 
 #[derive(clap::Args, Debug)]
 pub struct AcpArgs {
@@ -60,6 +66,10 @@ pub struct AcpArgs {
 
     #[command(flatten)]
     pub settings_source: SettingsSourceArgs,
+
+    /// OAuth credential backend to use. Use `memory` for tests to avoid OS keychain access.
+    #[clap(long, value_enum, default_value_t = OAuthCredentialStoreKind::Keyring)]
+    pub credential_store: OAuthCredentialStoreKind,
 }
 
 /// Outcome of running the ACP server successfully.
@@ -90,8 +100,7 @@ pub async fn run_acp(args: AcpArgs) -> Result<AcpRunOutcome, AcpRunError> {
     };
     let session_store =
         SessionStore::new().map_or_else(|e| panic!("Failed to initialize session store: {e}"), Arc::new);
-    let oauth_credential_store: Arc<dyn OAuthCredentialStorage> =
-        Arc::new(aether_auth::OsKeyringStore::with_platform_store());
+    let oauth_credential_store = oauth_credential_store(args.credential_store);
     let provider_connections = args.provider_connection.into_overrides();
     let state = Arc::new(AcpState::new(AcpStateConfig {
         session_store,
@@ -107,6 +116,13 @@ pub async fn run_acp(args: AcpArgs) -> Result<AcpRunOutcome, AcpRunError> {
     match connect_result {
         Ok(()) => Ok(AcpRunOutcome::CleanDisconnect),
         Err(err) => Err(AcpRunError::Protocol(err)),
+    }
+}
+
+fn oauth_credential_store(kind: OAuthCredentialStoreKind) -> Arc<dyn OAuthCredentialStorage> {
+    match kind {
+        OAuthCredentialStoreKind::Keyring => Arc::new(OsKeyringStore::with_platform_store()),
+        OAuthCredentialStoreKind::Memory => Arc::new(FakeOAuthCredentialStore::new()),
     }
 }
 
@@ -150,6 +166,13 @@ mod tests {
         let err = TestCli::try_parse_from(["test", "--reasoning-effort", "high"])
             .expect_err("reasoning effort should require model");
         assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn oauth_credential_store_memory_flag_is_allowed() {
+        let cli = TestCli::try_parse_from(["test", "--credential-store", "memory"])
+            .expect("memory credential store can be selected for tests");
+        assert_eq!(cli.args.credential_store, OAuthCredentialStoreKind::Memory);
     }
 
     #[test]

@@ -52,7 +52,7 @@ fn pipe_backed_stdio_serves_acp() -> TestResult {
 
 fn acp_command(log_dir: &std::path::Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_aether"));
-    command.arg("acp").arg("--log-dir").arg(log_dir).stderr(Stdio::null());
+    command.arg("acp").arg("--log-dir").arg(log_dir).arg("--credential-store").arg("memory").stderr(Stdio::null());
     command
 }
 
