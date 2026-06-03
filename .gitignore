@@ -6,7 +6,9 @@ gen/
 eval-results/
 packages/llm/src/catalog/generated.rs
 packages/aether-sdk/src/generated/
+website/src/data/aether-settings.schema.json
 .aether-tasks/
+.aether/notes/
 plans/
 sweep.timestamp
 .astro/

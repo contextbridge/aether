@@ -207,7 +207,11 @@ The `mcps` array in user or project settings can reference files, inline configs
 {
   "mcps": [
     ".aether/mcp.json",
-    { "type": "file", "path": "${WORKSPACE}/.aether/local-mcp.json", "optional": true },
+    {
+      "type": "file",
+      "path": "${WORKSPACE}/.aether/local-mcp.json",
+      "optional": true
+    },
     { "type": "file", "path": ".aether/external-mcp.json", "proxy": true },
     {
       "type": "inline",
@@ -256,7 +260,11 @@ MCP file paths use resource path resolution:
       "prompts": ["BUILD.md"],
       "mcps": [
         "mcp.json",
-        { "type": "file", "path": "${WORKSPACE}/.aether/mcp.json", "optional": true }
+        {
+          "type": "file",
+          "path": "${WORKSPACE}/.aether/mcp.json",
+          "optional": true
+        }
       ]
     }
   ]
@@ -326,7 +334,7 @@ Missing variables are errors; they are not replaced with an empty string. For MC
 
 ## Tool filtering
 
-The `tools` field in an [agent entry](/aether/configuration/agent-settings/) restricts which discovered MCP tools the model can use.
+The `tools` field in an [agent entry](/aether/settings/overview/#agents) restricts which discovered MCP tools the model can use.
 
 Tool names use `server__tool` with a double underscore. Patterns support exact names or a trailing `*` prefix wildcard only.
 

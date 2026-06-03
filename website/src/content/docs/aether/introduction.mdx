@@ -1,0 +1,75 @@
+---
+title: Introduction
+description: Prompts, agents, ACP clients, and MCP tools in Aether.
+---
+
+import RustBasicAgent from "../../../../../packages/aether-core/src/docs/basic_agent.md";
+import SdkBasicSession from "../../../../../packages/aether-sdk/src/docs/basic_session.md";
+
+## What is Aether?
+
+Aether is an open-source coding agent harness that gives you control over every token in context. Run it in a TUI, IDE/editor (via [ACP](https://agentclientprotocol.com/get-started/introduction)), headlessly, or use it as a library.
+
+#### Terminal
+
+Aether runs in your terminal via a fancy TUI:
+
+```bash
+aether
+```
+
+#### IDE/Editor
+
+Aether runs in any IDE or editor that supports [ACP](https://agentclientprotocol.com/get-started/introduction):
+
+```bash
+aether acp
+```
+
+#### Headless
+
+Aether runs headlessly in a container or VM:
+
+```bash
+aether headless "Explain the main function in this project"
+```
+
+#### Library
+
+##### Rust
+
+Ather agents can be defined and controlled via a Rust crate:
+
+<RustBasicAgent />
+
+##### TypeScript
+
+Aether agents can be programatically defined and controlled via a TypeScript SDK:
+
+<SdkBasicSession />
+
+## Why Aether?
+
+There are many coding agent harnesses. So, what makes Aether special?:
+
+#### Written in Rust
+
+Aether is written in Rust because you deserve a performant agent that isn't vibe-coded slop built on React + TypeScript.
+
+#### Modular by design
+
+Some agents are minimal, others are "batteries-included". Aether is **modular**; it does _both_.
+
+Minimal agents are great until you have to ["draw the rest of the f-ing owl"](https://knowyourmeme.com/memes/how-to-draw-an-owl). Batteries-included agents are great until you need _more control_ and end up fighting the prompts and tools that were hardcoded into the harness.
+
+Aether gives you the best of both worlds. Your agent starts as a blank slate with no system prompt or tools. Then you add only what you need via 1st-party extentsions for fileystem tools, skills, sub-agents, [LSP](https://microsoft.github.io/language-server-protocol/) integration and more. You're not left to draw the "owl" by yourself.
+
+#### MCP, done better
+
+Aether agents get tools _exclusively_ via [MCP](https://modelcontextprotocol.io/docs/getting-started/intro) servers . This makes Aether easy to extend in _any_ language you want.
+
+MCP has a bad rap for "wasting tokens" because many MCP clients dump tool definitions directly into context. Aether _doesn't_ do that. It has token-efficient progessive tool discovery built-in. So you don't need to worry about MCP vs CLIs.
+
+#### ACP-1st Architecture
+
+Aether is an [ACP](https://agentclientprotocol.com/get-started/introduction)-1st agent. This makes it easy to run "anywhere" by attaching it to an ACP client. Aether's TUI (Wisp) is an ACP client. Aether's TypeScript SDK is an ACP client...etc.

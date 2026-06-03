@@ -15,6 +15,7 @@ pub struct McpConfig {
     pub servers: BTreeMap<String, McpServerConfig>,
 }
 
+#[doc = include_str!("../docs/mcp_server_config.md")]
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(untagged)]
 pub enum McpServerConfig {
@@ -27,17 +28,22 @@ pub enum McpServerConfig {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct StdioServerConfig {
+    /// Transport discriminant; always `stdio`.
     #[serde(rename = "type", default)]
     pub type_: StdioType,
 
+    /// Executable launched to run the MCP server over stdio.
     pub command: String,
 
+    /// Command-line arguments passed to the executable.
     #[serde(default)]
     pub args: Vec<String>,
 
+    /// Environment variables set for the server process.
     #[serde(default)]
     pub env: HashMap<String, String>,
 
+    /// Expose this server's tools through Aether's tool proxy.
     #[serde(default, skip_serializing_if = "is_false")]
     pub proxy: bool,
 }
@@ -45,14 +51,18 @@ pub struct StdioServerConfig {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct HttpServerConfig {
+    /// Transport discriminant; always `http`.
     #[serde(rename = "type")]
     pub type_: HttpType,
 
+    /// Base URL of the streamable HTTP MCP server.
     pub url: String,
 
+    /// Extra HTTP headers sent with every request.
     #[serde(default)]
     pub headers: HashMap<String, String>,
 
+    /// Expose this server's tools through Aether's tool proxy.
     #[serde(default, skip_serializing_if = "is_false")]
     pub proxy: bool,
 }
@@ -60,14 +70,18 @@ pub struct HttpServerConfig {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct SseServerConfig {
+    /// Transport discriminant; always `sse`.
     #[serde(rename = "type")]
     pub type_: SseType,
 
+    /// Base URL of the Server-Sent Events MCP server.
     pub url: String,
 
+    /// Extra HTTP headers sent with every request.
     #[serde(default)]
     pub headers: HashMap<String, String>,
 
+    /// Expose this server's tools through Aether's tool proxy.
     #[serde(default, skip_serializing_if = "is_false")]
     pub proxy: bool,
 }
@@ -75,15 +89,19 @@ pub struct SseServerConfig {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct InMemoryServerConfig {
+    /// Transport discriminant; always `in-memory`.
     #[serde(rename = "type")]
     pub type_: InMemoryType,
 
+    /// Arguments passed to the built-in (in-process) server.
     #[serde(default)]
     pub args: Vec<String>,
 
+    /// Optional JSON input passed to the built-in server at startup.
     #[serde(default)]
     pub input: Option<Value>,
 
+    /// Expose this server's tools through Aether's tool proxy.
     #[serde(default, skip_serializing_if = "is_false")]
     pub proxy: bool,
 }

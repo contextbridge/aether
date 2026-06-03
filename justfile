@@ -46,6 +46,10 @@ lint *PKGS:
 doc-check *PKGS:
     RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items --all-features {{ if PKGS == "" { "--workspace --examples" } else { PKGS } }}
 
+# Regenerate the AetherSettings JSON Schema consumed by the website and SDK
+gen-schema:
+    cargo run -q -p aether-project --bin aether-settings-schema > website/src/data/aether-settings.schema.json
+
 # Install Node dependencies for the TypeScript SDK
 sdk-install:
     pnpm install --frozen-lockfile

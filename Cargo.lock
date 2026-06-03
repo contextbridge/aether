@@ -79,6 +79,7 @@ dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
  "aether-auth",
+ "aether-doctest",
  "aether-llm",
  "aether-mcp-utils",
  "aether-utils",
@@ -126,6 +127,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "aether-doctest"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "aether-evals"
 version = "0.1.0"
 dependencies = [
@@ -143,6 +152,7 @@ name = "aether-llm"
 version = "0.7.7"
 dependencies = [
  "aether-auth",
+ "aether-doctest",
  "aether-llm-codegen",
  "aether-utils",
  "async-openai",
@@ -252,6 +262,7 @@ name = "aether-mcp-utils"
 version = "0.5.12"
 dependencies = [
  "aether-auth",
+ "aether-doctest",
  "aether-llm",
  "aether-utils",
  "futures",
@@ -273,6 +284,7 @@ name = "aether-project"
 version = "0.5.8"
 dependencies = [
  "aether-agent-core",
+ "aether-doctest",
  "aether-llm",
  "aether-mcp-utils",
  "aether-utils",

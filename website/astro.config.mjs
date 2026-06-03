@@ -1,6 +1,7 @@
 // @ts-check
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
+import mermaid from "astro-mermaid";
 import icon from "astro-icon";
 import tailwindcss from "@tailwindcss/vite";
 import { GITHUB_URL } from "./src/consts.ts";
@@ -9,6 +10,29 @@ export default defineConfig({
   site: "https://aether-agent.io",
   integrations: [
     icon(),
+    mermaid({
+      theme: "base",
+      autoTheme: false,
+      enableLog: false,
+      mermaidConfig: {
+        themeVariables: {
+          background: "#0d1117",
+          primaryColor: "#22272e",
+          primaryTextColor: "#f0f1f4",
+          primaryBorderColor: "#444c5c",
+          lineColor: "#8891a0",
+          secondaryColor: "#161b22",
+          tertiaryColor: "#1c2128",
+          clusterBkg: "#161b22",
+          clusterBorder: "#444c5c",
+          edgeLabelBackground: "#0d1117",
+          fontFamily: "IBM Plex Sans, sans-serif",
+        },
+        flowchart: {
+          curve: "basis",
+        },
+      },
+    }),
     starlight({
       title: "Aether",
       customCss: [
@@ -31,138 +55,71 @@ export default defineConfig({
       sidebar: [
         {
           label: "Getting Started",
-          items: [{ label: "Introduction", slug: "getting-started/overview" }],
-        },
-        {
-          label: "Aether",
           items: [
-            {
-              label: "Configuration",
-              items: [
-                {
-                  label: "Agents",
-                  slug: "aether/configuration/agent-settings",
-                },
-                { label: "LLMs", slug: "aether/configuration/llm-providers" },
-                {
-                  label: "Prompts",
-                  slug: "aether/configuration/system-prompts",
-                },
-                { label: "Tools", slug: "aether/configuration/mcp-servers" },
-              ],
-            },
-            {
-              label: "Built-in MCP Servers",
-              items: [
-                { label: "Coding", slug: "aether/built-in-servers/coding" },
-                {
-                  label: "Skills, Rules & Notes",
-                  slug: "aether/built-in-servers/skills-commands",
-                },
-                { label: "Tasks", slug: "aether/built-in-servers/tasks" },
-                {
-                  label: "Sub-Agents",
-                  slug: "aether/built-in-servers/subagents",
-                },
-                { label: "Survey", slug: "aether/built-in-servers/survey" },
-                { label: "Plan", slug: "aether/built-in-servers/plan" },
-              ],
-            },
-            {
-              label: "Terminal UI",
-              items: [
-                { label: "Overview", slug: "aether/terminal/overview" },
-                {
-                  label: "Keybindings & Commands",
-                  slug: "aether/terminal/keybindings",
-                },
-                { label: "Git Diff View", slug: "aether/terminal/git-diff" },
-                {
-                  label: "Settings & Themes",
-                  slug: "aether/terminal/settings",
-                },
-                { label: "Sessions", slug: "aether/terminal/sessions" },
-              ],
-            },
-            { label: "IDE (ACP)", slug: "aether/running/editor-integration" },
-            { label: "Headless", slug: "aether/running/headless" },
+            { label: "Quickstart", slug: "getting-started/overview" },
+            { label: "Introduction", slug: "aether/introduction" },
           ],
         },
         {
-          label: "Wisp Standalone",
-          collapsed: true,
+          label: "Settings",
           items: [
+            { label: "Overview", slug: "aether/settings/overview" },
             {
-              label: "Using with Other Agents",
-              slug: "wisp-standalone/using-with-other-agents",
+              label: "User and Project Settings",
+              slug: "aether/settings/user-project-settings",
             },
+            { label: "LLMs", slug: "aether/settings/llm-providers" },
             {
-              label: "Embedding as a Library",
-              slug: "wisp-standalone/embedding",
+              label: "Prompts",
+              slug: "aether/settings/system-prompts",
+            },
+            { label: "Tools", slug: "aether/settings/mcp-servers" },
+            {
+              label: "Field reference",
+              slug: "aether/settings/reference",
             },
           ],
         },
+        {
+          label: "Built-in MCP Servers",
+          items: [
+            { label: "Coding", slug: "aether/built-in-servers/coding" },
+            {
+              label: "Skills, Rules & Notes",
+              slug: "aether/built-in-servers/skills-commands",
+            },
+            { label: "Tasks", slug: "aether/built-in-servers/tasks" },
+            {
+              label: "Sub-Agents",
+              slug: "aether/built-in-servers/subagents",
+            },
+            { label: "Survey", slug: "aether/built-in-servers/survey" },
+            { label: "Plan", slug: "aether/built-in-servers/plan" },
+          ],
+        },
+        {
+          label: "Terminal UI",
+          items: [
+            { label: "Overview", slug: "aether/terminal/overview" },
+            {
+              label: "Keybindings & Commands",
+              slug: "aether/terminal/keybindings",
+            },
+            { label: "Git Diff View", slug: "aether/terminal/git-diff" },
+            {
+              label: "Settings & Themes",
+              slug: "aether/terminal/settings",
+            },
+            { label: "Sessions", slug: "aether/terminal/sessions" },
+          ],
+        },
+        { label: "IDE (ACP)", slug: "aether/running/editor-integration" },
+        { label: "Headless", slug: "aether/running/headless" },
         {
           label: "Libraries",
           items: [
-            { label: "Architecture", slug: "libraries/architecture" },
-            {
-              label: "aether-core",
-              collapsed: true,
-              items: [
-                {
-                  label: "Agent Builder",
-                  slug: "libraries/aether-core/agent-builder",
-                },
-                {
-                  label: "Events & Streaming",
-                  slug: "libraries/aether-core/events",
-                },
-                {
-                  label: "MCP Integration",
-                  slug: "libraries/aether-core/mcp-integration",
-                },
-              ],
-            },
-            {
-              label: "llm",
-              collapsed: true,
-              items: [
-                {
-                  label: "Provider Interface",
-                  slug: "libraries/llm/provider-interface",
-                },
-                {
-                  label: "Custom Providers",
-                  slug: "libraries/llm/custom-providers",
-                },
-              ],
-            },
-            {
-              label: "mcp-servers",
-              collapsed: true,
-              items: [
-                {
-                  label: "Embedding Servers",
-                  slug: "libraries/mcp-servers/embedding",
-                },
-              ],
-            },
-            {
-              label: "tui",
-              collapsed: true,
-              items: [
-                { label: "Components", slug: "libraries/tui/components" },
-                { label: "Rendering", slug: "libraries/tui/rendering" },
-              ],
-            },
-            {
-              label: "crucible",
-              collapsed: true,
-              items: [
-                { label: "Writing Evals", slug: "libraries/crucible/evals" },
-              ],
-            },
+            { label: "Rust", slug: "libraries/rust" },
+            { label: "TypeScript SDK", slug: "libraries/typescript-sdk" },
           ],
         },
       ],

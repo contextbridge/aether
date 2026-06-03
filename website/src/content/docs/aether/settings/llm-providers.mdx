@@ -3,64 +3,27 @@ title: LLMs
 description: Configure model specs, credentials, and reasoning effort.
 ---
 
-Aether stores each agent's model as a string in [agent settings](/aether/configuration/agent-settings/). A model spec is usually `provider:model-id`.
+LLM models are specified in settings via a string with format `provider:model-id`.
 
-```json title=".aether/settings.json"
+## Examples
+
+```json {4} title=".aether/settings.json "
 {
   "agents": [
     {
-      "name": "Build",
-      "description": "Builds features and fixes bugs",
-      "model": "anthropic:claude-sonnet-4-5-20250929",
-      "reasoningEffort": "high",
-      "userInvocable": true,
-      "prompts": [".aether/BUILD.md"]
+      "model": "zai:glm-5.1",
+      ...
     }
   ]
 }
 ```
 
-## Model spec syntax
+| Form         | Example                      | Meaning                                                 |
+| ------------ | ---------------------------- | ------------------------------------------------------- |
+| Single model | `zai:glm-5.1`                | Use one provider/model pair.                            |
+| Alloy        | `zai:glm-5.1,openai:gpt-5.5` | Round-robin between model specs each conversation turn. |
 
-| Form         | Example                                | Meaning                                                 |
-| ------------ | -------------------------------------- | ------------------------------------------------------- |
-| Single model | `anthropic:claude-sonnet-4-5-20250929` | Use one provider/model pair.                            |
-| Local model  | `ollama:llama3.2`                      | Use a model discovered from a local provider.           |
-| Alloy        | `zai:glm-5.1,openai:gpt-5.5`           | Round-robin between model specs each conversation turn. |
-
-For providers that accept arbitrary model IDs, the part after the first colon is passed to the provider. For catalog providers, use IDs from `packages/llm/models.json`.
-
-## Common provider specs
-
-These examples are verified against the current parser or model catalog.
-
-| Provider    | Example spec                           | Credentials / setup                          |
-| ----------- | -------------------------------------- | -------------------------------------------- |
-| Anthropic   | `anthropic:claude-sonnet-4-5-20250929` | `ANTHROPIC_API_KEY`                          |
-| Anthropic   | `anthropic:claude-opus-4-6`            | `ANTHROPIC_API_KEY`                          |
-| OpenAI      | `openai:gpt-5.5`                       | `OPENAI_API_KEY`                             |
-| Codex       | `codex:gpt-5.5`                        | OAuth credentials stored in the OS keychain  |
-| ZAI         | `zai:glm-5.1`                          | `ZAI_API_KEY`                                |
-| DeepSeek    | `deepseek:deepseek-chat`               | `DEEPSEEK_API_KEY`                           |
-| Moonshot    | `moonshot:moonshot-v1-8k`              | `MOONSHOT_API_KEY`                           |
-| Gemini      | `gemini:<model-id>`                    | `GEMINI_API_KEY`                             |
-| OpenRouter  | `openrouter:<vendor>/<model-id>`       | `OPENROUTER_API_KEY`                         |
-| AWS Bedrock | `bedrock:<model-id>`                   | AWS credential chain                         |
-| Ollama      | `ollama:llama3.2`                      | A running Ollama server                      |
-| llama.cpp   | `llamacpp:<loaded-model-id>`           | A running llama.cpp OpenAI-compatible server |
-
-The current CLI registers built-in provider factories for Anthropic, OpenAI, Codex, Gemini, OpenRouter, Ollama, llama.cpp, DeepSeek, Moonshot, ZAI, and Bedrock. The generated catalog is larger and is used for model metadata and availability; avoid copying a catalog-only provider into `settings.json` unless the runtime parser can create that provider.
-
-## Availability in the UI
-
-The model selector is built from catalog models whose required environment variables are set, plus locally discovered models.
-
-- Catalog models with `required_env_var` only appear when that environment variable is present.
-- Ollama models are discovered from the running Ollama server (`OLLAMA_HOST` overrides the default host).
-- llama.cpp models are discovered from the server's `/v1/models` endpoint (`LLAMA_CPP_HOST` overrides the default host).
-- Codex uses OAuth credentials. In the TUI or ACP client, selecting a Codex model can trigger the provider login flow. There is no current top-level `aether auth codex` command.
-
-## Provider details
+## Supported Providers
 
 ### Anthropic
 
@@ -79,11 +42,11 @@ The model selector is built from catalog models whose required environment varia
 
 ### Codex
 
-|                  |                                        |
-| ---------------- | -------------------------------------- |
-| **Credentials**  | OAuth login stored in your OS keychain |
-| **Model syntax** | `codex:<model-id>`                     |
-| **Common model** | `codex:gpt-5.5`                        |
+|                  |                                                                               |
+| ---------------- | ----------------------------------------------------------------------------- |
+| **Credentials**  | OAuth login stored in the configured credential store; OS keychain by default |
+| **Model syntax** | `codex:<model-id>`                                                            |
+| **Common model** | `codex:gpt-5.5`                                                               |
 
 Codex uses OpenAI's Codex OAuth flow through the client. If no Codex credentials are available, Aether asks you to log in when the model is selected.
 

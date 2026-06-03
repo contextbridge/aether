@@ -3,19 +3,19 @@ title: Prompts
 description: Control agent behavior with prompt sources.
 ---
 
-Aether assembles each agent's system prompt from authored prompt sources plus MCP server instructions. There is no built-in prompt file name to target; use the files and inline text you list in user settings (`$HOME/.aether/settings.json`) or project settings (`.aether/settings.json`).
+Aether assembles each agent's system prompt from user-supplied prompt sources and MCP servers specified in an agent's `prompts` field. There is no built-in system prompt, so you control every token in context.
 
 ## Prompt sources
 
 The `prompts` field accepts these formats:
 
-| Form                  | Example                                                  |
-| --------------------- | -------------------------------------------------------- |
-| String path shorthand | `"AGENTS.md"`                                            |
-| Typed file            | `{ "type": "file", "path": ".aether/BUILD.md" }`         |
-| Typed glob            | `{ "type": "glob", "pattern": ".aether/rules/*.md" }`    |
+| Form                  | Example                                                     |
+| --------------------- | ----------------------------------------------------------- |
+| String path shorthand | `"AGENTS.md"`                                               |
+| Typed file            | `{ "type": "file", "path": ".aether/BUILD.md" }`            |
+| Typed glob            | `{ "type": "glob", "pattern": ".aether/rules/*.md" }`       |
 | Optional file/glob    | `{ "type": "file", "path": "AGENTS.md", "optional": true }` |
-| Inline text           | `{ "type": "text", "text": "Always answer concisely." }` |
+| Inline text           | `{ "type": "text", "text": "Always answer concisely." }`    |
 
 Top-level `prompts` are defaults. An agent inherits them only when its own `prompts` array is empty. If an agent provides a non-empty `prompts` array, that array replaces the top-level prompt list for that agent.
 
@@ -59,7 +59,11 @@ Prompt file paths and glob patterns use resource path resolution:
       "prompts": [
         "PLANNER.md",
         { "type": "file", "path": "${WORKSPACE}/AGENTS.md", "optional": true },
-        { "type": "glob", "pattern": "${WORKSPACE}/.aether/rules/*.md", "optional": true }
+        {
+          "type": "glob",
+          "pattern": "${WORKSPACE}/.aether/rules/*.md",
+          "optional": true
+        }
       ]
     }
   ]

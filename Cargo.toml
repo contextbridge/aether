@@ -16,6 +16,7 @@ members = [
     "packages/mcp-servers",
     "packages/utils",
     "packages/tui",
+    "packages/doctest",
 ]
 
 [workspace.lints.clippy]

@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 import {
   FetchingJSONSchemaStore,
   InputData,
@@ -14,34 +14,30 @@ const TS_HEADER = `// @generated ${GENERATED_NOTICE}\n// Source: packages/aether
 
 const root = resolve(import.meta.dirname, "../../..");
 const generatedDir = resolve(import.meta.dirname, "../src/generated");
-const schemaPath = resolve(generatedDir, "aether-settings.schema.json");
 const typesPath = resolve(generatedDir, "aether-settings.ts");
 
-const rustSchema = execFileSync(
-  "cargo",
-  ["run", "-q", "-p", "aether-project", "--bin", "aether-settings-schema"],
-  { cwd: root, encoding: "utf8" },
+const canonicalSchemaPath = resolve(
+  root,
+  "website/src/data/aether-settings.schema.json",
 );
+const schema = JSON.parse(generateCanonicalSchema());
 
-const schema = withGeneratedComment(JSON.parse(rustSchema));
-const outputs = [
-  {
-    path: schemaPath,
-    content: formatWithPrettier(`${JSON.stringify(schema, null, 2)}\n`, "json"),
-  },
-  {
-    path: typesPath,
-    content: formatWithPrettier(await generateTypes(schema), "typescript"),
-  },
-];
+mkdirSync(resolve(root, "website/src/data"), { recursive: true });
+writeFileSync(canonicalSchemaPath, `${JSON.stringify(schema, null, 2)}\n`);
 
 mkdirSync(generatedDir, { recursive: true });
-for (const { path, content } of outputs) writeFileSync(path, content);
-console.log(`wrote ${dirname(schemaPath)}`);
+writeFileSync(
+  typesPath,
+  formatWithPrettier(await generateTypes(schema), "typescript"),
+);
+console.log(`wrote ${typesPath}`);
 
-function withGeneratedComment(schema) {
-  const { $schema, $comment: _oldComment, ...rest } = schema;
-  return { $schema, $comment: GENERATED_NOTICE, ...rest };
+function generateCanonicalSchema() {
+  return execFileSync(
+    "cargo",
+    ["run", "-q", "-p", "aether-project", "--bin", "aether-settings-schema"],
+    { cwd: root, encoding: "utf8" },
+  );
 }
 
 function formatWithPrettier(content, parser) {
