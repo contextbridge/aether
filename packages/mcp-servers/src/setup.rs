@@ -1,3 +1,4 @@
+use crate::plan::DEFAULT_PLANS_DIR;
 use crate::{CodingMcp, CodingMcpArgs, DefaultCodingTools, PlanMcp, SkillsMcp, SubAgentsMcp, SurveyMcp, TasksMcp};
 use aether_auth::OAuthCredentialStorage;
 use aether_core::mcp::McpBuilder;
@@ -25,6 +26,7 @@ impl McpBuilderExt for McpBuilder {
         roots_path: &Path,
         oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
     ) -> Self {
+        let plan_cwd = cwd.clone();
         self.register_in_memory_server(
             "coding",
             Box::new(move |args, _input| {
@@ -80,8 +82,12 @@ impl McpBuilderExt for McpBuilder {
         )
         .register_in_memory_server(
             "plan",
-            Box::new(|args, _input| {
-                async move { PlanMcp::from_args(args).expect("Failed to parse PlanMcp args").into_dyn() }.boxed()
+            Box::new(move |args, _input| {
+                let default_plans_dir = plan_cwd.join(DEFAULT_PLANS_DIR);
+                async move {
+                    PlanMcp::from_args(args, default_plans_dir).expect("Failed to parse PlanMcp args").into_dyn()
+                }
+                .boxed()
             }),
         )
         .register_in_memory_server(

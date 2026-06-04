@@ -5,6 +5,8 @@
 
 use thiserror::Error;
 
+pub use crate::file_ops::FileError;
+
 #[doc = include_str!("../docs/coding_error.md")]
 #[derive(Debug, Error)]
 pub enum CodingError {
@@ -39,38 +41,6 @@ pub enum CodingError {
     /// Tool not configured/available
     #[error("{0}")]
     NotConfigured(String),
-}
-
-/// Errors related to file operations (read, write, edit)
-#[derive(Debug, Error)]
-pub enum FileError {
-    /// File does not exist
-    #[error("File does not exist: {path}")]
-    NotFound { path: String },
-
-    /// Failed to read file
-    #[error("Failed to read file {path}: {reason}")]
-    ReadFailed { path: String, reason: String },
-
-    /// Failed to write file
-    #[error("Failed to write to file {path}: {reason}")]
-    WriteFailed { path: String, reason: String },
-
-    /// Failed to create parent directories
-    #[error("Failed to create directories for {path}: {reason}")]
-    CreateDirFailed { path: String, reason: String },
-
-    /// Invalid offset (must be 1-indexed)
-    #[error("Invalid offset for file {path}: offset must be 1-indexed (start from 1)")]
-    InvalidOffset { path: String },
-
-    /// String replacement failed (string not found)
-    #[error("String replacement failed for file {path}: string '{pattern}' not found")]
-    PatternNotFound { path: String, pattern: String },
-
-    /// IO error (wraps `std::io::Error`)
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
 }
 
 /// Errors related to bash command execution

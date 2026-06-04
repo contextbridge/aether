@@ -1,10 +1,8 @@
+use crate::file_ops::{FileError, write_text_file};
+use mcp_utils::display_meta::{FileDiff, ToolDisplayMeta, ToolResultMeta, basename};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use tokio::fs::{create_dir_all, write};
-
-use crate::coding::error::FileError;
-use mcp_utils::display_meta::{FileDiff, ToolDisplayMeta, ToolResultMeta, basename};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -33,25 +31,15 @@ pub struct WriteFileResponse {
 
 pub async fn write_file_contents(args: WriteFileArgs) -> Result<WriteFileResponse, FileError> {
     let file_path = Path::new(&args.file_path);
-
-    if let Some(parent) = file_path.parent()
-        && let Err(e) = create_dir_all(parent).await
-    {
-        return Err(FileError::CreateDirFailed { path: args.file_path, reason: e.to_string() });
-    }
-
-    if let Err(e) = write(&args.file_path, &args.content).await {
-        return Err(FileError::WriteFailed { path: args.file_path, reason: e.to_string() });
-    }
-
-    let bytes_written = args.content.len();
-    let display_meta = ToolDisplayMeta::new("Write file", basename(&args.file_path));
-    let file_diff = FileDiff { path: args.file_path.clone(), old_text: None, new_text: args.content.clone() };
+    let result = write_text_file(file_path, &args.content).await?;
+    let file_path = result.path.to_string_lossy().into_owned();
+    let display_meta = ToolDisplayMeta::new("Write file", basename(&file_path));
+    let file_diff = FileDiff { path: file_path.clone(), old_text: None, new_text: args.content };
 
     Ok(WriteFileResponse {
-        message: format!("Successfully wrote {} bytes to {}", bytes_written, args.file_path),
-        bytes_written,
-        file_path: args.file_path,
+        message: format!("Successfully wrote {} bytes to {}", result.bytes_written, file_path),
+        bytes_written: result.bytes_written,
+        file_path,
         meta: Some(ToolResultMeta::with_file_diff(display_meta, file_diff)),
     })
 }

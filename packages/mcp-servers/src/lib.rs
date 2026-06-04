@@ -5,6 +5,9 @@ pub mod setup;
 #[cfg(any(feature = "all", feature = "subagents"))]
 pub use setup::McpBuilderExt;
 
+#[cfg(feature = "file-ops")]
+pub mod file_ops;
+
 #[cfg(feature = "coding")]
 pub mod coding;
 

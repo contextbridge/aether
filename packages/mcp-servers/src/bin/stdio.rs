@@ -1,4 +1,5 @@
 use clap::Parser;
+use mcp_servers::plan::default_plans_dir;
 use mcp_servers::{CodingMcp, CodingMcpArgs, PlanMcp, SkillsMcp, SubAgentsMcp, SurveyMcp, TasksMcp};
 use mcp_utils::ServiceExt;
 use rmcp::ServerHandler;
@@ -76,7 +77,7 @@ async fn main() -> Result<(), StdioError> {
             serve_stdio(server).await
         }
         "plan" => {
-            let server = PlanMcp::from_args(cli.args).map_err(StdioError::ServerArgs)?;
+            let server = PlanMcp::from_args(cli.args, default_plans_dir()).map_err(StdioError::ServerArgs)?;
             serve_stdio(server).await
         }
         other => Err(StdioError::UnknownServer(other.to_string())),
