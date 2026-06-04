@@ -1,8 +1,10 @@
 mod build_settings;
+mod harness;
 mod recommendations;
 mod tui_runner;
 use aether_project::user_settings_path;
 pub use build_settings::Preset;
+pub use harness::HarnessIntegration;
 use llm::catalog::Provider;
 use recommendations::recommended_for_provider;
 use std::fs;
@@ -18,6 +20,15 @@ pub enum InitScope {
     Project,
 }
 
+impl InitScope {
+    pub fn asset_path(self, asset_rel_path: &str) -> String {
+        match self {
+            Self::User => asset_rel_path.to_string(),
+            Self::Project => format!(".aether/{asset_rel_path}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InitTarget {
     pub scope: InitScope,
@@ -30,6 +41,7 @@ pub struct InitRequest {
     pub target: InitTargetRequest,
     pub provider: Option<Provider>,
     pub preset: Option<Preset>,
+    pub harnesses: Vec<HarnessIntegration>,
     pub force: bool,
 }
 
@@ -77,7 +89,7 @@ impl InitTarget {
 
 impl InitRequest {
     pub fn user_onboarding() -> Self {
-        Self { target: InitTargetRequest::User, provider: None, preset: None, force: false }
+        Self { target: InitTargetRequest::User, provider: None, preset: None, harnesses: vec![], force: false }
     }
 }
 
@@ -85,6 +97,7 @@ pub fn apply_init(
     target: InitTarget,
     provider: Provider,
     preset: Preset,
+    harnesses: &[HarnessIntegration],
     force: bool,
 ) -> Result<InitOutcome, InitError> {
     if target.settings_path.is_file() && !force {
@@ -96,7 +109,7 @@ pub fn apply_init(
         supported: supported_providers().map(Provider::parser_name).collect::<Vec<_>>().join(", "),
     })?;
 
-    let built = build_settings::build_preset(preset, provider, &recs, target.scope);
+    let built = build_settings::build_preset(preset, provider, &recs, target.scope, harnesses);
 
     fs::create_dir_all(&target.asset_root).map_err(|e| InitError::Io { path: target.asset_root.clone(), source: e })?;
 
@@ -123,11 +136,13 @@ pub async fn run_init(request: InitRequest) -> Result<InitOutcome, InitError> {
         return Ok(InitOutcome::AlreadyInitialized { settings_path: target.settings_path });
     }
 
-    let Some((provider, preset)) = tui_runner::run_wizard(request.provider, request.preset).await? else {
+    let Some((provider, preset, harnesses)) =
+        tui_runner::run_wizard(request.provider, request.preset, request.harnesses).await?
+    else {
         return Ok(InitOutcome::Cancelled);
     };
 
-    apply_init(target, provider, preset, request.force)
+    apply_init(target, provider, preset, &harnesses, request.force)
 }
 
 pub fn next_steps_message(outcome: &InitOutcome) -> Option<String> {

@@ -1,4 +1,5 @@
 use super::InitScope;
+use super::harness::HarnessIntegration;
 use super::recommendations::{ProviderRecommendations, recommended_for_provider};
 use aether_core::agent_spec::ToolFilter;
 use aether_project::{AetherSettings, AgentConfig, McpSourceSpec, PromptSource};
@@ -6,20 +7,10 @@ use llm::catalog::Provider;
 use mcp_utils::client::{InMemoryServerConfig, InMemoryType, McpServerConfig};
 
 const SYSTEM_PATH: &str = "SYSTEM.md";
-const PROJECT_AGENTS_PATH: &str = "${WORKSPACE}/AGENTS.md";
 const SYSTEM_MD: &str = include_str!("templates/SYSTEM.md");
 
 const EXPLORER_AGENTS_MD: &str = include_str!("templates/agents/codebase-explorer/AGENTS.md");
 const EXPLORER_AGENTS_PATH: &str = "agents/codebase-explorer/AGENTS.md";
-
-const SKILLS_ARGS: &[&str] = &[
-    "--dir",
-    "${AETHER_HOME}/skills",
-    "--dir",
-    "${WORKSPACE}/.aether/skills",
-    "--notes-dir",
-    "${WORKSPACE}/.aether/notes",
-];
 
 const READ_ONLY_DENIED_CODING_TOOLS: &[&str] =
     &["coding__bash", "coding__edit_file", "coding__lsp_rename", "coding__write_file"];
@@ -52,10 +43,11 @@ pub(crate) fn build_preset(
     provider: Provider,
     recs: &ProviderRecommendations,
     scope: InitScope,
+    harnesses: &[HarnessIntegration],
 ) -> ResolvedPreset {
     match preset {
         Preset::Minimal => minimal_preset(provider, recs, scope),
-        Preset::BatteriesIncluded => build_batteries_included_preset(provider, recs, scope),
+        Preset::BatteriesIncluded => batteries_included_preset(provider, recs, scope, harnesses),
     }
 }
 
@@ -67,7 +59,7 @@ fn minimal_preset(provider: Provider, recs: &ProviderRecommendations, scope: Ini
         model: recs.plan.model.to_string(),
         reasoning_effort: recs.plan.reasoning_effort,
         user_invocable: true,
-        mcps: vec![mcps(&[("coding", &[]), ("skills", SKILLS_ARGS)])],
+        mcps: vec![mcps(vec![("coding", vec![]), ("skills", skills_args(&[]))])],
         tools: ToolFilter { allow: vec!["coding__bash".to_string(), "skills__*".to_string()], deny: vec![] },
         ..AgentConfig::default()
     };
@@ -78,25 +70,29 @@ fn minimal_preset(provider: Provider, recs: &ProviderRecommendations, scope: Ini
     }
 }
 
-fn build_batteries_included_preset(
+fn batteries_included_preset(
     provider: Provider,
     recs: &ProviderRecommendations,
     scope: InitScope,
+    harnesses: &[HarnessIntegration],
 ) -> ResolvedPreset {
     let display = provider.display_name();
+    let coding = coding_args(harnesses);
+    let skills = skills_args(harnesses);
+
     let plan = AgentConfig {
         name: "Plan".to_string(),
         description: format!("{display} planner (read-only except plan files)"),
         model: recs.plan.model.to_string(),
         reasoning_effort: recs.plan.reasoning_effort,
         user_invocable: true,
-        mcps: vec![mcps(&[
-            ("plan", &[]),
-            ("coding", &[]),
-            ("skills", SKILLS_ARGS),
-            ("subagents", &[]),
-            ("tasks", &[]),
-            ("survey", &[]),
+        mcps: vec![mcps(vec![
+            ("plan", vec![]),
+            ("coding", coding.clone()),
+            ("skills", skills.clone()),
+            ("subagents", vec![]),
+            ("tasks", vec![]),
+            ("survey", vec![]),
         ])],
         tools: read_only_coding_tools(),
         ..AgentConfig::default()
@@ -108,12 +104,12 @@ fn build_batteries_included_preset(
         model: recs.build.model.to_string(),
         reasoning_effort: recs.build.reasoning_effort,
         user_invocable: true,
-        mcps: vec![mcps(&[
-            ("coding", &[]),
-            ("skills", SKILLS_ARGS),
-            ("subagents", &[]),
-            ("tasks", &[]),
-            ("survey", &[]),
+        mcps: vec![mcps(vec![
+            ("coding", coding.clone()),
+            ("skills", skills),
+            ("subagents", vec![]),
+            ("tasks", vec![]),
+            ("survey", vec![]),
         ])],
         ..AgentConfig::default()
     };
@@ -124,8 +120,8 @@ fn build_batteries_included_preset(
         model: recs.explore.model.to_string(),
         reasoning_effort: recs.explore.reasoning_effort,
         agent_invocable: true,
-        prompts: vec![PromptSource::file(settings_asset_path(scope, EXPLORER_AGENTS_PATH))],
-        mcps: vec![mcps(&[("coding", &[])])],
+        prompts: vec![PromptSource::file(scope.asset_path(EXPLORER_AGENTS_PATH))],
+        mcps: vec![mcps(vec![("coding", coding)])],
         tools: read_only_coding_tools(),
         ..AgentConfig::default()
     };
@@ -136,40 +132,67 @@ fn build_batteries_included_preset(
             TemplateFile { path: EXPLORER_AGENTS_PATH, body: EXPLORER_AGENTS_MD },
         ],
         settings: AetherSettings {
-            prompts: default_prompts(scope),
+            prompts: batteries_prompts(scope, harnesses),
             agents: vec![plan, build, explore],
             ..AetherSettings::default()
         },
     }
 }
 
-fn read_only_coding_tools() -> ToolFilter {
-    ToolFilter { allow: vec![], deny: READ_ONLY_DENIED_CODING_TOOLS.iter().map(|tool| (*tool).to_string()).collect() }
+fn skills_args(harnesses: &[HarnessIntegration]) -> Vec<String> {
+    let mut args = vec!["--dir".to_string(), "${AETHER_HOME}/skills".to_string()];
+    for harness in harnesses {
+        for dir in harness.skills_dirs() {
+            args.extend(["--dir".to_string(), dir]);
+        }
+    }
+
+    args.extend([
+        "--dir".to_string(),
+        "${WORKSPACE}/.aether/skills".to_string(),
+        "--notes-dir".to_string(),
+        "${WORKSPACE}/.aether/notes".to_string(),
+    ]);
+
+    args
+}
+
+fn coding_args(harnesses: &[HarnessIntegration]) -> Vec<String> {
+    let mut args = Vec::new();
+    for harness in harnesses {
+        for dir in harness.rules_dirs() {
+            args.extend(["--rules-dir".to_string(), dir]);
+        }
+    }
+    args
+}
+
+fn batteries_prompts(scope: InitScope, harnesses: &[HarnessIntegration]) -> Vec<PromptSource> {
+    let mut prompts = vec![PromptSource::file(scope.asset_path(SYSTEM_PATH))];
+    for harness in harnesses {
+        if let Some(source) = harness.prompt_source() {
+            prompts.push(source);
+        }
+    }
+
+    prompts
 }
 
 fn default_prompts(scope: InitScope) -> Vec<PromptSource> {
-    vec![
-        PromptSource::file(settings_asset_path(scope, SYSTEM_PATH)),
-        PromptSource::file(PROJECT_AGENTS_PATH).optional(),
-    ]
+    let mut prompts = vec![PromptSource::file(scope.asset_path(SYSTEM_PATH))];
+    prompts.extend(HarnessIntegration::Agents.prompt_source());
+    prompts
 }
 
-fn settings_asset_path(scope: InitScope, asset_rel_path: &str) -> String {
-    match scope {
-        InitScope::User => asset_rel_path.to_string(),
-        InitScope::Project => format!(".aether/{asset_rel_path}"),
-    }
-}
-
-fn mcps(servers: &[(&str, &[&str])]) -> McpSourceSpec {
+fn mcps(servers: Vec<(&str, Vec<String>)>) -> McpSourceSpec {
     let servers = servers
-        .iter()
+        .into_iter()
         .map(|(name, args)| {
             (
-                (*name).to_string(),
+                name.to_string(),
                 McpServerConfig::InMemory(InMemoryServerConfig {
                     type_: InMemoryType::InMemory,
-                    args: args.iter().map(|s| (*s).to_string()).collect(),
+                    args,
                     input: None,
                     proxy: false,
                 }),
@@ -177,4 +200,8 @@ fn mcps(servers: &[(&str, &[&str])]) -> McpSourceSpec {
         })
         .collect();
     McpSourceSpec::Inline { servers }
+}
+
+fn read_only_coding_tools() -> ToolFilter {
+    ToolFilter { allow: vec![], deny: READ_ONLY_DENIED_CODING_TOOLS.iter().map(|tool| (*tool).to_string()).collect() }
 }

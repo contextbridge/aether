@@ -1,4 +1,4 @@
-use crate::init::{InitRequest, InitTargetRequest, Preset};
+use crate::init::{HarnessIntegration, InitRequest, InitTargetRequest, Preset};
 use clap::{Args, Subcommand};
 use llm::catalog::Provider;
 use std::path::PathBuf;
@@ -36,6 +36,10 @@ pub struct SettingsInitArgs {
     #[arg(long)]
     pub preset: Option<Preset>,
 
+    /// Harness conventions to auto-load (only with `batteries-included` preset).
+    #[arg(long = "harness", value_enum)]
+    pub harnesses: Vec<HarnessIntegration>,
+
     /// Overwrite an existing settings file at the selected target.
     #[arg(long)]
     pub force: bool,
@@ -44,7 +48,7 @@ pub struct SettingsInitArgs {
 impl From<SettingsInitArgs> for InitRequest {
     fn from(args: SettingsInitArgs) -> Self {
         let target = if args.user { InitTargetRequest::User } else { InitTargetRequest::Project { path: args.path } };
-        Self { target, provider: args.provider, preset: args.preset, force: args.force }
+        Self { target, provider: args.provider, preset: args.preset, harnesses: args.harnesses, force: args.force }
     }
 }
 
@@ -101,5 +105,14 @@ mod tests {
     #[test]
     fn rejects_user_path() {
         assert!(parse(&["init", "--user", "--path", "/tmp/repo"]).is_err());
+    }
+
+    #[test]
+    fn accepts_repeated_harness_flags() {
+        let cli =
+            parse(&["init", "--user", "--preset", "batteries-included", "--harness", "claude", "--harness", "agents"])
+                .unwrap();
+        let SettingsCommand::Init(args) = cli.command;
+        assert_eq!(args.harnesses, vec![HarnessIntegration::Claude, HarnessIntegration::Agents]);
     }
 }
