@@ -58,7 +58,7 @@ describe("AetherSession with a fake ACP agent", () => {
           inferenceProfileArn: arn,
         },
       },
-      oauthCredentialStore: "memory",
+      settings: { credentialsStore: { type: "memory" }, agents: [] },
       env: { PATH: process.env.PATH, FAKE_AETHER_LOG_FILE: logFile },
     });
 
@@ -71,8 +71,10 @@ describe("AetherSession with a fake ACP agent", () => {
       expect(argv.args).toContain("bedrock.url=http://127.0.0.1:8787");
       expect(argv.args).toContain("bedrock.auth=none");
       expect(argv.args).toContain(`bedrock.inference-profile-arn=${arn}`);
-      expect(argv.args).toContain("--credential-store");
-      expect(argv.args).toContain("memory");
+      const settingsJson = argv.args[argv.args.indexOf("--settings-json") + 1];
+      expect(JSON.parse(settingsJson).credentialsStore).toEqual({
+        type: "memory",
+      });
     } finally {
       await session.close();
       await rm(dir, { recursive: true, force: true });

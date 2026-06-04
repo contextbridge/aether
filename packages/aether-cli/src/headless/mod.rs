@@ -9,10 +9,13 @@ use std::io::{IsTerminal, Read as _, stdin};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use crate::credentials::build_oauth_credential_store;
 use crate::mcp_config_args::McpConfigArgs;
 use crate::provider_connection_args::ProviderConnectionArgs;
 use crate::resolve::resolve_agent_spec;
 use crate::settings_args::SettingsSourceArgs;
+use aether_auth::OAuthCredentialStorage;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub enum OutputFormat {
@@ -72,6 +75,7 @@ pub struct RunConfig {
     pub output: OutputFormat,
     pub verbose: bool,
     pub events: Vec<CliEventKind>,
+    pub oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
 }
 
 pub async fn run_headless(args: HeadlessArgs) -> Result<ExitCode, CliError> {
@@ -88,6 +92,7 @@ pub async fn run_headless(args: HeadlessArgs) -> Result<ExitCode, CliError> {
     };
 
     let mcp_config_sources = args.mcp_config.sources(&cwd);
+    let oauth_credential_store = build_oauth_credential_store(&args.settings_source, &cwd)?;
 
     let config = RunConfig {
         prompt,
@@ -98,6 +103,7 @@ pub async fn run_headless(args: HeadlessArgs) -> Result<ExitCode, CliError> {
         output,
         verbose: args.verbose,
         events: args.events,
+        oauth_credential_store,
     };
 
     run::run(config).await

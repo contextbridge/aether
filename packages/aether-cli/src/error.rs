@@ -1,3 +1,4 @@
+use aether_auth::OAuthError;
 use std::io;
 use thiserror::Error;
 
@@ -15,4 +16,6 @@ pub enum CliError {
     IoError(#[from] io::Error),
     #[error("Agent error: {0}")]
     AgentError(String),
+    #[error("Credential store error: {0}")]
+    CredentialStore(#[from] OAuthError),
 }

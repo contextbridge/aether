@@ -2,12 +2,14 @@
 
 mod browser;
 mod credential;
+pub mod encrypted_file;
 pub mod error;
 mod fake;
 mod handler;
 
 pub use browser::{BrowserOAuthHandler, accept_oauth_callback, open_browser, wait_for_callback};
 pub use credential::{OAuthCredential, OAuthCredentialStorage, oauth_http_client};
+pub use encrypted_file::EncryptedFileOAuthCredentialStorage;
 pub use error::OAuthError;
 pub use fake::FakeOAuthCredentialStore;
 pub use handler::{OAuthCallback, OAuthHandler};

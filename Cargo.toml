@@ -91,6 +91,9 @@ serde_yml = "0.0.12"
 htmd = "0.5"
 dom_smoothie = "0.17"
 
+# Encryption
+age = "0.11.3"
+
 # Error handling
 thiserror = "2.0"
 

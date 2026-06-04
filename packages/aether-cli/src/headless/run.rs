@@ -13,6 +13,7 @@ pub async fn run(config: RunConfig) -> Result<ExitCode, CliError> {
 
     let agent = RuntimeBuilder::from_spec(config.cwd.clone(), config.spec)
         .mcp_sources(config.mcp_config_sources)
+        .oauth_credential_store(config.oauth_credential_store)
         .build(config.system_prompt.as_deref().map(Prompt::text), None)
         .await?;
 
