@@ -1,9 +1,8 @@
+use crate::file_ops::{FileError, read_text_file};
+use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-
-use crate::coding::error::FileError;
-use crate::coding::tools::file_io::read_text_file;
-use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename};
+use std::path::Path;
 
 const MAX_LINE_LENGTH: usize = 2000;
 const DEFAULT_LINE_LIMIT: usize = 2000;
@@ -42,7 +41,7 @@ pub struct ReadFileResult {
 }
 
 pub async fn read_file_contents(args: ReadFileArgs) -> Result<ReadFileResult, FileError> {
-    let content = read_text_file(&args.file_path).await?;
+    let content = read_text_file(Path::new(&args.file_path)).await?;
 
     let all_lines: Vec<&str> = content.lines().collect();
     let total_lines = all_lines.len();

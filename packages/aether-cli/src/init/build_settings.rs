@@ -86,7 +86,7 @@ fn build_batteries_included_preset(
     let display = provider.display_name();
     let plan = AgentConfig {
         name: "Plan".to_string(),
-        description: format!("{display} planner (read-only)"),
+        description: format!("{display} planner (read-only except plan files)"),
         model: recs.plan.model.to_string(),
         reasoning_effort: recs.plan.reasoning_effort,
         user_invocable: true,

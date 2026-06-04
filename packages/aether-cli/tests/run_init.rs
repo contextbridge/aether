@@ -5,6 +5,7 @@ use llm::catalog::Provider;
 use llm::{LlmModel, ReasoningEffort};
 use mcp_servers::{CodingMcpArgs, PlanMcpArgs, SkillsMcpArgs, SubAgentsMcpArgs, TasksMcpArgs};
 use mcp_utils::client::McpServerConfig;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 fn load(settings_path: &Path) -> AetherSettings {
@@ -72,7 +73,7 @@ fn writes_project_minimal_preset_for_codex() {
 }
 
 #[test]
-fn writes_project_batteries_preset_for_anthropic() {
+fn writes_project_batteries_preset_for_anthropic() -> Result<(), String> {
     let dir = tempfile::tempdir().unwrap();
     let outcome = apply_init(InitTarget::project(dir.path()), Provider::Anthropic, Preset::BatteriesIncluded, false)
         .expect("apply_init");
@@ -93,14 +94,20 @@ fn writes_project_batteries_preset_for_anthropic() {
     let plan = &settings.agents[0];
     assert_read_only_coding_tools(plan);
 
+    let plan_servers = inline_servers(&plan.mcps[0])?;
+    let plan_server_names: Vec<&str> = plan_servers.keys().map(String::as_str).collect();
+    assert_eq!(plan_server_names, vec!["coding", "plan", "skills", "subagents", "survey", "tasks"]);
+    assert!(!plan.tools.deny.iter().any(|tool| tool.starts_with("plan__")));
+
     let explore = &settings.agents[2];
     assert!(explore.agent_invocable);
     assert!(!explore.user_invocable);
     assert_eq!(explore.prompts[0].path(), Some(".aether/agents/codebase-explorer/AGENTS.md"));
     assert_read_only_coding_tools(explore);
-    let McpSourceSpec::Inline { servers } = &explore.mcps[0] else { panic!("explore MCPs should be inline") };
-    let server_names: Vec<&str> = servers.keys().map(String::as_str).collect();
+    let explore_servers = inline_servers(&explore.mcps[0])?;
+    let server_names: Vec<&str> = explore_servers.keys().map(String::as_str).collect();
     assert_eq!(server_names, vec!["coding"]);
+    Ok(())
 }
 
 #[test]
@@ -200,6 +207,13 @@ fn unsupported_provider_returns_error_without_writing_files() {
     assert!(matches!(err, InitError::UnsupportedProvider { provider: Provider::Gemini, .. }), "{err:?}");
     assert!(!dir.path().join("settings.json").exists(), "no settings.json should be written");
     assert!(!dir.path().join("SYSTEM.md").exists(), "no SYSTEM.md should be written");
+}
+
+fn inline_servers(spec: &McpSourceSpec) -> Result<&BTreeMap<String, McpServerConfig>, String> {
+    match spec {
+        McpSourceSpec::Inline { servers } => Ok(servers),
+        McpSourceSpec::File(_) => Err("expected inline MCPs, got a file spec".to_string()),
+    }
 }
 
 fn assert_read_only_coding_tools(agent: &aether_project::AgentConfig) {

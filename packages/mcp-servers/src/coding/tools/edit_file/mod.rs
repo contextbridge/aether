@@ -1,9 +1,8 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tokio::fs::write;
+use std::path::Path;
 
-use crate::coding::error::FileError;
-use crate::coding::tools::file_io::read_text_file;
+use crate::file_ops::{FileError, edit_text_file};
 use mcp_utils::display_meta::{FileDiff, ToolDisplayMeta, ToolResultMeta, basename};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -43,42 +42,23 @@ pub struct EditFileResponse {
 }
 
 pub async fn edit_file_contents(args: EditFileArgs) -> Result<EditFileResponse, FileError> {
-    // Read current file content
-    let current_content = read_text_file(&args.file_path).await?;
-
-    // Perform string replacement
-    let (updated_content, replacements_made) = if args.replace_all {
-        let count = current_content.matches(&args.old_string).count();
-        (current_content.replace(&args.old_string, &args.new_string), count)
-    } else if current_content.contains(&args.old_string) {
-        (current_content.replacen(&args.old_string, &args.new_string, 1), 1)
-    } else {
-        (current_content.clone(), 0)
+    let result =
+        edit_text_file(Path::new(&args.file_path), &args.old_string, &args.new_string, args.replace_all).await?;
+    let file_path = result.path.to_string_lossy().into_owned();
+    let total_lines = result.updated_content.lines().count();
+    let display_meta = ToolDisplayMeta::new("Edit file", basename(&file_path));
+    let file_diff = FileDiff {
+        path: file_path.clone(),
+        old_text: Some(result.original_content),
+        new_text: result.updated_content.clone(),
     };
-
-    // Check if any replacement actually occurred
-    if replacements_made == 0 {
-        return Err(FileError::PatternNotFound { path: args.file_path, pattern: args.old_string });
-    }
-
-    // Write back to file
-    if let Err(e) = write(&args.file_path, &updated_content).await {
-        return Err(FileError::WriteFailed { path: args.file_path, reason: e.to_string() });
-    }
-
-    // Count lines for response
-    let total_lines = updated_content.lines().count();
-
-    let display_meta = ToolDisplayMeta::new("Edit file", basename(&args.file_path));
-    let file_diff =
-        FileDiff { path: args.file_path.clone(), old_text: Some(current_content), new_text: updated_content.clone() };
 
     Ok(EditFileResponse {
         status: "success".to_string(),
-        file_path: args.file_path,
+        file_path,
         total_lines,
-        replacements_made,
-        content: updated_content,
+        replacements_made: result.replacements_made,
+        content: result.updated_content,
         meta: Some(ToolResultMeta::with_file_diff(display_meta, file_diff)),
     })
 }

@@ -27,7 +27,9 @@ workspace = true
 [features]
 default = ["coding", "skills", "tasks", "subagents", "plan"]
 test-helpers = []
+file-ops = ["dep:thiserror"]
 coding = [
+    "file-ops",
     "dep:aether-project",
     "dep:aether-lspd",
     "dep:futures",
@@ -58,7 +60,7 @@ tasks = [
     "dep:tempfile",
     "dep:thiserror",
 ]
-plan = []
+plan = ["file-ops"]
 subagents = [
     "coding",
     "skills",

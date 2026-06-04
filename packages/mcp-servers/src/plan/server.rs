@@ -1,4 +1,6 @@
+use crate::file_ops::{FileError, edit_text_file, read_text_file, write_text_file};
 use clap::Parser;
+use mcp_utils::display_meta::{FileDiff, ToolDisplayMeta, ToolResultMeta, basename};
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     handler::server::{
@@ -16,15 +18,16 @@ use rmcp::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fmt::{Display, Formatter};
-use std::io::ErrorKind;
-use std::path::PathBuf;
+use std::env::current_dir;
+use std::path::{Path, PathBuf};
+use thiserror::Error;
 use tokio::fs::read_to_string;
 use tokio::process::Command;
 use utils::plan_review::{PlanReviewDecision, PlanReviewElicitationMeta};
 use utils::substitution::substitute_parameters;
 
 pub const DEFAULT_PLAN_PROMPT: &str = include_str!("./default_prompt.md");
+pub const DEFAULT_PLANS_DIR: &str = "docs/aether/plans";
 
 const DECISION: &str = "decision";
 const FEEDBACK: &str = "feedback";
@@ -34,6 +37,11 @@ const ARGUMENTS: &str = "ARGUMENTS";
 #[derive(Debug, Clone, Parser)]
 #[command(name = "plan-mcp")]
 pub struct PlanMcpArgs {
+    /// Directory where plan markdown files are written and read.
+    /// Defaults to `docs/aether/plans` relative to the server process cwd.
+    #[arg(long)]
+    pub plans_dir: Option<PathBuf>,
+
     /// Markdown file whose body is returned as the `plan` MCP prompt.
     /// When the flag is absent or the file is missing at invocation time,
     /// `DEFAULT_PLAN_PROMPT` is used instead.
@@ -62,6 +70,7 @@ impl PlanMcpArgs {
 #[derive(Clone)]
 pub struct PlanMcp {
     tool_router: ToolRouter<Self>,
+    plans_dir: PathBuf,
     prompt_file: Option<PathBuf>,
     submit_command: Vec<String>,
 }
@@ -69,12 +78,30 @@ pub struct PlanMcp {
 #[tool_router]
 impl PlanMcp {
     pub fn new() -> Self {
-        Self { tool_router: Self::tool_router(), prompt_file: None, submit_command: Vec::new() }
+        Self {
+            tool_router: Self::tool_router(),
+            plans_dir: default_plans_dir(),
+            prompt_file: None,
+            submit_command: Vec::new(),
+        }
     }
 
-    pub fn from_args(args: Vec<String>) -> Result<Self, String> {
-        let PlanMcpArgs { prompt_file, submit_command } = PlanMcpArgs::from_args(args)?;
-        Ok(Self { tool_router: Self::tool_router(), prompt_file, submit_command })
+    /// Builds a server from raw `mcp.json` args. `default_plans_dir` is used
+    /// when the caller did not pass `--plans-dir`; it lets the embedder anchor
+    /// plans at a workspace path that differs from the process cwd.
+    pub fn from_args(args: Vec<String>, default_plans_dir: PathBuf) -> Result<Self, String> {
+        let PlanMcpArgs { plans_dir, prompt_file, submit_command } = PlanMcpArgs::from_args(args)?;
+        Ok(Self {
+            tool_router: Self::tool_router(),
+            plans_dir: absolutize(plans_dir.unwrap_or(default_plans_dir)),
+            prompt_file,
+            submit_command,
+        })
+    }
+
+    pub fn with_plans_dir(mut self, path: PathBuf) -> Self {
+        self.plans_dir = absolutize(path);
+        self
     }
 
     pub fn with_prompt_file(mut self, path: PathBuf) -> Self {
@@ -87,6 +114,20 @@ impl PlanMcp {
         self
     }
 
+    #[doc = include_str!("./write_plan_description.md")]
+    #[tool]
+    pub async fn write_plan(&self, request: Parameters<WritePlanInput>) -> Result<Json<WritePlanOutput>, String> {
+        let Parameters(input) = request;
+        write_plan_file(&self.plans_dir, input).await.map(Json).map_err(|e| e.to_string())
+    }
+
+    #[doc = include_str!("./edit_plan_description.md")]
+    #[tool]
+    pub async fn edit_plan(&self, request: Parameters<EditPlanInput>) -> Result<Json<EditPlanOutput>, String> {
+        let Parameters(input) = request;
+        edit_plan_file(&self.plans_dir, input).await.map(Json).map_err(|e| e.to_string())
+    }
+
     #[doc = include_str!("./submit_plan_description.md")]
     #[tool]
     pub async fn submit_plan(
@@ -95,7 +136,7 @@ impl PlanMcp {
         context: RequestContext<RoleServer>,
     ) -> Result<Json<SubmitPlanOutput>, String> {
         let Parameters(input) = request;
-        let plan = Plan::load(&input.plan_path).await.map_err(|e| e.to_string())?;
+        let plan = Plan::load_by_name(&self.plans_dir, &input.plan_name).await.map_err(|e| e.to_string())?;
 
         if !self.submit_command.is_empty() {
             return run_external_submit(&plan, &self.submit_command).await.map(Json).map_err(|e| e.to_string());
@@ -208,10 +249,59 @@ impl ServerHandler for PlanMcp {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct SubmitPlanInput {
-    /// Absolute path to the markdown plan file to review.
-    #[serde(alias = "planPath")]
+pub struct WritePlanInput {
+    /// Stable plan identifier chosen by the agent, e.g. `auth-refactor`.
+    #[serde(alias = "planName")]
+    pub plan_name: String,
+    /// Markdown plan body to write.
+    pub content: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WritePlanOutput {
+    pub plan_name: String,
     pub plan_path: String,
+    pub bytes_written: usize,
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub meta: Option<ToolResultMeta>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct EditPlanInput {
+    /// Stable plan identifier originally passed to `write_plan`.
+    #[serde(alias = "planName")]
+    pub plan_name: String,
+    /// Exact string to find and replace in the plan file.
+    #[serde(alias = "old_string")]
+    pub old_string: String,
+    /// String to replace it with.
+    #[serde(alias = "new_string")]
+    pub new_string: String,
+    /// Replace all occurrences. Defaults to replacing the first occurrence.
+    #[serde(default, alias = "replace_all")]
+    pub replace_all: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct EditPlanOutput {
+    pub plan_name: String,
+    pub plan_path: String,
+    pub replacements_made: usize,
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub meta: Option<ToolResultMeta>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmitPlanInput {
+    /// Stable plan identifier originally passed to `write_plan`.
+    #[serde(alias = "planName")]
+    pub plan_name: String,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -222,31 +312,67 @@ pub struct SubmitPlanOutput {
     pub feedback: Option<String>,
 }
 
-#[derive(Debug)]
-pub enum SubmitPlanError {
-    RelativePath,
-    Io { path: PathBuf, source: std::io::Error },
+#[derive(Debug, Error)]
+pub enum PlanError {
+    #[error("Invalid planName `{0}`; use only letters, numbers, dashes, and underscores")]
+    InvalidPlanName(String),
+
+    #[error(transparent)]
+    File(#[from] FileError),
+
+    #[error("Plan file is empty: {}", .0.display())]
     EmptyPlan(PathBuf),
+
+    #[error("submit_command is empty; expected at least a program name")]
     EmptySubmitCommand,
+
+    #[error("Failed to spawn submit command `{program}`: {source}")]
     SubmitCommandSpawn { program: String, source: std::io::Error },
+
+    #[error("Submit command `{program}` exited with {status}{}", stderr_suffix(.stderr))]
     SubmitCommandFailed { program: String, status: std::process::ExitStatus, stderr: String },
 }
+
+struct PlanName(String);
 
 struct Plan {
     path: PathBuf,
     content: String,
 }
 
-impl Plan {
-    async fn load(plan_path: &str) -> Result<Self, SubmitPlanError> {
-        let path = PathBuf::from(plan_path);
-        if !path.is_absolute() {
-            return Err(SubmitPlanError::RelativePath);
+impl PlanName {
+    fn parse(value: &str) -> Result<Self, PlanError> {
+        if Self::is_valid_plan_name(value) {
+            Ok(Self(value.to_string()))
+        } else {
+            Err(PlanError::InvalidPlanName(value.to_string()))
         }
+    }
 
-        let content = read_to_string(&path).await.map_err(|e| SubmitPlanError::from((e, path.clone())))?;
+    fn into_string(self) -> String {
+        self.0
+    }
+
+    fn file_name(&self) -> String {
+        format!("{}-plan.md", self.0)
+    }
+
+    fn is_valid_plan_name(value: &str) -> bool {
+        let is_boundary = |c: char| c == '-' || c == '_';
+        !value.is_empty()
+            && value.chars().all(|c| c.is_ascii_alphanumeric() || is_boundary(c))
+            && !value.starts_with(is_boundary)
+            && !value.ends_with(is_boundary)
+    }
+}
+
+impl Plan {
+    async fn load_by_name(plans_dir: &Path, plan_name: &str) -> Result<Self, PlanError> {
+        let plan_name = PlanName::parse(plan_name)?;
+        let path = plan_path(plans_dir, &plan_name);
+        let content = read_text_file(&path).await?;
         if content.trim().is_empty() {
-            return Err(SubmitPlanError::EmptyPlan(path));
+            return Err(PlanError::EmptyPlan(path));
         }
 
         Ok(Self { path, content })
@@ -259,55 +385,71 @@ impl Default for PlanMcp {
     }
 }
 
-impl From<(std::io::Error, PathBuf)> for SubmitPlanError {
-    fn from((source, path): (std::io::Error, PathBuf)) -> Self {
-        Self::Io { path, source }
+async fn write_plan_file(plans_dir: &Path, input: WritePlanInput) -> Result<WritePlanOutput, PlanError> {
+    let plan_name = PlanName::parse(&input.plan_name)?;
+    let path = plan_path(plans_dir, &plan_name);
+    if input.content.trim().is_empty() {
+        return Err(PlanError::EmptyPlan(path));
     }
+
+    let result = write_text_file(&path, &input.content).await?;
+    let plan_path = result.path.to_string_lossy().into_owned();
+    let display_meta = ToolDisplayMeta::new("Write plan", basename(&plan_path));
+    let file_diff = FileDiff { path: plan_path.clone(), old_text: None, new_text: input.content };
+
+    Ok(WritePlanOutput {
+        plan_name: plan_name.into_string(),
+        plan_path,
+        bytes_written: result.bytes_written,
+        meta: Some(ToolResultMeta::with_file_diff(display_meta, file_diff)),
+    })
 }
 
-impl Display for SubmitPlanError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SubmitPlanError::RelativePath => {
-                write!(f, "planPath must be an absolute path")
-            }
-            SubmitPlanError::Io { path, source } => match source.kind() {
-                ErrorKind::NotFound => write!(f, "Plan file does not exist: {}", path.display()),
-                ErrorKind::InvalidData => write!(f, "Plan file is not valid UTF-8: {}", path.display()),
-                _ => write!(f, "Failed to read plan file {}: {source}", path.display()),
-            },
-            SubmitPlanError::EmptyPlan(path) => {
-                write!(f, "Plan file is empty: {}", path.display())
-            }
-            SubmitPlanError::EmptySubmitCommand => {
-                write!(f, "submit_command is empty; expected at least a program name")
-            }
-            SubmitPlanError::SubmitCommandSpawn { program, source } => {
-                write!(f, "Failed to spawn submit command `{program}`: {source}")
-            }
-            SubmitPlanError::SubmitCommandFailed { program, status, stderr } => {
-                let stderr_trimmed = stderr.trim();
-                if stderr_trimmed.is_empty() {
-                    write!(f, "Submit command `{program}` exited with {status}")
-                } else {
-                    write!(f, "Submit command `{program}` exited with {status}: {stderr_trimmed}")
-                }
-            }
-        }
-    }
+async fn edit_plan_file(plans_dir: &Path, input: EditPlanInput) -> Result<EditPlanOutput, PlanError> {
+    let plan_name = PlanName::parse(&input.plan_name)?;
+    let path = plan_path(plans_dir, &plan_name);
+    let result = edit_text_file(&path, &input.old_string, &input.new_string, input.replace_all).await?;
+    let plan_path = result.path.to_string_lossy().into_owned();
+    let display_meta = ToolDisplayMeta::new("Edit plan", basename(&plan_path));
+    let file_diff =
+        FileDiff { path: plan_path.clone(), old_text: Some(result.original_content), new_text: result.updated_content };
+
+    Ok(EditPlanOutput {
+        plan_name: plan_name.into_string(),
+        plan_path,
+        replacements_made: result.replacements_made,
+        meta: Some(ToolResultMeta::with_file_diff(display_meta, file_diff)),
+    })
 }
 
-async fn run_external_submit(plan: &Plan, command: &[String]) -> Result<SubmitPlanOutput, SubmitPlanError> {
-    let (program, extra_args) = command.split_first().ok_or(SubmitPlanError::EmptySubmitCommand)?;
+pub fn default_plans_dir() -> PathBuf {
+    absolutize(PathBuf::from(DEFAULT_PLANS_DIR))
+}
+
+fn plan_path(plans_dir: &Path, plan_name: &PlanName) -> PathBuf {
+    plans_dir.join(plan_name.file_name())
+}
+
+fn absolutize(path: PathBuf) -> PathBuf {
+    if path.is_absolute() { path } else { current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(path) }
+}
+
+fn stderr_suffix(stderr: &str) -> String {
+    let trimmed = stderr.trim();
+    if trimmed.is_empty() { String::new() } else { format!(": {trimmed}") }
+}
+
+async fn run_external_submit(plan: &Plan, command: &[String]) -> Result<SubmitPlanOutput, PlanError> {
+    let (program, extra_args) = command.split_first().ok_or(PlanError::EmptySubmitCommand)?;
     let output = Command::new(program)
         .args(extra_args)
         .arg(&plan.path)
         .output()
         .await
-        .map_err(|source| SubmitPlanError::SubmitCommandSpawn { program: program.clone(), source })?;
+        .map_err(|source| PlanError::SubmitCommandSpawn { program: program.clone(), source })?;
 
     if !output.status.success() {
-        return Err(SubmitPlanError::SubmitCommandFailed {
+        return Err(PlanError::SubmitCommandFailed {
             program: program.clone(),
             status: output.status,
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
@@ -321,78 +463,61 @@ async fn run_external_submit(plan: &Plan, command: &[String]) -> Result<SubmitPl
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use tempfile::TempDir;
 
-    #[tokio::test]
-    async fn resolve_plan_rejects_relative_path() {
-        let result = Plan::load("./example-plan.md").await;
-        assert!(matches!(result, Err(SubmitPlanError::RelativePath)));
-    }
+    const TEST_DEFAULT: &str = "/workspace/docs/aether/plans";
 
-    #[tokio::test]
-    async fn resolve_plan_rejects_missing_file() {
-        let temp_dir = TempDir::new().expect("tempdir");
-        let path = temp_dir.path().join("missing-plan.md");
-
-        let result = Plan::load(path.to_string_lossy().as_ref()).await;
-        assert!(matches!(
-            result,
-            Err(SubmitPlanError::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound
-        ));
-    }
-
-    #[tokio::test]
-    async fn resolve_plan_rejects_invalid_utf8() {
-        let temp_dir = TempDir::new().expect("tempdir");
-        let path = temp_dir.path().join("invalid-plan.md");
-        fs::write(&path, vec![0xff, 0xfe, 0xfd]).expect("write invalid bytes");
-
-        let result = Plan::load(path.to_string_lossy().as_ref()).await;
-        assert!(matches!(
-            result,
-            Err(SubmitPlanError::Io { source, .. }) if source.kind() == std::io::ErrorKind::InvalidData
-        ));
-    }
-
-    #[tokio::test]
-    async fn resolve_plan_rejects_empty_file() {
-        let temp_dir = TempDir::new().expect("tempdir");
-        let path = temp_dir.path().join("empty-plan.md");
-        fs::write(&path, "   \n\n\t").expect("write empty markdown");
-
-        let result = Plan::load(path.to_string_lossy().as_ref()).await;
-        assert!(matches!(result, Err(SubmitPlanError::EmptyPlan(_))));
+    fn default() -> PathBuf {
+        PathBuf::from(TEST_DEFAULT)
     }
 
     #[test]
     fn from_args_parses_prompt_file() {
-        let server = PlanMcp::from_args(vec!["--prompt-file".into(), "/tmp/plan.md".into()]).unwrap();
+        let server = PlanMcp::from_args(vec!["--prompt-file".into(), "/tmp/plan.md".into()], default()).unwrap();
         assert_eq!(server.prompt_file, Some(PathBuf::from("/tmp/plan.md")));
     }
 
     #[test]
-    fn from_args_empty_is_ok() {
-        let server = PlanMcp::from_args(vec![]).unwrap();
+    fn from_args_uses_default_plans_dir_when_flag_absent() {
+        let server = PlanMcp::from_args(vec![], default()).unwrap();
+        assert_eq!(server.plans_dir, default());
         assert_eq!(server.prompt_file, None);
         assert!(server.submit_command.is_empty());
     }
 
     #[test]
+    fn from_args_explicit_plans_dir_overrides_default() {
+        let server = PlanMcp::from_args(vec!["--plans-dir".into(), "/tmp/plans".into()], default()).unwrap();
+        assert_eq!(server.plans_dir, PathBuf::from("/tmp/plans"));
+    }
+
+    #[test]
+    fn from_args_keeps_submit_command_separate_from_plans_dir() {
+        let server = PlanMcp::from_args(
+            vec!["contextbridge".into(), "plan".into(), "--plans-dir".into(), "external".into()],
+            default(),
+        )
+        .unwrap();
+
+        assert_eq!(server.plans_dir, default());
+        assert_eq!(server.submit_command, vec!["contextbridge", "plan", "--plans-dir", "external"]);
+    }
+
+    #[test]
     fn from_args_parses_trailing_submit_command() {
-        let server =
-            PlanMcp::from_args(vec!["contextbridge".into(), "plan".into(), "--project".into(), "foo".into()]).unwrap();
+        let server = PlanMcp::from_args(
+            vec!["contextbridge".into(), "plan".into(), "--project".into(), "foo".into()],
+            default(),
+        )
+        .unwrap();
         assert_eq!(server.submit_command, vec!["contextbridge", "plan", "--project", "foo"]);
     }
 
     #[test]
     fn from_args_parses_prompt_file_followed_by_submit_command() {
-        let server = PlanMcp::from_args(vec![
-            "--prompt-file".into(),
-            "/tmp/plan.md".into(),
-            "contextbridge".into(),
-            "plan".into(),
-        ])
+        let server = PlanMcp::from_args(
+            vec!["--prompt-file".into(), "/tmp/plan.md".into(), "contextbridge".into(), "plan".into()],
+            default(),
+        )
         .unwrap();
         assert_eq!(server.prompt_file, Some(PathBuf::from("/tmp/plan.md")));
         assert_eq!(server.submit_command, vec!["contextbridge", "plan"]);
