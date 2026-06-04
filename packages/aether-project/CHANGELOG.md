@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.9](https://github.com/contextbridge/aether/compare/aether-project-v0.5.8...aether-project-v0.5.9) - 2026-06-04
+
+### Added
+
+- *(aether-cli)* Support encrypted file store for oauth for users that do not want full keyring ([#124](https://github.com/contextbridge/aether/pull/124))
+
+### Other
+
+- update docs ([#122](https://github.com/contextbridge/aether/pull/122))
+
 ## [0.5.8](https://github.com/contextbridge/aether/compare/aether-project-v0.5.7...aether-project-v0.5.8) - 2026-05-31
 
 ### Added

@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.13](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.12...aether-mcp-servers-v0.4.13) - 2026-06-04
+
+### Added
+
+- *(aether-cli)* Support encrypted file store for oauth for users that do not want full keyring ([#124](https://github.com/contextbridge/aether/pull/124))
+
+### Fixed
+
+- *(aether-cli)* Default Plan edit unable to create/edit plan files ([#125](https://github.com/contextbridge/aether/pull/125))
+
 ## [0.4.12](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.11...aether-mcp-servers-v0.4.12) - 2026-05-31
 
 ### Added

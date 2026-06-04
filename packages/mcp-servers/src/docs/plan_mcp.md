@@ -1,6 +1,6 @@
 MCP server for plan review workflows.
 
-Exposes a single tool, `submit_plan`, that accepts an absolute markdown file path and returns `{ approved, feedback }`. The planner instructions themselves live in a user-customizable skill (e.g. `.aether/skills/plan/SKILL.md`) -- this server is just the review trigger.
+Exposes plan-specific file lifecycle tools: `write_plan`, `edit_plan`, and `submit_plan`. Agents address plans by a stable `planName`; the server maps that name to `<planName>-plan.md` inside the configured plans directory. The planner instructions themselves live in a user-customizable skill (e.g. `.aether/skills/plan/SKILL.md`).
 
 Reviews are collected via MCP elicitation: the client receives a form elicitation with `ui: "planReview"` metadata (plus the plan path and markdown body) and returns an approve/deny decision with optional feedback.
 
@@ -12,6 +12,8 @@ use mcp_servers::PlanMcp;
 let server = PlanMcp::new();
 ```
 
-# Tool provided
+# Tools provided
 
-- **`submit_plan`** -- Reads a markdown file and returns a structured approval decision.
+- **`write_plan`** -- Writes a markdown plan in the configured plans directory.
+- **`edit_plan`** -- Applies an exact string replacement to an existing plan.
+- **`submit_plan`** -- Reads a named plan and returns a structured approval decision.

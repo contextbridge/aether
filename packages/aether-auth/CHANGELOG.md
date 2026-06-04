@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5](https://github.com/contextbridge/aether/compare/aether-auth-v0.1.4...aether-auth-v0.1.5) - 2026-06-04
+
+### Added
+
+- *(aether-cli)* Support encrypted file store for oauth for users that do not want full keyring ([#124](https://github.com/contextbridge/aether/pull/124))
+
 ## [0.1.4](https://github.com/contextbridge/aether/compare/aether-auth-v0.1.3...aether-auth-v0.1.4) - 2026-05-31
 
 ### Other

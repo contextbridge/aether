@@ -1,6 +1,6 @@
 [package]
 name = "aether-mcp-utils"
-version = "0.5.12"
+version = "0.5.13"
 edition = "2024"
 description = "MCP client and server utilities for the Aether AI agent framework"
 license = "MIT"
@@ -45,8 +45,8 @@ tracing = { workspace = true }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.5" }
 
 # client-only deps
-aether-auth = { path = "../aether-auth", version = "0.1.4", optional = true }
-llm = { package = "aether-llm", path = "../llm", optional = true, version = "0.7.7" }
+aether-auth = { path = "../aether-auth", version = "0.1.5", optional = true }
+llm = { package = "aether-llm", path = "../llm", optional = true, version = "0.7.8" }
 serde_json = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true, optional = true }

@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.10](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.9...aether-agent-cli-v0.7.10) - 2026-06-04
+
+### Added
+
+- *(aether-cli)* Support encrypted file store for oauth for users that do not want full keyring ([#124](https://github.com/contextbridge/aether/pull/124))
+
+### Fixed
+
+- *(aether-cli)* Default Plan edit unable to create/edit plan files ([#125](https://github.com/contextbridge/aether/pull/125))
+
 ## [0.7.9](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.8...aether-agent-cli-v0.7.9) - 2026-06-02
 
 ### Fixed

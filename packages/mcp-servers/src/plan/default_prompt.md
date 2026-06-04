@@ -20,7 +20,7 @@ First you must:
 
 ### Step 3: Generate Implementation Plan
 
-Generate an implementation plan and save it to a markdown file in a subdirectory named `docs/aether/plans/`. within the `cwd`. Save your plan file with a `-plan.md` suffix. Then present your plan to the user via the `submit_plan` tool. It must include the following sections:
+Generate an implementation plan and save it with the `write_plan` tool. Choose a short stable `planName` such as `auth-refactor`; the MCP server stores it in the configured plans directory. Then present your plan to the user via the `submit_plan` tool using the same `planName`. It must include the following sections:
 
 **Overview**
 - Clear problem statement
@@ -54,7 +54,7 @@ A markdown table that lists:
 
 ### Updating a plan
 
-The user may ask you to revise or update a plan based on feedback. Use your edit file tools to update the plan file and call the `submit_plan` tool again.
+The user may ask you to revise or update a plan based on feedback. Use the `edit_plan` tool with the plan's `planName` to update the plan file and call the `submit_plan` tool again.
 
 ## Task
 
