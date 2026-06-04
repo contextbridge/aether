@@ -183,14 +183,6 @@ impl Modes {
         self.iter().find(|mode| mode.name == mode_name).map(|mode| (mode.model.clone(), mode.reasoning_effort))
     }
 
-    /// The mode whose `(model, reasoning_effort)` matches the given selection, if
-    /// any — used to keep the Mode dropdown in sync after a Model change.
-    pub(crate) fn name_for(&self, model: &str, reasoning_effort: Option<ReasoningEffort>) -> Option<String> {
-        self.iter()
-            .find(|mode| mode.model == model && mode.reasoning_effort == reasoning_effort)
-            .map(|mode| mode.name.clone())
-    }
-
     fn config_option(&self, selected_mode: Option<&str>) -> Option<SessionConfigOption> {
         if self.is_empty() {
             return None;
@@ -364,12 +356,6 @@ mod tests {
     #[test]
     fn resolve_rejects_unknown_mode() {
         assert!(test_validated_modes().resolve("Unknown").is_none());
-    }
-
-    #[test]
-    fn name_for_matches_valid_tuple() {
-        let selected = test_validated_modes().name_for("anthropic:claude-sonnet-4-5", Some(ReasoningEffort::High));
-        assert_eq!(selected.as_deref(), Some("Planner"));
     }
 
     #[test]

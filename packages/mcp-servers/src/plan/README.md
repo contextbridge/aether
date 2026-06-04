@@ -1,3 +1,20 @@
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+
+- [PlanMcp](#planmcp)
+  - [Tools](#tools)
+  - [write_plan](#write_plan)
+    - [Input](#input)
+    - [Output](#output)
+  - [edit_plan](#edit_plan)
+    - [Input](#input-1)
+    - [Output](#output-1)
+  - [submit_plan](#submit_plan)
+    - [Input](#input-2)
+    - [Output](#output-2)
+
+<!-- END doctoc generated TOC please keep comment here to allow auto update -->
+
 # PlanMcp
 
 MCP server that exposes plan-specific tools for writing, editing, and submitting implementation plans for user approval/feedback. Agents refer to plans by `planName`; the server maps that name to `<planName>-plan.md` inside the configured plans directory.

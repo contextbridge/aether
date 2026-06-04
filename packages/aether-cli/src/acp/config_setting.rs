@@ -26,14 +26,6 @@ impl ConfigSetting {
             }
         }
     }
-
-    pub fn config_id(&self) -> ConfigOptionId {
-        match self {
-            Self::Mode(_) => ConfigOptionId::Mode,
-            Self::Model(_) => ConfigOptionId::Model,
-            Self::ReasoningEffort(_) => ConfigOptionId::ReasoningEffort,
-        }
-    }
 }
 
 #[derive(Debug, Error)]
@@ -52,21 +44,18 @@ mod tests {
     fn parse_mode() {
         let setting = ConfigSetting::parse("mode", "Planner").unwrap();
         assert_eq!(setting, ConfigSetting::Mode("Planner".to_string()));
-        assert_eq!(setting.config_id(), ConfigOptionId::Mode);
     }
 
     #[test]
     fn parse_model() {
         let setting = ConfigSetting::parse("model", "anthropic:claude-sonnet-4-5").unwrap();
         assert_eq!(setting, ConfigSetting::Model("anthropic:claude-sonnet-4-5".to_string()));
-        assert_eq!(setting.config_id(), ConfigOptionId::Model);
     }
 
     #[test]
     fn parse_reasoning_effort_high() {
         let setting = ConfigSetting::parse("reasoning_effort", "high").unwrap();
         assert_eq!(setting, ConfigSetting::ReasoningEffort(Some(ReasoningEffort::High)));
-        assert_eq!(setting.config_id(), ConfigOptionId::ReasoningEffort);
     }
 
     #[test]
@@ -94,14 +83,5 @@ mod tests {
         assert!(matches!(err, ConfigSettingError::InvalidValue { .. }));
         assert!(err.to_string().contains("max"));
         assert!(err.to_string().contains("reasoning_effort"));
-    }
-
-    #[test]
-    fn config_id_round_trip() {
-        let cases: Vec<(&str, &str)> = vec![("mode", "test"), ("model", "test"), ("reasoning_effort", "low")];
-        for (id_str, value) in cases {
-            let setting = ConfigSetting::parse(id_str, value).unwrap();
-            assert_eq!(setting.config_id().as_str(), id_str);
-        }
     }
 }
