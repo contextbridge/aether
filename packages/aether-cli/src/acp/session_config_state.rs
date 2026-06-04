@@ -42,13 +42,13 @@ impl SessionConfigState {
     }
 
     pub(crate) fn effective_model(&self, modes: &Modes) -> String {
-        if let Some(Pending::Model(target)) = &self.pending {
-            return target.clone();
+        match &self.pending {
+            Some(Pending::Model(target)) => target.clone(),
+            Some(Pending::Mode(agent)) => {
+                modes.resolve(agent).map_or_else(|| self.active_model.clone(), |(model, _)| model)
+            }
+            None => self.active_model.clone(),
         }
-        self.selected_mode
-            .as_deref()
-            .and_then(|mode| modes.resolve(mode).map(|(model, _)| model))
-            .unwrap_or_else(|| self.active_model.clone())
     }
 
     pub(crate) fn begin_prompt(&mut self, modes: &Modes) -> Switch {
@@ -78,7 +78,6 @@ impl SessionConfigState {
         available: &[LlmModel],
         setting: &ConfigSetting,
     ) -> Result<(), acp::Error> {
-        use acp_utils::config_option_id::ConfigOptionId;
         match setting {
             ConfigSetting::Mode(value) => {
                 let Some((_mode_model, mode_reasoning_effort)) = modes.resolve(value) else {
@@ -101,14 +100,6 @@ impl SessionConfigState {
             ConfigSetting::ReasoningEffort(effort) => {
                 self.reasoning_effort = *effort;
             }
-        }
-
-        if setting.config_id() == ConfigOptionId::Model {
-            let effective = match &self.pending {
-                Some(Pending::Model(target)) => target.as_str(),
-                _ => self.active_model.as_str(),
-            };
-            self.selected_mode = modes.name_for(effective, self.reasoning_effort);
         }
 
         Ok(())

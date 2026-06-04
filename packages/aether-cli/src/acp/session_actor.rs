@@ -745,6 +745,24 @@ mod tests {
         assert!(matches!(switch, Switch::Model(ref model) if model == DEEPSEEK));
         assert_eq!(s.active_model, DEEPSEEK);
         assert!(s.pending.is_none());
+        assert_eq!(s.selected_mode.as_deref(), Some("Planner"));
+        assert_eq!(s.effective_model(&validated_modes()), DEEPSEEK);
+    }
+
+    #[test]
+    fn model_change_preserves_selected_mode() {
+        let modes = Modes::new(vec![
+            ValidatedMode { name: "Planner".into(), model: SONNET.into(), reasoning_effort: None },
+            ValidatedMode { name: "Coder".into(), model: DEEPSEEK.into(), reasoning_effort: None },
+        ]);
+        let mut s = SessionConfigState::with_selection(DEEPSEEK.into(), Some("Coder".into()), None);
+
+        s.apply_config_change(&modes, &available_models(), &ConfigSetting::Model(SONNET.into()))
+            .expect("model switch should apply");
+
+        assert_eq!(s.pending, Some(Pending::Model(SONNET.into())));
+        assert_eq!(s.selected_mode.as_deref(), Some("Coder"));
+        assert_eq!(s.effective_model(&modes), SONNET);
     }
 
     #[test]
@@ -754,7 +772,7 @@ mod tests {
     }
 
     #[test]
-    fn effort_change_preserves_mode_and_model_change_clears_it() {
+    fn effort_and_model_changes_preserve_mode_selection() {
         let (res, s) = apply(SONNET, Some(RE::High), Some("Planner"), &ConfigSetting::ReasoningEffort(Some(RE::Low)));
         assert!(res.is_ok());
         assert_eq!(s.reasoning_effort, Some(RE::Low));
@@ -763,7 +781,8 @@ mod tests {
         let (res, s) = apply(SONNET, Some(RE::Medium), Some("Planner"), &ConfigSetting::Model(DEEPSEEK.into()));
         assert!(res.is_ok());
         assert_eq!(s.pending, Some(Pending::Model(DEEPSEEK.into())));
-        assert!(s.selected_mode.is_none());
+        assert_eq!(s.selected_mode.as_deref(), Some("Planner"));
+        assert_eq!(s.effective_model(&validated_modes()), DEEPSEEK);
     }
 
     #[test]
