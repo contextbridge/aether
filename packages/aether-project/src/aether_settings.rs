@@ -4,8 +4,34 @@ use crate::agent_config::AgentConfig;
 use crate::error::SettingsError;
 use crate::{McpSourceSpec, PromptSource};
 use llm::ProviderConnectionOverrides;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum CredentialsStoreConfig {
+    /// Holds credentials in the OS keyring
+    Keyring,
+
+    /// Holds credentials in-memory and only for the lifetime of the
+    /// process. Intended for tests and ephemeral runs that must not touch the OS
+    /// keychain.
+    Memory,
+
+    /// Holds credentials in an encrypted file
+    EncryptedFile {
+        /// File path for the encrypted credential blob. Defaults to
+        /// `.aether/credentials.enc` in the Aether home directory when unset.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<PathBuf>,
+        /// Environment variable name to read the passphrase from. Uses
+        /// `AETHER_CREDENTIALS_PASSWORD` when unset.
+        #[serde(default, skip_serializing_if = "Option::is_none", rename = "passwordEnv")]
+        password_env: Option<String>,
+    },
+}
 
 const PROJECT_SETTINGS_PATH: &str = ".aether/settings.json";
 const USER_SETTINGS_FILENAME: &str = "settings.json";
@@ -46,6 +72,10 @@ pub struct AetherSettings {
     /// applied to every agent unless overridden per-agent.
     #[serde(default, skip_serializing_if = "ProviderConnectionOverrides::is_empty")]
     pub providers: ProviderConnectionOverrides,
+    /// Credential storage backend for OAuth tokens. Defaults to the OS keyring
+    /// when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credentials_store: Option<CredentialsStoreConfig>,
     /// The agents defined for this project. At least one agent is required.
     #[schemars(length(min = 1))]
     pub agents: Vec<AgentConfig>,
@@ -98,6 +128,10 @@ impl AetherSettings {
             self.mcps = next.mcps;
         }
         self.providers.merge(next.providers);
+
+        if next.credentials_store.is_some() {
+            self.credentials_store = next.credentials_store;
+        }
 
         for next_agent in next.agents {
             if let Some(existing) = self.agents.iter_mut().find(|agent| agent.name.trim() == next_agent.name.trim()) {
@@ -912,5 +946,53 @@ mod tests {
             prompts: vec![PromptSource::file("PROMPT.md")],
             ..AgentConfig::default()
         }
+    }
+
+    #[test]
+    fn parses_credentials_store_keyring() {
+        let config = AetherSettings::try_from(
+            r#"{
+                "credentialsStore": { "type": "keyring" },
+                "agents": [{"name":"alpha","description":"Alpha","model":"anthropic:claude-sonnet-4-5","userInvocable":true}]
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.credentials_store, Some(CredentialsStoreConfig::Keyring));
+    }
+
+    #[test]
+    fn parses_credentials_store_memory() {
+        let config = AetherSettings::try_from(
+            r#"{
+                "credentialsStore": { "type": "memory" },
+                "agents": [{"name":"alpha","description":"Alpha","model":"anthropic:claude-sonnet-4-5","userInvocable":true}]
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.credentials_store, Some(CredentialsStoreConfig::Memory));
+    }
+
+    #[test]
+    fn parses_credentials_store_encrypted_file_with_options() {
+        let config = AetherSettings::try_from(
+            r#"{
+                "credentialsStore": {
+                    "type": "encryptedFile",
+                    "path": "/custom/creds.enc",
+                    "passwordEnv": "MY_SECRET"
+                },
+                "agents": [{"name":"alpha","description":"Alpha","model":"anthropic:claude-sonnet-4-5","userInvocable":true}]
+            }"#,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            &config.credentials_store,
+            Some(CredentialsStoreConfig::EncryptedFile { path, password_env })
+            if path == &Some(PathBuf::from("/custom/creds.enc"))
+                && password_env == &Some("MY_SECRET".to_string())
+        ));
     }
 }

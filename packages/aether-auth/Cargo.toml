@@ -24,7 +24,9 @@ keyring = [
 mcp = ["dep:rmcp", "dep:url"]
 
 [dependencies]
+age = { workspace = true }
 async-trait = { workspace = true }
+dirs = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -49,3 +51,6 @@ windows-native-keyring-store = { workspace = true, optional = true }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 dbus-secret-service-keyring-store = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

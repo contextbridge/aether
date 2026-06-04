@@ -40,3 +40,22 @@ A fuller setup with shared prompts, an MCP source, and a provider override:
   ]
 }
 ```
+
+An encrypted file credential store using a passphrase from the environment:
+
+```json
+{
+  "credentialsStore": {
+    "type": "encryptedFile",
+    "passwordEnv": "PASSWORD_ENV_VAR_NAME"
+  },
+  "agents": [
+    {
+      "name": "Build",
+      "description": "Builds features and fixes bugs",
+      "model": "anthropic:claude-sonnet-4-5-20250929",
+      "userInvocable": true
+    }
+  ]
+}
+```

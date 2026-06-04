@@ -1,18 +1,30 @@
 use crate::{CodingMcp, CodingMcpArgs, DefaultCodingTools, PlanMcp, SkillsMcp, SubAgentsMcp, SurveyMcp, TasksMcp};
+use aether_auth::OAuthCredentialStorage;
 use aether_core::mcp::McpBuilder;
 use futures::FutureExt;
 use mcp_utils::ServiceExt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tracing::{debug, warn};
 
 #[doc = include_str!("docs/mcp_builder_ext.md")]
 pub trait McpBuilderExt {
     /// Registers all built-in in-memory MCP server factories and workspace roots.
-    fn with_builtin_servers(self, cwd: PathBuf, roots_path: &Path) -> Self;
+    fn with_builtin_servers(
+        self,
+        cwd: PathBuf,
+        roots_path: &Path,
+        oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
+    ) -> Self;
 }
 
 impl McpBuilderExt for McpBuilder {
-    fn with_builtin_servers(self, cwd: PathBuf, roots_path: &Path) -> Self {
+    fn with_builtin_servers(
+        self,
+        cwd: PathBuf,
+        roots_path: &Path,
+        oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
+    ) -> Self {
         self.register_in_memory_server(
             "coding",
             Box::new(move |args, _input| {
@@ -50,9 +62,16 @@ impl McpBuilderExt for McpBuilder {
         )
         .register_in_memory_server(
             "subagents",
-            Box::new(|args, _input| {
-                async move { SubAgentsMcp::from_args(args).expect("Failed to parse SubAgentsMcp args").into_dyn() }
-                    .boxed()
+            Box::new(move |args, _input| {
+                let store = oauth_credential_store.clone();
+                async move {
+                    let mut mcp = SubAgentsMcp::from_args(args).expect("Failed to parse SubAgentsMcp args");
+                    if let Some(store) = store {
+                        mcp = mcp.with_oauth_credential_store(store);
+                    }
+                    mcp.into_dyn()
+                }
+                .boxed()
             }),
         )
         .register_in_memory_server(

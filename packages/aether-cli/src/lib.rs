@@ -1,6 +1,7 @@
 #![doc = include_str!("../README.md")]
 
 pub mod acp;
+pub mod credentials;
 pub mod error;
 pub mod headless;
 pub mod init;

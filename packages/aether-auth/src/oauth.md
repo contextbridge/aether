@@ -6,6 +6,7 @@ OAuth 2.0 authentication primitives for the Aether agent framework.
 - [`BrowserOAuthHandler`] -- Default implementation that opens the system browser and listens on a dynamic local port.
 - [`OAuthCredentialStorage`] -- Trait for persisting OAuth credentials keyed by provider ID, MCP server ID, or another credential key.
 - [`OsKeyringStore`] -- OS-keychain-backed [`OAuthCredentialStorage`] (macOS Keychain, Windows Credential Manager, Linux/FreeBSD Secret Service). Available under the `keyring` feature.
+- [`EncryptedFileOAuthCredentialStorage`] -- File-backed [`OAuthCredentialStorage`] that encrypts the file with [`age`](https://docs.rs/age). The passphrase is read from an environment variable.
 - [`FakeOAuthCredentialStore`] -- In-memory storage for tests.
 
 Behind the `mcp` feature:

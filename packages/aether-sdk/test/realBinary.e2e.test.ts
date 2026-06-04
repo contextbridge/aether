@@ -25,6 +25,7 @@ describe("E2E tests", () => {
         logDir: cwd,
         settings: {
           agent: "Dummy",
+          credentialsStore: { type: "memory" },
           agents: [
             {
               name: "Dummy",
@@ -37,7 +38,6 @@ describe("E2E tests", () => {
             },
           ],
         },
-        oauthCredentialStore: "memory",
         env: {
           ...process.env,
           ANTHROPIC_API_KEY: "sk-ant-e2e-dummy",
