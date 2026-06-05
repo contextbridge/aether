@@ -35,6 +35,22 @@ fn reasoning_option(value: impl Into<String>) -> SessionConfigOption {
     )
 }
 
+fn status_line() -> StatusLine<'static> {
+    static WORKSPACE_STATUS: std::sync::LazyLock<WorkspaceStatus> =
+        std::sync::LazyLock::new(|| WorkspaceStatus::new("~/code/aether-2", Some("main".to_string())));
+
+    StatusLine {
+        workspace_status: &WORKSPACE_STATUS,
+        agent_name: "test-agent",
+        config_options: &[],
+        context_usage: None,
+        waiting_for_response: false,
+        unhealthy_server_count: 0,
+        content_padding: DEFAULT_CONTENT_PADDING,
+        exit_confirmation_active: false,
+    }
+}
+
 struct StatusBuilder<'a> {
     name: &'a str,
     options: Vec<SessionConfigOption>,
@@ -158,11 +174,7 @@ fn wraps_right_side_to_second_line_when_narrow() {
         workspace_status: &workspace_status,
         agent_name: "agent-name",
         config_options: &options,
-        context_usage: None,
-        waiting_for_response: false,
-        unhealthy_server_count: 0,
-        content_padding: DEFAULT_CONTENT_PADDING,
-        exit_confirmation_active: false,
+        ..status_line()
     };
     let ctx = ViewContext::new((40, 24));
 
@@ -183,12 +195,8 @@ fn exit_confirmation_keeps_workspace_and_moves_warning_right() {
     let status = StatusLine {
         workspace_status: &workspace_status,
         agent_name: "agent-name",
-        config_options: &[],
-        context_usage: None,
-        waiting_for_response: false,
-        unhealthy_server_count: 0,
-        content_padding: DEFAULT_CONTENT_PADDING,
         exit_confirmation_active: true,
+        ..status_line()
     };
     let ctx = ViewContext::new((100, 24));
     let text = status.render(&ctx).lines()[0].plain_text();

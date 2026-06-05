@@ -240,20 +240,25 @@ mod tests {
         )
     }
 
-    #[test]
-    fn reasoning_bar_hidden_without_reasoning_option() {
-        let options = vec![model_option()];
-        let workspace_status = test_workspace_status();
-        let status = StatusLine {
-            workspace_status: &workspace_status,
+    fn status_line() -> StatusLine<'static> {
+        static WORKSPACE_STATUS: std::sync::LazyLock<WorkspaceStatus> = std::sync::LazyLock::new(test_workspace_status);
+
+        StatusLine {
+            workspace_status: &WORKSPACE_STATUS,
             agent_name: "test-agent",
-            config_options: &options,
+            config_options: &[],
             context_usage: None,
             waiting_for_response: false,
             unhealthy_server_count: 0,
             content_padding: DEFAULT_CONTENT_PADDING,
             exit_confirmation_active: false,
-        };
+        }
+    }
+
+    #[test]
+    fn reasoning_bar_hidden_without_reasoning_option() {
+        let options = vec![model_option()];
+        let status = StatusLine { config_options: &options, ..status_line() };
 
         let context = ViewContext::new((120, 40));
         let frame = status.render(&context);
@@ -267,17 +272,7 @@ mod tests {
     #[test]
     fn reasoning_bar_shown_with_reasoning_option() {
         let options = vec![model_option(), reasoning_option()];
-        let workspace_status = test_workspace_status();
-        let status = StatusLine {
-            workspace_status: &workspace_status,
-            agent_name: "test-agent",
-            config_options: &options,
-            context_usage: None,
-            waiting_for_response: false,
-            unhealthy_server_count: 0,
-            content_padding: DEFAULT_CONTENT_PADDING,
-            exit_confirmation_active: false,
-        };
+        let status = StatusLine { config_options: &options, ..status_line() };
 
         let context = ViewContext::new((120, 40));
         let frame = status.render(&context);
@@ -289,17 +284,7 @@ mod tests {
     #[test]
     fn wraps_right_side_onto_second_line_when_too_narrow() {
         let options = vec![model_option(), reasoning_option()];
-        let workspace_status = test_workspace_status();
-        let status = StatusLine {
-            workspace_status: &workspace_status,
-            agent_name: "test-agent",
-            config_options: &options,
-            context_usage: None,
-            waiting_for_response: false,
-            unhealthy_server_count: 0,
-            content_padding: DEFAULT_CONTENT_PADDING,
-            exit_confirmation_active: false,
-        };
+        let status = StatusLine { config_options: &options, ..status_line() };
 
         let context = ViewContext::new((60, 40));
         let frame = status.render(&context);
@@ -316,17 +301,7 @@ mod tests {
     #[test]
     fn stays_on_one_line_when_it_fits() {
         let options = vec![model_option(), reasoning_option()];
-        let workspace_status = test_workspace_status();
-        let status = StatusLine {
-            workspace_status: &workspace_status,
-            agent_name: "test-agent",
-            config_options: &options,
-            context_usage: None,
-            waiting_for_response: false,
-            unhealthy_server_count: 0,
-            content_padding: DEFAULT_CONTENT_PADDING,
-            exit_confirmation_active: false,
-        };
+        let status = StatusLine { config_options: &options, ..status_line() };
 
         let context = ViewContext::new((120, 40));
         let frame = status.render(&context);
