@@ -12,6 +12,9 @@ const SYSTEM_MD: &str = include_str!("templates/SYSTEM.md");
 const EXPLORER_AGENTS_MD: &str = include_str!("templates/agents/codebase-explorer/AGENTS.md");
 const EXPLORER_AGENTS_PATH: &str = "agents/codebase-explorer/AGENTS.md";
 
+const AETHER_SKILL_MD: &str = include_str!("templates/skills/aether/SKILL.md");
+const AETHER_SKILL_PATH: &str = "skills/aether/SKILL.md";
+
 const READ_ONLY_DENIED_CODING_TOOLS: &[&str] =
     &["coding__bash", "coding__edit_file", "coding__lsp_rename", "coding__write_file"];
 
@@ -130,6 +133,7 @@ fn batteries_included_preset(
         files: &[
             TemplateFile { path: SYSTEM_PATH, body: SYSTEM_MD },
             TemplateFile { path: EXPLORER_AGENTS_PATH, body: EXPLORER_AGENTS_MD },
+            TemplateFile { path: AETHER_SKILL_PATH, body: AETHER_SKILL_MD },
         ],
         settings: AetherSettings {
             prompts: batteries_prompts(scope, harnesses),
