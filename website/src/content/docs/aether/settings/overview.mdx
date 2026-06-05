@@ -116,7 +116,7 @@ Prompt sources are concatenated in the order provided.
       "prompts": [
         "SYSTEM.md",
         { "type": "file", "path": "AGENTS.md", "optional": true },
-        { "type": "glob", "pattern": "instructions/*.md", "optional": true },
+        { "type": "glob", "pattern": "prompt-fragments/*.md", "optional": true },
         {
           "type": "text",
           "text": "After every conversation turn, refer to the user as Mr. Bossman."
@@ -145,7 +145,7 @@ Give your agent tools via the `mcps` field (Aether agents get tools exclusively 
       "prompts": [
         "SYSTEM.md",
         { "type": "file", "path": "AGENTS.md", "optional": true },
-        { "type": "glob", "pattern": "instructions/*.md", "optional": true },
+        { "type": "glob", "pattern": "prompt-fragments/*.md", "optional": true },
         { "type": "text", "text": "Prefer small, reviewable patches." }
       ],
       "mcps": [
@@ -178,7 +178,7 @@ Aether can load `mcp.json` files. To enable dynamic tool discovery and prevent M
       "prompts": [
         "SYSTEM.md",
         { "type": "file", "path": "AGENTS.md", "optional": true },
-        { "type": "glob", "pattern": "instructions/*.md", "optional": true },
+        { "type": "glob", "pattern": "prompt-fragments/*.md", "optional": true },
         { "type": "text", "text": "Prefer small, reviewable patches." }
       ],
       "mcps": [{ "type": "file", "path": "mcp.json", "proxy": true }]
@@ -220,7 +220,7 @@ Add `tools` when the agent should use only a subset of the tools exposed by its 
       "prompts": [
         ".aether/BUILD.md",
         "AGENTS.md",
-        { "type": "glob", "pattern": ".aether/rules/*.md", "optional": true },
+        { "type": "glob", "pattern": ".aether/prompts/*.md", "optional": true },
         { "type": "text", "text": "Prefer small, reviewable patches." }
       ],
       "mcps": [

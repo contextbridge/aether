@@ -40,13 +40,14 @@ Paths in user settings resolve from the **Aether home** directory (`$HOME/.aethe
       "description": "Plans work across any workspace",
       "model": "anthropic:claude-sonnet-4-5-20250929",
       "userInvocable": true,
-      "prompts": ["planner/SYSTEM.md", "mcp.json"]
+      "prompts": ["planner/SYSTEM.md"],
+      "mcps": ["mcp.json"]
     }
   ]
 }
 ```
 
-Here `planner/SYSTEM.md` resolves to `$HOME/.aether/planner/SYSTEM.md` and `mcp.json` resolves to `$HOME/.aether/mcp.json`.
+Here `planner/SYSTEM.md` resolves to `$HOME/.aether/planner/SYSTEM.md`, and `mcp.json` resolves to `$HOME/.aether/mcp.json`.
 
 ## Project settings
 
@@ -90,6 +91,8 @@ Here `AGENTS.md` resolves to `<workspace-root>/AGENTS.md`.
 
 All resource paths support `$VAR` / `${VAR}` variable expansion. This lets user-level settings reference project files without knowing the project's location.
 
+Use this for prompt files and MCP config files that should be loaded up front. Do not use `prompts` to load read-triggered rules; rule artifacts are loaded automatically by the MCP servers when their read globs match.
+
 ### `${WORKSPACE}`
 
 `${WORKSPACE}` always resolves to the current workspace root — the project directory you launched Aether from.
@@ -101,12 +104,7 @@ All resource paths support `$VAR` / `${VAR}` variable expansion. This lets user-
       ...
       "prompts": [
         "BUILD.md",
-        { "type": "file", "path": "${WORKSPACE}/AGENTS.md", "optional": true },
-        {
-          "type": "glob",
-          "pattern": "${WORKSPACE}/.aether/rules/*.md",
-          "optional": true
-        }
+        { "type": "file", "path": "${WORKSPACE}/AGENTS.md", "optional": true }
       ],
       "mcps": [
         "mcp.json",
@@ -169,12 +167,7 @@ Define a general-purpose agent in user settings and let projects extend it:
       "userInvocable": true,
       "prompts": [
         "BUILD.md",
-        { "type": "file", "path": "${WORKSPACE}/AGENTS.md", "optional": true },
-        {
-          "type": "glob",
-          "pattern": "${WORKSPACE}/.aether/rules/*.md",
-          "optional": true
-        }
+        { "type": "file", "path": "${WORKSPACE}/AGENTS.md", "optional": true }
       ],
       "mcps": [
         { "type": "file", "path": "mcp.json", "proxy": true },
@@ -190,7 +183,7 @@ Define a general-purpose agent in user settings and let projects extend it:
 }
 ```
 
-This agent loads its system prompt and MCP config from the user's Aether home, then optionally adds project-level instructions and MCP servers when they exist.
+This agent loads its base system prompt and MCP config from the user's Aether home, then optionally adds project-level instructions and MCP servers when they exist.
 
 ### Team-shared project config
 
