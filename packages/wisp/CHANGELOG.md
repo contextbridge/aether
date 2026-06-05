@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.18](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.17...aether-wisp-v0.4.18) - 2026-06-05
+
+### Fixed
+
+- Status line wrapping ([#129](https://github.com/contextbridge/aether/pull/129))
+
 ## [0.4.17](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.16...aether-wisp-v0.4.17) - 2026-06-04
 
 ### Other

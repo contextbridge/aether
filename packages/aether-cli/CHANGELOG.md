@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.11](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.10...aether-agent-cli-v0.7.11) - 2026-06-05
+
+### Added
+
+- *(aether-cli)* Settings init command now offers to load config from other harnesses like Claude to ease onboarding ([#126](https://github.com/contextbridge/aether/pull/126))
+
+### Fixed
+
+- model override switches to default agent ([#128](https://github.com/contextbridge/aether/pull/128))
+
 ## [0.7.10](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.9...aether-agent-cli-v0.7.10) - 2026-06-04
 
 ### Added
