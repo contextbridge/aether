@@ -35,6 +35,22 @@ fn reasoning_option(value: impl Into<String>) -> SessionConfigOption {
     )
 }
 
+fn status_line() -> StatusLine<'static> {
+    static WORKSPACE_STATUS: std::sync::LazyLock<WorkspaceStatus> =
+        std::sync::LazyLock::new(|| WorkspaceStatus::new("~/code/aether-2", Some("main".to_string())));
+
+    StatusLine {
+        workspace_status: &WORKSPACE_STATUS,
+        agent_name: "test-agent",
+        config_options: &[],
+        context_usage: None,
+        waiting_for_response: false,
+        unhealthy_server_count: 0,
+        content_padding: DEFAULT_CONTENT_PADDING,
+        exit_confirmation_active: false,
+    }
+}
+
 struct StatusBuilder<'a> {
     name: &'a str,
     options: Vec<SessionConfigOption>,
@@ -151,25 +167,30 @@ fn renders_workspace_with_expected_colors() {
 }
 
 #[test]
-fn keeps_status_area_to_one_line_when_narrow() {
-    let workspace_status = WorkspaceStatus::new(
-        "~/very/long/path/that/would/wrap/without/truncation",
-        Some("feature/very-long-branch".to_string()),
-    );
-    let options = vec![model_option("model", "very-long-model-name")];
+fn wraps_right_side_to_second_line_when_narrow() {
+    let workspace_status = WorkspaceStatus::new("~/code/project", Some("main".to_string()));
+    let options = vec![model_option("model", "Claude Sonnet")];
     let status = StatusLine {
         workspace_status: &workspace_status,
         agent_name: "agent-name",
         config_options: &options,
-        context_usage: Some(ContextUsageDisplay::new(100_000, 200_000)),
-        waiting_for_response: false,
-        unhealthy_server_count: 0,
-        content_padding: DEFAULT_CONTENT_PADDING,
-        exit_confirmation_active: false,
+        ..status_line()
     };
-    let ctx = ViewContext::new((24, 24));
+    let ctx = ViewContext::new((40, 24));
 
-    assert_eq!(status.render(&ctx).lines().len(), 1);
+    let frame = status.render(&ctx);
+    assert_eq!(frame.lines().len(), 2, "the right cluster should wrap onto a second row instead of truncating");
+
+    let left = frame.lines()[0].plain_text();
+    let right = frame.lines()[1].plain_text();
+    assert!(left.contains("~/code/project"), "left row keeps the workspace, got: {left}");
+    assert!(right.contains("agent-name"), "right row keeps the agent, got: {right}");
+    assert!(right.contains("Claude Sonnet"), "right row keeps the model, got: {right}");
+    assert_eq!(
+        right.find("agent-name"),
+        Some(DEFAULT_CONTENT_PADDING),
+        "wrapped right row should align to content padding, got: {right:?}"
+    );
 }
 
 #[test]
@@ -178,12 +199,8 @@ fn exit_confirmation_keeps_workspace_and_moves_warning_right() {
     let status = StatusLine {
         workspace_status: &workspace_status,
         agent_name: "agent-name",
-        config_options: &[],
-        context_usage: None,
-        waiting_for_response: false,
-        unhealthy_server_count: 0,
-        content_padding: DEFAULT_CONTENT_PADDING,
         exit_confirmation_active: true,
+        ..status_line()
     };
     let ctx = ViewContext::new((100, 24));
     let text = status.render(&ctx).lines()[0].plain_text();
