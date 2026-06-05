@@ -12,6 +12,8 @@
     "check": "astro check"
   },
   "dependencies": {
+    "@astrojs/markdown-remark": "^7.2.0",
+    "@astrojs/mdx": "^6.0.2",
     "@astrojs/starlight": "^0.39.3",
     "@astrojs/starlight-tailwind": "^5.0.0",
     "@fontsource/ibm-plex-mono": "^5.2.7",
@@ -25,6 +27,7 @@
     "astro-icon": "^1.1.5",
     "astro-mermaid": "^2.0.1",
     "mermaid": "^11.15.0",
+    "remark-gfm": "^4.0.1",
     "sharp": "^0.34.2",
     "tailwindcss": "^4.2.1"
   },
