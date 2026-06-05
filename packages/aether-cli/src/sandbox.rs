@@ -17,6 +17,8 @@ pub enum SandboxError {
     DockerNotFound,
     #[error("Docker daemon is not running: {0}")]
     DockerNotRunning(String),
+    #[error("failed to build image '{0}' from Dockerfile")]
+    BuildFailed(String),
     #[error(
         "Sandbox image '{0}' not found. Build it with:\n\
              cargo build --release -p aether-agent-cli\n\
@@ -28,6 +30,51 @@ pub enum SandboxError {
     ExecFailed(#[from] io::Error),
     #[error("Could not determine home directory")]
     HomeNotResolvable,
+}
+
+/// Build a Docker image from a Dockerfile, tagging it `tag`.
+pub fn build_image(tag: &str, dockerfile: &Path, context_dir: &Path) -> Result<(), SandboxError> {
+    check_docker()?;
+    let status = Command::new("docker")
+        .arg("build")
+        .args(["-t", tag, "-f"])
+        .arg(dockerfile)
+        .arg(context_dir)
+        .status()
+        .map_err(SandboxError::ExecFailed)?;
+    if !status.success() {
+        return Err(SandboxError::BuildFailed(tag.to_string()));
+    }
+    Ok(())
+}
+
+/// Run a command inside `image`, capturing its output. The workspace is mounted
+/// at `/workspace` and the Aether home at `/root/.aether`, mirroring
+/// [`exec_in_container`]. `command_args` are passed verbatim to the image's
+/// entrypoint (the `aether` binary).
+pub fn run_in_container(
+    image: &str,
+    cwd: &Path,
+    aether_home: &Path,
+    env_vars: &[(String, String)],
+    command_args: &[String],
+) -> Result<std::process::Output, SandboxError> {
+    check_docker()?;
+    check_image(image)?;
+    let mut args = container_run_args(image, cwd, aether_home, env_vars, false);
+    args.extend(command_args.iter().cloned());
+    Command::new("docker").args(&args).output().map_err(SandboxError::ExecFailed)
+}
+
+/// Resolve the Aether home directory (`$AETHER_HOME` or `~/.aether`).
+pub fn aether_home() -> Result<PathBuf, SandboxError> {
+    resolve_aether_home()
+}
+
+/// The environment variables forwarded into sandbox/eval containers
+/// (provider API keys and `AETHER_*`).
+pub fn forwarded_vars() -> Vec<(String, String)> {
+    select_forwarded_vars(env::vars())
 }
 
 /// Entry point called from `main()` when `--sandbox-image` is present.
@@ -133,6 +180,25 @@ fn build_docker_args(
     inner_args: &[String],
     tty: bool,
 ) -> Vec<String> {
+    let mut args = container_run_args(image, cwd, aether_home, env_vars, tty);
+
+    // Skip the binary name (first element) — the ENTRYPOINT already provides it
+    if inner_args.len() > 1 {
+        args.extend(inner_args[1..].iter().cloned());
+    }
+
+    args
+}
+
+/// `docker run` flags through the image name (mounts, env, network), shared by
+/// the exec-replace sandbox and the capturing eval container runner.
+fn container_run_args(
+    image: &str,
+    cwd: &Path,
+    aether_home: &Path,
+    env_vars: &[(String, String)],
+    tty: bool,
+) -> Vec<String> {
     let mut args = vec!["run".to_string(), "--rm".to_string(), "-i".to_string()];
     if tty {
         args.push("-t".to_string());
@@ -162,12 +228,6 @@ fn build_docker_args(
     }
 
     args.push(image.to_string());
-
-    // Skip the binary name (first element) — the ENTRYPOINT already provides it
-    if inner_args.len() > 1 {
-        args.extend(inner_args[1..].iter().cloned());
-    }
-
     args
 }
 

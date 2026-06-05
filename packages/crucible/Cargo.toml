@@ -2,7 +2,12 @@
 name = "crucible"
 version = "0.2.1"
 edition = "2024"
-publish = false
+description = "Evaluation framework for Aether AI coding agents"
+license = "MIT"
+repository = "https://github.com/contextbridge/aether"
+homepage = "https://github.com/contextbridge/aether"
+keywords = ["ai", "agent", "eval", "testing"]
+categories = ["development-tools::testing"]
 
 [package.metadata.dist]
 dist = false
@@ -19,9 +24,9 @@ schemars = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tempfile = { workspace = true }
-aether-core = { package = "aether-agent-core", path = "../aether-core" }
-llm = { package = "aether-llm", path = "../llm" }
-mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils" }
+aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.6.9" }
+llm = { package = "aether-llm", path = "../llm", version = "0.7.8" }
+mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.5.13" }
 
 [lib]
 name = "crucible"

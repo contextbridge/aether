@@ -1,0 +1,17 @@
+{
+  "agent": "demo",
+  "workspace": {
+    "files": {
+      "README.md": "# Demo project\n\nA tiny fixture the example eval operates on.\n"
+    }
+  },
+  "prompt": [
+    "Create a file using the relative name greeting.txt (no leading slash, no directory prefix).",
+    "Its contents must be exactly this single line: Hello, Aether!"
+  ],
+  "expect": [
+    { "tool": "coding__write_file" },
+    { "file": "greeting.txt", "contains": "Hello, Aether!" },
+    { "run": "test -f greeting.txt", "exitCode": 0 }
+  ]
+}

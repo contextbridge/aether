@@ -18,4 +18,6 @@ pub enum CliError {
     AgentError(String),
     #[error("Credential store error: {0}")]
     CredentialStore(#[from] OAuthError),
+    #[error("Eval error: {0}")]
+    Eval(String),
 }

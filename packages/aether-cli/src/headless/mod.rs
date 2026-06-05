@@ -177,7 +177,7 @@ fn resolve_prompt(args: &HeadlessArgs) -> Result<String, CliError> {
     }
 }
 
-fn resolve_spec(
+pub(crate) fn resolve_spec(
     agent: Option<&str>,
     model: Option<&str>,
     cwd: &std::path::Path,

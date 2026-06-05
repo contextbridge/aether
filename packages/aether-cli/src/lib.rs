@@ -3,6 +3,7 @@
 pub mod acp;
 pub mod credentials;
 pub mod error;
+pub mod eval;
 pub mod headless;
 pub mod init;
 pub mod mcp_config_args;

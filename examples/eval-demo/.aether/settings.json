@@ -1,0 +1,19 @@
+{
+  "agents": [
+    {
+      "name": "demo",
+      "description": "Self-contained agent for the example eval",
+      "model": "zai:glm-5.1",
+      "userInvocable": true,
+      "prompts": ["SYSTEM.md"],
+      "mcps": [
+        {
+          "type": "inline",
+          "servers": {
+            "coding": { "type": "in-memory" }
+          }
+        }
+      ]
+    }
+  ]
+}
