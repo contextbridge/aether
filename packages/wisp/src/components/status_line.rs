@@ -31,7 +31,7 @@ impl StatusLine<'_> {
         let lines = if left.display_width() + right.display_width() <= width {
             vec![join_aligned(left, &right, width)]
         } else {
-            vec![left, align_right(&right, width)]
+            vec![left, align_left(&right, self.content_padding)]
         };
 
         Frame::new(lines).fit(context.size.width, FitOptions::truncate())
@@ -104,9 +104,9 @@ fn join_aligned(mut left: Line, right: &Line, width: usize) -> Line {
     left
 }
 
-fn align_right(right: &Line, width: usize) -> Line {
+fn align_left(right: &Line, content_padding: usize) -> Line {
     let mut line = Line::default();
-    line.push_text(" ".repeat(width.saturating_sub(right.display_width())));
+    line.push_text(" ".repeat(content_padding));
     line.append_line(right);
     line
 }
@@ -295,7 +295,7 @@ mod tests {
         assert!(left.contains("aether-2"));
         assert!(right.contains("test-agent"));
         assert!(right.contains("Claude Sonnet"));
-        assert!(right.starts_with(' '));
+        assert_eq!(right.find("test-agent"), Some(DEFAULT_CONTENT_PADDING));
     }
 
     #[test]

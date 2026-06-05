@@ -186,7 +186,11 @@ fn wraps_right_side_to_second_line_when_narrow() {
     assert!(left.contains("~/code/project"), "left row keeps the workspace, got: {left}");
     assert!(right.contains("agent-name"), "right row keeps the agent, got: {right}");
     assert!(right.contains("Claude Sonnet"), "right row keeps the model, got: {right}");
-    assert!(right.starts_with(' '), "wrapped right row should be right-aligned, got: {right:?}");
+    assert_eq!(
+        right.find("agent-name"),
+        Some(DEFAULT_CONTENT_PADDING),
+        "wrapped right row should align to content padding, got: {right:?}"
+    );
 }
 
 #[test]

@@ -43,8 +43,8 @@ pub(super) fn expected_status_line_rows(width: u16, agent_name: &str) -> Vec<Str
     if display_width_text(&left) + display_width_text(agent_name) <= w {
         return vec![expected_status_line(width, agent_name)];
     }
-    let pad = w.saturating_sub(display_width_text(agent_name));
-    vec![truncate_to_display_width(&left, w), truncate_to_display_width(&format!("{}{agent_name}", " ".repeat(pad)), w)]
+    let pad = " ".repeat(DEFAULT_CONTENT_PADDING);
+    vec![truncate_to_display_width(&left, w), truncate_to_display_width(&format!("{pad}{agent_name}"), w)]
 }
 
 fn truncate_to_display_width(text: &str, width: usize) -> String {
