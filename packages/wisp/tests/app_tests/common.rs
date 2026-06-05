@@ -35,6 +35,18 @@ pub(super) fn expected_status_line(width: u16, agent_name: &str) -> String {
     truncate_to_display_width(&line, usize::from(width))
 }
 
+/// Expected status-line rows, wrapping the right side onto a second line when
+/// the left and right clusters do not fit together on one row.
+pub(super) fn expected_status_line_rows(width: u16, agent_name: &str) -> Vec<String> {
+    let left = format!("{}{} · {}", " ".repeat(DEFAULT_CONTENT_PADDING), TEST_WORKSPACE_DIR, TEST_GIT_REF);
+    let w = usize::from(width);
+    if display_width_text(&left) + display_width_text(agent_name) <= w {
+        return vec![expected_status_line(width, agent_name)];
+    }
+    let pad = w.saturating_sub(display_width_text(agent_name));
+    vec![truncate_to_display_width(&left, w), truncate_to_display_width(&format!("{}{agent_name}", " ".repeat(pad)), w)]
+}
+
 fn truncate_to_display_width(text: &str, width: usize) -> String {
     let mut truncated = String::new();
     for ch in text.chars() {

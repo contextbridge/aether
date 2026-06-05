@@ -199,13 +199,8 @@ async fn test_cursor_position_after_whitespace_wrap() {
     type_string(&mut renderer, "abc def ghi").await;
 
     let rule = "─".repeat(width as usize);
-    let expected = vec![
-        rule.clone(),
-        "> abc def".to_string(),
-        "  ghi".to_string(),
-        rule.clone(),
-        expected_status_line(width, TEST_AGENT),
-    ];
+    let mut expected = vec![rule.clone(), "> abc def".to_string(), "  ghi".to_string(), rule.clone()];
+    expected.extend(expected_status_line_rows(width, TEST_AGENT));
     assert_buffer_eq(renderer.writer(), &expected);
 
     let (cursor_col, cursor_row) = renderer.writer().cursor_position();
@@ -214,13 +209,8 @@ async fn test_cursor_position_after_whitespace_wrap() {
 
     type_string(&mut renderer, "j").await;
 
-    let expected_after = vec![
-        rule.clone(),
-        "> abc def".to_string(),
-        "  ghij".to_string(),
-        rule,
-        expected_status_line(width, TEST_AGENT),
-    ];
+    let mut expected_after = vec![rule.clone(), "> abc def".to_string(), "  ghij".to_string(), rule];
+    expected_after.extend(expected_status_line_rows(width, TEST_AGENT));
     assert_buffer_eq(renderer.writer(), &expected_after);
 
     let (cursor_col_after, cursor_row_after) = renderer.writer().cursor_position();
