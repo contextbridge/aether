@@ -1,13 +1,20 @@
 // @ts-check
 import { defineConfig } from "astro/config";
+import { unified } from "@astrojs/markdown-remark";
 import starlight from "@astrojs/starlight";
+import starlightLlmsTxt from "starlight-llms-txt";
+import mdx from "@astrojs/mdx";
 import mermaid from "astro-mermaid";
 import icon from "astro-icon";
+import remarkGfm from "remark-gfm";
 import tailwindcss from "@tailwindcss/vite";
 import { GITHUB_URL } from "./src/consts.ts";
 
 export default defineConfig({
   site: "https://aether-agent.io",
+  markdown: {
+    processor: unified({ remarkPlugins: [remarkGfm] }),
+  },
   integrations: [
     icon(),
     mermaid({
@@ -35,6 +42,13 @@ export default defineConfig({
     }),
     starlight({
       title: "Aether",
+      plugins: [
+        starlightLlmsTxt({
+          projectName: "Aether",
+          description:
+            "Aether is a Rust-based, modular coding agent that runs in the terminal, IDE (ACP), and headlessly.",
+        }),
+      ],
       customCss: [
         "./src/styles/global.css",
         "./src/styles/starlight.css",
@@ -124,6 +138,7 @@ export default defineConfig({
         },
       ],
     }),
+    mdx({ optimize: true }),
   ],
   vite: { plugins: [tailwindcss()] },
 });

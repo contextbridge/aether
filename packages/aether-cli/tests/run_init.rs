@@ -96,6 +96,10 @@ fn writes_project_batteries_preset_for_anthropic() {
     assert!(matches!(outcome, InitOutcome::Applied { .. }), "{outcome:?}");
     assert!(dir.path().join(".aether/agents/codebase-explorer/AGENTS.md").is_file());
 
+    let skill = dir.path().join(".aether/skills/aether/SKILL.md");
+    assert!(skill.is_file(), "batteries-included should write the aether docs skill into a scanned skills dir");
+    assert!(std::fs::read_to_string(&skill).unwrap().contains("name: aether"));
+
     let settings = load(&dir.path().join(".aether/settings.json"));
     let names: Vec<&str> = settings.agents.iter().map(|a| a.name.as_str()).collect();
     assert_eq!(names, vec!["Plan", "Build", "Explore"]);
