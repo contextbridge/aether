@@ -10,21 +10,239 @@ use crate::components::server_status::server_status_summary;
 use acp_utils::notifications::McpServerStatusEntry;
 use acp_utils::settings::SettingsStore;
 use agent_client_protocol::schema::{AuthMethod, SessionConfigOption};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::path::{Path, PathBuf};
 use tracing::warn;
 
 #[cfg(test)]
 pub(crate) static WISP_HOME_ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-#[doc = include_str!("../docs/wisp_settings.md")]
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WispSettings {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_line: Option<StatusLineSettings>,
+    #[serde(default, skip_serializing_if = "ThemeSettings::is_empty")]
     pub theme: ThemeSettings,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_padding: Option<u16>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ThemeSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StatusLineSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub separator: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left: Option<Vec<StatusLineSegmentConfig>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub right: Option<Vec<StatusLineSegmentConfig>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StatusLineSegmentConfig {
+    Cwd { max_width: Option<u16> },
+    GitRef,
+    Agent,
+    Mode,
+    Model { max_width: Option<u16> },
+    Reasoning,
+    Context,
+    ServerHealth,
+    Text { value: String, style: Option<StatusLineStyle> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedStatusLineSettings {
+    pub separator: String,
+    pub left: Vec<StatusLineSegmentConfig>,
+    pub right: Vec<StatusLineSegmentConfig>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum StatusLineStyle {
+    Primary,
+    Secondary,
+    Muted,
+    Info,
+    Success,
+    Warning,
+    Error,
+}
+
+impl ThemeSettings {
+    pub fn is_empty(&self) -> bool {
+        self.file.is_none()
+    }
+}
+impl WispSettings {
+    pub fn with_default_status_line(mut self, default: StatusLineSettings) -> Self {
+        let user = self.status_line.unwrap_or_default();
+        self.status_line = Some(StatusLineSettings {
+            separator: user.separator.or(default.separator),
+            left: user.left.or(default.left),
+            right: user.right.or(default.right),
+        });
+        self
+    }
+}
+
+impl StatusLineSettings {
+    pub fn defaults() -> Self {
+        Self {
+            separator: Some(default_separator()),
+            left: Some(default_left_segments()),
+            right: Some(default_right_segments()),
+        }
+    }
+
+    pub fn resolve(self) -> ResolvedStatusLineSettings {
+        ResolvedStatusLineSettings {
+            separator: self.separator.unwrap_or_else(default_separator),
+            left: self.left.unwrap_or_else(default_left_segments),
+            right: self.right.unwrap_or_else(default_right_segments),
+        }
+    }
+
+    pub fn resolved_defaults() -> ResolvedStatusLineSettings {
+        Self::defaults().resolve()
+    }
+}
+
+impl From<StatusLineSegmentName> for StatusLineSegmentConfig {
+    fn from(name: StatusLineSegmentName) -> Self {
+        match name {
+            StatusLineSegmentName::Cwd => Self::Cwd { max_width: None },
+            StatusLineSegmentName::GitRef => Self::GitRef,
+            StatusLineSegmentName::Agent => Self::Agent,
+            StatusLineSegmentName::Mode => Self::Mode,
+            StatusLineSegmentName::Model => Self::Model { max_width: None },
+            StatusLineSegmentName::Reasoning => Self::Reasoning,
+            StatusLineSegmentName::Context => Self::Context,
+            StatusLineSegmentName::ServerHealth => Self::ServerHealth,
+        }
+    }
+}
+
+impl From<StatusLineSegmentConfigObject> for StatusLineSegmentConfig {
+    fn from(object: StatusLineSegmentConfigObject) -> Self {
+        match object {
+            StatusLineSegmentConfigObject::Cwd { max_width } => Self::Cwd { max_width },
+            StatusLineSegmentConfigObject::GitRef => Self::GitRef,
+            StatusLineSegmentConfigObject::Agent => Self::Agent,
+            StatusLineSegmentConfigObject::Mode => Self::Mode,
+            StatusLineSegmentConfigObject::Model { max_width } => Self::Model { max_width },
+            StatusLineSegmentConfigObject::Reasoning => Self::Reasoning,
+            StatusLineSegmentConfigObject::Context => Self::Context,
+            StatusLineSegmentConfigObject::ServerHealth => Self::ServerHealth,
+            StatusLineSegmentConfigObject::Text { value, style } => Self::Text { value, style },
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for StatusLineSegmentConfig {
+    fn deserialize<T: Deserializer<'de>>(deserializer: T) -> Result<Self, T::Error> {
+        Ok(match StatusLineSegmentConfigWire::deserialize(deserializer)? {
+            StatusLineSegmentConfigWire::Shorthand(name) => name.into(),
+            StatusLineSegmentConfigWire::Object(object) => object.into(),
+        })
+    }
+}
+
+impl Serialize for StatusLineSegmentConfig {
+    fn serialize<T: Serializer>(&self, serializer: T) -> Result<T::Ok, T::Error> {
+        match self {
+            Self::Cwd { max_width: None } => StatusLineSegmentName::Cwd.serialize(serializer),
+            Self::Cwd { max_width } => {
+                Serialize::serialize(&StatusLineSegmentConfigObject::Cwd { max_width: *max_width }, serializer)
+            }
+            Self::GitRef => StatusLineSegmentName::GitRef.serialize(serializer),
+            Self::Agent => StatusLineSegmentName::Agent.serialize(serializer),
+            Self::Mode => StatusLineSegmentName::Mode.serialize(serializer),
+            Self::Model { max_width: None } => StatusLineSegmentName::Model.serialize(serializer),
+            Self::Model { max_width } => {
+                Serialize::serialize(&StatusLineSegmentConfigObject::Model { max_width: *max_width }, serializer)
+            }
+            Self::Reasoning => StatusLineSegmentName::Reasoning.serialize(serializer),
+            Self::Context => StatusLineSegmentName::Context.serialize(serializer),
+            Self::ServerHealth => StatusLineSegmentName::ServerHealth.serialize(serializer),
+            Self::Text { value, style } => Serialize::serialize(
+                &StatusLineSegmentConfigObject::Text { value: value.clone(), style: *style },
+                serializer,
+            ),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StatusLineSegmentConfigWire {
+    Shorthand(StatusLineSegmentName),
+    Object(StatusLineSegmentConfigObject),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum StatusLineSegmentName {
+    Cwd,
+    GitRef,
+    Agent,
+    Mode,
+    Model,
+    Reasoning,
+    Context,
+    ServerHealth,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+enum StatusLineSegmentConfigObject {
+    Cwd {
+        #[serde(default, skip_serializing_if = "Option::is_none", rename = "maxWidth")]
+        max_width: Option<u16>,
+    },
+    GitRef,
+    Agent,
+    Mode,
+    Model {
+        #[serde(default, skip_serializing_if = "Option::is_none", rename = "maxWidth")]
+        max_width: Option<u16>,
+    },
+    Reasoning,
+    Context,
+    ServerHealth,
+    Text {
+        value: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        style: Option<StatusLineStyle>,
+    },
+}
+
+fn default_separator() -> String {
+    " · ".to_string()
+}
+
+fn default_left_segments() -> Vec<StatusLineSegmentConfig> {
+    vec![StatusLineSegmentConfig::Cwd { max_width: None }, StatusLineSegmentConfig::GitRef]
+}
+
+fn default_right_segments() -> Vec<StatusLineSegmentConfig> {
+    vec![
+        StatusLineSegmentConfig::Agent,
+        StatusLineSegmentConfig::Mode,
+        StatusLineSegmentConfig::Model { max_width: None },
+        StatusLineSegmentConfig::Reasoning,
+        StatusLineSegmentConfig::Context,
+        StatusLineSegmentConfig::ServerHealth,
+    ]
 }
 
 pub const DEFAULT_CONTENT_PADDING: usize = 2;
@@ -33,11 +251,8 @@ pub fn resolve_content_padding(settings: &WispSettings) -> usize {
     settings.content_padding.map_or(DEFAULT_CONTENT_PADDING, |v| v.max(2) as usize)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ThemeSettings {
-    #[serde(default)]
-    pub file: Option<String>,
+pub fn resolve_status_line_settings(settings: &WispSettings) -> ResolvedStatusLineSettings {
+    settings.status_line.clone().unwrap_or_default().resolve()
 }
 
 pub fn wisp_home() -> Option<PathBuf> {
@@ -48,7 +263,11 @@ pub fn themes_dir_path() -> Option<PathBuf> {
     Some(wisp_home()?.join("themes"))
 }
 
-pub fn load_or_create_settings() -> WispSettings {
+pub fn load_or_create_settings(default_status_line: StatusLineSettings) -> WispSettings {
+    load_or_create_raw_settings().with_default_status_line(default_status_line)
+}
+
+fn load_or_create_raw_settings() -> WispSettings {
     if let Some(store) = SettingsStore::new("WISP_HOME", ".wisp") {
         store.load_or_create()
     } else {
@@ -151,7 +370,7 @@ pub(crate) fn decorate_menu(
     server_statuses: &[McpServerStatusEntry],
     auth_methods: &[AuthMethod],
 ) {
-    let settings = load_or_create_settings();
+    let settings = load_or_create_raw_settings();
     let theme_files = list_theme_files();
     menu.add_theme_entry(settings.theme.file.as_deref(), &theme_files);
 
@@ -175,7 +394,7 @@ pub(crate) fn process_config_changes(changes: Vec<types::SettingsChange>) -> Vec
     for change in changes {
         if change.config_id == THEME_CONFIG_ID {
             let file = theme_file_from_picker_value(&change.new_value);
-            let mut settings = load_or_create_settings();
+            let mut settings = load_or_create_raw_settings();
             settings.theme.file = file;
             if let Err(err) = save_settings(&settings) {
                 tracing::warn!("Failed to persist theme setting: {err}");
@@ -274,7 +493,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let store = SettingsStore::from_path(temp_dir.path());
         let settings =
-            WispSettings { theme: ThemeSettings { file: Some("my-theme.json".to_string()) }, content_padding: None };
+            WispSettings { theme: ThemeSettings { file: Some("my-theme.json".to_string()) }, ..Default::default() };
         store.save(&settings).unwrap();
         assert_eq!(store.load_or_create::<WispSettings>(), settings);
     }
@@ -339,7 +558,10 @@ mod tests {
                 });
                 assert!(theme.is_some(), "should produce SetTheme message");
                 assert_eq!(theme.unwrap().text_primary(), Color::Rgb { r: 0x11, g: 0x22, b: 0x33 });
-                assert_eq!(load_or_create_settings().theme.file.as_deref(), Some("custom.tmTheme"));
+                assert_eq!(
+                    load_or_create_settings(StatusLineSettings::defaults()).theme.file.as_deref(),
+                    Some("custom.tmTheme")
+                );
             });
         });
     }
@@ -350,11 +572,11 @@ mod tests {
         with_wisp_home(temp_dir.path(), || {
             save_settings(&WispSettings {
                 theme: ThemeSettings { file: Some("old.tmTheme".to_string()) },
-                content_padding: None,
+                ..Default::default()
             })
             .unwrap();
             let _ = process_config_changes(vec![change(THEME_CONFIG_ID, "   ")]);
-            assert_eq!(load_or_create_settings().theme.file, None);
+            assert_eq!(load_or_create_settings(StatusLineSettings::defaults()).theme.file, None);
         });
     }
 
@@ -368,5 +590,110 @@ mod tests {
             }
             other => panic!("expected SetConfigOption, got: {other:?}"),
         }
+    }
+
+    fn aether_default_status_line() -> StatusLineSettings {
+        StatusLineSettings {
+            separator: Some(" · ".to_string()),
+            left: Some(vec![StatusLineSegmentConfig::Cwd { max_width: None }, StatusLineSegmentConfig::GitRef]),
+            right: Some(vec![
+                StatusLineSegmentConfig::Mode,
+                StatusLineSegmentConfig::Model { max_width: None },
+                StatusLineSegmentConfig::Reasoning,
+                StatusLineSegmentConfig::Context,
+                StatusLineSegmentConfig::ServerHealth,
+            ]),
+        }
+    }
+
+    #[test]
+    fn aether_defaults_omit_agent_segment() {
+        let resolved = resolve_status_line_settings(
+            &WispSettings::default().with_default_status_line(aether_default_status_line()),
+        );
+        assert!(!resolved.right.contains(&StatusLineSegmentConfig::Agent));
+        assert!(resolved.right.contains(&StatusLineSegmentConfig::Model { max_width: None }));
+    }
+
+    #[test]
+    fn wisp_defaults_include_agent_segment() {
+        let resolved = resolve_status_line_settings(
+            &WispSettings::default().with_default_status_line(StatusLineSettings::defaults()),
+        );
+        assert!(resolved.right.contains(&StatusLineSegmentConfig::Agent));
+    }
+
+    #[test]
+    fn explicit_status_line_keeps_agent_for_aether() {
+        let settings = WispSettings {
+            status_line: Some(StatusLineSettings {
+                right: Some(vec![StatusLineSegmentConfig::Agent]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let resolved = resolve_status_line_settings(&settings.with_default_status_line(aether_default_status_line()));
+        assert_eq!(resolved.right, vec![StatusLineSegmentConfig::Agent]);
+    }
+
+    #[test]
+    fn partial_status_line_keeps_launcher_default_segments() {
+        let settings = WispSettings {
+            status_line: Some(StatusLineSettings { separator: Some(" | ".to_string()), ..Default::default() }),
+            ..Default::default()
+        };
+
+        let resolved = resolve_status_line_settings(&settings.with_default_status_line(aether_default_status_line()));
+
+        assert_eq!(resolved.separator, " | ");
+        assert_eq!(resolved.left, aether_default_status_line().left.unwrap());
+        assert_eq!(resolved.right, aether_default_status_line().right.unwrap());
+    }
+
+    #[test]
+    fn explicit_empty_right_stays_empty() {
+        let settings = WispSettings {
+            status_line: Some(StatusLineSettings { right: Some(vec![]), ..Default::default() }),
+            ..Default::default()
+        };
+
+        let resolved = resolve_status_line_settings(&settings.with_default_status_line(aether_default_status_line()));
+        assert!(resolved.right.is_empty());
+    }
+
+    #[test]
+    fn status_line_segments_support_shorthand_and_object_forms() {
+        let settings: WispSettings = serde_json::from_str(
+            r#"{
+                "statusLine": {
+                    "left": ["cwd", "gitRef"],
+                    "right": ["agent", {"type": "model", "maxWidth": 32}]
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let status_line = settings.status_line.unwrap();
+        assert_eq!(
+            status_line.left,
+            Some(vec![StatusLineSegmentConfig::Cwd { max_width: None }, StatusLineSegmentConfig::GitRef])
+        );
+        assert_eq!(
+            status_line.right,
+            Some(vec![StatusLineSegmentConfig::Agent, StatusLineSegmentConfig::Model { max_width: Some(32) }])
+        );
+    }
+
+    #[test]
+    fn simple_status_line_segments_serialize_as_shorthand() {
+        let segments = vec![
+            StatusLineSegmentConfig::Cwd { max_width: None },
+            StatusLineSegmentConfig::GitRef,
+            StatusLineSegmentConfig::Agent,
+            StatusLineSegmentConfig::Model { max_width: None },
+        ];
+
+        assert_eq!(serde_json::to_value(&segments).unwrap(), serde_json::json!(["cwd", "gitRef", "agent", "model"]));
     }
 }

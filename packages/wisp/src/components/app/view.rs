@@ -27,5 +27,6 @@ fn make_status_line(app: &App) -> StatusLine<'_> {
         unhealthy_server_count: settings::unhealthy_server_count(&app.server_statuses),
         content_padding: app.content_padding,
         exit_confirmation_active: app.exit_confirmation_active(),
+        settings: &app.status_line_settings,
     }
 }

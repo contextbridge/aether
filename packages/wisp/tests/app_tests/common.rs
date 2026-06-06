@@ -29,10 +29,25 @@ pub(super) fn p(s: &str) -> String {
 }
 
 pub(super) fn expected_status_line(width: u16, agent_name: &str) -> String {
+    let lines = expected_status_lines(width, agent_name);
+    lines.into_iter().next().unwrap_or_default()
+}
+
+pub(super) fn expected_status_lines(width: u16, agent_name: &str) -> Vec<String> {
     let left = format!("{}{} · {}", " ".repeat(DEFAULT_CONTENT_PADDING), TEST_WORKSPACE_DIR, TEST_GIT_REF);
-    let padding = usize::from(width).saturating_sub(display_width_text(&left) + display_width_text(agent_name));
-    let line = format!("{left}{}{agent_name}", " ".repeat(padding));
-    truncate_to_display_width(&line, usize::from(width))
+    let left_w = display_width_text(&left);
+    let right_w = display_width_text(agent_name);
+    let width = usize::from(width);
+
+    if left_w + 1 + right_w <= width {
+        let padding = width.saturating_sub(left_w + right_w);
+        vec![truncate_to_display_width(&format!("{left}{}{agent_name}", " ".repeat(padding)), width)]
+    } else {
+        let row1 = truncate_to_display_width(&left, width);
+        let pad = width.saturating_sub(right_w);
+        let row2 = format!("{}{agent_name}", " ".repeat(pad));
+        vec![row1, row2]
+    }
 }
 
 /// Expected status-line rows, wrapping the right side onto a second line when
@@ -133,6 +148,8 @@ impl Renderer {
             working_dir: std::path::PathBuf::from("."),
             workspace_status: test_workspace_status(),
             prompt_handle: AcpPromptHandle::noop(),
+            settings: wisp::settings::WispSettings::default()
+                .with_default_status_line(wisp::settings::StatusLineSettings::defaults()),
         });
         let frame_renderer = FrameRenderer::new(terminal, Theme::default(), size);
         Self { app, frame_renderer }

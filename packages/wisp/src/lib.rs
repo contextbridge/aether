@@ -17,6 +17,7 @@ use acp_utils::client::AcpEvent;
 use components::app::{App, AppInfo, EventOutcome};
 use error::AppError;
 use runtime_state::RuntimeState;
+use settings::WispSettings;
 use std::fs::create_dir_all;
 use std::future::pending;
 use std::io;
@@ -34,9 +35,9 @@ use tui::{
 ///
 /// Sets up logging, connects to the agent via ACP, and runs the interactive
 /// terminal event loop until the user exits.
-pub async fn run_tui(agent_command: &str) -> Result<(), AppError> {
+pub async fn run_tui(agent_command: &str, settings: WispSettings) -> Result<(), AppError> {
     setup_logging(None);
-    let state = RuntimeState::new(agent_command).await?;
+    let state = RuntimeState::new(agent_command, settings).await?;
     run_with_state(state).await
 }
 
@@ -49,6 +50,7 @@ pub async fn run_with_state(state: RuntimeState) -> Result<(), AppError> {
         config_options,
         auth_methods,
         theme,
+        settings,
         event_rx,
         prompt_handle,
         working_dir,
@@ -64,6 +66,7 @@ pub async fn run_with_state(state: RuntimeState) -> Result<(), AppError> {
         working_dir,
         workspace_status,
         prompt_handle,
+        settings,
     });
 
     run_app(app, theme, event_rx).await

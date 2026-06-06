@@ -5,7 +5,9 @@ description: Configure appearance and agent options in the terminal UI.
 
 import { FileTree } from "@astrojs/starlight/components";
 
-Aether's terminal UI is powered by Wisp, so UI preferences use Wisp's settings file. Agent configuration options (models, reasoning, servers) are advertised by the Aether ACP server at runtime.
+Aether's terminal UI is powered by Wisp. UI preferences live in Wisp's settings
+file, while agent configuration options (models, reasoning, servers) are
+advertised by the Aether ACP server at runtime.
 
 ## UI settings
 
@@ -13,8 +15,16 @@ Stored in `~/.wisp/settings.json`:
 
 ```json
 {
-  "theme": {
-    "file": "catppuccin.tmTheme"
+  "theme": { "file": "catppuccin.tmTheme" },
+  "statusLine": {
+    "separator": " · ",
+    "left": ["cwd", "gitRef"],
+    "right": [
+      "mode",
+      { "type": "model", "maxWidth": 32 },
+      "reasoning",
+      "context"
+    ]
   }
 }
 ```

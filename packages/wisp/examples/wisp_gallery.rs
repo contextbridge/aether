@@ -16,6 +16,7 @@ use wisp::components::text_input::TextInput;
 use wisp::components::thought_message::ThoughtMessage;
 use wisp::components::tool_call_status_view::{ToolCallStatus, ToolCallStatusView};
 use wisp::keybindings::Keybindings;
+use wisp::settings::StatusLineSettings;
 use wisp::workspace_status::WorkspaceStatus;
 
 enum WispStory {
@@ -175,6 +176,7 @@ impl Component for StatusLineStory {
 
     fn render(&mut self, ctx: &ViewContext) -> Frame {
         let workspace_status = WorkspaceStatus::new("~/code/foo", Some("main".to_string()));
+        let settings = StatusLineSettings::resolved_defaults();
         let status = StatusLine {
             workspace_status: &workspace_status,
             agent_name: "aether",
@@ -184,6 +186,7 @@ impl Component for StatusLineStory {
             unhealthy_server_count: 0,
             content_padding: wisp::settings::DEFAULT_CONTENT_PADDING,
             exit_confirmation_active: false,
+            settings: &settings,
         };
         status.render(ctx)
     }

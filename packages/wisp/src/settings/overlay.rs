@@ -589,7 +589,7 @@ mod tests {
     #[test]
     fn settings_overlay_picker_confirm_persists_theme_to_settings() {
         run_theme_picker_test(|_overlay| {
-            let settings = crate::settings::load_or_create_settings();
+            let settings = crate::settings::load_or_create_settings(crate::settings::StatusLineSettings::defaults());
             assert_eq!(settings.theme.file.as_deref(), Some("nord.tmTheme"));
         });
     }
