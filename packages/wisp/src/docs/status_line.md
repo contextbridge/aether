@@ -1,20 +1,31 @@
 The bottom status bar showing workspace and agent state at a glance.
 
-Renders a single line with current workspace context on the left and session indicators on the right:
 
-**Left side:**
-- Current working directory, shortened relative to the user's home directory when possible
-- Current git branch or detached HEAD short SHA when the working directory is in a git repo/worktree
+**Built-in segment types:**
 
-**Right side:**
-- Agent name
-- Current mode/profile (if configured)
-- Active model name
-- Reasoning effort bar (visual level indicator)
-- Context window usage bar (shows current context usage against the model limit)
-- Unhealthy MCP server count (when not waiting for a response)
+| Type            | Description                                                       |
+|-----------------|-------------------------------------------------------------------|
+| `cwd`           | Current working directory, shortened relative to `$HOME`          |
+| `gitRef`        | Current git branch or detached HEAD short SHA                     |
+| `agent`         | Active agent name                                                 |
+| `mode`          | Current mode/profile (if configured)                              |
+| `model`         | Active model name (supports `maxWidth`)                           |
+| `reasoning`     | Reasoning effort bar (visual level indicator)                     |
+| `context`       | Context window usage bar (current usage against model limit)      |
+| `serverHealth`  | Unhealthy MCP server count (hidden when not applicable)           |
+| `text`          | Custom static text with an optional semantic style                |
+
+Segments that have no data (e.g. `gitRef` outside a repo, `serverHealth` when
+healthy) are silently omitted. 
+
+Segments can be written as string shorthand (e.g. `"cwd"` or `"agent"`) or object form (`{ "type": "cwd" }`). Custom text segments support an optional `style` field with values: `primary`, `secondary`, `muted`, `info`, `success`, `warning`, `error`.
+
+## Sections
+
+Status lines contain a `left` and optional `right` section. If the status line's width exceeds the terminal width, status lines wrap.
 
 # See also
 
 - [`App`](crate::components::app::App) — constructs this view each render cycle
 - [`Keybindings`](crate::keybindings::Keybindings) — `Tab` cycles reasoning, `Shift+Tab` cycles mode
+- [`StatusLineSettings`](crate::settings::StatusLineSettings) — segment configuration

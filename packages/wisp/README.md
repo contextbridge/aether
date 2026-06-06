@@ -81,10 +81,14 @@ Additional commands may be available from the agent (e.g., `/search`, `/web`).
 
 Wisp has two kinds of settings:
 
-1. **Wisp settings** (`~/.wisp/settings.json`) — UI preferences like themes
+1. **Wisp settings** (`~/.wisp/settings.json`) — UI preferences like themes and status-line segments. 
 2. **Agent settings** — Model, reasoning effort, MCP servers, etc. These come from the agent and are configured in-app via `/settings`
 
 Override the Wisp home directory with `WISP_HOME` environment variable.
+
+### Status line
+
+The status line is configurable. Segments like `cwd`, `gitRef`, `agent`, `mode`, `model`, `reasoning`, `context`, and `serverHealth` can be reordered or hidden. See the [settings reference](/aether/terminal/settings/) for details.
 
 ### Themes
 

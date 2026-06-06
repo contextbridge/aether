@@ -10,6 +10,7 @@ use std::fmt::Display;
 use std::process::ExitCode;
 use tokio::runtime::Runtime;
 use wisp::run_tui;
+use wisp::settings::{StatusLineSegmentConfig, StatusLineSettings, load_or_create_settings};
 
 #[derive(Parser)]
 #[command(name = "aether")]
@@ -121,9 +122,26 @@ async fn run_default_command() -> Result<ExitCode, String> {
             InitOutcome::Applied { missing_env_var: None, .. } | InitOutcome::AlreadyInitialized { .. } => {}
         }
     }
-    run_tui("aether acp").await.map(|()| ExitCode::SUCCESS).map_err(|e| e.to_string())
+
+    run_tui("aether acp", load_or_create_settings(default_status_line()))
+        .await
+        .map(|()| ExitCode::SUCCESS)
+        .map_err(|e| e.to_string())
 }
 
+fn default_status_line() -> StatusLineSettings {
+    StatusLineSettings {
+        separator: Some(" · ".to_string()),
+        left: Some(vec![StatusLineSegmentConfig::Cwd { max_width: None }, StatusLineSegmentConfig::GitRef]),
+        right: Some(vec![
+            StatusLineSegmentConfig::Mode,
+            StatusLineSegmentConfig::Model { max_width: None },
+            StatusLineSegmentConfig::Reasoning,
+            StatusLineSegmentConfig::Context,
+            StatusLineSegmentConfig::ServerHealth,
+        ]),
+    }
+}
 fn invalid_settings_message(paths: &[std::path::PathBuf], error: impl Display) -> String {
     format!(
         "Found settings at {}, but they are invalid: {error}\nRun `aether settings init --user --force` to replace user settings, `aether settings init --project --force` to replace project settings, or edit the settings JSON manually.",

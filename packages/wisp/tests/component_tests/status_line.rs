@@ -4,6 +4,7 @@ use tui::ViewContext;
 use tui::testing::render_lines;
 use wisp::components::status_line::{ContextUsageDisplay, StatusLine};
 use wisp::settings::DEFAULT_CONTENT_PADDING;
+use wisp::settings::StatusLineSettings;
 use wisp::workspace_status::WorkspaceStatus;
 
 fn mode_option(value: impl Into<String>, name: impl Into<String>) -> SessionConfigOption {
@@ -35,12 +36,12 @@ fn reasoning_option(value: impl Into<String>) -> SessionConfigOption {
     )
 }
 
-fn status_line() -> StatusLine<'static> {
-    static WORKSPACE_STATUS: std::sync::LazyLock<WorkspaceStatus> =
-        std::sync::LazyLock::new(|| WorkspaceStatus::new("~/code/aether-2", Some("main".to_string())));
-
+fn status_line<'a>(
+    workspace_status: &'a WorkspaceStatus,
+    settings: &'a wisp::settings::ResolvedStatusLineSettings,
+) -> StatusLine<'a> {
     StatusLine {
-        workspace_status: &WORKSPACE_STATUS,
+        workspace_status,
         agent_name: "test-agent",
         config_options: &[],
         context_usage: None,
@@ -48,6 +49,7 @@ fn status_line() -> StatusLine<'static> {
         unhealthy_server_count: 0,
         content_padding: DEFAULT_CONTENT_PADDING,
         exit_confirmation_active: false,
+        settings,
     }
 }
 
@@ -108,15 +110,14 @@ impl<'a> StatusBuilder<'a> {
     }
 
     fn render(&self) -> (String, tui::testing::TestTerminal) {
+        let settings = StatusLineSettings::resolved_defaults();
         let status = StatusLine {
-            workspace_status: &self.workspace_status,
             agent_name: self.name,
             config_options: &self.options,
             context_usage: self.ctx_usage,
             waiting_for_response: self.waiting,
             unhealthy_server_count: self.unhealthy,
-            content_padding: DEFAULT_CONTENT_PADDING,
-            exit_confirmation_active: false,
+            ..status_line(&self.workspace_status, &settings)
         };
         let ctx = ViewContext::new((self.width, 24));
         let frame = status.render(&ctx);
@@ -170,12 +171,9 @@ fn renders_workspace_with_expected_colors() {
 fn wraps_right_side_to_second_line_when_narrow() {
     let workspace_status = WorkspaceStatus::new("~/code/project", Some("main".to_string()));
     let options = vec![model_option("model", "Claude Sonnet")];
-    let status = StatusLine {
-        workspace_status: &workspace_status,
-        agent_name: "agent-name",
-        config_options: &options,
-        ..status_line()
-    };
+    let settings = StatusLineSettings::resolved_defaults();
+    let status =
+        StatusLine { agent_name: "agent-name", config_options: &options, ..status_line(&workspace_status, &settings) };
     let ctx = ViewContext::new((40, 24));
 
     let frame = status.render(&ctx);
@@ -196,11 +194,11 @@ fn wraps_right_side_to_second_line_when_narrow() {
 #[test]
 fn exit_confirmation_keeps_workspace_and_moves_warning_right() {
     let workspace_status = WorkspaceStatus::new("~/code/aether-2", Some("main".to_string()));
+    let settings = StatusLineSettings::resolved_defaults();
     let status = StatusLine {
-        workspace_status: &workspace_status,
         agent_name: "agent-name",
         exit_confirmation_active: true,
-        ..status_line()
+        ..status_line(&workspace_status, &settings)
     };
     let ctx = ViewContext::new((100, 24));
     let text = status.render(&ctx).lines()[0].plain_text();

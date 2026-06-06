@@ -5,6 +5,8 @@ mod screen_router;
 mod view;
 
 use crate::session_loading_buffer::SessionLoadingBuffer;
+use crate::settings::resolve_content_padding;
+use crate::settings::resolve_status_line_settings;
 use agent_client_protocol::schema::SessionUpdate;
 pub use git_diff_mode::{GitDiffLoadState, GitDiffMode, GitDiffViewMessage};
 pub use plan_review_mode::{PlanReviewAction, PlanReviewInput, PlanReviewMode};
@@ -18,6 +20,7 @@ use crate::components::status_line::ContextUsageDisplay;
 use crate::keybindings::Keybindings;
 use crate::settings;
 use crate::settings::overlay::{SettingsMessage, SettingsOverlay};
+use crate::settings::{ResolvedStatusLineSettings, WispSettings};
 use crate::workspace_status::WorkspaceStatus;
 use acp_utils::client::{AcpEvent, AcpPromptHandle};
 use acp_utils::config_meta::SelectOptionMeta;
@@ -65,6 +68,7 @@ pub struct AppInfo {
     pub working_dir: PathBuf,
     pub workspace_status: WorkspaceStatus,
     pub prompt_handle: AcpPromptHandle,
+    pub settings: WispSettings,
 }
 
 #[doc = include_str!("../../docs/app.md")]
@@ -88,6 +92,7 @@ pub struct App {
     working_dir: PathBuf,
     workspace_status: WorkspaceStatus,
     content_padding: usize,
+    status_line_settings: ResolvedStatusLineSettings,
 }
 
 impl App {
@@ -101,10 +106,11 @@ impl App {
             working_dir,
             workspace_status,
             prompt_handle,
+            settings,
         } = info;
         let keybindings = Keybindings::default();
-        let wisp_settings = settings::load_or_create_settings();
-        let content_padding = settings::resolve_content_padding(&wisp_settings);
+        let content_padding = resolve_content_padding(&settings);
+        let status_line_settings = resolve_status_line_settings(&settings);
         let prompt_search_enabled = prompt_search_capability::is_advertised(prompt_capabilities.meta.as_ref());
         Self {
             agent_name,
@@ -126,6 +132,7 @@ impl App {
             working_dir,
             workspace_status,
             content_padding,
+            status_line_settings,
         }
     }
 
@@ -662,6 +669,8 @@ fn current_config_selections(options: &[acp::SessionConfigOption]) -> Vec<(Strin
 
 #[cfg(test)]
 pub(crate) mod test_helpers {
+    use crate::settings::StatusLineSettings;
+
     use super::*;
     use acp_utils::client::PromptCommand;
     use tokio::sync::mpsc;
@@ -719,6 +728,7 @@ pub(crate) mod test_helpers {
             working_dir: PathBuf::from("."),
             workspace_status: test_workspace_status(),
             prompt_handle,
+            settings: WispSettings::default().with_default_status_line(StatusLineSettings::defaults()),
         })
     }
 }
@@ -731,7 +741,8 @@ mod tests {
     use crate::components::conversation_screen::Modal;
     use crate::components::conversation_window::SegmentContent;
     use crate::components::elicitation_form::ElicitationForm;
-    use crate::settings::{DEFAULT_CONTENT_PADDING, ThemeSettings as WispThemeSettings, WispSettings, save_settings};
+    use crate::settings::{DEFAULT_CONTENT_PADDING, save_settings};
+    use crate::settings::{ThemeSettings, WispSettings};
     use crate::test_helpers::{elicitation_params, modified_key, url_elicitation_params, with_wisp_home};
     use acp_utils::ElicitationSchema;
     use acp_utils::testing::test_connection;
@@ -857,10 +868,8 @@ mod tests {
 
         let temp_dir = setup_themes_dir(&["sage.tmTheme", "nord.tmTheme"]);
         with_wisp_home(temp_dir.path(), || {
-            let settings = WispSettings {
-                theme: WispThemeSettings { file: Some("nord.tmTheme".to_string()) },
-                content_padding: None,
-            };
+            let settings =
+                WispSettings { theme: ThemeSettings { file: Some("nord.tmTheme".to_string()) }, ..Default::default() };
             save_settings(&settings).unwrap();
             let mut app = make_app();
             app.open_settings_overlay();
@@ -1596,6 +1605,7 @@ mod tests {
     #[test]
     fn status_line_shows_warning_when_confirmation_active() {
         use crate::components::status_line::StatusLine;
+        use crate::settings::StatusLineSettings;
         let options = vec![acp::SessionConfigOption::select(
             "model",
             "Model",
@@ -1603,6 +1613,7 @@ mod tests {
             vec![acp::SessionConfigSelectOption::new("m1", "M1")],
         )];
         let workspace_status = test_workspace_status();
+        let resolved = StatusLineSettings::resolved_defaults();
         let status = StatusLine {
             workspace_status: &workspace_status,
             agent_name: "test-agent",
@@ -1612,6 +1623,7 @@ mod tests {
             unhealthy_server_count: 0,
             content_padding: DEFAULT_CONTENT_PADDING,
             exit_confirmation_active: true,
+            settings: &resolved,
         };
         let context = ViewContext::new((120, 40));
         let frame = status.render(&context);
