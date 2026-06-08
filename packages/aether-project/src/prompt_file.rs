@@ -149,9 +149,13 @@ impl PromptFile {
         };
 
         let yaml = serde_yml::to_string(&frontmatter).map_err(|e| PromptFileError::Yaml(e.to_string()))?;
+        let yaml = normalize_frontmatter_yaml(&yaml);
 
-        let file_content =
-            if self.body.is_empty() { format!("---\n{yaml}---\n") } else { format!("---\n{yaml}---\n{}\n", self.body) };
+        let file_content = if self.body.is_empty() {
+            format!("---\n{yaml}\n---\n")
+        } else {
+            format!("---\n{yaml}\n---\n{}\n", self.body)
+        };
         fs::write(path, file_content)?;
         Ok(())
     }
@@ -266,6 +270,12 @@ impl From<std::io::Error> for PromptFileError {
     fn from(e: std::io::Error) -> Self {
         PromptFileError::Io(e)
     }
+}
+
+fn normalize_frontmatter_yaml(yaml: &str) -> &str {
+    let yaml = yaml.trim();
+    let yaml = yaml.strip_prefix("---\n").unwrap_or(yaml);
+    yaml.strip_suffix("\n...").unwrap_or(yaml).trim()
 }
 
 #[expect(clippy::trivially_copy_pass_by_ref)]
