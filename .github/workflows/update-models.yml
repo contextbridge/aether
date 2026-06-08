@@ -1,0 +1,50 @@
+name: Update models
+
+on:
+  schedule:
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-models:
+    name: Update models
+    runs-on: ubuntu-latest
+    environment: ci
+    concurrency:
+      group: update-models
+      cancel-in-progress: false
+    steps:
+      - name: Generate ContextBridge app token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.CB_PR_AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.CB_PR_AUTOMATION_APP_PRIVATE_KEY }}
+          owner: contextbridge
+          repositories: aether
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          token: ${{ steps.app-token.outputs.token }}
+      - uses: jdx/mise-action@v4
+      - name: Update models
+        run: just update-models
+      - name: Create pull request
+        id: create-pr
+        uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          branch: automation/update-models
+          delete-branch: true
+          title: Update models
+          commit-message: "chore: update models"
+          body: |
+            Updates `packages/llm/models.json` from models.dev.
+
+            This PR was created automatically by the weekly update models workflow.
