@@ -7,6 +7,8 @@ use tokio::sync::mpsc;
 
 pub struct Workspace {
     path: PathBuf,
+    root_path: PathBuf,
+    relative_cwd: Option<PathBuf>,
     source: WorkspaceSource,
     _drop_guard: tempfile::TempDir,
 }
@@ -31,7 +33,7 @@ pub async fn run_eval<T: Agent>(
     workspace: Workspace,
 ) -> Result<EvalReport, EvalRunError> {
     let prompt = prompt.into();
-    let messages = run_agent_and_collect_messages(agent, workspace.path(), &prompt).await?;
+    let messages = run_agent_and_collect_messages(agent, &workspace, &prompt).await?;
     let (agent_diff, reference_diff) = capture_git_diffs(&workspace);
     Ok(EvalReport::new(prompt, workspace, messages, agent_diff, reference_diff))
 }
@@ -40,7 +42,13 @@ impl Workspace {
     pub fn empty() -> Result<Self, WorkspaceError> {
         let temp_dir = new_temp_dir()?;
         let path = temp_dir.path().to_path_buf();
-        Ok(Self { path, source: WorkspaceSource::Local, _drop_guard: temp_dir })
+        Ok(Self {
+            path: path.clone(),
+            root_path: path,
+            relative_cwd: None,
+            source: WorkspaceSource::Local,
+            _drop_guard: temp_dir,
+        })
     }
 
     pub fn from_dir(src_path: impl Into<PathBuf>) -> Result<Self, WorkspaceError> {
@@ -54,7 +62,13 @@ impl Workspace {
             source,
         })?;
 
-        Ok(Self { path, source: WorkspaceSource::Local, _drop_guard: temp_dir })
+        Ok(Self {
+            path: path.clone(),
+            root_path: path,
+            relative_cwd: None,
+            source: WorkspaceSource::Local,
+            _drop_guard: temp_dir,
+        })
     }
 
     pub fn from_git_repo(spec: GitRepoSpec) -> Result<Self, WorkspaceError> {
@@ -65,22 +79,37 @@ impl Workspace {
         let repo = GitRepo::clone(&url, temp_dir.path())?;
         repo.checkout(&start_commit)?;
 
-        let path = match subdir {
-            None => temp_dir.path().to_path_buf(),
-            Some(subdir) => {
-                let working_path = temp_dir.path().join(subdir);
+        let root_path = temp_dir.path().to_path_buf();
+        let (path, relative_cwd) = match subdir {
+            None => (root_path.clone(), None),
+            Some(relative_cwd) => {
+                let working_path = root_path.join(&relative_cwd);
                 if !working_path.exists() {
                     return Err(WorkspaceError::MissingSubdir { path: working_path });
                 }
-                working_path
+                (working_path, Some(relative_cwd))
             }
         };
 
-        Ok(Self { path, source: WorkspaceSource::GitRepo { url, start_commit, gold_commit }, _drop_guard: temp_dir })
+        Ok(Self {
+            path,
+            root_path,
+            relative_cwd,
+            source: WorkspaceSource::GitRepo { url, start_commit, gold_commit },
+            _drop_guard: temp_dir,
+        })
     }
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub fn root_path(&self) -> &Path {
+        &self.root_path
+    }
+
+    pub fn relative_cwd(&self) -> Option<&Path> {
+        self.relative_cwd.as_deref()
     }
 
     pub fn source(&self) -> &WorkspaceSource {
@@ -90,11 +119,12 @@ impl Workspace {
 
 async fn run_agent_and_collect_messages<A: Agent>(
     agent: &A,
-    workspace_path: &Path,
+    workspace: &Workspace,
     task_prompt: &str,
 ) -> Result<Vec<AgentEvalMessage>, EvalRunError> {
     let (tx, mut rx) = mpsc::channel(100);
-    let config = AgentConfig { workspace: workspace_path, task_prompt };
+    let config =
+        AgentConfig { workspace_root: workspace.root_path(), relative_cwd: workspace.relative_cwd(), task_prompt };
     let agent_task = agent.run(config, tx);
     let message_task = async {
         let mut messages = Vec::new();
@@ -160,6 +190,8 @@ mod tests {
         let workspace = Workspace::empty().unwrap();
         assert!(workspace.path().exists());
         assert!(workspace.path().is_dir());
+        assert_eq!(workspace.root_path(), workspace.path());
+        assert!(workspace.relative_cwd().is_none());
     }
 
     #[test]
@@ -169,6 +201,8 @@ mod tests {
         fs::write(fixture.path().join("nested/file.txt"), "hello").unwrap();
         let workspace = Workspace::from_dir(fixture.path()).unwrap();
         assert_eq!(fs::read_to_string(workspace.path().join("nested/file.txt")).unwrap(), "hello");
+        assert_eq!(workspace.root_path(), workspace.path());
+        assert!(workspace.relative_cwd().is_none());
     }
 
     #[tokio::test]

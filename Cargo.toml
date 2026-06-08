@@ -121,6 +121,7 @@ unicode-width = "0.2.2"
 # Testing
 tempfile = "3.27"
 async-trait = "0.1"
+testcontainers = "0.27.3"
 
 [profile.dist]
 inherits = "release"

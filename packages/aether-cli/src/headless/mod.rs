@@ -42,28 +42,7 @@ pub enum CliEventKind {
     ContextCompactionResult,
     ContextUsage,
     ContextCleared,
-}
-
-impl CliEventKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Text => "text",
-            Self::Thought => "thought",
-            Self::ToolCall => "tool_call",
-            Self::ToolResult => "tool_result",
-            Self::ToolError => "tool_error",
-            Self::Error => "error",
-            Self::Cancelled => "cancelled",
-            Self::AutoContinue => "auto_continue",
-            Self::Retrying => "retrying",
-            Self::ModelSwitched => "model_switched",
-            Self::ToolProgress => "tool_progress",
-            Self::ContextCompactionStarted => "context_compaction_started",
-            Self::ContextCompactionResult => "context_compaction_result",
-            Self::ContextUsage => "context_usage",
-            Self::ContextCleared => "context_cleared",
-        }
-    }
+    Done,
 }
 
 pub struct RunConfig {
@@ -154,8 +133,8 @@ pub struct HeadlessArgs {
     #[arg(short, long)]
     pub verbose: bool,
 
-    /// Comma-separated list of events to emit (e.g. `tool_call,tool_result`).
-    /// Omit to emit everything. When set, `error` is only shown if explicitly listed.
+    /// Comma-separated list of events to emit (e.g. `tool_call,tool_result,done`).
+    /// Omit to emit every output event. When set, `error` is only shown if explicitly listed.
     #[arg(long = "events", value_enum, value_delimiter = ',')]
     pub events: Vec<CliEventKind>,
 }

@@ -22,9 +22,10 @@ test-ci *PKGS:
     cargo nextest run --profile ci --all-features {{ if PKGS == "" { "--workspace" } else { PKGS } }}
 
 # Run real LLM evals from the dedicated eval crate
-# e.g. `just evals anthropic:claude-sonnet-4-5`
-evals MODEL *ARGS:
-    AETHER_EVAL_MODEL={{MODEL}} cargo nextest run -p aether-evals --ignore-default-filter -E 'group(evals)' {{ARGS}}
+# Builds the default sandbox if it is missing unless AETHER_EVAL_DOCKER_IMAGE points at a custom image.
+evals *ARGS:
+    if [ -z "${AETHER_EVAL_DOCKER_IMAGE:-}" ] && { [ "${AETHER_EVAL_REBUILD_DOCKER:-}" = "1" ] || ! docker image inspect aether-sandbox:latest >/dev/null 2>&1; }; then docker build -t aether-sandbox:latest -f Dockerfile.sandbox .; fi
+    cargo nextest run -p aether-evals --ignore-default-filter -E 'group(evals)' {{ARGS}}
 
 # List eval test names without running them
 evals-list *ARGS:

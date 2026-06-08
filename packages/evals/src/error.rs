@@ -6,11 +6,18 @@ pub enum EvalHarnessError {
     #[error("workspace setup failed: {0}")]
     Workspace(#[from] crucible::WorkspaceError),
 
-    #[error("AETHER_EVAL_MODEL is required to run evals")]
-    MissingEvalModel,
+    #[error("invalid AETHER_EVAL_DOCKER_IMAGE: {0}")]
+    DockerImage(#[from] crucible::agents::DockerImageParseError),
 
-    #[error("eval model provider setup failed: {0}")]
-    ModelProvider(#[from] llm::LlmError),
+    #[error("failed to read eval settings '{}': {source}", path.display())]
+    ReadSettings {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to parse eval settings: {0}")]
+    Settings(String),
 
     #[error("eval run failed: {0}")]
     EvalRun(#[from] crucible::EvalRunError),

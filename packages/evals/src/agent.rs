@@ -1,33 +1,42 @@
 use crate::EvalHarnessError;
-use crucible::{AetherAgent, Prompt};
-use futures::FutureExt;
-use llm::StreamingModelProvider;
-use llm::parser::ModelProviderParser;
-use mcp_servers::{CodingMcp, PermissionMode};
-use mcp_utils::ServiceExt;
-use mcp_utils::client::ServerFactory;
+use crucible::{AetherSettings, DockerAetherAgent, DockerImage};
+use std::env::var;
+use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
-pub type Agent = AetherAgent<Arc<dyn StreamingModelProvider>>;
+const DEFAULT_EVAL_DOCKER_IMAGE: &str = "aether-sandbox:latest";
 
-pub async fn create_aether_agent(workspace_path: &Path) -> Result<Agent, EvalHarnessError> {
-    let model = std::env::var("AETHER_EVAL_MODEL").map_err(|_| EvalHarnessError::MissingEvalModel)?;
-    let (provider, _) = ModelProviderParser::default().parse(&model).await?;
-    let provider = Arc::from(provider);
+pub type Agent = DockerAetherAgent;
 
-    let prompt_path = format!("{}/prompts/coding_agent.md", env!("CARGO_MANIFEST_DIR"));
-    let system_prompt = Prompt::file(prompt_path, workspace_path.to_path_buf());
+pub async fn create_aether_agent(_workspace_path: &Path) -> Result<Agent, EvalHarnessError> {
+    let image_ref = var("AETHER_EVAL_DOCKER_IMAGE").unwrap_or_else(|_| DEFAULT_EVAL_DOCKER_IMAGE.to_string());
+    let image = DockerImage::parse(&image_ref)?;
+    let agent = DockerAetherAgent::new(image).with_settings(aether_settings()?);
 
-    Ok(AetherAgent::new(provider)
-        .with_mcp_server_factory("coding", coding_server_factory(workspace_path.to_path_buf()))
-        .with_system_prompt(system_prompt))
+    Ok(match eval_agent_name() {
+        Some(agent_name) => agent.with_agent(agent_name),
+        None => agent,
+    })
 }
 
-fn coding_server_factory(root: PathBuf) -> ServerFactory {
-    Box::new(move |_args, _input| {
-        let root = root.clone();
-        async move { CodingMcp::new().with_root_dir(root).with_permission_mode(PermissionMode::AlwaysAllow).into_dyn() }
-            .boxed()
-    })
+fn aether_settings() -> Result<AetherSettings, EvalHarnessError> {
+    let root = aether_repo_root();
+    let path = root.join(".aether/settings.json");
+    let content = read_to_string(&path).map_err(|source| EvalHarnessError::ReadSettings { path, source })?;
+    let mut settings =
+        AetherSettings::try_from(content.as_str()).map_err(|e| EvalHarnessError::Settings(e.to_string()))?;
+    settings.inline_resources(&root).map_err(|e| EvalHarnessError::Settings(e.to_string()))?;
+    Ok(settings)
+}
+
+fn eval_agent_name() -> Option<String> {
+    var("AETHER_EVAL_AGENT").ok().map(|value| value.trim().to_string()).filter(|value| !value.is_empty())
+}
+
+fn aether_repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("packages/evals should live under the repository root")
+        .to_path_buf()
 }
