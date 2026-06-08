@@ -23,7 +23,7 @@
     "@tailwindcss/vite": "4.3.0",
     "asciinema-player": "^3.15.1",
     "astro": "^6.4.4",
-    "astro-expressive-code": "^0.42.0",
+    "astro-expressive-code": "^0.43.0",
     "astro-icon": "^1.1.5",
     "astro-mermaid": "^2.0.1",
     "mermaid": "^11.15.0",
