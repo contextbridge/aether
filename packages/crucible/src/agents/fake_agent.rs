@@ -41,7 +41,7 @@ impl FakeAgent {
 impl Agent for FakeAgent {
     async fn run(&self, config: AgentConfig<'_>, tx: Sender<AgentEvalMessage>) -> Result<(), RunError> {
         for (path, contents) in &self.file_writes {
-            let file_path = config.workspace.join(path);
+            let file_path = config.workspace().join(path);
             if let Some(parent) = file_path.parent() {
                 tokio::fs::create_dir_all(parent).await.map_err(|error| {
                     RunError::ExecutionFailed(format!("failed to create fake file parent: {error}"))
@@ -70,7 +70,7 @@ mod tests {
         let agent = FakeAgent::success();
         let (tx, mut rx) = mpsc::channel(10);
         let temp_dir = tempfile::tempdir().unwrap();
-        let config = AgentConfig { workspace: temp_dir.path(), task_prompt: "test task" };
+        let config = AgentConfig { workspace_root: temp_dir.path(), relative_cwd: None, task_prompt: "test task" };
         let result = agent.run(config, tx).await;
         assert!(result.is_ok());
 
@@ -86,7 +86,7 @@ mod tests {
         let agent = FakeAgent::with_tool_call("bash", "success");
         let (tx, mut rx) = mpsc::channel(10);
         let temp_dir = tempfile::tempdir().unwrap();
-        let config = AgentConfig { workspace: temp_dir.path(), task_prompt: "test task" };
+        let config = AgentConfig { workspace_root: temp_dir.path(), relative_cwd: None, task_prompt: "test task" };
         let result = agent.run(config, tx).await;
         assert!(result.is_ok());
 
@@ -105,7 +105,7 @@ mod tests {
         let agent = FakeAgent::writes_file("nested/hello.txt", "hello");
         let (tx, _rx) = mpsc::channel(10);
         let temp_dir = tempfile::tempdir().unwrap();
-        let config = AgentConfig { workspace: temp_dir.path(), task_prompt: "test task" };
+        let config = AgentConfig { workspace_root: temp_dir.path(), relative_cwd: None, task_prompt: "test task" };
         agent.run(config, tx).await.unwrap();
         assert_eq!(std::fs::read_to_string(temp_dir.path().join("nested/hello.txt")).unwrap(), "hello");
     }

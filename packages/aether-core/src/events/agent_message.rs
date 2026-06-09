@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 /// Message from the agent to the user.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentMessage {
     Text {
         message_id: String,
@@ -71,6 +72,7 @@ pub enum AgentMessage {
     },
 
     /// Context usage update for UI display.
+    #[serde(rename = "context_usage")]
     ContextUsageUpdate {
         /// Current usage ratio (0.0 - 1.0), if context window is known.
         usage_ratio: Option<f64>,
@@ -237,9 +239,9 @@ mod tests {
         };
 
         let json = serde_json::to_value(&msg).unwrap();
-        let tool_result = &json["ToolResult"];
-        assert_eq!(tool_result["result_meta"]["display"]["title"], "Read file");
-        assert_eq!(tool_result["result_meta"]["display"]["value"], "Cargo.toml, 156 lines");
+        assert_eq!(json["type"], "tool_result");
+        assert_eq!(json["result_meta"]["display"]["title"], "Read file");
+        assert_eq!(json["result_meta"]["display"]["value"], "Cargo.toml, 156 lines");
 
         let parsed: AgentMessage = serde_json::from_value(json).unwrap();
         assert_eq!(parsed, msg);
@@ -287,5 +289,57 @@ mod tests {
             }
             other => panic!("Expected ToolCallUpdate, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_done_serializes_as_object() {
+        let json = serde_json::to_value(&AgentMessage::Done).unwrap();
+        assert_eq!(json["type"], "done");
+        assert_eq!(json.as_object().unwrap().len(), 1);
+
+        let parsed: AgentMessage = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed, AgentMessage::Done);
+    }
+
+    #[test]
+    fn test_tool_result_roundtrip_with_type_tag() {
+        let msg = AgentMessage::ToolResult {
+            result: ToolCallResult {
+                id: "call_1".to_string(),
+                name: "coding__read_file".to_string(),
+                arguments: "{}".to_string(),
+                result: "ok".to_string(),
+            },
+            result_meta: None,
+            model_name: "test".to_string(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains(r#""type":"tool_result""#), "missing type tag: {json}");
+
+        let parsed: AgentMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, msg);
+    }
+
+    #[test]
+    fn test_context_usage_serializes_with_type_tag() {
+        let msg = AgentMessage::ContextUsageUpdate {
+            usage_ratio: Some(0.5),
+            context_limit: Some(200_000),
+            input_tokens: 1000,
+            output_tokens: 200,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
+            reasoning_tokens: None,
+            total_input_tokens: 3000,
+            total_output_tokens: 600,
+            total_cache_read_tokens: 0,
+            total_cache_creation_tokens: 0,
+            total_reasoning_tokens: 0,
+        };
+        let json = serde_json::to_value(&msg).unwrap();
+        assert_eq!(json["type"], "context_usage");
+
+        let parsed: AgentMessage = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed, msg);
     }
 }

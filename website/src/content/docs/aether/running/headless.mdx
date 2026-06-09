@@ -83,7 +83,7 @@ aether headless --model bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0 \
 
   </TabItem>
   <TabItem label="pretty">
-    Pretty tracing output for agent events.
+    Pretty-printed `AgentMessage` JSON for humans. Each emitted event is serialized with `serde_json::to_string_pretty`.
 
     ```bash
     aether headless --output pretty "Summarize the README"
@@ -91,19 +91,37 @@ aether headless --model bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0 \
 
   </TabItem>
   <TabItem label="json">
-    JSON tracing output for agent events. This is useful when you want structured event streams.
+    Newline-delimited `AgentMessage` JSON. Each stdout line is one compact object with a `type` discriminator such as `tool_call`, `text`, or `done`.
 
     ```bash
-    aether headless --output json --events text,tool_call,tool_result \
+    aether headless --output json --events text,tool_call,tool_result,done \
       "List TODO comments"
     ```
 
   </TabItem>
 </Tabs>
 
+## Structured JSON output
+
+`--output json` writes NDJSON to stdout: one `aether_core::events::AgentMessage` JSON object per line. Parse each line independently:
+
+```rust
+let event: aether_core::events::AgentMessage = serde_json::from_str(line)?;
+```
+
+Example lines:
+
+```json
+{"type":"tool_call","request":{"id":"tc1","name":"bash","arguments":"{}"},"model_name":"test"}
+{"type":"text","message_id":"msg1","chunk":"done","is_complete":true,"model_name":"claude"}
+{"type":"done"}
+```
+
+Diagnostics from tracing are written to stderr. Keep stdout and stderr separate when parsing JSON output.
+
 ## Event filtering
 
-By default, headless mode emits every event. Use `--events` to restrict output:
+By default, headless mode emits every output event. Use `--events` to restrict output:
 
 ```bash
 aether headless --output json --events tool_call,tool_result \
@@ -129,6 +147,7 @@ Available event kinds:
 | `context_compaction_result`  | Context compaction completed.   |
 | `context_usage`              | Token usage update.             |
 | `context_cleared`            | Context was cleared.            |
+| `done`                       | Agent run completed.            |
 
 When `--events` is set, `error` events are shown only if `error` is explicitly listed.
 

@@ -2,12 +2,15 @@ use utils::SettingsStore;
 
 use crate::agent_config::AgentConfig;
 use crate::error::SettingsError;
-use crate::{McpSourceSpec, PromptSource};
+use crate::{McpFileSpec, McpSourceSpec, PromptSource};
+use aether_core::core::Prompt;
 use llm::ProviderConnectionOverrides;
+use mcp_utils::client::McpConfig;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
+use utils::variables::VarError;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -144,6 +147,22 @@ impl AetherSettings {
         self
     }
 
+    /// Replace every file- and glob-backed prompt and MCP source with its
+    /// inlined contents, resolving paths against `root`.
+    ///
+    /// The result serializes to a self-contained settings document with no
+    /// external file references, suitable for shipping to a machine or
+    /// container that does not have the authoring repository mounted.
+    pub fn inline_resources(&mut self, root: &Path) -> Result<(), SettingsError> {
+        self.prompts = inline_prompt_sources(&self.prompts, root)?;
+        self.mcps = inline_mcp_sources(&self.mcps, root)?;
+        for agent in &mut self.agents {
+            agent.prompts = inline_prompt_sources(&agent.prompts, root)?;
+            agent.mcps = inline_mcp_sources(&agent.mcps, root)?;
+        }
+        Ok(())
+    }
+
     fn load_source(project_root: &Path, source: AetherSettingsSource) -> Result<Self, SettingsError> {
         match source {
             AetherSettingsSource::File(source) => load_file_source(project_root, source, false),
@@ -204,6 +223,62 @@ fn normalize_resource_paths(mut settings: AetherSettings, source_root: Option<&P
     }
 
     settings
+}
+
+fn inline_prompt_sources(sources: &[PromptSource], root: &Path) -> Result<Vec<PromptSource>, SettingsError> {
+    let mut inlined = Vec::new();
+    for prompt in Prompt::from_sources(root, sources)? {
+        let text = match prompt {
+            Prompt::Text(text) => text,
+            Prompt::File { path, .. } => read_to_string(&path)
+                .map_err(|e| SettingsError::IoError(format!("Failed to read prompt '{}': {e}", path.display())))?,
+            Prompt::McpInstructions(_) => continue,
+        };
+        inlined.push(PromptSource::Text { text });
+    }
+    Ok(inlined)
+}
+
+fn inline_mcp_sources(sources: &[McpSourceSpec], root: &Path) -> Result<Vec<McpSourceSpec>, SettingsError> {
+    let mut inlined = Vec::new();
+    for source in sources {
+        let McpSourceSpec::File(McpFileSpec { path, proxy, optional }) = source else {
+            inlined.push(source.clone());
+            continue;
+        };
+
+        let full_path = match path.resolve(root) {
+            Ok(full_path) => full_path,
+            Err(VarError::NotFound(variable)) => {
+                if *optional {
+                    tracing::warn!(
+                        "Skipping optional MCP config '{}': variable '{variable}' is not defined",
+                        path.as_authored()
+                    );
+                    continue;
+                }
+                return Err(SettingsError::UnresolvedMcpConfigVariable {
+                    path: path.as_authored().to_string(),
+                    variable,
+                });
+            }
+        };
+
+        if !full_path.is_file() {
+            if *optional {
+                continue;
+            }
+            return Err(SettingsError::InvalidMcpConfigPath { path: path.as_authored().to_string() });
+        }
+
+        let mut config = McpConfig::from_json_file(&full_path)
+            .map_err(|e| SettingsError::IoError(format!("Failed to read MCP config '{}': {e}", full_path.display())))?;
+        if *proxy {
+            config.mark_all_proxy();
+        }
+        inlined.push(McpSourceSpec::Inline { servers: config.servers });
+    }
+    Ok(inlined)
 }
 
 fn promote_prompt_sources(sources: &mut [PromptSource], source_root: &Path) {
@@ -506,6 +581,67 @@ mod tests {
         .unwrap();
 
         assert_eq!(config, AetherSettings::default());
+    }
+
+    #[test]
+    fn inline_resources_replaces_file_sources_with_their_contents() {
+        let root = tempfile::tempdir().unwrap();
+        write_file(root.path(), "BASE.md", "Be helpful");
+        write_file(root.path(), "AGENT.md", "Edit carefully");
+        write_file(root.path(), "mcp.json", r#"{"servers":{"coding":{"type":"stdio","command":"run"}}}"#);
+
+        let mut settings = AetherSettings {
+            prompts: vec![PromptSource::file("BASE.md")],
+            mcps: vec![McpSourceSpec::file("mcp.json")],
+            agents: vec![AgentConfig {
+                prompts: vec![PromptSource::file("AGENT.md")],
+                mcps: vec![McpSourceSpec::file("mcp.json")],
+                ..agent_config("alpha")
+            }],
+            ..AetherSettings::default()
+        };
+
+        settings.inline_resources(root.path()).unwrap();
+
+        assert_eq!(settings.prompts, vec![PromptSource::Text { text: "Be helpful".to_string() }]);
+        assert_eq!(settings.agents[0].prompts, vec![PromptSource::Text { text: "Edit carefully".to_string() }]);
+        assert!(matches!(&settings.mcps[0], McpSourceSpec::Inline { servers } if servers.contains_key("coding")));
+        assert!(
+            matches!(&settings.agents[0].mcps[0], McpSourceSpec::Inline { servers } if servers.contains_key("coding"))
+        );
+
+        let serialized = serde_json::to_string(&settings).unwrap();
+        assert!(!serialized.contains("BASE.md") && !serialized.contains("mcp.json"), "{serialized}");
+    }
+
+    #[test]
+    fn inline_resources_drops_optional_missing_sources() {
+        let root = tempfile::tempdir().unwrap();
+        write_file(root.path(), "PROMPT.md", "Agent prompt");
+        let mut settings = AetherSettings {
+            prompts: vec![PromptSource::file("absent.md").optional()],
+            mcps: vec![McpSourceSpec::File(McpFileSpec::new("absent.json").optional())],
+            agents: vec![agent_config("alpha")],
+            ..AetherSettings::default()
+        };
+
+        settings.inline_resources(root.path()).unwrap();
+
+        assert!(settings.prompts.is_empty());
+        assert!(settings.mcps.is_empty());
+    }
+
+    #[test]
+    fn inline_resources_errors_on_required_missing_mcp() {
+        let root = tempfile::tempdir().unwrap();
+        let mut settings = AetherSettings {
+            mcps: vec![McpSourceSpec::file("absent.json")],
+            agents: vec![agent_config("alpha")],
+            ..AetherSettings::default()
+        };
+
+        let err = settings.inline_resources(root.path()).unwrap_err();
+        assert!(matches!(err, SettingsError::InvalidMcpConfigPath { .. }));
     }
 
     #[test]

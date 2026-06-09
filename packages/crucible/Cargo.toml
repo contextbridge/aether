@@ -20,8 +20,10 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 tempfile = { workspace = true }
 aether-core = { package = "aether-agent-core", path = "../aether-core" }
+aether-project = { path = "../aether-project" }
 llm = { package = "aether-llm", path = "../llm" }
 mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils" }
+testcontainers = { workspace = true }
 
 [lib]
 name = "crucible"

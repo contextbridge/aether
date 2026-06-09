@@ -10,6 +10,7 @@ Crucible is a Rust library that makes writing agent evals easier to express as o
 - [Quick Start](#quick-start)
 - [Test organization](#test-organization)
 - [Core API](#core-api)
+- [Dockerized Aether evals](#dockerized-aether-evals)
 - [Assertions](#assertions)
 - [Failure output and debugging](#failure-output-and-debugging)
 - [Git-backed evals](#git-backed-evals)
@@ -52,11 +53,38 @@ Crucible's fake-agent coverage should use normal test names. Reserve `_eval` suf
 ## Core API
 
 - `run_eval(&agent, prompt, workspace)` runs one eval and returns an `EvalReport`.
-- `AetherAgent::with_system_prompt(prompt)` configures the agent's system prompt; accepts any `crucible::Prompt`, including file/glob prompts that get `!`cmd`` shell interpolation.
+- `DockerAetherAgent::new(image)` runs `aether headless --output json` in a fresh Testcontainers container for each eval run.
 - `Workspace::empty()` creates an isolated temp directory.
 - `Workspace::from_dir(path)` copies fixture directory contents into a temp directory.
 - `Workspace::from_git_repo(GitRepoSpec { url, start_commit, gold_commit, subdir })` clones and checks out a git repository.
 - `EvalReport` exposes the prompt, workspace, agent messages, tool-call helpers, and git diff summaries.
+
+## Dockerized Aether evals
+
+Use `DockerAetherAgent` when an eval should exercise the real Aether CLI in an isolated container. Crucible mounts the workspace root at `/workspace`; git-backed workspaces with `GitRepoSpec::subdir` mount the repository root so `.git` remains available while headless runs from the matching relative cwd under `/workspace`.
+
+```rust
+use crucible::{AetherSettings, DockerAetherAgent, DockerImage, GitRepoSpec, Workspace, run_eval};
+
+let settings = AetherSettings::try_from(std::fs::read_to_string(".aether/settings.json")?.as_str())?;
+let agent = DockerAetherAgent::new(DockerImage::new("aether-sandbox", "latest"))
+    .with_settings(settings)
+    .with_agent("Fast");
+
+let report = run_eval(
+    &agent,
+    "fix the failing test",
+    Workspace::from_git_repo(GitRepoSpec {
+        url: "https://github.com/example/repo".to_string(),
+        start_commit: "start_sha".to_string(),
+        gold_commit: "gold_sha".to_string(),
+        subdir: None,
+    })?,
+)
+.await?;
+```
+
+By default the Docker agent forwards provider API key env vars, `OLLAMA_HOST`, and `AETHER_*`, mounts host `AETHER_HOME` or `~/.aether` when present, and uses the container's normal Aether settings unless configured with `.with_settings(...)`. Use `.with_agent(...)` to pass `--agent`.
 
 ## Assertions
 
