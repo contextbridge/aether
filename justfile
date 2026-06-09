@@ -15,21 +15,19 @@ check:
 
 # Run tests with nextest
 test *PKGS:
-    cargo nextest run --all-features {{ if PKGS == "" { "--workspace" } else { PKGS } }}
+    cargo nextest run --no-tests pass --all-features {{ if PKGS == "" { "--workspace" } else { PKGS } }}
 
 # Run tests with nextest's CI profile and JUnit output
 test-ci *PKGS:
-    cargo nextest run --profile ci --all-features {{ if PKGS == "" { "--workspace" } else { PKGS } }}
+    cargo nextest run --no-tests pass --profile ci --all-features {{ if PKGS == "" { "--workspace" } else { PKGS } }}
 
-# Run real LLM evals from the dedicated eval crate
-# Builds the default sandbox if it is missing unless AETHER_EVAL_DOCKER_IMAGE points at a custom image.
-evals *ARGS:
-    if [ -z "${AETHER_EVAL_DOCKER_IMAGE:-}" ] && { [ "${AETHER_EVAL_REBUILD_DOCKER:-}" = "1" ] || ! docker image inspect aether-sandbox:latest >/dev/null 2>&1; }; then docker build -t aether-sandbox:latest -f Dockerfile.sandbox .; fi
-    cargo nextest run -p aether-evals --ignore-default-filter -E 'group(evals)' {{ARGS}}
+# Run real LLM evals from the dedicated eval crate against a fresh sandbox image
+evals *ARGS: build-sandbox
+    cargo nextest run -p internal-evals --ignore-default-filter -E 'group(evals)' {{ARGS}}
 
 # List eval test names without running them
 evals-list *ARGS:
-    cargo nextest list -p aether-evals --ignore-default-filter -E 'group(evals)' {{ARGS}}
+    cargo nextest list -p internal-evals --ignore-default-filter -E 'group(evals)' {{ARGS}}
 
 # Check formatting
 fmt-check *PKGS:
@@ -109,9 +107,10 @@ sweep DAYS="7":
 sweep-installed:
     cargo sweep --time 1
 
-# Build the workspace sandbox image
+# Build the sandbox image from the eval example Dockerfile (copies the aether debug binary)
 build-sandbox TAG="aether-sandbox:latest":
-    docker build -t {{TAG}} -f Dockerfile.sandbox .
+    cargo build -p aether-agent-cli --bin aether
+    docker build -t {{TAG}} -f packages/internal-evals/examples/Dockerfile .
 
 # Run wisp + aether agent inside the sandbox
 run-sandbox:

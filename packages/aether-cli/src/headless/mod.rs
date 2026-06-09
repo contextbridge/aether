@@ -2,7 +2,6 @@ pub mod error;
 pub mod run;
 
 use aether_core::agent_spec::AgentSpec;
-use aether_project::{AetherSettings, AgentCatalog};
 use error::CliError;
 use llm::ProviderConnectionOverrides;
 use std::io::{IsTerminal, Read as _, stdin};
@@ -11,18 +10,12 @@ use std::process::ExitCode;
 
 use crate::credentials::build_oauth_credential_store;
 use crate::mcp_config_args::McpConfigArgs;
+use crate::output::OutputFormat;
 use crate::provider_connection_args::ProviderConnectionArgs;
 use crate::resolve::resolve_agent_spec;
 use crate::settings_args::SettingsSourceArgs;
 use aether_auth::OAuthCredentialStorage;
 use std::sync::Arc;
-
-#[derive(Clone)]
-pub enum OutputFormat {
-    Text,
-    Pretty,
-    Json,
-}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, clap::ValueEnum)]
 #[clap(rename_all = "snake_case")]
@@ -64,12 +57,6 @@ pub async fn run_headless(args: HeadlessArgs) -> Result<ExitCode, CliError> {
     let spec =
         resolve_spec(args.agent.as_deref(), args.model.as_deref(), &cwd, &args.settings_source, provider_connections)?;
 
-    let output = match args.output {
-        CliOutputFormat::Text => OutputFormat::Text,
-        CliOutputFormat::Pretty => OutputFormat::Pretty,
-        CliOutputFormat::Json => OutputFormat::Json,
-    };
-
     let mcp_config_sources = args.mcp_config.sources(&cwd);
     let oauth_credential_store = build_oauth_credential_store(&args.settings_source, &cwd)?;
 
@@ -79,20 +66,13 @@ pub async fn run_headless(args: HeadlessArgs) -> Result<ExitCode, CliError> {
         mcp_config_sources,
         spec,
         system_prompt: args.system_prompt,
-        output,
+        output: args.output,
         verbose: args.verbose,
         events: args.events,
         oauth_credential_store,
     };
 
     run::run(config).await
-}
-
-#[derive(Clone, clap::ValueEnum)]
-pub enum CliOutputFormat {
-    Text,
-    Pretty,
-    Json,
 }
 
 #[derive(clap::Args)]
@@ -127,7 +107,7 @@ pub struct HeadlessArgs {
 
     /// Output format
     #[arg(long, default_value = "text")]
-    pub output: CliOutputFormat,
+    pub output: OutputFormat,
 
     /// Verbose diagnostic logging to stderr.
     #[arg(short, long)]
@@ -167,17 +147,7 @@ fn resolve_spec(
         return Err(CliError::ConflictingArgs("Cannot specify both --agent and --model".to_string()));
     }
 
-    let config = if let Some(source) = settings_source.source(cwd) {
-        AetherSettings::load(cwd, [source])
-    } else {
-        AetherSettings::load_default(cwd)
-    }
-    .map_err(|e| CliError::AgentError(e.to_string()))?;
-    let catalog = if config.agents.is_empty() {
-        AgentCatalog::empty(cwd.to_path_buf())
-    } else {
-        AgentCatalog::from_settings(cwd, config).map_err(|e| CliError::AgentError(e.to_string()))?
-    };
+    let catalog = settings_source.load_agent_catalog(cwd).map_err(|e| CliError::AgentError(e.to_string()))?;
 
     let mut spec = match model {
         Some(m) => {

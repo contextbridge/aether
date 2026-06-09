@@ -1,2 +1,5 @@
-target/
+target/*
+!target/debug/
+target/debug/*
+!target/debug/aether
 .git/

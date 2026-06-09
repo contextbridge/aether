@@ -1,6 +1,6 @@
 # Type Safety
 
-**Location**: `packages/aether/src/types.rs`, `packages/crucible/src/eval_assertion.rs`
+**Location**: `packages/aether/src/types.rs`, `packages/aether-evals/src/eval_assertion.rs`
 
 ## Pattern 1: Newtype Wrapper
 

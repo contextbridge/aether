@@ -55,6 +55,21 @@ pub fn project_settings_exist(project_root: &Path) -> bool {
     project_settings_path(project_root).is_file()
 }
 
+/// Root that file-backed settings resources resolve against for the settings file at
+/// `settings_path`: the project root (the parent of `.aether`) when the settings file lives in a
+/// `.aether` directory, otherwise the settings file's directory.
+pub fn settings_resource_root(settings_path: &Path) -> PathBuf {
+    let Some(settings_dir) = settings_path.parent() else {
+        return PathBuf::from(".");
+    };
+
+    if settings_dir.file_name().and_then(|name| name.to_str()) == Some(".aether") {
+        return settings_dir.parent().unwrap_or(settings_dir).to_path_buf();
+    }
+
+    settings_dir.to_path_buf()
+}
+
 #[doc = include_str!("docs/aether_settings.md")]
 #[derive(Debug, Clone, Default, PartialEq, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -117,6 +132,15 @@ impl AetherSettings {
             let next = Self::load_source(project_root, source)?;
             Ok(config.merge(next))
         })
+    }
+
+    pub fn load_file_for_export(path: &Path) -> Result<Self, SettingsError> {
+        let content = read_to_string(path).map_err(|source| {
+            SettingsError::IoError(format!("failed to read settings file '{}': {source}", path.display()))
+        })?;
+        let mut settings = Self::try_from(content.as_str())?;
+        settings.inline_resources(&settings_resource_root(path))?;
+        Ok(settings)
     }
 
     pub fn merge(mut self, next: Self) -> Self {
@@ -320,6 +344,12 @@ mod tests {
     #[test]
     fn project_settings_path_points_at_project_aether_settings() {
         assert_eq!(project_settings_path(Path::new("/repo")), PathBuf::from("/repo/.aether/settings.json"));
+    }
+
+    #[test]
+    fn settings_resource_root_uses_project_root_for_aether_dir_settings() {
+        assert_eq!(settings_resource_root(Path::new("/repo/.aether/settings.json")), PathBuf::from("/repo"));
+        assert_eq!(settings_resource_root(Path::new("/repo/config/settings.json")), PathBuf::from("/repo/config"));
     }
 
     #[test]

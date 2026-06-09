@@ -19,7 +19,6 @@ use super::session_actor::{SessionActor, SessionActorInit, SessionHandle};
 use super::session_config_state::SessionConfigState;
 use super::session_store::{SessionMeta, SessionStore};
 use crate::settings_args::SettingsSourceArgs;
-use aether_project::{AetherSettings, AgentCatalog};
 
 /// Initial session selection supplied when `aether acp` starts.
 #[derive(Clone, Debug, Default)]
@@ -241,23 +240,10 @@ impl SessionFactory {
     }
 
     async fn load_mode_catalog(&self, cwd: &Path) -> Result<SessionModeCatalog, acp::Error> {
-        let config = if let Some(source) = self.settings_source.source(cwd) {
-            AetherSettings::load(cwd, [source])
-        } else {
-            AetherSettings::load_default(cwd)
-        }
-        .map_err(|e| {
+        let catalog = self.settings_source.load_agent_catalog(cwd).map_err(|e| {
             error!("Failed to load agent catalog: {e}");
             acp::Error::invalid_params()
         })?;
-        let catalog = if config.agents.is_empty() {
-            AgentCatalog::empty(cwd.to_path_buf())
-        } else {
-            AgentCatalog::from_settings(cwd, config).map_err(|e| {
-                error!("Failed to load agent catalog: {e}");
-                acp::Error::invalid_params()
-            })?
-        };
 
         let available = get_local_models().await;
         let user_invocable: Vec<AgentSpec> = catalog.user_invocable().cloned().collect();

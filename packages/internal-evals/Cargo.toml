@@ -1,0 +1,19 @@
+[package]
+name = "internal-evals"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[package.metadata.dist]
+dist = false
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+aether-evals = { path = "../aether-evals" }
+aether-project = { path = "../aether-project" }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }

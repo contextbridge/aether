@@ -1,4 +1,5 @@
 use aether_cli::acp::{AcpArgs, AcpRunOutcome, run_acp};
+use aether_cli::eval::{EvalArgs, run as run_eval_command};
 use aether_cli::headless::{HeadlessArgs, run_headless};
 use aether_cli::init::{InitOutcome, InitRequest, next_steps_message, run_init};
 use aether_cli::settings::SettingsCommand;
@@ -29,6 +30,8 @@ struct Cli {
 enum Command {
     /// Run a single prompt headlessly
     Headless(HeadlessArgs),
+    /// Run declarative JSON eval files in Docker sandboxes
+    Eval(EvalArgs),
     /// Start the ACP server
     Acp(AcpArgs),
     /// Print the fully assembled system prompt (for debugging)
@@ -51,6 +54,8 @@ fn main() -> ExitCode {
     let rt = Runtime::new().expect("Failed to create tokio runtime");
     let result: Result<ExitCode, String> = match cli.command {
         Some(Command::Headless(args)) => rt.block_on(run_headless(args)).map_err(|e| e.to_string()),
+
+        Some(Command::Eval(args)) => rt.block_on(run_eval_command(args)).map_err(|e| e.to_string()),
 
         Some(Command::Acp(args)) => rt
             .block_on(run_acp(args))
