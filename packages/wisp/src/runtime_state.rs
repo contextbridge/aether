@@ -5,7 +5,7 @@ use crate::workspace_status::WorkspaceStatus;
 use acp_utils::client::{AcpEvent, AcpPromptHandle, spawn_acp_session};
 use agent_client_protocol::schema::{
     AuthMethod, Implementation, InitializeRequest, NewSessionRequest, PromptCapabilities, ProtocolVersion,
-    SessionConfigOption, SessionId,
+    SessionCapabilities, SessionConfigOption, SessionId,
 };
 use std::env::current_dir;
 use tokio::sync::mpsc;
@@ -16,6 +16,7 @@ pub struct RuntimeState {
     pub session_id: SessionId,
     pub agent_name: String,
     pub prompt_capabilities: PromptCapabilities,
+    pub session_capabilities: SessionCapabilities,
     pub config_options: Vec<SessionConfigOption>,
     pub auth_methods: Vec<AuthMethod>,
     pub theme: Theme,
@@ -43,6 +44,7 @@ impl RuntimeState {
             session_id: session.session_id,
             agent_name: session.agent_name,
             prompt_capabilities: session.prompt_capabilities,
+            session_capabilities: session.session_capabilities,
             config_options: session.config_options,
             auth_methods: session.auth_methods,
             theme,

@@ -10,8 +10,8 @@ use agent_client_protocol::schema::{
     AuthMethod, AuthenticateRequest, CancelNotification, ConfigOptionUpdate, ContentBlock, InitializeRequest,
     InitializeResponse, ListSessionsRequest, LoadSessionRequest, NewSessionRequest, NewSessionResponse,
     PermissionOptionId, PermissionOptionKind, PromptCapabilities, PromptRequest, RequestPermissionOutcome,
-    RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome, SessionConfigOption, SessionId,
-    SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, TextContent,
+    RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome, SessionCapabilities,
+    SessionConfigOption, SessionId, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, TextContent,
 };
 use agent_client_protocol::{self as acp, Client, ConnectionTo};
 use std::str::FromStr;
@@ -25,6 +25,7 @@ pub struct AcpSession {
     pub session_id: SessionId,
     pub agent_name: String,
     pub prompt_capabilities: PromptCapabilities,
+    pub session_capabilities: SessionCapabilities,
     pub config_options: Vec<SessionConfigOption>,
     pub auth_methods: Vec<AuthMethod>,
     pub event_rx: mpsc::UnboundedReceiver<AcpEvent>,
@@ -61,6 +62,7 @@ pub async fn spawn_acp_session(
         session_id: session_resp.session_id,
         agent_name,
         prompt_capabilities: init_resp.agent_capabilities.prompt_capabilities,
+        session_capabilities: init_resp.agent_capabilities.session_capabilities,
         config_options: session_resp.config_options.unwrap_or_default(),
         auth_methods: init_resp.auth_methods,
         event_rx,
@@ -336,6 +338,17 @@ async fn handle_side_command(
                 }
                 Err(e) => {
                     let _ = event_tx.send(AcpEvent::PromptSearchFailed { query, error: format!("{e}") });
+                }
+            }
+        }
+        PromptCommand::SessionPreview(params) => {
+            let session_id = params.session_id.clone();
+            match cx.send_request(params).block_task().await {
+                Ok(resp) => {
+                    let _ = event_tx.send(AcpEvent::SessionPreviewLoaded(resp));
+                }
+                Err(e) => {
+                    let _ = event_tx.send(AcpEvent::SessionPreviewFailed { session_id, error: format!("{e}") });
                 }
             }
         }

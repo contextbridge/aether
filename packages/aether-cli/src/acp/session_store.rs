@@ -1,14 +1,18 @@
 use super::prompt_history_index::PromptHistoryIndex;
-use acp_utils::notifications::{PromptSearchParams, PromptSearchResponse};
+use acp_utils::notifications::{
+    PromptSearchParams, PromptSearchResponse, SessionPreviewParams, SessionPreviewResponse, SessionPreviewRole,
+    SessionPreviewTurn,
+};
 use aether_core::context::ext::{SessionEvent, UserEvent};
 use aether_core::events::AgentMessage;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing::warn;
 
 const PROMPT_HISTORY_FILE: &str = "prompt-history.jsonl";
+const PREVIEW_TRANSCRIPT_TURNS: usize = 8;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -25,6 +29,18 @@ pub struct SessionMeta {
 pub struct SessionSummary {
     pub meta: SessionMeta,
     pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScanLimits {
+    pub max_lines: usize,
+    pub max_bytes: usize,
+}
+
+impl ScanLimits {
+    pub const SUMMARY: Self = Self { max_lines: 64, max_bytes: 64 * 1024 };
+    pub const PREVIEW: Self = Self { max_lines: 200, max_bytes: 128 * 1024 };
+    pub const UNBOUNDED: Self = Self { max_lines: usize::MAX, max_bytes: usize::MAX };
 }
 
 pub struct SessionStore {
@@ -62,45 +78,33 @@ impl SessionStore {
     }
 
     pub fn load(&self, session_id: &str) -> Option<(SessionMeta, Vec<SessionEvent>)> {
-        let path = self.session_path(session_id);
-        let file = File::open(&path).ok()?;
-        let reader = BufReader::new(file);
-        let mut lines = reader.lines();
-
-        let meta_line = lines.next()?.ok()?;
-        let meta: SessionMeta = match serde_json::from_str(&meta_line) {
-            Ok(m) => m,
-            Err(e) => {
-                warn!("Failed to parse session meta: {e}");
-                return None;
-            }
-        };
-
-        let mut events = Vec::new();
-        for line in lines {
-            let Ok(line) = line else { break };
-            if line.trim().is_empty() {
-                continue;
-            }
-            match serde_json::from_str::<SessionEvent>(&line) {
-                Ok(event) => events.push(event),
-                Err(e) => {
-                    warn!("Skipping malformed session log line: {e}");
-                }
-            }
-        }
-
-        Some((meta, events))
+        let scan = SessionLogReader::open(&self.session_path(session_id)).ok()?.scan(ScanLimits::UNBOUNDED).ok()?;
+        Some((scan.meta, scan.events))
     }
 
     pub fn list(&self) -> Vec<SessionSummary> {
-        self.read_metas_sorted()
-            .into_iter()
-            .map(|meta| {
-                let title = self.title_for_session(&meta.session_id);
-                SessionSummary { meta, title }
+        let Ok(entries) = fs::read_dir(&self.dir) else {
+            return Vec::new();
+        };
+
+        let mut summaries: Vec<SessionSummary> = entries
+            .filter_map(|entry| {
+                let path = entry.ok()?.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("jsonl")
+                    || self.prompt_history.is_index_path(&path)
+                {
+                    return None;
+                }
+                read_session_summary(&path).ok()
             })
-            .collect()
+            .collect();
+
+        summaries.sort_by(|a, b| b.meta.created_at.cmp(&a.meta.created_at));
+        summaries
+    }
+
+    pub fn preview(&self, params: &SessionPreviewParams) -> io::Result<SessionPreviewResponse> {
+        read_session_preview(&self.session_path(&params.session_id), ScanLimits::PREVIEW)
     }
 
     pub fn search_prompts(&self, params: &PromptSearchParams) -> io::Result<PromptSearchResponse> {
@@ -115,45 +119,6 @@ impl SessionStore {
         serde_json::from_str(first_line.trim()).ok()
     }
 
-    fn read_metas_sorted(&self) -> Vec<SessionMeta> {
-        let Ok(entries) = fs::read_dir(&self.dir) else {
-            return Vec::new();
-        };
-
-        let mut metas: Vec<SessionMeta> = entries
-            .filter_map(|entry| {
-                let path = entry.ok()?.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("jsonl")
-                    || self.prompt_history.is_index_path(&path)
-                {
-                    return None;
-                }
-                let mut first_line = String::new();
-                BufReader::new(File::open(&path).ok()?).read_line(&mut first_line).ok()?;
-                serde_json::from_str::<SessionMeta>(first_line.trim()).ok()
-            })
-            .collect();
-
-        metas.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-        metas
-    }
-
-    fn title_for_session(&self, session_id: &str) -> Option<String> {
-        let file = File::open(self.session_path(session_id)).ok()?;
-        let mut reader = BufReader::new(file);
-        let mut first = String::new();
-        reader.read_line(&mut first).ok()?;
-        let mut second = String::new();
-        let read = reader.read_line(&mut second).ok()?;
-        if read == 0 {
-            return None;
-        }
-        match serde_json::from_str::<SessionEvent>(second.trim()).ok()? {
-            SessionEvent::User(UserEvent::Message { content }) => Some(extract_title(&content)),
-            _ => None,
-        }
-    }
-
     fn append_line<T: Serialize>(&self, session_id: &str, value: &T) -> io::Result<()> {
         fs::create_dir_all(&self.dir)?;
         let path = self.session_path(session_id);
@@ -166,6 +131,143 @@ impl SessionStore {
 
     fn session_path(&self, session_id: &str) -> PathBuf {
         self.dir.join(format!("{session_id}.jsonl"))
+    }
+}
+
+fn read_session_summary(path: &Path) -> io::Result<SessionSummary> {
+    let scan = read_bounded_session(path, ScanLimits::SUMMARY)?;
+    let title = scan.events.iter().find_map(|event| match event {
+        SessionEvent::User(UserEvent::Message { content }) => Some(extract_title(content)),
+        _ => None,
+    });
+    Ok(SessionSummary { meta: scan.meta, title })
+}
+
+fn read_session_preview(path: &Path, limits: ScanLimits) -> io::Result<SessionPreviewResponse> {
+    let scan = read_bounded_session(path, limits)?;
+    let meta = scan.meta;
+    let events = scan.events;
+    let mut truncated = scan.truncated;
+    let mut transcript = Vec::new();
+    let mut tool_call_count = 0;
+
+    for event in events {
+        match event {
+            SessionEvent::User(UserEvent::Message { content }) => {
+                let text = llm::ContentBlock::join_text(&content);
+                let text = if text.is_empty() { "[media prompt]".to_string() } else { text };
+                if !push_preview_turn(&mut transcript, SessionPreviewRole::User, &text) {
+                    truncated = true;
+                }
+            }
+            SessionEvent::Agent(AgentMessage::Text { chunk, .. })
+                if !push_preview_turn(&mut transcript, SessionPreviewRole::Assistant, &chunk) =>
+            {
+                truncated = true;
+            }
+            SessionEvent::Agent(AgentMessage::ToolCall { .. }) => {
+                tool_call_count += 1;
+            }
+            _ => {}
+        }
+    }
+
+    Ok(SessionPreviewResponse {
+        session_id: meta.session_id,
+        cwd: meta.cwd,
+        created_at: meta.created_at,
+        model: meta.model,
+        selected_mode: meta.selected_mode,
+        transcript,
+        tool_call_count,
+        truncated,
+    })
+}
+
+struct SessionLogReader {
+    reader: BufReader<File>,
+    meta: SessionMeta,
+    bytes_read: usize,
+}
+
+struct SessionLogScan {
+    meta: SessionMeta,
+    events: Vec<SessionEvent>,
+    truncated: bool,
+}
+
+impl SessionLogReader {
+    fn open(path: &Path) -> io::Result<Self> {
+        let file = File::open(path)?;
+        let mut reader = BufReader::new(file);
+        let mut line = String::new();
+        let bytes_read = reader.read_line(&mut line)?;
+        if bytes_read == 0 {
+            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "session file is empty"));
+        }
+        let meta = serde_json::from_str::<SessionMeta>(line.trim())
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("invalid session metadata: {e}")))?;
+        Ok(Self { reader, meta, bytes_read })
+    }
+
+    fn scan(mut self, limits: ScanLimits) -> io::Result<SessionLogScan> {
+        let mut line = String::new();
+        let mut lines_read = 0;
+        let mut events = Vec::new();
+        let mut truncated = false;
+
+        loop {
+            if lines_read >= limits.max_lines || self.bytes_read >= limits.max_bytes {
+                truncated = true;
+                break;
+            }
+            line.clear();
+            let read = self.reader.read_line(&mut line)?;
+            if read == 0 {
+                break;
+            }
+            self.bytes_read = self.bytes_read.saturating_add(read);
+            lines_read += 1;
+            if self.bytes_read > limits.max_bytes {
+                truncated = true;
+                break;
+            }
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<SessionEvent>(trimmed) {
+                Ok(event) => events.push(event),
+                Err(e) => warn!("Skipping malformed session log line: {e}"),
+            }
+        }
+
+        Ok(SessionLogScan { meta: self.meta, events, truncated })
+    }
+}
+
+fn read_bounded_session(path: &Path, limits: ScanLimits) -> io::Result<SessionLogScan> {
+    SessionLogReader::open(path)?.scan(limits)
+}
+
+fn push_preview_turn(transcript: &mut Vec<SessionPreviewTurn>, role: SessionPreviewRole, text: &str) -> bool {
+    let text = text.lines().next().unwrap_or(text).trim();
+    if text.is_empty() {
+        return true;
+    }
+    if transcript.len() >= PREVIEW_TRANSCRIPT_TURNS {
+        return false;
+    }
+    transcript.push(SessionPreviewTurn { role, text: truncate_for_preview(text) });
+    true
+}
+
+fn truncate_for_preview(text: &str) -> String {
+    if text.len() <= MAX_TITLE_LEN {
+        text.to_string()
+    } else {
+        let end = text.floor_char_boundary(MAX_TITLE_LEN);
+        format!("{}…", &text[..end])
     }
 }
 
@@ -470,6 +572,61 @@ mod tests {
         assert_eq!(unicode.results.len(), 1);
         let hit = &unicode.results[0];
         assert_eq!(&hit.prompt[hit.match_start..hit.match_end], "fé");
+    }
+
+    #[test]
+    fn list_finds_first_user_prompt_after_non_user_events() {
+        let (_dir, store) = temp_store();
+        store.append_meta("s1", &default_meta()).unwrap();
+        store.append_event("s1", &switch_agent(Some("Planner"), Some("Coder"))).unwrap();
+        store.append_event("s1", &agent_text("msg", "setup", true)).unwrap();
+        store.append_event("s1", &user_msg("First useful prompt")).unwrap();
+
+        let title = store.list().into_iter().next().unwrap().title;
+        assert_eq!(title.as_deref(), Some("First useful prompt"));
+    }
+
+    #[test]
+    fn list_ignores_malformed_content_after_summary_limit() {
+        let (dir, store) = temp_store();
+        let m = default_meta();
+        let mut file = File::create(dir.path().join("s1.jsonl")).unwrap();
+        writeln!(file, "{}", serde_json::to_string(&m).unwrap()).unwrap();
+        writeln!(file, "{}", serde_json::to_string(&user_msg("bounded prompt")).unwrap()).unwrap();
+        for _ in 0..ScanLimits::SUMMARY.max_lines {
+            writeln!(file).unwrap();
+        }
+        writeln!(file, "{{malformed after limit").unwrap();
+
+        let listed = store.list();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].title.as_deref(), Some("bounded prompt"));
+    }
+
+    #[test]
+    fn preview_returns_transcript_metadata_and_truncation() {
+        let (_dir, store) = temp_store();
+        store.append_meta("s1", &default_meta()).unwrap();
+        store.append_event("s1", &user_msg("Preview this session")).unwrap();
+        store.append_event("s1", &agent_text("msg", "Assistant reply", true)).unwrap();
+
+        for i in 0..ScanLimits::PREVIEW.max_lines {
+            store.append_event("s1", &user_msg(&format!("extra {i}"))).unwrap();
+        }
+
+        let preview = store.preview(&SessionPreviewParams { session_id: "s1".to_string() }).unwrap();
+
+        assert_eq!(preview.model, "test-model");
+        assert_eq!(preview.selected_mode.as_deref(), Some("planner"));
+        assert_eq!(preview.transcript[0].role, SessionPreviewRole::User);
+        assert!(preview.truncated);
+    }
+
+    #[test]
+    fn preview_unknown_session_returns_not_found() {
+        let (_dir, store) = temp_store();
+        let err = store.preview(&SessionPreviewParams { session_id: "missing".to_string() }).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
     }
 
     #[test]

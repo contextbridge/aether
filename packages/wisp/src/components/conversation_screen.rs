@@ -10,7 +10,7 @@ use crate::components::session_picker::{SessionEntry, SessionPicker, SessionPick
 use crate::components::tool_call_statuses::ToolCallStatuses;
 use crate::keybindings::Keybindings;
 use acp_utils::CreateElicitationRequestParams;
-use acp_utils::notifications::{ElicitationResponse, PromptSearchParams, PromptSearchResponse};
+use acp_utils::notifications::{ElicitationResponse, PromptSearchParams, PromptSearchResponse, SessionPreviewResponse};
 use agent_client_protocol::Responder;
 use agent_client_protocol::schema::{self as acp, SessionId};
 use std::collections::HashSet;
@@ -26,6 +26,7 @@ pub enum ConversationScreenMessage {
     OpenSessionPicker,
     LoadSession { session_id: SessionId, cwd: PathBuf },
     SearchPrompts(PromptSearchParams),
+    RequestSessionPreview { session_id: SessionId },
 }
 
 pub(crate) enum Modal {
@@ -44,10 +45,16 @@ pub struct ConversationScreen {
     pub(crate) active_modal: Option<Modal>,
     pub(crate) content_padding: usize,
     pub(crate) pending_url_elicitations: HashSet<(String, String)>,
+    session_preview_enabled: bool,
 }
 
 impl ConversationScreen {
-    pub fn new(keybindings: Keybindings, content_padding: usize, prompt_search_enabled: bool) -> Self {
+    pub fn new(
+        keybindings: Keybindings,
+        content_padding: usize,
+        prompt_search_enabled: bool,
+        session_preview_enabled: bool,
+    ) -> Self {
         Self {
             conversation: ConversationBuffer::new(),
             tool_call_statuses: ToolCallStatuses::new(),
@@ -58,6 +65,7 @@ impl ConversationScreen {
             active_modal: None,
             content_padding,
             pending_url_elicitations: HashSet::new(),
+            session_preview_enabled,
         }
     }
 
@@ -104,9 +112,21 @@ impl ConversationScreen {
         self.pending_url_elicitations.clear();
     }
 
-    pub fn open_session_picker(&mut self, sessions: Vec<acp::SessionInfo>) {
+    pub fn open_session_picker(&mut self, sessions: Vec<acp::SessionInfo>) -> Vec<ConversationScreenMessage> {
         let entries = sessions.into_iter().map(SessionEntry).collect();
-        self.active_modal = Some(Modal::SessionPicker(SessionPicker::new(entries)));
+        let mut picker = SessionPicker::new(entries, self.session_preview_enabled);
+        let messages = picker
+            .initial_messages()
+            .into_iter()
+            .filter_map(|msg| match msg {
+                SessionPickerMessage::RequestPreview { session_id } => {
+                    Some(ConversationScreenMessage::RequestSessionPreview { session_id })
+                }
+                _ => None,
+            })
+            .collect();
+        self.active_modal = Some(Modal::SessionPicker(picker));
+        messages
     }
 
     pub fn on_session_update(&mut self, update: &acp::SessionUpdate) {
@@ -251,6 +271,9 @@ impl ConversationScreen {
                             out.push(ConversationScreenMessage::ClearScreen);
                             out.push(ConversationScreenMessage::LoadSession { session_id, cwd });
                         }
+                        SessionPickerMessage::RequestPreview { session_id } => {
+                            out.push(ConversationScreenMessage::RequestSessionPreview { session_id });
+                        }
                     }
                 }
                 Some(out)
@@ -294,6 +317,18 @@ impl ConversationScreen {
 
     pub fn on_prompt_search_failed(&mut self, query: &str, error: String) {
         self.prompt_composer.on_prompt_search_failed(query, error);
+    }
+
+    pub fn on_session_preview_loaded(&mut self, preview: SessionPreviewResponse) {
+        if let Some(Modal::SessionPicker(picker)) = self.active_modal.as_mut() {
+            picker.on_preview_loaded(preview);
+        }
+    }
+
+    pub fn on_session_preview_failed(&mut self, session_id: &str, error: String) {
+        if let Some(Modal::SessionPicker(picker)) = self.active_modal.as_mut() {
+            picker.on_preview_failed(session_id, error);
+        }
     }
 }
 

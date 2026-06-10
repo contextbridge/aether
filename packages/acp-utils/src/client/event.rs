@@ -6,7 +6,7 @@ use agent_client_protocol::schema::{SessionConfigOption, SessionId, SessionInfo}
 
 use crate::notifications::{
     AuthMethodsUpdatedParams, ContextClearedParams, ContextUsageParams, ElicitationParams, ElicitationResponse,
-    McpNotification, PromptSearchResponse, SubAgentProgressParams,
+    McpNotification, PromptSearchResponse, SessionPreviewResponse, SubAgentProgressParams,
 };
 
 /// Events forwarded from the ACP connection to the main event loop.
@@ -27,5 +27,7 @@ pub enum AcpEvent {
     NewSessionCreated { session_id: SessionId, config_options: Vec<SessionConfigOption> },
     PromptSearchResults(PromptSearchResponse),
     PromptSearchFailed { query: String, error: String },
+    SessionPreviewLoaded(SessionPreviewResponse),
+    SessionPreviewFailed { session_id: String, error: String },
     ConnectionClosed,
 }

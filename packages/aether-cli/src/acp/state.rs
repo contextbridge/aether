@@ -1,5 +1,6 @@
 use acp_utils::notifications::{
-    AuthMethodsUpdatedParams, McpRequest, PromptSearchParams, PromptSearchResponse, prompt_search_capability,
+    AetherCapabilities, AuthMethodsUpdatedParams, McpRequest, PromptSearchParams, PromptSearchResponse,
+    SessionDisplayMeta, SessionPreviewParams, SessionPreviewResponse,
 };
 use acp_utils::server::AcpServerError;
 use aether_auth::OAuthCredentialStorage;
@@ -68,7 +69,11 @@ impl AcpState {
         let auth_methods = build_auth_methods(self.oauth_credential_store.as_ref());
         let available = get_local_models().await;
         let prompt_capabilities =
-            prompt_capabilities_for_models(&available).meta(Some(prompt_search_capability::to_meta()));
+            prompt_capabilities_for_models(&available).meta(Some(AetherCapabilities::prompt_search().to_meta()));
+
+        let session_capabilities = acp::SessionCapabilities::new()
+            .list(acp::SessionListCapabilities::new())
+            .meta(Some(AetherCapabilities::session_preview().to_meta()));
 
         Ok(InitializeResponse::new(ProtocolVersion::V1)
             .agent_info(Implementation::new("Aether", "0.1.0"))
@@ -76,7 +81,7 @@ impl AcpState {
                 AgentCapabilities::new()
                     .load_session(true)
                     .mcp_capabilities(McpCapabilities::new().http(true).sse(true))
-                    .session_capabilities(acp::SessionCapabilities::new().list(acp::SessionListCapabilities::new()))
+                    .session_capabilities(session_capabilities)
                     .prompt_capabilities(prompt_capabilities),
             )
             .auth_methods(auth_methods))
@@ -143,7 +148,12 @@ impl AcpState {
 
         let sessions: Vec<acp::SessionInfo> = summaries
             .into_iter()
-            .map(|s| acp::SessionInfo::new(s.meta.session_id, s.meta.cwd).updated_at(s.meta.created_at).title(s.title))
+            .map(|s| {
+                acp::SessionInfo::new(s.meta.session_id, s.meta.cwd)
+                    .updated_at(s.meta.created_at)
+                    .title(s.title)
+                    .meta(SessionDisplayMeta::new(s.meta.model, s.meta.selected_mode).to_meta())
+            })
             .collect();
 
         info!("Found {} sessions", sessions.len());
@@ -154,6 +164,16 @@ impl AcpState {
         self.session_store.search_prompts(params).map_err(|e| {
             error!("Prompt search failed: {e}");
             acp::Error::internal_error()
+        })
+    }
+
+    pub(crate) fn session_preview(&self, params: &SessionPreviewParams) -> Result<SessionPreviewResponse, acp::Error> {
+        self.session_store.preview(params).map_err(|e| {
+            error!("Session preview failed: {e}");
+            match e.kind() {
+                std::io::ErrorKind::NotFound => acp::Error::invalid_params(),
+                _ => acp::Error::internal_error(),
+            }
         })
     }
 
@@ -405,7 +425,13 @@ mod tests {
         let state = test_state();
         let response =
             state.initialize(InitializeRequest::new(ProtocolVersion::LATEST)).await.expect("initialize succeeds");
-        assert!(prompt_search_capability::is_advertised(response.agent_capabilities.prompt_capabilities.meta.as_ref()));
+        assert!(
+            AetherCapabilities::from_meta(response.agent_capabilities.prompt_capabilities.meta.as_ref()).prompt_search
+        );
+        assert!(
+            AetherCapabilities::from_meta(response.agent_capabilities.session_capabilities.meta.as_ref())
+                .session_preview
+        );
     }
 
     #[test]
