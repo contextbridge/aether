@@ -1,16 +1,18 @@
-use acp_utils::client::AcpEvent;
-use acp_utils::client::AcpPromptHandle;
+use acp_utils::client::{AcpEvent, AcpPromptHandle, PromptCommand};
+use acp_utils::notifications::AetherCapabilities;
 use acp_utils::notifications::ElicitationParams;
 use acp_utils::notifications::ElicitationResponse;
+use acp_utils::notifications::SessionPreviewResponse;
 use agent_client_protocol::Responder;
 use agent_client_protocol::schema as acp;
 use std::path::PathBuf;
+use tokio::sync::mpsc::UnboundedReceiver;
 use tui::Renderer as FrameRenderer;
 use tui::RendererCommand;
 use tui::Theme;
 use tui::display_width_text;
 use tui::testing::TestTerminal;
-use tui::{Component, Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+use tui::{Component, Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseEvent, MouseEventKind};
 use wisp::components::app::{App, AppInfo, EventOutcome};
 use wisp::settings::DEFAULT_CONTENT_PADDING;
 use wisp::workspace_status::WorkspaceStatus;
@@ -77,6 +79,10 @@ fn truncate_to_display_width(text: &str, width: usize) -> String {
 pub(super) const PROGRESS_LINE: &str =
     "⠒ Tip: Hit Tab to adjust reasoning level (off → low → medium → high)  (esc to interrupt)";
 
+pub(super) fn preview_session_capabilities() -> acp::SessionCapabilities {
+    acp::SessionCapabilities::new().meta(Some(AetherCapabilities::session_preview().to_meta()))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum LoopAction {
     Continue,
@@ -86,6 +92,17 @@ pub(super) enum LoopAction {
 pub(super) struct Renderer {
     app: App,
     frame_renderer: FrameRenderer<TestTerminal>,
+}
+
+struct RendererOptions<'a> {
+    terminal: TestTerminal,
+    agent_name: String,
+    config_options: &'a [acp::SessionConfigOption],
+    prompt_capabilities: acp::PromptCapabilities,
+    session_capabilities: acp::SessionCapabilities,
+    auth_methods: Vec<acp::AuthMethod>,
+    prompt_handle: AcpPromptHandle,
+    size: (u16, u16),
 }
 
 impl Renderer {
@@ -131,6 +148,57 @@ impl Renderer {
         )
     }
 
+    pub(super) fn new_recording(
+        terminal: TestTerminal,
+        agent_name: String,
+        config_options: &[acp::SessionConfigOption],
+        size: (u16, u16),
+    ) -> (Self, UnboundedReceiver<PromptCommand>) {
+        Self::new_recording_with_session_capabilities(
+            terminal,
+            agent_name,
+            config_options,
+            preview_session_capabilities(),
+            size,
+        )
+    }
+
+    pub(super) fn new_without_session_preview(
+        terminal: TestTerminal,
+        agent_name: String,
+        config_options: &[acp::SessionConfigOption],
+        size: (u16, u16),
+    ) -> (Self, UnboundedReceiver<PromptCommand>) {
+        Self::new_recording_with_session_capabilities(
+            terminal,
+            agent_name,
+            config_options,
+            acp::SessionCapabilities::new(),
+            size,
+        )
+    }
+
+    fn new_recording_with_session_capabilities(
+        terminal: TestTerminal,
+        agent_name: String,
+        config_options: &[acp::SessionConfigOption],
+        session_capabilities: acp::SessionCapabilities,
+        size: (u16, u16),
+    ) -> (Self, UnboundedReceiver<PromptCommand>) {
+        let (prompt_handle, rx) = AcpPromptHandle::recording();
+        let renderer = Self::new_with_options(RendererOptions {
+            terminal,
+            agent_name,
+            config_options,
+            prompt_capabilities: acp::PromptCapabilities::new(),
+            session_capabilities,
+            auth_methods: vec![],
+            prompt_handle,
+            size,
+        });
+        (renderer, rx)
+    }
+
     fn new_with_prompt_capabilities_and_auth_methods(
         terminal: TestTerminal,
         agent_name: String,
@@ -139,15 +207,39 @@ impl Renderer {
         auth_methods: Vec<acp::AuthMethod>,
         size: (u16, u16),
     ) -> Self {
+        Self::new_with_options(RendererOptions {
+            terminal,
+            agent_name,
+            config_options,
+            prompt_capabilities,
+            session_capabilities: preview_session_capabilities(),
+            auth_methods,
+            prompt_handle: AcpPromptHandle::noop(),
+            size,
+        })
+    }
+
+    fn new_with_options(options: RendererOptions<'_>) -> Self {
+        let RendererOptions {
+            terminal,
+            agent_name,
+            config_options,
+            prompt_capabilities,
+            session_capabilities,
+            auth_methods,
+            prompt_handle,
+            size,
+        } = options;
         let app = App::new(AppInfo {
             session_id: acp::SessionId::new("test"),
             agent_name,
             prompt_capabilities,
+            session_capabilities,
             config_options: config_options.to_vec(),
             auth_methods,
-            working_dir: std::path::PathBuf::from("."),
+            working_dir: PathBuf::from("."),
             workspace_status: test_workspace_status(),
-            prompt_handle: AcpPromptHandle::noop(),
+            prompt_handle,
             settings: wisp::settings::WispSettings::default()
                 .with_default_status_line(wisp::settings::StatusLineSettings::defaults()),
         });
@@ -222,6 +314,16 @@ impl Renderer {
         Ok(())
     }
 
+    pub(super) async fn on_mouse_scroll_down(&mut self) -> Result<LoopAction, Box<dyn std::error::Error>> {
+        let mouse = MouseEvent { kind: MouseEventKind::ScrollDown, column: 0, row: 0, modifiers: KeyModifiers::NONE };
+        self.handle_terminal_event(Event::Mouse(mouse)).await
+    }
+
+    pub(super) async fn on_mouse_scroll_up(&mut self) -> Result<LoopAction, Box<dyn std::error::Error>> {
+        let mouse = MouseEvent { kind: MouseEventKind::ScrollUp, column: 0, row: 0, modifiers: KeyModifiers::NONE };
+        self.handle_terminal_event(Event::Mouse(mouse)).await
+    }
+
     pub(super) async fn on_paste(&mut self, text: &str) -> Result<(), Box<dyn std::error::Error>> {
         self.handle_terminal_event(Event::Paste(text.to_string())).await?;
         Ok(())
@@ -285,6 +387,26 @@ impl Renderer {
         error: impl Into<String>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         self.handle_acp_event(AcpEvent::PromptSearchFailed { query: query.to_string(), error: error.into() })?;
+        Ok(())
+    }
+
+    pub(super) fn on_session_preview_loaded(
+        &mut self,
+        preview: SessionPreviewResponse,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.handle_acp_event(AcpEvent::SessionPreviewLoaded(preview))?;
+        Ok(())
+    }
+
+    pub(super) fn on_session_preview_failed(
+        &mut self,
+        session_id: &str,
+        error: impl Into<String>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.handle_acp_event(AcpEvent::SessionPreviewFailed {
+            session_id: session_id.to_string(),
+            error: error.into(),
+        })?;
         Ok(())
     }
 

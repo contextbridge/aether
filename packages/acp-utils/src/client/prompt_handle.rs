@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
 
 use super::error::AcpClientError;
-use crate::notifications::PromptSearchParams;
+use crate::notifications::{PromptSearchParams, SessionPreviewParams};
 
 /// Commands sent from the main thread to the ACP client task.
 #[derive(Debug)]
@@ -17,6 +17,7 @@ pub enum PromptCommand {
     LoadSession { session_id: SessionId, cwd: PathBuf },
     NewSession { cwd: std::path::PathBuf },
     SearchPrompts(PromptSearchParams),
+    SessionPreview(SessionPreviewParams),
 }
 
 /// Send-safe handle for issuing prompt commands to the ACP client task.
@@ -92,6 +93,10 @@ impl AcpPromptHandle {
 
     pub fn search_prompts(&self, params: PromptSearchParams) -> Result<(), AcpClientError> {
         self.send(PromptCommand::SearchPrompts(params))
+    }
+
+    pub fn session_preview(&self, session_id: &SessionId) -> Result<(), AcpClientError> {
+        self.send(PromptCommand::SessionPreview(SessionPreviewParams { session_id: session_id.0.to_string() }))
     }
 
     fn send(&self, cmd: PromptCommand) -> Result<(), AcpClientError> {

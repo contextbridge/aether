@@ -1,5 +1,5 @@
 use super::state::AcpState;
-use acp_utils::notifications::{McpRequest, PromptSearchParams};
+use acp_utils::notifications::{McpRequest, PromptSearchParams, SessionPreviewParams};
 use agent_client_protocol::schema::{
     AuthenticateRequest, CancelNotification, InitializeRequest, ListSessionsRequest, LoadSessionRequest,
     NewSessionRequest, PromptRequest, SetSessionConfigOptionRequest,
@@ -99,6 +99,16 @@ pub(crate) fn acp_agent_builder(state: Arc<AcpState>) -> Builder<Agent, impl Han
                 async move |req: PromptSearchParams, responder, cx| {
                     let state = state.clone();
                     spawn_response(&cx, responder, async move { state.search_prompts(&req) })
+                }
+            },
+            acp::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let state = state.clone();
+                async move |req: SessionPreviewParams, responder, cx| {
+                    let state = state.clone();
+                    spawn_response(&cx, responder, async move { state.session_preview(&req) })
                 }
             },
             acp::on_receive_request!(),

@@ -6,12 +6,11 @@ use agent_client_protocol::schema::AuthMethod;
 use agent_client_protocol::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 pub use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
 pub use rmcp::model::CreateElicitationRequestParams;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 pub use mcp_utils::status::{McpServerAuthCapability, McpServerStatus, McpServerStatusEntry};
 
 pub const AETHER_META_NAMESPACE: &str = "contextbridge/aether";
-pub const PROMPT_SEARCH_CAPABILITY_KEY: &str = "promptSearch";
 
 /// Parameters for `_aether/context_usage` notifications.
 ///
@@ -106,28 +105,109 @@ pub struct PromptSearchResult {
     pub match_end: usize,
 }
 
-/// Metadata advertised on `PromptCapabilities::_meta` when the agent supports
-/// `_aether/prompt_search`.
-pub mod prompt_search_capability {
-    use super::{AETHER_META_NAMESPACE, PROMPT_SEARCH_CAPABILITY_KEY};
-    use agent_client_protocol::schema::Meta;
-    use serde_json::{Value, json};
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonRpcRequest)]
+#[request(method = "_aether/session_preview", response = SessionPreviewResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionPreviewParams {
+    pub session_id: String,
+}
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonRpcResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionPreviewResponse {
+    pub session_id: String,
+    pub cwd: PathBuf,
+    pub created_at: String,
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_mode: Option<String>,
+    pub transcript: Vec<SessionPreviewTurn>,
+    pub tool_call_count: usize,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionPreviewTurn {
+    pub role: SessionPreviewRole,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SessionPreviewRole {
+    User,
+    Assistant,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionDisplayMeta {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_mode: Option<String>,
+}
+
+impl SessionDisplayMeta {
     #[must_use]
-    pub fn to_meta() -> Meta {
-        let mut meta = Meta::new();
-        meta.insert(AETHER_META_NAMESPACE.to_string(), json!({ PROMPT_SEARCH_CAPABILITY_KEY: true }));
-        meta
+    pub fn new(model: impl Into<String>, selected_mode: Option<String>) -> Self {
+        Self { model: Some(model.into()), selected_mode }
     }
 
     #[must_use]
-    pub fn is_advertised(meta: Option<&Meta>) -> bool {
-        meta.and_then(|m| m.get(AETHER_META_NAMESPACE))
-            .and_then(Value::as_object)
-            .and_then(|aether| aether.get(PROMPT_SEARCH_CAPABILITY_KEY))
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
+    pub fn to_meta(&self) -> agent_client_protocol::schema::Meta {
+        to_aether_meta(self)
     }
+
+    #[must_use]
+    pub fn from_meta(meta: Option<&agent_client_protocol::schema::Meta>) -> Self {
+        from_aether_meta(meta)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AetherCapabilities {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub prompt_search: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub session_preview: bool,
+}
+
+impl AetherCapabilities {
+    #[must_use]
+    pub fn prompt_search() -> Self {
+        Self { prompt_search: true, session_preview: false }
+    }
+
+    #[must_use]
+    pub fn session_preview() -> Self {
+        Self { prompt_search: false, session_preview: true }
+    }
+
+    #[must_use]
+    pub fn to_meta(self) -> agent_client_protocol::schema::Meta {
+        to_aether_meta(&self)
+    }
+
+    #[must_use]
+    pub fn from_meta(meta: Option<&agent_client_protocol::schema::Meta>) -> Self {
+        from_aether_meta(meta)
+    }
+}
+
+fn to_aether_meta<T: Serialize>(value: &T) -> agent_client_protocol::schema::Meta {
+    let mut meta = agent_client_protocol::schema::Meta::new();
+    meta.insert(AETHER_META_NAMESPACE.to_string(), serde_json::json!(value));
+    meta
+}
+
+fn from_aether_meta<T: DeserializeOwned + Default>(meta: Option<&agent_client_protocol::schema::Meta>) -> T {
+    meta.and_then(|m| m.get(AETHER_META_NAMESPACE))
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_default()
 }
 
 /// Response returned from the client for an elicitation request.
@@ -224,14 +304,18 @@ mod tests {
                 == "_aether/mcp_request"
         );
         assert_eq!(PromptSearchParams { query: String::new(), limit: None }.method(), "_aether/prompt_search");
+        assert_eq!(SessionPreviewParams { session_id: String::new() }.method(), "_aether/session_preview");
     }
 
     #[test]
     fn prompt_search_capability_meta_roundtrip() {
-        let meta = prompt_search_capability::to_meta();
-        assert!(prompt_search_capability::is_advertised(Some(&meta)));
-        assert!(!prompt_search_capability::is_advertised(None));
-        assert!(!prompt_search_capability::is_advertised(Some(&agent_client_protocol::schema::Meta::new())));
+        let meta = AetherCapabilities::prompt_search().to_meta();
+        assert!(AetherCapabilities::from_meta(Some(&meta)).prompt_search);
+        assert!(!AetherCapabilities::from_meta(None).prompt_search);
+        assert!(!AetherCapabilities::from_meta(Some(&agent_client_protocol::schema::Meta::new())).prompt_search);
+        let raw = serde_json::to_string(meta.get(AETHER_META_NAMESPACE).unwrap()).unwrap();
+        assert!(raw.contains("promptSearch"));
+        assert!(!raw.contains("sessionPreview"));
     }
 
     #[test]

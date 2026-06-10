@@ -26,7 +26,7 @@ use acp_utils::client::{AcpEvent, AcpPromptHandle};
 use acp_utils::config_meta::SelectOptionMeta;
 use acp_utils::config_option_id::ConfigOptionId;
 use acp_utils::notifications::{
-    CreateElicitationRequestParams, ElicitationAction, ElicitationResponse, prompt_search_capability,
+    AetherCapabilities, CreateElicitationRequestParams, ElicitationAction, ElicitationResponse,
 };
 use agent_client_protocol::Responder;
 use agent_client_protocol::schema::{self as acp, SessionId};
@@ -63,6 +63,7 @@ pub struct AppInfo {
     pub session_id: SessionId,
     pub agent_name: String,
     pub prompt_capabilities: acp::PromptCapabilities,
+    pub session_capabilities: acp::SessionCapabilities,
     pub config_options: Vec<acp::SessionConfigOption>,
     pub auth_methods: Vec<acp::AuthMethod>,
     pub working_dir: PathBuf,
@@ -101,6 +102,7 @@ impl App {
             session_id,
             agent_name,
             prompt_capabilities,
+            session_capabilities,
             config_options,
             auth_methods,
             working_dir,
@@ -111,13 +113,19 @@ impl App {
         let keybindings = Keybindings::default();
         let content_padding = resolve_content_padding(&settings);
         let status_line_settings = resolve_status_line_settings(&settings);
-        let prompt_search_enabled = prompt_search_capability::is_advertised(prompt_capabilities.meta.as_ref());
+        let prompt_search_enabled = AetherCapabilities::from_meta(prompt_capabilities.meta.as_ref()).prompt_search;
+        let session_preview_enabled = AetherCapabilities::from_meta(session_capabilities.meta.as_ref()).session_preview;
         Self {
             agent_name,
             context_usage: None,
             exit_requested: false,
             ctrl_c_pressed_at: None,
-            conversation_screen: ConversationScreen::new(keybindings.clone(), content_padding, prompt_search_enabled),
+            conversation_screen: ConversationScreen::new(
+                keybindings.clone(),
+                content_padding,
+                prompt_search_enabled,
+                session_preview_enabled,
+            ),
             prompt_capabilities,
             config_options,
             server_statuses: Vec::new(),
@@ -191,7 +199,8 @@ impl App {
             AcpEvent::SessionsListed { sessions } => {
                 let current_id = &self.session_id;
                 let filtered: Vec<_> = sessions.into_iter().filter(|s| s.session_id != *current_id).collect();
-                self.conversation_screen.open_session_picker(filtered);
+                let messages = self.conversation_screen.open_session_picker(filtered);
+                self.handle_conversation_messages_sync(messages);
             }
             // SessionLoaded intentionally does NOT restore previous config selections:
             // when the user loads an existing session, the server's stored config for
@@ -221,6 +230,12 @@ impl App {
             }
             AcpEvent::PromptSearchFailed { query, error } => {
                 self.conversation_screen.on_prompt_search_failed(&query, error);
+            }
+            AcpEvent::SessionPreviewLoaded(preview) => {
+                self.conversation_screen.on_session_preview_loaded(preview);
+            }
+            AcpEvent::SessionPreviewFailed { session_id, error } => {
+                self.conversation_screen.on_session_preview_failed(&session_id, error);
             }
         }
         EventOutcome::Render { commands }
@@ -321,7 +336,24 @@ impl App {
                         tracing::warn!("Failed to send prompt search: {e}");
                     }
                 }
+                ConversationScreenMessage::RequestSessionPreview { session_id } => {
+                    self.request_session_preview(&session_id);
+                }
             }
+        }
+    }
+
+    fn handle_conversation_messages_sync(&mut self, messages: Vec<ConversationScreenMessage>) {
+        for msg in messages {
+            if let ConversationScreenMessage::RequestSessionPreview { session_id } = msg {
+                self.request_session_preview(&session_id);
+            }
+        }
+    }
+
+    fn request_session_preview(&self, session_id: &SessionId) {
+        if let Err(e) = self.prompt_handle.session_preview(session_id) {
+            tracing::warn!("Failed to send session preview request: {e}");
         }
     }
 
@@ -607,6 +639,9 @@ impl Component for App {
                     }
                 } else if self.settings_overlay.is_some() {
                     self.handle_settings_overlay_event(&mut commands, event).await;
+                } else if self.conversation_screen.has_modal() {
+                    let outcome = self.conversation_screen.on_event(event).await;
+                    self.handle_conversation_messages(&mut commands, outcome).await;
                 }
             }
             Event::Resize(_) => {}
@@ -723,6 +758,8 @@ pub(crate) mod test_helpers {
             session_id: SessionId::new(session_id),
             agent_name: "test-agent".to_string(),
             prompt_capabilities,
+            session_capabilities: acp::SessionCapabilities::new()
+                .meta(Some(AetherCapabilities::session_preview().to_meta())),
             config_options: config_options.to_vec(),
             auth_methods,
             working_dir: PathBuf::from("."),
