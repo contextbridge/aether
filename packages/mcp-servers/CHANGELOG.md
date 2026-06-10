@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.15](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.14...aether-mcp-servers-v0.4.15) - 2026-06-10
+
+### Added
+
+- *(aether-cli)* Add evals command ([#142](https://github.com/contextbridge/aether/pull/142))
+
 ## [0.4.14](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.13...aether-mcp-servers-v0.4.14) - 2026-06-05
 
 ### Fixed

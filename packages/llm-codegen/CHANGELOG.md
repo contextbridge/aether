@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.10](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.9...aether-llm-codegen-v0.2.10) - 2026-06-10
+
+### Other
+
+- update Cargo.toml dependencies
+
 ## [0.2.9](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.8...aether-llm-codegen-v0.2.9) - 2026-05-31
 
 ### Fixed

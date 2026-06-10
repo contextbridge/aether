@@ -24,9 +24,9 @@ schemars = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tempfile = { workspace = true }
-aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.6.9" }
+aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.6.10" }
 aether-project = { path = "../aether-project", version = "0.5.10" }
-llm = { package = "aether-llm", path = "../llm", version = "0.7.8" }
+llm = { package = "aether-llm", path = "../llm", version = "0.7.9" }
 testcontainers = { workspace = true }
 
 [lib]
