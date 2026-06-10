@@ -55,6 +55,7 @@ dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
  "aether-auth",
+ "aether-evals",
  "aether-llm",
  "aether-lspd",
  "aether-mcp-servers",
@@ -149,11 +150,20 @@ dependencies = [
 
 [[package]]
 name = "aether-evals"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
- "crucible",
+ "aether-agent-core",
+ "aether-llm",
+ "aether-project",
+ "futures",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "testcontainers",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -290,7 +300,7 @@ dependencies = [
 
 [[package]]
 name = "aether-project"
-version = "0.5.9"
+version = "0.5.10"
 dependencies = [
  "aether-agent-core",
  "aether-doctest",
@@ -1763,25 +1773,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "acdd7c62a3665c7f6830a51635d9ac9b23ed385797f70a83bb8bafe9c572ab2b"
 dependencies = [
  "winapi",
-]
-
-[[package]]
-name = "crucible"
-version = "0.2.1"
-dependencies = [
- "aether-agent-core",
- "aether-llm",
- "aether-mcp-utils",
- "aether-project",
- "futures",
- "schemars 1.2.1",
- "serde",
- "serde_json",
- "tempfile",
- "testcontainers",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -3350,6 +3341,18 @@ checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
 dependencies = [
  "block-padding",
  "generic-array",
+]
+
+[[package]]
+name = "internal-evals"
+version = "0.1.0"
+dependencies = [
+ "aether-evals",
+ "aether-project",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]

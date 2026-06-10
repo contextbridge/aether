@@ -2,7 +2,7 @@ use crate::settings_args::SettingsSourceArgs;
 use aether_auth::{
     EncryptedFileOAuthCredentialStorage, FakeOAuthCredentialStore, OAuthCredentialStorage, OAuthError, OsKeyringStore,
 };
-use aether_project::{AetherSettings, CredentialsStoreConfig};
+use aether_project::CredentialsStoreConfig;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -10,15 +10,10 @@ pub fn build_oauth_credential_store(
     settings_source: &SettingsSourceArgs,
     cwd: &Path,
 ) -> Result<Arc<dyn OAuthCredentialStorage>, OAuthError> {
-    let result = match settings_source.source(cwd) {
-        Some(source) => AetherSettings::load(cwd, [source]),
-        None => AetherSettings::load_default(cwd),
-    };
-
-    let settings_source = match result {
-        Ok(settings) => Ok(settings.credentials_store),
-        Err(e) => Err(OAuthError::CredentialStore(format!("Failed to load settings for credential store config: {e}"))),
-    }?;
+    let settings_source =
+        settings_source.load_settings(cwd).map(|settings| settings.credentials_store).map_err(|e| {
+            OAuthError::CredentialStore(format!("Failed to load settings for credential store config: {e}"))
+        })?;
 
     match settings_source {
         Some(CredentialsStoreConfig::Memory) => Ok(Arc::new(FakeOAuthCredentialStore::new())),

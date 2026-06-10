@@ -1,7 +1,7 @@
 nextest-version = { required = "0.9.133" }
 
 [profile.default]
-default-filter = 'not (package(aether-evals) and test(/_eval$/))'
+default-filter = 'not package(internal-evals)'
 fail-fast = false
 failure-output = "immediate-final"
 success-output = "never"
@@ -20,7 +20,7 @@ store-failure-output = true
 evals = { max-threads = 5 }
 
 [[profile.default.overrides]]
-filter = 'package(aether-evals) and test(/_eval$/)'
+filter = 'package(internal-evals) and test(/_eval$/)'
 test-group = 'evals'
 slow-timeout = { period = "180s", terminate-after = 3 }
 failure-output = "immediate-final"

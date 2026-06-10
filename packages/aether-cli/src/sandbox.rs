@@ -19,9 +19,8 @@ pub enum SandboxError {
     DockerNotRunning(String),
     #[error(
         "Sandbox image '{0}' not found. Build it with:\n\
-             cargo build --release -p aether-agent-cli\n\
-             cp target/release/aether docker/\n\
-             docker build -t {0} -f docker/Dockerfile.sandbox docker/"
+             cargo build -p aether-agent-cli --bin aether\n\
+             docker build -t {0} -f packages/internal-evals/examples/Dockerfile ."
     )]
     ImageNotFound(String),
     #[error("Failed to exec docker: {0}")]

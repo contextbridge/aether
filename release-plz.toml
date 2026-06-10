@@ -7,11 +7,6 @@ dependencies_update = true
 semver_check = false
 
 [[package]]
-name = "crucible"
-release = false
-publish = false
-
-[[package]]
-name = "aether-evals"
+name = "internal-evals"
 release = false
 publish = false

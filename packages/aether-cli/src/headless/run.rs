@@ -5,7 +5,8 @@ use std::process::ExitCode;
 use tokio::sync::mpsc;
 
 use super::error::CliError;
-use super::{CliEventKind, OutputFormat, RunConfig};
+use super::{CliEventKind, RunConfig};
+use crate::output::OutputFormat;
 use crate::runtime::RuntimeBuilder;
 
 pub async fn run(config: RunConfig) -> Result<ExitCode, CliError> {
@@ -28,12 +29,12 @@ pub async fn run(config: RunConfig) -> Result<ExitCode, CliError> {
         .await
         .map_err(|e| CliError::AgentError(format!("Failed to send prompt: {e}")))?;
 
-    Ok(stream_output(agent.agent_rx, &config.output, &config.events).await)
+    Ok(stream_output(agent.agent_rx, config.output, &config.events).await)
 }
 
 async fn stream_output(
     mut rx: mpsc::Receiver<AgentMessage>,
-    format: &OutputFormat,
+    format: OutputFormat,
     events: &[CliEventKind],
 ) -> ExitCode {
     while let Some(msg) = rx.recv().await {
@@ -51,7 +52,7 @@ async fn stream_output(
     ExitCode::SUCCESS
 }
 
-fn print_message(format: &OutputFormat, msg: &AgentMessage) -> Result<(), serde_json::Error> {
+fn print_message(format: OutputFormat, msg: &AgentMessage) -> Result<(), serde_json::Error> {
     match format {
         OutputFormat::Text => {
             if let Some(text) = format_text(msg) {
@@ -425,7 +426,7 @@ mod tests {
         let (tx, rx) = mpsc::channel(4);
         tx.send(AgentMessage::Done).await.unwrap();
         let filter = vec![CliEventKind::ToolCall];
-        let code = stream_output(rx, &OutputFormat::Text, &filter).await;
+        let code = stream_output(rx, OutputFormat::Text, &filter).await;
         assert_eq!(code, ExitCode::SUCCESS);
     }
 

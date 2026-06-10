@@ -1,4 +1,4 @@
-use aether_project::{AetherSettingsSource, SettingsFileSource};
+use aether_project::{AetherSettings, AetherSettingsSource, AgentCatalog, SettingsError, SettingsFileSource};
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, Default, clap::Args)]
@@ -18,6 +18,22 @@ impl SettingsSourceArgs {
             self.settings_file
                 .as_ref()
                 .map(|path| AetherSettingsSource::File(SettingsFileSource::new(path.clone(), root)))
+        }
+    }
+
+    pub fn load_settings(&self, cwd: &Path) -> Result<AetherSettings, SettingsError> {
+        match self.source(cwd) {
+            Some(source) => AetherSettings::load(cwd, [source]),
+            None => AetherSettings::load_default(cwd),
+        }
+    }
+
+    pub fn load_agent_catalog(&self, cwd: &Path) -> Result<AgentCatalog, SettingsError> {
+        let settings = self.load_settings(cwd)?;
+        if settings.agents.is_empty() {
+            Ok(AgentCatalog::empty(cwd.to_path_buf()))
+        } else {
+            AgentCatalog::from_settings(cwd, settings)
         }
     }
 }

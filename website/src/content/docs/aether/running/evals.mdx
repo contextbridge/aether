@@ -1,0 +1,315 @@
+---
+title: Evals
+description: Build and run CLI evals for Aether agents in Docker sandboxes.
+---
+
+`aether eval` runs regression tests for Aether agents. Each eval creates a workspace, runs `aether headless --output json` in a fresh Docker container, then checks the agent's tool calls and file changes.
+
+## Overview
+
+Create an `evals/` directory at the root of your project:
+
+```bash
+mkdir -p evals
+```
+
+`aether eval` looks in `./evals` by default. A typical eval directory contains a Dockerfile, one or more `*.eval.json` files, and optional fixtures:
+
+```text
+evals/
+  Dockerfile
+  edit-notes.eval.json
+  review-pr.eval.json
+  fixtures/
+    todo-app/
+      package.json
+      src/app.ts
+```
+
+Each `*.eval.json` file defines one scenario: the sandbox image to run in, the prompt to send to Aether, the starting workspace, and the expectations to check after the agent finishes.
+
+## Dockerfiles
+
+Each eval runs inside Docker. The image must contain the `aether` binary because the eval runner starts the agent by executing `aether headless` inside the container.
+
+Create `evals/Dockerfile`:
+
+```dockerfile
+FROM rust:latest
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    git \
+    pkg-config \
+    libssl-dev \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN cargo install aether-agent-cli
+
+WORKDIR /workspace
+```
+
+This image uses Rust so it can install Aether with Cargo. Add your project's own tools here too. For example, a Node repo might add `nodejs` and `npm`; a Python repo might add `python3` and `python3-pip`.
+
+Eval files can either build a local Dockerfile:
+
+```jsonc
+"docker": {
+  "file": "Dockerfile",
+  "context": ".",
+  "image": "my-aether-evals:latest"
+}
+```
+
+Or reference a prebuilt image:
+
+```jsonc
+"docker": {
+  "image": "ghcr.io/acme/aether-evals:main"
+}
+```
+
+Paths in the `docker` object are relative to the eval file.
+
+## Eval Files
+
+Create `evals/edit-notes.eval.json`:
+
+```jsonc
+{
+  "docker": {
+    "file": "Dockerfile",
+    "context": ".",
+    "image": "my-aether-evals:latest"
+  },
+  "settings": "../.aether/settings.json",
+  "agent": "Fast",
+  "name": "edits_notes",
+  "prompt": "Read notes.txt, then replace only the first 'alpha' with 'beta'. Leave the second 'alpha' unchanged.",
+  "workspace": {
+    "files": {
+      "notes.txt": "alpha\nalpha\n"
+    }
+  },
+  "expect": {
+    "toolCalls": {
+      "coding__read_file": { "atLeast": 1 },
+      "coding__edit_file": { "exactly": 1 }
+    },
+    "files": {
+      "notes.txt": "beta\nalpha\n"
+    },
+    "judge": {
+      "model": "anthropic:claude-sonnet-4-5",
+      "instructions": "Grade whether this would be accepted by a maintainer.",
+      "contextFiles": ["notes.txt"],
+      "criteria": [
+        {
+          "id": "behavior",
+          "description": "Only the first alpha is replaced with beta; the second alpha remains.",
+          "blocking": true,
+          "weight": 3.0,
+          "threshold": 1.0
+        },
+        {
+          "id": "clarity",
+          "description": "The final response clearly explains the completed change.",
+          "blocking": false,
+          "weight": 0.5,
+          "threshold": 0.7
+        }
+      ]
+    }
+  }
+}
+```
+
+The paths in this file are relative to `evals/edit-notes.eval.json`:
+
+- `docker.file: "Dockerfile"` points at `evals/Dockerfile`.
+- `docker.context: "."` means Docker builds from the `evals/` directory.
+- `settings: "../.aether/settings.json"` loads your project settings from the repo root.
+
+### Workspace
+
+Use inline files for small examples:
+
+```jsonc
+"workspace": {
+  "files": {
+    "README.md": "# Demo\n",
+    "src/main.rs": "fn main() {}\n"
+  }
+}
+```
+
+For larger workspaces, create fixtures next to your evals:
+
+```text
+evals/
+  Dockerfile
+  fix-todo.eval.json
+  fixtures/
+    todo-app/
+      package.json
+      src/app.ts
+```
+
+Then reference the fixture directory:
+
+```jsonc
+"workspace": {
+  "dir": "fixtures/todo-app"
+}
+```
+
+The fixture is copied into a fresh temporary workspace for each eval run, so the agent cannot dirty your source fixture.
+
+Use a Git workspace when you want Aether to start from one commit and compare against a known good commit:
+
+```jsonc
+"workspace": {
+  "git": {
+    "url": "https://github.com/acme/example.git",
+    "startCommit": "abc123",
+    "goldCommit": "def456",
+    "subdir": "packages/api"
+  }
+}
+```
+
+`startCommit` is what the agent sees. `goldCommit` is optional reference output used for diff context in reports.
+
+### Expectations
+
+Use exact file checks when possible:
+
+```jsonc
+"expect": {
+  "files": {
+    "notes.txt": "beta\nalpha\n"
+  }
+}
+```
+
+Use tool assertions when the method matters. `atLeast` requires a minimum count; `exactly` requires an exact count:
+
+```jsonc
+"expect": {
+  "toolCalls": {
+    "coding__read_file": { "atLeast": 1 },
+    "coding__edit_file": { "exactly": 1 }
+  }
+}
+```
+
+Use a judge when correctness is qualitative, such as code review quality, explanation quality, or whether a migration plan covers the important risks.
+
+```jsonc
+"expect": {
+  "filesContain": {
+    "review.md": "SQL injection"
+  },
+  "judge": {
+    "model": "anthropic:claude-sonnet-4-5",
+    "instructions": "Grade the review like a senior maintainer.",
+    "contextFiles": ["review.md"],
+    "criteria": [
+      {
+        "id": "risk",
+        "description": "The review identifies the SQL injection risk and explains a concrete fix.",
+        "blocking": true,
+        "weight": 2.0,
+        "threshold": 0.9
+      },
+      {
+        "id": "clarity",
+        "description": "The review is concise and actionable.",
+        "blocking": false,
+        "weight": 1.0,
+        "threshold": 0.7
+      }
+    ]
+  }
+}
+```
+
+A judge is a separate model call from the agent run, so it has its own `model` field. Each criterion gets one normalized score from `0.0` to `1.0`. Blocking criteria default to `true` and must meet their thresholds for the eval to pass; non-blocking criteria affect only the reported weighted score. `weight` defaults to `1.0`, `threshold` defaults to `1.0`, and `contextFiles` adds final workspace file contents to the judge prompt. Keep deterministic checks such as files and tool calls as first-class expectations.
+
+### Sharing a judge across evals
+
+To reuse one rubric in several evals, set `judge` to a path (relative to the eval file) instead of an inline object:
+
+```jsonc
+"expect": {
+  "files": {
+    "notes.txt": "beta\nalpha\n"
+  },
+  "judge": "shared/maintainer.judge.json"
+}
+```
+
+The referenced file contains exactly what would otherwise appear inline:
+
+```jsonc
+// evals/shared/maintainer.judge.json
+{
+  "model": "anthropic:claude-sonnet-4-5",
+  "instructions": "Grade whether this would be accepted by a maintainer.",
+  "criteria": [
+    {
+      "id": "scope",
+      "description": "The agent avoids unrelated file changes and extra refactors.",
+      "blocking": true
+    },
+    {
+      "id": "clarity",
+      "description": "The final response clearly explains the completed change.",
+      "blocking": false,
+      "weight": 0.5,
+      "threshold": 0.7
+    }
+  ]
+}
+```
+
+A broken or invalid judge reference fails at load time, before any Docker builds or agent runs. There is no merging: an eval that needs a different rubric inlines its own `judge` object.
+
+## Running Evals
+
+Run one eval file:
+
+```bash
+aether eval evals/edit-notes.eval.json
+```
+
+On the first run, Aether builds `my-aether-evals:latest` from `evals/Dockerfile`, then runs the eval in a fresh container.
+
+Run every eval under `evals/`:
+
+```bash
+aether eval
+```
+
+Useful variants:
+
+```bash
+aether eval evals/ --name edits_notes         # run one eval by name
+aether eval evals/ --max-concurrency 2        # limit parallel eval execution
+aether eval evals/ --output json              # script-friendly report
+```
+
+`aether eval` exits with:
+
+| Scenario | Exit status |
+|---|---|
+| Every eval passes | `0` |
+| Any eval fails | `1` |
+| Setup fails before eval execution | `1` |
+
+Setup failures include invalid JSON, an unreadable settings file, a missing Dockerfile, or a failed Docker build. Setup failures abort the whole run before any eval starts.
+
+Per-eval failures include container errors, unmet expectations, and judge failures. Those are reported for the failing eval while other eval files continue to run.
+
+The CLI eval format is the recommended path for Aether users. The underlying Rust harness lives in the `aether-evals` crate and is useful when you need custom setup or assertions that JSON cannot express, but most agent regression tests should start as `*.eval.json` files run by `aether eval`.

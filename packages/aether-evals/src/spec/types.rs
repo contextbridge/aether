@@ -1,0 +1,413 @@
+use super::error::EvalFileError;
+use crate::agents::{DockerImage, ImageBuildRequest};
+use crate::{EvalReport, GitRepoSpec, Workspace, WorkspaceError};
+use aether_project::AetherSettings;
+use serde::Deserialize;
+use serde::de::DeserializeOwned;
+use std::collections::{BTreeMap, BTreeSet};
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::path::{Path, PathBuf};
+
+/// Docker image configuration for an eval sandbox: either a prebuilt `image`, or a Dockerfile
+/// `file` to build (optionally tagged with `image`).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(try_from = "DockerSpecRepr")]
+pub enum DockerSpec {
+    /// Prebuilt sandbox image to run the eval in. The image must have `aether` on its `PATH`.
+    Prebuilt { image: String },
+    /// Dockerfile (relative to the eval file) to build into an image. When `image` is set, the
+    /// built image is tagged with it; otherwise the tag is derived from the Dockerfile and
+    /// context paths. `context` is relative to the eval file and defaults to its directory.
+    Build { file: PathBuf, image: Option<String>, context: Option<PathBuf> },
+}
+
+/// A [`DockerSpec`] resolved against the eval file's directory: the image to run in and, for
+/// Dockerfile-backed specs, the build that produces it.
+#[derive(Debug, Clone)]
+pub(crate) struct ResolvedDocker {
+    pub image: DockerImage,
+    pub build: Option<ImageBuildRequest>,
+}
+
+/// The starting workspace for an eval. Omitted means an empty temporary directory.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(try_from = "WorkspaceSpecRepr")]
+pub enum WorkspaceSpec {
+    /// Inline files written into a fresh workspace, keyed by relative path.
+    Files(BTreeMap<String, String>),
+    /// A directory (relative to the eval file) copied into a fresh workspace.
+    Dir(PathBuf),
+    /// A git repository checked out at `startCommit`.
+    Git(GitRepoSpec),
+}
+
+/// An LLM-as-judge rubric, either inline or a path (relative to the eval file) to a shared JSON
+/// file holding a [`JudgeSpec`], so one rubric can be reused across evals.
+#[derive(Debug, Clone)]
+pub(crate) enum PathOrInline<T> {
+    Path(PathBuf),
+    Inline(T),
+}
+
+pub(crate) type JudgeRef = PathOrInline<JudgeSpec>;
+
+/// An LLM-as-judge rubric for an eval.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JudgeSpec {
+    /// Model to use for this judge check (e.g. "anthropic:claude-sonnet-4-5").
+    pub model: String,
+
+    /// Optional high-level grading instructions for the LLM judge.
+    #[serde(default)]
+    pub instructions: Option<String>,
+
+    /// Workspace-relative files to include in the judge context in addition to deterministic
+    /// expectation files.
+    #[serde(default)]
+    pub context_files: Vec<String>,
+
+    /// Ordered rubric criteria to score on a normalized 0.0..=1.0 scale.
+    #[serde(default)]
+    pub criteria: Vec<JudgeCriterionSpec>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JudgeCriterionSpec {
+    pub id: String,
+    pub description: String,
+    #[serde(default = "default_blocking")]
+    pub blocking: bool,
+    #[serde(default = "default_weight")]
+    pub weight: f64,
+    #[serde(default = "default_threshold")]
+    pub threshold: f64,
+}
+
+/// Tool call expectations keyed by tool name.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(try_from = "ToolCallExpectationRepr")]
+pub enum ToolCallExpectation {
+    AtLeast(usize),
+    Exactly(usize),
+}
+
+/// Expectations checked against the agent's run. All are optional; an empty `expect` passes as
+/// long as the agent runs to completion.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Expect {
+    /// Tool call count requirements by tool name.
+    #[serde(default)]
+    pub tool_calls: BTreeMap<String, ToolCallExpectation>,
+
+    /// Files whose full content must equal the given value, keyed by workspace-relative path.
+    #[serde(default)]
+    pub files: BTreeMap<String, String>,
+
+    /// Files that must contain the given substring, keyed by workspace-relative path.
+    #[serde(default)]
+    pub files_contain: BTreeMap<String, String>,
+
+    /// LLM-as-judge evaluation, inline or a path to a shared judge file.
+    #[serde(default)]
+    pub judge: Option<JudgeRef>,
+}
+
+pub(crate) type SettingsRef = PathOrInline<Box<AetherSettings>>;
+
+impl DockerSpec {
+    /// Resolve the image to run in, and the build producing it for Dockerfile-backed specs, with
+    /// paths resolved relative to `base_dir`.
+    pub(crate) fn resolve(&self, base_dir: &Path) -> Result<ResolvedDocker, EvalFileError> {
+        match self {
+            Self::Prebuilt { image } => Ok(ResolvedDocker { image: DockerImage::parse(image)?, build: None }),
+            Self::Build { file, image, context } => {
+                let dockerfile = canonical_docker_path(base_dir.join(file))?;
+                let context = canonical_docker_path(
+                    context.as_ref().map_or_else(|| base_dir.to_path_buf(), |context| base_dir.join(context)),
+                )?;
+                let tag = image.clone().unwrap_or_else(|| derived_tag(&dockerfile, &context));
+                Ok(ResolvedDocker {
+                    image: DockerImage::parse(&tag)?,
+                    build: Some(ImageBuildRequest { dockerfile, context, tag }),
+                })
+            }
+        }
+    }
+}
+
+impl WorkspaceSpec {
+    pub(crate) fn build(&self, base_dir: &Path) -> Result<Workspace, WorkspaceError> {
+        match self {
+            Self::Files(files) => Workspace::from_files(files),
+            Self::Dir(dir) => Workspace::from_dir(base_dir.join(dir)),
+            Self::Git(git) => Workspace::from_git_repo(git.clone()),
+        }
+    }
+}
+
+impl Expect {
+    pub(crate) fn evaluate(&self, report: &EvalReport) -> Vec<String> {
+        let mut failures = Vec::new();
+
+        for (tool, expectation) in &self.tool_calls {
+            let actual = report.tool_call_count(tool);
+            if let Some(failure) = expectation.failure(tool, actual) {
+                failures.push(failure);
+            }
+        }
+
+        for (path, expected) in &self.files {
+            match read_workspace_file(report, path) {
+                Ok(actual) if &actual == expected => {}
+                Ok(actual) => failures
+                    .push(format!("file `{path}` content mismatch:\n  expected: {expected:?}\n  actual:   {actual:?}")),
+                Err(error) => failures.push(format!("file `{path}` could not be read: {error}")),
+            }
+        }
+
+        for (path, needle) in &self.files_contain {
+            match read_workspace_file(report, path) {
+                Ok(actual) if actual.contains(needle) => {}
+                Ok(_) => failures.push(format!("file `{path}` does not contain {needle:?}")),
+                Err(error) => failures.push(format!("file `{path}` could not be read: {error}")),
+            }
+        }
+
+        failures
+    }
+}
+
+fn read_workspace_file(report: &EvalReport, relative_path: &str) -> std::io::Result<String> {
+    std::fs::read_to_string(report.path(relative_path))
+}
+
+impl SettingsRef {
+    /// Load the settings this reference points at, resolving the settings path relative to
+    /// `base_dir`. Inline settings resolve file-backed resources relative to `base_dir`; path-backed
+    /// settings resolve resources relative to the settings project root.
+    pub fn resolve(&self, base_dir: &Path) -> Result<AetherSettings, EvalFileError> {
+        match self {
+            SettingsRef::Inline(settings) => {
+                let mut settings = settings.as_ref().clone();
+                settings.inline_resources(base_dir)?;
+                Ok(settings)
+            }
+            SettingsRef::Path(path) => {
+                AetherSettings::load_file_for_export(&base_dir.join(path)).map_err(EvalFileError::from)
+            }
+        }
+    }
+}
+
+impl JudgeRef {
+    /// Resolve to a concrete judge spec, reading path references relative to `base_dir`.
+    pub fn resolve(&self, base_dir: &Path) -> Result<JudgeSpec, EvalFileError> {
+        match self {
+            JudgeRef::Inline(spec) => {
+                spec.validate().map_err(|message| EvalFileError::InvalidInlineJudge { message })?;
+                Ok(spec.clone())
+            }
+            JudgeRef::Path(path) => {
+                let path = base_dir.join(path);
+                let content = std::fs::read_to_string(&path)
+                    .map_err(|source| EvalFileError::ReadJudgeFile { path: path.clone(), source })?;
+                let spec: JudgeSpec = serde_json::from_str(&content)
+                    .map_err(|source| EvalFileError::ParseJudgeFile { path: path.clone(), source })?;
+                spec.validate().map_err(|message| EvalFileError::InvalidInlineJudge { message })?;
+                Ok(spec)
+            }
+        }
+    }
+}
+
+impl<'de, T> Deserialize<'de> for PathOrInline<T>
+where
+    T: DeserializeOwned,
+{
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        match serde_json::Value::deserialize(deserializer)? {
+            serde_json::Value::String(path) => Ok(Self::Path(PathBuf::from(path))),
+            value => serde_json::from_value(value).map(Self::Inline).map_err(serde::de::Error::custom),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DockerSpecRepr {
+    #[serde(default)]
+    image: Option<String>,
+    #[serde(default)]
+    file: Option<PathBuf>,
+    #[serde(default)]
+    context: Option<PathBuf>,
+}
+
+impl TryFrom<DockerSpecRepr> for DockerSpec {
+    type Error = &'static str;
+
+    fn try_from(repr: DockerSpecRepr) -> Result<Self, Self::Error> {
+        match (repr.file, repr.image, repr.context) {
+            (Some(file), image, context) => Ok(Self::Build { file, image, context }),
+            (None, Some(image), None) => Ok(Self::Prebuilt { image }),
+            (None, Some(_), Some(_)) => Err("docker `context` requires a Dockerfile `file`"),
+            (None, None, _) => Err("docker must specify a prebuilt `image` and/or a Dockerfile `file`"),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ToolCallExpectationRepr {
+    #[serde(default)]
+    at_least: Option<usize>,
+    #[serde(default)]
+    exactly: Option<usize>,
+}
+
+impl ToolCallExpectation {
+    pub(crate) fn failure(&self, tool: &str, actual: usize) -> Option<String> {
+        match self {
+            Self::AtLeast(expected) if actual < *expected => Some(format!(
+                "expected tool `{tool}` to be called at least {expected} time(s), but was called {actual}"
+            )),
+            Self::Exactly(expected) if actual != *expected => {
+                Some(format!("expected tool `{tool}` to be called exactly {expected} time(s), but was called {actual}"))
+            }
+            _ => None,
+        }
+    }
+}
+
+impl TryFrom<ToolCallExpectationRepr> for ToolCallExpectation {
+    type Error = &'static str;
+
+    fn try_from(repr: ToolCallExpectationRepr) -> Result<Self, Self::Error> {
+        match (repr.at_least, repr.exactly) {
+            (Some(at_least), None) => Ok(Self::AtLeast(at_least)),
+            (None, Some(exactly)) => Ok(Self::Exactly(exactly)),
+            _ => Err("tool call expectation must specify exactly one of `atLeast` or `exactly`"),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WorkspaceSpecRepr {
+    #[serde(default)]
+    files: Option<BTreeMap<String, String>>,
+    #[serde(default)]
+    dir: Option<PathBuf>,
+    #[serde(default)]
+    git: Option<GitRepoSpec>,
+}
+
+impl TryFrom<WorkspaceSpecRepr> for WorkspaceSpec {
+    type Error = &'static str;
+
+    fn try_from(repr: WorkspaceSpecRepr) -> Result<Self, Self::Error> {
+        match (repr.files, repr.dir, repr.git) {
+            (Some(files), None, None) => Ok(Self::Files(files)),
+            (None, Some(dir), None) => Ok(Self::Dir(dir)),
+            (None, None, Some(git)) => Ok(Self::Git(git)),
+            _ => Err("workspace must specify exactly one of `files`, `dir`, or `git`"),
+        }
+    }
+}
+
+impl JudgeSpec {
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        if self.criteria.is_empty() {
+            return Err("judge criteria must not be empty".to_string());
+        }
+
+        let mut ids = BTreeSet::new();
+        for criterion in &self.criteria {
+            if criterion.id.trim().is_empty() {
+                return Err("judge criterion id must not be empty".to_string());
+            }
+            if !ids.insert(criterion.id.clone()) {
+                return Err(format!("duplicate judge criterion id `{}`", criterion.id));
+            }
+            if criterion.description.trim().is_empty() {
+                return Err(format!("judge criterion `{}` description must not be empty", criterion.id));
+            }
+            if !criterion.weight.is_finite() || criterion.weight <= 0.0 {
+                return Err(format!("judge criterion `{}` weight must be positive and finite", criterion.id));
+            }
+            if !criterion.threshold.is_finite() || !(0.0..=1.0).contains(&criterion.threshold) {
+                return Err(format!("judge criterion `{}` threshold must be between 0.0 and 1.0", criterion.id));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+fn canonical_docker_path(path: PathBuf) -> Result<PathBuf, EvalFileError> {
+    path.canonicalize().map_err(|source| EvalFileError::DockerPath { path, source })
+}
+
+/// Tag for a built image whose eval file does not name one. Derived from the Dockerfile and
+/// context paths so distinct builds never collide on a shared default tag, while eval files
+/// sharing a Dockerfile and context share one build.
+fn derived_tag(dockerfile: &Path, context: &Path) -> String {
+    let mut hasher = DefaultHasher::new();
+    (dockerfile, context).hash(&mut hasher);
+    format!("aether-eval-sandbox:{:016x}", hasher.finish())
+}
+
+fn default_blocking() -> bool {
+    true
+}
+
+fn default_weight() -> f64 {
+    1.0
+}
+
+fn default_threshold() -> f64 {
+    1.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_ref_parses_path_or_inline() {
+        let path: SettingsRef = serde_json::from_str(r#""./.aether/settings.json""#).unwrap();
+        assert!(matches!(path, SettingsRef::Path(_)));
+
+        let inline: SettingsRef = serde_json::from_str(r#"{"agents":[]}"#).unwrap();
+        assert!(matches!(inline, SettingsRef::Inline(_)));
+    }
+
+    #[test]
+    fn judge_ref_parses_path_or_inline() {
+        let path: JudgeRef = serde_json::from_str(r#""shared/maintainer.judge.json""#).unwrap();
+        assert!(matches!(path, JudgeRef::Path(_)));
+
+        let inline: JudgeRef =
+            serde_json::from_str(r#"{"model":"m","criteria":[{"id":"a","description":"ok"}]}"#).unwrap();
+        assert!(matches!(inline, JudgeRef::Inline(_)));
+    }
+
+    #[test]
+    fn judge_ref_preserves_inline_validation_errors() {
+        let error = serde_json::from_str::<JudgeRef>(r#"{"criteria":[{"id":"a","description":"ok"}]}"#).unwrap_err();
+
+        assert!(error.to_string().contains("missing field `model`"), "got: {error}");
+    }
+
+    #[test]
+    fn derived_tags_differ_per_dockerfile_and_match_for_identical_builds() {
+        let tag_a = derived_tag(Path::new("/repo/a/Dockerfile"), Path::new("/repo"));
+        let tag_b = derived_tag(Path::new("/repo/b/Dockerfile"), Path::new("/repo"));
+
+        assert_eq!(tag_a, derived_tag(Path::new("/repo/a/Dockerfile"), Path::new("/repo")));
+        assert_ne!(tag_a, tag_b);
+    }
+}

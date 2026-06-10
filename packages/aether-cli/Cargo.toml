@@ -31,7 +31,7 @@ path = "src/main.rs"
 [dependencies]
 aether-auth = { path = "../aether-auth", version = "0.1.5", features = ["keyring"] }
 aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.6.9" }
-aether-project = { path = "../aether-project", version = "0.5.9" }
+aether-project = { path = "../aether-project", version = "0.5.10" }
 llm = { package = "aether-llm", path = "../llm", features = ["bedrock", "codex"], version = "0.7.8" }
 mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.5.13" }
 mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", features = ["all"], version = "0.4.14" }
@@ -40,6 +40,7 @@ tui = { package = "aether-tui", path = "../tui", default-features = false, featu
 acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["server", "testing"], version = "0.3.19" }
 agent-client-protocol = { workspace = true }
 aether-lspd = { path = "../aether-lspd", version = "0.1.16" }
+aether-evals = { path = "../aether-evals", version = "0.2.1" }
 rmcp = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

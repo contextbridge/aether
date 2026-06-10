@@ -165,7 +165,7 @@ Use `aether-agent-core` as a Rust library to build your own agent in ~25 lines. 
 | [`wisp`](packages/wisp) | Terminal UI for AI agents, built on ACP ([docs](https://aether-agent.io/aether/terminal/overview/)) |
 | [`aether-agent-cli`](packages/aether-cli) | Headless CLI and ACP server for editor integration ([docs](https://aether-agent.io/aether/running/headless/)) |
 | [`mcp-servers`](packages/mcp-servers) | Pre-built MCP tool servers (coding, LSP, skills, tasks, sub-agents, survey) ([docs](https://aether-agent.io/aether/built-in-servers/coding/)) |
-| [`crucible`](packages/crucible) | Automated testing (evals) for LLM agents ([docs](https://aether-agent.io/libraries/crucible/evals/)) |
+| [`aether-evals`](packages/aether-evals) | Automated testing (evals) for LLM agents ([docs](https://aether-agent.io/libraries/aether-evals/evals/)) |
 | [`aether-lspd`](packages/aether-lspd) | LSP daemon — shares language servers across agents |
 | [`aether-project`](packages/aether-project) | Project configuration and agent catalog from `.aether/settings.json` |
 
