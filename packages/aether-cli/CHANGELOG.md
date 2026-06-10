@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.12](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.11...aether-agent-cli-v0.7.12) - 2026-06-10
+
+### Added
+
+- *(aether-cli)* Add evals command ([#142](https://github.com/contextbridge/aether/pull/142))
+- *(wisp)* Allow configuring status lines via settings ([#132](https://github.com/contextbridge/aether/pull/132))
+
+### Other
+
+- *(aether-cli)* Make aether cli headless mode output serialized AgentMessages instead of abusing the tracing crate output format and run evals in isolated Docker containers ([#141](https://github.com/contextbridge/aether/pull/141))
+- Upgrade deps ([#140](https://github.com/contextbridge/aether/pull/140))
+- *(website)* Docs fixes + docs skill ([#131](https://github.com/contextbridge/aether/pull/131))
+
 ## [0.7.11](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.10...aether-agent-cli-v0.7.11) - 2026-06-05
 
 ### Added

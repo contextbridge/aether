@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.9](https://github.com/contextbridge/aether/compare/aether-llm-v0.7.8...aether-llm-v0.7.9) - 2026-06-10
+
+### Added
+
+- *(aether-cli)* Add evals command ([#142](https://github.com/contextbridge/aether/pull/142))
+
+### Other
+
+- update models ([#143](https://github.com/contextbridge/aether/pull/143))
+- update models ([#135](https://github.com/contextbridge/aether/pull/135))
+
 ## [0.7.8](https://github.com/contextbridge/aether/compare/aether-llm-v0.7.7...aether-llm-v0.7.8) - 2026-06-04
 
 ### Other

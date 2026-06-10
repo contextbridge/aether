@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.10](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.6.9...aether-agent-core-v0.6.10) - 2026-06-10
+
+### Other
+
+- *(aether-cli)* Make aether cli headless mode output serialized AgentMessages instead of abusing the tracing crate output format and run evals in isolated Docker containers ([#141](https://github.com/contextbridge/aether/pull/141))
+
 ## [0.6.9](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.6.8...aether-agent-core-v0.6.9) - 2026-06-04
 
 ### Other

@@ -20,10 +20,10 @@ rustdoc-args = ["--cfg", "docsrs"]
 workspace = true
 
 [dependencies]
-aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.6.9" }
-llm = { package = "aether-llm", path = "../llm", version = "0.7.8" }
-mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.5.13" }
-utils = { package = "aether-utils", path = "../utils", version = "0.2.5" }
+aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.6.10" }
+llm = { package = "aether-llm", path = "../llm", version = "0.7.9" }
+mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.5.14" }
+utils = { package = "aether-utils", path = "../utils", version = "0.2.6" }
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

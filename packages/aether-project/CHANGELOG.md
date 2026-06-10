@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.10](https://github.com/contextbridge/aether/compare/aether-project-v0.5.9...aether-project-v0.5.10) - 2026-06-10
+
+### Added
+
+- *(aether-cli)* Add evals command ([#142](https://github.com/contextbridge/aether/pull/142))
+
+### Other
+
+- *(aether-cli)* Make aether cli headless mode output serialized AgentMessages instead of abusing the tracing crate output format and run evals in isolated Docker containers ([#141](https://github.com/contextbridge/aether/pull/141))
+- Upgrade deps ([#140](https://github.com/contextbridge/aether/pull/140))
+
 ## [0.5.9](https://github.com/contextbridge/aether/compare/aether-project-v0.5.8...aether-project-v0.5.9) - 2026-06-04
 
 ### Added
