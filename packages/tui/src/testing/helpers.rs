@@ -2,6 +2,9 @@ use std::fmt::Write;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use crate::Line;
+use crate::Style;
+use crate::display_width_text;
 use crate::rendering::frame::Cursor;
 use crate::rendering::frame::Frame;
 use crate::rendering::renderer::Renderer;
@@ -61,4 +64,18 @@ pub fn sample_options() -> Vec<SelectOption> {
         SelectOption { value: "b".into(), title: "Beta".into(), description: None },
         SelectOption { value: "c".into(), title: "Gamma".into(), description: None },
     ]
+}
+
+/// Returns the style of the span that covers the given display column.
+/// Useful in tests for asserting background/foreground colors at a position.
+pub fn style_at_column(line: &Line, col: usize) -> Style {
+    let mut current = 0;
+    for span in line.spans() {
+        let width = display_width_text(span.text());
+        if col < current + width {
+            return span.style();
+        }
+        current += width;
+    }
+    Style::default()
 }

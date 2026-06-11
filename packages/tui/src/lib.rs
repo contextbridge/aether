@@ -49,7 +49,7 @@ pub use components::stepper::{StepVisualState, Stepper, StepperItem};
 pub use components::text_field::TextField;
 
 pub use components::{Component, Cursor, Event, PickerMessage, ViewContext, merge, wrap_selection};
-pub use diffs::diff_types::{DiffLine, DiffPreview, DiffTag, SplitDiffCell, SplitDiffRow};
+pub use diffs::diff_types::{DiffLine, DiffPreview, DiffTag, SplitDiffEntry, SplitDiffRow};
 pub use focus::{FocusOutcome, FocusRing};
 pub use rendering::frame::{FitOptions, Frame, FramePart, Overflow};
 pub use rendering::gutter::{digit_count, wrap_with_gutter};
@@ -77,8 +77,8 @@ pub use rendering::span::Span;
 // Markdown
 #[cfg(feature = "syntax")]
 pub use markdown::{
-    MarkdownBlock, MarkdownHeading, MarkdownRenderResult, SourceMappedLine, parse_markdown_headings,
-    render_markdown_result,
+    MarkdownBlock, MarkdownHeading, MarkdownRenderResult, SourceMappedLine, SourceMarkdownLine,
+    SourceMarkdownRenderResult, parse_markdown_headings, render_markdown_result, render_markdown_source_lines,
 };
 
 // Feature-gated re-exports
@@ -89,8 +89,9 @@ pub use diffs::diff::highlight_diff;
 pub use diffs::split_diff::render_diff;
 #[cfg(feature = "syntax")]
 pub use diffs::split_diff::{
-    MIN_GUTTER_WIDTH, SEPARATOR, SEPARATOR_WIDTH, Side as SplitDiffSide, gutter_width_for_preview,
-    render_cell as split_render_cell,
+    GutterTint, MIN_GUTTER_WIDTH, MIN_SPLIT_WIDTH, SEPARATOR, SEPARATOR_WIDTH, Side as SplitDiffSide,
+    SplitLayoutDimensions, WRAP_MARKER, header_left_padding, render_entry as split_render_entry,
+    usize_to_u16_saturating,
 };
 
 #[cfg(feature = "syntax")]

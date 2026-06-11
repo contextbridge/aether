@@ -1,5 +1,5 @@
 use super::support::git_diff::{
-    added_line, comment_diff_document, git_diff_document, hunk, modified_file_with_hunks, removed_line,
+    added_line, comment_diff_document, context_line, git_diff_document, hunk, modified_file_with_hunks, removed_line,
     sample_git_diff_document, wrapping_split_document,
 };
 use std::path::PathBuf;
@@ -8,7 +8,8 @@ use tui::{Component, Event, KeyCode, MIN_GUTTER_WIDTH, SEPARATOR_WIDTH, ViewCont
 use wisp::components::app::{GitDiffLoadState, GitDiffMode};
 use wisp::git_diff::GitDiffDocument;
 
-const HINT_LINE: &str = "j/k:move  n/p:hunk  h/l:focus  c:comment  s:submit  u:undo  r:refresh  Esc:close";
+const LEFT_HINT_LINE: &str = "j/k move  h/l fold/open  enter view  u undo  r refresh  Esc close";
+const RIGHT_HINT_LINE: &str = "j/k move  h back  c comment  s submit  o full file  u undo  r refresh  Esc close";
 
 fn make_mode(doc: GitDiffDocument) -> GitDiffMode {
     let mut mode = GitDiffMode::new(PathBuf::from("."));
@@ -27,7 +28,8 @@ fn wrapped_right_pane_rows_keep_a_neutral_boundary() {
         .position(|line| line.contains("LEFT_MARK") && line.contains("RIGHT_HEAD"))
         .expect("expected split row containing both left and right markers");
 
-    let right_start = lines[first_row].find("RIGHT_HEAD").expect("expected RIGHT_HEAD marker in first row");
+    let right_start_byte = lines[first_row].find("RIGHT_HEAD").expect("expected RIGHT_HEAD marker in first row");
+    let right_start = lines[first_row][..right_start_byte].chars().count();
 
     let wrapped_idx = lines
         .iter()
@@ -39,13 +41,14 @@ fn wrapped_right_pane_rows_keep_a_neutral_boundary() {
     let ctx = ViewContext::new((140, 12));
     let added_bg = Some(ctx.theme.diff_added_bg());
     let removed_bg = Some(ctx.theme.diff_removed_bg());
-    let separator_and_gutter = SEPARATOR_WIDTH + MIN_GUTTER_WIDTH;
-    let separator_start = right_start.saturating_sub(separator_and_gutter);
-    assert!(separator_start > 0, "first row's RIGHT_HEAD should be preceded by separator + gutter columns");
-    for col in separator_start..right_start {
+    let separator_col = right_start.saturating_sub(SEPARATOR_WIDTH + MIN_GUTTER_WIDTH);
+    assert!(separator_col > 0, "first row's RIGHT_HEAD should be preceded by separator + gutter columns");
+    let separator_bg = term.get_style_at(wrapped_idx, separator_col).bg;
+    assert_ne!(separator_bg, added_bg, "separator column {separator_col} should not inherit added background");
+    assert_ne!(separator_bg, removed_bg, "separator column {separator_col} should not inherit removed background");
+    for col in (separator_col + 1)..right_start {
         let actual_bg = term.get_style_at(wrapped_idx, col).bg;
-        assert_ne!(actual_bg, added_bg, "separator/gutter column {col} should not inherit added background");
-        assert_ne!(actual_bg, removed_bg, "separator/gutter column {col} should not inherit removed background");
+        assert_eq!(actual_bg, added_bg, "continuation gutter column {col} should carry the added background");
     }
 }
 
@@ -73,13 +76,24 @@ fn wrapped_split_diff_continuation_row_keeps_neutral_padding() {
         .get_lines()
         .first()
         .and_then(|line| (0..line.len()).find(|&col| term.get_style_at(0, col).bg == added_bg))
-        .expect("wrapped row should contain at least one cell with the diff_added bg");
+        .expect("wrapped row should contain at least one span with the diff_added bg");
     let neutral_start = right_content_start.saturating_sub(SEPARATOR_WIDTH + MIN_GUTTER_WIDTH);
     for col in neutral_start..right_content_start {
         let actual_bg = term.get_style_at(0, col).bg;
         assert_ne!(actual_bg, added_bg, "padding column {col} should not inherit added background");
         assert_ne!(actual_bg, removed_bg, "padding column {col} should not inherit removed background");
     }
+}
+
+#[test]
+fn diff_header_aligns_with_split_line_numbers() {
+    let mut mode = make_mode(git_diff_document(vec![modified_file_with_hunks(
+        "x.rs",
+        vec![hunk("@@ -1,2 +1,2 @@", 1, 2, 1, 2, vec![removed_line("old();", 1), added_line("new();", 1)])],
+    )]));
+    let lines = render_component(|ctx| mode.render(ctx), 140, 7).get_lines();
+    let header = lines.iter().find(|line| line.contains("x.rs  modified")).expect("diff header should render");
+    assert!(header.contains("│ x.rs  modified"), "diff header should align with split line numbers: {header:?}");
 }
 
 #[test]
@@ -101,13 +115,13 @@ fn git_diff_view_keeps_wrapped_code_out_of_the_line_number_gutter() {
     assert_buffer_eq(
         &term,
         &[
-            cols(&[(">   M x.rs             +1/-1", 28), ("", 1), ("x.rs  (modified)", 0)]),
-            String::new(),
-            cols(&[("", 28), ("", 1), ("@@ -1,2 +1,2 @@", 0)]),
-            cols(&[("", 29), (" 1 LEFT_MARK", 55), ("", 1), (" 1 RIGHT_HEAD", 55)]),
-            cols(&[("", 29), ("", 55), ("", 1), ("", 3), (filler.as_str(), 0)]),
-            cols(&[("", 29), ("", 55), ("", 1), ("", 3), ("RIGHT_TAIL", 0)]),
-            HINT_LINE.to_string(),
+            cols(&[(" Git Diff  1 file  +1 -1", 28), ("│", 1), (" x.rs  modified  +1 -1", 0)]),
+            cols(&[(&"─".repeat(28), 28), ("│", 1), (&"─".repeat(111), 0)]),
+            cols(&[("▎── x.rs", 21), ("+1 -1 M", 7), ("│", 1), (" 1 LEFT_MARK", 55), ("", 1), (" 1 RIGHT_HEAD", 55)]),
+            cols(&[("", 28), ("│", 1), ("", 55), ("", 1), (" ↪ ", 3), (filler.as_str(), 0)]),
+            cols(&[("", 28), ("│", 1), ("", 55), ("", 1), (" ↪ ", 3), ("RIGHT_TAIL", 0)]),
+            cols(&[("", 28), ("│", 1)]),
+            LEFT_HINT_LINE.to_string(),
         ],
     );
 }
@@ -142,28 +156,40 @@ fn screenshot_shaped_git_diff_wrap_row_stays_out_of_gutters() {
     assert_buffer_eq(
         &render_lines(&[tui::Line::new(wrapped_row.clone())], 151, 1),
         &[cols(&[
-            ("", 32),
-            ("blank_panel(left_panel));", 58),
-            ("", 4),
+            ("", 28),
+            ("│", 1),
+            (" ↪ ", 3),
+            ("blank_panel(left_panel));", 57),
+            ("", 1),
+            (" ↪ ", 3),
             ("blank_panel(left_panel, theme.code_bg()));", 0),
         ])],
     );
 
-    let left_start = wrapped_row.find("blank_panel(left_panel));").expect("expected wrapped removed continuation");
-    let right_start =
-        wrapped_row.find("blank_panel(left_panel, theme.code_bg()));").expect("expected wrapped added continuation");
+    let column_of = |needle: &str| {
+        let byte_start = wrapped_row.find(needle).unwrap_or_else(|| panic!("expected {needle:?} in wrapped row"));
+        wrapped_row[..byte_start].chars().count()
+    };
+    let left_start = column_of("blank_panel(left_panel));");
+    let right_start = column_of("blank_panel(left_panel, theme.code_bg()));");
 
     let ctx = ViewContext::new((151, 8));
     let added_bg = Some(ctx.theme.diff_added_bg());
     let removed_bg = Some(ctx.theme.diff_removed_bg());
-    let code_panel_start = left_start.saturating_sub(MIN_GUTTER_WIDTH);
-    for col in code_panel_start..left_start {
+    for col in left_start.saturating_sub(MIN_GUTTER_WIDTH)..left_start {
         let actual_bg = term.get_style_at(wrapped_idx, col).bg;
-        assert_ne!(actual_bg, added_bg, "blank left panel column {col} should not inherit added background");
-        assert_ne!(actual_bg, removed_bg, "blank left panel column {col} should not inherit removed background");
+        assert_eq!(actual_bg, removed_bg, "left continuation gutter column {col} should carry removed background");
     }
-    assert_eq!(term.get_style_at(wrapped_idx, left_start).bg, Some(ctx.theme.diff_removed_bg()));
-    assert_eq!(term.get_style_at(wrapped_idx, right_start).bg, Some(ctx.theme.diff_added_bg()));
+    let separator_col = right_start.saturating_sub(MIN_GUTTER_WIDTH + 1);
+    let separator_bg = term.get_style_at(wrapped_idx, separator_col).bg;
+    assert_ne!(separator_bg, added_bg, "separator column {separator_col} should not inherit added background");
+    assert_ne!(separator_bg, removed_bg, "separator column {separator_col} should not inherit removed background");
+    for col in right_start.saturating_sub(MIN_GUTTER_WIDTH)..right_start {
+        let actual_bg = term.get_style_at(wrapped_idx, col).bg;
+        assert_eq!(actual_bg, added_bg, "right continuation gutter column {col} should carry added background");
+    }
+    assert_eq!(term.get_style_at(wrapped_idx, left_start).bg, removed_bg);
+    assert_eq!(term.get_style_at(wrapped_idx, right_start).bg, added_bg);
 }
 
 fn make_long_header_doc() -> GitDiffDocument {
@@ -171,14 +197,6 @@ fn make_long_header_doc() -> GitDiffDocument {
     let long_path = "src/components/git_diff_mode/this_is_a_deliberately_long_filename_that_should_be_clipped_in_the_patch_header.rs".to_string();
     doc.files[0].old_path = Some(long_path.clone());
     doc.files[0].path = long_path;
-    doc
-}
-
-fn make_long_split_hunk_header_doc() -> GitDiffDocument {
-    let mut doc = sample_git_diff_document();
-    let long_header = format!("@@ -1,3 +1,3 @@ {}", "WRAPME_".repeat(30));
-    doc.files[0].hunks[0].header.clone_from(&long_header);
-    doc.files[0].hunks[0].lines[0].text = long_header;
     doc
 }
 
@@ -190,11 +208,31 @@ fn render_empty_state() {
     assert_buffer_eq(
         &term,
         &[
-            cols(&[("", sb), ("", 1), ("No changes in working tree relative to HEAD", 0)]),
-            String::new(),
-            HINT_LINE.to_string(),
+            cols(&[("", sb), ("│", 1), ("No changes in working tree relative to HEAD", 0)]),
+            cols(&[("", sb), ("│", 1)]),
+            LEFT_HINT_LINE.to_string(),
         ],
     );
+    assert_eq!(term.get_style_at(0, 0).bg, None, "empty-state sidebar filler should not set an explicit bg");
+    assert_eq!(term.get_style_at(0, sb).bg, None, "empty-state separator should not set an explicit bg");
+}
+
+#[test]
+fn ready_state_sidebar_and_separator_use_no_explicit_bg() {
+    let sb = 28;
+    let doc = sample_git_diff_document();
+    let mut mode = make_mode(doc);
+    let term = render_component(|ctx| mode.render(ctx), 100, 9);
+    let ctx = ViewContext::new((100, 9));
+
+    assert_eq!(term.get_style_at(0, 1).bg, None, "sidebar header should not set an explicit bg");
+    assert_eq!(term.get_style_at(0, sb).bg, None, "split separator should not set an explicit bg");
+    assert_eq!(
+        term.get_style_at(0, sb).fg,
+        Some(ctx.theme.muted()),
+        "split separator should match the header rule style"
+    );
+    assert_eq!(term.get_style_at(3, 1).bg, None, "unselected sidebar rows should not set an explicit bg");
 }
 
 #[test]
@@ -205,7 +243,11 @@ fn render_error_state() {
     let term = render_component(|ctx| mode.render(ctx), 80, 3);
     assert_buffer_eq(
         &term,
-        &[cols(&[("", sb), ("", 1), ("Git diff unavailable: not a repo", 0)]), String::new(), HINT_LINE.to_string()],
+        &[
+            cols(&[("", sb), ("│", 1), ("Git diff unavailable: not a repo", 0)]),
+            cols(&[("", sb), ("│", 1)]),
+            LEFT_HINT_LINE.to_string(),
+        ],
     );
 }
 
@@ -218,16 +260,50 @@ fn render_shows_file_list_and_patch() {
     assert_buffer_eq(
         &term,
         &[
-            cols(&[(">   M a.rs             +1/-1", sb), ("", 1), ("a.rs  (modified)", 0)]),
-            cols(&[("    A b.rs             +1/-0", sb), ("", 1)]),
-            cols(&[("", sb), ("", 1), ("@@ -1,3 +1,3 @@", 0)]),
-            cols(&[("", sb), ("", 1), ("1 1   fn main() {", 0)]),
-            cols(&[("", sb), ("", 1), ("2   -     old();", 0)]),
-            cols(&[("", sb), ("", 1), ("  2 +     new();", 0)]),
-            cols(&[("", sb), ("", 1), ("3 3   }", 0)]),
-            String::new(),
-            HINT_LINE.to_string(),
+            cols(&[(" Git Diff  2 files  +2 -1", sb), ("│", 1), ("a.rs  modified  +1 -1", 0)]),
+            cols(&[(&"─".repeat(sb), sb), ("│", 1), (&"─".repeat(71), 0)]),
+            cols(&[("▎── a.rs", 21), ("+1 -1 M", 7), ("│", 1), ("1   fn main() {", 0)]),
+            cols(&[(" ── b.rs", 21), ("+1 -0 A", 7), ("│", 1), ("2 -     old();", 0)]),
+            cols(&[("", sb), ("│", 1), ("2 +     new();", 0)]),
+            cols(&[("", sb), ("│", 1), ("3   }", 0)]),
+            cols(&[("", sb), ("│", 1)]),
+            cols(&[("", sb), ("│", 1)]),
+            LEFT_HINT_LINE.to_string(),
         ],
+    );
+}
+
+#[test]
+fn unified_added_only_diff_uses_one_line_number_column() {
+    let mut mode = make_mode(git_diff_document(vec![modified_file_with_hunks(
+        "lib.rs",
+        vec![hunk(
+            "@@ -50,2 +50,3 @@",
+            50,
+            2,
+            50,
+            3,
+            vec![
+                context_line("pub use existing::Item;", 50, 50),
+                added_line("pub use diffs::intraline::{IntralineEmphasis, intraline_emphasis};", 51),
+                context_line("pub use focus::{FocusOutcome, FocusRing};", 51, 52),
+            ],
+        )],
+    )]));
+
+    let lines = render_component(|ctx| mode.render(ctx), 120, 8).get_lines();
+
+    assert!(
+        lines.iter().any(|line| line.contains("50   pub use existing::Item;")),
+        "context rows should render one line number column: {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("51 + pub use diffs::intraline")),
+        "added rows should render one line number column plus the diff marker: {lines:?}"
+    );
+    assert!(
+        lines.iter().all(|line| !line.contains("50 50") && !line.contains("51 52")),
+        "unified rows should not render old and new line number columns: {lines:?}"
     );
 }
 
@@ -261,13 +337,156 @@ fn narrow_width_renders_unified_diff_rows() {
 #[test]
 fn wide_width_renders_split_diff_rows() {
     let mut mode = make_mode(sample_git_diff_document());
-    let term = render_component(|ctx| mode.render(ctx), 109, 10);
+    let term = render_component(|ctx| mode.render(ctx), 110, 10);
     let lines = term.get_lines();
 
     assert!(
         lines.iter().any(|line| line.contains("old();") && line.contains("new();")),
         "split view should render old/new content on the same row"
     );
+}
+
+#[tokio::test]
+async fn opening_full_file_retains_split_layout() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("foo.rs"), "fn main() {\n    new_call();\n    keep();\n}\n").unwrap();
+
+    let mut doc = git_diff_document(vec![modified_file_with_hunks(
+        "foo.rs",
+        vec![hunk(
+            "@@ -1,4 +1,4 @@",
+            1,
+            4,
+            1,
+            4,
+            vec![
+                context_line("fn main() {", 1, 1),
+                removed_line("    old_call();", 2),
+                added_line("    new_call();", 2),
+                context_line("    keep();", 3, 3),
+                context_line("}", 4, 4),
+            ],
+        )],
+    )]);
+    doc.repo_root = dir.path().to_path_buf();
+    let mut mode = make_mode(doc);
+
+    // Wide enough that the hunk diff renders split (old/new on the same row).
+    let ctx = ViewContext::new((140, 12));
+    mode.render(&ctx);
+    mode.on_event(&Event::Key(key(KeyCode::Char('l')))).await; // focus the diff pane
+    let hunk_lines = render_component(|ctx| mode.render(ctx), 140, 12).get_lines();
+    assert!(
+        hunk_lines.iter().any(|line| line.contains("old_call();") && line.contains("new_call();")),
+        "precondition: hunk view should be split, got {hunk_lines:?}"
+    );
+
+    mode.on_event(&Event::Key(key(KeyCode::Char('o')))).await; // open the full file
+    let lines = render_component(|ctx| mode.render(ctx), 140, 12).get_lines();
+
+    assert!(
+        lines.iter().any(|line| line.matches("fn main() {").count() == 2),
+        "full-file view should stay split: an unchanged line should appear in both panes, got {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.contains("old_call();")),
+        "full-file view shows the working tree, so removed lines should be gone, got {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("new_call();")),
+        "full-file view should still show the added line, got {lines:?}"
+    );
+}
+
+#[tokio::test]
+async fn opening_full_file_stays_unified_when_narrow() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("foo.rs"), "fn main() {\n    new_call();\n    keep();\n}\n").unwrap();
+
+    let mut doc = git_diff_document(vec![modified_file_with_hunks(
+        "foo.rs",
+        vec![hunk(
+            "@@ -1,4 +1,4 @@",
+            1,
+            4,
+            1,
+            4,
+            vec![
+                context_line("fn main() {", 1, 1),
+                removed_line("    old_call();", 2),
+                added_line("    new_call();", 2),
+                context_line("    keep();", 3, 3),
+                context_line("}", 4, 4),
+            ],
+        )],
+    )]);
+    doc.repo_root = dir.path().to_path_buf();
+    let mut mode = make_mode(doc);
+
+    // Narrow: the right pane is below the split threshold, so the diff is unified.
+    let ctx = ViewContext::new((100, 12));
+    mode.render(&ctx);
+    mode.on_event(&Event::Key(key(KeyCode::Char('l')))).await;
+    mode.render(&ctx);
+    mode.on_event(&Event::Key(key(KeyCode::Char('o')))).await;
+    let lines = render_component(|ctx| mode.render(ctx), 100, 12).get_lines();
+
+    assert!(
+        lines.iter().all(|line| line.matches("fn main() {").count() <= 1),
+        "full-file view should stay unified when narrow, got {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("fn main() {")),
+        "full-file view should still render the file, got {lines:?}"
+    );
+}
+
+#[test]
+fn scroll_track_appears_when_patch_overflows_viewport() {
+    let body: Vec<_> = (1..=40).map(|line_no| added_line(format!("line_{line_no}();"), line_no)).collect();
+    let mut mode = make_mode(git_diff_document(vec![modified_file_with_hunks(
+        "long.rs",
+        vec![hunk("@@ -0,0 +1,40 @@", 0, 0, 1, 40, body)],
+    )]));
+    let term = render_component(|ctx| mode.render(ctx), 100, 10);
+    let lines = term.get_lines();
+
+    let thumb_rows = lines.iter().filter(|line| line.ends_with('█')).count();
+    assert!(thumb_rows > 0, "overflowing patch should render a scrollbar thumb at the right edge: {lines:?}");
+    assert!(thumb_rows < 7, "thumb should not fill the whole track: {thumb_rows}");
+}
+
+#[test]
+fn scroll_track_is_blank_when_patch_fits() {
+    let mut mode = make_mode(sample_git_diff_document());
+    let term = render_component(|ctx| mode.render(ctx), 100, 12);
+    let lines = term.get_lines();
+
+    assert!(
+        lines.iter().all(|line| !line.contains('█') && !line.contains('▪')),
+        "patch that fits the viewport should not render scrollbar glyphs: {lines:?}"
+    );
+}
+
+#[tokio::test]
+async fn focused_panel_title_brightens_and_footer_follows_focus() {
+    let mut mode = make_mode(sample_git_diff_document());
+    let ctx = ViewContext::new((100, 20));
+
+    let term = render_component(|c| mode.render(c), 100, 20);
+    assert_eq!(term.get_style_at(0, 1).fg, Some(ctx.theme.accent()), "focused sidebar title should use accent");
+    let footer = term.get_lines().last().cloned().unwrap_or_default();
+    assert_eq!(footer, LEFT_HINT_LINE, "left-focused footer should show tree keys");
+
+    send_keys(&mut mode, &[KeyCode::Char('l')]).await;
+    let term = render_component(|c| mode.render(c), 100, 20);
+    assert_eq!(
+        term.get_style_at(0, 1).fg,
+        Some(ctx.theme.text_primary()),
+        "unfocused sidebar title should fall back to the text color"
+    );
+    let footer = term.get_lines().last().cloned().unwrap_or_default();
+    assert_eq!(footer, RIGHT_HINT_LINE, "right-focused footer should show diff keys");
 }
 
 #[test]
@@ -287,29 +506,6 @@ fn git_diff_mode_soft_wraps_long_patch_headers_in_rhs_panel() {
     assert!(lines.iter().all(|line| line.chars().count() <= 100));
 }
 
-#[test]
-fn git_split_view_preserves_hunk_header_background_on_wrapped_rows() {
-    let mut mode = make_mode(make_long_split_hunk_header_doc());
-    let term = render_component(|ctx| mode.render(ctx), 130, 10);
-    let lines = term.get_lines();
-
-    let header_row = lines
-        .iter()
-        .position(|line| line.contains("@@ -1,3 +1,3 @@"))
-        .expect("expected hunk header row to be rendered");
-    let header_col = lines[header_row].find("@@ -1,3 +1,3 @@").expect("expected hunk header text in row");
-
-    assert!(
-        lines.get(header_row + 1).is_some_and(|line| line.contains("WRAPME_")),
-        "expected wrapped hunk header continuation row, got {lines:?}"
-    );
-
-    let expected_bg = term.get_style_at(header_row, header_col).bg;
-    assert!(expected_bg.is_some(), "expected hunk header to have background style");
-    assert_eq!(term.get_style_at(header_row + 1, header_col).bg, expected_bg);
-    assert_eq!(term.get_style_at(header_row + 1, 129).bg, expected_bg);
-}
-
 async fn send_keys(mode: &mut GitDiffMode, codes: &[KeyCode]) {
     let ctx = ViewContext::new((100, 20));
     for &code in codes {
@@ -324,11 +520,10 @@ async fn draft_comment_appears_after_correct_line_when_submitted_comment_exists(
 
     // Focus right panel (l on file list triggers FileOpened)
     send_keys(&mut mode, &[KeyCode::Char('l')]).await;
-    // Move cursor down to line_one, open comment, type "first", submit
+    // Open a comment on line_one, type "first", submit
     send_keys(
         &mut mode,
         &[
-            KeyCode::Char('j'),
             KeyCode::Char('c'),
             KeyCode::Char('f'),
             KeyCode::Char('i'),

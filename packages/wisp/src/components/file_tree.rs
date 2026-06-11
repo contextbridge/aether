@@ -73,7 +73,7 @@ impl FileTree {
         if self.cached_entries.is_empty() {
             return;
         }
-        crate::components::wrap_selection(&mut self.selected_visible, self.cached_entries.len(), delta);
+        self.selected_visible = self.selected_visible.saturating_add_signed(delta).min(self.cached_entries.len() - 1);
     }
 
     pub fn collapse_or_parent(&mut self) {
@@ -341,14 +341,18 @@ mod tests {
     }
 
     #[test]
-    fn navigate_wraps() {
+    fn navigate_clamps_at_bounds() {
         let files = vec![modified("a.rs"), modified("b.rs")];
         let mut tree = FileTree::from_files(&files);
         assert_eq!(tree.selected_visible, 0);
         tree.navigate(1);
         assert_eq!(tree.selected_visible, 1);
         tree.navigate(1);
+        assert_eq!(tree.selected_visible, 1, "navigating past the last entry should stay on it");
+        tree.navigate(-1);
         assert_eq!(tree.selected_visible, 0);
+        tree.navigate(-1);
+        assert_eq!(tree.selected_visible, 0, "navigating before the first entry should stay on it");
     }
 
     #[test]

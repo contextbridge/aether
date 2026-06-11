@@ -7,7 +7,7 @@ use tui::Line;
 pub(crate) struct CommentAnchor<A>(pub A);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct AnchoredBlock<A> {
+pub(crate) struct AnchoredGroup<A> {
     pub anchor: CommentAnchor<A>,
     pub start_row: usize,
     pub end_row: usize,
@@ -16,13 +16,13 @@ pub(crate) struct AnchoredBlock<A> {
 #[derive(Debug, Clone)]
 pub(crate) struct AnchoredRows<A> {
     lines: Vec<Line>,
-    blocks: Vec<AnchoredBlock<A>>,
-    block_index_by_anchor: HashMap<CommentAnchor<A>, usize>,
+    groups: Vec<AnchoredGroup<A>>,
+    group_index_by_anchor: HashMap<CommentAnchor<A>, usize>,
 }
 
 impl<A> Default for AnchoredRows<A> {
     fn default() -> Self {
-        Self { lines: Vec::new(), blocks: Vec::new(), block_index_by_anchor: HashMap::new() }
+        Self { lines: Vec::new(), groups: Vec::new(), group_index_by_anchor: HashMap::new() }
     }
 }
 
@@ -35,8 +35,9 @@ impl<A: Copy + Eq + Hash> AnchoredRows<A> {
         self.lines.len().saturating_sub(1)
     }
 
-    pub(crate) fn blocks(&self) -> &[AnchoredBlock<A>] {
-        &self.blocks
+    #[cfg(test)]
+    pub(crate) fn groups(&self) -> &[AnchoredGroup<A>] {
+        &self.groups
     }
 
     pub(crate) fn push_unanchored_rows(&mut self, rows: impl IntoIterator<Item = Line>) {
@@ -53,35 +54,35 @@ impl<A: Copy + Eq + Hash> AnchoredRows<A> {
         self.lines.extend(rows);
         let end_row = self.lines.len() - 1;
 
-        if let Some(index) = self.block_index_by_anchor.get(&anchor).copied() {
-            let expected_index = self.blocks.len().saturating_sub(1);
-            let block = self.blocks.get_mut(index).expect("anchor block index should be valid");
+        if let Some(index) = self.group_index_by_anchor.get(&anchor).copied() {
+            let expected_index = self.groups.len().saturating_sub(1);
+            let block = self.groups.get_mut(index).expect("anchor group index should be valid");
             assert_eq!(index, expected_index, "anchored rows for the same anchor must be appended contiguously");
             assert_eq!(block.end_row + 1, start_row, "anchored rows for the same anchor must be appended contiguously");
             block.end_row = end_row;
             return;
         }
 
-        let index = self.blocks.len();
-        self.blocks.push(AnchoredBlock { anchor, start_row, end_row });
-        self.block_index_by_anchor.insert(anchor, index);
+        let index = self.groups.len();
+        self.groups.push(AnchoredGroup { anchor, start_row, end_row });
+        self.group_index_by_anchor.insert(anchor, index);
     }
 
     pub(crate) fn anchor_at_or_before(&self, row: usize) -> Option<CommentAnchor<A>> {
-        if self.lines.is_empty() || self.blocks.is_empty() {
+        if self.lines.is_empty() || self.groups.is_empty() {
             return None;
         }
 
         let capped = row.min(self.max_row());
-        self.blocks.iter().rev().find(|block| block.start_row <= capped).map(|block| block.anchor)
+        self.groups.iter().rev().find(|group| group.start_row <= capped).map(|group| group.anchor)
     }
 
     pub(crate) fn start_row_for_anchor(&self, anchor: CommentAnchor<A>) -> Option<usize> {
-        self.block_index_by_anchor.get(&anchor).map(|index| self.blocks[*index].start_row)
+        self.group_index_by_anchor.get(&anchor).map(|index| self.groups[*index].start_row)
     }
 
     pub(crate) fn end_row_for_anchor(&self, anchor: CommentAnchor<A>) -> Option<usize> {
-        self.block_index_by_anchor.get(&anchor).map(|index| self.blocks[*index].end_row)
+        self.group_index_by_anchor.get(&anchor).map(|index| self.groups[*index].end_row)
     }
 
     pub(crate) fn restore_cursor(&self, cursor: &mut VerticalCursor, anchor: Option<CommentAnchor<A>>) {
@@ -117,7 +118,7 @@ mod tests {
     }
 
     #[test]
-    fn anchor_at_or_before_uses_previous_block_for_unanchored_gap() {
+    fn anchor_at_or_before_uses_previous_group_for_unanchored_gap() {
         let mut rows: AnchoredRows<usize> = AnchoredRows::default();
         rows.push_anchored_rows(CommentAnchor(1), [Line::new("row0")]);
         rows.push_unanchored_rows([Line::new("gap")]);
@@ -154,23 +155,23 @@ mod tests {
     }
 
     #[test]
-    fn push_rows_records_anchor_blocks() {
+    fn push_rows_records_anchor_groups() {
         let mut rows: AnchoredRows<usize> = AnchoredRows::default();
         rows.push_unanchored_rows([Line::new("gap")]);
         rows.push_anchored_rows(CommentAnchor(7), [Line::new("a"), Line::new("b")]);
 
-        assert_eq!(rows.blocks(), &[AnchoredBlock { anchor: CommentAnchor(7), start_row: 1, end_row: 2 }]);
+        assert_eq!(rows.groups(), &[AnchoredGroup { anchor: CommentAnchor(7), start_row: 1, end_row: 2 }]);
         assert_eq!(rows.start_row_for_anchor(CommentAnchor(7)), Some(1));
         assert_eq!(rows.end_row_for_anchor(CommentAnchor(7)), Some(2));
     }
 
     #[test]
-    fn repeated_contiguous_anchor_pushes_extend_existing_block() {
+    fn repeated_contiguous_anchor_pushes_extend_existing_group() {
         let mut rows: AnchoredRows<usize> = AnchoredRows::default();
         rows.push_anchored_rows(CommentAnchor(7), [Line::new("a")]);
         rows.push_anchored_rows(CommentAnchor(7), [Line::new("b")]);
 
-        assert_eq!(rows.blocks(), &[AnchoredBlock { anchor: CommentAnchor(7), start_row: 0, end_row: 1 }]);
+        assert_eq!(rows.groups(), &[AnchoredGroup { anchor: CommentAnchor(7), start_row: 0, end_row: 1 }]);
         assert_eq!(rows.start_row_for_anchor(CommentAnchor(7)), Some(0));
         assert_eq!(rows.end_row_for_anchor(CommentAnchor(7)), Some(1));
     }

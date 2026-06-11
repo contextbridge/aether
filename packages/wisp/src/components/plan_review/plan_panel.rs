@@ -1,18 +1,18 @@
 use super::PlanDocument;
 use crate::components::common::{AnchoredSurfaceBuilder, CachedLayer};
 use crate::components::review_comments::{
-    AnchoredRows, BlockAnchors, CommentAnchor, KeyOutcome, Navigation, ReviewComment, ReviewSurface, ReviewSurfaceEvent,
+    AnchorIndex, AnchoredRows, CommentAnchor, KeyOutcome, Navigation, ReviewComment, ReviewSurface, ReviewSurfaceEvent,
 };
 use tui::{
-    Component, Event, Frame, Line, MarkdownBlock, MouseEventKind, SourceMappedLine, Style, ViewContext, digit_count,
-    render_markdown_result,
+    Component, Event, Frame, Line, MouseEventKind, SourceMarkdownLine, Style, ViewContext, digit_count,
+    render_markdown_source_lines,
 };
 
 const PAGE_SIZE: usize = 10;
 
 pub enum PlanPanelMessage {}
 
-pub(crate) type BlockAnchor = CommentAnchor<usize>;
+pub(crate) type SourceLineAnchor = CommentAnchor<usize>;
 
 pub struct PlanPanel {
     document: PlanDocument,
@@ -24,13 +24,12 @@ pub struct PlanPanel {
 }
 
 struct PlanMarkdown {
-    rendered_lines: Vec<SourceMappedLine>,
-    blocks: Vec<MarkdownBlock>,
+    rendered_lines: Vec<SourceMarkdownLine>,
 }
 
 struct PlanSurface {
     surface: AnchoredRows<usize>,
-    block_anchors: BlockAnchors<usize>,
+    line_anchors: AnchorIndex<usize>,
 }
 
 impl PlanPanel {
@@ -54,22 +53,22 @@ impl PlanPanel {
         self.surface.is_in_comment_mode()
     }
 
-    pub fn current_anchor_line_no(&self) -> usize {
-        self.current_cursor_line_no().unwrap_or(1)
+    pub fn current_source_line_no(&self) -> usize {
+        self.current_cursor_source_line_no().unwrap_or(1)
     }
 
-    pub fn set_cursor_anchor_line_no(&mut self, anchor_line_no: usize) {
+    pub fn set_cursor_source_line_no(&mut self, line_no: usize) {
         let Some(cached) = self.cached_surface.get() else {
             return;
         };
 
-        if let Some(row) = cached.surface.start_row_for_anchor(CommentAnchor(anchor_line_no)) {
+        if let Some(row) = cached.surface.start_row_for_anchor(CommentAnchor(line_no)) {
             self.surface.cursor_mut().row = row;
             return;
         }
 
         if let Some(nearest) =
-            cached.block_anchors.as_slice().iter().rev().copied().find(|CommentAnchor(a)| *a <= anchor_line_no)
+            cached.line_anchors.as_slice().iter().rev().copied().find(|CommentAnchor(a)| *a <= line_no)
             && let Some(row) = cached.surface.start_row_for_anchor(nearest)
         {
             self.surface.cursor_mut().row = row;
@@ -77,18 +76,18 @@ impl PlanPanel {
     }
 
     pub fn jump_next_heading(&mut self) -> bool {
-        let current = self.current_anchor_line_no();
+        let current = self.current_source_line_no();
         if let Some(next) = self.heading_lines.iter().copied().find(|line_no| *line_no > current) {
-            self.set_cursor_anchor_line_no(next);
+            self.set_cursor_source_line_no(next);
             return true;
         }
         false
     }
 
     pub fn jump_prev_heading(&mut self) -> bool {
-        let current = self.current_anchor_line_no();
+        let current = self.current_source_line_no();
         if let Some(previous) = self.heading_lines.iter().copied().rev().find(|line_no| *line_no < current) {
-            self.set_cursor_anchor_line_no(previous);
+            self.set_cursor_source_line_no(previous);
             return true;
         }
         false
@@ -106,11 +105,11 @@ impl PlanPanel {
         &self.queued_comments
     }
 
-    fn current_cursor_anchor(&self) -> Option<BlockAnchor> {
+    fn current_cursor_anchor(&self) -> Option<SourceLineAnchor> {
         self.cached_surface.get().and_then(|cached| self.surface.current_anchor(&cached.surface))
     }
 
-    fn current_cursor_line_no(&self) -> Option<usize> {
+    fn current_cursor_source_line_no(&self) -> Option<usize> {
         self.current_cursor_anchor().map(|CommentAnchor(line_no)| line_no)
     }
 
@@ -121,8 +120,8 @@ impl PlanPanel {
 
     fn ensure_cached_markdown(&mut self, ctx: &ViewContext) {
         self.cached_markdown.ensure(self.document.line_count(), || {
-            let result = render_markdown_result(&self.document.markdown_text(), ctx);
-            PlanMarkdown { rendered_lines: result.lines, blocks: result.blocks }
+            let result = render_markdown_source_lines(&self.document.markdown_text(), ctx);
+            PlanMarkdown { rendered_lines: result.lines }
         });
     }
 
@@ -131,8 +130,8 @@ impl PlanPanel {
         let cached = self.cached_markdown.get().expect("markdown cache populated above");
         let document = &self.document;
         self.cached_surface.ensure(width, || {
-            let (surface, block_anchors) = build_plan_surface(document, &cached.rendered_lines, &cached.blocks, ctx);
-            PlanSurface { surface, block_anchors }
+            let (surface, line_anchors) = build_plan_surface(document, &cached.rendered_lines, ctx);
+            PlanSurface { surface, line_anchors }
         });
     }
 }
@@ -143,16 +142,16 @@ impl Component for PlanPanel {
     async fn on_event(&mut self, event: &Event) -> Option<Vec<Self::Message>> {
         let cached = self.cached_surface.get()?;
         let rows = &cached.surface;
-        let nav = Navigation::BlockStep { blocks: &cached.block_anchors, page_size: PAGE_SIZE };
+        let nav = Navigation::AnchorStep { anchors: &cached.line_anchors, page_size: PAGE_SIZE };
 
         if let Event::Mouse(mouse) = event {
             return match mouse.kind {
                 MouseEventKind::ScrollUp if !self.is_in_comment_mode() => {
-                    self.surface.on_mouse_scroll(-3, rows, nav);
+                    self.surface.on_mouse_scroll(-1, rows, nav);
                     Some(vec![])
                 }
                 MouseEventKind::ScrollDown if !self.is_in_comment_mode() => {
-                    self.surface.on_mouse_scroll(3, rows, nav);
+                    self.surface.on_mouse_scroll(1, rows, nav);
                     Some(vec![])
                 }
                 _ => None,
@@ -192,60 +191,24 @@ impl Component for PlanPanel {
 
 fn build_plan_surface(
     document: &PlanDocument,
-    rendered_markdown: &[SourceMappedLine],
-    blocks: &[MarkdownBlock],
+    rendered_lines: &[SourceMarkdownLine],
     ctx: &ViewContext,
-) -> (AnchoredRows<usize>, BlockAnchors<usize>) {
-    let width_u16 = ctx.size.width;
-    let line_no_width = digit_count(document.lines.last().map_or(1, |line| line.line_no));
-    let (blank_head, blank_tail) = build_blank_gutter(line_no_width);
-
+) -> (AnchoredRows<usize>, AnchorIndex<usize>) {
+    let width = ctx.size.width;
+    let line_no_width = digit_count(document.line_count().max(1));
     let mut rows = AnchoredSurfaceBuilder::new();
-    let mut block_anchors: BlockAnchors<usize> = BlockAnchors::default();
+    let mut line_anchors = AnchorIndex::default();
 
-    let total_rendered = rendered_markdown.len();
-    let mut cursor = 0usize;
-    for block in blocks {
-        let block_start = block.rendered_line_range.start.min(total_rendered);
-        let block_end = block.rendered_line_range.end.min(total_rendered);
-        if block_start >= block_end {
-            continue;
-        }
+    for rendered in rendered_lines {
+        let line_no = rendered.source_line_no;
+        let anchor = CommentAnchor(line_no);
+        line_anchors.push(anchor);
 
-        for rendered in &rendered_markdown[cursor..block_start] {
-            append_unanchored_line(&rendered.line, width_u16, &blank_head, &blank_tail, &mut rows);
-        }
-
-        let anchor = CommentAnchor(block.anchor_line_no);
-        block_anchors.push(anchor);
-
-        for (offset, idx) in (block_start..block_end).enumerate() {
-            let (head, tail) = if offset == 0 {
-                build_numbered_gutter(block.anchor_line_no, line_no_width, ctx)
-            } else {
-                (blank_head.clone(), blank_tail.clone())
-            };
-            rows.push_anchored_wrapped(anchor, rendered_markdown[idx].line.clone(), width_u16, &head, &tail);
-        }
-
-        cursor = block_end;
+        let (head, tail) = build_numbered_gutter(line_no, line_no_width, ctx);
+        rows.push_anchored_wrapped(anchor, rendered.line.clone(), width, &head, &tail);
     }
 
-    for rendered in &rendered_markdown[cursor..total_rendered] {
-        append_unanchored_line(&rendered.line, width_u16, &blank_head, &blank_tail, &mut rows);
-    }
-
-    (rows.finish(), block_anchors)
-}
-
-fn append_unanchored_line(
-    line: &Line,
-    width_u16: u16,
-    first_head: &Line,
-    continuation_head: &Line,
-    rows: &mut AnchoredSurfaceBuilder<usize>,
-) {
-    rows.push_unanchored_wrapped(line.clone(), width_u16, first_head, continuation_head);
+    (rows.finish(), line_anchors)
 }
 
 fn build_numbered_gutter(line_no: usize, line_no_width: usize, ctx: &ViewContext) -> (Line, Line) {
@@ -255,11 +218,6 @@ fn build_numbered_gutter(line_no: usize, line_no_width: usize, ctx: &ViewContext
     head.push_with_style(" │ ", Style::fg(theme.muted()));
     let tail = Line::new(" ".repeat(line_no_width + 3));
     (head, tail)
-}
-
-fn build_blank_gutter(line_no_width: usize) -> (Line, Line) {
-    let blank = Line::new(" ".repeat(line_no_width + 3));
-    (blank.clone(), blank)
 }
 
 #[cfg(test)]
@@ -279,7 +237,7 @@ mod tests {
 
         panel.on_event(&Event::Key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE))).await.unwrap();
 
-        assert_eq!(panel.current_anchor_line_no(), 3);
+        assert_eq!(panel.current_source_line_no(), 2);
     }
 
     #[tokio::test]
@@ -297,19 +255,16 @@ mod tests {
     }
 
     #[test]
-    fn plan_surface_records_block_first_rows_and_insertion_rows() {
+    fn plan_surface_records_source_line_rows_and_insertion_rows() {
         let document = PlanDocument::parse("/tmp/plan.md", &format!("# Intro\n\n{}\n\nshort", "x".repeat(120)));
         let ctx = ViewContext::new((28, 20));
-        let result = render_markdown_result(&document.markdown_text(), &ctx);
-        let (surface, block_anchors) = build_plan_surface(&document, &result.lines, &result.blocks, &ctx);
+        let result = render_markdown_source_lines(&document.markdown_text(), &ctx);
+        let (surface, line_anchors) = build_plan_surface(&document, &result.lines, &ctx);
 
-        assert!(
-            block_anchors.as_slice().contains(&CommentAnchor(3)),
-            "long paragraph block should be anchored at its first source line"
-        );
-        let start_row = surface.start_row_for_anchor(CommentAnchor(3)).expect("block should have a start row");
-        let end_row = surface.end_row_for_anchor(CommentAnchor(3)).expect("block should have an end row");
+        assert!(line_anchors.as_slice().contains(&CommentAnchor(3)), "long source line should be anchored");
+        let start_row = surface.start_row_for_anchor(CommentAnchor(3)).expect("line should have a start row");
+        let end_row = surface.end_row_for_anchor(CommentAnchor(3)).expect("line should have an end row");
 
-        assert!(end_row > start_row, "wrapped block should span multiple rows");
+        assert!(end_row > start_row, "wrapped source line should span multiple rows");
     }
 }

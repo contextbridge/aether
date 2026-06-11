@@ -5,8 +5,9 @@ use crate::rendering::gutter::digit_count;
 use crate::rendering::render_context::ViewContext;
 use crate::span::Span;
 use crate::style::Style;
+use crossterm::style::Color;
 
-use crate::{DiffPreview, DiffTag, SplitDiffCell};
+use crate::{DiffPreview, DiffTag, SplitDiffEntry};
 
 const MAX_DIFF_LINES: usize = 20;
 pub const MIN_SPLIT_WIDTH: u16 = 80;
@@ -15,12 +16,66 @@ pub const SEPARATOR: &str = " ";
 pub const SEPARATOR_WIDTH: usize = 1;
 const SEPARATOR_WIDTH_U16: u16 = 1;
 const LEFT_INNER_PAD: usize = 1;
+pub const WRAP_MARKER: &str = "↪";
 
-/// Which pane a [`render_cell`] call is rendering
+/// Which pane a [`render_entry`] call is rendering
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Side {
     Left,
     Right,
+}
+
+/// Whether changed rows tint the line-number gutter with their diff color.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GutterTint {
+    Neutral,
+    Diff,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SplitLayoutDimensions {
+    pub gutter_width: usize,
+    pub left_content_width: usize,
+    pub right_content_width: usize,
+    pub left_panel_width: u16,
+    pub right_panel_width: u16,
+}
+
+impl SplitLayoutDimensions {
+    pub fn new(total_width: usize, max_line_no: usize) -> Self {
+        let gutter_width = gutter_width_for_max_line(max_line_no);
+        let fixed_overhead = gutter_width * 2 + SEPARATOR_WIDTH + LEFT_INNER_PAD;
+        let usable = total_width.saturating_sub(fixed_overhead);
+        let left_content_width = usable / 2;
+        let right_content_width = usable - left_content_width;
+        Self {
+            gutter_width,
+            left_content_width,
+            right_content_width,
+            left_panel_width: usize_to_u16_saturating(gutter_width + left_content_width + LEFT_INNER_PAD),
+            right_panel_width: usize_to_u16_saturating(gutter_width + right_content_width),
+        }
+    }
+
+    pub fn for_preview(preview: &DiffPreview, total_width: usize) -> Self {
+        Self::new(total_width, max_line_no_for_preview(preview))
+    }
+}
+
+fn gutter_width_for_max_line(max_line_no: usize) -> usize {
+    (digit_count(max_line_no) + 1).max(MIN_GUTTER_WIDTH)
+}
+
+pub fn header_left_padding(max_line_no: usize) -> usize {
+    gutter_width_for_max_line(max_line_no).saturating_sub(1).saturating_sub(digit_count(max_line_no))
+}
+
+fn max_line_no_for_entries(pairs: impl IntoIterator<Item = (Option<usize>, Option<usize>)>) -> usize {
+    pairs.into_iter().flat_map(|(left, right)| left.into_iter().chain(right)).max().unwrap_or(0)
+}
+
+pub fn usize_to_u16_saturating(value: usize) -> u16 {
+    u16::try_from(value).unwrap_or(u16::MAX)
 }
 
 /// Renders a diff preview, choosing split or unified based on terminal width
@@ -29,7 +84,8 @@ pub enum Side {
 /// For new files (only additions, no removals), uses unified view since
 /// split view would have an empty left panel.
 pub fn render_diff(preview: &DiffPreview, context: &ViewContext) -> Vec<Line> {
-    let has_removals = preview.lines.iter().any(|l| l.tag == DiffTag::Removed);
+    let has_removals =
+        preview.rows.iter().any(|row| row.left.as_ref().is_some_and(|entry| entry.tag == DiffTag::Removed));
 
     if context.size.width >= MIN_SPLIT_WIDTH && has_removals {
         highlight_split_diff(preview, context)
@@ -38,47 +94,39 @@ pub fn render_diff(preview: &DiffPreview, context: &ViewContext) -> Vec<Line> {
     }
 }
 
-/// Compute the per-pane line-number gutter width: the number of decimal
-/// digits in the largest line number across either pane in `preview`, plus
-/// one for the trailing space, floored at [`MIN_GUTTER_WIDTH`].
-pub fn gutter_width_for_preview(preview: &DiffPreview) -> usize {
-    let max_line_no = preview
-        .rows
-        .iter()
-        .flat_map(|row| {
-            row.left
-                .as_ref()
-                .and_then(|c| c.line_number)
-                .into_iter()
-                .chain(row.right.as_ref().and_then(|c| c.line_number))
-        })
-        .max()
-        .unwrap_or(0);
-    (digit_count(max_line_no) + 1).max(MIN_GUTTER_WIDTH)
+fn max_line_no_for_preview(preview: &DiffPreview) -> usize {
+    max_line_no_for_entries(preview.rows.iter().map(|row| {
+        (row.left.as_ref().and_then(|entry| entry.line_number), row.right.as_ref().and_then(|entry| entry.line_number))
+    }))
 }
 
 fn highlight_split_diff(preview: &DiffPreview, context: &ViewContext) -> Vec<Line> {
     let theme = &context.theme;
-    let terminal_width = context.size.width as usize;
-    let gutter_width = gutter_width_for_preview(preview);
-    let fixed_overhead = gutter_width * 2 + SEPARATOR_WIDTH + LEFT_INNER_PAD;
-    let usable = terminal_width.saturating_sub(fixed_overhead);
-    let left_content = usable / 2;
-    let right_content = usable - left_content;
-    #[allow(clippy::cast_possible_truncation)]
-    let left_panel_u16 = (gutter_width + left_content + LEFT_INNER_PAD) as u16;
-    #[allow(clippy::cast_possible_truncation)]
-    let right_panel_u16 = (gutter_width + right_content) as u16;
+    let dimensions = SplitLayoutDimensions::for_preview(preview, context.size.width as usize);
 
     let mut row_frames: Vec<Frame> = Vec::new();
     let mut visual_lines = 0usize;
     let mut rows_consumed = 0usize;
 
     for row in &preview.rows {
-        let left_frame =
-            render_cell(row.left.as_ref(), left_content, &preview.lang_hint, Side::Left, gutter_width, context);
-        let right_frame =
-            render_cell(row.right.as_ref(), right_content, &preview.lang_hint, Side::Right, gutter_width, context);
+        let left_frame = render_entry(
+            row.left.as_ref(),
+            dimensions.left_content_width,
+            &preview.lang_hint,
+            Side::Left,
+            dimensions.gutter_width,
+            GutterTint::Neutral,
+            context,
+        );
+        let right_frame = render_entry(
+            row.right.as_ref(),
+            dimensions.right_content_width,
+            &preview.lang_hint,
+            Side::Right,
+            dimensions.gutter_width,
+            GutterTint::Neutral,
+            context,
+        );
 
         let height = left_frame.lines().len().max(right_frame.lines().len());
 
@@ -89,9 +137,9 @@ fn highlight_split_diff(preview: &DiffPreview, context: &ViewContext) -> Vec<Lin
         let sep_line = Line::new(SEPARATOR.to_string());
         let sep_frame = Frame::new(vec![sep_line; height]);
         row_frames.push(Frame::hstack([
-            FramePart::new(left_frame, left_panel_u16),
+            FramePart::new(left_frame, dimensions.left_panel_width),
             FramePart::new(sep_frame, SEPARATOR_WIDTH_U16),
-            FramePart::new(right_frame, right_panel_u16),
+            FramePart::new(right_frame, dimensions.right_panel_width),
         ]));
 
         visual_lines += height;
@@ -111,80 +159,56 @@ fn highlight_split_diff(preview: &DiffPreview, context: &ViewContext) -> Vec<Lin
 }
 
 fn blank_panel(width: usize) -> Line {
-    let mut line = Line::default();
-    line.push_text(" ".repeat(width));
-    line
+    Line::new(" ".repeat(width))
 }
 
-pub fn render_cell(
-    cell: Option<&SplitDiffCell>,
+/// [`GutterTint::Diff`] extends the diff background and foreground through the
+/// line-number gutter of changed rows, forming a clean color block. Inline
+/// previews use [`GutterTint::Neutral`] so indenting the frame cannot pick up a
+/// diff background (see [`Line::prepend`]).
+pub fn render_entry(
+    entry: Option<&SplitDiffEntry>,
     content_width: usize,
     lang_hint: &str,
     side: Side,
     gutter_width: usize,
+    gutter_tint: GutterTint,
     context: &ViewContext,
 ) -> Frame {
     let theme = &context.theme;
     let inner_pad = if side == Side::Left { LEFT_INNER_PAD } else { 0 };
     let panel_width = gutter_width + content_width + inner_pad;
 
-    let Some(cell) = cell else {
+    let Some(entry) = entry else {
         return Frame::new(vec![blank_panel(panel_width)]);
     };
 
-    let is_context = cell.tag == DiffTag::Context;
-    let bg = match cell.tag {
-        DiffTag::Removed => Some(theme.diff_removed_bg()),
-        DiffTag::Added => Some(theme.diff_added_bg()),
-        DiffTag::Context => None,
-    };
-
-    let highlighted = context.highlighter().highlight(&cell.content, lang_hint, theme);
+    let palette = DiffEntryStyle::for_entry(entry.tag, gutter_tint, theme);
+    let highlighted = context.highlighter().highlight(&entry.content, lang_hint, theme);
 
     let content_line = if let Some(hl_line) = highlighted.first() {
         let mut styled_content = Line::default();
         for span in hl_line.spans() {
-            let mut span_style = span.style();
-            if let Some(bg) = bg {
-                span_style.bg = Some(bg);
-            }
-            if is_context {
-                span_style.dim = true;
-            }
-            styled_content.push_span(Span::with_style(span.text(), span_style));
+            styled_content.push_span(Span::with_style(span.text(), palette.content_style(span.style())));
         }
         styled_content
     } else {
-        let fg = match cell.tag {
-            DiffTag::Removed => theme.diff_removed_fg(),
-            DiffTag::Added => theme.diff_added_fg(),
-            DiffTag::Context => theme.code_fg(),
-        };
-        let mut style = Style::fg(fg);
-        if let Some(bg) = bg {
-            style = style.bg_color(bg);
-        }
-        if is_context {
-            style.dim = true;
-        }
-        Line::with_style(&cell.content, style)
+        Line::with_style(&entry.content, palette.fallback_content_style())
     };
-    let content_line = match bg {
+    let content_line = match palette.bg {
         Some(bg) => content_line.with_fill(bg),
         None => content_line,
     };
 
-    #[allow(clippy::cast_possible_truncation)]
-    let content_width_u16 = content_width as u16;
+    let content_width_u16 = usize_to_u16_saturating(content_width);
     let extend_to = content_width + inner_pad;
 
-    let gutter_style = Style::fg(theme.muted());
     let digit_field = gutter_width.saturating_sub(1);
-    let head = match cell.line_number {
-        Some(num) => Line::with_style(format!("{num:>digit_field$} "), gutter_style),
-        None => Line::with_style(" ".repeat(gutter_width), gutter_style),
+    let head = match entry.line_number {
+        Some(num) => Line::with_style(format!("{num:>digit_field$} "), palette.gutter_style),
+        None => Line::with_style(" ".repeat(gutter_width), palette.gutter_style),
     };
-    let tail = Line::new(" ".repeat(gutter_width));
+    let tail = Line::with_style(format!("{WRAP_MARKER:>digit_field$} "), palette.gutter_style.dim());
 
     Frame::new(vec![content_line])
         .fit(content_width_u16, FitOptions::wrap())
@@ -195,11 +219,50 @@ pub fn render_cell(
         .prefix(&head, &tail)
 }
 
+struct DiffEntryStyle {
+    fg: Color,
+    bg: Option<Color>,
+    dim: bool,
+    gutter_style: Style,
+}
+
+impl DiffEntryStyle {
+    fn for_entry(tag: DiffTag, gutter_tint: GutterTint, theme: &crate::Theme) -> Self {
+        let (fg, bg) = match tag {
+            DiffTag::Removed => (theme.diff_removed_fg(), Some(theme.diff_removed_bg())),
+            DiffTag::Added => (theme.diff_added_fg(), Some(theme.diff_added_bg())),
+            DiffTag::Context => (theme.code_fg(), None),
+        };
+        let gutter_style = match (tag, gutter_tint) {
+            (DiffTag::Removed, GutterTint::Diff) => {
+                Style::fg(theme.diff_removed_fg()).bg_color(theme.diff_removed_bg())
+            }
+            (DiffTag::Added, GutterTint::Diff) => Style::fg(theme.diff_added_fg()).bg_color(theme.diff_added_bg()),
+            _ => Style::fg(theme.muted()),
+        };
+        Self { fg, bg, dim: tag == DiffTag::Context, gutter_style }
+    }
+
+    fn content_style(&self, mut style: Style) -> Style {
+        if let Some(bg) = self.bg {
+            style.bg = Some(bg);
+        }
+        if self.dim {
+            style.dim = true;
+        }
+        style
+    }
+
+    fn fallback_content_style(&self) -> Style {
+        self.content_style(Style::fg(self.fg))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::rendering::line::Line;
-    use crate::{DiffLine, SplitDiffCell, SplitDiffRow};
+    use crate::{DiffLine, SplitDiffEntry, SplitDiffRow};
 
     fn test_context_with_width(width: u16) -> ViewContext {
         ViewContext::new((width, 24))
@@ -209,31 +272,31 @@ mod tests {
         DiffPreview { lines: vec![], rows, lang_hint: String::new(), start_line: None }
     }
 
-    fn removed_cell(content: &str, line_num: usize) -> SplitDiffCell {
-        SplitDiffCell { tag: DiffTag::Removed, content: content.to_string(), line_number: Some(line_num) }
+    fn gutter_width_for_preview(preview: &DiffPreview) -> usize {
+        gutter_width_for_max_line(max_line_no_for_preview(preview))
     }
 
-    fn added_cell(content: &str, line_num: usize) -> SplitDiffCell {
-        SplitDiffCell { tag: DiffTag::Added, content: content.to_string(), line_number: Some(line_num) }
+    fn removed_entry(content: &str, line_num: usize) -> SplitDiffEntry {
+        SplitDiffEntry::new(DiffTag::Removed, content, Some(line_num))
+    }
+
+    fn added_entry(content: &str, line_num: usize) -> SplitDiffEntry {
+        SplitDiffEntry::new(DiffTag::Added, content, Some(line_num))
+    }
+
+    fn context_entry(content: &str, line_num: usize) -> SplitDiffEntry {
+        SplitDiffEntry::new(DiffTag::Context, content, Some(line_num))
     }
 
     fn style_at_column(line: &Line, col: usize) -> Style {
-        let mut current = 0;
-        for span in line.spans() {
-            let width = crate::display_width_text(span.text());
-            if col < current + width {
-                return span.style();
-            }
-            current += width;
-        }
-        Style::default()
+        crate::testing::style_at_column(line, col)
     }
 
     #[test]
     fn wrapped_split_rows_preserve_neutral_boundary_columns() {
         let preview = make_split_preview(vec![SplitDiffRow {
-            left: Some(removed_cell("LEFT_MARK", 1)),
-            right: Some(added_cell(&format!("RIGHT_HEAD {} RIGHT_TAIL", "y".repeat(140)), 1)),
+            left: Some(removed_entry("LEFT_MARK", 1)),
+            right: Some(added_entry(&format!("RIGHT_HEAD {} RIGHT_TAIL", "y".repeat(140)), 1)),
         }]);
         let ctx = test_context_with_width(100);
         let lines = highlight_split_diff(&preview, &ctx);
@@ -281,8 +344,8 @@ mod tests {
     #[test]
     fn both_panels_rendered_with_content() {
         let preview = make_split_preview(vec![SplitDiffRow {
-            left: Some(removed_cell("old code", 1)),
-            right: Some(added_cell("new code", 1)),
+            left: Some(removed_entry("old code", 1)),
+            right: Some(added_entry("new code", 1)),
         }]);
         let ctx = test_context_with_width(100);
         let lines = highlight_split_diff(&preview, &ctx);
@@ -296,8 +359,8 @@ mod tests {
     fn long_lines_wrapped_within_terminal_width() {
         let long = "x".repeat(200);
         let preview = make_split_preview(vec![SplitDiffRow {
-            left: Some(removed_cell(&long, 1)),
-            right: Some(added_cell(&long, 1)),
+            left: Some(removed_entry(&long, 1)),
+            right: Some(added_entry(&long, 1)),
         }]);
         let ctx = test_context_with_width(100);
         let lines = highlight_split_diff(&preview, &ctx);
@@ -317,8 +380,8 @@ mod tests {
     fn truncation_budget_applied() {
         let rows: Vec<SplitDiffRow> = (0..30)
             .map(|i| SplitDiffRow {
-                left: Some(removed_cell(&format!("old {i}"), i + 1)),
-                right: Some(added_cell(&format!("new {i}"), i + 1)),
+                left: Some(removed_entry(&format!("old {i}"), i + 1)),
+                right: Some(added_entry(&format!("new {i}"), i + 1)),
             })
             .collect();
         let preview = make_split_preview(rows);
@@ -331,13 +394,14 @@ mod tests {
     }
 
     #[test]
-    fn empty_added_cell_pads_content_with_added_background() {
+    fn empty_added_entry_pads_content_with_added_background() {
         let ctx = test_context_with_width(100);
         let added_bg = ctx.theme.diff_added_bg();
-        let cell = SplitDiffCell { tag: DiffTag::Added, content: String::new(), line_number: Some(1) };
+        let entry = SplitDiffEntry::new(DiffTag::Added, String::new(), Some(1));
         let content_width = 40;
         let gutter_width = MIN_GUTTER_WIDTH;
-        let frame = render_cell(Some(&cell), content_width, "rs", Side::Right, gutter_width, &ctx);
+        let frame =
+            render_entry(Some(&entry), content_width, "rs", Side::Right, gutter_width, GutterTint::Neutral, &ctx);
         let lines = frame.into_lines();
         assert_eq!(lines.len(), 1);
         let row = &lines[0];
@@ -351,7 +415,7 @@ mod tests {
         assert_eq!(
             trailing.style().bg,
             Some(added_bg),
-            "trailing pad of empty added cell should carry diff_added_bg, got {:?}",
+            "trailing pad of empty added entry should carry diff_added_bg, got {:?}",
             trailing.style().bg
         );
     }
@@ -368,7 +432,7 @@ mod tests {
     fn render_diff_dispatches_to_unified_below_80() {
         let preview = DiffPreview {
             lines: vec![DiffLine { tag: DiffTag::Removed, content: "old".to_string() }],
-            rows: vec![SplitDiffRow { left: Some(removed_cell("old", 1)), right: None }],
+            rows: vec![SplitDiffRow { left: Some(removed_entry("old", 1)), right: None }],
             lang_hint: String::new(),
             start_line: None,
         };
@@ -393,9 +457,9 @@ mod tests {
                 DiffLine { tag: DiffTag::Added, content: "}".to_string() },
             ],
             rows: vec![
-                SplitDiffRow { left: None, right: Some(added_cell("fn main() {", 1)) },
-                SplitDiffRow { left: None, right: Some(added_cell("    println!(\"Hello\");", 2)) },
-                SplitDiffRow { left: None, right: Some(added_cell("}", 3)) },
+                SplitDiffRow { left: None, right: Some(added_entry("fn main() {", 1)) },
+                SplitDiffRow { left: None, right: Some(added_entry("    println!(\"Hello\");", 2)) },
+                SplitDiffRow { left: None, right: Some(added_entry("}", 3)) },
             ],
             lang_hint: "rs".to_string(),
             start_line: None,
@@ -411,7 +475,7 @@ mod tests {
     fn render_diff_dispatches_to_split_at_80() {
         let preview = DiffPreview {
             lines: vec![DiffLine { tag: DiffTag::Removed, content: "old".to_string() }],
-            rows: vec![SplitDiffRow { left: Some(removed_cell("old", 1)), right: None }],
+            rows: vec![SplitDiffRow { left: Some(removed_entry("old", 1)), right: None }],
             lang_hint: String::new(),
             start_line: None,
         };
@@ -425,8 +489,8 @@ mod tests {
     #[test]
     fn line_numbers_rendered_when_start_line_set() {
         let preview = make_split_preview(vec![SplitDiffRow {
-            left: Some(SplitDiffCell { tag: DiffTag::Context, content: "hello".to_string(), line_number: Some(42) }),
-            right: Some(SplitDiffCell { tag: DiffTag::Context, content: "hello".to_string(), line_number: Some(42) }),
+            left: Some(context_entry("hello", 42)),
+            right: Some(context_entry("hello", 42)),
         }]);
         let ctx = test_context_with_width(100);
         let lines = highlight_split_diff(&preview, &ctx);
@@ -439,8 +503,8 @@ mod tests {
         // Left side has a long line that wraps, right side is short
         let long = "a".repeat(200);
         let preview = make_split_preview(vec![SplitDiffRow {
-            left: Some(removed_cell(&long, 1)),
-            right: Some(added_cell("short", 1)),
+            left: Some(removed_entry(&long, 1)),
+            right: Some(added_entry("short", 1)),
         }]);
         let ctx = test_context_with_width(100);
         let lines = highlight_split_diff(&preview, &ctx);
@@ -455,8 +519,8 @@ mod tests {
     #[test]
     fn separator_has_no_background_on_context_row() {
         let preview = make_split_preview(vec![SplitDiffRow {
-            left: Some(SplitDiffCell { tag: DiffTag::Context, content: "hello".to_string(), line_number: Some(1) }),
-            right: Some(SplitDiffCell { tag: DiffTag::Context, content: "world".to_string(), line_number: Some(1) }),
+            left: Some(context_entry("hello", 1)),
+            right: Some(context_entry("world", 1)),
         }]);
         let ctx = test_context_with_width(100);
         let lines = highlight_split_diff(&preview, &ctx);
@@ -480,7 +544,7 @@ mod tests {
     #[test]
     fn blank_gutter_when_line_number_none() {
         let preview = make_split_preview(vec![SplitDiffRow {
-            left: Some(SplitDiffCell { tag: DiffTag::Removed, content: "old".to_string(), line_number: None }),
+            left: Some(SplitDiffEntry::new(DiffTag::Removed, "old", None)),
             right: None,
         }]);
         let ctx = test_context_with_width(100);
@@ -493,8 +557,8 @@ mod tests {
     #[test]
     fn left_pane_diff_bg_extends_through_inner_pad_to_separator() {
         let preview = make_split_preview(vec![SplitDiffRow {
-            left: Some(removed_cell("old", 1)),
-            right: Some(added_cell("new", 1)),
+            left: Some(removed_entry("old", 1)),
+            right: Some(added_entry("new", 1)),
         }]);
         let ctx = test_context_with_width(100);
         let lines = highlight_split_diff(&preview, &ctx);
@@ -514,10 +578,57 @@ mod tests {
     }
 
     #[test]
+    fn absent_entry_renders_without_background() {
+        let ctx = test_context_with_width(100);
+        let frame = render_entry(None, 40, "", Side::Left, MIN_GUTTER_WIDTH, GutterTint::Diff, &ctx);
+        let line = &frame.into_lines()[0];
+        assert_eq!(style_at_column(line, 0).bg, None, "absent side should blend with the pane background");
+    }
+
+    #[test]
+    fn tinted_gutter_carries_diff_colors() {
+        let ctx = test_context_with_width(100);
+        let frame =
+            render_entry(Some(&removed_entry("old", 7)), 40, "", Side::Left, MIN_GUTTER_WIDTH, GutterTint::Diff, &ctx);
+        let line = &frame.into_lines()[0];
+        let style = style_at_column(line, 0);
+        assert_eq!(style.bg, Some(ctx.theme.diff_removed_bg()), "tinted gutter should carry removed bg");
+        assert_eq!(style.fg, Some(ctx.theme.diff_removed_fg()), "tinted gutter number should use removed fg");
+    }
+
+    #[test]
+    fn inline_preview_gutter_stays_neutral() {
+        let preview = make_split_preview(vec![SplitDiffRow {
+            left: Some(removed_entry("old", 7)),
+            right: Some(added_entry("new", 7)),
+        }]);
+        let ctx = test_context_with_width(100);
+        let lines = highlight_split_diff(&preview, &ctx);
+        let style = style_at_column(&lines[0], 0);
+        assert_eq!(style.bg, None, "inline preview gutter must stay neutral so frame indents do not inherit it");
+    }
+
+    #[test]
+    fn wrapped_continuation_rows_show_wrap_marker() {
+        let preview = make_split_preview(vec![SplitDiffRow {
+            left: Some(removed_entry("short", 1)),
+            right: Some(added_entry(&"y".repeat(140), 1)),
+        }]);
+        let ctx = test_context_with_width(100);
+        let lines = highlight_split_diff(&preview, &ctx);
+        assert!(lines.len() > 1, "long right side should wrap");
+        assert!(
+            lines[1].plain_text().contains(WRAP_MARKER),
+            "continuation row should mark the wrap in its gutter: {:?}",
+            lines[1].plain_text()
+        );
+    }
+
+    #[test]
     fn right_pane_line_number_sits_adjacent_to_separator() {
         let preview = make_split_preview(vec![SplitDiffRow {
-            left: Some(removed_cell("old", 89)),
-            right: Some(added_cell("new", 89)),
+            left: Some(removed_entry("old", 89)),
+            right: Some(added_entry("new", 89)),
         }]);
         let ctx = test_context_with_width(100);
         let lines = highlight_split_diff(&preview, &ctx);

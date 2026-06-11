@@ -2,7 +2,7 @@ use super::support::tool_events::*;
 use agent_client_protocol::schema as acp;
 use serde_json::json;
 use tui::testing::{assert_buffer_eq, render_component, render_lines};
-use tui::{BRAILLE_FRAMES as FRAMES, DiffLine, DiffPreview, DiffTag, Line, SplitDiffCell, SplitDiffRow, ViewContext};
+use tui::{BRAILLE_FRAMES as FRAMES, DiffLine, DiffPreview, DiffTag, Line, SplitDiffEntry, SplitDiffRow, ViewContext};
 use wisp::components::tool_call_status_view::{MAX_TOOL_ARG_LENGTH, ToolCallStatus, ToolCallStatusView};
 use wisp::components::tool_call_statuses::ToolCallStatuses;
 
@@ -213,8 +213,8 @@ fn indented_split_diff_does_not_bleed_diff_bg_into_left_indent_columns() {
             DiffLine { tag: DiffTag::Added, content: "new code".to_string() },
         ],
         rows: vec![SplitDiffRow {
-            left: Some(SplitDiffCell { tag: DiffTag::Removed, content: "old code".to_string(), line_number: Some(1) }),
-            right: Some(SplitDiffCell { tag: DiffTag::Added, content: "new code".to_string(), line_number: Some(1) }),
+            left: Some(SplitDiffEntry::new(DiffTag::Removed, "old code", Some(1))),
+            right: Some(SplitDiffEntry::new(DiffTag::Added, "new code", Some(1))),
         }],
         lang_hint: String::new(),
         start_line: None,

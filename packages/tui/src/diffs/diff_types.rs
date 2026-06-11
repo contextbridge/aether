@@ -18,16 +18,22 @@ pub struct DiffLine {
 /// A row in a side-by-side diff, pairing an old (left) line with a new (right) line.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SplitDiffRow {
-    pub left: Option<SplitDiffCell>,
-    pub right: Option<SplitDiffCell>,
+    pub left: Option<SplitDiffEntry>,
+    pub right: Option<SplitDiffEntry>,
 }
 
 /// One side of a split diff row.
 #[derive(Debug, Clone, PartialEq)]
-pub struct SplitDiffCell {
+pub struct SplitDiffEntry {
     pub tag: DiffTag,
     pub content: String,
     pub line_number: Option<usize>,
+}
+
+impl SplitDiffEntry {
+    pub fn new(tag: DiffTag, content: impl Into<String>, line_number: Option<usize>) -> Self {
+        Self { tag, content: content.into(), line_number }
+    }
 }
 
 /// A preview of changed lines for an edit operation.
@@ -92,12 +98,8 @@ fn process_diff_op(op: DiffOp, old: &[&str], new: &[&str], s: &mut DiffBuildStat
                 let content = get_line(old, old_index + i).to_string();
                 s.lines.push(DiffLine { tag: DiffTag::Context, content: content.clone() });
                 s.rows.push(SplitDiffRow {
-                    left: Some(SplitDiffCell {
-                        tag: DiffTag::Context,
-                        content: content.clone(),
-                        line_number: Some(s.old_line_num),
-                    }),
-                    right: Some(SplitDiffCell { tag: DiffTag::Context, content, line_number: Some(s.new_line_num) }),
+                    left: Some(SplitDiffEntry::new(DiffTag::Context, content.clone(), Some(s.old_line_num))),
+                    right: Some(SplitDiffEntry::new(DiffTag::Context, content, Some(s.new_line_num))),
                 });
             }
         }
@@ -110,7 +112,7 @@ fn process_diff_op(op: DiffOp, old: &[&str], new: &[&str], s: &mut DiffBuildStat
                 let content = get_line(old, old_index + i).to_string();
                 s.lines.push(DiffLine { tag: DiffTag::Removed, content: content.clone() });
                 s.rows.push(SplitDiffRow {
-                    left: Some(SplitDiffCell { tag: DiffTag::Removed, content, line_number: Some(s.old_line_num) }),
+                    left: Some(SplitDiffEntry::new(DiffTag::Removed, content, Some(s.old_line_num))),
                     right: None,
                 });
             }
@@ -125,7 +127,7 @@ fn process_diff_op(op: DiffOp, old: &[&str], new: &[&str], s: &mut DiffBuildStat
                 s.lines.push(DiffLine { tag: DiffTag::Added, content: content.clone() });
                 s.rows.push(SplitDiffRow {
                     left: None,
-                    right: Some(SplitDiffCell { tag: DiffTag::Added, content, line_number: Some(s.new_line_num) }),
+                    right: Some(SplitDiffEntry::new(DiffTag::Added, content, Some(s.new_line_num))),
                 });
             }
         }
@@ -142,19 +144,11 @@ fn process_diff_op(op: DiffOp, old: &[&str], new: &[&str], s: &mut DiffBuildStat
             for i in 0..old_len.max(new_len) {
                 let left = (i < old_len).then(|| {
                     s.old_line_num += 1;
-                    SplitDiffCell {
-                        tag: DiffTag::Removed,
-                        content: get_line(old, old_index + i).to_string(),
-                        line_number: Some(s.old_line_num),
-                    }
+                    SplitDiffEntry::new(DiffTag::Removed, get_line(old, old_index + i), Some(s.old_line_num))
                 });
                 let right = (i < new_len).then(|| {
                     s.new_line_num += 1;
-                    SplitDiffCell {
-                        tag: DiffTag::Added,
-                        content: get_line(new, new_index + i).to_string(),
-                        line_number: Some(s.new_line_num),
-                    }
+                    SplitDiffEntry::new(DiffTag::Added, get_line(new, new_index + i), Some(s.new_line_num))
                 });
                 s.rows.push(SplitDiffRow { left, right });
             }

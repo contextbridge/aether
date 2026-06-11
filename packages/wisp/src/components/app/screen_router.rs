@@ -15,9 +15,11 @@ pub struct ScreenRouter {
     git_diff_working_dir: PathBuf,
 }
 
+// Both variants are boxed to keep ScreenRouter's stack frame small since
+// GitDiffMode and PlanReviewMode own rendered patch buffers and split panels.
 enum FullScreenMode {
-    GitDiff(GitDiffMode),
-    PlanReview(PlanReviewMode),
+    GitDiff(Box<GitDiffMode>),
+    PlanReview(Box<PlanReviewMode>),
 }
 
 impl ScreenRouter {
@@ -44,7 +46,7 @@ impl ScreenRouter {
             None => {
                 let mut git_diff_mode = GitDiffMode::new(self.git_diff_working_dir.clone());
                 git_diff_mode.begin_open();
-                self.mode = Some(FullScreenMode::GitDiff(git_diff_mode));
+                self.mode = Some(FullScreenMode::GitDiff(Box::new(git_diff_mode)));
                 Some(ScreenRouterMessage::LoadGitDiff)
             }
             Some(FullScreenMode::GitDiff(mut git_diff_mode)) => {
@@ -71,12 +73,12 @@ impl ScreenRouter {
     }
 
     pub fn open_plan_review(&mut self, input: PlanReviewInput) {
-        self.mode = Some(FullScreenMode::PlanReview(PlanReviewMode::new(input)));
+        self.mode = Some(FullScreenMode::PlanReview(Box::new(PlanReviewMode::new(input))));
     }
 
     #[cfg(test)]
     pub fn enter_git_diff_for_test(&mut self) {
-        self.mode = Some(FullScreenMode::GitDiff(GitDiffMode::new(self.git_diff_working_dir.clone())));
+        self.mode = Some(FullScreenMode::GitDiff(Box::new(GitDiffMode::new(self.git_diff_working_dir.clone()))));
     }
 
     pub fn git_diff_mode_mut(&mut self) -> &mut GitDiffMode {

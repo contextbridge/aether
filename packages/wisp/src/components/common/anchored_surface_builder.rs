@@ -11,17 +11,6 @@ impl<A: Copy + Eq + Hash> AnchoredSurfaceBuilder<A> {
         Self { rows: AnchoredRows::default() }
     }
 
-    pub(crate) fn push_unanchored_wrapped(
-        &mut self,
-        content: Line,
-        width: u16,
-        first_head: &Line,
-        continuation_head: &Line,
-    ) {
-        let wrapped = tui::wrap_with_gutter(content, width, first_head, continuation_head).into_lines();
-        self.rows.push_unanchored_rows(wrapped);
-    }
-
     pub(crate) fn push_anchored_wrapped(
         &mut self,
         anchor: CommentAnchor<A>,

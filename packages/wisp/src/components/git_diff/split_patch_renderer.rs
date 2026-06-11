@@ -1,45 +1,27 @@
-use super::patch_renderer::{RenderedPatch, lang_hint_from_path, usize_to_u16_saturating};
+use super::patch_renderer::{RenderedPatch, lang_hint_from_path};
 use super::{DiffAnchor, PatchAnchor};
 use crate::components::common::AnchoredSurfaceBuilder;
 use crate::components::review_comments::CommentAnchor;
 use crate::git_diff::{FileDiff, PatchLine, PatchLineKind};
-use tui::{Line, ViewContext};
+use tui::{DiffTag, Frame, FramePart, GutterTint, Line, SplitDiffEntry, ViewContext};
 
 const SEPARATOR_WIDTH_U16: u16 = 1;
-const LEFT_INNER_PAD: usize = 1;
 
 pub fn build_split_patch_base_lines(file: &FileDiff, width: usize, ctx: &ViewContext) -> RenderedPatch {
     let theme = &ctx.theme;
     let lang_hint = lang_hint_from_path(&file.path);
-    let max_line_no = file
-        .hunks
-        .iter()
-        .flat_map(|hunk| &hunk.lines)
-        .filter_map(|line| line.old_line_no.into_iter().chain(line.new_line_no).max())
-        .max()
-        .unwrap_or(0);
-    let gutter_width = (tui::digit_count(max_line_no) + 1).max(tui::MIN_GUTTER_WIDTH);
-    let usable = width.saturating_sub(gutter_width * 2 + tui::SEPARATOR_WIDTH + LEFT_INNER_PAD);
-    let left_content = usable / 2;
-    let right_content = usable.saturating_sub(left_content);
-    let left_panel_u16 = usize_to_u16_saturating(gutter_width + left_content + LEFT_INNER_PAD);
-    let right_panel_u16 = usize_to_u16_saturating(gutter_width + right_content);
+    let max_line_no = file.max_line_no();
+    let metrics = tui::SplitLayoutDimensions::new(width, max_line_no);
 
     let mut rows: AnchoredSurfaceBuilder<PatchAnchor> = AnchoredSurfaceBuilder::new();
 
     for (hunk_idx, hunk) in file.hunks.iter().enumerate() {
-        if hunk_idx > 0 {
-            rows.push_raw_unanchored_rows([Line::default()]);
-        }
-
         for row in pair_hunk_lines(&hunk.lines) {
             let anchor = row.anchor(hunk_idx);
 
             match row {
-                PairedRow::Header { text, .. } => {
-                    let mut line = Line::default();
-                    line.push_with_style(text, tui::Style::fg(theme.info()).bold().bg_color(theme.code_bg()));
-                    line.extend_bg_to_width(width);
+                PairedRow::Meta { text, .. } => {
+                    let line = Line::with_style(text, tui::Style::fg(theme.text_secondary()).italic());
 
                     if let Some(anchor) = anchor {
                         rows.push_raw_anchored_rows(anchor, [line]);
@@ -48,47 +30,53 @@ pub fn build_split_patch_base_lines(file: &FileDiff, width: usize, ctx: &ViewCon
                     }
                 }
                 PairedRow::Split { left, right } => {
-                    let left_cell = left.as_ref().map(|side| tui::SplitDiffCell {
-                        tag: match side.kind {
-                            PatchLineKind::Removed => tui::DiffTag::Removed,
-                            _ => tui::DiffTag::Context,
-                        },
-                        content: side.text.to_string(),
-                        line_number: side.line_no,
+                    let left_entry = left.as_ref().map(|side| {
+                        SplitDiffEntry::new(
+                            match side.kind {
+                                PatchLineKind::Removed => DiffTag::Removed,
+                                _ => DiffTag::Context,
+                            },
+                            side.text,
+                            side.line_no,
+                        )
                     });
-                    let right_cell = right.as_ref().map(|side| tui::SplitDiffCell {
-                        tag: match side.kind {
-                            PatchLineKind::Added => tui::DiffTag::Added,
-                            _ => tui::DiffTag::Context,
-                        },
-                        content: side.text.to_string(),
-                        line_number: side.line_no,
+                    let right_entry = right.as_ref().map(|side| {
+                        SplitDiffEntry::new(
+                            match side.kind {
+                                PatchLineKind::Added => DiffTag::Added,
+                                _ => DiffTag::Context,
+                            },
+                            side.text,
+                            side.line_no,
+                        )
                     });
 
-                    let left_frame = tui::split_render_cell(
-                        left_cell.as_ref(),
-                        left_content,
+                    let left_frame = tui::split_render_entry(
+                        left_entry.as_ref(),
+                        metrics.left_content_width,
                         lang_hint,
                         tui::SplitDiffSide::Left,
-                        gutter_width,
+                        metrics.gutter_width,
+                        GutterTint::Diff,
                         ctx,
                     );
-                    let right_frame = tui::split_render_cell(
-                        right_cell.as_ref(),
-                        right_content,
+                    let right_frame = tui::split_render_entry(
+                        right_entry.as_ref(),
+                        metrics.right_content_width,
                         lang_hint,
                         tui::SplitDiffSide::Right,
-                        gutter_width,
+                        metrics.gutter_width,
+                        GutterTint::Diff,
                         ctx,
                     );
                     let height = left_frame.lines().len().max(right_frame.lines().len());
 
                     let sep_line = Line::new(tui::SEPARATOR.to_string());
-                    let sep_frame = tui::Frame::new(vec![sep_line; height]);
-                    let row_frame = tui::Frame::hstack([
-                        tui::FramePart::new(left_frame, left_panel_u16),
-                        tui::FramePart::new(sep_frame, SEPARATOR_WIDTH_U16),
-                        tui::FramePart::new(right_frame, right_panel_u16),
+                    let sep_frame = Frame::new(vec![sep_line; height]);
+                    let row_frame = Frame::hstack([
+                        FramePart::new(left_frame, metrics.left_panel_width),
+                        FramePart::new(sep_frame, SEPARATOR_WIDTH_U16),
+                        FramePart::new(right_frame, metrics.right_panel_width),
                     ]);
 
                     if let Some(anchor) = anchor {
@@ -113,14 +101,14 @@ struct SideInfo<'a> {
 }
 
 enum PairedRow<'a> {
-    Header { line_idx: usize, text: &'a str },
+    Meta { line_idx: usize, text: &'a str },
     Split { left: Option<SideInfo<'a>>, right: Option<SideInfo<'a>> },
 }
 
 impl PairedRow<'_> {
     fn anchor(&self, hunk_index: usize) -> Option<DiffAnchor> {
         match self {
-            Self::Header { line_idx, .. } => Some(CommentAnchor(PatchAnchor { hunk: hunk_index, line: *line_idx })),
+            Self::Meta { line_idx, .. } => Some(CommentAnchor(PatchAnchor { hunk: hunk_index, line: *line_idx })),
             Self::Split { left, right } => {
                 right.as_ref().map(|side| CommentAnchor(PatchAnchor { hunk: hunk_index, line: side.line_idx })).or_else(
                     || left.as_ref().map(|side| CommentAnchor(PatchAnchor { hunk: hunk_index, line: side.line_idx })),
@@ -137,8 +125,11 @@ fn pair_hunk_lines(lines: &[PatchLine]) -> Vec<PairedRow<'_>> {
     while index < lines.len() {
         let patch_line = &lines[index];
         match patch_line.kind {
-            PatchLineKind::HunkHeader | PatchLineKind::Meta => {
-                rows.push(PairedRow::Header { line_idx: index, text: &patch_line.text });
+            PatchLineKind::HunkHeader => {
+                index += 1;
+            }
+            PatchLineKind::Meta => {
+                rows.push(PairedRow::Meta { line_idx: index, text: &patch_line.text });
                 index += 1;
             }
             PatchLineKind::Context => {
@@ -280,33 +271,8 @@ mod tests {
         ])]);
         let result = build_split_patch_base_lines(&file, 100, &ctx());
 
-        assert_eq!(result.surface.blocks().len(), 2);
-        assert_eq!(result.surface.end_row_for_anchor(CommentAnchor(PatchAnchor { hunk: 0, line: 0 })), Some(0));
-    }
-
-    #[test]
-    fn split_base_lines_has_hunk_offsets() {
-        let file = test_file(vec![
-            test_hunk(vec![
-                pl(PatchLineKind::HunkHeader, "@@ -1,1 +1,1 @@", None, None),
-                pl(PatchLineKind::Context, "a", Some(1), Some(1)),
-            ]),
-            Hunk {
-                header: "@@ -5,1 +5,1 @@".to_string(),
-                old_start: 5,
-                old_count: 1,
-                new_start: 5,
-                new_count: 1,
-                lines: vec![
-                    pl(PatchLineKind::HunkHeader, "@@ -5,1 +5,1 @@", None, None),
-                    pl(PatchLineKind::Context, "b", Some(5), Some(5)),
-                ],
-            },
-        ]);
-        let result = build_split_patch_base_lines(&file, 100, &ctx());
-
-        assert_eq!(result.hunk_offsets.len(), 2);
-        assert_eq!(result.hunk_offsets[0], 0);
+        assert_eq!(result.surface.groups().len(), 1);
+        assert_eq!(result.surface.end_row_for_anchor(CommentAnchor(PatchAnchor { hunk: 0, line: 2 })), Some(0));
     }
 
     #[test]
@@ -320,35 +286,10 @@ mod tests {
         ])]);
         let result = build_split_patch_base_lines(&file, 100, &ctx());
 
-        assert_eq!(result.surface.lines().len(), 3);
-        assert_eq!(result.surface.blocks().len(), 3);
-        assert_eq!(result.surface.start_row_for_anchor(CommentAnchor(PatchAnchor { hunk: 0, line: 3 })), Some(1));
-        assert_eq!(result.surface.start_row_for_anchor(CommentAnchor(PatchAnchor { hunk: 0, line: 4 })), Some(2));
-    }
-
-    #[test]
-    fn split_spacer_between_hunks() {
-        let file = test_file(vec![
-            test_hunk(vec![
-                pl(PatchLineKind::HunkHeader, "@@ -1,1 +1,1 @@", None, None),
-                pl(PatchLineKind::Context, "a", Some(1), Some(1)),
-            ]),
-            Hunk {
-                header: "@@ -5,1 +5,1 @@".to_string(),
-                old_start: 5,
-                old_count: 1,
-                new_start: 5,
-                new_count: 1,
-                lines: vec![
-                    pl(PatchLineKind::HunkHeader, "@@ -5,1 +5,1 @@", None, None),
-                    pl(PatchLineKind::Context, "b", Some(5), Some(5)),
-                ],
-            },
-        ]);
-        let result = build_split_patch_base_lines(&file, 100, &ctx());
-
-        assert_eq!(result.surface.max_row(), 4);
-        assert_eq!(result.surface.start_row_for_anchor(CommentAnchor(PatchAnchor { hunk: 1, line: 0 })), Some(3));
+        assert_eq!(result.surface.lines().len(), 2);
+        assert_eq!(result.surface.groups().len(), 2);
+        assert_eq!(result.surface.start_row_for_anchor(CommentAnchor(PatchAnchor { hunk: 0, line: 3 })), Some(0));
+        assert_eq!(result.surface.start_row_for_anchor(CommentAnchor(PatchAnchor { hunk: 0, line: 4 })), Some(1));
     }
 
     #[test]
@@ -361,7 +302,7 @@ mod tests {
         let result = build_split_patch_base_lines(&file, 100, &ctx());
 
         let CommentAnchor(PatchAnchor { line, .. }) =
-            result.surface.anchor_at_or_before(1).expect("split row should have an anchor");
+            result.surface.anchor_at_or_before(0).expect("split row should have an anchor");
         assert_eq!(line, 2, "should reference the Added line");
     }
 
@@ -377,7 +318,7 @@ mod tests {
         let result = build_split_patch_base_lines(&file, 100, &ctx());
 
         let shared_row =
-            result.surface.lines().iter().skip(1).find(|line| line.plain_text().matches("shared_call();").count() == 2);
+            result.surface.lines().iter().find(|line| line.plain_text().matches("shared_call();").count() == 2);
         assert!(shared_row.is_some(), "identical moved lines should be aligned onto the same split row");
     }
 
@@ -394,7 +335,7 @@ mod tests {
         let result = build_split_patch_base_lines(&file, 100, &ctx());
 
         let shared_row =
-            result.surface.lines().iter().skip(1).find(|line| line.plain_text().matches("shared_call();").count() == 2);
+            result.surface.lines().iter().find(|line| line.plain_text().matches("shared_call();").count() == 2);
         assert!(shared_row.is_some(), "shared prefix line should stay aligned as an unchanged pair");
 
         let overflow_row = result

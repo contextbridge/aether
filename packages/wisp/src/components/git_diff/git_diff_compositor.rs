@@ -36,7 +36,7 @@ struct CachedRenderedPatch {
 
 pub struct GitDiffCompositor {
     rendered_patches: Vec<CachedRenderedPatch>,
-    has_active_rendered_patch: bool,
+    has_active: bool,
     submitted_layer: CachedLayer<CommentLayerKey, Vec<FrameSplice>>,
     submitted_revision: usize,
 }
@@ -45,7 +45,7 @@ impl GitDiffCompositor {
     pub fn new() -> Self {
         Self {
             rendered_patches: Vec::new(),
-            has_active_rendered_patch: false,
+            has_active: false,
             submitted_layer: CachedLayer::new(),
             submitted_revision: 0,
         }
@@ -53,12 +53,12 @@ impl GitDiffCompositor {
 
     pub fn clear_rendered_patches(&mut self) {
         self.rendered_patches.clear();
-        self.has_active_rendered_patch = false;
+        self.has_active = false;
         self.submitted_layer.reset();
     }
 
     pub fn deactivate_rendered_patch(&mut self) {
-        self.has_active_rendered_patch = false;
+        self.has_active = false;
         self.submitted_layer.reset();
     }
 
@@ -85,7 +85,7 @@ impl GitDiffCompositor {
         if let Some(index) = self.rendered_patches.iter().position(|cached| cached.key == key) {
             let cached = self.rendered_patches.remove(index);
             self.rendered_patches.push(cached);
-            self.has_active_rendered_patch = true;
+            self.has_active = true;
             return;
         }
 
@@ -99,30 +99,26 @@ impl GitDiffCompositor {
             self.rendered_patches.remove(0);
         }
 
+        self.has_active = true;
         self.rendered_patches.push(CachedRenderedPatch { key, patch });
-        self.has_active_rendered_patch = true;
     }
 
     pub fn ensure_submitted_layer(&mut self, file: &FileDiff, comments: &[&QueuedComment], ctx: &ViewContext) {
-        let rendered = if self.has_active_rendered_patch {
-            self.rendered_patches.last().map(|cached| &cached.patch)
-        } else {
-            None
-        };
-        let Some(rendered) = rendered else {
+        if !self.has_active {
             self.submitted_layer.reset();
             return;
-        };
+        }
+        let rendered_surface = &self.rendered_patches.last().expect("has_active implies non-empty").patch.surface;
 
         let key =
             CommentLayerKey { revision: self.submitted_revision, width: ctx.size.width, file_path: file.path.clone() };
         self.submitted_layer.ensure(key, || {
-            CommentGroup::splices_for(&rendered.surface, comments.iter().map(|comment| &comment.review), ctx)
+            CommentGroup::splices_for(rendered_surface, comments.iter().map(|comment| &comment.review), ctx)
         });
     }
 
     pub fn rendered_patch(&self) -> Option<&RenderedPatch> {
-        if self.has_active_rendered_patch { self.rendered_patches.last().map(|cached| &cached.patch) } else { None }
+        if self.has_active { self.rendered_patches.last().map(|cached| &cached.patch) } else { None }
     }
 
     pub fn comment_splices(&self) -> &[FrameSplice] {
