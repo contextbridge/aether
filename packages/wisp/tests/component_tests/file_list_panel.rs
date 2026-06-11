@@ -1,5 +1,5 @@
 use tui::testing::{TestTerminal, assert_buffer_eq, cols, key, render_component};
-use tui::{Component, Event, KeyCode, ViewContext};
+use tui::{Component, Event, KeyCode, KeyModifiers, MouseEvent, MouseEventKind, ViewContext};
 use wisp::components::file_list_panel::FileListPanel;
 use wisp::git_diff::{FileDiff, FileStatus, Hunk, PatchLine, PatchLineKind};
 
@@ -7,6 +7,10 @@ const W: u16 = 40;
 
 fn ev(code: KeyCode) -> Event {
     Event::Key(key(code))
+}
+
+fn mouse_scroll(kind: MouseEventKind) -> Event {
+    Event::Mouse(MouseEvent { kind, column: 0, row: 0, modifiers: KeyModifiers::NONE })
 }
 
 fn rule() -> String {
@@ -358,6 +362,24 @@ async fn arrow_keys_navigate() {
     panel.on_event(&ev(KeyCode::Up)).await;
     let term = render_component(|ctx| panel.render(ctx), W, 4);
     assert_selected_tree_row(&term, 2, 3);
+}
+
+#[tokio::test]
+async fn mouse_scroll_moves_once_until_next_render() {
+    let files = (0..5).map(|i| file(&format!("file-{i}.rs"), FileStatus::Modified, 1, 1)).collect::<Vec<_>>();
+    let mut panel = FileListPanel::new();
+    panel.rebuild_from_files(&files);
+
+    panel.on_event(&mouse_scroll(MouseEventKind::ScrollDown)).await;
+    panel.on_event(&mouse_scroll(MouseEventKind::ScrollDown)).await;
+    let term = render_component(|ctx| panel.render(ctx), W, 7);
+
+    assert_selected_tree_row(&term, 3, 2);
+
+    panel.on_event(&mouse_scroll(MouseEventKind::ScrollDown)).await;
+    let term = render_component(|ctx| panel.render(ctx), W, 7);
+
+    assert_selected_tree_row(&term, 4, 3);
 }
 
 #[tokio::test]

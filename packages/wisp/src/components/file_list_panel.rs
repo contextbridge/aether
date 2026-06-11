@@ -15,6 +15,7 @@ pub struct FileListPanel {
     deletions: usize,
     focused: bool,
     file_comment_counts: Vec<usize>,
+    scroll_consumed_this_frame: bool,
 }
 
 pub enum FileListMessage {
@@ -33,6 +34,7 @@ impl Default for FileListPanel {
             deletions: 0,
             focused: false,
             file_comment_counts: Vec::new(),
+            scroll_consumed_this_frame: false,
         }
     }
 }
@@ -125,9 +127,17 @@ impl Component for FileListPanel {
         if let Event::Mouse(mouse) = event {
             return match mouse.kind {
                 MouseEventKind::ScrollUp => {
+                    if self.scroll_consumed_this_frame {
+                        return Some(vec![]);
+                    }
+                    self.scroll_consumed_this_frame = true;
                     Some(self.select_relative(-1).map(|idx| vec![FileListMessage::Selected(idx)]).unwrap_or_default())
                 }
                 MouseEventKind::ScrollDown => {
+                    if self.scroll_consumed_this_frame {
+                        return Some(vec![]);
+                    }
+                    self.scroll_consumed_this_frame = true;
                     Some(self.select_relative(1).map(|idx| vec![FileListMessage::Selected(idx)]).unwrap_or_default())
                 }
                 _ => None,
@@ -161,6 +171,7 @@ impl Component for FileListPanel {
 
     fn render(&mut self, ctx: &ViewContext) -> Frame {
         let theme = &ctx.theme;
+        self.scroll_consumed_this_frame = false;
         let width = ctx.size.width as usize;
         let height = ctx.size.height as usize;
         if width < 2 {
