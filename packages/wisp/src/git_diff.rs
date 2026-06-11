@@ -81,15 +81,44 @@ impl FileStatus {
             Self::Untracked => '?',
         }
     }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Modified => "modified",
+            Self::Added => "new file",
+            Self::Deleted => "deleted",
+            Self::Renamed => "renamed",
+            Self::Untracked => "untracked",
+        }
+    }
 }
 
 impl FileDiff {
     pub fn additions(&self) -> usize {
-        self.hunks.iter().flat_map(|hunk| &hunk.lines).filter(|line| line.kind == PatchLineKind::Added).count()
+        self.hunks.iter().map(Hunk::additions).sum()
     }
 
     pub fn deletions(&self) -> usize {
-        self.hunks.iter().flat_map(|hunk| &hunk.lines).filter(|line| line.kind == PatchLineKind::Removed).count()
+        self.hunks.iter().map(Hunk::deletions).sum()
+    }
+
+    pub fn max_line_no(&self) -> usize {
+        self.hunks
+            .iter()
+            .flat_map(|hunk| &hunk.lines)
+            .flat_map(|line| line.old_line_no.into_iter().chain(line.new_line_no))
+            .max()
+            .unwrap_or(0)
+    }
+}
+
+impl Hunk {
+    pub fn additions(&self) -> usize {
+        self.lines.iter().filter(|line| line.kind == PatchLineKind::Added).count()
+    }
+
+    pub fn deletions(&self) -> usize {
+        self.lines.iter().filter(|line| line.kind == PatchLineKind::Removed).count()
     }
 }
 
@@ -101,8 +130,7 @@ pub(crate) async fn load_git_diff(
         Some(root) => root.to_path_buf(),
         None => resolve_repo_root(working_dir).await?,
     };
-    let diff_output =
-        run_git_command(&repo_root, &["diff", "--no-ext-diff", "--find-renames", "--unified=3", "HEAD"]).await?;
+    let diff_output = run_git_command(&repo_root, &["diff", "--no-ext-diff", "--find-renames", "HEAD"]).await?;
 
     let mut files = if diff_output.trim().is_empty() { Vec::new() } else { parse_unified_diff(&diff_output)? };
 

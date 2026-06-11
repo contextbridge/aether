@@ -25,16 +25,16 @@ pub(crate) enum KeyOutcome<A> {
 #[derive(Clone, Copy)]
 pub(crate) enum Navigation<'a, A: Copy + Eq + Hash> {
     RowStep { page_size: usize },
-    BlockStep { blocks: &'a BlockAnchors<A>, page_size: usize },
+    AnchorStep { anchors: &'a AnchorIndex<A>, page_size: usize },
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct BlockAnchors<A> {
+pub(crate) struct AnchorIndex<A> {
     anchors: Vec<CommentAnchor<A>>,
     index_by_anchor: HashMap<CommentAnchor<A>, usize>,
 }
 
-impl<A: Copy + Eq + Hash> BlockAnchors<A> {
+impl<A: Copy + Eq + Hash> AnchorIndex<A> {
     pub(crate) fn push(&mut self, anchor: CommentAnchor<A>) {
         self.index_by_anchor.entry(anchor).or_insert_with(|| {
             self.anchors.push(anchor);
@@ -192,7 +192,7 @@ impl<A: Copy + Eq + Hash> Default for ReviewSurface<A> {
 impl<A: Copy + Eq + Hash> Navigation<'_, A> {
     fn page_delta(&self) -> isize {
         let size = match self {
-            Self::RowStep { page_size } | Self::BlockStep { page_size, .. } => *page_size,
+            Self::RowStep { page_size } | Self::AnchorStep { page_size, .. } => *page_size,
         };
         isize::try_from(size).unwrap_or(isize::MAX)
     }
@@ -200,38 +200,40 @@ impl<A: Copy + Eq + Hash> Navigation<'_, A> {
     fn move_by(&self, delta: isize, cursor: &mut VerticalCursor, rows: &AnchoredRows<A>) -> bool {
         match self {
             Self::RowStep { .. } => cursor.move_by(delta, rows.max_row()),
-            Self::BlockStep { blocks, .. } => block_step_by(delta, cursor, rows, blocks),
+            Self::AnchorStep { anchors, .. } => anchor_step_by(delta, cursor, rows, anchors),
         }
     }
 
     fn move_to_start(&self, cursor: &mut VerticalCursor, rows: &AnchoredRows<A>) -> bool {
         match self {
             Self::RowStep { .. } => cursor.move_to_start(),
-            Self::BlockStep { blocks, .. } => jump_to_block_index(0, cursor, rows, blocks),
+            Self::AnchorStep { anchors, .. } => jump_to_anchor_index(0, cursor, rows, anchors),
         }
     }
 
     fn move_to_end(&self, cursor: &mut VerticalCursor, rows: &AnchoredRows<A>) -> bool {
         match self {
             Self::RowStep { .. } => cursor.move_to_end(rows.max_row()),
-            Self::BlockStep { blocks, .. } => jump_to_block_index(blocks.len().saturating_sub(1), cursor, rows, blocks),
+            Self::AnchorStep { anchors, .. } => {
+                jump_to_anchor_index(anchors.len().saturating_sub(1), cursor, rows, anchors)
+            }
         }
     }
 }
 
-fn block_step_by<A: Copy + Eq + Hash>(
+fn anchor_step_by<A: Copy + Eq + Hash>(
     delta: isize,
     cursor: &mut VerticalCursor,
     rows: &AnchoredRows<A>,
-    blocks: &BlockAnchors<A>,
+    anchors: &AnchorIndex<A>,
 ) -> bool {
-    if blocks.is_empty() {
+    if anchors.is_empty() {
         return false;
     }
 
     let current = rows.anchor_at_or_before(cursor.row);
-    let current_index = current.and_then(|a| blocks.index_of(a)).unwrap_or(0);
-    let max = blocks.len().saturating_sub(1);
+    let current_index = current.and_then(|a| anchors.index_of(a)).unwrap_or(0);
+    let max = anchors.len().saturating_sub(1);
     let new_index = if delta.is_negative() {
         current_index.saturating_sub(delta.unsigned_abs())
     } else {
@@ -240,16 +242,16 @@ fn block_step_by<A: Copy + Eq + Hash>(
     if new_index == current_index {
         return false;
     }
-    jump_to_block_index(new_index, cursor, rows, blocks)
+    jump_to_anchor_index(new_index, cursor, rows, anchors)
 }
 
-fn jump_to_block_index<A: Copy + Eq + Hash>(
+fn jump_to_anchor_index<A: Copy + Eq + Hash>(
     index: usize,
     cursor: &mut VerticalCursor,
     rows: &AnchoredRows<A>,
-    blocks: &BlockAnchors<A>,
+    anchors: &AnchorIndex<A>,
 ) -> bool {
-    let Some(anchor) = blocks.as_slice().get(index).copied() else {
+    let Some(anchor) = anchors.as_slice().get(index).copied() else {
         return false;
     };
     let Some(row) = rows.start_row_for_anchor(anchor) else {
@@ -283,18 +285,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn block_step_nav_skips_to_next_block() {
+    async fn anchor_step_nav_skips_to_next_anchor() {
         let rows = make_rows();
         let mut surface: ReviewSurface<usize> = ReviewSurface::new();
-        let mut anchors: BlockAnchors<usize> = BlockAnchors::default();
+        let mut anchors: AnchorIndex<usize> = AnchorIndex::default();
         anchors.push(CommentAnchor(1));
         anchors.push(CommentAnchor(2));
         anchors.push(CommentAnchor(3));
 
-        surface.on_key(KeyCode::Char('j'), &rows, Navigation::BlockStep { blocks: &anchors, page_size: 10 }).await;
+        surface.on_key(KeyCode::Char('j'), &rows, Navigation::AnchorStep { anchors: &anchors, page_size: 10 }).await;
         assert_eq!(surface.cursor().row, 1);
 
-        surface.on_key(KeyCode::Char('j'), &rows, Navigation::BlockStep { blocks: &anchors, page_size: 10 }).await;
+        surface.on_key(KeyCode::Char('j'), &rows, Navigation::AnchorStep { anchors: &anchors, page_size: 10 }).await;
         assert_eq!(surface.cursor().row, 3);
     }
 

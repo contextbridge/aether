@@ -163,7 +163,7 @@ impl Default for ToolCallStatuses {
 mod tests {
     use super::*;
     use acp_utils::notifications::{SubAgentEvent, SubAgentProgressParams};
-    use tui::{DiffLine, DiffPreview, DiffTag, SplitDiffCell, SplitDiffRow};
+    use tui::{DiffLine, DiffPreview, DiffTag, SplitDiffEntry, SplitDiffRow};
 
     fn ctx() -> ViewContext {
         ViewContext::new((80, 24))
@@ -295,16 +295,8 @@ mod tests {
                 DiffLine { tag: DiffTag::Added, content: "new line".to_string() },
             ],
             rows: vec![SplitDiffRow {
-                left: Some(SplitDiffCell {
-                    tag: DiffTag::Removed,
-                    content: "old line".to_string(),
-                    line_number: Some(1),
-                }),
-                right: Some(SplitDiffCell {
-                    tag: DiffTag::Added,
-                    content: "new line".to_string(),
-                    line_number: Some(1),
-                }),
+                left: Some(SplitDiffEntry::new(DiffTag::Removed, "old line", Some(1))),
+                right: Some(SplitDiffEntry::new(DiffTag::Added, "new line", Some(1))),
             }],
             lang_hint: "rs".to_string(),
             start_line: Some(1),
@@ -328,11 +320,7 @@ mod tests {
             lines: vec![DiffLine { tag: DiffTag::Added, content: "new line".to_string() }],
             rows: vec![SplitDiffRow {
                 left: None,
-                right: Some(SplitDiffCell {
-                    tag: DiffTag::Added,
-                    content: "new line".to_string(),
-                    line_number: Some(1),
-                }),
+                right: Some(SplitDiffEntry::new(DiffTag::Added, "new line", Some(1))),
             }],
             lang_hint: "rs".to_string(),
             start_line: Some(1),

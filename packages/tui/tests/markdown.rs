@@ -1,5 +1,5 @@
 use tui::testing::{TestTerminal, render_lines};
-use tui::{Line, MarkdownBlock, Theme, ViewContext, render_markdown_result};
+use tui::{Line, MarkdownBlock, Theme, ViewContext, render_markdown_result, render_markdown_source_lines};
 use unicode_width::UnicodeWidthStr;
 
 fn ctx() -> ViewContext {
@@ -52,6 +52,67 @@ fn row_inner_display_widths(row: &str) -> Vec<usize> {
         return Vec::new();
     }
     segments[1..segments.len() - 1].iter().map(|s| UnicodeWidthStr::width(*s)).collect()
+}
+
+#[test]
+fn source_line_renderer_preserves_every_source_line() {
+    let md = "# Title\n\nfirst\nsecond\n```rust\nlet x = 1;\n```";
+    let result = render_markdown_source_lines(md, &ctx());
+    let line_numbers: Vec<_> = result.lines.iter().map(|line| line.source_line_no).collect();
+
+    assert_eq!(line_numbers, vec![1, 2, 3, 4, 5, 6, 7]);
+}
+
+#[test]
+fn source_line_renderer_preserves_blank_lines() {
+    let result = render_markdown_source_lines("first\n\nsecond", &ctx());
+
+    assert_eq!(result.lines.len(), 3);
+    assert!(result.lines[1].line.is_empty());
+    assert_eq!(result.lines[1].source_line_no, 2);
+}
+
+#[test]
+fn source_line_renderer_preserves_inline_styles_per_line() {
+    let theme = Theme::default();
+    let context = themed_ctx(&theme);
+    let result = render_markdown_source_lines("alpha **bold** and `code`", &context);
+    let term = render_lines(&result.lines.into_iter().map(|line| line.line).collect::<Vec<_>>(), 80, 24);
+
+    assert_eq!(term.get_lines()[0].trim(), "alpha bold and code");
+    assert!(term.style_of_text(0, "bold").unwrap().bold);
+    assert_eq!(term.style_of_text(0, "code").unwrap().fg, Some(theme.code_fg()));
+}
+
+#[test]
+fn source_line_renderer_keeps_fenced_code_delimiters() {
+    let result = render_markdown_source_lines("```rust\nlet x = 1;\n```", &ctx());
+    let lines: Vec<_> = result.lines.iter().map(|line| line.line.plain_text()).collect();
+
+    assert_eq!(lines, vec!["```rust", "let x = 1;", "```"]);
+    assert_eq!(result.lines.iter().map(|line| line.source_line_no).collect::<Vec<_>>(), vec![1, 2, 3]);
+}
+
+#[test]
+fn source_line_renderer_keeps_table_source_rows() {
+    let md = "| A | B |\n|---|---|\n| 1 | 2 |";
+    let result = render_markdown_source_lines(md, &ctx());
+    let lines: Vec<_> = result.lines.iter().map(|line| line.line.plain_text()).collect();
+
+    assert_eq!(lines, vec!["| A | B |", "|---|---|", "| 1 | 2 |"]);
+}
+
+#[test]
+fn source_line_renderer_maps_code_content_lines_to_source_lines() {
+    let result = render_markdown_source_lines("intro\n```rust\nlet x = 1;\nlet y = 2;\n```", &ctx());
+    let code_lines: Vec<_> = result
+        .lines
+        .iter()
+        .filter(|line| line.line.plain_text().contains("let "))
+        .map(|line| line.source_line_no)
+        .collect();
+
+    assert_eq!(code_lines, vec![3, 4]);
 }
 
 #[test]

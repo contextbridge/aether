@@ -1,3 +1,4 @@
+use crate::components::common::render_key_hints;
 use crate::components::plan_review::{OutlinePanel, OutlinePanelMessage, PlanDocument, PlanPanel};
 use crate::components::review_comments::{CommentAnchor, ReviewComment};
 use std::fmt::Write;
@@ -25,15 +26,15 @@ impl PlanReviewMode {
         let outline_panel = OutlinePanel::new(document.outline.clone());
         let plan_panel = PlanPanel::new(document);
         let mut split = SplitPanel::new(outline_panel, plan_panel, SplitLayout::fraction(1, 4, 20, 32))
-            .with_separator(" ", Style::default())
+            .with_separator("│", Style::default())
             .with_resize_keys();
 
         split.focus_right();
         Self { title, split }
     }
 
-    pub fn current_anchor_line_no(&self) -> usize {
-        self.split.right().current_anchor_line_no()
+    pub fn current_source_line_no(&self) -> usize {
+        self.split.right().current_source_line_no()
     }
 
     pub fn comment_count(&self) -> usize {
@@ -84,7 +85,7 @@ impl Component for PlanReviewMode {
         for message in split_messages {
             match message {
                 Either::Left(OutlinePanelMessage::OpenSelectedAnchor(anchor_line_no)) => {
-                    self.split.right_mut().set_cursor_anchor_line_no(anchor_line_no);
+                    self.split.right_mut().set_cursor_source_line_no(anchor_line_no);
                     self.split.focus_right();
                 }
                 Either::Right(message) => match message {},
@@ -99,24 +100,36 @@ impl Component for PlanReviewMode {
             return Frame::new(vec![Line::new("Plan review view is too narrow")]);
         }
 
+        let plan_focused = !self.split.is_left_focused();
+        let title_fg = if plan_focused { ctx.theme.accent() } else { ctx.theme.text_primary() };
         let mut header = Line::default();
-        header.push_with_style(self.title.as_str(), Style::fg(ctx.theme.text_primary()).bold());
-
-        let mut help = Line::default();
-        help.push_with_style(
-            "j/k:move  g/G:top/bottom  h/l:focus  enter:jump  c:comment  u:undo  a:approve  r:request changes  Esc:cancel",
-            Style::fg(ctx.theme.muted()),
-        );
+        header.push_with_style(self.title.as_str(), Style::fg(title_fg).bold());
 
         let body_height = ctx.size.height.saturating_sub(2);
         let body_context = ctx.with_size((ctx.size.width, body_height));
 
-        self.split.set_separator_style(Style::default().bg_color(ctx.theme.background()));
+        self.split.left_mut().set_focused(!plan_focused);
+        self.split.set_separator_style(Style::fg(ctx.theme.muted()));
         let body = self.split.render(&body_context);
 
-        Frame::vstack([Frame::new(vec![header]), body, Frame::new(vec![help])])
+        let help_keys: &[(&str, &str)] = if plan_focused { &PLAN_HELP_KEYS } else { &OUTLINE_HELP_KEYS };
+        Frame::vstack([Frame::new(vec![header]), body, Frame::new(vec![render_key_hints(&ctx.theme, help_keys)])])
     }
 }
+
+const OUTLINE_HELP_KEYS: [(&str, &str); 6] =
+    [("j/k", "move"), ("g/G", "top/bottom"), ("enter", "jump"), ("h/l", "focus"), ("u", "undo"), ("Esc", "cancel")];
+
+const PLAN_HELP_KEYS: [(&str, &str); 8] = [
+    ("j/k", "move"),
+    ("n/p", "heading"),
+    ("h", "outline"),
+    ("c", "comment"),
+    ("u", "undo"),
+    ("a", "approve"),
+    ("r", "changes"),
+    ("Esc", "cancel"),
+];
 
 fn compile_feedback(document: &PlanDocument, comments: &[ReviewComment<usize>]) -> String {
     if comments.is_empty() {

@@ -10,11 +10,16 @@ pub struct OutlinePanel {
     sections: Vec<PlanSection>,
     cursor: VerticalCursor,
     cached_rows: CachedLayer<u16, Vec<Line>>,
+    focused: bool,
 }
 
 impl OutlinePanel {
     pub fn new(sections: Vec<PlanSection>) -> Self {
-        Self { sections, cursor: VerticalCursor::new(), cached_rows: CachedLayer::new() }
+        Self { sections, cursor: VerticalCursor::new(), cached_rows: CachedLayer::new(), focused: false }
+    }
+
+    pub fn set_focused(&mut self, focused: bool) {
+        self.focused = focused;
     }
 
     pub fn selected_anchor_line_no(&self) -> Option<usize> {
@@ -94,7 +99,9 @@ impl Component for OutlinePanel {
         let mut lines = Vec::with_capacity(height);
 
         let mut header = Line::default();
-        header.push_with_style(" Outline", Style::fg(theme.text_secondary()).bg_color(theme.sidebar_bg()).bold());
+        let title_fg = if self.focused { theme.accent() } else { theme.text_primary() };
+        header.push_text(" ");
+        header.push_with_style("Outline", Style::fg(title_fg).bold());
         header.extend_bg_to_width(width);
         lines.push(header);
 
@@ -109,7 +116,7 @@ impl Component for OutlinePanel {
                 }
             } else {
                 let mut line = Line::default();
-                line.push_with_style(" ".repeat(width), Style::default().bg_color(theme.sidebar_bg()));
+                line.push_text(" ".repeat(width));
                 lines.push(line);
             }
         }
@@ -118,8 +125,8 @@ impl Component for OutlinePanel {
     }
 }
 
-fn build_section_row(section: &PlanSection, width: usize, theme: &Theme) -> Line {
-    build_row_with_style(section, width, "  ", Style::default().bg_color(theme.sidebar_bg()))
+fn build_section_row(section: &PlanSection, width: usize, _theme: &Theme) -> Line {
+    build_row_with_style(section, width, "  ", Style::default())
 }
 
 fn build_selected_row(section: &PlanSection, width: usize, theme: &Theme) -> Line {

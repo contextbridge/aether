@@ -15,7 +15,7 @@ impl Component for CommentBox<'_> {
     fn render(&mut self, ctx: &ViewContext) -> Frame {
         let width = usize::from(ctx.size.width);
         let bg = ctx.theme.sidebar_bg();
-        let border_fg = ctx.theme.muted();
+        let border_fg = ctx.theme.accent();
         let text_fg = ctx.theme.text_primary();
         let dashes = width.saturating_sub(INDENT + 1);
         let inner_width = width.saturating_sub(DRAFT_TEXT_COL_START + 1);

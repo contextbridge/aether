@@ -1,90 +1,69 @@
 use super::PatchAnchor;
 use crate::components::common::AnchoredSurfaceBuilder;
-use crate::components::review_comments::{AnchoredBlock, AnchoredRows, CommentAnchor};
+use crate::components::review_comments::{AnchoredRows, CommentAnchor};
 use crate::git_diff::{FileDiff, PatchLineKind};
 use tui::{Line, ViewContext};
 
 pub(crate) struct RenderedPatch {
     pub surface: AnchoredRows<PatchAnchor>,
-    pub hunk_offsets: Vec<usize>,
 }
 
 impl RenderedPatch {
     pub(crate) fn new(surface: AnchoredRows<PatchAnchor>) -> Self {
-        let hunk_offsets = compute_hunk_offsets(surface.blocks());
-        Self { surface, hunk_offsets }
+        Self { surface }
     }
 
     pub(crate) fn from_file_diff(file: &FileDiff, width: usize, ctx: &ViewContext) -> RenderedPatch {
         let theme = &ctx.theme;
         let lang_hint = lang_hint_from_path(&file.path);
-        let max_line_no = file
-            .hunks
-            .iter()
-            .flat_map(|hunk| &hunk.lines)
-            .filter_map(|line| line.old_line_no.into_iter().chain(line.new_line_no).max())
-            .max()
-            .unwrap_or(0);
+        let max_line_no = file.max_line_no();
 
         let gutter_width = tui::digit_count(max_line_no);
-        let width_u16 = usize_to_u16_saturating(width);
+        let width_u16 = tui::usize_to_u16_saturating(width);
         let mut rows = AnchoredSurfaceBuilder::new();
 
         for (hunk_idx, hunk) in file.hunks.iter().enumerate() {
-            if hunk_idx > 0 {
-                rows.push_raw_unanchored_rows([Line::default()]);
-            }
-
             for (line_idx, patch_line) in hunk.lines.iter().enumerate() {
                 let (head, tail, content) = match patch_line.kind {
-                    PatchLineKind::HunkHeader => (
-                        Line::default(),
-                        Line::default(),
-                        Line::with_style(
-                            &patch_line.text,
-                            tui::Style::fg(theme.info()).bold().bg_color(theme.code_bg()),
-                        ),
-                    ),
+                    PatchLineKind::HunkHeader => continue,
                     PatchLineKind::Meta => (
                         Line::default(),
                         Line::default(),
                         Line::with_style(&patch_line.text, tui::Style::fg(theme.text_secondary()).italic()),
                     ),
                     PatchLineKind::Context => {
-                        let old_str = format_line_no(patch_line.old_line_no, gutter_width);
-                        let new_str = format_line_no(patch_line.new_line_no, gutter_width);
-                        let head =
-                            Line::with_style(format!("{old_str} {new_str}   "), tui::Style::fg(theme.text_secondary()));
-                        let tail = Line::new(" ".repeat(2 * gutter_width + 4));
+                        let line_str = format_line_no(patch_line.new_line_no.or(patch_line.old_line_no), gutter_width);
+                        let head = Line::with_style(format!("{line_str}   "), tui::Style::fg(theme.text_secondary()));
+                        let tail = wrap_marker_gutter(gutter_width, tui::Style::fg(theme.muted()).dim());
                         let mut content = Line::default();
                         append_syntax_spans(&mut content, &patch_line.text, lang_hint, None, ctx);
                         (head, tail, content)
                     }
                     PatchLineKind::Added => {
-                        let old_str = " ".repeat(gutter_width);
-                        let new_str = format_line_no(patch_line.new_line_no, gutter_width);
+                        let line_str = format_line_no(patch_line.new_line_no, gutter_width);
                         let bg = theme.diff_added_bg();
                         let head = Line::with_style(
-                            format!("{old_str} {new_str} + "),
+                            format!("{line_str} + "),
                             tui::Style::fg(theme.diff_added_fg()).bg_color(bg),
                         );
                         let tail =
-                            Line::with_style(" ".repeat(2 * gutter_width + 4), tui::Style::default().bg_color(bg));
+                            wrap_marker_gutter(gutter_width, tui::Style::fg(theme.diff_added_fg()).dim().bg_color(bg));
                         let mut content = Line::default();
                         append_syntax_spans(&mut content, &patch_line.text, lang_hint, Some(bg), ctx);
                         let content = content.with_fill(bg);
                         (head, tail, content)
                     }
                     PatchLineKind::Removed => {
-                        let old_str = format_line_no(patch_line.old_line_no, gutter_width);
-                        let new_str = " ".repeat(gutter_width);
+                        let line_str = format_line_no(patch_line.old_line_no, gutter_width);
                         let bg = theme.diff_removed_bg();
                         let head = Line::with_style(
-                            format!("{old_str} {new_str} - "),
+                            format!("{line_str} - "),
                             tui::Style::fg(theme.diff_removed_fg()).bg_color(bg),
                         );
-                        let tail =
-                            Line::with_style(" ".repeat(2 * gutter_width + 4), tui::Style::default().bg_color(bg));
+                        let tail = wrap_marker_gutter(
+                            gutter_width,
+                            tui::Style::fg(theme.diff_removed_fg()).dim().bg_color(bg),
+                        );
                         let mut content = Line::default();
                         append_syntax_spans(&mut content, &patch_line.text, lang_hint, Some(bg), ctx);
                         let content = content.with_fill(bg);
@@ -99,6 +78,12 @@ impl RenderedPatch {
 
         Self::new(rows.finish())
     }
+}
+
+/// Gutter prefix for wrapped continuation rows: a dim `↪` right-aligned in the
+/// line-number gutter, matching the head width used by unified diffs.
+fn wrap_marker_gutter(gutter_width: usize, style: tui::Style) -> Line {
+    Line::with_style(format!("{:>width$}  ", tui::WRAP_MARKER, width = gutter_width + 1), style)
 }
 
 fn append_syntax_spans(
@@ -131,25 +116,6 @@ fn format_line_no(line_no: Option<usize>, width: usize) -> String {
 
 pub(crate) fn lang_hint_from_path(path: &str) -> &str {
     path.rsplit('.').next().unwrap_or("")
-}
-
-pub(crate) fn usize_to_u16_saturating(value: usize) -> u16 {
-    u16::try_from(value).unwrap_or(u16::MAX)
-}
-
-fn compute_hunk_offsets(blocks: &[AnchoredBlock<PatchAnchor>]) -> Vec<usize> {
-    let mut offsets = Vec::new();
-    let mut last_hunk: Option<usize> = None;
-
-    for block in blocks {
-        let CommentAnchor(PatchAnchor { hunk, .. }) = block.anchor;
-        if last_hunk != Some(hunk) {
-            offsets.push(block.start_row);
-            last_hunk = Some(hunk);
-        }
-    }
-
-    offsets
 }
 
 #[cfg(test)]
@@ -193,31 +159,8 @@ mod tests {
         let context = ViewContext::new((120, 24));
         let result = RenderedPatch::from_file_diff(&file, 80, &context);
 
-        assert_eq!(result.surface.blocks().len(), 2);
-        assert_eq!(result.surface.end_row_for_anchor(CommentAnchor(PatchAnchor { hunk: 0, line: 0 })), Some(0));
-    }
-
-    #[test]
-    fn rendered_patch_contains_hunk_offsets() {
-        let file = make_file(vec![
-            PatchLine {
-                kind: PatchLineKind::HunkHeader,
-                text: "@@ -1,1 +1,1 @@".to_string(),
-                old_line_no: None,
-                new_line_no: None,
-            },
-            PatchLine {
-                kind: PatchLineKind::Context,
-                text: "fn test()".to_string(),
-                old_line_no: Some(1),
-                new_line_no: Some(1),
-            },
-        ]);
-        let context = ViewContext::new((120, 24));
-        let result = RenderedPatch::from_file_diff(&file, 80, &context);
-
-        assert!(!result.hunk_offsets.is_empty(), "should have at least one hunk offset");
-        assert_eq!(result.hunk_offsets[0], 0, "first hunk should start at row 0");
+        assert_eq!(result.surface.groups().len(), 1);
+        assert_eq!(result.surface.end_row_for_anchor(CommentAnchor(PatchAnchor { hunk: 0, line: 1 })), Some(0));
     }
 
     #[test]
@@ -247,19 +190,18 @@ mod tests {
         }
 
         let anchor = CommentAnchor(PatchAnchor { hunk: 0, line: 1 });
-        assert_eq!(result.surface.start_row_for_anchor(anchor), Some(1));
+        assert_eq!(result.surface.start_row_for_anchor(anchor), Some(0));
         assert!(
-            result.surface.end_row_for_anchor(anchor).is_some_and(|end_row| end_row > 1),
+            result.surface.end_row_for_anchor(anchor).is_some_and(|end_row| end_row > 0),
             "wrapped line should extend the anchored block"
         );
 
-        let gutter_cols = 2 * tui::digit_count(1) + 4;
-        let gutter_pad = " ".repeat(gutter_cols);
-        for (index, line) in result.surface.lines().iter().enumerate().skip(2) {
+        let gutter_pad = format!("{:>width$}  ", tui::WRAP_MARKER, width = tui::digit_count(1) + 1);
+        for (index, line) in result.surface.lines().iter().enumerate().skip(1) {
             let text = line.plain_text();
             assert!(
                 text.starts_with(&gutter_pad),
-                "continuation line {index} should start with blank gutter, got {text:?}"
+                "continuation line {index} should start with a wrap marker gutter, got {text:?}"
             );
         }
     }
@@ -282,7 +224,7 @@ mod tests {
 
         assert!(result.surface.lines().len() > 2, "long Added line should wrap");
 
-        for (index, line) in result.surface.lines().iter().enumerate().skip(2) {
+        for (index, line) in result.surface.lines().iter().enumerate().skip(1) {
             let first_span = line.spans().first().expect("continuation row should have spans");
             assert_eq!(
                 first_span.style().bg,
@@ -309,7 +251,7 @@ mod tests {
         let total_width = 60;
         let result = RenderedPatch::from_file_diff(&file, total_width, &context);
 
-        let added_row = &result.surface.lines()[1];
+        let added_row = &result.surface.lines()[0];
         assert_eq!(
             added_row.display_width(),
             total_width,
@@ -331,12 +273,5 @@ mod tests {
         assert_eq!(lang_hint_from_path("foo.py"), "py");
         assert_eq!(lang_hint_from_path("Makefile"), "Makefile");
         assert_eq!(lang_hint_from_path("a/b/c.tsx"), "tsx");
-    }
-
-    #[test]
-    fn usize_to_u16_saturating_clamps_large_values() {
-        assert_eq!(usize_to_u16_saturating(123), 123);
-        assert_eq!(usize_to_u16_saturating(usize::from(u16::MAX)), u16::MAX);
-        assert_eq!(usize_to_u16_saturating(usize::from(u16::MAX) + 1), u16::MAX);
     }
 }

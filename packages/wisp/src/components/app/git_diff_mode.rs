@@ -1,8 +1,10 @@
+use crate::components::common::render_key_hints;
 use crate::components::file_list_panel::{FileListMessage, FileListPanel};
 use crate::components::git_diff::git_diff_panel::{GitDiffPanel, GitDiffPanelMessage};
 use crate::components::git_diff::{DiffAnchor, PatchAnchor};
 use crate::components::review_comments::{CommentAnchor, ReviewComment};
 use crate::git_diff::{GitDiffDocument, PatchLineKind, load_git_diff};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use tui::{Component, Either, Event, Frame, KeyCode, Line, SplitLayout, SplitPanel, Style, ViewContext};
 
@@ -39,7 +41,7 @@ pub struct GitDiffMode {
     document_revision: usize,
     pub load_state: GitDiffLoadState,
     split: SplitPanel<FileListPanel, GitDiffPanel>,
-    queued_comments: Vec<QueuedComment>,
+    comments: ReviewQueue,
     pending_restore: Option<RefreshState>,
 }
 
@@ -51,9 +53,9 @@ impl GitDiffMode {
             document_revision: 0,
             load_state: GitDiffLoadState::Empty,
             split: SplitPanel::new(FileListPanel::new(), GitDiffPanel::new(), SplitLayout::fraction(1, 3, 20, 28))
-                .with_separator(" ", Style::default())
+                .with_separator("│", Style::default())
                 .with_resize_keys(),
-            queued_comments: Vec::new(),
+            comments: ReviewQueue::default(),
             pending_restore: None,
         }
     }
@@ -97,7 +99,7 @@ impl GitDiffMode {
         self.load_state = load_state;
         *self.split.left_mut() = FileListPanel::new();
         *self.split.right_mut() = GitDiffPanel::new();
-        self.queued_comments.clear();
+        self.comments.clear();
         self.split.focus_left();
     }
 
@@ -123,8 +125,8 @@ impl Component for GitDiffMode {
                 KeyCode::Esc => return Some(vec![GitDiffViewMessage::Close]),
                 KeyCode::Char('r') => return Some(vec![GitDiffViewMessage::Refresh]),
                 KeyCode::Char('u') => {
-                    self.queued_comments.pop();
-                    self.split.left_mut().set_queued_comment_count(self.queued_comments.len());
+                    self.comments.pop();
+                    self.sync_comment_state();
                     self.split.right_mut().invalidate_comment_splices();
                     return Some(vec![]);
                 }
@@ -168,8 +170,8 @@ impl Component for GitDiffMode {
             let mut rows = Vec::with_capacity(height);
             for i in 0..height {
                 let mut line = Line::default();
-                line.push_with_style(" ".repeat(left_width), Style::default().bg_color(theme.sidebar_bg()));
-                line.push_with_style(" ", Style::default().bg_color(theme.background()));
+                line.push_text(" ".repeat(left_width));
+                line.push_with_style("│", Style::fg(theme.muted()));
                 if i == 0 {
                     line.push_with_style(&msg, Style::fg(theme.text_secondary()));
                 }
@@ -177,17 +179,16 @@ impl Component for GitDiffMode {
             }
             Frame::new(rows)
         } else {
+            let left_focused = self.split.is_left_focused();
+            self.split.left_mut().set_focused(left_focused);
+            self.split.right_mut().set_focused(!left_focused);
             self.prepare_right_panel_layers(&body_context);
-            self.split.set_separator_style(Style::default().bg_color(theme.background()));
+            self.split.set_separator_style(Style::fg(theme.muted()));
             self.split.render(&body_context)
         };
 
-        let mut help = Line::default();
-        help.push_with_style(
-            "j/k:move  n/p:hunk  h/l:focus  c:comment  s:submit  u:undo  r:refresh  Esc:close",
-            Style::fg(theme.muted()),
-        );
-        Frame::vstack([body, Frame::new(vec![help])])
+        let help_keys: &[(&str, &str)] = if self.split.is_left_focused() { &LEFT_HELP_KEYS } else { &RIGHT_HELP_KEYS };
+        Frame::vstack([body, Frame::new(vec![render_key_hints(theme, help_keys)])])
     }
 }
 
@@ -200,8 +201,7 @@ impl GitDiffMode {
         let selected = self.split.left().selected_file_index().unwrap_or(0).min(doc.files.len().saturating_sub(1));
         let file = &doc.files[selected];
 
-        let file_comments =
-            self.queued_comments.iter().filter(|comment| comment.context.file_path == file.path).collect::<Vec<_>>();
+        let file_comments = self.comments.for_file(&file.path);
 
         let right_width = self.split.widths(context.size.width).right;
         self.split.right_mut().ensure_layers(file, &file_comments, right_width, self.document_revision);
@@ -263,7 +263,7 @@ impl GitDiffMode {
             return;
         };
 
-        self.queued_comments.push(QueuedComment {
+        self.comments.push(QueuedComment {
             review: ReviewComment::new(anchor, text),
             context: GitDiffCommentContext {
                 file_path: file.path.clone(),
@@ -272,16 +272,23 @@ impl GitDiffMode {
                 line_kind: patch_line.kind,
             },
         });
-        self.split.left_mut().set_queued_comment_count(self.queued_comments.len());
+        self.sync_comment_state();
         self.split.right_mut().invalidate_comment_splices();
     }
 
+    fn sync_comment_state(&mut self) {
+        let counts = match &self.load_state {
+            GitDiffLoadState::Ready(doc) => self.comments.counts_for(&doc.files),
+            _ => vec![],
+        };
+        self.split.left_mut().sync_view_state(self.comments.len(), counts);
+    }
+
     fn submit_review(&self) -> Vec<GitDiffViewMessage> {
-        if self.queued_comments.is_empty() {
+        if self.comments.is_empty() {
             return vec![];
         }
-        let prompt = format_review_prompt(&self.queued_comments);
-        vec![GitDiffViewMessage::SubmitPrompt(prompt)]
+        vec![GitDiffViewMessage::SubmitPrompt(self.comments.format_prompt())]
     }
 
     fn selected_file_path(&self) -> Option<&str> {
@@ -303,6 +310,7 @@ impl GitDiffMode {
 
         self.split.left_mut().rebuild_from_files(&doc.files);
         self.split.right_mut().clear_rendered_patches();
+        self.split.right_mut().set_repo_root(doc.repo_root.clone());
 
         if let Some(restore) = restore {
             if restore.was_right_focused {
@@ -319,46 +327,102 @@ impl GitDiffMode {
         }
 
         self.load_state = GitDiffLoadState::Ready(doc);
+        self.sync_comment_state();
+    }
+}
+
+const LEFT_HELP_KEYS: [(&str, &str); 6] =
+    [("j/k", "move"), ("h/l", "fold/open"), ("enter", "view"), ("u", "undo"), ("r", "refresh"), ("Esc", "close")];
+
+const RIGHT_HELP_KEYS: [(&str, &str); 8] = [
+    ("j/k", "move"),
+    ("h", "back"),
+    ("c", "comment"),
+    ("s", "submit"),
+    ("o", "full file"),
+    ("u", "undo"),
+    ("r", "refresh"),
+    ("Esc", "close"),
+];
+
+#[derive(Default)]
+struct ReviewQueue {
+    comments: Vec<QueuedComment>,
+}
+
+impl ReviewQueue {
+    fn is_empty(&self) -> bool {
+        self.comments.is_empty()
+    }
+
+    fn len(&self) -> usize {
+        self.comments.len()
+    }
+
+    fn clear(&mut self) {
+        self.comments.clear();
+    }
+
+    fn push(&mut self, comment: QueuedComment) {
+        self.comments.push(comment);
+    }
+
+    fn pop(&mut self) -> Option<QueuedComment> {
+        self.comments.pop()
+    }
+
+    fn for_file(&self, path: &str) -> Vec<&QueuedComment> {
+        self.comments.iter().filter(|comment| comment.context.file_path == path).collect()
+    }
+
+    fn counts_for(&self, files: &[crate::git_diff::FileDiff]) -> Vec<usize> {
+        files
+            .iter()
+            .map(|file| self.comments.iter().filter(|comment| comment.context.file_path == file.path).count())
+            .collect()
+    }
+
+    fn format_prompt(&self) -> String {
+        use std::fmt::Write;
+
+        let mut prompt = String::from("I'm reviewing the working tree diff. Here are my comments:\n");
+        let mut file_order: Vec<&str> = Vec::new();
+        let mut grouped: HashMap<&str, Vec<&QueuedComment>> = HashMap::new();
+
+        for comment in &self.comments {
+            let path = comment.context.file_path.as_str();
+            if !grouped.contains_key(path) {
+                file_order.push(path);
+            }
+            grouped.entry(path).or_default().push(comment);
+        }
+
+        for file_path in file_order {
+            let file_comments = grouped.get(file_path).expect("group exists for ordered path");
+            write!(prompt, "\n## `{file_path}`\n").unwrap();
+
+            for comment in file_comments {
+                let kind_label = match comment.context.line_kind {
+                    PatchLineKind::Added => "added",
+                    PatchLineKind::Removed => "removed",
+                    PatchLineKind::Context => "context",
+                    PatchLineKind::HunkHeader => "header",
+                    PatchLineKind::Meta => "meta",
+                };
+                let line_ref = match comment.context.line_number {
+                    Some(n) => format!("Line {n} ({kind_label})"),
+                    None => kind_label.to_string(),
+                };
+                write!(prompt, "\n**{line_ref}:** `{}`\n> {}\n", comment.context.line_text, comment.review.body)
+                    .unwrap();
+            }
+        }
+
+        prompt
     }
 }
 
 struct RefreshState {
     selected_path: Option<String>,
     was_right_focused: bool,
-}
-
-pub(crate) fn format_review_prompt(comments: &[QueuedComment]) -> String {
-    use std::fmt::Write;
-
-    let mut prompt = String::from("I'm reviewing the working tree diff. Here are my comments:\n");
-
-    let mut file_groups: Vec<(&str, Vec<&QueuedComment>)> = Vec::new();
-    for comment in comments {
-        if let Some(group) = file_groups.iter_mut().find(|(path, _)| *path == comment.context.file_path) {
-            group.1.push(comment);
-        } else {
-            file_groups.push((&comment.context.file_path, vec![comment]));
-        }
-    }
-
-    for (file_path, file_comments) in &file_groups {
-        write!(prompt, "\n## `{file_path}`\n").unwrap();
-
-        for comment in file_comments {
-            let kind_label = match comment.context.line_kind {
-                PatchLineKind::Added => "added",
-                PatchLineKind::Removed => "removed",
-                PatchLineKind::Context => "context",
-                PatchLineKind::HunkHeader => "header",
-                PatchLineKind::Meta => "meta",
-            };
-            let line_ref = match comment.context.line_number {
-                Some(n) => format!("Line {n} ({kind_label})"),
-                None => kind_label.to_string(),
-            };
-            write!(prompt, "\n**{line_ref}:** `{}`\n> {}\n", comment.context.line_text, comment.review.body).unwrap();
-        }
-    }
-
-    prompt
 }
