@@ -14,6 +14,7 @@ pub mod file_tree;
 pub mod git_diff;
 pub mod input_prompt;
 pub mod model_selector;
+pub(crate) mod picker_rendering;
 pub mod plan_review;
 pub(crate) mod plan_tracker;
 pub mod plan_view;
@@ -32,5 +33,6 @@ pub mod thought_message;
 pub mod tool_call_status_view;
 pub mod tool_call_statuses;
 pub(crate) mod tracked_tool_call;
+pub(crate) mod workspace_picker;
 
 pub use tui::wrap_selection;

@@ -207,6 +207,10 @@ impl AcpTestHarness {
         self.session_store.append_meta(session_id, &meta).expect("stored session meta appends");
     }
 
+    pub fn stored_events(&self, session_id: &str) -> Vec<SessionEvent> {
+        self.session_store.load(session_id).map(|(_, events)| events).unwrap_or_default()
+    }
+
     pub fn append_stored_prompt(&self, session_id: &str, prompt: &str) {
         self.append_stored_event(
             session_id,

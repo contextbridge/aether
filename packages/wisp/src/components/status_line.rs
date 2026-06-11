@@ -1,7 +1,7 @@
 use crate::components::context_bar::{context_bar, context_color};
 use crate::components::reasoning_bar::{reasoning_bar, reasoning_color};
 use crate::settings::{ResolvedStatusLineSettings, StatusLineSegmentConfig, StatusLineStyle};
-use crate::workspace_status::WorkspaceStatus;
+use crate::workspace::WorkspaceStatus;
 use acp_utils::config_option_id::ConfigOptionId;
 use agent_client_protocol::schema::{
     self as acp, SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOptions,
@@ -309,7 +309,7 @@ mod tests {
     use super::*;
     use crate::settings::DEFAULT_CONTENT_PADDING;
     use crate::settings::StatusLineSettings;
-    use crate::workspace_status::WorkspaceStatus;
+    use crate::workspace::WorkspaceStatus;
 
     fn default_settings() -> ResolvedStatusLineSettings {
         StatusLineSettings::resolved_defaults()

@@ -18,6 +18,7 @@ pub enum PromptComposerMessage {
     SubmitRequested { user_input: String, attachments: Vec<PromptAttachment> },
     OpenSettings,
     OpenSessionPicker,
+    OpenWorkspacePicker,
     NewSession,
     SearchPrompts(PromptSearchParams),
 }
@@ -307,6 +308,10 @@ impl PromptComposer {
             self.text_input.clear();
             self.close_all();
             vec![PromptComposerMessage::OpenSessionPicker]
+        } else if cmd.builtin && cmd.name == "fork" {
+            self.text_input.clear();
+            self.close_all();
+            vec![PromptComposerMessage::OpenWorkspacePicker]
         } else if cmd.has_input {
             self.text_input.set_input(format!("/{} ", cmd.name));
             vec![]
@@ -511,6 +516,13 @@ fn builtin_commands() -> Vec<CommandEntry> {
             hint: None,
             builtin: true,
         },
+        CommandEntry {
+            name: "fork".into(),
+            description: "Fork session into another workspace".into(),
+            has_input: false,
+            hint: None,
+            builtin: true,
+        },
     ]
 }
 
@@ -554,6 +566,18 @@ mod tests {
         composer.on_event(&key(KeyCode::Down)).await;
         let msgs = composer.on_event(&key(KeyCode::Enter)).await.unwrap();
         assert!(matches!(msgs.as_slice(), [PromptComposerMessage::OpenSettings]));
+        assert_eq!(composer.buffer(), "");
+        assert!(!composer.has_active_picker());
+    }
+
+    #[tokio::test]
+    async fn builtin_fork_command_emits_open_workspace_picker() {
+        let mut composer = PromptComposer::default();
+        type_chars(&mut composer, "/fork").await;
+        assert!(composer.has_command_picker());
+
+        let msgs = composer.on_event(&key(KeyCode::Enter)).await.unwrap();
+        assert!(matches!(msgs.as_slice(), [PromptComposerMessage::OpenWorkspacePicker]));
         assert_eq!(composer.buffer(), "");
         assert!(!composer.has_active_picker());
     }

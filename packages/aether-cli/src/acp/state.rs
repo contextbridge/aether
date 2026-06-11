@@ -131,6 +131,7 @@ impl AcpState {
         req: LoadSessionRequest,
         cx: &ConnectionTo<Client>,
     ) -> Result<LoadSessionResponse, acp::Error> {
+        self.cancel_existing_session(&req.session_id.0).await;
         let created = self.factory.load(req, cx).await?;
         let response = LoadSessionResponse::new().config_options(created.config_options);
         self.register_session(&created.session_id, created.handle).await;
@@ -281,7 +282,17 @@ impl AcpState {
     }
 
     pub(crate) async fn register_session(&self, session_id: &SessionId, handle: SessionHandle) {
-        self.sessions.lock().await.insert(session_id.0.to_string(), handle);
+        let displaced = self.sessions.lock().await.insert(session_id.0.to_string(), handle);
+        if let Some(displaced) = displaced {
+            cancel_and_join(displaced).await;
+        }
+    }
+
+    async fn cancel_existing_session(&self, session_id: &str) {
+        let displaced = self.sessions.lock().await.remove(session_id);
+        if let Some(displaced) = displaced {
+            cancel_and_join(displaced).await;
+        }
     }
 
     async fn lookup(&self, session_id: &str) -> Option<(mpsc::Sender<SessionCommand>, ConfigSnapshot)> {
@@ -306,6 +317,11 @@ impl AcpState {
             let _ = cx.send_notification(notification);
         }
     }
+}
+
+async fn cancel_and_join(handle: SessionHandle) {
+    handle.cancel();
+    handle.join().await;
 }
 
 fn respond_err<T: agent_client_protocol::JsonRpcResponse>(responder: Responder<T>, error: acp::Error) {

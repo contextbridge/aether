@@ -21,7 +21,7 @@ use crate::keybindings::Keybindings;
 use crate::settings;
 use crate::settings::overlay::{SettingsMessage, SettingsOverlay};
 use crate::settings::{ResolvedStatusLineSettings, WispSettings};
-use crate::workspace_status::WorkspaceStatus;
+use crate::workspace::{WorkspaceFlow, WorkspaceFlowEffect, WorkspaceRuntime, WorkspaceStatus};
 use acp_utils::client::{AcpEvent, AcpPromptHandle};
 use acp_utils::config_meta::SelectOptionMeta;
 use acp_utils::config_option_id::ConfigOptionId;
@@ -66,8 +66,7 @@ pub struct AppInfo {
     pub session_capabilities: acp::SessionCapabilities,
     pub config_options: Vec<acp::SessionConfigOption>,
     pub auth_methods: Vec<acp::AuthMethod>,
-    pub working_dir: PathBuf,
-    pub workspace_status: WorkspaceStatus,
+    pub workspace: WorkspaceRuntime,
     pub prompt_handle: AcpPromptHandle,
     pub settings: WispSettings,
 }
@@ -92,6 +91,7 @@ pub struct App {
     prompt_handle: AcpPromptHandle,
     working_dir: PathBuf,
     workspace_status: WorkspaceStatus,
+    workspace_flow: WorkspaceFlow,
     content_padding: usize,
     status_line_settings: ResolvedStatusLineSettings,
 }
@@ -105,8 +105,7 @@ impl App {
             session_capabilities,
             config_options,
             auth_methods,
-            working_dir,
-            workspace_status,
+            workspace,
             prompt_handle,
             settings,
         } = info;
@@ -115,6 +114,9 @@ impl App {
         let status_line_settings = resolve_status_line_settings(&settings);
         let prompt_search_enabled = AetherCapabilities::from_meta(prompt_capabilities.meta.as_ref()).prompt_search;
         let session_preview_enabled = AetherCapabilities::from_meta(session_capabilities.meta.as_ref()).session_preview;
+        let working_dir = workspace.cwd.clone();
+        let workspace_status = workspace.status.clone();
+        let workspace_flow = WorkspaceFlow::new(workspace);
         Self {
             agent_name,
             context_usage: None,
@@ -139,6 +141,7 @@ impl App {
             prompt_handle,
             working_dir,
             workspace_status,
+            workspace_flow,
             content_padding,
             status_line_settings,
         }
@@ -162,7 +165,7 @@ impl App {
     }
 
     pub fn wants_tick(&self) -> bool {
-        self.conversation_screen.wants_tick() || self.ctrl_c_pressed_at.is_some()
+        self.conversation_screen.wants_tick() || self.ctrl_c_pressed_at.is_some() || self.workspace_flow.wants_tick()
     }
 
     fn git_diff_mode_mut(&mut self) -> &mut GitDiffMode {
@@ -191,6 +194,7 @@ impl App {
             AcpEvent::PromptDone(stop_reason) => self.on_prompt_done(stop_reason, &mut commands),
             AcpEvent::PromptError(error) => {
                 self.session_loading_buffer.clear();
+                self.workspace_flow.cancel_session_load();
                 self.conversation_screen.on_prompt_error(&error);
             }
             AcpEvent::ElicitationRequest { params, responder } => self.on_elicitation_request(params, responder),
@@ -212,6 +216,11 @@ impl App {
                     self.on_session_update(&update);
                 }
                 self.update_config_options(&config_options);
+                if let Some(update) = self.workspace_flow.complete_session_load() {
+                    self.screen_router = ScreenRouter::new(update.cwd.clone());
+                    self.working_dir = update.cwd;
+                    self.workspace_status = update.status;
+                }
             }
             AcpEvent::NewSessionCreated { session_id, config_options } => {
                 self.session_loading_buffer.clear();
@@ -324,6 +333,14 @@ impl App {
                 ConversationScreenMessage::OpenSessionPicker => {
                     let _ = self.prompt_handle.list_sessions();
                 }
+                ConversationScreenMessage::OpenWorkspacePicker => {
+                    let effects = self.workspace_flow.open_picker(self.conversation_screen.is_waiting()).await;
+                    self.apply_workspace_effects(commands, effects);
+                }
+                ConversationScreenMessage::ForkWorkspace(destination) => {
+                    let effects = self.workspace_flow.fork(destination);
+                    self.apply_workspace_effects(commands, effects);
+                }
                 ConversationScreenMessage::LoadSession { session_id, cwd } => {
                     self.session_loading_buffer.begin_load(session_id.clone());
                     if let Err(e) = self.prompt_handle.load_session(&session_id, &cwd) {
@@ -354,6 +371,29 @@ impl App {
     fn request_session_preview(&self, session_id: &SessionId) {
         if let Err(e) = self.prompt_handle.session_preview(session_id) {
             tracing::warn!("Failed to send session preview request: {e}");
+        }
+    }
+
+    fn apply_workspace_effects(&mut self, commands: &mut Vec<RendererCommand>, effects: Vec<WorkspaceFlowEffect>) {
+        for effect in effects {
+            match effect {
+                WorkspaceFlowEffect::OpenPicker(picker) => self.conversation_screen.open_workspace_picker(picker),
+                WorkspaceFlowEffect::UserMessage(message) => {
+                    self.conversation_screen.conversation.push_user_message(&format!("[wisp] {message}"));
+                }
+                WorkspaceFlowEffect::ForkFailed(message) => self.conversation_screen.fork_failed(&message),
+                WorkspaceFlowEffect::CloseModal => self.conversation_screen.close_modal(),
+                WorkspaceFlowEffect::ClearScreen => commands.push(RendererCommand::ClearScreen),
+                WorkspaceFlowEffect::ResetConversation => self.conversation_screen.reset_after_context_cleared(),
+                WorkspaceFlowEffect::LoadSession { cwd } => {
+                    self.session_loading_buffer.begin_load(self.session_id.clone());
+                    if let Err(e) = self.prompt_handle.load_session(&self.session_id, &cwd) {
+                        self.session_loading_buffer.remove(&self.session_id);
+                        self.workspace_flow.cancel_session_load();
+                        tracing::warn!("Failed to move session: {e}");
+                    }
+                }
+            }
         }
     }
 
@@ -631,6 +671,8 @@ impl Component for App {
                 }
                 let now = Instant::now();
                 self.conversation_screen.on_tick(now);
+                let effects = self.workspace_flow.poll().await;
+                self.apply_workspace_effects(&mut commands, effects);
             }
             Event::Mouse(_) => {
                 if self.screen_router.is_full_screen_mode() {
@@ -762,11 +804,37 @@ pub(crate) mod test_helpers {
                 .meta(Some(AetherCapabilities::session_preview().to_meta())),
             config_options: config_options.to_vec(),
             auth_methods,
-            working_dir: PathBuf::from("."),
-            workspace_status: test_workspace_status(),
+            workspace: WorkspaceRuntime::new(
+                PathBuf::from("."),
+                test_workspace_status(),
+                std::sync::Arc::new(crate::workspace::WorkspaceManager::new()),
+            ),
             prompt_handle,
             settings: WispSettings::default().with_default_status_line(StatusLineSettings::defaults()),
         })
+    }
+
+    pub fn make_app_for_fork(
+        working_dir: PathBuf,
+        registry_file: PathBuf,
+    ) -> (App, mpsc::UnboundedReceiver<PromptCommand>) {
+        let (handle, rx) = AcpPromptHandle::recording();
+        let app = App::new(AppInfo {
+            session_id: SessionId::new("fork-session"),
+            agent_name: "test-agent".to_string(),
+            prompt_capabilities: acp::PromptCapabilities::new(),
+            session_capabilities: acp::SessionCapabilities::new(),
+            config_options: Vec::new(),
+            auth_methods: Vec::new(),
+            workspace: WorkspaceRuntime::new(
+                working_dir,
+                test_workspace_status(),
+                std::sync::Arc::new(crate::workspace::WorkspaceManager::with_registry_path(registry_file)),
+            ),
+            prompt_handle: handle,
+            settings: WispSettings::default().with_default_status_line(StatusLineSettings::defaults()),
+        });
+        (app, rx)
     }
 }
 
@@ -1637,6 +1705,330 @@ mod tests {
         assert!(app.exit_confirmation_active());
         app.on_event(&Event::Tick).await;
         assert!(!app.exit_confirmation_active(), "confirmation should expire after timeout");
+    }
+
+    mod fork {
+        use super::*;
+        use crate::workspace::registry::{ManagedWorkspace, WorkspaceRegistry, repo_identity};
+        use acp_utils::client::PromptCommand;
+        use tokio::sync::{mpsc::UnboundedReceiver, oneshot};
+
+        fn fork_app(dir: &TempDir) -> (App, UnboundedReceiver<PromptCommand>) {
+            let working_dir = dir.path().join("src-workspace");
+            fs::create_dir_all(&working_dir).unwrap();
+            make_app_for_fork(working_dir, dir.path().join("workspaces.json"))
+        }
+
+        fn wisp_messages(app: &App) -> Vec<String> {
+            app.conversation_screen
+                .conversation
+                .segments()
+                .filter_map(|seg| match seg {
+                    SegmentContent::UserMessage(text) if text.starts_with("[wisp]") => Some(text.clone()),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        fn init_git_repo(path: &Path) {
+            fs::create_dir_all(path).unwrap();
+            std::process::Command::new("git").arg("-C").arg(path).args(["init"]).output().unwrap();
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(path)
+                .args(["config", "user.email", "test@example.com"])
+                .output()
+                .unwrap();
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(path)
+                .args(["config", "user.name", "Test User"])
+                .output()
+                .unwrap();
+        }
+
+        fn commit_all(path: &Path) {
+            std::process::Command::new("git").arg("-C").arg(path).args(["add", "."]).output().unwrap();
+            std::process::Command::new("git").arg("-C").arg(path).args(["commit", "-m", "initial"]).output().unwrap();
+        }
+
+        fn init_repo_with_file(path: &Path) {
+            init_git_repo(path);
+            fs::write(path.join("base.txt"), "base\n").unwrap();
+            commit_all(path);
+        }
+
+        #[tokio::test]
+        async fn open_workspace_picker_registers_source_and_opens_modal() {
+            let dir = TempDir::new().unwrap();
+            let (mut app, _rx) = fork_app(&dir);
+            let mut commands = Vec::new();
+
+            app.handle_conversation_messages(&mut commands, Some(vec![ConversationScreenMessage::OpenWorkspacePicker]))
+                .await;
+
+            assert!(matches!(app.conversation_screen.active_modal, Some(Modal::WorkspacePicker(_))));
+            let registered = WorkspaceRegistry::from_path(dir.path().join("workspaces.json")).list();
+            assert_eq!(registered.len(), 1);
+            assert_eq!(registered[0].path, dir.path().join("src-workspace"));
+        }
+
+        #[tokio::test]
+        async fn picker_filters_to_matching_repo_workspaces() {
+            let dir = TempDir::new().unwrap();
+            let (mut app, _rx) = fork_app(&dir);
+            init_repo_with_file(&app.working_dir);
+            let sibling = dir.path().join("same-repo");
+            std::process::Command::new("git").arg("clone").arg(&app.working_dir).arg(&sibling).output().unwrap();
+            let foreign = dir.path().join("foreign-repo");
+            init_git_repo(&foreign);
+            fs::write(foreign.join("foreign.txt"), "foreign\n").unwrap();
+            commit_all(&foreign);
+            let registry = WorkspaceRegistry::from_path(dir.path().join("workspaces.json"));
+            registry
+                .register(ManagedWorkspace::new(
+                    "same-repo".to_string(),
+                    sibling.clone(),
+                    repo_identity(&sibling).await,
+                ))
+                .unwrap();
+            registry
+                .register(ManagedWorkspace::new(
+                    "foreign-repo".to_string(),
+                    foreign.clone(),
+                    repo_identity(&foreign).await,
+                ))
+                .unwrap();
+            let mut commands = Vec::new();
+
+            app.handle_conversation_messages(&mut commands, Some(vec![ConversationScreenMessage::OpenWorkspacePicker]))
+                .await;
+
+            let text = rendered_modal_text(&mut app);
+            assert!(text.contains("same-repo"), "matching repo should be listed: {text}");
+            assert!(!text.contains("foreign-repo"), "foreign repo should be hidden: {text}");
+        }
+
+        #[tokio::test]
+        async fn non_git_picker_only_shows_create_new() {
+            let dir = TempDir::new().unwrap();
+            let (mut app, _rx) = fork_app(&dir);
+            let other = dir.path().join("other");
+            fs::create_dir_all(&other).unwrap();
+            WorkspaceRegistry::from_path(dir.path().join("workspaces.json"))
+                .register(ManagedWorkspace::new("other".to_string(), other, None))
+                .unwrap();
+            let mut commands = Vec::new();
+
+            app.handle_conversation_messages(&mut commands, Some(vec![ConversationScreenMessage::OpenWorkspacePicker]))
+                .await;
+
+            let text = rendered_modal_text(&mut app);
+            assert!(text.contains("Create new workspace"));
+            assert!(!text.contains("other"), "non-git cwd must not match None repo entries: {text}");
+        }
+
+        #[tokio::test]
+        async fn fork_blocked_while_prompt_in_flight() {
+            let dir = TempDir::new().unwrap();
+            let (mut app, _rx) = fork_app(&dir);
+            app.conversation_screen.waiting_for_response = true;
+            let mut commands = Vec::new();
+
+            app.handle_conversation_messages(&mut commands, Some(vec![ConversationScreenMessage::OpenWorkspacePicker]))
+                .await;
+
+            assert!(app.conversation_screen.active_modal.is_none());
+            assert!(app.conversation_screen.waiting_for_response, "guard must not clear the waiting state");
+            assert!(wisp_messages(&app).iter().any(|m| m.contains("Cannot fork while a prompt is in flight")));
+        }
+
+        #[tokio::test]
+        async fn move_to_existing_transfers_changes_before_loading_session() {
+            let dir = TempDir::new().unwrap();
+            let (mut app, mut rx) = fork_app(&dir);
+            init_repo_with_file(&app.working_dir);
+            let target = dir.path().join("other-workspace");
+            std::process::Command::new("git").arg("clone").arg(&app.working_dir).arg(&target).output().unwrap();
+            fs::write(app.working_dir.join("new.txt"), "new\n").unwrap();
+            let mut commands = Vec::new();
+
+            app.handle_conversation_messages(
+                &mut commands,
+                Some(vec![ConversationScreenMessage::ForkWorkspace(
+                    crate::workspace::WorkspaceDestination::Existing { path: target.clone() },
+                )]),
+            )
+            .await;
+            assert!(rx.try_recv().is_err(), "load_session must wait for the transfer to finish");
+            tick_until_fork_settles(&mut app).await;
+
+            assert!(target.join("new.txt").exists());
+            assert!(!app.working_dir.join("new.txt").exists());
+            match rx.try_recv().expect("expected LoadSession command") {
+                PromptCommand::LoadSession { cwd, .. } => assert_eq!(cwd, target),
+                other => panic!("expected LoadSession, got {other:?}"),
+            }
+        }
+
+        #[tokio::test]
+        async fn move_to_workspace_sends_load_session_for_current_session() {
+            let dir = TempDir::new().unwrap();
+            let (mut app, mut rx) = fork_app(&dir);
+            let target = dir.path().join("other-workspace");
+            init_repo_with_file(&app.working_dir);
+            std::process::Command::new("git").arg("clone").arg(&app.working_dir).arg(&target).output().unwrap();
+            let mut commands = Vec::new();
+
+            app.handle_conversation_messages(
+                &mut commands,
+                Some(vec![ConversationScreenMessage::ForkWorkspace(
+                    crate::workspace::WorkspaceDestination::Existing { path: target.clone() },
+                )]),
+            )
+            .await;
+            tick_until_fork_settles(&mut app).await;
+
+            match rx.try_recv().expect("expected LoadSession command") {
+                PromptCommand::LoadSession { session_id, cwd } => {
+                    assert_eq!(session_id, SessionId::new("fork-session"));
+                    assert_eq!(cwd, target);
+                }
+                other => panic!("expected LoadSession, got {other:?}"),
+            }
+        }
+
+        #[tokio::test]
+        async fn session_loaded_applies_pending_workspace() {
+            let dir = TempDir::new().unwrap();
+            let (mut app, _rx) = fork_app(&dir);
+            let target = dir.path().join("other-workspace");
+            init_repo_with_file(&app.working_dir);
+            std::process::Command::new("git").arg("clone").arg(&app.working_dir).arg(&target).output().unwrap();
+            let mut commands = Vec::new();
+
+            app.handle_conversation_messages(
+                &mut commands,
+                Some(vec![ConversationScreenMessage::ForkWorkspace(
+                    crate::workspace::WorkspaceDestination::Existing { path: target.clone() },
+                )]),
+            )
+            .await;
+            tick_until_fork_settles(&mut app).await;
+            app.on_acp_event(AcpEvent::SessionLoaded {
+                session_id: SessionId::new("fork-session"),
+                config_options: Vec::new(),
+            });
+
+            assert_eq!(app.working_dir, target);
+            assert!(!app.workspace_flow.wants_tick());
+        }
+
+        #[tokio::test]
+        async fn prompt_error_clears_pending_workspace() {
+            let dir = TempDir::new().unwrap();
+            let (mut app, _rx) = fork_app(&dir);
+            let target = dir.path().join("other-workspace");
+            fs::create_dir_all(&target).unwrap();
+            let mut commands = Vec::new();
+
+            app.handle_conversation_messages(
+                &mut commands,
+                Some(vec![ConversationScreenMessage::ForkWorkspace(
+                    crate::workspace::WorkspaceDestination::Existing { path: target.clone() },
+                )]),
+            )
+            .await;
+            app.on_acp_event(AcpEvent::PromptError(acp::Error::internal_error()));
+
+            assert_eq!(app.working_dir, dir.path().join("src-workspace"), "working dir must not change on error");
+        }
+
+        async fn tick_until_fork_settles(app: &mut App) {
+            while app.workspace_flow.wants_tick() {
+                tokio::task::yield_now().await;
+                app.on_event(&Event::Tick).await;
+            }
+        }
+
+        fn rendered_modal_text(app: &mut App) -> String {
+            let Some(Modal::WorkspacePicker(picker)) = app.conversation_screen.active_modal.as_mut() else {
+                panic!("expected workspace picker modal");
+            };
+            render_component(|ctx| picker.render(ctx), 100, 20).get_lines().join("\n")
+        }
+
+        #[tokio::test]
+        async fn fork_into_existing_sibling_dir_shows_error_and_sends_nothing() {
+            let dir = TempDir::new().unwrap();
+            let (mut app, mut rx) = fork_app(&dir);
+            fs::create_dir_all(dir.path().join("taken")).unwrap();
+            let mut commands = Vec::new();
+
+            app.handle_conversation_messages(
+                &mut commands,
+                Some(vec![ConversationScreenMessage::ForkWorkspace(
+                    crate::workspace::WorkspaceDestination::NewSibling { name: "taken".to_string() },
+                )]),
+            )
+            .await;
+            tick_until_fork_settles(&mut app).await;
+
+            assert!(wisp_messages(&app).iter().any(|m| m.contains("Fork failed")));
+            assert!(rx.try_recv().is_err(), "no session command should be sent when the clone fails");
+            assert_eq!(app.working_dir, dir.path().join("src-workspace"));
+        }
+
+        #[tokio::test]
+        async fn fork_shows_cloning_indicator_then_reverts_modal_on_failure() {
+            let dir = TempDir::new().unwrap();
+            let (mut app, _rx) = fork_app(&dir);
+            fs::create_dir_all(dir.path().join("taken")).unwrap();
+            let mut commands = Vec::new();
+            app.handle_conversation_messages(&mut commands, Some(vec![ConversationScreenMessage::OpenWorkspacePicker]))
+                .await;
+
+            for c in "create".chars() {
+                send_key(&mut app, KeyCode::Char(c), KeyModifiers::NONE).await;
+            }
+            send_key(&mut app, KeyCode::Enter, KeyModifiers::NONE).await;
+            for c in "taken".chars() {
+                send_key(&mut app, KeyCode::Char(c), KeyModifiers::NONE).await;
+            }
+            send_key(&mut app, KeyCode::Enter, KeyModifiers::NONE).await;
+
+            assert!(app.workspace_flow.wants_tick(), "confirming the name should start a fork");
+            assert!(rendered_modal_text(&mut app).contains("Cloning"), "modal should show the cloning indicator");
+
+            tick_until_fork_settles(&mut app).await;
+
+            let text = rendered_modal_text(&mut app);
+            assert!(text.contains("New workspace name"), "modal should fall back to name entry, got: {text}");
+            assert!(text.contains("destination already exists"), "modal should show the clone error, got: {text}");
+        }
+
+        #[tokio::test]
+        async fn completed_fork_registers_workspace_and_moves_session() {
+            let dir = TempDir::new().unwrap();
+            let (mut app, mut rx) = fork_app(&dir);
+            let dest = dir.path().join("forked");
+            fs::create_dir_all(&dest).unwrap();
+            let (tx, fork_rx) = oneshot::channel();
+            app.workspace_flow.set_pending_operation_for_test(fork_rx);
+            tx.send(Ok(crate::workspace::WorkspaceFork { cwd: dest.clone(), status: test_workspace_status() }))
+                .unwrap();
+
+            app.on_event(&Event::Tick).await;
+
+            assert!(!app.workspace_flow.wants_tick());
+            match rx.try_recv().expect("expected LoadSession command") {
+                PromptCommand::LoadSession { session_id, cwd } => {
+                    assert_eq!(session_id, SessionId::new("fork-session"));
+                    assert_eq!(cwd, dest);
+                }
+                other => panic!("expected LoadSession, got {other:?}"),
+            }
+        }
     }
 
     #[test]

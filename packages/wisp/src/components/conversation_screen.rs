@@ -8,7 +8,9 @@ use crate::components::progress_indicator::ProgressIndicator;
 use crate::components::prompt_composer::{PromptComposer, PromptComposerMessage};
 use crate::components::session_picker::{SessionEntry, SessionPicker, SessionPickerMessage};
 use crate::components::tool_call_statuses::ToolCallStatuses;
+use crate::components::workspace_picker::{WorkspacePicker, WorkspacePickerMessage};
 use crate::keybindings::Keybindings;
+use crate::workspace::WorkspaceDestination;
 use acp_utils::CreateElicitationRequestParams;
 use acp_utils::notifications::{ElicitationResponse, PromptSearchParams, PromptSearchResponse, SessionPreviewResponse};
 use agent_client_protocol::Responder;
@@ -24,7 +26,9 @@ pub enum ConversationScreenMessage {
     NewSession,
     OpenSettings,
     OpenSessionPicker,
+    OpenWorkspacePicker,
     LoadSession { session_id: SessionId, cwd: PathBuf },
+    ForkWorkspace(WorkspaceDestination),
     SearchPrompts(PromptSearchParams),
     RequestSessionPreview { session_id: SessionId },
 }
@@ -32,6 +36,7 @@ pub enum ConversationScreenMessage {
 pub(crate) enum Modal {
     Elicitation(ElicitationForm),
     SessionPicker(SessionPicker),
+    WorkspacePicker(WorkspacePicker),
 }
 
 #[doc = include_str!("../docs/conversation_screen.md")]
@@ -91,6 +96,9 @@ impl ConversationScreen {
         self.tool_call_statuses.on_tick(now);
         self.plan_tracker.on_tick(now);
         self.progress_indicator.on_tick();
+        if let Some(Modal::WorkspacePicker(picker)) = self.active_modal.as_mut() {
+            picker.on_tick();
+        }
     }
 
     pub fn refresh_caches(&mut self, _context: &ViewContext) {
@@ -127,6 +135,24 @@ impl ConversationScreen {
             .collect();
         self.active_modal = Some(Modal::SessionPicker(picker));
         messages
+    }
+
+    pub fn open_workspace_picker(&mut self, picker: WorkspacePicker) {
+        self.active_modal = Some(Modal::WorkspacePicker(picker));
+    }
+
+    pub fn close_modal(&mut self) {
+        self.active_modal = None;
+    }
+
+    /// Surface a failed fork task: back into the picker when the modal is still
+    /// up, otherwise into the conversation.
+    pub fn fork_failed(&mut self, message: &str) {
+        if let Some(Modal::WorkspacePicker(picker)) = self.active_modal.as_mut() {
+            picker.fail(message);
+        } else {
+            self.conversation.push_user_message(&format!("[wisp] Fork failed: {message}"));
+        }
     }
 
     pub fn on_session_update(&mut self, update: &acp::SessionUpdate) {
@@ -278,6 +304,21 @@ impl ConversationScreen {
                 }
                 Some(out)
             }
+            Modal::WorkspacePicker(picker) => {
+                let msgs = picker.on_event(event).await.unwrap_or_default();
+                let mut out = Vec::new();
+                for msg in msgs {
+                    match msg {
+                        WorkspacePickerMessage::Close => {
+                            self.active_modal = None;
+                        }
+                        WorkspacePickerMessage::Fork(destination) => {
+                            out.push(ConversationScreenMessage::ForkWorkspace(destination));
+                        }
+                    }
+                }
+                Some(out)
+            }
         }
     }
 
@@ -298,6 +339,9 @@ impl ConversationScreen {
                 }
                 PromptComposerMessage::OpenSessionPicker => {
                     out.push(ConversationScreenMessage::OpenSessionPicker);
+                }
+                PromptComposerMessage::OpenWorkspacePicker => {
+                    out.push(ConversationScreenMessage::OpenWorkspacePicker);
                 }
                 PromptComposerMessage::SubmitRequested { user_input, attachments } => {
                     self.waiting_for_response = true;
@@ -380,6 +424,7 @@ impl Component for ConversationScreen {
 
         let modal_frame = match &mut self.active_modal {
             Some(Modal::SessionPicker(picker)) => Some(picker.render(ctx)),
+            Some(Modal::WorkspacePicker(picker)) => Some(picker.render(ctx)),
             Some(Modal::Elicitation(form)) => Some(form.render(ctx)),
             None => None,
         };

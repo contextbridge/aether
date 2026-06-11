@@ -82,6 +82,25 @@ impl SessionStore {
         Some((scan.meta, scan.events))
     }
 
+    /// Rewrite the stored meta line so the session is re-homed to `cwd`,
+    /// preserving every event line byte-for-byte. Only safe while no live
+    /// actor is appending to this session's log.
+    pub fn update_meta_cwd(&self, session_id: &str, cwd: &Path) -> io::Result<()> {
+        let mut log = SessionLogReader::open(&self.session_path(session_id))?;
+        if log.meta.cwd == cwd {
+            return Ok(());
+        }
+        log.meta.cwd = cwd.to_path_buf();
+
+        let temp_path = temp_session_path(&self.dir, session_id);
+        let result = write_rewritten_log(&temp_path, &log.meta, &mut log.reader)
+            .and_then(|()| fs::rename(&temp_path, self.session_path(session_id)));
+        if result.is_err() {
+            let _ = fs::remove_file(&temp_path);
+        }
+        result
+    }
+
     pub fn list(&self) -> Vec<SessionSummary> {
         let Ok(entries) = fs::read_dir(&self.dir) else {
             return Vec::new();
@@ -248,6 +267,21 @@ impl SessionLogReader {
 
 fn read_bounded_session(path: &Path, limits: ScanLimits) -> io::Result<SessionLogScan> {
     SessionLogReader::open(path)?.scan(limits)
+}
+
+fn write_rewritten_log(temp_path: &Path, meta: &SessionMeta, rest: &mut BufReader<File>) -> io::Result<()> {
+    let mut file = File::create(temp_path)?;
+    let meta_line =
+        serde_json::to_string(meta).map_err(|e| io::Error::other(format!("Failed to serialize session meta: {e}")))?;
+    writeln!(file, "{meta_line}")?;
+    io::copy(rest, &mut file)?;
+    file.sync_all()
+}
+
+fn temp_session_path(dir: &Path, session_id: &str) -> PathBuf {
+    let nanos =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |duration| duration.as_nanos());
+    dir.join(format!("{session_id}.jsonl.tmp.{}.{nanos}", std::process::id()))
 }
 
 fn push_preview_turn(transcript: &mut Vec<SessionPreviewTurn>, role: SessionPreviewRole, text: &str) -> bool {
@@ -422,6 +456,79 @@ mod tests {
     fn load_nonexistent_returns_none() {
         let (_dir, store) = temp_store();
         assert!(store.load("nonexistent").is_none());
+    }
+
+    #[test]
+    fn update_meta_cwd_rewrites_meta_and_preserves_events() {
+        let (_dir, store) = temp_store();
+        let events = vec![user_msg("Hello"), agent_text("msg_1", "Hi!", true)];
+        store.append_meta("s1", &default_meta()).unwrap();
+        for event in &events {
+            store.append_event("s1", event).unwrap();
+        }
+
+        store.update_meta_cwd("s1", Path::new("/new/workspace")).unwrap();
+
+        let (meta, loaded_events) = store.load("s1").unwrap();
+        assert_eq!(meta.cwd, PathBuf::from("/new/workspace"));
+        assert_eq!(meta, SessionMeta { cwd: PathBuf::from("/new/workspace"), ..default_meta() });
+        assert_eq!(loaded_events, events);
+    }
+
+    #[test]
+    fn update_meta_cwd_same_cwd_leaves_file_untouched() {
+        let (dir, store) = temp_store();
+        store.append_meta("s1", &default_meta()).unwrap();
+        store.append_event("s1", &user_msg("Hello")).unwrap();
+        let path = dir.path().join("s1.jsonl");
+        let before = std::fs::read(&path).unwrap();
+
+        store.update_meta_cwd("s1", &default_meta().cwd).unwrap();
+
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn update_meta_cwd_missing_session_returns_not_found() {
+        let (_dir, store) = temp_store();
+        let err = store.update_meta_cwd("missing", Path::new("/new")).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn update_meta_cwd_preserves_malformed_trailing_bytes_verbatim() {
+        let (dir, store) = temp_store();
+        let path = dir.path().join("s1.jsonl");
+        let trailing = format!("{}\n{{truncated garbage", serde_json::to_string(&user_msg("Hello")).unwrap());
+        let mut file = File::create(&path).unwrap();
+        writeln!(file, "{}", serde_json::to_string(&default_meta()).unwrap()).unwrap();
+        write!(file, "{trailing}").unwrap();
+        drop(file);
+
+        store.update_meta_cwd("s1", Path::new("/new/workspace")).unwrap();
+
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let (meta_line, rest) = raw.split_once('\n').unwrap();
+        assert_eq!(serde_json::from_str::<SessionMeta>(meta_line).unwrap().cwd, PathBuf::from("/new/workspace"));
+        assert_eq!(rest, trailing);
+    }
+
+    #[test]
+    fn update_meta_cwd_leaves_no_temp_files_and_list_still_finds_session() {
+        let (dir, store) = temp_store();
+        store.append_meta("s1", &default_meta()).unwrap();
+        store.update_meta_cwd("s1", Path::new("/new/workspace")).unwrap();
+
+        let temp_count = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".tmp."))
+            .count();
+        assert_eq!(temp_count, 0);
+
+        let listed = store.list();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].meta.cwd, PathBuf::from("/new/workspace"));
     }
 
     #[test]

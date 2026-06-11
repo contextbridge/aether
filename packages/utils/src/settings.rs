@@ -33,7 +33,7 @@ impl SettingsStore {
     }
 
     pub fn save<T: Serialize>(&self, settings: &T) -> io::Result<()> {
-        save_to_path(&self.home.join("settings.json"), settings)
+        save_json(&self.home.join("settings.json"), settings)
     }
 }
 
@@ -51,6 +51,48 @@ pub fn resolve_home(
 
     let fallback_home = home.or(userprofile)?;
     Some(PathBuf::from(fallback_home).join(dot_dir))
+}
+
+pub fn load_json_or_default<T: DeserializeOwned + Default>(path: &Path) -> T {
+    let raw = match fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(error) => {
+            if error.kind() != io::ErrorKind::NotFound {
+                warn!("Failed reading JSON file {}: {error}", path.display());
+            }
+            return T::default();
+        }
+    };
+
+    match serde_json::from_str::<T>(&raw) {
+        Ok(value) => value,
+        Err(error) => {
+            warn!("Malformed JSON at {}: {error}", path.display());
+            T::default()
+        }
+    }
+}
+
+pub fn save_json<T: Serialize>(path: &Path, value: &T) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let temp_path = temp_path_for(path);
+    let serialized = serde_json::to_vec_pretty(value)
+        .map_err(|error| io::Error::other(format!("Failed to serialize JSON: {error}")))?;
+
+    let result = (|| {
+        let mut file = fs::File::create(&temp_path)?;
+        file.write_all(&serialized)?;
+        file.write_all(b"\n")?;
+        file.sync_all()?;
+        fs::rename(&temp_path, path)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    result
 }
 
 fn load_or_create_at<T: Serialize + DeserializeOwned + Default>(path: &Path) -> T {
@@ -79,23 +121,7 @@ fn load_or_create_at<T: Serialize + DeserializeOwned + Default>(path: &Path) -> 
 }
 
 fn save_to_path<T: Serialize>(path: &Path, settings: &T) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    let temp_path = temp_path_for(path);
-    let serialized = serde_json::to_vec_pretty(settings)
-        .map_err(|error| io::Error::other(format!("Failed to serialize settings: {error}")))?;
-
-    {
-        let mut file = fs::File::create(&temp_path)?;
-        file.write_all(&serialized)?;
-        file.write_all(b"\n")?;
-        file.sync_all()?;
-    }
-
-    fs::rename(&temp_path, path)?;
-    Ok(())
+    save_json(path, settings)
 }
 
 fn temp_path_for(path: &Path) -> PathBuf {

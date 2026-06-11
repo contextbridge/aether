@@ -11,7 +11,7 @@ mod session_loading_buffer;
 pub mod settings;
 #[cfg(test)]
 pub(crate) mod test_helpers;
-pub mod workspace_status;
+pub mod workspace;
 
 use acp_utils::client::AcpEvent;
 use components::app::{App, AppInfo, EventOutcome};
@@ -54,8 +54,7 @@ pub async fn run_with_state(state: RuntimeState) -> Result<(), AppError> {
         settings,
         event_rx,
         prompt_handle,
-        working_dir,
-        workspace_status,
+        workspace,
     } = state;
 
     let app = App::new(AppInfo {
@@ -65,8 +64,7 @@ pub async fn run_with_state(state: RuntimeState) -> Result<(), AppError> {
         session_capabilities,
         config_options,
         auth_methods,
-        working_dir,
-        workspace_status,
+        workspace,
         prompt_handle,
         settings,
     });

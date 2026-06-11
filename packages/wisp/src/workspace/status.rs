@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use tokio::process::Command;
+use super::git::run_git;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceStatus {
@@ -34,17 +34,10 @@ async fn resolve_git_ref(cwd: &Path) -> Option<String> {
 }
 
 async fn git_stdout(cwd: &Path, args: &[&str]) -> Option<String> {
-    let output = Command::new("git").args(args).current_dir(cwd).output().await.ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if text.is_empty() { None } else { Some(text) }
+    run_git(cwd, args).await.ok().map(|text| text.trim().to_string()).filter(|text| !text.is_empty())
 }
 
-fn home_relative_path(path: &Path) -> String {
+pub(crate) fn home_relative_path(path: &Path) -> String {
     home_dir().map_or_else(|| path.display().to_string(), |home| home_relative_path_with_home(path, &home))
 }
 

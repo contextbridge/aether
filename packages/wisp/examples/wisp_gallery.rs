@@ -17,7 +17,7 @@ use wisp::components::thought_message::ThoughtMessage;
 use wisp::components::tool_call_status_view::{ToolCallStatus, ToolCallStatusView};
 use wisp::keybindings::Keybindings;
 use wisp::settings::StatusLineSettings;
-use wisp::workspace_status::WorkspaceStatus;
+use wisp::workspace::WorkspaceStatus;
 
 enum WispStory {
     TextInput(TextInput),

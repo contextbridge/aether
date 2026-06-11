@@ -5,7 +5,7 @@ use tui::testing::render_lines;
 use wisp::components::status_line::{ContextUsageDisplay, StatusLine};
 use wisp::settings::DEFAULT_CONTENT_PADDING;
 use wisp::settings::StatusLineSettings;
-use wisp::workspace_status::WorkspaceStatus;
+use wisp::workspace::WorkspaceStatus;
 
 fn mode_option(value: impl Into<String>, name: impl Into<String>) -> SessionConfigOption {
     let value = value.into();

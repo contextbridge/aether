@@ -125,6 +125,14 @@ impl SessionFactory {
         let mut mode_catalog = self.load_mode_catalog(&args.cwd).await?;
         let resolved = self.resolve_loaded_session(&mut mode_catalog, &meta, &events)?;
 
+        // Loading with a different cwd re-homes the session; keep the stored
+        // meta in sync so future resume menus show where it actually runs.
+        if meta.cwd != args.cwd
+            && let Err(e) = self.session_store.update_meta_cwd(&session_id, &args.cwd)
+        {
+            error!("Failed to re-home session {session_id} to {}: {e}", args.cwd.display());
+        }
+
         let runtime_factory = self.production_runtime_factory(args.cwd, args.mcp_servers, &session_id);
         self.build_session(SessionId::new(session_id), runtime_factory, mode_catalog, resolved, events, cx).await
     }

@@ -1,11 +1,11 @@
+use crate::components::picker_rendering::{boxed_search_field, render_two_column_items};
 use acp_utils::notifications::{SessionDisplayMeta, SessionPreviewResponse, SessionPreviewRole};
 use agent_client_protocol::schema as acp;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tui::{
-    BorderedTextField, Combobox, Component, Cursor, Event, Frame, FramePart, Line, MouseEventKind, PickerMessage,
-    Searchable, Style, ViewContext, display_width_text, pad_text_to_width, truncate_text,
+    Combobox, Component, Event, Frame, FramePart, Line, MouseEventKind, PickerMessage, Searchable, Style, ViewContext,
 };
 
 #[derive(Clone)]
@@ -119,7 +119,7 @@ impl Component for SessionPicker {
             return Frame::new(vec![Line::new(String::new()), Line::new("  No previous sessions found.")]);
         }
 
-        let search = search_box_frame(self.combobox.query(), context);
+        let search = boxed_search_field(SEARCH_LABEL, self.combobox.query(), SEARCH_PLACEHOLDER, context);
         let now = Utc::now();
         let body_height = context.size.height.saturating_sub(u16::try_from(search.lines().len()).unwrap_or(0));
         let body_context = context.with_height(body_height);
@@ -142,8 +142,6 @@ impl Component for SessionPicker {
     }
 }
 
-const SEARCH_BOX_MAX_WIDTH: usize = 56;
-const SEARCH_BOX_INDENT: u16 = 2;
 const SEARCH_LABEL: &str = "🔍 Search";
 const SEARCH_PLACEHOLDER: &str = "type to search title or path";
 const WIDE_PREVIEW_THRESHOLD: u16 = 96;
@@ -168,35 +166,17 @@ impl SessionPicker {
             return Frame::new(list_lines);
         }
 
-        let max_title_width = self
-            .combobox
-            .matches()
-            .iter()
-            .map(|e| display_width_text(&display_title(&e.0)))
-            .max()
-            .unwrap_or(0)
-            .min(MAX_TITLE_WIDTH);
-
-        let item_lines = self.combobox.render_items(context, |SessionEntry(info), is_selected, ctx| {
-            let display_title = display_title(info);
-            let title = truncate_text(&display_title, max_title_width);
-            let relative = info.updated_at.as_deref().map(|ts| format_short_datetime_at(ts, now)).unwrap_or_default();
-            let meta = row_metadata(info, &relative);
-            let padded_title = pad_text_to_width(&title, max_title_width);
-            let line_text = if meta.is_empty() { padded_title.to_string() } else { format!("{padded_title}  {meta}") };
-            let truncated = truncate_text(&line_text, ctx.size.width as usize);
-
-            if is_selected {
-                ctx.theme.selected_row_line(truncated)
-            } else {
-                let boundary = truncated.floor_char_boundary(padded_title.len().min(truncated.len()));
-                let mut line = Line::new(&truncated[..boundary]);
-                if truncated.len() > boundary {
-                    line.push_with_style(&truncated[boundary..], Style::fg(ctx.theme.muted()));
-                }
-                line
-            }
-        });
+        let item_lines = render_two_column_items(
+            &self.combobox,
+            context,
+            MAX_TITLE_WIDTH,
+            |SessionEntry(info)| display_title(info),
+            |SessionEntry(info)| {
+                let relative =
+                    info.updated_at.as_deref().map(|ts| format_short_datetime_at(ts, now)).unwrap_or_default();
+                row_metadata(info, &relative)
+            },
+        );
         list_lines.extend(item_lines);
         Frame::new(list_lines)
     }
@@ -218,19 +198,6 @@ impl SessionPicker {
         }
         Frame::new(lines)
     }
-}
-
-fn search_box_frame(query: &str, context: &ViewContext) -> Frame {
-    let width = (context.size.width as usize).saturating_sub(usize::from(SEARCH_BOX_INDENT)).min(SEARCH_BOX_MAX_WIDTH);
-    let input_width = width.saturating_sub(4);
-    let visible_query = truncate_text(query, input_width);
-
-    let mut field = BorderedTextField::new(SEARCH_LABEL, query.to_string()).placeholder(SEARCH_PLACEHOLDER);
-    field.set_width(width);
-
-    Frame::new(field.render_field(context, false))
-        .with_cursor(Cursor::visible(1, 2 + display_width_text(&visible_query)))
-        .indent(SEARCH_BOX_INDENT)
 }
 
 fn push_preview_lines(
