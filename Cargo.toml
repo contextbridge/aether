@@ -33,7 +33,9 @@ absolute_paths = "warn"
 # AWS SDK
 aws-config = { version = "1.8.18", features = ["behavior-version-latest"] }
 aws-sdk-bedrockruntime = "1.133.0"
-aws-smithy-types = "1.4.9"
+# Capped below 1.5.0: it makes DeferredSignerSender::send generic, which breaks
+# type inference in aws-runtime 1.7.4 (latest). Lift once aws-runtime ships a fix.
+aws-smithy-types = ">=1.4.9, <1.5.0"
 
 # Async runtime
 tokio = { version = "^1.52.3", features = ["full"] }
@@ -81,8 +83,9 @@ secrecy = "0.10"
 
 # Utilities
 chrono = { version = "^0.4.45", features = ["serde"] }
+time = "=0.3.47"
 uuid = { version = "1.23", features = ["v4"] }
-regex = "^1.12.3"
+regex = "^1.12.4"
 sha2 = "0.11"
 base64 = "0.22"
 rand = "0.10"
