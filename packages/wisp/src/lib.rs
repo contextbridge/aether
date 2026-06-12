@@ -54,7 +54,8 @@ pub async fn run_with_state(state: RuntimeState) -> Result<(), AppError> {
         settings,
         event_rx,
         prompt_handle,
-        workspace,
+        working_dir,
+        workspace_status,
     } = state;
 
     let app = App::new(AppInfo {
@@ -64,7 +65,8 @@ pub async fn run_with_state(state: RuntimeState) -> Result<(), AppError> {
         session_capabilities,
         config_options,
         auth_methods,
-        workspace,
+        working_dir,
+        workspace_status,
         prompt_handle,
         settings,
     });

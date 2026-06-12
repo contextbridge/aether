@@ -1,6 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::process::Stdio;
 
-use super::git::run_git;
+use utils::paths::home_relative_path;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceStatus {
@@ -34,26 +35,22 @@ async fn resolve_git_ref(cwd: &Path) -> Option<String> {
 }
 
 async fn git_stdout(cwd: &Path, args: &[&str]) -> Option<String> {
-    run_git(cwd, args).await.ok().map(|text| text.trim().to_string()).filter(|text| !text.is_empty())
-}
-
-pub(crate) fn home_relative_path(path: &Path) -> String {
-    home_dir().map_or_else(|| path.display().to_string(), |home| home_relative_path_with_home(path, &home))
-}
-
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from)
-}
-
-fn home_relative_path_with_home(path: &Path, home: &Path) -> String {
-    if path == home {
-        return "~".to_string();
+    let output = tokio::process::Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(args)
+        .env("LC_ALL", "C")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .await
+        .ok()?;
+    if output.status.success() {
+        let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if text.is_empty() { None } else { Some(text) }
+    } else {
+        None
     }
-
-    path.strip_prefix(home)
-        .ok()
-        .filter(|relative| !relative.as_os_str().is_empty())
-        .map_or_else(|| path.display().to_string(), |relative| format!("~/{}", relative.display()))
 }
 
 #[cfg(test)]
@@ -70,25 +67,5 @@ mod tests {
     fn label_omits_ref_when_absent() {
         let status = WorkspaceStatus::new("~/scratch", None);
         assert_eq!(status.label(), "~/scratch");
-    }
-
-    #[test]
-    fn home_relative_path_rewrites_home_child() {
-        let path = Path::new("/Users/josh/code/aether-2");
-        let home = Path::new("/Users/josh");
-        assert_eq!(home_relative_path_with_home(path, home), "~/code/aether-2");
-    }
-
-    #[test]
-    fn home_relative_path_handles_home_itself() {
-        let home = Path::new("/Users/josh");
-        assert_eq!(home_relative_path_with_home(home, home), "~");
-    }
-
-    #[test]
-    fn home_relative_path_leaves_external_path_absolute() {
-        let path = Path::new("/opt/work/aether-2");
-        let home = Path::new("/Users/josh");
-        assert_eq!(home_relative_path_with_home(path, home), "/opt/work/aether-2");
     }
 }

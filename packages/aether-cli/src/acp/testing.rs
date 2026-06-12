@@ -8,6 +8,7 @@ use super::session_actor::{SessionActor, SessionActorInit};
 use super::session_config_state::SessionConfigState;
 use super::session_factory::InitialSessionSelection;
 use super::state::{AcpState, AcpStateConfig};
+use super::workspace::WorkspaceManager;
 use crate::acp::session_store::{SessionMeta, SessionStore};
 use crate::error::CliError;
 use crate::settings_args::SettingsSourceArgs;
@@ -71,6 +72,8 @@ impl AcpTestHarness {
             initial_selection: InitialSessionSelection::default(),
             settings_source: SettingsSourceArgs::default(),
             provider_connections: ProviderConnectionOverrides::default(),
+            workspaces: WorkspaceManager::new(),
+            runtime_factory_override: None,
         }));
 
         let (peer, client_builder) = TestPeer::new();

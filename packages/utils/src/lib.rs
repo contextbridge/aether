@@ -1,6 +1,7 @@
 #![doc = include_str!("../README.md")]
 
 pub mod markdown_file;
+pub mod paths;
 pub mod plan_review;
 pub mod reasoning;
 pub mod resource_path;

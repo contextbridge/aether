@@ -50,6 +50,7 @@ pub(crate) struct SessionFactory {
     oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
     session_store: Arc<SessionStore>,
     initial_selection: InitialSessionSelection,
+    runtime_factory_override: Option<Arc<dyn RuntimeFactory>>,
 }
 
 /// The fully-built session ready to be registered with [`AcpState`](super::state::AcpState).
@@ -61,14 +62,23 @@ pub(crate) struct CreatedSession {
 }
 
 impl SessionFactory {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         settings_source: SettingsSourceArgs,
         provider_connections: ProviderConnectionOverrides,
         oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
         session_store: Arc<SessionStore>,
         initial_selection: InitialSessionSelection,
+        runtime_factory_override: Option<Arc<dyn RuntimeFactory>>,
     ) -> Self {
-        Self { settings_source, provider_connections, oauth_credential_store, session_store, initial_selection }
+        Self {
+            settings_source,
+            provider_connections,
+            oauth_credential_store,
+            session_store,
+            initial_selection,
+            runtime_factory_override,
+        }
     }
 
     pub(crate) async fn create(
@@ -125,14 +135,6 @@ impl SessionFactory {
         let mut mode_catalog = self.load_mode_catalog(&args.cwd).await?;
         let resolved = self.resolve_loaded_session(&mut mode_catalog, &meta, &events)?;
 
-        // Loading with a different cwd re-homes the session; keep the stored
-        // meta in sync so future resume menus show where it actually runs.
-        if meta.cwd != args.cwd
-            && let Err(e) = self.session_store.update_meta_cwd(&session_id, &args.cwd)
-        {
-            error!("Failed to re-home session {session_id} to {}: {e}", args.cwd.display());
-        }
-
         let runtime_factory = self.production_runtime_factory(args.cwd, args.mcp_servers, &session_id);
         self.build_session(SessionId::new(session_id), runtime_factory, mode_catalog, resolved, events, cx).await
     }
@@ -143,6 +145,9 @@ impl SessionFactory {
         mcp_servers: Vec<acp::McpServer>,
         session_id: &str,
     ) -> Arc<dyn RuntimeFactory> {
+        if let Some(ref factory) = self.runtime_factory_override {
+            return Arc::clone(factory);
+        }
         Arc::new(ProductionRuntimeFactory::new(
             cwd,
             map_acp_mcp_servers(mcp_servers),

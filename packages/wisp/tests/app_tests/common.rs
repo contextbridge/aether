@@ -15,7 +15,7 @@ use tui::testing::TestTerminal;
 use tui::{Component, Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseEvent, MouseEventKind};
 use wisp::components::app::{App, AppInfo, EventOutcome};
 use wisp::settings::DEFAULT_CONTENT_PADDING;
-use wisp::workspace::{WorkspaceManager, WorkspaceRuntime, WorkspaceStatus};
+use wisp::workspace::WorkspaceStatus;
 
 pub(super) const TEST_AGENT: &str = "test-agent";
 pub(super) const TEST_WIDTH: u16 = 200;
@@ -237,11 +237,8 @@ impl Renderer {
             session_capabilities,
             config_options: config_options.to_vec(),
             auth_methods,
-            workspace: WorkspaceRuntime::new(
-                PathBuf::from("."),
-                test_workspace_status(),
-                std::sync::Arc::new(WorkspaceManager::new()),
-            ),
+            working_dir: PathBuf::from("."),
+            workspace_status: test_workspace_status(),
             prompt_handle,
             settings: wisp::settings::WispSettings::default()
                 .with_default_status_line(wisp::settings::StatusLineSettings::defaults()),

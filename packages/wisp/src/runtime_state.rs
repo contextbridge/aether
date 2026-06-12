@@ -1,13 +1,14 @@
 use crate::cli::Cli;
 use crate::error::AppError;
 use crate::settings::{StatusLineSettings, WispSettings};
-use crate::workspace::WorkspaceRuntime;
+use crate::workspace::WorkspaceStatus;
 use acp_utils::client::{AcpEvent, AcpPromptHandle, spawn_acp_session};
 use agent_client_protocol::schema::{
     AuthMethod, Implementation, InitializeRequest, NewSessionRequest, PromptCapabilities, ProtocolVersion,
     SessionCapabilities, SessionConfigOption, SessionId,
 };
 use std::env::current_dir;
+use std::path::PathBuf;
 use tokio::sync::mpsc;
 use tui::Theme;
 
@@ -23,13 +24,14 @@ pub struct RuntimeState {
     pub settings: WispSettings,
     pub event_rx: mpsc::UnboundedReceiver<AcpEvent>,
     pub prompt_handle: AcpPromptHandle,
-    pub workspace: WorkspaceRuntime,
+    pub working_dir: PathBuf,
+    pub workspace_status: WorkspaceStatus,
 }
 
 impl RuntimeState {
     pub async fn new(agent_command: &str, settings: WispSettings) -> Result<Self, AppError> {
         let cwd = current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let workspace = WorkspaceRuntime::resolve(cwd.clone()).await;
+        let workspace_status = WorkspaceStatus::resolve(&cwd).await;
         let new_session_request = NewSessionRequest::new(cwd.clone());
         let init_request = InitializeRequest::new(ProtocolVersion::LATEST)
             .client_info(Implementation::new("wisp", env!("CARGO_PKG_VERSION")));
@@ -50,7 +52,8 @@ impl RuntimeState {
             settings,
             event_rx: session.event_rx,
             prompt_handle: session.prompt_handle,
-            workspace,
+            working_dir: cwd,
+            workspace_status,
         })
     }
 

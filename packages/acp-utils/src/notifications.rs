@@ -166,6 +166,77 @@ impl SessionDisplayMeta {
     }
 }
 
+/// Parameters for `_aether/fork_options` request.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonRpcRequest)]
+#[request(method = "_aether/fork_options", response = ForkOptionsResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct ForkOptionsParams {
+    pub session_id: String,
+}
+
+/// Response for `_aether/fork_options`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonRpcResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct ForkOptionsResponse {
+    pub session_id: String,
+    pub options: Vec<WorkspaceOption>,
+}
+
+/// A workspace option displayed in the fork picker.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceOption {
+    pub name: String,
+    pub path: PathBuf,
+    pub subtitle: String,
+}
+
+/// Destination for `_aether/fork_session`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum WorkspaceDestination {
+    Existing { path: PathBuf },
+    NewSibling { name: String },
+}
+
+/// Parameters for `_aether/fork_session` request.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonRpcRequest)]
+#[request(method = "_aether/fork_session", response = ForkSessionResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct ForkSessionParams {
+    pub session_id: String,
+    pub destination: WorkspaceDestination,
+}
+
+/// Response for `_aether/fork_session`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonRpcResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct ForkSessionResponse {
+    pub session_id: String,
+    pub cwd: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_ref: Option<String>,
+    pub config_options: Vec<agent_client_protocol::schema::SessionConfigOption>,
+}
+
+/// Error returned by [`validate_workspace_name`].
+#[derive(Debug, Clone)]
+pub struct InvalidWorkspaceName(pub String);
+
+impl std::fmt::Display for InvalidWorkspaceName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invalid workspace name `{}`: must be non-empty with no path separators", self.0)
+    }
+}
+
+impl std::error::Error for InvalidWorkspaceName {}
+
+/// Validate a workspace name is non-empty and contains no path separators.
+pub fn validate_workspace_name(name: &str) -> Result<(), InvalidWorkspaceName> {
+    let valid = !name.trim().is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', '\0']);
+    if valid { Ok(()) } else { Err(InvalidWorkspaceName(name.to_string())) }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AetherCapabilities {
@@ -173,17 +244,25 @@ pub struct AetherCapabilities {
     pub prompt_search: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub session_preview: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub workspace_fork: bool,
 }
 
 impl AetherCapabilities {
     #[must_use]
     pub fn prompt_search() -> Self {
-        Self { prompt_search: true, session_preview: false }
+        Self { prompt_search: true, session_preview: false, workspace_fork: false }
     }
 
     #[must_use]
     pub fn session_preview() -> Self {
-        Self { prompt_search: false, session_preview: true }
+        Self { prompt_search: false, session_preview: true, workspace_fork: false }
+    }
+
+    #[must_use]
+    pub fn with_workspace_fork(mut self) -> Self {
+        self.workspace_fork = true;
+        self
     }
 
     #[must_use]
@@ -308,6 +387,98 @@ mod tests {
     }
 
     #[test]
+    fn fork_options_wire_method_name() {
+        let params = ForkOptionsParams { session_id: "s1".to_string() };
+        assert_eq!(params.method(), "_aether/fork_options");
+    }
+
+    #[test]
+    fn fork_session_wire_method_name() {
+        let params = ForkSessionParams {
+            session_id: "s1".to_string(),
+            destination: WorkspaceDestination::NewSibling { name: "fork".to_string() },
+        };
+        assert_eq!(params.method(), "_aether/fork_session");
+    }
+
+    #[test]
+    fn fork_options_roundtrip() {
+        let params = ForkOptionsParams { session_id: "s1".to_string() };
+        let untyped = params.to_untyped_message().expect("serializable");
+        let parsed = ForkOptionsParams::parse_message(untyped.method(), untyped.params()).expect("roundtrip");
+        assert_eq!(parsed, params);
+    }
+
+    #[test]
+    fn fork_session_roundtrip() {
+        let params = ForkSessionParams {
+            session_id: "s1".to_string(),
+            destination: WorkspaceDestination::NewSibling { name: "forked".to_string() },
+        };
+        let untyped = params.to_untyped_message().expect("serializable");
+        let parsed = ForkSessionParams::parse_message(untyped.method(), untyped.params()).expect("roundtrip");
+        assert_eq!(parsed, params);
+    }
+
+    #[test]
+    fn workspace_destination_new_sibling_serializes_with_type_tag() {
+        let dest = WorkspaceDestination::NewSibling { name: "big-refactor".to_string() };
+        let json = serde_json::to_string(&dest).unwrap();
+        assert!(json.contains("\"type\":\"newSibling\""));
+        assert!(json.contains("\"name\":\"big-refactor\""));
+        let parsed: WorkspaceDestination = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, dest);
+    }
+
+    #[test]
+    fn workspace_destination_existing_serializes_with_type_tag() {
+        let dest = WorkspaceDestination::Existing { path: PathBuf::from("/home/dev/code/target") };
+        let json = serde_json::to_string(&dest).unwrap();
+        assert!(json.contains("\"type\":\"existing\""));
+        assert!(json.contains("\"path\":\"/home/dev/code/target\""));
+        let parsed: WorkspaceDestination = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, dest);
+    }
+
+    #[test]
+    fn fork_session_response_roundtrip() {
+        let resp = ForkSessionResponse {
+            session_id: "s1".to_string(),
+            cwd: PathBuf::from("/home/dev/code/forked"),
+            git_ref: Some("main".to_string()),
+            config_options: Vec::new(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("\"cwd\":\"/home/dev/code/forked\""));
+        assert!(json.contains("\"gitRef\":\"main\""));
+        let parsed: ForkSessionResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.session_id, "s1");
+        assert_eq!(parsed.cwd, PathBuf::from("/home/dev/code/forked"));
+        assert_eq!(parsed.git_ref, Some("main".to_string()));
+    }
+
+    #[test]
+    fn validate_workspace_name_rejects_invalid_names() {
+        for name in ["", "   ", ".", "..", "a/b", "a\\b", "a\0b"] {
+            assert!(validate_workspace_name(name).is_err(), "expected rejection: {name:?}");
+        }
+    }
+
+    #[test]
+    fn validate_workspace_name_accepts_reasonable_names() {
+        for name in ["fix-login", "aether2", "big_refactor", "feature.branch"] {
+            assert!(validate_workspace_name(name).is_ok(), "expected acceptance: {name:?}");
+        }
+    }
+
+    #[test]
+    fn invalid_workspace_name_display() {
+        let err = InvalidWorkspaceName("a/b".to_string());
+        assert!(err.to_string().contains("invalid workspace name"));
+        assert!(err.to_string().contains("a/b"));
+    }
+
+    #[test]
     fn prompt_search_capability_meta_roundtrip() {
         let meta = AetherCapabilities::prompt_search().to_meta();
         assert!(AetherCapabilities::from_meta(Some(&meta)).prompt_search);
@@ -316,6 +487,23 @@ mod tests {
         let raw = serde_json::to_string(meta.get(AETHER_META_NAMESPACE).unwrap()).unwrap();
         assert!(raw.contains("promptSearch"));
         assert!(!raw.contains("sessionPreview"));
+    }
+
+    #[test]
+    fn workspace_fork_capability_roundtrip() {
+        let meta = AetherCapabilities::session_preview().with_workspace_fork().to_meta();
+        let parsed = AetherCapabilities::from_meta(Some(&meta));
+        assert!(parsed.session_preview);
+        assert!(parsed.workspace_fork);
+        assert!(!parsed.prompt_search);
+        let raw = serde_json::to_string(meta.get(AETHER_META_NAMESPACE).unwrap()).unwrap();
+        assert!(raw.contains("workspaceFork"));
+    }
+
+    #[test]
+    fn workspace_fork_capability_defaults_to_false() {
+        assert!(!AetherCapabilities::default().workspace_fork);
+        assert!(!AetherCapabilities::prompt_search().workspace_fork);
     }
 
     #[test]

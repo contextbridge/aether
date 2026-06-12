@@ -3,8 +3,8 @@ use super::event::AcpEvent;
 use super::prompt_handle::{AcpPromptHandle, PromptCommand};
 use super::tokio_agent::TokioAcpAgent;
 use crate::notifications::{
-    AuthMethodsUpdatedParams, ContextClearedParams, ContextUsageParams, ElicitationParams, McpNotification, McpRequest,
-    SubAgentProgressParams,
+    AuthMethodsUpdatedParams, ContextClearedParams, ContextUsageParams, ElicitationParams, ForkOptionsParams,
+    ForkSessionParams, McpNotification, McpRequest, SubAgentProgressParams,
 };
 use agent_client_protocol::schema::{
     AuthMethod, AuthenticateRequest, CancelNotification, ConfigOptionUpdate, ContentBlock, InitializeRequest,
@@ -349,6 +349,29 @@ async fn handle_side_command(
                 }
                 Err(e) => {
                     let _ = event_tx.send(AcpEvent::SessionPreviewFailed { session_id, error: format!("{e}") });
+                }
+            }
+        }
+        PromptCommand::ForkOptions(session_id) => {
+            let params = ForkOptionsParams { session_id: session_id.0.to_string() };
+            match cx.send_request(params).block_task().await {
+                Ok(resp) => {
+                    let _ = event_tx.send(AcpEvent::ForkOptionsLoaded(resp));
+                }
+                Err(e) => {
+                    let _ = event_tx.send(AcpEvent::ForkOptionsFailed { error: format!("{e}") });
+                }
+            }
+        }
+        PromptCommand::ForkSession { session_id, destination } => {
+            let sid = session_id.0.to_string();
+            let params = ForkSessionParams { session_id: sid.clone(), destination };
+            match cx.send_request(params).block_task().await {
+                Ok(resp) => {
+                    let _ = event_tx.send(AcpEvent::SessionForked(resp));
+                }
+                Err(e) => {
+                    let _ = event_tx.send(AcpEvent::SessionForkFailed { session_id: sid, error: format!("{e}") });
                 }
             }
         }

@@ -70,7 +70,7 @@ impl SessionStore {
         }
         self.append_line(session_id, event)?;
         if let Some(prompt) = user_prompt_text_from_event(event)
-            && let Some(meta) = self.session_meta(session_id)
+            && let Some(meta) = self.meta(session_id)
         {
             self.prompt_history.append_prompt(&meta, prompt)?;
         }
@@ -130,7 +130,7 @@ impl SessionStore {
         self.prompt_history.search(params)
     }
 
-    fn session_meta(&self, session_id: &str) -> Option<SessionMeta> {
+    pub(crate) fn meta(&self, session_id: &str) -> Option<SessionMeta> {
         let file = File::open(self.session_path(session_id)).ok()?;
         let mut reader = BufReader::new(file);
         let mut first_line = String::new();

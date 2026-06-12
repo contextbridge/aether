@@ -46,11 +46,6 @@ unicode-width = { workspace = true }
 serde = { workspace = true }
 similar = { workspace = true }
 chrono = { workspace = true }
-async-trait = { workspace = true }
-thiserror = { workspace = true }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-libc = { workspace = true }
 
 [dev-dependencies]
 acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client", "testing"], version = "0.3.20" }

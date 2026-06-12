@@ -1,10 +1,11 @@
 use crate::components::picker_rendering::{boxed_search_field, render_two_column_items};
-use crate::workspace::{WorkspaceDestination, WorkspaceOption};
+use acp_utils::notifications::{WorkspaceDestination, WorkspaceOption, validate_workspace_name};
 use std::path::{Path, PathBuf};
 use tui::{
     Combobox, Component, Cursor, Event, Frame, KeyCode, Line, MouseEventKind, PickerMessage, Searchable, Spinner,
     Style, TextField, ViewContext,
 };
+use utils::paths::home_relative_path;
 
 pub struct WorkspacePicker {
     mode: PickerMode,
@@ -88,7 +89,7 @@ impl Component for WorkspacePicker {
                 for msg in msgs {
                     match msg {
                         PickerMessage::Close | PickerMessage::CloseAndPopChar => {
-                            out.push(WorkspacePickerMessage::Close)
+                            out.push(WorkspacePickerMessage::Close);
                         }
                         PickerMessage::Confirm(WorkspaceEntry::Existing(workspace)) => {
                             let label = format!("Moving changes into {}…", workspace.name);
@@ -127,7 +128,7 @@ impl Component for WorkspacePicker {
                                     Some(vec![WorkspacePickerMessage::Fork(WorkspaceDestination::NewSibling { name })])
                                 }
                                 Err(e) => {
-                                    *error = Some(e);
+                                    *error = Some(e.to_string());
                                     Some(vec![])
                                 }
                             };
@@ -238,34 +239,6 @@ fn entry_metadata(entry: &WorkspaceEntry) -> String {
     match entry {
         WorkspaceEntry::Existing(workspace) => workspace.subtitle.clone(),
         WorkspaceEntry::CreateNew => String::new(),
-    }
-}
-
-fn home_relative_path(path: &Path) -> String {
-    home_dir().map_or_else(|| path.display().to_string(), |home| home_relative_path_with_home(path, &home))
-}
-
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from)
-}
-
-fn home_relative_path_with_home(path: &Path, home: &Path) -> String {
-    if path == home {
-        return "~".to_string();
-    }
-
-    path.strip_prefix(home)
-        .ok()
-        .filter(|relative| !relative.as_os_str().is_empty())
-        .map_or_else(|| path.display().to_string(), |relative| format!("~/{}", relative.display()))
-}
-
-fn validate_workspace_name(name: &str) -> Result<(), String> {
-    let valid = !name.trim().is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', '\0']);
-    if valid {
-        Ok(())
-    } else {
-        Err(format!("invalid workspace name `{name}`: must be non-empty with no path separators"))
     }
 }
 

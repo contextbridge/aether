@@ -1,6 +1,7 @@
 use acp_utils::notifications::{
-    AetherCapabilities, AuthMethodsUpdatedParams, McpRequest, PromptSearchParams, PromptSearchResponse,
-    SessionDisplayMeta, SessionPreviewParams, SessionPreviewResponse,
+    AetherCapabilities, AuthMethodsUpdatedParams, ForkOptionsParams, ForkOptionsResponse, ForkSessionParams,
+    ForkSessionResponse, McpRequest, PromptSearchParams, PromptSearchResponse, SessionDisplayMeta,
+    SessionPreviewParams, SessionPreviewResponse,
 };
 use acp_utils::server::AcpServerError;
 use aether_auth::OAuthCredentialStorage;
@@ -19,6 +20,7 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 use tracing::{error, info};
 
+use super::agent_runtime::RuntimeFactory;
 use super::config_setting::ConfigSetting;
 use super::model_config::supports_prompt_audio;
 use super::protocol::content::map_acp_to_content_blocks;
@@ -26,6 +28,8 @@ use super::protocol::replay::replay_to_client;
 use super::session_actor::{ConfigSnapshot, SessionCommand, SessionHandle};
 use super::session_factory::{InitialSessionSelection, SessionFactory};
 use super::session_store::SessionStore;
+use super::workspace as workspace_mod;
+use super::workspace::{WorkspaceError, WorkspaceManager};
 use crate::settings_args::SettingsSourceArgs;
 
 /// Global, connection-scoped ACP server state: the live session map plus the
@@ -37,6 +41,7 @@ pub(crate) struct AcpState {
     session_store: Arc<SessionStore>,
     oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
     factory: SessionFactory,
+    workspaces: WorkspaceManager,
 }
 
 pub(crate) struct AcpStateConfig {
@@ -45,6 +50,8 @@ pub(crate) struct AcpStateConfig {
     pub(crate) initial_selection: InitialSessionSelection,
     pub(crate) settings_source: SettingsSourceArgs,
     pub(crate) provider_connections: ProviderConnectionOverrides,
+    pub(crate) workspaces: WorkspaceManager,
+    pub(crate) runtime_factory_override: Option<Arc<dyn RuntimeFactory>>,
 }
 
 impl AcpState {
@@ -55,12 +62,14 @@ impl AcpState {
             Arc::clone(&config.oauth_credential_store),
             Arc::clone(&config.session_store),
             config.initial_selection,
+            config.runtime_factory_override,
         );
         Self {
             sessions: Mutex::new(HashMap::new()),
             session_store: config.session_store,
             oauth_credential_store: config.oauth_credential_store,
             factory,
+            workspaces: config.workspaces,
         }
     }
 
@@ -73,7 +82,7 @@ impl AcpState {
 
         let session_capabilities = acp::SessionCapabilities::new()
             .list(acp::SessionListCapabilities::new())
-            .meta(Some(AetherCapabilities::session_preview().to_meta()));
+            .meta(Some(AetherCapabilities::session_preview().with_workspace_fork().to_meta()));
 
         Ok(InitializeResponse::new(ProtocolVersion::V1)
             .agent_info(Implementation::new("Aether", "0.1.0"))
@@ -176,6 +185,59 @@ impl AcpState {
                 _ => acp::Error::internal_error(),
             }
         })
+    }
+
+    pub(crate) async fn fork_options(&self, params: &ForkOptionsParams) -> Result<ForkOptionsResponse, acp::Error> {
+        let meta =
+            self.session_store.meta(&params.session_id).ok_or_else(|| acp::Error::new(-32602, "session not found"))?;
+        let options = self.workspaces.fork_options(&meta.cwd).await.map_err(workspace_acp_error)?;
+        Ok(ForkOptionsResponse { session_id: params.session_id.clone(), options })
+    }
+
+    pub(crate) async fn fork_session(
+        &self,
+        params: ForkSessionParams,
+        cx: &ConnectionTo<Client>,
+    ) -> Result<ForkSessionResponse, acp::Error> {
+        // 1. Resolve meta (no effects).
+        let meta =
+            self.session_store.meta(&params.session_id).ok_or_else(|| acp::Error::new(-32602, "session not found"))?;
+
+        // 2. Turn guard: if live snapshot has turn_active, refuse.
+        if let Some((_, snapshot)) = self.lookup(&params.session_id).await
+            && snapshot.turn_active
+        {
+            return Err(acp::Error::new(-32602, "Cannot fork while a prompt is in flight."));
+        }
+
+        // 3. Workspace op first — failure leaves live session untouched.
+        let fork_cwd = self.workspaces.fork(&meta.cwd, &params.destination).await.map_err(workspace_acp_error)?;
+
+        // 4. Re-check turn_active (closes most of the check-then-act race).
+        if let Some((_, snapshot)) = self.lookup(&params.session_id).await
+            && snapshot.turn_active
+        {
+            return Err(acp::Error::new(-32602, "Cannot fork while a prompt is in flight."));
+        }
+
+        // 5. Point of no return: cancel existing session.
+        self.cancel_existing_session(&params.session_id).await;
+
+        // 6. Re-home the stored session meta.
+        if let Err(e) = self.session_store.update_meta_cwd(&params.session_id, &fork_cwd) {
+            error!("Failed to re-home session {} to {}: {e}", params.session_id, fork_cwd.display());
+            return Err(acp::Error::internal_error());
+        }
+
+        // 7. Load + register + replay.
+        let git_ref = workspace_mod::git::resolve_git_ref(&fork_cwd).await;
+        let load_req = LoadSessionRequest::new(SessionId::new(params.session_id.clone()), fork_cwd.clone());
+        let created = self.factory.load(load_req, cx).await?;
+        let config_options = created.config_options.clone();
+        self.register_session(&created.session_id, created.handle).await;
+        replay_to_client(&created.replay_events, cx, &created.session_id).await;
+
+        Ok(ForkSessionResponse { session_id: params.session_id, cwd: fork_cwd, git_ref, config_options })
     }
 
     /// Route a prompt to its session actor. Validates media support against the
@@ -288,6 +350,10 @@ impl AcpState {
         }
     }
 
+    /// This is for `create_session` which calls `register_session` (it calls
+    /// `cancel_and_join` internally), so we use the existing `register_session` path
+    /// instead. For `fork_session` and `load_session` we cancel explicitly so the
+    /// session store meta can be rewritten between cancel and re-register.
     async fn cancel_existing_session(&self, session_id: &str) {
         let displaced = self.sessions.lock().await.remove(session_id);
         if let Some(displaced) = displaced {
@@ -402,6 +468,22 @@ fn validate_prompt_support(model_value: &str, content: &[ContentBlock]) -> Resul
     Ok(())
 }
 
+/// Map user-addressable `WorkspaceError`s to `-32602` (invalid params) with
+/// the error message, other errors to `-32603` (internal error).
+#[allow(clippy::needless_pass_by_value)]
+fn workspace_acp_error(e: WorkspaceError) -> acp::Error {
+    let message = e.to_string();
+    match &e {
+        WorkspaceError::Clone(_) | WorkspaceError::Transfer(_) | WorkspaceError::InvalidName(_) => {
+            acp::Error::new(-32602, &message)
+        }
+        _ => {
+            error!("Workspace operation failed: {e}");
+            acp::Error::internal_error()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -424,6 +506,8 @@ mod tests {
             initial_selection: InitialSessionSelection::default(),
             settings_source: SettingsSourceArgs::default(),
             provider_connections: ProviderConnectionOverrides::default(),
+            workspaces: WorkspaceManager::new(),
+            runtime_factory_override: None,
         })
     }
 

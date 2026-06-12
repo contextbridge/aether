@@ -1,5 +1,7 @@
 use super::state::AcpState;
-use acp_utils::notifications::{McpRequest, PromptSearchParams, SessionPreviewParams};
+use acp_utils::notifications::{
+    ForkOptionsParams, ForkSessionParams, McpRequest, PromptSearchParams, SessionPreviewParams,
+};
 use agent_client_protocol::schema::{
     AuthenticateRequest, CancelNotification, InitializeRequest, ListSessionsRequest, LoadSessionRequest,
     NewSessionRequest, PromptRequest, SetSessionConfigOptionRequest,
@@ -109,6 +111,27 @@ pub(crate) fn acp_agent_builder(state: Arc<AcpState>) -> Builder<Agent, impl Han
                 async move |req: SessionPreviewParams, responder, cx| {
                     let state = state.clone();
                     spawn_response(&cx, responder, async move { state.session_preview(&req) })
+                }
+            },
+            acp::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let state = state.clone();
+                async move |req: ForkOptionsParams, responder, cx| {
+                    let state = state.clone();
+                    spawn_response(&cx, responder, async move { state.fork_options(&req).await })
+                }
+            },
+            acp::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let state = state.clone();
+                async move |req: ForkSessionParams, responder, cx| {
+                    let state = state.clone();
+                    let cx_for_call = cx.clone();
+                    spawn_response(&cx, responder, async move { state.fork_session(req, &cx_for_call).await })
                 }
             },
             acp::on_receive_request!(),

@@ -10,8 +10,8 @@ use crate::components::session_picker::{SessionEntry, SessionPicker, SessionPick
 use crate::components::tool_call_statuses::ToolCallStatuses;
 use crate::components::workspace_picker::{WorkspacePicker, WorkspacePickerMessage};
 use crate::keybindings::Keybindings;
-use crate::workspace::WorkspaceDestination;
 use acp_utils::CreateElicitationRequestParams;
+use acp_utils::notifications::WorkspaceDestination;
 use acp_utils::notifications::{ElicitationResponse, PromptSearchParams, PromptSearchResponse, SessionPreviewResponse};
 use agent_client_protocol::Responder;
 use agent_client_protocol::schema::{self as acp, SessionId};

@@ -87,6 +87,7 @@ pub(crate) struct ConfigSnapshot {
     pub selected_mode: Option<String>,
     pub effective_model: String,
     pub reasoning_effort: Option<ReasoningEffort>,
+    pub turn_active: bool,
 }
 
 impl ConfigSnapshot {
@@ -131,6 +132,7 @@ pub(crate) struct SessionActor {
     transcript: Vec<SessionEvent>,
     config: SessionConfigState,
     modes: Modes,
+    turn_active: bool,
 }
 
 /// List a runtime's MCP prompts as ACP available commands, de-duplicated by
@@ -154,6 +156,7 @@ impl SessionActor {
             transcript: init.transcript,
             config: init.config,
             modes: init.modes,
+            turn_active: false,
         };
 
         actor.ensure_active_running().await?;
@@ -221,6 +224,7 @@ impl SessionActor {
             selected_mode: self.config.selected_mode.clone(),
             effective_model: self.effective_model(),
             reasoning_effort: self.config.reasoning_effort,
+            turn_active: self.turn_active,
         }
     }
 
@@ -303,7 +307,11 @@ async fn on_session_command(
 ) {
     match cmd {
         SessionCommand::Prompt { content, responder } => {
+            actor.turn_active = true;
+            publish_snapshot(actor, io);
             let result = handle_prompt(actor, runtime_event_rx, cmd_rx, io, content).await;
+            actor.turn_active = false;
+            publish_snapshot(actor, io);
             respond_prompt(responder, result);
         }
         SessionCommand::Cancel => info!("Cancel received while idle, ignoring"),

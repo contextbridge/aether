@@ -15,12 +15,14 @@ pub(crate) mod slash_commands;
 pub(crate) mod state;
 pub(crate) mod stdio;
 pub mod testing;
+pub(crate) mod workspace;
 
 pub use protocol::map_mcp_prompt_to_available_command;
 
 use crate::acp::agent::acp_agent_builder;
 use crate::acp::state::{AcpState, AcpStateConfig};
 use crate::acp::stdio::Stdio;
+use crate::acp::workspace::WorkspaceManager;
 use crate::provider_connection_args::ProviderConnectionArgs;
 use crate::settings_args::SettingsSourceArgs;
 use agent_client_protocol as acp;
@@ -104,6 +106,8 @@ pub async fn run_acp(args: AcpArgs) -> Result<AcpRunOutcome, AcpRunError> {
         initial_selection,
         settings_source: args.settings_source,
         provider_connections,
+        workspaces: WorkspaceManager::new(),
+        runtime_factory_override: None,
     }));
 
     let connect_result = acp_agent_builder(state.clone()).connect_to(Stdio::new()).await;
