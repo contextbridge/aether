@@ -69,6 +69,7 @@ dependencies = [
  "crossterm",
  "dirs",
  "futures",
+ "libc",
  "rmcp",
  "serde",
  "serde_json",

@@ -1,7 +1,7 @@
 use mcp_servers::coding::CodingMcp;
 use mcp_utils::testing::connect;
 use rmcp::model::{CallToolRequestParams, ClientCapabilities, ClientInfo, Implementation};
-use std::fs;
+use std::fs::{self, canonicalize};
 
 #[tokio::test]
 async fn test_read_file_tool() {
@@ -337,4 +337,138 @@ async fn test_list_files_tool() {
 
     // Clean up
     let _ = fs::remove_dir_all(test_dir);
+}
+
+#[tokio::test]
+async fn test_list_files_uses_workspace_root_when_no_path_given() -> Result<(), Box<dyn std::error::Error>> {
+    let temp = tempfile::tempdir()?;
+    let workspace = temp.path().to_path_buf();
+
+    fs::write(temp.path().join("alpha.txt"), "a")?;
+    fs::write(temp.path().join("beta.rs"), "b")?;
+
+    let server_service = CodingMcp::new().with_root_dir(workspace.clone());
+    let client_info = ClientInfo::new(ClientCapabilities::default(), Implementation::new("test-client", "0.1.0"));
+    let (_server_handle, client) = connect(server_service, client_info).await?;
+    let result = client
+        .call_tool(
+            CallToolRequestParams::new("list_files").with_arguments(serde_json::json!({}).as_object().unwrap().clone()),
+        )
+        .await?;
+
+    let text_content = result.content.first().and_then(|c| c.as_text()).ok_or("Expected text content")?;
+    let parsed: serde_json::Value = serde_json::from_str(&text_content.text)?;
+    let files = parsed["files"].as_array().ok_or("Files should be an array")?;
+    let file_names: Vec<String> = files.iter().map(|f| f["name"].as_str().unwrap().to_string()).collect();
+
+    assert!(file_names.contains(&"alpha.txt".to_string()));
+    assert!(file_names.contains(&"beta.rs".to_string()));
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_bash_pwd_uses_workspace_root() -> Result<(), Box<dyn std::error::Error>> {
+    let temp = tempfile::tempdir()?;
+    let workspace = temp.path().to_path_buf();
+    let server_service = CodingMcp::new().with_root_dir(workspace.clone());
+    let client_info = ClientInfo::new(ClientCapabilities::default(), Implementation::new("test-client", "0.1.0"));
+    let (_server_handle, client) = connect(server_service, client_info).await?;
+    let result = client
+        .call_tool(
+            CallToolRequestParams::new("bash").with_arguments(
+                serde_json::json!({
+                    "command": "pwd"
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        )
+        .await?;
+
+    let text_content = result.content.first().and_then(|c| c.as_text()).ok_or("Expected text content")?;
+    let parsed: serde_json::Value = serde_json::from_str(&text_content.text)?;
+    let pwd = parsed["output"].as_str().ok_or("Expected output string")?.trim();
+    assert_eq!(canonicalize(pwd)?, canonicalize(&workspace)?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_grep_and_find_use_workspace_root_when_no_path_given() -> Result<(), Box<dyn std::error::Error>> {
+    let temp = tempfile::tempdir()?;
+    let workspace = temp.path().to_path_buf();
+    fs::write(temp.path().join("root_only.txt"), "needle\n")?;
+    fs::write(temp.path().join("other.rs"), "fn main() {}\n")?;
+
+    let server_service = CodingMcp::new().with_root_dir(workspace.clone());
+    let client_info = ClientInfo::new(ClientCapabilities::default(), Implementation::new("test-client", "0.1.0"));
+    let (_server_handle, client) = connect(server_service, client_info).await?;
+    let grep_result = client
+        .call_tool(
+            CallToolRequestParams::new("grep").with_arguments(
+                serde_json::json!({
+                    "pattern": "needle"
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        )
+        .await?;
+
+    let text_content = grep_result.content.first().and_then(|c| c.as_text()).ok_or("Expected text content")?;
+    let parsed: serde_json::Value = serde_json::from_str(&text_content.text)?;
+    let matches = parsed["matches"].as_array().ok_or("matches should be an array")?;
+    assert!(matches.iter().any(|m| m["file"].as_str().unwrap().ends_with("root_only.txt")));
+
+    let find_result = client
+        .call_tool(
+            CallToolRequestParams::new("find").with_arguments(
+                serde_json::json!({
+                    "pattern": "*.rs"
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        )
+        .await?;
+
+    let text_content = find_result.content.first().and_then(|c| c.as_text()).ok_or("Expected text content")?;
+    let parsed: serde_json::Value = serde_json::from_str(&text_content.text)?;
+    assert_eq!(parsed["searchPath"].as_str().unwrap(), workspace.to_str().unwrap());
+    let matches = parsed["matches"].as_array().ok_or("matches should be an array")?;
+
+    assert!(matches.iter().any(|m| m.as_str().unwrap().ends_with("other.rs")));
+    Ok(())
+}
+
+#[cfg(feature = "test-helpers")]
+#[tokio::test]
+async fn test_read_before_edit_safety_with_relative_path_normalization() {
+    use mcp_servers::coding::tools::edit_file::EditFileArgs;
+    use mcp_servers::coding::tools::read_file::ReadFileArgs;
+
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = temp.path().to_path_buf();
+    let test_file = temp.path().join("test.txt");
+    fs::write(&test_file, "hello world").unwrap();
+
+    let server = CodingMcp::new().with_root_dir(workspace);
+
+    server
+        .test_read_file(ReadFileArgs { file_path: "test.txt".to_string(), offset: None, limit: None })
+        .await
+        .expect("read_file should succeed with relative path");
+
+    let result = server
+        .test_edit_file(EditFileArgs {
+            file_path: "test.txt".to_string(),
+            old_string: "hello".to_string(),
+            new_string: "goodbye".to_string(),
+            replace_all: false,
+        })
+        .await;
+
+    assert!(result.is_ok());
 }

@@ -1,5 +1,7 @@
 use super::state::AcpState;
-use acp_utils::notifications::{McpRequest, PromptSearchParams, SessionPreviewParams};
+use acp_utils::notifications::{
+    McpRequest, PromptSearchParams, SessionPreviewParams, WorkspaceListParams, WorkspaceMoveParams,
+};
 use agent_client_protocol::schema::{
     AuthenticateRequest, CancelNotification, InitializeRequest, ListSessionsRequest, LoadSessionRequest,
     NewSessionRequest, PromptRequest, SetSessionConfigOptionRequest,
@@ -109,6 +111,26 @@ pub(crate) fn acp_agent_builder(state: Arc<AcpState>) -> Builder<Agent, impl Han
                 async move |req: SessionPreviewParams, responder, cx| {
                     let state = state.clone();
                     spawn_response(&cx, responder, async move { state.session_preview(&req) })
+                }
+            },
+            acp::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let state = state.clone();
+                async move |req: WorkspaceListParams, responder, cx| {
+                    let state = state.clone();
+                    spawn_response(&cx, responder, async move { state.workspace_list(&req).await })
+                }
+            },
+            acp::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let state = state.clone();
+                async move |req: WorkspaceMoveParams, responder, cx| {
+                    let state = state.clone();
+                    spawn_response(&cx, responder, async move { state.workspace_move(&req).await })
                 }
             },
             acp::on_receive_request!(),

@@ -30,7 +30,7 @@ pub struct RuntimeState {
 impl RuntimeState {
     pub async fn new(agent_command: &str, settings: WispSettings) -> Result<Self, AppError> {
         let cwd = current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let workspace_status = WorkspaceStatus::resolve(&cwd).await;
+        let workspace_status = WorkspaceStatus::resolve(&cwd);
         let new_session_request = NewSessionRequest::new(cwd.clone());
         let init_request = InitializeRequest::new(ProtocolVersion::LATEST)
             .client_info(Implementation::new("wisp", env!("CARGO_PKG_VERSION")));

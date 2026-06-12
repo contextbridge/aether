@@ -15,5 +15,6 @@ pub mod sandbox;
 pub mod settings;
 pub mod settings_args;
 pub mod show_prompt;
+pub mod workspace;
 
 pub use acp::map_mcp_prompt_to_available_command;

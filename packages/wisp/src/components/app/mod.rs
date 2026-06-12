@@ -31,7 +31,7 @@ use acp_utils::notifications::{
 use agent_client_protocol::Responder;
 use agent_client_protocol::schema::{self as acp, SessionId};
 use attachments::build_attachment_blocks;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tui::RendererCommand;
 use tui::{Component, Event, Frame, KeyEvent, ViewContext};
@@ -113,8 +113,7 @@ impl App {
         let keybindings = Keybindings::default();
         let content_padding = resolve_content_padding(&settings);
         let status_line_settings = resolve_status_line_settings(&settings);
-        let prompt_search_enabled = AetherCapabilities::from_meta(prompt_capabilities.meta.as_ref()).prompt_search;
-        let session_preview_enabled = AetherCapabilities::from_meta(session_capabilities.meta.as_ref()).session_preview;
+        let capabilities = AetherCapabilities::from_meta(session_capabilities.meta.as_ref());
         Self {
             agent_name,
             context_usage: None,
@@ -123,8 +122,8 @@ impl App {
             conversation_screen: ConversationScreen::new(
                 keybindings.clone(),
                 content_padding,
-                prompt_search_enabled,
-                session_preview_enabled,
+                working_dir.clone(),
+                capabilities,
             ),
             prompt_capabilities,
             config_options,
@@ -208,6 +207,7 @@ impl App {
             AcpEvent::SessionLoaded { session_id, config_options } => {
                 let replay_updates = self.session_loading_buffer.take(&session_id);
                 self.session_id = session_id;
+                self.conversation_screen.on_workspace_move_finished();
                 for update in replay_updates {
                     self.on_session_update(&update);
                 }
@@ -237,8 +237,46 @@ impl App {
             AcpEvent::SessionPreviewFailed { session_id, error } => {
                 self.conversation_screen.on_session_preview_failed(&session_id, error);
             }
+            AcpEvent::WorkspacesListed(response) => {
+                self.conversation_screen.open_workspace_picker(response.workspaces);
+            }
+            AcpEvent::WorkspaceListFailed { error } => {
+                self.conversation_screen.on_workspace_list_failed(&error);
+            }
+            AcpEvent::WorkspaceMoved(response) => {
+                self.on_workspace_moved(&response.new_cwd, &mut commands);
+            }
+            AcpEvent::WorkspaceMoveFailed { error } => {
+                self.conversation_screen.on_workspace_move_failed(&error);
+            }
         }
         EventOutcome::Render { commands }
+    }
+
+    fn on_workspace_moved(&mut self, new_cwd: &Path, commands: &mut Vec<RendererCommand>) {
+        self.working_dir = new_cwd.to_path_buf();
+        self.conversation_screen.set_working_dir(new_cwd.to_path_buf());
+        self.workspace_status = WorkspaceStatus::resolve(new_cwd);
+        self.screen_router.set_git_diff_working_dir(new_cwd.to_path_buf());
+
+        self.conversation_screen.reset_after_context_cleared();
+        commands.push(RendererCommand::ClearScreen);
+        let session_id = self.session_id.clone();
+        if self.start_session_load(&session_id, new_cwd) {
+            self.conversation_screen.on_workspace_session_loading();
+        } else {
+            self.conversation_screen.on_workspace_move_finished();
+        }
+    }
+
+    fn start_session_load(&mut self, session_id: &SessionId, cwd: &Path) -> bool {
+        self.session_loading_buffer.begin_load(session_id.clone());
+        if let Err(e) = self.prompt_handle.load_session(session_id, cwd) {
+            self.session_loading_buffer.remove(session_id);
+            tracing::warn!("Failed to load session: {e}");
+            return false;
+        }
+        true
     }
 
     async fn handle_key(&mut self, commands: &mut Vec<RendererCommand>, key_event: KeyEvent) {
@@ -324,12 +362,21 @@ impl App {
                 ConversationScreenMessage::OpenSessionPicker => {
                     let _ = self.prompt_handle.list_sessions();
                 }
-                ConversationScreenMessage::LoadSession { session_id, cwd } => {
-                    self.session_loading_buffer.begin_load(session_id.clone());
-                    if let Err(e) = self.prompt_handle.load_session(&session_id, &cwd) {
-                        self.session_loading_buffer.remove(&session_id);
-                        tracing::warn!("Failed to load session: {e}");
+                ConversationScreenMessage::OpenWorkspacePicker => {
+                    if let Err(e) = self.prompt_handle.list_workspaces(&self.session_id) {
+                        self.conversation_screen.on_workspace_list_failed(&e.to_string());
+                        tracing::warn!("Failed to request workspace list: {e}");
                     }
+                }
+                ConversationScreenMessage::MoveWorkspace { target } => {
+                    self.conversation_screen.on_workspace_move_started();
+                    if let Err(e) = self.prompt_handle.move_workspace(&self.session_id, target) {
+                        self.conversation_screen.on_workspace_move_failed(&e.to_string());
+                        tracing::warn!("Failed to request workspace move: {e}");
+                    }
+                }
+                ConversationScreenMessage::LoadSession { session_id, cwd } => {
+                    self.start_session_load(&session_id, &cwd);
                 }
                 ConversationScreenMessage::SearchPrompts(params) => {
                     if let Err(e) = self.prompt_handle.search_prompts(params) {
@@ -758,8 +805,9 @@ pub(crate) mod test_helpers {
             session_id: SessionId::new(session_id),
             agent_name: "test-agent".to_string(),
             prompt_capabilities,
-            session_capabilities: acp::SessionCapabilities::new()
-                .meta(Some(AetherCapabilities::session_preview().to_meta())),
+            session_capabilities: acp::SessionCapabilities::new().meta(Some(
+                AetherCapabilities { prompt_search: true, session_preview: true, workspace_move: true }.to_meta(),
+            )),
             config_options: config_options.to_vec(),
             auth_methods,
             working_dir: PathBuf::from("."),
@@ -778,6 +826,7 @@ mod tests {
     use crate::components::conversation_screen::Modal;
     use crate::components::conversation_window::SegmentContent;
     use crate::components::elicitation_form::ElicitationForm;
+    use crate::components::progress_indicator::WorkspaceProgress;
     use crate::settings::{DEFAULT_CONTENT_PADDING, save_settings};
     use crate::settings::{ThemeSettings, WispSettings};
     use crate::test_helpers::{elicitation_params, modified_key, url_elicitation_params, with_wisp_home};
@@ -1365,7 +1414,7 @@ mod tests {
         let mut app = make_app();
         let tool_call = acp::ToolCall::new("tool-1".to_string(), "test_tool");
         app.conversation_screen.tool_call_statuses.on_tool_call(&tool_call);
-        app.conversation_screen.progress_indicator.update(0, 1, true);
+        app.conversation_screen.progress_indicator.update(0, 1, true, WorkspaceProgress::default());
 
         let ctx = ViewContext::new((80, 24));
         let tool_before = app.conversation_screen.tool_call_statuses.render_tool("tool-1", &ctx);

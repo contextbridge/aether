@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
 
 use super::error::AcpClientError;
-use crate::notifications::{PromptSearchParams, SessionPreviewParams};
+use crate::notifications::{
+    PromptSearchParams, SessionPreviewParams, WorkspaceListParams, WorkspaceMoveParams, WorkspaceMoveTarget,
+};
 
 /// Commands sent from the main thread to the ACP client task.
 #[derive(Debug)]
@@ -18,6 +20,8 @@ pub enum PromptCommand {
     NewSession { cwd: std::path::PathBuf },
     SearchPrompts(PromptSearchParams),
     SessionPreview(SessionPreviewParams),
+    ListWorkspaces(WorkspaceListParams),
+    MoveWorkspace(WorkspaceMoveParams),
 }
 
 /// Send-safe handle for issuing prompt commands to the ACP client task.
@@ -97,6 +101,14 @@ impl AcpPromptHandle {
 
     pub fn session_preview(&self, session_id: &SessionId) -> Result<(), AcpClientError> {
         self.send(PromptCommand::SessionPreview(SessionPreviewParams { session_id: session_id.0.to_string() }))
+    }
+
+    pub fn list_workspaces(&self, session_id: &SessionId) -> Result<(), AcpClientError> {
+        self.send(PromptCommand::ListWorkspaces(WorkspaceListParams { session_id: session_id.0.to_string() }))
+    }
+
+    pub fn move_workspace(&self, session_id: &SessionId, target: WorkspaceMoveTarget) -> Result<(), AcpClientError> {
+        self.send(PromptCommand::MoveWorkspace(WorkspaceMoveParams { session_id: session_id.0.to_string(), target }))
     }
 
     fn send(&self, cmd: PromptCommand) -> Result<(), AcpClientError> {
@@ -215,6 +227,35 @@ mod tests {
                 assert_eq!(cwd, std::path::PathBuf::from("/tmp/project"));
             }
             _ => panic!("Expected LoadSession command"),
+        }
+    }
+
+    #[test]
+    fn test_list_workspaces_sends_command() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let handle = AcpPromptHandle { cmd_tx: tx };
+        handle.list_workspaces(&SessionId::new("sess-1")).unwrap();
+
+        let cmd = rx.try_recv().unwrap();
+        match cmd {
+            PromptCommand::ListWorkspaces(params) => assert_eq!(params.session_id, "sess-1"),
+            _ => panic!("Expected ListWorkspaces command"),
+        }
+    }
+
+    #[test]
+    fn test_move_workspace_sends_command() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let handle = AcpPromptHandle { cmd_tx: tx };
+        handle.move_workspace(&SessionId::new("sess-1"), WorkspaceMoveTarget::New { name: "ws".into() }).unwrap();
+
+        let cmd = rx.try_recv().unwrap();
+        match cmd {
+            PromptCommand::MoveWorkspace(params) => {
+                assert_eq!(params.session_id, "sess-1");
+                assert_eq!(params.target, WorkspaceMoveTarget::New { name: "ws".into() });
+            }
+            _ => panic!("Expected MoveWorkspace command"),
         }
     }
 

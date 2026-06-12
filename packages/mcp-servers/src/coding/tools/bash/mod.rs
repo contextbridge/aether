@@ -1,5 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
@@ -133,9 +134,13 @@ async fn run_command_with_timeout(
     command: String,
     timeout: Option<Duration>,
     output_tx: mpsc::UnboundedSender<String>,
+    cwd: Option<&std::path::Path>,
 ) -> (i32, bool) {
     let mut cmd = Command::new("bash");
     cmd.arg("-c").arg(&command);
+    if let Some(dir) = cwd {
+        cmd.current_dir(dir);
+    }
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
 
@@ -185,6 +190,10 @@ async fn run_command_with_timeout(
 }
 
 pub async fn execute_command(args: BashInput) -> Result<BashResult, BashError> {
+    execute_command_in_dir(args, None).await
+}
+
+pub async fn execute_command_in_dir(args: BashInput, cwd: Option<&std::path::Path>) -> Result<BashResult, BashError> {
     if args.command.trim() == "rm" {
         return Err(BashError::Forbidden("No you can't fucking delete files".to_string()));
     }
@@ -202,11 +211,13 @@ pub async fn execute_command(args: BashInput) -> Result<BashResult, BashError> {
     if run_in_background {
         let shell_id = Uuid::new_v4().to_string();
         let command = args.command.clone();
+        let cwd = cwd.map(Path::to_path_buf);
 
         let (output_tx, output_rx) = mpsc::unbounded_channel();
 
-        let task_handle =
-            tokio::spawn(async move { run_command_with_timeout(command, timeout_duration, output_tx).await });
+        let task_handle = tokio::spawn(async move {
+            run_command_with_timeout(command, timeout_duration, output_tx, cwd.as_deref()).await
+        });
 
         Ok(BashResult::Background(BackgroundProcessHandle { shell_id, output_rx, task_handle }))
     } else {
@@ -217,6 +228,9 @@ pub async fn execute_command(args: BashInput) -> Result<BashResult, BashError> {
         // Collect output in-memory for synchronous case
         let mut cmd = Command::new("bash");
         cmd.arg("-c").arg(&command);
+        if let Some(dir) = cwd {
+            cmd.current_dir(dir);
+        }
 
         let result = if let Some(timeout_duration) = timeout {
             tokio::time::timeout(timeout_duration, cmd.output()).await

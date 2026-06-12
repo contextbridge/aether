@@ -2,9 +2,10 @@ use super::error::CodingError;
 use super::{
     BackgroundProcessHandle, BashInput, BashResult, EditFileArgs, EditFileResponse, FindInput, FindOutput, GrepInput,
     GrepOutput, ListFilesArgs, ListFilesResult, ReadBackgroundBashOutput, ReadFileArgs, ReadFileResult, WriteFileArgs,
-    WriteFileResponse, edit_file_contents, execute_command, find_files_by_name, list_files, perform_grep,
+    WriteFileResponse, edit_file_contents, execute_command_in_dir, find_files_by_name, list_files, perform_grep,
     read_background_bash, read_file_contents, tools_trait::CodingTools, write_file_contents,
 };
+use std::path::PathBuf;
 
 /// Default implementation that uses local filesystem operations.
 ///
@@ -37,8 +38,8 @@ impl CodingTools for DefaultCodingTools {
         list_files(args).await.map_err(CodingError::from)
     }
 
-    async fn bash(&self, args: BashInput) -> Result<BashResult, CodingError> {
-        execute_command(args).await.map_err(CodingError::from)
+    async fn bash(&self, args: BashInput, cwd: Option<PathBuf>) -> Result<BashResult, CodingError> {
+        execute_command_in_dir(args, cwd.as_deref()).await.map_err(CodingError::from)
     }
 
     async fn read_background_bash(

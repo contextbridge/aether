@@ -25,7 +25,7 @@ pub use mcp_client::{McpClient, cancel_result};
 pub use naming::{SERVERNAME_DELIMITER, split_on_server_name};
 pub use oauth_handler::{AETHER_OAUTH_ELICITATION_ID, ElicitingOAuthHandler};
 pub use rmcp::model::Root;
-pub use roots::root_from_path;
+pub use roots::{path_to_file_uri, root_from_path, root_to_path};
 
 use std::path::PathBuf;
 

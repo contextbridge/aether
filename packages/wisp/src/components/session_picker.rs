@@ -1,11 +1,12 @@
+use crate::components::common::input_box_frame;
 use acp_utils::notifications::{SessionDisplayMeta, SessionPreviewResponse, SessionPreviewRole};
 use agent_client_protocol::schema as acp;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tui::{
-    BorderedTextField, Combobox, Component, Cursor, Event, Frame, FramePart, Line, MouseEventKind, PickerMessage,
-    Searchable, Style, ViewContext, display_width_text, pad_text_to_width, truncate_text,
+    Combobox, Component, Event, Frame, FramePart, Line, MouseEventKind, PickerMessage, Searchable, Style, ViewContext,
+    display_width_text, pad_text_to_width, truncate_text,
 };
 
 #[derive(Clone)]
@@ -119,7 +120,7 @@ impl Component for SessionPicker {
             return Frame::new(vec![Line::new(String::new()), Line::new("  No previous sessions found.")]);
         }
 
-        let search = search_box_frame(self.combobox.query(), context);
+        let search = input_box_frame(SEARCH_LABEL, self.combobox.query(), SEARCH_PLACEHOLDER, context);
         let now = Utc::now();
         let body_height = context.size.height.saturating_sub(u16::try_from(search.lines().len()).unwrap_or(0));
         let body_context = context.with_height(body_height);
@@ -142,8 +143,6 @@ impl Component for SessionPicker {
     }
 }
 
-const SEARCH_BOX_MAX_WIDTH: usize = 56;
-const SEARCH_BOX_INDENT: u16 = 2;
 const SEARCH_LABEL: &str = "🔍 Search";
 const SEARCH_PLACEHOLDER: &str = "type to search title or path";
 const WIDE_PREVIEW_THRESHOLD: u16 = 96;
@@ -218,19 +217,6 @@ impl SessionPicker {
         }
         Frame::new(lines)
     }
-}
-
-fn search_box_frame(query: &str, context: &ViewContext) -> Frame {
-    let width = (context.size.width as usize).saturating_sub(usize::from(SEARCH_BOX_INDENT)).min(SEARCH_BOX_MAX_WIDTH);
-    let input_width = width.saturating_sub(4);
-    let visible_query = truncate_text(query, input_width);
-
-    let mut field = BorderedTextField::new(SEARCH_LABEL, query.to_string()).placeholder(SEARCH_PLACEHOLDER);
-    field.set_width(width);
-
-    Frame::new(field.render_field(context, false))
-        .with_cursor(Cursor::visible(1, 2 + display_width_text(&visible_query)))
-        .indent(SEARCH_BOX_INDENT)
 }
 
 fn push_preview_lines(

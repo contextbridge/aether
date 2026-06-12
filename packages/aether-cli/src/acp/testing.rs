@@ -11,6 +11,8 @@ use super::state::{AcpState, AcpStateConfig};
 use crate::acp::session_store::{SessionMeta, SessionStore};
 use crate::error::CliError;
 use crate::settings_args::SettingsSourceArgs;
+use crate::workspace::WorkspaceManager;
+use crate::workspace::testing::StdCopyCloner;
 use acp_utils::notifications::McpNotification;
 use acp_utils::testing::{TestPeer, duplex_pair};
 use aether_auth::OAuthCredentialStorage;
@@ -65,8 +67,13 @@ impl AcpTestHarness {
     pub async fn start() -> Self {
         let tmp = tempfile::tempdir().expect("tempdir for session store");
         let session_store = Arc::new(SessionStore::from_path(tmp.path().to_path_buf()));
+        let workspace_manager = Arc::new(WorkspaceManager::from_registry_path_with_cloner(
+            tmp.path().join("workspaces.json"),
+            Arc::new(StdCopyCloner),
+        ));
         let state = Arc::new(AcpState::new(AcpStateConfig {
             session_store: session_store.clone(),
+            workspace_manager,
             oauth_credential_store: fake_oauth_store(),
             initial_selection: InitialSessionSelection::default(),
             settings_source: SettingsSourceArgs::default(),
@@ -196,9 +203,13 @@ impl AcpTestHarness {
     }
 
     pub fn append_stored_session(&self, session_id: &str, created_at: &str) {
+        self.append_stored_session_in(session_id, created_at, std::path::Path::new("/tmp"));
+    }
+
+    pub fn append_stored_session_in(&self, session_id: &str, created_at: &str, cwd: &std::path::Path) {
         let meta = SessionMeta {
             session_id: session_id.to_string(),
-            cwd: PathBuf::from("/tmp"),
+            cwd: cwd.to_path_buf(),
             model: "test-model".to_string(),
             selected_mode: None,
             created_at: created_at.to_string(),

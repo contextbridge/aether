@@ -35,21 +35,27 @@ pub mod tools_trait;
 pub use default_tools::DefaultCodingTools;
 pub use tools_trait::CodingTools;
 
-use crate::lsp::tools::check_errors::{
-    LspDiagnosticsInput, LspDiagnosticsOutput, LspDiagnosticsRequest, execute_lsp_diagnostics,
-};
-use crate::lsp::tools::document_info::{LspDocumentInput, LspDocumentOutput, execute_lsp_document};
 use crate::lsp::tools::rename::{LspRenameInput, LspRenameOutput, execute_lsp_rename};
 use crate::lsp::tools::symbol_lookup::{LspSymbolInput, LspSymbolOutput, execute_lsp_symbol};
 use crate::lsp::tools::workspace_search::{
     LspWorkspaceSearchInput, LspWorkspaceSearchOutput, execute_lsp_workspace_search,
 };
 use crate::{coding::prompt_rule_matcher::PromptRuleMatcher, lsp::registry::LspRegistry};
+use crate::{
+    lsp::tools::check_errors::{
+        LspDiagnosticsInput, LspDiagnosticsOutput, LspDiagnosticsRequest, execute_lsp_diagnostics,
+    },
+    workspace_paths::primary_root,
+};
+use crate::{
+    lsp::tools::document_info::{LspDocumentInput, LspDocumentOutput, execute_lsp_document},
+    workspace_paths::{resolve_dir, resolve_file},
+};
 
 use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename, truncate};
 use tools::bash::{
     BackgroundProcessHandle, BashInput, BashOutput, BashResult, ReadBackgroundBashInput, ReadBackgroundBashOutput,
-    execute_command, read_background_bash,
+    execute_command_in_dir, read_background_bash,
 };
 use tools::edit_file::{EditFileArgs, EditFileResponse, edit_file_contents};
 use tools::find::{FindInput, FindOutput, find_files_by_name};
@@ -297,6 +303,11 @@ impl<T: CodingTools + 'static> CodingMcp<T> {
         self.roots.try_read().ok().and_then(|roots| roots.first().cloned())
     }
 
+    async fn primary_workspace_root(&self) -> PathBuf {
+        let roots = self.roots.read().await;
+        primary_root(&roots)
+    }
+
     fn build_instructions(&self) -> String {
         let mut base = String::from(
             r"# Coding MCP Server
@@ -414,39 +425,16 @@ When using tools that take file paths, always use absolute paths from:
         }
     }
 
-    #[doc = include_str!("tools/grep/description.md")]
-    #[tool]
-    pub async fn grep(
-        &self,
-        request: Parameters<GrepInput>,
-        context: RequestContext<RoleServer>,
-    ) -> Result<Json<GrepOutput>, String> {
-        let Parameters(args) = request;
-        notify_preview(&context, ToolDisplayMeta::new("Grep", format!("'{}'", args.pattern))).await;
-        self.tools.grep(args).await.into_mcp()
+    /// Resolves a required file-path argument against the primary workspace root,
+    /// returning the normalized absolute path as a string.
+    async fn resolve_file_arg(&self, raw: &str) -> Result<String, String> {
+        let root = self.primary_workspace_root().await;
+        Ok(resolve_file(&root, raw)?.to_string_lossy().to_string())
     }
 
-    #[doc = include_str!("tools/find/description.md")]
-    #[tool]
-    pub async fn find(
-        &self,
-        request: Parameters<FindInput>,
-        context: RequestContext<RoleServer>,
-    ) -> Result<Json<FindOutput>, String> {
-        let Parameters(args) = request;
-        notify_preview(&context, ToolDisplayMeta::new("Find", format!("'{}'", args.pattern))).await;
-        self.tools.find(args).await.into_mcp()
-    }
-
-    #[doc = include_str!("tools/read_file/description.md")]
-    #[tool]
-    pub async fn read_file(
-        &self,
-        request: Parameters<ReadFileArgs>,
-        context: RequestContext<RoleServer>,
-    ) -> Result<Json<ReadFileResult>, String> {
-        let Parameters(args) = request;
-        notify_preview(&context, ToolDisplayMeta::new("Read file", basename(&args.file_path))).await;
+    /// Reads `args.file_path` (already resolved against the workspace root),
+    /// records it in the read set, and appends any matching read-rule reminders.
+    async fn read_and_track(&self, args: ReadFileArgs) -> Result<Json<ReadFileResult>, String> {
         let file_path = args.file_path.clone();
         let mut result = self.tools.read_file(args).await.map_err(|e| e.to_string())?;
         self.files_read.write().await.insert(file_path.clone());
@@ -468,6 +456,72 @@ When using tools that take file paths, always use absolute paths from:
         Ok(Json(result))
     }
 
+    /// Read-before-overwrite safety check: an existing file must have been read
+    /// first, preventing accidental data loss.
+    async fn ensure_read_before_overwrite(&self, file_path: &str) -> Result<(), String> {
+        if try_exists(file_path).await.map_err(|e| format!("Failed to check existence of {file_path}: {e}"))?
+            && !self.files_read.read().await.contains(file_path)
+        {
+            return Err(format!(
+                "Safety check failed: File '{file_path}' already exists. You must use read_file on it before overwriting. This prevents accidental data loss."
+            ));
+        }
+        Ok(())
+    }
+
+    /// Read-before-edit safety check: a file must have been read before editing.
+    async fn ensure_read_before_edit(&self, file_path: &str) -> Result<(), String> {
+        if !self.files_read.read().await.contains(file_path) {
+            return Err(format!(
+                "Safety check failed: You must use read_file on '{file_path}' before editing it. This ensures you understand the current file contents before making changes."
+            ));
+        }
+        Ok(())
+    }
+
+    #[doc = include_str!("tools/grep/description.md")]
+    #[tool]
+    pub async fn grep(
+        &self,
+        request: Parameters<GrepInput>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<Json<GrepOutput>, String> {
+        let Parameters(mut args) = request;
+        let root = self.primary_workspace_root().await;
+        let normalized_path = resolve_dir(&root, args.path.as_deref());
+        args.path = Some(normalized_path.to_string_lossy().to_string());
+        notify_preview(&context, ToolDisplayMeta::new("Grep", format!("'{}'", args.pattern))).await;
+        self.tools.grep(args).await.into_mcp()
+    }
+
+    #[doc = include_str!("tools/find/description.md")]
+    #[tool]
+    pub async fn find(
+        &self,
+        request: Parameters<FindInput>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<Json<FindOutput>, String> {
+        let Parameters(mut args) = request;
+        let root = self.primary_workspace_root().await;
+        let normalized_path = resolve_dir(&root, args.path.as_deref());
+        args.path = Some(normalized_path.to_string_lossy().to_string());
+        notify_preview(&context, ToolDisplayMeta::new("Find", format!("'{}'", args.pattern))).await;
+        self.tools.find(args).await.into_mcp()
+    }
+
+    #[doc = include_str!("tools/read_file/description.md")]
+    #[tool]
+    pub async fn read_file(
+        &self,
+        request: Parameters<ReadFileArgs>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<Json<ReadFileResult>, String> {
+        let Parameters(mut args) = request;
+        args.file_path = self.resolve_file_arg(&args.file_path).await?;
+        notify_preview(&context, ToolDisplayMeta::new("Read file", basename(&args.file_path))).await;
+        self.read_and_track(args).await
+    }
+
     #[doc = include_str!("tools/write_file/description.md")]
     #[tool]
     pub async fn write_file(
@@ -475,24 +529,12 @@ When using tools that take file paths, always use absolute paths from:
         request: Parameters<WriteFileArgs>,
         context: RequestContext<RoleServer>,
     ) -> Result<Json<WriteFileResponse>, String> {
-        let Parameters(args) = request;
+        let Parameters(mut args) = request;
+        args.file_path = self.resolve_file_arg(&args.file_path).await?;
         notify_preview(&context, ToolDisplayMeta::new("Write file", basename(&args.file_path))).await;
 
         self.check_write_permission(&context, "write_file", &args.file_path).await?;
-
-        // Safety check: if file exists, ensure it has been read first
-        if try_exists(&args.file_path)
-            .await
-            .map_err(|e| format!("Failed to check existence of {}: {e}", args.file_path))?
-        {
-            let files_read = self.files_read.read().await;
-            if !files_read.contains(&args.file_path) {
-                return Err(format!(
-                    "Safety check failed: File '{}' already exists. You must use read_file on it before overwriting. This prevents accidental data loss.",
-                    args.file_path
-                ));
-            }
-        }
+        self.ensure_read_before_overwrite(&args.file_path).await?;
 
         let response = self.tools.write_file(args).await.map_err(|e| e.to_string())?;
 
@@ -508,21 +550,12 @@ When using tools that take file paths, always use absolute paths from:
         request: Parameters<EditFileArgs>,
         context: RequestContext<RoleServer>,
     ) -> Result<Json<EditFileResponse>, String> {
-        let Parameters(args) = request;
+        let Parameters(mut args) = request;
+        args.file_path = self.resolve_file_arg(&args.file_path).await?;
         notify_preview(&context, ToolDisplayMeta::new("Edit file", basename(&args.file_path))).await;
 
         self.check_write_permission(&context, "edit_file", &args.file_path).await?;
-
-        // Safety check: ensure file has been read first
-        {
-            let files_read = self.files_read.read().await;
-            if !files_read.contains(&args.file_path) {
-                return Err(format!(
-                    "Safety check failed: You must use read_file on '{}' before editing it. This ensures you understand the current file contents before making changes.",
-                    args.file_path
-                ));
-            }
-        }
+        self.ensure_read_before_edit(&args.file_path).await?;
 
         let response = self.tools.edit_file(args).await.map_err(|e| e.to_string())?;
 
@@ -538,8 +571,11 @@ When using tools that take file paths, always use absolute paths from:
         request: Parameters<ListFilesArgs>,
         context: RequestContext<RoleServer>,
     ) -> Result<Json<ListFilesResult>, String> {
-        let Parameters(args) = request;
-        let preview_value = args.path.as_deref().map_or_else(|| ".".to_string(), basename);
+        let Parameters(mut args) = request;
+        let root = self.primary_workspace_root().await;
+        let normalized_path = resolve_dir(&root, args.path.as_deref());
+        let preview_value = basename(&normalized_path.to_string_lossy());
+        args.path = Some(normalized_path.to_string_lossy().to_string());
         notify_preview(&context, ToolDisplayMeta::new("List files", preview_value)).await;
         self.tools.list_files(args).await.into_mcp()
     }
@@ -557,7 +593,8 @@ When using tools that take file paths, always use absolute paths from:
         self.check_bash_permission(&context, &args.command).await?;
 
         let command = args.command.clone();
-        let result = self.tools.bash(args).await.map_err(|e| e.to_string())?;
+        let cwd = self.primary_workspace_root().await;
+        let result = self.tools.bash(args, Some(cwd)).await.map_err(|e| e.to_string())?;
 
         match result {
             BashResult::Completed(output) => Ok(Json(output)),
@@ -718,56 +755,22 @@ impl Default for CodingMcp<DefaultCodingTools> {
 #[cfg(feature = "test-helpers")]
 impl<T: CodingTools + 'static> CodingMcp<T> {
     /// Read a file and track it in the read set (test helper, no MCP context needed).
-    pub async fn test_read_file(&self, args: ReadFileArgs) -> Result<Json<ReadFileResult>, String> {
-        let file_path = args.file_path.clone();
-        let mut result = self.tools.read_file(args).await.map_err(|e| e.to_string())?;
-        self.files_read.write().await.insert(file_path.clone());
-
-        let total_lines = result.total_lines;
-        let roots = self.roots.read().await;
-        let matched = self.read_rule_state.get_matched_rules(&roots, &file_path);
-        for rule in &matched {
-            write!(result.content, "\n\n<system-reminder>\n{}\n</system-reminder>", rule.body).unwrap();
-        }
-
-        if !matched.is_empty() {
-            let rule_names: Vec<&str> = matched.iter().map(|r| r.name.as_str()).collect();
-            let base = format!("{}, {total_lines} lines", basename(&file_path));
-            let value = format!("{base} +rules: {}", rule_names.join(", "));
-            result.meta = Some(ToolDisplayMeta::new("Read file", value).into());
-        }
-
-        Ok(Json(result))
+    pub async fn test_read_file(&self, mut args: ReadFileArgs) -> Result<Json<ReadFileResult>, String> {
+        args.file_path = self.resolve_file_arg(&args.file_path).await?;
+        self.read_and_track(args).await
     }
 
     /// Write a file with read-before-write safety check (test helper, no MCP context needed).
-    pub async fn test_write_file(&self, args: WriteFileArgs) -> Result<Json<WriteFileResponse>, String> {
-        if try_exists(&args.file_path)
-            .await
-            .map_err(|e| format!("Failed to check existence of {}: {e}", args.file_path))?
-        {
-            let files_read = self.files_read.read().await;
-            if !files_read.contains(&args.file_path) {
-                return Err(format!(
-                    "Safety check failed: File '{}' already exists. You must use read_file on it before overwriting. This prevents accidental data loss.",
-                    args.file_path
-                ));
-            }
-        }
+    pub async fn test_write_file(&self, mut args: WriteFileArgs) -> Result<Json<WriteFileResponse>, String> {
+        args.file_path = self.resolve_file_arg(&args.file_path).await?;
+        self.ensure_read_before_overwrite(&args.file_path).await?;
         self.tools.write_file(args).await.map(Json).map_err(|e| e.to_string())
     }
 
     /// Edit a file with read-before-edit safety check (test helper, no MCP context needed).
-    pub async fn test_edit_file(&self, args: EditFileArgs) -> Result<Json<EditFileResponse>, String> {
-        {
-            let files_read = self.files_read.read().await;
-            if !files_read.contains(&args.file_path) {
-                return Err(format!(
-                    "Safety check failed: You must use read_file on '{}' before editing it. This ensures you understand the current file contents before making changes.",
-                    args.file_path
-                ));
-            }
-        }
+    pub async fn test_edit_file(&self, mut args: EditFileArgs) -> Result<Json<EditFileResponse>, String> {
+        args.file_path = self.resolve_file_arg(&args.file_path).await?;
+        self.ensure_read_before_edit(&args.file_path).await?;
         self.tools.edit_file(args).await.map(Json).map_err(|e| e.to_string())
     }
 }

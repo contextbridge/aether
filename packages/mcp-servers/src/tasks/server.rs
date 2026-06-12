@@ -8,13 +8,17 @@ use rmcp::{
     model::{Implementation, ServerCapabilities, ServerInfo},
     tool, tool_handler, tool_router,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use tokio::sync::{Mutex, RwLock};
 
-use crate::tasks::{
-    TaskCreateInput, TaskCreateOutput, TaskGetInput, TaskGetOutput, TaskListInput, TaskListOutput, TaskStore,
-    TaskUpdateInput, TaskUpdateOutput, execute_task_create, execute_task_get, execute_task_list, execute_task_update,
+use crate::{
+    tasks::{
+        TaskCreateInput, TaskCreateOutput, TaskGetInput, TaskGetOutput, TaskListInput, TaskListOutput, TaskStore,
+        TaskUpdateInput, TaskUpdateOutput, execute_task_create, execute_task_get, execute_task_list,
+        execute_task_update,
+    },
+    workspace_paths::resolve_path,
 };
 
 /// CLI arguments for `TasksMcp` server
@@ -94,6 +98,14 @@ impl TasksMcp {
         Ok(match parsed_args.dir {
             Some(dir) => Self::new_persistent(dir),
             None => Self::new(),
+        })
+    }
+
+    pub fn from_args_with_workspace_root(args: Vec<String>, workspace_root: &Path) -> Result<Self, String> {
+        let parsed_args = TasksMcpArgs::from_args(args)?;
+        Ok(match parsed_args.dir {
+            Some(dir) => Self::new_persistent(resolve_path(workspace_root, dir)),
+            None => Self::new().with_roots(vec![workspace_root.to_path_buf()]),
         })
     }
 
@@ -195,10 +207,19 @@ mod tests {
     }
 
     #[test]
-    fn test_from_args_with_dir_is_persistent() {
-        let temp = TempDir::new().unwrap();
-        let dir = temp.path().to_str().unwrap().to_string();
-        let server = TasksMcp::from_args(vec!["--dir".into(), dir]).unwrap();
+    fn test_from_args_with_workspace_root_resolves_relative_dir() {
+        let server =
+            TasksMcp::from_args_with_workspace_root(vec!["--dir".into(), "tasks".into()], Path::new("/workspace"))
+                .unwrap();
+
         assert!(!server.is_session_scoped());
+        assert_eq!(server.roots.blocking_read().as_slice(), &[PathBuf::from("/workspace/tasks")]);
+    }
+
+    #[test]
+    fn test_from_args_with_workspace_root_no_dir_stays_session_scoped() {
+        let server = TasksMcp::from_args_with_workspace_root(vec![], Path::new("/workspace")).unwrap();
+        assert!(server.is_session_scoped());
+        assert_eq!(server.roots.blocking_read().as_slice(), &[PathBuf::from("/workspace")]);
     }
 }

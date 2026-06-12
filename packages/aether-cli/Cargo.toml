@@ -59,5 +59,8 @@ tempfile = { workspace = true }
 crossterm = { workspace = true }
 url = { workspace = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = { workspace = true }
+
 [dev-dependencies]
 acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["testing"], version = "0.3.20" }

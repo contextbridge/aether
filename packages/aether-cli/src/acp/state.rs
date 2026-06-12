@@ -1,6 +1,7 @@
 use acp_utils::notifications::{
     AetherCapabilities, AuthMethodsUpdatedParams, McpRequest, PromptSearchParams, PromptSearchResponse,
-    SessionDisplayMeta, SessionPreviewParams, SessionPreviewResponse,
+    SessionDisplayMeta, SessionPreviewParams, SessionPreviewResponse, WorkspaceListParams, WorkspaceListResponse,
+    WorkspaceMoveParams, WorkspaceMoveResponse,
 };
 use acp_utils::server::AcpServerError;
 use aether_auth::OAuthCredentialStorage;
@@ -15,8 +16,11 @@ use agent_client_protocol::{Client, ConnectionTo, Responder};
 use llm::catalog::{LlmModel, get_local_models};
 use llm::{ContentBlock, ProviderConnectionOverrides};
 use std::collections::{HashMap, HashSet};
+use std::io;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
+use tokio::task::spawn_blocking;
 use tracing::{error, info};
 
 use super::config_setting::ConfigSetting;
@@ -27,6 +31,7 @@ use super::session_actor::{ConfigSnapshot, SessionCommand, SessionHandle};
 use super::session_factory::{InitialSessionSelection, SessionFactory};
 use super::session_store::SessionStore;
 use crate::settings_args::SettingsSourceArgs;
+use crate::workspace::{WorkspaceError, WorkspaceManager};
 
 /// Global, connection-scoped ACP server state: the live session map plus the
 /// dependencies needed to create sessions and answer global requests. There is
@@ -35,12 +40,14 @@ use crate::settings_args::SettingsSourceArgs;
 pub(crate) struct AcpState {
     sessions: Mutex<HashMap<String, SessionHandle>>,
     session_store: Arc<SessionStore>,
+    workspace_manager: Arc<WorkspaceManager>,
     oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
     factory: SessionFactory,
 }
 
 pub(crate) struct AcpStateConfig {
     pub(crate) session_store: Arc<SessionStore>,
+    pub(crate) workspace_manager: Arc<WorkspaceManager>,
     pub(crate) oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
     pub(crate) initial_selection: InitialSessionSelection,
     pub(crate) settings_source: SettingsSourceArgs,
@@ -59,6 +66,7 @@ impl AcpState {
         Self {
             sessions: Mutex::new(HashMap::new()),
             session_store: config.session_store,
+            workspace_manager: config.workspace_manager,
             oauth_credential_store: config.oauth_credential_store,
             factory,
         }
@@ -68,12 +76,12 @@ impl AcpState {
         info!("Received initialize request: {:?}", args);
         let auth_methods = build_auth_methods(self.oauth_credential_store.as_ref());
         let available = get_local_models().await;
-        let prompt_capabilities =
-            prompt_capabilities_for_models(&available).meta(Some(AetherCapabilities::prompt_search().to_meta()));
-
+        let prompt_capabilities = prompt_capabilities_for_models(&available);
+        let aether_capabilities =
+            AetherCapabilities { prompt_search: true, session_preview: true, workspace_move: true };
         let session_capabilities = acp::SessionCapabilities::new()
             .list(acp::SessionListCapabilities::new())
-            .meta(Some(AetherCapabilities::session_preview().to_meta()));
+            .meta(Some(aether_capabilities.to_meta()));
 
         Ok(InitializeResponse::new(ProtocolVersion::V1)
             .agent_info(Implementation::new("Aether", "0.1.0"))
@@ -175,6 +183,58 @@ impl AcpState {
                 _ => acp::Error::internal_error(),
             }
         })
+    }
+
+    /// Lists managed workspaces sharing the session's repository.
+    pub(crate) async fn workspace_list(
+        &self,
+        params: &WorkspaceListParams,
+    ) -> Result<WorkspaceListResponse, acp::Error> {
+        self.run_workspace_request(params.session_id.clone(), |_session_store, manager, src_cwd| {
+            manager
+                .list(&src_cwd)
+                .map(|workspaces| WorkspaceListResponse { workspaces })
+                .map_err(WorkspaceRequestError::Workspace)
+        })
+        .await
+    }
+
+    /// Moves the session's uncommitted changes to the target workspace, then
+    /// relocates the stored session to the target directory.
+    pub(crate) async fn workspace_move(
+        &self,
+        params: &WorkspaceMoveParams,
+    ) -> Result<WorkspaceMoveResponse, acp::Error> {
+        let target = params.target.clone();
+        let session_id = params.session_id.clone();
+        let response = self
+            .run_workspace_request(session_id.clone(), move |session_store, manager, src_cwd| {
+                let new_cwd = manager.move_to(&src_cwd, &target).map_err(WorkspaceRequestError::Workspace)?;
+                session_store.relocate(&session_id, &new_cwd).map_err(WorkspaceRequestError::Relocate)?;
+                Ok(WorkspaceMoveResponse { new_cwd })
+            })
+            .await?;
+
+        info!("Moved session {} to workspace {}", params.session_id, response.new_cwd.display());
+        Ok(response)
+    }
+
+    async fn run_workspace_request<T, F>(&self, session_id: String, op: F) -> Result<T, acp::Error>
+    where
+        T: Send + 'static,
+        F: FnOnce(&SessionStore, &WorkspaceManager, PathBuf) -> Result<T, WorkspaceRequestError> + Send + 'static,
+    {
+        let session_store = Arc::clone(&self.session_store);
+        let manager = Arc::clone(&self.workspace_manager);
+        spawn_blocking(move || {
+            let src_cwd = session_store
+                .session_cwd(&session_id)
+                .ok_or_else(|| WorkspaceRequestError::UnknownSession(session_id.clone()))?;
+            op(&session_store, &manager, src_cwd)
+        })
+        .await
+        .map_err(|e| internal_error(format!("workspace task failed: {e}")))?
+        .map_err(workspace_request_error)
     }
 
     /// Route a prompt to its session actor. Validates media support against the
@@ -281,7 +341,9 @@ impl AcpState {
     }
 
     pub(crate) async fn register_session(&self, session_id: &SessionId, handle: SessionHandle) {
-        self.sessions.lock().await.insert(session_id.0.to_string(), handle);
+        if let Some(old) = self.sessions.lock().await.insert(session_id.0.to_string(), handle) {
+            old.cancel();
+        }
     }
 
     async fn lookup(&self, session_id: &str) -> Option<(mpsc::Sender<SessionCommand>, ConfigSnapshot)> {
@@ -312,6 +374,34 @@ fn respond_err<T: agent_client_protocol::JsonRpcResponse>(responder: Responder<T
     if let Err(e) = responder.respond_with_error(error) {
         error!("failed to send error response: {e:?}");
     }
+}
+
+enum WorkspaceRequestError {
+    UnknownSession(String),
+    Workspace(WorkspaceError),
+    Relocate(io::Error),
+}
+
+fn workspace_request_error(e: WorkspaceRequestError) -> acp::Error {
+    match e {
+        WorkspaceRequestError::UnknownSession(session_id) => {
+            invalid_params_error(format!("unknown session: {session_id}"))
+        }
+        WorkspaceRequestError::Workspace(e) => workspace_error(&e),
+        WorkspaceRequestError::Relocate(e) => internal_error(format!("failed to relocate session: {e}")),
+    }
+}
+
+fn workspace_error(e: &WorkspaceError) -> acp::Error {
+    if e.is_invalid_input() { invalid_params_error(e.to_string()) } else { internal_error(e.to_string()) }
+}
+
+fn invalid_params_error(message: impl Into<String>) -> acp::Error {
+    acp::Error::new(i32::from(acp::ErrorCode::InvalidParams), message)
+}
+
+fn internal_error(message: impl Into<String>) -> acp::Error {
+    acp::Error::new(i32::from(acp::ErrorCode::InternalError), message)
 }
 
 fn build_auth_methods(store: &dyn OAuthCredentialStorage) -> Vec<AuthMethod> {
@@ -400,10 +490,12 @@ mod tests {
     }
 
     fn test_state() -> AcpState {
-        let session_store =
-            SessionStore::new().map_or_else(|e| panic!("Failed to initialize session store: {e}"), Arc::new);
+        let session_store = Arc::new(SessionStore::from_path(PathBuf::from("/tmp/aether-test-sessions")));
+        let workspace_manager =
+            Arc::new(WorkspaceManager::from_registry_path(PathBuf::from("/tmp/aether-test-workspaces.json")));
         AcpState::new(AcpStateConfig {
             session_store,
+            workspace_manager,
             oauth_credential_store: fake_oauth_store(),
             initial_selection: InitialSessionSelection::default(),
             settings_source: SettingsSourceArgs::default(),
@@ -421,17 +513,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn initialize_advertises_prompt_search_capability() {
+    async fn initialize_advertises_aether_capabilities_once() {
         let state = test_state();
         let response =
             state.initialize(InitializeRequest::new(ProtocolVersion::LATEST)).await.expect("initialize succeeds");
-        assert!(
-            AetherCapabilities::from_meta(response.agent_capabilities.prompt_capabilities.meta.as_ref()).prompt_search
+        assert_eq!(
+            AetherCapabilities::from_meta(response.agent_capabilities.prompt_capabilities.meta.as_ref()),
+            AetherCapabilities::default()
         );
-        assert!(
-            AetherCapabilities::from_meta(response.agent_capabilities.session_capabilities.meta.as_ref())
-                .session_preview
-        );
+        let capabilities =
+            AetherCapabilities::from_meta(response.agent_capabilities.session_capabilities.meta.as_ref());
+        assert!(capabilities.prompt_search);
+        assert!(capabilities.session_preview);
+        assert!(capabilities.workspace_move);
     }
 
     #[test]

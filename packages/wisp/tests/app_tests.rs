@@ -15,4 +15,5 @@ mod app_tests {
     mod small_terminal_tests;
     mod status_line_tests;
     mod tool_calls_tests;
+    mod workspace_move_tests;
 }

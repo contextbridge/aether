@@ -4,13 +4,17 @@ use crate::components::conversation_window::{ConversationBuffer, ConversationWin
 use crate::components::elicitation_form::{ElicitationForm, ElicitationMessage};
 use crate::components::plan_tracker::PlanTracker;
 use crate::components::plan_view::PlanView;
-use crate::components::progress_indicator::ProgressIndicator;
+use crate::components::progress_indicator::{ProgressIndicator, WorkspaceProgress};
 use crate::components::prompt_composer::{PromptComposer, PromptComposerMessage};
 use crate::components::session_picker::{SessionEntry, SessionPicker, SessionPickerMessage};
 use crate::components::tool_call_statuses::ToolCallStatuses;
+use crate::components::workspace_picker::{WorkspacePicker, WorkspacePickerMessage};
 use crate::keybindings::Keybindings;
 use acp_utils::CreateElicitationRequestParams;
-use acp_utils::notifications::{ElicitationResponse, PromptSearchParams, PromptSearchResponse, SessionPreviewResponse};
+use acp_utils::notifications::{
+    AetherCapabilities, ElicitationResponse, PromptSearchParams, PromptSearchResponse, SessionPreviewResponse,
+    WorkspaceEntry, WorkspaceMoveTarget,
+};
 use agent_client_protocol::Responder;
 use agent_client_protocol::schema::{self as acp, SessionId};
 use std::collections::HashSet;
@@ -24,14 +28,41 @@ pub enum ConversationScreenMessage {
     NewSession,
     OpenSettings,
     OpenSessionPicker,
+    OpenWorkspacePicker,
+    MoveWorkspace { target: WorkspaceMoveTarget },
     LoadSession { session_id: SessionId, cwd: PathBuf },
     SearchPrompts(PromptSearchParams),
     RequestSessionPreview { session_id: SessionId },
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) enum WorkspaceMoveState {
+    #[default]
+    Idle,
+    Listing,
+    Picking,
+    Moving,
+    LoadingSession,
+}
+
+impl WorkspaceMoveState {
+    fn progress(&self) -> WorkspaceProgress {
+        match self {
+            Self::Moving => WorkspaceProgress::Moving,
+            Self::LoadingSession => WorkspaceProgress::LoadingSession,
+            Self::Idle | Self::Listing | Self::Picking => WorkspaceProgress::None,
+        }
+    }
+
+    fn is_idle(&self) -> bool {
+        matches!(self, Self::Idle)
+    }
+}
+
 pub(crate) enum Modal {
     Elicitation(ElicitationForm),
     SessionPicker(SessionPicker),
+    WorkspacePicker(WorkspacePicker),
 }
 
 #[doc = include_str!("../docs/conversation_screen.md")]
@@ -41,31 +72,33 @@ pub struct ConversationScreen {
     pub(crate) prompt_composer: PromptComposer,
     pub(crate) plan_tracker: PlanTracker,
     pub(crate) progress_indicator: ProgressIndicator,
+    pub(crate) workspace_move_state: WorkspaceMoveState,
     pub(crate) waiting_for_response: bool,
     pub(crate) active_modal: Option<Modal>,
     pub(crate) content_padding: usize,
     pub(crate) pending_url_elicitations: HashSet<(String, String)>,
-    session_preview_enabled: bool,
+    capabilities: AetherCapabilities,
 }
 
 impl ConversationScreen {
     pub fn new(
         keybindings: Keybindings,
         content_padding: usize,
-        prompt_search_enabled: bool,
-        session_preview_enabled: bool,
+        working_dir: PathBuf,
+        capabilities: AetherCapabilities,
     ) -> Self {
         Self {
             conversation: ConversationBuffer::new(),
             tool_call_statuses: ToolCallStatuses::new(),
-            prompt_composer: PromptComposer::new(keybindings, prompt_search_enabled),
+            prompt_composer: PromptComposer::new(keybindings, working_dir, capabilities.clone()),
             plan_tracker: PlanTracker::default(),
             progress_indicator: ProgressIndicator::default(),
+            workspace_move_state: WorkspaceMoveState::Idle,
             waiting_for_response: false,
             active_modal: None,
             content_padding,
             pending_url_elicitations: HashSet::new(),
-            session_preview_enabled,
+            capabilities,
         }
     }
 
@@ -77,12 +110,17 @@ impl ConversationScreen {
         self.prompt_composer.clear_content();
     }
 
+    pub fn set_working_dir(&mut self, working_dir: PathBuf) {
+        self.prompt_composer.set_working_dir(working_dir);
+    }
+
     pub fn is_waiting(&self) -> bool {
         self.waiting_for_response
     }
 
     pub fn wants_tick(&self) -> bool {
         self.waiting_for_response
+            || self.workspace_move_state.progress() != WorkspaceProgress::None
             || self.tool_call_statuses.progress().running_any
             || self.plan_tracker_has_tick_driven_visibility()
     }
@@ -99,6 +137,7 @@ impl ConversationScreen {
             progress.completed_top_level,
             progress.total_top_level,
             self.waiting_for_response,
+            self.workspace_move_state.progress(),
         );
         self.plan_tracker.cached_visible_entries();
     }
@@ -107,14 +146,54 @@ impl ConversationScreen {
         self.conversation.clear();
         self.tool_call_statuses.clear();
         self.waiting_for_response = false;
+        self.workspace_move_state = WorkspaceMoveState::Idle;
         self.plan_tracker.clear();
         self.progress_indicator = ProgressIndicator::default();
         self.pending_url_elicitations.clear();
     }
 
+    pub fn request_workspace_picker(&mut self) -> Result<ConversationScreenMessage, &'static str> {
+        if self.waiting_for_response {
+            return Err("Cannot move workspaces while a prompt is running.");
+        }
+        if !self.workspace_move_state.is_idle() {
+            return Err("Cannot move workspaces while another workspace move is in progress.");
+        }
+        self.workspace_move_state = WorkspaceMoveState::Listing;
+        self.prompt_composer.clear_content();
+        Ok(ConversationScreenMessage::OpenWorkspacePicker)
+    }
+
+    pub fn open_workspace_picker(&mut self, workspaces: Vec<WorkspaceEntry>) {
+        self.workspace_move_state = WorkspaceMoveState::Picking;
+        self.active_modal = Some(Modal::WorkspacePicker(WorkspacePicker::new(workspaces)));
+    }
+
+    pub(crate) fn on_workspace_list_failed(&mut self, error: &str) {
+        self.conversation.push_user_message(&format!("[wisp] Failed to list workspaces: {error}"));
+        self.workspace_move_state = WorkspaceMoveState::Idle;
+    }
+
+    pub(crate) fn on_workspace_move_started(&mut self) {
+        self.workspace_move_state = WorkspaceMoveState::Moving;
+    }
+
+    pub(crate) fn on_workspace_session_loading(&mut self) {
+        self.workspace_move_state = WorkspaceMoveState::LoadingSession;
+    }
+
+    pub(crate) fn on_workspace_move_finished(&mut self) {
+        self.workspace_move_state = WorkspaceMoveState::Idle;
+    }
+
+    pub(crate) fn on_workspace_move_failed(&mut self, error: &str) {
+        self.conversation.push_user_message(&format!("[wisp] Workspace move failed: {error}"));
+        self.workspace_move_state = WorkspaceMoveState::Idle;
+    }
+
     pub fn open_session_picker(&mut self, sessions: Vec<acp::SessionInfo>) -> Vec<ConversationScreenMessage> {
         let entries = sessions.into_iter().map(SessionEntry).collect();
-        let mut picker = SessionPicker::new(entries, self.session_preview_enabled);
+        let mut picker = SessionPicker::new(entries, self.capabilities.session_preview);
         let messages = picker
             .initial_messages()
             .into_iter()
@@ -278,6 +357,23 @@ impl ConversationScreen {
                 }
                 Some(out)
             }
+            Modal::WorkspacePicker(picker) => {
+                let msgs = picker.on_event(event).await.unwrap_or_default();
+                let mut out = Vec::new();
+                for msg in msgs {
+                    match msg {
+                        WorkspacePickerMessage::Close => {
+                            self.active_modal = None;
+                            self.workspace_move_state = WorkspaceMoveState::Idle;
+                        }
+                        WorkspacePickerMessage::Move { target } => {
+                            self.active_modal = None;
+                            out.push(ConversationScreenMessage::MoveWorkspace { target });
+                        }
+                    }
+                }
+                Some(out)
+            }
         }
     }
 
@@ -299,6 +395,10 @@ impl ConversationScreen {
                 PromptComposerMessage::OpenSessionPicker => {
                     out.push(ConversationScreenMessage::OpenSessionPicker);
                 }
+                PromptComposerMessage::OpenWorkspacePicker => match self.request_workspace_picker() {
+                    Ok(msg) => out.push(msg),
+                    Err(message) => self.conversation.push_user_message(&format!("[wisp] {message}")),
+                },
                 PromptComposerMessage::SubmitRequested { user_input, attachments } => {
                     self.waiting_for_response = true;
                     out.push(ConversationScreenMessage::SendPrompt { user_input, attachments });
@@ -380,6 +480,7 @@ impl Component for ConversationScreen {
 
         let modal_frame = match &mut self.active_modal {
             Some(Modal::SessionPicker(picker)) => Some(picker.render(ctx)),
+            Some(Modal::WorkspacePicker(picker)) => Some(picker.render(ctx)),
             Some(Modal::Elicitation(form)) => Some(form.render(ctx)),
             None => None,
         };
