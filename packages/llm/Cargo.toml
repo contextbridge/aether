@@ -25,7 +25,7 @@ workspace = true
 
 [features]
 default = []
-bedrock = ["dep:aws-config", "dep:aws-sdk-bedrockruntime", "dep:aws-smithy-types", "dep:base64"]
+bedrock = ["dep:aws-config", "dep:aws-sdk-bedrockruntime", "dep:aws-smithy-types", "dep:base64", "dep:time"]
 codex = ["dep:aether-auth", "dep:oauth2", "dep:base64", "dep:url"]
 
 [dependencies]
@@ -40,6 +40,7 @@ eventsource-stream = { workspace = true }
 reqwest = { workspace = true }
 futures = { workspace = true }
 thiserror = { workspace = true }
+time = { workspace = true, optional = true }
 uuid = { workspace = true }
 
 tokio = { workspace = true }
