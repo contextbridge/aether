@@ -1,4 +1,3 @@
-use std::fmt::{Display, Formatter};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -219,57 +218,24 @@ impl PromptTriggers {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum PromptFileError {
-    Io(std::io::Error),
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("YAML error: {0}")]
     Yaml(String),
+    #[error("missing YAML frontmatter")]
     MissingFrontmatter,
+    #[error("skill '{name}' has an empty description")]
     MissingDescription { name: String },
+    #[error("skill '{name}' must have at least one of: user-invocable, agent-invocable, triggers, globs, or paths")]
     NoActivationSurface { name: String },
+    #[error("invalid trigger glob '{pattern}': {error}")]
     InvalidTriggerGlob { pattern: String, error: String },
+    #[error("skill not found: {0}")]
     NotFound(String),
+    #[error("skill '{0}' is not agent-authored and cannot be modified")]
     NotAgentAuthored(String),
-}
-
-impl Display for PromptFileError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PromptFileError::Io(e) => write!(f, "IO error: {e}"),
-            PromptFileError::Yaml(e) => write!(f, "YAML error: {e}"),
-            PromptFileError::MissingFrontmatter => write!(f, "missing YAML frontmatter"),
-            PromptFileError::MissingDescription { name } => {
-                write!(f, "skill '{name}' has an empty description")
-            }
-            PromptFileError::NoActivationSurface { name } => {
-                write!(
-                    f,
-                    "skill '{name}' must have at least one of: user-invocable, agent-invocable, triggers, globs, or paths"
-                )
-            }
-            PromptFileError::InvalidTriggerGlob { pattern, error } => {
-                write!(f, "invalid trigger glob '{pattern}': {error}")
-            }
-            PromptFileError::NotFound(name) => write!(f, "skill not found: {name}"),
-            PromptFileError::NotAgentAuthored(name) => {
-                write!(f, "skill '{name}' is not agent-authored and cannot be modified")
-            }
-        }
-    }
-}
-
-impl std::error::Error for PromptFileError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            PromptFileError::Io(e) => Some(e),
-            _ => None,
-        }
-    }
-}
-
-impl From<std::io::Error> for PromptFileError {
-    fn from(e: std::io::Error) -> Self {
-        PromptFileError::Io(e)
-    }
 }
 
 fn normalize_frontmatter_yaml(yaml: &str) -> &str {

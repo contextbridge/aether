@@ -1,4 +1,3 @@
-use std::fmt;
 use std::sync::Arc;
 
 use tokio_stream::StreamExt;
@@ -20,26 +19,15 @@ pub struct CompactionResult {
 }
 
 /// Errors that can occur during compaction
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum CompactionError {
     /// The LLM failed to generate a summary
+    #[error("summarization failed: {0}")]
     SummarizationFailed(String),
     /// No messages to compact
+    #[error("nothing to compact")]
     NothingToCompact,
 }
-
-impl fmt::Display for CompactionError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CompactionError::SummarizationFailed(msg) => {
-                write!(f, "summarization failed: {msg}")
-            }
-            CompactionError::NothingToCompact => write!(f, "nothing to compact"),
-        }
-    }
-}
-
-impl std::error::Error for CompactionError {}
 
 /// Configuration for context compaction
 #[derive(Debug, Clone)]

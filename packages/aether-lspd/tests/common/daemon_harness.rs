@@ -3,29 +3,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Error type for daemon harness operations
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum HarnessError {
+    #[error("Failed to spawn daemon: {0}")]
     SpawnFailed(String),
-    ClientError(ClientError),
+    #[error("Client error: {0}")]
+    ClientError(#[from] ClientError),
+    #[error("Failed to kill daemon: {0}")]
     KillFailed(String),
-}
-
-impl std::fmt::Display for HarnessError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            HarnessError::SpawnFailed(e) => write!(f, "Failed to spawn daemon: {e}"),
-            HarnessError::ClientError(e) => write!(f, "Client error: {e}"),
-            HarnessError::KillFailed(e) => write!(f, "Failed to kill daemon: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for HarnessError {}
-
-impl From<ClientError> for HarnessError {
-    fn from(e: ClientError) -> Self {
-        HarnessError::ClientError(e)
-    }
 }
 
 /// Test harness for the LSP daemon

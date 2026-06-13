@@ -1,27 +1,17 @@
 #[cfg(feature = "syntax")]
 use std::sync::Arc;
 
-use std::fmt;
-
 use crate::rendering::line::Line;
 use crate::style::Style;
 use crossterm::style::Color;
+use thiserror::Error;
 mod defaults;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Error)]
 pub enum ThemeBuildError {
+    #[error("ThemeBuilder requires {0}")]
     MissingField(&'static str),
 }
-
-impl fmt::Display for ThemeBuildError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingField(name) => write!(f, "ThemeBuilder requires {name}"),
-        }
-    }
-}
-
-impl std::error::Error for ThemeBuildError {}
 
 #[cfg(feature = "syntax")]
 mod syntax;

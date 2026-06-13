@@ -83,9 +83,9 @@ Key combinators: `.map()`, `.and_then()`, `.map_err()`, `.ok_or()`, `.unwrap_or_
 See [error-handling.md](./error-handling.md) for detailed patterns.
 
 **Quick reference:**
-- Libraries: emit concrete, detailed error types (use enums or `thiserror`)
-- Applications: use `anyhow` for convenience across heterogeneous errors
-- Always implement `std::error::Error` for your error types
+- Use `thiserror` + concrete `enum` error types everywhere
+- Never add `anyhow` or `color-eyre`
+- Outside of tests, avoid `Box<dyn std::error::Error>` — it erases the concrete type
 
 ## Memory and Ownership
 
@@ -95,6 +95,7 @@ See [error-handling.md](./error-handling.md) for detailed patterns.
 - Allocating/cloning often leads to simpler, more maintainable code
 - Optimize only when benchmarking shows it's necessary
 
+## Concurrency
 
 **Key points:**
 - Rust prevents data races but NOT deadlocks
@@ -122,3 +123,8 @@ let result: Vec<_> = collection
     .map(transform)
     .collect();
 ```
+
+## Anti-Patterns to Avoid
+
+- **Boolean parameters** — use enums. See [Type System](#enums-over-booleans)
+- **Mock frameworks** — use Fakes. See [testing-fakes.md](./testing-fakes.md)

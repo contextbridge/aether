@@ -1,78 +1,52 @@
 # Rust Error Handling
 
-Patterns for effective error handling in Rust.
+This project uses concrete `enum` error types with `thiserror`.
 
 ## Contents
 
-- [Library vs Application](#library-vs-application-distinction) - thiserror vs anyhow
-- [The thiserror Crate](#the-thiserror-crate) - library error types
-- [When to Use panic!](#when-to-use-panic)
-- [Error Context with anyhow](#error-context-with-anyhow)
+- [Canonical Pattern](#canonical-pattern) - enum + thiserror + Result alias
+- [Variants and Sources](#variants-and-sources) - `#[error]`, `#[from]`
+- [Adding Context](#adding-context) - without anyhow
+- [When to Use `panic!`](#when-to-use-panic)
+- [Banned Dependencies](#banned-dependencies)
 
-## Library vs Application Distinction
+## Canonical Pattern
 
-### Libraries: Use Concrete Error Types
-
-Libraries should emit detailed, typed errors that consumers can match on:
-
-```rust
-use thiserror::Error;
-
-#[derive(Error, Debug)]
-pub enum MyLibraryError {
-    #[error("failed to read configuration: {0}")]
-    Config(#[from] std::io::Error),
-
-    #[error("invalid format in {file}: {reason}")]
-    InvalidFormat { file: String, reason: String },
-
-    #[error("connection failed after {attempts} attempts")]
-    ConnectionFailed { attempts: u32 },
-}
-```
-
-### Applications: Use `anyhow`
-
-Applications can use `anyhow` for convenience:
-
-```rust
-use anyhow::{Context, Result};
-
-fn main() -> Result<()> {
-    let config = read_config()
-        .context("failed to read configuration")?;
-
-    process(&config)
-        .with_context(|| format!("failed to process {}", config.name))?;
-
-    Ok(())
-}
-```
-
-## The `thiserror` Crate
-
-Use `thiserror` to reduce boilerplate:
+Define a specific enum per component and a `Result` type alias:
 
 ```rust
 use thiserror::Error;
 
-#[derive(Error, Debug)]
+#[derive(Debug, Error)]
+pub enum AgentError {
+    #[error("MCP error: {0}")]
+    McpError(#[from] mcp_utils::client::McpError),
+    #[error("LLM error: {0}")]
+    LlmError(#[from] llm::LlmError),
+    #[error("IO error: {0}")]
+    IoError(String),
+}
+
+pub type Result<T> = std::result::Result<T, AgentError>;
+```
+
+## Variants and Sources
+
+- `#[error("...")]` — sets the `Display` message (supports interpolation)
+- `#[from]` — auto-implements `From`, enabling `?` to convert source errors
+- Named fields make messages self-documenting:
+
+```rust
+#[derive(Debug, Error)]
 pub enum DataError {
-    // Simple message
     #[error("data not found")]
     NotFound,
 
-    // With interpolation
     #[error("invalid data at position {position}")]
     Invalid { position: usize },
 
-    // Wrapping another error (auto-implements From)
-    #[error("IO error")]
+    #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
-
-    // Transparent (delegates Display and source to inner error)
-    #[error(transparent)]
-    Other(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
 ```
 
@@ -81,14 +55,10 @@ pub enum DataError {
 **DO use panic for:**
 - Programmer errors / violated invariants
 - Unrecoverable states that indicate bugs
-- Tests and examples
-- Prototyping (replace with proper errors later)
 
 **DON'T use panic for:**
-- Expected error conditions
-- User input validation
-- Network/IO failures
-- Anything a library consumer might want to handle
+- Expected error conditions (IO, parsing, user input)
+- Anything a caller might want to handle
 
 ```rust
 // Good: panic for invariant violation
@@ -97,43 +67,19 @@ fn get_element(slice: &[i32], index: usize) -> i32 {
     slice[index]
 }
 
-// Bad: panic for expected condition
-fn parse_config(input: &str) -> Config {
-    serde_json::from_str(input).unwrap()  // Don't do this!
-}
-
 // Good: return Result for expected failures
 fn parse_config(input: &str) -> Result<Config, ConfigError> {
     serde_json::from_str(input).map_err(ConfigError::from)
 }
 ```
 
-## Error Context with `anyhow`
-
-Add context to understand error chains:
-
-```rust
-use anyhow::{Context, Result};
-
-fn process_file(path: &Path) -> Result<()> {
-    let content = std::fs::read_to_string(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
-
-    let data: Data = serde_json::from_str(&content)
-        .context("failed to parse JSON")?;
-
-    validate(&data)
-        .context("validation failed")?;
-
-    Ok(())
-}
-```
 
 ## Quick Reference
 
-| Context | Use | Example |
-|---------|-----|---------|
-| Library code | `thiserror` | `#[derive(Error, Debug)]` |
-| Application code | `anyhow` | `anyhow::Result<T>` |
-| Adding context | `.context()` | `.context("failed to parse")?` |
-| Bugs/invariants | `panic!` | `assert!(condition)` |
+| Context | Use |
+|---------|-----|
+| Any component | `#[derive(Debug, Error)] pub enum MyError { ... }` |
+| Propagate | `?` with `#[from]` on the source variant |
+| Add context | `.map_err(\|e\| MyError::Variant(ctx, e))` |
+| Type alias | `pub type Result<T> = std::result::Result<T, MyError>;` |
+| Bugs/invariants | `panic!` / `assert!` |

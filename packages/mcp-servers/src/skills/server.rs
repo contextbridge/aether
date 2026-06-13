@@ -12,10 +12,10 @@ use rmcp::{
     service::RequestContext,
     tool, tool_handler, tool_router,
 };
+use std::collections::HashMap;
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::{collections::HashMap, fmt::Display};
 use std::{fs, path::Path};
 use tokio::sync::RwLock;
 use utils::shell_expander::ShellExpander;
@@ -62,43 +62,28 @@ pub struct SkillsMcp {
     roots: Arc<RwLock<Vec<PathBuf>>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 enum SkillFileError {
+    #[error("Skill not found: {0}")]
     SkillNotFound(String),
+    #[error("Skill '{0}' is not agent-invocable")]
     NotAgentInvocable(String),
+    #[error("Prompt '{0}' is a flat markdown file and does not support relative paths")]
     FlatFileDoesNotSupportRelativePaths(String),
+    #[error("Absolute paths are not allowed")]
     AbsolutePath,
+    #[error("Path traversal (..) is not allowed")]
     TraversalAttempt,
+    #[error("Resolved path escapes skill directory")]
     EscapeAttempt,
+    #[error("Path is a directory, not a file")]
     IsDirectory,
+    #[error("File not found: {0}")]
     FileNotFound(PathBuf),
-    IoError(io::Error),
+    #[error("IO error: {0}")]
+    IoError(#[from] io::Error),
+    #[error("File content is not valid UTF-8")]
     InvalidUtf8,
-}
-
-impl Display for SkillFileError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SkillFileError::SkillNotFound(name) => write!(f, "Skill not found: {name}"),
-            SkillFileError::NotAgentInvocable(name) => write!(f, "Skill '{name}' is not agent-invocable"),
-            SkillFileError::FlatFileDoesNotSupportRelativePaths(name) => {
-                write!(f, "Prompt '{name}' is a flat markdown file and does not support relative paths")
-            }
-            SkillFileError::AbsolutePath => write!(f, "Absolute paths are not allowed"),
-            SkillFileError::TraversalAttempt => write!(f, "Path traversal (..) is not allowed"),
-            SkillFileError::EscapeAttempt => write!(f, "Resolved path escapes skill directory"),
-            SkillFileError::IsDirectory => write!(f, "Path is a directory, not a file"),
-            SkillFileError::FileNotFound(path) => write!(f, "File not found: {}", path.display()),
-            SkillFileError::IoError(e) => write!(f, "IO error: {e}"),
-            SkillFileError::InvalidUtf8 => write!(f, "File content is not valid UTF-8"),
-        }
-    }
-}
-
-impl From<io::Error> for SkillFileError {
-    fn from(e: io::Error) -> Self {
-        SkillFileError::IoError(e)
-    }
 }
 
 impl SkillsMcp {
