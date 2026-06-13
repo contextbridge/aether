@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.11](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.6.10...aether-agent-core-v0.6.11) - 2026-06-13
+
+### Added
+
+- *(aether-cli)* Allow filtering mcp tools by annotation ([#151](https://github.com/contextbridge/aether/pull/151))
+
 ## [0.6.10](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.6.9...aether-agent-core-v0.6.10) - 2026-06-10
 
 ### Other

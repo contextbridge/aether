@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.13](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.12...aether-agent-cli-v0.7.13) - 2026-06-13
+
+### Added
+
+- *(aether-cli)* Allow filtering mcp tools by annotation ([#151](https://github.com/contextbridge/aether/pull/151))
+- *(aether-cli)* Add /move command to switch workspaces and bring your session + changes with you. ([#150](https://github.com/contextbridge/aether/pull/150))
+- *(aether-cli)* Better session resume menu ([#145](https://github.com/contextbridge/aether/pull/145))
+
 ## [0.7.12](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.11...aether-agent-cli-v0.7.12) - 2026-06-10
 
 ### Added

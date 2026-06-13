@@ -1,6 +1,6 @@
 [package]
 name = "aether-mcp-servers"
-version = "0.4.15"
+version = "0.4.16"
 edition = "2024"
 description = "Built-in MCP tool servers for the Aether AI agent framework"
 license = "MIT"
@@ -86,8 +86,8 @@ tokio = { workspace = true }
 rmcp = { workspace = true }
 schemars = { workspace = true }
 clap = { workspace = true, features = ["env"] }
-mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.5.14" }
-utils = { package = "aether-utils", path = "../utils", version = "0.2.6" }
+mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.5.15" }
+utils = { package = "aether-utils", path = "../utils", version = "0.2.7" }
 aether-lspd = { path = "../aether-lspd", optional = true, version = "0.1.17" }
 futures = { workspace = true, optional = true }
 glob = { workspace = true, optional = true }
@@ -113,9 +113,9 @@ tempfile = { workspace = true, optional = true }
 
 # subagents feature
 aether-auth = { path = "../aether-auth", optional = true, version = "0.1.6", features = ["keyring"] }
-aether-core = { package = "aether-agent-core", path = "../aether-core", optional = true, version = "0.6.10" }
-aether-project = { path = "../aether-project", optional = true, version = "0.5.10" }
-llm = { package = "aether-llm", path = "../llm", optional = true, version = "0.7.9" }
+aether-core = { package = "aether-agent-core", path = "../aether-core", optional = true, version = "0.6.11" }
+aether-project = { path = "../aether-project", optional = true, version = "0.5.11" }
+llm = { package = "aether-llm", path = "../llm", optional = true, version = "0.7.10" }
 
 [dev-dependencies]
 tempfile = { workspace = true }
