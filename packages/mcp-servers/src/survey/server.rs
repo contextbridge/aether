@@ -73,7 +73,12 @@ impl SurveyMcp {
     /// Use this to gather information from the user when you need specific inputs
     /// (text, numbers, booleans, selections). The schema parameter defines the form
     /// fields using JSON Schema format.
-    #[tool]
+    #[tool(annotations(
+        read_only_hint = false,
+        destructive_hint = false,
+        idempotent_hint = false,
+        open_world_hint = true
+    ))]
     pub async fn ask_user(
         &self,
         request: Parameters<AskUserInput>,

@@ -86,12 +86,9 @@ mod tests {
     use super::*;
 
     fn tool(name: &str, desc: &str, params: &str, server: Option<&str>) -> ToolDefinition {
-        ToolDefinition {
-            name: name.to_string(),
-            description: desc.to_string(),
-            parameters: params.to_string(),
-            server: server.map(String::from),
-        }
+        let mut tool = ToolDefinition::new(name, desc, params);
+        tool.server = server.map(String::from);
+        tool
     }
 
     #[test]

@@ -480,7 +480,7 @@ When using tools that take file paths, always use absolute paths from:
     }
 
     #[doc = include_str!("tools/grep/description.md")]
-    #[tool]
+    #[tool(annotations(read_only_hint = true, open_world_hint = false))]
     pub async fn grep(
         &self,
         request: Parameters<GrepInput>,
@@ -495,7 +495,7 @@ When using tools that take file paths, always use absolute paths from:
     }
 
     #[doc = include_str!("tools/find/description.md")]
-    #[tool]
+    #[tool(annotations(read_only_hint = true, open_world_hint = false))]
     pub async fn find(
         &self,
         request: Parameters<FindInput>,
@@ -510,7 +510,7 @@ When using tools that take file paths, always use absolute paths from:
     }
 
     #[doc = include_str!("tools/read_file/description.md")]
-    #[tool]
+    #[tool(annotations(read_only_hint = true, open_world_hint = false))]
     pub async fn read_file(
         &self,
         request: Parameters<ReadFileArgs>,
@@ -523,7 +523,12 @@ When using tools that take file paths, always use absolute paths from:
     }
 
     #[doc = include_str!("tools/write_file/description.md")]
-    #[tool]
+    #[tool(annotations(
+        read_only_hint = false,
+        destructive_hint = true,
+        idempotent_hint = false,
+        open_world_hint = false
+    ))]
     pub async fn write_file(
         &self,
         request: Parameters<WriteFileArgs>,
@@ -544,7 +549,12 @@ When using tools that take file paths, always use absolute paths from:
     }
 
     #[doc = include_str!("tools/edit_file/description.md")]
-    #[tool]
+    #[tool(annotations(
+        read_only_hint = false,
+        destructive_hint = true,
+        idempotent_hint = false,
+        open_world_hint = false
+    ))]
     pub async fn edit_file(
         &self,
         request: Parameters<EditFileArgs>,
@@ -565,7 +575,7 @@ When using tools that take file paths, always use absolute paths from:
     }
 
     #[doc = include_str!("tools/list_files/description.md")]
-    #[tool]
+    #[tool(annotations(read_only_hint = true, open_world_hint = false))]
     pub async fn list_files(
         &self,
         request: Parameters<ListFilesArgs>,
@@ -581,7 +591,12 @@ When using tools that take file paths, always use absolute paths from:
     }
 
     #[doc = include_str!("tools/bash/description.md")]
-    #[tool]
+    #[tool(annotations(
+        read_only_hint = false,
+        destructive_hint = true,
+        idempotent_hint = false,
+        open_world_hint = true
+    ))]
     pub async fn bash(
         &self,
         request: Parameters<BashInput>,
@@ -620,7 +635,7 @@ When using tools that take file paths, always use absolute paths from:
     }
 
     #[doc = include_str!("tools/bash/read_background_description.md")]
-    #[tool]
+    #[tool(annotations(read_only_hint = true, open_world_hint = false))]
     pub async fn read_background_bash(
         &self,
         request: Parameters<ReadBackgroundBashInput>,
@@ -646,7 +661,7 @@ When using tools that take file paths, always use absolute paths from:
     }
 
     #[doc = include_str!("tools/web_fetch/description.md")]
-    #[tool]
+    #[tool(annotations(read_only_hint = true, open_world_hint = true))]
     pub async fn web_fetch(
         &self,
         request: Parameters<WebFetchInput>,
@@ -658,7 +673,7 @@ When using tools that take file paths, always use absolute paths from:
     }
 
     #[doc = include_str!("tools/web_search/description.md")]
-    #[tool]
+    #[tool(annotations(read_only_hint = true, open_world_hint = true))]
     pub async fn web_search(
         &self,
         request: Parameters<WebSearchInput>,
@@ -677,7 +692,7 @@ When using tools that take file paths, always use absolute paths from:
     }
 
     #[doc = include_str!("../lsp/tools/symbol_lookup/description.md")]
-    #[tool]
+    #[tool(annotations(read_only_hint = true, open_world_hint = false))]
     pub async fn lsp_symbol(
         &self,
         request: Parameters<LspSymbolInput>,
@@ -690,7 +705,7 @@ When using tools that take file paths, always use absolute paths from:
     }
 
     #[doc = include_str!("../lsp/tools/workspace_search/description.md")]
-    #[tool]
+    #[tool(annotations(read_only_hint = true, open_world_hint = false))]
     pub async fn lsp_workspace_search(
         &self,
         request: Parameters<LspWorkspaceSearchInput>,
@@ -703,7 +718,7 @@ When using tools that take file paths, always use absolute paths from:
     }
 
     #[doc = include_str!("../lsp/tools/document_info/description.md")]
-    #[tool]
+    #[tool(annotations(read_only_hint = true, open_world_hint = false))]
     pub async fn lsp_document(
         &self,
         request: Parameters<LspDocumentInput>,
@@ -716,7 +731,7 @@ When using tools that take file paths, always use absolute paths from:
     }
 
     #[doc = include_str!("../lsp/tools/check_errors/description.md")]
-    #[tool]
+    #[tool(annotations(read_only_hint = true, open_world_hint = false))]
     pub async fn lsp_check_errors(
         &self,
         request: Parameters<LspDiagnosticsRequest>,
@@ -733,7 +748,12 @@ When using tools that take file paths, always use absolute paths from:
     }
 
     #[doc = include_str!("../lsp/tools/rename/description.md")]
-    #[tool]
+    #[tool(annotations(
+        read_only_hint = false,
+        destructive_hint = true,
+        idempotent_hint = false,
+        open_world_hint = false
+    ))]
     pub async fn lsp_rename(
         &self,
         request: Parameters<LspRenameInput>,

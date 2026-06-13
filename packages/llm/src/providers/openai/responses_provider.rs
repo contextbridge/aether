@@ -399,12 +399,7 @@ mod tests {
                     result: "Found results".to_string(),
                 })),
             ],
-            vec![ToolDefinition {
-                name: "search".to_string(),
-                description: "Search".to_string(),
-                parameters: r#"{"type":"object"}"#.to_string(),
-                server: None,
-            }],
+            vec![ToolDefinition::new("search", "Search", r#"{"type":"object"}"#)],
         );
 
         let req = build_response_request("gpt-4.1", &context).unwrap();
@@ -453,12 +448,11 @@ mod tests {
 
     #[test]
     fn test_map_tools_valid() {
-        let tools = vec![ToolDefinition {
-            name: "read_file".to_string(),
-            description: "Read a file".to_string(),
-            parameters: r#"{"type":"object","properties":{"path":{"type":"string"}}}"#.to_string(),
-            server: None,
-        }];
+        let tools = vec![ToolDefinition::new(
+            "read_file",
+            "Read a file",
+            r#"{"type":"object","properties":{"path":{"type":"string"}}}"#,
+        )];
 
         let result = map_tools(&tools).unwrap();
         assert_eq!(result.len(), 1);
@@ -470,12 +464,7 @@ mod tests {
 
     #[test]
     fn test_map_tools_invalid_json() {
-        let tools = vec![ToolDefinition {
-            name: "broken".to_string(),
-            description: "Broken".to_string(),
-            parameters: "not json{".to_string(),
-            server: None,
-        }];
+        let tools = vec![ToolDefinition::new("broken", "Broken", "not json{")];
 
         let result = map_tools(&tools);
         assert!(result.is_err());

@@ -14,3 +14,5 @@ Tools follow a request-response lifecycle:
 - [`ToolCallError`] -- Failed execution: includes the `error` string. Construct from a request with [`ToolCallError::from_request`].
 
 The optional `server` field on `ToolDefinition` tracks which MCP server originally provided the tool, if any.
+
+The optional `annotations` field preserves MCP tool hints such as `readOnlyHint`, `destructiveHint`, `idempotentHint`, and `openWorldHint`. These values are hints supplied by the server and are used by higher-level filtering policy; they are not a security boundary.

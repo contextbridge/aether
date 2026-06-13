@@ -231,12 +231,11 @@ mod tests {
                 ChatMessage::System { content: "You are helpful".to_string(), timestamp: IsoString::now() },
                 ChatMessage::User { content: vec![ContentBlock::text("Hello")], timestamp: IsoString::now() },
             ],
-            vec![ToolDefinition {
-                name: "bash".to_string(),
-                description: "Run a command".to_string(),
-                parameters: r#"{"type": "object", "properties": {"cmd": {"type": "string"}}}"#.to_string(),
-                server: None,
-            }],
+            vec![ToolDefinition::new(
+                "bash",
+                "Run a command",
+                r#"{"type": "object", "properties": {"cmd": {"type": "string"}}}"#,
+            )],
         );
 
         let request = provider.build_request(&context).unwrap();

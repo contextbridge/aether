@@ -299,12 +299,7 @@ mod tests {
                 ChatMessage::User { content: vec![ContentBlock::text("run a tool")], timestamp: IsoString::now() },
                 message,
             ],
-            vec![ToolDefinition {
-                name: "test__tool".to_string(),
-                description: "test".to_string(),
-                parameters: "{\"type\":\"object\"}".to_string(),
-                server: None,
-            }],
+            vec![ToolDefinition::new("test__tool", "test", "{\"type\":\"object\"}")],
         )
     }
 

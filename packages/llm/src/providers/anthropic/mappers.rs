@@ -249,12 +249,11 @@ mod tests {
 
     #[test]
     fn test_map_tools() {
-        let tools = vec![ToolDefinition {
-            name: "search".to_string(),
-            description: "Search for information".to_string(),
-            parameters: r#"{"type": "object", "properties": {"query": {"type": "string"}}}"#.to_string(),
-            server: None,
-        }];
+        let tools = vec![ToolDefinition::new(
+            "search",
+            "Search for information",
+            r#"{"type": "object", "properties": {"query": {"type": "string"}}}"#,
+        )];
 
         let mapped = map_tools(&tools).unwrap();
         assert_eq!(mapped.len(), 1);
@@ -264,12 +263,11 @@ mod tests {
 
     #[test]
     fn test_map_tools_no_cache_control() {
-        let tools = vec![ToolDefinition {
-            name: "search".to_string(),
-            description: "Search for information".to_string(),
-            parameters: r#"{"type": "object", "properties": {"query": {"type": "string"}}}"#.to_string(),
-            server: None,
-        }];
+        let tools = vec![ToolDefinition::new(
+            "search",
+            "Search for information",
+            r#"{"type": "object", "properties": {"query": {"type": "string"}}}"#,
+        )];
 
         let mapped = map_tools(&tools).unwrap();
         assert_eq!(mapped.len(), 1);

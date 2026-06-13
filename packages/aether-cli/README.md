@@ -214,7 +214,7 @@ Define agents with specific model, prompts, and tool configurations:
       "prompts": [".aether/prompts/researcher.md"],
       "mcps": [".aether/researcher-mcp.json"],
       "tools": {
-        "allow": ["coding__grep", "coding__read_file", "coding__glob"],
+        "allow": [{ "readOnly": true }],
         "deny": []
       }
     },
@@ -237,7 +237,7 @@ Define agents with specific model, prompts, and tool configurations:
 - **Agent `mcps`** — Optional ordered MCP config sources that override top-level `mcps` for that agent. Supports the same string shorthand and typed objects as top-level `mcps`.
 - **`userInvocable: true`** — Agent appears as a mode option in ACP clients (e.g., Wisp's Shift+Tab)
 - **`agentInvocable: true`** — Agent can be spawned as a sub-agent
-- **`tools`** — Filter which MCP tools the agent can use (optional). Supports `allow` (allowlist) and `deny` (blocklist) with trailing `*` wildcards. If both are set, `allow` is applied first, then `deny` removes from the result. Omit or leave empty to allow all tools.
+- **`tools`** — Filter which MCP tools the agent can use (optional). Supports `allow` (allowlist) and `deny` (blocklist) entries. Entries can be exact/trailing-`*` name patterns such as `coding__read_file` or annotation matchers such as `{ "readOnly": true }`, `{ "destructive": false }`, `{ "idempotent": true }`, and `{ "openWorld": false }`. If both are set, `allow` is applied first, then `deny` removes from the result. Omit or leave empty to allow all tools.
 
 You can scaffold settings interactively via `aether settings init --user` or `aether settings init --project`. Edit the generated settings JSON directly to customize agents.
 

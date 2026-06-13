@@ -1,7 +1,7 @@
 use super::InitScope;
 use super::harness::HarnessIntegration;
 use super::recommendations::{ProviderRecommendations, recommended_for_provider};
-use aether_core::agent_spec::ToolFilter;
+use aether_core::agent_spec::{ToolFilter, ToolMatcher};
 use aether_project::{AetherSettings, AgentConfig, McpSourceSpec, PromptSource};
 use llm::catalog::Provider;
 use mcp_utils::client::{InMemoryServerConfig, InMemoryType, McpServerConfig};
@@ -14,9 +14,6 @@ const EXPLORER_AGENTS_PATH: &str = "agents/codebase-explorer/AGENTS.md";
 
 const AETHER_SKILL_MD: &str = include_str!("templates/skills/aether/SKILL.md");
 const AETHER_SKILL_PATH: &str = "skills/aether/SKILL.md";
-
-const READ_ONLY_DENIED_CODING_TOOLS: &[&str] =
-    &["coding__bash", "coding__edit_file", "coding__lsp_rename", "coding__write_file"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 #[clap(rename_all = "kebab-case")]
@@ -63,7 +60,10 @@ fn minimal_preset(provider: Provider, recs: &ProviderRecommendations, scope: Ini
         reasoning_effort: recs.plan.reasoning_effort,
         user_invocable: true,
         mcps: vec![mcps(vec![("coding", vec![]), ("skills", skills_args(&[]))])],
-        tools: ToolFilter { allow: vec!["coding__bash".to_string(), "skills__*".to_string()], deny: vec![] },
+        tools: ToolFilter {
+            allow: vec![ToolMatcher::name("coding__bash"), ToolMatcher::name("skills__*")],
+            deny: vec![],
+        },
         ..AgentConfig::default()
     };
 
@@ -207,5 +207,15 @@ fn mcps(servers: Vec<(&str, Vec<String>)>) -> McpSourceSpec {
 }
 
 fn read_only_coding_tools() -> ToolFilter {
-    ToolFilter { allow: vec![], deny: READ_ONLY_DENIED_CODING_TOOLS.iter().map(|tool| (*tool).to_string()).collect() }
+    ToolFilter {
+        allow: vec![
+            ToolMatcher::read_only(),
+            ToolMatcher::name("plan__*"),
+            ToolMatcher::name("skills__*"),
+            ToolMatcher::name("subagents__*"),
+            ToolMatcher::name("tasks__*"),
+            ToolMatcher::name("survey__*"),
+        ],
+        deny: vec![],
+    }
 }

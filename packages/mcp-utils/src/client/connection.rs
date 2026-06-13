@@ -6,6 +6,7 @@ use super::{
 };
 use crate::{client::OAuthHandlerContext, transport::create_in_memory_transport};
 use aether_auth::{OAuthCredentialStorage, create_auth_manager_from_store, perform_oauth_flow};
+use llm::ToolAnnotations;
 use rmcp::{
     RoleClient, RoleServer, ServiceExt,
     model::{ClientInfo, Root, Tool as RmcpTool},
@@ -33,6 +34,17 @@ pub struct Tool {
     pub name: String,
     pub description: String,
     pub parameters: Value,
+    pub annotations: Option<ToolAnnotations>,
+}
+
+pub(crate) fn convert_tool_annotations(annotations: &rmcp::model::ToolAnnotations) -> ToolAnnotations {
+    ToolAnnotations {
+        title: annotations.title.clone(),
+        read_only_hint: annotations.read_only_hint,
+        destructive_hint: annotations.destructive_hint,
+        idempotent_hint: annotations.idempotent_hint,
+        open_world_hint: annotations.open_world_hint,
+    }
 }
 
 impl From<RmcpTool> for Tool {
@@ -47,6 +59,7 @@ impl From<&RmcpTool> for Tool {
             name: tool.name.to_string(),
             description: tool.description.clone().unwrap_or_default().to_string(),
             parameters: serde_json::Value::Object((*tool.input_schema).clone()),
+            annotations: tool.annotations.as_ref().map(convert_tool_annotations),
         }
     }
 }

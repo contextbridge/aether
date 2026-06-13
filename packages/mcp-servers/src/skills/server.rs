@@ -335,7 +335,7 @@ impl ServerHandler for SkillsMcp {
 #[tool_router]
 impl SkillsMcp {
     #[doc = include_str!("tools/list_skills/description.md")]
-    #[tool]
+    #[tool(annotations(read_only_hint = true, open_world_hint = false))]
     pub async fn list_skills(&self, request: Parameters<ListSkillsInput>) -> Result<Json<ListSkillsOutput>, String> {
         let Parameters(_input) = request;
         let catalog = self.catalog.read().await;
@@ -360,7 +360,7 @@ impl SkillsMcp {
     }
 
     #[doc = include_str!("tools/get_skills/description.md")]
-    #[tool]
+    #[tool(annotations(read_only_hint = true, open_world_hint = false))]
     pub async fn get_skills(&self, request: Parameters<LoadSkillsInput>) -> Result<Json<LoadSkillsOutput>, String> {
         let Parameters(args) = request;
         let expander = ShellExpander::new();
@@ -373,7 +373,12 @@ impl SkillsMcp {
     }
 
     #[doc = include_str!("tools/save_note/description.md")]
-    #[tool]
+    #[tool(annotations(
+        read_only_hint = false,
+        destructive_hint = false,
+        idempotent_hint = false,
+        open_world_hint = false
+    ))]
     pub async fn save_note(&self, request: Parameters<SaveNoteInput>) -> Result<Json<SaveNoteOutput>, String> {
         let Parameters(input) = request;
         let today = today_string();
@@ -382,7 +387,7 @@ impl SkillsMcp {
     }
 
     #[doc = include_str!("tools/search_notes/description.md")]
-    #[tool]
+    #[tool(annotations(read_only_hint = true, open_world_hint = false))]
     pub async fn search_notes(&self, request: Parameters<SearchNotesInput>) -> Result<Json<SearchNotesOutput>, String> {
         let Parameters(input) = request;
         let result = search_notes(&input, &self.notes_dir).map_err(|e| e.to_string())?;

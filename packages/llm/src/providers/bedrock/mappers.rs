@@ -438,12 +438,11 @@ mod tests {
 
     #[test]
     fn test_map_tools() {
-        let tools = vec![ToolDefinition {
-            name: "search".to_string(),
-            description: "Search for information".to_string(),
-            parameters: r#"{"type": "object", "properties": {"query": {"type": "string"}}}"#.to_string(),
-            server: None,
-        }];
+        let tools = vec![ToolDefinition::new(
+            "search",
+            "Search for information",
+            r#"{"type": "object", "properties": {"query": {"type": "string"}}}"#,
+        )];
 
         let config = map_tools(&tools, None).unwrap();
         assert_eq!(config.tools().len(), 1);
@@ -535,12 +534,11 @@ mod tests {
 
     #[test]
     fn tool_cache_point_is_added_when_cache_point_provided() {
-        let tools = vec![ToolDefinition {
-            name: "search".to_string(),
-            description: "Search for information".to_string(),
-            parameters: r#"{"type": "object", "properties": {"query": {"type": "string"}}}"#.to_string(),
-            server: None,
-        }];
+        let tools = vec![ToolDefinition::new(
+            "search",
+            "Search for information",
+            r#"{"type": "object", "properties": {"query": {"type": "string"}}}"#,
+        )];
         let cache_point = default_cache_point().unwrap();
 
         let config = map_tools(&tools, Some(&cache_point)).unwrap();
@@ -552,12 +550,7 @@ mod tests {
 
     #[test]
     fn test_map_tools_invalid_json() {
-        let tools = vec![ToolDefinition {
-            name: "broken".to_string(),
-            description: "A broken tool".to_string(),
-            parameters: "not valid json".to_string(),
-            server: None,
-        }];
+        let tools = vec![ToolDefinition::new("broken", "A broken tool", "not valid json")];
 
         let result = map_tools(&tools, None);
         assert!(result.is_err());

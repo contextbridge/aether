@@ -7,6 +7,46 @@ pub struct ToolDefinition {
     pub description: String,
     pub parameters: String,
     pub server: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<ToolAnnotations>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolAnnotations {
+    pub title: Option<String>,
+    pub read_only_hint: Option<bool>,
+    pub destructive_hint: Option<bool>,
+    pub idempotent_hint: Option<bool>,
+    pub open_world_hint: Option<bool>,
+}
+
+impl ToolDefinition {
+    pub fn new(name: impl Into<String>, description: impl Into<String>, parameters: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            parameters: parameters.into(),
+            server: None,
+            annotations: None,
+        }
+    }
+
+    pub fn with_server(mut self, server: impl Into<String>) -> Self {
+        self.server = Some(server.into());
+        self
+    }
+
+    pub fn with_annotations(mut self, annotations: impl Into<Option<ToolAnnotations>>) -> Self {
+        self.annotations = annotations.into();
+        self
+    }
+}
+
+impl ToolAnnotations {
+    pub fn read_only() -> Self {
+        Self { read_only_hint: Some(true), ..Self::default() }
+    }
 }
 
 /// Tool call request from the LLM

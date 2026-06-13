@@ -1,4 +1,5 @@
 use aether_cli::init::{HarnessIntegration, InitError, InitOutcome, InitTarget, Preset, apply_init};
+use aether_core::agent_spec::ToolMatcher;
 use aether_core::core::Prompt;
 use aether_project::{AetherSettings, AgentCatalog, McpSourceSpec, PromptSource};
 use llm::catalog::Provider;
@@ -116,7 +117,7 @@ fn writes_project_batteries_preset_for_anthropic() {
     let plan_servers = inline_servers(&plan.mcps[0]);
     let plan_server_names: Vec<&str> = plan_servers.keys().map(String::as_str).collect();
     assert_eq!(plan_server_names, vec!["coding", "plan", "skills", "subagents", "survey", "tasks"]);
-    assert!(!plan.tools.deny.iter().any(|tool| tool.starts_with("plan__")));
+    assert!(!plan.tools.deny.iter().any(|tool| matches!(tool, ToolMatcher::Name(name) if name.starts_with("plan__"))));
 
     let explore = &settings.agents[2];
     assert!(explore.agent_invocable);
@@ -293,15 +294,25 @@ fn unsupported_provider_returns_error_without_writing_files() {
 }
 
 fn assert_read_only_coding_tools(agent: &aether_project::AgentConfig) {
-    assert_eq!(agent.tools.allow, Vec::<String>::new());
-    assert_eq!(agent.tools.deny, vec!["coding__bash", "coding__edit_file", "coding__lsp_rename", "coding__write_file"]);
+    assert_eq!(
+        agent.tools.allow,
+        vec![
+            ToolMatcher::read_only(),
+            ToolMatcher::name("plan__*"),
+            ToolMatcher::name("skills__*"),
+            ToolMatcher::name("subagents__*"),
+            ToolMatcher::name("tasks__*"),
+            ToolMatcher::name("survey__*"),
+        ]
+    );
+    assert!(agent.tools.deny.is_empty());
 }
 
 fn assert_minimal_mcp_and_tools(agent: &aether_project::AgentConfig) {
     let McpSourceSpec::Inline { servers } = &agent.mcps[0] else { panic!("minimal MCPs should be inline") };
     let names: Vec<&str> = servers.keys().map(String::as_str).collect();
     assert_eq!(names, vec!["coding", "skills"]);
-    assert_eq!(agent.tools.allow, vec!["coding__bash", "skills__*"]);
+    assert_eq!(agent.tools.allow, vec![ToolMatcher::name("coding__bash"), ToolMatcher::name("skills__*")]);
     assert!(agent.tools.deny.is_empty());
 }
 

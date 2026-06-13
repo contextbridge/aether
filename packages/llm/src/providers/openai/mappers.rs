@@ -279,12 +279,11 @@ mod tests {
 
     #[test]
     fn map_tools_with_valid_json() {
-        let tools = vec![ToolDefinition {
-            name: "search".to_string(),
-            description: "Search for things".to_string(),
-            parameters: r#"{"type": "object", "properties": {"q": {"type": "string"}}}"#.to_string(),
-            server: None,
-        }];
+        let tools = vec![ToolDefinition::new(
+            "search",
+            "Search for things",
+            r#"{"type": "object", "properties": {"q": {"type": "string"}}}"#,
+        )];
         let result = map_tools(&tools, None);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().len(), 1);
@@ -292,12 +291,7 @@ mod tests {
 
     #[test]
     fn map_tools_with_invalid_json_returns_error() {
-        let tools = vec![ToolDefinition {
-            name: "broken_tool".to_string(),
-            description: "A tool with bad params".to_string(),
-            parameters: "not valid json{{{".to_string(),
-            server: None,
-        }];
+        let tools = vec![ToolDefinition::new("broken_tool", "A tool with bad params", "not valid json{{{")];
         let result = map_tools(&tools, None);
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -311,12 +305,7 @@ mod tests {
     #[test]
     fn map_tools_applies_transform_when_provided() {
         let raw_params = r#"{"$schema": "https://json-schema.org/draft/2020-12/schema", "title": "MySchema", "type": "object", "properties": {"q": {"type": "string", "format": "uri"}}}"#;
-        let tools = vec![ToolDefinition {
-            name: "search".to_string(),
-            description: "Search".to_string(),
-            parameters: raw_params.to_string(),
-            server: None,
-        }];
+        let tools = vec![ToolDefinition::new("search", "Search", raw_params)];
         let result = map_tools(&tools, Some(normalize_for_moonshot)).unwrap();
         let ChatCompletionTools::Function(f) = &result[0] else {
             panic!("Expected function tool");

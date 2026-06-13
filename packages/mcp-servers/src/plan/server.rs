@@ -130,21 +130,36 @@ impl PlanMcp {
     }
 
     #[doc = include_str!("./write_plan_description.md")]
-    #[tool]
+    #[tool(annotations(
+        read_only_hint = false,
+        destructive_hint = true,
+        idempotent_hint = false,
+        open_world_hint = false
+    ))]
     pub async fn write_plan(&self, request: Parameters<WritePlanInput>) -> Result<Json<WritePlanOutput>, String> {
         let Parameters(input) = request;
         write_plan_file(&self.plans_dir, input).await.map(Json).map_err(|e| e.to_string())
     }
 
     #[doc = include_str!("./edit_plan_description.md")]
-    #[tool]
+    #[tool(annotations(
+        read_only_hint = false,
+        destructive_hint = true,
+        idempotent_hint = false,
+        open_world_hint = false
+    ))]
     pub async fn edit_plan(&self, request: Parameters<EditPlanInput>) -> Result<Json<EditPlanOutput>, String> {
         let Parameters(input) = request;
         edit_plan_file(&self.plans_dir, input).await.map(Json).map_err(|e| e.to_string())
     }
 
     #[doc = include_str!("./submit_plan_description.md")]
-    #[tool]
+    #[tool(annotations(
+        read_only_hint = false,
+        destructive_hint = false,
+        idempotent_hint = false,
+        open_world_hint = true
+    ))]
     pub async fn submit_plan(
         &self,
         request: Parameters<SubmitPlanInput>,
