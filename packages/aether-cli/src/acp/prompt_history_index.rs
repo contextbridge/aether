@@ -36,6 +36,19 @@ impl PromptHistoryIndex {
         }
     }
 
+    pub(super) fn relocate_session(&self, session_id: &str, new_cwd: &Path) -> io::Result<()> {
+        let mut state = self.lock_state();
+        let entries = self.ensure_loaded(&mut state)?;
+
+        let mut changed = false;
+        for entry in entries.iter_mut().filter(|entry| entry.session_id == session_id) {
+            entry.cwd = new_cwd.to_path_buf();
+            changed = true;
+        }
+
+        if changed { self.rewrite_file(entries.iter()) } else { Ok(()) }
+    }
+
     pub(super) fn search(&self, params: &PromptSearchParams) -> io::Result<PromptSearchResponse> {
         let query = params.query.trim();
         let limit = prompt_search_limit(params.limit);

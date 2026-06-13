@@ -13,12 +13,13 @@ use rmcp::{
     service::RequestContext,
     tool, tool_handler, tool_router,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::RwLock;
 
 use super::tools::{AgentExecutor, SpawnSubAgentsInput, SpawnSubAgentsOutput};
+use crate::workspace_paths::resolve_path;
 
 type ProgressCallback = Box<dyn Fn(&str, &str, &AgentMessage) + Send + Sync>;
 
@@ -76,6 +77,14 @@ impl SubAgentsMcp {
     pub fn from_args(args: Vec<String>) -> Result<Self, String> {
         let parsed_args = SubAgentsMcpArgs::from_args(args)?;
         let project_root = parsed_args.project_root.unwrap_or_else(|| PathBuf::from("."));
+        Self::from_project_root(project_root)
+    }
+
+    pub fn from_args_with_default_project_root(args: Vec<String>, default_root: &Path) -> Result<Self, String> {
+        let parsed_args = SubAgentsMcpArgs::from_args(args)?;
+        let project_root = parsed_args
+            .project_root
+            .map_or_else(|| default_root.to_path_buf(), |path| resolve_path(default_root, path));
         Self::from_project_root(project_root)
     }
 

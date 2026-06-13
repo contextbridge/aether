@@ -82,6 +82,39 @@ impl SessionStore {
         Some((scan.meta, scan.events))
     }
 
+    pub(crate) fn session_cwd(&self, session_id: &str) -> Option<PathBuf> {
+        self.session_meta(session_id).map(|meta| meta.cwd)
+    }
+
+    /// Rewrites the session's recorded working directory to `new_cwd`, updating the
+    /// metadata line and any matching prompt-history entries. Event lines are left
+    /// unchanged.
+    pub fn relocate(&self, session_id: &str, new_cwd: &Path) -> io::Result<()> {
+        let path = self.session_path(session_id);
+        let content = fs::read_to_string(&path)?;
+        let mut lines = content.lines();
+        let first =
+            lines.next().ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "session file is empty"))?;
+
+        let mut meta: SessionMeta = serde_json::from_str(first.trim())
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("invalid session metadata: {e}")))?;
+        meta.cwd = new_cwd.to_path_buf();
+        let meta_line = serde_json::to_string(&meta)
+            .map_err(|e| io::Error::other(format!("Failed to serialize session metadata: {e}")))?;
+
+        let tmp_path = path.with_extension("jsonl.tmp");
+        {
+            let mut file = File::create(&tmp_path)?;
+            writeln!(file, "{meta_line}")?;
+            for line in lines {
+                writeln!(file, "{line}")?;
+            }
+        }
+        fs::rename(tmp_path, &path)?;
+
+        self.prompt_history.relocate_session(session_id, new_cwd)
+    }
+
     pub fn list(&self) -> Vec<SessionSummary> {
         let Ok(entries) = fs::read_dir(&self.dir) else {
             return Vec::new();
@@ -468,6 +501,40 @@ mod tests {
 
         let (_, events) = store.load("s1").unwrap();
         assert_eq!(events, kept);
+    }
+
+    #[test]
+    fn relocate_rewrites_cwd_in_meta_and_prompt_history_for_target_session_only() {
+        let (_dir, store) = temp_store();
+        store.append_meta("s1", &default_meta()).unwrap();
+        store.append_event("s1", &user_msg("hello world")).unwrap();
+        store.append_event("s1", &agent_text("m", "hi there", true)).unwrap();
+        store.append_meta("s2", &meta("s2", "2026-01-02T00:00:00Z", None)).unwrap();
+        store.append_event("s2", &user_msg("other prompt")).unwrap();
+
+        store.relocate("s1", Path::new("/new/workspace")).unwrap();
+
+        let (meta1, events1) = store.load("s1").unwrap();
+        assert_eq!(meta1.cwd, PathBuf::from("/new/workspace"));
+        assert_eq!(events1, vec![user_msg("hello world"), agent_text("m", "hi there", true)]);
+
+        let (meta2, _) = store.load("s2").unwrap();
+        assert_eq!(meta2.cwd, PathBuf::from("/tmp"));
+
+        let moved =
+            store.search_prompts(&PromptSearchParams { query: "hello world".to_string(), limit: None }).unwrap();
+        assert_eq!(moved.results[0].cwd, PathBuf::from("/new/workspace"));
+        let untouched =
+            store.search_prompts(&PromptSearchParams { query: "other prompt".to_string(), limit: None }).unwrap();
+        assert_eq!(untouched.results[0].cwd, PathBuf::from("/tmp"));
+    }
+
+    #[test]
+    fn session_cwd_reads_recorded_directory() {
+        let (_dir, store) = temp_store();
+        store.append_meta("s1", &default_meta()).unwrap();
+        assert_eq!(store.session_cwd("s1"), Some(PathBuf::from("/tmp")));
+        assert_eq!(store.session_cwd("missing"), None);
     }
 
     #[test]

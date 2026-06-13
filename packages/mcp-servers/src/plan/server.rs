@@ -1,4 +1,5 @@
 use crate::file_ops::{FileError, edit_text_file, read_text_file, write_text_file};
+use crate::workspace_paths::resolve_path;
 use clap::Parser;
 use mcp_utils::display_meta::{FileDiff, ToolDisplayMeta, ToolResultMeta, basename};
 use rmcp::{
@@ -95,6 +96,20 @@ impl PlanMcp {
             tool_router: Self::tool_router(),
             plans_dir: absolutize(plans_dir.unwrap_or(default_plans_dir)),
             prompt_file,
+            submit_command,
+        })
+    }
+
+    pub fn from_args_with_workspace_root(
+        args: Vec<String>,
+        default_plans_dir: PathBuf,
+        workspace_root: &Path,
+    ) -> Result<Self, String> {
+        let PlanMcpArgs { plans_dir, prompt_file, submit_command } = PlanMcpArgs::from_args(args)?;
+        Ok(Self {
+            tool_router: Self::tool_router(),
+            plans_dir: plans_dir.map_or(default_plans_dir, |path| resolve_path(workspace_root, path)),
+            prompt_file: prompt_file.map(|path| resolve_path(workspace_root, path)),
             submit_command,
         })
     }
@@ -488,6 +503,34 @@ mod tests {
     fn from_args_explicit_plans_dir_overrides_default() {
         let server = PlanMcp::from_args(vec!["--plans-dir".into(), "/tmp/plans".into()], default()).unwrap();
         assert_eq!(server.plans_dir, PathBuf::from("/tmp/plans"));
+    }
+
+    #[test]
+    fn from_args_with_workspace_root_resolves_relative_paths() {
+        let workspace = PathBuf::from("/workspace");
+        let server = PlanMcp::from_args_with_workspace_root(
+            vec!["--plans-dir".into(), "plans".into(), "--prompt-file".into(), "prompts/plan.md".into()],
+            default(),
+            &workspace,
+        )
+        .unwrap();
+
+        assert_eq!(server.plans_dir, PathBuf::from("/workspace/plans"));
+        assert_eq!(server.prompt_file, Some(PathBuf::from("/workspace/prompts/plan.md")));
+    }
+
+    #[test]
+    fn from_args_with_workspace_root_keeps_absolute_paths() {
+        let workspace = PathBuf::from("/workspace");
+        let server = PlanMcp::from_args_with_workspace_root(
+            vec!["--plans-dir".into(), "/tmp/plans".into(), "--prompt-file".into(), "/tmp/plan.md".into()],
+            default(),
+            &workspace,
+        )
+        .unwrap();
+
+        assert_eq!(server.plans_dir, PathBuf::from("/tmp/plans"));
+        assert_eq!(server.prompt_file, Some(PathBuf::from("/tmp/plan.md")));
     }
 
     #[test]

@@ -106,5 +106,7 @@ pub use fuzzy_matcher::Searchable;
 pub use fuzzy_matcher::FuzzyMatcher;
 
 // Terminal event types (re-exported from crossterm)
-pub use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseEvent, MouseEventKind};
+pub use crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 pub use crossterm::style::Color;

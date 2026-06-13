@@ -6,7 +6,7 @@ use crate::components::input_prompt::{InputPrompt, prompt_content_width};
 use crate::components::prompt_search_picker::{PromptSearchPicker, PromptSearchPickerMessage, cursor_at_match_end};
 use crate::components::text_input::{SelectedFileMention, TextInput, TextInputMessage, is_newline_modifier};
 use crate::keybindings::Keybindings;
-use acp_utils::notifications::{PromptSearchParams, PromptSearchResponse};
+use acp_utils::notifications::{AetherCapabilities, PromptSearchParams, PromptSearchResponse};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use tui::{Component, Cursor, Event, Frame, KeyCode, Line, PickerMessage, ViewContext};
@@ -18,6 +18,7 @@ pub enum PromptComposerMessage {
     SubmitRequested { user_input: String, attachments: Vec<PromptAttachment> },
     OpenSettings,
     OpenSessionPicker,
+    OpenWorkspacePicker,
     NewSession,
     SearchPrompts(PromptSearchParams),
 }
@@ -27,7 +28,8 @@ pub struct PromptComposer {
     available_commands: Vec<CommandEntry>,
     active_overlay: Option<Overlay>,
     pending_media: Vec<PromptAttachment>,
-    prompt_search_enabled: bool,
+    working_dir: PathBuf,
+    capabilities: AetherCapabilities,
     keybindings: Keybindings,
 }
 
@@ -39,20 +41,29 @@ enum Overlay {
 
 impl Default for PromptComposer {
     fn default() -> Self {
-        Self::new(Keybindings::default(), true)
+        Self::new(
+            Keybindings::default(),
+            PathBuf::from("."),
+            AetherCapabilities { prompt_search: true, ..Default::default() },
+        )
     }
 }
 
 impl PromptComposer {
-    pub fn new(keybindings: Keybindings, prompt_search_enabled: bool) -> Self {
+    pub fn new(keybindings: Keybindings, working_dir: PathBuf, capabilities: AetherCapabilities) -> Self {
         Self {
             text_input: TextInput::new(keybindings.clone()),
             available_commands: Vec::new(),
             active_overlay: None,
             pending_media: Vec::new(),
-            prompt_search_enabled,
+            working_dir,
+            capabilities,
             keybindings,
         }
+    }
+
+    pub fn set_working_dir(&mut self, working_dir: PathBuf) {
+        self.working_dir = working_dir;
     }
 
     pub fn on_prompt_search_results(&mut self, response: PromptSearchResponse) {
@@ -281,13 +292,13 @@ impl PromptComposer {
         match msgs.into_iter().next() {
             Some(TextInputMessage::Submit) => Some(self.prepare_submit()),
             Some(TextInputMessage::OpenCommandPicker) => {
-                let mut commands = builtin_commands();
+                let mut commands = builtin_commands(&self.capabilities);
                 commands.extend(self.available_commands.clone());
                 self.active_overlay = Some(Overlay::Command(CommandPicker::new(commands)));
                 Some(vec![])
             }
             Some(TextInputMessage::OpenFilePicker) => {
-                self.active_overlay = Some(Overlay::File(FilePicker::new()));
+                self.active_overlay = Some(Overlay::File(FilePicker::new(&self.working_dir)));
                 Some(vec![])
             }
             None => Some(vec![]),
@@ -307,6 +318,9 @@ impl PromptComposer {
             self.text_input.clear();
             self.close_all();
             vec![PromptComposerMessage::OpenSessionPicker]
+        } else if cmd.builtin && cmd.name == "move" {
+            self.close_all();
+            vec![PromptComposerMessage::OpenWorkspacePicker]
         } else if cmd.has_input {
             self.text_input.set_input(format!("/{} ", cmd.name));
             vec![]
@@ -378,7 +392,7 @@ impl Component for PromptComposer {
                 Some(vec![])
             }
             Event::Key(key_event) => {
-                if self.prompt_search_enabled
+                if self.capabilities.prompt_search
                     && self.keybindings.open_prompt_search.matches(*key_event)
                     && self.active_overlay.is_none()
                 {
@@ -488,8 +502,8 @@ fn collect_submit_attachments(user_input: &str, selected_mentions: Vec<SelectedF
         .collect()
 }
 
-fn builtin_commands() -> Vec<CommandEntry> {
-    vec![
+fn builtin_commands(capabilities: &AetherCapabilities) -> Vec<CommandEntry> {
+    let mut commands = vec![
         CommandEntry {
             name: "clear".into(),
             description: "Clear screen and start a new session".into(),
@@ -511,7 +525,17 @@ fn builtin_commands() -> Vec<CommandEntry> {
             hint: None,
             builtin: true,
         },
-    ]
+    ];
+    if capabilities.workspace_move {
+        commands.push(CommandEntry {
+            name: "move".into(),
+            description: "Move changes to another workspace".into(),
+            has_input: false,
+            hint: None,
+            builtin: true,
+        });
+    }
+    commands
 }
 
 #[cfg(test)]

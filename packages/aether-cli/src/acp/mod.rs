@@ -26,6 +26,7 @@ use crate::settings_args::SettingsSourceArgs;
 use agent_client_protocol as acp;
 use llm::ReasoningEffort;
 use std::env::current_dir;
+use std::io;
 use std::sync::Arc;
 use std::{fs::create_dir_all, path::PathBuf};
 use thiserror::Error;
@@ -34,6 +35,7 @@ use tracing_appender::rolling::daily;
 use tracing_subscriber::EnvFilter;
 
 use crate::credentials::build_oauth_credential_store;
+use crate::workspace::WorkspaceManager;
 use aether_auth::OAuthError;
 use session_factory::InitialSessionSelection;
 use session_store::SessionStore;
@@ -79,6 +81,12 @@ pub enum AcpRunError {
 
     #[error("Failed to initialize OAuth credential store: {0}")]
     CredentialStore(#[from] OAuthError),
+
+    #[error("Failed to initialize session store: {0}")]
+    SessionStore(#[source] io::Error),
+
+    #[error("Failed to initialize workspace manager: {0}")]
+    WorkspaceManager(#[source] io::Error),
 }
 
 pub async fn run_acp(args: AcpArgs) -> Result<AcpRunOutcome, AcpRunError> {
@@ -93,13 +101,14 @@ pub async fn run_acp(args: AcpArgs) -> Result<AcpRunOutcome, AcpRunError> {
     } else {
         InitialSessionSelection::default()
     };
-    let session_store =
-        SessionStore::new().map_or_else(|e| panic!("Failed to initialize session store: {e}"), Arc::new);
+    let session_store = Arc::new(SessionStore::new().map_err(AcpRunError::SessionStore)?);
+    let workspace_manager = Arc::new(WorkspaceManager::new().map_err(AcpRunError::WorkspaceManager)?);
     let cwd = current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let oauth_credential_store = build_oauth_credential_store(&args.settings_source, &cwd)?;
     let provider_connections = args.provider_connection.into_overrides();
     let state = Arc::new(AcpState::new(AcpStateConfig {
         session_store,
+        workspace_manager,
         oauth_credential_store,
         initial_selection,
         settings_source: args.settings_source,

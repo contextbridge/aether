@@ -1,5 +1,6 @@
 use mcp_servers::coding::error::BashError;
 use mcp_servers::coding::tools::bash::{BashInput, BashResult, execute_command, read_background_bash};
+use std::fs::canonicalize;
 use std::time::Duration;
 
 #[tokio::test]
@@ -275,4 +276,21 @@ async fn test_read_background_bash_failed_status() {
         }
         BashResult::Completed(_) => panic!("Expected background result"),
     }
+}
+
+#[tokio::test]
+async fn test_execute_command_in_dir_foreground() -> Result<(), Box<dyn std::error::Error>> {
+    use mcp_servers::coding::tools::bash::execute_command_in_dir;
+
+    let temp = tempfile::tempdir()?;
+    let args = BashInput { command: "pwd".to_string(), timeout: None, description: None, run_in_background: None };
+    let result = execute_command_in_dir(args, Some(temp.path())).await?;
+    let BashResult::Completed(output) = result else {
+        return Err("Expected completed result".into());
+    };
+
+    let pwd = output.output.trim();
+
+    assert_eq!(canonicalize(pwd)?, canonicalize(temp.path())?);
+    Ok(())
 }

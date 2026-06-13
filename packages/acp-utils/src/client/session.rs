@@ -13,7 +13,7 @@ use agent_client_protocol::schema::{
     RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome, SessionCapabilities,
     SessionConfigOption, SessionId, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, TextContent,
 };
-use agent_client_protocol::{self as acp, Client, ConnectionTo};
+use agent_client_protocol::{self as acp, Client, ConnectionTo, JsonRpcRequest};
 use std::str::FromStr;
 use tokio::sync::mpsc;
 use tracing::info;
@@ -237,40 +237,46 @@ async fn run_main(
                 }
             }
             PromptCommand::ListSessions => {
-                let req = ListSessionsRequest::new();
-                match cx.send_request(req).block_task().await {
-                    Ok(resp) => {
-                        let _ = event_tx.send(AcpEvent::SessionsListed { sessions: resp.sessions });
-                    }
-                    Err(e) => {
-                        let _ = event_tx.send(AcpEvent::PromptError(e));
-                    }
-                }
+                request_to_event(
+                    &cx,
+                    &event_tx,
+                    ListSessionsRequest::new(),
+                    |resp| AcpEvent::SessionsListed { sessions: resp.sessions },
+                    AcpEvent::PromptError,
+                )
+                .await;
             }
             PromptCommand::LoadSession { session_id, cwd } => {
-                let req = LoadSessionRequest::new(session_id.clone(), cwd);
-                match cx.send_request(req).block_task().await {
-                    Ok(resp) => {
-                        let config_options = resp.config_options.unwrap_or_default();
-                        let _ = event_tx.send(AcpEvent::SessionLoaded { session_id, config_options });
-                    }
-                    Err(e) => {
-                        let _ = event_tx.send(AcpEvent::PromptError(e));
-                    }
-                }
+                request_to_event(
+                    &cx,
+                    &event_tx,
+                    LoadSessionRequest::new(session_id.clone(), cwd),
+                    |resp| AcpEvent::SessionLoaded {
+                        session_id,
+                        config_options: resp.config_options.unwrap_or_default(),
+                    },
+                    AcpEvent::PromptError,
+                )
+                .await;
             }
             PromptCommand::NewSession { cwd } => {
-                let req = NewSessionRequest::new(cwd);
-                match cx.send_request(req).block_task().await {
-                    Ok(resp) => {
-                        let config_options = resp.config_options.unwrap_or_default();
-                        let _ =
-                            event_tx.send(AcpEvent::NewSessionCreated { session_id: resp.session_id, config_options });
-                    }
-                    Err(e) => {
-                        let _ = event_tx.send(AcpEvent::PromptError(e));
-                    }
-                }
+                request_to_event(
+                    &cx,
+                    &event_tx,
+                    NewSessionRequest::new(cwd),
+                    |resp| AcpEvent::NewSessionCreated {
+                        session_id: resp.session_id,
+                        config_options: resp.config_options.unwrap_or_default(),
+                    },
+                    AcpEvent::PromptError,
+                )
+                .await;
+            }
+            PromptCommand::MoveWorkspace(params) => {
+                request_to_event(&cx, &event_tx, params, AcpEvent::WorkspaceMoved, |e| AcpEvent::WorkspaceMoveFailed {
+                    error: format!("{e}"),
+                })
+                .await;
             }
             cmd => handle_side_command(&cx, &event_tx, cmd).await,
         }
@@ -332,27 +338,44 @@ async fn handle_side_command(
         }
         PromptCommand::SearchPrompts(params) => {
             let query = params.query.clone();
-            match cx.send_request(params).block_task().await {
-                Ok(resp) => {
-                    let _ = event_tx.send(AcpEvent::PromptSearchResults(resp));
-                }
-                Err(e) => {
-                    let _ = event_tx.send(AcpEvent::PromptSearchFailed { query, error: format!("{e}") });
-                }
-            }
+            request_to_event(cx, event_tx, params, AcpEvent::PromptSearchResults, |e| AcpEvent::PromptSearchFailed {
+                query,
+                error: format!("{e}"),
+            })
+            .await;
         }
         PromptCommand::SessionPreview(params) => {
             let session_id = params.session_id.clone();
-            match cx.send_request(params).block_task().await {
-                Ok(resp) => {
-                    let _ = event_tx.send(AcpEvent::SessionPreviewLoaded(resp));
-                }
-                Err(e) => {
-                    let _ = event_tx.send(AcpEvent::SessionPreviewFailed { session_id, error: format!("{e}") });
-                }
-            }
+            request_to_event(cx, event_tx, params, AcpEvent::SessionPreviewLoaded, |e| {
+                AcpEvent::SessionPreviewFailed { session_id, error: format!("{e}") }
+            })
+            .await;
+        }
+        PromptCommand::ListWorkspaces(params) => {
+            request_to_event(cx, event_tx, params, AcpEvent::WorkspacesListed, |e| AcpEvent::WorkspaceListFailed {
+                error: format!("{e}"),
+            })
+            .await;
+        }
+        PromptCommand::MoveWorkspace(_) => {
+            tracing::warn!("ignoring MoveWorkspace while prompt is in-flight");
+            let _ = event_tx.send(AcpEvent::WorkspaceMoveFailed { error: "a prompt is in flight".to_string() });
         }
     }
+}
+
+async fn request_to_event<T: JsonRpcRequest>(
+    cx: &ConnectionTo<acp::Agent>,
+    event_tx: &mpsc::UnboundedSender<AcpEvent>,
+    params: T,
+    ok: impl FnOnce(T::Response) -> AcpEvent,
+    err: impl FnOnce(acp::Error) -> AcpEvent,
+) {
+    let event = match cx.send_request(params).block_task().await {
+        Ok(resp) => ok(resp),
+        Err(e) => err(e),
+    };
+    let _ = event_tx.send(event);
 }
 
 fn auto_approve_option(req: &RequestPermissionRequest) -> PermissionOptionId {

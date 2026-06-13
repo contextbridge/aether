@@ -1,5 +1,7 @@
 #![doc = include_str!("../README.md")]
 
+pub mod workspace_paths;
+
 #[cfg(any(feature = "all", feature = "subagents"))]
 pub mod setup;
 #[cfg(any(feature = "all", feature = "subagents"))]

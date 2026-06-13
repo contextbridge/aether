@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
-
-use tokio::process::Command;
+use std::process::Command;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceStatus {
@@ -19,22 +18,22 @@ impl WorkspaceStatus {
             .map_or_else(|| self.display_dir.clone(), |git_ref| format!("{} · {git_ref}", self.display_dir))
     }
 
-    pub async fn resolve(cwd: &Path) -> Self {
+    pub fn resolve(cwd: &Path) -> Self {
         let display_dir = home_relative_path(cwd);
-        let git_ref = resolve_git_ref(cwd).await;
+        let git_ref = resolve_git_ref(cwd);
         Self::new(display_dir, git_ref)
     }
 }
 
-async fn resolve_git_ref(cwd: &Path) -> Option<String> {
-    if let Some(branch) = git_stdout(cwd, &["branch", "--show-current"]).await {
+fn resolve_git_ref(cwd: &Path) -> Option<String> {
+    if let Some(branch) = git_stdout(cwd, &["branch", "--show-current"]) {
         return Some(branch);
     }
-    git_stdout(cwd, &["rev-parse", "--short", "HEAD"]).await
+    git_stdout(cwd, &["rev-parse", "--short", "HEAD"])
 }
 
-async fn git_stdout(cwd: &Path, args: &[&str]) -> Option<String> {
-    let output = Command::new("git").args(args).current_dir(cwd).output().await.ok()?;
+fn git_stdout(cwd: &Path, args: &[&str]) -> Option<String> {
+    let output = Command::new("git").args(args).current_dir(cwd).output().ok()?;
 
     if !output.status.success() {
         return None;
@@ -44,7 +43,7 @@ async fn git_stdout(cwd: &Path, args: &[&str]) -> Option<String> {
     if text.is_empty() { None } else { Some(text) }
 }
 
-fn home_relative_path(path: &Path) -> String {
+pub fn home_relative_path(path: &Path) -> String {
     home_dir().map_or_else(|| path.display().to_string(), |home| home_relative_path_with_home(path, &home))
 }
 

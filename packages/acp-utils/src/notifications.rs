@@ -140,6 +140,51 @@ pub enum SessionPreviewRole {
     Assistant,
 }
 
+/// Parameters for the `_aether/workspace_list` request.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonRpcRequest)]
+#[request(method = "_aether/workspace_list", response = WorkspaceListResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceListParams {
+    pub session_id: String,
+}
+
+/// Response for the `_aether/workspace_list` request: every managed workspace
+/// originating from the same git repository as the session's working directory.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonRpcResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceListResponse {
+    pub workspaces: Vec<WorkspaceEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceEntry {
+    pub path: PathBuf,
+    pub is_current: bool,
+}
+
+/// Parameters for the `_aether/workspace_move` request.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonRpcRequest)]
+#[request(method = "_aether/workspace_move", response = WorkspaceMoveResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceMoveParams {
+    pub session_id: String,
+    pub target: WorkspaceMoveTarget,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum WorkspaceMoveTarget {
+    Existing { path: PathBuf },
+    New { name: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonRpcResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceMoveResponse {
+    pub new_cwd: PathBuf,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionDisplayMeta {
@@ -166,26 +211,18 @@ impl SessionDisplayMeta {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AetherCapabilities {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub prompt_search: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub session_preview: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub workspace_move: bool,
 }
 
 impl AetherCapabilities {
-    #[must_use]
-    pub fn prompt_search() -> Self {
-        Self { prompt_search: true, session_preview: false }
-    }
-
-    #[must_use]
-    pub fn session_preview() -> Self {
-        Self { prompt_search: false, session_preview: true }
-    }
-
     #[must_use]
     pub fn to_meta(self) -> agent_client_protocol::schema::Meta {
         to_aether_meta(&self)
@@ -305,17 +342,10 @@ mod tests {
         );
         assert_eq!(PromptSearchParams { query: String::new(), limit: None }.method(), "_aether/prompt_search");
         assert_eq!(SessionPreviewParams { session_id: String::new() }.method(), "_aether/session_preview");
-    }
-
-    #[test]
-    fn prompt_search_capability_meta_roundtrip() {
-        let meta = AetherCapabilities::prompt_search().to_meta();
-        assert!(AetherCapabilities::from_meta(Some(&meta)).prompt_search);
-        assert!(!AetherCapabilities::from_meta(None).prompt_search);
-        assert!(!AetherCapabilities::from_meta(Some(&agent_client_protocol::schema::Meta::new())).prompt_search);
-        let raw = serde_json::to_string(meta.get(AETHER_META_NAMESPACE).unwrap()).unwrap();
-        assert!(raw.contains("promptSearch"));
-        assert!(!raw.contains("sessionPreview"));
+        assert_eq!(WorkspaceListParams { session_id: String::new() }.method(), "_aether/workspace_list");
+        let move_params =
+            WorkspaceMoveParams { session_id: String::new(), target: WorkspaceMoveTarget::New { name: String::new() } };
+        assert_eq!(move_params.method(), "_aether/workspace_move");
     }
 
     #[test]

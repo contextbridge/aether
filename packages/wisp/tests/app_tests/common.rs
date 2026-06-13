@@ -1,8 +1,8 @@
 use acp_utils::client::{AcpEvent, AcpPromptHandle, PromptCommand};
-use acp_utils::notifications::AetherCapabilities;
-use acp_utils::notifications::ElicitationParams;
-use acp_utils::notifications::ElicitationResponse;
 use acp_utils::notifications::SessionPreviewResponse;
+use acp_utils::notifications::{AetherCapabilities, WorkspaceListResponse};
+use acp_utils::notifications::{ElicitationParams, WorkspaceEntry};
+use acp_utils::notifications::{ElicitationResponse, WorkspaceMoveResponse};
 use agent_client_protocol::Responder;
 use agent_client_protocol::schema as acp;
 use std::path::PathBuf;
@@ -80,7 +80,18 @@ pub(super) const PROGRESS_LINE: &str =
     "⠒ Tip: Hit Tab to adjust reasoning level (off → low → medium → high)  (esc to interrupt)";
 
 pub(super) fn preview_session_capabilities() -> acp::SessionCapabilities {
-    acp::SessionCapabilities::new().meta(Some(AetherCapabilities::session_preview().to_meta()))
+    acp::SessionCapabilities::new()
+        .meta(Some(AetherCapabilities { prompt_search: false, session_preview: true, workspace_move: false }.to_meta()))
+}
+
+pub(super) fn prompt_search_session_capabilities() -> acp::SessionCapabilities {
+    acp::SessionCapabilities::new()
+        .meta(Some(AetherCapabilities { prompt_search: true, session_preview: true, workspace_move: false }.to_meta()))
+}
+
+pub(super) fn workspace_session_capabilities() -> acp::SessionCapabilities {
+    acp::SessionCapabilities::new()
+        .meta(Some(AetherCapabilities { prompt_search: true, session_preview: true, workspace_move: true }.to_meta()))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,14 +149,16 @@ impl Renderer {
         prompt_capabilities: acp::PromptCapabilities,
         size: (u16, u16),
     ) -> Self {
-        Self::new_with_prompt_capabilities_and_auth_methods(
+        Self::new_with_options(RendererOptions {
             terminal,
             agent_name,
-            &[],
+            config_options: &[],
             prompt_capabilities,
-            vec![],
+            session_capabilities: prompt_search_session_capabilities(),
+            auth_methods: vec![],
+            prompt_handle: AcpPromptHandle::noop(),
             size,
-        )
+        })
     }
 
     pub(super) fn new_recording(
@@ -178,7 +191,7 @@ impl Renderer {
         )
     }
 
-    fn new_recording_with_session_capabilities(
+    pub(super) fn new_recording_with_session_capabilities(
         terminal: TestTerminal,
         agent_name: String,
         config_options: &[acp::SessionConfigOption],
@@ -324,6 +337,20 @@ impl Renderer {
         self.handle_terminal_event(Event::Mouse(mouse)).await
     }
 
+    pub(super) async fn on_mouse_down(
+        &mut self,
+        row: u16,
+        column: u16,
+    ) -> Result<LoopAction, Box<dyn std::error::Error>> {
+        let mouse = MouseEvent {
+            kind: MouseEventKind::Down(tui::MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        };
+        self.handle_terminal_event(Event::Mouse(mouse)).await
+    }
+
     pub(super) async fn on_paste(&mut self, text: &str) -> Result<(), Box<dyn std::error::Error>> {
         self.handle_terminal_event(Event::Paste(text.to_string())).await?;
         Ok(())
@@ -415,6 +442,27 @@ impl Renderer {
         notification: acp_utils::notifications::McpNotification,
     ) -> Result<(), Box<dyn std::error::Error>> {
         self.handle_acp_event(AcpEvent::McpNotification(notification))?;
+        Ok(())
+    }
+
+    pub(super) fn on_workspaces_listed(
+        &mut self,
+        workspaces: Vec<WorkspaceEntry>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.handle_acp_event(AcpEvent::WorkspacesListed(WorkspaceListResponse { workspaces }))?;
+        Ok(())
+    }
+
+    pub(super) fn on_workspace_moved(&mut self, new_cwd: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+        self.handle_acp_event(AcpEvent::WorkspaceMoved(WorkspaceMoveResponse { new_cwd }))?;
+        Ok(())
+    }
+
+    pub(super) fn on_workspace_move_failed(
+        &mut self,
+        error: impl Into<String>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.handle_acp_event(AcpEvent::WorkspaceMoveFailed { error: error.into() })?;
         Ok(())
     }
 

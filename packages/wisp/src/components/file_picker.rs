@@ -25,8 +25,8 @@ impl Searchable for FileMatch {
 }
 
 impl FilePicker {
-    pub fn new() -> Self {
-        let root = current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    pub fn new(root: impl AsRef<Path>) -> Self {
+        let root = root.as_ref().to_path_buf();
         let mut entries = Vec::new();
 
         let walker = WalkBuilder::new(&root)
@@ -64,7 +64,7 @@ impl FilePicker {
 
 impl Default for FilePicker {
     fn default() -> Self {
-        Self::new()
+        Self::new(current_dir().unwrap_or_else(|_| PathBuf::from(".")))
     }
 }
 

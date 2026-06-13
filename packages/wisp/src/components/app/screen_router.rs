@@ -41,6 +41,10 @@ impl ScreenRouter {
         self.mode.is_some()
     }
 
+    pub fn set_git_diff_working_dir(&mut self, dir: PathBuf) {
+        self.git_diff_working_dir = dir;
+    }
+
     pub fn toggle_git_diff(&mut self) -> Option<ScreenRouterMessage> {
         match self.mode.take() {
             None => {

@@ -2,6 +2,7 @@ use super::{
     McpClientEvent, McpError, OAuthHandlerFactory, Result,
     config::{McpServer, McpTransport},
     mcp_client::McpClient,
+    roots::primary_root_path,
 };
 use crate::{client::OAuthHandlerContext, transport::create_in_memory_transport};
 use aether_auth::{OAuthCredentialStorage, create_auth_manager_from_store, perform_oauth_flow};
@@ -17,6 +18,7 @@ use rmcp::{
 };
 use serde_json::Value;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::{
@@ -118,7 +120,11 @@ pub(super) async fn connect_server(server: McpServer, ctx: &ConnectConfig) -> Mc
         McpClient::new(ctx.client_info.clone(), name.clone(), ctx.event_sender.clone(), Arc::clone(&ctx.roots));
 
     let outcome = match transport {
-        McpTransport::Stdio { command, args, env } => connect_stdio(&name, command, args, env, mcp_client).await,
+        McpTransport::Stdio { command, args, env } => {
+            let roots = ctx.roots.read().await;
+            let cwd = primary_root_path(&roots);
+            connect_stdio(&name, command, args, env, mcp_client, cwd).await
+        }
         McpTransport::InMemory { server } => connect_in_memory(&name, server, mcp_client).await,
         McpTransport::Http { config } => {
             connect_http(
@@ -180,9 +186,14 @@ async fn connect_stdio(
     args: Vec<String>,
     env: HashMap<String, String>,
     mcp_client: McpClient,
+    cwd: Option<PathBuf>,
 ) -> McpConnectOutcome {
     let mut cmd = Command::new(&command);
     cmd.args(&args).envs(&env);
+
+    if let Some(ref dir) = cwd {
+        cmd.current_dir(dir);
+    }
 
     let (proc, stderr) = match TokioChildProcess::builder(cmd).stderr(Stdio::piped()).spawn() {
         Ok(parts) => parts,

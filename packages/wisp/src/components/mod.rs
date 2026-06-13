@@ -32,5 +32,6 @@ pub mod thought_message;
 pub mod tool_call_status_view;
 pub mod tool_call_statuses;
 pub(crate) mod tracked_tool_call;
+pub(crate) mod workspace_picker;
 
 pub use tui::wrap_selection;

@@ -25,7 +25,8 @@ use super::tools::{
     ListSkillsInput, ListSkillsOutput, LoadSkillsInput, LoadSkillsOutput, SaveNoteInput, SaveNoteOutput,
     SearchNotesInput, SearchNotesOutput, SkillFile, SkillListItem, SkillRequest, save_note,
 };
-use crate::skills::tools::search_notes::search_notes;
+use crate::workspace_paths::primary_root;
+use crate::{skills::tools::search_notes::search_notes, workspace_paths::resolve_path};
 use aether_project::{PromptCatalog, PromptFile, SKILL_FILENAME};
 use mcp_utils::display_meta::ToolDisplayMeta;
 
@@ -115,6 +116,13 @@ impl SkillsMcp {
     pub fn from_args(args: Vec<String>) -> Result<Self, String> {
         let parsed_args = SkillsMcpArgs::from_args(args)?;
         Ok(Self::new(&parsed_args.dirs, parsed_args.notes_dir))
+    }
+
+    pub fn from_args_with_workspace_root(args: Vec<String>, workspace_root: &Path) -> Result<Self, String> {
+        let parsed_args = SkillsMcpArgs::from_args(args)?;
+        let dirs = parsed_args.dirs.into_iter().map(|path| resolve_path(workspace_root, path)).collect::<Vec<_>>();
+        let notes_dir = resolve_path(workspace_root, parsed_args.notes_dir);
+        Ok(Self::new(&dirs, notes_dir).with_roots(vec![workspace_root.to_path_buf()]))
     }
 
     pub fn with_roots(mut self, roots: Vec<PathBuf>) -> Self {
@@ -315,7 +323,8 @@ impl ServerHandler for SkillsMcp {
 
         let content = substitute_parameters(&body, &arguments);
         let expander = ShellExpander::new();
-        let cwd = self.roots.read().await.first().cloned().unwrap_or_else(|| PathBuf::from("."));
+        let roots = self.roots.read().await;
+        let cwd = primary_root(&roots);
         let content = expander.expand(&content, &cwd).await;
         let messages = vec![PromptMessage::new_text(PromptMessageRole::User, content)];
 
@@ -441,6 +450,20 @@ mod tests {
 
         assert_eq!(parsed.dirs, vec![PathBuf::from(".aether/skills"), PathBuf::from(".claude/rules")]);
         assert_eq!(parsed.notes_dir, PathBuf::from(".aether/notes"));
+    }
+
+    #[test]
+    fn from_args_with_workspace_root_resolves_relative_dirs() {
+        let workspace = PathBuf::from("/workspace");
+        let server = SkillsMcp::from_args_with_workspace_root(
+            vec!["--dir".into(), ".aether/skills".into(), "--notes-dir".into(), ".aether/notes".into()],
+            &workspace,
+        )
+        .unwrap();
+
+        assert_eq!(server.notes_dir, PathBuf::from("/workspace/.aether/notes"));
+        let roots = server.roots.blocking_read();
+        assert_eq!(*roots, vec![workspace]);
     }
 
     #[tokio::test]

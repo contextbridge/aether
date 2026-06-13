@@ -1,5 +1,5 @@
 use super::common::*;
-use acp_utils::notifications::{AetherCapabilities, PromptSearchResponse, PromptSearchResult};
+use acp_utils::notifications::{PromptSearchResponse, PromptSearchResult};
 use agent_client_protocol::schema as acp;
 use std::path::PathBuf;
 use tui::testing::{TestTerminal, assert_buffer_eq};
@@ -310,7 +310,7 @@ async fn prompt_search_rows_truncate_prompt_and_show_cwd_basename() {
 }
 
 fn prompt_search_capabilities() -> acp::PromptCapabilities {
-    acp::PromptCapabilities::new().meta(Some(AetherCapabilities::prompt_search().to_meta()))
+    acp::PromptCapabilities::new()
 }
 
 fn result(prompt: &str, start: usize, end: usize) -> PromptSearchResult {

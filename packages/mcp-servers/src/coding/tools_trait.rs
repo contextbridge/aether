@@ -1,5 +1,6 @@
 use std::fmt::Debug;
 use std::future::Future;
+use std::path::PathBuf;
 
 use super::error::CodingError;
 use super::tools::bash::{BackgroundProcessHandle, BashInput, BashResult, ReadBackgroundBashOutput};
@@ -24,8 +25,12 @@ pub trait CodingTools: Send + Sync + Debug {
     /// List files in a directory
     fn list_files(&self, args: ListFilesArgs) -> impl Future<Output = Result<ListFilesResult, CodingError>> + Send;
 
-    /// Execute a bash command
-    fn bash(&self, args: BashInput) -> impl Future<Output = Result<BashResult, CodingError>> + Send;
+    /// Execute a bash command with an optional working directory
+    fn bash(
+        &self,
+        args: BashInput,
+        cwd: Option<PathBuf>,
+    ) -> impl Future<Output = Result<BashResult, CodingError>> + Send;
 
     /// Read output from a background bash process
     fn read_background_bash(
