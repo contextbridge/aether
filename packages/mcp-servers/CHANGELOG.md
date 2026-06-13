@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.16](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.15...aether-mcp-servers-v0.4.16) - 2026-06-13
+
+### Added
+
+- *(aether-cli)* Allow filtering mcp tools by annotation ([#151](https://github.com/contextbridge/aether/pull/151))
+- *(aether-cli)* Add /move command to switch workspaces and bring your session + changes with you. ([#150](https://github.com/contextbridge/aether/pull/150))
+
 ## [0.4.15](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.14...aether-mcp-servers-v0.4.15) - 2026-06-10
 
 ### Added

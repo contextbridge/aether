@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.21](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.3.20...aether-acp-utils-v0.3.21) - 2026-06-13
+
+### Added
+
+- *(aether-cli)* Add /move command to switch workspaces and bring your session + changes with you. ([#150](https://github.com/contextbridge/aether/pull/150))
+- *(aether-cli)* Better session resume menu ([#145](https://github.com/contextbridge/aether/pull/145))
+
 ## [0.3.20](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.3.19...aether-acp-utils-v0.3.20) - 2026-06-10
 
 ### Other

@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.20](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.19...aether-wisp-v0.4.20) - 2026-06-13
+
+### Added
+
+- *(aether-cli)* Add /move command to switch workspaces and bring your session + changes with you. ([#150](https://github.com/contextbridge/aether/pull/150))
+- *(wisp)* Better git diff and plan views ([#146](https://github.com/contextbridge/aether/pull/146))
+- *(aether-cli)* Better session resume menu ([#145](https://github.com/contextbridge/aether/pull/145))
+
+### Fixed
+
+- *(wisp)* Mouse scroll in git diff view no longer jumps ([#147](https://github.com/contextbridge/aether/pull/147))
+
 ## [0.4.19](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.18...aether-wisp-v0.4.19) - 2026-06-10
 
 ### Added

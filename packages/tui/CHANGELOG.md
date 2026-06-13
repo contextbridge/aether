@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.13](https://github.com/contextbridge/aether/compare/aether-tui-v0.2.12...aether-tui-v0.2.13) - 2026-06-13
+
+### Added
+
+- *(aether-cli)* Add /move command to switch workspaces and bring your session + changes with you. ([#150](https://github.com/contextbridge/aether/pull/150))
+- *(wisp)* Better git diff and plan views ([#146](https://github.com/contextbridge/aether/pull/146))
+
 ## [0.2.12](https://github.com/contextbridge/aether/compare/aether-tui-v0.2.11...aether-tui-v0.2.12) - 2026-06-10
 
 ### Other

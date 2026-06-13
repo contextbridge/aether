@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.10](https://github.com/contextbridge/aether/compare/aether-llm-v0.7.9...aether-llm-v0.7.10) - 2026-06-13
+
+### Added
+
+- *(aether-cli)* Allow filtering mcp tools by annotation ([#151](https://github.com/contextbridge/aether/pull/151))
+
+### Other
+
+- update models ([#149](https://github.com/contextbridge/aether/pull/149))
+- pin deps to prevent build error ([#148](https://github.com/contextbridge/aether/pull/148))
+
 ## [0.7.9](https://github.com/contextbridge/aether/compare/aether-llm-v0.7.8...aether-llm-v0.7.9) - 2026-06-10
 
 ### Added
