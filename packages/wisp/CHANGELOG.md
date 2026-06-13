@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.21](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.20...aether-wisp-v0.4.21) - 2026-06-13
+
+### Other
+
+- updated the following local packages: aether-acp-utils, aether-acp-utils
+
 ## [0.4.20](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.19...aether-wisp-v0.4.20) - 2026-06-13
 
 ### Added
