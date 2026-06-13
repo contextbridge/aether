@@ -22,7 +22,7 @@ enum StdioError {
     #[error("Unknown server: '{0}'. Available: coding, skills, tasks, subagents, survey, plan")]
     UnknownServer(String),
     #[error("{0}")]
-    ServerArgs(String),
+    ServerArgs(#[from] mcp_servers::error::ServerInitError),
     #[error("Failed to start server: {0}")]
     Serve(String),
     #[error("Server task failed: {0}")]

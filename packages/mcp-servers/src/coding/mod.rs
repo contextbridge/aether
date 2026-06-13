@@ -35,12 +35,15 @@ pub mod tools_trait;
 pub use default_tools::DefaultCodingTools;
 pub use tools_trait::CodingTools;
 
-use crate::lsp::tools::rename::{LspRenameInput, LspRenameOutput, execute_lsp_rename};
 use crate::lsp::tools::symbol_lookup::{LspSymbolInput, LspSymbolOutput, execute_lsp_symbol};
 use crate::lsp::tools::workspace_search::{
     LspWorkspaceSearchInput, LspWorkspaceSearchOutput, execute_lsp_workspace_search,
 };
 use crate::{coding::prompt_rule_matcher::PromptRuleMatcher, lsp::registry::LspRegistry};
+use crate::{
+    error::ServerInitError,
+    lsp::tools::rename::{LspRenameInput, LspRenameOutput, execute_lsp_rename},
+};
 use crate::{
     lsp::tools::check_errors::{
         LspDiagnosticsInput, LspDiagnosticsOutput, LspDiagnosticsRequest, execute_lsp_diagnostics,
@@ -112,12 +115,11 @@ pub struct CodingMcpArgs {
 }
 
 impl CodingMcpArgs {
-    pub fn from_args(args: Vec<String>) -> Result<Self, String> {
-        // Prepend a dummy program name since clap expects it
+    pub fn from_args(args: Vec<String>) -> Result<Self, ServerInitError> {
         let mut full_args = vec!["coding-mcp".to_string()];
         full_args.extend(args);
 
-        Self::try_parse_from(full_args).map_err(|e| format!("Failed to parse CodingMcp arguments: {e}"))
+        Self::try_parse_from(full_args).map_err(ServerInitError::InvalidArgs)
     }
 
     /// Parse the root directory from an mcp.json config file.
@@ -429,7 +431,7 @@ When using tools that take file paths, always use absolute paths from:
     /// returning the normalized absolute path as a string.
     async fn resolve_file_arg(&self, raw: &str) -> Result<String, String> {
         let root = self.primary_workspace_root().await;
-        Ok(resolve_file(&root, raw)?.to_string_lossy().to_string())
+        Ok(resolve_file(&root, raw).map_err(|e| e.to_string())?.to_string_lossy().to_string())
     }
 
     /// Reads `args.file_path` (already resolved against the workspace root),

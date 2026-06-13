@@ -25,7 +25,7 @@ use super::tools::{
     ListSkillsInput, ListSkillsOutput, LoadSkillsInput, LoadSkillsOutput, SaveNoteInput, SaveNoteOutput,
     SearchNotesInput, SearchNotesOutput, SkillFile, SkillListItem, SkillRequest, save_note,
 };
-use crate::workspace_paths::primary_root;
+use crate::{error::ServerInitError, workspace_paths::primary_root};
 use crate::{skills::tools::search_notes::search_notes, workspace_paths::resolve_path};
 use aether_project::{PromptCatalog, PromptFile, SKILL_FILENAME};
 use mcp_utils::display_meta::ToolDisplayMeta;
@@ -45,11 +45,11 @@ pub struct SkillsMcpArgs {
 }
 
 impl SkillsMcpArgs {
-    pub fn from_args(args: Vec<String>) -> Result<Self, String> {
+    pub fn from_args(args: Vec<String>) -> Result<Self, ServerInitError> {
         let mut full_args = vec!["skills-mcp".to_string()];
         full_args.extend(args);
 
-        Self::try_parse_from(full_args).map_err(|e| format!("Failed to parse SkillsMcp arguments: {e}"))
+        Self::try_parse_from(full_args).map_err(ServerInitError::InvalidArgs)
     }
 }
 
@@ -98,12 +98,12 @@ impl SkillsMcp {
         }
     }
 
-    pub fn from_args(args: Vec<String>) -> Result<Self, String> {
+    pub fn from_args(args: Vec<String>) -> Result<Self, ServerInitError> {
         let parsed_args = SkillsMcpArgs::from_args(args)?;
         Ok(Self::new(&parsed_args.dirs, parsed_args.notes_dir))
     }
 
-    pub fn from_args_with_workspace_root(args: Vec<String>, workspace_root: &Path) -> Result<Self, String> {
+    pub fn from_args_with_workspace_root(args: Vec<String>, workspace_root: &Path) -> Result<Self, ServerInitError> {
         let parsed_args = SkillsMcpArgs::from_args(args)?;
         let dirs = parsed_args.dirs.into_iter().map(|path| resolve_path(workspace_root, path)).collect::<Vec<_>>();
         let notes_dir = resolve_path(workspace_root, parsed_args.notes_dir);

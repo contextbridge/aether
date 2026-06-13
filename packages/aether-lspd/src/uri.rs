@@ -1,12 +1,19 @@
 //! URI↔path conversion utilities for LSP file URIs.
 
 use lsp_types::Uri;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+#[derive(Debug, thiserror::Error)]
+#[error("Invalid path '{}': {reason}", path.display())]
+pub struct UriError {
+    path: PathBuf,
+    reason: String,
+}
 
 /// Convert a file path to an LSP `file://` URI.
 ///
 /// Relative paths are resolved against the current working directory.
-pub fn path_to_uri(path: &Path) -> Result<Uri, String> {
+pub fn path_to_uri(path: &Path) -> Result<Uri, UriError> {
     let absolute =
         if path.is_absolute() { path.to_path_buf() } else { std::env::current_dir().unwrap_or_default().join(path) };
     // Canonicalize to resolve symlinks (e.g. /var → /private/var on macOS).
@@ -22,7 +29,7 @@ pub fn path_to_uri(path: &Path) -> Result<Uri, String> {
     #[cfg(not(windows))]
     let uri_str = format!("file://{}", absolute.display());
 
-    uri_str.parse().map_err(|e| format!("Invalid path '{}': {e}", absolute.display()))
+    uri_str.parse::<Uri>().map_err(|e| UriError { path: absolute, reason: e.to_string() })
 }
 
 /// Convert an LSP `file://` URI to a file path string.

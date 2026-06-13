@@ -45,8 +45,30 @@ pub enum UrlPromptOutcome {
     Cancelled,
 }
 
-pub type BrowserOpener = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
-pub type ClipboardWriter = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
+#[derive(Debug, thiserror::Error)]
+pub enum UrlHandlerError {
+    #[error("Failed to spawn '{command}': {source}")]
+    Spawn {
+        command: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("'{command}' exited with status {status}")]
+    BadExit { command: String, status: String },
+    #[error("'{command}' has no stdin")]
+    NoStdin { command: String },
+    #[error("Failed to write to '{command}': {source}")]
+    Write {
+        command: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{0}")]
+    Unsupported(&'static str),
+}
+
+pub type BrowserOpener = Arc<dyn Fn(&str) -> Result<(), UrlHandlerError> + Send + Sync>;
+pub type ClipboardWriter = Arc<dyn Fn(&str) -> Result<(), UrlHandlerError> + Send + Sync>;
 
 pub struct ElicitationForm {
     pub ui: ElicitationUi,
@@ -174,7 +196,7 @@ impl ElicitationForm {
         browser_opener: T,
     ) -> Self
     where
-        T: Fn(&str) -> Result<(), String> + Send + Sync + 'static,
+        T: Fn(&str) -> Result<(), UrlHandlerError> + Send + Sync + 'static,
     {
         Self::with_url_handlers(params, responder, browser_opener, default_clipboard_writer)
     }
@@ -186,8 +208,8 @@ impl ElicitationForm {
         clipboard_writer: U,
     ) -> Self
     where
-        T: Fn(&str) -> Result<(), String> + Send + Sync + 'static,
-        U: Fn(&str) -> Result<(), String> + Send + Sync + 'static,
+        T: Fn(&str) -> Result<(), UrlHandlerError> + Send + Sync + 'static,
+        U: Fn(&str) -> Result<(), UrlHandlerError> + Send + Sync + 'static,
     {
         let ui = match params.request {
             CreateElicitationRequestParams::FormElicitationParams { message, requested_schema, .. } => {
@@ -286,30 +308,48 @@ fn is_local_http_url(url: &url::Url) -> bool {
     matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "::1"))
 }
 
-fn default_browser_opener(url: &str) -> Result<(), String> {
+fn default_browser_opener(url: &str) -> Result<(), UrlHandlerError> {
     #[cfg(target_os = "macos")]
     {
-        let status = Command::new("open").arg(url).status().map_err(|e| e.to_string())?;
-        return status.success().then_some(()).ok_or_else(|| format!("open exited with status {status}"));
+        let status = Command::new("open")
+            .arg(url)
+            .status()
+            .map_err(|source| UrlHandlerError::Spawn { command: "open".to_string(), source })?;
+        return status
+            .success()
+            .then_some(())
+            .ok_or_else(|| UrlHandlerError::BadExit { command: "open".to_string(), status: status.to_string() });
     }
 
     #[cfg(target_os = "linux")]
     {
-        let status = Command::new("xdg-open").arg(url).status().map_err(|e| e.to_string())?;
-        return status.success().then_some(()).ok_or_else(|| format!("xdg-open exited with status {status}"));
+        let status = Command::new("xdg-open")
+            .arg(url)
+            .status()
+            .map_err(|source| UrlHandlerError::Spawn { command: "xdg-open".to_string(), source })?;
+        return status
+            .success()
+            .then_some(())
+            .ok_or_else(|| UrlHandlerError::BadExit { command: "xdg-open".to_string(), status: status.to_string() });
     }
 
     #[cfg(target_os = "windows")]
     {
-        let status = Command::new("cmd").args(["/C", "start", url]).status().map_err(|e| e.to_string())?;
-        return status.success().then_some(()).ok_or_else(|| format!("start exited with status {status}"));
+        let status = Command::new("cmd")
+            .args(["/C", "start", url])
+            .status()
+            .map_err(|source| UrlHandlerError::Spawn { command: "start".to_string(), source })?;
+        return status
+            .success()
+            .then_some(())
+            .ok_or_else(|| UrlHandlerError::BadExit { command: "start".to_string(), status: status.to_string() });
     }
 
     #[allow(unreachable_code)]
-    Err("Unsupported platform for opening URLs".to_string())
+    Err(UrlHandlerError::Unsupported("Unsupported platform for opening URLs"))
 }
 
-fn default_clipboard_writer(text: &str) -> Result<(), String> {
+fn default_clipboard_writer(text: &str) -> Result<(), UrlHandlerError> {
     #[cfg(target_os = "macos")]
     {
         return cmd("pbcopy", &[], text);
@@ -328,19 +368,26 @@ fn default_clipboard_writer(text: &str) -> Result<(), String> {
     }
 
     #[allow(unreachable_code)]
-    Err("Unsupported platform for copying URLs".to_string())
+    Err(UrlHandlerError::Unsupported("Unsupported platform for copying URLs"))
 }
 
-fn cmd(command: &str, args: &[&str], text: &str) -> Result<(), String> {
-    let mut child = Command::new(command).args(args).stdin(Stdio::piped()).spawn().map_err(|e| e.to_string())?;
+fn cmd(command: &str, args: &[&str], text: &str) -> Result<(), UrlHandlerError> {
+    let mut child = Command::new(command)
+        .args(args)
+        .stdin(Stdio::piped())
+        .spawn()
+        .map_err(|source| UrlHandlerError::Spawn { command: command.to_string(), source })?;
     child
         .stdin
         .as_mut()
-        .ok_or_else(|| format!("{command} stdin unavailable"))?
+        .ok_or_else(|| UrlHandlerError::NoStdin { command: command.to_string() })?
         .write_all(text.as_bytes())
-        .map_err(|e| e.to_string())?;
-    let status = child.wait().map_err(|e| e.to_string())?;
-    status.success().then_some(()).ok_or_else(|| format!("{command} exited with status {status}"))
+        .map_err(|source| UrlHandlerError::Write { command: command.to_string(), source })?;
+    let status = child.wait().map_err(|source| UrlHandlerError::Write { command: command.to_string(), source })?;
+    status
+        .success()
+        .then_some(())
+        .ok_or_else(|| UrlHandlerError::BadExit { command: command.to_string(), status: status.to_string() })
 }
 
 fn parse_schema(schema: &ElicitationSchema) -> Vec<FormField> {

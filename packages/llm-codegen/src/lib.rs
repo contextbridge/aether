@@ -238,23 +238,32 @@ pub struct GeneratedOutput {
     pub provider_docs: HashMap<String, String>,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum CodegenError {
+    #[error("read: {0}")]
+    Read(#[from] std::io::Error),
+    #[error("parse: {0}")]
+    Parse(#[from] serde_json::Error),
+    #[error("Provider '{0}' not found in models.dev data")]
+    ProviderNotFound(String),
+}
+
 /// Run the codegen, returning the generated Rust source and per-provider docs.
-pub fn generate(models_json_path: &Path) -> Result<GeneratedOutput, String> {
-    let json_bytes = std::fs::read_to_string(models_json_path).map_err(|e| format!("read: {e}"))?;
-    let data: ModelsDevData = serde_json::from_str(&json_bytes).map_err(|e| format!("parse: {e}"))?;
+pub fn generate(models_json_path: &Path) -> Result<GeneratedOutput, CodegenError> {
+    let json_bytes = std::fs::read_to_string(models_json_path)?;
+    let data: ModelsDevData = serde_json::from_str(&json_bytes)?;
 
     let provider_models = build_provider_models(&data)?;
     let ctx = CodegenCtx { provider_models };
     Ok(GeneratedOutput { rust_source: emit_generated_source(&ctx), provider_docs: emit_provider_docs(&ctx) })
 }
 
-fn build_provider_models(data: &ModelsDevData) -> Result<ProviderModels, String> {
+fn build_provider_models(data: &ModelsDevData) -> Result<ProviderModels, CodegenError> {
     let mut provider_models = ProviderModels::new();
 
     for cfg in PROVIDERS {
         let json_key = cfg.json_key();
-        let provider_data =
-            data.get(json_key).ok_or_else(|| format!("Provider '{json_key}' not found in models.dev data"))?;
+        let provider_data = data.get(json_key).ok_or_else(|| CodegenError::ProviderNotFound(json_key.to_string()))?;
 
         let mut models: Vec<ModelInfo> = collect_models_from(cfg, &provider_data.models);
 

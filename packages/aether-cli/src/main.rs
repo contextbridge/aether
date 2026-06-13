@@ -1,17 +1,38 @@
-use aether_cli::acp::{AcpArgs, AcpRunOutcome, run_acp};
+use aether_cli::acp::{AcpArgs, AcpRunError, AcpRunOutcome, run_acp};
+use aether_cli::error::CliError;
 use aether_cli::eval::{EvalArgs, run as run_eval_command};
 use aether_cli::headless::{HeadlessArgs, run_headless};
-use aether_cli::init::{InitOutcome, InitRequest, next_steps_message, run_init};
+use aether_cli::init::{InitError, InitOutcome, InitRequest, next_steps_message, run_init};
 use aether_cli::settings::SettingsCommand;
 use aether_cli::show_prompt::{PromptArgs, run_prompt};
+use aether_evals::EvalFileError;
 use aether_project::{AgentCatalog, project_settings_path, user_settings_path};
 use clap::{Parser, Subcommand};
 use std::env::current_dir;
-use std::fmt::Display;
 use std::process::ExitCode;
 use tokio::runtime::Runtime;
 use wisp::run_tui;
 use wisp::settings::{StatusLineSegmentConfig, StatusLineSettings, load_or_create_settings};
+
+#[derive(Debug, thiserror::Error)]
+enum MainError {
+    #[error("{0}")]
+    Cli(#[from] CliError),
+    #[error("{0}")]
+    Eval(#[from] EvalFileError),
+    #[error("{0}")]
+    Acp(#[from] AcpRunError),
+    #[error("{0}")]
+    Init(#[from] InitError),
+    #[error("{0}")]
+    Lspd(#[from] aether_lspd::LspdRunError),
+    #[error("{0}")]
+    Tui(#[from] wisp::error::AppError),
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("{0}")]
+    Settings(String),
+}
 
 #[derive(Parser)]
 #[command(name = "aether")]
@@ -52,27 +73,27 @@ fn main() -> ExitCode {
     }
 
     let rt = Runtime::new().expect("Failed to create tokio runtime");
-    let result: Result<ExitCode, String> = match cli.command {
-        Some(Command::Headless(args)) => rt.block_on(run_headless(args)).map_err(|e| e.to_string()),
+    let result: Result<ExitCode, MainError> = match cli.command {
+        Some(Command::Headless(args)) => rt.block_on(run_headless(args)).map_err(Into::into),
 
-        Some(Command::Eval(args)) => rt.block_on(run_eval_command(args)).map_err(|e| e.to_string()),
+        Some(Command::Eval(args)) => rt.block_on(run_eval_command(args)).map_err(Into::into),
 
         Some(Command::Acp(args)) => rt
             .block_on(run_acp(args))
             .map(|outcome| match outcome {
                 AcpRunOutcome::CleanDisconnect => ExitCode::SUCCESS,
             })
-            .map_err(|e| e.to_string()),
+            .map_err(Into::into),
 
         Some(Command::ShowPrompt(args)) => {
-            rt.block_on(run_prompt(args)).map(|()| ExitCode::SUCCESS).map_err(|e| e.to_string())
+            rt.block_on(run_prompt(args)).map(|()| ExitCode::SUCCESS).map_err(Into::into)
         }
 
         Some(Command::Settings(SettingsCommand::Init(args))) => rt.block_on(run_init_command(args.into())),
 
-        Some(Command::Lspd(args)) => aether_lspd::run_lspd(args).map(|()| ExitCode::SUCCESS),
+        Some(Command::Lspd(args)) => aether_lspd::run_lspd(args).map(|()| ExitCode::SUCCESS).map_err(Into::into),
 
-        None => rt.block_on(run_default_command()).map_err(|e| e.clone()),
+        None => rt.block_on(run_default_command()),
     };
 
     match result {
@@ -84,8 +105,8 @@ fn main() -> ExitCode {
     }
 }
 
-async fn run_init_command(request: InitRequest) -> Result<ExitCode, String> {
-    let outcome = run_init(request).await.map_err(|e| e.to_string())?;
+async fn run_init_command(request: InitRequest) -> Result<ExitCode, MainError> {
+    let outcome = run_init(request).await?;
     if let Some(msg) = next_steps_message(&outcome) {
         println!("{msg}");
     }
@@ -97,8 +118,8 @@ async fn run_init_command(request: InitRequest) -> Result<ExitCode, String> {
     })
 }
 
-async fn run_default_command() -> Result<ExitCode, String> {
-    let cwd = current_dir().map_err(|e| e.to_string())?;
+async fn run_default_command() -> Result<ExitCode, MainError> {
+    let cwd = current_dir()?;
     let existing_settings = {
         let mut paths = Vec::new();
         if let Some(path) = user_settings_path().filter(|path| path.is_file()) {
@@ -113,9 +134,11 @@ async fn run_default_command() -> Result<ExitCode, String> {
         paths
     };
 
-    if AgentCatalog::load_default(&cwd).map_err(|error| invalid_settings_message(&existing_settings, error))?.is_none()
+    if AgentCatalog::load_default(&cwd)
+        .map_err(|error| MainError::Settings(invalid_settings_message(&existing_settings, error)))?
+        .is_none()
     {
-        let outcome = run_init(InitRequest::user_onboarding()).await.map_err(|e| e.to_string())?;
+        let outcome = run_init(InitRequest::user_onboarding()).await?;
         if let Some(msg) = next_steps_message(&outcome) {
             println!("{msg}");
         }
@@ -131,7 +154,7 @@ async fn run_default_command() -> Result<ExitCode, String> {
     run_tui("aether acp", load_or_create_settings(default_status_line()))
         .await
         .map(|()| ExitCode::SUCCESS)
-        .map_err(|e| e.to_string())
+        .map_err(Into::into)
 }
 
 fn default_status_line() -> StatusLineSettings {
@@ -147,7 +170,7 @@ fn default_status_line() -> StatusLineSettings {
         ]),
     }
 }
-fn invalid_settings_message(paths: &[std::path::PathBuf], error: impl Display) -> String {
+fn invalid_settings_message(paths: &[std::path::PathBuf], error: impl std::fmt::Display) -> String {
     format!(
         "Found settings at {}, but they are invalid: {error}\nRun `aether settings init --user --force` to replace user settings, `aether settings init --project --force` to replace project settings, or edit the settings JSON manually.",
         format_settings_paths(paths)
