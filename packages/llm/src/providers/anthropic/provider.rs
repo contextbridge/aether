@@ -334,12 +334,11 @@ mod tests {
                 ChatMessage::System { content: "You are helpful".to_string(), timestamp: IsoString::now() },
                 ChatMessage::User { content: vec![ContentBlock::text("Hello")], timestamp: IsoString::now() },
             ],
-            vec![ToolDefinition {
-                name: "search".to_string(),
-                description: "Search for information".to_string(),
-                parameters: r#"{"type": "object", "properties": {"query": {"type": "string"}}}"#.to_string(),
-                server: None,
-            }],
+            vec![ToolDefinition::new(
+                "search",
+                "Search for information",
+                r#"{"type": "object", "properties": {"query": {"type": "string"}}}"#,
+            )],
         );
 
         let request = provider.build_request(&context).unwrap();
@@ -369,12 +368,11 @@ mod tests {
                 ChatMessage::System { content: "Hello".to_string(), timestamp: IsoString::now() },
                 ChatMessage::User { content: vec![ContentBlock::text("Hello")], timestamp: IsoString::now() },
             ],
-            vec![ToolDefinition {
-                name: "search".to_string(),
-                description: "Search for information".to_string(),
-                parameters: r#"{"type": "object", "properties": {"query": {"type": "string"}}}"#.to_string(),
-                server: None,
-            }],
+            vec![ToolDefinition::new(
+                "search",
+                "Search for information",
+                r#"{"type": "object", "properties": {"query": {"type": "string"}}}"#,
+            )],
         );
 
         let request = provider.build_request(&context).unwrap();

@@ -128,7 +128,12 @@ impl ServerHandler for SubAgentsMcp {
 #[tool_router]
 impl SubAgentsMcp {
     #[doc = include_str!("tools/spawn_subagent/description.md")]
-    #[tool]
+    #[tool(annotations(
+        read_only_hint = false,
+        destructive_hint = true,
+        idempotent_hint = false,
+        open_world_hint = true
+    ))]
     pub async fn spawn_subagent(
         &self,
         request: Parameters<SpawnSubAgentsInput>,

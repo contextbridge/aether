@@ -62,10 +62,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     ];
 
     let tools = vec![
-        ToolDefinition {
-            name: "search_web".to_string(),
-            description: "Search the web for current information".to_string(),
-            parameters: json!({
+        ToolDefinition::new(
+            "search_web",
+            "Search the web for current information",
+            json!({
                 "type": "object",
                 "properties": {
                     "query": {
@@ -76,12 +76,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 "required": ["query"]
             })
             .to_string(),
-            server: None,
-        },
-        ToolDefinition {
-            name: "calculate".to_string(),
-            description: "Perform mathematical calculations".to_string(),
-            parameters: json!({
+        ),
+        ToolDefinition::new(
+            "calculate",
+            "Perform mathematical calculations",
+            json!({
                 "type": "object",
                 "properties": {
                     "expression": {
@@ -92,8 +91,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 "required": ["expression"]
             })
             .to_string(),
-            server: None,
-        },
+        ),
     ];
     let context = Context::new(messages, tools);
 

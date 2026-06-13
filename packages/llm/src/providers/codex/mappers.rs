@@ -255,12 +255,11 @@ mod tests {
 
     #[test]
     fn map_tools_produces_function_type() {
-        let tools = vec![ToolDefinition {
-            name: "read_file".to_string(),
-            description: "Read a file from disk".to_string(),
-            parameters: r#"{"type": "object", "properties": {"path": {"type": "string"}}}"#.to_string(),
-            server: None,
-        }];
+        let tools = vec![ToolDefinition::new(
+            "read_file",
+            "Read a file from disk",
+            r#"{"type": "object", "properties": {"path": {"type": "string"}}}"#,
+        )];
 
         let mapped = map_tools(&tools).unwrap();
         assert_eq!(mapped.len(), 1);
@@ -275,12 +274,7 @@ mod tests {
 
     #[test]
     fn map_tools_returns_error_on_invalid_json_parameters() {
-        let tools = vec![ToolDefinition {
-            name: "broken".to_string(),
-            description: "A tool with invalid params".to_string(),
-            parameters: "not valid json".to_string(),
-            server: None,
-        }];
+        let tools = vec![ToolDefinition::new("broken", "A tool with invalid params", "not valid json")];
 
         let result = map_tools(&tools);
         assert!(result.is_err());

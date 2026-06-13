@@ -142,7 +142,12 @@ impl ServerHandler for TasksMcp {
 #[tool_router]
 impl TasksMcp {
     #[doc = include_str!("./tools/create/description.md")]
-    #[tool]
+    #[tool(annotations(
+        read_only_hint = false,
+        destructive_hint = false,
+        idempotent_hint = false,
+        open_world_hint = false
+    ))]
     pub async fn task_create(&self, request: Parameters<TaskCreateInput>) -> Result<Json<TaskCreateOutput>, String> {
         let Parameters(input) = request;
         let mut store = self.task_store.lock().await;
@@ -151,7 +156,12 @@ impl TasksMcp {
     }
 
     #[doc = include_str!("./tools/update/description.md")]
-    #[tool]
+    #[tool(annotations(
+        read_only_hint = false,
+        destructive_hint = true,
+        idempotent_hint = false,
+        open_world_hint = false
+    ))]
     pub async fn task_update(&self, request: Parameters<TaskUpdateInput>) -> Result<Json<TaskUpdateOutput>, String> {
         let Parameters(input) = request;
         let mut store = self.task_store.lock().await;
@@ -160,7 +170,7 @@ impl TasksMcp {
     }
 
     #[doc = include_str!("./tools/list/description.md")]
-    #[tool]
+    #[tool(annotations(read_only_hint = true, open_world_hint = false))]
     pub async fn task_list(&self, request: Parameters<TaskListInput>) -> Result<Json<TaskListOutput>, String> {
         let Parameters(input) = request;
         let mut store = self.task_store.lock().await;
@@ -169,7 +179,7 @@ impl TasksMcp {
     }
 
     #[doc = include_str!("./tools/get/description.md")]
-    #[tool]
+    #[tool(annotations(read_only_hint = true, open_world_hint = false))]
     pub async fn task_get(&self, request: Parameters<TaskGetInput>) -> Result<Json<TaskGetOutput>, String> {
         let Parameters(input) = request;
         let mut store = self.task_store.lock().await;

@@ -87,12 +87,11 @@ use llm::{
     AssistantReasoning, ChatMessage, ContentBlock, Context, ToolCallResult, ToolDefinition,
 };
 
-let tools = vec![ToolDefinition {
-    name: "get_weather".into(),
-    description: "Get current weather for a city".into(),
-    parameters: r#"{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}"#.into(),
-    server: None,
-}];
+let tools = vec![ToolDefinition::new(
+    "get_weather",
+    "Get current weather for a city",
+    r#"{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}"#,
+)];
 
 let mut context = Context::new(
     vec![ChatMessage::User {

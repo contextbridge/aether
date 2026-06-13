@@ -216,11 +216,14 @@ impl McpManager {
             if record.proxied {
                 continue;
             }
-            definitions.extend(record.tools().iter().map(|tool| ToolDefinition {
-                name: create_namespaced_tool_name(name, &tool.name),
-                description: tool.description.clone(),
-                parameters: tool.parameters.to_string(),
-                server: Some(name.clone()),
+            definitions.extend(record.tools().iter().map(|tool| {
+                ToolDefinition::new(
+                    create_namespaced_tool_name(name, &tool.name),
+                    tool.description.clone(),
+                    tool.parameters.to_string(),
+                )
+                .with_server(name.clone())
+                .with_annotations(tool.annotations.clone())
             }));
         }
         definitions
@@ -791,7 +794,7 @@ mod tests {
             Box::new(self)
         }
 
-        #[tool(description = "Returns the provided value")]
+        #[tool(description = "Returns the provided value", annotations(read_only_hint = true, open_world_hint = false))]
         async fn echo(&self, request: Parameters<EchoRequest>) -> Json<EchoResult> {
             let Parameters(EchoRequest { value }) = request;
             Json(EchoResult { value })
@@ -1020,6 +1023,26 @@ mod tests {
 
         assert!(!names(&manager).iter().any(|name| name.starts_with("git__")));
         assert!(names(&manager).contains(&"github__echo".to_string()));
+    }
+
+    #[tokio::test]
+    async fn tool_definitions_preserve_annotations() {
+        let (event_sender, _event_receiver) = mpsc::channel(32);
+        let mut manager = McpManager::new(event_sender, None);
+        manager
+            .add_mcps(vec![McpServer::new(
+                "test",
+                McpTransport::InMemory { server: TestServer::default().into_dyn() },
+                false,
+            )])
+            .await
+            .unwrap();
+
+        let tools = manager.tool_definitions();
+        let echo = tools.iter().find(|tool| tool.name == "test__echo").expect("echo tool");
+        let annotations = echo.annotations.as_ref().expect("annotations should be preserved");
+        assert_eq!(annotations.read_only_hint, Some(true));
+        assert_eq!(annotations.open_world_hint, Some(false));
     }
 
     #[tokio::test]

@@ -275,12 +275,7 @@ mod tests {
 
     #[test]
     fn replace_conversation_does_not_change_tools() {
-        let tool = ToolDefinition {
-            name: "read_file".to_string(),
-            description: "Reads a file".to_string(),
-            parameters: "{}".to_string(),
-            server: None,
-        };
+        let tool = ToolDefinition::new("read_file", "Reads a file", "{}");
         let mut ctx = Context::new(
             vec![ChatMessage::System { content: "system".to_string(), timestamp: IsoString::now() }],
             vec![tool.clone()],
@@ -404,13 +399,7 @@ mod tests {
         // With no tools, estimate = message_bytes / 4
         assert_eq!(base_estimate, 87 / 4);
 
-        // Now add a tool definition and verify it increases
-        let tool = ToolDefinition {
-            name: "read_file".to_string(),           // 9
-            description: "Reads a file".to_string(), // 12
-            parameters: "{}".to_string(),            // 2
-            server: None,
-        };
+        let tool = ToolDefinition::new("read_file", "Reads a file", "{}");
         let ctx_with_tools = Context::new(ctx.messages().clone(), vec![tool]);
         let with_tools_estimate = ctx_with_tools.estimated_token_count();
         assert_eq!(with_tools_estimate, (87 + 9 + 12 + 2) / 4);

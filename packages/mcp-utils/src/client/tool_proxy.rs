@@ -1,6 +1,7 @@
 use super::McpError;
+use super::connection::convert_tool_annotations;
 use super::mcp_client::McpClient;
-use llm::ToolDefinition;
+use llm::{ToolAnnotations, ToolDefinition};
 use rmcp::{RoleClient, service::RunningService};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -113,12 +114,12 @@ impl ToolProxy {
     pub fn call_tool_definition(proxy_name: &str) -> ToolDefinition {
         let schema = Self::call_tool_schema();
         let namespaced_name = format!("{proxy_name}__call_tool");
-        ToolDefinition {
-            name: namespaced_name,
-            description: "Execute a tool on a nested MCP server. Browse the tool-proxy directory to discover available tools first.".to_string(),
-            parameters: Value::Object((*schema).clone()).to_string(),
-            server: Some(proxy_name.to_string()),
-        }
+        ToolDefinition::new(
+            namespaced_name,
+            "Execute a tool on a nested MCP server. Browse the tool-proxy directory to discover available tools first.",
+            Value::Object((*schema).clone()).to_string(),
+        )
+        .with_server(proxy_name.to_string())
     }
 
     /// Write tool entries to `tool_dir/<server_name>/`, removing any stale files first.
@@ -139,6 +140,7 @@ impl ToolProxy {
                 description: tool.description.clone().unwrap_or_default().to_string(),
                 server: server_name.to_string(),
                 parameters: Value::Object((*tool.input_schema).clone()),
+                annotations: tool.annotations.as_ref().map(convert_tool_annotations),
             };
 
             let file_path = server_dir.join(format!("{}.json", tool.name));
@@ -188,6 +190,8 @@ pub struct ToolFileEntry {
     pub description: String,
     pub server: String,
     pub parameters: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<ToolAnnotations>,
 }
 
 #[cfg(test)]
@@ -209,6 +213,7 @@ mod tests {
                 },
                 "required": ["repo", "title"]
             }),
+            annotations: None,
         };
 
         let json_str = serde_json::to_string_pretty(&entry).unwrap();
@@ -258,6 +263,7 @@ mod tests {
             description: "Does stuff".to_string(),
             server: "test-server".to_string(),
             parameters: json!({"type": "object", "properties": {}}),
+            annotations: None,
         };
 
         let file_path = server_dir.join("my_tool.json");
@@ -303,6 +309,7 @@ mod tests {
             description: "Old tool".to_string(),
             server: "my-server".to_string(),
             parameters: json!({"type": "object", "properties": {}}),
+            annotations: None,
         };
         std::fs::write(server_dir.join("old_tool.json"), serde_json::to_string_pretty(&old_entry).unwrap()).unwrap();
         assert!(server_dir.join("old_tool.json").exists());
@@ -313,6 +320,24 @@ mod tests {
 
         assert!(!server_dir.join("old_tool.json").exists(), "stale file should be removed");
         assert!(server_dir.join("new_tool.json").exists(), "new file should be written");
+    }
+
+    #[tokio::test]
+    async fn write_tool_entries_to_dir_preserves_annotations() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tool_dir = tmp.path().to_path_buf();
+        let tools = vec![
+            rmcp::model::Tool::new("read", "Read", Arc::new(serde_json::Map::new()))
+                .with_annotations(rmcp::model::ToolAnnotations::new().read_only(true).open_world(false)),
+        ];
+
+        ToolProxy::write_tool_entries_to_dir("my-server", &tools, &tool_dir).await.unwrap();
+
+        let contents = std::fs::read_to_string(tool_dir.join("my-server/read.json")).unwrap();
+        let parsed: ToolFileEntry = serde_json::from_str(&contents).unwrap();
+        let annotations = parsed.annotations.expect("annotations should be written");
+        assert_eq!(annotations.read_only_hint, Some(true));
+        assert_eq!(annotations.open_world_hint, Some(false));
     }
 
     fn make_proxy(members: &[&str]) -> ToolProxy {

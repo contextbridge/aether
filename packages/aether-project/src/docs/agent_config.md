@@ -1,7 +1,7 @@
 A single agent definition. Every agent must be invocable on at least one
 surface — set `userInvocable`, `agentInvocable`, or both.
 
-A user-invocable agent with its own prompt and a tool allowlist:
+A user-invocable agent with its own prompt and a read-only tool allowlist:
 
 ```json
 {
@@ -10,7 +10,7 @@ A user-invocable agent with its own prompt and a tool allowlist:
   "model": "anthropic:claude-sonnet-4-5-20250929",
   "userInvocable": true,
   "prompts": [".aether/REVIEW.md"],
-  "tools": { "allow": ["read_file", "grep", "find"] }
+  "tools": { "allow": [{ "readOnly": true }, "plan__*"] }
 }
 ```
 
