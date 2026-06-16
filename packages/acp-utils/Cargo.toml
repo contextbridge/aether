@@ -25,8 +25,8 @@ workspace = true
 
 [features]
 default = ["client", "server"]
-client = ["dep:thiserror"]
-server = ["dep:thiserror"]
+client = []
+server = []
 testing = ["client"]
 
 [dependencies]
@@ -41,9 +41,7 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.7" }
 async-trait = { workspace = true }
-
-# Optional (feature-gated)
-thiserror = { workspace = true, optional = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
