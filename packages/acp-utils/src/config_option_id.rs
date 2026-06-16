@@ -26,16 +26,9 @@ impl fmt::Display for ConfigOptionId {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[error("Unknown config option: {0}")]
 pub struct UnknownConfigOptionId(pub String);
-
-impl fmt::Display for UnknownConfigOptionId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Unknown config option: {}", self.0)
-    }
-}
-
-impl std::error::Error for UnknownConfigOptionId {}
 
 impl FromStr for ConfigOptionId {
     type Err = UnknownConfigOptionId;

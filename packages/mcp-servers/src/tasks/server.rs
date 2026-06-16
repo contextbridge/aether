@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use tokio::sync::{Mutex, RwLock};
 
+use crate::error::ServerInitError;
 use crate::{
     tasks::{
         TaskCreateInput, TaskCreateOutput, TaskGetInput, TaskGetOutput, TaskListInput, TaskListOutput, TaskStore,
@@ -32,12 +33,12 @@ pub struct TasksMcpArgs {
 }
 
 impl TasksMcpArgs {
-    pub fn from_args(args: Vec<String>) -> Result<Self, String> {
+    pub fn from_args(args: Vec<String>) -> Result<Self, ServerInitError> {
         // Prepend a dummy program name since clap expects it
         let mut full_args = vec!["tasks-mcp".to_string()];
         full_args.extend(args);
 
-        Self::try_parse_from(full_args).map_err(|e| format!("Failed to parse TasksMcp arguments: {e}"))
+        Self::try_parse_from(full_args).map_err(ServerInitError::InvalidArgs)
     }
 }
 
@@ -93,7 +94,7 @@ impl TasksMcp {
     ///
     /// If `--dir` is provided, tasks persist at that path. Otherwise, tasks are
     /// session-scoped in a temporary directory.
-    pub fn from_args(args: Vec<String>) -> Result<Self, String> {
+    pub fn from_args(args: Vec<String>) -> Result<Self, ServerInitError> {
         let parsed_args = TasksMcpArgs::from_args(args)?;
         Ok(match parsed_args.dir {
             Some(dir) => Self::new_persistent(dir),
@@ -101,7 +102,7 @@ impl TasksMcp {
         })
     }
 
-    pub fn from_args_with_workspace_root(args: Vec<String>, workspace_root: &Path) -> Result<Self, String> {
+    pub fn from_args_with_workspace_root(args: Vec<String>, workspace_root: &Path) -> Result<Self, ServerInitError> {
         let parsed_args = TasksMcpArgs::from_args(args)?;
         Ok(match parsed_args.dir {
             Some(dir) => Self::new_persistent(resolve_path(workspace_root, dir)),

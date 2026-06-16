@@ -17,25 +17,16 @@ struct Cli {
     args: Vec<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 enum StdioError {
+    #[error("Unknown server: '{0}'. Available: coding, skills, tasks, subagents, survey, plan")]
     UnknownServer(String),
-    ServerArgs(String),
+    #[error("{0}")]
+    ServerArgs(#[from] mcp_servers::error::ServerInitError),
+    #[error("Failed to start server: {0}")]
     Serve(String),
+    #[error("Server task failed: {0}")]
     Join(tokio::task::JoinError),
-}
-
-impl std::fmt::Display for StdioError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            StdioError::UnknownServer(name) => {
-                write!(f, "Unknown server: '{name}'. Available: coding, skills, tasks, subagents, survey, plan")
-            }
-            StdioError::ServerArgs(msg) => write!(f, "{msg}"),
-            StdioError::Serve(msg) => write!(f, "Failed to start server: {msg}"),
-            StdioError::Join(e) => write!(f, "Server task failed: {e}"),
-        }
-    }
 }
 
 async fn serve_stdio(server: impl ServerHandler) -> Result<(), StdioError> {

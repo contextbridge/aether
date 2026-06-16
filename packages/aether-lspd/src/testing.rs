@@ -28,30 +28,13 @@ pub trait TestProject {
 }
 
 /// Error type for test project operations.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum TestProjectError {
-    Io(std::io::Error),
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("Command '{command}' failed:\n{stderr}")]
     CommandFailed { command: String, stderr: String },
 }
-
-impl From<std::io::Error> for TestProjectError {
-    fn from(e: std::io::Error) -> Self {
-        TestProjectError::Io(e)
-    }
-}
-
-impl std::fmt::Display for TestProjectError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TestProjectError::Io(e) => write!(f, "IO error: {e}"),
-            TestProjectError::CommandFailed { command, stderr } => {
-                write!(f, "Command '{command}' failed:\n{stderr}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for TestProjectError {}
 
 /// A temporary Cargo project for testing.
 pub struct CargoProject {

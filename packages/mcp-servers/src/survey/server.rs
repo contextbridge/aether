@@ -16,13 +16,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, from_str, from_value};
 
 /// Parse a schema value that may be either a JSON object or a double-encoded JSON string.
-fn parse_schema(value: serde_json::Value) -> Result<ElicitationSchema, String> {
+fn parse_schema(value: serde_json::Value) -> Result<ElicitationSchema, serde_json::Error> {
     let normalized = match &value {
-        Value::String(s) => from_str(s).map_err(|e| format!("Invalid schema: {e}"))?,
+        Value::String(s) => from_str(s)?,
         _ => value,
     };
 
-    from_value(normalized).map_err(|e| format!("Invalid schema: {e}"))
+    from_value(normalized)
 }
 
 #[doc = include_str!("../docs/survey_mcp.md")]
@@ -42,7 +42,7 @@ impl SurveyMcp {
         Self { tool_router: Self::tool_router() }
     }
 
-    pub fn from_args(_args: Vec<String>) -> Result<Self, String> {
+    pub fn from_args(_args: Vec<String>) -> Result<Self, crate::error::ServerInitError> {
         Ok(Self::new())
     }
 }
@@ -85,7 +85,7 @@ impl SurveyMcp {
         context: RequestContext<RoleServer>,
     ) -> Result<Json<AskUserOutput>, String> {
         let Parameters(args) = request;
-        let schema = parse_schema(args.schema)?;
+        let schema = parse_schema(args.schema).map_err(|e| e.to_string())?;
         let result = context
             .peer
             .create_elicitation(CreateElicitationRequestParams::FormElicitationParams {

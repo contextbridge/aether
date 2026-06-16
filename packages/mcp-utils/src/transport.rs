@@ -2,25 +2,16 @@ use rmcp::RoleClient;
 use rmcp::RoleServer;
 use rmcp::service::{RxJsonRpcMessage, ServiceRole, TxJsonRpcMessage};
 use rmcp::transport::Transport;
-use std::fmt;
 use std::future::Future;
 use std::sync::Arc;
+use thiserror::Error;
 use tokio::sync::{Mutex, mpsc};
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum InMemoryTransportError {
+    #[error("Channel closed")]
     ChannelClosed,
 }
-
-impl fmt::Display for InMemoryTransportError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            InMemoryTransportError::ChannelClosed => write!(f, "Channel closed"),
-        }
-    }
-}
-
-impl std::error::Error for InMemoryTransportError {}
 
 /// In-memory transport for connecting `McpServer` and `McpClient` in tests
 pub struct InMemoryTransport<R: ServiceRole> {

@@ -11,12 +11,16 @@ pub fn resolve_path(root: &Path, path: PathBuf) -> PathBuf {
     if path.is_absolute() { path } else { root.join(path) }
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("file path is required and cannot be empty")]
+pub struct EmptyFilePathError;
+
 /// Resolves a required file path against `root`. Whitespace-only input is
 /// rejected; otherwise the text (including any surrounding spaces) is preserved
 /// so unusual-but-valid file names round-trip unchanged.
-pub fn resolve_file(root: &Path, raw: &str) -> Result<PathBuf, String> {
+pub fn resolve_file(root: &Path, raw: &str) -> Result<PathBuf, EmptyFilePathError> {
     if raw.trim().is_empty() {
-        return Err("file path is required and cannot be empty".to_string());
+        return Err(EmptyFilePathError);
     }
     Ok(resolve_path(root, PathBuf::from(raw)))
 }
@@ -62,7 +66,7 @@ mod tests {
     #[test]
     fn rejects_whitespace_only_required_file_path() {
         let err = resolve_file(Path::new("/workspace"), "  \t ").unwrap_err();
-        assert!(err.contains("file path is required"));
+        assert!(err.to_string().contains("file path is required"));
     }
 
     #[test]

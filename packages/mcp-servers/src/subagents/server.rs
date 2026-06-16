@@ -19,6 +19,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::RwLock;
 
 use super::tools::{AgentExecutor, SpawnSubAgentsInput, SpawnSubAgentsOutput};
+use crate::error::ServerInitError;
 use crate::workspace_paths::resolve_path;
 
 type ProgressCallback = Box<dyn Fn(&str, &str, &AgentMessage) + Send + Sync>;
@@ -31,11 +32,11 @@ pub struct SubAgentsMcpArgs {
 }
 
 impl SubAgentsMcpArgs {
-    pub fn from_args(args: Vec<String>) -> Result<Self, String> {
+    pub fn from_args(args: Vec<String>) -> Result<Self, ServerInitError> {
         let mut full_args = vec!["subagents-mcp".to_string()];
         full_args.extend(args);
 
-        Self::try_parse_from(full_args).map_err(|e| format!("Failed to parse SubAgentsMcp arguments: {e}"))
+        Self::try_parse_from(full_args).map_err(ServerInitError::InvalidArgs)
     }
 }
 
@@ -49,13 +50,14 @@ pub struct SubAgentsMcp {
 }
 
 impl SubAgentsMcp {
-    pub fn from_project_root(project_root: PathBuf) -> Result<Self, String> {
-        let settings =
-            AetherSettings::load_default(&project_root).map_err(|e| format!("Failed to load agents: {e}"))?;
+    pub fn from_project_root(project_root: PathBuf) -> Result<Self, ServerInitError> {
+        let settings = AetherSettings::load_default(&project_root)
+            .map_err(|e| ServerInitError::Other(format!("Failed to load agents: {e}")))?;
         let catalog = if settings.agents.is_empty() {
             AgentCatalog::empty(project_root.clone())
         } else {
-            AgentCatalog::from_settings(&project_root, settings).map_err(|e| format!("Failed to load agents: {e}"))?
+            AgentCatalog::from_settings(&project_root, settings)
+                .map_err(|e| ServerInitError::Other(format!("Failed to load agents: {e}")))?
         };
         Ok(Self::new(catalog, project_root))
     }
@@ -74,13 +76,16 @@ impl SubAgentsMcp {
         self
     }
 
-    pub fn from_args(args: Vec<String>) -> Result<Self, String> {
+    pub fn from_args(args: Vec<String>) -> Result<Self, ServerInitError> {
         let parsed_args = SubAgentsMcpArgs::from_args(args)?;
         let project_root = parsed_args.project_root.unwrap_or_else(|| PathBuf::from("."));
         Self::from_project_root(project_root)
     }
 
-    pub fn from_args_with_default_project_root(args: Vec<String>, default_root: &Path) -> Result<Self, String> {
+    pub fn from_args_with_default_project_root(
+        args: Vec<String>,
+        default_root: &Path,
+    ) -> Result<Self, ServerInitError> {
         let parsed_args = SubAgentsMcpArgs::from_args(args)?;
         let project_root = parsed_args
             .project_root

@@ -30,6 +30,16 @@ use tracing_subscriber::fmt::writer::MakeWriterExt;
 pub use client::{ClientError, ClientResult, LspClient};
 pub use daemon::{LspDaemon, run_daemon};
 pub use error::{DaemonError, DaemonResult};
+
+#[derive(Debug, thiserror::Error)]
+pub enum LspdRunError {
+    #[error("Failed to create tokio runtime: {0}")]
+    RuntimeCreate(std::io::Error),
+    #[error("Failed to open log file: {0}")]
+    LogFileOpen(std::io::Error),
+    #[error("{0}")]
+    Daemon(#[from] DaemonError),
+}
 pub use language_catalog::LanguageId;
 pub use language_catalog::{
     LANGUAGE_METADATA, LanguageMetadata, LspConfig, extensions_for_alias, from_lsp_id, get_config_for_language,
@@ -41,7 +51,7 @@ pub use socket_path::{ensure_socket_dir, lockfile_path, log_file_path, socket_pa
 pub use protocol::{
     DaemonRequest, DaemonResponse, InitializeRequest, LspErrorResponse, MAX_MESSAGE_SIZE, ProtocolError,
 };
-pub use uri::{path_to_uri, uri_to_path};
+pub use uri::{UriError, path_to_uri, uri_to_path};
 
 #[derive(clap::Args)]
 pub struct LspdArgs {
@@ -62,10 +72,10 @@ pub struct LspdArgs {
     pub log_file: Option<PathBuf>,
 }
 
-pub fn run_lspd(args: LspdArgs) -> Result<(), String> {
+pub fn run_lspd(args: LspdArgs) -> Result<(), LspdRunError> {
     let idle_timeout = if args.idle_timeout == 0 { None } else { Some(Duration::from_secs(args.idle_timeout)) };
 
-    let runtime = tokio::runtime::Runtime::new().map_err(|e| format!("Failed to create tokio runtime: {e}"))?;
+    let runtime = tokio::runtime::Runtime::new().map_err(LspdRunError::RuntimeCreate)?;
 
     runtime.block_on(async {
         let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&args.log_level));
@@ -78,7 +88,7 @@ pub fn run_lspd(args: LspdArgs) -> Result<(), String> {
                 .create(true)
                 .append(true)
                 .open(log_file)
-                .map_err(|e| format!("Failed to open log file: {e}"))?;
+                .map_err(LspdRunError::LogFileOpen)?;
 
             tracing_subscriber::fmt()
                 .with_env_filter(filter)
@@ -91,6 +101,6 @@ pub fn run_lspd(args: LspdArgs) -> Result<(), String> {
         }
 
         tracing::info!("Starting LSP daemon on socket: {:?}", args.socket);
-        run_daemon(args.socket, idle_timeout).await.map_err(|e| format!("Daemon error: {e}"))
+        run_daemon(args.socket, idle_timeout).await.map_err(LspdRunError::Daemon)
     })
 }

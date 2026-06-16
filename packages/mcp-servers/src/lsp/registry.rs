@@ -192,7 +192,7 @@ impl LspRegistry {
     pub async fn resolve_symbol(&self, file_path: &str, symbol: &str, line: u32) -> Result<ResolvedSymbol, LspError> {
         let content = tokio::fs::read_to_string(file_path).await?;
         let column = find_symbol_column(&content, symbol, line)?;
-        let uri = path_to_uri(Path::new(file_path)).map_err(LspError::Transport)?;
+        let uri = path_to_uri(Path::new(file_path)).map_err(|e| LspError::Transport(e.to_string()))?;
         let client = self.require_client(file_path).await?;
         Ok(ResolvedSymbol { uri, line: line - 1, column, client })
     }

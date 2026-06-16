@@ -25,19 +25,10 @@ where
     Ok((server, client))
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ConnectError {
+    #[error("Server initialization failed: {0}")]
     ServerInit(ServerInitializeError),
+    #[error("Client initialization failed: {0}")]
     ClientInit(ClientInitializeError),
 }
-
-impl std::fmt::Display for ConnectError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ConnectError::ServerInit(e) => write!(f, "Server initialization failed: {e}"),
-            ConnectError::ClientInit(e) => write!(f, "Client initialization failed: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for ConnectError {}

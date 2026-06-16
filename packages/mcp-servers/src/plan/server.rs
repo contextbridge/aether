@@ -1,3 +1,4 @@
+use crate::error::ServerInitError;
 use crate::file_ops::{FileError, edit_text_file, read_text_file, write_text_file};
 use crate::workspace_paths::resolve_path;
 use clap::Parser;
@@ -60,10 +61,10 @@ pub struct PlanMcpArgs {
 }
 
 impl PlanMcpArgs {
-    pub fn from_args(args: Vec<String>) -> Result<Self, String> {
+    pub fn from_args(args: Vec<String>) -> Result<Self, ServerInitError> {
         let mut full_args = vec!["plan-mcp".to_string()];
         full_args.extend(args);
-        Self::try_parse_from(full_args).map_err(|e| format!("Failed to parse PlanMcp arguments: {e}"))
+        Self::try_parse_from(full_args).map_err(ServerInitError::InvalidArgs)
     }
 }
 
@@ -90,7 +91,7 @@ impl PlanMcp {
     /// Builds a server from raw `mcp.json` args. `default_plans_dir` is used
     /// when the caller did not pass `--plans-dir`; it lets the embedder anchor
     /// plans at a workspace path that differs from the process cwd.
-    pub fn from_args(args: Vec<String>, default_plans_dir: PathBuf) -> Result<Self, String> {
+    pub fn from_args(args: Vec<String>, default_plans_dir: PathBuf) -> Result<Self, ServerInitError> {
         let PlanMcpArgs { plans_dir, prompt_file, submit_command } = PlanMcpArgs::from_args(args)?;
         Ok(Self {
             tool_router: Self::tool_router(),
@@ -104,7 +105,7 @@ impl PlanMcp {
         args: Vec<String>,
         default_plans_dir: PathBuf,
         workspace_root: &Path,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, ServerInitError> {
         let PlanMcpArgs { plans_dir, prompt_file, submit_command } = PlanMcpArgs::from_args(args)?;
         Ok(Self {
             tool_router: Self::tool_router(),

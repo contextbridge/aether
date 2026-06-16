@@ -1,7 +1,7 @@
 use futures::future::join_all;
 use serde::de::DeserializeOwned;
 use std::{
-    fmt, fs, io,
+    fs, io,
     path::{Path, PathBuf},
 };
 
@@ -176,32 +176,10 @@ fn list_subdirs(dir: impl AsRef<Path>) -> Result<Vec<PathBuf>, io::Error> {
     Ok(paths)
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ParseError {
+    #[error("Invalid filename")]
     InvalidFilename,
-    Io(io::Error),
-}
-
-impl fmt::Display for ParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ParseError::InvalidFilename => write!(f, "Invalid filename"),
-            ParseError::Io(e) => write!(f, "IO error: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for ParseError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            ParseError::Io(e) => Some(e),
-            ParseError::InvalidFilename => None,
-        }
-    }
-}
-
-impl From<io::Error> for ParseError {
-    fn from(e: io::Error) -> Self {
-        ParseError::Io(e)
-    }
+    #[error("IO error: {0}")]
+    Io(#[from] io::Error),
 }

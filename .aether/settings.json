@@ -3,7 +3,7 @@
     {
       "name": "Cheap",
       "description": "ZAI GLM-5 with high reasoning",
-      "model": "zai:glm-5.1",
+      "model": "zai:glm-5.2",
       "reasoningEffort": "high",
       "userInvocable": true,
       "prompts": [".aether/SYSTEM.md", "AGENTS.md"],
@@ -11,8 +11,8 @@
     },
     {
       "name": "Fast",
-      "description": "MiniMax M2.7 with high reasoning",
-      "model": "openrouter:minimax/minimax-m2.7",
+      "description": "MiniMax M3 with high reasoning",
+      "model": "openrouter:minimax/minimax-m3",
       "reasoningEffort": "high",
       "userInvocable": true,
       "prompts": [".aether/SYSTEM.md", "AGENTS.md"],

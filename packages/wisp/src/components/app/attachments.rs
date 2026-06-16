@@ -12,6 +12,22 @@ const MAX_MEDIA_BYTES: usize = 10 * 1024 * 1024;
 const IMAGE_MIME_TYPES: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp"];
 const AUDIO_MIME_TYPES: &[&str] = &["audio/wav", "audio/mpeg", "audio/mp3", "audio/ogg"];
 
+#[derive(Debug, thiserror::Error)]
+pub enum AttachmentError {
+    #[error("Failed to read {name}: {source}")]
+    Read {
+        name: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("Skipped {name}: file too large ({size} bytes, max {max})")]
+    TooLarge { name: String, size: u64, max: usize },
+    #[error("Skipped binary or non-UTF8 file: {0}")]
+    NotUtf8(String),
+    #[error("Failed to build file URI for {0}")]
+    FileUri(String),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttachmentKind {
     Text,
@@ -55,7 +71,7 @@ pub async fn build_attachment_blocks(attachments: &[PromptAttachment]) -> Attach
                     outcome.warnings.push(warning);
                 }
             }
-            Err(warning) => outcome.warnings.push(warning),
+            Err(warning) => outcome.warnings.push(warning.to_string()),
         }
     }
 
@@ -68,7 +84,7 @@ struct AttachmentBlockResult {
     warning: Option<String>,
 }
 
-async fn try_build_attachment_block(path: &Path, display_name: &str) -> Result<AttachmentBlockResult, String> {
+async fn try_build_attachment_block(path: &Path, display_name: &str) -> Result<AttachmentBlockResult, AttachmentError> {
     let kind = classify_attachment(path);
     let mime_type = mime_guess::from_path(path).first_or_octet_stream().to_string();
 
@@ -92,32 +108,36 @@ async fn try_build_attachment_block(path: &Path, display_name: &str) -> Result<A
     }
 }
 
-async fn read_media_bytes(path: &Path, display_name: &str) -> Result<Vec<u8>, String> {
-    let metadata = tokio::fs::metadata(path).await.map_err(|e| format!("Failed to read {display_name}: {e}"))?;
+async fn read_media_bytes(path: &Path, display_name: &str) -> Result<Vec<u8>, AttachmentError> {
+    let metadata = tokio::fs::metadata(path)
+        .await
+        .map_err(|e| AttachmentError::Read { name: display_name.to_string(), source: e })?;
 
     if metadata.len() > MAX_MEDIA_BYTES as u64 {
-        return Err(format!(
-            "Skipped {display_name}: file too large ({} bytes, max {})",
-            metadata.len(),
-            MAX_MEDIA_BYTES
-        ));
+        return Err(AttachmentError::TooLarge {
+            name: display_name.to_string(),
+            size: metadata.len(),
+            max: MAX_MEDIA_BYTES,
+        });
     }
 
-    tokio::fs::read(path).await.map_err(|e| format!("Failed to read {display_name}: {e}"))
+    tokio::fs::read(path).await.map_err(|e| AttachmentError::Read { name: display_name.to_string(), source: e })
 }
 
 async fn build_text_resource_block(
     path: &Path,
     display_name: &str,
     mime_type: &str,
-) -> Result<AttachmentBlockResult, String> {
-    let file = tokio::fs::File::open(path).await.map_err(|error| format!("Failed to read {display_name}: {error}"))?;
+) -> Result<AttachmentBlockResult, AttachmentError> {
+    let file = tokio::fs::File::open(path)
+        .await
+        .map_err(|e| AttachmentError::Read { name: display_name.to_string(), source: e })?;
 
     let mut bytes = Vec::new();
     file.take((MAX_EMBED_TEXT_BYTES + 1) as u64)
         .read_to_end(&mut bytes)
         .await
-        .map_err(|error| format!("Failed to read {display_name}: {error}"))?;
+        .map_err(|e| AttachmentError::Read { name: display_name.to_string(), source: e })?;
 
     let truncated = bytes.len() > MAX_EMBED_TEXT_BYTES;
     if truncated {
@@ -131,7 +151,7 @@ async fn build_text_resource_block(
             let valid_bytes = &text_bytes[..error.valid_up_to()];
             std::str::from_utf8(valid_bytes).expect("valid_up_to must point at a utf8 boundary").to_string()
         }
-        Err(_) => return Err(format!("Skipped binary or non-UTF8 file: {display_name}")),
+        Err(_) => return Err(AttachmentError::NotUtf8(display_name.to_string())),
     };
 
     let file_uri = build_attachment_file_uri(path, display_name).await?;
@@ -145,11 +165,11 @@ async fn build_text_resource_block(
     Ok(AttachmentBlockResult { block, transcript_placeholder: None, warning })
 }
 
-async fn build_attachment_file_uri(path: &Path, display_name: &str) -> Result<String, String> {
+async fn build_attachment_file_uri(path: &Path, display_name: &str) -> Result<String, AttachmentError> {
     let canonical_path = tokio::fs::canonicalize(path).await.ok();
     let uri_path = canonical_path.as_deref().unwrap_or(path);
     Url::from_file_path(uri_path)
-        .map_err(|()| format!("Failed to build file URI for {display_name}"))
+        .map_err(|()| AttachmentError::FileUri(display_name.to_string()))
         .map(|url| url.to_string())
 }
 

@@ -48,6 +48,7 @@ serde_json = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 tui = { package = "aether-tui", path = ".", features = ["testing"] }

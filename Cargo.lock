@@ -215,6 +215,7 @@ dependencies = [
  "serde_json",
  "syn",
  "tempfile",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -334,6 +335,7 @@ dependencies = [
  "similar",
  "syntect",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-util",
  "tracing",
@@ -374,6 +376,7 @@ dependencies = [
  "serde_json",
  "similar",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
  "tracing-appender",

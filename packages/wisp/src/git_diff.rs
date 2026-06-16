@@ -1,5 +1,5 @@
-use std::fmt;
 use std::path::{Path, PathBuf};
+use thiserror::Error;
 
 #[doc = include_str!("docs/git_diff_document.md")]
 #[allow(dead_code)]
@@ -52,24 +52,15 @@ pub enum PatchLineKind {
 }
 
 #[doc = include_str!("docs/git_diff_error.md")]
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum GitDiffError {
+    #[error("Not a git repository")]
     NotARepository,
+    #[error("Git command failed: {stderr}")]
     CommandFailed { stderr: String },
+    #[error("Failed to parse diff: {0}")]
     ParseError(String),
 }
-
-impl fmt::Display for GitDiffError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NotARepository => write!(f, "Not a git repository"),
-            Self::CommandFailed { stderr } => write!(f, "Git command failed: {stderr}"),
-            Self::ParseError(msg) => write!(f, "Failed to parse diff: {msg}"),
-        }
-    }
-}
-
-impl std::error::Error for GitDiffError {}
 
 impl FileStatus {
     pub fn marker(self) -> char {

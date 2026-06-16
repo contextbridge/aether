@@ -1,8 +1,7 @@
 use futures::future::join_all;
 use regex::Regex;
-use std::fmt::{Display, Formatter};
+use std::env;
 use std::path::Path;
-use std::{env, fmt};
 use tokio::process::Command;
 
 /// Expands `` !`command` `` markers in text by running each command via
@@ -75,9 +74,11 @@ impl ShellExpander {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ShellExpansionError {
+    #[error("Failed to spawn {shell} for `{cmd}`: {error}")]
     Spawn { shell: String, cmd: String, error: String },
+    #[error("Shell interpolation `{cmd}` failed with {status}: {stderr}")]
     NonZeroExit { cmd: String, status: String, stderr: String },
 }
 
@@ -86,21 +87,6 @@ impl Default for ShellExpander {
         Self::new()
     }
 }
-
-impl Display for ShellExpansionError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Spawn { shell, cmd, error } => {
-                write!(f, "Failed to spawn {shell} for `{cmd}`: {error}")
-            }
-            Self::NonZeroExit { cmd, status, stderr } => {
-                write!(f, "Shell interpolation `{cmd}` failed with {status}: {stderr}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for ShellExpansionError {}
 
 #[cfg(test)]
 mod tests {
