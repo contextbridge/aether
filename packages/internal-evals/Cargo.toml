@@ -11,9 +11,11 @@ dist = false
 workspace = true
 
 [dev-dependencies]
+aether-core = { package = "aether-agent-core", path = "../aether-core" }
 aether-evals = { path = "../aether-evals" }
 aether-project = { path = "../aether-project" }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
+testcontainers = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

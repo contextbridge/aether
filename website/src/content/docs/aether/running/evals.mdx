@@ -3,7 +3,7 @@ title: Evals
 description: Build and run CLI evals for Aether agents in Docker sandboxes.
 ---
 
-`aether eval` runs regression tests for Aether agents. Each eval creates a workspace, runs `aether headless --output json` in a fresh Docker container, then checks the agent's tool calls and file changes.
+`aether eval` evals for Aether agents. Each eval creates a workspace, drives `aether acp` through `aether-evals-acp-client` in a fresh Docker container, then checks the agent's tool calls and file changes.
 
 ## Overview
 
@@ -30,7 +30,7 @@ Each `*.eval.json` file defines one scenario: the sandbox image to run in, the p
 
 ## Dockerfiles
 
-Each eval runs inside Docker. The image must contain the `aether` binary because the eval runner starts the agent by executing `aether headless` inside the container.
+Each eval runs inside Docker. The image must contain the `aether` and `aether-evals-acp-client` binaries because the eval runner starts the agent by executing `aether-evals-acp-client`, which drives `aether acp` inside the container.
 
 Create `evals/Dockerfile`:
 
@@ -45,7 +45,8 @@ RUN apt-get update \
     libssl-dev \
   && rm -rf /var/lib/apt/lists/*
 
-RUN cargo install aether-agent-cli
+RUN cargo install aether-agent-cli \
+  && cargo install aether-evals --bin aether-evals-acp-client
 
 WORKDIR /workspace
 ```

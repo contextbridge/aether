@@ -2,12 +2,13 @@ use crate::cli::Cli;
 use crate::error::AppError;
 use crate::settings::{StatusLineSettings, WispSettings};
 use crate::workspace_status::WorkspaceStatus;
-use acp_utils::client::{AcpEvent, AcpPromptHandle, spawn_acp_session};
+use acp_utils::client::{AcpClientError, AcpEvent, AcpPromptHandle, TokioAcpAgent, spawn_acp_session};
 use agent_client_protocol::schema::{
     AuthMethod, Implementation, InitializeRequest, NewSessionRequest, PromptCapabilities, ProtocolVersion,
     SessionCapabilities, SessionConfigOption, SessionId,
 };
 use std::env::current_dir;
+use std::str::FromStr;
 use tokio::sync::mpsc;
 use tui::Theme;
 
@@ -35,8 +36,8 @@ impl RuntimeState {
         let init_request = InitializeRequest::new(ProtocolVersion::LATEST)
             .client_info(Implementation::new("wisp", env!("CARGO_PKG_VERSION")));
 
-        let session =
-            spawn_acp_session(agent_command, init_request, new_session_request).await.map_err(AppError::Acp)?;
+        let agent = TokioAcpAgent::from_str(agent_command).map_err(AcpClientError::InvalidAgentCommand)?;
+        let session = spawn_acp_session(agent, init_request, new_session_request).await.map_err(AppError::Acp)?;
 
         let theme = crate::settings::load_theme(&settings);
 

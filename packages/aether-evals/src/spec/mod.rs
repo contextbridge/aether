@@ -33,7 +33,7 @@ pub(crate) struct EvalCase {
 }
 
 /// A declarative eval file, authored as JSON, that describes one scenario to run against a
-/// Dockerized `aether headless` agent.
+/// Dockerized agent.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct EvalSpec {
@@ -41,7 +41,7 @@ pub(crate) struct EvalSpec {
     #[serde(default)]
     pub docker: Option<DockerSpec>,
 
-    /// Named agent from settings to pass through to `aether headless --agent`.
+    /// Named agent from settings to pass through to `aether acp --agent`.
     #[serde(default)]
     pub agent: Option<String>,
 
@@ -107,11 +107,9 @@ impl EvalCase {
         if let Some(settings) = &self.settings {
             agent = agent.with_settings(settings.clone());
         }
-
-        if let Some(agent_name) = self.eval.agent.as_deref() {
-            agent = agent.with_agent(agent_name);
+        if let Some(agent_name) = &self.eval.agent {
+            agent = agent.with_agent(agent_name.clone());
         }
-
         Ok(agent)
     }
 
@@ -328,9 +326,13 @@ mod tests {
 
     #[test]
     fn rejects_unknown_fields() {
-        let result: Result<EvalSpec, _> =
-            serde_json::from_str(r#"{"docker":{"image":"sandbox:latest"},"name":"c","prompt":"p","bogus":true}"#);
-        assert!(result.is_err());
+        for json in [
+            r#"{"docker":{"image":"sandbox:latest"},"name":"c","prompt":"p","bogus":true}"#,
+            r#"{"docker":{"image":"sandbox:latest"},"name":"c","prompt":"p","runtime":{"type":"acp","command":["a"]}}"#,
+        ] {
+            let result: Result<EvalSpec, _> = serde_json::from_str(json);
+            assert!(result.is_err());
+        }
     }
 
     #[test]

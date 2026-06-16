@@ -100,11 +100,11 @@ pub enum DockerError {
         source: std::io::Error,
     },
 
-    #[error("Aether headless exited without completing: {stderr}")]
-    HeadlessExit { stderr: String },
+    #[error("Docker command exited without emitting a terminal AgentMessage: {stderr}")]
+    CommandExitWithoutTerminal { stderr: String },
 
-    #[error("Aether headless emitted invalid JSON line: {line}")]
-    HeadlessJsonLine {
+    #[error("Docker command emitted invalid AgentMessage JSON line: {line}")]
+    AgentMessageJsonLine {
         line: String,
         #[source]
         source: serde_json::Error,
