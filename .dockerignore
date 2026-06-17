@@ -2,4 +2,5 @@ target/*
 !target/debug/
 target/debug/*
 !target/debug/aether
+!target/debug/aether-evals-acp-client
 .git/

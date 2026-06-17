@@ -6,7 +6,9 @@ mod git_repo;
 mod spec;
 
 pub use agents::{
-    Agent, AgentConfig, DockerAetherAgent, DockerImage, DockerImageParseError, FakeAgent, ImageBuildError, RunError,
+    AETHER_EVAL_WRAPPED_TASK_PROMPT_ENV, AcpClientCommand, Agent, AgentCommandBuilder, AgentConfig,
+    CONTAINER_AETHER_HOME, DockerAetherAgent, DockerAgent, DockerCommandConfig, DockerImage, DockerImageParseError,
+    FakeAgent, ImageBuildError, RunError, aether_eval_env_vars,
 };
 pub use assertions::{assert_tool_call_count, assert_tool_call_with_args, assert_tool_called};
 pub use error::{EvalRunError, WorkspaceError};

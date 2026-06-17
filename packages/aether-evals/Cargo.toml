@@ -24,6 +24,9 @@ schemars = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tempfile = { workspace = true }
+clap = { workspace = true }
+agent-client-protocol = { workspace = true }
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", version = "0.3.22", features = ["client"] }
 aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.6.12" }
 aether-project = { path = "../aether-project", version = "0.5.12" }
 llm = { package = "aether-llm", path = "../llm", version = "0.7.11" }

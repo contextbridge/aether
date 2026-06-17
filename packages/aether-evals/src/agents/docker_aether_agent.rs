@@ -1,12 +1,10 @@
-use super::docker::{Docker, DockerExecConfig};
-use super::transcript::is_terminal;
-use super::{Agent, AgentConfig, DockerError, DockerImage, RunError, build_task_prompt};
+use super::{
+    AcpClientCommand, Agent, AgentConfig, CONTAINER_AETHER_HOME, DockerAgent, DockerError, DockerImage, RunError,
+    aether_eval_env_vars,
+};
 use aether_core::events::AgentMessage;
 use aether_project::AetherSettings;
-use llm::LlmModel;
-use std::path::{Path, PathBuf};
 use testcontainers::core::Mount;
-use tokio::io::{AsyncBufRead, AsyncBufReadExt};
 use tokio::sync::mpsc::Sender;
 
 pub struct DockerAetherAgent {
@@ -29,89 +27,18 @@ impl DockerAetherAgent {
         self.agent = Some(agent.into());
         self
     }
-
-    fn build_command(&self, task_prompt: &str, container_cwd: &Path) -> Vec<String> {
-        let mut command = vec![
-            "aether".to_string(),
-            "headless".to_string(),
-            "--cwd".to_string(),
-            container_cwd.display().to_string(),
-        ];
-
-        if let Some(agent) = &self.agent {
-            command.push("--agent".to_string());
-            command.push(agent.clone());
-        }
-
-        command.extend(["--output".to_string(), "json".to_string()]);
-
-        if let Some(settings) = &self.settings {
-            command.push("--settings-json".to_string());
-            command.push(serde_json::to_string(settings).expect("AetherSettings should serialize to JSON"));
-        }
-        command.push(build_task_prompt(task_prompt, container_cwd));
-        command
-    }
 }
 
 impl Agent for DockerAetherAgent {
     async fn run(&self, config: AgentConfig<'_>, tx: Sender<AgentMessage>) -> Result<(), RunError> {
         let aether_home = tempfile::tempdir().map_err(|source| DockerError::AetherHomeTempDir { source })?;
-        let docker = {
-            let mut docker = Docker::new(self.image.clone())
-                .with_env_var("AETHER_HOME", "/root/.aether")
-                .with_mount(Mount::bind_mount(aether_home.path().display().to_string(), "/root/.aether"));
+        let agent = DockerAgent::with_command_builder(
+            self.image.clone(),
+            AcpClientCommand::aether(self.settings.clone(), self.agent.clone()),
+        )
+        .with_env_vars(aether_eval_env_vars())
+        .with_mount(Mount::bind_mount(aether_home.path().display().to_string(), CONTAINER_AETHER_HOME));
 
-            for (key, value) in std::env::vars().filter(|(key, _)| {
-                key != "AETHER_HOME"
-                    && (LlmModel::ALL_REQUIRED_ENV_VARS.contains(&key.as_str())
-                        || key == "OLLAMA_HOST"
-                        || key.starts_with("AETHER_"))
-            }) {
-                docker = docker.with_env_var(key, value);
-            }
-
-            docker
-        };
-
-        let container_cwd = config
-            .relative_cwd
-            .map_or_else(|| PathBuf::from("/workspace"), |relative_cwd| Path::new("/workspace").join(relative_cwd));
-
-        let command = self.build_command(config.task_prompt, &container_cwd);
-        let (sent_terminal, stderr) = {
-            let mut session = docker.exec(DockerExecConfig { workspace_root: config.workspace_root, command }).await?;
-            let sent_terminal = forward_stdout_messages(session.stdout(), &tx).await?;
-
-            (sent_terminal, session.stderr_to_string().await?)
-        };
-
-        if !stderr.trim().is_empty() {
-            tracing::debug!("aether headless stderr: {}", stderr.trim());
-        }
-
-        if sent_terminal { Ok(()) } else { Err(DockerError::HeadlessExit { stderr }.into()) }
+        agent.run(config, tx).await
     }
-}
-
-async fn forward_stdout_messages<T: AsyncBufRead + Unpin>(
-    reader: T,
-    tx: &Sender<AgentMessage>,
-) -> Result<bool, RunError> {
-    let mut lines = reader.lines();
-    while let Some(line) = lines.next_line().await.map_err(|source| DockerError::StdoutRead { source })? {
-        if line.trim().is_empty() {
-            continue;
-        }
-        tracing::debug!("aether headless: {line}");
-        let message: AgentMessage =
-            serde_json::from_str(&line).map_err(|source| DockerError::HeadlessJsonLine { line, source })?;
-        let terminal = is_terminal(&message);
-        tx.send(message).await.map_err(|error| RunError::ChannelSendFailed(error.to_string()))?;
-        if terminal {
-            return Ok(true);
-        }
-    }
-
-    Ok(false)
 }

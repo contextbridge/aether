@@ -1,5 +1,7 @@
 use acp_utils::notifications::{ContextClearedParams, ContextUsageParams, SubAgentProgressParams};
-use aether_core::events::{AgentMessage, SubAgentProgressPayload};
+use aether_core::events::{
+    AgentMessage, SubAgentProgressPayload, aether_tool_name_meta, humanize_tool_name, parse_tool_call_chunk,
+};
 use agent_client_protocol::schema::{
     self as acp, Content, ContentBlock, ContentChunk, Diff, MessageId, PlanEntry, PlanEntryPriority, PlanEntryStatus,
     SessionId, SessionNotification, SessionUpdate, StopReason, TextContent, ToolCall, ToolCallContent, ToolCallId,
@@ -191,13 +193,10 @@ fn map_tool_call_to_notification(session_id: SessionId, request: &ToolCallReques
         SessionUpdate::ToolCall(
             ToolCall::new(ToolCallId::new(request.id.clone()), humanize_tool_name(&request.name))
                 .status(acp::ToolCallStatus::InProgress)
-                .raw_input(raw_input),
+                .raw_input(raw_input)
+                .meta(aether_tool_name_meta(&request.name)),
         ),
     )
-}
-
-fn parse_tool_call_chunk(chunk: &str) -> serde_json::Value {
-    serde_json::from_str(chunk).unwrap_or_else(|_| serde_json::Value::String(chunk.to_string()))
 }
 
 fn map_tool_call_update_to_notification(session_id: SessionId, tool_call_id: &str, chunk: &str) -> SessionNotification {
@@ -207,17 +206,6 @@ fn map_tool_call_update_to_notification(session_id: SessionId, tool_call_id: &st
         session_id,
         SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(ToolCallId::new(tool_call_id.to_string()), fields)),
     )
-}
-
-/// Produces the initial human-readable title for a tool call (e.g., "Read file").
-/// This is sent when the tool call starts.
-fn humanize_tool_name(name: &str) -> String {
-    let base = name.split("__").last().unwrap_or(name);
-    let mut result = base.replace('_', " ");
-    if let Some(first) = result.get_mut(0..1) {
-        first.make_ascii_uppercase();
-    }
-    result
 }
 
 fn map_tool_result_to_notification(
@@ -612,6 +600,25 @@ mod tests {
         assert_eq!(humanize_tool_name("read_file"), "Read file");
         assert_eq!(humanize_tool_name("bash"), "Bash");
         assert_eq!(humanize_tool_name("plugins__coding__read_file"), "Read file");
+    }
+
+    #[test]
+    fn test_tool_call_notification_includes_original_tool_name_meta() -> Result<(), String> {
+        let session_id = acp::SessionId::new("test-session");
+        let request = ToolCallRequest {
+            id: "call_1".to_string(),
+            name: "coding__read_file".to_string(),
+            arguments: "{}".to_string(),
+        };
+
+        let notification = map_tool_call_to_notification(session_id, &request);
+        let SessionUpdate::ToolCall(tool_call) = notification.update else {
+            return Err("Expected ToolCall".to_string());
+        };
+        let meta = tool_call.meta.ok_or("meta should be present")?;
+        assert_eq!(meta.get("aetherToolName").and_then(|value| value.as_str()), Some("coding__read_file"));
+        assert_eq!(tool_call.title, "Read file");
+        Ok(())
     }
 
     #[test]

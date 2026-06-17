@@ -5,7 +5,7 @@ use aether_evals::{DockerAetherAgent, DockerImage, Workspace, run_eval};
 use aether_project::{AetherSettings, AgentConfig as AetherAgentConfig, PromptSource};
 
 #[tokio::test]
-async fn docker_aether_agent_eval() -> Result<(), aether_evals::EvalRunError> {
+async fn docker_agent_aether_acp_eval() -> Result<(), aether_evals::EvalRunError> {
     if var("AETHER_RUN_DOCKER_TESTS").ok().as_deref() != Some("1") {
         eprintln!("skipping Docker eval test; set AETHER_RUN_DOCKER_TESTS=1 to run");
         return Ok(());

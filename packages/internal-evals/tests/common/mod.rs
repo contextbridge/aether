@@ -20,7 +20,6 @@ pub fn create_aether_agent() -> Result<DockerAetherAgent, EvalHarnessError> {
     let image = DockerImage::new("aether-sandbox", "latest");
     let settings = load_repo_eval_settings()?;
     let agent = DockerAetherAgent::new(image).with_settings(settings);
-
     Ok(match eval_agent_name() {
         Some(agent_name) => agent.with_agent(agent_name),
         None => agent,

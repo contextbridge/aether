@@ -7,6 +7,7 @@
 use agent_client_protocol::schema::{McpServer, McpServerStdio};
 use agent_client_protocol::util::internal_error;
 use agent_client_protocol::{AcpAgent, ByteStreams, ConnectTo, Error, Role, util};
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::str::FromStr;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -19,6 +20,14 @@ pub struct TokioAcpAgent {
 }
 
 impl TokioAcpAgent {
+    pub fn from_command(command: impl Into<PathBuf>, args: Vec<String>) -> Self {
+        let command = command.into();
+        let name = command.file_name().and_then(|name| name.to_str()).unwrap_or("acp-agent").to_string();
+        let mut stdio = McpServerStdio::new(name, command);
+        stdio.args = args;
+        Self { stdio }
+    }
+
     pub fn stdio(&self) -> &McpServerStdio {
         &self.stdio
     }

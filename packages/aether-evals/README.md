@@ -53,7 +53,10 @@ Aether Evals' fake-agent coverage should use normal test names. Reserve `_eval` 
 ## Core API
 
 - `run_eval(&agent, prompt, workspace)` runs one eval and returns an `EvalReport`.
-- `DockerAetherAgent::new(image)` runs `aether headless --output json` in a fresh Testcontainers container for each eval run.
+- `DockerAetherAgent::new(image)` drives the real Aether CLI (`aether acp`) through `aether-evals-acp-client` with an isolated container `AETHER_HOME`.
+- `DockerAgent::new(image, command)` runs a static in-container command that emits `AgentMessage` NDJSON.
+- `DockerAgent::with_command_builder(image, builder)` builds argv per run when the command needs the container cwd or wrapped prompt.
+- `AcpClientCommand::aether(settings, agent)` builds the lower-level ACP client command used by `DockerAetherAgent`.
 - `Workspace::empty()` creates an isolated temp directory.
 - `Workspace::from_dir(path)` copies fixture directory contents into a temp directory.
 - `Workspace::from_git_repo(GitRepoSpec { url, start_commit, gold_commit, subdir })` clones and checks out a git repository.
@@ -61,7 +64,7 @@ Aether Evals' fake-agent coverage should use normal test names. Reserve `_eval` 
 
 ## Dockerized Aether evals
 
-Use `DockerAetherAgent` when an eval should exercise the real Aether CLI in an isolated container. Aether Evals mounts the workspace root at `/workspace`; git-backed workspaces with `GitRepoSpec::subdir` mount the repository root so `.git` remains available while headless runs from the matching relative cwd under `/workspace`.
+Use `DockerAetherAgent` when an eval should exercise the real Aether CLI in an isolated container. Aether Evals mounts the workspace root at `/workspace`; git-backed workspaces with `GitRepoSpec::subdir` mount the repository root so `.git` remains available while Aether runs from the matching relative cwd under `/workspace`. Aether evals drive the CLI through ACP with `aether-evals-acp-client`, while the standalone `aether headless` command remains available for direct CLI use.
 
 ```rust
 use aether_evals::{DockerAetherAgent, DockerImage, GitRepoSpec, Workspace, run_eval};
@@ -70,8 +73,7 @@ use std::path::Path;
 
 let settings = AetherSettings::load_file_for_export(Path::new(".aether/settings.json"))?;
 let agent = DockerAetherAgent::new(DockerImage::new("aether-sandbox", "latest"))
-    .with_settings(settings)
-    .with_agent("Fast");
+    .with_settings(settings);
 
 let report = run_eval(
     &agent,
@@ -85,8 +87,6 @@ let report = run_eval(
 )
 .await?;
 ```
-
-By default the Docker agent forwards provider API key env vars, `OLLAMA_HOST`, and `AETHER_*` except host `AETHER_HOME`. Each run gets a fresh temporary container `AETHER_HOME`; configured settings are passed with `--settings-json`, and `.with_agent(...)` passes `--agent`.
 
 ## Assertions
 

@@ -14,7 +14,6 @@ use agent_client_protocol::schema::{
     SessionConfigOption, SessionId, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, TextContent,
 };
 use agent_client_protocol::{self as acp, Client, ConnectionTo, JsonRpcRequest};
-use std::str::FromStr;
 use tokio::sync::mpsc;
 use tracing::info;
 
@@ -38,11 +37,10 @@ pub struct AcpSession {
 /// [`AcpEvent`]s, and tunnels elicitation requests through the `_aether/elicitation`
 /// extension method.
 pub async fn spawn_acp_session(
-    agent_command: &str,
+    agent: TokioAcpAgent,
     init_request: InitializeRequest,
     new_session_request: NewSessionRequest,
 ) -> Result<AcpSession, AcpClientError> {
-    let agent = TokioAcpAgent::from_str(agent_command).map_err(AcpClientError::InvalidAgentCommand)?;
     let (event_tx, event_rx) = mpsc::unbounded_channel::<AcpEvent>();
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<PromptCommand>();
     let (init_tx, mut init_rx) = mpsc::unbounded_channel::<InitializeResult>();
