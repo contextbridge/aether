@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 use testcontainers::core::{ExecCommand, ExecResult, Mount};
 use testcontainers::runners::AsyncRunner;
@@ -6,7 +7,7 @@ use tokio::io::AsyncBufRead;
 
 pub(crate) struct Docker {
     image: DockerImage,
-    env_vars: Vec<(String, String)>,
+    env_vars: BTreeMap<String, String>,
     mounts: Vec<Mount>,
 }
 
@@ -28,11 +29,11 @@ pub struct DockerImage {
 
 impl Docker {
     pub fn new(image: DockerImage) -> Self {
-        Self { image, env_vars: Vec::new(), mounts: Vec::new() }
+        Self { image, env_vars: BTreeMap::new(), mounts: Vec::new() }
     }
 
     pub fn with_env_var(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.env_vars.push((key.into(), value.into()));
+        self.env_vars.insert(key.into(), value.into());
         self
     }
 
@@ -88,8 +89,8 @@ pub enum DockerError {
     #[error("Docker container operation failed: {0}")]
     Testcontainers(#[from] testcontainers::TestcontainersError),
 
-    #[error("Failed to create Docker AETHER_HOME temporary directory: {source}")]
-    AetherHomeTempDir {
+    #[error("Failed to create ephemeral mount temporary directory: {source}")]
+    EphemeralMountTempDir {
         #[source]
         source: std::io::Error,
     },

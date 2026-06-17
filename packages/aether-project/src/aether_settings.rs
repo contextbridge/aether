@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use utils::variables::VarError;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 pub enum CredentialsStoreConfig {
     /// Holds credentials in the OS keyring
     Keyring,

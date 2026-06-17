@@ -45,6 +45,7 @@ mod tests {
                     name: "passing".to_string(),
                     passed: true,
                     failures: vec![],
+                    tool_calls: vec![],
                     judge: Some(JudgeSummary {
                         passed: true,
                         score: 1.0,
@@ -60,11 +61,13 @@ mod tests {
                         }],
                     }),
                     failure_context: None,
+                    retained_workspace: None,
                 },
                 EvalOutcome {
                     name: "failing".to_string(),
                     passed: false,
                     failures: vec!["expected tool `bash` to be called".to_string()],
+                    tool_calls: vec![],
                     judge: Some(JudgeSummary {
                         passed: false,
                         score: 0.0,
@@ -79,7 +82,8 @@ mod tests {
                             reason: "wrong".to_string(),
                         }],
                     }),
-                    failure_context: Some("Eval failure context\nWorkspace: /tmp/x".to_string()),
+                    failure_context: Some("Task failure context\nWorkspace: /tmp/x".to_string()),
+                    retained_workspace: None,
                 },
             ],
         }

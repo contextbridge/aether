@@ -47,11 +47,32 @@ pub struct AgentConfig {
 }
 
 fn require_agent_invocation_surface_schema(schema: &mut schemars::Schema) {
-    schema.insert(
-        "anyOf".to_string(),
-        serde_json::json!([
-            { "required": ["userInvocable"], "properties": { "userInvocable": { "const": true } } },
-            { "required": ["agentInvocable"], "properties": { "agentInvocable": { "const": true } } }
-        ]),
-    );
+    let Some(mut base_schema) = schema.as_object().cloned() else {
+        return;
+    };
+    let description = base_schema.remove("description");
+
+    let invocation_surface_schema = serde_json::json!({
+        "anyOf": [
+            {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["userInvocable"],
+                "properties": { "userInvocable": { "const": true } }
+            },
+            {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["agentInvocable"],
+                "properties": { "agentInvocable": { "const": true } }
+            }
+        ]
+    });
+
+    let mut composed_schema = serde_json::Map::new();
+    if let Some(description) = description {
+        composed_schema.insert("description".to_string(), description);
+    }
+    composed_schema.insert("allOf".to_string(), serde_json::json!([base_schema, invocation_surface_schema]));
+    *schema = composed_schema.into();
 }

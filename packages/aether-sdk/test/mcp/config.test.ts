@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { startMcpServersForSession } from "../../src/mcp/config.js";
+import {
+  startMcpServersForHeadless,
+  startMcpServersForSession,
+} from "../../src/mcp/config.js";
 import { tool } from "../../src/tool.js";
 import type { ExternalMcpServerConfig } from "../../src/types.js";
 
@@ -157,5 +160,98 @@ describe("startMcpServersForSession()", () => {
         externalMcpServers: configs,
       }),
     ).rejects.toThrow(/Duplicate MCP server name/);
+  });
+});
+
+describe("startMcpServersForHeadless()", () => {
+  let cleanup: (() => Promise<void>) | null = null;
+
+  afterEach(async () => {
+    await cleanup?.().catch(() => undefined);
+    cleanup = null;
+  });
+
+  it("returns an empty server map when no configs are supplied", async () => {
+    const result = await startMcpServersForHeadless();
+    cleanup = result.cleanup;
+    expect(result.mcpConfig).toEqual({ servers: {} });
+    expect(result).not.toHaveProperty("acpServers");
+  });
+
+  it("emits an http server with bearer auth for an SDK tool group", async () => {
+    const submit = tool({
+      name: "submit",
+      description: "submit",
+      inputSchema: { value: z.string() },
+      handler: async () => ({ content: [{ type: "text", text: "ok" }] }),
+    });
+    const result = await startMcpServersForHeadless({
+      tools: { weather: [submit] },
+    });
+    cleanup = result.cleanup;
+
+    const server = result.mcpConfig.servers.weather!;
+    expect(result).not.toHaveProperty("acpServers");
+    expect(server).toMatchObject({ type: "http" });
+    if (server.type === "http") {
+      expect(server.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
+      expect(server.headers?.Authorization).toMatch(/^Bearer .+$/);
+    }
+  });
+
+  it("maps external http and stdio servers into the headless shape", async () => {
+    const configs: Record<string, ExternalMcpServerConfig> = {
+      remote: {
+        type: "http",
+        url: "https://example.test/mcp",
+        headers: { Authorization: "Bearer x" },
+      },
+      git: {
+        type: "stdio",
+        command: "/usr/bin/git-mcp",
+        args: ["serve"],
+        env: { GIT_TOKEN: "abc", IGNORED: undefined },
+      },
+    };
+    const result = await startMcpServersForHeadless({
+      externalMcpServers: configs,
+    });
+    cleanup = result.cleanup;
+
+    expect(result.mcpConfig.servers.remote).toEqual({
+      type: "http",
+      url: "https://example.test/mcp",
+      headers: { Authorization: "Bearer x" },
+    });
+    expect(result.mcpConfig.servers.git).toEqual({
+      type: "stdio",
+      command: "/usr/bin/git-mcp",
+      args: ["serve"],
+      env: { GIT_TOKEN: "abc" },
+    });
+  });
+
+  it("stops the local http server on cleanup", async () => {
+    const submit = tool({
+      name: "submit",
+      description: "submit",
+      inputSchema: {},
+      handler: async () => ({ content: [] }),
+    });
+    const result = await startMcpServersForHeadless({
+      tools: { weather: [submit] },
+    });
+    const server = result.mcpConfig.servers.weather!;
+    const url = server.type === "http" ? server.url : "";
+
+    await result.cleanup();
+
+    await expect(fetch(url)).rejects.toThrow();
+  });
+
+  it("rejects SDK tool prefixes containing the server delimiter", async () => {
+    await expect(
+      startMcpServersForHeadless({ tools: { bad__prefix: [] } }),
+    ).rejects.toThrow(/must not contain/);
   });
 });

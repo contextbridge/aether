@@ -6,6 +6,7 @@ export type AetherSdkErrorCode =
   | "session_not_started"
   | "prompt_in_progress"
   | "invalid_options"
+  | "eval_command_failed"
   | "aborted";
 
 export class AetherSdkError extends Error {
@@ -17,5 +18,11 @@ export class AetherSdkError extends Error {
     this.name = "AetherSdkError";
     this.code = code;
     this.cause = cause;
+  }
+}
+
+export function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw new AetherSdkError("aborted", "Aborted by caller");
   }
 }

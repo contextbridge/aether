@@ -6,7 +6,7 @@
     "sdk:typecheck": "pnpm --filter @aether-agent/sdk typecheck",
     "sdk:test": "pnpm --filter @aether-agent/sdk test",
     "sdk:e2e": "pnpm --filter @aether-agent/sdk e2e",
-    "sdk:generate-settings-types": "pnpm --filter @aether-agent/sdk generate:settings-types",
+    "sdk:generate-types": "pnpm --filter @aether-agent/sdk generate:types",
     "website:dev": "pnpm --dir website dev",
     "website:build": "pnpm --dir website build",
     "website:preview": "pnpm --dir website preview",

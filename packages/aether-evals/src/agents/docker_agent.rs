@@ -4,37 +4,30 @@ use super::{Agent, AgentConfig, DockerError, DockerImage, RunError, build_task_p
 use aether_core::events::AgentMessage;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use tempfile::tempdir;
 use testcontainers::core::Mount;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt};
 use tokio::sync::mpsc::Sender;
 
 /// Environment variable through which `DockerAgent` hands the wrapped task prompt to the
-/// in-container command. Shared with `aether-evals-acp-client`, which reads it back.
+/// in-container command.
 pub const AETHER_EVAL_WRAPPED_TASK_PROMPT_ENV: &str = "AETHER_EVAL_WRAPPED_TASK_PROMPT";
+pub const AETHER_EVAL_WORKSPACE_ROOT_ENV: &str = "AETHER_EVAL_WORKSPACE_ROOT";
+pub const AETHER_EVAL_CWD_ENV: &str = "AETHER_EVAL_CWD";
 
 pub struct DockerAgent {
     image: DockerImage,
-    command: Arc<dyn AgentCommandBuilder>,
+    command: Vec<String>,
     env_vars: HashMap<String, String>,
     mounts: Vec<Mount>,
-}
-
-pub struct DockerCommandConfig<'a> {
-    pub container_cwd: &'a Path,
-}
-
-pub trait AgentCommandBuilder: Send + Sync {
-    fn build(&self, config: DockerCommandConfig<'_>) -> Vec<String>;
+    ephemeral_mounts: Vec<String>,
 }
 
 impl DockerAgent {
+    /// `command` is the in-container argv to exec; its stdout must be newline-delimited
+    /// `AgentMessage` JSON.
     pub fn new(image: DockerImage, command: Vec<String>) -> Self {
-        Self::with_command_builder(image, command)
-    }
-
-    pub fn with_command_builder(image: DockerImage, builder: impl AgentCommandBuilder + 'static) -> Self {
-        Self { image, command: Arc::new(builder), env_vars: HashMap::new(), mounts: Vec::new() }
+        Self { image, command, env_vars: HashMap::new(), mounts: Vec::new(), ephemeral_mounts: Vec::new() }
     }
 
     pub fn with_env_var(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
@@ -42,7 +35,7 @@ impl DockerAgent {
         self
     }
 
-    pub fn with_env_vars(mut self, env_vars: HashMap<String, String>) -> Self {
+    pub fn with_env_vars(mut self, env_vars: impl IntoIterator<Item = (String, String)>) -> Self {
         self.env_vars.extend(env_vars);
         self
     }
@@ -51,11 +44,11 @@ impl DockerAgent {
         self.mounts.push(mount);
         self
     }
-}
 
-impl AgentCommandBuilder for Vec<String> {
-    fn build(&self, _config: DockerCommandConfig<'_>) -> Vec<String> {
-        self.clone()
+    /// Register a container path to be backed by a fresh host tempdir, created at run time.
+    pub fn with_ephemeral_mount(mut self, container_path: impl Into<String>) -> Self {
+        self.ephemeral_mounts.push(container_path.into());
+        self
     }
 }
 
@@ -64,13 +57,9 @@ impl Agent for DockerAgent {
         let container_workspace_root = Path::new("/workspace");
         let container_cwd = container_cwd(container_workspace_root, config.relative_cwd);
         let wrapped_task_prompt = build_task_prompt(config.task_prompt, &container_cwd);
-        let command = self.command.build(DockerCommandConfig { container_cwd: &container_cwd });
+        let command = wrap_command(&container_cwd, &self.command);
 
-        let mut docker = Docker::new(self.image.clone())
-            .with_env_var("AETHER_EVAL_WORKSPACE_ROOT", container_workspace_root.display().to_string())
-            .with_env_var("AETHER_EVAL_CWD", container_cwd.display().to_string())
-            .with_env_var("AETHER_EVAL_TASK_PROMPT", config.task_prompt)
-            .with_env_var(AETHER_EVAL_WRAPPED_TASK_PROMPT_ENV, wrapped_task_prompt);
+        let mut docker = Docker::new(self.image.clone());
 
         for mount in &self.mounts {
             docker = docker.with_mount(mount.clone());
@@ -78,6 +67,18 @@ impl Agent for DockerAgent {
 
         for (key, value) in &self.env_vars {
             docker = docker.with_env_var(key.clone(), value.clone());
+        }
+
+        docker = docker
+            .with_env_var(AETHER_EVAL_WRAPPED_TASK_PROMPT_ENV, wrapped_task_prompt)
+            .with_env_var(AETHER_EVAL_WORKSPACE_ROOT_ENV, container_workspace_root.display().to_string())
+            .with_env_var(AETHER_EVAL_CWD_ENV, container_cwd.display().to_string());
+
+        let mut ephemeral_tempdirs = Vec::with_capacity(self.ephemeral_mounts.len());
+        for container_path in &self.ephemeral_mounts {
+            let tempdir = tempdir().map_err(|source| DockerError::EphemeralMountTempDir { source })?;
+            docker = docker.with_mount(Mount::bind_mount(tempdir.path().display().to_string(), container_path.clone()));
+            ephemeral_tempdirs.push(tempdir);
         }
 
         let (sent_terminal, stderr) = {
@@ -123,6 +124,22 @@ fn container_cwd(container_workspace_root: &Path, relative_cwd: Option<&Path>) -
     )
 }
 
+/// Wrap the agent argv in a shell that `cd`s into the eval cwd first. `testcontainers` execs inherit
+/// the image working dir (`/workspace`) and expose no per-exec cwd, so the cwd is passed as the
+/// shell's first positional (`$1`) and dropped with `shift` before exec-ing the real command. `$0`
+/// is a throwaway name.
+fn wrap_command(container_cwd: &Path, command: &[String]) -> Vec<String> {
+    let mut argv = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        "cd \"$1\" && shift && exec \"$@\"".to_string(),
+        "aether-eval-command".to_string(),
+        container_cwd.display().to_string(),
+    ];
+    argv.extend(command.iter().cloned());
+    argv
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,14 +155,6 @@ mod tests {
     }
 
     #[test]
-    fn static_vec_command_is_returned_as_argv() {
-        let command = vec!["print-agent-messages".to_string()]
-            .build(DockerCommandConfig { container_cwd: Path::new("/workspace") });
-
-        assert_eq!(command, vec!["print-agent-messages".to_string()]);
-    }
-
-    #[test]
     fn container_cwd_uses_workspace_root_when_no_relative_cwd() {
         assert_eq!(container_cwd(Path::new("/workspace"), None), Path::new("/workspace"));
     }
@@ -153,5 +162,34 @@ mod tests {
     #[test]
     fn container_cwd_joins_relative_cwd() {
         assert_eq!(container_cwd(Path::new("/workspace"), Some(Path::new("subdir"))), Path::new("/workspace/subdir"));
+    }
+
+    #[test]
+    fn wrap_command_cds_to_container_cwd_then_execs_command() {
+        let argv =
+            wrap_command(Path::new("/workspace/subdir"), &["node".to_string(), "/app/eval-agent.js".to_string()]);
+
+        assert_eq!(
+            argv,
+            vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "cd \"$1\" && shift && exec \"$@\"".to_string(),
+                "aether-eval-command".to_string(),
+                "/workspace/subdir".to_string(),
+                "node".to_string(),
+                "/app/eval-agent.js".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn wrap_command_preserves_command_args_after_cwd_arg() {
+        let argv = wrap_command(
+            Path::new("/workspace"),
+            &["node".to_string(), "/app/eval agent.js".to_string(), "--city".to_string(), "New York".to_string()],
+        );
+
+        assert_eq!(&argv[5..], ["node", "/app/eval agent.js", "--city", "New York"]);
     }
 }

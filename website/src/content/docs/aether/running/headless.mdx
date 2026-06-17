@@ -178,7 +178,7 @@ aether show-prompt --agent Researcher
 
 ### `eval`
 
-Run declarative eval files in Docker sandboxes. Evals drive `aether acp` through `aether-evals-acp-client` under the hood and aggregate pass/fail results.
+Run declarative eval files in Docker sandboxes. Each eval runs the configured `agent.command`, which emits newline-delimited `AgentMessage` JSON, and aggregates pass/fail results.
 
 ```bash
 aether eval evals/ --output json

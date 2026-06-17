@@ -1,20 +1,15 @@
-import type {
-  AetherSettings,
-  ProviderConnectionOverride,
-} from "./generated/aether-settings.js";
-import type { ChildProcess } from "node:child_process";
+import type { ProviderConnectionOverride } from "./generated/aether-settings.js";
 import { addAbortListener } from "node:events";
 import path from "node:path";
-import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import { AsyncQueue } from "./asyncQueue.js";
-import { AetherSdkError } from "./errors.js";
-import { startMcpServersForSession } from "./mcp/index.js";
 import {
-  resolveAetherCommand,
-  spawnAetherProcess,
-  stopChild,
-} from "./spawnAetherProcess.js";
+  startAgent,
+  type AcpAgentProcess,
+  type SettingsSelection,
+} from "./agentProcess.js";
+import { AetherSdkError, throwIfAborted } from "./errors.js";
+import { startMcpServersForSession } from "./mcp/index.js";
 import type {
   AetherElicitationRequest,
   AetherElicitationResponse,
@@ -29,11 +24,6 @@ const SDK_VERSION = "0.2.3";
 export type PermissionRequestHandler = (
   request: acp.RequestPermissionRequest,
 ) => Promise<acp.RequestPermissionResponse>;
-
-export type SettingsSelection =
-  | { settings: AetherSettings; settingsFile?: never }
-  | { settings?: never; settingsFile: string }
-  | { settings?: never; settingsFile?: never };
 
 export interface CommonAetherSessionOptions {
   cwd?: string;
@@ -102,8 +92,7 @@ export class AetherSession {
       onElicitation,
     } = options;
 
-    if (abortSignal?.aborted)
-      throw new AetherSdkError("aborted", "Aborted by caller");
+    throwIfAborted(abortSignal);
 
     const events = new AsyncQueue<AetherMessage>();
     await using stack = new AsyncDisposableStack();
@@ -114,68 +103,27 @@ export class AetherSession {
 
     stack.defer(() => started.cleanup().catch(() => undefined));
 
-    if (abortSignal?.aborted)
-      throw new AetherSdkError("aborted", "Aborted by caller");
+    throwIfAborted(abortSignal);
 
-    if (settings && settingsFile)
-      throw new AetherSdkError(
-        "invalid_options",
-        "settings and settingsFile cannot both be supplied",
-      );
-
-    if (agent && model)
-      throw new AetherSdkError(
-        "invalid_options",
-        "agent and model cannot both be supplied",
-      );
-
-    const resolved = resolveAetherCommand(binaryPath);
-    const args = [...resolved.prefixArgs, "acp"];
-    if (settings) args.push("--settings-json", JSON.stringify(settings));
-    if (settingsFile) args.push("--settings-file", settingsFile);
-    if (agent) args.push("--agent", agent);
-    else if (model) {
-      args.push("--model", model);
-      if (reasoningEffort) args.push("--reasoning-effort", reasoningEffort);
-    } else if (reasoningEffort) {
-      throw new AetherSdkError(
-        "invalid_options",
-        "reasoningEffort requires model",
-      );
-    }
-    for (const [provider, connection] of Object.entries(
-      providers ?? {},
-    ).sort()) {
-      if (connection.url)
-        args.push("--provider", `${provider}.url=${connection.url}`);
-      if (connection.auth)
-        args.push("--provider", `${provider}.auth=${connection.auth}`);
-      if (connection.inferenceProfileArn)
-        args.push(
-          "--provider",
-          `${provider}.inference-profile-arn=${connection.inferenceProfileArn}`,
-        );
-    }
-    if (logDir) args.push("--log-dir", logDir);
-
-    const spawned = spawnAetherProcess({
-      command: resolved.command,
-      args,
+    const agentProcess = startAgent({
+      binaryPath,
+      agent,
+      model,
+      reasoningEffort,
+      settings,
+      settingsFile,
+      providers,
+      logDir,
       cwd,
       env,
       events,
     });
 
-    stack.defer(() => stopChild(spawned.child));
-
-    const stream = acp.ndJsonStream(
-      Writable.toWeb(spawned.stdin) as WritableStream<Uint8Array>,
-      Readable.toWeb(spawned.stdout) as ReadableStream<Uint8Array>,
-    );
+    stack.defer(() => agentProcess.close());
 
     const connection = new acp.ClientSideConnection(
       () => createAcpClient({ onPermissionRequest, onElicitation }, events),
-      stream,
+      agentProcess.stream,
     );
 
     const initializeResponse = await connection.initialize({
@@ -187,8 +135,7 @@ export class AetherSession {
       },
     });
 
-    if (abortSignal?.aborted)
-      throw new AetherSdkError("aborted", "Aborted by caller");
+    throwIfAborted(abortSignal);
 
     const newSessionResponse = await connection.newSession({
       cwd: path.resolve(cwd),
@@ -196,7 +143,7 @@ export class AetherSession {
     });
 
     const session = new AetherSession(
-      spawned.child,
+      agentProcess,
       connection,
       events,
       started.cleanup,
@@ -211,7 +158,7 @@ export class AetherSession {
   }
 
   private constructor(
-    private readonly child: ChildProcess,
+    private readonly agentProcess: AcpAgentProcess,
     private readonly connection: acp.ClientSideConnection,
     private readonly events: AsyncQueue<AetherMessage>,
     private readonly mcpCleanup: () => Promise<void>,
@@ -251,7 +198,7 @@ export class AetherSession {
     this.abortCleanup?.[Symbol.dispose]();
     this.abortCleanup = null;
     this.events.close();
-    await Promise.allSettled([stopChild(this.child), this.mcpCleanup()]);
+    await Promise.allSettled([this.agentProcess.close(), this.mcpCleanup()]);
   }
 
   async [Symbol.asyncDispose](): Promise<void> {

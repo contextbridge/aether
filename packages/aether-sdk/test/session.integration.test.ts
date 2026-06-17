@@ -67,13 +67,20 @@ describe("AetherSession with a fake ACP agent", () => {
       const argv = lines
         .map((line) => JSON.parse(line))
         .find((event) => event.event === "argv");
-      expect(argv.args).toContain("--provider");
-      expect(argv.args).toContain("bedrock.url=http://127.0.0.1:8787");
-      expect(argv.args).toContain("bedrock.auth=none");
-      expect(argv.args).toContain(`bedrock.inference-profile-arn=${arn}`);
-      const settingsJson = argv.args[argv.args.indexOf("--settings-json") + 1];
-      expect(JSON.parse(settingsJson).credentialsStore).toEqual({
-        type: "memory",
+      expect(argv.args).toContain("--options-json");
+      const optionsJson = argv.args[argv.args.indexOf("--options-json") + 1];
+      expect(JSON.parse(optionsJson)).toEqual({
+        providers: {
+          bedrock: {
+            url: "http://127.0.0.1:8787",
+            auth: "none",
+            inferenceProfileArn: arn,
+          },
+        },
+        settings: {
+          credentialsStore: { type: "memory" },
+          agents: [],
+        },
       });
     } finally {
       await session.close();

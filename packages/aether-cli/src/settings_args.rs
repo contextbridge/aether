@@ -1,5 +1,6 @@
 use aether_project::{AetherSettings, AetherSettingsSource, AgentCatalog, SettingsError, SettingsFileSource};
 use std::path::{Path, PathBuf};
+use thiserror::Error;
 
 #[derive(Clone, Debug, Default, clap::Args)]
 pub struct SettingsSourceArgs {
@@ -10,7 +11,25 @@ pub struct SettingsSourceArgs {
     pub settings_file: Option<PathBuf>,
 }
 
+/// A JSON options object supplied both an inline `settings` object and a `settingsFile`.
+#[derive(Debug, Error)]
+#[error("settings and settingsFile cannot both be supplied")]
+pub struct ConflictingSettingsSources;
+
 impl SettingsSourceArgs {
+    pub fn from_json_options(
+        settings: Option<AetherSettings>,
+        settings_file: Option<PathBuf>,
+    ) -> Result<Self, ConflictingSettingsSources> {
+        if settings.is_some() && settings_file.is_some() {
+            return Err(ConflictingSettingsSources);
+        }
+        Ok(Self {
+            settings_json: settings.map(|settings| serde_json::to_string(&settings).expect("settings serialize")),
+            settings_file,
+        })
+    }
+
     pub fn source(&self, root: &Path) -> Option<AetherSettingsSource> {
         if let Some(json) = &self.settings_json {
             Some(AetherSettingsSource::Json(json.clone()))
@@ -50,6 +69,24 @@ mod tests {
             panic!("expected JSON settings source");
         };
         assert_eq!(json, "{\"agents\":[]}");
+    }
+
+    #[test]
+    fn from_json_options_serializes_inline_settings() {
+        let args = SettingsSourceArgs::from_json_options(Some(AetherSettings::default()), None).unwrap();
+
+        assert!(args.settings_json.is_some());
+        assert!(args.settings_file.is_none());
+    }
+
+    #[test]
+    fn from_json_options_rejects_both_settings_and_file() {
+        let error = SettingsSourceArgs::from_json_options(
+            Some(AetherSettings::default()),
+            Some(PathBuf::from("settings.json")),
+        );
+
+        assert!(matches!(error, Err(ConflictingSettingsSources)));
     }
 
     #[test]

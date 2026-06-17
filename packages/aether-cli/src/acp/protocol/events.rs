@@ -595,14 +595,6 @@ mod tests {
     }
 
     #[test]
-    fn test_humanize_tool_name() {
-        assert_eq!(humanize_tool_name("coding__read_file"), "Read file");
-        assert_eq!(humanize_tool_name("read_file"), "Read file");
-        assert_eq!(humanize_tool_name("bash"), "Bash");
-        assert_eq!(humanize_tool_name("plugins__coding__read_file"), "Read file");
-    }
-
-    #[test]
     fn test_tool_call_notification_includes_original_tool_name_meta() -> Result<(), String> {
         let session_id = acp::SessionId::new("test-session");
         let request = ToolCallRequest {

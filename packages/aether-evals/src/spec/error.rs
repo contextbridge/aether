@@ -1,5 +1,4 @@
 use crate::agents::{DockerImageParseError, ImageBuildError};
-use aether_project::SettingsError;
 use std::path::PathBuf;
 use thiserror::Error;
 
@@ -22,6 +21,15 @@ pub enum EvalFileError {
         #[source]
         source: serde_json::Error,
     },
+
+    #[error("failed to parse eval spec: {source}")]
+    ParseSpec {
+        #[source]
+        source: serde_json::Error,
+    },
+
+    #[error("invalid agent selection: {message}")]
+    InvalidAgentCommand { message: String },
 
     #[error("eval path '{}' does not exist", path.display())]
     EvalPathNotFound { path: PathBuf },
@@ -49,9 +57,6 @@ pub enum EvalFileError {
         source: llm::LlmError,
     },
 
-    #[error("eval file does not specify a Docker image (set `docker.image` and/or `docker.file`)")]
-    NoImage,
-
     #[error("invalid image reference: {0}")]
     Image(#[from] DockerImageParseError),
 
@@ -64,9 +69,6 @@ pub enum EvalFileError {
 
     #[error(transparent)]
     ImageBuild(#[from] ImageBuildError),
-
-    #[error("invalid settings: {0}")]
-    Settings(#[from] SettingsError),
 
     #[error("invalid inline judge: {message}")]
     InvalidInlineJudge { message: String },

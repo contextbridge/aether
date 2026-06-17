@@ -149,6 +149,7 @@ impl ToolAnnotationMatcher {
 #[doc = ""]
 #[doc = include_str!("docs/tool_filter.md")]
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ToolFilter {
     /// If non-empty, only tools matching these patterns or annotations are allowed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

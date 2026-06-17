@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+
+if [ "${AETHER_EVAL_AGENT:-}" ]; then
+  exec aether headless \
+    --output json \
+    --settings-file /repo/.aether/settings.json \
+    --agent "$AETHER_EVAL_AGENT" \
+    "$AETHER_EVAL_WRAPPED_TASK_PROMPT"
+fi
+
+exec aether headless \
+  --output json \
+  --settings-file /repo/.aether/settings.json \
+  "$AETHER_EVAL_WRAPPED_TASK_PROMPT"
