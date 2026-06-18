@@ -37,6 +37,8 @@ coding = [
     "dep:globset",
     "dep:grep",
     "dep:ignore",
+    "dep:ast-grep-core",
+    "dep:ast-grep-language",
     "dep:regex",
     "dep:tracing",
     "dep:thiserror",
@@ -94,6 +96,8 @@ glob = { workspace = true, optional = true }
 globset = { workspace = true, optional = true }
 grep = { workspace = true, optional = true }
 ignore = { workspace = true, optional = true }
+ast-grep-core = { workspace = true, optional = true }
+ast-grep-language = { workspace = true, optional = true }
 regex = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }

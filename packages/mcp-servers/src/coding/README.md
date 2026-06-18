@@ -35,6 +35,7 @@ File operations, code search, bash execution, LSP integration, and web tools. Th
 | Tool | Description |
 |------|-------------|
 | `grep` | Search file contents with regex. Supports glob filters, file type filters, context lines, case-insensitive mode, and multiline matching. Output modes: `Content`, `FilesWithMatches`, `Count`. |
+| `ast_grep` | Search code with ast-grep structural AST patterns. Supports language aliases, glob filters, context lines, captures, and result limits. |
 | `find` | Find files by glob pattern. Recursive directory walk. |
 
 ### Bash

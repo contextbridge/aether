@@ -3,6 +3,7 @@ use std::future::Future;
 use std::path::PathBuf;
 
 use super::error::CodingError;
+use super::tools::ast_grep::{AstGrepInput, AstGrepOutput, perform_ast_grep};
 use super::tools::bash::{BackgroundProcessHandle, BashInput, BashResult, ReadBackgroundBashOutput};
 use super::tools::edit_file::{EditFileArgs, EditFileResponse};
 use super::tools::find::{FindInput, FindOutput, find_files_by_name};
@@ -42,6 +43,10 @@ pub trait CodingTools: Send + Sync + Debug {
     /// Search file contents using regex patterns.
     fn grep(&self, args: GrepInput) -> impl Future<Output = Result<GrepOutput, CodingError>> + Send {
         async move { perform_grep(args).await.map_err(CodingError::from) }
+    }
+
+    fn ast_grep(&self, args: AstGrepInput) -> impl Future<Output = Result<AstGrepOutput, CodingError>> + Send {
+        async move { perform_ast_grep(args).await.map_err(CodingError::from) }
     }
 
     /// Find files by name using glob patterns.

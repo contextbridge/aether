@@ -1,9 +1,9 @@
 pub mod common;
 
 use crate::coding::error::GrepError;
+use crate::coding::tools::glob_filter::build_glob_set;
 use aether_lspd::extensions_for_alias as extensions_for_type;
 use common::{CountSink, HasMatchSink, MatchCollectorSink, MatchData, OutputMode};
-use globset::{Glob, GlobSetBuilder};
 use grep::{
     regex::{RegexMatcher, RegexMatcherBuilder},
     searcher::{BinaryDetection, Searcher, SearcherBuilder},
@@ -199,18 +199,6 @@ impl SearchResults {
     fn empty() -> Self {
         Self { matches: Vec::new(), files_with_matches: Vec::new(), file_counts: Vec::new() }
     }
-}
-
-fn build_glob_set(glob_pattern: Option<&str>) -> Result<Option<globset::GlobSet>, GrepError> {
-    let Some(glob_pattern) = glob_pattern else {
-        return Ok(None);
-    };
-    let mut builder = GlobSetBuilder::new();
-    builder.add(
-        Glob::new(glob_pattern)
-            .map_err(|e| GrepError::InvalidGlobPattern { pattern: glob_pattern.to_owned(), reason: e.to_string() })?,
-    );
-    builder.build().map(Some).map_err(|e| GrepError::GlobSetBuildFailed(e.to_string()))
 }
 
 fn build_matcher(

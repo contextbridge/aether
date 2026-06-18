@@ -1,9 +1,10 @@
 use super::error::CodingError;
 use super::{
-    BackgroundProcessHandle, BashInput, BashResult, EditFileArgs, EditFileResponse, FindInput, FindOutput, GrepInput,
-    GrepOutput, ListFilesArgs, ListFilesResult, ReadBackgroundBashOutput, ReadFileArgs, ReadFileResult, WriteFileArgs,
-    WriteFileResponse, edit_file_contents, execute_command_in_dir, find_files_by_name, list_files, perform_grep,
-    read_background_bash, read_file_contents, tools_trait::CodingTools, write_file_contents,
+    AstGrepInput, AstGrepOutput, BackgroundProcessHandle, BashInput, BashResult, EditFileArgs, EditFileResponse,
+    FindInput, FindOutput, GrepInput, GrepOutput, ListFilesArgs, ListFilesResult, ReadBackgroundBashOutput,
+    ReadFileArgs, ReadFileResult, WriteFileArgs, WriteFileResponse, edit_file_contents, execute_command_in_dir,
+    find_files_by_name, list_files, perform_ast_grep, perform_grep, read_background_bash, read_file_contents,
+    tools_trait::CodingTools, write_file_contents,
 };
 use std::path::PathBuf;
 
@@ -52,6 +53,10 @@ impl CodingTools for DefaultCodingTools {
 
     async fn grep(&self, args: GrepInput) -> Result<GrepOutput, CodingError> {
         perform_grep(args).await.map_err(CodingError::from)
+    }
+
+    async fn ast_grep(&self, args: AstGrepInput) -> Result<AstGrepOutput, CodingError> {
+        perform_ast_grep(args).await.map_err(CodingError::from)
     }
 
     async fn find(&self, args: FindInput) -> Result<FindOutput, CodingError> {
