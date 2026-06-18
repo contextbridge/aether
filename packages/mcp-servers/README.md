@@ -4,7 +4,7 @@ Pre-built [MCP](https://modelcontextprotocol.io/) tool servers for Aether agents
 
 | Feature | Server | What it provides |
 |---------|--------|-----------------|
-| `coding` | [`CodingMcp`](src/coding/README.md) | File read/write/edit, bash, grep, find, LSP integration, web fetch/search |
+| `coding` | [`CodingMcp`](src/coding/README.md) | File read/write/edit, bash, grep, `ast_grep` structural search, find, LSP integration, web fetch/search |
 | `skills` | [`SkillsMcp`](src/skills/README.md) | Slash commands and reusable skill prompts |
 | `tasks` | [`TasksMcp`](src/tasks/README.md) | Hierarchical task management with dependencies |
 | `subagents` | [`SubAgentsMcp`](src/subagents/README.md) | Spawn and orchestrate sub-agents |

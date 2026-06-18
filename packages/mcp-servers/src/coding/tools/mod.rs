@@ -1,7 +1,9 @@
+pub mod ast_grep;
 pub mod bash;
 pub mod edit_file;
 pub mod file_io;
 pub mod find;
+pub mod glob_filter;
 pub mod grep;
 pub mod list_files;
 pub mod read_file;

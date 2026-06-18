@@ -1,4 +1,4 @@
-The primary MCP tool server for coding workflows. Provides file I/O, shell execution, regex search, glob-based file discovery, LSP code intelligence, and web fetch/search -- all exposed as MCP tools that an agent can invoke.
+The primary MCP tool server for coding workflows. Provides file I/O, shell execution, regex search, structural AST search, glob-based file discovery, LSP code intelligence, and web fetch/search -- all exposed as MCP tools that an agent can invoke.
 
 # Construction
 

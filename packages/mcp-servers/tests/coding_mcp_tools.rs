@@ -443,6 +443,43 @@ async fn test_grep_and_find_use_workspace_root_when_no_path_given() -> Result<()
     Ok(())
 }
 
+#[tokio::test]
+async fn test_ast_grep_uses_workspace_root_when_no_path_given() -> Result<(), Box<dyn std::error::Error>> {
+    let temp = tempfile::tempdir()?;
+    let workspace = temp.path().to_path_buf();
+    fs::write(workspace.join("lib.rs"), "fn target() {}\nfn other() {}\n")?;
+
+    let server_service = CodingMcp::new().with_root_dir(workspace.clone());
+    let client_info = ClientInfo::new(ClientCapabilities::default(), Implementation::new("test-client", "0.1.0"));
+    let (_server_handle, client) = connect(server_service, client_info).await?;
+    let result = client
+        .call_tool(
+            CallToolRequestParams::new("ast_grep").with_arguments(
+                serde_json::json!({
+                    "language": "rs",
+                    "pattern": "fn $NAME() {}"
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        )
+        .await?;
+
+    let text_content = result.content.first().and_then(|c| c.as_text()).ok_or("Expected text content")?;
+    let parsed: serde_json::Value = serde_json::from_str(&text_content.text)?;
+    let matches = parsed["matches"].as_array().ok_or("matches should be an array")?;
+    assert_eq!(parsed["searchPath"].as_str().unwrap(), workspace.to_str().unwrap());
+    assert!(matches.iter().any(|m| {
+        m["file"].as_str().unwrap().ends_with("lib.rs")
+            && m["text"].as_str().unwrap() == "fn target() {}"
+            && m["range"]["startLine"].as_u64().unwrap() == 1
+            && m["captures"].as_array().unwrap().iter().any(|c| c["name"] == "NAME" && c["text"] == "target")
+    }));
+
+    Ok(())
+}
+
 #[cfg(feature = "test-helpers")]
 #[tokio::test]
 async fn test_read_before_edit_safety_with_relative_path_normalization() {

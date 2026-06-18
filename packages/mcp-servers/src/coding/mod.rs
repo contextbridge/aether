@@ -56,6 +56,7 @@ use crate::{
 };
 
 use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename, truncate};
+use tools::ast_grep::{AstGrepInput, AstGrepOutput, perform_ast_grep};
 use tools::bash::{
     BackgroundProcessHandle, BashInput, BashOutput, BashResult, ReadBackgroundBashInput, ReadBackgroundBashOutput,
     execute_command_in_dir, read_background_bash,
@@ -319,6 +320,7 @@ File I/O, search, shell, and optional LSP code intelligence tools for coding wor
 ## Quick Reference
 
 - **Text patterns** (TODOs, logs, strings): `grep`
+- **Structural code patterns** (AST search): `ast_grep`
 - **File names** (find *.test.ts): `find`
 - **Read/write/edit** files: `read_file`, `write_file`, `edit_file`
 - **Shell commands**: `bash`
@@ -494,6 +496,21 @@ When using tools that take file paths, always use absolute paths from:
         args.path = Some(normalized_path.to_string_lossy().to_string());
         notify_preview(&context, ToolDisplayMeta::new("Grep", format!("'{}'", args.pattern))).await;
         self.tools.grep(args).await.into_mcp()
+    }
+
+    #[doc = include_str!("tools/ast_grep/description.md")]
+    #[tool(annotations(read_only_hint = true, open_world_hint = false))]
+    pub async fn ast_grep(
+        &self,
+        request: Parameters<AstGrepInput>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<Json<AstGrepOutput>, String> {
+        let Parameters(mut args) = request;
+        let root = self.primary_workspace_root().await;
+        let normalized_path = resolve_dir(&root, args.path.as_deref());
+        args.path = Some(normalized_path.to_string_lossy().to_string());
+        notify_preview(&context, ToolDisplayMeta::new("AST grep", format!("'{}'", args.pattern))).await;
+        self.tools.ast_grep(args).await.into_mcp()
     }
 
     #[doc = include_str!("tools/find/description.md")]
