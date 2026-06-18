@@ -31,7 +31,6 @@ client = [
     "dep:llm",
     "dep:reqwest",
     "dep:thiserror",
-    "dep:schemars",
     "rmcp/transport-streamable-http-client-reqwest",
     "rmcp/transport-child-process",
 ]
@@ -43,6 +42,7 @@ tokio = { workspace = true }
 rmcp = { workspace = true }
 tracing = { workspace = true }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.8" }
+schemars = { workspace = true }
 
 # client-only deps
 aether-auth = { path = "../aether-auth", version = "0.1.6", optional = true }
@@ -51,7 +51,6 @@ serde_json = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }
-schemars = { workspace = true, optional = true }
 
 [dev-dependencies]
 aether-doctest = { path = "../doctest" }

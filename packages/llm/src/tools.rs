@@ -1,7 +1,8 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[doc = include_str!("docs/tools.md")]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ToolDefinition {
     pub name: String,
     pub description: String,
@@ -11,7 +12,7 @@ pub struct ToolDefinition {
     pub annotations: Option<ToolAnnotations>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolAnnotations {
     pub title: Option<String>,
@@ -50,7 +51,7 @@ impl ToolAnnotations {
 }
 
 /// Tool call request from the LLM
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ToolCallRequest {
     pub id: String,
     pub name: String,
@@ -58,7 +59,7 @@ pub struct ToolCallRequest {
 }
 
 /// Successful result of a tool call
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ToolCallResult {
     pub id: String,
     pub name: String,
@@ -67,7 +68,7 @@ pub struct ToolCallResult {
 }
 
 /// Error result of a tool call
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ToolCallError {
     pub id: String,
     pub name: String,

@@ -18,7 +18,7 @@ pub use evals::{
 };
 pub use git_repo::GitRepoError;
 pub use spec::{
-    AgentSpec, DockerSpec, EvalFileError, EvalFilesReport, EvalOutcome, EvalSpec, EvalSpecLoadOptions, EvalToolCall,
-    Expect, JudgeCriterionSummary, JudgeRef, JudgeSpec, JudgeSummary, ResolvedEvalSpec, TaskSpec, ToolCallExpectation,
-    WorkspaceRetention, WorkspaceSpec, run_eval_specs,
+    AgentSpec, DockerSpec, EvalFileError, EvalFilesReport, EvalOutcome, EvalSpec, EvalSpecLoadOptions, EvalStreamEvent,
+    EvalToolCall, Expect, JudgeCriterionSummary, JudgeRef, JudgeSpec, JudgeSummary, ResolvedEvalSpec, TaskSpec,
+    ToolCallExpectation, WorkspaceRetention, WorkspaceSpec, run_eval_spec_streaming, run_eval_specs,
 };

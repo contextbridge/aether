@@ -1,8 +1,22 @@
 use super::runner::WorkspaceRetention;
 use crate::evals::{RetainedWorkspaceInfo, TaskRun};
+use aether_core::events::AgentMessage;
 use schemars::{JsonSchema, Schema, schema_for};
 use serde::Serialize;
 use serde_json::Value;
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum EvalStreamEvent {
+    AgentMessage { message: AgentMessage },
+    Outcome { outcome: EvalOutcome },
+}
+
+impl EvalStreamEvent {
+    pub fn schema() -> Schema {
+        schema_for!(Self)
+    }
+}
 
 /// Outcome of running a collection of eval files.
 #[derive(Debug, Clone, Serialize)]
@@ -143,6 +157,7 @@ impl JudgeCriterionSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aether_core::events::AgentMessage;
 
     #[test]
     fn blocking_failures_report_only_blocking_criteria_below_threshold() {
@@ -169,5 +184,40 @@ mod tests {
         let failures: Vec<String> = summary.blocking_failures().collect();
 
         assert_eq!(failures, vec!["judge criterion `failed`: failed reason".to_string()]);
+    }
+
+    #[test]
+    fn agent_message_event_serializes_with_snake_case_tag_and_nested_message() {
+        let event = EvalStreamEvent::AgentMessage {
+            message: AgentMessage::Text {
+                message_id: "msg_1".to_string(),
+                chunk: "hi".to_string(),
+                is_complete: false,
+                model_name: "fake".to_string(),
+            },
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["type"], "agent_message");
+        assert_eq!(json["message"]["type"], "text");
+        assert_eq!(json["message"]["message_id"], "msg_1");
+        assert_eq!(json["message"]["is_complete"], false);
+    }
+
+    #[test]
+    fn outcome_event_serializes_with_nested_outcome_fields() {
+        let outcome = EvalOutcome {
+            name: "edit-notes".to_string(),
+            passed: true,
+            failures: Vec::new(),
+            tool_calls: Vec::new(),
+            judge: None,
+            failure_context: None,
+            retained_workspace: None,
+        };
+        let event = EvalStreamEvent::Outcome { outcome };
+        let json: serde_json::Value = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["type"], "outcome");
+        assert_eq!(json["outcome"]["name"], "edit-notes");
+        assert_eq!(json["outcome"]["passed"], true);
     }
 }

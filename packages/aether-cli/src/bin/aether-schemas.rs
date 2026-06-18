@@ -7,6 +7,7 @@ fn main() {
         "HeadlessOptions": schemars::schema_for!(aether_cli::headless::HeadlessOptions),
         "EvalSpec": aether_evals::EvalSpec::schema(),
         "EvalOutcome": aether_evals::EvalOutcome::schema(),
+        "EvalStreamEvent": aether_evals::EvalStreamEvent::schema(),
     });
     println!("{}", serde_json::to_string_pretty(&document).expect("schema document serializes to JSON"));
 }
