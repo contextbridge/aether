@@ -11,6 +11,7 @@ use schemars::{JsonSchema, Schema, schema_for};
 use serde::Deserialize;
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs::read_to_string;
 use thiserror::Error;
 
 const JUDGE_CONTEXT_CHARS: usize = 4_000;
@@ -174,7 +175,7 @@ impl JudgeBuilder {
     pub fn build(self) -> Result<Judge, JudgeError> {
         let task = self.task.ok_or_else(|| JudgeError::InvalidInput("judge task must be provided".to_string()))?;
         let criteria = normalize_criteria(self.criteria)?;
-        let prompt = build_prompt(self.instructions.unwrap_or_default(), task, &self.context, &criteria);
+        let prompt = build_prompt(&self.instructions.unwrap_or_default(), &task, &self.context, &criteria);
         Ok(Judge { prompt, criteria })
     }
 }
@@ -253,7 +254,7 @@ impl JudgeRubricResponse {
     }
 }
 
-fn build_prompt(instructions: String, task: String, context: &JudgeContext, criteria: &[JudgeCriterionSpec]) -> String {
+fn build_prompt(instructions: &str, task: &str, context: &JudgeContext, criteria: &[JudgeCriterionSpec]) -> String {
     let mut sections = vec![
         format!("## Instructions\n\n{instructions}"),
         format!("## Task\n\nThe agent you're evaluating was given this task: <task>{task}</task>"),
@@ -351,9 +352,10 @@ fn collect_eval_context_files(run: &TaskRun, expect: &Expect, spec: &JudgeSpec) 
         .chain(expect.files_contain.keys())
         .chain(spec.context_files.iter())
         .map(|path| {
-            let contents = std::fs::read_to_string(run.workspace().join(path))
-                .map(|contents| truncate_chars(&contents, JUDGE_CONTEXT_CHARS))
-                .unwrap_or_else(|error| format!("could not read: {error}"));
+            let contents = read_to_string(run.workspace().join(path)).map_or_else(
+                |error| format!("could not read: {error}"),
+                |contents| truncate_chars(&contents, JUDGE_CONTEXT_CHARS),
+            );
             (path.clone(), contents)
         })
         .collect()
