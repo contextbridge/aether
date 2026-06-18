@@ -57,6 +57,7 @@ mod tests {
                             weight: 1.0,
                             threshold: 1.0,
                             score: 1.0,
+                            passed: true,
                             reason: "correct".to_string(),
                         }],
                     }),
@@ -79,6 +80,7 @@ mod tests {
                             weight: 1.0,
                             threshold: 1.0,
                             score: 0.5,
+                            passed: false,
                             reason: "wrong".to_string(),
                         }],
                     }),
@@ -109,6 +111,6 @@ mod tests {
         assert_eq!(parsed["evals"][1]["failures"][0], "expected tool `bash` to be called");
         assert_eq!(parsed["evals"][0]["judge"]["score"], 1.0);
         assert_eq!(parsed["evals"][1]["judge"]["criteria"][0]["id"], "behavior");
-        assert!(parsed["evals"][1]["judge"]["criteria"][0]["passed"].is_null());
+        assert_eq!(parsed["evals"][1]["judge"]["criteria"][0]["passed"], false);
     }
 }

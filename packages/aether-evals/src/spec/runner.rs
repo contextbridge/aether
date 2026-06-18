@@ -1,6 +1,6 @@
 use super::ResolvedEvalSpec;
 use super::error::EvalFileError;
-use super::judge::Judge;
+use super::judge::JudgeRunner;
 use super::report::{EvalOutcome, JudgeSummary};
 use crate::agents::{DockerAgent, build_images};
 use crate::evals::TaskRun;
@@ -91,7 +91,11 @@ async fn run_judge(
         return None;
     };
     let llm = judge_llm.expect("judge model is parsed before any eval runs when a judge is configured");
-    match Judge::new(llm, run, case.expectations(), spec).run().await {
+    let result = match JudgeRunner::from_eval_run(llm, run, case.expectations(), spec) {
+        Ok(judge) => judge.run().await,
+        Err(error) => Err(error),
+    };
+    match result {
         Ok(summary) => {
             failures.extend(summary.blocking_failures());
             Some(summary)

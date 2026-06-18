@@ -5,12 +5,15 @@ mod runner;
 mod types;
 
 pub use error::EvalFileError;
-pub use judge::{JudgeCriterionResponse, JudgeRubricResponse};
+pub use judge::{Judge, JudgeBuilder, JudgeContext, JudgeCriterionResponse, JudgeError, JudgeRubricResponse, judge};
 pub use report::{EvalFilesReport, EvalOutcome, EvalStreamEvent, EvalToolCall, JudgeCriterionSummary, JudgeSummary};
 pub use runner::{WorkspaceRetention, run_eval_spec_streaming, run_eval_specs};
 use serde_json::from_str;
 pub(crate) use types::ResolvedDocker;
-pub use types::{AgentSpec, DockerSpec, Expect, JudgeRef, JudgeSpec, TaskSpec, ToolCallExpectation, WorkspaceSpec};
+pub use types::{
+    AgentSpec, DockerSpec, Expect, JudgeCriterionSpec, JudgeRef, JudgeSpec, TaskSpec, ToolCallExpectation,
+    WorkspaceSpec,
+};
 
 use schemars::{JsonSchema, Schema, schema_for};
 use serde::Deserialize;
