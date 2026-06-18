@@ -4,7 +4,7 @@ use crate::components::dropped_files::parse_dropped_file_paths;
 use crate::components::file_picker::{FilePicker, FilePickerMessage};
 use crate::components::input_prompt::{InputPrompt, prompt_content_width};
 use crate::components::prompt_search_picker::{PromptSearchPicker, PromptSearchPickerMessage, cursor_at_match_end};
-use crate::components::text_input::{SelectedFileMention, TextInput, TextInputMessage, is_newline_modifier};
+use crate::components::text_input::{SelectedFileMention, TextInput, TextInputMessage, is_newline_key};
 use crate::keybindings::Keybindings;
 use acp_utils::notifications::{AetherCapabilities, PromptSearchParams, PromptSearchResponse};
 use std::collections::HashSet;
@@ -400,7 +400,7 @@ impl Component for PromptComposer {
                     return Some(vec![]);
                 }
 
-                if key_event.code == KeyCode::Enter && is_newline_modifier(key_event.modifiers) {
+                if is_newline_key(key_event) {
                     self.close_all();
                     let outcome = self.text_input.on_event(event).await;
                     return self.handle_text_input_outcome(outcome);
@@ -647,6 +647,18 @@ mod tests {
         assert!(composer.has_command_picker());
 
         let msgs = composer.on_event(&key_with_modifiers(KeyCode::Enter, KeyModifiers::SHIFT)).await.unwrap();
+        assert!(msgs.is_empty());
+        assert!(!composer.has_command_picker());
+        assert_eq!(composer.buffer(), "/\n");
+    }
+
+    #[tokio::test]
+    async fn ctrl_j_closes_command_picker_and_inserts_newline() {
+        let mut composer = PromptComposer::default();
+        type_chars(&mut composer, "/").await;
+        assert!(composer.has_command_picker());
+
+        let msgs = composer.on_event(&key_with_modifiers(KeyCode::Char('j'), KeyModifiers::CONTROL)).await.unwrap();
         assert!(msgs.is_empty());
         assert!(!composer.has_command_picker());
         assert_eq!(composer.buffer(), "/\n");

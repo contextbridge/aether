@@ -147,12 +147,11 @@ pub async fn run_init(request: InitRequest) -> Result<InitOutcome, InitError> {
 
 pub fn next_steps_message(outcome: &InitOutcome) -> Option<String> {
     match outcome {
-        InitOutcome::Applied { settings_path, missing_env_var: Some(var) } => Some(format!(
-            "Wrote {}. Set ${var} in your shell, then run `wisp` or `aether` to start chatting.",
-            settings_path.display()
-        )),
+        InitOutcome::Applied { settings_path, missing_env_var: Some(var) } => {
+            Some(format!("Wrote {}. Set ${var} in your shell.", settings_path.display()))
+        }
         InitOutcome::Applied { settings_path, missing_env_var: None } => {
-            Some(format!("Wrote {}. Run `wisp` or `aether` to start chatting.", settings_path.display()))
+            Some(format!("Wrote {}", settings_path.display()))
         }
         InitOutcome::AlreadyInitialized { settings_path } => {
             Some(format!("Already initialized at {}; pass --force to overwrite.", settings_path.display()))

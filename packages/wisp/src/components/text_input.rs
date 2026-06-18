@@ -221,7 +221,7 @@ impl Component for TextInput {
 
 impl TextInput {
     async fn handle_key(&mut self, key_event: &KeyEvent) -> Option<Vec<TextInputMessage>> {
-        if key_event.code == KeyCode::Enter && is_newline_modifier(key_event.modifiers) {
+        if is_newline_key(key_event) {
             self.history.reset();
             self.field.insert_at_cursor('\n');
             return Some(vec![]);
@@ -266,7 +266,12 @@ impl TextInput {
     }
 }
 
-pub(crate) fn is_newline_modifier(modifiers: KeyModifiers) -> bool {
+pub(crate) fn is_newline_key(key_event: &KeyEvent) -> bool {
+    (key_event.code == KeyCode::Enter && is_newline_modifier(key_event.modifiers))
+        || (key_event.code == KeyCode::Char('j') && key_event.modifiers.contains(KeyModifiers::CONTROL))
+}
+
+fn is_newline_modifier(modifiers: KeyModifiers) -> bool {
     modifiers.contains(KeyModifiers::SHIFT) || modifiers.contains(KeyModifiers::ALT)
 }
 
@@ -420,6 +425,16 @@ mod tests {
 
         assert!(matches!(outcome.as_deref(), Some([])));
         assert_eq!(input.buffer(), "hello\nworld");
+        assert_eq!(cursor(&input), 6);
+    }
+
+    #[tokio::test]
+    async fn ctrl_j_inserts_newline() {
+        let mut input = input_with("hello", None);
+        let outcome = input.on_event(&key_with_modifiers(KeyCode::Char('j'), KeyModifiers::CONTROL)).await;
+
+        assert!(matches!(outcome.as_deref(), Some([])));
+        assert_eq!(input.buffer(), "hello\n");
         assert_eq!(cursor(&input), 6);
     }
 
