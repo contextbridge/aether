@@ -284,3 +284,18 @@ await using result = await runEval({
 ```
 
 Pass `{ keepWorkspace: true }` to retain the workspace on disk for debugging.
+
+`runEval` also streams the agent's messages and the eval process's stderr while it runs. Pass
+`onMessage` and `onStderr` callbacks to observe them:
+
+```ts
+await using result = await runEval(spec, {
+  onMessage: (message) => {
+    if (message.type === "text") process.stdout.write(message.chunk);
+    if (message.type === "tool_call") console.error("tool:", message.request.name);
+  },
+  onStderr: (chunk) => process.stderr.write(chunk),
+});
+```
+
+`message` is the generated `AgentMessage` union from `@aether-agent/sdk/evals`.

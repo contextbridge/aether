@@ -339,3 +339,16 @@ Setup failures include invalid JSON, a missing Dockerfile, or a failed Docker bu
 Per-eval failures include container errors, unmet expectations, and judge failures. Those are reported for the failing eval while other eval files continue to run.
 
 The CLI eval format is the recommended path for Aether users. The underlying Rust harness lives in the `aether-evals` crate and is useful when you need custom setup or assertions that JSON cannot express, but most agent regression tests should start as `*.eval.json` files run by `aether eval`.
+
+### Machine-readable output
+
+`aether eval --output json` prints an aggregate `EvalFilesReport` (one JSON object describing every eval) and exits non-zero if any eval failed. This is the format to use when scripting over a directory of eval files.
+
+For a single eval, `aether eval --spec-file <path-or-->` (the path used by `@aether-agent/sdk`'s `runEval`) always streams newline-delimited `EvalStreamEvent` JSON on stdout, regardless of `--output`. Each line is one of:
+
+```jsonl
+{"type":"agent_message","message":{"type":"text","message_id":"msg_1","chunk":"...","is_complete":false,"model_name":"..."}}
+{"type":"outcome","outcome":{"name":"edit-notes","passed":true,"failures":[],"toolCalls":[],"retainedWorkspace":{"rootPath":"/tmp/...","path":"/tmp/..."}}}
+```
+
+`agent_message` events are emitted and flushed as the eval runs, so callers can observe agent progress before the run completes. The stream terminates with exactly one `outcome` event carrying the `EvalOutcome`. Multi-file `aether eval --output json` is unaffected and still returns the aggregate report.

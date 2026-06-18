@@ -27,6 +27,10 @@ export interface RunCommandOptions {
   spawnFailedMessage: string;
   exitedErrorCode: AetherSdkErrorCode;
   exitedMessage: (result: RunCommandOutput) => string;
+  /** Called with each utf8 stdout chunk as it arrives (only when `stdout` is `"pipe"`). */
+  onStdout?: (chunk: string) => void;
+  /** Called with each utf8 stderr chunk as it arrives (only when `stderr` is `"pipe"`). */
+  onStderr?: (chunk: string) => void;
 }
 
 export function runCommand(
@@ -66,11 +70,27 @@ export function runCommand(
     let stderr = "";
     if (stdoutMode === "pipe") {
       child.stdout?.setEncoding("utf8");
-      child.stdout?.on("data", (chunk: string) => (stdout += chunk));
+      child.stdout?.on("data", (chunk: string) => {
+        stdout += chunk;
+        try {
+          options.onStdout?.(chunk);
+        } catch (err) {
+          void stopChild(child);
+          reject(err);
+        }
+      });
     }
     if (stderrMode === "pipe") {
       child.stderr?.setEncoding("utf8");
-      child.stderr?.on("data", (chunk: string) => (stderr += chunk));
+      child.stderr?.on("data", (chunk: string) => {
+        stderr += chunk;
+        try {
+          options.onStderr?.(chunk);
+        } catch (err) {
+          void stopChild(child);
+          reject(err);
+        }
+      });
     }
     if (options.stdin !== undefined) {
       child.stdin?.end(options.stdin);
