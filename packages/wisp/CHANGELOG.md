@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.22](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.21...aether-wisp-v0.4.22) - 2026-06-18
+
+### Added
+
+- *(aether-evals)* Drive dockerized agents under eval via ACP ([#161](https://github.com/contextbridge/aether/pull/161))
+
+### Fixed
+
+- Small fixes ([#164](https://github.com/contextbridge/aether/pull/164))
+
+### Other
+
+- Move a bunch of errors to using thiserror ([#160](https://github.com/contextbridge/aether/pull/160))
+
 ## [0.4.21](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.20...aether-wisp-v0.4.21) - 2026-06-13
 
 ### Other

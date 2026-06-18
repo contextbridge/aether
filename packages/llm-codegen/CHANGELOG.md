@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.12](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.11...aether-llm-codegen-v0.2.12) - 2026-06-18
+
+### Other
+
+- Move a bunch of errors to using thiserror ([#160](https://github.com/contextbridge/aether/pull/160))
+
 ## [0.2.11](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.10...aether-llm-codegen-v0.2.11) - 2026-06-13
 
 ### Other

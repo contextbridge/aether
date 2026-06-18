@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.17](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.5.16...aether-mcp-utils-v0.5.17) - 2026-06-18
+
+### Other
+
+- Move a bunch of errors to using thiserror ([#160](https://github.com/contextbridge/aether/pull/160))
+
 ## [0.5.16](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.5.15...aether-mcp-utils-v0.5.16) - 2026-06-13
 
 ### Other

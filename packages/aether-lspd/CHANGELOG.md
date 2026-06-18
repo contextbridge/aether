@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.19](https://github.com/contextbridge/aether/compare/aether-lspd-v0.1.18...aether-lspd-v0.1.19) - 2026-06-18
+
+### Other
+
+- Move a bunch of errors to using thiserror ([#160](https://github.com/contextbridge/aether/pull/160))
+
 ## [0.1.18](https://github.com/contextbridge/aether/compare/aether-lspd-v0.1.17...aether-lspd-v0.1.18) - 2026-06-13
 
 ### Other

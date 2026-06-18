@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.15](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.14...aether-agent-cli-v0.7.15) - 2026-06-18
+
+### Added
+
+- *(aether-evals)* Drive dockerized agents under eval via ACP ([#161](https://github.com/contextbridge/aether/pull/161))
+
+### Fixed
+
+- Small fixes ([#164](https://github.com/contextbridge/aether/pull/164))
+
+### Other
+
+- Better experience for authoring evals ([#162](https://github.com/contextbridge/aether/pull/162))
+- Move a bunch of errors to using thiserror ([#160](https://github.com/contextbridge/aether/pull/160))
+
 ## [0.7.14](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.13...aether-agent-cli-v0.7.14) - 2026-06-13
 
 ### Other
