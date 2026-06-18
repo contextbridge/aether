@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.14](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.6.13...aether-agent-core-v0.6.14) - 2026-06-18
+
+### Added
+
+- Improved support for evals ([#167](https://github.com/contextbridge/aether/pull/167))
+
 ## [0.6.13](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.6.12...aether-agent-core-v0.6.13) - 2026-06-18
 
 ### Added
