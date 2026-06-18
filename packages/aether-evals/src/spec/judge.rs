@@ -146,6 +146,7 @@ impl<'a> Judge<'a> {
                 weight: criterion.weight,
                 threshold: criterion.threshold,
                 score: response.score,
+                passed,
                 reason: response.reason,
             });
         }
@@ -193,16 +194,18 @@ impl<'a> Judge<'a> {
 
 /// JSON shape the judge model is asked to respond with.
 #[derive(Debug, Deserialize, JsonSchema)]
-struct JudgeRubricResponse {
-    criteria: Vec<JudgeCriterionResponse>,
-    overall_reason: String,
+#[serde(deny_unknown_fields)]
+pub struct JudgeRubricResponse {
+    pub criteria: Vec<JudgeCriterionResponse>,
+    pub overall_reason: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-struct JudgeCriterionResponse {
-    id: String,
-    score: f64,
-    reason: String,
+#[serde(deny_unknown_fields)]
+pub struct JudgeCriterionResponse {
+    pub id: String,
+    pub score: f64,
+    pub reason: String,
 }
 
 /// Pull the JSON object out of a judge response, tolerating prose or markdown fences the
@@ -259,7 +262,7 @@ mod tests {
 
         assert!(!summary.passed);
         assert!(summary.score.abs() < f64::EPSILON);
-        assert!(!summary.criteria[0].passed());
+        assert!(!summary.criteria[0].passed);
         assert!(summary.reason.contains("one or more blockers failed"));
     }
 

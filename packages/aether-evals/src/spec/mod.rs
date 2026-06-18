@@ -5,6 +5,7 @@ mod runner;
 mod types;
 
 pub use error::EvalFileError;
+pub use judge::{JudgeCriterionResponse, JudgeRubricResponse};
 pub use report::{EvalFilesReport, EvalOutcome, EvalStreamEvent, EvalToolCall, JudgeCriterionSummary, JudgeSummary};
 pub use runner::{WorkspaceRetention, run_eval_spec_streaming, run_eval_specs};
 use serde_json::from_str;

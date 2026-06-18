@@ -121,6 +121,7 @@ pub struct JudgeCriterionSummary {
     pub weight: f64,
     pub threshold: f64,
     pub score: f64,
+    pub passed: bool,
     pub reason: String,
 }
 
@@ -143,14 +144,8 @@ impl JudgeSummary {
     pub fn blocking_failures(&self) -> impl Iterator<Item = String> + '_ {
         self.criteria
             .iter()
-            .filter(|criterion| criterion.blocking && !criterion.passed())
+            .filter(|criterion| criterion.blocking && !criterion.passed)
             .map(|criterion| format!("judge criterion `{}`: {}", criterion.id, criterion.reason))
-    }
-}
-
-impl JudgeCriterionSummary {
-    pub fn passed(&self) -> bool {
-        self.score >= self.threshold
     }
 }
 
@@ -161,13 +156,14 @@ mod tests {
 
     #[test]
     fn blocking_failures_report_only_blocking_criteria_below_threshold() {
-        let criterion = |id: &str, blocking, score| JudgeCriterionSummary {
+        let criterion = |id: &str, blocking, score: f64| JudgeCriterionSummary {
             id: id.to_string(),
             description: "desc".to_string(),
             blocking,
             weight: 1.0,
             threshold: 0.8,
             score,
+            passed: score >= 0.8,
             reason: format!("{id} reason"),
         };
         let summary = JudgeSummary {
