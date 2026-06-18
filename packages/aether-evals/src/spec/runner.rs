@@ -1,9 +1,10 @@
 use super::ResolvedEvalSpec;
 use super::error::EvalFileError;
-use super::judge::Judge;
+use super::judge::JudgeRunner;
 use super::report::{EvalOutcome, JudgeSummary};
 use crate::agents::{DockerAgent, build_images};
 use crate::evals::TaskRun;
+use aether_core::events::AgentMessage;
 use futures::StreamExt;
 use futures::stream::iter;
 use llm::StreamingModelProvider;
@@ -27,32 +28,41 @@ pub async fn run_eval_specs(
 ) -> Result<Vec<EvalOutcome>, EvalFileError> {
     let mut prepared = Vec::new();
     for spec in specs {
-        let agent = spec.agent();
-        let judge_llm = parse_judge_llm(&spec).await?;
-        prepared.push((spec, agent, judge_llm));
+        prepared.push(prepare_spec(spec).await?);
     }
 
     build_images(prepared.iter().filter_map(|(case, _, _)| case.docker.build.clone()), max_concurrency).await?;
     let futures = prepared
         .into_iter()
-        .map(|(case, agent, judge_llm)| async move { run_eval_spec(case, agent, judge_llm, retention).await });
+        .map(|(case, agent, judge_llm)| async move { run_eval_spec(case, agent, judge_llm, retention, |_| {}).await });
 
     let evals = iter(futures).buffered(max_concurrency.get()).collect().await;
     Ok(evals)
 }
 
-async fn run_eval_spec(
+pub async fn run_eval_spec_streaming<T: FnMut(&AgentMessage) + Send>(
+    spec: ResolvedEvalSpec,
+    retention: WorkspaceRetention,
+    on_message: T,
+) -> Result<EvalOutcome, EvalFileError> {
+    let (spec, agent, judge_llm) = prepare_spec(spec).await?;
+    build_images(spec.docker.build.clone(), NonZeroUsize::MIN).await?;
+    Ok(run_eval_spec(spec, agent, judge_llm, retention, on_message).await)
+}
+
+async fn run_eval_spec<T: FnMut(&AgentMessage) + Send>(
     spec: ResolvedEvalSpec,
     agent: DockerAgent,
     judge_llm: Option<Box<dyn StreamingModelProvider>>,
     retention: WorkspaceRetention,
+    on_message: T,
 ) -> EvalOutcome {
     let task = match spec.task() {
         Ok(task) => task,
         Err(error) => return EvalOutcome::setup_failed(spec.name(), error),
     };
 
-    let run = match task.run(&agent).await {
+    let run = match task.run_observed(&agent, on_message).await {
         Ok(run) => run,
         Err(error) => {
             let (run, error) = error.into_parts();
@@ -81,7 +91,11 @@ async fn run_judge(
         return None;
     };
     let llm = judge_llm.expect("judge model is parsed before any eval runs when a judge is configured");
-    match Judge::new(llm, run, case.expectations(), spec).run().await {
+    let result = match JudgeRunner::from_eval_run(llm, run, case.expectations(), spec) {
+        Ok(judge) => judge.run().await,
+        Err(error) => Err(error),
+    };
+    match result {
         Ok(summary) => {
             failures.extend(summary.blocking_failures());
             Some(summary)
@@ -91,6 +105,14 @@ async fn run_judge(
             None
         }
     }
+}
+
+async fn prepare_spec(
+    spec: ResolvedEvalSpec,
+) -> Result<(ResolvedEvalSpec, DockerAgent, Option<Box<dyn StreamingModelProvider>>), EvalFileError> {
+    let agent = spec.agent();
+    let judge_llm = parse_judge_llm(&spec).await?;
+    Ok((spec, agent, judge_llm))
 }
 
 async fn parse_judge_llm(spec: &ResolvedEvalSpec) -> Result<Option<Box<dyn StreamingModelProvider>>, EvalFileError> {

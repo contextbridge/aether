@@ -11,6 +11,7 @@
   - [External MCP servers](#external-mcp-servers)
   - [Permission and elicitation hooks](#permission-and-elicitation-hooks)
   - [Writing evals with vitest](#writing-evals-with-vitest)
+    - [Grading a run with an LLM judge](#grading-a-run-with-an-llm-judge)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -233,7 +234,10 @@ await AetherSession.start({
 ## Writing evals with vitest
 
 `@aether-agent/sdk/evals` runs a single Dockerized eval per test via the `aether`
-CLI.
+CLI. `runEval` runs the agent and returns the outcome; you assert against it
+directly with your test runner. `result.passed` reflects whether the agent ran to
+completion — there are no built-in matchers, so check files, tool calls, and the
+workspace yourself.
 
 ```ts
 import { test, expect } from "vitest";
@@ -249,16 +253,10 @@ test("agent edits notes.txt", async () => {
       prompt: "Change the first line of notes.txt from alpha to beta",
       workspace: { files: { "notes.txt": "alpha\nalpha\n" } },
     },
-    expect: {
-      judge: {
-        model: "anthropic:claude-sonnet-4-5",
-        criteria: [{ id: "edited", description: "first line is beta" }],
-      },
-    },
   });
 
   expect(result.passed).toBe(true);
-  // Run your own assertions against the retained workspace.
+  // Assert against the retained workspace and the recorded tool calls.
   expect(await readFile(join(result.workspace.path, "notes.txt"), "utf8")).toBe(
     "beta\nalpha\n",
   );
@@ -266,21 +264,105 @@ test("agent edits notes.txt", async () => {
 });
 ```
 
+### Grading a run with an LLM judge
+
+For judgments you can't express deterministically, ask a model to score a rubric
+with `generate`, then let `judge` compute the final weighted score and
+blocker status. Collect the transcript with `runEval`'s `onMessage` callback and
+put evidence under `context` along with any diff or final file contents:
+
 ```ts
-await using result = await runEval({
-  docker: { image: "my-ts-agent:latest" },
-  name: "custom-agent-eval",
-  agent: { command: ["node", "/app/dist/agent.js"] },
-  task: { prompt: "..." },
-  expect: {
-    judge: {
-      model: "anthropic:claude-sonnet-4-5",
-      criteria: [
-        /* ... */
-      ],
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { test, expect } from "vitest";
+import {
+  generate,
+  judge,
+  runEval,
+  type AgentMessage,
+} from "@aether-agent/sdk/evals";
+
+test("agent makes a maintainer-quality edit", async () => {
+  const transcript: AgentMessage[] = [];
+  await using result = await runEval(
+    {
+      docker: { image: "aether-sandbox:latest" },
+      name: "edit-notes",
+      task: { prompt: "Change the first line of notes.txt from alpha to beta", /* ... */ },
     },
-  },
+    { onMessage: (message) => transcript.push(message) },
+  );
+
+  const grader = judge({
+    instructions: "Grade strictly using only the provided transcript and files.",
+    task: "Change the first line of notes.txt from alpha to beta",
+    context: {
+      transcript,
+      files: {
+        "notes.txt": await readFile(join(result.workspace.path, "notes.txt"), "utf8"),
+      },
+    },
+    criteria: [
+      {
+        id: "correct-edit",
+        description: "The final notes.txt content is exactly 'beta\\nalpha\\n'.",
+        blocking: true,
+        threshold: 1,
+        weight: 3,
+      },
+      {
+        id: "minimal-change",
+        description: "No unrelated files or lines were changed.",
+        blocking: true,
+        threshold: 0.8,
+        weight: 2,
+      },
+    ],
+  });
+
+  const response = await generate(grader.prompt, {
+    model: "anthropic:claude-sonnet-4-5", // or set AETHER_LLM_MODEL
+    schema: grader.schema,
+  });
+  const summary = grader.summarize(response);
+
+  expect(summary.passed, summary.reason).toBe(true);
+});
+```
+
+The model returns only normalized criterion scores and reasons. `judge`
+checks that the response has exactly one result for each criterion, then computes
+criterion pass/fail, weighted score, blocker failures, and the final summary.
+
+The lower-level `generate` primitive also supports raw text responses:
+
+```ts
+import { generate } from "@aether-agent/sdk/evals";
+import { z } from "zod";
+
+const { text } = await generate("Summarize this diff in one sentence:\n" + diff, {
+  model: "anthropic:claude-sonnet-4-5", // or set AETHER_LLM_MODEL
+});
+
+const verdict = await generate("Grade this run. Respond with passed and reason.", {
+  model: "anthropic:claude-sonnet-4-5",
+  schema: z.object({ passed: z.boolean(), reason: z.string() }),
 });
 ```
 
 Pass `{ keepWorkspace: true }` to retain the workspace on disk for debugging.
+
+`runEval` also streams the agent's messages and the eval process's stderr while it runs. Pass
+`onMessage` and `onStderr` callbacks to observe them:
+
+```ts
+await using result = await runEval(spec, {
+  onMessage: (message) => {
+    if (message.type === "text") process.stdout.write(message.chunk);
+    if (message.type === "tool_call") console.error("tool:", message.request.name);
+  },
+  onStderr: (chunk) => process.stderr.write(chunk),
+});
+```
+
+`message` is the generated `AgentMessage` union from `@aether-agent/sdk/evals`.

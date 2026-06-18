@@ -5,13 +5,14 @@
 
 use std::path::Path;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Human-readable display metadata for a tool operation.
 ///
 /// Contains a pre-computed `title` (e.g., "Read file") and `value`
 /// (e.g., "Cargo.toml, 156 lines") that consumers render directly.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct ToolDisplayMeta {
     pub title: String,
     pub value: String,
@@ -25,7 +26,7 @@ impl ToolDisplayMeta {
 
 /// Full file contents for a diff, sent as metadata so the ACP layer
 /// can emit a first-class `ToolCallContent::Diff`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct FileDiff {
     pub path: String,
     /// Original file content (`None` for new files).
@@ -36,20 +37,20 @@ pub struct FileDiff {
 }
 
 /// A snapshot of the agent's current task plan.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct PlanMeta {
     pub entries: Vec<PlanMetaEntry>,
 }
 
 /// A single entry in a plan.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct PlanMetaEntry {
     pub content: String,
     pub status: PlanMetaStatus,
 }
 
 /// Execution status of a plan entry.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PlanMetaStatus {
     Pending,
@@ -61,7 +62,7 @@ pub enum PlanMetaStatus {
 ///
 /// Wraps a [`ToolDisplayMeta`] so that tool output structs can use
 /// `Option<ToolResultMeta>` instead of `Option<serde_json::Value>`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct ToolResultMeta {
     pub display: ToolDisplayMeta,
     #[serde(skip_serializing_if = "Option::is_none")]

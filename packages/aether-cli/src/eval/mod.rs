@@ -2,12 +2,13 @@ mod render;
 
 use crate::output::OutputFormat;
 use aether_evals::{
-    EvalFileError, EvalFilesReport, EvalSpec, EvalSpecLoadOptions, ResolvedEvalSpec, WorkspaceRetention, run_eval_specs,
+    EvalFileError, EvalFilesReport, EvalSpec, EvalSpecLoadOptions, EvalStreamEvent, ResolvedEvalSpec,
+    WorkspaceRetention, run_eval_spec_streaming, run_eval_specs,
 };
 use render::render;
 use std::env::current_dir;
 use std::fs::read_to_string;
-use std::io::{Read, stdin};
+use std::io::{Read, Write, stdin, stdout};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -31,7 +32,9 @@ pub struct EvalArgs {
     #[arg(long, default_value = "text")]
     pub output: OutputFormat,
 
-    /// Run a single eval from a JSON file, or from stdin with `-`. The outcome is printed to stdout as JSON.
+    /// Run a single eval from a JSON file, or from stdin with `-`. Emits newline-delimited
+    /// `EvalStreamEvent` JSON on stdout: an `agent_message` event per agent message as it streams,
+    /// terminated by one `outcome` event.
     #[arg(long, value_name = "PATH_OR_DASH")]
     pub spec_file: Option<String>,
 
@@ -53,9 +56,11 @@ pub async fn run(args: EvalArgs) -> Result<ExitCode, EvalFileError> {
         let retention = if args.retain_workspace { WorkspaceRetention::Retain } else { WorkspaceRetention::Discard };
         let spec: EvalSpec = serde_json::from_str(&json).map_err(|source| EvalFileError::ParseSpec { source })?;
         let case = ResolvedEvalSpec::resolve(spec, base_dir)?;
-        let mut evals = run_eval_specs([case], retention, NonZeroUsize::MIN).await?;
-        let outcome = evals.pop().expect("one case in, one outcome out");
-        println!("{}", serde_json::to_string(&outcome).expect("EvalOutcome serializes to JSON"));
+        let outcome = run_eval_spec_streaming(case, retention, |message| {
+            print_json_event(&EvalStreamEvent::AgentMessage { message: message.clone() });
+        })
+        .await?;
+        print_json_event(&EvalStreamEvent::Outcome { outcome });
         return Ok(ExitCode::SUCCESS);
     }
 
@@ -65,6 +70,11 @@ pub async fn run(args: EvalArgs) -> Result<ExitCode, EvalFileError> {
 
     println!("{}", render(&report, args.output));
     Ok(if report.passed() { ExitCode::SUCCESS } else { ExitCode::FAILURE })
+}
+
+fn print_json_event(event: &EvalStreamEvent) {
+    println!("{}", serde_json::to_string(event).expect("EvalStreamEvent serializes to JSON"));
+    let _ = stdout().flush();
 }
 
 fn read_eval(source: &str) -> Result<String, EvalFileError> {

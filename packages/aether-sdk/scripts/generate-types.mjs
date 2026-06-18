@@ -37,22 +37,37 @@ async function generateEvalTypes(document) {
   writeText(
     canonicalSchemaPath,
     `${JSON.stringify(
-      { EvalSpec: document.EvalSpec, EvalOutcome: document.EvalOutcome },
+      {
+        EvalSpec: document.EvalSpec,
+        EvalOutcome: document.EvalOutcome,
+        EvalStreamEvent: document.EvalStreamEvent,
+        JudgeRubricResponse: document.JudgeRubricResponse,
+      },
       null,
       2,
     )}\n`,
   );
 
-  const evalSpec = schemaForTypeGeneration(document.EvalSpec, "EvalSpec");
-
-  const evalOutcome = schemaForTypeGeneration(
-    document.EvalOutcome,
-    "EvalOutcome",
+  const evalStreamEvent = schemaForTypeGeneration(
+    document.EvalStreamEvent,
+    "EvalStreamEvent",
   );
 
   const parts = await Promise.all([
-    compile(evalSpec, "EvalSpec", TYPE_OPTIONS),
-    compile(evalOutcome, "EvalOutcome", TYPE_OPTIONS),
+    compile(
+      schemaForTypeGeneration(document.EvalSpec, "EvalSpec"),
+      "EvalSpec",
+      TYPE_OPTIONS,
+    ),
+    compile(evalStreamEvent, "EvalStreamEvent", TYPE_OPTIONS),
+    compile(
+      schemaForTypeGeneration(
+        document.JudgeRubricResponse,
+        "JudgeRubricResponse",
+      ),
+      "JudgeRubricResponse",
+      TYPE_OPTIONS,
+    ),
   ]);
 
   const content = [

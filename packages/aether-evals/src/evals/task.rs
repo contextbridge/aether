@@ -3,6 +3,7 @@ use super::transcript::{Transcript, format_transcript};
 use super::workspace::Workspace;
 use crate::EvalRunError;
 use crate::agents::{Agent, AgentConfig, RunError, is_terminal};
+use aether_core::events::AgentMessage;
 use std::fmt::{Debug, Write as _};
 use thiserror::Error;
 use tokio::sync::mpsc;
@@ -39,8 +40,21 @@ impl Task {
         &self.workspace
     }
 
+    /// Run the task against `agent` and collect its transcript. Use [`Task::run_observed`] to also
+    /// observe each `AgentMessage` as it streams.
     #[tracing::instrument(skip(agent, self))]
     pub async fn run<T: Agent>(self, agent: &T) -> Result<TaskRun, TaskRunError> {
+        self.run_observed(agent, |_| {}).await
+    }
+
+    /// Run the task against `agent`, forwarding each `AgentMessage` to `on_message` before it is
+    /// added to the transcript. Terminal messages (`Done`, `Error`, `Cancelled`) are forwarded too.
+    #[tracing::instrument(skip(agent, self, on_message))]
+    pub async fn run_observed<T: Agent, U: FnMut(&AgentMessage) + Send>(
+        self,
+        agent: &T,
+        mut on_message: U,
+    ) -> Result<TaskRun, TaskRunError> {
         let Task { prompt, workspace } = self;
         let (tx, mut rx) = mpsc::channel(100);
         let agent_task = agent.run(
@@ -56,6 +70,7 @@ impl Task {
             let mut messages = Vec::new();
             while let Some(message) = rx.recv().await {
                 let is_done = is_terminal(&message);
+                on_message(&message);
                 messages.push(message);
                 if is_done {
                     break;
@@ -198,6 +213,27 @@ mod tests {
         Task::new("do the thing", Workspace::empty().unwrap()).run(&agent).await.unwrap();
 
         assert_eq!(agent.captured_task_prompt(), Some("do the thing".to_string()));
+    }
+
+    #[tokio::test]
+    async fn task_run_with_message_observer_forwards_messages_in_order() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let captured = seen.clone();
+        let run = Task::new("do the thing", Workspace::empty().unwrap())
+            .run_observed(&FakeAgent::with_tool_call("bash", "success"), move |message| {
+                captured.lock().unwrap().push(message.clone());
+            })
+            .await
+            .unwrap();
+
+        let agent_messages = run.transcript().messages().to_vec();
+        let observed = seen.lock().unwrap().clone();
+
+        assert_eq!(observed.len(), agent_messages.len());
+        for (observed, transcript) in observed.iter().zip(agent_messages.iter()) {
+            assert_eq!(observed, transcript);
+        }
+        assert!(matches!(observed.last(), Some(AgentMessage::Done)));
     }
 
     #[derive(Default)]

@@ -4,14 +4,22 @@ import { runCommand } from "../childProcess.js";
 import { AetherSdkError } from "../errors.js";
 import { resolveEnv } from "../processEnv.js";
 import type {
+  AgentMessage,
   EvalOutcome,
   EvalSpec,
+  EvalStreamEvent,
   JudgeCriterionSummary,
   JudgeSummary,
 } from "../generated/eval-types.js";
 import { createWorkspaceHandle, type WorkspaceHandle } from "./workspace.js";
 
-export type { EvalSpec, EvalOutcome, JudgeSummary, JudgeCriterionSummary };
+export type {
+  AgentMessage,
+  EvalSpec,
+  EvalOutcome,
+  JudgeSummary,
+  JudgeCriterionSummary,
+};
 export type EvalRunSpec = Omit<EvalSpec, "expect">;
 
 export interface RunEvalOptions {
@@ -32,6 +40,12 @@ export interface RunEvalOptions {
 
   /** Abort the eval run. */
   signal?: AbortSignal;
+
+  /** Called for each `AgentMessage` the eval emits, as soon as it arrives. */
+  onMessage?: (message: AgentMessage) => void;
+
+  /** Called with each raw stderr chunk produced by the eval process. */
+  onStderr?: (chunk: string) => void;
 }
 
 export interface EvalRunResult
@@ -42,7 +56,8 @@ export interface EvalRunResult
 
 /**
  * Run a single Dockerized eval via the `aether` CLI and return its outcome plus a disposable handle
- * to the retained workspace.
+ * to the retained workspace. Agent messages and stderr are streamed to the optional `onMessage`
+ * and `onStderr` callbacks while the eval runs.
  *
  * @example
  * ```ts
@@ -71,7 +86,8 @@ export async function runEval(
   const baseDir = options.baseDir ?? processCwd();
   const { command, prefixArgs } = resolveAetherCommand(options.binaryPath);
   const childEnv = resolveEnv(options.env);
-  const { stdout, stderr } = await runCommand(
+  const consumer = createEvalEventConsumer(options);
+  const { stderr } = await runCommand(
     command,
     [
       ...prefixArgs,
@@ -81,14 +97,14 @@ export async function runEval(
       "--retain-workspace",
       "--base-dir",
       baseDir,
-      "--output",
-      "json",
     ],
     {
       cwd: baseDir,
       env: childEnv,
       stdin: JSON.stringify(spec),
       abortSignal: options.signal,
+      onStdout: (chunk) => consumer.push(chunk),
+      onStderr: options.onStderr,
       spawnFailedMessage: `Failed to run aether eval at ${command}`,
       exitedErrorCode: "eval_command_failed",
       exitedMessage: ({ exitCode, stderr }) =>
@@ -96,22 +112,14 @@ export async function runEval(
     },
   );
 
-  const { retainedWorkspace, ...outcome } = (() => {
-    try {
-      return JSON.parse(stdout.trim()) as EvalOutcome;
-    } catch (err) {
-      throw new AetherSdkError(
-        "eval_command_failed",
-        `Failed to parse aether eval output as JSON.\nstdout:\n${stdout}\nstderr:\n${stderr}`,
-        err,
-      );
-    }
-  })();
+  const outcome = consumer.finish(stderr);
+
+  const { retainedWorkspace, ...result } = outcome;
 
   if (!retainedWorkspace) {
     throw new AetherSdkError(
       "eval_command_failed",
-      `aether eval did not report a workspace path.\nstdout:\n${stdout}\nstderr:\n${stderr}`,
+      `aether eval did not report a workspace path.\nstderr:\n${stderr}`,
     );
   }
 
@@ -121,8 +129,70 @@ export async function runEval(
   );
 
   return {
-    ...outcome,
+    ...result,
     workspace,
     [Symbol.asyncDispose]: () => workspace[Symbol.asyncDispose](),
   };
+}
+
+function createEvalEventConsumer(options: RunEvalOptions) {
+  let buffered = "";
+  let outcome: EvalOutcome | undefined;
+
+  function push(chunk: string): void {
+    buffered += chunk;
+    const lines = buffered.split(/\r?\n/);
+    buffered = lines.pop() ?? "";
+    for (const line of lines) processLine(line);
+  }
+
+  function finish(stderr: string): EvalOutcome {
+    if (buffered.trim()) {
+      const pending = buffered;
+      buffered = "";
+      processLine(pending);
+    }
+    if (!outcome) {
+      throw new AetherSdkError(
+        "eval_command_failed",
+        `aether eval did not emit an outcome event.\nstderr:\n${stderr}`,
+      );
+    }
+    return outcome;
+  }
+
+  function processLine(line: string): void {
+    if (!line.trim()) return;
+    let parsed: EvalStreamEvent;
+    try {
+      parsed = JSON.parse(line) as EvalStreamEvent;
+    } catch (err) {
+      throw new AetherSdkError(
+        "eval_command_failed",
+        `Failed to parse aether eval event line as JSON: ${line}`,
+        err,
+      );
+    }
+    switch (parsed.type) {
+      case "agent_message":
+        options.onMessage?.(parsed.message);
+        return;
+      case "outcome":
+        if (outcome) {
+          throw new AetherSdkError(
+            "eval_command_failed",
+            "aether eval emitted multiple outcome events",
+          );
+        }
+        outcome = parsed.outcome;
+        return;
+      default:
+        throw new AetherSdkError(
+          "eval_command_failed",
+          `unknown aether eval event type: ${(parsed as { type?: unknown }).type}`,
+        );
+    }
+  }
+
+  return { push, finish };
 }

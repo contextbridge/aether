@@ -1,6 +1,7 @@
 use aether_cli::acp::{AcpArgs, AcpRunError, AcpRunOutcome, run_acp};
 use aether_cli::error::CliError;
 use aether_cli::eval::{EvalArgs, run as run_eval_command};
+use aether_cli::generate_command::{GenerateArgs, GenerateCommandError, run as run_generate_command};
 use aether_cli::headless::{HeadlessArgs, run_headless};
 use aether_cli::init::{InitError, InitOutcome, InitRequest, next_steps_message, run_init};
 use aether_cli::settings::SettingsCommand;
@@ -20,6 +21,8 @@ enum MainError {
     Cli(#[from] CliError),
     #[error("{0}")]
     Eval(#[from] EvalFileError),
+    #[error("{0}")]
+    Generate(#[from] GenerateCommandError),
     #[error("{0}")]
     Acp(#[from] AcpRunError),
     #[error("{0}")]
@@ -53,6 +56,8 @@ enum Command {
     Headless(HeadlessArgs),
     /// Run declarative JSON eval files in Docker sandboxes
     Eval(EvalArgs),
+    /// Call a model with a single prompt and print its response
+    Generate(GenerateArgs),
     /// Start the ACP server
     Acp(AcpArgs),
     /// Print the fully assembled system prompt (for debugging)
@@ -77,6 +82,8 @@ fn main() -> ExitCode {
         Some(Command::Headless(args)) => rt.block_on(run_headless(args)).map_err(Into::into),
 
         Some(Command::Eval(args)) => rt.block_on(run_eval_command(args)).map_err(Into::into),
+
+        Some(Command::Generate(args)) => rt.block_on(run_generate_command(args)).map_err(Into::into),
 
         Some(Command::Acp(args)) => rt
             .block_on(run_acp(args))

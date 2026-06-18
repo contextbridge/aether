@@ -95,6 +95,32 @@ pub struct JudgeCriterionSpec {
     pub threshold: f64,
 }
 
+impl JudgeCriterionSpec {
+    pub fn new(id: impl Into<String>, description: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            description: description.into(),
+            blocking: default_blocking(),
+            weight: default_weight(),
+            threshold: default_threshold(),
+        }
+    }
+
+    pub fn blocking(mut self, blocking: bool) -> Self {
+        self.blocking = blocking;
+        self
+    }
+
+    pub fn weight(mut self, weight: f64) -> Self {
+        self.weight = weight;
+        self
+    }
+
+    pub fn threshold(mut self, threshold: f64) -> Self {
+        self.threshold = threshold;
+        self
+    }
+}
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum ToolCallExpectation {

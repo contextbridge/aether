@@ -3,10 +3,11 @@ use acp_utils::notifications::{
 };
 use llm::{ToolCallError, ToolCallRequest, ToolCallResult};
 use mcp_utils::display_meta::ToolResultMeta;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Message from the agent to the user.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentMessage {
     Text {
