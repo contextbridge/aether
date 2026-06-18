@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.16](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.15...aether-agent-cli-v0.7.16) - 2026-06-18
+
+### Added
+
+- Improved support for evals ([#167](https://github.com/contextbridge/aether/pull/167))
+
 ## [0.7.15](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.14...aether-agent-cli-v0.7.15) - 2026-06-18
 
 ### Added

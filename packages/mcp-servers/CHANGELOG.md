@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.19](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.18...aether-mcp-servers-v0.4.19) - 2026-06-18
+
+### Added
+
+- *(mcp-servers)* Add ast-grep tool ([#165](https://github.com/contextbridge/aether/pull/165))
+
 ## [0.4.18](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.17...aether-mcp-servers-v0.4.18) - 2026-06-18
 
 ### Other

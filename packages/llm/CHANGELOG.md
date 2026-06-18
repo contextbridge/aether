@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.13](https://github.com/contextbridge/aether/compare/aether-llm-v0.7.12...aether-llm-v0.7.13) - 2026-06-18
+
+### Added
+
+- Improved support for evals ([#167](https://github.com/contextbridge/aether/pull/167))
+
 ## [0.7.12](https://github.com/contextbridge/aether/compare/aether-llm-v0.7.11...aether-llm-v0.7.12) - 2026-06-18
 
 ### Other

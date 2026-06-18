@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.5](https://github.com/contextbridge/aether/compare/aether-evals-v0.2.4...aether-evals-v0.2.5) - 2026-06-18
+
+### Added
+
+- Improved support for evals ([#167](https://github.com/contextbridge/aether/pull/167))
+
 ## [0.2.4](https://github.com/contextbridge/aether/compare/aether-evals-v0.2.3...aether-evals-v0.2.4) - 2026-06-18
 
 ### Added
