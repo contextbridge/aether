@@ -9,7 +9,6 @@
     - [How closure-backed tools are wired](#how-closure-backed-tools-are-wired)
     - [Aether tool naming](#aether-tool-naming)
   - [External MCP servers](#external-mcp-servers)
-  - [Connecting tools to `aether headless`](#connecting-tools-to-aether-headless)
   - [Permission and elicitation hooks](#permission-and-elicitation-hooks)
   - [Writing evals with vitest](#writing-evals-with-vitest)
 

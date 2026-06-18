@@ -10,7 +10,7 @@ Aether Evals is a Rust library that makes writing agent evals easier to express 
 - [Quick Start](#quick-start)
 - [Test organization](#test-organization)
 - [Core API](#core-api)
-- [Dockerized command evals](#dockerized-command-evals)
+- [Dockerized evals](#dockerized-evals)
 - [Assertions](#assertions)
 - [Failure output and debugging](#failure-output-and-debugging)
 - [Git-backed evals](#git-backed-evals)
