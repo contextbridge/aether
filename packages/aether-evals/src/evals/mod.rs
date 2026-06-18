@@ -1,8 +1,10 @@
-mod report;
-mod run_eval;
+mod diff;
+mod task;
+mod transcript;
 mod workspace;
 
-pub(crate) use report::format_transcript;
-pub use report::{DiffStats, EvalReport, GitDiff, ToolCall};
-pub use run_eval::run_eval;
-pub use workspace::{GitRepoSpec, Workspace, WorkspaceSource};
+pub use diff::{DiffStats, GitDiff};
+pub use task::{Task, TaskRun, TaskRunError};
+pub(crate) use transcript::format_transcript;
+pub use transcript::{ToolCall, Transcript};
+pub use workspace::{GitRepoSpec, RetainedWorkspaceInfo, Workspace, WorkspaceSource};

@@ -10,6 +10,7 @@
     - [Aether tool naming](#aether-tool-naming)
   - [External MCP servers](#external-mcp-servers)
   - [Permission and elicitation hooks](#permission-and-elicitation-hooks)
+  - [Writing evals with vitest](#writing-evals-with-vitest)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -228,3 +229,58 @@ await AetherSession.start({
 ```
 
 `onElicitation` handles Aether's `_aether/elicitation` extension request.
+
+## Writing evals with vitest
+
+`@aether-agent/sdk/evals` runs a single Dockerized eval per test via the `aether`
+CLI.
+
+```ts
+import { test, expect } from "vitest";
+import { runEval } from "@aether-agent/sdk/evals";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+
+test("agent edits notes.txt", async () => {
+  await using result = await runEval({
+    docker: { image: "aether-sandbox:latest" },
+    name: "edit-notes",
+    task: {
+      prompt: "Change the first line of notes.txt from alpha to beta",
+      workspace: { files: { "notes.txt": "alpha\nalpha\n" } },
+    },
+    expect: {
+      judge: {
+        model: "anthropic:claude-sonnet-4-5",
+        criteria: [{ id: "edited", description: "first line is beta" }],
+      },
+    },
+  });
+
+  expect(result.passed).toBe(true);
+  // Run your own assertions against the retained workspace.
+  expect(await readFile(join(result.workspace.path, "notes.txt"), "utf8")).toBe(
+    "beta\nalpha\n",
+  );
+  // Workspace is removed when `result` goes out of scope.
+});
+```
+
+```ts
+await using result = await runEval({
+  docker: { image: "my-ts-agent:latest" },
+  name: "custom-agent-eval",
+  agent: { command: ["node", "/app/dist/agent.js"] },
+  task: { prompt: "..." },
+  expect: {
+    judge: {
+      model: "anthropic:claude-sonnet-4-5",
+      criteria: [
+        /* ... */
+      ],
+    },
+  },
+});
+```
+
+Pass `{ keepWorkspace: true }` to retain the workspace on disk for debugging.

@@ -1,6 +1,6 @@
 use super::report::{JudgeCriterionSummary, JudgeSummary};
 use super::types::{Expect, JudgeSpec};
-use crate::EvalReport;
+use crate::TaskRun;
 use crate::agents::truncate_chars;
 use crate::evals::format_transcript;
 use futures::StreamExt;
@@ -18,7 +18,7 @@ const JUDGE_CONTEXT_CHARS: usize = 4_000;
 /// judge model's response, and scores it against the rubric.
 pub(crate) struct Judge<'a> {
     llm: &'a dyn StreamingModelProvider,
-    report: &'a EvalReport,
+    run: &'a TaskRun,
     expect: &'a Expect,
     spec: &'a JudgeSpec,
 }
@@ -42,11 +42,11 @@ pub enum JudgeError {
 impl<'a> Judge<'a> {
     pub(crate) fn new(
         llm: &'a dyn StreamingModelProvider,
-        report: &'a EvalReport,
+        run: &'a TaskRun,
         expect: &'a Expect,
         spec: &'a JudgeSpec,
     ) -> Self {
-        Self { llm, report, expect, spec }
+        Self { llm, run, expect, spec }
     }
 
     pub(crate) async fn run(&self) -> Result<JudgeSummary, JudgeError> {
@@ -74,11 +74,12 @@ impl<'a> Judge<'a> {
     fn build_prompt(&self) -> String {
         let mut prompt = String::new();
         let _ = writeln!(prompt, "You are grading whether an AI coding agent succeeded at a task.\n");
-        let _ = writeln!(prompt, "Task given to the agent:\n{}\n", self.report.prompt());
+        let _ = writeln!(prompt, "Task given to the agent:\n{}\n", self.run.prompt());
         let _ = writeln!(prompt, "Agent transcript:");
-        prompt.push_str(&format_transcript(self.report.messages()));
+        prompt.push_str(&format_transcript(self.run.transcript().messages()));
 
-        if let Some(diff) = self.report.agent_diff() {
+        let (agent_diff, _) = self.run.workspace().capture_git_diffs();
+        if let Some(diff) = agent_diff {
             let _ = writeln!(prompt, "\nAgent's workspace diff:\n{}", truncate_chars(&diff.diff, JUDGE_CONTEXT_CHARS));
         }
         self.push_final_file_contents(&mut prompt);
@@ -178,7 +179,7 @@ impl<'a> Judge<'a> {
 
         let _ = writeln!(prompt, "\nFinal contents of files under evaluation:");
         for path in paths {
-            match std::fs::read_to_string(self.report.path(path)) {
+            match std::fs::read_to_string(self.run.workspace().join(path)) {
                 Ok(contents) => {
                     let _ = writeln!(prompt, "--- {path} ---\n{}", truncate_chars(&contents, JUDGE_CONTEXT_CHARS));
                 }
@@ -224,8 +225,12 @@ fn judge_response_schema() -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::write;
+    use std::path::Path;
+    use std::process::Command;
+
     use super::*;
-    use crate::{DiffStats, GitDiff, Workspace};
+    use crate::{GitRepoSpec, TaskRun, Transcript, Workspace};
     use aether_core::events::AgentMessage;
     use llm::testing::FakeLlmProvider;
     use llm::{ChatMessage, LlmError, LlmResponse, ToolCallRequest};
@@ -236,7 +241,7 @@ mod tests {
     async fn judge_scores_weighted_rubric() {
         let judge_llm = FakeLlmProvider::with_single_response(vec![LlmResponse::text(VALID_RESPONSE)]);
 
-        let summary = Judge::new(&judge_llm, &report(), &Expect::default(), &judge_spec()).run().await.unwrap();
+        let summary = Judge::new(&judge_llm, &run(), &Expect::default(), &judge_spec()).run().await.unwrap();
 
         assert!(summary.passed);
         assert!((summary.score - 0.875).abs() < f64::EPSILON);
@@ -250,7 +255,7 @@ mod tests {
             r#"{"criteria":[{"id":"behavior","score":0.75,"reason":"wrong behavior"},{"id":"clarity","score":1.0,"reason":"clear"}],"overall_reason":"bad"}"#,
         )]);
 
-        let summary = Judge::new(&judge_llm, &report(), &Expect::default(), &judge_spec()).run().await.unwrap();
+        let summary = Judge::new(&judge_llm, &run(), &Expect::default(), &judge_spec()).run().await.unwrap();
 
         assert!(!summary.passed);
         assert!(summary.score.abs() < f64::EPSILON);
@@ -268,7 +273,7 @@ mod tests {
         ] {
             let judge_llm = FakeLlmProvider::with_single_response(vec![LlmResponse::text(response)]);
 
-            let error = Judge::new(&judge_llm, &report(), &Expect::default(), &judge_spec()).run().await.unwrap_err();
+            let error = Judge::new(&judge_llm, &run(), &Expect::default(), &judge_spec()).run().await.unwrap_err();
 
             assert!(matches!(error, JudgeError::InvalidJudgment { .. }), "response: {response}");
         }
@@ -279,7 +284,7 @@ mod tests {
         let response = format!("Here is my assessment:\n{VALID_RESPONSE}");
         let judge_llm = FakeLlmProvider::with_single_response(vec![LlmResponse::text(&response)]);
 
-        let summary = Judge::new(&judge_llm, &report(), &Expect::default(), &judge_spec()).run().await.unwrap();
+        let summary = Judge::new(&judge_llm, &run(), &Expect::default(), &judge_spec()).run().await.unwrap();
 
         assert!(summary.passed);
     }
@@ -288,7 +293,7 @@ mod tests {
     async fn judge_returns_invalid_json_error_with_raw_response() {
         let judge_llm = FakeLlmProvider::with_single_response(vec![LlmResponse::text("not json")]);
 
-        let error = Judge::new(&judge_llm, &report(), &Expect::default(), &judge_spec()).run().await.unwrap_err();
+        let error = Judge::new(&judge_llm, &run(), &Expect::default(), &judge_spec()).run().await.unwrap_err();
 
         let JudgeError::InvalidJson { raw_response, .. } = error else {
             panic!("expected InvalidJson, got {error:?}");
@@ -300,7 +305,7 @@ mod tests {
     async fn judge_returns_stream_error_on_llm_failure() {
         let judge_llm = FakeLlmProvider::from_results(vec![vec![Err(LlmError::Other("boom".to_string()))]]);
 
-        let error = Judge::new(&judge_llm, &report(), &Expect::default(), &judge_spec()).run().await.unwrap_err();
+        let error = Judge::new(&judge_llm, &run(), &Expect::default(), &judge_spec()).run().await.unwrap_err();
 
         assert!(matches!(error, JudgeError::Stream(_)));
         assert!(error.to_string().contains("boom"));
@@ -319,10 +324,10 @@ mod tests {
             },
             AgentMessage::text("msg_1", "all done", true, "test"),
         ];
-        let report = EvalReport::new("edit the file".to_string(), Workspace::empty().unwrap(), messages, None, None);
+        let run = TaskRun::new("edit the file".to_string(), Workspace::empty().unwrap(), Transcript::new(messages));
         let judge_llm = FakeLlmProvider::with_single_response(vec![LlmResponse::text(VALID_RESPONSE)]);
 
-        Judge::new(&judge_llm, &report, &Expect::default(), &judge_spec()).run().await.unwrap();
+        Judge::new(&judge_llm, &run, &Expect::default(), &judge_spec()).run().await.unwrap();
 
         let prompt = judged_prompt(&judge_llm);
         assert!(prompt.contains("Grade maintainability."));
@@ -335,32 +340,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn judge_prompt_includes_stored_agent_diff() {
-        let diff = GitDiff {
-            diff: "diff --git a/a.txt b/a.txt\n+new\n".to_string(),
-            stats: DiffStats { files_changed: 1, lines_added: 1, lines_removed: 0 },
-        };
-        let report =
-            EvalReport::new("p".to_string(), Workspace::empty().unwrap(), vec![AgentMessage::Done], Some(diff), None);
+    async fn judge_prompt_includes_agent_diff_from_workspace() {
+        let workspace = git_workspace_with_agent_change();
+        let run = TaskRun::new("p".to_string(), workspace, Transcript::new(vec![AgentMessage::Done]));
         let judge_llm = FakeLlmProvider::with_single_response(vec![LlmResponse::text(VALID_RESPONSE)]);
 
-        Judge::new(&judge_llm, &report, &Expect::default(), &judge_spec()).run().await.unwrap();
+        Judge::new(&judge_llm, &run, &Expect::default(), &judge_spec()).run().await.unwrap();
 
         let prompt = judged_prompt(&judge_llm);
         assert!(prompt.contains("Agent's workspace diff"));
-        assert!(prompt.contains("+new"));
+        assert!(prompt.contains("+agent change"));
     }
 
     #[tokio::test]
     async fn judge_prompt_includes_final_contents_of_files_under_evaluation() {
         let workspace =
             Workspace::from_files([("notes.txt", "beta\nalpha\n"), ("extra.txt", "extra context")]).unwrap();
-        let report = EvalReport::new("p".to_string(), workspace, vec![AgentMessage::Done], None, None);
+        let run = TaskRun::new("p".to_string(), workspace, Transcript::new(vec![AgentMessage::Done]));
         let expect =
             Expect { files_contain: [("notes.txt".to_string(), "beta".to_string())].into(), ..Expect::default() };
         let judge_llm = FakeLlmProvider::with_single_response(vec![LlmResponse::text(VALID_RESPONSE)]);
 
-        Judge::new(&judge_llm, &report, &expect, &judge_spec()).run().await.unwrap();
+        Judge::new(&judge_llm, &run, &expect, &judge_spec()).run().await.unwrap();
 
         let prompt = judged_prompt(&judge_llm);
         assert!(prompt.contains("--- notes.txt ---"));
@@ -369,8 +370,43 @@ mod tests {
         assert!(prompt.contains("extra context"));
     }
 
-    fn report() -> EvalReport {
-        EvalReport::new("prompt".to_string(), Workspace::empty().unwrap(), vec![AgentMessage::Done], None, None)
+    fn run() -> TaskRun {
+        TaskRun::new("prompt".to_string(), Workspace::empty().unwrap(), Transcript::new(vec![AgentMessage::Done]))
+    }
+
+    fn git_workspace_with_agent_change() -> Workspace {
+        let source = tempfile::tempdir().unwrap();
+        git(source.path(), ["init", "--initial-branch", "main"]);
+        git(source.path(), ["config", "user.email", "eval@example.com"]);
+        git(source.path(), ["config", "user.name", "Eval"]);
+        std::fs::write(source.path().join("notes.txt"), "start\n").unwrap();
+        git(source.path(), ["add", "."]);
+        git(source.path(), ["commit", "-m", "start"]);
+        let start_commit = git_output(source.path(), ["rev-parse", "HEAD"]);
+        std::fs::write(source.path().join("notes.txt"), "gold\n").unwrap();
+        git(source.path(), ["commit", "-am", "gold"]);
+        let gold_commit = git_output(source.path(), ["rev-parse", "HEAD"]);
+
+        let workspace = Workspace::from_git_repo(GitRepoSpec {
+            url: source.path().to_string_lossy().to_string(),
+            start_commit,
+            gold_commit,
+            subdir: None,
+        })
+        .unwrap();
+        write(workspace.join("notes.txt"), "start\nagent change\n").unwrap();
+        workspace
+    }
+
+    fn git<const N: usize>(cwd: &Path, args: [&str; N]) {
+        let output = Command::new("git").args(args).current_dir(cwd).output().unwrap();
+        assert!(output.status.success(), "git failed: {}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    fn git_output<const N: usize>(cwd: &Path, args: [&str; N]) -> String {
+        let output = Command::new("git").args(args).current_dir(cwd).output().unwrap();
+        assert!(output.status.success(), "git failed: {}", String::from_utf8_lossy(&output.stderr));
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
     }
 
     fn judge_spec() -> JudgeSpec {

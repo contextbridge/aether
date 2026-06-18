@@ -1,19 +1,33 @@
 {
+  "name": "edits_notes_file",
   "docker": {
     "file": "Dockerfile",
     "context": "../../..",
     "image": "aether-sandbox:latest"
   },
-  "settings": "../../../.aether/settings.json",
-  "name": "edits_notes_file",
-  "prompt": "Use the coding MCP tools to update notes.txt. Read the file first, then call coding__edit_file exactly once to replace only the first 'alpha' with 'beta'. Do not replace the second 'alpha'.",
-  "workspace": { "files": { "notes.txt": "alpha\nalpha\n" } },
+  "agent": {
+    "command": ["/usr/local/bin/aether-eval-agent"]
+  },
+  "task": {
+    "prompt": "Use the coding MCP tools to update notes.txt. Read the file first, then call coding__edit_file exactly once to replace only the first 'alpha' with 'beta'. Do not replace the second 'alpha'.",
+    "workspace": {
+      "files": {
+        "notes.txt": "alpha\nalpha\n"
+      }
+    }
+  },
   "expect": {
     "toolCalls": {
-      "coding__read_file": { "atLeast": 1 },
-      "coding__edit_file": { "exactly": 1 }
+      "coding__read_file": {
+        "atLeast": 1
+      },
+      "coding__edit_file": {
+        "exactly": 1
+      }
     },
-    "files": { "notes.txt": "beta\nalpha\n" },
+    "files": {
+      "notes.txt": "beta\nalpha\n"
+    },
     "judge": {
       "model": "zai:glm-5.1",
       "instructions": "Grade whether this would be accepted by a maintainer.",

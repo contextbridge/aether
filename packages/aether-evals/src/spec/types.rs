@@ -1,7 +1,7 @@
 use super::error::EvalFileError;
 use crate::agents::{DockerImage, ImageBuildRequest};
-use crate::{EvalReport, GitRepoSpec, Workspace, WorkspaceError};
-use aether_project::AetherSettings;
+use crate::{GitRepoSpec, Task, TaskRun, Workspace, WorkspaceError};
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use std::collections::{BTreeMap, BTreeSet};
@@ -29,10 +29,20 @@ pub(crate) struct ResolvedDocker {
     pub build: Option<ImageBuildRequest>,
 }
 
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TaskSpec {
+    pub prompt: String,
+    #[serde(default)]
+    pub workspace: WorkspaceSpec,
+}
+
 /// The starting workspace for an eval. Omitted means an empty temporary directory.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(try_from = "WorkspaceSpecRepr")]
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub enum WorkspaceSpec {
+    #[default]
+    Empty,
     /// Inline files written into a fresh workspace, keyed by relative path.
     Files(BTreeMap<String, String>),
     /// A directory (relative to the eval file) copied into a fresh workspace.
@@ -44,15 +54,15 @@ pub enum WorkspaceSpec {
 /// An LLM-as-judge rubric, either inline or a path (relative to the eval file) to a shared JSON
 /// file holding a [`JudgeSpec`], so one rubric can be reused across evals.
 #[derive(Debug, Clone)]
-pub(crate) enum PathOrInline<T> {
+pub enum PathOrInline<T> {
     Path(PathBuf),
     Inline(T),
 }
 
-pub(crate) type JudgeRef = PathOrInline<JudgeSpec>;
+pub type JudgeRef = PathOrInline<JudgeSpec>;
 
 /// An LLM-as-judge rubric for an eval.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct JudgeSpec {
     /// Model to use for this judge check (e.g. "anthropic:claude-sonnet-4-5").
@@ -72,7 +82,7 @@ pub struct JudgeSpec {
     pub criteria: Vec<JudgeCriterionSpec>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct JudgeCriterionSpec {
     pub id: String,
@@ -85,9 +95,8 @@ pub struct JudgeCriterionSpec {
     pub threshold: f64,
 }
 
-/// Tool call expectations keyed by tool name.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(try_from = "ToolCallExpectationRepr")]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub enum ToolCallExpectation {
     AtLeast(usize),
     Exactly(usize),
@@ -95,7 +104,7 @@ pub enum ToolCallExpectation {
 
 /// Expectations checked against the agent's run. All are optional; an empty `expect` passes as
 /// long as the agent runs to completion.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Expect {
     /// Tool call count requirements by tool name.
@@ -115,7 +124,31 @@ pub struct Expect {
     pub judge: Option<JudgeRef>,
 }
 
-pub(crate) type SettingsRef = PathOrInline<Box<AetherSettings>>;
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentSpec {
+    pub command: Vec<String>,
+
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+}
+
+impl AgentSpec {
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        let Some(program) = self.command.first() else {
+            return Err("agent command must not be empty".to_string());
+        };
+        if program.trim().is_empty() {
+            return Err("agent command program must not be empty".to_string());
+        }
+        for key in self.env.keys() {
+            if key.trim().is_empty() || key.contains('=') {
+                return Err(format!("agent env contains invalid key `{key}`"));
+            }
+        }
+        Ok(())
+    }
+}
 
 impl DockerSpec {
     /// Resolve the image to run in, and the build producing it for Dockerfile-backed specs, with
@@ -138,9 +171,16 @@ impl DockerSpec {
     }
 }
 
+impl TaskSpec {
+    pub(crate) fn build(&self, base_dir: &Path) -> Result<Task, WorkspaceError> {
+        Ok(Task::new(self.prompt.clone(), self.workspace.build(base_dir)?))
+    }
+}
+
 impl WorkspaceSpec {
     pub(crate) fn build(&self, base_dir: &Path) -> Result<Workspace, WorkspaceError> {
         match self {
+            Self::Empty => Workspace::empty(),
             Self::Files(files) => Workspace::from_files(files),
             Self::Dir(dir) => Workspace::from_dir(base_dir.join(dir)),
             Self::Git(git) => Workspace::from_git_repo(git.clone()),
@@ -149,18 +189,18 @@ impl WorkspaceSpec {
 }
 
 impl Expect {
-    pub(crate) fn evaluate(&self, report: &EvalReport) -> Vec<String> {
+    pub(crate) fn evaluate(&self, run: &TaskRun) -> Vec<String> {
         let mut failures = Vec::new();
 
         for (tool, expectation) in &self.tool_calls {
-            let actual = report.tool_call_count(tool);
+            let actual = run.transcript().tool_call_count(tool);
             if let Some(failure) = expectation.failure(tool, actual) {
                 failures.push(failure);
             }
         }
 
         for (path, expected) in &self.files {
-            match read_workspace_file(report, path) {
+            match read_workspace_file(run, path) {
                 Ok(actual) if &actual == expected => {}
                 Ok(actual) => failures
                     .push(format!("file `{path}` content mismatch:\n  expected: {expected:?}\n  actual:   {actual:?}")),
@@ -169,7 +209,7 @@ impl Expect {
         }
 
         for (path, needle) in &self.files_contain {
-            match read_workspace_file(report, path) {
+            match read_workspace_file(run, path) {
                 Ok(actual) if actual.contains(needle) => {}
                 Ok(_) => failures.push(format!("file `{path}` does not contain {needle:?}")),
                 Err(error) => failures.push(format!("file `{path}` could not be read: {error}")),
@@ -180,26 +220,8 @@ impl Expect {
     }
 }
 
-fn read_workspace_file(report: &EvalReport, relative_path: &str) -> std::io::Result<String> {
-    std::fs::read_to_string(report.path(relative_path))
-}
-
-impl SettingsRef {
-    /// Load the settings this reference points at, resolving the settings path relative to
-    /// `base_dir`. Inline settings resolve file-backed resources relative to `base_dir`; path-backed
-    /// settings resolve resources relative to the settings project root.
-    pub fn resolve(&self, base_dir: &Path) -> Result<AetherSettings, EvalFileError> {
-        match self {
-            SettingsRef::Inline(settings) => {
-                let mut settings = settings.as_ref().clone();
-                settings.inline_resources(base_dir)?;
-                Ok(settings)
-            }
-            SettingsRef::Path(path) => {
-                AetherSettings::load_file_for_export(&base_dir.join(path)).map_err(EvalFileError::from)
-            }
-        }
-    }
+fn read_workspace_file(run: &TaskRun, relative_path: &str) -> std::io::Result<String> {
+    std::fs::read_to_string(run.workspace().join(relative_path))
 }
 
 impl JudgeRef {
@@ -235,7 +257,31 @@ where
     }
 }
 
-#[derive(Deserialize)]
+impl JsonSchema for DockerSpec {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "DockerSpec".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        DockerSpecRepr::json_schema(generator)
+    }
+}
+
+impl<T: JsonSchema> JsonSchema for PathOrInline<T> {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Owned(format!("PathOr{}", T::schema_name()))
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let inline = generator.subschema_for::<T>().to_value();
+        schemars::Schema::try_from(serde_json::json!({
+            "oneOf": [{ "type": "string" }, inline],
+        }))
+        .expect("PathOrInline schema must be valid")
+    }
+}
+
+#[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct DockerSpecRepr {
     #[serde(default)]
@@ -259,15 +305,6 @@ impl TryFrom<DockerSpecRepr> for DockerSpec {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ToolCallExpectationRepr {
-    #[serde(default)]
-    at_least: Option<usize>,
-    #[serde(default)]
-    exactly: Option<usize>,
-}
-
 impl ToolCallExpectation {
     pub(crate) fn failure(&self, tool: &str, actual: usize) -> Option<String> {
         match self {
@@ -278,42 +315,6 @@ impl ToolCallExpectation {
                 Some(format!("expected tool `{tool}` to be called exactly {expected} time(s), but was called {actual}"))
             }
             _ => None,
-        }
-    }
-}
-
-impl TryFrom<ToolCallExpectationRepr> for ToolCallExpectation {
-    type Error = &'static str;
-
-    fn try_from(repr: ToolCallExpectationRepr) -> Result<Self, Self::Error> {
-        match (repr.at_least, repr.exactly) {
-            (Some(at_least), None) => Ok(Self::AtLeast(at_least)),
-            (None, Some(exactly)) => Ok(Self::Exactly(exactly)),
-            _ => Err("tool call expectation must specify exactly one of `atLeast` or `exactly`"),
-        }
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct WorkspaceSpecRepr {
-    #[serde(default)]
-    files: Option<BTreeMap<String, String>>,
-    #[serde(default)]
-    dir: Option<PathBuf>,
-    #[serde(default)]
-    git: Option<GitRepoSpec>,
-}
-
-impl TryFrom<WorkspaceSpecRepr> for WorkspaceSpec {
-    type Error = &'static str;
-
-    fn try_from(repr: WorkspaceSpecRepr) -> Result<Self, Self::Error> {
-        match (repr.files, repr.dir, repr.git) {
-            (Some(files), None, None) => Ok(Self::Files(files)),
-            (None, Some(dir), None) => Ok(Self::Dir(dir)),
-            (None, None, Some(git)) => Ok(Self::Git(git)),
-            _ => Err("workspace must specify exactly one of `files`, `dir`, or `git`"),
         }
     }
 }
@@ -377,12 +378,47 @@ mod tests {
     use super::*;
 
     #[test]
-    fn settings_ref_parses_path_or_inline() {
-        let path: SettingsRef = serde_json::from_str(r#""./.aether/settings.json""#).unwrap();
-        assert!(matches!(path, SettingsRef::Path(_)));
+    fn agent_spec_parses_command_only_json() {
+        let agent: AgentSpec = serde_json::from_str(
+            r#"{"command":["node","/app/eval-agent.js"],"env":{"AETHER_EVAL_MODEL":"test:model"}}"#,
+        )
+        .unwrap();
 
-        let inline: SettingsRef = serde_json::from_str(r#"{"agents":[]}"#).unwrap();
-        assert!(matches!(inline, SettingsRef::Inline(_)));
+        assert_eq!(agent.command, vec!["node", "/app/eval-agent.js"]);
+        assert_eq!(agent.env["AETHER_EVAL_MODEL"], "test:model");
+    }
+
+    #[test]
+    fn agent_spec_rejects_empty_command() {
+        let agent: AgentSpec = serde_json::from_str(r#"{"command":[]}"#).unwrap();
+        let error = agent.validate().unwrap_err();
+        assert_eq!(error, "agent command must not be empty");
+    }
+
+    #[test]
+    fn agent_spec_rejects_blank_program() {
+        let agent: AgentSpec = serde_json::from_str(r#"{"command":["  "]}"#).unwrap();
+
+        let error = agent.validate().unwrap_err();
+        assert_eq!(error, "agent command program must not be empty");
+    }
+
+    #[test]
+    fn agent_spec_rejects_invalid_env_keys() {
+        for json in [r#"{"command":["agent"],"env":{"":"x"}}"#, r#"{"command":["agent"],"env":{"BAD=KEY":"x"}}"#] {
+            let agent: AgentSpec = serde_json::from_str(json).unwrap();
+            let error = agent.validate().unwrap_err();
+            assert!(error.contains("agent env contains invalid key"), "got: {error}");
+        }
+    }
+
+    #[test]
+    fn agent_spec_rejects_old_tagged_shapes() {
+        for json in [r#"{"type":"aether","settings":{}}"#, r#"{"type":"command","command":["agent"]}"#] {
+            let error = serde_json::from_str::<AgentSpec>(json).unwrap_err().to_string();
+
+            assert!(error.contains("unknown field `type`"), "got: {error}");
+        }
     }
 
     #[test]

@@ -27,6 +27,27 @@ const log = (line) => {
   }
 };
 
+if (process.argv[2] === "headless") {
+  const args = process.argv.slice(2);
+  log(JSON.stringify({ event: "headless", args }));
+  const optionsIndex = args.indexOf("--options-json");
+  const options =
+    optionsIndex >= 0 ? JSON.parse(args[optionsIndex + 1] ?? "{}") : {};
+  const prompt = options.prompt ?? args.at(-1);
+  const output = options.output ?? args[args.indexOf("--output") + 1];
+  if (process.env.FAKE_AETHER_HEADLESS_EXIT_CODE) {
+    console.error("fake headless failed");
+    process.exit(Number(process.env.FAKE_AETHER_HEADLESS_EXIT_CODE));
+  }
+  if (output === "json") {
+    console.log(JSON.stringify({ type: "Text", chunk: prompt }));
+    console.log(JSON.stringify({ type: "Done" }));
+  } else {
+    console.log(`fake headless: ${prompt}`);
+  }
+  process.exit(0);
+}
+
 const writable = Writable.toWeb(process.stdout);
 const readable = Readable.toWeb(process.stdin);
 const stream = ndJsonStream(writable, readable);

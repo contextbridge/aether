@@ -1,25 +1,22 @@
-use aether_evals::{EvalRunError, FakeAgent, Workspace, run_eval};
+use aether_evals::{EvalRunError, FakeAgent, Task, Workspace};
 
 #[tokio::test]
 async fn fake_agent_passes_file_assertion() -> Result<(), EvalRunError> {
-    let report = run_eval(
-        &FakeAgent::writes_file("hello.txt", "Hello, World!"),
-        "Write 'Hello, World!' to hello.txt",
-        Workspace::empty()?,
-    )
-    .await?;
+    let run = Task::new("Write 'Hello, World!' to hello.txt", Workspace::empty()?)
+        .run(&FakeAgent::writes_file("hello.txt", "Hello, World!"))
+        .await?;
 
-    assert!(report.path("hello.txt").exists(), "{}", report.failure_context());
+    assert!(run.workspace().join("hello.txt").exists(), "{}", run.failure_context());
 
     Ok(())
 }
 
 #[tokio::test]
 async fn fake_agent_failure_context_describes_missing_file() -> Result<(), EvalRunError> {
-    let report = run_eval(&FakeAgent::success(), "Create missing.txt", Workspace::empty()?).await?;
+    let run = Task::new("Create missing.txt", Workspace::empty()?).run(&FakeAgent::success()).await?;
 
-    assert!(!report.path("missing.txt").exists());
-    let context = report.failure_context();
+    assert!(!run.workspace().join("missing.txt").exists());
+    let context = run.failure_context();
     assert!(context.contains("Create missing.txt"));
     assert!(context.contains("Task completed successfully"));
 
@@ -28,10 +25,10 @@ async fn fake_agent_failure_context_describes_missing_file() -> Result<(), EvalR
 
 #[tokio::test]
 async fn tool_call_assertion_works_in_rust_test() -> Result<(), EvalRunError> {
-    let report =
-        run_eval(&FakeAgent::with_tool_call("bash", "success"), "Run a bash command", Workspace::empty()?).await?;
+    let run =
+        Task::new("Run a bash command", Workspace::empty()?).run(&FakeAgent::with_tool_call("bash", "success")).await?;
 
-    assert_eq!(report.tool_call_count("bash"), 1, "{}", report.failure_context());
+    assert_eq!(run.transcript().tool_call_count("bash"), 1, "{}", run.failure_context());
 
     Ok(())
 }

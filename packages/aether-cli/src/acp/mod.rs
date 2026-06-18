@@ -22,13 +22,18 @@ use crate::acp::agent::acp_agent_builder;
 use crate::acp::state::{AcpState, AcpStateConfig};
 use crate::acp::stdio::Stdio;
 use crate::provider_connection_args::ProviderConnectionArgs;
-use crate::settings_args::SettingsSourceArgs;
+use crate::settings_args::{ConflictingSettingsSources, SettingsSourceArgs};
+use aether_project::AetherSettings;
 use agent_client_protocol as acp;
-use llm::ReasoningEffort;
+use llm::{ProviderConnectionOverride, ProviderConnectionOverrides, ReasoningEffort};
+use std::collections::BTreeMap;
 use std::env::current_dir;
 use std::io;
 use std::sync::Arc;
-use std::{fs::create_dir_all, path::PathBuf};
+use std::{
+    fs::create_dir_all,
+    path::{Path, PathBuf},
+};
 use thiserror::Error;
 use tracing::info;
 use tracing_appender::rolling::daily;
@@ -42,9 +47,17 @@ use session_store::SessionStore;
 
 #[derive(clap::Args, Debug)]
 pub struct AcpArgs {
+    /// JSON object with ACP launch options. Intended for SDKs and other programmatic clients.
+    #[clap(
+        long = "options-json",
+        hide = true,
+        conflicts_with_all = ["log_dir", "agent", "model", "reasoning_effort", "providers", "settings_json", "settings_file"]
+    )]
+    pub options_json: Option<String>,
+
     /// Path to log file directory (default: /tmp/aether-acp-logs)
-    #[clap(long, default_value = "/tmp/aether-acp-logs")]
-    pub log_dir: PathBuf,
+    #[clap(long)]
+    pub log_dir: Option<PathBuf>,
 
     /// Initial agent (mode) to select for new sessions. Mutually exclusive with `--model` and `--reasoning-effort`.
     #[clap(long, conflicts_with_all = ["model", "reasoning_effort"])]
@@ -66,6 +79,25 @@ pub struct AcpArgs {
     pub settings_source: SettingsSourceArgs,
 }
 
+#[derive(Clone, Debug, Default, serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AcpOptions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_dir: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub providers: Option<BTreeMap<String, ProviderConnectionOverride>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings: Option<AetherSettings>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings_file: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
+}
+
 /// Outcome of running the ACP server successfully.
 #[derive(Debug)]
 pub enum AcpRunOutcome {
@@ -79,6 +111,9 @@ pub enum AcpRunError {
     #[error("ACP protocol error: {0}")]
     Protocol(#[from] acp::Error),
 
+    #[error("Invalid --options-json: {0}")]
+    OptionsJson(#[from] AcpOptionsJsonError),
+
     #[error("Failed to initialize OAuth credential store: {0}")]
     CredentialStore(#[from] OAuthError),
 
@@ -89,30 +124,42 @@ pub enum AcpRunError {
     WorkspaceManager(#[source] io::Error),
 }
 
+#[derive(Debug, Error)]
+pub enum AcpOptionsJsonError {
+    #[error("{0}")]
+    Parse(#[from] serde_json::Error),
+    #[error(transparent)]
+    ConflictingSettingsSources(#[from] ConflictingSettingsSources),
+    #[error("agent and model cannot both be supplied")]
+    ConflictingAgentSelection,
+    #[error("reasoningEffort requires model")]
+    ReasoningEffortWithoutModel,
+}
+
 pub async fn run_acp(args: AcpArgs) -> Result<AcpRunOutcome, AcpRunError> {
     info!("Starting Aether ACP server");
 
-    setup_logging(&args);
+    let config = AcpRunConfig::from_args(args)?;
+    setup_logging(&config.log_dir);
 
-    let initial_selection = if let Some(agent) = args.agent.clone() {
+    let initial_selection = if let Some(agent) = config.agent.clone() {
         InitialSessionSelection::agent(agent)
-    } else if let Some(model) = args.model.clone() {
-        InitialSessionSelection::model(model, args.reasoning_effort)
+    } else if let Some(model) = config.model.clone() {
+        InitialSessionSelection::model(model, config.reasoning_effort)
     } else {
         InitialSessionSelection::default()
     };
     let session_store = Arc::new(SessionStore::new().map_err(AcpRunError::SessionStore)?);
     let workspace_manager = Arc::new(WorkspaceManager::new().map_err(AcpRunError::WorkspaceManager)?);
     let cwd = current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let oauth_credential_store = build_oauth_credential_store(&args.settings_source, &cwd)?;
-    let provider_connections = args.provider_connection.into_overrides();
+    let oauth_credential_store = build_oauth_credential_store(&config.settings_source, &cwd)?;
     let state = Arc::new(AcpState::new(AcpStateConfig {
         session_store,
         workspace_manager,
         oauth_credential_store,
         initial_selection,
-        settings_source: args.settings_source,
-        provider_connections,
+        settings_source: config.settings_source,
+        provider_connections: config.provider_connections,
     }));
 
     let connect_result = acp_agent_builder(state.clone()).connect_to(Stdio::new()).await;
@@ -124,14 +171,65 @@ pub async fn run_acp(args: AcpArgs) -> Result<AcpRunOutcome, AcpRunError> {
     }
 }
 
-fn setup_logging(args: &AcpArgs) {
-    create_dir_all(&args.log_dir).ok();
+#[derive(Debug)]
+struct AcpRunConfig {
+    log_dir: PathBuf,
+    agent: Option<String>,
+    model: Option<String>,
+    reasoning_effort: Option<ReasoningEffort>,
+    provider_connections: ProviderConnectionOverrides,
+    settings_source: SettingsSourceArgs,
+}
+
+impl AcpRunConfig {
+    fn from_args(args: AcpArgs) -> Result<Self, AcpOptionsJsonError> {
+        if let Some(json) = args.options_json {
+            return Self::from_options(serde_json::from_str(&json)?);
+        }
+
+        Ok(Self {
+            log_dir: args.log_dir.unwrap_or_else(default_log_dir),
+            agent: args.agent,
+            model: args.model,
+            reasoning_effort: args.reasoning_effort,
+            provider_connections: args.provider_connection.into_overrides(),
+            settings_source: args.settings_source,
+        })
+    }
+
+    fn from_options(options: AcpOptions) -> Result<Self, AcpOptionsJsonError> {
+        if options.agent.is_some() && options.model.is_some() {
+            return Err(AcpOptionsJsonError::ConflictingAgentSelection);
+        }
+        if options.reasoning_effort.is_some() && options.model.is_none() {
+            return Err(AcpOptionsJsonError::ReasoningEffortWithoutModel);
+        }
+
+        let settings_source = SettingsSourceArgs::from_json_options(options.settings, options.settings_file)?;
+
+        Ok(Self {
+            log_dir: options.log_dir.unwrap_or_else(default_log_dir),
+            agent: options.agent,
+            model: options.model,
+            reasoning_effort: options.reasoning_effort,
+            provider_connections: ProviderConnectionOverrides::new(options.providers.unwrap_or_default()),
+            settings_source,
+        })
+    }
+}
+
+fn setup_logging(log_dir: &Path) {
+    create_dir_all(log_dir).ok();
     tracing_subscriber::fmt()
-        .with_writer(daily(&args.log_dir, "aether-acp.log"))
+        .with_writer(daily(log_dir, "aether-acp.log"))
         .with_ansi(false) // No ANSI colors in log files
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn")))
         .pretty()
         .init();
+}
+
+fn default_log_dir() -> PathBuf {
+    PathBuf::from("/tmp/aether-acp-logs")
 }
 
 #[cfg(test)]
@@ -172,5 +270,49 @@ mod tests {
             TestCli::try_parse_from(["test", "--model", "anthropic:claude-sonnet-4-5", "--reasoning-effort", "high"])
                 .expect("reasoning effort can configure an explicit model session");
         assert_eq!(cli.args.reasoning_effort, Some(ReasoningEffort::High));
+    }
+
+    #[test]
+    fn options_json_conflicts_with_individual_flags() {
+        let err = TestCli::try_parse_from([
+            "test",
+            "--options-json",
+            r#"{"model":"anthropic:claude-sonnet-4-5"}"#,
+            "--model",
+            "anthropic:claude-sonnet-4-5",
+        ])
+        .expect_err("options JSON should conflict with individual ACP flags");
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn resolves_options_json() {
+        let cli = TestCli::try_parse_from([
+            "test",
+            "--options-json",
+            r#"{"logDir":"/tmp/custom-aether-logs","settings":{"agents":[]},"model":"anthropic:claude-sonnet-4-5","reasoningEffort":"high","providers":{"bedrock":{"url":"http://127.0.0.1:8787","auth":"none"}}}"#,
+        ])
+        .unwrap();
+
+        let config = AcpRunConfig::from_args(cli.args).unwrap();
+
+        assert_eq!(config.log_dir, PathBuf::from("/tmp/custom-aether-logs"));
+        assert_eq!(config.model.as_deref(), Some("anthropic:claude-sonnet-4-5"));
+        assert_eq!(config.reasoning_effort, Some(ReasoningEffort::High));
+        assert!(config.settings_source.settings_json.as_deref().unwrap().contains(r#""agents":[]"#));
+        let bedrock = config.provider_connections.config_for("bedrock");
+        assert_eq!(bedrock.base_url.as_deref(), Some("http://127.0.0.1:8787"));
+        assert_eq!(bedrock.auth_mode, llm::ProviderAuthMode::None);
+    }
+
+    #[test]
+    fn options_json_validates_selection_rules() {
+        let err = AcpRunConfig::from_options(AcpOptions {
+            reasoning_effort: Some(ReasoningEffort::High),
+            ..AcpOptions::default()
+        })
+        .unwrap_err();
+
+        assert!(matches!(err, AcpOptionsJsonError::ReasoningEffortWithoutModel));
     }
 }

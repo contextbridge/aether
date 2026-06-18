@@ -1,6 +1,6 @@
 {
   "name": "@aether-agent/sdk",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "description": "TypeScript SDK for the Aether agent CLI",
   "repository": {
     "type": "git",
@@ -12,6 +12,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./evals": {
+      "types": "./dist/evals/index.d.ts",
+      "import": "./dist/evals/index.js"
     }
   },
   "files": [
@@ -19,10 +23,10 @@
     "README.md"
   ],
   "scripts": {
-    "build": "pnpm generate:settings-types && tsc -p tsconfig.build.json",
-    "typecheck": "pnpm generate:settings-types && tsc -p tsconfig.json --noEmit",
-    "test": "pnpm generate:settings-types && vitest run",
-    "generate:settings-types": "node scripts/generate-settings-types.mjs",
+    "build": "pnpm generate:types && tsc -p tsconfig.build.json",
+    "typecheck": "pnpm generate:types && tsc -p tsconfig.json --noEmit",
+    "test": "pnpm generate:types && vitest run",
+    "generate:types": "node scripts/generate-types.mjs",
     "e2e": "node scripts/e2e.mjs"
   },
   "dependencies": {
@@ -35,7 +39,7 @@
   "devDependencies": {
     "@types/express": "^5.0.0",
     "@types/node": "^25.9.3",
-    "quicktype-core": "^23.2.6",
+    "json-schema-to-typescript": "^15.0.4",
     "typescript": "^6.0.3",
     "vitest": "^4.1.8"
   },

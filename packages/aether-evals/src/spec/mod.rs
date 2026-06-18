@@ -5,159 +5,147 @@ mod runner;
 mod types;
 
 pub use error::EvalFileError;
-pub use report::{EvalFilesReport, EvalOutcome, JudgeCriterionSummary, JudgeSummary};
-pub use runner::{EvalRunOptions, run_eval_files};
-pub(crate) use types::{DockerSpec, Expect, JudgeSpec, ResolvedDocker, SettingsRef, WorkspaceSpec};
-#[cfg(test)]
-use types::{JudgeRef, ToolCallExpectation};
+pub use report::{EvalFilesReport, EvalOutcome, EvalToolCall, JudgeCriterionSummary, JudgeSummary};
+pub use runner::{WorkspaceRetention, run_eval_specs};
+use serde_json::from_str;
+pub(crate) use types::ResolvedDocker;
+pub use types::{AgentSpec, DockerSpec, Expect, JudgeRef, JudgeSpec, TaskSpec, ToolCallExpectation, WorkspaceSpec};
 
-use self::judge::{Judge, JudgeError};
-use crate::agents::{Agent, DockerAetherAgent};
-use crate::{EvalRunError, WorkspaceError, run_eval};
-use aether_project::AetherSettings;
-use llm::StreamingModelProvider;
+use schemars::{JsonSchema, Schema, schema_for};
 use serde::Deserialize;
-use std::path::{Path, PathBuf};
-use thiserror::Error;
+use std::{
+    collections::BTreeSet,
+    fs::read_to_string,
+    path::{Path, PathBuf},
+};
 
-/// An [`EvalSpec`] resolved against its base directory (the eval file's parent), against which
-/// relative paths resolve. Docker, judge, and settings references are resolved once at
-/// construction, so a broken reference fails at load time rather than after the agent run.
-#[derive(Debug)]
-pub(crate) struct EvalCase {
-    pub eval: EvalSpec,
-    pub base_dir: PathBuf,
-    pub(crate) docker: Option<ResolvedDocker>,
-    pub(crate) judge: Option<JudgeSpec>,
-    pub(crate) settings: Option<AetherSettings>,
-}
+use crate::{CONTAINER_AETHER_HOME, DockerAgent, default_eval_env_vars};
 
-/// A declarative eval file, authored as JSON, that describes one scenario to run against a
-/// Dockerized agent.
-#[derive(Debug, Clone, Deserialize)]
+const DEFAULT_EVALS_DIR: &str = "evals";
+
+/// A JSON serializable representation of a single eval.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct EvalSpec {
-    /// Docker configuration (image, Dockerfile, build context).
-    #[serde(default)]
-    pub docker: Option<DockerSpec>,
-
-    /// Named agent from settings to pass through to `aether acp --agent`.
-    #[serde(default)]
-    pub agent: Option<String>,
-
-    /// Aether settings to drive the agent: either a path (relative to the eval file) or an inline
-    /// settings object.
-    #[serde(default)]
-    pub settings: Option<SettingsRef>,
-
+pub struct EvalSpec {
     pub name: String,
-    pub prompt: String,
-    #[serde(default)]
-    pub workspace: Option<WorkspaceSpec>,
+    /// Docker configuration (image, Dockerfile, build context).
+    pub docker: DockerSpec,
+
+    /// Command that emits newline-delimited `AgentMessage` JSON on stdout.
+    pub agent: AgentSpec,
+
+    pub task: TaskSpec,
     #[serde(default)]
     pub expect: Expect,
 }
 
 impl EvalSpec {
-    /// Read and parse an eval file, resolving it against its base directory (the eval file's
-    /// parent).
-    pub(crate) fn load(path: impl AsRef<Path>) -> Result<EvalCase, EvalFileError> {
-        let path = path.as_ref();
-        let path =
-            path.canonicalize().map_err(|source| EvalFileError::ReadEvalFile { path: path.to_path_buf(), source })?;
-        let content = std::fs::read_to_string(&path)
-            .map_err(|source| EvalFileError::ReadEvalFile { path: path.clone(), source })?;
-        let eval: EvalSpec = serde_json::from_str(&content)
-            .map_err(|source| EvalFileError::ParseEvalFile { path: path.clone(), source })?;
-        let base_dir = path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
-        EvalCase::new(eval, base_dir)
+    /// JSON schema for the eval spec (the input authored as JSON / generated as a TypeScript type).
+    pub fn schema() -> Schema {
+        schema_for!(Self)
     }
+}
 
-    /// Discover, read, and parse eval files under the provided files or directories. Directory
-    /// discovery is recursive and includes files ending in `.eval.json`. Explicit file paths are
-    /// always treated as eval files, regardless of filename.
-    pub(crate) fn load_all(paths: &[PathBuf]) -> Result<Vec<EvalCase>, EvalFileError> {
+/// Options for discovering and loading resolved eval specs.
+#[derive(Debug, Clone, Default)]
+pub struct EvalSpecLoadOptions {
+    /// Eval files or directories to discover eval files under. Empty means `./evals`.
+    pub paths: Vec<PathBuf>,
+    /// When set, load only the eval with this name.
+    pub filter: Option<String>,
+}
+
+/// An [`EvalSpec`] resolved against its base directory.
+#[derive(Debug)]
+pub struct ResolvedEvalSpec {
+    pub name: String,
+    pub base_dir: PathBuf,
+    pub(crate) docker: ResolvedDocker,
+    pub(crate) agent: AgentSpec,
+    pub(crate) task: TaskSpec,
+    pub(crate) expect: Expect,
+    pub(crate) judge: Option<JudgeSpec>,
+}
+
+impl ResolvedEvalSpec {
+    /// Discover, read, and parse eval files using the provided options. Directory discovery is
+    /// recursive and includes files ending in `.eval.json`. Explicit file paths are always treated
+    /// as eval files, regardless of filename.
+    pub fn load(options: EvalSpecLoadOptions) -> Result<Vec<Self>, EvalFileError> {
+        let paths = if options.paths.is_empty() { vec![PathBuf::from(DEFAULT_EVALS_DIR)] } else { options.paths };
         let mut spec_paths = Vec::new();
-        for path in paths {
+        for path in &paths {
             discover_specs_at(path, &mut spec_paths)?;
         }
 
         spec_paths.sort();
         spec_paths.dedup();
-        spec_paths.into_iter().map(Self::load).collect()
+        let mut cases = spec_paths.into_iter().map(Self::load_file).collect::<Result<Vec<_>, _>>()?;
+        if cases.is_empty() {
+            return Err(EvalFileError::NoEvalFilesFound { paths });
+        }
+
+        reject_duplicate_names(&cases)?;
+
+        if let Some(name) = &options.filter {
+            cases.retain(|case| &case.name == name);
+            if cases.is_empty() {
+                return Err(EvalFileError::NoMatchingEval { name: name.clone() });
+            }
+        }
+
+        Ok(cases)
+    }
+
+    /// Read and parse an eval file, resolving it against its base directory (the eval file's
+    /// parent).
+    pub fn load_file(path: impl AsRef<Path>) -> Result<Self, EvalFileError> {
+        let path = path.as_ref();
+        let path =
+            path.canonicalize().map_err(|source| EvalFileError::ReadEvalFile { path: path.to_path_buf(), source })?;
+
+        let content =
+            read_to_string(&path).map_err(|source| EvalFileError::ReadEvalFile { path: path.clone(), source })?;
+
+        let eval: EvalSpec =
+            from_str(&content).map_err(|source| EvalFileError::ParseEvalFile { path: path.clone(), source })?;
+
+        let base_dir = path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+        Self::resolve(eval, base_dir)
+    }
+
+    /// Resolve a parsed eval file against `base_dir`, resolving the Docker image and reading
+    /// referenced judge files.
+    pub fn resolve(eval: EvalSpec, base_dir: impl Into<PathBuf>) -> Result<Self, EvalFileError> {
+        let EvalSpec { name, docker, agent, task, expect } = eval;
+        let base_dir = base_dir.into();
+        agent.validate().map_err(|message| EvalFileError::InvalidAgentCommand { message })?;
+
+        let docker = docker.resolve(&base_dir)?;
+        let judge = expect.judge.as_ref().map(|judge| judge.resolve(&base_dir)).transpose()?;
+
+        Ok(Self { name, base_dir, docker, agent, task, expect, judge })
     }
 }
 
-impl EvalCase {
-    /// Resolve a parsed eval file against `base_dir`, resolving the Docker image and reading
-    /// referenced judge and settings files.
-    pub(crate) fn new(eval: EvalSpec, base_dir: impl Into<PathBuf>) -> Result<Self, EvalFileError> {
-        let base_dir = base_dir.into();
-        let docker = eval.docker.as_ref().map(|docker| docker.resolve(&base_dir)).transpose()?;
-        let judge = eval.expect.judge.as_ref().map(|judge| judge.resolve(&base_dir)).transpose()?;
-        let settings = eval.settings.as_ref().map(|settings| settings.resolve(&base_dir)).transpose()?;
-        Ok(Self { eval, base_dir, docker, judge, settings })
+impl ResolvedEvalSpec {
+    pub(crate) fn name(&self) -> &str {
+        &self.name
     }
 
-    /// Assemble the Dockerized agent for this case from its resolved image, settings, and agent
-    /// name. Fails when the eval file has no `docker` section.
-    pub(crate) fn agent(&self) -> Result<DockerAetherAgent, EvalFileError> {
-        let docker = self.docker.as_ref().ok_or(EvalFileError::NoImage)?;
-        let mut agent = DockerAetherAgent::new(docker.image.clone());
-        if let Some(settings) = &self.settings {
-            agent = agent.with_settings(settings.clone());
-        }
-        if let Some(agent_name) = &self.eval.agent {
-            agent = agent.with_agent(agent_name.clone());
-        }
-        Ok(agent)
+    pub(crate) fn task(&self) -> Result<crate::Task, crate::WorkspaceError> {
+        self.task.build(&self.base_dir)
     }
 
-    /// Run this eval against an already-constructed agent. `judge_llm` is the parsed judge model
-    /// when the case has a judge. Faults — workspace setup, the agent run, the judge call — are
-    /// recorded as failures on the returned outcome rather than surfaced as errors.
-    pub(crate) async fn run_with(
-        &self,
-        agent: &impl Agent,
-        judge_llm: Option<&dyn StreamingModelProvider>,
-    ) -> EvalOutcome {
-        match self.run_checks(agent, judge_llm).await {
-            Ok(outcome) => outcome,
-            Err(error) => EvalOutcome {
-                name: self.eval.name.clone(),
-                passed: false,
-                failures: vec![error.to_string()],
-                judge: None,
-                failure_context: None,
-            },
-        }
+    pub(crate) fn agent(&self) -> DockerAgent {
+        DockerAgent::new(self.docker.image.clone(), self.agent.command.clone())
+            .with_env_vars(default_eval_env_vars())
+            .with_env_vars(self.agent.env.clone())
+            .with_ephemeral_mount(CONTAINER_AETHER_HOME)
     }
 
-    async fn run_checks(
-        &self,
-        agent: &impl Agent,
-        judge_llm: Option<&dyn StreamingModelProvider>,
-    ) -> Result<EvalOutcome, EvalRunFailure> {
-        let workspace = match &self.eval.workspace {
-            Some(spec) => spec.build(&self.base_dir)?,
-            None => crate::Workspace::empty()?,
-        };
-        let report = run_eval(agent, &self.eval.prompt, workspace).await?;
-        let mut failures = self.eval.expect.evaluate(&report);
-        let judge = match &self.judge {
-            Some(spec) => {
-                let llm = judge_llm.expect("judge model is parsed before any eval runs when a judge is configured");
-                let summary = Judge::new(llm, &report, &self.eval.expect, spec).run().await?;
-                failures.extend(summary.blocking_failures());
-                Some(summary)
-            }
-            None => None,
-        };
-
-        let passed = failures.is_empty();
-        let failure_context = (!passed).then(|| report.failure_context());
-
-        Ok(EvalOutcome { name: self.eval.name.clone(), passed, failures, judge, failure_context })
+    pub(crate) fn expectations(&self) -> &Expect {
+        &self.expect
     }
 }
 
@@ -197,16 +185,14 @@ fn is_discovered_spec(path: &Path) -> bool {
     file_name.ends_with(".eval.json")
 }
 
-#[derive(Debug, Error)]
-enum EvalRunFailure {
-    #[error("workspace setup failed: {0}")]
-    Workspace(#[from] WorkspaceError),
-
-    #[error("agent run failed: {0}")]
-    Run(#[from] EvalRunError),
-
-    #[error("judge failed: {0}")]
-    Judge(#[from] JudgeError),
+fn reject_duplicate_names(cases: &[ResolvedEvalSpec]) -> Result<(), EvalFileError> {
+    let mut names = BTreeSet::new();
+    for case in cases {
+        if !names.insert(case.name.as_str()) {
+            return Err(EvalFileError::DuplicateEvalName { name: case.name.clone() });
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -216,38 +202,17 @@ mod tests {
     #[test]
     fn parses_camel_case_spec_with_inline_files() {
         let spec: EvalSpec = serde_json::from_str(
-            r#"{
-                "docker": { "file": "Dockerfile", "image": "sandbox:latest", "context": "../../.." },
-                "name": "edit",
-                "prompt": "do it",
-                "workspace": { "files": { "a.txt": "hi" } },
-                "expect": {
-                    "toolCalls": {
-                        "coding__read_file": { "atLeast": 1 },
-                        "coding__edit_file": { "exactly": 1 }
-                    },
-                    "files": { "a.txt": "bye" },
-                    "judge": {
-                        "model": "anthropic:claude-sonnet-4-5",
-                        "instructions": "grade it",
-                        "contextFiles": ["a.txt"],
-                        "criteria": [
-                            { "id": "behavior", "description": "did it work?" },
-                            { "id": "clarity", "description": "explained it", "blocking": false, "weight": 0.5, "threshold": 0.7 }
-                        ]
-                    }
-                }
-            }"#,
+            r#"{"docker":{"file":"Dockerfile","image":"sandbox:latest","context":"../../.."},"name":"edit","agent":{"command":["agent"]},"task":{"prompt":"do it","workspace":{"files":{"a.txt":"hi"}}},"expect":{"toolCalls":{"coding__read_file":{"atLeast":1},"coding__edit_file":{"exactly":1}},"files":{"a.txt":"bye"},"judge":{"model":"anthropic:claude-sonnet-4-5","instructions":"grade it","contextFiles":["a.txt"],"criteria":[{"id":"behavior","description":"did it work?"},{"id":"clarity","description":"explained it","blocking":false,"weight":0.5,"threshold":0.7}]}}}"#,
         )
         .unwrap();
 
         assert!(matches!(
             &spec.docker,
-            Some(DockerSpec::Build { file, image: Some(image), context: Some(context) })
+            DockerSpec::Build { file, image: Some(image), context: Some(context) }
                 if file == Path::new("Dockerfile") && image == "sandbox:latest" && context == Path::new("../../..")
         ));
         assert_eq!(spec.name, "edit");
-        assert!(matches!(&spec.workspace, Some(WorkspaceSpec::Files(files)) if files["a.txt"] == "hi"));
+        assert!(matches!(&spec.task.workspace, WorkspaceSpec::Files(files) if files["a.txt"] == "hi"));
         assert!(matches!(spec.expect.tool_calls["coding__read_file"], ToolCallExpectation::AtLeast(1)));
         assert!(matches!(spec.expect.tool_calls["coding__edit_file"], ToolCallExpectation::Exactly(1)));
         let Some(JudgeRef::Inline(judge)) = &spec.expect.judge else {
@@ -267,27 +232,30 @@ mod tests {
     #[test]
     fn parses_git_and_dir_workspaces() {
         let git: EvalSpec = serde_json::from_str(
-            r#"{"docker":{"image":"sandbox:latest"},"name":"g","prompt":"p","workspace":{"git":{"url":"u","startCommit":"a","goldCommit":"b"}}}"#,
+            r#"{"docker":{"image":"sandbox:latest"},"name":"g","agent":{"command":["agent"]},"task":{"prompt":"p","workspace":{"git":{"url":"u","startCommit":"a","goldCommit":"b"}}}}"#,
         )
         .unwrap();
-        assert!(matches!(git.workspace, Some(WorkspaceSpec::Git(_))));
+        assert!(matches!(git.task.workspace, WorkspaceSpec::Git(_)));
 
         let dir: EvalSpec = serde_json::from_str(
-            r#"{"docker":{"image":"sandbox:latest"},"name":"d","prompt":"p","workspace":{"dir":"fixtures/x"}}"#,
+            r#"{"docker":{"image":"sandbox:latest"},"name":"d","agent":{"command":["agent"]},"task":{"prompt":"p","workspace":{"dir":"fixtures/x"}}}"#,
         )
         .unwrap();
-        assert!(matches!(dir.workspace, Some(WorkspaceSpec::Dir(_))));
+        assert!(matches!(dir.task.workspace, WorkspaceSpec::Dir(_)));
     }
 
     #[test]
     fn rejects_invalid_docker_specs() {
         for (json, expected) in [
-            (r#"{"docker":{},"name":"c","prompt":"p"}"#, "docker must specify"),
+            (r#"{"docker":{},"name":"c","agent":{"command":["agent"]},"task":{"prompt":"p"}}"#, "docker must specify"),
             (
-                r#"{"docker":{"image":"sandbox:latest","context":"x"},"name":"c","prompt":"p"}"#,
+                r#"{"docker":{"image":"sandbox:latest","context":"x"},"name":"c","agent":{"command":["agent"]},"task":{"prompt":"p"}}"#,
                 "`context` requires a Dockerfile `file`",
             ),
-            (r#"{"docker":{"dockerfile":"Dockerfile"},"name":"c","prompt":"p"}"#, "unknown field `dockerfile`"),
+            (
+                r#"{"docker":{"dockerfile":"Dockerfile"},"name":"c","agent":{"command":["agent"]},"task":{"prompt":"p"}}"#,
+                "unknown field `dockerfile`",
+            ),
         ] {
             let error = serde_json::from_str::<EvalSpec>(json).unwrap_err().to_string();
             assert!(error.contains(expected), "expected {expected:?} in {error:?}");
@@ -296,29 +264,25 @@ mod tests {
 
     #[test]
     fn rejects_invalid_tool_call_expectations() {
-        for (json, expected) in [
-            (
-                r#"{"docker":{"image":"sandbox:latest"},"name":"c","prompt":"p","expect":{"toolCalls":{"bash":{}}}}"#,
-                "exactly one of `atLeast` or `exactly`",
-            ),
-            (
-                r#"{"docker":{"image":"sandbox:latest"},"name":"c","prompt":"p","expect":{"toolCalls":{"bash":{"atLeast":1,"exactly":1}}}}"#,
-                "exactly one of `atLeast` or `exactly`",
-            ),
-            (
-                r#"{"docker":{"image":"sandbox:latest"},"name":"c","prompt":"p","expect":{"toolCalls":{"bash":{"minimum":1}}}}"#,
-                "unknown field `minimum`",
-            ),
+        for json in [
+            r#"{"docker":{"image":"sandbox:latest"},"name":"c","agent":{"command":["agent"]},"task":{"prompt":"p"},"expect":{"toolCalls":{"bash":{}}}}"#,
+            r#"{"docker":{"image":"sandbox:latest"},"name":"c","agent":{"command":["agent"]},"task":{"prompt":"p"},"expect":{"toolCalls":{"bash":{"atLeast":1,"exactly":1}}}}"#,
         ] {
-            let error = serde_json::from_str::<EvalSpec>(json).unwrap_err().to_string();
-            assert!(error.contains(expected), "expected {expected:?} in {error:?}");
+            assert!(serde_json::from_str::<EvalSpec>(json).is_err(), "expected rejection for {json}");
         }
+
+        let unknown = serde_json::from_str::<EvalSpec>(
+            r#"{"docker":{"image":"sandbox:latest"},"name":"c","agent":{"command":["agent"]},"task":{"prompt":"p"},"expect":{"toolCalls":{"bash":{"minimum":1}}}}"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(unknown.contains("unknown variant `minimum`"), "got: {unknown}");
     }
 
     #[test]
     fn rejects_judge_without_model() {
         let result: Result<EvalSpec, _> = serde_json::from_str(
-            r#"{"docker":{"image":"sandbox:latest"},"name":"c","prompt":"p","expect":{"judge":{"criteria":[{"id":"ok","description":"ok"}]}}}"#,
+            r#"{"docker":{"image":"sandbox:latest"},"name":"c","agent":{"command":["agent"]},"task":{"prompt":"p"},"expect":{"judge":{"criteria":[{"id":"ok","description":"ok"}]}}}"#,
         );
 
         assert!(result.unwrap_err().to_string().contains("missing field `model`"));
@@ -327,8 +291,12 @@ mod tests {
     #[test]
     fn rejects_unknown_fields() {
         for json in [
-            r#"{"docker":{"image":"sandbox:latest"},"name":"c","prompt":"p","bogus":true}"#,
-            r#"{"docker":{"image":"sandbox:latest"},"name":"c","prompt":"p","runtime":{"type":"acp","command":["a"]}}"#,
+            r#"{"docker":{"image":"sandbox:latest"},"name":"c","agent":{"command":["agent"]},"task":{"prompt":"p"},"bogus":true}"#,
+            r#"{"docker":{"image":"sandbox:latest"},"name":"c","agent":{"command":["agent"]},"task":{"prompt":"p"},"runtime":{"type":"acp","command":["a"]}}"#,
+            r#"{"docker":{"image":"sandbox:latest"},"name":"c","agent":{"command":["agent"]},"task":{"prompt":"p"},"baseDir":"."}"#,
+            r#"{"docker":{"image":"sandbox:latest"},"name":"c","agent":{"command":["agent"]},"task":{"prompt":"p"},"judge":null}"#,
+            r#"{"docker":{"image":"sandbox:latest"},"name":"c","agent":{"type":"aether","command":["nope"]},"task":{"prompt":"p"}}"#,
+            r#"{"docker":{"image":"sandbox:latest"},"name":"c","agent":{"command":["node"],"modelName":"m"},"task":{"prompt":"p"}}"#,
         ] {
             let result: Result<EvalSpec, _> = serde_json::from_str(json);
             assert!(result.is_err());
@@ -338,25 +306,25 @@ mod tests {
     #[test]
     fn rejects_workspace_with_more_than_one_source() {
         let result: Result<EvalSpec, _> = serde_json::from_str(
-            r#"{"docker":{"image":"sandbox:latest"},"name":"c","prompt":"p","workspace":{"files":{},"dir":"x"}}"#,
+            r#"{"docker":{"image":"sandbox:latest"},"name":"c","agent":{"command":["agent"]},"task":{"prompt":"p","workspace":{"files":{},"dir":"x"}}}"#,
         );
 
-        assert!(result.unwrap_err().to_string().contains("exactly one of"));
+        assert!(result.is_err());
     }
 
     #[test]
     fn rejects_workspace_with_unknown_field_by_name() {
         let result: Result<EvalSpec, _> = serde_json::from_str(
-            r#"{"docker":{"image":"sandbox:latest"},"name":"c","prompt":"p","workspace":{"dirr":"x"}}"#,
+            r#"{"docker":{"image":"sandbox:latest"},"name":"c","agent":{"command":["agent"]},"task":{"prompt":"p","workspace":{"dirr":"x"}}}"#,
         );
 
-        assert!(result.unwrap_err().to_string().contains("unknown field `dirr`"));
+        assert!(result.unwrap_err().to_string().contains("unknown variant `dirr`"));
     }
 
     #[test]
     fn rejects_git_workspace_with_unknown_field_by_name() {
         let result: Result<EvalSpec, _> = serde_json::from_str(
-            r#"{"docker":{"image":"sandbox:latest"},"name":"g","prompt":"p","workspace":{"git":{"url":"u","startCommit":"a","goldComit":"b"}}}"#,
+            r#"{"docker":{"image":"sandbox:latest"},"name":"g","agent":{"command":["agent"]},"task":{"prompt":"p","workspace":{"git":{"url":"u","startCommit":"a","goldComit":"b"}}}}"#,
         );
 
         assert!(result.unwrap_err().to_string().contains("unknown field `goldComit`"));
@@ -366,32 +334,32 @@ mod tests {
     fn rejects_invalid_judge_criteria() {
         for (json, expected) in [
             (
-                r#"{"docker":{"image":"sandbox:latest"},"name":"c","prompt":"p","expect":{"judge":{"model":"m","criteria":[]}}}"#,
+                r#"{"docker":{"image":"sandbox:latest"},"name":"c","agent":{"command":["agent"]},"task":{"prompt":"p"},"expect":{"judge":{"model":"m","criteria":[]}}}"#,
                 "criteria must not be empty",
             ),
             (
-                r#"{"docker":{"image":"sandbox:latest"},"name":"c","prompt":"p","expect":{"judge":{"model":"m","criteria":[{"id":"","description":"ok"}]}}}"#,
+                r#"{"docker":{"image":"sandbox:latest"},"name":"c","agent":{"command":["agent"]},"task":{"prompt":"p"},"expect":{"judge":{"model":"m","criteria":[{"id":"","description":"ok"}]}}}"#,
                 "id must not be empty",
             ),
             (
-                r#"{"docker":{"image":"sandbox:latest"},"name":"c","prompt":"p","expect":{"judge":{"model":"m","criteria":[{"id":"a","description":"ok"},{"id":"a","description":"ok"}]}}}"#,
+                r#"{"docker":{"image":"sandbox:latest"},"name":"c","agent":{"command":["agent"]},"task":{"prompt":"p"},"expect":{"judge":{"model":"m","criteria":[{"id":"a","description":"ok"},{"id":"a","description":"ok"}]}}}"#,
                 "duplicate judge criterion id `a`",
             ),
             (
-                r#"{"docker":{"image":"sandbox:latest"},"name":"c","prompt":"p","expect":{"judge":{"model":"m","criteria":[{"id":"a","description":""}]}}}"#,
+                r#"{"docker":{"image":"sandbox:latest"},"name":"c","agent":{"command":["agent"]},"task":{"prompt":"p"},"expect":{"judge":{"model":"m","criteria":[{"id":"a","description":""}]}}}"#,
                 "description must not be empty",
             ),
             (
-                r#"{"docker":{"image":"sandbox:latest"},"name":"c","prompt":"p","expect":{"judge":{"model":"m","criteria":[{"id":"a","description":"ok","weight":0.0}]}}}"#,
+                r#"{"docker":{"image":"sandbox:latest"},"name":"c","agent":{"command":["agent"]},"task":{"prompt":"p"},"expect":{"judge":{"model":"m","criteria":[{"id":"a","description":"ok","weight":0.0}]}}}"#,
                 "weight must be positive and finite",
             ),
             (
-                r#"{"docker":{"image":"sandbox:latest"},"name":"c","prompt":"p","expect":{"judge":{"model":"m","criteria":[{"id":"a","description":"ok","threshold":1.5}]}}}"#,
+                r#"{"docker":{"image":"sandbox:latest"},"name":"c","agent":{"command":["agent"]},"task":{"prompt":"p"},"expect":{"judge":{"model":"m","criteria":[{"id":"a","description":"ok","threshold":1.5}]}}}"#,
                 "threshold must be between 0.0 and 1.0",
             ),
         ] {
             let eval = serde_json::from_str::<EvalSpec>(json).unwrap();
-            let error = EvalCase::new(eval, ".").unwrap_err().to_string();
+            let error = ResolvedEvalSpec::resolve(eval, ".").unwrap_err().to_string();
             assert!(error.contains(expected), "expected {expected:?} in {error:?}");
         }
     }

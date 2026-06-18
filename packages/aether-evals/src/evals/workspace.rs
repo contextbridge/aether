@@ -1,7 +1,12 @@
-use super::report::{DiffStats, GitDiff};
+use super::diff::{DiffStats, GitDiff};
 use crate::WorkspaceError;
 use crate::git_repo::GitRepo;
-use std::path::{Path, PathBuf};
+use schemars::JsonSchema;
+use serde::Serialize;
+use std::{
+    fs::{create_dir_all, write},
+    path::{Path, PathBuf},
+};
 use tempfile::TempDir;
 
 pub struct Workspace {
@@ -9,7 +14,7 @@ pub struct Workspace {
     root_path: PathBuf,
     relative_cwd: Option<PathBuf>,
     source: WorkspaceSource,
-    _drop_guard: TempDir,
+    temp_dir: TempDir,
 }
 
 #[derive(Debug, Clone)]
@@ -18,7 +23,7 @@ pub enum WorkspaceSource {
     GitRepo { url: String, start_commit: String, gold_commit: String },
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GitRepoSpec {
     pub url: String,
@@ -28,17 +33,18 @@ pub struct GitRepoSpec {
     pub subdir: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RetainedWorkspaceInfo {
+    pub root_path: PathBuf,
+    pub path: PathBuf,
+}
+
 impl Workspace {
     pub fn empty() -> Result<Self, WorkspaceError> {
         let temp_dir = new_temp_dir()?;
         let path = temp_dir.path().to_path_buf();
-        Ok(Self {
-            path: path.clone(),
-            root_path: path,
-            relative_cwd: None,
-            source: WorkspaceSource::Local,
-            _drop_guard: temp_dir,
-        })
+        Ok(Self { path: path.clone(), root_path: path, relative_cwd: None, source: WorkspaceSource::Local, temp_dir })
     }
 
     pub fn from_dir(src_path: impl Into<PathBuf>) -> Result<Self, WorkspaceError> {
@@ -52,28 +58,20 @@ impl Workspace {
             source,
         })?;
 
-        Ok(Self {
-            path: path.clone(),
-            root_path: path,
-            relative_cwd: None,
-            source: WorkspaceSource::Local,
-            _drop_guard: temp_dir,
-        })
+        Ok(Self { path: path.clone(), root_path: path, relative_cwd: None, source: WorkspaceSource::Local, temp_dir })
     }
 
-    pub fn from_files<T, U>(files: impl IntoIterator<Item = (T, U)>) -> Result<Self, WorkspaceError>
-    where
-        T: AsRef<Path>,
-        U: AsRef<str>,
-    {
+    pub fn from_files<T: AsRef<Path>, U: AsRef<str>>(
+        files: impl IntoIterator<Item = (T, U)>,
+    ) -> Result<Self, WorkspaceError> {
         let workspace = Self::empty()?;
         for (relative_path, contents) in files {
             let path = workspace.path().join(relative_path.as_ref());
             if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)
+                create_dir_all(parent)
                     .map_err(|source| WorkspaceError::WriteFile { path: parent.to_path_buf(), source })?;
             }
-            std::fs::write(&path, contents.as_ref()).map_err(|source| WorkspaceError::WriteFile { path, source })?;
+            write(&path, contents.as_ref()).map_err(|source| WorkspaceError::WriteFile { path, source })?;
         }
         Ok(workspace)
     }
@@ -103,12 +101,16 @@ impl Workspace {
             root_path,
             relative_cwd,
             source: WorkspaceSource::GitRepo { url, start_commit, gold_commit },
-            _drop_guard: temp_dir,
+            temp_dir,
         })
     }
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub fn join(&self, relative_path: impl AsRef<Path>) -> PathBuf {
+        self.path.join(relative_path)
     }
 
     pub fn root_path(&self) -> &Path {
@@ -121,6 +123,13 @@ impl Workspace {
 
     pub fn source(&self) -> &WorkspaceSource {
         &self.source
+    }
+
+    /// Prevents the workspace from getting automatically removed and returns its retained root and effective cwd. The caller is responsible for cleanup.
+    pub fn persist(self) -> RetainedWorkspaceInfo {
+        let root_path = self.temp_dir.keep();
+        let path = self.relative_cwd.map_or_else(|| root_path.clone(), |relative_cwd| root_path.join(relative_cwd));
+        RetainedWorkspaceInfo { root_path, path }
     }
 
     pub fn capture_git_diffs(&self) -> (Option<GitDiff>, Option<GitDiff>) {
@@ -156,4 +165,21 @@ fn copy_dir_contents(src: &Path, dst: &Path) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::{read_to_string, remove_dir_all};
+
+    #[test]
+    fn persist_reports_root_and_path_for_local_workspace() {
+        let workspace = Workspace::from_files([("notes.txt", "hi\n")]).unwrap();
+
+        let retained = workspace.persist();
+
+        assert_eq!(retained.root_path, retained.path);
+        assert_eq!(read_to_string(retained.path.join("notes.txt")).unwrap(), "hi\n");
+        remove_dir_all(retained.root_path).unwrap();
+    }
 }

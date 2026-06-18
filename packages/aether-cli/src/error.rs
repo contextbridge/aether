@@ -8,6 +8,10 @@ pub enum CliError {
     NoPrompt,
     #[error("{0}")]
     ConflictingArgs(String),
+    #[error("Invalid --options-json: {0}")]
+    InvalidOptionsJson(#[source] serde_json::Error),
+    #[error(transparent)]
+    ConflictingSettingsSources(#[from] crate::settings_args::ConflictingSettingsSources),
     #[error("Model error: {0}")]
     ModelError(String),
     #[error("MCP error: {0}")]

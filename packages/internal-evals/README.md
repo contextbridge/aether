@@ -39,9 +39,9 @@ just evals-list
 
 ## Docker and agent configuration
 
-All evals in this repo run in the `aether-sandbox:latest` image, built from [`examples/Dockerfile`](examples/Dockerfile). `just evals` builds it (via `just build-sandbox`) before running anything, so a fresh checkout works without manual setup. The example eval also points `docker.file` at the same Dockerfile, so running it standalone with `aether eval` builds the identical image. The evals crate loads repo `.aether/settings.json` and passes it to Dockerized Aether ACP with `--settings-json`.
+All evals in this repo run in the `aether-sandbox:latest` image, built from [`examples/Dockerfile`](examples/Dockerfile). `just evals` builds it (via `just build-sandbox`) before running anything, so a fresh checkout works without manual setup. Both the internal Rust tests and the declarative examples drive the same in-image `/usr/local/bin/aether-eval-agent` wrapper, which runs `aether headless --output json` and emits `AgentMessage` NDJSON.
 
-Set `AETHER_EVAL_AGENT` to pass `--agent` through to `aether acp`:
+Set `AETHER_EVAL_AGENT` to pass `--agent` through to `aether headless`:
 
 ```bash
 AETHER_EVAL_AGENT="Fast" just evals
@@ -51,7 +51,7 @@ AETHER_EVAL_AGENT="Fast" just evals
 
 - Put real LLM scenarios in `packages/internal-evals/tests` or add declarative `*.eval.json` files under `packages/internal-evals/examples`; shared Rust setup code lives in `tests/common`.
 - `just evals` runs tests ending in `_eval` with nextest's default filter disabled and the `evals` group selected; keep that suffix for real provider-backed eval tests.
-- Prefer `aether_evals::DockerAetherAgent` with settings-driven MCP wiring over fake agents.
-- Run the agent with `aether_evals::run_eval(&agent, prompt, workspace).await?`.
-- Assert Aether namespaced MCP tool names, such as `coding__read_file` and `coding__edit_file`, with `EvalReport` helpers.
+- Drive real Aether evals through the in-image `aether-eval-agent` wrapper command, which emits `AgentMessage` NDJSON via `aether headless --output json`.
+- Run the agent with `aether_evals::Task::new(prompt, workspace).run(&agent).await?`.
+- Assert Aether namespaced MCP tool names, such as `coding__read_file` and `coding__edit_file`, with `TaskRun`/`Transcript` helpers.
 - Prefer direct filesystem assertions over shell commands for file outcomes.

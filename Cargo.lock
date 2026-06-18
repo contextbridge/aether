@@ -71,6 +71,7 @@ dependencies = [
  "futures",
  "libc",
  "rmcp",
+ "schemars 1.2.1",
  "serde",
  "serde_json",
  "tempfile",
@@ -153,12 +154,9 @@ dependencies = [
 name = "aether-evals"
 version = "0.2.3"
 dependencies = [
- "aether-acp-utils",
  "aether-agent-core",
  "aether-llm",
  "aether-project",
- "agent-client-protocol",
- "clap",
  "futures",
  "schemars 1.2.1",
  "serde",
