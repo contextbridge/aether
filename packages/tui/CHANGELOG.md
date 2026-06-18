@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.14](https://github.com/contextbridge/aether/compare/aether-tui-v0.2.13...aether-tui-v0.2.14) - 2026-06-18
+
+### Other
+
+- Move a bunch of errors to using thiserror ([#160](https://github.com/contextbridge/aether/pull/160))
+
 ## [0.2.13](https://github.com/contextbridge/aether/compare/aether-tui-v0.2.12...aether-tui-v0.2.13) - 2026-06-13
 
 ### Added

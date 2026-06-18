@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.13](https://github.com/contextbridge/aether/compare/aether-project-v0.5.12...aether-project-v0.5.13) - 2026-06-18
+
+### Other
+
+- Fix ci by re-adding missing schema generator ([#163](https://github.com/contextbridge/aether/pull/163))
+- Better experience for authoring evals ([#162](https://github.com/contextbridge/aether/pull/162))
+- Move a bunch of errors to using thiserror ([#160](https://github.com/contextbridge/aether/pull/160))
+
 ## [0.5.12](https://github.com/contextbridge/aether/compare/aether-project-v0.5.11...aether-project-v0.5.12) - 2026-06-13
 
 ### Other

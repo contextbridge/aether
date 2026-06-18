@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.8](https://github.com/contextbridge/aether/compare/aether-utils-v0.2.7...aether-utils-v0.2.8) - 2026-06-18
+
+### Other
+
+- Move a bunch of errors to using thiserror ([#160](https://github.com/contextbridge/aether/pull/160))
+
 ## [0.2.7](https://github.com/contextbridge/aether/compare/aether-utils-v0.2.6...aether-utils-v0.2.7) - 2026-06-13
 
 ### Other
