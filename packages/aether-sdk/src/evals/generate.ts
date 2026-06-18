@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import { resolveAetherCommand } from "../agentProcess.js";
 import { runCommand } from "../childProcess.js";
 import { AetherSdkError } from "../errors.js";
@@ -23,26 +25,45 @@ export interface GenerateOptions {
   signal?: AbortSignal;
 }
 
+export type GenerateJsonOptions<T extends z.ZodType> = GenerateOptions & {
+  /** Validate the model's response as JSON with this schema and return the parsed value. */
+  schema: T;
+};
+
 export interface GenerateResult {
   /** The model's response text. */
   text: string;
 }
 
 /**
- * Call a model with a single prompt and return its response, via the `aether generate` CLI. This is
- * the low-level primitive that {@link judge} builds on.
+ * Call a model with a single prompt and return its response, via the `aether generate` CLI.
+ * When a Zod schema is provided, the model response is parsed as JSON, validated, and returned
+ * as the inferred schema type.
  *
  * @example
  * ```ts
  * const { text } = await generate("Summarize this diff in one sentence:\n" + diff, {
  *   model: "anthropic:claude-sonnet-4-5",
  * });
+ *
+ * const verdict = await generate("Grade this run as JSON", {
+ *   model: "anthropic:claude-sonnet-4-5",
+ *   schema: z.object({ passed: z.boolean(), reason: z.string() }),
+ * });
  * ```
  */
-export async function generate(
+export function generate(
   prompt: string,
-  options: GenerateOptions = {},
-): Promise<GenerateResult> {
+  options?: GenerateOptions,
+): Promise<GenerateResult>;
+export function generate<T extends z.ZodType>(
+  prompt: string,
+  options: GenerateJsonOptions<T>,
+): Promise<z.infer<T>>;
+export async function generate<T extends z.ZodType>(
+  prompt: string,
+  options: GenerateOptions | GenerateJsonOptions<T> = {},
+): Promise<GenerateResult | z.infer<T>> {
   const model = options.model ?? process.env.AETHER_LLM_MODEL;
   if (!model) {
     throw new AetherSdkError(
@@ -64,10 +85,15 @@ export async function generate(
   ];
   if (options.system !== undefined) args.push("--system", options.system);
 
+  const promptWithInstructions =
+    "schema" in options
+      ? `${prompt}\n\nRespond with ONLY valid JSON. Do not include markdown fences or explanatory prose.`
+      : prompt;
+
   const { stdout } = await runCommand(command, args, {
     cwd: process.cwd(),
     env: resolveEnv(options.env),
-    stdin: prompt,
+    stdin: promptWithInstructions,
     abortSignal: options.signal,
     spawnFailedMessage: `Failed to run aether generate at ${command}`,
     exitedErrorCode: "generate_command_failed",
@@ -75,7 +101,9 @@ export async function generate(
       `aether generate exited with code ${exitCode}.\n${stderr}`,
   });
 
-  return { text: parseResponseText(stdout) };
+  const text = parseResponseText(stdout);
+  if ("schema" in options) return parseJsonResponse(text, options.schema);
+  return { text };
 }
 
 function parseResponseText(stdout: string): string {
@@ -100,4 +128,52 @@ function parseResponseText(stdout: string): string {
     );
   }
   return (parsed as { text: string }).text;
+}
+
+function parseJsonResponse<T extends z.ZodType>(
+  response: string,
+  schema: T,
+): z.infer<T> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(extractJson(response));
+  } catch (err) {
+    throw new AetherSdkError(
+      "generate_command_failed",
+      `Model returned invalid JSON.\nRaw response: ${response}`,
+      err,
+    );
+  }
+
+  const result = schema.safeParse(parsed);
+  if (!result.success) {
+    throw new AetherSdkError(
+      "generate_command_failed",
+      `Model response did not match schema.\n${z.prettifyError(result.error)}\nRaw response: ${response}`,
+      result.error,
+    );
+  }
+  return result.data;
+}
+
+function extractJson(response: string): string {
+  const trimmed = response.trim();
+  try {
+    JSON.parse(trimmed);
+    return trimmed;
+  } catch {
+    const objectStart = trimmed.indexOf("{");
+    const objectEnd = trimmed.lastIndexOf("}");
+    if (objectStart !== -1 && objectEnd !== -1 && objectStart <= objectEnd) {
+      return trimmed.slice(objectStart, objectEnd + 1);
+    }
+
+    const arrayStart = trimmed.indexOf("[");
+    const arrayEnd = trimmed.lastIndexOf("]");
+    if (arrayStart !== -1 && arrayEnd !== -1 && arrayStart <= arrayEnd) {
+      return trimmed.slice(arrayStart, arrayEnd + 1);
+    }
+
+    return trimmed;
+  }
 }

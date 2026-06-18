@@ -7,6 +7,7 @@ export type AetherSdkErrorCode =
   | "prompt_in_progress"
   | "invalid_options"
   | "eval_command_failed"
+  | "generate_command_failed"
   | "aborted";
 
 export class AetherSdkError extends Error {

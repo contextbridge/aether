@@ -41,6 +41,7 @@ async function generateEvalTypes(document) {
         EvalSpec: document.EvalSpec,
         EvalOutcome: document.EvalOutcome,
         EvalStreamEvent: document.EvalStreamEvent,
+        JudgeRubricResponse: document.JudgeRubricResponse,
       },
       null,
       2,
@@ -59,6 +60,14 @@ async function generateEvalTypes(document) {
       TYPE_OPTIONS,
     ),
     compile(evalStreamEvent, "EvalStreamEvent", TYPE_OPTIONS),
+    compile(
+      schemaForTypeGeneration(
+        document.JudgeRubricResponse,
+        "JudgeRubricResponse",
+      ),
+      "JudgeRubricResponse",
+      TYPE_OPTIONS,
+    ),
   ]);
 
   const content = [
