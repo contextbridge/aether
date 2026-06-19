@@ -78,7 +78,7 @@ async fn test_parse_http_and_sse_configs() {
         assert_http(parse_one(&json).await, "mcpMesh", "http://localhost:3000/mcp")
     );
     if let McpTransport::Http { config: c } = cfg.transport {
-        assert_eq!(c.auth_header.as_ref().unwrap(), "Bearer secret_token");
+        assert_eq!(c.auth_header.as_ref().unwrap(), "secret_token");
     }
 
     let json = server_json("sseServer", r#"{ "type": "sse", "url": "http://localhost:4000/sse", "headers": {} }"#);
