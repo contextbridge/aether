@@ -21,6 +21,7 @@ const document = JSON.parse(
 );
 
 await generateEvalTypes(document);
+await generateReasoningTypes(document.ReasoningEffort);
 await generateSettingsTypes(document.AetherSettings);
 await generateAcpOptionsTypes(document.AcpOptions);
 await generateHeadlessOptionsTypes(document.HeadlessOptions);
@@ -62,6 +63,19 @@ async function generateEvalTypes(document) {
 
   writeGenerated(
     resolve(import.meta.dirname, "../src/generated/eval-types.ts"),
+    content,
+  );
+}
+
+async function generateReasoningTypes(schema) {
+  const content = `// @generated ${GENERATED_NOTICE}\n// Source: packages/utils/src/reasoning.rs via aether-schemas.\n\n${await compile(
+    schemaForTypeGeneration(schema, "ReasoningEffort"),
+    "ReasoningEffort",
+    TYPE_OPTIONS,
+  )}`;
+
+  writeGenerated(
+    resolve(import.meta.dirname, "../src/generated/reasoning-types.ts"),
     content,
   );
 }

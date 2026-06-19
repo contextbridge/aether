@@ -16,6 +16,7 @@ export type {
   GenerateJsonOptions,
   GenerateOptions,
   GenerateResult,
+  ReasoningEffort,
 } from "./generate.js";
 export {
   formatTranscript,

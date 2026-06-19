@@ -331,6 +331,7 @@ test("agent makes a maintainer-quality edit", async () => {
 
   const response = await generate(grader.prompt, {
     model: "anthropic:claude-sonnet-4-5", // or set AETHER_LLM_MODEL
+    temperature: 0,
     schema: grader.schema,
   });
   const summary = grader.summarize(response);
@@ -351,10 +352,12 @@ import { z } from "zod";
 
 const { text } = await generate("Summarize this diff in one sentence:\n" + diff, {
   model: "anthropic:claude-sonnet-4-5", // or set AETHER_LLM_MODEL
+  temperature: 0.2,
 });
 
 const verdict = await generate("Grade this run. Respond with passed and reason.", {
   model: "anthropic:claude-sonnet-4-5",
+  temperature: 0,
   schema: z.object({ passed: z.boolean(), reason: z.string() }),
 });
 ```

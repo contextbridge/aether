@@ -87,6 +87,33 @@ describe("generate", () => {
     expect(captured.argv).toContain("json");
   });
 
+  it("passes model settings and reasoning effort to the CLI", async () => {
+    const capture = join(scratch, "capture.json");
+    await generate("grade deterministically", {
+      binaryPath: fakeBinary,
+      model: "anthropic:claude-sonnet-4-5",
+      temperature: 0,
+      topP: 0.5,
+      maxTokens: 64,
+      reasoningEffort: "high",
+      env: baseEnv({ FAKE_GENERATE_CAPTURE: capture }),
+    });
+
+    const captured = JSON.parse(await readFile(capture, "utf8"));
+    expect(captured.argv).toEqual(
+      expect.arrayContaining([
+        "--temperature",
+        "0",
+        "--top-p",
+        "0.5",
+        "--max-tokens",
+        "64",
+        "--reasoning-effort",
+        "high",
+      ]),
+    );
+  });
+
   it("returns typed JSON when a schema is provided", async () => {
     const capture = join(scratch, "capture.json");
     const verdict = await generate("grade the run", {
