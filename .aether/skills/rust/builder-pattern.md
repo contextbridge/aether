@@ -1,6 +1,6 @@
 # Builder Pattern
 
-**Location**: `packages/aether/src/agent/agent_builder.rs`, `packages/aether/src/mcp/mcp_builder.rs`
+**Location**: `crates/aether-core/src/agent/agent_builder.rs`, `crates/aether-core/src/mcp/mcp_builder.rs`
 
 ## Pattern
 

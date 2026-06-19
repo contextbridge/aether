@@ -23,7 +23,7 @@ Wisp launches an ACP-compatible agent as a subprocess, streams the conversation 
 ## Quick start
 
 ```bash
-cargo install --path packages/wisp
+cargo install --path crates/wisp
 wisp                       # launches the default agent ("aether acp")
 wisp --agent "my-agent"    # launch a custom ACP agent
 ```

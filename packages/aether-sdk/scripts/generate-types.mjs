@@ -29,7 +29,7 @@ await generateHeadlessOptionsTypes(document.HeadlessOptions);
 async function generateEvalTypes(document) {
   const canonicalSchemaPath = resolve(
     root,
-    "website/src/data/aether-eval.schema.json",
+    "packages/website/src/data/aether-eval.schema.json",
   );
   writeText(
     canonicalSchemaPath,
@@ -68,7 +68,7 @@ async function generateEvalTypes(document) {
 }
 
 async function generateReasoningTypes(schema) {
-  const content = `// @generated ${GENERATED_NOTICE}\n// Source: packages/utils/src/reasoning.rs via aether-schemas.\n\n${await compile(
+  const content = `// @generated ${GENERATED_NOTICE}\n// Source: crates/utils/src/reasoning.rs via aether-schemas.\n\n${await compile(
     schemaForTypeGeneration(schema, "ReasoningEffort"),
     "ReasoningEffort",
     TYPE_OPTIONS,
@@ -82,11 +82,11 @@ async function generateReasoningTypes(schema) {
 
 async function generateSettingsTypes(schema) {
   writeText(
-    resolve(root, "website/src/data/aether-settings.schema.json"),
+    resolve(root, "packages/website/src/data/aether-settings.schema.json"),
     `${JSON.stringify(schema, null, 2)}\n`,
   );
 
-  const content = `// @generated ${GENERATED_NOTICE}\n// Source: packages/aether-project/src/aether_settings.rs via aether-schemas.\n\n${await compile(
+  const content = `// @generated ${GENERATED_NOTICE}\n// Source: crates/aether-project/src/aether_settings.rs via aether-schemas.\n\n${await compile(
     schemaForTypeGeneration(schema, "AetherSettings"),
     "AetherSettings",
     TYPE_OPTIONS,
@@ -99,7 +99,7 @@ async function generateSettingsTypes(schema) {
 }
 
 async function generateAcpOptionsTypes(schema) {
-  const content = `// @generated ${GENERATED_NOTICE}\n// Source: packages/aether-cli/src/acp/mod.rs via aether-schemas.\n\n${await compile(
+  const content = `// @generated ${GENERATED_NOTICE}\n// Source: crates/aether-cli/src/acp/mod.rs via aether-schemas.\n\n${await compile(
     schemaForTypeGeneration(schema, "AetherAcpOptions"),
     "AetherAcpOptions",
     TYPE_OPTIONS,
@@ -112,7 +112,7 @@ async function generateAcpOptionsTypes(schema) {
 }
 
 async function generateHeadlessOptionsTypes(schema) {
-  const content = `// @generated ${GENERATED_NOTICE}\n// Source: packages/aether-cli/src/headless/mod.rs via aether-schemas.\n\n${await compile(
+  const content = `// @generated ${GENERATED_NOTICE}\n// Source: crates/aether-cli/src/headless/mod.rs via aether-schemas.\n\n${await compile(
     schemaForTypeGeneration(schema, "AetherHeadlessCliOptions"),
     "AetherHeadlessCliOptions",
     TYPE_OPTIONS,

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Extract unique workspace package names from file paths passed as arguments.
-# Reads the actual Cargo package name from each package's Cargo.toml.
-# Usage: changed-packages file1.rs file2.rs ... -- outputs -p pkg1 -p pkg2 ...
+# Extract unique workspace crate names from file paths passed as arguments.
+# Reads the actual Cargo package name from each crate's Cargo.toml.
+# Usage: changed-crates file1.rs file2.rs ... -- outputs -p pkg1 -p pkg2 ...
 set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
@@ -9,7 +9,7 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 dirs=""
 for f in "$@"; do
     case "$f" in
-        packages/*/*)
+        crates/*/*)
             dir=$(echo "$f" | cut -d/ -f2)
             dirs="$dirs $dir"
             ;;
@@ -17,7 +17,7 @@ for f in "$@"; do
 done
 
 echo "$dirs" | tr ' ' '\n' | sort -u | sed '/^$/d' | while read -r dir; do
-    toml="$REPO_ROOT/packages/$dir/Cargo.toml"
+    toml="$REPO_ROOT/crates/$dir/Cargo.toml"
     if [ -f "$toml" ]; then
         pkg=$(grep '^name' "$toml" | head -1 | sed 's/.*= *"//;s/".*//')
         printf -- '-p %s ' "$pkg"

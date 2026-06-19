@@ -1,6 +1,5 @@
 packages:
-  - "packages/aether-sdk"
-  - "website"
+  - "packages/*"
 
 onlyBuiltDependencies:
   - "@aether-agent/cli"
