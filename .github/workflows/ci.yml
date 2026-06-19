@@ -6,6 +6,9 @@ on:
       - main
   pull_request:
 
+env:
+  CARGO_INCREMENTAL: "0"
+
 jobs:
   fmt:
     name: Formatting
