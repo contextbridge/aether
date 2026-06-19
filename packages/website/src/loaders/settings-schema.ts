@@ -11,7 +11,7 @@ import type { Loader, LoaderContext } from "astro/loaders";
  */
 export function settingsSchemaLoader(): Loader {
   const here = dirname(fileURLToPath(import.meta.url));
-  const root = resolve(here, "../../..");
+  const root = resolve(here, "../../../..");
   const snapshotPath = resolve(here, "../data/aether-settings.schema.json");
 
   return {

@@ -19,7 +19,7 @@ COPY target/debug/aether /usr/local/bin/aether
 COPY .aether /repo/.aether
 COPY AGENTS.md /repo/AGENTS.md
 COPY mcp.json /repo/mcp.json
-COPY packages/internal-evals/examples/aether-eval-agent /usr/local/bin/aether-eval-agent
+COPY crates/internal-evals/examples/aether-eval-agent /usr/local/bin/aether-eval-agent
 RUN chmod +x /usr/local/bin/aether-eval-agent
 
 WORKDIR /workspace

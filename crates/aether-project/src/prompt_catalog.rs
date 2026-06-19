@@ -188,7 +188,7 @@ mod tests {
         write_skill(
             dir.path(),
             "rust-rules",
-            "---\ndescription: Rust conventions\nagent-invocable: false\ntriggers:\n  read:\n    - \"packages/**/*.rs\"\n---\nFollow Rust conventions.",
+            "---\ndescription: Rust conventions\nagent-invocable: false\ntriggers:\n  read:\n    - \"crates/**/*.rs\"\n---\nFollow Rust conventions.",
         );
 
         let catalog = PromptCatalog::from_dir(dir.path()).unwrap();
@@ -198,7 +198,7 @@ mod tests {
         assert!(spec.user_invocable);
         assert!(!spec.agent_invocable);
         assert!(!spec.triggers.is_empty());
-        assert!(spec.triggers.matches_read("packages/foo/bar.rs"));
+        assert!(spec.triggers.matches_read("crates/foo/bar.rs"));
         assert!(!spec.triggers.matches_read("other/file.py"));
     }
 
