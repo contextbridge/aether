@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Run a just recipe scoped to changed packages.
+# Run a just recipe scoped to changed crates.
 # Usage: run-check <just-recipe> <files...>
 set -euo pipefail
 cmd="$1"; shift
-PKG_FLAGS=$(scripts/changed-packages "$@")
+PKG_FLAGS=$(scripts/changed-crates "$@")
 [ -n "$PKG_FLAGS" ] && just "$cmd" $PKG_FLAGS
