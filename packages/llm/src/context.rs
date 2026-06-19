@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::catalog::LlmModel;
 use crate::chat_message::AssistantReasoning;
+use crate::model_settings::ModelSettings;
 use crate::reasoning::ReasoningEffort;
 use crate::types::IsoString;
 
@@ -15,12 +16,20 @@ pub struct Context {
     #[serde(skip)]
     reasoning_effort: Option<ReasoningEffort>,
     #[serde(skip)]
+    model_settings: ModelSettings,
+    #[serde(skip)]
     prompt_cache_key: Option<String>,
 }
 
 impl Context {
     pub fn new(messages: Vec<ChatMessage>, tools: Vec<ToolDefinition>) -> Self {
-        Self { messages, tools, reasoning_effort: None, prompt_cache_key: None }
+        Self {
+            messages,
+            tools,
+            reasoning_effort: None,
+            model_settings: ModelSettings::default(),
+            prompt_cache_key: None,
+        }
     }
 
     pub fn prompt_cache_key(&self) -> Option<&str> {
@@ -37,6 +46,14 @@ impl Context {
 
     pub fn set_reasoning_effort(&mut self, effort: Option<ReasoningEffort>) {
         self.reasoning_effort = effort;
+    }
+
+    pub fn model_settings(&self) -> &ModelSettings {
+        &self.model_settings
+    }
+
+    pub fn set_model_settings(&mut self, settings: ModelSettings) {
+        self.model_settings = settings;
     }
 
     pub fn add_message(&mut self, message: ChatMessage) {
@@ -134,12 +151,7 @@ impl Context {
                 other => other.clone(),
             })
             .collect();
-        Context {
-            messages,
-            tools: self.tools.clone(),
-            reasoning_effort: self.reasoning_effort,
-            prompt_cache_key: self.prompt_cache_key.clone(),
-        }
+        Context { messages, ..self.clone() }
     }
 
     /// Clear all non-system messages, retaining only system prompts.
@@ -178,12 +190,7 @@ impl Context {
             });
         }
 
-        Context {
-            messages,
-            tools: self.tools.clone(),
-            reasoning_effort: self.reasoning_effort,
-            prompt_cache_key: self.prompt_cache_key.clone(),
-        }
+        Context { messages, ..self.clone() }
     }
 }
 

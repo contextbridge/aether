@@ -2,7 +2,7 @@ use clap::Parser;
 use futures::StreamExt;
 use llm::providers::anthropic::AnthropicProvider;
 use llm::types::IsoString;
-use llm::{ChatMessage, Context, LlmResponse, ProviderFactory, StreamingModelProvider, ToolDefinition};
+use llm::{ChatMessage, Context, LlmResponse, ModelSettings, ProviderFactory, StreamingModelProvider, ToolDefinition};
 use serde_json::json;
 use std::error::Error;
 use std::io::{self, Write};
@@ -44,11 +44,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("Max tokens: {}", args.max_tokens);
     println!("{}", "=".repeat(50));
 
-    let provider = AnthropicProvider::from_env()
-        .await?
-        .with_model(&args.model)
-        .with_temperature(args.temperature)
-        .with_max_tokens(args.max_tokens);
+    let provider = AnthropicProvider::from_env().await?.with_model(&args.model);
 
     let _ = args.no_cache; // Prompt caching is always enabled
 
@@ -93,7 +89,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .to_string(),
         ),
     ];
-    let context = Context::new(messages, tools);
+    let mut context = Context::new(messages, tools);
+    context.set_model_settings(ModelSettings {
+        temperature: Some(args.temperature),
+        max_tokens: Some(args.max_tokens),
+        ..Default::default()
+    });
 
     // Stream the response
     let stream = provider.stream_response(&context);

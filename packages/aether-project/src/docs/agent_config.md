@@ -14,6 +14,18 @@ A user-invocable agent with its own prompt and a read-only tool allowlist:
 }
 ```
 
+A deterministic judge agent that pins sampling via `modelSettings`:
+
+```json
+{
+  "name": "Judge",
+  "description": "Grades responses against a rubric",
+  "model": "anthropic:claude-sonnet-4-5-20250929",
+  "userInvocable": true,
+  "modelSettings": { "temperature": 0, "maxTokens": 1024 }
+}
+```
+
 A sub-agent (callable by other agents) that pins a Bedrock inference profile:
 
 ```json

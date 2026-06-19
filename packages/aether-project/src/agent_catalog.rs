@@ -178,6 +178,7 @@ fn resolve_agent_entry(
         description,
         model,
         reasoning_effort: entry.reasoning_effort,
+        model_settings: entry.model_settings,
         context_window: entry.context_window,
         prompts,
         provider_connections,
@@ -251,6 +252,7 @@ fn canonicalize_model_spec(model: &str) -> Result<String, String> {
 mod tests {
     use super::*;
     use aether_core::agent_spec::{AgentSpecExposure, ToolFilter};
+    use llm::ModelSettings;
     use std::fs;
 
     fn create_temp_project() -> tempfile::TempDir {
@@ -271,6 +273,7 @@ mod tests {
             description: format!("{name} agent"),
             model: "anthropic:claude-sonnet-4-5".to_string(),
             reasoning_effort: None,
+            model_settings: ModelSettings::default(),
             context_window: None,
             prompts: vec![],
             provider_connections: ProviderConnectionOverrides::default(),
@@ -395,6 +398,32 @@ mod tests {
         let spec = catalog.resolve("planner").unwrap();
 
         assert_eq!(spec.context_window, Some(200_000));
+    }
+
+    #[test]
+    fn agent_model_settings_resolve_from_config_json() {
+        let dir = create_temp_project();
+        write_file(dir.path(), "BASE.md", "Base instructions");
+
+        let json = r#"{
+            "agents": [{
+                "name": "judge",
+                "description": "Judge agent",
+                "model": "anthropic:claude-sonnet-4-5",
+                "userInvocable": true,
+                "prompts": ["BASE.md"],
+                "modelSettings": { "temperature": 0, "topP": 0.9, "maxTokens": 1024 }
+            }]
+        }"#;
+
+        let config: AetherSettings = serde_json::from_str(json).unwrap();
+        let catalog = AgentCatalog::from_settings(dir.path(), config).unwrap();
+        let spec = catalog.resolve("judge").unwrap();
+
+        assert_eq!(
+            spec.model_settings,
+            ModelSettings { temperature: Some(0.0), top_p: Some(0.9), max_tokens: Some(1024) }
+        );
     }
 
     #[test]

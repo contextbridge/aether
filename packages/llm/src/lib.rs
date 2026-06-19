@@ -7,6 +7,7 @@ mod context;
 mod credential;
 pub mod error;
 mod llm_response;
+mod model_settings;
 pub mod parser;
 pub mod provider;
 pub mod provider_connection;
@@ -23,6 +24,7 @@ pub use context::Context;
 pub use credential::ProviderCredential;
 pub use error::{ContextOverflowError, LlmError, Result};
 pub use llm_response::{LlmResponse, StopReason, TokenUsage};
+pub use model_settings::ModelSettings;
 pub use provider::{LlmResponseStream, ProviderFactory, StreamingModelProvider};
 pub use provider_connection::{
     ProviderAuthMode, ProviderConnectionConfig, ProviderConnectionOverride, ProviderConnectionOverrides,

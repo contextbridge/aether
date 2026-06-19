@@ -7,7 +7,7 @@ use crate::mcp::run_mcp_task::McpCommand;
 use aether_auth::OAuthCredentialStorage;
 use llm::parser::ModelProviderParser;
 use llm::types::IsoString;
-use llm::{ChatMessage, Context, StreamingModelProvider, ToolDefinition};
+use llm::{ChatMessage, Context, ModelSettings, StreamingModelProvider, ToolDefinition};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::{self, Receiver, Sender};
@@ -48,6 +48,7 @@ pub struct AgentBuilder {
     retry_config: RetryConfig,
     prompt_cache_key: Option<String>,
     context_window: Option<u32>,
+    model_settings: ModelSettings,
 }
 
 impl AgentBuilder {
@@ -65,6 +66,7 @@ impl AgentBuilder {
             retry_config: RetryConfig::default(),
             prompt_cache_key: None,
             context_window: None,
+            model_settings: ModelSettings::default(),
         }
     }
 
@@ -83,13 +85,18 @@ impl AgentBuilder {
             None => parser,
         };
         let (provider, _) = parser.parse(&spec.model).await?;
-        let mut builder = Self::new(Arc::from(provider)).context_window(spec.context_window);
+        let mut builder = Self::new(Arc::from(provider))
+            .context_window(spec.context_window)
+            .model_settings(spec.model_settings.clone());
+
         for prompt in base_prompts {
             builder = builder.system_prompt(prompt);
         }
+
         for prompt in &spec.prompts {
             builder = builder.system_prompt(prompt.clone());
         }
+
         Ok(builder)
     }
 
@@ -196,6 +203,13 @@ impl AgentBuilder {
         self
     }
 
+    /// Set the sampling controls (`temperature`, `top_p`, `max_tokens`) applied to
+    /// every model call this agent makes.
+    pub fn model_settings(mut self, model_settings: ModelSettings) -> Self {
+        self.model_settings = model_settings;
+        self
+    }
+
     /// Pre-populate the context with conversation history (e.g. from a restored session).
     ///
     /// These messages are inserted after the system prompt.
@@ -221,6 +235,7 @@ impl AgentBuilder {
 
         let mut context = Context::new(messages, self.tool_definitions);
         context.set_prompt_cache_key(self.prompt_cache_key);
+        context.set_model_settings(self.model_settings);
 
         let config = AgentConfig {
             llm: self.llm,
@@ -358,12 +373,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn from_spec_applies_context_window() {
+    async fn from_spec_applies_context_window_and_model_settings() {
+        let settings = ModelSettings { temperature: Some(0.0), max_tokens: Some(128), ..Default::default() };
         let spec = AgentSpec {
             name: "alloy".to_string(),
             description: "alloy".to_string(),
             model: "ollama:llama3.2,llamacpp:local".to_string(),
             reasoning_effort: None,
+            model_settings: settings.clone(),
             context_window: Some(200_000),
             prompts: vec![],
             provider_connections: ProviderConnectionOverrides::default(),
@@ -375,6 +392,32 @@ mod tests {
         let builder = AgentBuilder::from_spec(&spec, vec![], None).await.unwrap();
 
         assert_eq!(builder.context_window, Some(200_000));
+        assert_eq!(builder.model_settings, settings);
+    }
+
+    #[tokio::test]
+    async fn spawn_applies_model_settings_to_context() {
+        let fake = FakeLlmProvider::with_single_response(vec![
+            LlmResponse::start("msg"),
+            LlmResponse::usage(10, 10),
+            LlmResponse::done(),
+        ]);
+
+        let captured = fake.captured_contexts();
+        let settings = ModelSettings { temperature: Some(0.0), max_tokens: Some(64), ..Default::default() };
+
+        let (tx, mut rx, handle) =
+            AgentBuilder::new(Arc::new(fake)).model_settings(settings.clone()).spawn().await.unwrap();
+
+        tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("hello")] }))
+            .await
+            .unwrap();
+
+        let _ = next_context_usage(&mut rx).await;
+        let contexts = captured.lock().unwrap();
+
+        assert_eq!(contexts[0].model_settings(), &settings);
+        handle.abort();
     }
 
     #[tokio::test]
@@ -384,6 +427,7 @@ mod tests {
             description: "alloy".to_string(),
             model: "ollama:llama3.2,llamacpp:local".to_string(),
             reasoning_effort: None,
+            model_settings: ModelSettings::default(),
             context_window: None,
             prompts: vec![],
             provider_connections: ProviderConnectionOverrides::default(),

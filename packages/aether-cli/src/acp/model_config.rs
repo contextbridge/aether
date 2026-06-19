@@ -286,6 +286,7 @@ mod tests {
             description: name.to_lowercase(),
             model: model.to_string(),
             reasoning_effort: effort,
+            model_settings: llm::ModelSettings::default(),
             context_window: None,
             prompts: vec![],
             provider_connections: llm::ProviderConnectionOverrides::default(),

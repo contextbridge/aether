@@ -12,14 +12,16 @@ use std::env;
 use std::time::Duration;
 use tracing::debug;
 
+/// Tokens requested when no `max_tokens` is set via `ModelSettings`. Anthropic requires
+/// `max_tokens` on every request, so a value is always sent.
+const DEFAULT_MAX_TOKENS: u32 = 16_384;
+
 #[derive(Clone)]
 pub struct AnthropicProvider {
     client: Client,
     model: String,
     base_url: Option<String>,
     auth_mode: ProviderAuthMode,
-    temperature: Option<f32>,
-    max_tokens: u32,
     api_key: Option<String>,
 }
 
@@ -32,8 +34,6 @@ impl AnthropicProvider {
             model: "claude-sonnet-4-5-20250929".to_string(),
             base_url: Some("https://api.anthropic.com".to_string()),
             auth_mode: ProviderAuthMode::Default,
-            temperature: None,
-            max_tokens: 16_384,
             api_key,
         })
     }
@@ -56,27 +56,23 @@ impl AnthropicProvider {
         self
     }
 
-    pub fn with_temperature(mut self, temperature: f32) -> Self {
-        self.temperature = Some(temperature);
-        self
-    }
-
-    pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
-        self.max_tokens = max_tokens;
-        self
-    }
-
     pub(crate) fn build_request(&self, context: &Context) -> Result<Request> {
         let (system_prompt, messages) = map_messages(context.messages())?;
         let tools = if context.tools().is_empty() { None } else { Some(map_tools(context.tools())?) };
 
+        let settings = context.model_settings();
+
         let mut request = Request::new(self.model.clone(), messages)
-            .with_max_tokens(self.max_tokens)
+            .with_max_tokens(settings.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS))
             .with_stream(true)
             .with_auto_caching();
 
-        if let Some(temp) = self.temperature {
+        if let Some(temp) = settings.temperature {
             request = request.with_temperature(temp);
+        }
+
+        if let Some(top_p) = settings.top_p {
+            request = request.with_top_p(top_p);
         }
 
         if let Some(system) = system_prompt {
@@ -90,8 +86,9 @@ impl AnthropicProvider {
         if let Some(effort) = context.reasoning_effort() {
             let budget_tokens = effort_to_budget_tokens(effort);
             request = request.with_thinking(Thinking::new(budget_tokens));
-            // Anthropic requires temperature to be unset when thinking is enabled
+            // Anthropic requires temperature and top_p to be unset when thinking is enabled
             request.temperature = None;
+            request.top_p = None;
             // max_tokens must be > budget_tokens
             if request.max_tokens <= budget_tokens {
                 request.max_tokens = budget_tokens + 1024;
@@ -276,11 +273,7 @@ mod tests {
     use reqwest::header::AUTHORIZATION;
 
     fn create_test_provider() -> AnthropicProvider {
-        AnthropicProvider::new(Some("test-api-key".to_string()))
-            .unwrap()
-            .with_model("claude-sonnet-4-5-20250929")
-            .with_temperature(0.7)
-            .with_max_tokens(1000)
+        AnthropicProvider::new(Some("test-api-key".to_string())).unwrap().with_model("claude-sonnet-4-5-20250929")
     }
 
     #[test]
@@ -319,7 +312,7 @@ mod tests {
 
         let request = provider.build_request(&context).unwrap();
         assert_eq!(request.model, "claude-sonnet-4-5-20250929");
-        assert_eq!(request.max_tokens, 1000);
+        assert_eq!(request.max_tokens, DEFAULT_MAX_TOKENS);
         assert_eq!(request.messages.len(), 1);
         assert!(request.tools.is_none());
         assert!(request.stream);
@@ -431,13 +424,48 @@ mod tests {
     }
 
     #[test]
+    fn test_build_request_applies_model_settings() {
+        let provider = create_test_provider();
+        let mut context = Context::new(
+            vec![ChatMessage::User { content: vec![ContentBlock::text("Hello")], timestamp: IsoString::now() }],
+            vec![],
+        );
+        context.set_model_settings(crate::ModelSettings {
+            temperature: Some(0.0),
+            top_p: Some(0.5),
+            max_tokens: Some(256),
+        });
+
+        let request = provider.build_request(&context).unwrap();
+        assert_eq!(request.temperature, Some(0.0));
+        assert_eq!(request.top_p, Some(0.5));
+        assert_eq!(request.max_tokens, 256);
+    }
+
+    #[test]
+    fn test_build_request_thinking_clears_sampling() {
+        let provider = create_test_provider();
+        let mut context = Context::new(
+            vec![ChatMessage::User { content: vec![ContentBlock::text("Think")], timestamp: IsoString::now() }],
+            vec![],
+        );
+        context.set_model_settings(crate::ModelSettings { temperature: Some(0.2), top_p: Some(0.9), max_tokens: None });
+        context.set_reasoning_effort(Some(crate::ReasoningEffort::High));
+
+        let request = provider.build_request(&context).unwrap();
+        assert!(request.temperature.is_none());
+        assert!(request.top_p.is_none());
+    }
+
+    #[test]
     fn test_build_request_thinking_bumps_max_tokens_if_needed() {
-        let provider = AnthropicProvider::new(Some("test-api-key".to_string())).unwrap().with_max_tokens(500);
+        let provider = AnthropicProvider::new(Some("test-api-key".to_string())).unwrap();
 
         let mut context = Context::new(
             vec![ChatMessage::User { content: vec![ContentBlock::text("Hi")], timestamp: IsoString::now() }],
             vec![],
         );
+        context.set_model_settings(crate::ModelSettings { max_tokens: Some(500), ..Default::default() });
         context.set_reasoning_effort(Some(crate::ReasoningEffort::Low));
 
         let request = provider.build_request(&context).unwrap();

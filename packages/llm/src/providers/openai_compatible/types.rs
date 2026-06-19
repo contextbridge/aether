@@ -99,6 +99,12 @@ pub struct CompatibleChatRequest {
     pub stream_options: Option<ChatCompletionStreamOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<crate::ReasoningEffort>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
 }
 
 pub fn map_messages(messages: &[ChatMessage]) -> crate::Result<Vec<CompatibleChatMessage>> {
@@ -275,7 +281,7 @@ mod tests {
     use super::*;
     use crate::providers::openai_compatible::build_chat_request;
     use crate::types::IsoString;
-    use crate::{ToolCallRequest, ToolDefinition};
+    use crate::{Context, ModelSettings, ToolCallRequest, ToolDefinition};
 
     fn assistant_with_tool_call(reasoning_content: Option<&str>) -> ChatMessage {
         ChatMessage::Assistant {
@@ -311,6 +317,24 @@ mod tests {
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["messages"][1]["role"], "assistant");
         assert_eq!(json["messages"][1]["reasoning_content"], "trace chunk");
+    }
+
+    #[test]
+    fn test_build_request_maps_model_settings_and_omits_when_unset() {
+        let user = || ChatMessage::User { content: vec![ContentBlock::text("hello")], timestamp: IsoString::now() };
+
+        let mut context = Context::new(vec![user()], vec![]);
+        context.set_model_settings(ModelSettings { temperature: Some(0.0), top_p: Some(0.5), max_tokens: Some(64) });
+        let json = serde_json::to_value(build_chat_request("test-model", &context, None).unwrap()).unwrap();
+        assert_eq!(json["temperature"], 0.0);
+        assert_eq!(json["top_p"], 0.5);
+        assert_eq!(json["max_tokens"], 64);
+
+        let unset = Context::new(vec![user()], vec![]);
+        let json = serde_json::to_value(build_chat_request("test-model", &unset, None).unwrap()).unwrap();
+        assert!(json.get("temperature").is_none());
+        assert!(json.get("top_p").is_none());
+        assert!(json.get("max_tokens").is_none());
     }
 
     #[test]

@@ -2,7 +2,9 @@ use crate::output::OutputFormat;
 use futures::StreamExt;
 use llm::parser::ModelProviderParser;
 use llm::types::IsoString;
-use llm::{ChatMessage, ContentBlock, Context, LlmError, LlmResponse, StreamingModelProvider};
+use llm::{
+    ChatMessage, ContentBlock, Context, LlmError, LlmResponse, ModelSettings, ReasoningEffort, StreamingModelProvider,
+};
 use std::io::{Read, stdin};
 use std::process::ExitCode;
 use thiserror::Error;
@@ -25,10 +27,38 @@ pub struct GenerateArgs {
     #[arg(long)]
     pub system: Option<String>,
 
+    /// Sampling controls (temperature, top-p, max-tokens) for the model call.
+    #[command(flatten)]
+    pub model_settings: ModelSettingsArgs,
+
+    /// Reasoning effort for models that support extended thinking
+    /// (`low`, `medium`, `high`, `xhigh`).
+    #[arg(long)]
+    pub reasoning_effort: Option<ReasoningEffort>,
+
     /// Output format. `text` prints the raw response; `json`/`pretty` wrap it as
     /// `{ "text": <response>, "model": <model> }`.
     #[arg(long, default_value = "text")]
     pub output: OutputFormat,
+}
+
+#[derive(Debug, Clone, Default, clap::Args)]
+pub struct ModelSettingsArgs {
+    /// Sampling temperature. Lower is more deterministic (e.g. `0` for grading).
+    #[arg(long)]
+    pub temperature: Option<f32>,
+    /// Nucleus sampling: the probability mass to sample from.
+    #[arg(long)]
+    pub top_p: Option<f32>,
+    /// Upper bound on the number of tokens generated in the response.
+    #[arg(long)]
+    pub max_tokens: Option<u32>,
+}
+
+impl From<ModelSettingsArgs> for ModelSettings {
+    fn from(args: ModelSettingsArgs) -> Self {
+        ModelSettings { temperature: args.temperature, top_p: args.top_p, max_tokens: args.max_tokens }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -64,7 +94,11 @@ pub async fn run(args: GenerateArgs) -> Result<ExitCode, GenerateCommandError> {
         messages
     };
 
-    let mut stream = provider.stream_response(&Context::new(messages, vec![]));
+    let mut context = Context::new(messages, vec![]);
+    context.set_model_settings(args.model_settings.clone().into());
+    context.set_reasoning_effort(args.reasoning_effort);
+
+    let mut stream = provider.stream_response(&context);
     let mut text = String::new();
     while let Some(result) = stream.next().await {
         match result {
@@ -109,6 +143,7 @@ fn read_prompt_file(source: &str) -> Result<String, GenerateCommandError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
 
     #[test]
     fn format_output_wraps_json_and_passes_text_through() {
@@ -130,12 +165,56 @@ mod tests {
             prompt: None,
             prompt_file: Some(prompt_path.to_string_lossy().into_owned()),
             system: None,
+            model_settings: ModelSettingsArgs::default(),
+            reasoning_effort: None,
             output: OutputFormat::Json,
         };
 
         let error = run(args).await.unwrap_err();
 
         assert!(matches!(error, GenerateCommandError::Model { .. }), "got: {error:?}");
+    }
+
+    #[derive(clap::Parser)]
+    struct TestCli {
+        #[command(flatten)]
+        args: GenerateArgs,
+    }
+
+    fn parse_args(argv: &[&str]) -> GenerateArgs {
+        TestCli::try_parse_from(argv).unwrap().args
+    }
+
+    #[test]
+    fn model_settings_and_reasoning_flags_parse_convert_and_validate() {
+        let set = parse_args(&[
+            "gen",
+            "--model",
+            "anthropic:m",
+            "--prompt",
+            "hi",
+            "--temperature",
+            "0",
+            "--top-p",
+            "0.5",
+            "--max-tokens",
+            "64",
+            "--reasoning-effort",
+            "high",
+        ]);
+        assert_eq!(
+            ModelSettings::from(set.model_settings),
+            ModelSettings { temperature: Some(0.0), top_p: Some(0.5), max_tokens: Some(64) }
+        );
+        assert_eq!(set.reasoning_effort, Some(ReasoningEffort::High));
+
+        let absent = parse_args(&["gen", "--model", "anthropic:m", "--prompt", "hi"]);
+        assert!(ModelSettings::from(absent.model_settings).is_empty());
+        assert_eq!(absent.reasoning_effort, None);
+
+        let bad =
+            TestCli::try_parse_from(["gen", "--model", "anthropic:m", "--prompt", "hi", "--reasoning-effort", "nope"]);
+        assert!(bad.is_err());
     }
 
     #[test]
