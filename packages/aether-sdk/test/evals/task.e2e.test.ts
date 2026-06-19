@@ -58,4 +58,3 @@ const script = [
   'echo modified > "$AETHER_EVAL_CWD/out.txt"',
   `printf '%s\\n%s\\n' '${JSON.stringify(toolResult)}' '${JSON.stringify(done)}'`,
 ].join("; ");
-

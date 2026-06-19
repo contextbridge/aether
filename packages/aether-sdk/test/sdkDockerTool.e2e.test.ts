@@ -48,4 +48,3 @@ describe.skipIf(process.env.AETHER_SDK_DOCKER_E2E !== "1")(
     }, 1_200_000);
   },
 );
-
