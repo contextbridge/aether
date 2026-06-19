@@ -70,7 +70,9 @@ export class Workspace implements AsyncDisposable {
   ): Promise<Workspace> {
     const workspace = await Workspace.empty();
     try {
-      await cp(resolve(baseDir, srcDir), workspace.rootPath, { recursive: true });
+      await cp(resolve(baseDir, srcDir), workspace.rootPath, {
+        recursive: true,
+      });
       return workspace;
     } catch (err) {
       await workspace.cleanup();

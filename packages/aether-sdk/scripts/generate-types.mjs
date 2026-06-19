@@ -14,14 +14,10 @@ const TYPE_OPTIONS = {
 };
 
 const document = JSON.parse(
-  execFileSync(
-    "cargo",
-    ["run", "-q", "-p", "aether-schemas"],
-    {
-      cwd: root,
-      encoding: "utf8",
-    },
-  ),
+  execFileSync("cargo", ["run", "-q", "-p", "aether-schemas"], {
+    cwd: root,
+    encoding: "utf8",
+  }),
 );
 
 await generateEvalTypes(document);

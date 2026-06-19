@@ -4,7 +4,11 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import type { AgentMessage } from "../../src/generated/eval-types.js";
-import type { Agent, AgentConfig, AgentRunResult } from "../../src/evals/index.js";
+import type {
+  Agent,
+  AgentConfig,
+  AgentRunResult,
+} from "../../src/evals/index.js";
 import { FakeAgent, Task, Workspace } from "../../src/evals/index.js";
 
 describe("Task.run", () => {
@@ -77,9 +81,9 @@ describe("Task.run", () => {
     const created = await task();
     const workspacePath = created.workspace.path;
 
-    await expect(created.run(new ThrowingAgent("agent crashed"))).rejects.toThrow(
-      "agent crashed",
-    );
+    await expect(
+      created.run(new ThrowingAgent("agent crashed")),
+    ).rejects.toThrow("agent crashed");
     expect(existsSync(workspacePath)).toBe(false);
   });
 });

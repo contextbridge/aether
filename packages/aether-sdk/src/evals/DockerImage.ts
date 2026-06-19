@@ -16,11 +16,7 @@ export class DockerImage {
   readonly tag: string;
   readonly build: DockerImageBuildOptions | undefined;
 
-  constructor(
-    name: string,
-    tag = "latest",
-    build?: DockerImageBuildOptions,
-  ) {
+  constructor(name: string, tag = "latest", build?: DockerImageBuildOptions) {
     validateImageReference(`${name}:${tag}`);
     this.name = name;
     this.tag = tag;
