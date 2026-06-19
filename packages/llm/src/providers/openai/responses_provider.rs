@@ -275,6 +275,8 @@ fn build_response_request(model: &str, context: &Context) -> Result<CreateRespon
         .reasoning_effort()
         .map(|effort| Reasoning { effort: Some(map_reasoning_effort(effort)), summary: Some(ReasoningSummary::Auto) });
 
+    let settings = context.model_settings();
+
     Ok(CreateResponse {
         model: Some(model.to_string()),
         input: InputParam::Items(items),
@@ -286,17 +288,17 @@ fn build_response_request(model: &str, context: &Context) -> Result<CreateRespon
         store: Some(false),
         background: None,
         conversation: None,
-        max_output_tokens: None,
+        max_output_tokens: settings.max_tokens,
         metadata: None,
         parallel_tool_calls: None,
         previous_response_id: None,
         prompt: None,
         service_tier: None,
         stream_options: None,
-        temperature: None,
+        temperature: settings.temperature,
         text: None,
         tool_choice: None,
-        top_p: None,
+        top_p: settings.top_p,
         truncation: None,
         prompt_cache_key: None,
         safety_identifier: None,
@@ -431,6 +433,24 @@ mod tests {
         let reasoning = req.reasoning.unwrap();
         assert_eq!(reasoning.effort, Some(OaiReasoningEffort::High));
         assert_eq!(reasoning.summary, Some(ReasoningSummary::Auto));
+    }
+
+    #[test]
+    fn test_build_request_applies_model_settings() {
+        let mut context = Context::new(
+            vec![ChatMessage::User { content: vec![ContentBlock::text("Hello")], timestamp: IsoString::now() }],
+            vec![],
+        );
+        context.set_model_settings(crate::ModelSettings {
+            temperature: Some(0.0),
+            top_p: Some(0.5),
+            max_tokens: Some(128),
+        });
+
+        let req = build_response_request("gpt-4.1", &context).unwrap();
+        assert_eq!(req.temperature, Some(0.0));
+        assert_eq!(req.top_p, Some(0.5));
+        assert_eq!(req.max_output_tokens, Some(128));
     }
 
     #[test]

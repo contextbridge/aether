@@ -216,6 +216,9 @@ fn test_openrouter_from_compatible_request_includes_cache_control() {
         tools: None,
         stream_options: None,
         reasoning_effort: None,
+        temperature: None,
+        top_p: None,
+        max_tokens: None,
     };
 
     let openrouter: OpenRouterChatRequest = compatible.into();

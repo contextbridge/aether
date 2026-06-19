@@ -1,6 +1,6 @@
 use crate::{McpSourceSpec, PromptSource};
 use aether_core::agent_spec::ToolFilter;
-use llm::{ProviderConnectionOverrides, ReasoningEffort};
+use llm::{ModelSettings, ProviderConnectionOverrides, ReasoningEffort};
 
 #[doc = include_str!("docs/agent_config.md")]
 #[derive(Debug, Clone, Default, PartialEq, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
@@ -20,6 +20,10 @@ pub struct AgentConfig {
     /// Optional thinking budget for providers that support extended reasoning.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<ReasoningEffort>,
+    /// Sampling controls (`temperature`, `topP`, `maxTokens`) applied to this
+    /// agent's model calls. Omitted knobs keep the provider/model default.
+    #[serde(default, skip_serializing_if = "ModelSettings::is_empty")]
+    pub model_settings: ModelSettings,
     /// Override for the model's context window, in tokens. Defaults to the
     /// model's advertised window.
     #[serde(default, skip_serializing_if = "Option::is_none")]

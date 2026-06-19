@@ -27,6 +27,7 @@ pub fn build_chat_request(
     let messages = types::map_messages(context.messages())?;
     let tools =
         if context.tools().is_empty() { None } else { Some(map_tools(context.tools(), tool_schema_transform)?) };
+    let settings = context.model_settings();
 
     Ok(CompatibleChatRequest {
         model: model.to_string(),
@@ -35,5 +36,8 @@ pub fn build_chat_request(
         tools,
         stream_options: Some(ChatCompletionStreamOptions { include_usage: Some(true), include_obfuscation: None }),
         reasoning_effort: context.reasoning_effort(),
+        temperature: settings.temperature,
+        top_p: settings.top_p,
+        max_tokens: settings.max_tokens,
     })
 }

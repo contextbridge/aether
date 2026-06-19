@@ -23,6 +23,8 @@ pub struct Request {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub system: Option<SystemContent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<Tool>>,
@@ -53,6 +55,7 @@ impl Request {
             messages,
             max_tokens: 4096,
             temperature: None,
+            top_p: None,
             system: None,
             tools: None,
             stream: false,
@@ -73,6 +76,11 @@ impl Request {
 
     pub fn with_temperature(mut self, temperature: f32) -> Self {
         self.temperature = Some(temperature);
+        self
+    }
+
+    pub fn with_top_p(mut self, top_p: f32) -> Self {
+        self.top_p = Some(top_p);
         self
     }
 

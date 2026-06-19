@@ -4,7 +4,7 @@
 //! It represents a resolved runtime type, not a raw settings DTO.
 
 use crate::core::Prompt;
-use llm::{LlmModel, ProviderConnectionOverrides, ReasoningEffort, ToolDefinition};
+use llm::{LlmModel, ModelSettings, ProviderConnectionOverrides, ReasoningEffort, ToolDefinition};
 use mcp_utils::client::McpConfig;
 use std::path::PathBuf;
 
@@ -47,6 +47,8 @@ pub struct AgentSpec {
     pub model: String,
     /// Optional reasoning effort level for models that support it.
     pub reasoning_effort: Option<ReasoningEffort>,
+    /// Sampling controls applied to this agent's model calls.
+    pub model_settings: ModelSettings,
     /// Effective context window in tokens for this agent.
     pub context_window: Option<u32>,
     /// The prompt stack for this agent.
@@ -72,6 +74,7 @@ impl AgentSpec {
             description: "Default agent".to_string(),
             model: model.to_string(),
             reasoning_effort,
+            model_settings: ModelSettings::default(),
             context_window: None,
             prompts,
             provider_connections: ProviderConnectionOverrides::default(),

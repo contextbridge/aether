@@ -30,8 +30,6 @@ pub struct BedrockProvider {
     client: Client,
     model: String,
     inference_profile_arn: Option<String>,
-    max_tokens: i32,
-    temperature: Option<f32>,
 }
 
 impl BedrockProvider {
@@ -53,40 +51,18 @@ impl BedrockProvider {
             Client::new(&config)
         };
 
-        Self {
-            client,
-            model: DEFAULT_MODEL.to_string(),
-            inference_profile_arn: connection.inference_profile_arn,
-            max_tokens: DEFAULT_MAX_TOKENS,
-            temperature: None,
-        }
+        Self { client, model: DEFAULT_MODEL.to_string(), inference_profile_arn: connection.inference_profile_arn }
     }
 
     /// Create a provider from explicit configuration without async credential discovery.
     pub fn from_config(credentials: Option<AwsCredentials>, region: Option<&str>) -> Self {
         let client = build_client(credentials, region);
 
-        Self {
-            client,
-            model: DEFAULT_MODEL.to_string(),
-            inference_profile_arn: None,
-            max_tokens: DEFAULT_MAX_TOKENS,
-            temperature: None,
-        }
+        Self { client, model: DEFAULT_MODEL.to_string(), inference_profile_arn: None }
     }
 
     pub fn with_model(mut self, model: &str) -> Self {
         self.model = model.to_string();
-        self
-    }
-
-    pub fn with_max_tokens(mut self, max_tokens: i32) -> Self {
-        self.max_tokens = max_tokens;
-        self
-    }
-
-    pub fn with_temperature(mut self, temperature: f32) -> Self {
-        self.temperature = Some(temperature);
         self
     }
 
@@ -106,10 +82,16 @@ impl BedrockProvider {
         let cache_point =
             self.model().is_some_and(|m| m.supports_prompt_caching()).then(default_cache_point).transpose()?;
         let (system_blocks, messages) = map_messages(context.messages(), cache_point.as_ref())?;
-        let mut inference_config = InferenceConfiguration::builder().max_tokens(self.max_tokens);
+        let settings = context.model_settings();
+        let max_tokens = settings.max_tokens.and_then(|m| i32::try_from(m).ok()).unwrap_or(DEFAULT_MAX_TOKENS);
+        let mut inference_config = InferenceConfiguration::builder().max_tokens(max_tokens);
 
-        if let Some(temp) = self.temperature {
+        if let Some(temp) = settings.temperature {
             inference_config = inference_config.temperature(temp);
+        }
+
+        if let Some(top_p) = settings.top_p {
+            inference_config = inference_config.top_p(top_p);
         }
 
         let inference_config = inference_config.build();
@@ -294,23 +276,9 @@ mod tests {
     }
 
     #[test]
-    fn test_with_max_tokens() {
-        let provider = test_provider().with_max_tokens(8192);
-        assert_eq!(provider.max_tokens, 8192);
-    }
-
-    #[test]
-    fn test_with_temperature() {
-        let provider = test_provider().with_temperature(0.7);
-        assert_eq!(provider.temperature, Some(0.7));
-    }
-
-    #[test]
     fn test_default_values() {
         let provider = test_provider();
         assert_eq!(provider.model, "anthropic.claude-sonnet-4-5-20250929-v1:0");
-        assert_eq!(provider.max_tokens, 16_384);
-        assert!(provider.temperature.is_none());
     }
 
     #[tokio::test]
@@ -363,13 +331,9 @@ mod tests {
         };
 
         let provider = BedrockProvider::from_config(Some(credentials), Some("us-west-2"))
-            .with_model("anthropic.claude-opus-4-20250514-v1:0")
-            .with_max_tokens(4096)
-            .with_temperature(0.5);
+            .with_model("anthropic.claude-opus-4-20250514-v1:0");
 
         assert_eq!(provider.model, "anthropic.claude-opus-4-20250514-v1:0");
-        assert_eq!(provider.max_tokens, 4096);
-        assert_eq!(provider.temperature, Some(0.5));
     }
 
     #[test]
