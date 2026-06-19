@@ -9,6 +9,7 @@ fn main() {
         "JudgeRubricResponse": schemars::schema_for!(aether_evals::JudgeRubricResponse),
         "JudgeSummary": schemars::schema_for!(aether_evals::JudgeSummary),
         "JudgeCriterionSpec": schemars::schema_for!(aether_evals::JudgeCriterionSpec),
+        "ReasoningEffort": schemars::schema_for!(utils::ReasoningEffort),
     });
     println!("{}", serde_json::to_string_pretty(&document).expect("schema document serializes to JSON"));
 }

@@ -3,6 +3,8 @@ import { z } from "zod";
 import { resolveAetherCommand } from "../agentProcess.js";
 import { runCommand } from "../childProcess.js";
 import { AetherSdkError } from "../errors.js";
+import type { ReasoningEffort } from "../generated/reasoning-types.js";
+export type { ReasoningEffort } from "../generated/reasoning-types.js";
 import { resolveEnv } from "../processEnv.js";
 
 export interface GenerateOptions {
@@ -14,6 +16,18 @@ export interface GenerateOptions {
 
   /** Optional system prompt. */
   system?: string;
+
+  /** Sampling temperature. Lower is more deterministic (e.g. `0` for grading). */
+  temperature?: number;
+
+  /** Nucleus sampling: the probability mass to sample from. */
+  topP?: number;
+
+  /** Upper bound on the number of tokens generated in the response. */
+  maxTokens?: number;
+
+  /** Reasoning effort for models that support extended thinking. */
+  reasoningEffort?: ReasoningEffort;
 
   /** Path to the `aether` binary. Defaults to the bundled `@aether-agent/cli`. */
   binaryPath?: string;
@@ -83,7 +97,26 @@ export async function generate<T extends z.ZodType>(
     "--output",
     "json",
   ];
-  if (options.system !== undefined) args.push("--system", options.system);
+
+  if (options.system !== undefined) {
+    args.push("--system", options.system);
+  }
+
+  if (options.temperature !== undefined) {
+    args.push("--temperature", String(options.temperature));
+  }
+
+  if (options.topP !== undefined) {
+    args.push("--top-p", String(options.topP));
+  }
+
+  if (options.maxTokens !== undefined) {
+    args.push("--max-tokens", String(options.maxTokens));
+  }
+
+  if (options.reasoningEffort !== undefined) {
+    args.push("--reasoning-effort", options.reasoningEffort);
+  }
 
   const promptWithInstructions =
     "schema" in options

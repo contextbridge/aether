@@ -176,16 +176,6 @@ aether show-prompt --agent Researcher
 
 `show-prompt` accepts `--cwd`, settings overrides, MCP config overrides, `--system-prompt`, `--agent`, and `--sandbox-image`.
 
-### `eval`
-
-Run declarative eval files in Docker sandboxes. Each eval runs the configured `agent.command`, which emits newline-delimited `AgentMessage` JSON, and aggregates pass/fail results.
-
-```bash
-aether eval evals/ --output json
-```
-
-See [Evals](/aether/running/evals/) for eval file examples, Docker requirements, and result handling.
-
 ### `agent`
 
 Manage project agents:

@@ -332,6 +332,7 @@ dependencies = [
  "aether-agent-core",
  "aether-evals",
  "aether-project",
+ "aether-utils",
  "schemars 1.2.1",
  "serde_json",
 ]

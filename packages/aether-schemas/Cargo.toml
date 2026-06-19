@@ -21,3 +21,4 @@ aether-evals = { path = "../aether-evals", version = "0.2.5" }
 aether-project = { path = "../aether-project", version = "0.5.14" }
 schemars = { workspace = true }
 serde_json = { workspace = true }
+utils = { package = "aether-utils", path = "../utils", version = "0.2.8" }
