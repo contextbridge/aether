@@ -3,7 +3,6 @@
 pub mod acp;
 pub mod credentials;
 pub mod error;
-pub mod eval;
 pub mod generate_command;
 pub mod headless;
 pub mod init;

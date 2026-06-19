@@ -1,21 +1,22 @@
-use super::report::{JudgeCriterionSummary, JudgeSummary};
-use super::types::{Expect, JudgeCriterionSpec, JudgeSpec};
-use crate::TaskRun;
-use crate::agents::truncate_chars;
 use crate::evals::format_transcript;
 use aether_core::events::AgentMessage;
 use futures::StreamExt;
 use llm::types::IsoString;
 use llm::{ChatMessage, ContentBlock, Context, LlmResponse, StreamingModelProvider};
 use schemars::{JsonSchema, Schema, schema_for};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::read_to_string;
 use thiserror::Error;
 
-const JUDGE_CONTEXT_CHARS: usize = 4_000;
+/// Start building an LLM-as-judge from structured context and rubric criteria.
+pub fn judge() -> JudgeBuilder {
+    JudgeBuilder::default()
+}
 
+/// A built judge: the assembled prompt plus the normalized rubric it grades against. Run it with
+/// [`Judge::run`] against a model, or grade a parsed [`JudgeRubricResponse`] with
+/// [`Judge::summarize`].
 #[derive(Debug, Clone)]
 pub struct Judge {
     pub prompt: String,
@@ -30,11 +31,65 @@ pub struct JudgeBuilder {
     criteria: Vec<JudgeCriterionSpec>,
 }
 
+/// Evidence the judge grades against: the agent transcript, a workspace diff, and/or final files.
 #[derive(Debug, Clone, Default)]
 pub struct JudgeContext {
     pub transcript: Option<Vec<AgentMessage>>,
     pub diff: Option<String>,
     pub files: BTreeMap<String, String>,
+}
+
+/// A single rubric criterion scored on a normalized 0.0..=1.0 scale.
+#[derive(Debug, Clone, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JudgeCriterionSpec {
+    pub id: String,
+    pub description: String,
+    #[serde(default = "default_blocking")]
+    pub blocking: bool,
+    #[serde(default = "default_weight")]
+    pub weight: f64,
+    #[serde(default = "default_threshold")]
+    pub threshold: f64,
+}
+
+/// The graded result of running a judge: an overall pass/score plus per-criterion detail.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JudgeSummary {
+    pub passed: bool,
+    pub score: f64,
+    pub reason: String,
+    pub criteria: Vec<JudgeCriterionSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JudgeCriterionSummary {
+    pub id: String,
+    pub description: String,
+    pub blocking: bool,
+    pub weight: f64,
+    pub threshold: f64,
+    pub score: f64,
+    pub passed: bool,
+    pub reason: String,
+}
+
+/// The raw rubric response the judge model is expected to return.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct JudgeRubricResponse {
+    pub criteria: Vec<JudgeCriterionResponse>,
+    pub overall_reason: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct JudgeCriterionResponse {
+    pub id: String,
+    pub score: f64,
+    pub reason: String,
 }
 
 #[derive(Debug, Error)]
@@ -56,13 +111,19 @@ pub enum JudgeError {
     InvalidJudgment { reason: String, raw_response: String },
 }
 
-pub fn judge() -> JudgeBuilder {
-    JudgeBuilder::default()
-}
-
 impl Judge {
     pub fn response_schema() -> Schema {
         JudgeRubricResponse::schema()
+    }
+
+    /// Grade `llm` against this judge's rubric: stream the model's response, parse it as a
+    /// [`JudgeRubricResponse`], and summarize it.
+    pub async fn run(&self, llm: &dyn StreamingModelProvider) -> Result<JudgeSummary, JudgeError> {
+        tracing::info!("Running LLM judge");
+        let raw_response = self.stream_response(llm).await?;
+        let response: JudgeRubricResponse = serde_json::from_str(extract_json_object(&raw_response))
+            .map_err(|source| JudgeError::InvalidJson { source, raw_response: raw_response.clone() })?;
+        self.summarize(response)
     }
 
     pub fn summarize(&self, response: JudgeRubricResponse) -> Result<JudgeSummary, JudgeError> {
@@ -119,6 +180,21 @@ impl Judge {
         };
 
         Ok(JudgeSummary { passed: !blocking_failed, score, reason, criteria: summaries })
+    }
+
+    async fn stream_response(&self, llm: &dyn StreamingModelProvider) -> Result<String, JudgeError> {
+        let message =
+            ChatMessage::User { content: vec![ContentBlock::text(self.prompt.clone())], timestamp: IsoString::now() };
+        let mut response_stream = llm.stream_response(&Context::new(vec![message], vec![]));
+        let mut raw_response = String::new();
+        while let Some(result) = response_stream.next().await {
+            match result {
+                Ok(LlmResponse::Text { chunk }) => raw_response.push_str(&chunk),
+                Err(error) => return Err(JudgeError::Stream(error)),
+                _ => {}
+            }
+        }
+        Ok(raw_response)
     }
 }
 
@@ -180,72 +256,41 @@ impl JudgeBuilder {
     }
 }
 
-pub(crate) struct JudgeRunner<'a> {
-    llm: &'a dyn StreamingModelProvider,
-    judge: Judge,
-}
-
-impl<'a> JudgeRunner<'a> {
-    pub(crate) fn from_eval_run(
-        llm: &'a dyn StreamingModelProvider,
-        run: &TaskRun,
-        expect: &Expect,
-        spec: &JudgeSpec,
-    ) -> Result<Self, JudgeError> {
-        let builder = judge()
-            .instructions(spec.instructions.clone().unwrap_or_default())
-            .task(run.prompt().to_string())
-            .transcript(run.transcript().messages().to_vec())
-            .criteria(&spec.criteria)
-            .files(collect_eval_context_files(run, expect, spec));
-
-        let builder = match run.workspace().capture_git_diffs().0 {
-            Some(diff) => builder.diff(truncate_chars(&diff.diff, JUDGE_CONTEXT_CHARS)),
-            None => builder,
-        };
-
-        Ok(Self { llm, judge: builder.build()? })
-    }
-
-    pub(crate) async fn run(&self) -> Result<JudgeSummary, JudgeError> {
-        tracing::info!("Running LLM judge");
-        let raw_response = self.stream_response().await?;
-        let response: JudgeRubricResponse = serde_json::from_str(extract_json_object(&raw_response))
-            .map_err(|source| JudgeError::InvalidJson { source, raw_response: raw_response.clone() })?;
-        self.judge.summarize(response)
-    }
-
-    async fn stream_response(&self) -> Result<String, JudgeError> {
-        let message = ChatMessage::User {
-            content: vec![ContentBlock::text(self.judge.prompt.clone())],
-            timestamp: IsoString::now(),
-        };
-        let mut response_stream = self.llm.stream_response(&Context::new(vec![message], vec![]));
-        let mut raw_response = String::new();
-        while let Some(result) = response_stream.next().await {
-            match result {
-                Ok(LlmResponse::Text { chunk }) => raw_response.push_str(&chunk),
-                Err(error) => return Err(JudgeError::Stream(error)),
-                _ => {}
-            }
+impl JudgeCriterionSpec {
+    pub fn new(id: impl Into<String>, description: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            description: description.into(),
+            blocking: default_blocking(),
+            weight: default_weight(),
+            threshold: default_threshold(),
         }
-        Ok(raw_response)
+    }
+
+    pub fn blocking(mut self, blocking: bool) -> Self {
+        self.blocking = blocking;
+        self
+    }
+
+    pub fn weight(mut self, weight: f64) -> Self {
+        self.weight = weight;
+        self
+    }
+
+    pub fn threshold(mut self, threshold: f64) -> Self {
+        self.threshold = threshold;
+        self
     }
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct JudgeRubricResponse {
-    pub criteria: Vec<JudgeCriterionResponse>,
-    pub overall_reason: String,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct JudgeCriterionResponse {
-    pub id: String,
-    pub score: f64,
-    pub reason: String,
+impl JudgeSummary {
+    /// Failure messages for blocking criteria that scored below their threshold.
+    pub fn blocking_failures(&self) -> impl Iterator<Item = String> + '_ {
+        self.criteria
+            .iter()
+            .filter(|criterion| criterion.blocking && !criterion.passed)
+            .map(|criterion| format!("judge criterion `{}`: {}", criterion.id, criterion.reason))
+    }
 }
 
 impl JudgeRubricResponse {
@@ -345,22 +390,6 @@ fn normalize_criteria(criteria: Vec<JudgeCriterionSpec>) -> Result<Vec<JudgeCrit
     Ok(normalized)
 }
 
-fn collect_eval_context_files(run: &TaskRun, expect: &Expect, spec: &JudgeSpec) -> BTreeMap<String, String> {
-    expect
-        .files
-        .keys()
-        .chain(expect.files_contain.keys())
-        .chain(spec.context_files.iter())
-        .map(|path| {
-            let contents = read_to_string(run.workspace().join(path)).map_or_else(
-                |error| format!("could not read: {error}"),
-                |contents| truncate_chars(&contents, JUDGE_CONTEXT_CHARS),
-            );
-            (path.clone(), contents)
-        })
-        .collect()
-}
-
 fn extract_json_object(response: &str) -> &str {
     let trimmed = response.trim();
     match (trimmed.find('{'), trimmed.rfind('}')) {
@@ -377,16 +406,24 @@ fn judge_response_schema() -> String {
     serde_json::to_string_pretty(&JudgeRubricResponse::schema()).unwrap()
 }
 
+fn default_blocking() -> bool {
+    true
+}
+
+fn default_weight() -> f64 {
+    1.0
+}
+
+fn default_threshold() -> f64 {
+    1.0
+}
+
 #[cfg(test)]
 mod tests {
-    use std::fs::write;
-    use std::path::Path;
-    use std::process::Command;
-
     use super::*;
-    use crate::{GitRepoSpec, Transcript, Workspace};
+    use aether_core::events::AgentMessage;
     use llm::testing::FakeLlmProvider;
-    use llm::{ChatMessage, LlmError, ToolCallRequest};
+    use llm::{LlmError, ToolCallRequest};
 
     const VALID_RESPONSE: &str = r#"{"criteria":[{"id":"behavior","score":1.0,"reason":"correct"},{"id":"clarity","score":0.5,"reason":"brief"}],"overall_reason":"good"}"#;
 
@@ -418,6 +455,32 @@ mod tests {
     }
 
     #[test]
+    fn judge_builder_renders_transcript_context() {
+        let messages = vec![
+            AgentMessage::ToolCall {
+                request: ToolCallRequest {
+                    id: "call_1".to_string(),
+                    name: "bash".to_string(),
+                    arguments: "{}".to_string(),
+                },
+                model_name: "test".to_string(),
+            },
+            AgentMessage::text("msg_1", "all done", true, "test"),
+        ];
+
+        let judge = judge()
+            .task("edit the file")
+            .transcript(messages)
+            .criteria([criterion("behavior", "did it work", true, 1.0, 1.0)])
+            .build()
+            .unwrap();
+
+        assert!(judge.prompt.contains("## Agent Transcript"));
+        assert!(judge.prompt.contains("[tool-call] bash"));
+        assert!(judge.prompt.contains("[agent] all done"));
+    }
+
+    #[test]
     fn judge_builder_accepts_slice_criteria() {
         let criteria = vec![criterion("behavior", "does the thing", true, 1.0, 0.8)];
         let judge = judge().task("do it").criteria(&criteria).build().unwrap();
@@ -426,7 +489,7 @@ mod tests {
 
     #[test]
     fn judge_summarizes_weighted_rubric() {
-        let judge = judge().task("prompt").criteria(judge_spec().criteria).build().unwrap();
+        let judge = judge().task("prompt").criteria(default_criteria()).build().unwrap();
 
         let summary = judge.summarize(serde_json::from_str(VALID_RESPONSE).unwrap()).unwrap();
 
@@ -438,7 +501,7 @@ mod tests {
 
     #[test]
     fn judge_zeroes_score_when_blocker_fails() {
-        let judge = judge().task("prompt").criteria(judge_spec().criteria).build().unwrap();
+        let judge = judge().task("prompt").criteria(default_criteria()).build().unwrap();
         let response = serde_json::from_str(
             r#"{"criteria":[{"id":"behavior","score":0.75,"reason":"wrong behavior"},{"id":"clarity","score":1.0,"reason":"clear"}],"overall_reason":"bad"}"#,
         )
@@ -454,7 +517,7 @@ mod tests {
 
     #[test]
     fn judge_rejects_invalid_criterion_sets() {
-        let judge = judge().task("prompt").criteria(judge_spec().criteria).build().unwrap();
+        let judge = judge().task("prompt").criteria(default_criteria()).build().unwrap();
         for raw_response in [
             r#"{"criteria":[],"overall_reason":"missing"}"#,
             r#"{"criteria":[{"id":"behavior","score":1.0,"reason":"ok"},{"id":"behavior","score":1.0,"reason":"ok"}],"overall_reason":"duplicate"}"#,
@@ -488,29 +551,51 @@ mod tests {
         }
     }
 
+    #[test]
+    fn blocking_failures_report_only_blocking_criteria_below_threshold() {
+        let criterion = |id: &str, blocking, score: f64| JudgeCriterionSummary {
+            id: id.to_string(),
+            description: "desc".to_string(),
+            blocking,
+            weight: 1.0,
+            threshold: 0.8,
+            score,
+            passed: score >= 0.8,
+            reason: format!("{id} reason"),
+        };
+        let summary = JudgeSummary {
+            passed: false,
+            score: 0.0,
+            reason: "r".to_string(),
+            criteria: vec![
+                criterion("met", true, 0.9),
+                criterion("failed", true, 0.5),
+                criterion("advisory", false, 0.0),
+            ],
+        };
+
+        let failures: Vec<String> = summary.blocking_failures().collect();
+
+        assert_eq!(failures, vec!["judge criterion `failed`: failed reason".to_string()]);
+    }
+
     #[tokio::test]
-    async fn judge_runner_extracts_json_object_from_surrounding_prose() {
+    async fn judge_run_extracts_json_object_from_surrounding_prose() {
         let response = format!("Here is my assessment:\n{VALID_RESPONSE}");
         let judge_llm = FakeLlmProvider::with_single_response(vec![LlmResponse::text(&response)]);
+        let judge = judge().task("prompt").criteria(default_criteria()).build().unwrap();
 
-        let summary = JudgeRunner::from_eval_run(&judge_llm, &run(), &Expect::default(), &judge_spec())
-            .unwrap()
-            .run()
-            .await
-            .unwrap();
+        let summary = judge.run(&judge_llm).await.unwrap();
 
         assert!(summary.passed);
     }
 
     #[tokio::test]
-    async fn judge_runner_returns_invalid_json_error_with_raw_response() {
+    async fn judge_run_returns_invalid_json_error_with_raw_response() {
         let judge_llm = FakeLlmProvider::with_single_response(vec![LlmResponse::text("not json")]);
+        let judge = judge().task("prompt").criteria(default_criteria()).build().unwrap();
 
-        let error = JudgeRunner::from_eval_run(&judge_llm, &run(), &Expect::default(), &judge_spec())
-            .unwrap()
-            .run()
-            .await
-            .unwrap_err();
+        let error = judge.run(&judge_llm).await.unwrap_err();
 
         let JudgeError::InvalidJson { raw_response, .. } = error else {
             panic!("expected InvalidJson, got {error:?}");
@@ -519,142 +604,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn judge_runner_returns_stream_error_on_llm_failure() {
+    async fn judge_run_returns_stream_error_on_llm_failure() {
         let judge_llm = FakeLlmProvider::from_results(vec![vec![Err(LlmError::Other("boom".to_string()))]]);
+        let judge = judge().task("prompt").criteria(default_criteria()).build().unwrap();
 
-        let error = JudgeRunner::from_eval_run(&judge_llm, &run(), &Expect::default(), &judge_spec())
-            .unwrap()
-            .run()
-            .await
-            .unwrap_err();
+        let error = judge.run(&judge_llm).await.unwrap_err();
 
         assert!(matches!(error, JudgeError::Stream(_)));
         assert!(error.to_string().contains("boom"));
-    }
-
-    #[tokio::test]
-    async fn judge_runner_prompt_includes_eval_run_context() {
-        let messages = vec![
-            AgentMessage::ToolCall {
-                request: ToolCallRequest {
-                    id: "call_1".to_string(),
-                    name: "bash".to_string(),
-                    arguments: "{}".to_string(),
-                },
-                model_name: "test".to_string(),
-            },
-            AgentMessage::text("msg_1", "all done", true, "test"),
-        ];
-        let run = TaskRun::new("edit the file".to_string(), Workspace::empty().unwrap(), Transcript::new(messages));
-        let judge_llm = FakeLlmProvider::with_single_response(vec![LlmResponse::text(VALID_RESPONSE)]);
-
-        JudgeRunner::from_eval_run(&judge_llm, &run, &Expect::default(), &judge_spec()).unwrap().run().await.unwrap();
-
-        let prompt = judged_prompt(&judge_llm);
-        assert!(prompt.contains("Grade maintainability."));
-        assert!(prompt.contains("behavior"));
-        assert!(prompt.contains("The behavior is correct."));
-        assert!(prompt.contains("edit the file"));
-        assert!(prompt.contains("[tool-call] bash"));
-        assert!(prompt.contains("[agent] all done"));
-        assert!(prompt.contains("overall_reason"));
-    }
-
-    #[tokio::test]
-    async fn judge_runner_prompt_includes_agent_diff_from_workspace() {
-        let workspace = git_workspace_with_agent_change();
-        let run = TaskRun::new("p".to_string(), workspace, Transcript::new(vec![AgentMessage::Done]));
-        let judge_llm = FakeLlmProvider::with_single_response(vec![LlmResponse::text(VALID_RESPONSE)]);
-
-        JudgeRunner::from_eval_run(&judge_llm, &run, &Expect::default(), &judge_spec()).unwrap().run().await.unwrap();
-
-        let prompt = judged_prompt(&judge_llm);
-        assert!(prompt.contains("## Git diff"));
-        assert!(prompt.contains("+agent change"));
-    }
-
-    #[tokio::test]
-    async fn judge_runner_prompt_includes_final_contents_of_files_under_evaluation() {
-        let workspace =
-            Workspace::from_files([("notes.txt", "beta\nalpha\n"), ("extra.txt", "extra context")]).unwrap();
-        let run = TaskRun::new("p".to_string(), workspace, Transcript::new(vec![AgentMessage::Done]));
-        let expect =
-            Expect { files_contain: [("notes.txt".to_string(), "beta".to_string())].into(), ..Expect::default() };
-        let judge_llm = FakeLlmProvider::with_single_response(vec![LlmResponse::text(VALID_RESPONSE)]);
-
-        JudgeRunner::from_eval_run(&judge_llm, &run, &expect, &judge_spec()).unwrap().run().await.unwrap();
-
-        let prompt = judged_prompt(&judge_llm);
-        assert!(prompt.contains("<path>notes.txt</path>"));
-        assert!(prompt.contains("beta\nalpha"));
-        assert!(prompt.contains("<path>extra.txt</path>"));
-        assert!(prompt.contains("extra context"));
-    }
-
-    fn run() -> TaskRun {
-        TaskRun::new("prompt".to_string(), Workspace::empty().unwrap(), Transcript::new(vec![AgentMessage::Done]))
     }
 
     fn criterion(id: &str, description: &str, blocking: bool, weight: f64, threshold: f64) -> JudgeCriterionSpec {
         JudgeCriterionSpec { id: id.to_string(), description: description.to_string(), blocking, weight, threshold }
     }
 
-    fn git_workspace_with_agent_change() -> Workspace {
-        let source = tempfile::tempdir().unwrap();
-        git(source.path(), ["init", "--initial-branch", "main"]);
-        git(source.path(), ["config", "user.email", "eval@example.com"]);
-        git(source.path(), ["config", "user.name", "Eval"]);
-        std::fs::write(source.path().join("notes.txt"), "start\n").unwrap();
-        git(source.path(), ["add", "."]);
-        git(source.path(), ["commit", "-m", "start"]);
-        let start_commit = git_output(source.path(), ["rev-parse", "HEAD"]);
-        std::fs::write(source.path().join("notes.txt"), "gold\n").unwrap();
-        git(source.path(), ["commit", "-am", "gold"]);
-        let gold_commit = git_output(source.path(), ["rev-parse", "HEAD"]);
-
-        let workspace = Workspace::from_git_repo(GitRepoSpec {
-            url: source.path().to_string_lossy().to_string(),
-            start_commit,
-            gold_commit,
-            subdir: None,
-        })
-        .unwrap();
-        write(workspace.join("notes.txt"), "start\nagent change\n").unwrap();
-        workspace
-    }
-
-    fn git<const N: usize>(cwd: &Path, args: [&str; N]) {
-        let output = Command::new("git").args(args).current_dir(cwd).output().unwrap();
-        assert!(output.status.success(), "git failed: {}", String::from_utf8_lossy(&output.stderr));
-    }
-
-    fn git_output<const N: usize>(cwd: &Path, args: [&str; N]) -> String {
-        let output = Command::new("git").args(args).current_dir(cwd).output().unwrap();
-        assert!(output.status.success(), "git failed: {}", String::from_utf8_lossy(&output.stderr));
-        String::from_utf8(output.stdout).unwrap().trim().to_string()
-    }
-
-    fn judge_spec() -> JudgeSpec {
-        serde_json::from_str(
-            r#"{
-                "model": "judge:model",
-                "instructions": "Grade maintainability.",
-                "contextFiles": ["extra.txt"],
-                "criteria": [
-                    { "id": "behavior", "description": "The behavior is correct.", "blocking": true, "weight": 3.0, "threshold": 1.0 },
-                    { "id": "clarity", "description": "The response is clear.", "blocking": false, "weight": 1.0, "threshold": 0.5 }
-                ]
-            }"#,
-        )
-        .unwrap()
-    }
-
-    fn judged_prompt(judge_llm: &FakeLlmProvider) -> String {
-        let contexts = judge_llm.captured_contexts();
-        let contexts = contexts.lock().unwrap();
-        let ChatMessage::User { content, .. } = &contexts[0].messages()[0] else {
-            panic!("expected a user message in the judge context");
-        };
-        ContentBlock::join_text(content)
+    fn default_criteria() -> Vec<JudgeCriterionSpec> {
+        vec![
+            criterion("behavior", "The behavior is correct.", true, 3.0, 1.0),
+            criterion("clarity", "The response is clear.", false, 1.0, 0.5),
+        ]
     }
 }

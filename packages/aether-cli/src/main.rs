@@ -1,12 +1,10 @@
 use aether_cli::acp::{AcpArgs, AcpRunError, AcpRunOutcome, run_acp};
 use aether_cli::error::CliError;
-use aether_cli::eval::{EvalArgs, run as run_eval_command};
 use aether_cli::generate_command::{GenerateArgs, GenerateCommandError, run as run_generate_command};
 use aether_cli::headless::{HeadlessArgs, run_headless};
 use aether_cli::init::{InitError, InitOutcome, InitRequest, next_steps_message, run_init};
 use aether_cli::settings::SettingsCommand;
 use aether_cli::show_prompt::{PromptArgs, run_prompt};
-use aether_evals::EvalFileError;
 use aether_project::{AgentCatalog, project_settings_path, user_settings_path};
 use clap::{Parser, Subcommand};
 use std::env::current_dir;
@@ -19,8 +17,6 @@ use wisp::settings::{StatusLineSegmentConfig, StatusLineSettings, load_or_create
 enum MainError {
     #[error("{0}")]
     Cli(#[from] CliError),
-    #[error("{0}")]
-    Eval(#[from] EvalFileError),
     #[error("{0}")]
     Generate(#[from] GenerateCommandError),
     #[error("{0}")]
@@ -54,8 +50,6 @@ struct Cli {
 enum Command {
     /// Run a single prompt headlessly
     Headless(HeadlessArgs),
-    /// Run declarative JSON eval files in Docker sandboxes
-    Eval(EvalArgs),
     /// Call a model with a single prompt and print its response
     Generate(GenerateArgs),
     /// Start the ACP server
@@ -80,8 +74,6 @@ fn main() -> ExitCode {
     let rt = Runtime::new().expect("Failed to create tokio runtime");
     let result: Result<ExitCode, MainError> = match cli.command {
         Some(Command::Headless(args)) => rt.block_on(run_headless(args)).map_err(Into::into),
-
-        Some(Command::Eval(args)) => rt.block_on(run_eval_command(args)).map_err(Into::into),
 
         Some(Command::Generate(args)) => rt.block_on(run_generate_command(args)).map_err(Into::into),
 

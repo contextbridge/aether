@@ -5,10 +5,10 @@ fn main() {
         "AcpOptions": schemars::schema_for!(aether_cli::acp::AcpOptions),
         "AetherSettings": schemars::schema_for!(aether_project::AetherSettings),
         "HeadlessOptions": schemars::schema_for!(aether_cli::headless::HeadlessOptions),
-        "EvalSpec": aether_evals::EvalSpec::schema(),
-        "EvalOutcome": aether_evals::EvalOutcome::schema(),
-        "EvalStreamEvent": aether_evals::EvalStreamEvent::schema(),
+        "AgentMessage": schemars::schema_for!(aether_core::events::AgentMessage),
         "JudgeRubricResponse": schemars::schema_for!(aether_evals::JudgeRubricResponse),
+        "JudgeSummary": schemars::schema_for!(aether_evals::JudgeSummary),
+        "JudgeCriterionSpec": schemars::schema_for!(aether_evals::JudgeCriterionSpec),
     });
     println!("{}", serde_json::to_string_pretty(&document).expect("schema document serializes to JSON"));
 }

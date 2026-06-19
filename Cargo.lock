@@ -55,7 +55,6 @@ dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
  "aether-auth",
- "aether-evals",
  "aether-llm",
  "aether-lspd",
  "aether-mcp-servers",
@@ -323,6 +322,18 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "aether-schemas"
+version = "0.1.0"
+dependencies = [
+ "aether-agent-cli",
+ "aether-agent-core",
+ "aether-evals",
+ "aether-project",
+ "schemars 1.2.1",
+ "serde_json",
 ]
 
 [[package]]

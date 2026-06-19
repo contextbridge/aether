@@ -1,0 +1,23 @@
+[package]
+name = "aether-schemas"
+version = "0.1.0"
+edition = "2024"
+description = "Schema generation utilities for Aether SDK codegen"
+license = "MIT"
+repository = "https://github.com/contextbridge/aether"
+keywords = ["aether", "schema", "codegen"]
+categories = ["development-tools"]
+
+[package.metadata.dist]
+dist = false
+
+[lints]
+workspace = true
+
+[dependencies]
+aether-cli = { package = "aether-agent-cli", path = "../aether-cli", version = "0.7.16" }
+aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.6.14" }
+aether-evals = { path = "../aether-evals", version = "0.2.5" }
+aether-project = { path = "../aether-project", version = "0.5.14" }
+schemars = { workspace = true }
+serde_json = { workspace = true }
