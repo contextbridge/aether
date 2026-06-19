@@ -15,10 +15,10 @@ RUN pacman -Syu --noconfirm ca-certificates git dbus \
 # Install your project's toolchain here, e.g.:
 # RUN apt-get update && apt-get install -y python3 python3-pip
 
-# Provide the aether binary and an example direct eval wrapper from the repository
-# build output. Run `cargo build -p aether-agent-cli --bin aether` before this image builds.
 COPY target/debug/aether /usr/local/bin/aether
 COPY .aether /repo/.aether
+COPY AGENTS.md /repo/AGENTS.md
+COPY mcp.json /repo/mcp.json
 COPY packages/internal-evals/examples/aether-eval-agent /usr/local/bin/aether-eval-agent
 RUN chmod +x /usr/local/bin/aether-eval-agent
 

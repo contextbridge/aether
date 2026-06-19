@@ -97,8 +97,7 @@ async fn test_mcp_edit_produces_diagnostics() {
         "edit_file",
         serde_json::json!({
             "filePath": main_rs,
-            "oldString": "\"not an int\"",
-            "newString": "42"
+            "edits": [{ "oldString": "\"not an int\"", "newString": "42" }]
         }),
     )
     .await;
@@ -113,8 +112,7 @@ async fn test_mcp_edit_produces_diagnostics() {
         "edit_file",
         serde_json::json!({
             "filePath": main_rs,
-            "oldString": "42",
-            "newString": "true"
+            "edits": [{ "oldString": "42", "newString": "true" }]
         }),
     )
     .await;
@@ -159,8 +157,7 @@ async fn test_diagnostics_available_after_edit_without_polling() {
         "edit_file",
         serde_json::json!({
             "filePath": main_rs,
-            "oldString": "42",
-            "newString": "\"not an int\""
+            "edits": [{ "oldString": "42", "newString": "\"not an int\"" }]
         }),
     )
     .await;
@@ -203,8 +200,7 @@ async fn test_diagnostics_all_files_after_edit() {
         "edit_file",
         serde_json::json!({
             "filePath": main_rs,
-            "oldString": "42",
-            "newString": "\"not an int\""
+            "edits": [{ "oldString": "42", "newString": "\"not an int\"" }]
         }),
     )
     .await;
@@ -244,8 +240,7 @@ async fn test_workspace_diagnostics_after_edit_without_file_check() {
         "edit_file",
         serde_json::json!({
             "filePath": main_rs,
-            "oldString": "42",
-            "newString": "\"not an int\""
+            "edits": [{ "oldString": "42", "newString": "\"not an int\"" }]
         }),
     )
     .await;
@@ -290,8 +285,7 @@ async fn test_workspace_diagnostics_clear_after_fix_without_file_check() {
         "edit_file",
         serde_json::json!({
             "filePath": main_rs,
-            "oldString": "\"not an int\"",
-            "newString": "42"
+            "edits": [{ "oldString": "\"not an int\"", "newString": "42" }]
         }),
     )
     .await;

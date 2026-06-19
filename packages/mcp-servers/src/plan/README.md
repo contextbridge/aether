@@ -47,7 +47,7 @@ A non-zero exit code surfaces as a tool error; an exit code of `0` returns `{ "a
 | Tool | Description |
 |------|-------------|
 | `write_plan` | Write a markdown plan file for a plan name. |
-| `edit_plan` | Edit an existing plan file by exact string replacement. |
+| `edit_plan` | Edit an existing plan file by applying a batch of exact-string replacements. |
 | `submit_plan` | Submit a named markdown plan file for review and approval. |
 
 ## write_plan
@@ -74,9 +74,7 @@ A non-zero exit code surfaces as a tool error; an exit code of `0` returns `{ "a
 | Field | Type | Description |
 |-------|------|-------------|
 | `planName` | string | Stable plan identifier originally passed to `write_plan`. |
-| `oldString` | string | Exact string to replace. |
-| `newString` | string | Replacement string. |
-| `replaceAll` | bool | Whether to replace all occurrences. Defaults to false. |
+| `edits` | array | Non-empty list of exact-string replacements applied atomically. Each has `oldString`, `newString`, and optional `replaceAll`. |
 
 ### Output
 
@@ -84,7 +82,7 @@ A non-zero exit code surfaces as a tool error; an exit code of `0` returns `{ "a
 |-------|------|-------------|
 | `planName` | string | Plan identifier. |
 | `planPath` | string | Absolute path edited by the server. |
-| `replacementsMade` | number | Number of replacements made. |
+| `replacementsMade` | number | Number of replacements made (a `replaceAll` edit counts each occurrence). |
 
 ## submit_plan
 

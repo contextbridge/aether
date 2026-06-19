@@ -11,6 +11,9 @@ pub enum EvalHarnessError {
 
     #[error("eval run failed: {0}")]
     TaskRun(Box<aether_evals::TaskRunError>),
+
+    #[error("file IO failed: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 impl From<aether_evals::TaskRunError> for EvalHarnessError {

@@ -181,8 +181,7 @@ async fn test_edit_file_tool() {
             CallToolRequestParams::new("edit_file").with_arguments(
                 serde_json::json!({
                     "filePath": test_path,
-                    "oldString": "World",
-                    "newString": "Rust"
+                    "edits": [{ "oldString": "World", "newString": "Rust" }]
                 })
                 .as_object()
                 .unwrap()
@@ -233,9 +232,7 @@ async fn test_edit_file_tool() {
             CallToolRequestParams::new("edit_file").with_arguments(
                 serde_json::json!({
                     "filePath": test_path,
-                    "oldString": "test",
-                    "newString": "TEST",
-                    "replaceAll": true
+                    "edits": [{ "oldString": "test", "newString": "TEST", "replaceAll": true }]
                 })
                 .as_object()
                 .unwrap()
@@ -482,30 +479,27 @@ async fn test_ast_grep_uses_workspace_root_when_no_path_given() -> Result<(), Bo
 
 #[cfg(feature = "test-helpers")]
 #[tokio::test]
-async fn test_read_before_edit_safety_with_relative_path_normalization() {
+async fn test_read_before_edit_safety_with_relative_path_normalization() -> Result<(), Box<dyn std::error::Error>> {
     use mcp_servers::coding::tools::edit_file::EditFileArgs;
     use mcp_servers::coding::tools::read_file::ReadFileArgs;
+    use mcp_servers::file_ops::FileEdit;
 
-    let temp = tempfile::tempdir().unwrap();
+    let temp = tempfile::tempdir()?;
     let workspace = temp.path().to_path_buf();
     let test_file = temp.path().join("test.txt");
-    fs::write(&test_file, "hello world").unwrap();
+    fs::write(&test_file, "hello world")?;
 
     let server = CodingMcp::new().with_root_dir(workspace);
 
-    server
-        .test_read_file(ReadFileArgs { file_path: "test.txt".to_string(), offset: None, limit: None })
-        .await
-        .expect("read_file should succeed with relative path");
+    server.test_read_file(ReadFileArgs { file_path: "test.txt".to_string(), offset: None, limit: None }).await?;
 
     let result = server
         .test_edit_file(EditFileArgs {
             file_path: "test.txt".to_string(),
-            old_string: "hello".to_string(),
-            new_string: "goodbye".to_string(),
-            replace_all: false,
+            edits: vec![FileEdit::new("hello", "goodbye")],
         })
         .await;
 
     assert!(result.is_ok());
+    Ok(())
 }

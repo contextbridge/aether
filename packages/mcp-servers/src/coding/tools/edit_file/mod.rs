@@ -2,24 +2,16 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-use crate::file_ops::{FileError, edit_text_file};
+use crate::file_ops::{ApplyEditsResult, FileEdit, FileError, apply_edits};
 use mcp_utils::display_meta::{FileDiff, ToolDisplayMeta, ToolResultMeta, basename};
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EditFileArgs {
     /// Path to the file to edit
     #[serde(alias = "file_path")]
     pub file_path: String,
-    /// Exact string to find and replace in the file
-    #[serde(alias = "old_string")]
-    pub old_string: String,
-    /// String to replace it with
-    #[serde(alias = "new_string")]
-    pub new_string: String,
-    /// Replace all occurrences (default: false - replace only first match)
-    #[serde(default, alias = "replace_all")]
-    pub replace_all: bool,
+    pub edits: Vec<FileEdit>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -42,31 +34,28 @@ pub struct EditFileResponse {
 }
 
 pub async fn edit_file_contents(args: EditFileArgs) -> Result<EditFileResponse, FileError> {
-    let result =
-        edit_text_file(Path::new(&args.file_path), &args.old_string, &args.new_string, args.replace_all).await?;
-    let file_path = result.path.to_string_lossy().into_owned();
-    let total_lines = result.updated_content.lines().count();
+    let ApplyEditsResult { path, original_content, updated_content, replacements_made } =
+        apply_edits(Path::new(&args.file_path), &args.edits).await?;
+    let file_path = path.to_string_lossy().into_owned();
+    let total_lines = updated_content.lines().count();
     let display_meta = ToolDisplayMeta::new("Edit file", basename(&file_path));
-    let file_diff = FileDiff {
-        path: file_path.clone(),
-        old_text: Some(result.original_content),
-        new_text: result.updated_content.clone(),
-    };
+    let file_diff =
+        FileDiff { path: file_path.clone(), old_text: Some(original_content), new_text: updated_content.clone() };
 
     Ok(EditFileResponse {
         status: "success".to_string(),
         file_path,
         total_lines,
-        replacements_made: result.replacements_made,
-        content: result.updated_content,
+        replacements_made,
+        content: updated_content,
         meta: Some(ToolResultMeta::with_file_diff(display_meta, file_diff)),
     })
 }
 
-#[allow(clippy::used_underscore_binding)]
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::file_ops::EditFailureKind;
     use std::fs;
     use tempfile::TempDir;
 
@@ -77,9 +66,7 @@ mod tests {
 
         let result = edit_file_contents(EditFileArgs {
             file_path: file_path.to_string_lossy().to_string(),
-            old_string: "before".to_string(),
-            new_string: "after".to_string(),
-            replace_all: false,
+            edits: vec![FileEdit::new("before", "after")],
         })
         .await;
 
@@ -87,20 +74,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn edit_file_existing_file_without_match_returns_pattern_not_found() {
-        let temp_dir = TempDir::new().unwrap();
+    async fn edit_file_existing_file_without_match_returns_edits_failed() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
         let file_path = temp_dir.path().join("sample.txt");
-        fs::write(&file_path, "hello world").unwrap();
+        fs::write(&file_path, "hello world")?;
 
         let result = edit_file_contents(EditFileArgs {
             file_path: file_path.to_string_lossy().to_string(),
-            old_string: "missing".to_string(),
-            new_string: "replacement".to_string(),
-            replace_all: false,
+            edits: vec![FileEdit::new("missing", "replacement")],
         })
         .await;
 
-        assert!(matches!(result, Err(FileError::PatternNotFound { .. })));
+        let Err(FileError::EditsFailed { failures, .. }) = result else {
+            return Err("expected EditsFailed".into());
+        };
+        assert!(matches!(failures.as_slice(), [f] if matches!(f.kind, EditFailureKind::PatternNotFound { .. })));
+        Ok(())
     }
 
     #[tokio::test]
@@ -112,9 +101,7 @@ mod tests {
 
         let result = edit_file_contents(EditFileArgs {
             file_path: file_path.to_string_lossy().to_string(),
-            old_string: "line3".to_string(),
-            new_string: "replaced".to_string(),
-            replace_all: false,
+            edits: vec![FileEdit::new("line3", "replaced")],
         })
         .await
         .unwrap();
@@ -128,37 +115,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn edit_file_file_diff_has_correct_path() {
+    async fn edit_file_applies_batch_in_one_call() {
         let temp_dir = TempDir::new().unwrap();
-        let file_path = temp_dir.path().join("test.rs");
-        fs::write(&file_path, "hello world").unwrap();
+        let file_path = temp_dir.path().join("lines.txt");
+        fs::write(&file_path, "alpha\nbeta\ngamma\n").unwrap();
 
         let result = edit_file_contents(EditFileArgs {
             file_path: file_path.to_string_lossy().to_string(),
-            old_string: "hello".to_string(),
-            new_string: "goodbye".to_string(),
-            replace_all: false,
+            edits: vec![FileEdit::new("alpha", "ALPHA"), FileEdit::new("gamma", "GAMMA")],
         })
         .await
         .unwrap();
 
-        let diff = result.meta.unwrap().file_diff.unwrap();
-        assert_eq!(diff.path, file_path.to_string_lossy().to_string());
+        assert_eq!(result.replacements_made, 2);
+        assert_eq!(fs::read_to_string(&file_path).unwrap(), "ALPHA\nbeta\nGAMMA\n");
     }
 
     #[test]
     fn edit_file_args_accepts_snake_case_fields() {
         let args: EditFileArgs = serde_json::from_value(serde_json::json!({
             "file_path": "/tmp/test.txt",
-            "old_string": "foo",
-            "new_string": "bar",
-            "replace_all": true
+            "edits": [{ "old_string": "foo", "new_string": "bar", "replace_all": true }]
         }))
         .unwrap();
 
         assert_eq!(args.file_path, "/tmp/test.txt");
-        assert_eq!(args.old_string, "foo");
-        assert_eq!(args.new_string, "bar");
-        assert!(args.replace_all);
+        assert!(matches!(
+            args.edits.as_slice(),
+            [FileEdit { old_string, new_string, replace_all: true }]
+                if old_string == "foo" && new_string == "bar"
+        ));
     }
 }
