@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.6](https://github.com/contextbridge/aether/compare/aether-evals-v0.2.5...aether-evals-v0.2.6) - 2026-06-19
+
+### Other
+
+- Cleanup experimental eval APIs ([#171](https://github.com/contextbridge/aether/pull/171))
+
 ## [0.2.5](https://github.com/contextbridge/aether/compare/aether-evals-v0.2.4...aether-evals-v0.2.5) - 2026-06-18
 
 ### Added
