@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.15](https://github.com/contextbridge/aether/compare/aether-project-v0.5.14...aether-project-v0.5.15) - 2026-06-19
+
+### Added
+
+- *(aether-cli)* Add model settings to be able to control temperature, top p etc ([#168](https://github.com/contextbridge/aether/pull/168))
+
 ## [0.5.14](https://github.com/contextbridge/aether/compare/aether-project-v0.5.13...aether-project-v0.5.14) - 2026-06-18
 
 ### Other
