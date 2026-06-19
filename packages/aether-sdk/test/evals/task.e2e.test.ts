@@ -8,6 +8,7 @@ import {
   Task,
   Workspace,
 } from "../../src/evals/index.js";
+import { logMessage } from "../logMessage.js";
 import type { AgentMessage } from "../../src/generated/eval-types.js";
 
 describe.skipIf(!process.env.AETHER_SDK_E2E)(
@@ -24,7 +25,11 @@ describe.skipIf(!process.env.AETHER_SDK_E2E)(
         command: ["/bin/sh", "-c", script],
       });
       await using result = await task.run(agent, {
-        onMessage: (message) => seen.push(message),
+        onMessage: (message) => {
+          seen.push(message);
+          logMessage(message);
+        },
+        onStderr: (chunk) => process.stderr.write(chunk),
       });
 
       expect(result.passed).toBe(true);
@@ -53,3 +58,4 @@ const script = [
   'echo modified > "$AETHER_EVAL_CWD/out.txt"',
   `printf '%s\\n%s\\n' '${JSON.stringify(toolResult)}' '${JSON.stringify(done)}'`,
 ].join("; ");
+

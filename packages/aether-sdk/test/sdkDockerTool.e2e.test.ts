@@ -6,6 +6,7 @@ import {
   Task,
   Workspace,
 } from "../src/evals/index.js";
+import { logMessage } from "./logMessage.js";
 
 describe.skipIf(process.env.AETHER_SDK_DOCKER_E2E !== "1")(
   "SDK Docker tool e2e",
@@ -18,6 +19,7 @@ describe.skipIf(process.env.AETHER_SDK_DOCKER_E2E !== "1")(
           context: join(packageDir, "../.."),
           dockerfile:
             "packages/aether-sdk/test/fixtures/sdk-weather-agent/Dockerfile",
+          buildkit: true,
         },
       );
 
@@ -29,7 +31,13 @@ describe.skipIf(process.env.AETHER_SDK_DOCKER_E2E !== "1")(
         image,
         command: ["node", "/app/dist/eval-agent.js"],
       });
-      await using result = await task.run(agent);
+      process.stderr.write(
+        "[e2e] building image + running agent (first run builds, ~1 min)…\n",
+      );
+      await using result = await task.run(agent, {
+        onMessage: logMessage,
+        onStderr: (chunk) => process.stderr.write(chunk),
+      });
 
       const getWeatherCall = result.toolCalls.find(
         (_) => _.name === "weather__get_weather",
@@ -37,6 +45,7 @@ describe.skipIf(process.env.AETHER_SDK_DOCKER_E2E !== "1")(
 
       expect(result.passed).toBe(true);
       expect(getWeatherCall?.arguments).toMatchObject({ city: "Tokyo" });
-    }, 300_000);
+    }, 1_200_000);
   },
 );
+

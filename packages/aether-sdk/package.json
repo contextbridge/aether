@@ -23,7 +23,8 @@
     "README.md"
   ],
   "scripts": {
-    "build": "pnpm generate:types && tsc -p tsconfig.build.json",
+    "build": "pnpm generate:types && pnpm compile",
+    "compile": "tsc -p tsconfig.build.json",
     "typecheck": "pnpm generate:types && tsc -p tsconfig.json --noEmit",
     "test": "pnpm generate:types && vitest run",
     "generate:types": "node scripts/generate-types.mjs",
