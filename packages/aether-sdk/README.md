@@ -233,27 +233,30 @@ await AetherSession.start({
 
 ## Writing evals with vitest
 
-`@aether-agent/sdk/evals` runs a single Dockerized eval per test via the `aether`
-CLI. `runEval` runs the agent and returns the outcome; you assert against it
-directly with your test runner. `result.passed` reflects whether the agent ran to
-completion — there are no built-in matchers, so check files, tool calls, and the
-workspace yourself.
+`@aether-agent/sdk/evals` runs a single Dockerized eval per test via the `Task` class.
 
 ```ts
 import { test, expect } from "vitest";
-import { runEval } from "@aether-agent/sdk/evals";
+import {
+  DockerAgent,
+  DockerImage,
+  Task,
+  Workspace,
+} from "@aether-agent/sdk/evals";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 test("agent edits notes.txt", async () => {
-  await using result = await runEval({
-    docker: { image: "aether-sandbox:latest" },
-    name: "edit-notes",
-    task: {
-      prompt: "Change the first line of notes.txt from alpha to beta",
-      workspace: { files: { "notes.txt": "alpha\nalpha\n" } },
-    },
+  const task = new Task(
+    "Change the first line of notes.txt from alpha to beta",
+    await Workspace.fromFiles({ "notes.txt": "alpha\nalpha\n" }),
+  );
+  const agent = new DockerAgent({
+    image: DockerImage.parse("aether-sandbox:latest"),
+    command: ["node", "/app/eval-agent.js"],
   });
+
+  await using result = await task.run(agent);
 
   expect(result.passed).toBe(true);
   // Assert against the retained workspace and the recorded tool calls.
@@ -268,7 +271,7 @@ test("agent edits notes.txt", async () => {
 
 For judgments you can't express deterministically, ask a model to score a rubric
 with `generate`, then let `judge` compute the final weighted score and
-blocker status. Collect the transcript with `runEval`'s `onMessage` callback and
+blocker status. Collect the transcript with `Task.run`'s `onMessage` callback and
 put evidence under `context` along with any diff or final file contents:
 
 ```ts
@@ -276,22 +279,28 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test, expect } from "vitest";
 import {
+  DockerAgent,
+  DockerImage,
   generate,
   judge,
-  runEval,
+  Task,
+  Workspace,
   type AgentMessage,
 } from "@aether-agent/sdk/evals";
 
 test("agent makes a maintainer-quality edit", async () => {
   const transcript: AgentMessage[] = [];
-  await using result = await runEval(
-    {
-      docker: { image: "aether-sandbox:latest" },
-      name: "edit-notes",
-      task: { prompt: "Change the first line of notes.txt from alpha to beta", /* ... */ },
-    },
-    { onMessage: (message) => transcript.push(message) },
+  const task = new Task(
+    "Change the first line of notes.txt from alpha to beta",
+    await Workspace.fromFiles({ "notes.txt": "alpha\nalpha\n" }),
   );
+  const agent = new DockerAgent({
+    image: DockerImage.parse("aether-sandbox:latest"),
+    command: ["node", "/app/eval-agent.js"],
+  });
+  await using result = await task.run(agent, {
+    onMessage: (message) => transcript.push(message),
+  });
 
   const grader = judge({
     instructions: "Grade strictly using only the provided transcript and files.",
@@ -350,13 +359,14 @@ const verdict = await generate("Grade this run. Respond with passed and reason."
 });
 ```
 
-Pass `{ keepWorkspace: true }` to retain the workspace on disk for debugging.
+Bind the run to a plain `const` (instead of `await using`) and skip
+`result.workspace.cleanup()` to retain the workspace on disk for debugging.
 
-`runEval` also streams the agent's messages and the eval process's stderr while it runs. Pass
+`Task.run` also streams the agent's messages and stderr while it runs. Pass
 `onMessage` and `onStderr` callbacks to observe them:
 
 ```ts
-await using result = await runEval(spec, {
+await using result = await task.run(agent, {
   onMessage: (message) => {
     if (message.type === "text") process.stdout.write(message.chunk);
     if (message.type === "tool_call") console.error("tool:", message.request.name);
