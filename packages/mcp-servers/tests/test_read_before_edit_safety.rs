@@ -2,8 +2,13 @@ use mcp_servers::coding::CodingMcp;
 use mcp_servers::coding::tools::edit_file::EditFileArgs;
 use mcp_servers::coding::tools::read_file::ReadFileArgs;
 use mcp_servers::coding::tools::write_file::WriteFileArgs;
+use mcp_servers::file_ops::FileEdit;
 use std::fs;
 use tempfile::TempDir;
+
+fn replace(old: &str, new: &str) -> Vec<FileEdit> {
+    vec![FileEdit::new(old, new)]
+}
 
 /// Test that editing a file without reading it first fails
 #[tokio::test]
@@ -15,12 +20,8 @@ async fn test_edit_file_without_read_fails() {
     let mcp = CodingMcp::new();
 
     // Try to edit without reading first
-    let edit_args = EditFileArgs {
-        file_path: test_file.to_string_lossy().to_string(),
-        old_string: "original".to_string(),
-        new_string: "modified".to_string(),
-        replace_all: false,
-    };
+    let edit_args =
+        EditFileArgs { file_path: test_file.to_string_lossy().to_string(), edits: replace("original", "modified") };
 
     let result = mcp.test_edit_file(edit_args).await;
 
@@ -46,12 +47,8 @@ async fn test_edit_file_after_read_succeeds() {
     assert!(read_result.is_ok());
 
     // Now edit should succeed
-    let edit_args = EditFileArgs {
-        file_path: test_file.to_string_lossy().to_string(),
-        old_string: "original".to_string(),
-        new_string: "modified".to_string(),
-        replace_all: false,
-    };
+    let edit_args =
+        EditFileArgs { file_path: test_file.to_string_lossy().to_string(), edits: replace("original", "modified") };
 
     let result = mcp.test_edit_file(edit_args).await;
     assert!(result.is_ok());
@@ -146,21 +143,11 @@ async fn test_multiple_files_tracked_independently() {
     mcp.test_read_file(read_args).await.unwrap();
 
     // Edit file1 should succeed
-    let edit_args = EditFileArgs {
-        file_path: file1.to_string_lossy().to_string(),
-        old_string: "1".to_string(),
-        new_string: "one".to_string(),
-        replace_all: false,
-    };
+    let edit_args = EditFileArgs { file_path: file1.to_string_lossy().to_string(), edits: replace("1", "one") };
     assert!(mcp.test_edit_file(edit_args).await.is_ok());
 
     // Edit file2 should fail (not read yet)
-    let edit_args = EditFileArgs {
-        file_path: file2.to_string_lossy().to_string(),
-        old_string: "2".to_string(),
-        new_string: "two".to_string(),
-        replace_all: false,
-    };
+    let edit_args = EditFileArgs { file_path: file2.to_string_lossy().to_string(), edits: replace("2", "two") };
     assert!(mcp.test_edit_file(edit_args).await.is_err());
 }
 
@@ -184,9 +171,7 @@ async fn test_failed_read_doesnt_track_file() {
     // Edit should still fail because the read failed
     let edit_args = EditFileArgs {
         file_path: nonexistent_file.to_string_lossy().to_string(),
-        old_string: "content".to_string(),
-        new_string: "modified".to_string(),
-        replace_all: false,
+        edits: replace("content", "modified"),
     };
     let result = mcp.test_edit_file(edit_args).await;
     assert!(result.is_err());

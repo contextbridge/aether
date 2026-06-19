@@ -1,5 +1,5 @@
 use crate::error::ServerInitError;
-use crate::file_ops::{FileError, edit_text_file, read_text_file, write_text_file};
+use crate::file_ops::{FileEdit, FileError, apply_edits, read_text_file, write_text_file};
 use crate::workspace_paths::resolve_path;
 use clap::Parser;
 use mcp_utils::display_meta::{FileDiff, ToolDisplayMeta, ToolResultMeta, basename};
@@ -305,15 +305,9 @@ pub struct EditPlanInput {
     /// Stable plan identifier originally passed to `write_plan`.
     #[serde(alias = "planName")]
     pub plan_name: String,
-    /// Exact string to find and replace in the plan file.
-    #[serde(alias = "old_string")]
-    pub old_string: String,
-    /// String to replace it with.
-    #[serde(alias = "new_string")]
-    pub new_string: String,
-    /// Replace all occurrences. Defaults to replacing the first occurrence.
-    #[serde(default, alias = "replace_all")]
-    pub replace_all: bool,
+    /// Exact-string replacements to apply, in one atomic batch. All edits must
+    /// apply or none are written.
+    pub edits: Vec<FileEdit>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -439,7 +433,7 @@ async fn write_plan_file(plans_dir: &Path, input: WritePlanInput) -> Result<Writ
 async fn edit_plan_file(plans_dir: &Path, input: EditPlanInput) -> Result<EditPlanOutput, PlanError> {
     let plan_name = PlanName::parse(&input.plan_name)?;
     let path = plan_path(plans_dir, &plan_name);
-    let result = edit_text_file(&path, &input.old_string, &input.new_string, input.replace_all).await?;
+    let result = apply_edits(&path, &input.edits).await?;
     let plan_path = result.path.to_string_lossy().into_owned();
     let display_meta = ToolDisplayMeta::new("Edit plan", basename(&plan_path));
     let file_diff =
