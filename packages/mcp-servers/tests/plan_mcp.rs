@@ -89,6 +89,35 @@ async fn edit_plan_updates_existing_plan_file_from_name() {
 }
 
 #[tokio::test]
+async fn edit_plan_applies_batch_in_single_call() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = TempDir::new()?;
+    let server = PlanMcp::new().with_plans_dir(temp_dir.path().to_path_buf());
+    let (_server_handle, client_handle) = connect(server, silent_client()).await?;
+    write_plan(&client_handle, "feature", "# Plan\nStep one\nStep two\n").await;
+
+    let request = CallToolRequestParams::new("edit_plan").with_arguments(
+        json!({
+            "planName": "feature",
+            "edits": [
+                { "oldString": "Step one", "newString": "Step ONE" },
+                { "oldString": "Step two", "newString": "Step TWO" }
+            ]
+        })
+        .as_object()
+        .ok_or("edit_plan arguments")?
+        .clone(),
+    );
+    let result = client_handle.call_tool(request).await?;
+    let text = result.content.first().and_then(|content| content.as_text()).ok_or("edit_plan text content")?;
+    let parsed: serde_json::Value = serde_json::from_str(&text.text)?;
+
+    assert_eq!(parsed["replacementsMade"], 2);
+    let plan_path = temp_dir.path().join("feature-plan.md");
+    assert_eq!(fs::read_to_string(plan_path)?, "# Plan\nStep ONE\nStep TWO\n");
+    Ok(())
+}
+
+#[tokio::test]
 async fn plan_name_rejects_path_traversal() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let server = PlanMcp::new().with_plans_dir(temp_dir.path().to_path_buf());
@@ -186,9 +215,11 @@ async fn edit_plan<T: Service<RoleClient>>(
     let request = CallToolRequestParams::new("edit_plan").with_arguments(
         json!({
             "planName": plan_name,
-            "oldString": old_string,
-            "newString": new_string,
-            "replaceAll": replace_all
+            "edits": [{
+                "oldString": old_string,
+                "newString": new_string,
+                "replaceAll": replace_all
+            }]
         })
         .as_object()
         .unwrap()

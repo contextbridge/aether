@@ -42,8 +42,7 @@ async fn test_ts_mcp_edit_produces_diagnostics() {
         "edit_file",
         serde_json::json!({
             "filePath": index_ts,
-            "oldString": "\"not a number\"",
-            "newString": "42"
+            "edits": [{ "oldString": "\"not a number\"", "newString": "42" }]
         }),
     )
     .await;
@@ -59,8 +58,7 @@ async fn test_ts_mcp_edit_produces_diagnostics() {
         "edit_file",
         serde_json::json!({
             "filePath": index_ts,
-            "oldString": "42",
-            "newString": "true"
+            "edits": [{ "oldString": "42", "newString": "true" }]
         }),
     )
     .await;
@@ -130,8 +128,7 @@ async fn test_ts_diagnostics_after_edit_without_polling() {
         "edit_file",
         serde_json::json!({
             "filePath": index_ts,
-            "oldString": "42",
-            "newString": "\"not a number\""
+            "edits": [{ "oldString": "42", "newString": "\"not a number\"" }]
         }),
     )
     .await;

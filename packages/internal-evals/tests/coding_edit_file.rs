@@ -1,5 +1,7 @@
 mod common;
 
+use std::fs::read_to_string;
+
 use aether_evals::{Task, TaskRun, Workspace};
 use common::{EvalHarnessError, create_aether_agent};
 
@@ -17,7 +19,7 @@ async fn edit_file_replaces_first_match_by_default_eval() -> Result<(), EvalHarn
     let run = Task::new(prompt, workspace).run(&agent).await?;
 
     assert_read_then_single_edit(&run);
-    assert_eq!(read_file(&run, "notes.txt"), file_contents(&["beta", "alpha"]), "{}", run.failure_context());
+    assert_eq!(read_file(&run, "notes.txt")?, file_contents(&["beta", "alpha"]), "{}", run.failure_context());
     Ok(())
 }
 
@@ -28,12 +30,12 @@ async fn edit_file_replace_all_updates_every_match_eval() -> Result<(), EvalHarn
     let agent = create_aether_agent();
     let prompt = lines(&[
         "Use the coding MCP tools to update tasks.md.",
-        "Read the file first, then call coding__edit_file exactly once with replaceAll enabled to change every 'todo' marker to 'done'.",
+        "Read the file first, then call coding__edit_file exactly once, using a single replace edit with replaceAll enabled, to change every 'todo' marker to 'done'.",
     ]);
 
     let run = Task::new(prompt, workspace).run(&agent).await?;
 
-    let contents = read_file(&run, "tasks.md");
+    let contents = read_file(&run, "tasks.md")?;
     assert_read_then_single_edit(&run);
     assert!(!contents.contains("todo"), "{}", run.failure_context());
     assert_eq!(contents.matches("done").count(), 3, "{}", run.failure_context());
@@ -58,7 +60,7 @@ async fn edit_file_handles_multiline_exact_replacement_eval() -> Result<(), Eval
 
     let run = Task::new(prompt, workspace).run(&agent).await?;
 
-    let contents = read_file(&run, "src/lib.rs");
+    let contents = read_file(&run, "src/lib.rs")?;
     assert_read_then_single_edit(&run);
     assert!(contents.contains("println!(\"hello from edit_file\");"), "{}", run.failure_context());
     assert!(contents.contains("pub fn keep() {}"), "{}", run.failure_context());
@@ -72,13 +74,13 @@ async fn edit_file_pattern_not_found_leaves_file_unchanged_eval() -> Result<(), 
     let agent = create_aether_agent();
     let prompt = lines(&[
         "Use the coding MCP tools on config.toml.",
-        "Read the file first, then intentionally call coding__edit_file exactly once with oldString set to 'mode = \"missing\"' and newString set to 'mode = \"unsafe\"'.",
+        "Read the file first, then intentionally call coding__edit_file exactly once with a single replace edit whose oldString is 'mode = \"missing\"' and newString is 'mode = \"unsafe\"'.",
         "This old string is not present; report the tool error and leave the file unchanged.",
     ]);
 
     let run = Task::new(prompt, workspace).run(&agent).await?;
 
-    let contents = read_file(&run, "config.toml");
+    let contents = read_file(&run, "config.toml")?;
     assert_read_then_single_edit(&run);
     assert_eq!(contents, file_contents(&["mode = \"safe\""]), "{}", run.failure_context());
     assert!(!contents.contains("unsafe"), "{}", run.failure_context());
@@ -99,6 +101,6 @@ fn lines(lines: &[&str]) -> String {
     lines.join("\n")
 }
 
-fn read_file(run: &TaskRun, path: &str) -> String {
-    std::fs::read_to_string(run.workspace().join(path)).unwrap_or_else(|error| panic!("failed to read {path}: {error}"))
+fn read_file(run: &TaskRun, path: &str) -> Result<String, EvalHarnessError> {
+    Ok(read_to_string(run.workspace().join(path))?)
 }

@@ -15,5 +15,5 @@ let server = PlanMcp::new();
 # Tools provided
 
 - **`write_plan`** -- Writes a markdown plan in the configured plans directory.
-- **`edit_plan`** -- Applies an exact string replacement to an existing plan.
+- **`edit_plan`** -- Applies a batch of exact-string replacements to an existing plan.
 - **`submit_plan`** -- Reads a named plan and returns a structured approval decision.
