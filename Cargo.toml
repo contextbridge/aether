@@ -1,24 +1,6 @@
 [workspace]
 resolver = "3"
-members = [
-    "packages/aether-core",
-    "packages/aether-auth",
-    "packages/aether-project",
-    "packages/wisp",
-    "packages/aether-evals",
-    "packages/internal-evals",
-    "packages/aether-cli",
-    "packages/aether-schemas",
-    "packages/acp-utils",
-    "packages/aether-lspd",
-    "packages/llm",
-    "packages/llm-codegen",
-    "packages/mcp-utils",
-    "packages/mcp-servers",
-    "packages/utils",
-    "packages/tui",
-    "packages/doctest",
-]
+members = ["crates/*"]
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }

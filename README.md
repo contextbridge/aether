@@ -22,7 +22,8 @@ Aether is an AI coding agent harness, written in Rust, that gives _you_ control 
   - [2. **Create your first project settings**](#2-create-your-first-project-settings)
   - [3. **Run it**](#3-run-it)
 - [Using Aether as a library](#using-aether-as-a-library)
-- [Packages](#packages)
+- [Rust crates](#rust-crates)
+- [TypeScript packages](#typescript-packages)
 - [License](#license)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -156,18 +157,25 @@ Use `aether-agent-core` as a Rust library to build your own agent in ~25 lines. 
    }
    ```
 
-## Packages
+## Rust crates
+
+| Crate | Description |
+|---------|-------------|
+| [`aether-agent-core`](crates/aether-core) | Core agent library — LLM + prompt + tools in a loop ([docs](https://aether-agent.io/libraries/aether-core/agent-builder/)) |
+| [`llm`](crates/llm) | Multi-provider LLM abstraction ([docs](https://aether-agent.io/libraries/llm/provider-interface/)) |
+| [`wisp`](crates/wisp) | Terminal UI for AI agents, built on ACP ([docs](https://aether-agent.io/aether/terminal/overview/)) |
+| [`aether-agent-cli`](crates/aether-cli) | Headless CLI and ACP server for editor integration ([docs](https://aether-agent.io/aether/running/headless/)) |
+| [`mcp-servers`](crates/mcp-servers) | Pre-built MCP tool servers (coding, LSP, skills, tasks, sub-agents, survey) ([docs](https://aether-agent.io/aether/built-in-servers/coding/)) |
+| [`aether-evals`](crates/aether-evals) | Automated testing (evals) for LLM agents ([docs](https://aether-agent.io/libraries/aether-evals/evals/)) |
+| [`aether-lspd`](crates/aether-lspd) | LSP daemon — shares language servers across agents |
+| [`aether-project`](crates/aether-project) | Project configuration and agent catalog from `.aether/settings.json` |
+
+## TypeScript packages
 
 | Package | Description |
 |---------|-------------|
-| [`aether-agent-core`](packages/aether-core) | Core agent library — LLM + prompt + tools in a loop ([docs](https://aether-agent.io/libraries/aether-core/agent-builder/)) |
-| [`llm`](packages/llm) | Multi-provider LLM abstraction ([docs](https://aether-agent.io/libraries/llm/provider-interface/)) |
-| [`wisp`](packages/wisp) | Terminal UI for AI agents, built on ACP ([docs](https://aether-agent.io/aether/terminal/overview/)) |
-| [`aether-agent-cli`](packages/aether-cli) | Headless CLI and ACP server for editor integration ([docs](https://aether-agent.io/aether/running/headless/)) |
-| [`mcp-servers`](packages/mcp-servers) | Pre-built MCP tool servers (coding, LSP, skills, tasks, sub-agents, survey) ([docs](https://aether-agent.io/aether/built-in-servers/coding/)) |
-| [`aether-evals`](packages/aether-evals) | Automated testing (evals) for LLM agents ([docs](https://aether-agent.io/libraries/aether-evals/evals/)) |
-| [`aether-lspd`](packages/aether-lspd) | LSP daemon — shares language servers across agents |
-| [`aether-project`](packages/aether-project) | Project configuration and agent catalog from `.aether/settings.json` |
+| [`@aether-agent/sdk`](packages/aether-sdk) | TypeScript SDK for building agents programmatically |
+| [`@aether-agent/website`](packages/website) | Documentation website built with Astro
 
 ## License
 

@@ -47,7 +47,7 @@ doc-check *PKGS:
 
 # Regenerate the AetherSettings JSON Schema consumed by the website and SDK
 gen-schema:
-    cargo run -q -p aether-project --bin aether-settings-schema > website/src/data/aether-settings.schema.json
+    cargo run -q -p aether-project --bin aether-settings-schema > packages/website/src/data/aether-settings.schema.json
 
 # Install Node dependencies for the TypeScript SDK
 sdk-install:
@@ -95,9 +95,9 @@ changelog:
 changelog-gen:
     git cliff -o CHANGELOG.md
 
-# Update packages/llm/models.json from models.dev
+# Update crates/llm/models.json from models.dev
 update-models:
-    ./packages/llm/scripts/fetch-models.sh
+    ./crates/llm/scripts/fetch-models.sh
 
 # Sweep build artifacts older than N days (default: 7)
 sweep DAYS="7":
@@ -110,7 +110,7 @@ sweep-installed:
 # Build the sandbox image from the eval example Dockerfile (copies the aether debug binary)
 build-sandbox TAG="aether-sandbox:latest":
     cargo build -p aether-agent-cli --bin aether
-    docker build -t {{TAG}} -f packages/internal-evals/examples/Dockerfile .
+    docker build -t {{TAG}} -f crates/internal-evals/examples/Dockerfile .
 
 # Run wisp + aether agent inside the sandbox
 run-sandbox:
@@ -118,8 +118,8 @@ run-sandbox:
 
 # Install aether-cli and wisp binaries locally
 install:
-    cargo install --path packages/aether-cli --force
-    cargo install --path packages/wisp --force
+    cargo install --path crates/aether-cli --force
+    cargo install --path crates/wisp --force
     cargo sweep --installed
 
 # Preview the release PR release-plz would open against main

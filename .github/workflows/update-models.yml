@@ -45,6 +45,6 @@ jobs:
           title: Update models
           commit-message: "chore: update models"
           body: |
-            Updates `packages/llm/models.json` from models.dev.
+            Updates `crates/llm/models.json` from models.dev.
 
             This PR was created automatically by the weekly update models workflow.

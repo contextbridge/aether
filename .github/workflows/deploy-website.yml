@@ -5,7 +5,7 @@ on:
     branches:
       - main
     paths:
-      - website/**
+      - packages/website/**
       - package.json
       - pnpm-lock.yaml
       - pnpm-workspace.yaml
@@ -39,7 +39,7 @@ jobs:
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v5
         with:
-          path: website/dist
+          path: packages/website/dist
 
   deploy:
     name: Deploy website
