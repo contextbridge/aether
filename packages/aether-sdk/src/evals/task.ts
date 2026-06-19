@@ -1,7 +1,7 @@
 import type { AgentMessage } from "../generated/eval-types.js";
 import type { Agent, AgentRunOptions, AgentRunResult } from "./Agent.js";
 import { type EvalToolCall, extractToolCalls } from "./transcript.js";
-import { Workspace } from "./Workspace.js";
+import { Workspace } from "./workspace.js";
 
 export interface TaskRun extends AsyncDisposable {
   readonly prompt: string;

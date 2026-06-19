@@ -1,5 +1,5 @@
 import type { AgentMessage } from "../generated/eval-types.js";
-import type { Workspace } from "./Workspace.js";
+import type { Workspace } from "./workspace.js";
 
 export interface Agent {
   run(config: AgentConfig, options?: AgentRunOptions): Promise<AgentRunResult>;
