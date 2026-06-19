@@ -3,12 +3,11 @@ mod assertions;
 mod error;
 mod evals;
 mod git_repo;
-mod spec;
+mod judge;
 
 pub use agents::{
     AETHER_EVAL_CWD_ENV, AETHER_EVAL_WORKSPACE_ROOT_ENV, AETHER_EVAL_WRAPPED_TASK_PROMPT_ENV, Agent, AgentConfig,
-    CONTAINER_AETHER_HOME, DockerAgent, DockerImage, DockerImageParseError, FakeAgent, ImageBuildError, RunError,
-    default_eval_env_vars,
+    CONTAINER_AETHER_HOME, DockerAgent, DockerImage, DockerImageParseError, FakeAgent, RunError, default_eval_env_vars,
 };
 pub use assertions::{assert_tool_call_count, assert_tool_call_with_args, assert_tool_called};
 pub use error::{EvalRunError, WorkspaceError};
@@ -17,9 +16,7 @@ pub use evals::{
     Workspace, WorkspaceSource,
 };
 pub use git_repo::GitRepoError;
-pub use spec::{
-    AgentSpec, DockerSpec, EvalFileError, EvalFilesReport, EvalOutcome, EvalSpec, EvalSpecLoadOptions, EvalStreamEvent,
-    EvalToolCall, Expect, Judge, JudgeBuilder, JudgeContext, JudgeCriterionResponse, JudgeCriterionSpec,
-    JudgeCriterionSummary, JudgeError, JudgeRef, JudgeRubricResponse, JudgeSpec, JudgeSummary, ResolvedEvalSpec,
-    TaskSpec, ToolCallExpectation, WorkspaceRetention, WorkspaceSpec, judge, run_eval_spec_streaming, run_eval_specs,
+pub use judge::{
+    Judge, JudgeBuilder, JudgeContext, JudgeCriterionResponse, JudgeCriterionSpec, JudgeCriterionSummary, JudgeError,
+    JudgeRubricResponse, JudgeSummary, judge,
 };

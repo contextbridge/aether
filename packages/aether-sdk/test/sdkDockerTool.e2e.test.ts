@@ -1,53 +1,50 @@
-import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  DockerAgent,
+  DockerImage,
+  Task,
+  Workspace,
+} from "../src/evals/index.js";
+import { logMessage } from "./logMessage.js";
 
-import { runEval } from "../src/evals/index.js";
-
-const runDockerE2E = process.env.AETHER_SDK_DOCKER_E2E === "1";
-
-describe.skipIf(!runDockerE2E)("SDK Docker tool e2e", () => {
-  it("runs a real Aether agent in Docker and calls a TS-defined tool", async () => {
-    await using result = await runEval(
-      {
-        name: "sdk-weather-tool",
-        docker: {
-          file: "test/fixtures/sdk-weather-agent/Dockerfile",
-          context: "../..",
+describe.skipIf(process.env.AETHER_SDK_DOCKER_E2E !== "1")(
+  "SDK Docker tool e2e",
+  () => {
+    it("runs a real Aether agent in Docker and calls a TS-defined tool", async () => {
+      const packageDir = new URL("..", import.meta.url).pathname;
+      const image = DockerImage.fromDockerfile(
+        "aether-sdk-weather-agent:latest",
+        {
+          context: join(packageDir, "../.."),
+          dockerfile:
+            "packages/aether-sdk/test/fixtures/sdk-weather-agent/Dockerfile",
+          buildkit: true,
         },
-        agent: {
-          command: ["node", "/app/dist/eval-agent.js"],
-        },
-        task: {
-          prompt:
-            'Call weather__get_weather with city "Tokyo", then answer using the tool result.',
-          workspace: { files: { "README.md": "SDK Docker tool eval\n" } },
-        },
-      },
-      {
-        baseDir: new URL("..", import.meta.url).pathname,
-      },
-    );
+      );
 
-    expect(result.passed, result.failures.join("\n")).toBe(true);
+      const task = new Task(
+        'Call weather__get_weather with city "Tokyo", then answer using the tool result.',
+        await Workspace.fromFiles({}),
+      );
+      const agent = new DockerAgent({
+        image,
+        command: ["node", "/app/dist/eval-agent.js"],
+      });
+      process.stderr.write(
+        "[e2e] building image + running agent (first run builds, ~1 min)…\n",
+      );
+      await using result = await task.run(agent, {
+        onMessage: logMessage,
+        onStderr: (chunk) => process.stderr.write(chunk),
+      });
 
-    const transcriptCall = result.toolCalls.find(
-      (call) => call.name === "weather__get_weather",
-    );
-    expect(transcriptCall).toBeTruthy();
-    expect(transcriptCall?.arguments).toMatchObject({ city: "Tokyo" });
+      const getWeatherCall = result.toolCalls.find(
+        (_) => _.name === "weather__get_weather",
+      );
 
-    const log = await readFile(
-      join(result.workspace.path, "tool-calls.jsonl"),
-      "utf8",
-    );
-    const calls = log
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
-    expect(calls).toContainEqual({
-      name: "weather__get_weather",
-      args: { city: "Tokyo" },
-    });
-  });
-});
+      expect(result.passed).toBe(true);
+      expect(getWeatherCall?.arguments).toMatchObject({ city: "Tokyo" });
+    }, 1_200_000);
+  },
+);

@@ -11,7 +11,6 @@ import type {
 } from "../generated/eval-types.js";
 
 export type {
-  AgentMessage,
   JudgeCriterionResponse,
   JudgeCriterionSpec,
   JudgeCriterionSummary,
@@ -31,15 +30,13 @@ export interface JudgeInput {
 }
 
 export interface JudgeContext {
-  /** The agent transcript, e.g. messages collected via `runEval`'s `onMessage` callback. */
+  /** The agent transcript, e.g. messages collected via `Task.run`'s `onMessage` callback. */
   transcript?: AgentMessage[];
   /** A workspace diff to grade against. */
   diff?: string;
   /** Final file contents to include, keyed by path. */
   files?: Record<string, string>;
 }
-
-type NormalizedJudgeCriterion = Required<JudgeCriterionSpec>;
 
 export interface Judge {
   prompt: string;
@@ -172,7 +169,7 @@ export function messageToString(message: AgentMessage): string {
 
 function normalizeCriteria(
   criteria: JudgeCriterionSpec[],
-): NormalizedJudgeCriterion[] {
+): Required<JudgeCriterionSpec>[] {
   if (criteria.length === 0) {
     throw invalidJudgeInput("judge criteria must not be empty");
   }
@@ -220,7 +217,7 @@ function normalizeCriteria(
 }
 
 function summarizeJudgeResponse(
-  criteria: NormalizedJudgeCriterion[],
+  criteria: Required<JudgeCriterionSpec>[],
   response: JudgeRubricResponse,
 ): JudgeSummary {
   const responses = new Map<string, JudgeCriterionResponse>();

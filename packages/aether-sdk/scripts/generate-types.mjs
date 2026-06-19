@@ -14,14 +14,10 @@ const TYPE_OPTIONS = {
 };
 
 const document = JSON.parse(
-  execFileSync(
-    "cargo",
-    ["run", "-q", "-p", "aether-agent-cli", "--bin", "aether-schemas"],
-    {
-      cwd: root,
-      encoding: "utf8",
-    },
-  ),
+  execFileSync("cargo", ["run", "-q", "-p", "aether-schemas"], {
+    cwd: root,
+    encoding: "utf8",
+  }),
 );
 
 await generateEvalTypes(document);
@@ -38,40 +34,29 @@ async function generateEvalTypes(document) {
     canonicalSchemaPath,
     `${JSON.stringify(
       {
-        EvalSpec: document.EvalSpec,
-        EvalOutcome: document.EvalOutcome,
-        EvalStreamEvent: document.EvalStreamEvent,
+        AgentMessage: document.AgentMessage,
         JudgeRubricResponse: document.JudgeRubricResponse,
+        JudgeSummary: document.JudgeSummary,
+        JudgeCriterionSpec: document.JudgeCriterionSpec,
       },
       null,
       2,
     )}\n`,
   );
 
-  const evalStreamEvent = schemaForTypeGeneration(
-    document.EvalStreamEvent,
-    "EvalStreamEvent",
+  const parts = await Promise.all(
+    [
+      ["AgentMessage", document.AgentMessage],
+      ["JudgeRubricResponse", document.JudgeRubricResponse],
+      ["JudgeSummary", document.JudgeSummary],
+      ["JudgeCriterionSpec", document.JudgeCriterionSpec],
+    ].map(([title, schema]) =>
+      compile(schemaForTypeGeneration(schema, title), title, TYPE_OPTIONS),
+    ),
   );
 
-  const parts = await Promise.all([
-    compile(
-      schemaForTypeGeneration(document.EvalSpec, "EvalSpec"),
-      "EvalSpec",
-      TYPE_OPTIONS,
-    ),
-    compile(evalStreamEvent, "EvalStreamEvent", TYPE_OPTIONS),
-    compile(
-      schemaForTypeGeneration(
-        document.JudgeRubricResponse,
-        "JudgeRubricResponse",
-      ),
-      "JudgeRubricResponse",
-      TYPE_OPTIONS,
-    ),
-  ]);
-
   const content = [
-    `// @generated ${GENERATED_NOTICE}\n// Source: packages/aether-evals/src/spec via aether-schemas.\n`,
+    `// @generated ${GENERATED_NOTICE}\n// Source: aether-schemas.\n`,
     ...parts,
   ].join("\n");
 

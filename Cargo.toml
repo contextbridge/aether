@@ -8,6 +8,7 @@ members = [
     "packages/aether-evals",
     "packages/internal-evals",
     "packages/aether-cli",
+    "packages/aether-schemas",
     "packages/acp-utils",
     "packages/aether-lspd",
     "packages/llm",

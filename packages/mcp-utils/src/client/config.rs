@@ -310,11 +310,19 @@ impl McpServerConfig {
 
             McpServerConfig::Http(HttpServerConfig { url, headers, .. })
             | McpServerConfig::Sse(SseServerConfig { url, headers, .. }) => {
-                let auth_header = headers.get("Authorization").map(|v| vars.expand(v)).transpose()?;
+                let auth_header = headers.get("Authorization").map(|v| vars.expand(v)).transpose()?.map(|auth| {
+                    // rmcp adds `Bearer`  to the auth header.
+                    auth.split_once(' ')
+                        .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("Bearer"))
+                        .map_or(auth.as_str(), |(_, rest)| rest)
+                        .to_string()
+                });
+
                 let mut config = StreamableHttpClientTransportConfig::with_uri(vars.expand(&url)?);
                 if let Some(auth) = auth_header {
                     config = config.auth_header(auth);
                 }
+
                 Ok(McpTransport::Http { config })
             }
 
@@ -529,5 +537,52 @@ mod tests {
             }
             other => panic!("expected Stdio transport, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn into_transport_strips_bearer_prefix_from_auth_header() -> Result<(), String> {
+        let config = McpConfig::from_json(
+            r#"{"servers":{"weather":{"type":"http","url":"http://127.0.0.1:9000/mcp","headers":{"Authorization":"Bearer secret-token"}}}}"#,
+        )
+        .map_err(|e| e.to_string())?;
+
+        let servers = config.into_servers(&HashMap::new(), &Vars::new()).await.map_err(|e| e.to_string())?;
+        let McpTransport::Http { config } = &servers[0].transport else {
+            return Err(format!("expected Http transport, got {:?}", servers[0].transport));
+        };
+
+        assert_eq!(config.auth_header.as_deref(), Some("secret-token"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn into_transport_keeps_non_bearer_auth_header_verbatim() -> Result<(), String> {
+        let config = McpConfig::from_json(
+            r#"{"servers":{"weather":{"type":"http","url":"http://127.0.0.1:9000/mcp","headers":{"Authorization":"Basic dXNlcjpwYXNz"}}}}"#,
+        )
+        .map_err(|e| e.to_string())?;
+        let servers = config.into_servers(&HashMap::new(), &Vars::new()).await.map_err(|e| e.to_string())?;
+
+        let McpTransport::Http { config } = &servers[0].transport else {
+            return Err(format!("expected Http transport, got {:?}", servers[0].transport));
+        };
+        assert_eq!(config.auth_header.as_deref(), Some("Basic dXNlcjpwYXNz"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn into_transport_expands_vars_in_auth_header() -> Result<(), String> {
+        let config = McpConfig::from_json(
+            r#"{"servers":{"weather":{"type":"http","url":"http://127.0.0.1:9000/mcp","headers":{"Authorization":"Bearer ${TOKEN}"}}}}"#,
+        )
+        .map_err(|e| e.to_string())?;
+        let vars = Vars::new().with("TOKEN", "expanded-token");
+        let servers = config.into_servers(&HashMap::new(), &vars).await.map_err(|e| e.to_string())?;
+
+        let McpTransport::Http { config } = &servers[0].transport else {
+            return Err(format!("expected Http transport, got {:?}", servers[0].transport));
+        };
+        assert_eq!(config.auth_header.as_deref(), Some("expanded-token"));
+        Ok(())
     }
 }

@@ -40,7 +40,6 @@ tui = { package = "aether-tui", path = "../tui", default-features = false, featu
 acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["server", "testing"], version = "0.3.24" }
 agent-client-protocol = { workspace = true }
 aether-lspd = { path = "../aether-lspd", version = "0.1.19" }
-aether-evals = { path = "../aether-evals", version = "0.2.5" }
 rmcp = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

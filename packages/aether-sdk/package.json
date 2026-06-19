@@ -1,6 +1,6 @@
 {
   "name": "@aether-agent/sdk",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "TypeScript SDK for the Aether agent CLI",
   "repository": {
     "type": "git",
@@ -23,7 +23,8 @@
     "README.md"
   ],
   "scripts": {
-    "build": "pnpm generate:types && tsc -p tsconfig.build.json",
+    "build": "pnpm generate:types && pnpm compile",
+    "compile": "tsc -p tsconfig.build.json",
     "typecheck": "pnpm generate:types && tsc -p tsconfig.json --noEmit",
     "test": "pnpm generate:types && vitest run",
     "generate:types": "node scripts/generate-types.mjs",
@@ -34,9 +35,11 @@
     "@agentclientprotocol/sdk": "^0.25.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "express": "^5.1.0",
+    "testcontainers": "^12.0.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@types/dockerode": "^3.3.31",
     "@types/express": "^5.0.0",
     "@types/node": "^25.9.3",
     "json-schema-to-typescript": "^15.0.4",
