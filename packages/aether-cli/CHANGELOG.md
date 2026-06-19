@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.17](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.16...aether-agent-cli-v0.7.17) - 2026-06-19
+
+### Added
+
+- *(aether-cli)* Add model settings to be able to control temperature, top p etc ([#168](https://github.com/contextbridge/aether/pull/168))
+
 ## [0.7.16](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.15...aether-agent-cli-v0.7.16) - 2026-06-18
 
 ### Added

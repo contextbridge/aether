@@ -31,7 +31,7 @@ dependencies = [
 
 [[package]]
 name = "aether-acp-utils"
-version = "0.3.24"
+version = "0.3.25"
 dependencies = [
  "aether-mcp-utils",
  "aether-utils",
@@ -50,7 +50,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-cli"
-version = "0.7.16"
+version = "0.7.17"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
@@ -87,7 +87,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-core"
-version = "0.6.14"
+version = "0.6.15"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
@@ -152,7 +152,7 @@ dependencies = [
 
 [[package]]
 name = "aether-evals"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -170,7 +170,7 @@ dependencies = [
 
 [[package]]
 name = "aether-llm"
-version = "0.7.13"
+version = "0.7.14"
 dependencies = [
  "aether-auth",
  "aether-doctest",
@@ -245,7 +245,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp-servers"
-version = "0.4.19"
+version = "0.4.20"
 dependencies = [
  "aether-agent-core",
  "aether-auth",
@@ -284,7 +284,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp-utils"
-version = "0.5.18"
+version = "0.5.19"
 dependencies = [
  "aether-auth",
  "aether-doctest",
@@ -306,7 +306,7 @@ dependencies = [
 
 [[package]]
 name = "aether-project"
-version = "0.5.14"
+version = "0.5.15"
 dependencies = [
  "aether-agent-core",
  "aether-doctest",
@@ -364,7 +364,7 @@ dependencies = [
 
 [[package]]
 name = "aether-wisp"
-version = "0.4.23"
+version = "0.4.24"
 dependencies = [
  "aether-acp-utils",
  "aether-tui",
@@ -1561,9 +1561,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.2.64"
+version = "1.2.65"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dad887fd958be91b5098c0248def011f4523ab786cd411be668777e55063501f"
+checksum = "e228eec9be7c17ccb640b59b36a5cd805ea2a564a4c5e162c2f659fea30d3b96"
 dependencies = [
  "find-msvc-tools",
  "jobserver",

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.20](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.19...aether-mcp-servers-v0.4.20) - 2026-06-19
+
+### Added
+
+- *(mcp-servers)* Make edit_file and edit_plan support batched edits ([#170](https://github.com/contextbridge/aether/pull/170))
+
 ## [0.4.19](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.18...aether-mcp-servers-v0.4.19) - 2026-06-18
 
 ### Added
