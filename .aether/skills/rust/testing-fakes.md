@@ -1,6 +1,6 @@
 # Testing with Fakes
 
-**Location**: `packages/aether/src/testing/fake_llm.rs`, `packages/aether/src/testing/fake_mcp.rs`
+**Location**: `crates/aether-core/src/testing/fake_llm.rs`, `crates/aether-core/src/testing/fake_mcp.rs`
 
 ## Rule: Use "Fake", Never "Mock"
 
