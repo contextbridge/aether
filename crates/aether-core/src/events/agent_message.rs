@@ -6,6 +6,42 @@ use mcp_utils::display_meta::ToolResultMeta;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Context/token usage reported after an LLM call.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ContextUsage {
+    /// Current usage ratio (0.0 - 1.0), if context window is known.
+    pub usage_ratio: Option<f64>,
+    /// Maximum context limit, if known.
+    pub context_limit: Option<u32>,
+    /// Input tokens on the most recent API call (the current context size).
+    pub input_tokens: u32,
+    /// Output tokens on the most recent API call.
+    pub output_tokens: u32,
+    /// Prompt tokens served from cache on the most recent API call.
+    pub cache_read_tokens: Option<u32>,
+    /// Prompt tokens written to cache on the most recent API call.
+    pub cache_creation_tokens: Option<u32>,
+    /// Reasoning tokens spent on the most recent API call.
+    pub reasoning_tokens: Option<u32>,
+    /// Cumulative input tokens since the agent started.
+    pub total_input_tokens: u64,
+    /// Cumulative output tokens since the agent started.
+    pub total_output_tokens: u64,
+    /// Cumulative cache-read tokens since the agent started.
+    pub total_cache_read_tokens: u64,
+    /// Cumulative cache-creation tokens since the agent started.
+    pub total_cache_creation_tokens: u64,
+    /// Cumulative reasoning tokens since the agent started.
+    pub total_reasoning_tokens: u64,
+}
+
+impl ContextUsage {
+    /// Sum of cumulative input + output tokens.
+    pub fn total_tokens(&self) -> u64 {
+        self.total_input_tokens + self.total_output_tokens
+    }
+}
+
 /// Message from the agent to the user.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -75,30 +111,8 @@ pub enum AgentMessage {
     /// Context usage update for UI display.
     #[serde(rename = "context_usage")]
     ContextUsageUpdate {
-        /// Current usage ratio (0.0 - 1.0), if context window is known.
-        usage_ratio: Option<f64>,
-        /// Maximum context limit, if known.
-        context_limit: Option<u32>,
-        /// Input tokens on the most recent API call (the current context size).
-        input_tokens: u32,
-        /// Output tokens on the most recent API call.
-        output_tokens: u32,
-        /// Prompt tokens served from cache on the most recent API call.
-        cache_read_tokens: Option<u32>,
-        /// Prompt tokens written to cache on the most recent API call.
-        cache_creation_tokens: Option<u32>,
-        /// Reasoning tokens spent on the most recent API call.
-        reasoning_tokens: Option<u32>,
-        /// Cumulative input tokens since the agent started.
-        total_input_tokens: u64,
-        /// Cumulative output tokens since the agent started.
-        total_output_tokens: u64,
-        /// Cumulative cache-read tokens since the agent started.
-        total_cache_read_tokens: u64,
-        /// Cumulative cache-creation tokens since the agent started.
-        total_cache_creation_tokens: u64,
-        /// Cumulative reasoning tokens since the agent started.
-        total_reasoning_tokens: u64,
+        #[serde(flatten)]
+        usage: ContextUsage,
     },
 
     /// Agent is auto-continuing because LLM stopped with a resumable stop reason.
@@ -184,7 +198,7 @@ impl AgentMessage {
 
 #[cfg(test)]
 mod tests {
-    use super::AgentMessage;
+    use super::{AgentMessage, ContextUsage};
     use acp_utils::notifications::SubAgentEvent;
     use llm::ToolCallResult;
     use mcp_utils::display_meta::ToolDisplayMeta;
@@ -324,18 +338,7 @@ mod tests {
     #[test]
     fn test_context_usage_serializes_with_type_tag() {
         let msg = AgentMessage::ContextUsageUpdate {
-            usage_ratio: Some(0.5),
-            context_limit: Some(200_000),
-            input_tokens: 1000,
-            output_tokens: 200,
-            cache_read_tokens: None,
-            cache_creation_tokens: None,
-            reasoning_tokens: None,
-            total_input_tokens: 3000,
-            total_output_tokens: 600,
-            total_cache_read_tokens: 0,
-            total_cache_creation_tokens: 0,
-            total_reasoning_tokens: 0,
+            usage: ContextUsage { usage_ratio: Some(0.5), input_tokens: 1000, ..Default::default() },
         };
         let json = serde_json::to_value(&msg).unwrap();
         assert_eq!(json["type"], "context_usage");

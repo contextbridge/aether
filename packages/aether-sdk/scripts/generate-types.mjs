@@ -36,6 +36,7 @@ async function generateEvalTypes(document) {
     `${JSON.stringify(
       {
         AgentMessage: document.AgentMessage,
+        ContextUsage: document.ContextUsage,
         JudgeRubricResponse: document.JudgeRubricResponse,
         JudgeSummary: document.JudgeSummary,
         JudgeCriterionSpec: document.JudgeCriterionSpec,
@@ -48,6 +49,7 @@ async function generateEvalTypes(document) {
   const parts = await Promise.all(
     [
       ["AgentMessage", document.AgentMessage],
+      ["ContextUsage", document.ContextUsage],
       ["JudgeRubricResponse", document.JudgeRubricResponse],
       ["JudgeSummary", document.JudgeSummary],
       ["JudgeCriterionSpec", document.JudgeCriterionSpec],

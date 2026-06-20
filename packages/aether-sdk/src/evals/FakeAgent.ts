@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import type { AgentMessage } from "../generated/eval-types.js";
+import type { AgentMessage, ContextUsage } from "../generated/eval-types.js";
 import type {
   Agent,
   AgentConfig,
@@ -58,6 +58,20 @@ export class FakeAgent implements Agent {
 
   static writesFile(path: string, contents: string): FakeAgent {
     return FakeAgent.success().withFileWrite(path, contents);
+  }
+
+  /** Append a `context_usage` message reflecting `usage` to the scripted transcript. */
+  withUsage(usage: ContextUsage): FakeAgent {
+    return new FakeAgent(
+      [
+        ...this.messages,
+        {
+          type: "context_usage",
+          ...usage,
+        },
+      ],
+      this.fileWrites,
+    );
   }
 
   withFileWrite(path: string, contents: string): FakeAgent {

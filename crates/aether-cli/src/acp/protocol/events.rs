@@ -37,32 +37,19 @@ pub enum AgentExtNotification {
 
 pub fn try_into_agent_notification(msg: &AgentMessage) -> Option<AgentExtNotification> {
     match msg {
-        AgentMessage::ContextUsageUpdate {
-            usage_ratio,
-            context_limit,
-            input_tokens,
-            output_tokens,
-            cache_read_tokens,
-            cache_creation_tokens,
-            reasoning_tokens,
-            total_input_tokens,
-            total_output_tokens,
-            total_cache_read_tokens,
-            total_cache_creation_tokens,
-            total_reasoning_tokens,
-        } => Some(AgentExtNotification::ContextUsage(ContextUsageParams {
-            usage_ratio: *usage_ratio,
-            context_limit: *context_limit,
-            input_tokens: *input_tokens,
-            output_tokens: *output_tokens,
-            cache_read_tokens: *cache_read_tokens,
-            cache_creation_tokens: *cache_creation_tokens,
-            reasoning_tokens: *reasoning_tokens,
-            total_input_tokens: *total_input_tokens,
-            total_output_tokens: *total_output_tokens,
-            total_cache_read_tokens: *total_cache_read_tokens,
-            total_cache_creation_tokens: *total_cache_creation_tokens,
-            total_reasoning_tokens: *total_reasoning_tokens,
+        AgentMessage::ContextUsageUpdate { usage } => Some(AgentExtNotification::ContextUsage(ContextUsageParams {
+            usage_ratio: usage.usage_ratio,
+            context_limit: usage.context_limit,
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            cache_read_tokens: usage.cache_read_tokens,
+            cache_creation_tokens: usage.cache_creation_tokens,
+            reasoning_tokens: usage.reasoning_tokens,
+            total_input_tokens: usage.total_input_tokens,
+            total_output_tokens: usage.total_output_tokens,
+            total_cache_read_tokens: usage.total_cache_read_tokens,
+            total_cache_creation_tokens: usage.total_cache_creation_tokens,
+            total_reasoning_tokens: usage.total_reasoning_tokens,
         })),
         AgentMessage::ToolProgress { request, message, .. } => {
             let msg_str = message.as_ref()?;

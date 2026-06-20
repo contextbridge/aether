@@ -66,21 +66,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some(ContextCompactionResult { messages_removed, .. }) => {
                 println!("Context compacted: {messages_removed} messages removed");
             }
-            Some(ContextUsageUpdate { usage_ratio, input_tokens, context_limit, .. }) => {
-                match (usage_ratio, context_limit) {
-                    (Some(usage_ratio), Some(context_limit)) => {
-                        println!(
-                            "Context usage: {:.1}% ({}/{} tokens)",
-                            usage_ratio * 100.0,
-                            input_tokens,
-                            context_limit
-                        );
-                    }
-                    _ => {
-                        println!("Context usage: unknown limit ({input_tokens} tokens used)");
-                    }
+            Some(ContextUsageUpdate { usage }) => match (usage.usage_ratio, usage.context_limit) {
+                (Some(usage_ratio), Some(context_limit)) => {
+                    println!(
+                        "Context usage: {:.1}% ({}/{} tokens)",
+                        usage_ratio * 100.0,
+                        usage.input_tokens,
+                        context_limit
+                    );
                 }
-            }
+                _ => {
+                    println!("Context usage: unknown limit ({} tokens used)", usage.input_tokens);
+                }
+            },
             Some(AutoContinue { attempt, max_attempts }) => {
                 println!("Auto-continuing: attempt {attempt}/{max_attempts} (LLM stopped due to length)");
             }

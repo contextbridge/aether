@@ -35,7 +35,12 @@ export type {
   JudgeRubricResponse,
   JudgeSummary,
 } from "./judge.js";
-export { extractToolCalls, isTerminalMessage } from "./transcript.js";
+export {
+  extractToolCalls,
+  isTerminalMessage,
+  summarizeUsage,
+  totalTokens,
+} from "./transcript.js";
 export type { EvalToolCall } from "./transcript.js";
 export { Workspace } from "./workspace.js";
 export type { GitRepoSource, WorkspaceSource } from "./workspace.js";

@@ -346,10 +346,14 @@ mod tests {
 
     async fn next_context_usage(rx: &mut Receiver<AgentMessage>) -> ContextUsageUpdate {
         loop {
-            if let AgentMessage::ContextUsageUpdate { usage_ratio, context_limit, input_tokens, .. } =
+            if let AgentMessage::ContextUsageUpdate { usage } =
                 rx.recv().await.expect("agent should emit context usage")
             {
-                return ContextUsageUpdate { usage_ratio, context_limit, input_tokens };
+                return ContextUsageUpdate {
+                    usage_ratio: usage.usage_ratio,
+                    context_limit: usage.context_limit,
+                    input_tokens: usage.input_tokens,
+                };
             }
         }
     }
