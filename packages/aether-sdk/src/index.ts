@@ -23,27 +23,15 @@ export type {
   HeadlessStdioMode,
 } from "./headless.js";
 export { tool } from "./tool.js";
-export {
-  startMcpServersForHeadless,
-  startMcpServersForSession,
-} from "./mcp/index.js";
-export type {
-  McpSessionConfig,
-  StartedHeadlessMcpServers,
-  StartedMcpServers,
-} from "./mcp/index.js";
+export { mcp } from "./mcp/index.js";
+export type { McpHandle, InlineMcpSource } from "./mcp/index.js";
 export { AetherSdkError } from "./errors.js";
 export type {
   AetherElicitationRequest,
   AetherElicitationResponse,
   AgentSelection,
-  ExternalMcpServerConfig,
   AetherMessage,
-  AetherToolGroups,
-  HttpMcpServerConfig,
   SdkMcpToolDefinition,
-  SseMcpServerConfig,
-  StdioMcpServerConfig,
 } from "./types.js";
 export type { AetherSdkErrorCode } from "./errors.js";
 export type * from "./generated/aether-settings.js";

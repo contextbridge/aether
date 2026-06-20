@@ -9,14 +9,11 @@ import {
   type SettingsSelection,
 } from "./agentProcess.js";
 import { AetherSdkError, throwIfAborted } from "./errors.js";
-import { startMcpServersForSession } from "./mcp/index.js";
 import type {
   AetherElicitationRequest,
   AetherElicitationResponse,
   AetherMessage,
-  AetherToolGroups,
   AgentSelection,
-  ExternalMcpServerConfig,
 } from "./types.js";
 
 const SDK_VERSION = "0.2.3";
@@ -30,8 +27,6 @@ export interface CommonAetherSessionOptions {
   binaryPath?: string;
   env?: Record<string, string | undefined>;
   logDir?: string;
-  tools?: AetherToolGroups;
-  externalMcpServers?: Record<string, ExternalMcpServerConfig>;
   providers?: Record<string, ProviderConnectionOverride>;
   abortSignal?: AbortSignal;
   /** Defaults to {@link autoApprovePermissions}. */
@@ -76,8 +71,6 @@ export class AetherSession {
   ): Promise<AetherSession> {
     const {
       abortSignal,
-      externalMcpServers,
-      tools,
       binaryPath,
       agent,
       model,
@@ -96,12 +89,6 @@ export class AetherSession {
 
     const events = new AsyncQueue<AetherMessage>();
     await using stack = new AsyncDisposableStack();
-    const started = await startMcpServersForSession({
-      externalMcpServers,
-      tools,
-    });
-
-    stack.defer(() => started.cleanup().catch(() => undefined));
 
     throwIfAborted(abortSignal);
 
@@ -139,14 +126,13 @@ export class AetherSession {
 
     const newSessionResponse = await connection.newSession({
       cwd: path.resolve(cwd),
-      mcpServers: started.acpServers,
+      mcpServers: [],
     });
 
     const session = new AetherSession(
       agentProcess,
       connection,
       events,
-      started.cleanup,
       initializeResponse,
       newSessionResponse,
       abortSignal,
@@ -161,7 +147,6 @@ export class AetherSession {
     private readonly agentProcess: AcpAgentProcess,
     private readonly connection: acp.ClientSideConnection,
     private readonly events: AsyncQueue<AetherMessage>,
-    private readonly mcpCleanup: () => Promise<void>,
     initializeResponse: acp.InitializeResponse,
     newSessionResponse: acp.NewSessionResponse,
     abortSignal: AbortSignal | undefined,
@@ -198,7 +183,7 @@ export class AetherSession {
     this.abortCleanup?.[Symbol.dispose]();
     this.abortCleanup = null;
     this.events.close();
-    await Promise.allSettled([this.agentProcess.close(), this.mcpCleanup()]);
+    await this.agentProcess.close();
   }
 
   async [Symbol.asyncDispose](): Promise<void> {

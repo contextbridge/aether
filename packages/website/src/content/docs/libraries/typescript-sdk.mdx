@@ -61,11 +61,9 @@ await AetherSession.start({
 | `agent`               | Agent name from `.aether/settings.json`.                                              |
 | `model`               | Direct model id, such as `anthropic:claude-sonnet-4-5`.                               |
 | `reasoningEffort`     | `"low"`, `"medium"`, `"high"`, or `"xhigh"` when using a direct model.                |
-| `settings`            | Inline Aether settings object using the `.aether/settings.json` shape.                |
+| `settings`            | Inline Aether settings object using the `.aether/settings.json` shape. SDK-hosted and external MCP servers live here under `mcps`. |
 | `settingsFile`        | Path to an alternate settings JSON file.                                              |
 | `binaryPath`          | Override the bundled CLI binary with an absolute path or command available on `PATH`. |
-| `tools`               | Closure-backed TypeScript MCP tool groups keyed by Aether tool prefix.                |
-| `externalMcpServers`  | External stdio, HTTP, or SSE MCP servers keyed by Aether tool prefix.                 |
 | `providers`           | Provider connection overrides, such as custom Bedrock endpoints or auth behavior.     |
 | `abortSignal`         | Cancel the active session and tear down the subprocess.                               |
 | `onPermissionRequest` | Custom policy for ACP permission requests. Defaults to `autoApprovePermissions`.      |
@@ -93,10 +91,12 @@ Only one prompt can be in progress per session.
 
 ## TypeScript tools
 
-Use `tool()` and the `tools` session option to expose TypeScript functions as MCP tools. Tool handlers run in your Node.js process, so closures and in-memory state work normally.
+Use `tool()` to define a TypeScript function and `mcp()` to host one or more of
+them as an MCP server. Tool handlers run in your Node.js process, so closures and
+in-memory state work normally.
 
 ```ts
-import { AetherSession, tool } from "@aether-agent/sdk";
+import { AetherSession, mcp, tool } from "@aether-agent/sdk";
 import { z } from "zod";
 
 let submitted: { answer: string } | null = null;
@@ -104,17 +104,20 @@ let submitted: { answer: string } | null = null;
 const submitAnswer = tool({
   name: "submit_answer",
   description: "Submit the final answer",
-  input: { answer: z.string() },
+  inputSchema: { answer: z.string() },
   handler: async ({ answer }) => {
     submitted = { answer };
     return { content: [{ type: "text", text: "Submitted." }] };
   },
 });
 
+await using custom = await mcp({ name: "custom", tools: [submitAnswer] });
+
 await using session = await AetherSession.start({
   cwd: process.cwd(),
-  tools: {
-    custom: [submitAnswer],
+  settings: {
+    agents: [],
+    mcps: [custom.spec],
   },
 });
 
@@ -127,28 +130,67 @@ for await (const _message of session.prompt(
 console.log(submitted);
 ```
 
-Aether names MCP tools as `server__tool`. In the example above, the `custom` group exposes `submit_answer` as `custom__submit_answer`.
 
-Each tool group starts a local Streamable HTTP MCP server on `127.0.0.1` for the lifetime of the session. The SDK protects these local servers with a per-session bearer token and host-header validation.
+
+The handle implements `Symbol.asyncDispose`, so `await using` stops the server on
+scope exit.
+
+### Per-agent tools
+
+A spec on the top-level `mcps` is available to every agent. Put it on a single
+agent's `mcps` instead to scope those tools to that agent.
+
+```ts
+await using planner = await mcp({ name: "planner-tools", tools: [plan] });
+await using reviewer = await mcp({ name: "reviewer-tools", tools: [review] });
+await using session = await AetherSession.start({
+  settings: {
+    agents: [
+      {
+        name: "planner",
+        description: "Planner",
+        model: "anthropic:claude-sonnet-4-5",
+        userInvocable: true,
+        mcps: [planner.spec],
+      },
+      {
+        name: "reviewer",
+        description: "Reviewer",
+        model: "anthropic:claude-sonnet-4-5",
+        userInvocable: true,
+        mcps: [reviewer.spec],
+      },
+    ],
+  },
+});
+```
 
 ## External MCP servers
 
-You can also attach external MCP servers. Object keys become the Aether tool prefix.
+Attach external MCP servers by adding an inline source to `settings.mcps`.
 
 ```ts
 await using session = await AetherSession.start({
   cwd: process.cwd(),
-  externalMcpServers: {
-    filesystem: {
-      type: "stdio",
-      command: "uvx",
-      args: ["mcp-server-filesystem", process.cwd()],
-    },
-    remote: {
-      type: "http",
-      url: "https://mcp.example.com/mcp",
-      headers: { Authorization: "Bearer ..." },
-    },
+  settings: {
+    agents: [],
+    mcps: [
+      {
+        type: "inline",
+        servers: {
+          filesystem: {
+            type: "stdio",
+            command: "uvx",
+            args: ["mcp-server-filesystem", process.cwd()],
+          },
+          remote: {
+            type: "http",
+            url: "https://mcp.example.com/mcp",
+            headers: { Authorization: "Bearer ..." },
+          },
+        },
+      },
+    ],
   },
 });
 ```
