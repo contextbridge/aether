@@ -1,12 +1,17 @@
-import type { AgentMessage } from "../generated/eval-types.js";
+import type { AgentMessage, ContextUsage } from "../generated/eval-types.js";
 import type { Agent, AgentRunOptions, AgentRunResult } from "./Agent.js";
-import { type EvalToolCall, extractToolCalls } from "./transcript.js";
+import {
+  type EvalToolCall,
+  extractToolCalls,
+  summarizeUsage,
+} from "./transcript.js";
 import { Workspace } from "./workspace.js";
 
 export interface TaskRun extends AsyncDisposable {
   readonly prompt: string;
   readonly passed: boolean;
   readonly toolCalls: EvalToolCall[];
+  readonly usage: ContextUsage;
   readonly transcript: AgentMessage[];
   readonly workspace: Workspace;
 }
@@ -37,6 +42,7 @@ export class Task {
       prompt: this.prompt,
       passed: result.transcript.at(-1)?.type === "done",
       toolCalls: extractToolCalls(result.transcript),
+      usage: summarizeUsage(result.transcript),
       transcript: result.transcript,
       workspace,
       [Symbol.asyncDispose]: () => workspace.cleanup(),

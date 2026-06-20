@@ -1,5 +1,5 @@
 use crate::agents::{TRANSCRIPT_PAYLOAD_CHARS, get_transcript_line};
-use aether_core::events::AgentMessage;
+use aether_core::events::{AgentMessage, ContextUsage};
 use std::fmt::Write as _;
 
 pub struct Transcript {
@@ -42,6 +42,19 @@ impl Transcript {
 
     pub fn tool_call_count(&self, name: &str) -> usize {
         self.tool_calls(name).count()
+    }
+
+    /// Returns the aggregated usage from the final `ContextUsageUpdate`, or a
+    /// zeroed summary if no usage was recorded.
+    pub fn usage(&self) -> ContextUsage {
+        self.messages
+            .iter()
+            .rev()
+            .find_map(|msg| match msg {
+                AgentMessage::ContextUsageUpdate { usage } => Some(usage.clone()),
+                _ => None,
+            })
+            .unwrap_or_default()
     }
 }
 
@@ -89,6 +102,60 @@ mod tests {
         let call = ToolCall { name: "bash", arguments: "not json" };
 
         assert!(call.arguments_json().is_err());
+    }
+
+    #[test]
+    fn usage_returns_zeroed_summary_when_no_context_usage() {
+        let transcript = transcript_with_messages(vec![tool_call("bash")]);
+        let usage = transcript.usage();
+        assert_eq!(usage, ContextUsage::default());
+    }
+
+    #[test]
+    fn usage_extracts_final_cumulative_totals() {
+        let transcript = transcript_with_messages(vec![
+            context_usage(100, 10, 1000, 100, 0, 0),
+            context_usage(200, 20, 3000, 600, 50, 0),
+        ]);
+
+        let usage = transcript.usage();
+        assert_eq!(usage.input_tokens, 200);
+        assert_eq!(usage.output_tokens, 20);
+        assert_eq!(usage.cache_read_tokens, Some(50));
+        assert_eq!(usage.total_input_tokens, 3000);
+        assert_eq!(usage.total_output_tokens, 600);
+        assert_eq!(usage.usage_ratio, Some(0.5));
+        assert_eq!(usage.context_limit, Some(200_000));
+    }
+
+    #[test]
+    fn total_tokens_sums_input_and_output() {
+        let transcript = transcript_with_messages(vec![context_usage(0, 0, 3000, 600, 0, 0)]);
+
+        assert_eq!(transcript.usage().total_tokens(), 3600);
+    }
+
+    fn context_usage(
+        input_tokens: u32,
+        output_tokens: u32,
+        total_input: u64,
+        total_output: u64,
+        cache_read: u32,
+        reasoning: u32,
+    ) -> AgentMessage {
+        AgentMessage::ContextUsageUpdate {
+            usage: ContextUsage {
+                usage_ratio: Some(0.5),
+                context_limit: Some(200_000),
+                input_tokens,
+                output_tokens,
+                cache_read_tokens: Some(cache_read),
+                reasoning_tokens: Some(reasoning),
+                total_input_tokens: total_input,
+                total_output_tokens: total_output,
+                ..Default::default()
+            },
+        }
     }
 
     pub(crate) fn transcript_with_messages(messages: Vec<AgentMessage>) -> Transcript {

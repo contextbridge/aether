@@ -1,7 +1,7 @@
 use crate::context::{CompactionConfig, Compactor, TokenTracker};
 use crate::core::PromptCache;
 pub use crate::core::retry_config::RetryConfig;
-use crate::events::{AgentCommand, AgentMessage, Command, UserCommand};
+use crate::events::{AgentCommand, AgentMessage, Command, ContextUsage, UserCommand};
 use crate::mcp::run_mcp_task::{McpCommand, ToolExecutionEvent};
 use futures::Stream;
 use llm::types::IsoString;
@@ -525,18 +525,20 @@ impl Agent {
     fn context_usage_message(&self) -> AgentMessage {
         let last = self.token_tracker.last_usage();
         AgentMessage::ContextUsageUpdate {
-            usage_ratio: self.token_tracker.usage_ratio(),
-            context_limit: self.token_tracker.context_limit(),
-            input_tokens: last.input_tokens,
-            output_tokens: last.output_tokens,
-            cache_read_tokens: last.cache_read_tokens,
-            cache_creation_tokens: last.cache_creation_tokens,
-            reasoning_tokens: last.reasoning_tokens,
-            total_input_tokens: self.token_tracker.total_input_tokens(),
-            total_output_tokens: self.token_tracker.total_output_tokens(),
-            total_cache_read_tokens: self.token_tracker.total_cache_read_tokens(),
-            total_cache_creation_tokens: self.token_tracker.total_cache_creation_tokens(),
-            total_reasoning_tokens: self.token_tracker.total_reasoning_tokens(),
+            usage: ContextUsage {
+                usage_ratio: self.token_tracker.usage_ratio(),
+                context_limit: self.token_tracker.context_limit(),
+                input_tokens: last.input_tokens,
+                output_tokens: last.output_tokens,
+                cache_read_tokens: last.cache_read_tokens,
+                cache_creation_tokens: last.cache_creation_tokens,
+                reasoning_tokens: last.reasoning_tokens,
+                total_input_tokens: self.token_tracker.total_input_tokens(),
+                total_output_tokens: self.token_tracker.total_output_tokens(),
+                total_cache_read_tokens: self.token_tracker.total_cache_read_tokens(),
+                total_cache_creation_tokens: self.token_tracker.total_cache_creation_tokens(),
+                total_reasoning_tokens: self.token_tracker.total_reasoning_tokens(),
+            },
         }
     }
 
@@ -855,12 +857,12 @@ mod tests {
         .await
         .unwrap();
 
-        let Some(AgentMessage::ContextUsageUpdate { input_tokens, usage_ratio, .. }) = rx.recv().await else {
+        let Some(AgentMessage::ContextUsageUpdate { usage }) = rx.recv().await else {
             panic!("expected context usage update after conversation replacement");
         };
 
-        assert_eq!(input_tokens, 800);
-        assert_eq!(usage_ratio, Some(0.8));
+        assert_eq!(usage.input_tokens, 800);
+        assert_eq!(usage.usage_ratio, Some(0.8));
         handle.abort();
     }
 

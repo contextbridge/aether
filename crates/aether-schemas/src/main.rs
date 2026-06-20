@@ -6,6 +6,7 @@ fn main() {
         "AetherSettings": schemars::schema_for!(aether_project::AetherSettings),
         "HeadlessOptions": schemars::schema_for!(aether_cli::headless::HeadlessOptions),
         "AgentMessage": schemars::schema_for!(aether_core::events::AgentMessage),
+        "ContextUsage": schemars::schema_for!(aether_core::events::ContextUsage),
         "JudgeRubricResponse": schemars::schema_for!(aether_evals::JudgeRubricResponse),
         "JudgeSummary": schemars::schema_for!(aether_evals::JudgeSummary),
         "JudgeCriterionSpec": schemars::schema_for!(aether_evals::JudgeCriterionSpec),

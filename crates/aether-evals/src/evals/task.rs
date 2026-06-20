@@ -3,7 +3,7 @@ use super::transcript::{Transcript, format_transcript};
 use super::workspace::Workspace;
 use crate::EvalRunError;
 use crate::agents::{Agent, AgentConfig, RunError, is_terminal};
-use aether_core::events::AgentMessage;
+use aether_core::events::{AgentMessage, ContextUsage};
 use std::fmt::{Debug, Write as _};
 use thiserror::Error;
 use tokio::sync::mpsc;
@@ -103,6 +103,12 @@ impl TaskRun {
 
     pub fn transcript(&self) -> &Transcript {
         &self.transcript
+    }
+
+    /// Returns the aggregated token usage for this run (extracted from the final
+    /// `ContextUsageUpdate`). Returns a zeroed summary if no usage was recorded.
+    pub fn usage(&self) -> ContextUsage {
+        self.transcript.usage()
     }
 
     pub fn into_workspace(self) -> Workspace {

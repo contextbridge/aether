@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { FakeAgent, Workspace } from "../../src/evals/index.js";
+import { FakeAgent, Workspace, summarizeUsage } from "../../src/evals/index.js";
 
 describe("FakeAgent", () => {
   it("success() ends with a done message", async () => {
@@ -52,6 +52,35 @@ describe("FakeAgent", () => {
     );
 
     expect(seen).toEqual(["text", "done"]);
+  });
+
+  it("withUsage() appends a context_usage message whose totals flow into usage", async () => {
+    const agent = FakeAgent.success().withUsage({
+      input_tokens: 200,
+      output_tokens: 20,
+      cache_read_tokens: 50,
+      cache_creation_tokens: 0,
+      reasoning_tokens: 7,
+      usage_ratio: 0.5,
+      context_limit: 200_000,
+      total_input_tokens: 3000,
+      total_output_tokens: 600,
+      total_cache_read_tokens: 50,
+      total_cache_creation_tokens: 0,
+      total_reasoning_tokens: 7,
+    });
+
+    const result = await agent.run({
+      workspace: await workspace(),
+      taskPrompt: "t",
+    });
+
+    expect(result.transcript.map((message) => message.type)).toContain(
+      "context_usage",
+    );
+    const usage = summarizeUsage(result.transcript);
+    expect(usage.total_input_tokens).toBe(3000);
+    expect(usage.total_output_tokens).toBe(600);
   });
 });
 

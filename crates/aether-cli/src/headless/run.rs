@@ -142,14 +142,9 @@ fn format_text(msg: &AgentMessage) -> Option<String> {
             Some(format!("Context compacted: {messages_removed} messages removed. {summary}"))
         }
 
-        AgentMessage::ContextUsageUpdate {
-            input_tokens,
-            output_tokens,
-            total_input_tokens,
-            total_output_tokens,
-            ..
-        } => Some(format!(
-            "Tokens: {input_tokens} in, {output_tokens} out (total: {total_input_tokens} in, {total_output_tokens} out)"
+        AgentMessage::ContextUsageUpdate { usage } => Some(format!(
+            "Tokens: {} in, {} out (total: {} in, {} out)",
+            usage.input_tokens, usage.output_tokens, usage.total_input_tokens, usage.total_output_tokens
         )),
 
         AgentMessage::ContextCleared => Some("Context cleared".to_string()),
@@ -175,6 +170,8 @@ fn setup_tracing(verbose: bool) {
 
 #[cfg(test)]
 mod tests {
+    use aether_core::events::ContextUsage;
+
     use super::*;
 
     #[test]
@@ -469,18 +466,13 @@ mod tests {
 
     fn usage_update() -> AgentMessage {
         AgentMessage::ContextUsageUpdate {
-            usage_ratio: Some(0.25),
-            context_limit: Some(200_000),
-            input_tokens: 1500,
-            output_tokens: 250,
-            cache_read_tokens: Some(400),
-            cache_creation_tokens: Some(100),
-            reasoning_tokens: Some(50),
-            total_input_tokens: 5000,
-            total_output_tokens: 800,
-            total_cache_read_tokens: 1200,
-            total_cache_creation_tokens: 300,
-            total_reasoning_tokens: 150,
+            usage: ContextUsage {
+                input_tokens: 1500,
+                output_tokens: 250,
+                total_input_tokens: 5000,
+                total_output_tokens: 800,
+                ..Default::default()
+            },
         }
     }
 }
