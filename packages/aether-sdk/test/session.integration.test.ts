@@ -6,7 +6,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { AetherSession, type AetherMessage, tool } from "../src/index.js";
+import { AetherSession, mcp, type AetherMessage, tool } from "../src/index.js";
 
 const FAKE_AETHER = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -268,6 +268,8 @@ describe("AetherSession with a fake ACP agent", () => {
         return { content: [{ type: "text", text: "ok" }] };
       },
     });
+
+    await using custom = await mcp({ name: "custom", tools: [submit] });
     const session = await AetherSession.start({
       binaryPath: FAKE_AETHER,
       env: {
@@ -276,7 +278,7 @@ describe("AetherSession with a fake ACP agent", () => {
         FAKE_AETHER_TOOL: "submit",
         FAKE_AETHER_TOOL_ARGS: JSON.stringify({ answer: "42" }),
       },
-      tools: { custom: [submit] },
+      settings: { agents: [], mcps: [custom.spec] },
     });
 
     try {
@@ -288,5 +290,79 @@ describe("AetherSession with a fake ACP agent", () => {
     }
 
     expect(received).toBe("42");
+  });
+
+  it("forwards per-agent mcps to the spawned agent and scopes each source", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "aether-sdk-per-agent-"));
+    const logFile = path.join(dir, "fake-aether.log");
+    await using planner = await mcp({
+      name: "planner-tools",
+      tools: [
+        tool({
+          name: "plan",
+          description: "plan",
+          inputSchema: {},
+          handler: async () => ({ content: [] }),
+        }),
+      ],
+    });
+
+    await using reviewer = await mcp({
+      name: "reviewer-tools",
+      tools: [
+        tool({
+          name: "review",
+          description: "review",
+          inputSchema: {},
+          handler: async () => ({ content: [] }),
+        }),
+      ],
+    });
+
+    const session = await AetherSession.start({
+      binaryPath: FAKE_AETHER,
+      env: { PATH: process.env.PATH, FAKE_AETHER_LOG_FILE: logFile },
+      settings: {
+        agents: [
+          {
+            name: "planner",
+            description: "Planner",
+            model: "anthropic:claude-sonnet-4-5",
+            userInvocable: true,
+            mcps: [planner.spec],
+          },
+          {
+            name: "reviewer",
+            description: "Reviewer",
+            model: "anthropic:claude-sonnet-4-5",
+            userInvocable: true,
+            mcps: [reviewer.spec],
+          },
+        ],
+      },
+    });
+
+    try {
+      const lines = (await readFile(logFile, "utf8")).trim().split("\n");
+      const argv = lines
+        .map((line) => JSON.parse(line))
+        .find((event) => event.event === "argv");
+      const optionsJson = argv.args[argv.args.indexOf("--options-json") + 1];
+      const options = JSON.parse(optionsJson);
+      const agents = options.settings.agents;
+
+      const plannerServer = agents[0].mcps[0].servers["planner-tools"];
+      expect(plannerServer).toMatchObject({ type: "http" });
+      expect(agents[0].mcps).toHaveLength(1);
+
+      const reviewerServer = agents[1].mcps[0].servers["reviewer-tools"];
+      expect(reviewerServer).toMatchObject({ type: "http" });
+      expect(agents[1].mcps).toHaveLength(1);
+
+      expect(agents[0].mcps[0]).not.toBe(agents[1].mcps[0]);
+    } finally {
+      await session.close();
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

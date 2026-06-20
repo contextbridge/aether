@@ -7,13 +7,8 @@ import {
 import { runCommand } from "./childProcess.js";
 import { assertOptionInvariants, compactCliOptions } from "./cliOptions.js";
 import { throwIfAborted } from "./errors.js";
-import type {
-  AetherHeadlessCliOptions,
-  McpConfig,
-} from "./generated/aether-headless-options.js";
-import { startMcpServersForHeadless } from "./mcp/index.js";
+import type { AetherHeadlessCliOptions } from "./generated/aether-headless-options.js";
 import { resolveEnv } from "./processEnv.js";
-import type { AetherToolGroups, ExternalMcpServerConfig } from "./types.js";
 
 export type HeadlessOutputFormat = NonNullable<
   AetherHeadlessCliOptions["output"]
@@ -39,8 +34,6 @@ export interface AetherHeadlessOptions extends Omit<
   prompt: string;
   binaryPath?: string;
   env?: Record<string, string | undefined>;
-  tools?: AetherToolGroups;
-  externalMcpServers?: Record<string, ExternalMcpServerConfig>;
   stdout?: HeadlessStdioMode;
   stderr?: HeadlessStdioMode;
   abortSignal?: AbortSignal;
@@ -50,44 +43,22 @@ export async function runHeadless(
   options: AetherHeadlessOptions,
 ): Promise<AetherHeadlessResult> {
   throwIfAborted(options.abortSignal);
-  const started = await startMcpServersForHeadless({
-    tools: options.tools,
-    externalMcpServers: options.externalMcpServers,
-  });
-  try {
-    throwIfAborted(options.abortSignal);
-    const { command, args } = buildHeadlessCommand(options, started.mcpConfig);
-    return await runHeadlessProcess(command, args, options);
-  } finally {
-    await started.cleanup();
-  }
+  const { command, args } = buildHeadlessCommand(options);
+  return runHeadlessProcess(command, args, options);
 }
 
 function buildHeadlessCommand(
   options: AetherHeadlessOptions,
-  mcpConfig: McpConfig = { servers: {} },
 ): AetherCliCommand {
-  const {
-    binaryPath,
-    tools,
-    externalMcpServers,
-    stdout,
-    stderr,
-    abortSignal,
-    env,
-    ...cliOptions
-  } = options;
+  const { binaryPath, stdout, stderr, abortSignal, env, ...cliOptions } =
+    options;
 
   assertOptionInvariants(cliOptions);
 
   return buildAetherCliCommand({
     binaryPath,
     subcommand: "headless",
-    options: compactCliOptions({
-      ...cliOptions,
-      mcpConfig:
-        Object.keys(mcpConfig.servers).length > 0 ? mcpConfig : undefined,
-    }),
+    options: compactCliOptions(cliOptions),
   });
 }
 

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import { runHeadless } from "../src/headless.js";
+import { mcp } from "../src/mcp/index.js";
 import { tool } from "../src/tool.js";
 
 const FAKE_AETHER = path.resolve(
@@ -24,7 +25,7 @@ afterEach(async () => {
 });
 
 describe("runAetherHeadless()", () => {
-  it("starts SDK tool servers and passes their MCP config to headless", async () => {
+  it("passes SDK-hosted mcp() sources through to headless via settings.mcps", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "aether-sdk-headless-"));
     tempDirs.push(dir);
     const logFile = path.join(dir, "fake-aether.jsonl");
@@ -35,11 +36,13 @@ describe("runAetherHeadless()", () => {
       handler: async () => ({ content: [{ type: "text", text: "ok" }] }),
     });
 
+    await using weather = await mcp({ name: "weather", tools: [submit] });
+
     const result = await runHeadless({
       binaryPath: FAKE_AETHER,
       prompt: "call the tool",
       model: "anthropic:claude-sonnet-4-5",
-      settings: { agents: [] },
+      settings: { agents: [], mcps: [weather.spec] },
       providers: {
         bedrock: {
           url: "http://127.0.0.1:8787",
@@ -49,7 +52,6 @@ describe("runAetherHeadless()", () => {
       },
       output: "json",
       events: ["tool_call", "done"],
-      tools: { weather: [submit] },
       env: { ...process.env, FAKE_AETHER_LOG_FILE: logFile },
     });
 
@@ -75,12 +77,12 @@ describe("runAetherHeadless()", () => {
         },
       },
     });
-    const mcpConfig = options.mcpConfig;
-    expect(mcpConfig.servers.weather).toMatchObject({ type: "http" });
-    expect(mcpConfig.servers.weather.headers.Authorization).toMatch(
-      /^Bearer .+$/,
-    );
-    await expect(fetch(mcpConfig.servers.weather.url)).rejects.toThrow();
+    const inlineSource = options.settings.mcps[0];
+    expect(inlineSource.type).toBe("inline");
+    const weatherServer = inlineSource.servers.weather;
+    expect(weatherServer).toMatchObject({ type: "http" });
+    expect(weatherServer.headers.Authorization).toMatch(/^Bearer .+$/);
+    expect(options).not.toHaveProperty("mcpConfig");
   });
 
   it("rejects conflicting options", async () => {

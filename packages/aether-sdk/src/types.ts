@@ -21,32 +21,6 @@ export interface AetherElicitationResponse {
   content?: Record<string, unknown>;
 }
 
-export type AetherToolGroups = Record<string, SdkMcpToolDefinition<any>[]>;
-
-export type ExternalMcpServerConfig =
-  | StdioMcpServerConfig
-  | HttpMcpServerConfig
-  | SseMcpServerConfig;
-
-export interface StdioMcpServerConfig {
-  type: "stdio";
-  command: string;
-  args?: string[];
-  env?: Record<string, string | undefined>;
-}
-
-export interface HttpMcpServerConfig {
-  type: "http";
-  url: string;
-  headers?: Record<string, string>;
-}
-
-export interface SseMcpServerConfig {
-  type: "sse";
-  url: string;
-  headers?: Record<string, string>;
-}
-
 export interface SdkMcpToolDefinition<Schema extends z.ZodRawShape> {
   name: string;
   description: string;

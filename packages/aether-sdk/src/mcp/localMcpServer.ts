@@ -17,7 +17,6 @@ export interface LocalMcpServerConfig {
 }
 
 export interface LocalMcpServerInfo {
-  name: string;
   url: string;
   authToken: string;
 }
@@ -56,7 +55,6 @@ export class LocalMcpServerHost {
     const { port } = this.httpServer.address() as AddressInfo;
 
     return {
-      name: this.config.name,
       url: `http://127.0.0.1:${port}/mcp`,
       authToken: this.authToken,
     };

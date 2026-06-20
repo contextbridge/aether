@@ -3,7 +3,7 @@
 //
 // Behavior:
 //   - initialize -> respond with V1 capabilities.
-//   - newSession -> echo session id, store mcpServers + _meta to log file.
+//   - newSession -> echo session id, store settings + _meta to log file.
 //   - prompt -> emit a session_update chunk, optionally request a permission
 //     decision and/or call a custom MCP tool, then return stopReason="end_turn".
 //
@@ -52,10 +52,32 @@ const writable = Writable.toWeb(process.stdout);
 const readable = Readable.toWeb(process.stdin);
 const stream = ndJsonStream(writable, readable);
 
-log(JSON.stringify({ event: "argv", args: process.argv.slice(2) }));
+const argv = process.argv.slice(2);
+log(JSON.stringify({ event: "argv", args: argv }));
+
+const argvOptionsIndex = argv.indexOf("--options-json");
+const argvOptions =
+  argvOptionsIndex >= 0 ? JSON.parse(argv[argvOptionsIndex + 1] ?? "{}") : {};
+const settings = argvOptions.settings ?? {};
+
+function collectInlineServers() {
+  const map = new Map();
+  const ingest = (source) => {
+    if (typeof source !== "object" || source === null) return;
+    if (source.type !== "inline") return;
+    for (const [name, config] of Object.entries(source.servers ?? {})) {
+      map.set(name, config);
+    }
+  };
+  for (const source of settings.mcps ?? []) ingest(source);
+  for (const agent of settings.agents ?? []) {
+    for (const source of agent.mcps ?? []) ingest(source);
+  }
+  return map;
+}
+const inlineServers = collectInlineServers();
 
 let capturedSessionId = null;
-let capturedMcpServers = [];
 let capturedMeta = null;
 let conn;
 
@@ -74,12 +96,11 @@ const agent = {
   async newSession(params) {
     capturedSessionId =
       "fake-session-" + Math.random().toString(36).slice(2, 8);
-    capturedMcpServers = params.mcpServers ?? [];
     capturedMeta = params._meta ?? null;
     log(
       JSON.stringify({
         event: "newSession",
-        mcpServers: capturedMcpServers,
+        settings,
         meta: capturedMeta,
       }),
     );
@@ -134,15 +155,13 @@ const agent = {
 
     const callName = process.env.FAKE_AETHER_CALL_MCP_SERVER;
     if (callName) {
-      const server = capturedMcpServers.find((s) => s.name === callName);
+      const server = inlineServers.get(callName);
       if (!server || server.type !== "http") {
         throw new Error(
-          `Fake agent could not find http MCP server named ${callName}`,
+          `Fake agent could not find inline http MCP server named ${callName}`,
         );
       }
-      const headers = Object.fromEntries(
-        server.headers.map((h) => [h.name, h.value]),
-      );
+      const headers = server.headers ?? {};
 
       const transport = new StreamableHTTPClientTransport(new URL(server.url), {
         requestInit: { headers },
