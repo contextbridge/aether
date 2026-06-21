@@ -1,12 +1,12 @@
 mod common;
-use aether_evals::{Task, TaskRun, Workspace};
+use aether_evals::{Agent, Task, Transcript, Workspace};
 use common::{EvalHarnessError, create_aether_agent};
 
 #[tokio::test]
 async fn edit_file_multi_point_revision_in_single_call_eval() -> Result<(), EvalHarnessError> {
     let workspace =
         Workspace::from_files([("config.txt", &file_contents(&["host = localhost", "port = 8080", "debug = false"]))])?;
-    let agent = create_aether_agent();
+    let (_container, agent) = create_aether_agent(&workspace).await?;
     let prompt = lines(&[
         "Use the coding MCP tools to update config.txt.",
         "Read the file first, then call coding__edit_file EXACTLY ONCE, passing all three changes together in the edits array:",
@@ -15,21 +15,20 @@ async fn edit_file_multi_point_revision_in_single_call_eval() -> Result<(), Eval
         "- set debug to true",
     ]);
 
-    let run = Task::new(prompt, workspace).run(&agent).await?;
+    let trace = Transcript::from_stream(agent.run(Task::new(prompt.clone()))).await?;
 
-    assert_single_edit_call(&run, "coding__edit_file");
+    assert_single_edit_call(&trace, "coding__edit_file");
     assert_eq!(
-        read_file(&run, "config.txt")?,
-        file_contents(&["host = example.com", "port = 443", "debug = true"]),
-        "{}",
-        run.failure_context()
+        read_file(&workspace, "config.txt")?,
+        file_contents(&["host = example.com", "port = 443", "debug = true"])
     );
     Ok(())
 }
 
 #[tokio::test]
 async fn edit_plan_multi_point_revision_in_single_call_eval() -> Result<(), EvalHarnessError> {
-    let agent = create_aether_agent();
+    let workspace = Workspace::empty()?;
+    let (_container, agent) = create_aether_agent(&workspace).await?;
     let prompt = lines(&[
         "Use the plan MCP tools.",
         "First call plan__write_plan with planName 'feature' and this exact body:",
@@ -41,21 +40,19 @@ async fn edit_plan_multi_point_revision_in_single_call_eval() -> Result<(), Eval
         "- change 'Step two: wire it up' to 'Step two: implement'",
     ]);
 
-    let run = Task::new(prompt, Workspace::empty()?).run(&agent).await?;
+    let trace = Transcript::from_stream(agent.run(Task::new(prompt.clone()))).await?;
 
-    assert_single_edit_call(&run, "plan__edit_plan");
+    assert_single_edit_call(&trace, "plan__edit_plan");
     assert_eq!(
-        read_file(&run, "docs/aether/plans/feature-plan.md")?,
-        lines(&["# Feature", "Step one: design", "Step two: implement"]),
-        "{}",
-        run.failure_context()
+        read_file(&workspace, "docs/aether/plans/feature-plan.md")?,
+        lines(&["# Feature", "Step one: design", "Step two: implement"])
     );
     Ok(())
 }
 
 #[track_caller]
-fn assert_single_edit_call(run: &TaskRun, tool: &str) {
-    assert_eq!(run.transcript().tool_call_count(tool), 1, "{}", run.failure_context());
+fn assert_single_edit_call(trace: &Transcript, tool: &str) {
+    assert_eq!(trace.tool_call_count(tool), 1);
 }
 
 fn file_contents(lines: &[&str]) -> String {
@@ -66,6 +63,6 @@ fn lines(lines: &[&str]) -> String {
     lines.join("\n")
 }
 
-fn read_file(run: &TaskRun, path: &str) -> Result<String, EvalHarnessError> {
-    Ok(std::fs::read_to_string(run.workspace().join(path))?)
+fn read_file(workspace: &Workspace, path: &str) -> Result<String, EvalHarnessError> {
+    Ok(std::fs::read_to_string(workspace.join(path))?)
 }

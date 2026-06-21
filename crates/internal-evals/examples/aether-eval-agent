@@ -10,9 +10,9 @@ if [ "${AETHER_EVAL_AGENT:-}" ]; then
   exec aether headless \
     --output json \
     --agent "$AETHER_EVAL_AGENT" \
-    "$AETHER_EVAL_WRAPPED_TASK_PROMPT"
+    "$AETHER_EVAL_TASK_PROMPT"
 fi
 
 exec aether headless \
   --output json \
-  "$AETHER_EVAL_WRAPPED_TASK_PROMPT"
+  "$AETHER_EVAL_TASK_PROMPT"
