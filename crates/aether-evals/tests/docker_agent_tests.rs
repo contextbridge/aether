@@ -17,7 +17,7 @@ enum DockerAgentTestError {
 #[tokio::test]
 async fn docker_agent_direct_agent_message_eval() -> Result<(), DockerAgentTestError> {
     let workspace = Workspace::empty()?;
-    let container = Container::builder(Image::new("aether-sandbox", "latest")).start(&workspace).await?;
+    let container = Container::builder(Image::parse("alpine:3").unwrap()).start(&workspace).await?;
     let agent = DockerAgent::new(
         container,
         vec![
