@@ -156,6 +156,7 @@ dependencies = [
  "aether-agent-core",
  "aether-llm",
  "aether-project",
+ "async-stream",
  "futures",
  "schemars 1.2.1",
  "serde",
