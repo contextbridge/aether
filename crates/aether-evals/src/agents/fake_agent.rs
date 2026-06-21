@@ -1,18 +1,22 @@
-use super::agent::{Agent, AgentConfig, RunError};
+use super::agent::{Agent, AgentRunResult, RunError};
+use crate::Task;
 use aether_core::events::AgentMessage;
+use async_stream::try_stream;
+use futures::Stream;
 use llm::ToolCallResult;
-use std::path::PathBuf;
-use tokio::sync::mpsc::Sender;
+use std::path::{Path, PathBuf};
+use tokio::fs::{create_dir_all, write};
 
 #[derive(Clone)]
 pub struct FakeAgent {
     messages: Vec<AgentMessage>,
     file_writes: Vec<(PathBuf, String)>,
+    workspace: Option<PathBuf>,
 }
 
 impl FakeAgent {
     pub fn new(messages: Vec<AgentMessage>) -> Self {
-        Self { messages, file_writes: Vec::new() }
+        Self { messages, file_writes: Vec::new(), workspace: None }
     }
 
     pub fn success() -> Self {
@@ -45,77 +49,68 @@ impl FakeAgent {
         self.file_writes.push((path.into(), contents.into()));
         self
     }
+
+    pub fn with_workspace(mut self, workspace: impl AsRef<Path>) -> Self {
+        self.workspace = Some(workspace.as_ref().to_path_buf());
+        self
+    }
 }
 
 impl Agent for FakeAgent {
-    async fn run(&self, config: AgentConfig<'_>, tx: Sender<AgentMessage>) -> Result<(), RunError> {
-        for (path, contents) in &self.file_writes {
-            let file_path = config.workspace().join(path);
-            if let Some(parent) = file_path.parent() {
-                tokio::fs::create_dir_all(parent).await.map_err(|error| {
-                    RunError::ExecutionFailed(format!("failed to create fake file parent: {error}"))
-                })?;
+    fn run(&self, _task: Task) -> impl Stream<Item = AgentRunResult> + Send + '_ {
+        try_stream! {
+            if !self.file_writes.is_empty() && self.workspace.is_none() {
+                Err(RunError::ConfigurationError("FakeAgent file writes require a bound workspace".to_string()))?;
             }
-            tokio::fs::write(&file_path, contents)
-                .await
-                .map_err(|error| RunError::ExecutionFailed(format!("failed to write fake file: {error}")))?;
-        }
 
-        for message in &self.messages {
-            tx.send(message.clone()).await.map_err(|error| RunError::ChannelSendFailed(error.to_string()))?;
-        }
+            for (path, contents) in &self.file_writes {
+                let file_path = self.workspace.as_ref().expect("workspace checked above").join(path);
+                if let Some(parent) = file_path.parent() {
+                    create_dir_all(parent).await.map_err(|error| {
+                        RunError::ExecutionFailed(format!("failed to create fake file parent: {error}"))
+                    })?;
+                }
+                write(&file_path, contents)
+                    .await
+                    .map_err(|error| RunError::ExecutionFailed(format!("failed to write fake file: {error}")))?;
+            }
 
-        Ok(())
+            for message in &self.messages {
+                yield message.clone();
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::sync::mpsc;
 
     #[tokio::test]
     async fn fake_agent_success_sends_done() {
         let agent = FakeAgent::success();
-        let (tx, mut rx) = mpsc::channel(10);
-        let temp_dir = tempfile::tempdir().unwrap();
-        let config = AgentConfig { workspace_root: temp_dir.path(), relative_cwd: None, task_prompt: "test task" };
-        let result = agent.run(config, tx).await;
-        assert!(result.is_ok());
+        let transcript = crate::Transcript::from_stream(agent.run(Task::new("test task"))).await.unwrap();
+        let messages = transcript.messages();
 
-        let message = rx.recv().await.unwrap();
-        assert!(matches!(message, AgentMessage::Text { .. }));
-
-        let message = rx.recv().await.unwrap();
-        assert!(matches!(message, AgentMessage::Done));
+        assert!(matches!(messages.first(), Some(AgentMessage::Text { .. })));
+        assert!(matches!(messages.get(1), Some(AgentMessage::Done)));
     }
 
     #[tokio::test]
     async fn fake_agent_with_tool_call_sends_tool_messages() {
         let agent = FakeAgent::with_tool_call("bash", "success");
-        let (tx, mut rx) = mpsc::channel(10);
-        let temp_dir = tempfile::tempdir().unwrap();
-        let config = AgentConfig { workspace_root: temp_dir.path(), relative_cwd: None, task_prompt: "test task" };
-        let result = agent.run(config, tx).await;
-        assert!(result.is_ok());
+        let transcript = crate::Transcript::from_stream(agent.run(Task::new("test task"))).await.unwrap();
+        let messages = transcript.messages();
 
-        let mut count = 0;
-        while let Some(message) = rx.recv().await {
-            count += 1;
-            if matches!(message, AgentMessage::Done) {
-                break;
-            }
-        }
-        assert_eq!(count, 3);
+        assert_eq!(messages.len(), 3);
+        assert!(matches!(messages.last(), Some(AgentMessage::Done)));
     }
 
     #[tokio::test]
     async fn fake_agent_writes_file_in_workspace() {
-        let agent = FakeAgent::writes_file("nested/hello.txt", "hello");
-        let (tx, _rx) = mpsc::channel(10);
         let temp_dir = tempfile::tempdir().unwrap();
-        let config = AgentConfig { workspace_root: temp_dir.path(), relative_cwd: None, task_prompt: "test task" };
-        agent.run(config, tx).await.unwrap();
+        let agent = FakeAgent::writes_file("nested/hello.txt", "hello").with_workspace(temp_dir.path());
+        crate::Transcript::from_stream(agent.run(Task::new("test task"))).await.unwrap();
         assert_eq!(std::fs::read_to_string(temp_dir.path().join("nested/hello.txt")).unwrap(), "hello");
     }
 }

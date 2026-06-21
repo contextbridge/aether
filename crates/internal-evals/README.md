@@ -52,6 +52,6 @@ AETHER_EVAL_AGENT="Fast" just evals
 - Put real LLM scenarios in `crates/internal-evals/tests` or add declarative `*.eval.json` files under `crates/internal-evals/examples`; shared Rust setup code lives in `tests/common`.
 - `just evals` runs tests ending in `_eval` with nextest's default filter disabled and the `evals` group selected; keep that suffix for real provider-backed eval tests.
 - Drive real Aether evals through the in-image `aether-eval-agent` wrapper command, which emits `AgentMessage` NDJSON via `aether headless --output json`.
-- Run the agent with `aether_evals::Task::new(prompt, workspace).run(&agent).await?`.
-- Assert Aether namespaced MCP tool names, such as `coding__read_file` and `coding__edit_file`, with `TaskRun`/`Transcript` helpers.
+- Run the agent with `aether_evals::Transcript::from_stream(agent.run(aether_evals::Task::new(prompt))).await?`.
+- Assert Aether namespaced MCP tool names, such as `coding__read_file` and `coding__edit_file`, with `Transcript` helpers.
 - Prefer direct filesystem assertions over shell commands for file outcomes.

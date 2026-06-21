@@ -2,28 +2,32 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { FakeAgent, Workspace, summarizeUsage } from "../../src/evals/index.js";
+import type { AgentMessage } from "../../src/generated/eval-types.js";
+import {
+  FakeAgent,
+  Task,
+  Transcript,
+  Workspace,
+} from "../../src/evals/index.js";
 
 describe("FakeAgent", () => {
   it("success() ends with a done message", async () => {
-    const result = await FakeAgent.success().run({
-      workspace: await workspace(),
-      taskPrompt: "t",
-    });
+    const result = await Transcript.fromStream(
+      FakeAgent.success().run(new Task("t")),
+    );
 
-    expect(result.transcript.map((message) => message.type)).toEqual([
+    expect(result.messages.map((message) => message.type)).toEqual([
       "text",
       "done",
     ]);
   });
 
   it("withToolCall() streams tool_result, text, then done", async () => {
-    const result = await FakeAgent.withToolCall("bash", "ok").run({
-      workspace: await workspace(),
-      taskPrompt: "t",
-    });
+    const result = await Transcript.fromStream(
+      FakeAgent.withToolCall("bash", "ok").run(new Task("t")),
+    );
 
-    expect(result.transcript.map((message) => message.type)).toEqual([
+    expect(result.messages.map((message) => message.type)).toEqual([
       "tool_result",
       "text",
       "done",
@@ -33,29 +37,33 @@ describe("FakeAgent", () => {
   it("writesFile() writes into the workspace, including nested paths", async () => {
     const ws = await workspace();
 
-    await FakeAgent.writesFile("nested/hello.txt", "hello").run({
-      workspace: ws,
-      taskPrompt: "t",
-    });
+    await Transcript.fromStream(
+      FakeAgent.writesFile("nested/hello.txt", "hello")
+        .withWorkspace(ws)
+        .run(new Task("t")),
+    );
 
     expect(await readFile(join(ws.path, "nested/hello.txt"), "utf8")).toBe(
       "hello",
     );
   });
 
-  it("forwards each message to onMessage", async () => {
+  it("add supports observing each streamed message", async () => {
     const seen: string[] = [];
+    const trace = new Transcript();
 
-    await FakeAgent.success().run(
-      { workspace: await workspace(), taskPrompt: "t" },
-      { onMessage: (message) => seen.push(message.type) },
-    );
+    for await (const message of FakeAgent.success().run(new Task("t"))) {
+      seen.push(message.type);
+      trace.add(message);
+    }
 
     expect(seen).toEqual(["text", "done"]);
+    expect(trace.messages.map((message) => message.type)).toEqual(seen);
   });
 
-  it("withUsage() appends a context_usage message whose totals flow into usage", async () => {
-    const agent = FakeAgent.success().withUsage({
+  it("context_usage messages in the transcript flow into usage", async () => {
+    const usageMessage: AgentMessage = {
+      type: "context_usage",
       input_tokens: 200,
       output_tokens: 20,
       cache_read_tokens: 50,
@@ -68,19 +76,26 @@ describe("FakeAgent", () => {
       total_cache_read_tokens: 50,
       total_cache_creation_tokens: 0,
       total_reasoning_tokens: 7,
-    });
+    };
+    const agent = new FakeAgent([
+      {
+        type: "text",
+        message_id: "fake_1",
+        chunk: "ok",
+        is_complete: true,
+        model_name: "fake",
+      },
+      usageMessage,
+      { type: "done" },
+    ]);
 
-    const result = await agent.run({
-      workspace: await workspace(),
-      taskPrompt: "t",
-    });
+    const result = await Transcript.fromStream(agent.run(new Task("t")));
 
-    expect(result.transcript.map((message) => message.type)).toContain(
+    expect(result.messages.map((message) => message.type)).toContain(
       "context_usage",
     );
-    const usage = summarizeUsage(result.transcript);
-    expect(usage.total_input_tokens).toBe(3000);
-    expect(usage.total_output_tokens).toBe(600);
+    expect(result.usage().total_input_tokens).toBe(3000);
+    expect(result.usage().total_output_tokens).toBe(600);
   });
 });
 

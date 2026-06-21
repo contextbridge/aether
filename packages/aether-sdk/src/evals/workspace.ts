@@ -3,13 +3,19 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 
 import { AetherSdkError } from "../errors.js";
-import { gitClone } from "./git.js";
+import { diffStatsFromDiff, type GitDiff } from "./diff.js";
+import { GitRepo } from "./git.js";
 
-export interface GitRepoSource {
+export interface GitRepoSpec {
   url: string;
   startCommit: string;
   goldCommit: string;
   subdir?: string;
+}
+
+export interface RetainedWorkspaceInfo {
+  rootPath: string;
+  path: string;
 }
 
 /** Where an eval workspace came from. Git workspaces carry the commits for diffing. */
@@ -81,13 +87,14 @@ export class Workspace implements AsyncDisposable {
   }
 
   static async fromGitRepo(
-    source: GitRepoSource,
+    spec: GitRepoSpec,
     signal?: AbortSignal,
   ): Promise<Workspace> {
     const rootPath = await createWorkspaceDir();
     try {
-      const { url, startCommit, goldCommit, subdir } = source;
-      await gitClone(url, startCommit, rootPath, signal);
+      const { url, startCommit, goldCommit, subdir } = spec;
+      const repo = await GitRepo.clone(url, rootPath, signal);
+      await repo.checkout(startCommit, signal);
       const path = subdir ? join(rootPath, subdir) : rootPath;
       if (subdir && !(await pathExists(path))) {
         throw new AetherSdkError(
@@ -107,6 +114,30 @@ export class Workspace implements AsyncDisposable {
     }
   }
 
+  join(relativePath: string): string {
+    return join(this.path, relativePath);
+  }
+
+  persist(): RetainedWorkspaceInfo {
+    this.#cleaned = true;
+    return { rootPath: this.rootPath, path: this.path };
+  }
+
+  async captureGitDiffs(): Promise<{
+    agentDiff?: GitDiff;
+    referenceDiff?: GitDiff;
+  }> {
+    if (this.source === "local") return {};
+
+    const repo = GitRepo.fromPath(this.path);
+    const { startCommit, goldCommit } = this.source.git;
+    const [agentDiff, referenceDiff] = await Promise.all([
+      captureDiff(() => repo.diffUnstaged()),
+      captureDiff(() => repo.diff(startCommit, goldCommit)),
+    ]);
+    return { agentDiff, referenceDiff };
+  }
+
   /** Remove the workspace directory. Idempotent. */
   async cleanup(): Promise<void> {
     if (this.#cleaned) return;
@@ -116,6 +147,17 @@ export class Workspace implements AsyncDisposable {
 
   [Symbol.asyncDispose](): Promise<void> {
     return this.cleanup();
+  }
+}
+
+async function captureDiff(
+  getDiff: () => Promise<string>,
+): Promise<GitDiff | undefined> {
+  try {
+    const diff = await getDiff();
+    return { diff, stats: diffStatsFromDiff(diff) };
+  } catch {
+    return undefined;
   }
 }
 

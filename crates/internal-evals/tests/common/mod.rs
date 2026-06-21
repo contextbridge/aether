@@ -1,4 +1,6 @@
-use aether_evals::{CONTAINER_AETHER_HOME, DockerAgent, DockerImage, default_eval_env_vars};
+use aether_evals::{
+    CONTAINER_AETHER_HOME, Container, ContainerError, DockerAgent, Image, Workspace, default_eval_env_vars,
+};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -6,24 +8,22 @@ pub enum EvalHarnessError {
     #[error("workspace setup failed: {0}")]
     Workspace(#[from] aether_evals::WorkspaceError),
 
-    #[error("eval run failed: {0}")]
-    EvalRun(#[from] aether_evals::EvalRunError),
+    #[error("transcript collection failed: {0}")]
+    Transcript(#[from] aether_evals::TranscriptError),
 
-    #[error("eval run failed: {0}")]
-    TaskRun(Box<aether_evals::TaskRunError>),
+    #[error("container setup failed: {0}")]
+    Container(#[from] ContainerError),
 
     #[error("file IO failed: {0}")]
     Io(#[from] std::io::Error),
 }
 
-impl From<aether_evals::TaskRunError> for EvalHarnessError {
-    fn from(error: aether_evals::TaskRunError) -> Self {
-        Self::TaskRun(Box::new(error))
-    }
-}
-
-pub fn create_aether_agent() -> DockerAgent {
-    DockerAgent::new(DockerImage::new("aether-sandbox", "latest"), vec!["/usr/local/bin/aether-eval-agent".to_string()])
+pub async fn create_aether_agent(workspace: &Workspace) -> Result<(Container, DockerAgent), EvalHarnessError> {
+    let container = Container::builder(Image::new("aether-sandbox", "latest"))
         .with_env_vars(default_eval_env_vars())
         .with_ephemeral_mount(CONTAINER_AETHER_HOME)
+        .start(workspace)
+        .await?;
+    let agent = DockerAgent::new(container.clone(), vec!["/usr/local/bin/aether-eval-agent".to_string()]);
+    Ok((container, agent))
 }

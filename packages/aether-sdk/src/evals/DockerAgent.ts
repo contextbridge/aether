@@ -1,20 +1,15 @@
-import { posix } from "node:path";
 import { env as processEnv } from "node:process";
-import { AetherSdkError, throwIfAborted } from "../errors.js";
-import { DockerImage } from "./DockerImage.js";
-import { DockerContainer, type BindMount } from "./DockerContainer.js";
-import type {
-  Agent,
-  AgentConfig,
-  AgentRunOptions,
-  AgentRunResult,
-} from "./Agent.js";
+import { AetherSdkError } from "../errors.js";
+import { Container } from "./containers/container.js";
+import type { Agent } from "./Agent.js";
+import type { Task } from "./task.js";
+import type { AgentMessage } from "../generated/eval-types.js";
+import { isTerminalMessage } from "./transcript.js";
 
-export type { BindMount } from "./DockerContainer.js";
+export type { BindMount } from "./containers/container.js";
 
 export const CONTAINER_AETHER_HOME = "/root/.aether";
-export const AETHER_EVAL_WRAPPED_TASK_PROMPT_ENV =
-  "AETHER_EVAL_WRAPPED_TASK_PROMPT";
+export const AETHER_EVAL_TASK_PROMPT_ENV = "AETHER_EVAL_TASK_PROMPT";
 export const AETHER_EVAL_WORKSPACE_ROOT_ENV = "AETHER_EVAL_WORKSPACE_ROOT";
 export const AETHER_EVAL_CWD_ENV = "AETHER_EVAL_CWD";
 const REQUIRED_PROVIDER_ENV_VARS = new Set([
@@ -28,88 +23,83 @@ const REQUIRED_PROVIDER_ENV_VARS = new Set([
 ]);
 
 export interface DockerAgentOptions {
-  image: DockerImage;
+  container: Container;
   command: string[];
   env?: Record<string, string>;
-  mounts?: BindMount[];
-  ephemeralMounts?: string[];
 }
 
 export class DockerAgent implements Agent {
-  readonly image: DockerImage;
+  readonly container: Container;
   readonly command: string[];
   readonly env: Record<string, string>;
-  readonly mounts: BindMount[];
-  readonly ephemeralMounts: string[];
 
   constructor(options: DockerAgentOptions) {
     if (options.command.length === 0) {
       throw new AetherSdkError(
-        "invalid_options",
+        "configuration_error",
         "DockerAgent command must not be empty",
       );
     }
-    this.image = options.image;
+    this.container = options.container;
     this.command = [...options.command];
-    this.env = { ...(options.env ?? {}) };
-    this.mounts = [...(options.mounts ?? [])];
-    this.ephemeralMounts = [
-      ...(options.ephemeralMounts ?? [CONTAINER_AETHER_HOME]),
-    ];
+    this.env = {
+      ...defaultEvalEnvVars(processEnv),
+      ...(options.env ?? {}),
+    };
   }
 
-  async run(
-    config: AgentConfig,
-    options: AgentRunOptions = {},
-  ): Promise<AgentRunResult> {
-    throwIfAborted(options.signal);
-
-    const containerCwd = config.workspace.relativeCwd
-      ? posix.join("/workspace", config.workspace.relativeCwd)
-      : "/workspace";
-
-    await using container = await DockerContainer.create({
-      image: this.image,
-      env: {
-        ...defaultEvalEnvVars(options.env),
-        ...this.env,
-        [AETHER_EVAL_WORKSPACE_ROOT_ENV]: "/workspace",
-        [AETHER_EVAL_CWD_ENV]: containerCwd,
-        [AETHER_EVAL_WRAPPED_TASK_PROMPT_ENV]: buildTaskPrompt(
-          config.taskPrompt,
-          containerCwd,
-        ),
-      },
-      bindMounts: [
-        {
-          source: config.workspace.rootPath,
-          target: "/workspace",
-          mode: "rw",
-        },
-        ...this.mounts,
-      ],
-      ephemeralMounts: this.ephemeralMounts,
-    });
-
-    return await container.run({
+  withEnvVar(key: string, value: string): DockerAgent {
+    return new DockerAgent({
+      container: this.container,
       command: this.command,
-      cwd: containerCwd,
-      signal: options.signal,
-      onMessage: options.onMessage,
-      onStderr: options.onStderr,
+      env: { ...this.env, [key]: value },
     });
+  }
+
+  withEnvVars(env: Record<string, string>): DockerAgent {
+    return new DockerAgent({
+      container: this.container,
+      command: this.command,
+      env: { ...this.env, ...env },
+    });
+  }
+
+  async *run(task: Task): AsyncIterable<AgentMessage> {
+    const env = {
+      ...this.env,
+      [AETHER_EVAL_WORKSPACE_ROOT_ENV]: this.container.workspaceRoot,
+      [AETHER_EVAL_CWD_ENV]: this.container.cwd,
+      [AETHER_EVAL_TASK_PROMPT_ENV]: task.prompt,
+    };
+
+    let stderr = "";
+    let finished = false;
+    for await (const line of this.container.execStreaming({
+      command: this.command,
+      cwd: this.container.cwd,
+      env,
+      onStderr: (chunk) => {
+        stderr += chunk;
+      },
+    })) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const message = parseAgentMessage(trimmed);
+      finished = isTerminalMessage(message);
+      yield message;
+      if (finished) break;
+    }
+
+    if (!finished) {
+      throw new AetherSdkError(
+        "command_exit_without_terminal",
+        `agent command exited without emitting a terminal AgentMessage.\nstderr:\n${stderr}`,
+      );
+    }
   }
 }
 
-function buildTaskPrompt(taskPrompt: string, containerCwd: string): string {
-  return [
-    "Complete the following task:",
-    `<task>${taskPrompt}</task>`,
-    `CRITICAL INSTRUCTIONS: when working on this task, you MUST only operate within this directory: ${containerCwd}`,
-  ].join("\n");
-}
-
-function defaultEvalEnvVars(
+export function defaultEvalEnvVars(
   hostEnv: Record<string, string | undefined> = processEnv,
 ): Record<string, string> {
   const env: Record<string, string> = {};
@@ -126,4 +116,16 @@ function defaultEvalEnvVars(
   }
   env.AETHER_HOME = CONTAINER_AETHER_HOME;
   return env;
+}
+
+function parseAgentMessage(line: string): AgentMessage {
+  try {
+    return JSON.parse(line) as AgentMessage;
+  } catch (err) {
+    throw new AetherSdkError(
+      "agent_message_json_line",
+      `agent emitted an invalid AgentMessage JSON line: ${line}`,
+      err,
+    );
+  }
 }

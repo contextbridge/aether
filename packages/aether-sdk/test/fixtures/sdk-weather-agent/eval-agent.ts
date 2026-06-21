@@ -2,8 +2,8 @@ import { appendFile } from "node:fs/promises";
 import { mcp, runHeadless, tool } from "@aether-agent/sdk";
 import { z } from "zod";
 
-const prompt = process.env.AETHER_EVAL_WRAPPED_TASK_PROMPT;
-if (!prompt) throw new Error("AETHER_EVAL_WRAPPED_TASK_PROMPT is required");
+const prompt = process.env.AETHER_EVAL_TASK_PROMPT;
+if (!prompt) throw new Error("AETHER_EVAL_TASK_PROMPT is required");
 
 const getWeather = tool({
   name: "get_weather",

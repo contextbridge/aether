@@ -241,13 +241,15 @@ await AetherSession.start({
 
 ## Writing evals with vitest
 
-`@aether-agent/sdk/evals` runs a single Dockerized eval per test via the `Task` class.
+`@aether-agent/sdk/evals` runs a single Dockerized eval per test via an `Agent` and `Task`.
 
 ```ts
 import { test, expect } from "vitest";
 import {
+  Transcript,
   DockerAgent,
-  DockerImage,
+  Container,
+  Image,
   Task,
   Workspace,
 } from "@aether-agent/sdk/evals";
@@ -255,23 +257,28 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 test("agent edits notes.txt", async () => {
+  await using workspace = await Workspace.fromFiles({ "notes.txt": "alpha\nalpha\n" });
   const task = new Task(
     "Change the first line of notes.txt from alpha to beta",
-    await Workspace.fromFiles({ "notes.txt": "alpha\nalpha\n" }),
   );
+  await using container = await Container.builder(
+    Image.parse("aether-sandbox:latest"),
+  ).start(workspace);
   const agent = new DockerAgent({
-    image: DockerImage.parse("aether-sandbox:latest"),
+    container,
     command: ["node", "/app/eval-agent.js"],
   });
 
-  await using result = await task.run(agent);
+  const trace = await Transcript.fromStream(agent.run(task));
 
-  expect(result.passed).toBe(true);
+  expect(trace.messages.at(-1)?.type).toBe("done");
   // Assert against the retained workspace and the recorded tool calls.
-  expect(await readFile(join(result.workspace.path, "notes.txt"), "utf8")).toBe(
+  expect(await readFile(join(workspace.path, "notes.txt"), "utf8")).toBe(
     "beta\nalpha\n",
   );
-  // Workspace is removed when `result` goes out of scope.
+  const tests = await container.exec({ command: ["pnpm", "test"] });
+  expect(tests.exitCode).toBe(0);
+  // Workspace is removed when `workspace` goes out of scope; run container exec assertions first.
 });
 ```
 
@@ -279,7 +286,7 @@ test("agent edits notes.txt", async () => {
 
 For judgments you can't express deterministically, ask a model to score a rubric
 with `generate`, then let `judge` compute the final weighted score and
-blocker status. Collect the transcript with `Task.run`'s `onMessage` callback and
+blocker status. Collect the transcript with `Transcript` and
 put evidence under `context` along with any diff or final file contents:
 
 ```ts
@@ -287,36 +294,37 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test, expect } from "vitest";
 import {
+  Transcript,
   DockerAgent,
-  DockerImage,
+  Container,
+  Image,
   generate,
   judge,
   Task,
   Workspace,
-  type AgentMessage,
 } from "@aether-agent/sdk/evals";
 
 test("agent makes a maintainer-quality edit", async () => {
-  const transcript: AgentMessage[] = [];
+  await using workspace = await Workspace.fromFiles({ "notes.txt": "alpha\nalpha\n" });
   const task = new Task(
     "Change the first line of notes.txt from alpha to beta",
-    await Workspace.fromFiles({ "notes.txt": "alpha\nalpha\n" }),
   );
+  await using container = await Container.builder(
+    Image.parse("aether-sandbox:latest"),
+  ).start(workspace);
   const agent = new DockerAgent({
-    image: DockerImage.parse("aether-sandbox:latest"),
+    container,
     command: ["node", "/app/eval-agent.js"],
   });
-  await using result = await task.run(agent, {
-    onMessage: (message) => transcript.push(message),
-  });
+  const trace = await Transcript.fromStream(agent.run(task));
 
   const grader = judge({
     instructions: "Grade strictly using only the provided transcript and files.",
     task: "Change the first line of notes.txt from alpha to beta",
     context: {
-      transcript,
+      transcript: trace.messages,
       files: {
-        "notes.txt": await readFile(join(result.workspace.path, "notes.txt"), "utf8"),
+        "notes.txt": await readFile(join(workspace.path, "notes.txt"), "utf8"),
       },
     },
     criteria: [
@@ -370,20 +378,17 @@ const verdict = await generate("Grade this run. Respond with passed and reason."
 });
 ```
 
-Bind the run to a plain `const` (instead of `await using`) and skip
-`result.workspace.cleanup()` to retain the workspace on disk for debugging.
+Workspace cleanup is controlled by the `Workspace` owner. Bind the workspace to a plain `const` (instead of `await using`) and skip `workspace.cleanup()` to retain it on disk for debugging.
 
-`Task.run` also streams the agent's messages and stderr while it runs. Pass
-`onMessage` and `onStderr` callbacks to observe them:
+`Agent.run` returns an async iterable of the agent's messages and passes the task prompt through unchanged. `Transcript.fromStream` can collect it, or callers can observe each message while adding it to a transcript:
 
 ```ts
-await using result = await task.run(agent, {
-  onMessage: (message) => {
-    if (message.type === "text") process.stdout.write(message.chunk);
-    if (message.type === "tool_call") console.error("tool:", message.request.name);
-  },
-  onStderr: (chunk) => process.stderr.write(chunk),
-});
+const trace = new Transcript();
+for await (const message of agent.run(task)) {
+  if (message.type === "text") process.stdout.write(message.chunk);
+  if (message.type === "tool_call") console.error("tool:", message.request.name);
+  trace.add(message);
+}
 ```
 
 `message` is the generated `AgentMessage` union from `@aether-agent/sdk/evals`.

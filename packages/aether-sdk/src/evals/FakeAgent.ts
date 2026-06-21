@@ -1,29 +1,22 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import type { AgentMessage, ContextUsage } from "../generated/eval-types.js";
-import type {
-  Agent,
-  AgentConfig,
-  AgentRunOptions,
-  AgentRunResult,
-} from "./Agent.js";
+import { AetherSdkError } from "../errors.js";
+import type { AgentMessage } from "../generated/eval-types.js";
+import type { Agent } from "./Agent.js";
+import type { Task } from "./task.js";
+import type { Workspace } from "./workspace.js";
 
 /**
  * In-memory {@link Agent} for testing eval harnesses without Docker. Streams a scripted transcript
  * and optionally writes files into the workspace, mirroring how a real agent is observed.
  */
 export class FakeAgent implements Agent {
-  readonly messages: AgentMessage[];
-  readonly fileWrites: ReadonlyArray<readonly [string, string]>;
-
   constructor(
-    messages: AgentMessage[],
-    fileWrites: ReadonlyArray<readonly [string, string]> = [],
-  ) {
-    this.messages = messages;
-    this.fileWrites = fileWrites;
-  }
+    readonly messages: AgentMessage[],
+    readonly fileWrites: ReadonlyArray<readonly [string, string]> = [],
+    readonly workspace: Workspace | undefined = undefined,
+  ) {}
 
   static success(): FakeAgent {
     return new FakeAgent([
@@ -60,34 +53,34 @@ export class FakeAgent implements Agent {
     return FakeAgent.success().withFileWrite(path, contents);
   }
 
-  /** Append a `context_usage` message reflecting `usage` to the scripted transcript. */
-  withUsage(usage: ContextUsage): FakeAgent {
+  withFileWrite(path: string, contents: string): FakeAgent {
     return new FakeAgent(
-      [
-        ...this.messages,
-        {
-          type: "context_usage",
-          ...usage,
-        },
-      ],
-      this.fileWrites,
+      this.messages,
+      [...this.fileWrites, [path, contents]],
+      this.workspace,
     );
   }
 
-  withFileWrite(path: string, contents: string): FakeAgent {
-    return new FakeAgent(this.messages, [...this.fileWrites, [path, contents]]);
+  withWorkspace(workspace: Workspace): FakeAgent {
+    return new FakeAgent(this.messages, this.fileWrites, workspace);
   }
 
-  async run(
-    config: AgentConfig,
-    options: AgentRunOptions = {},
-  ): Promise<AgentRunResult> {
+  async *run(_task: Task): AsyncIterable<AgentMessage> {
+    if (this.fileWrites.length > 0 && !this.workspace) {
+      throw new AetherSdkError(
+        "configuration_error",
+        "FakeAgent file writes require a bound workspace",
+      );
+    }
+
     for (const [relativePath, contents] of this.fileWrites) {
-      const target = join(config.workspace.path, relativePath);
+      const target = join(this.workspace!.path, relativePath);
       await mkdir(dirname(target), { recursive: true });
       await writeFile(target, contents);
     }
-    for (const message of this.messages) options.onMessage?.(message);
-    return { transcript: this.messages, stderr: "" };
+
+    for (const message of this.messages) {
+      yield message;
+    }
   }
 }

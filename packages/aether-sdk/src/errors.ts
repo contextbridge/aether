@@ -6,7 +6,11 @@ export type AetherSdkErrorCode =
   | "session_not_started"
   | "prompt_in_progress"
   | "invalid_options"
-  | "eval_command_failed"
+  | "execution_failed"
+  | "configuration_error"
+  | "command_exit_without_terminal"
+  | "agent_message_json_line"
+  | "invalid_image_reference"
   | "generate_command_failed"
   | "aborted";
 
