@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  formatTranscript,
-  judge,
-  JudgeResponseSchema,
-} from "../../src/evals/index.js";
+import { judge, JudgeResponseSchema } from "../../src/evals/index.js";
 
 const baseJudgeInput = {
   task: "do the thing",
@@ -169,32 +165,5 @@ describe("judge", () => {
         overall_reason: "unknown",
       }),
     ).toThrow(/unknown response criterion `extra`/);
-  });
-
-  it("formatTranscript joins streamed text chunks and renders tool calls", () => {
-    const text = formatTranscript([
-      {
-        type: "text",
-        message_id: "m1",
-        chunk: "Hello ",
-        is_complete: false,
-        model_name: "fake",
-      },
-      {
-        type: "text",
-        message_id: "m1",
-        chunk: "world",
-        is_complete: true,
-        model_name: "fake",
-      },
-      {
-        type: "tool_call",
-        model_name: "fake",
-        request: { id: "c1", name: "bash", arguments: '{"cmd":"ls"}' },
-      },
-    ]);
-
-    expect(text).toContain("[agent] Hello world");
-    expect(text).toContain('[tool-call] bash {"cmd":"ls"}');
   });
 });

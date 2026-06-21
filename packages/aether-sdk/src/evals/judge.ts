@@ -30,7 +30,7 @@ export interface JudgeInput {
 }
 
 export interface JudgeContext {
-  /** The agent transcript, e.g. messages collected via `Task.run`'s `onMessage` callback. */
+  /** The agent transcript, e.g. messages collected from `Agent.run` with `Transcript.fromStream`. */
   transcript?: AgentMessage[];
   /** A workspace diff to grade against. */
   diff?: string;

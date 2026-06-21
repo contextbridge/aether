@@ -3,46 +3,88 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  Container,
   DockerAgent,
-  DockerImage,
+  Image,
   Task,
+  ToolCall,
+  Transcript,
   Workspace,
 } from "../../src/evals/index.js";
 import { logMessage } from "../logMessage.js";
 import type { AgentMessage } from "../../src/generated/eval-types.js";
 
 describe.skipIf(!process.env.AETHER_SDK_E2E)(
-  "Task.run (e2e, requires Docker)",
+  "Transcript Docker collection (e2e, requires Docker)",
   () => {
     it("runs an agent in a real container and returns its result", async () => {
       const seen: AgentMessage[] = [];
-      const task = new Task(
-        "write out.txt",
-        await Workspace.fromFiles({ "notes.txt": "seed\n" }),
-      );
+      await using workspace = await Workspace.fromFiles({
+        "notes.txt": "seed\n",
+      });
+      await using container = await Container.builder(
+        Image.parse("alpine:3"),
+      ).start(workspace);
       const agent = new DockerAgent({
-        image: DockerImage.parse("alpine:3"),
+        container,
         command: ["/bin/sh", "-c", script],
       });
-      await using result = await task.run(agent, {
-        onMessage: (message) => {
-          seen.push(message);
-          logMessage(message);
-        },
-        onStderr: (chunk) => process.stderr.write(chunk),
-      });
+      const trace = new Transcript();
+      for await (const message of agent.run(new Task("write out.txt"))) {
+        seen.push(message);
+        logMessage(message);
+        trace.add(message);
+      }
 
-      expect(result.passed).toBe(true);
-      expect(result.toolCalls).toEqual([
-        { name: "write", arguments: {}, rawArguments: "{}" },
-      ]);
+      expect(trace.messages.at(-1)?.type).toBe("done");
+      expect(trace.allToolCalls()).toEqual([new ToolCall("write", "{}")]);
       expect(seen.map((message) => message.type)).toEqual([
         "tool_result",
         "done",
       ]);
-      expect(
-        await readFile(join(result.workspace.path, "out.txt"), "utf8"),
-      ).toBe("modified\n");
+      expect(await readFile(join(workspace.path, "out.txt"), "utf8")).toBe(
+        "modified\n",
+      );
+    }, 120_000);
+
+    it("lets callers exec follow-up commands in the same container", async () => {
+      await using workspace = await Workspace.empty();
+      await using container = await Container.builder(
+        Image.parse("alpine:3"),
+      ).start(workspace);
+      const agent = new DockerAgent({
+        container,
+        command: [
+          "/bin/sh",
+          "-c",
+          `echo same-container > /tmp/aether-marker; printf '%s\n' '${JSON.stringify({ type: "done" })}'`,
+        ],
+      });
+
+      const trace = await Transcript.fromStream(
+        agent.run(new Task("create marker")),
+      );
+      const output = await container.exec({
+        command: ["/bin/sh", "-c", "cat /tmp/aether-marker"],
+      });
+
+      expect(trace.messages.at(-1)?.type).toBe("done");
+      expect(output.exitCode).toBe(0);
+      expect(output.stdout).toContain("same-container");
+    }, 120_000);
+
+    it("returns non-zero follow-up command exit codes", async () => {
+      await using workspace = await Workspace.empty();
+      await using container = await Container.builder(
+        Image.parse("alpine:3"),
+      ).start(workspace);
+
+      const output = await container.exec({
+        command: ["/bin/sh", "-c", "echo nope >&2; exit 7"],
+      });
+
+      expect(output.exitCode).toBe(7);
+      expect(output.stderr).toContain("nope");
     }, 120_000);
   },
 );

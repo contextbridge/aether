@@ -1,6 +1,6 @@
-import { AetherSdkError } from "../errors.js";
+import { AetherSdkError } from "../../errors.js";
 
-export interface DockerImageBuildOptions {
+export interface ImageBuildOptions {
   context: string;
   dockerfile?: string;
   buildArgs?: Record<string, string>;
@@ -11,29 +11,26 @@ export interface DockerImageBuildOptions {
   deleteOnExit?: boolean;
 }
 
-export class DockerImage {
+export class Image {
   readonly name: string;
   readonly tag: string;
-  readonly build: DockerImageBuildOptions | undefined;
+  readonly build: ImageBuildOptions | undefined;
 
-  constructor(name: string, tag = "latest", build?: DockerImageBuildOptions) {
+  constructor(name: string, tag = "latest", build?: ImageBuildOptions) {
     validateImageReference(`${name}:${tag}`);
     this.name = name;
     this.tag = tag;
     this.build = build ? { ...build } : undefined;
   }
 
-  static parse(image: string): DockerImage {
+  static parse(image: string): Image {
     const { name, tag } = parseImageReference(image);
-    return new DockerImage(name, tag);
+    return new Image(name, tag);
   }
 
-  static fromDockerfile(
-    image: string,
-    build: DockerImageBuildOptions,
-  ): DockerImage {
+  static fromDockerfile(image: string, build: ImageBuildOptions): Image {
     const { name, tag } = parseImageReference(image);
-    return new DockerImage(name, tag, build);
+    return new Image(name, tag, build);
   }
 
   toString(): string {
@@ -61,8 +58,8 @@ function validateImageReference(reference: string): void {
     reference.endsWith(":")
   ) {
     throw new AetherSdkError(
-      "invalid_options",
-      `invalid Docker image reference '${reference}'`,
+      "invalid_image_reference",
+      `invalid container image reference '${reference}'`,
     );
   }
 }

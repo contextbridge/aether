@@ -1,9 +1,74 @@
 import type { AgentMessage, ContextUsage } from "../generated/eval-types.js";
 
-export interface EvalToolCall {
-  name: string;
-  arguments?: unknown;
-  rawArguments: string;
+export class ToolCall {
+  readonly arguments: string;
+
+  constructor(
+    readonly name: string,
+    argumentsValue: string,
+  ) {
+    this.arguments = argumentsValue;
+  }
+
+  argumentsJson(): unknown {
+    return JSON.parse(this.arguments);
+  }
+}
+
+export class TranscriptError extends Error {
+  readonly transcript: Transcript;
+
+  constructor(transcript: Transcript, cause: unknown) {
+    super("transcript stream failed", { cause });
+    this.name = "TranscriptError";
+    this.transcript = transcript;
+  }
+}
+
+export class Transcript {
+  readonly messages: AgentMessage[];
+
+  constructor(messages: AgentMessage[] = []) {
+    this.messages = [...messages];
+  }
+
+  static async fromStream(
+    stream: AsyncIterable<AgentMessage>,
+  ): Promise<Transcript> {
+    const transcript = new Transcript();
+    try {
+      for await (const message of stream) {
+        transcript.add(message);
+      }
+    } catch (err) {
+      throw new TranscriptError(transcript, err);
+    }
+    return transcript;
+  }
+
+  add(message: AgentMessage): void {
+    this.messages.push(message);
+  }
+
+  allToolCalls(): ToolCall[] {
+    return extractToolCalls(this.messages);
+  }
+
+  toolCalls(name: string): ToolCall[] {
+    return this.allToolCalls().filter((call) => call.name === name);
+  }
+
+  toolCalled(name: string): boolean {
+    return this.toolCalls(name).length > 0;
+  }
+
+  toolCallCount(name: string): number {
+    return this.toolCalls(name).length;
+  }
+
+  usage(): ContextUsage {
+    return summarizeUsage(this.messages);
+  }
 }
 
 const ZERO_USAGE: ContextUsage = {
@@ -22,11 +87,6 @@ const ZERO_USAGE: ContextUsage = {
   total_reasoning_tokens: 0,
 };
 
-/** Sum of cumulative input + output tokens. */
-export function totalTokens(usage: ContextUsage): number {
-  return usage.total_input_tokens + usage.total_output_tokens;
-}
-
 export function isTerminalMessage(message: AgentMessage): boolean {
   return (
     message.type === "done" ||
@@ -35,36 +95,24 @@ export function isTerminalMessage(message: AgentMessage): boolean {
   );
 }
 
-export function extractToolCalls(messages: AgentMessage[]): EvalToolCall[] {
-  const calls: EvalToolCall[] = [];
+function extractToolCalls(messages: AgentMessage[]): ToolCall[] {
+  const calls: ToolCall[] = [];
   for (const message of messages) {
     if (message.type === "tool_result") {
-      calls.push(toToolCall(message.result.name, message.result.arguments));
+      calls.push(new ToolCall(message.result.name, message.result.arguments));
     } else if (message.type === "tool_error") {
-      calls.push(toToolCall(message.error.name, message.error.arguments ?? ""));
+      calls.push(
+        new ToolCall(message.error.name, message.error.arguments ?? ""),
+      );
     }
   }
   return calls;
 }
 
-/**
- * Returns the final `context_usage` message payload, or zeroed usage if no usage
- * was recorded.
- */
-export function summarizeUsage(messages: AgentMessage[]): ContextUsage {
+function summarizeUsage(messages: AgentMessage[]): ContextUsage {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
     if (message && message.type === "context_usage") return message;
   }
   return { ...ZERO_USAGE };
-}
-
-function toToolCall(name: string, raw: string): EvalToolCall {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    parsed = undefined;
-  }
-  return { name, arguments: parsed, rawArguments: raw };
 }

@@ -4,87 +4,114 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import type { AgentMessage } from "../../src/generated/eval-types.js";
-import type {
-  Agent,
-  AgentConfig,
-  AgentRunResult,
+import type { Agent } from "../../src/evals/index.js";
+import {
+  FakeAgent,
+  Task,
+  ToolCall,
+  Transcript,
+  TranscriptError,
+  Workspace,
 } from "../../src/evals/index.js";
-import { FakeAgent, Task, Workspace } from "../../src/evals/index.js";
 
-describe("Task.run", () => {
-  it("creates the workspace, runs the agent, and returns a TS-native result", async () => {
-    const result = await (
-      await task()
-    ).run(new FakeAgent([TOOL_RESULT, { type: "done" }]));
+describe("Transcript", () => {
+  it("collects the agent stream and exposes transcript summaries", async () => {
+    await using workspace = await Workspace.fromFiles({
+      "notes.txt": "alpha\n",
+    });
+    const trace = await Transcript.fromStream(
+      new FakeAgent([TOOL_RESULT, { type: "done" }]).run(
+        new Task("do the thing"),
+      ),
+    );
 
-    expect(result.passed).toBe(true);
-    expect(result.toolCalls).toEqual([
-      {
-        name: "weather__get_current",
-        arguments: { city: "Tokyo" },
-        rawArguments: '{"city":"Tokyo"}',
-      },
+    expect(trace.messages.at(-1)?.type).toBe("done");
+    expect(trace.allToolCalls()).toEqual([
+      new ToolCall("weather__get_current", '{"city":"Tokyo"}'),
     ]);
-    expect(result.transcript).toHaveLength(2);
-    expect(existsSync(result.workspace.path)).toBe(true);
-    expect(result.workspace.rootPath).toBe(result.workspace.path);
-    expect(
-      await readFile(join(result.workspace.path, "notes.txt"), "utf8"),
-    ).toBe("alpha\n");
-
-    await result.workspace.cleanup();
-    expect(existsSync(result.workspace.path)).toBe(false);
+    expect(trace.toolCalled("weather__get_current")).toBe(true);
+    expect(trace.toolCallCount("weather__get_current")).toBe(1);
+    expect(trace.messages).toHaveLength(2);
+    expect(existsSync(workspace.path)).toBe(true);
+    expect(workspace.rootPath).toBe(workspace.path);
+    expect(await readFile(join(workspace.path, "notes.txt"), "utf8")).toBe(
+      "alpha\n",
+    );
   });
 
-  it("forwards the workspace and task prompt to the agent", async () => {
+  it("forwards the task prompt to the agent", async () => {
     const agent = new CapturingAgent();
 
-    await using result = await (await task()).run(agent);
+    await Transcript.fromStream(agent.run(new Task("do the thing")));
 
-    expect(agent.config?.taskPrompt).toBe("do the thing");
-    expect(agent.config?.workspace.rootPath).toBe(result.workspace.rootPath);
+    expect(agent.taskPrompt).toBe("do the thing");
   });
 
-  it("reports passed=false when the terminal message is not `done`", async () => {
-    await using result = await (
-      await task()
-    ).run(new FakeAgent([{ type: "error", message: "boom" }]));
+  it("records the terminal message even when it is not `done`", async () => {
+    const trace = await Transcript.fromStream(
+      new FakeAgent([{ type: "error", message: "boom" }]).run(
+        new Task("do the thing"),
+      ),
+    );
 
-    expect(result.passed).toBe(false);
+    expect(trace.messages.at(-1)?.type).toBe("error");
   });
 
-  it("invokes onMessage for each agent message as it streams", async () => {
+  it("add supports custom observation while walking the stream", async () => {
     const seen: AgentMessage[] = [];
+    const trace = new Transcript();
 
-    await using result = await (
-      await task()
-    ).run(new FakeAgent([TOOL_RESULT, { type: "done" }]), {
-      onMessage: (message) => seen.push(message),
-    });
+    for await (const message of new FakeAgent([
+      TOOL_RESULT,
+      { type: "done" },
+    ]).run(new Task("do the thing"))) {
+      seen.push(message);
+      trace.add(message);
+    }
 
-    expect(result.passed).toBe(true);
+    expect(trace.messages.at(-1)?.type).toBe("done");
     expect(seen).toHaveLength(2);
     expect(seen[0]).toMatchObject({ type: "tool_result" });
   });
 
-  it("removes the workspace at the end of an `await using` scope", async () => {
+  it("leaves workspace cleanup with the caller", async () => {
     let workspacePath: string;
     {
-      await using result = await (await task()).run(FakeAgent.success());
-      workspacePath = result.workspace.path;
+      await using workspace = await Workspace.empty();
+      workspacePath = workspace.path;
+      await Transcript.fromStream(
+        FakeAgent.success().run(new Task("do the thing")),
+      );
       expect(existsSync(workspacePath)).toBe(true);
     }
+    expect(existsSync(workspacePath!)).toBe(false);
+  });
+
+  it("throws TranscriptError carrying the partial transcript when the agent fails", async () => {
+    const workspace = await Workspace.empty();
+    const workspacePath = workspace.path;
+
+    await expect(
+      Transcript.fromStream(
+        new ThrowingAgent("agent crashed").run(new Task("do the thing")),
+      ),
+    ).rejects.toBeInstanceOf(TranscriptError);
+    expect(existsSync(workspacePath)).toBe(true);
+    await workspace.cleanup();
     expect(existsSync(workspacePath)).toBe(false);
   });
 
-  it("cleans up the workspace when the agent throws", async () => {
-    const created = await task();
-    const workspacePath = created.workspace.path;
+  it("TranscriptError exposes the partial transcript and cause", async () => {
+    let captured: TranscriptError | undefined;
+    await Transcript.fromStream(
+      new ThrowingAgent("agent crashed").run(new Task("do the thing")),
+    ).catch((err: unknown) => {
+      if (err instanceof TranscriptError) captured = err;
+    });
 
-    await expect(
-      created.run(new ThrowingAgent("agent crashed")),
-    ).rejects.toThrow("agent crashed");
-    expect(existsSync(workspacePath)).toBe(false);
+    expect(captured).toBeInstanceOf(TranscriptError);
+    expect(captured!.transcript).toBeInstanceOf(Transcript);
+    expect(String(captured!.cause)).toContain("agent crashed");
   });
 });
 
@@ -99,26 +126,19 @@ const TOOL_RESULT: AgentMessage = {
   },
 };
 
-async function task(): Promise<Task> {
-  return new Task(
-    "do the thing",
-    await Workspace.fromFiles({ "notes.txt": "alpha\n" }),
-  );
-}
-
 class CapturingAgent implements Agent {
-  config?: AgentConfig;
+  taskPrompt?: string;
 
-  async run(config: AgentConfig): Promise<AgentRunResult> {
-    this.config = config;
-    return { transcript: [{ type: "done" }], stderr: "" };
+  async *run(task: Task): AsyncIterable<AgentMessage> {
+    this.taskPrompt = task.prompt;
+    yield* FakeAgent.success().run(task);
   }
 }
 
 class ThrowingAgent implements Agent {
   constructor(private readonly message: string) {}
 
-  run(): Promise<AgentRunResult> {
-    return Promise.reject(new Error(this.message));
+  async *run(_task: Task): AsyncIterable<AgentMessage> {
+    throw new Error(this.message);
   }
 }
