@@ -10,7 +10,7 @@ import {
   type StartedTestContainer,
   Wait,
 } from "testcontainers";
-import { AetherSdkError } from "../../errors.js";
+import { AetherSdkError } from "@aether-agent/sdk";
 import { Image } from "./image.js";
 import type { Workspace } from "../workspace.js";
 

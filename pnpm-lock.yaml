@@ -15,6 +15,31 @@ importers:
         specifier: ^0.14.1
         version: 0.14.1
 
+  packages/aether-evals:
+    dependencies:
+      '@aether-agent/sdk':
+        specifier: workspace:^
+        version: link:../aether-sdk
+      testcontainers:
+        specifier: ^12.0.3
+        version: 12.0.3
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@types/dockerode':
+        specifier: ^3.3.31
+        version: 3.3.47
+      '@types/node':
+        specifier: ^25.9.3
+        version: 25.9.3
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.8
+        version: 4.1.8(@types/node@25.9.3)(vite@8.0.10(@types/node@25.9.3)(esbuild@0.27.7)(jiti@2.7.0)(yaml@2.8.3))
+
   packages/aether-sdk:
     dependencies:
       '@aether-agent/cli':
@@ -29,16 +54,10 @@ importers:
       express:
         specifier: ^5.1.0
         version: 5.2.1
-      testcontainers:
-        specifier: ^12.0.3
-        version: 12.0.3
       zod:
         specifier: ^4.4.3
         version: 4.4.3
     devDependencies:
-      '@types/dockerode':
-        specifier: ^3.3.31
-        version: 3.3.47
       '@types/express':
         specifier: ^5.0.0
         version: 5.0.6

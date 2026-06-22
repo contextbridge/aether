@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { Workspace } from "../../src/evals/workspace.js";
+import { Workspace } from "../src/workspace.js";
 
 describe("createWorkspace", () => {
   it("creates an empty workspace", async () => {

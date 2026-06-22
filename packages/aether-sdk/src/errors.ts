@@ -7,10 +7,6 @@ export type AetherSdkErrorCode =
   | "prompt_in_progress"
   | "invalid_options"
   | "execution_failed"
-  | "configuration_error"
-  | "command_exit_without_terminal"
-  | "agent_message_json_line"
-  | "invalid_image_reference"
   | "generate_command_failed"
   | "aborted";
 

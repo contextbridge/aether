@@ -1,8 +1,8 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import { AetherSdkError } from "../errors.js";
-import type { AgentMessage } from "../generated/eval-types.js";
+import type { AgentMessage } from "@aether-agent/sdk";
+import { AetherEvalError } from "./errors.js";
 import type { Agent } from "./Agent.js";
 import type { Task } from "./task.js";
 import type { Workspace } from "./workspace.js";
@@ -67,7 +67,7 @@ export class FakeAgent implements Agent {
 
   async *run(_task: Task): AsyncIterable<AgentMessage> {
     if (this.fileWrites.length > 0 && !this.workspace) {
-      throw new AetherSdkError(
+      throw new AetherEvalError(
         "configuration_error",
         "FakeAgent file writes require a bound workspace",
       );

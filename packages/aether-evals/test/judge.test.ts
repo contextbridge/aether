@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { judge, JudgeResponseSchema } from "../../src/evals/index.js";
+import { judge, JudgeResponseSchema } from "../src/index.js";
 
 const baseJudgeInput = {
   task: "do the thing",

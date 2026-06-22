@@ -1,4 +1,4 @@
-import type { AgentMessage } from "../src/generated/eval-types.js";
+import type { AgentMessage } from "@aether-agent/sdk";
 
 export function logMessage(message: AgentMessage): void {
   switch (message.type) {

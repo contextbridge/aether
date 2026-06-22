@@ -1,5 +1,6 @@
 export {
   buildAetherAcpCommand,
+  resolveAetherCommand,
   startAgent as startAetherAcpAgentProcess,
 } from "./agentProcess.js";
 export type {
@@ -34,6 +35,9 @@ export type {
   SdkMcpToolDefinition,
 } from "./types.js";
 export type { AetherSdkErrorCode } from "./errors.js";
+export { runCommand } from "./childProcess.js";
+export { resolveEnv } from "./processEnv.js";
+export type * from "./generated/eval-types.js";
 export type * from "./generated/aether-settings.js";
 export type { AetherAcpOptions } from "./generated/aether-acp-options.js";
 export type { AetherHeadlessCliOptions } from "./generated/aether-headless-options.js";

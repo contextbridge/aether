@@ -1,0 +1,48 @@
+name: Release Evals
+
+on:
+  push:
+    tags:
+      - "aether-evals-v*"
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    environment: ci
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev
+
+      - uses: jdx/mise-action@v4
+
+      - name: Setup npm registry
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .tool-versions
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build SDK
+        run: pnpm sdk:build
+
+      - name: Build evals
+        run: pnpm evals:build
+
+      - name: Publish
+        run: pnpm publish --access public --provenance --no-git-checks
+        working-directory: packages/aether-evals

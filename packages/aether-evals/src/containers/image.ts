@@ -1,4 +1,4 @@
-import { AetherSdkError } from "../../errors.js";
+import { AetherEvalError } from "../errors.js";
 
 export interface ImageBuildOptions {
   context: string;
@@ -57,7 +57,7 @@ function validateImageReference(reference: string): void {
     reference.startsWith(":") ||
     reference.endsWith(":")
   ) {
-    throw new AetherSdkError(
+    throw new AetherEvalError(
       "invalid_image_reference",
       `invalid container image reference '${reference}'`,
     );

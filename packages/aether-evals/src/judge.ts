@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { AetherSdkError } from "../errors.js";
+import { AetherSdkError } from "@aether-agent/sdk";
 import type {
   AgentMessage,
   JudgeCriterionResponse,
@@ -8,7 +8,7 @@ import type {
   JudgeCriterionSummary,
   JudgeRubricResponse,
   JudgeSummary,
-} from "../generated/eval-types.js";
+} from "@aether-agent/sdk";
 
 export type {
   JudgeCriterionResponse,
