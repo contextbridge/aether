@@ -7,7 +7,7 @@ use std::path::Path;
 use crate::coding::error::FindError;
 use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct FindInput {
     /// The glob pattern to match files against
     pub pattern: String,

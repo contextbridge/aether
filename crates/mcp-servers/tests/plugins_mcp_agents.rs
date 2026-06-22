@@ -1,14 +1,26 @@
+mod common;
+
 use aether_auth::FakeOAuthCredentialStore;
 use aether_project::{AetherSettings, AetherSettingsSource, AgentCatalog, SettingsFileSource};
+use common::{TestClient, TestResult};
 use mcp_servers::subagents::SubAgentsMcp;
-use mcp_utils::testing::connect;
-use rmcp::model::{CallToolRequestParams, ClientCapabilities, ClientInfo, Implementation};
-use rmcp::service::RunningService;
-use rmcp::{RoleClient, RoleServer};
+use mcp_servers::subagents::tools::{SpawnSubAgentsInput, SubAgentTask};
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use tempfile::TempDir;
+
+fn spawn_input(tasks: &[(&str, &str)]) -> SpawnSubAgentsInput {
+    SpawnSubAgentsInput {
+        tasks: tasks
+            .iter()
+            .map(|(agent_name, prompt)| SubAgentTask {
+                agent_name: (*agent_name).to_string(),
+                prompt: (*prompt).to_string(),
+            })
+            .collect(),
+    }
+}
 
 #[tokio::test]
 async fn test_spawn_agent_with_coding_mcp_from_settings_catalog() {
@@ -33,75 +45,44 @@ async fn test_spawn_agent_with_coding_mcp_from_settings_catalog() {
     ];
 
     let temp_dir = create_test_files(&test_files);
-    let (_server_handle, _client) = create_test_client(temp_dir.path()).await;
+    let _mcp = TestClient::start(|| create_test_server(temp_dir.path())).await.unwrap();
 }
 
 #[tokio::test]
-async fn test_spawn_subagent_codex_uses_oauth_store() {
+async fn test_spawn_subagent_codex_uses_oauth_store() -> TestResult {
     let temp_dir = create_project_with_codex_agent();
-    let (_server_handle, client) = connect(
-        create_test_server(temp_dir.path()).with_oauth_credential_store(Arc::new(FakeOAuthCredentialStore::new())),
-        ClientInfo::new(ClientCapabilities::default(), Implementation::new("test-client", "0.1.0")),
-    )
-    .await
-    .expect("Failed to connect MCP server and client");
+    let mcp = TestClient::start(|| {
+        create_test_server(temp_dir.path()).with_oauth_credential_store(Arc::new(FakeOAuthCredentialStore::new()))
+    })
+    .await?;
 
-    let args = {
-        let mut args = serde_json::Map::new();
-        args.insert("tasks".to_string(), serde_json::json!([{ "agentName": "explorer", "prompt": "Read README.md" }]));
-        args
-    };
+    let parsed = mcp.call("spawn_subagent", spawn_input(&[("explorer", "Read README.md")])).await?;
 
-    let result = client
-        .call_tool(CallToolRequestParams::new("spawn_subagent").with_arguments(args))
-        .await
-        .expect("Failed to call spawn_subagent tool");
-
-    let text = result.content.first().and_then(|c| c.as_text()).expect("Expected text content");
-    let parsed: serde_json::Value = serde_json::from_str(&text.text).expect("Invalid JSON response");
     let error = parsed["results"][0]["error"].as_str().expect("Expected sub-agent error");
-    assert!(error.contains("No Codex OAuth credentials found"),);
+    assert!(error.contains("No Codex OAuth credentials found"));
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_spawn_subagents_empty_tasks() {
+async fn test_spawn_subagents_empty_tasks() -> TestResult {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
-    let (_server_handle, client) = create_test_client(temp_dir.path()).await;
+    let mcp = TestClient::start(|| create_test_server(temp_dir.path())).await?;
 
-    let mut args = serde_json::Map::new();
-    args.insert("tasks".to_string(), serde_json::json!([]));
-    let result = client
-        .call_tool(CallToolRequestParams::new("spawn_subagent").with_arguments(args))
-        .await
-        .expect("Failed to call spawn_subagent tool");
+    let parsed = mcp.call("spawn_subagent", spawn_input(&[])).await?;
 
-    if let Some(content) = result.content.first() {
-        if let Some(text_content) = content.as_text() {
-            let parsed: serde_json::Value = serde_json::from_str(&text_content.text).expect("Invalid JSON response");
-
-            let results = parsed["results"].as_array().expect("Expected results array");
-            assert_eq!(results.len(), 0);
-            assert_eq!(parsed["successCount"], 0);
-            assert_eq!(parsed["errorCount"], 0);
-        } else {
-            panic!("Expected text content");
-        }
-    } else {
-        panic!("Expected content in result");
-    }
+    let results = parsed["results"].as_array().expect("Expected results array");
+    assert_eq!(results.len(), 0);
+    assert_eq!(parsed["successCount"], 0);
+    assert_eq!(parsed["errorCount"], 0);
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_spawn_subagent_errors_when_no_invocable_agents() {
+async fn test_spawn_subagent_errors_when_no_invocable_agents() -> TestResult {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
-    let (_server_handle, client) = create_test_client(temp_dir.path()).await;
+    let mcp = TestClient::start(|| create_test_server(temp_dir.path())).await?;
 
-    let mut args = serde_json::Map::new();
-    args.insert("tasks".to_string(), serde_json::json!([{ "agentName": "any-agent", "prompt": "Do something" }]));
-    let result = client
-        .call_tool(CallToolRequestParams::new("spawn_subagent").with_arguments(args))
-        .await
-        .expect("Tool call should succeed at protocol level");
+    let result = mcp.call_raw("spawn_subagent", spawn_input(&[("any-agent", "Do something")])).await?;
 
     let text = result.content.first().and_then(|c| c.as_text()).expect("Expected text content in error response");
     assert!(
@@ -109,90 +90,44 @@ async fn test_spawn_subagent_errors_when_no_invocable_agents() {
         "Error message should explain no agents are registered, got: {}",
         text.text,
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_spawn_subagent_agent_not_found() {
+async fn test_spawn_subagent_agent_not_found() -> TestResult {
     let temp_dir = create_project_with_invocable_agent();
-    let (_server_handle, client) = create_test_client(temp_dir.path()).await;
+    let mcp = TestClient::start(|| create_test_server(temp_dir.path())).await?;
 
-    let mut args = serde_json::Map::new();
-    args.insert(
-        "tasks".to_string(),
-        serde_json::json!([{
-            "agentName": "nonexistent-agent",
-            "prompt": "Do something"
-        }]),
-    );
-    let result = client
-        .call_tool(CallToolRequestParams::new("spawn_subagent").with_arguments(args))
-        .await
-        .expect("Failed to call spawn_subagent tool");
+    let parsed = mcp.call("spawn_subagent", spawn_input(&[("nonexistent-agent", "Do something")])).await?;
 
-    if let Some(content) = result.content.first() {
-        if let Some(text_content) = content.as_text() {
-            let parsed: serde_json::Value = serde_json::from_str(&text_content.text).expect("Invalid JSON response");
+    let results = parsed["results"].as_array().expect("Expected results array");
+    assert_eq!(results.len(), 1);
 
-            let results = parsed["results"].as_array().expect("Expected results array");
-            assert_eq!(results.len(), 1);
+    let first_result = &results[0];
+    assert_eq!(first_result["status"], "error");
+    assert_eq!(first_result["agentName"], "nonexistent-agent");
+    assert!(first_result["error"].as_str().unwrap().contains("not found"));
 
-            let first_result = &results[0];
-            assert_eq!(first_result["status"], "error");
-            assert_eq!(first_result["agentName"], "nonexistent-agent");
-            assert!(first_result["error"].as_str().unwrap().contains("not found"));
-
-            assert_eq!(parsed["successCount"], 0);
-            assert_eq!(parsed["errorCount"], 1);
-        } else {
-            panic!("Expected text content");
-        }
-    } else {
-        panic!("Expected content in result");
-    }
+    assert_eq!(parsed["successCount"], 0);
+    assert_eq!(parsed["errorCount"], 1);
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_spawn_subagents_task_id_assignment() {
+async fn test_spawn_subagents_task_id_assignment() -> TestResult {
     let temp_dir = create_project_with_invocable_agent();
-    let (_server_handle, client) = create_test_client(temp_dir.path()).await;
+    let mcp = TestClient::start(|| create_test_server(temp_dir.path())).await?;
 
-    let mut args = serde_json::Map::new();
-    args.insert(
-        "tasks".to_string(),
-        serde_json::json!([
-            {
-                "agentName": "missing-agent-a",
-                "prompt": "First task"
-            },
-            {
-                "agentName": "missing-agent-b",
-                "prompt": "Second task"
-            }
-        ]),
-    );
-    let result = client
-        .call_tool(CallToolRequestParams::new("spawn_subagent").with_arguments(args))
-        .await
-        .expect("Failed to call spawn_subagent tool");
+    let parsed = mcp
+        .call("spawn_subagent", spawn_input(&[("missing-agent-a", "First task"), ("missing-agent-b", "Second task")]))
+        .await?;
 
-    if let Some(content) = result.content.first() {
-        if let Some(text_content) = content.as_text() {
-            let parsed: serde_json::Value = serde_json::from_str(&text_content.text).expect("Invalid JSON response");
+    let results = parsed["results"].as_array().expect("Expected results array");
+    assert_eq!(results.len(), 2);
 
-            let results = parsed["results"].as_array().expect("Expected results array");
-            assert_eq!(results.len(), 2);
-
-            let first_result = &results[0];
-            assert_eq!(first_result["taskId"], "task_0");
-
-            let second_result = &results[1];
-            assert_eq!(second_result["taskId"], "task_1");
-        } else {
-            panic!("Expected text content");
-        }
-    } else {
-        panic!("Expected content in result");
-    }
+    assert_eq!(results[0]["taskId"], "task_0");
+    assert_eq!(results[1]["taskId"], "task_1");
+    Ok(())
 }
 
 fn create_test_files(files: &[(&str, &str)]) -> TempDir {
@@ -257,16 +192,4 @@ fn create_test_server(test_dir: &Path) -> SubAgentsMcp {
         AgentCatalog::from_settings(test_dir, settings).expect("Failed to create agent catalog")
     };
     SubAgentsMcp::new(catalog, test_dir.to_path_buf())
-}
-
-async fn create_test_client(
-    test_dir: &Path,
-) -> (RunningService<RoleServer, SubAgentsMcp>, RunningService<RoleClient, ClientInfo>) {
-    let server_service = create_test_server(test_dir);
-    let client_info = ClientInfo::new(ClientCapabilities::default(), Implementation::new("test-client", "0.1.0"));
-
-    let (server_handle, client) =
-        connect(server_service, client_info).await.expect("Failed to connect MCP server and client");
-
-    (server_handle, client)
 }

@@ -5,7 +5,7 @@ use std::time::SystemTime;
 use crate::coding::error::ListFilesError;
 use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename};
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ListFilesArgs {
     /// Directory path to list (defaults to current directory if not provided)

@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::coding::error::BashError;
 use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta, truncate};
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BashInput {
     /// The command to execute

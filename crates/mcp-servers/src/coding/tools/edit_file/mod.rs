@@ -5,7 +5,7 @@ use std::path::Path;
 use crate::file_ops::{ApplyEditsResult, FileEdit, FileError, apply_edits};
 use mcp_utils::display_meta::{FileDiff, ToolDisplayMeta, ToolResultMeta, basename};
 
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EditFileArgs {
     /// Path to the file to edit

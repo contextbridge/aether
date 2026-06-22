@@ -1,4 +1,4 @@
-//! Shared test helpers for LSP end-to-end tests.
+//! Shared test helpers for MCP integration tests.
 
 #![allow(dead_code)]
 
@@ -6,16 +6,78 @@ use aether_lspd::testing::TestProject;
 use mcp_servers::coding::CodingMcp;
 use mcp_utils::testing::connect;
 use rmcp::RoleClient;
-use rmcp::model::{CallToolRequestParams, ClientCapabilities, ClientInfo, Implementation};
+use rmcp::model::{CallToolRequestParams, CallToolResult, ClientCapabilities, ClientInfo, Implementation};
 use rmcp::service::RunningService;
+use rmcp::{RoleServer, Service};
+use serde::Serialize;
 use std::time::{Duration, Instant};
 
 /// Default timeout for polling operations (60 seconds).
 const POLL_TIMEOUT: Duration = Duration::from_mins(1);
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
+pub type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
+
 pub fn test_client_info() -> ClientInfo {
-    ClientInfo::new(ClientCapabilities::default(), Implementation::new("lsp-e2e-test", "0.1.0"))
+    ClientInfo::new(ClientCapabilities::default(), Implementation::new("test-client", "0.1.0"))
+}
+
+pub fn test_error(message: impl Into<String>) -> std::io::Error {
+    std::io::Error::other(message.into())
+}
+
+/// Generic test client wrapping a connected MCP server.
+pub struct TestClient<T: Service<RoleServer>, U: Service<RoleClient> = ClientInfo> {
+    _server_handle: RunningService<RoleServer, T>,
+    client: RunningService<RoleClient, U>,
+}
+
+impl<T: Service<RoleServer>> TestClient<T, ClientInfo> {
+    /// Connect a default test `ClientInfo` to a server built by `configure`.
+    ///
+    /// Use the closure to apply `.with_root_dir(...)`, `.with_lsp(...)`, etc.
+    pub async fn start(configure: impl FnOnce() -> T) -> TestResult<Self> {
+        let (server_handle, client) = connect(configure(), test_client_info()).await?;
+        Ok(Self { _server_handle: server_handle, client })
+    }
+}
+
+impl<T: Service<RoleServer>, U: Service<RoleClient>> TestClient<T, U> {
+    /// Connect a caller-provided client to a server built by `configure_server`.
+    ///
+    /// Use this when the test needs to intercept client-side behaviour (for
+    /// example, auto-responding to elicitation requests via `McpClient`).
+    pub async fn start_with(configure_server: impl FnOnce() -> T, client: U) -> TestResult<Self> {
+        let (server_handle, client) = connect(configure_server(), client).await?;
+        Ok(Self { _server_handle: server_handle, client })
+    }
+
+    /// Call a tool with typed args, returning the first text content parsed as JSON.
+    pub async fn call<V: Serialize>(&self, tool: &str, args: V) -> TestResult<serde_json::Value> {
+        let result = self.call_raw(tool, args).await?;
+
+        let text = result
+            .content
+            .first()
+            .and_then(|c| c.as_text())
+            .ok_or_else(|| test_error(format!("{tool} should return text content")))?;
+
+        Ok(serde_json::from_str(&text.text)?)
+    }
+
+    /// Call a tool with typed args, returning the raw MCP tool result.
+    pub async fn call_raw<V: Serialize>(&self, tool: &str, args: V) -> TestResult<CallToolResult> {
+        let args = serde_json::to_value(args)?;
+        let arguments =
+            args.as_object().ok_or_else(|| test_error("tool arguments must serialize to a JSON object"))?.clone();
+
+        Ok(self.client.call_tool(CallToolRequestParams::new(tool.to_string()).with_arguments(arguments)).await?)
+    }
+
+    /// Borrow the raw client for cases that need `CallToolRequestParams` directly
+    pub fn raw(&self) -> &RunningService<RoleClient, U> {
+        &self.client
+    }
 }
 
 /// Connect a `CodingMcp` server to a test project with LSP enabled.
@@ -24,7 +86,7 @@ pub fn test_client_info() -> ClientInfo {
 /// alive (bind it to `_server_handle`) for the connection to stay open.
 pub async fn connect_lsp(
     project: &impl TestProject,
-) -> (rmcp::service::RunningService<rmcp::RoleServer, CodingMcp>, RunningService<RoleClient, ClientInfo>) {
+) -> (RunningService<RoleServer, CodingMcp>, RunningService<RoleClient, ClientInfo>) {
     let server = CodingMcp::new().with_lsp(project.root().to_path_buf());
     connect(server, test_client_info()).await.expect("Failed to connect")
 }

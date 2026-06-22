@@ -1,6 +1,8 @@
+mod common;
+
+use common::{TestClient, TestResult};
 use mcp_servers::skills::SkillsMcp;
-use mcp_utils::testing::connect;
-use rmcp::model::{CallToolRequestParams, ClientCapabilities, ClientInfo, Implementation};
+use mcp_servers::skills::tools::{ListSkillsInput, LoadSkillsInput, SkillRequest};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -27,25 +29,17 @@ fn create_test_files(files: &[(&str, &str)]) -> TempDir {
     temp_dir
 }
 
-async fn create_test_client(
-    test_dir: &Path,
-) -> (
-    rmcp::service::RunningService<rmcp::RoleServer, SkillsMcp>,
-    rmcp::service::RunningService<rmcp::RoleClient, rmcp::model::ClientInfo>,
-) {
-    let server_service = SkillsMcp::new(&[test_dir.join("skills")], test_dir.join("notes"));
-    let client_info = ClientInfo::new(ClientCapabilities::default(), Implementation::new("test-client", "0.1.0"));
-
-    let (server_handle, client) =
-        connect(server_service, client_info).await.expect("Failed to connect MCP server and client");
-
-    (server_handle, client)
+fn build_server(test_dir: &Path) -> SkillsMcp {
+    SkillsMcp::new(&[test_dir.join("skills")], test_dir.join("notes"))
 }
 
-fn parse_tool_result(result: &rmcp::model::CallToolResult) -> serde_json::Value {
-    let content = result.content.first().expect("Expected content");
-    let text = content.as_text().expect("Expected text content");
-    serde_json::from_str(&text.text).expect("Invalid JSON response")
+fn load_skills_input(requests: &[(&str, Option<&str>)]) -> LoadSkillsInput {
+    LoadSkillsInput {
+        requests: requests
+            .iter()
+            .map(|(name, path)| SkillRequest { name: (*name).to_string(), path: path.map(str::to_string) })
+            .collect(),
+    }
 }
 
 #[tokio::test]
@@ -77,7 +71,7 @@ async fn test_load_from_nested_directories() {
 }
 
 #[tokio::test]
-async fn test_load_skills_tool() {
+async fn test_load_skills_tool() -> TestResult {
     let test_files = vec![
         (
             "skills/skill-1/SKILL.md",
@@ -94,28 +88,11 @@ async fn test_load_skills_tool() {
     ];
 
     let temp_dir = create_test_files(&test_files);
-    let (_server_handle, client) = create_test_client(temp_dir.path()).await;
+    let mcp = TestClient::start(|| build_server(temp_dir.path())).await?;
 
-    // Test loading multiple skills using new requests API
-    let result = client
-        .call_tool(
-            CallToolRequestParams::new("get_skills").with_arguments(
-                serde_json::json!({
-                    "requests": [
-                        { "name": "skill-1" },
-                        { "name": "skill-2" },
-                        { "name": "skill-3" }
-                    ]
-                })
-                .as_object()
-                .unwrap()
-                .clone(),
-            ),
-        )
-        .await
-        .expect("Failed to call get_skills tool");
+    let parsed =
+        mcp.call("get_skills", load_skills_input(&[("skill-1", None), ("skill-2", None), ("skill-3", None)])).await?;
 
-    let parsed = parse_tool_result(&result);
     let files = parsed["files"].as_array().expect("Expected files array");
     assert_eq!(files.len(), 3);
 
@@ -128,10 +105,11 @@ async fn test_load_skills_tool() {
 
     let skill3 = files.iter().find(|s| s["name"] == "skill-3").unwrap();
     assert!(skill3["content"].as_str().unwrap().contains("This is skill 3"));
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_list_skills_only_returns_agent_invocable_entries() {
+async fn test_list_skills_only_returns_agent_invocable_entries() -> TestResult {
     let test_files = vec![
         ("skills/zeta/SKILL.md", "---\ndescription: Zeta\nagent-invocable: true\ntags:\n  - systems\n---\n# Zeta"),
         (
@@ -149,17 +127,10 @@ async fn test_list_skills_only_returns_agent_invocable_entries() {
     ];
 
     let temp_dir = create_test_files(&test_files);
-    let (_server_handle, client) = create_test_client(temp_dir.path()).await;
+    let mcp = TestClient::start(|| build_server(temp_dir.path())).await?;
 
-    let result = client
-        .call_tool(
-            CallToolRequestParams::new("list_skills")
-                .with_arguments(serde_json::json!({}).as_object().unwrap().clone()),
-        )
-        .await
-        .expect("Failed to call list_skills");
+    let parsed = mcp.call("list_skills", ListSkillsInput::default()).await?;
 
-    let parsed = parse_tool_result(&result);
     assert_eq!(parsed["status"], "success");
     assert_eq!(parsed["count"], 2);
     assert_eq!(parsed["message"], "Found 2 skills");
@@ -170,10 +141,11 @@ async fn test_list_skills_only_returns_agent_invocable_entries() {
 
     assert!(skills.iter().all(|entry| entry.get("content").is_none()));
     assert!(skills.iter().all(|entry| entry.get("availableFiles").is_none()));
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_load_skills_with_missing() {
+async fn test_load_skills_with_missing() -> TestResult {
     let test_files = vec![
         ("skills/skill-1/SKILL.md", "---\ndescription: First skill\nagent-invocable: true\n---\n# Skill 1\n\nContent."),
         (
@@ -183,31 +155,15 @@ async fn test_load_skills_with_missing() {
     ];
 
     let temp_dir = create_test_files(&test_files);
-    let (_server_handle, client) = create_test_client(temp_dir.path()).await;
+    let mcp = TestClient::start(|| build_server(temp_dir.path())).await?;
 
-    let result = client
-        .call_tool(
-            CallToolRequestParams::new("get_skills").with_arguments(
-                serde_json::json!({
-                    "requests": [
-                        { "name": "skill-1" },
-                        { "name": "nonexistent-skill" },
-                        { "name": "skill-2" }
-                    ]
-                })
-                .as_object()
-                .unwrap()
-                .clone(),
-            ),
-        )
-        .await
-        .expect("Failed to call get_skills tool");
+    let parsed = mcp
+        .call("get_skills", load_skills_input(&[("skill-1", None), ("nonexistent-skill", None), ("skill-2", None)]))
+        .await?;
 
-    let parsed = parse_tool_result(&result);
     let files = parsed["files"].as_array().unwrap();
     assert_eq!(files.len(), 3);
 
-    // skill-1 and skill-2 should have content
     let skill1 = files.iter().find(|s| s["name"] == "skill-1").unwrap();
     assert!(skill1["content"].is_string());
     assert!(skill1["error"].is_null());
@@ -216,14 +172,14 @@ async fn test_load_skills_with_missing() {
     assert!(skill2["content"].is_string());
     assert!(skill2["error"].is_null());
 
-    // nonexistent-skill should have error
     let missing = files.iter().find(|s| s["name"] == "nonexistent-skill").unwrap();
     assert!(missing["content"].is_null());
     assert!(missing["error"].as_str().unwrap().contains("not found"));
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_get_skills_rejects_non_agent_invocable_prompts() {
+async fn test_get_skills_rejects_non_agent_invocable_prompts() -> TestResult {
     let test_files = vec![
         ("skills/allowed/SKILL.md", "---\ndescription: Allowed\nagent-invocable: true\n---\n# Allowed"),
         (
@@ -237,27 +193,12 @@ async fn test_get_skills_rejects_non_agent_invocable_prompts() {
     ];
 
     let temp_dir = create_test_files(&test_files);
-    let (_server_handle, client) = create_test_client(temp_dir.path()).await;
+    let mcp = TestClient::start(|| build_server(temp_dir.path())).await?;
 
-    let result = client
-        .call_tool(
-            CallToolRequestParams::new("get_skills").with_arguments(
-                serde_json::json!({
-                    "requests": [
-                        { "name": "allowed" },
-                        { "name": "user-only" },
-                        { "name": "rule-only" }
-                    ]
-                })
-                .as_object()
-                .unwrap()
-                .clone(),
-            ),
-        )
-        .await
-        .expect("Failed to call get_skills tool");
+    let parsed = mcp
+        .call("get_skills", load_skills_input(&[("allowed", None), ("user-only", None), ("rule-only", None)]))
+        .await?;
 
-    let parsed = parse_tool_result(&result);
     let files = parsed["files"].as_array().expect("Expected files array");
 
     let allowed = files.iter().find(|entry| entry["name"] == "allowed").unwrap();
@@ -271,10 +212,11 @@ async fn test_get_skills_rejects_non_agent_invocable_prompts() {
     let rule_only = files.iter().find(|entry| entry["name"] == "rule-only").unwrap();
     assert!(rule_only["content"].is_null());
     assert!(rule_only["error"].as_str().unwrap().contains("not agent-invocable"));
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_load_auxiliary_file() {
+async fn test_load_auxiliary_file() -> TestResult {
     let test_files = vec![
         (
             "skills/test-skill/SKILL.md",
@@ -285,119 +227,63 @@ async fn test_load_auxiliary_file() {
     ];
 
     let temp_dir = create_test_files(&test_files);
-    let (_server_handle, client) = create_test_client(temp_dir.path()).await;
+    let mcp = TestClient::start(|| build_server(temp_dir.path())).await?;
 
-    // Load SKILL.md first - should get available_files
-    let result = client
-        .call_tool(
-            CallToolRequestParams::new("get_skills").with_arguments(
-                serde_json::json!({
-                    "requests": [{ "name": "test-skill" }]
-                })
-                .as_object()
-                .unwrap()
-                .clone(),
-            ),
-        )
-        .await
-        .expect("Failed to call get_skills");
-
-    let parsed = parse_tool_result(&result);
+    let parsed = mcp.call("get_skills", load_skills_input(&[("test-skill", None)])).await?;
     let file = &parsed["files"][0];
 
-    // Check available_files
     let available = file["availableFiles"].as_array().unwrap();
     assert!(available.contains(&serde_json::json!("references/REF.md")));
     assert!(available.contains(&serde_json::json!("traits.md")));
 
-    // Load auxiliary file
-    let result_aux = client
-        .call_tool(
-            CallToolRequestParams::new("get_skills").with_arguments(
-                serde_json::json!({
-                    "requests": [{ "name": "test-skill", "path": "traits.md" }]
-                })
-                .as_object()
-                .unwrap()
-                .clone(),
-            ),
-        )
-        .await
-        .expect("Failed to call get_skills");
-
-    let parsed_aux = parse_tool_result(&result_aux);
+    let parsed_aux = mcp.call("get_skills", load_skills_input(&[("test-skill", Some("traits.md"))])).await?;
     let aux_file = &parsed_aux["files"][0];
 
     assert_eq!(aux_file["path"], "traits.md");
     assert!(aux_file["content"].as_str().unwrap().contains("Traits content"));
-    // available_files should be absent (skipped when empty) for non-SKILL.md
     assert!(aux_file.get("availableFiles").is_none());
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_reject_traversal() {
+async fn test_reject_traversal() -> TestResult {
     let test_files = vec![("skills/test-skill/SKILL.md", "---\ndescription: Test\nagent-invocable: true\n---\n# Test")];
 
     let temp_dir = create_test_files(&test_files);
-    let (_server_handle, client) = create_test_client(temp_dir.path()).await;
+    let mcp = TestClient::start(|| build_server(temp_dir.path())).await?;
 
-    let result = client
-        .call_tool(
-            CallToolRequestParams::new("get_skills").with_arguments(
-                serde_json::json!({
-                    "requests": [{ "name": "test-skill", "path": "../other-skill/SKILL.md" }]
-                })
-                .as_object()
-                .unwrap()
-                .clone(),
-            ),
-        )
-        .await
-        .expect("Failed to call get_skills");
-
-    let parsed = parse_tool_result(&result);
+    let parsed = mcp.call("get_skills", load_skills_input(&[("test-skill", Some("../other-skill/SKILL.md"))])).await?;
     let file = &parsed["files"][0];
 
     assert!(file["error"].as_str().unwrap().contains("traversal"));
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_reject_absolute_path() {
+async fn test_reject_absolute_path() -> TestResult {
     let test_files = vec![("skills/test-skill/SKILL.md", "---\ndescription: Test\nagent-invocable: true\n---\n# Test")];
 
     let temp_dir = create_test_files(&test_files);
-    let (_server_handle, client) = create_test_client(temp_dir.path()).await;
+    let mcp = TestClient::start(|| build_server(temp_dir.path())).await?;
 
-    let result = client
-        .call_tool(
-            CallToolRequestParams::new("get_skills").with_arguments(
-                serde_json::json!({
-                    "requests": [{ "name": "test-skill", "path": "/etc/passwd" }]
-                })
-                .as_object()
-                .unwrap()
-                .clone(),
-            ),
-        )
-        .await
-        .expect("Failed to call get_skills");
-
-    let parsed = parse_tool_result(&result);
+    let parsed = mcp.call("get_skills", load_skills_input(&[("test-skill", Some("/etc/passwd"))])).await?;
     let file = &parsed["files"][0];
 
     assert!(file["error"].as_str().unwrap().contains("Absolute"));
+    Ok(())
 }
 
 #[tokio::test]
-async fn list_skills_input_schema_has_properties_object() {
+async fn list_skills_input_schema_has_properties_object() -> TestResult {
     let temp_dir = create_test_files(&[]);
-    let (_server_handle, client) = create_test_client(temp_dir.path()).await;
+    let mcp = TestClient::start(|| build_server(temp_dir.path())).await?;
 
-    let tools = client.peer().list_all_tools().await.expect("list tools");
+    let tools = mcp.raw().peer().list_all_tools().await?;
     let tool = tools.into_iter().find(|tool| tool.name.as_ref() == "list_skills").expect("list_skills tool present");
 
     let schema = serde_json::Value::Object((*tool.input_schema).clone());
     assert_eq!(schema.get("type").and_then(|v| v.as_str()), Some("object"));
     let properties = schema.get("properties").expect("object schema must include a properties key");
     assert!(properties.is_object(), "properties must be an object, got: {properties}");
+    Ok(())
 }
