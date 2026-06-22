@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.8](https://github.com/contextbridge/aether/compare/aether-evals-v0.2.7...aether-evals-v0.2.8) - 2026-06-22
+
+### Added
+
+- Support instantiating eval workspaces from a git bundle file ([#194](https://github.com/contextbridge/aether/pull/194))
+
 ## [0.2.7](https://github.com/contextbridge/aether/compare/aether-evals-v0.2.6...aether-evals-v0.2.7) - 2026-06-22
 
 ### Other
