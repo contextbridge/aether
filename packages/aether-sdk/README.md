@@ -10,8 +10,6 @@
     - [How `mcp()` is wired](#how-mcp-is-wired)
     - [Aether tool naming](#aether-tool-naming)
   - [Permission and elicitation hooks](#permission-and-elicitation-hooks)
-  - [Writing evals with vitest](#writing-evals-with-vitest)
-    - [Grading a run with an LLM judge](#grading-a-run-with-an-llm-judge)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 

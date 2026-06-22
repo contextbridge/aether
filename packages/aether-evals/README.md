@@ -1,3 +1,13 @@
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+
+- [@aether-agent/evals](#aether-agentevals)
+  - [Install](#install)
+  - [Writing evals with vitest](#writing-evals-with-vitest)
+    - [Grading a run with an LLM judge](#grading-a-run-with-an-llm-judge)
+
+<!-- END doctoc generated TOC please keep comment here to allow auto update -->
+
 # @aether-agent/evals
 
 This package facilitates writing evals for Aether agents. 
