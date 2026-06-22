@@ -71,7 +71,7 @@ pub enum GrepOutput {
     Count(GrepCountOutput),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GrepInput {
     /// The regular expression pattern to search for in file contents

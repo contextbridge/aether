@@ -1,13 +1,10 @@
-use tui::testing::TestTerminal;
 use tui::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
 use super::common::*;
 
 #[tokio::test]
-async fn test_ctrl_c_exits_while_file_picker_is_open() {
-    let terminal = TestTerminal::new(80, 24);
-    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (80, 24));
-    renderer.initial_render().unwrap();
+async fn test_ctrl_c_exits_while_file_picker_is_open() -> TestResult {
+    let mut renderer = RendererTest::new().size((80, 24)).build()?;
 
     renderer
         .on_key_event(KeyEvent {
@@ -16,8 +13,7 @@ async fn test_ctrl_c_exits_while_file_picker_is_open() {
             kind: KeyEventKind::Press,
             state: KeyEventState::empty(),
         })
-        .await
-        .unwrap();
+        .await?;
     assert!(has_file_picker(renderer.writer()), "File picker should be open after typing @");
 
     let action = renderer
@@ -27,17 +23,15 @@ async fn test_ctrl_c_exits_while_file_picker_is_open() {
             kind: KeyEventKind::Press,
             state: KeyEventState::empty(),
         })
-        .await
-        .unwrap();
+        .await?;
 
     assert!(matches!(action, LoopAction::Exit));
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_space_closes_file_picker_without_selection() {
-    let terminal = TestTerminal::new(80, 24);
-    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (80, 24));
-    renderer.initial_render().unwrap();
+async fn test_space_closes_file_picker_without_selection() -> TestResult {
+    let mut renderer = RendererTest::new().size((80, 24)).build()?;
 
     renderer
         .on_key_event(KeyEvent {
@@ -46,8 +40,7 @@ async fn test_space_closes_file_picker_without_selection() {
             kind: KeyEventKind::Press,
             state: KeyEventState::empty(),
         })
-        .await
-        .unwrap();
+        .await?;
     assert!(has_file_picker(renderer.writer()), "File picker should be open");
 
     renderer
@@ -57,8 +50,8 @@ async fn test_space_closes_file_picker_without_selection() {
             kind: KeyEventKind::Press,
             state: KeyEventState::empty(),
         })
-        .await
-        .unwrap();
+        .await?;
 
     assert!(!has_file_picker(renderer.writer()), "File picker should be closed");
+    Ok(())
 }

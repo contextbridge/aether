@@ -4,9 +4,10 @@ use acp_utils::notifications::{AetherCapabilities, WorkspaceListResponse};
 use acp_utils::notifications::{ElicitationParams, WorkspaceEntry};
 use acp_utils::notifications::{ElicitationResponse, WorkspaceMoveResponse};
 use agent_client_protocol::Responder;
-use agent_client_protocol::schema as acp;
+use agent_client_protocol::schema::{self as acp, AuthMethod, SessionCapabilities, SessionConfigOption};
 use std::path::PathBuf;
 use tokio::sync::mpsc::UnboundedReceiver;
+pub(super) use tui::KeyCode::{Backspace, Down, Enter, Esc, Up};
 use tui::Renderer as FrameRenderer;
 use tui::RendererCommand;
 use tui::Theme;
@@ -21,6 +22,9 @@ pub(super) const TEST_AGENT: &str = "test-agent";
 pub(super) const TEST_WIDTH: u16 = 200;
 pub(super) const TEST_WORKSPACE_DIR: &str = "~/code/foo";
 pub(super) const TEST_GIT_REF: &str = "main";
+
+/// Result type for tests and helpers so fallible operations propagate with `?` instead of panicking.
+pub(super) type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
 pub(super) fn test_workspace_status() -> WorkspaceStatus {
     WorkspaceStatus::new(TEST_WORKSPACE_DIR, Some(TEST_GIT_REF.to_string()))
@@ -102,178 +106,104 @@ pub(super) enum LoopAction {
 
 pub(super) struct Renderer {
     app: App,
-    frame_renderer: FrameRenderer<TestTerminal>,
+    frame: FrameRenderer<TestTerminal>,
+    commands: UnboundedReceiver<PromptCommand>,
 }
 
-struct RendererOptions<'a> {
-    terminal: TestTerminal,
-    agent_name: String,
-    config_options: &'a [acp::SessionConfigOption],
-    prompt_capabilities: acp::PromptCapabilities,
-    session_capabilities: acp::SessionCapabilities,
-    auth_methods: Vec<acp::AuthMethod>,
-    prompt_handle: AcpPromptHandle,
+#[must_use]
+pub(super) struct RendererTest {
     size: (u16, u16),
+    agent_name: String,
+    config_options: Vec<SessionConfigOption>,
+    session_capabilities: SessionCapabilities,
+    auth_methods: Vec<AuthMethod>,
 }
 
-impl Renderer {
-    pub(super) fn new(
-        terminal: TestTerminal,
-        agent_name: String,
-        config_options: &[acp::SessionConfigOption],
-        size: (u16, u16),
-    ) -> Self {
-        Self::new_with_auth_methods(terminal, agent_name, config_options, vec![], size)
+impl Default for RendererTest {
+    fn default() -> Self {
+        Self::new()
     }
+}
 
-    pub(super) fn new_with_auth_methods(
-        terminal: TestTerminal,
-        agent_name: String,
-        config_options: &[acp::SessionConfigOption],
-        auth_methods: Vec<acp::AuthMethod>,
-        size: (u16, u16),
-    ) -> Self {
-        Self::new_with_prompt_capabilities_and_auth_methods(
-            terminal,
-            agent_name,
-            config_options,
-            acp::PromptCapabilities::new(),
-            auth_methods,
-            size,
-        )
-    }
-
-    pub(super) fn new_with_prompt_capabilities(
-        terminal: TestTerminal,
-        agent_name: String,
-        prompt_capabilities: acp::PromptCapabilities,
-        size: (u16, u16),
-    ) -> Self {
-        Self::new_with_options(RendererOptions {
-            terminal,
-            agent_name,
-            config_options: &[],
-            prompt_capabilities,
-            session_capabilities: prompt_search_session_capabilities(),
-            auth_methods: vec![],
-            prompt_handle: AcpPromptHandle::noop(),
-            size,
-        })
-    }
-
-    pub(super) fn new_recording(
-        terminal: TestTerminal,
-        agent_name: String,
-        config_options: &[acp::SessionConfigOption],
-        size: (u16, u16),
-    ) -> (Self, UnboundedReceiver<PromptCommand>) {
-        Self::new_recording_with_session_capabilities(
-            terminal,
-            agent_name,
-            config_options,
-            preview_session_capabilities(),
-            size,
-        )
-    }
-
-    pub(super) fn new_without_session_preview(
-        terminal: TestTerminal,
-        agent_name: String,
-        config_options: &[acp::SessionConfigOption],
-        size: (u16, u16),
-    ) -> (Self, UnboundedReceiver<PromptCommand>) {
-        Self::new_recording_with_session_capabilities(
-            terminal,
-            agent_name,
-            config_options,
-            acp::SessionCapabilities::new(),
-            size,
-        )
-    }
-
-    pub(super) fn new_recording_with_session_capabilities(
-        terminal: TestTerminal,
-        agent_name: String,
-        config_options: &[acp::SessionConfigOption],
-        session_capabilities: acp::SessionCapabilities,
-        size: (u16, u16),
-    ) -> (Self, UnboundedReceiver<PromptCommand>) {
-        let (prompt_handle, rx) = AcpPromptHandle::recording();
-        let renderer = Self::new_with_options(RendererOptions {
-            terminal,
-            agent_name,
-            config_options,
-            prompt_capabilities: acp::PromptCapabilities::new(),
-            session_capabilities,
-            auth_methods: vec![],
-            prompt_handle,
-            size,
-        });
-        (renderer, rx)
-    }
-
-    fn new_with_prompt_capabilities_and_auth_methods(
-        terminal: TestTerminal,
-        agent_name: String,
-        config_options: &[acp::SessionConfigOption],
-        prompt_capabilities: acp::PromptCapabilities,
-        auth_methods: Vec<acp::AuthMethod>,
-        size: (u16, u16),
-    ) -> Self {
-        Self::new_with_options(RendererOptions {
-            terminal,
-            agent_name,
-            config_options,
-            prompt_capabilities,
+impl RendererTest {
+    pub(super) fn new() -> Self {
+        Self {
+            size: (TEST_WIDTH, 40),
+            agent_name: TEST_AGENT.to_string(),
+            config_options: Vec::new(),
             session_capabilities: preview_session_capabilities(),
-            auth_methods,
-            prompt_handle: AcpPromptHandle::noop(),
-            size,
-        })
+            auth_methods: Vec::new(),
+        }
     }
 
-    fn new_with_options(options: RendererOptions<'_>) -> Self {
-        let RendererOptions {
-            terminal,
-            agent_name,
-            config_options,
-            prompt_capabilities,
-            session_capabilities,
-            auth_methods,
-            prompt_handle,
-            size,
-        } = options;
+    pub(super) fn size(mut self, size: (u16, u16)) -> Self {
+        self.size = size;
+        self
+    }
+
+    pub(super) fn agent_name(mut self, agent_name: impl Into<String>) -> Self {
+        self.agent_name = agent_name.into();
+        self
+    }
+
+    pub(super) fn config_options(mut self, config_options: &[acp::SessionConfigOption]) -> Self {
+        self.config_options = config_options.to_vec();
+        self
+    }
+
+    pub(super) fn session_capabilities(mut self, session_capabilities: acp::SessionCapabilities) -> Self {
+        self.session_capabilities = session_capabilities;
+        self
+    }
+
+    pub(super) fn auth_methods(mut self, auth_methods: Vec<acp::AuthMethod>) -> Self {
+        self.auth_methods = auth_methods;
+        self
+    }
+
+    pub(super) fn build(self) -> TestResult<Renderer> {
+        let (prompt_handle, commands) = AcpPromptHandle::recording();
         let app = App::new(AppInfo {
             session_id: acp::SessionId::new("test"),
-            agent_name,
-            prompt_capabilities,
-            session_capabilities,
-            config_options: config_options.to_vec(),
-            auth_methods,
+            agent_name: self.agent_name,
+            prompt_capabilities: acp::PromptCapabilities::new(),
+            session_capabilities: self.session_capabilities,
+            config_options: self.config_options,
+            auth_methods: self.auth_methods,
             working_dir: PathBuf::from("."),
             workspace_status: test_workspace_status(),
             prompt_handle,
             settings: wisp::settings::WispSettings::default()
                 .with_default_status_line(wisp::settings::StatusLineSettings::defaults()),
         });
-        let frame_renderer = FrameRenderer::new(terminal, Theme::default(), size);
-        Self { app, frame_renderer }
+        let terminal = TestTerminal::new(self.size.0, self.size.1);
+        let frame = FrameRenderer::new(terminal, Theme::default(), self.size);
+        let mut renderer = Renderer { app, frame, commands };
+        renderer.initial_render()?;
+        Ok(renderer)
     }
+}
 
+impl Renderer {
     pub(super) fn needs_mouse_capture(&self) -> bool {
         self.app.needs_mouse_capture()
     }
 
     pub(super) fn writer(&self) -> &TestTerminal {
-        self.frame_renderer.writer()
+        self.frame.writer()
+    }
+
+    /// Prompt commands the app has dispatched, for tests that assert on dispatched commands.
+    pub(super) fn commands(&mut self) -> &mut UnboundedReceiver<PromptCommand> {
+        &mut self.commands
     }
 
     pub(super) fn test_writer_mut(&mut self) -> &mut TestTerminal {
-        self.frame_renderer.test_writer_mut()
+        self.frame.test_writer_mut()
     }
 
     pub(super) fn render(&mut self) -> std::io::Result<()> {
-        self.frame_renderer.render_frame(|ctx| self.app.render(ctx))
+        self.frame.render_frame(|ctx| self.app.render(ctx))
     }
 
     pub(super) fn initial_render(&mut self) -> std::io::Result<()> {
@@ -357,7 +287,7 @@ impl Renderer {
     }
 
     pub(super) async fn on_resize_event(&mut self, cols: u16, rows: u16) -> Result<(), Box<dyn std::error::Error>> {
-        self.frame_renderer.on_resize((cols, rows));
+        self.frame.on_resize((cols, rows));
         self.handle_terminal_event(Event::Resize((cols, rows).into())).await?;
         Ok(())
     }
@@ -482,14 +412,14 @@ impl Renderer {
         }
 
         if let EventOutcome::Render { commands } = outcome {
-            self.frame_renderer.apply_commands(commands)?;
+            self.frame.apply_commands(commands)?;
             self.render()?;
         }
         Ok(LoopAction::Continue)
     }
 
     fn drain_and_render(&mut self, commands: Vec<RendererCommand>) -> Result<LoopAction, Box<dyn std::error::Error>> {
-        self.frame_renderer.apply_commands(commands)?;
+        self.frame.apply_commands(commands)?;
 
         if self.app.exit_requested() {
             return Ok(LoopAction::Exit);
@@ -586,30 +516,20 @@ pub(super) fn command_picker_visible_names(terminal: &TestTerminal) -> Vec<Strin
     names
 }
 
-/// Build a renderer with the default test agent and config and run the initial frame so
-/// keystroke-driven tests start from a clean rendered state.
-pub(super) fn new_test_renderer(size: (u16, u16)) -> Renderer {
-    let terminal = TestTerminal::new(size.0, size.1);
-    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], size);
-    renderer.initial_render().unwrap();
-    renderer
-}
-
-pub(super) fn render_with_size(events: Vec<TestEvent>, size: (u16, u16)) -> Renderer {
-    let terminal = TestTerminal::new(size.0, size.1);
-    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], size);
+pub(super) fn render_with_size(events: Vec<TestEvent>, size: (u16, u16)) -> TestResult<Renderer> {
+    let mut renderer = RendererTest::new().size(size).build()?;
 
     for event in events {
         match event {
-            TestEvent::Update(update) => renderer.on_session_update(*update).unwrap(),
-            TestEvent::PromptDone => renderer.on_prompt_done().unwrap(),
+            TestEvent::Update(update) => renderer.on_session_update(*update)?,
+            TestEvent::PromptDone => renderer.on_prompt_done()?,
         }
     }
 
-    renderer
+    Ok(renderer)
 }
 
-pub(super) fn render(events: Vec<TestEvent>) -> Renderer {
+pub(super) fn render(events: Vec<TestEvent>) -> TestResult<Renderer> {
     render_with_size(events, (TEST_WIDTH, 40))
 }
 
@@ -677,7 +597,7 @@ pub(super) fn tool_update_with_args(id: &str, args: &str) -> TestEvent {
     ))))
 }
 
-pub(super) async fn type_string(renderer: &mut Renderer, text: &str) {
+pub(super) async fn type_string(renderer: &mut Renderer, text: &str) -> TestResult {
     for ch in text.chars() {
         let key_event = KeyEvent {
             code: KeyCode::Char(ch),
@@ -685,39 +605,24 @@ pub(super) async fn type_string(renderer: &mut Renderer, text: &str) {
             kind: KeyEventKind::Press,
             state: KeyEventState::empty(),
         };
-        renderer.on_key_event(key_event).await.unwrap();
+        renderer.on_key_event(key_event).await?;
     }
+    Ok(())
 }
 
-pub(super) async fn press_enter(renderer: &mut Renderer) {
-    let enter_event = KeyEvent {
-        code: KeyCode::Enter,
-        modifiers: KeyModifiers::empty(),
-        kind: KeyEventKind::Press,
-        state: KeyEventState::empty(),
-    };
-    renderer.on_key_event(enter_event).await.unwrap();
+pub(super) async fn press(renderer: &mut Renderer, code: KeyCode) -> TestResult {
+    press_with_modifiers(renderer, code, KeyModifiers::empty()).await
 }
 
-pub(super) async fn press_shift_enter(renderer: &mut Renderer) {
-    send_key(renderer, KeyCode::Enter, KeyModifiers::SHIFT).await;
-}
-
-pub(super) async fn press_backspace(renderer: &mut Renderer) {
-    let backspace_event = KeyEvent {
-        code: KeyCode::Backspace,
-        modifiers: KeyModifiers::empty(),
-        kind: KeyEventKind::Press,
-        state: KeyEventState::empty(),
-    };
-    renderer.on_key_event(backspace_event).await.unwrap();
-}
-
-pub(super) async fn send_key(renderer: &mut Renderer, code: KeyCode, modifiers: KeyModifiers) {
+pub(super) async fn press_with_modifiers(
+    renderer: &mut Renderer,
+    code: KeyCode,
+    modifiers: KeyModifiers,
+) -> TestResult {
     renderer
         .on_key_event(KeyEvent { code, modifiers, kind: KeyEventKind::Press, state: KeyEventState::empty() })
-        .await
-        .unwrap();
+        .await?;
+    Ok(())
 }
 
 pub(super) fn make_settings_options() -> Vec<acp::SessionConfigOption> {
@@ -742,33 +647,30 @@ pub(super) fn make_settings_options() -> Vec<acp::SessionConfigOption> {
 }
 
 /// Create a renderer with settings options and open the settings menu.
-pub(super) async fn open_settings(config_options: &[acp::SessionConfigOption], size: (u16, u16)) -> Renderer {
-    let terminal = TestTerminal::new(size.0, size.1);
-    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), config_options, size);
-    renderer.initial_render().unwrap();
-    type_string(&mut renderer, "/settings").await;
-    press_enter(&mut renderer).await;
-    renderer
+pub(super) async fn open_settings(
+    config_options: &[acp::SessionConfigOption],
+    size: (u16, u16),
+) -> TestResult<Renderer> {
+    let mut renderer = RendererTest::new().size(size).config_options(config_options).build()?;
+    type_string(&mut renderer, "/settings").await?;
+    press(&mut renderer, Enter).await?;
+    Ok(renderer)
 }
 
-pub(super) async fn press_down(renderer: &mut Renderer) {
-    send_key(renderer, KeyCode::Down, KeyModifiers::empty()).await;
+pub(super) async fn open_resume_picker(renderer: &mut Renderer) -> TestResult {
+    type_string(renderer, "/resume").await?;
+    press(renderer, Enter).await
 }
 
-pub(super) async fn press_up(renderer: &mut Renderer) {
-    send_key(renderer, KeyCode::Up, KeyModifiers::empty()).await;
-}
-
-pub(super) async fn press_esc(renderer: &mut Renderer) {
-    send_key(renderer, KeyCode::Esc, KeyModifiers::empty()).await;
-}
-
-pub(super) async fn load_session_via_picker(renderer: &mut Renderer, session_id: acp::SessionId, cwd: PathBuf) {
-    type_string(renderer, "/resume").await;
-    press_enter(renderer).await;
+pub(super) async fn load_session_via_picker(
+    renderer: &mut Renderer,
+    session_id: acp::SessionId,
+    cwd: PathBuf,
+) -> TestResult {
+    open_resume_picker(renderer).await?;
     let info = acp::SessionInfo::new(session_id, cwd).title("Resumable session".to_string());
-    renderer.on_sessions_listed(vec![info]).unwrap();
-    press_enter(renderer).await;
+    renderer.on_sessions_listed(vec![info])?;
+    press(renderer, Enter).await
 }
 
 /// Assert that any terminal line contains the given text, panicking with a buffer dump.

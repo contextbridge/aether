@@ -1,11 +1,10 @@
 use agent_client_protocol::schema as acp;
-use tui::testing::TestTerminal;
 use tui::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::common::*;
 
 #[tokio::test]
-async fn test_shift_tab_cycles_mode_option() {
+async fn test_shift_tab_cycles_mode_option() -> TestResult {
     let options = vec![
         acp::SessionConfigOption::select(
             "mode",
@@ -19,17 +18,16 @@ async fn test_shift_tab_cycles_mode_option() {
         .category(acp::SessionConfigOptionCategory::Mode),
     ];
 
-    let terminal = TestTerminal::new(TEST_WIDTH, 40);
-    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &options, (TEST_WIDTH, 40));
-    renderer.initial_render().unwrap();
+    let mut renderer = RendererTest::new().config_options(&options).build()?;
 
-    let action = renderer.on_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)).await.unwrap();
+    let action = renderer.on_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)).await?;
 
     assert!(matches!(action, LoopAction::Continue));
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_shift_tab_wraps_mode_option() {
+async fn test_shift_tab_wraps_mode_option() -> TestResult {
     let options = vec![
         acp::SessionConfigOption::select(
             "mode",
@@ -43,15 +41,14 @@ async fn test_shift_tab_wraps_mode_option() {
         .category(acp::SessionConfigOptionCategory::Mode),
     ];
 
-    let terminal = TestTerminal::new(TEST_WIDTH, 40);
-    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &options, (TEST_WIDTH, 40));
-    renderer.initial_render().unwrap();
+    let mut renderer = RendererTest::new().config_options(&options).build()?;
 
-    renderer.on_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)).await.unwrap();
+    renderer.on_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)).await?;
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_shift_tab_ignored_when_overlay_consumes_input() {
+async fn test_shift_tab_ignored_when_overlay_consumes_input() -> TestResult {
     let options = vec![
         acp::SessionConfigOption::select(
             "mode",
@@ -62,24 +59,23 @@ async fn test_shift_tab_ignored_when_overlay_consumes_input() {
         .category(acp::SessionConfigOptionCategory::Mode),
     ];
 
-    let terminal = TestTerminal::new(TEST_WIDTH, 40);
-    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &options, (TEST_WIDTH, 40));
-    renderer.initial_render().unwrap();
+    let mut renderer = RendererTest::new().config_options(&options).build()?;
 
     // Open settings overlay
-    type_string(&mut renderer, "/settings").await;
-    press_enter(&mut renderer).await;
+    type_string(&mut renderer, "/settings").await?;
+    press(&mut renderer, Enter).await?;
     assert!(has_settings_menu(renderer.writer()), "Settings overlay should be visible");
 
     // Send shift+tab — should be swallowed by the overlay
-    renderer.on_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)).await.unwrap();
+    renderer.on_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)).await?;
 
     // Overlay should still be visible
     assert!(has_settings_menu(renderer.writer()), "Settings overlay should still be visible after shift+tab");
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_shift_tab_noop_when_no_cycleable_option_exists() {
+async fn test_shift_tab_noop_when_no_cycleable_option_exists() -> TestResult {
     let options = vec![
         acp::SessionConfigOption::select(
             "model",
@@ -90,20 +86,19 @@ async fn test_shift_tab_noop_when_no_cycleable_option_exists() {
         .category(acp::SessionConfigOptionCategory::Model),
     ];
 
-    let terminal = TestTerminal::new(TEST_WIDTH, 40);
-    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &options, (TEST_WIDTH, 40));
-    renderer.initial_render().unwrap();
+    let mut renderer = RendererTest::new().config_options(&options).build()?;
 
     let lines_before = renderer.writer().get_lines();
 
-    renderer.on_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)).await.unwrap();
+    renderer.on_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)).await?;
 
     let lines_after = renderer.writer().get_lines();
     assert_eq!(lines_before, lines_after, "Shift+Tab should be a no-op when no cycleable mode option");
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_tab_cycles_reasoning_option() {
+async fn test_tab_cycles_reasoning_option() -> TestResult {
     use acp_utils::config_option_id::ConfigOptionId;
 
     let options = vec![acp::SessionConfigOption::select(
@@ -117,23 +112,21 @@ async fn test_tab_cycles_reasoning_option() {
         ],
     )];
 
-    let terminal = TestTerminal::new(TEST_WIDTH, 40);
-    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &options, (TEST_WIDTH, 40));
-    renderer.initial_render().unwrap();
+    let mut renderer = RendererTest::new().config_options(&options).build()?;
 
-    renderer.on_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)).await.unwrap();
+    renderer.on_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)).await?;
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_tab_noop_when_no_reasoning_option() {
-    let terminal = TestTerminal::new(TEST_WIDTH, 40);
-    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (TEST_WIDTH, 40));
-    renderer.initial_render().unwrap();
+async fn test_tab_noop_when_no_reasoning_option() -> TestResult {
+    let mut renderer = RendererTest::new().size((TEST_WIDTH, 40)).build()?;
 
     let lines_before = renderer.writer().get_lines();
 
-    renderer.on_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)).await.unwrap();
+    renderer.on_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)).await?;
 
     let lines_after = renderer.writer().get_lines();
     assert_eq!(lines_before, lines_after, "Tab should be a no-op when no reasoning option");
+    Ok(())
 }

@@ -278,7 +278,7 @@ impl ServerHandler for PlanMcp {
     }
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WritePlanInput {
     /// Stable plan identifier chosen by the agent, e.g. `auth-refactor`.
@@ -299,7 +299,7 @@ pub struct WritePlanOutput {
     pub meta: Option<ToolResultMeta>,
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EditPlanInput {
     /// Stable plan identifier originally passed to `write_plan`.
@@ -321,7 +321,7 @@ pub struct EditPlanOutput {
     pub meta: Option<ToolResultMeta>,
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SubmitPlanInput {
     /// Stable plan identifier originally passed to `write_plan`.

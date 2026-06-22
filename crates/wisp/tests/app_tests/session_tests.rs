@@ -3,133 +3,109 @@ use acp_utils::notifications::{SessionDisplayMeta, SessionPreviewResponse, Sessi
 use agent_client_protocol::schema as acp;
 use std::path::PathBuf;
 use tokio::sync::mpsc::UnboundedReceiver;
-use tui::testing::{TestTerminal, assert_buffer_eq};
+use tui::testing::assert_buffer_eq;
 use tui::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::common::*;
 
 #[tokio::test]
-async fn test_resume_picker_shows_search_box_and_filters() {
-    let terminal = TestTerminal::new(TEST_WIDTH, 40);
-    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (TEST_WIDTH, 40));
-    renderer.initial_render().unwrap();
+async fn test_resume_picker_shows_search_box_and_filters() -> TestResult {
+    let mut renderer = RendererTest::new().size((TEST_WIDTH, 40)).build()?;
 
-    type_string(&mut renderer, "/resume").await;
-    press_enter(&mut renderer).await;
-    renderer
-        .on_sessions_listed(vec![
-            acp::SessionInfo::new("session-login", PathBuf::from("/repo/auth")).title("Fix login redirect".to_string()),
-            acp::SessionInfo::new("session-billing", PathBuf::from("/repo/billing"))
-                .title("Billing cleanup".to_string()),
-        ])
-        .unwrap();
+    open_resume_picker(&mut renderer).await?;
+    renderer.on_sessions_listed(vec![
+        acp::SessionInfo::new("session-login", PathBuf::from("/repo/auth")).title("Fix login redirect".to_string()),
+        acp::SessionInfo::new("session-billing", PathBuf::from("/repo/billing")).title("Billing cleanup".to_string()),
+    ])?;
 
     assert_buffer_contains(renderer.writer(), "🔍 Search");
     assert_buffer_contains(renderer.writer(), "type to search title or path");
     assert_buffer_not_contains(renderer.writer(), "Resume a previous session");
-    type_string(&mut renderer, "login").await;
+    type_string(&mut renderer, "login").await?;
     assert_buffer_contains(renderer.writer(), "Fix login redirect");
     assert_buffer_not_contains(renderer.writer(), "Billing cleanup");
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_resume_picker_space_appends_to_query() {
-    let terminal = TestTerminal::new(TEST_WIDTH, 40);
-    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (TEST_WIDTH, 40));
-    renderer.initial_render().unwrap();
+async fn test_resume_picker_space_appends_to_query() -> TestResult {
+    let mut renderer = RendererTest::new().size((TEST_WIDTH, 40)).build()?;
 
-    type_string(&mut renderer, "/resume").await;
-    press_enter(&mut renderer).await;
-    renderer
-        .on_sessions_listed(vec![
-            session_info("session-login", "/repo/auth", "Fix login redirect"),
-            session_info("session-billing", "/repo/billing", "Billing cleanup"),
-        ])
-        .unwrap();
+    open_resume_picker(&mut renderer).await?;
+    renderer.on_sessions_listed(vec![
+        session_info("session-login", "/repo/auth", "Fix login redirect"),
+        session_info("session-billing", "/repo/billing", "Billing cleanup"),
+    ])?;
 
-    type_string(&mut renderer, "Fix ").await;
+    type_string(&mut renderer, "Fix ").await?;
 
     assert_buffer_contains(renderer.writer(), "Fix login redirect");
     assert_buffer_not_contains(renderer.writer(), "Billing cleanup");
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_resume_picker_empty_and_filtered_empty_states() {
-    let terminal = TestTerminal::new(TEST_WIDTH, 40);
-    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (TEST_WIDTH, 40));
-    renderer.initial_render().unwrap();
+async fn test_resume_picker_empty_and_filtered_empty_states() -> TestResult {
+    let mut renderer = RendererTest::new().size((TEST_WIDTH, 40)).build()?;
 
-    type_string(&mut renderer, "/resume").await;
-    press_enter(&mut renderer).await;
-    renderer.on_sessions_listed(vec![]).unwrap();
+    open_resume_picker(&mut renderer).await?;
+    renderer.on_sessions_listed(vec![])?;
     assert_buffer_contains(renderer.writer(), "No previous sessions found.");
 
-    let terminal = TestTerminal::new(TEST_WIDTH, 40);
-    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (TEST_WIDTH, 40));
-    renderer.initial_render().unwrap();
-    type_string(&mut renderer, "/resume").await;
-    press_enter(&mut renderer).await;
-    renderer.on_sessions_listed(vec![session_info("session-login", "/repo/auth", "Fix login redirect")]).unwrap();
-    type_string(&mut renderer, "nomatch").await;
+    let mut renderer = RendererTest::new().size((TEST_WIDTH, 40)).build()?;
+    open_resume_picker(&mut renderer).await?;
+    renderer.on_sessions_listed(vec![session_info("session-login", "/repo/auth", "Fix login redirect")])?;
+    type_string(&mut renderer, "nomatch").await?;
     assert_buffer_contains(renderer.writer(), "(no matching sessions)");
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_resume_picker_uses_cwd_basename_title_fallback() {
-    let terminal = TestTerminal::new(TEST_WIDTH, 40);
-    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (TEST_WIDTH, 40));
-    renderer.initial_render().unwrap();
+async fn test_resume_picker_uses_cwd_basename_title_fallback() -> TestResult {
+    let mut renderer = RendererTest::new().size((TEST_WIDTH, 40)).build()?;
 
-    type_string(&mut renderer, "/resume").await;
-    press_enter(&mut renderer).await;
+    open_resume_picker(&mut renderer).await?;
     renderer
-        .on_sessions_listed(vec![acp::SessionInfo::new("session-untitled", PathBuf::from("/repo/fallback-name"))])
-        .unwrap();
+        .on_sessions_listed(vec![acp::SessionInfo::new("session-untitled", PathBuf::from("/repo/fallback-name"))])?;
 
     assert_buffer_contains(renderer.writer(), "fallback-name");
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_resume_picker_mouse_scroll_moves_selection_and_requests_preview() {
-    let terminal = TestTerminal::new(TEST_WIDTH, 40);
-    let (mut renderer, mut commands) = Renderer::new_recording(terminal, TEST_AGENT.to_string(), &[], (TEST_WIDTH, 40));
-    renderer.initial_render().unwrap();
+async fn test_resume_picker_mouse_scroll_moves_selection_and_requests_preview() -> TestResult {
+    let mut renderer = RendererTest::new().build()?;
 
-    type_string(&mut renderer, "/resume").await;
-    press_enter(&mut renderer).await;
-    assert_list_sessions_command(&mut commands);
-    renderer
-        .on_sessions_listed(vec![
-            session_info("session-login", "/repo/auth", "Fix login redirect"),
-            session_info("session-billing", "/repo/billing", "Billing cleanup"),
-        ])
-        .unwrap();
-    assert_session_preview_command(&mut commands, "session-login");
+    open_resume_picker(&mut renderer).await?;
+    assert_list_sessions_command(renderer.commands());
+    renderer.on_sessions_listed(vec![
+        session_info("session-login", "/repo/auth", "Fix login redirect"),
+        session_info("session-billing", "/repo/billing", "Billing cleanup"),
+    ])?;
+    assert_session_preview_command(renderer.commands(), "session-login");
 
-    renderer.on_mouse_scroll_down().await.unwrap();
+    renderer.on_mouse_scroll_down().await?;
 
-    assert_session_preview_command(&mut commands, "session-billing");
+    assert_session_preview_command(renderer.commands(), "session-billing");
     assert_buffer_contains(renderer.writer(), "Billing cleanup");
-    renderer.on_mouse_scroll_up().await.unwrap();
+    renderer.on_mouse_scroll_up().await?;
     assert_buffer_contains(renderer.writer(), "Fix login redirect");
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_resume_picker_shows_metadata_and_lazy_preview() {
-    let terminal = TestTerminal::new(TEST_WIDTH, 40);
-    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (TEST_WIDTH, 40));
-    renderer.initial_render().unwrap();
+async fn test_resume_picker_shows_metadata_and_lazy_preview() -> TestResult {
+    let mut renderer = RendererTest::new().size((TEST_WIDTH, 40)).build()?;
 
-    type_string(&mut renderer, "/resume").await;
-    press_enter(&mut renderer).await;
-    renderer.on_sessions_listed(vec![session_info("session-login", "/repo/auth", "Fix login redirect")]).unwrap();
+    open_resume_picker(&mut renderer).await?;
+    renderer.on_sessions_listed(vec![session_info("session-login", "/repo/auth", "Fix login redirect")])?;
 
     assert_buffer_contains(renderer.writer(), "Fix login redirect");
     assert_buffer_contains(renderer.writer(), &format!("auth · {} · claude-sonnet-4-5 · planner", expected_date()));
     assert_buffer_contains(renderer.writer(), "Session preview");
     assert_buffer_contains(renderer.writer(), "Loading…");
 
-    renderer.on_session_preview_loaded(preview("session-login", "/repo/auth", false)).unwrap();
+    renderer.on_session_preview_loaded(preview("session-login", "/repo/auth", false))?;
 
     assert_buffer_contains(renderer.writer(), &format!("Created: {}", expected_date()));
     assert_buffer_not_contains(renderer.writer(), "Prompt: Fix login redirect");
@@ -138,98 +114,86 @@ async fn test_resume_picker_shows_metadata_and_lazy_preview() {
     assert_buffer_contains(renderer.writer(), "Model: claude-sonnet-4-5  Mode: planner");
     assert_buffer_contains(renderer.writer(), "assistant: Updated the auth callback");
     assert_buffer_contains(renderer.writer(), "Tool calls: 2");
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_resume_picker_hides_preview_on_narrow_terminal() {
-    let terminal = TestTerminal::new(80, 24);
-    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (80, 24));
-    renderer.initial_render().unwrap();
+async fn test_resume_picker_hides_preview_on_narrow_terminal() -> TestResult {
+    let mut renderer = RendererTest::new().size((80, 24)).build()?;
 
-    type_string(&mut renderer, "/resume").await;
-    press_enter(&mut renderer).await;
-    renderer.on_sessions_listed(vec![session_info("session-login", "/repo/auth", "Fix login redirect")]).unwrap();
-    renderer.on_session_preview_loaded(preview("session-login", "/repo/auth", true)).unwrap();
+    open_resume_picker(&mut renderer).await?;
+    renderer.on_sessions_listed(vec![session_info("session-login", "/repo/auth", "Fix login redirect")])?;
+    renderer.on_session_preview_loaded(preview("session-login", "/repo/auth", true))?;
 
     assert_buffer_contains(renderer.writer(), "Fix login redirect");
     assert_buffer_contains(renderer.writer(), &format!("auth · {} · claude-sonnet-4-5 · planner", expected_date()));
     assert_buffer_not_contains(renderer.writer(), "Session preview");
     assert_buffer_not_contains(renderer.writer(), "… preview truncated");
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_resume_picker_requests_preview_on_highlight_change_and_reuses_loaded_preview() {
-    let terminal = TestTerminal::new(TEST_WIDTH, 40);
-    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (TEST_WIDTH, 40));
-    renderer.initial_render().unwrap();
+async fn test_resume_picker_requests_preview_on_highlight_change_and_reuses_loaded_preview() -> TestResult {
+    let mut renderer = RendererTest::new().size((TEST_WIDTH, 40)).build()?;
 
-    type_string(&mut renderer, "/resume").await;
-    press_enter(&mut renderer).await;
-    renderer
-        .on_sessions_listed(vec![
-            session_info("session-login", "/repo/auth", "Fix login redirect"),
-            session_info("session-billing", "/repo/billing", "Billing cleanup"),
-        ])
-        .unwrap();
-    renderer.on_session_preview_loaded(preview("session-login", "/repo/auth", false)).unwrap();
+    open_resume_picker(&mut renderer).await?;
+    renderer.on_sessions_listed(vec![
+        session_info("session-login", "/repo/auth", "Fix login redirect"),
+        session_info("session-billing", "/repo/billing", "Billing cleanup"),
+    ])?;
+    renderer.on_session_preview_loaded(preview("session-login", "/repo/auth", false))?;
 
-    press_down(&mut renderer).await;
+    press(&mut renderer, Down).await?;
     assert_buffer_contains(renderer.writer(), "Loading…");
-    renderer.on_session_preview_failed("session-billing", "missing session").unwrap();
+    renderer.on_session_preview_failed("session-billing", "missing session")?;
     assert_buffer_contains(renderer.writer(), "Error: missing session");
 
-    press_up(&mut renderer).await;
+    press(&mut renderer, Up).await?;
     assert_buffer_contains(renderer.writer(), "user: Fix login redirect");
     assert_buffer_not_contains(renderer.writer(), "Loading…");
     assert_buffer_not_contains(renderer.writer(), "Error: missing session");
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_resume_picker_dispatches_preview_requests_and_respects_capability() {
-    let terminal = TestTerminal::new(TEST_WIDTH, 40);
-    let (mut renderer, mut commands) = Renderer::new_recording(terminal, TEST_AGENT.to_string(), &[], (TEST_WIDTH, 40));
-    renderer.initial_render().unwrap();
+async fn test_resume_picker_dispatches_preview_requests_and_respects_capability() -> TestResult {
+    let mut renderer = RendererTest::new().build()?;
 
-    type_string(&mut renderer, "/resume").await;
-    press_enter(&mut renderer).await;
-    assert_list_sessions_command(&mut commands);
-    renderer
-        .on_sessions_listed(vec![
-            session_info("session-login", "/repo/auth", "Fix login redirect"),
-            session_info("session-billing", "/repo/billing", "Billing cleanup"),
-        ])
-        .unwrap();
+    open_resume_picker(&mut renderer).await?;
+    assert_list_sessions_command(renderer.commands());
+    renderer.on_sessions_listed(vec![
+        session_info("session-login", "/repo/auth", "Fix login redirect"),
+        session_info("session-billing", "/repo/billing", "Billing cleanup"),
+    ])?;
 
-    assert_session_preview_command(&mut commands, "session-login");
-    renderer.on_session_preview_loaded(preview("session-login", "/repo/auth", false)).unwrap();
+    assert_session_preview_command(renderer.commands(), "session-login");
+    renderer.on_session_preview_loaded(preview("session-login", "/repo/auth", false))?;
 
-    press_down(&mut renderer).await;
-    assert_session_preview_command(&mut commands, "session-billing");
-    renderer.on_session_preview_loaded(preview("session-billing", "/repo/billing", false)).unwrap();
+    press(&mut renderer, Down).await?;
+    assert_session_preview_command(renderer.commands(), "session-billing");
+    renderer.on_session_preview_loaded(preview("session-billing", "/repo/billing", false))?;
 
-    press_up(&mut renderer).await;
-    assert!(commands.try_recv().is_err(), "loaded previews should not be requested again");
+    press(&mut renderer, Up).await?;
+    assert!(renderer.commands().try_recv().is_err(), "loaded previews should not be requested again");
 
-    let terminal = TestTerminal::new(TEST_WIDTH, 40);
-    let (mut renderer, mut commands) =
-        Renderer::new_without_session_preview(terminal, TEST_AGENT.to_string(), &[], (TEST_WIDTH, 40));
-    renderer.initial_render().unwrap();
-    type_string(&mut renderer, "/resume").await;
-    press_enter(&mut renderer).await;
-    assert_list_sessions_command(&mut commands);
-    renderer.on_sessions_listed(vec![session_info("session-login", "/repo/auth", "Fix login redirect")]).unwrap();
-    assert!(commands.try_recv().is_err(), "missing sessionPreview capability should suppress preview requests");
+    let mut renderer = RendererTest::new().session_capabilities(acp::SessionCapabilities::new()).build()?;
+    open_resume_picker(&mut renderer).await?;
+    assert_list_sessions_command(renderer.commands());
+    renderer.on_sessions_listed(vec![session_info("session-login", "/repo/auth", "Fix login redirect")])?;
+    assert!(
+        renderer.commands().try_recv().is_err(),
+        "missing sessionPreview capability should suppress preview requests"
+    );
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_prompt_done_clears_running_tool_spinner() {
-    let terminal = TestTerminal::new(TEST_WIDTH, 40);
-    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (TEST_WIDTH, 40));
-    renderer.initial_render().unwrap();
+async fn test_prompt_done_clears_running_tool_spinner() -> TestResult {
+    let mut renderer = RendererTest::new().size((TEST_WIDTH, 40)).build()?;
 
-    renderer.on_session_update(acp::SessionUpdate::ToolCall(acp::ToolCall::new("tool-1", "Read file"))).unwrap();
+    renderer.on_session_update(acp::SessionUpdate::ToolCall(acp::ToolCall::new("tool-1", "Read file")))?;
 
-    renderer.on_prompt_done().unwrap();
+    renderer.on_prompt_done()?;
 
     // Ensure prompt_done triggers a render and clears the progress indicator.
     let lines = renderer.writer().get_lines();
@@ -239,21 +203,18 @@ async fn test_prompt_done_clears_running_tool_spinner() {
         "Progress indicator should not remain visible after prompt_done.\nBuffer:\n{}",
         lines.join("\n")
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_prompt_done_flush_respects_rendering() {
-    let terminal = TestTerminal::new(TEST_WIDTH, 40);
-    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (TEST_WIDTH, 40));
-    renderer.initial_render().unwrap();
+async fn test_prompt_done_flush_respects_rendering() -> TestResult {
+    let mut renderer = RendererTest::new().size((TEST_WIDTH, 40)).build()?;
 
-    renderer
-        .on_session_update(acp::SessionUpdate::AgentThoughtChunk(acp::ContentChunk::new(acp::ContentBlock::Text(
-            acp::TextContent::new("theme should be preserved"),
-        ))))
-        .unwrap();
+    renderer.on_session_update(acp::SessionUpdate::AgentThoughtChunk(acp::ContentChunk::new(
+        acp::ContentBlock::Text(acp::TextContent::new("theme should be preserved")),
+    )))?;
 
-    renderer.on_prompt_done().unwrap();
+    renderer.on_prompt_done()?;
 
     // Should render successfully
     let lines = renderer.writer().get_lines();
@@ -262,99 +223,85 @@ async fn test_prompt_done_flush_respects_rendering() {
         "Thought text should be visible after prompt_done.\nBuffer:\n{}",
         lines.join("\n")
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_streaming_chunks_keep_waiting_for_response() {
-    let terminal = TestTerminal::new(TEST_WIDTH, 40);
-    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (TEST_WIDTH, 40));
-    renderer.initial_render().unwrap();
+async fn test_streaming_chunks_keep_waiting_for_response() -> TestResult {
+    let mut renderer = RendererTest::new().size((TEST_WIDTH, 40)).build()?;
 
     // Submit prompt to enter waiting state
-    type_string(&mut renderer, "Hello").await;
-    press_enter(&mut renderer).await;
+    type_string(&mut renderer, "Hello").await?;
+    press(&mut renderer, Enter).await?;
 
     // Send a streaming chunk (should not clear waiting state)
-    renderer
-        .on_session_update(acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(
-            acp::TextContent::new("hello"),
-        ))))
-        .unwrap();
+    renderer.on_session_update(acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(
+        acp::ContentBlock::Text(acp::TextContent::new("hello")),
+    )))?;
 
     // Escape should still trigger cancel (proving we're still waiting)
-    let action = renderer.on_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)).await.unwrap();
+    let action = renderer.on_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)).await?;
 
     // If we're still waiting, escape triggers cancel effect which is handled
     assert!(matches!(action, LoopAction::Continue));
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_on_tick_without_active_state_is_noop() {
-    let terminal = TestTerminal::new(TEST_WIDTH, 40);
-    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (TEST_WIDTH, 40));
-    renderer.initial_render().unwrap();
+async fn test_on_tick_without_active_state_is_noop() -> TestResult {
+    let mut renderer = RendererTest::new().size((TEST_WIDTH, 40)).build()?;
 
     let lines_before = renderer.writer().get_lines();
 
-    renderer.on_tick().await.unwrap();
+    renderer.on_tick().await?;
 
     let lines_after = renderer.writer().get_lines();
     assert_eq!(lines_before, lines_after, "Tick should be a no-op when nothing active");
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_in_progress_tool_call_visible_after_initial_render() {
-    let terminal = TestTerminal::new(TEST_WIDTH, 40);
-    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (TEST_WIDTH, 40));
+async fn test_in_progress_tool_call_visible_after_initial_render() -> TestResult {
+    let mut renderer = RendererTest::new().size((TEST_WIDTH, 40)).build()?;
 
-    renderer.initial_render().unwrap();
-
-    renderer
-        .on_session_update(acp::SessionUpdate::ToolCall(
-            acp::ToolCall::new("call_1".to_string(), "Read").raw_input(serde_json::json!({"file": "test.rs"})),
-        ))
-        .unwrap();
+    renderer.on_session_update(acp::SessionUpdate::ToolCall(
+        acp::ToolCall::new("call_1".to_string(), "Read").raw_input(serde_json::json!({"file": "test.rs"})),
+    ))?;
 
     let expected = expected_with_prompt(&[&p("⠒ Read"), "", &p(PROGRESS_LINE), ""], TEST_WIDTH, "", TEST_AGENT);
     assert_buffer_eq(renderer.writer(), &expected);
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_in_progress_tool_call_renders_correctly_after_resize() {
-    let terminal = TestTerminal::new(TEST_WIDTH, 40);
-    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (TEST_WIDTH, 40));
-    renderer.initial_render().unwrap();
+async fn test_in_progress_tool_call_renders_correctly_after_resize() -> TestResult {
+    let mut renderer = RendererTest::new().size((TEST_WIDTH, 40)).build()?;
 
-    renderer
-        .on_session_update(acp::SessionUpdate::ToolCall(
-            acp::ToolCall::new("call_1".to_string(), "Read").raw_input(serde_json::json!({"file": "test.rs"})),
-        ))
-        .unwrap();
+    renderer.on_session_update(acp::SessionUpdate::ToolCall(
+        acp::ToolCall::new("call_1".to_string(), "Read").raw_input(serde_json::json!({"file": "test.rs"})),
+    ))?;
 
     // Terminal resize triggers full re-render at new width
-    renderer.on_resize_event(100, 30).await.unwrap();
+    renderer.on_resize_event(100, 30).await?;
 
     let expected = expected_with_prompt(&[&p("⠒ Read"), "", &p(PROGRESS_LINE), ""], 100, "", TEST_AGENT);
     assert_buffer_eq(renderer.writer(), &expected);
+    Ok(())
 }
 
 /// Bug repro: completed conversation content must re-render at the new width
 /// after a terminal resize. Previously, completed turns were drained to
 /// fixed-width terminal scrollback and could not be re-rendered.
 #[tokio::test]
-async fn test_completed_content_re_renders_at_new_width_after_resize() {
+async fn test_completed_content_re_renders_at_new_width_after_resize() -> TestResult {
     let initial_width: u16 = 40;
-    let terminal = TestTerminal::new(initial_width, 20);
-    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (initial_width, 20));
-    renderer.initial_render().unwrap();
+    let mut renderer = RendererTest::new().size((initial_width, 20)).build()?;
 
     // Complete a full turn: text + tool call + prompt_done
-    renderer
-        .on_session_update(acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(
-            acp::TextContent::new("First answer"),
-        ))))
-        .unwrap();
-    renderer.on_prompt_done().unwrap();
+    renderer.on_session_update(acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(
+        acp::ContentBlock::Text(acp::TextContent::new("First answer")),
+    )))?;
+    renderer.on_prompt_done()?;
 
     // Verify content is visible at original width
     let lines_before = renderer.writer().get_lines();
@@ -367,7 +314,7 @@ async fn test_completed_content_re_renders_at_new_width_after_resize() {
     // Widen the terminal — resize both the renderer and the TestTerminal buffer
     let new_width: u16 = 100;
     renderer.test_writer_mut().resize(new_width, 20);
-    renderer.on_resize_event(new_width, 20).await.unwrap();
+    renderer.on_resize_event(new_width, 20).await?;
 
     // Content from the completed turn must still be visible and the prompt
     // must be rendered at the new width
@@ -380,6 +327,7 @@ async fn test_completed_content_re_renders_at_new_width_after_resize() {
 
     let expected = expected_with_prompt(&[&p("First answer")], new_width, "", TEST_AGENT);
     assert_buffer_eq(renderer.writer(), &expected);
+    Ok(())
 }
 
 /// Bug repro: the prompt box must not garble after resizing when there is
@@ -387,29 +335,23 @@ async fn test_completed_content_re_renders_at_new_width_after_resize() {
 /// counts caused the `VisualFrame` visible/scrollback split to break,
 /// producing duplicated or corrupted prompt lines.
 #[tokio::test]
-async fn test_prompt_not_garbled_after_resize_with_completed_content() {
-    let terminal = TestTerminal::new(80, 12);
-    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (80, 12));
-    renderer.initial_render().unwrap();
+async fn test_prompt_not_garbled_after_resize_with_completed_content() -> TestResult {
+    let mut renderer = RendererTest::new().size((80, 12)).build()?;
 
     // Build up several completed turns so there's content above the prompt
-    renderer
-        .on_session_update(acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(
-            acp::TextContent::new("Turn one"),
-        ))))
-        .unwrap();
-    renderer.on_prompt_done().unwrap();
+    renderer.on_session_update(acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(
+        acp::ContentBlock::Text(acp::TextContent::new("Turn one")),
+    )))?;
+    renderer.on_prompt_done()?;
 
-    renderer
-        .on_session_update(acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(
-            acp::TextContent::new("Turn two"),
-        ))))
-        .unwrap();
-    renderer.on_prompt_done().unwrap();
+    renderer.on_session_update(acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(
+        acp::ContentBlock::Text(acp::TextContent::new("Turn two")),
+    )))?;
+    renderer.on_prompt_done()?;
 
     // Resize the terminal
     renderer.test_writer_mut().resize(60, 10);
-    renderer.on_resize_event(60, 10).await.unwrap();
+    renderer.on_resize_event(60, 10).await?;
 
     let lines = renderer.writer().get_lines();
 
@@ -424,42 +366,40 @@ async fn test_prompt_not_garbled_after_resize_with_completed_content() {
     let turn_two_count = lines.iter().filter(|l| l.contains("Turn two")).count();
     assert_eq!(turn_one_count, 1, "Turn one should appear exactly once after resize.\nBuffer:\n{}", lines.join("\n"));
     assert_eq!(turn_two_count, 1, "Turn two should appear exactly once after resize.\nBuffer:\n{}", lines.join("\n"));
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_replay_history_only_visible_after_session_loaded() {
-    let mut renderer = new_test_renderer((TEST_WIDTH, 40));
+async fn test_replay_history_only_visible_after_session_loaded() -> TestResult {
+    let mut renderer = RendererTest::new().size((TEST_WIDTH, 40)).build()?;
     let resumed = acp::SessionId::new("resumed-session");
-    load_session_via_picker(&mut renderer, resumed.clone(), std::path::PathBuf::from("/project")).await;
+    load_session_via_picker(&mut renderer, resumed.clone(), std::path::PathBuf::from("/project")).await?;
 
     let first_msg = "1st";
     let second_msg = "2nd";
-    renderer
-        .on_session_update_for(
-            resumed.clone(),
-            acp::SessionUpdate::UserMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(
-                acp::TextContent::new(first_msg),
-            ))),
-        )
-        .unwrap();
+    renderer.on_session_update_for(
+        resumed.clone(),
+        acp::SessionUpdate::UserMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(acp::TextContent::new(
+            first_msg,
+        )))),
+    )?;
 
-    renderer
-        .on_session_update_for(
-            resumed.clone(),
-            acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(
-                acp::TextContent::new(second_msg),
-            ))),
-        )
-        .unwrap();
+    renderer.on_session_update_for(
+        resumed.clone(),
+        acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(acp::TextContent::new(
+            second_msg,
+        )))),
+    )?;
 
     assert_buffer_not_contains(renderer.writer(), first_msg);
     assert_buffer_not_contains(renderer.writer(), second_msg);
-    renderer.on_session_loaded(resumed, vec![]).unwrap();
+    renderer.on_session_loaded(resumed, vec![])?;
 
     let lines = renderer.writer().get_lines();
     let early_idx = lines.iter().position(|l| l.contains(first_msg)).expect("early line present");
     let late_idx = lines.iter().position(|l| l.contains(second_msg)).expect("late line present");
     assert!(early_idx < late_idx);
+    Ok(())
 }
 
 fn assert_list_sessions_command(commands: &mut UnboundedReceiver<PromptCommand>) {

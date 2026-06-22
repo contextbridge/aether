@@ -1,20 +1,21 @@
 use super::common::*;
 
 #[tokio::test]
-async fn test_no_ghost_on_tool_completion_small_terminal() {
+async fn test_no_ghost_on_tool_completion_small_terminal() -> TestResult {
     let args = r#"{"file": "a.rs"}"#;
     let renderer = render_with_size(
         vec![tool_call("Read", args), tool_complete("call_Read"), text_chunk("Done"), prompt_done()],
         (80, 8),
-    );
+    )?;
 
     let lines = renderer.writer().get_lines();
     let tool_count = lines.iter().filter(|l| l.contains("Read")).count();
     assert_eq!(tool_count, 1, "Tool name should appear exactly once, got {tool_count}.\nBuffer:\n{}", lines.join("\n"));
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_tool_updates_in_place_after_scrollback_push() {
+async fn test_tool_updates_in_place_after_scrollback_push() -> TestResult {
     let renderer = render_with_size(
         vec![
             tool_call_with_id("Read", "call_1", r#"{"file": "a.rs"}"#),
@@ -25,7 +26,7 @@ async fn test_tool_updates_in_place_after_scrollback_push() {
             tool_complete("call_2"),
         ],
         (80, 10),
-    );
+    )?;
 
     let lines = renderer.writer().get_lines();
     let write_count = lines.iter().filter(|l| l.contains("Write")).count();
@@ -35,13 +36,14 @@ async fn test_tool_updates_in_place_after_scrollback_push() {
         "Write tool should appear exactly once, got {write_count}.\nBuffer:\n{}",
         lines.join("\n")
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_wrapped_tool_update_does_not_duplicate_lines() {
+async fn test_wrapped_tool_update_does_not_duplicate_lines() -> TestResult {
     let long_args = r#"{"file":"src/some/really/long/path/that/forces/tool/status/wrapping.rs"}"#;
     let renderer =
-        render_with_size(vec![tool_call_with_id("Read", "call_1", long_args), tool_complete("call_1")], (40, 12));
+        render_with_size(vec![tool_call_with_id("Read", "call_1", long_args), tool_complete("call_1")], (40, 12))?;
 
     let lines = renderer.writer().get_lines();
     let read_count = lines.iter().filter(|l| l.contains("Read")).count();
@@ -56,10 +58,11 @@ async fn test_wrapped_tool_update_does_not_duplicate_lines() {
         "Completed status should be visible after wrapped update.\nBuffer:\n{}",
         lines.join("\n")
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_multiple_scrollback_pushes_tiny_terminal() {
+async fn test_multiple_scrollback_pushes_tiny_terminal() -> TestResult {
     let renderer = render_with_size(
         vec![
             text_chunk("First message"),
@@ -70,18 +73,19 @@ async fn test_multiple_scrollback_pushes_tiny_terminal() {
             prompt_done(),
         ],
         (80, 8),
-    );
+    )?;
 
     let lines = renderer.writer().get_lines();
     assert!(lines.iter().any(|l| l.contains('>')), "Prompt should be visible.\nBuffer:\n{}", lines.join("\n"));
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_prompt_done_does_not_duplicate_overflowed_lines() {
+async fn test_prompt_done_does_not_duplicate_overflowed_lines() -> TestResult {
     let markers: Vec<String> = (1..=16).map(|i| format!("L{i:02}")).collect();
     let chunk = format!("```text\n{}\n```", markers.join("\n"));
 
-    let renderer = render_with_size(vec![text_chunk(&chunk), prompt_done()], (40, 8));
+    let renderer = render_with_size(vec![text_chunk(&chunk), prompt_done()], (40, 8))?;
 
     let transcript = renderer.writer().get_transcript_lines();
     for marker in markers.iter().take(8) {
@@ -93,4 +97,5 @@ async fn test_prompt_done_does_not_duplicate_overflowed_lines() {
             transcript.join("\n")
         );
     }
+    Ok(())
 }

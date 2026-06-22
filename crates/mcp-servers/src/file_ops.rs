@@ -3,11 +3,11 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::fs::{create_dir_all, write};
 
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FileEdit {
     /// Exact text to find. Must match whitespace (e.g. indentation).

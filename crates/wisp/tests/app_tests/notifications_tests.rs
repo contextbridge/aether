@@ -1,14 +1,11 @@
 use acp_utils::notifications::{ContextUsageParams, SubAgentEvent, SubAgentProgressParams, SubAgentToolRequest};
 use agent_client_protocol::schema as acp;
-use tui::testing::TestTerminal;
 
 use super::common::*;
 
 #[tokio::test]
-async fn test_sub_agent_progress_notification_triggers_render() {
-    let terminal = TestTerminal::new(TEST_WIDTH, 40);
-    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (TEST_WIDTH, 40));
-    renderer.initial_render().unwrap();
+async fn test_sub_agent_progress_notification_triggers_render() -> TestResult {
+    let mut renderer = RendererTest::new().size((TEST_WIDTH, 40)).build()?;
 
     let params = SubAgentProgressParams {
         parent_tool_id: "p1".to_string(),
@@ -22,17 +19,16 @@ async fn test_sub_agent_progress_notification_triggers_render() {
             },
         },
     };
-    renderer.on_sub_agent_progress(params).unwrap();
+    renderer.on_sub_agent_progress(params)?;
 
     let lines = renderer.writer().get_lines();
     assert!(!lines.is_empty());
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_context_usage_notification_updates_nominal_display() {
-    let terminal = TestTerminal::new(TEST_WIDTH, 40);
-    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (TEST_WIDTH, 40));
-    renderer.initial_render().unwrap();
+async fn test_context_usage_notification_updates_nominal_display() -> TestResult {
+    let mut renderer = RendererTest::new().size((TEST_WIDTH, 40)).build()?;
 
     let params = ContextUsageParams {
         usage_ratio: Some(0.75),
@@ -48,7 +44,7 @@ async fn test_context_usage_notification_updates_nominal_display() {
         total_cache_creation_tokens: 0,
         total_reasoning_tokens: 0,
     };
-    renderer.on_context_usage(params).unwrap();
+    renderer.on_context_usage(params)?;
 
     let lines = renderer.writer().get_lines();
     assert!(
@@ -56,13 +52,12 @@ async fn test_context_usage_notification_updates_nominal_display() {
         "Status line should show nominal context usage.\nBuffer:\n{}",
         lines.join("\n")
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_context_usage_notification_with_unknown_limit_clears_meter() {
-    let terminal = TestTerminal::new(TEST_WIDTH, 40);
-    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (TEST_WIDTH, 40));
-    renderer.initial_render().unwrap();
+async fn test_context_usage_notification_with_unknown_limit_clears_meter() -> TestResult {
+    let mut renderer = RendererTest::new().size((TEST_WIDTH, 40)).build()?;
 
     let nominal = ContextUsageParams {
         usage_ratio: Some(0.67),
@@ -78,7 +73,7 @@ async fn test_context_usage_notification_with_unknown_limit_clears_meter() {
         total_cache_creation_tokens: 0,
         total_reasoning_tokens: 0,
     };
-    renderer.on_context_usage(nominal).unwrap();
+    renderer.on_context_usage(nominal)?;
 
     let cleared = ContextUsageParams {
         usage_ratio: None,
@@ -94,7 +89,7 @@ async fn test_context_usage_notification_with_unknown_limit_clears_meter() {
         total_cache_creation_tokens: 0,
         total_reasoning_tokens: 0,
     };
-    renderer.on_context_usage(cleared).unwrap();
+    renderer.on_context_usage(cleared)?;
 
     let lines = renderer.writer().get_lines();
     assert!(
@@ -102,24 +97,21 @@ async fn test_context_usage_notification_with_unknown_limit_clears_meter() {
         "Context segment should not be shown when limit is unknown.\nBuffer:\n{}",
         lines.join("\n")
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_context_cleared_notification_resets_conversation() {
-    let terminal = TestTerminal::new(TEST_WIDTH, 40);
-    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (TEST_WIDTH, 40));
-    renderer.initial_render().unwrap();
+async fn test_context_cleared_notification_resets_conversation() -> TestResult {
+    let mut renderer = RendererTest::new().size((TEST_WIDTH, 40)).build()?;
 
-    renderer
-        .on_session_update(acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(
-            acp::TextContent::new("hello world"),
-        ))))
-        .unwrap();
+    renderer.on_session_update(acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(
+        acp::ContentBlock::Text(acp::TextContent::new("hello world")),
+    )))?;
 
     let lines = renderer.writer().get_lines();
     assert!(lines.iter().any(|l| l.contains("hello world")), "Content should be visible before clear");
 
-    renderer.on_context_cleared().unwrap();
+    renderer.on_context_cleared()?;
 
     let lines = renderer.writer().get_lines();
     assert!(
@@ -127,24 +119,22 @@ async fn test_context_cleared_notification_resets_conversation() {
         "Content should be cleared after context_cleared.\nBuffer:\n{}",
         lines.join("\n")
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_on_tick_requests_render_while_completed_entries() {
-    let terminal = TestTerminal::new(TEST_WIDTH, 40);
-    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (TEST_WIDTH, 40));
-    renderer.initial_render().unwrap();
+async fn test_on_tick_requests_render_while_completed_entries() -> TestResult {
+    let mut renderer = RendererTest::new().size((TEST_WIDTH, 40)).build()?;
 
-    renderer
-        .on_session_update(acp::SessionUpdate::Plan(acp::Plan::new(vec![acp::PlanEntry::new(
-            "1",
-            acp::PlanEntryPriority::Medium,
-            acp::PlanEntryStatus::Completed,
-        )])))
-        .unwrap();
+    renderer.on_session_update(acp::SessionUpdate::Plan(acp::Plan::new(vec![acp::PlanEntry::new(
+        "1",
+        acp::PlanEntryPriority::Medium,
+        acp::PlanEntryStatus::Completed,
+    )])))?;
 
-    renderer.on_tick().await.unwrap();
+    renderer.on_tick().await?;
 
     let lines = renderer.writer().get_lines();
     assert!(!lines.is_empty());
+    Ok(())
 }
