@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.16](https://github.com/contextbridge/aether/compare/aether-project-v0.5.15...aether-project-v0.5.16) - 2026-06-22
+
+### Other
+
+- *(workspace)* Move Rust to crates/ and TS to packages/ ([#175](https://github.com/contextbridge/aether/pull/175))
+
 ## [0.5.15](https://github.com/contextbridge/aether/compare/aether-project-v0.5.14...aether-project-v0.5.15) - 2026-06-19
 
 ### Added

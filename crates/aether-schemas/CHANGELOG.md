@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2](https://github.com/contextbridge/aether/compare/aether-schemas-v0.1.1...aether-schemas-v0.1.2) - 2026-06-22
+
+### Other
+
+- *(aether-evals)* Expose token usage stats for evals ([#179](https://github.com/contextbridge/aether/pull/179))
+
 ## [0.1.1](https://github.com/contextbridge/aether/compare/aether-schemas-v0.1.0...aether-schemas-v0.1.1) - 2026-06-19
 
 ### Added

@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.18](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.17...aether-agent-cli-v0.7.18) - 2026-06-22
+
+### Other
+
+- *(aether-evals)* Expose token usage stats for evals ([#179](https://github.com/contextbridge/aether/pull/179))
+- *(workspace)* Move Rust to crates/ and TS to packages/ ([#175](https://github.com/contextbridge/aether/pull/175))
+
 ## [0.7.17](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.16...aether-agent-cli-v0.7.17) - 2026-06-19
 
 ### Added
