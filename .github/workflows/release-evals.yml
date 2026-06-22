@@ -1,9 +1,9 @@
-name: Release Evals
+name: Release Evals (TS)
 
 on:
   push:
     tags:
-      - "aether-evals-v*"
+      - "aether-evals-ts-v*"
 
 permissions:
   contents: read
