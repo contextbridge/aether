@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.7](https://github.com/contextbridge/aether/compare/aether-evals-v0.2.6...aether-evals-v0.2.7) - 2026-06-22
+
+### Other
+
+- *(aether-evals)* Refactor unstable eval API ([#180](https://github.com/contextbridge/aether/pull/180))
+- *(aether-evals)* Expose token usage stats for evals ([#179](https://github.com/contextbridge/aether/pull/179))
+
 ## [0.2.6](https://github.com/contextbridge/aether/compare/aether-evals-v0.2.5...aether-evals-v0.2.6) - 2026-06-19
 
 ### Other

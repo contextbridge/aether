@@ -1,6 +1,6 @@
 [package]
 name = "aether-agent-core"
-version = "0.6.15"
+version = "0.6.16"
 edition = "2024"
 description = "A minimal Rust library for building AI agents with MCP tool integration"
 license = "MIT"

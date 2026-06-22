@@ -50,7 +50,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-cli"
-version = "0.7.17"
+version = "0.7.18"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
@@ -86,7 +86,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-core"
-version = "0.6.15"
+version = "0.6.16"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
@@ -151,7 +151,7 @@ dependencies = [
 
 [[package]]
 name = "aether-evals"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -245,7 +245,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp-servers"
-version = "0.4.20"
+version = "0.4.21"
 dependencies = [
  "aether-agent-core",
  "aether-auth",
@@ -306,7 +306,7 @@ dependencies = [
 
 [[package]]
 name = "aether-project"
-version = "0.5.15"
+version = "0.5.16"
 dependencies = [
  "aether-agent-core",
  "aether-doctest",
@@ -327,7 +327,7 @@ dependencies = [
 
 [[package]]
 name = "aether-schemas"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "aether-agent-cli",
  "aether-agent-core",
@@ -377,7 +377,7 @@ dependencies = [
 
 [[package]]
 name = "aether-wisp"
-version = "0.4.24"
+version = "0.4.25"
 dependencies = [
  "aether-acp-utils",
  "aether-tui",
@@ -3649,9 +3649,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.32"
+version = "0.4.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "953f07c43838f8e6f9758cab68bf5bed85465e7587ebe0b823f1bcd81978ad3a"
+checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "lru-slab"
@@ -4447,9 +4447,9 @@ dependencies = [
 
 [[package]]
 name = "quote"
-version = "1.0.45"
+version = "1.0.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41f2619966050689382d2b44f664f4bc593e129785a36d6ee376ddf37259b924"
+checksum = "dfbc457d0c7a0759a614551b11a6409e5951f6c7537be1f1b7682b9ae9230368"
 dependencies = [
  "proc-macro2",
 ]

@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.25](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.24...aether-wisp-v0.4.25) - 2026-06-22
+
+### Other
+
+- Dry up tests in mcp-servers and wisp with test builders ([#182](https://github.com/contextbridge/aether/pull/182))
+- *(workspace)* Move Rust to crates/ and TS to packages/ ([#175](https://github.com/contextbridge/aether/pull/175))
+
 ## [0.4.24](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.23...aether-wisp-v0.4.24) - 2026-06-19
 
 ### Other
