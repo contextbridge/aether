@@ -74,7 +74,7 @@ jobs:
         run: just test
 
   sdk:
-    name: TypeScript SDK + Evals
+    name: TypeScript SDK
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
