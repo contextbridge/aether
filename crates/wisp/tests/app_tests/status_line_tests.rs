@@ -1,16 +1,11 @@
 use agent_client_protocol::schema as acp;
 use tui::KeyCode;
-use tui::KeyModifiers;
-use tui::testing::TestTerminal;
 
 use super::common::*;
 
 #[tokio::test]
-async fn test_status_line_shows_workspace_on_left() {
-    let terminal = TestTerminal::new(TEST_WIDTH, 24);
-    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (TEST_WIDTH, 24));
-
-    renderer.initial_render().unwrap();
+async fn test_status_line_shows_workspace_on_left() -> TestResult {
+    let renderer = RendererTest::new().size((TEST_WIDTH, 24)).build()?;
 
     let lines = renderer.writer().get_lines();
     let status_line = lines
@@ -18,14 +13,12 @@ async fn test_status_line_shows_workspace_on_left() {
         .find(|line| line.contains(TEST_WORKSPACE_DIR) && line.contains(TEST_GIT_REF) && line.contains(TEST_AGENT))
         .unwrap_or_else(|| panic!("Status line should show workspace and agent.\nBuffer:\n{}", lines.join("\n")));
     assert!(status_line.find(TEST_WORKSPACE_DIR).unwrap() < status_line.find(TEST_AGENT).unwrap());
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_status_line_shows_agent_name() {
-    let terminal = TestTerminal::new(80, 24);
-    let mut renderer = Renderer::new(terminal, "claude-code".to_string(), &[], (80, 24));
-
-    renderer.initial_render().unwrap();
+async fn test_status_line_shows_agent_name() -> TestResult {
+    let renderer = RendererTest::new().size((80, 24)).agent_name("claude-code").build()?;
 
     let lines = renderer.writer().get_lines();
     assert!(
@@ -33,10 +26,11 @@ async fn test_status_line_shows_agent_name() {
         "Status line should show agent name.\nBuffer:\n{}",
         lines.join("\n")
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_status_line_shows_model_from_config_options() {
+async fn test_status_line_shows_model_from_config_options() -> TestResult {
     let config_options = vec![
         acp::SessionConfigOption::select(
             "model",
@@ -47,10 +41,8 @@ async fn test_status_line_shows_model_from_config_options() {
         .category(acp::SessionConfigOptionCategory::Model),
     ];
 
-    let terminal = TestTerminal::new(80, 24);
-    let mut renderer = Renderer::new(terminal, "aether-acp".to_string(), &config_options, (80, 24));
-
-    renderer.initial_render().unwrap();
+    let renderer =
+        RendererTest::new().size((80, 24)).agent_name("aether-acp").config_options(&config_options).build()?;
 
     let lines = renderer.writer().get_lines();
     assert!(
@@ -58,10 +50,11 @@ async fn test_status_line_shows_model_from_config_options() {
         "Status line should show agent name and model.\nBuffer:\n{}",
         lines.join("\n")
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_status_line_updates_on_config_option_update() {
+async fn test_status_line_updates_on_config_option_update() -> TestResult {
     let config_options = vec![
         acp::SessionConfigOption::select(
             "model",
@@ -72,9 +65,8 @@ async fn test_status_line_updates_on_config_option_update() {
         .category(acp::SessionConfigOptionCategory::Model),
     ];
 
-    let terminal = TestTerminal::new(80, 24);
-    let mut renderer = Renderer::new(terminal, "aether-acp".to_string(), &config_options, (80, 24));
-    renderer.initial_render().unwrap();
+    let mut renderer =
+        RendererTest::new().size((80, 24)).agent_name("aether-acp").config_options(&config_options).build()?;
 
     // Send a ConfigOptionUpdate with a new model
     let new_config_options = vec![
@@ -88,8 +80,7 @@ async fn test_status_line_updates_on_config_option_update() {
     ];
 
     renderer
-        .on_session_update(acp::SessionUpdate::ConfigOptionUpdate(acp::ConfigOptionUpdate::new(new_config_options)))
-        .unwrap();
+        .on_session_update(acp::SessionUpdate::ConfigOptionUpdate(acp::ConfigOptionUpdate::new(new_config_options)))?;
 
     let lines = renderer.writer().get_lines();
     assert!(
@@ -102,23 +93,21 @@ async fn test_status_line_updates_on_config_option_update() {
         "Status line should no longer show old model.\nBuffer:\n{}",
         lines.join("\n")
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_available_commands_update_is_forwarded() {
-    let terminal = TestTerminal::new(TEST_WIDTH, 40);
-    let mut renderer = Renderer::new(terminal, TEST_AGENT.to_string(), &[], (TEST_WIDTH, 40));
-    renderer.initial_render().unwrap();
+async fn test_available_commands_update_is_forwarded() -> TestResult {
+    let mut renderer = RendererTest::new().size((TEST_WIDTH, 40)).build()?;
 
-    renderer
-        .on_session_update(acp::SessionUpdate::AvailableCommandsUpdate(acp::AvailableCommandsUpdate::new(vec![
-            acp::AvailableCommand::new("search", "Search code"),
-        ])))
-        .unwrap();
+    renderer.on_session_update(acp::SessionUpdate::AvailableCommandsUpdate(acp::AvailableCommandsUpdate::new(
+        vec![acp::AvailableCommand::new("search", "Search code")],
+    )))?;
 
     // Open the command picker with /
-    send_key(&mut renderer, KeyCode::Char('/'), KeyModifiers::empty()).await;
+    press(&mut renderer, KeyCode::Char('/')).await?;
 
     let names = command_picker_visible_names(renderer.writer());
     assert!(names.iter().any(|n| n == "search"), "Command picker should show 'search' command. Got: {names:?}");
+    Ok(())
 }
