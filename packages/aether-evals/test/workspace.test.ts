@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { Workspace } from "../src/workspace.js";
+import { createGitBundle, Workspace } from "../src/workspace.js";
 
 describe("createWorkspace", () => {
   it("creates an empty workspace", async () => {
@@ -127,6 +127,63 @@ describe("createWorkspace", () => {
     });
     expect(referenceDiff?.diff).toContain("+gold");
     expect(referenceDiff?.stats.filesChanged).toBe(2);
+  });
+
+  it("creates a bundle and instantiates a workspace from it, honoring subdir and diffs", async () => {
+    const repo = track(await mkdtemp(join(tmpdir(), "ws-repo-")));
+    const git = (...args: string[]) =>
+      execFileSync("git", args, { cwd: repo, stdio: "pipe" });
+    git("init", "--initial-branch", "main");
+    git("config", "user.email", "eval@example.com");
+    git("config", "user.name", "Eval");
+    await writeFile(join(repo, "root.txt"), "root v1\n");
+    await mkdir(join(repo, "pkg"), { recursive: true });
+    await writeFile(join(repo, "pkg", "inner.txt"), "inner v1\n");
+    git("add", ".");
+    git("commit", "-m", "start");
+    const startCommit = git("rev-parse", "HEAD").toString().trim();
+
+    await writeFile(join(repo, "root.txt"), "root v2\n");
+    git("add", ".");
+    git("commit", "-m", "gold");
+    const goldCommit = git("rev-parse", "HEAD").toString().trim();
+
+    const bundleDir = track(await mkdtemp(join(tmpdir(), "ws-bundle-")));
+    const bundlePath = join(bundleDir, "repo.bundle");
+    await createGitBundle(
+      { url: `file://${repo}`, startCommit, goldCommit },
+      bundlePath,
+    );
+
+    const ws = await Workspace.fromGitBundle({
+      bundlePath,
+      startCommit,
+      goldCommit,
+      subdir: "pkg",
+    });
+    cleanups.push(ws.rootPath);
+
+    expect(ws.relativeCwd).toBe("pkg");
+    expect(ws.path).toBe(join(ws.rootPath, "pkg"));
+    expect(await readFile(join(ws.rootPath, "root.txt"), "utf8")).toBe(
+      "root v1\n",
+    );
+    expect(ws.source).toEqual({ bundle: { startCommit, goldCommit } });
+
+    await writeFile(ws.join("inner.txt"), "inner edited\n");
+    const { agentDiff, referenceDiff } = await ws.captureGitDiffs();
+    expect(referenceDiff?.diff).toContain("root v2");
+    expect(agentDiff?.diff).toContain("inner edited");
+  });
+
+  it("rejects a missing bundle file", async () => {
+    await expect(
+      Workspace.fromGitBundle({
+        bundlePath: join(tmpdir(), "does-not-exist.bundle"),
+        startCommit: "abc",
+        goldCommit: "def",
+      }),
+    ).rejects.toThrow(/git bundle file does not exist/);
   });
 });
 

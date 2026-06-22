@@ -28,6 +28,9 @@ pub enum WorkspaceError {
 
     #[error("git workspace subdirectory does not exist: {}", path.display())]
     MissingSubdir { path: PathBuf },
+
+    #[error("git bundle file does not exist: {}", path.display())]
+    MissingBundle { path: PathBuf },
 }
 
 #[derive(Debug, Error)]

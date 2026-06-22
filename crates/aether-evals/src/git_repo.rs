@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use thiserror::Error;
@@ -13,51 +14,64 @@ impl GitRepo {
         GitRepo { path: path.to_path_buf() }
     }
 
-    /// Clone a repository to the specified destination
-    ///
-    /// Uses a blobless partial clone (--filter=blob:none) with --no-checkout for efficiency.
-    /// This downloads commit history and tree structures but defers downloading file blobs
-    /// until they're needed (e.g., during checkout or diff operations).
-    ///
-    /// This significantly reduces clone time and disk space usage, especially for large repos,
-    /// while still allowing full git operations. Blobs are automatically fetched on-demand.
+    /// Initialize an empty repository at `dest`.
     #[tracing::instrument(skip(dest))]
-    pub fn clone(url: &str, dest: &Path) -> Result<Self, GitRepoError> {
-        tracing::debug!("Cloning repository from {} (blobless clone)", url);
-        let output = Command::new("git")
-            .arg("clone")
-            .arg("--no-checkout")
-            .arg("--filter=blob:none")
-            .arg(url)
-            .arg(dest)
-            .output()
-            .map_err(|e| GitRepoError::CommandFailed(format!("Failed to execute git clone: {e}")))?;
+    pub fn init(dest: &Path) -> Result<Self, GitRepoError> {
+        run_git(None, [OsStr::new("init"), dest.as_os_str()], GitRepoError::InitFailed)?;
+        Ok(GitRepo { path: dest.to_path_buf() })
+    }
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(GitRepoError::CloneFailed(stderr.to_string()));
+    /// Clone `source` (a URL or a local bundle/path) into `dest` with `--no-checkout`.
+    ///
+    /// When `blobless` is true, uses a partial blobless clone (`--filter=blob:none`) that
+    /// defers downloading file blobs until they're needed -- cheaper for large repos. When
+    /// false, the full object set is downloaded so the clone is self-contained (e.g. so it
+    /// can be bundled, or because `source` is a bundle and not a promisor remote).
+    #[tracing::instrument(skip(source, dest))]
+    pub fn clone(source: impl AsRef<OsStr>, dest: &Path, blobless: bool) -> Result<Self, GitRepoError> {
+        let mut args = vec![OsStr::new("clone"), OsStr::new("--no-checkout")];
+        if blobless {
+            args.push(OsStr::new("--filter=blob:none"));
         }
-
+        args.push(source.as_ref());
+        args.push(dest.as_os_str());
+        run_git(None, args, GitRepoError::CloneFailed)?;
         Ok(GitRepo { path: dest.to_path_buf() })
     }
 
     /// Checkout a specific commit, branch, or tag
     #[tracing::instrument(skip(self))]
     pub fn checkout(&self, reference: &str) -> Result<(), GitRepoError> {
-        tracing::debug!("Checking out ref: {}", reference);
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(&self.path)
-            .arg("checkout")
-            .arg(reference)
-            .output()
-            .map_err(|e| GitRepoError::CommandFailed(format!("Failed to execute git checkout: {e}")))?;
+        run_git(Some(&self.path), ["checkout", reference], |reason| GitRepoError::CheckoutFailed {
+            reference: reference.to_string(),
+            reason,
+        })?;
+        Ok(())
+    }
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(GitRepoError::CheckoutFailed { reference: reference.to_string(), reason: stderr.to_string() });
-        }
+    /// Fetch `revs` from `remote` (a named remote or a URL) into this repository.
+    #[tracing::instrument(skip(self))]
+    pub fn fetch(&self, remote: &str, revs: &[&str]) -> Result<(), GitRepoError> {
+        let mut args = vec!["fetch", remote];
+        args.extend_from_slice(revs);
+        run_git(Some(&self.path), args, GitRepoError::FetchFailed)?;
+        Ok(())
+    }
 
+    /// Point a ref at a commit (e.g. to create a branch tip to bundle).
+    #[tracing::instrument(skip(self))]
+    pub fn update_ref(&self, name: &str, commit: &str) -> Result<(), GitRepoError> {
+        run_git(Some(&self.path), ["update-ref", name, commit], GitRepoError::UpdateRefFailed)?;
+        Ok(())
+    }
+
+    /// Create a self-contained git bundle at `out` containing the given refs and their
+    /// reachable objects.
+    #[tracing::instrument(skip(self, out))]
+    pub fn bundle(&self, revs: &[&str], out: &Path) -> Result<(), GitRepoError> {
+        let mut args = vec![OsStr::new("bundle"), OsStr::new("create"), out.as_os_str()];
+        args.extend(revs.iter().map(OsStr::new));
+        run_git(Some(&self.path), args, GitRepoError::BundleFailed)?;
         Ok(())
     }
 
@@ -73,31 +87,15 @@ impl GitRepo {
     /// * `diff_range("HEAD", None)` - unstaged changes (equivalent to `git diff`)
     #[tracing::instrument(skip(self))]
     pub fn diff_range(&self, from_commit: &str, to_commit: Option<&str>) -> Result<String, GitRepoError> {
-        let mut cmd = Command::new("git");
-        cmd.arg("-C").arg(&self.path).arg("diff");
-
-        if let Some(to) = to_commit {
-            tracing::debug!("Getting diff from {} to {}", from_commit, to);
-            cmd.arg(format!("{from_commit}..{to}"));
-        } else {
-            tracing::debug!("Getting diff from {} to working directory", from_commit);
-            cmd.arg(from_commit);
-        }
-
-        let output =
-            cmd.output().map_err(|e| GitRepoError::CommandFailed(format!("Failed to execute git diff: {e}")))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(GitRepoError::DiffFailed {
-                from: from_commit.to_string(),
-                to: to_commit.unwrap_or("working directory").to_string(),
-                reason: stderr.to_string(),
-            });
-        }
-
-        let diff = String::from_utf8_lossy(&output.stdout).to_string();
-        Ok(diff)
+        let range = match to_commit {
+            Some(to) => format!("{from_commit}..{to}"),
+            None => from_commit.to_string(),
+        };
+        run_git(Some(&self.path), ["diff", range.as_str()], |reason| GitRepoError::DiffFailed {
+            from: from_commit.to_string(),
+            to: to_commit.unwrap_or("working directory").to_string(),
+            reason,
+        })
     }
 
     /// Get the diff between two commits
@@ -115,13 +113,49 @@ impl GitRepo {
     }
 }
 
+/// Run `git` (optionally inside `cwd`) and return its stdout.
+///
+/// Spawn failures are surfaced as [`GitRepoError::CommandFailed`]; a non-zero exit is mapped
+/// to a caller-chosen variant via `on_failure`, which receives the captured stderr.
+fn run_git<T: IntoIterator<Item = U>, U: AsRef<OsStr>>(
+    cwd: Option<&Path>,
+    args: T,
+    on_failure: impl FnOnce(String) -> GitRepoError,
+) -> Result<String, GitRepoError> {
+    let mut cmd = Command::new("git");
+    if let Some(dir) = cwd {
+        cmd.arg("-C").arg(dir);
+    }
+
+    let output =
+        cmd.args(args).output().map_err(|e| GitRepoError::CommandFailed(format!("Failed to execute git: {e}")))?;
+
+    if !output.status.success() {
+        return Err(on_failure(String::from_utf8_lossy(&output.stderr).into_owned()));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
 #[derive(Debug, Error)]
 pub enum GitRepoError {
     #[error("Git command failed: {0}")]
     CommandFailed(String),
 
+    #[error("Failed to initialize repository: {0}")]
+    InitFailed(String),
+
     #[error("Failed to clone repository: {0}")]
     CloneFailed(String),
+
+    #[error("Failed to fetch revisions: {0}")]
+    FetchFailed(String),
+
+    #[error("Failed to update ref: {0}")]
+    UpdateRefFailed(String),
+
+    #[error("Failed to create git bundle: {0}")]
+    BundleFailed(String),
 
     #[error("Failed to checkout '{reference}': {reason}")]
     CheckoutFailed { reference: String, reason: String },
@@ -259,7 +293,7 @@ mod tests {
         .to_string();
 
         let clone_dir = tempfile::tempdir().unwrap();
-        let repo = GitRepo::clone(source_path.to_str().unwrap(), clone_dir.path()).unwrap();
+        let repo = GitRepo::clone(source_path.to_str().unwrap(), clone_dir.path(), true).unwrap();
 
         let entries: Vec<_> = fs::read_dir(clone_dir.path())
             .unwrap()
