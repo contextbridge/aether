@@ -93,7 +93,7 @@ glob = "0.3"
 globset = "0.4"
 grep = "0.4.1"
 ignore = "0.4"
-ast-grep-core = "0.43"
+ast-grep-core = "0.44"
 ast-grep-language = "0.43"
 
 # Terminal UI
