@@ -38,8 +38,9 @@ export type {
   JudgeSummary,
 } from "./judge.js";
 export { Transcript, TranscriptError, ToolCall } from "./transcript.js";
-export { Workspace } from "./workspace.js";
+export { createGitBundle, Workspace } from "./workspace.js";
 export type {
+  GitBundleSpec,
   GitRepoSpec,
   RetainedWorkspaceInfo,
   WorkspaceSource,
