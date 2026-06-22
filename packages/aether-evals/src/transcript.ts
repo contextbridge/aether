@@ -1,4 +1,4 @@
-import type { AgentMessage, ContextUsage } from "../generated/eval-types.js";
+import type { AgentMessage, ContextUsage } from "@aether-agent/sdk";
 
 export class ToolCall {
   readonly arguments: string;

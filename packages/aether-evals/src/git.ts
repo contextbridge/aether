@@ -1,6 +1,6 @@
 import { env as processEnv } from "node:process";
 
-import { runCommand } from "../childProcess.js";
+import { runCommand } from "@aether-agent/sdk";
 
 export class GitRepo {
   private constructor(readonly path: string) {}

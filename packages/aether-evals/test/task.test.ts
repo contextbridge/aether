@@ -3,8 +3,8 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import type { AgentMessage } from "../../src/generated/eval-types.js";
-import type { Agent } from "../../src/evals/index.js";
+import type { AgentMessage } from "@aether-agent/sdk";
+import type { Agent } from "../src/index.js";
 import {
   FakeAgent,
   Task,
@@ -12,7 +12,7 @@ import {
   Transcript,
   TranscriptError,
   Workspace,
-} from "../../src/evals/index.js";
+} from "../src/index.js";
 
 describe("Transcript", () => {
   it("collects the agent stream and exposes transcript summaries", async () => {

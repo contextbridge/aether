@@ -41,9 +41,9 @@ RUN pnpm --filter @aether-agent/sdk compile
 COPY --from=aether /usr/local/bin/aether /usr/local/bin/aether
 
 WORKDIR /app
-COPY packages/aether-sdk/test/fixtures/sdk-weather-agent/package.json ./package.json
-COPY packages/aether-sdk/test/fixtures/sdk-weather-agent/tsconfig.json ./tsconfig.json
-COPY packages/aether-sdk/test/fixtures/sdk-weather-agent/eval-agent.ts ./eval-agent.ts
+COPY packages/aether-evals/test/fixtures/sdk-weather-agent/package.json ./package.json
+COPY packages/aether-evals/test/fixtures/sdk-weather-agent/tsconfig.json ./tsconfig.json
+COPY packages/aether-evals/test/fixtures/sdk-weather-agent/eval-agent.ts ./eval-agent.ts
 
 RUN pnpm install --frozen-lockfile=false --ignore-scripts
 RUN pnpm exec tsc -p tsconfig.json

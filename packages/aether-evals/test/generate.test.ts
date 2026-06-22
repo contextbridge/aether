@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { generate } from "../../src/evals/index.js";
+import { generate } from "../src/index.js";
 
 /**
  * A stand-in for the real `aether generate` binary. It validates argv, reads the prompt from stdin,

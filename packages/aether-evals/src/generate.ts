@@ -1,11 +1,13 @@
 import { z } from "zod";
 
-import { resolveAetherCommand } from "../agentProcess.js";
-import { runCommand } from "../childProcess.js";
-import { AetherSdkError } from "../errors.js";
-import type { ReasoningEffort } from "../generated/reasoning-types.js";
-export type { ReasoningEffort } from "../generated/reasoning-types.js";
-import { resolveEnv } from "../processEnv.js";
+import {
+  AetherSdkError,
+  resolveAetherCommand,
+  resolveEnv,
+  runCommand,
+} from "@aether-agent/sdk";
+import type { ReasoningEffort } from "@aether-agent/sdk";
+export type { ReasoningEffort } from "@aether-agent/sdk";
 
 export interface GenerateOptions {
   /**

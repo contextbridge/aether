@@ -10,11 +10,11 @@ import {
   ToolCall,
   Transcript,
   Workspace,
-} from "../../src/evals/index.js";
-import { logMessage } from "../logMessage.js";
-import type { AgentMessage } from "../../src/generated/eval-types.js";
+} from "../src/index.js";
+import { logMessage } from "./logMessage.js";
+import type { AgentMessage } from "@aether-agent/sdk";
 
-describe.skipIf(!process.env.AETHER_SDK_E2E)(
+describe.skipIf(!process.env.AETHER_EVALS_E2E)(
   "Transcript Docker collection (e2e, requires Docker)",
   () => {
     it("runs an agent in a real container and returns its result", async () => {

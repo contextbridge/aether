@@ -1,5 +1,7 @@
-export { DockerAgent, defaultEvalEnvVars } from "./DockerAgent.js";
+export { DockerAgent } from "./DockerAgent.js";
 export type { DockerAgentOptions } from "./DockerAgent.js";
+export { AetherEvalError } from "./errors.js";
+export type { AetherEvalErrorCode } from "./errors.js";
 export { Container, ContainerBuilder, Image } from "./containers/index.js";
 export type {
   BindMount,
@@ -42,4 +44,16 @@ export type {
   RetainedWorkspaceInfo,
   WorkspaceSource,
 } from "./workspace.js";
-export type * from "../generated/eval-types.js";
+export type {
+  AgentMessage,
+  ContextUsage,
+  FileDiff,
+  PlanMeta,
+  PlanMetaEntry,
+  PlanMetaStatus,
+  ToolCallError,
+  ToolCallRequest,
+  ToolCallResult,
+  ToolDisplayMeta,
+  ToolResultMeta,
+} from "@aether-agent/sdk";

@@ -2,7 +2,7 @@ import { access, cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 
-import { AetherSdkError } from "../errors.js";
+import { AetherSdkError } from "@aether-agent/sdk";
 import { diffStatsFromDiff, type GitDiff } from "./diff.js";
 import { GitRepo } from "./git.js";
 

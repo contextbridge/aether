@@ -2,13 +2,8 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { AgentMessage } from "../../src/generated/eval-types.js";
-import {
-  FakeAgent,
-  Task,
-  Transcript,
-  Workspace,
-} from "../../src/evals/index.js";
+import type { AgentMessage } from "@aether-agent/sdk";
+import { FakeAgent, Task, Transcript, Workspace } from "../src/index.js";
 
 describe("FakeAgent", () => {
   it("success() ends with a done message", async () => {

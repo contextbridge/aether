@@ -97,6 +97,12 @@ jobs:
         run: cargo build -p aether-agent-cli
       - name: Test
         run: pnpm sdk:test
+      - name: Typecheck evals
+        run: pnpm evals:typecheck
+      - name: Build evals
+        run: pnpm evals:build
+      - name: Test evals
+        run: pnpm evals:test
 
   docs:
     name: Docs

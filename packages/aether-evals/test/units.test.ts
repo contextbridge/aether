@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { Image } from "../../src/evals/containers/image.js";
+import { Image } from "../src/containers/image.js";
 
 describe("Image.parse", () => {
   it("splits name and tag", () => {

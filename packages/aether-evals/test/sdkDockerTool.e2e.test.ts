@@ -7,18 +7,18 @@ import {
   Task,
   Transcript,
   Workspace,
-} from "../src/evals/index.js";
+} from "../src/index.js";
 import { logMessage } from "./logMessage.js";
 
-describe.skipIf(process.env.AETHER_SDK_DOCKER_E2E !== "1")(
-  "SDK Docker tool e2e",
+describe.skipIf(process.env.AETHER_EVALS_DOCKER_E2E !== "1")(
+  "DockerAgent tool e2e",
   () => {
     it("runs a real Aether agent in Docker and calls a TS-defined tool", async () => {
       const packageDir = new URL("..", import.meta.url).pathname;
       const image = Image.fromDockerfile("aether-sdk-weather-agent:latest", {
         context: join(packageDir, "../.."),
         dockerfile:
-          "packages/aether-sdk/test/fixtures/sdk-weather-agent/Dockerfile",
+          "packages/aether-evals/test/fixtures/sdk-weather-agent/Dockerfile",
         buildkit: true,
       });
 

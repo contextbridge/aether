@@ -1,18 +1,16 @@
 import { env as processEnv } from "node:process";
-import { AetherSdkError } from "../errors.js";
+import type { AgentMessage } from "@aether-agent/sdk";
 import { Container } from "./containers/container.js";
+import { AetherEvalError } from "./errors.js";
 import type { Agent } from "./Agent.js";
 import type { Task } from "./task.js";
-import type { AgentMessage } from "../generated/eval-types.js";
 import { isTerminalMessage } from "./transcript.js";
-
-export type { BindMount } from "./containers/container.js";
 
 export const CONTAINER_AETHER_HOME = "/root/.aether";
 export const AETHER_EVAL_TASK_PROMPT_ENV = "AETHER_EVAL_TASK_PROMPT";
 export const AETHER_EVAL_WORKSPACE_ROOT_ENV = "AETHER_EVAL_WORKSPACE_ROOT";
 export const AETHER_EVAL_CWD_ENV = "AETHER_EVAL_CWD";
-const REQUIRED_PROVIDER_ENV_VARS = new Set([
+const PROVIDER_ENV_VARS = new Set([
   "ANTHROPIC_API_KEY",
   "DEEPSEEK_API_KEY",
   "GEMINI_API_KEY",
@@ -35,7 +33,7 @@ export class DockerAgent implements Agent {
 
   constructor(options: DockerAgentOptions) {
     if (options.command.length === 0) {
-      throw new AetherSdkError(
+      throw new AetherEvalError(
         "configuration_error",
         "DockerAgent command must not be empty",
       );
@@ -91,7 +89,7 @@ export class DockerAgent implements Agent {
     }
 
     if (!finished) {
-      throw new AetherSdkError(
+      throw new AetherEvalError(
         "command_exit_without_terminal",
         `agent command exited without emitting a terminal AgentMessage.\nstderr:\n${stderr}`,
       );
@@ -107,7 +105,7 @@ export function defaultEvalEnvVars(
     if (value === undefined) continue;
     if (key === "AETHER_HOME") continue;
     if (
-      REQUIRED_PROVIDER_ENV_VARS.has(key) ||
+      PROVIDER_ENV_VARS.has(key) ||
       key === "OLLAMA_HOST" ||
       key.startsWith("AETHER_")
     ) {
@@ -122,7 +120,7 @@ function parseAgentMessage(line: string): AgentMessage {
   try {
     return JSON.parse(line) as AgentMessage;
   } catch (err) {
-    throw new AetherSdkError(
+    throw new AetherEvalError(
       "agent_message_json_line",
       `agent emitted an invalid AgentMessage JSON line: ${line}`,
       err,
