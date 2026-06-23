@@ -151,12 +151,7 @@ fn skills_args(harnesses: &[HarnessIntegration]) -> Vec<String> {
         }
     }
 
-    args.extend([
-        "--dir".to_string(),
-        "${WORKSPACE}/.aether/skills".to_string(),
-        "--notes-dir".to_string(),
-        "${WORKSPACE}/.aether/notes".to_string(),
-    ]);
+    args.extend(["--dir".to_string(), "${WORKSPACE}/.aether/skills".to_string()]);
 
     args
 }

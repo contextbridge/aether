@@ -22,11 +22,10 @@ use utils::shell_expander::ShellExpander;
 use utils::substitution::substitute_parameters;
 
 use super::tools::{
-    ListSkillsInput, ListSkillsOutput, LoadSkillsInput, LoadSkillsOutput, SaveNoteInput, SaveNoteOutput,
-    SearchNotesInput, SearchNotesOutput, SkillFile, SkillListItem, SkillRequest, save_note,
+    ListSkillsInput, ListSkillsOutput, LoadSkillsInput, LoadSkillsOutput, SkillFile, SkillListItem, SkillRequest,
 };
+use crate::workspace_paths::resolve_path;
 use crate::{error::ServerInitError, workspace_paths::primary_root};
-use crate::{skills::tools::search_notes::search_notes, workspace_paths::resolve_path};
 use aether_project::{PromptCatalog, PromptFile, SKILL_FILENAME};
 use mcp_utils::display_meta::ToolDisplayMeta;
 
@@ -39,9 +38,9 @@ pub struct SkillsMcpArgs {
     #[arg(long = "dir", required = true)]
     pub dirs: Vec<PathBuf>,
 
-    /// Directory for persisted notes.
-    #[arg(long = "notes-dir", required = true)]
-    pub notes_dir: PathBuf,
+    /// Deprecated: Accepted for backward compatibility but ignored.
+    #[arg(long = "notes-dir")]
+    pub notes_dir: Option<PathBuf>,
 }
 
 impl SkillsMcpArgs {
@@ -56,7 +55,6 @@ impl SkillsMcpArgs {
 #[doc = include_str!("../docs/skills_mcp.md")]
 #[derive(Clone)]
 pub struct SkillsMcp {
-    notes_dir: PathBuf,
     catalog: Arc<RwLock<PromptCatalog>>,
     tool_router: ToolRouter<Self>,
     roots: Arc<RwLock<Vec<PathBuf>>>,
@@ -87,11 +85,10 @@ enum SkillFileError {
 }
 
 impl SkillsMcp {
-    pub fn new(prompt_dirs: &[PathBuf], notes_dir: PathBuf) -> Self {
+    pub fn new(prompt_dirs: &[PathBuf]) -> Self {
         let catalog = PromptCatalog::from_dirs(prompt_dirs);
 
         Self {
-            notes_dir,
             catalog: Arc::new(RwLock::new(catalog)),
             tool_router: Self::tool_router(),
             roots: Arc::new(RwLock::new(Vec::new())),
@@ -100,14 +97,13 @@ impl SkillsMcp {
 
     pub fn from_args(args: Vec<String>) -> Result<Self, ServerInitError> {
         let parsed_args = SkillsMcpArgs::from_args(args)?;
-        Ok(Self::new(&parsed_args.dirs, parsed_args.notes_dir))
+        Ok(Self::new(&parsed_args.dirs))
     }
 
     pub fn from_args_with_workspace_root(args: Vec<String>, workspace_root: &Path) -> Result<Self, ServerInitError> {
         let parsed_args = SkillsMcpArgs::from_args(args)?;
         let dirs = parsed_args.dirs.into_iter().map(|path| resolve_path(workspace_root, path)).collect::<Vec<_>>();
-        let notes_dir = resolve_path(workspace_root, parsed_args.notes_dir);
-        Ok(Self::new(&dirs, notes_dir).with_roots(vec![workspace_root.to_path_buf()]))
+        Ok(Self::new(&dirs).with_roots(vec![workspace_root.to_path_buf()]))
     }
 
     pub fn with_roots(mut self, roots: Vec<PathBuf>) -> Self {
@@ -356,32 +352,6 @@ impl SkillsMcp {
 
         Ok(Json(LoadSkillsOutput { files }))
     }
-
-    #[doc = include_str!("tools/save_note/description.md")]
-    #[tool(annotations(
-        read_only_hint = false,
-        destructive_hint = false,
-        idempotent_hint = false,
-        open_world_hint = false
-    ))]
-    pub async fn save_note(&self, request: Parameters<SaveNoteInput>) -> Result<Json<SaveNoteOutput>, String> {
-        let Parameters(input) = request;
-        let today = today_string();
-        let result = save_note(&input, &self.notes_dir, &today).map_err(|e| e.to_string())?;
-        Ok(Json(result))
-    }
-
-    #[doc = include_str!("tools/search_notes/description.md")]
-    #[tool(annotations(read_only_hint = true, open_world_hint = false))]
-    pub async fn search_notes(&self, request: Parameters<SearchNotesInput>) -> Result<Json<SearchNotesOutput>, String> {
-        let Parameters(input) = request;
-        let result = search_notes(&input, &self.notes_dir).map_err(|e| e.to_string())?;
-        Ok(Json(result))
-    }
-}
-
-fn today_string() -> String {
-    chrono::Local::now().format("%Y-%m-%d").to_string()
 }
 
 #[cfg(test)]
@@ -421,25 +391,30 @@ mod tests {
     }
 
     #[test]
-    fn skills_args_require_notes_dir() {
-        let parsed = SkillsMcpArgs::from_args(vec!["--dir".into(), ".aether/skills".into()]);
-        assert!(parsed.is_err());
-    }
-
-    #[test]
     fn skills_args_parse_repeated_dirs() {
         let parsed = SkillsMcpArgs::from_args(vec![
             "--dir".into(),
             ".aether/skills".into(),
             "--dir".into(),
             ".claude/rules".into(),
+        ])
+        .unwrap();
+
+        assert_eq!(parsed.dirs, vec![PathBuf::from(".aether/skills"), PathBuf::from(".claude/rules")]);
+    }
+
+    #[test]
+    fn skills_args_accepts_deprecated_notes_dir() {
+        let parsed = SkillsMcpArgs::from_args(vec![
+            "--dir".into(),
+            ".aether/skills".into(),
             "--notes-dir".into(),
             ".aether/notes".into(),
         ])
         .unwrap();
 
-        assert_eq!(parsed.dirs, vec![PathBuf::from(".aether/skills"), PathBuf::from(".claude/rules")]);
-        assert_eq!(parsed.notes_dir, PathBuf::from(".aether/notes"));
+        assert_eq!(parsed.dirs, vec![PathBuf::from(".aether/skills")]);
+        assert_eq!(parsed.notes_dir, Some(PathBuf::from(".aether/notes")));
     }
 
     #[test]
@@ -451,7 +426,6 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(server.notes_dir, PathBuf::from("/workspace/.aether/notes"));
         let roots = server.roots.blocking_read();
         assert_eq!(*roots, vec![workspace]);
     }
@@ -482,7 +456,7 @@ mod tests {
             "---\ndescription: Rule only\nagent-invocable: false\ntriggers:\n  read:\n    - \"**/*.rs\"\n---\n# Rule",
         );
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()], temp_dir.path().join("notes"));
+        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
         let Json(output) = server.list_skills(Parameters(ListSkillsInput::default())).await.unwrap();
 
         assert_eq!(output.status, "success");
@@ -521,7 +495,7 @@ mod tests {
             &[],
         );
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()], temp_dir.path().join("notes"));
+        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
         let info = ServerHandler::get_info(&server);
         let instructions = info.instructions.expect("skills server should provide instructions");
 
@@ -541,7 +515,7 @@ mod tests {
             &[],
         );
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()], temp_dir.path().join("notes"));
+        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
         let result = load(&server, "user-only", None).await;
 
         assert!(result.content.is_none());
@@ -557,7 +531,7 @@ mod tests {
             "---\ndescription: Rule-only prompt\nagent-invocable: false\ntriggers:\n  read:\n    - \"**/*.rs\"\n---\n# Rule",
         );
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()], temp_dir.path().join("notes"));
+        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
         let result = load(&server, "rule-only", None).await;
 
         assert!(result.content.is_none());
@@ -574,7 +548,7 @@ mod tests {
             &[],
         );
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()], temp_dir.path().join("notes"));
+        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
         let result = load(&server, "test-skill", None).await;
 
         assert_eq!(result.name, "test-skill");
@@ -594,7 +568,7 @@ mod tests {
             &[],
         );
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()], temp_dir.path().join("notes"));
+        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
         let result = load(&server, "custom-name", None).await;
 
         assert_eq!(result.name, "custom-name");
@@ -613,7 +587,7 @@ mod tests {
             "---\nname: rust-rules\ndescription: Rust rules\nagent-invocable: true\ntriggers:\n  read:\n    - \"**/*.rs\"\n---\nUse Rust conventions.",
         );
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()], temp_dir.path().join("notes"));
+        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
         let result = load(&server, "rust-rules", None).await;
 
         assert_eq!(result.name, "rust-rules");
@@ -632,7 +606,7 @@ mod tests {
             "---\ndescription: Rust rules\nagent-invocable: true\ntriggers:\n  read:\n    - \"**/*.rs\"\n---\nUse Rust conventions.",
         );
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()], temp_dir.path().join("notes"));
+        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
         let result = load(&server, "rust-rules", None).await;
 
         assert_eq!(result.path, "rust-rules.md");
@@ -651,7 +625,7 @@ mod tests {
             "---\ndescription: Rust rules\nagent-invocable: true\ntriggers:\n  read:\n    - \"**/*.rs\"\n---\nUse Rust conventions.",
         );
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()], temp_dir.path().join("notes"));
+        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
         let result = load(&server, "rust-rules", Some("details.md")).await;
 
         assert!(result.content.is_none());
@@ -669,7 +643,7 @@ mod tests {
             &[("traits.md", "# Traits content")],
         );
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()], temp_dir.path().join("notes"));
+        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
         let result = load(&server, "test-skill", Some("traits.md")).await;
 
         assert_eq!(result.path, "traits.md");
@@ -687,7 +661,7 @@ mod tests {
             &[("references/REF.md", "# Reference")],
         );
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()], temp_dir.path().join("notes"));
+        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
         let result = load(&server, "test-skill", Some("references/REF.md")).await;
 
         assert_eq!(result.path, "references/REF.md");
@@ -699,7 +673,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         create_skill(temp_dir.path(), "test-skill", "---\ndescription: Test\nagent-invocable: true\n---\n# Test", &[]);
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()], temp_dir.path().join("notes"));
+        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
         let result = load(&server, "test-skill", Some("/etc/passwd")).await;
 
         assert!(result.error.unwrap().contains("Absolute paths"));
@@ -710,7 +684,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         create_skill(temp_dir.path(), "test-skill", "---\ndescription: Test\nagent-invocable: true\n---\n# Test", &[]);
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()], temp_dir.path().join("notes"));
+        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
         let result = load(&server, "test-skill", Some("../other-skill/SKILL.md")).await;
 
         assert!(result.error.unwrap().contains("traversal"));
@@ -721,7 +695,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         create_skill(temp_dir.path(), "test-skill", "---\ndescription: Test\nagent-invocable: true\n---\n# Test", &[]);
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()], temp_dir.path().join("notes"));
+        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
         let result = load(&server, "test-skill", Some(".")).await;
 
         assert!(result.error.unwrap().contains("directory"));
@@ -742,7 +716,7 @@ mod tests {
             ],
         );
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()], temp_dir.path().join("notes"));
+        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
         let result = load(&server, "test-skill", None).await;
 
         assert_eq!(result.available_files.len(), 3);
@@ -757,7 +731,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         fs::create_dir_all(temp_dir.path().join("skills")).unwrap();
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()], temp_dir.path().join("notes"));
+        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
         let result = load(&server, "nonexistent", None).await;
 
         assert!(result.error.unwrap().contains("not found"));
@@ -768,7 +742,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         create_skill(temp_dir.path(), "test-skill", "---\ndescription: Test\nagent-invocable: true\n---\n# Test", &[]);
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()], temp_dir.path().join("notes"));
+        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
         let result = load(&server, "test-skill", Some("nonexistent.md")).await;
 
         assert!(result.error.unwrap().contains("not found"));
@@ -790,7 +764,7 @@ mod tests {
             &[],
         );
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()], temp_dir.path().join("notes"));
+        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
         let expander = ShellExpander::new();
         let requests = vec![
             SkillRequest { name: "rust".to_string(), path: None },
@@ -825,7 +799,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         create_skill(temp_dir.path(), "exists", "---\ndescription: Exists\nagent-invocable: true\n---\n# Exists", &[]);
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()], temp_dir.path().join("notes"));
+        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
         let expander = ShellExpander::new();
         let requests = vec![
             SkillRequest { name: "exists".to_string(), path: None },
@@ -857,8 +831,7 @@ mod tests {
         create_skill(dir_a.path(), "rust", "---\ndescription: Rust A\nagent-invocable: true\n---\n# From A", &[]);
         create_skill(dir_b.path(), "rust", "---\ndescription: Rust B\nagent-invocable: true\n---\n# From B", &[]);
 
-        let server =
-            SkillsMcp::new(&[dir_a.path().to_path_buf(), dir_b.path().to_path_buf()], dir_a.path().join("notes"));
+        let server = SkillsMcp::new(&[dir_a.path().to_path_buf(), dir_b.path().to_path_buf()]);
         let result = load(&server, "rust", None).await;
 
         assert!(result.content.as_ref().unwrap().contains("From B"));
@@ -871,8 +844,7 @@ mod tests {
         create_skill(dir_a.path(), "rust", "---\ndescription: Rust\nagent-invocable: true\n---\n# Rust", &[]);
         create_skill(dir_b.path(), "python", "---\ndescription: Python\nagent-invocable: true\n---\n# Python", &[]);
 
-        let server =
-            SkillsMcp::new(&[dir_a.path().to_path_buf(), dir_b.path().to_path_buf()], dir_a.path().join("notes"));
+        let server = SkillsMcp::new(&[dir_a.path().to_path_buf(), dir_b.path().to_path_buf()]);
 
         let rust = load(&server, "rust", None).await;
         assert!(rust.content.is_some());
@@ -889,8 +861,7 @@ mod tests {
         let dir_b = TempDir::new().unwrap();
         create_skill(dir_b.path(), "rust", "---\ndescription: Rust\nagent-invocable: true\n---\n# Rust", &[]);
 
-        let server =
-            SkillsMcp::new(&[dir_a.path().to_path_buf(), dir_b.path().to_path_buf()], dir_a.path().join("notes"));
+        let server = SkillsMcp::new(&[dir_a.path().to_path_buf(), dir_b.path().to_path_buf()]);
         let result = load(&server, "rust", None).await;
 
         assert!(result.content.is_some());
@@ -907,7 +878,7 @@ mod tests {
             &[],
         );
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()], temp_dir.path().join("notes"));
+        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
         let result = load(&server, "test-skill", None).await;
 
         let content = result.content.expect("content should be present");
@@ -926,7 +897,7 @@ mod tests {
             &[],
         );
 
-        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()], temp_dir.path().join("notes"));
+        let server = SkillsMcp::new(&[temp_dir.path().to_path_buf()]);
         let result = load(&server, "test-skill", None).await;
 
         let content = result.content.expect("content should be present");

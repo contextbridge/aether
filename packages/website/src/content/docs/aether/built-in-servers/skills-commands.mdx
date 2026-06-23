@@ -1,6 +1,6 @@
 ---
-title: Skills, Rules & Notes
-description: Load prompt artifacts and save durable agent notes.
+title: Skills, Rules & Commands
+description: Load prompt artifacts for agent skills, slash commands, and read-triggered rules.
 ---
 
 import { FileTree, Tabs, TabItem } from "@astrojs/starlight/components";
@@ -8,26 +8,26 @@ import { FileTree, Tabs, TabItem } from "@astrojs/starlight/components";
 The `skills` server loads prompt artifacts from configured directories and exposes them in two ways:
 
 - **MCP prompts** for `user-invocable` slash-command style workflows.
-- **MCP tools** for `agent-invocable` skills and persisted notes.
+- **MCP tools** for `agent-invocable` skills.
 
 A single markdown artifact can be a user prompt, an agent skill, a read-triggered rule, or any combination of those surfaces.
 
 ## Configuration
 
-Aether's project scaffold wires `skills` to `.aether/skills` and `.aether/notes`:
+Aether's project scaffold wires `skills` to `.aether/skills`:
 
 ```json title=".aether/mcp.json"
 {
   "servers": {
     "skills": {
       "type": "in-memory",
-      "args": ["--dir", ".aether/skills", "--notes-dir", ".aether/notes"]
+      "args": ["--dir", ".aether/skills"]
     }
   }
 }
 ```
 
-`--dir` is repeatable. On name collision, the last directory wins. `--notes-dir` is required for `save_note` and `search_notes`.
+`--dir` is repeatable. On name collision, the last directory wins.
 
 ## Directory shape
 
@@ -43,8 +43,6 @@ Prompt artifacts can be directory-backed `SKILL.md` files or flat markdown files
       - error-handling.md
     - commit.md
     - rust-rules.md
-  - notes/
-    - coding-style.md
 
 </FileTree>
 
@@ -76,7 +74,7 @@ See `traits.md` and `error-handling.md` for detailed patterns.
 | `user-invocable`  | Exposes the artifact as an MCP prompt. Directory-backed `SKILL.md` files default to `true`; flat files default to `false`. |
 | `agent-invocable` | Makes the artifact discoverable through `list_skills` and loadable with `get_skills`. Defaults to `true`.                  |
 | `argument-hint`   | Optional argument hint for user-invocable prompts.                                                                         |
-| `tags`            | Tags returned by `list_skills` and saved in note metadata.                                                                 |
+| `tags`            | Tags returned by `list_skills`.                                                                                            |
 | `triggers.read`   | Project-relative glob patterns used as read-triggered rules by the coding server.                                          |
 | `globs`, `paths`  | Compatibility aliases that also feed `triggers.read`.                                                                      |
 
@@ -88,16 +86,13 @@ Every authored artifact must have at least one activation surface: `user-invocab
 | -------------- | ----------------------------------------------------------------------- |
 | `list_skills`  | Return lightweight metadata for all `agent-invocable` skills.           |
 | `get_skills`   | Load skill content by exact name and optional relative auxiliary path.  |
-| `save_note`    | Append a learning to a topic note under the configured notes directory. |
-| `search_notes` | Search notes by topic substring or exact tag.                           |
 
 <Tabs>
   <TabItem label="Skill discovery">
     Recommended flow:
 
-    1. Call `search_notes` for prior learnings relevant to the task.
-    2. Call `list_skills` to discover available skills.
-    3. Call `get_skills` only for the exact skills needed.
+    1. Call `list_skills` to discover available skills.
+    2. Call `get_skills` only for the exact skills needed.
 
     ```json title="get_skills"
     {
@@ -130,22 +125,8 @@ Every authored artifact must have at least one activation surface: `user-invocab
     `$ARGUMENTS` and named MCP prompt parameters are substituted when the prompt is requested.
 
   </TabItem>
-  <TabItem label="Notes">
-    Notes are markdown files with frontmatter. `save_note` normalizes the topic to a kebab-case filename, creates the notes directory if needed, appends to existing notes, and merges tags case-insensitively.
-
-    ```json title="save_note"
-    {
-      "topic": "Coding Style",
-      "content": "- Prefer integration tests with fakes over mocks.",
-      "tags": ["testing", "style"]
-    }
-    ```
-
-    `search_notes` is case-insensitive. It matches topic substrings and exact tags.
-
-  </TabItem>
 </Tabs>
 
 ## Shell interpolation
 
-Loaded skill files and MCP prompt bodies support Aether prompt shell interpolation such as ``!`git branch --show-current` ``. Commands execute relative to the prompt file directory for `get_skills`, and relative to the workspace root for MCP prompts.
+Loaded skill files and MCP prompt bodies support Aether prompt shell interpolation such as `` !`git branch --show-current` ``. Commands execute relative to the prompt file directory for `get_skills`, and relative to the workspace root for MCP prompts.

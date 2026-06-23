@@ -30,7 +30,7 @@ fn create_test_files(files: &[(&str, &str)]) -> TempDir {
 }
 
 fn build_server(test_dir: &Path) -> SkillsMcp {
-    SkillsMcp::new(&[test_dir.join("skills")], test_dir.join("notes"))
+    SkillsMcp::new(&[test_dir.join("skills")])
 }
 
 fn load_skills_input(requests: &[(&str, Option<&str>)]) -> LoadSkillsInput {
