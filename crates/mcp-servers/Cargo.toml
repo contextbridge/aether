@@ -52,9 +52,7 @@ coding = [
 ]
 skills = [
     "dep:aether-project",
-    "dep:chrono",
     "dep:regex",
-    "dep:serde_yml",
     "dep:tracing",
 ]
 tasks = [
@@ -108,9 +106,6 @@ chrono = { workspace = true, optional = true }
 htmd = { workspace = true, optional = true }
 dom_smoothie = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
-
-# skills feature
-serde_yml = { workspace = true, optional = true }
 
 # tasks feature
 tempfile = { workspace = true, optional = true }

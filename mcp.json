@@ -6,7 +6,7 @@
     },
     "skills": {
       "type": "in-memory",
-      "args": ["--dir", "./.aether/skills", "--notes-dir", "./.aether/notes"]
+      "args": ["--dir", "./.aether/skills"]
     },
     "tasks": {
       "type": "in-memory"

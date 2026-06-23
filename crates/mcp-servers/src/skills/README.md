@@ -2,7 +2,7 @@
 
 Slash commands and reusable skill prompts. Skills teach the agent domain-specific knowledge; commands trigger multi-step workflows.
 
-**Flags:** `--dir <path>` (repeatable prompt directories) and `--notes-dir <path>` (notes storage)
+**Flags:** `--dir <path>` (repeatable prompt directories)
 
 ## Table of Contents
 
@@ -44,8 +44,6 @@ Slash commands and reusable skill prompts. Skills teach the agent domain-specifi
 |------|-------------|
 | `list_skills` | Discover available `agent-invocable` skills with lightweight metadata (`name`, `description`, `tags`). |
 | `get_skills` | Load files for exact skill names returned by `list_skills`. |
-| `save_note` | Append a learning to a topic-based note file. Notes consolidate learnings by topic. |
-| `search_notes` | Search notes by topic name (substring) or tag (exact match). |
 
 Commands are exposed as **MCP Prompts** (via `list_prompts` / `get_prompt`) rather than tools. This is what powers `/slash-commands` in the TUI.
 

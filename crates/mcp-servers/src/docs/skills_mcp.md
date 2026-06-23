@@ -9,14 +9,12 @@ use mcp_servers::SkillsMcp;
 
 let server = SkillsMcp::new(
     &["/my/project/.aether/skills".into(), "/my/project/.claude/rules".into()],
-    "/my/project/.aether/notes".into(),
 );
 
 // From CLI args
 let server = SkillsMcp::from_args(vec![
     "--dir".into(), "/my/project/.aether/skills".into(),
     "--dir".into(), "/my/project/.claude/rules".into(),
-    "--notes-dir".into(), "/my/project/.aether/notes".into(),
 ]).unwrap();
 ```
 
@@ -24,10 +22,8 @@ let server = SkillsMcp::from_args(vec![
 
 - **`list_skills`** -- Discover available `agent-invocable` skills (lightweight metadata only).
 - **`get_skills`** -- Load skill files by exact name returned from `list_skills`.
-- **`save_note`** -- Save a note (creates or updates a file in the notes directory).
-- **`search_notes`** -- Search saved notes by keyword.
 
-Recommended flow: `search_notes` -> `list_skills` -> `get_skills`.
+Recommended flow: `list_skills` -> `get_skills`.
 
 # Prompts
 

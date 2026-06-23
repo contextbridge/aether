@@ -55,7 +55,7 @@ If a server entry has a `command` and no `type`, it is treated as `"type": "stdi
         },
         "skills": {
           "type": "in-memory",
-          "args": ["--dir", ".aether/skills", "--notes-dir", ".aether/notes"]
+          "args": ["--dir", ".aether/skills"]
         },
         "tasks": { "type": "in-memory" },
         "subagents": { "type": "in-memory" },
@@ -160,7 +160,7 @@ If a server entry has a `command` and no `type`, it is treated as `"type": "stdi
 | Server      | Purpose                                                                  | Args                                                                                                                  |
 | ----------- | ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
 | `coding`    | File I/O, bash, grep/find, web fetch/search, and LSP-backed coding tools | `--root-dir <path>`, repeat `--rules-dir <path>`, `--permission-mode always-allow\|auto\|always-ask`, `--disable-lsp` |
-| `skills`    | Skill discovery, slash-command prompts, and notes                        | Required: repeat `--dir <path>` and `--notes-dir <path>`                                                              |
+| `skills`    | Skill discovery, slash-command prompts, and rules                        | Required: repeat `--dir <path>`                                                                                         |
 | `tasks`     | Hierarchical task management                                             | Optional `--dir <base>` for persistent storage                                                                        |
 | `subagents` | Spawn child agents from loaded settings                                  | `--project-root <path>` (alias: `--dir`, defaults to `.`)                                                             |
 | `survey`    | Structured human-in-the-loop questions                                   | No args                                                                                                               |
@@ -173,8 +173,8 @@ If a server entry has a `command` and no `type`, it is treated as `"type": "stdi
     href="/aether/built-in-servers/coding/"
   />
   <LinkCard
-    title="Skills, Rules & Notes"
-    description="Skills, slash commands, and persistent notes"
+    title="Skills, Rules & Commands"
+    description="Skills, slash commands, and read-triggered rules"
     href="/aether/built-in-servers/skills-commands/"
   />
   <LinkCard

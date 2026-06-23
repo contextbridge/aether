@@ -142,8 +142,7 @@ The `mcp.json` file configures MCP tool servers:
       "type": "in-memory",
       "args": [
         "--dir", ".aether/skills",
-        "--dir", ".claude/skills",
-        "--notes-dir", ".aether/notes"
+        "--dir", ".claude/skills"
       ]
     }
   }
@@ -177,7 +176,7 @@ $ARGUMENTS
 - `argumentHint` — optional hint string for the argument
 - `userInvocable` — exposes the prompt as a `/slash-command`
 - `agentInvocable` — exposes the prompt as a skill that other agents can `get_skills` against
-- `tags` — used by the `search_notes` / `list_skills` discovery surface
+- `tags` — used by the `list_skills` discovery surface
 
 **Parameter syntax in the body:**
 - `$ARGUMENTS` — full argument string (e.g. `/plan add user auth` → `add user auth`)
