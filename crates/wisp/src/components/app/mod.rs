@@ -409,19 +409,19 @@ impl App {
 
     fn handle_fallthrough_keybindings(&mut self, key_event: KeyEvent) {
         if self.keybindings.cycle_reasoning.matches(key_event) {
-            if let Some((id, val)) = cycle_reasoning_option(&self.config_options) {
-                if self.prompt_handle.set_config_option(&self.session_id, &id, &val).is_ok() {
-                    self.update_config_option_value(&id, &val);
-                }
+            if let Some((id, val)) = cycle_reasoning_option(&self.config_options)
+                && self.prompt_handle.set_config_option(&self.session_id, &id, &val).is_ok()
+            {
+                self.update_config_option_value(&id, &val);
             }
             return;
         }
 
         if self.keybindings.cycle_mode.matches(key_event) {
-            if let Some((id, val)) = cycle_quick_option(&self.config_options) {
-                if self.prompt_handle.set_config_option(&self.session_id, &id, &val).is_ok() {
-                    self.update_config_option_value(&id, &val);
-                }
+            if let Some((id, val)) = cycle_quick_option(&self.config_options)
+                && self.prompt_handle.set_config_option(&self.session_id, &id, &val).is_ok()
+            {
+                self.update_config_option_value(&id, &val);
             }
             return;
         }
