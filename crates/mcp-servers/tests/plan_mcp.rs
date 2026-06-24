@@ -8,19 +8,13 @@ use mcp_utils::client::{McpClient, McpClientEvent};
 use rmcp::model::{CreateElicitationRequestParams, CreateElicitationResult, ElicitationAction, GetPromptRequestParams};
 use serde_json::json;
 use std::fs;
-use std::sync::Arc;
 use tempfile::TempDir;
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::mpsc;
 use utils::plan_review::PlanReviewElicitationMeta;
 
 fn silent_client() -> McpClient {
     let (event_tx, _event_rx) = mpsc::channel(8);
-    McpClient::new(
-        common::test_client_info(),
-        "plan-test-server".to_string(),
-        event_tx,
-        Arc::new(RwLock::new(Vec::new())),
-    )
+    McpClient::new(common::test_client_info(), "plan-test-server".to_string(), event_tx)
 }
 
 fn write_plan_input(plan_name: &str, content: &str) -> WritePlanInput {
@@ -65,12 +59,7 @@ async fn submit_plan_attaches_plan_review_metadata_and_preserves_schema() -> Tes
     mcp.call("write_plan", write_plan_input("example", plan_content)).await?;
 
     let (event_tx, event_rx) = mpsc::channel(8);
-    let client = McpClient::new(
-        common::test_client_info(),
-        "plan-test-server".to_string(),
-        event_tx,
-        Arc::new(RwLock::new(Vec::new())),
-    );
+    let client = McpClient::new(common::test_client_info(), "plan-test-server".to_string(), event_tx);
 
     let task_handle = respond_to_elicitation_request(
         event_rx,

@@ -1,4 +1,7 @@
-use agent_client_protocol::schema as acp;
+use acp_utils::client::PromptCommand;
+use agent_client_protocol::schema::{
+    self as acp, SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOption,
+};
 use tui::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::common::*;
@@ -44,6 +47,31 @@ async fn test_shift_tab_wraps_mode_option() -> TestResult {
     let mut renderer = RendererTest::new().config_options(&options).build()?;
 
     renderer.on_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_shift_tab_advances_local_mode_before_server_response() -> TestResult {
+    let options = vec![
+        SessionConfigOption::select(
+            "mode",
+            "Mode",
+            "Cheap",
+            vec![
+                SessionConfigSelectOption::new("Cheap", "Cheap"),
+                SessionConfigSelectOption::new("Fast", "Fast"),
+                SessionConfigSelectOption::new("Local", "Local"),
+            ],
+        )
+        .category(SessionConfigOptionCategory::Mode),
+    ];
+
+    let mut renderer = RendererTest::new().config_options(&options).build()?;
+    renderer.on_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)).await?;
+    renderer.on_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)).await?;
+
+    assert_set_config(renderer.commands().try_recv()?, "Fast");
+    assert_set_config(renderer.commands().try_recv()?, "Local");
     Ok(())
 }
 
@@ -129,4 +157,15 @@ async fn test_tab_noop_when_no_reasoning_option() -> TestResult {
     let lines_after = renderer.writer().get_lines();
     assert_eq!(lines_before, lines_after, "Tab should be a no-op when no reasoning option");
     Ok(())
+}
+
+fn assert_set_config(command: PromptCommand, expected_value: &str) {
+    match command {
+        PromptCommand::SetConfigOption { config_id, value, .. } => {
+            assert_eq!(config_id, "mode");
+            assert_eq!(value, expected_value);
+        }
+
+        other => panic!("expected SetConfigOption command, got {other:?}"),
+    }
 }

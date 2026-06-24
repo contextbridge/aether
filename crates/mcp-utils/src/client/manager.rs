@@ -17,7 +17,7 @@ use rmcp::{
     RoleClient,
     model::{
         CallToolRequestParams, ClientCapabilities, ClientInfo, CreateElicitationRequestParams, CreateElicitationResult,
-        ElicitationAction, FormElicitationCapability, Implementation, Root, Tool as RmcpTool, UrlElicitationCapability,
+        ElicitationAction, FormElicitationCapability, Implementation, Tool as RmcpTool, UrlElicitationCapability,
     },
     service::RunningService,
     transport::streamable_http_client::StreamableHttpClientTransportConfig,
@@ -28,7 +28,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{RwLock, mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot};
 
 pub use crate::status::{McpServerAuthCapability, McpServerStatus, McpServerStatusEntry};
 
@@ -92,15 +92,14 @@ pub struct McpManager {
     aether_home: Option<PathBuf>,
     client_info: ClientInfo,
     event_sender: mpsc::Sender<McpClientEvent>,
-    /// Roots shared with all MCP clients
-    roots: Arc<RwLock<Vec<Root>>>,
+    root_dir: PathBuf,
     oauth_handler_factory: Option<OAuthHandlerFactory>,
     oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
 }
 
 impl McpManager {
     pub fn new(event_sender: mpsc::Sender<McpClientEvent>, oauth_handler_factory: Option<OAuthHandlerFactory>) -> Self {
-        let mut capabilities = ClientCapabilities::builder().enable_elicitation().enable_roots().build();
+        let mut capabilities = ClientCapabilities::builder().enable_elicitation().build();
         if let Some(elicitation) = capabilities.elicitation.as_mut() {
             elicitation.form = Some(FormElicitationCapability::default());
             elicitation.url = Some(UrlElicitationCapability::default());
@@ -113,7 +112,7 @@ impl McpManager {
             aether_home: None,
             client_info: ClientInfo::new(capabilities, Implementation::new("aether", "0.1.0")),
             event_sender,
-            roots: Arc::new(RwLock::new(Vec::new())),
+            root_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             oauth_handler_factory,
             oauth_credential_store: None,
         }
@@ -126,6 +125,11 @@ impl McpManager {
 
     pub fn with_oauth_credential_store(mut self, store: Arc<dyn OAuthCredentialStorage>) -> Self {
         self.oauth_credential_store = Some(store);
+        self
+    }
+
+    pub fn with_root_dir(mut self, root_dir: impl Into<PathBuf>) -> Self {
+        self.root_dir = root_dir.into();
         self
     }
 
@@ -314,7 +318,7 @@ impl McpManager {
             .iter()
             .filter_map(|(server_name, record)| {
                 let conn = record.connection()?;
-                conn.client.peer_info().and_then(|info| info.capabilities.prompts.as_ref())?;
+                conn.client.peer_info()?.capabilities.prompts.as_ref()?;
                 let server_name = server_name.clone();
                 let client = conn.client.clone();
                 Some(async move {
@@ -419,21 +423,6 @@ impl McpManager {
         Ok(())
     }
 
-    /// Set the roots advertised to MCP servers.
-    ///
-    /// This updates the roots and sends notifications to all connected servers
-    /// that support the `roots/list_changed` notification.
-    pub async fn set_roots(&mut self, new_roots: Vec<Root>) -> Result<()> {
-        {
-            let mut roots = self.roots.write().await;
-            *roots = new_roots;
-        }
-
-        self.notify_roots_changed().await;
-
-        Ok(())
-    }
-
     async fn emit_server_statuses_changed(&self) {
         self.emit_event(McpClientEvent::ServerStatusesChanged(self.server_statuses())).await;
     }
@@ -497,7 +486,7 @@ impl McpManager {
         Arc::new(ConnectConfig {
             client_info: self.client_info.clone(),
             event_sender: self.event_sender.clone(),
-            roots: Arc::clone(&self.roots),
+            root_dir: self.root_dir.clone(),
             oauth_handler_factory: self.oauth_handler_factory.clone(),
             oauth_credential_store: self.oauth_credential_store.clone(),
         })
@@ -611,16 +600,6 @@ impl McpManager {
                 self.servers.get(server_name).is_some_and(|record| !record.proxied && record.has_tool(tool_name))
             }
             None => false,
-        }
-    }
-
-    async fn notify_roots_changed(&self) {
-        for (server_name, record) in &self.servers {
-            if let Some(conn) = record.connection()
-                && let Err(e) = conn.client.notify_roots_list_changed().await
-            {
-                tracing::debug!("Note: server '{server_name}' did not accept roots notification: {e}");
-            }
         }
     }
 }

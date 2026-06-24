@@ -2,7 +2,7 @@ use aether_auth::OAuthCredentialStorage;
 
 use mcp_utils::client::{
     McpClientEvent, McpConfig, McpConnectionDetails, McpError, McpManager, McpServer, OAuthHandlerFactory, ParseError,
-    ServerFactory, root_from_path,
+    ServerFactory,
 };
 use utils::{SettingsStore, variables::Vars};
 
@@ -17,8 +17,8 @@ use tokio::{
     task::JoinHandle,
 };
 
-pub fn mcp(workspace_root: impl AsRef<Path>) -> McpBuilder {
-    McpBuilder::new(workspace_root)
+pub fn mcp(root_dir: impl AsRef<Path>) -> McpBuilder {
+    McpBuilder::new(root_dir)
 }
 
 /// Handle to the spawned MCP manager task. Consumers receive incremental
@@ -50,7 +50,7 @@ pub struct McpBuilder {
     servers: Vec<McpServer>,
     factories: HashMap<String, ServerFactory>,
     mcp_channel_capacity: usize,
-    roots: Vec<PathBuf>,
+    root_dir: PathBuf,
     oauth_handler_factory: Option<OAuthHandlerFactory>,
     oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
     aether_home: Option<PathBuf>,
@@ -58,8 +58,8 @@ pub struct McpBuilder {
 }
 
 impl McpBuilder {
-    pub fn new(workspace_root: impl AsRef<Path>) -> Self {
-        let mut vars = Vars::new().with("WORKSPACE", workspace_root.as_ref().to_string_lossy().into_owned());
+    pub fn new(root_dir: impl AsRef<Path>) -> Self {
+        let mut vars = Vars::new().with("WORKSPACE", root_dir.as_ref().to_string_lossy().into_owned());
 
         if let Some(store) = SettingsStore::new("AETHER_HOME", ".aether") {
             vars.insert("AETHER_HOME", store.home().to_string_lossy().into_owned());
@@ -69,7 +69,7 @@ impl McpBuilder {
             servers: Vec::new(),
             factories: HashMap::new(),
             mcp_channel_capacity: 1000,
-            roots: Vec::new(),
+            root_dir: root_dir.as_ref().to_path_buf(),
             oauth_handler_factory: None,
             oauth_credential_store: None,
             aether_home: None,
@@ -87,9 +87,12 @@ impl McpBuilder {
         self
     }
 
-    pub fn with_roots(mut self, roots: Vec<PathBuf>) -> Self {
-        self.roots = roots;
-        self
+    pub fn root_dir(&self) -> &Path {
+        &self.root_dir
+    }
+
+    pub fn oauth_credential_store(&self) -> Option<Arc<dyn OAuthCredentialStorage>> {
+        self.oauth_credential_store.clone()
     }
 
     pub fn with_oauth_handler_factory(mut self, factory: OAuthHandlerFactory) -> Self {
@@ -155,10 +158,7 @@ impl McpBuilder {
             mcp_manager = mcp_manager.with_aether_home(aether_home);
         }
 
-        if !self.roots.is_empty() {
-            let roots = self.roots.into_iter().map(|path| root_from_path(&path, None)).collect();
-            mcp_manager.set_roots(roots).await?;
-        }
+        mcp_manager = mcp_manager.with_root_dir(self.root_dir);
 
         mcp_manager.bootstrap_proxy_setup(&self.servers).await?;
         let pending = mcp_manager.register_pending(self.servers).await?;
@@ -305,6 +305,12 @@ mod tests {
             args_for(&builder, "skills"),
             Some(vec!["--dir".to_string(), home.path().join("skills").to_string_lossy().into_owned()])
         );
+    }
+
+    #[test]
+    fn new_sets_root_directory_from_workspace_root() {
+        let builder = McpBuilder::new("/workspace");
+        assert_eq!(builder.root_dir, PathBuf::from("/workspace"));
     }
 
     fn command_for<'a>(builder: &'a McpBuilder, name: &str) -> Option<&'a str> {

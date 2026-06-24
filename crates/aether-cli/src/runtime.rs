@@ -176,19 +176,20 @@ impl RuntimeBuilder {
     }
 
     async fn spawn_mcp(self) -> Result<(AgentSpec, McpSpawnResult), CliError> {
-        let mut builder =
-            mcp(&self.cwd).with_builtin_servers(self.cwd.clone(), &self.cwd, self.oauth_credential_store.clone());
+        let mut builder = mcp(&self.cwd);
 
-        if !self.extra_mcp_servers.is_empty() {
-            builder = builder.with_servers(self.extra_mcp_servers);
+        if let Some(store) = self.oauth_credential_store.clone() {
+            builder = builder.with_oauth_credential_store(store);
         }
 
         if let Some(apply_oauth) = self.oauth_applicator {
             builder = apply_oauth(builder);
         }
 
-        if let Some(store) = self.oauth_credential_store {
-            builder = builder.with_oauth_credential_store(store);
+        builder = builder.with_builtin_servers();
+
+        if !self.extra_mcp_servers.is_empty() {
+            builder = builder.with_servers(self.extra_mcp_servers);
         }
 
         let mcp_config_sources: Vec<McpConfigSource> = if self.mcp_config_sources.is_empty() {

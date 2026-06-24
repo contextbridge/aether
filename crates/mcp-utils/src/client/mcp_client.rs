@@ -4,34 +4,25 @@ use rmcp::{
     handler::client::progress::ProgressDispatcher,
     model::{
         ClientInfo, CreateElicitationRequestParams, CreateElicitationResult, ElicitationAction,
-        ElicitationResponseNotificationParam, ErrorData, ListRootsResult, ProgressNotificationParam,
+        ElicitationResponseNotificationParam, ErrorData, ProgressNotificationParam,
     },
     service::{NotificationContext, RequestContext},
 };
 use std::result::Result;
-use std::sync::Arc;
-use tokio::sync::{RwLock, mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot};
 
 use crate::client::{ElicitationRequest, McpClientEvent};
-use rmcp::model::Root;
 
 pub struct McpClient {
     client_info: ClientInfo,
     server_name: String,
     pub progress_dispatcher: ProgressDispatcher,
     event_sender: mpsc::Sender<McpClientEvent>,
-    /// Roots advertised to MCP servers
-    roots: Arc<RwLock<Vec<Root>>>,
 }
 
 impl McpClient {
-    pub fn new(
-        client_info: ClientInfo,
-        server_name: String,
-        event_sender: mpsc::Sender<McpClientEvent>,
-        roots: Arc<RwLock<Vec<Root>>>,
-    ) -> Self {
-        Self { client_info, server_name, progress_dispatcher: ProgressDispatcher::new(), event_sender, roots }
+    pub fn new(client_info: ClientInfo, server_name: String, event_sender: mpsc::Sender<McpClientEvent>) -> Self {
+        Self { client_info, server_name, progress_dispatcher: ProgressDispatcher::new(), event_sender }
     }
 
     pub fn server_name(&self) -> &str {
@@ -96,12 +87,6 @@ impl ClientHandler for McpClient {
     ) {
         self.forward_url_elicitation_complete(params.elicitation_id).await;
     }
-
-    async fn list_roots(&self, _context: RequestContext<RoleClient>) -> Result<ListRootsResult, ErrorData> {
-        let roots = self.roots.read().await;
-
-        Ok(ListRootsResult::new(roots.clone()))
-    }
 }
 
 #[cfg(test)]
@@ -113,7 +98,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     fn test_client_info() -> ClientInfo {
-        let mut capabilities = ClientCapabilities::builder().enable_elicitation().enable_roots().build();
+        let mut capabilities = ClientCapabilities::builder().enable_elicitation().build();
         if let Some(elicitation) = capabilities.elicitation.as_mut() {
             elicitation.form = Some(FormElicitationCapability::default());
             elicitation.url = Some(UrlElicitationCapability::default());
@@ -122,7 +107,7 @@ mod tests {
     }
 
     fn make_client(event_sender: mpsc::Sender<McpClientEvent>) -> McpClient {
-        McpClient::new(test_client_info(), "test-server".to_string(), event_sender, Arc::new(RwLock::new(Vec::new())))
+        McpClient::new(test_client_info(), "test-server".to_string(), event_sender)
     }
 
     fn unwrap_elicitation(event: McpClientEvent) -> ElicitationRequest {

@@ -24,8 +24,10 @@ use utils::substitution::substitute_parameters;
 use super::tools::{
     ListSkillsInput, ListSkillsOutput, LoadSkillsInput, LoadSkillsOutput, SkillFile, SkillListItem, SkillRequest,
 };
-use crate::workspace_paths::resolve_path;
-use crate::{error::ServerInitError, workspace_paths::primary_root};
+use crate::{
+    error::ServerInitError,
+    workspace_paths::{WorkspacePaths, resolve_path},
+};
 use aether_project::{PromptCatalog, PromptFile, SKILL_FILENAME};
 use mcp_utils::display_meta::ToolDisplayMeta;
 
@@ -57,7 +59,7 @@ impl SkillsMcpArgs {
 pub struct SkillsMcp {
     catalog: Arc<RwLock<PromptCatalog>>,
     tool_router: ToolRouter<Self>,
-    roots: Arc<RwLock<Vec<PathBuf>>>,
+    root_dir: PathBuf,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -91,7 +93,7 @@ impl SkillsMcp {
         Self {
             catalog: Arc::new(RwLock::new(catalog)),
             tool_router: Self::tool_router(),
-            roots: Arc::new(RwLock::new(Vec::new())),
+            root_dir: crate::workspace_paths::current_dir(),
         }
     }
 
@@ -100,14 +102,14 @@ impl SkillsMcp {
         Ok(Self::new(&parsed_args.dirs))
     }
 
-    pub fn from_args_with_workspace_root(args: Vec<String>, workspace_root: &Path) -> Result<Self, ServerInitError> {
+    pub fn from_args_with_base_dir(args: Vec<String>, base_dir: &Path) -> Result<Self, ServerInitError> {
         let parsed_args = SkillsMcpArgs::from_args(args)?;
-        let dirs = parsed_args.dirs.into_iter().map(|path| resolve_path(workspace_root, path)).collect::<Vec<_>>();
-        Ok(Self::new(&dirs).with_roots(vec![workspace_root.to_path_buf()]))
+        let dirs = parsed_args.dirs.into_iter().map(|path| resolve_path(base_dir, path)).collect::<Vec<_>>();
+        Ok(Self::new(&dirs).with_root_dir(base_dir.to_path_buf()))
     }
 
-    pub fn with_roots(mut self, roots: Vec<PathBuf>) -> Self {
-        self.roots = Arc::new(RwLock::new(roots));
+    pub fn with_root_dir(mut self, root_dir: PathBuf) -> Self {
+        self.root_dir = root_dir;
         self
     }
 
@@ -304,8 +306,7 @@ impl ServerHandler for SkillsMcp {
 
         let content = substitute_parameters(&body, &arguments);
         let expander = ShellExpander::new();
-        let roots = self.roots.read().await;
-        let cwd = primary_root(&roots);
+        let cwd = WorkspacePaths::new(self.root_dir.clone()).root().to_path_buf();
         let content = expander.expand(&content, &cwd).await;
         let messages = vec![PromptMessage::new_text(PromptMessageRole::User, content)];
 
@@ -418,16 +419,15 @@ mod tests {
     }
 
     #[test]
-    fn from_args_with_workspace_root_resolves_relative_dirs() {
+    fn from_args_with_base_dir_resolves_relative_dirs() {
         let workspace = PathBuf::from("/workspace");
-        let server = SkillsMcp::from_args_with_workspace_root(
+        let server = SkillsMcp::from_args_with_base_dir(
             vec!["--dir".into(), ".aether/skills".into(), "--notes-dir".into(), ".aether/notes".into()],
             &workspace,
         )
         .unwrap();
 
-        let roots = server.roots.blocking_read();
-        assert_eq!(*roots, vec![workspace]);
+        assert_eq!(server.root_dir, workspace);
     }
 
     #[tokio::test]

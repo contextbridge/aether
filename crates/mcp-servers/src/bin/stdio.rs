@@ -1,5 +1,6 @@
 use clap::Parser;
 use mcp_servers::plan::default_plans_dir;
+use mcp_servers::workspace_paths::{current_dir, resolve_path};
 use mcp_servers::{CodingMcp, CodingMcpArgs, PlanMcp, SkillsMcp, SubAgentsMcp, SurveyMcp, TasksMcp};
 use mcp_utils::ServiceExt;
 use rmcp::ServerHandler;
@@ -43,12 +44,13 @@ async fn main() -> Result<(), StdioError> {
         "coding" => {
             let CodingMcpArgs { root_dir, rules_dirs, permission_mode, disable_lsp } =
                 CodingMcpArgs::from_args(cli.args).map_err(StdioError::ServerArgs)?;
-            let server = CodingMcp::new().with_rules_dirs(rules_dirs).with_permission_mode(permission_mode);
-            let server = match root_dir {
-                Some(root_dir) if !disable_lsp => server.with_root_dir(root_dir.clone()).with_lsp(root_dir),
-                Some(root_dir) => server.with_root_dir(root_dir),
-                None => server,
-            };
+            let root_dir = root_dir.unwrap_or_else(current_dir);
+            let rules_dirs = rules_dirs.into_iter().map(|path| resolve_path(&root_dir, path)).collect();
+            let server = CodingMcp::new()
+                .with_root_dir(root_dir.clone())
+                .with_rules_dirs(rules_dirs)
+                .with_permission_mode(permission_mode);
+            let server = if disable_lsp { server } else { server.with_lsp(root_dir) };
             serve_stdio(server).await
         }
         "skills" => {
