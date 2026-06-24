@@ -5,8 +5,11 @@ mod screen_router;
 mod view;
 
 use crate::session_loading_buffer::SessionLoadingBuffer;
+use crate::settings::cycle_quick_option;
+use crate::settings::cycle_reasoning_option;
 use crate::settings::resolve_content_padding;
 use crate::settings::resolve_status_line_settings;
+use agent_client_protocol::schema::SessionConfigKind;
 use agent_client_protocol::schema::SessionUpdate;
 pub use git_diff_mode::{GitDiffLoadState, GitDiffMode, GitDiffViewMessage};
 pub use plan_review_mode::{PlanReviewAction, PlanReviewInput, PlanReviewMode};
@@ -404,17 +407,21 @@ impl App {
         }
     }
 
-    fn handle_fallthrough_keybindings(&self, key_event: KeyEvent) {
+    fn handle_fallthrough_keybindings(&mut self, key_event: KeyEvent) {
         if self.keybindings.cycle_reasoning.matches(key_event) {
-            if let Some((id, val)) = settings::cycle_reasoning_option(&self.config_options) {
-                let _ = self.prompt_handle.set_config_option(&self.session_id, &id, &val);
+            if let Some((id, val)) = cycle_reasoning_option(&self.config_options) {
+                if self.prompt_handle.set_config_option(&self.session_id, &id, &val).is_ok() {
+                    self.update_config_option_value(&id, &val);
+                }
             }
             return;
         }
 
         if self.keybindings.cycle_mode.matches(key_event) {
-            if let Some((id, val)) = settings::cycle_quick_option(&self.config_options) {
-                let _ = self.prompt_handle.set_config_option(&self.session_id, &id, &val);
+            if let Some((id, val)) = cycle_quick_option(&self.config_options) {
+                if self.prompt_handle.set_config_option(&self.session_id, &id, &val).is_ok() {
+                    self.update_config_option_value(&id, &val);
+                }
             }
             return;
         }
@@ -468,6 +475,18 @@ impl App {
         if let Some(ref mut overlay) = self.settings_overlay {
             overlay.update_config_options(config_options);
         }
+    }
+
+    fn update_config_option_value(&mut self, config_id: &str, value: &str) {
+        let Some(option) = self.config_options.iter_mut().find(|option| option.id.0.as_ref() == config_id) else {
+            return;
+        };
+
+        let SessionConfigKind::Select(select) = &mut option.kind else {
+            return;
+        };
+
+        select.current_value = value.to_string().into();
     }
 
     fn update_auth_methods(&mut self, auth_methods: Vec<acp::AuthMethod>) {
