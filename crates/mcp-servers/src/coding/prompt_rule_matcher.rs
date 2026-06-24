@@ -1,6 +1,6 @@
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
-use std::sync::RwLock;
+use std::path::Path;
+use std::sync::Mutex;
 
 use aether_project::{PromptCatalog, PromptFile};
 
@@ -8,18 +8,18 @@ use aether_project::{PromptCatalog, PromptFile};
 #[derive(Debug)]
 pub struct PromptRuleMatcher {
     catalog: PromptCatalog,
-    activated: RwLock<HashSet<String>>,
+    activated: Mutex<HashSet<String>>,
 }
 
 impl PromptRuleMatcher {
     pub fn new(catalog: PromptCatalog) -> Self {
-        Self { catalog, activated: RwLock::new(HashSet::new()) }
+        Self { catalog, activated: Mutex::new(HashSet::new()) }
     }
 
     /// Returns newly-matched rules for `file_path` and marks them as activated.
     /// Subsequent calls for the same rules return an empty `Vec`.
-    pub fn get_matched_rules(&self, roots: &[PathBuf], file_path: &str) -> Vec<PromptFile> {
-        let relative = make_relative(roots, file_path);
+    pub fn get_matched_rules(&self, root_dir: &Path, file_path: &str) -> Vec<PromptFile> {
+        let relative = make_relative(root_dir, file_path);
         let relative_path = relative.as_deref().unwrap_or(file_path);
         let matches = self.catalog.matching_rules(relative_path);
 
@@ -28,14 +28,12 @@ impl PromptRuleMatcher {
         }
 
         let mut result = Vec::new();
-        let mut activated = self.activated.write().expect("lock poisoned");
+        let mut activated = self.activated.lock().expect("lock poisoned");
         for spec in matches {
-            if activated.contains(&spec.name) {
-                continue;
+            if activated.insert(spec.name.clone()) {
+                tracing::info!("Activating read rule '{}' triggered by read of '{}'", spec.name, file_path);
+                result.push(spec.clone());
             }
-            tracing::info!("Activating read rule '{}' triggered by read of '{}'", spec.name, file_path);
-            activated.insert(spec.name.clone());
-            result.push(spec.clone());
         }
 
         result
@@ -43,19 +41,14 @@ impl PromptRuleMatcher {
 
     /// Clear all activated rules (e.g. on context clear).
     pub fn clear(&self) {
-        self.activated.write().expect("lock poisoned").clear();
+        self.activated.lock().expect("lock poisoned").clear();
     }
 }
 
-/// Make an absolute file path relative to one of the workspace roots.
-fn make_relative(roots: &[PathBuf], file_path: &str) -> Option<String> {
+/// Make an absolute file path relative to the root directory.
+fn make_relative(root_dir: &Path, file_path: &str) -> Option<String> {
     let path = Path::new(file_path);
-    for root in roots {
-        if let Ok(rel) = path.strip_prefix(root) {
-            return Some(rel.to_string_lossy().to_string());
-        }
-    }
-    None
+    path.strip_prefix(root_dir).ok().map(|rel| rel.to_string_lossy().to_string())
 }
 
 impl Default for PromptRuleMatcher {
@@ -87,14 +80,13 @@ mod tests {
 
         let catalog = PromptCatalog::from_dir(skills_dir).unwrap();
         let state = PromptRuleMatcher::new(catalog);
-        let roots = vec![PathBuf::from("/project")];
+        let root_dir = Path::new("/project");
 
-        let matched = state.get_matched_rules(&roots, "/project/src/main.rs");
+        let matched = state.get_matched_rules(root_dir, "/project/src/main.rs");
         assert_eq!(matched.len(), 1);
         assert_eq!(matched[0].body, "Rust best practices.");
 
-        // Second read of a matching file should NOT return again
-        let matched2 = state.get_matched_rules(&roots, "/project/src/lib.rs");
+        let matched2 = state.get_matched_rules(root_dir, "/project/src/lib.rs");
         assert!(matched2.is_empty());
     }
 
@@ -116,9 +108,9 @@ mod tests {
 
         let catalog = PromptCatalog::from_dir(skills_dir).unwrap();
         let state = PromptRuleMatcher::new(catalog);
-        let roots = vec![PathBuf::from("/project")];
+        let root_dir = Path::new("/project");
 
-        let matched = state.get_matched_rules(&roots, "/project/README.md");
+        let matched = state.get_matched_rules(root_dir, "/project/README.md");
         assert!(matched.is_empty());
     }
 
@@ -140,14 +132,14 @@ mod tests {
 
         let catalog = PromptCatalog::from_dir(skills_dir).unwrap();
         let state = PromptRuleMatcher::new(catalog);
-        let roots = vec![PathBuf::from("/project")];
+        let root_dir = Path::new("/project");
 
-        let matched = state.get_matched_rules(&roots, "/project/src/main.rs");
+        let matched = state.get_matched_rules(root_dir, "/project/src/main.rs");
         assert_eq!(matched.len(), 1);
 
         state.clear();
 
-        let matched2 = state.get_matched_rules(&roots, "/project/src/main.rs");
+        let matched2 = state.get_matched_rules(root_dir, "/project/src/main.rs");
         assert_eq!(matched2.len(), 1);
     }
 
@@ -164,9 +156,9 @@ mod tests {
         fs::write(
             rust_dir.join("SKILL.md"),
             "---\ndescription: Rust conventions\ntriggers:\n  read:\n    - \"**/*.rs\"\n---\nFollow Rust best practices.\n",
-        ).unwrap();
+        )
+        .unwrap();
 
-        // A skill without triggers should not produce a rule
         let commit_dir = skills_dir.join("commit");
         fs::create_dir_all(&commit_dir).unwrap();
         fs::write(
@@ -177,9 +169,8 @@ mod tests {
 
         let catalog = PromptCatalog::from_dir(skills_dir).unwrap();
         let state = PromptRuleMatcher::new(catalog);
-
-        let roots = vec![PathBuf::from("/project")];
-        let matched = state.get_matched_rules(&roots, "/project/src/main.rs");
+        let root_dir = Path::new("/project");
+        let matched = state.get_matched_rules(root_dir, "/project/src/main.rs");
         assert_eq!(matched.len(), 1);
         assert!(matched[0].body.contains("Follow Rust best practices"));
     }

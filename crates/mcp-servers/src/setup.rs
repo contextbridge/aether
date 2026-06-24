@@ -1,42 +1,49 @@
 use crate::plan::DEFAULT_PLANS_DIR;
-use crate::workspace_paths;
+use crate::workspace_paths::resolve_path;
 use crate::{CodingMcp, CodingMcpArgs, DefaultCodingTools, PlanMcp, SkillsMcp, SubAgentsMcp, SurveyMcp, TasksMcp};
 use aether_auth::OAuthCredentialStorage;
 use aether_core::mcp::McpBuilder;
 use futures::FutureExt;
 use mcp_utils::ServiceExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{debug, warn};
 
 #[doc = include_str!("docs/mcp_builder_ext.md")]
 pub trait McpBuilderExt {
-    /// Registers all built-in in-memory MCP server factories and workspace roots.
-    fn with_builtin_servers(
-        self,
-        cwd: PathBuf,
-        roots_path: &Path,
-        oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
-    ) -> Self;
+    /// Registers all built-in in-memory MCP server factories, resolving their
+    /// paths against the builder's configured root directory.
+    fn with_builtin_servers(self) -> Self;
+}
+
+#[derive(Clone)]
+struct BuiltinServerContext {
+    root_dir: PathBuf,
+    oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
+}
+
+impl BuiltinServerContext {
+    fn resolve(&self, path: PathBuf) -> PathBuf {
+        resolve_path(&self.root_dir, path)
+    }
 }
 
 impl McpBuilderExt for McpBuilder {
-    fn with_builtin_servers(
-        self,
-        _cwd: PathBuf,
-        roots_path: &Path,
-        oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
-    ) -> Self {
-        let workspace_root = roots_path.to_path_buf();
-        let coding_cwd = workspace_root.clone();
-        let plan_cwd = workspace_root.clone();
-        let subagents_cwd = workspace_root.clone();
-        let skills_cwd = workspace_root.clone();
-        let tasks_cwd = workspace_root.clone();
+    fn with_builtin_servers(self) -> Self {
+        let context = BuiltinServerContext {
+            root_dir: self.root_dir().to_path_buf(),
+            oauth_credential_store: self.oauth_credential_store(),
+        };
+        let coding_context = context.clone();
+        let skills_context = context.clone();
+        let subagents_context = context.clone();
+        let plan_context = context.clone();
+        let tasks_context = context;
+
         self.register_in_memory_server(
             "coding",
             Box::new(move |args, _input| {
-                let project_path = coding_cwd.clone();
+                let context = coding_context.clone();
                 async move {
                     let parsed = match CodingMcpArgs::from_args(args) {
                         Ok(args) => args,
@@ -45,9 +52,9 @@ impl McpBuilderExt for McpBuilder {
                             CodingMcpArgs::default()
                         }
                     };
-                    let CodingMcpArgs { permission_mode, mut rules_dirs, disable_lsp, .. } = parsed;
-                    rules_dirs =
-                        rules_dirs.into_iter().map(|path| workspace_paths::resolve_path(&project_path, path)).collect();
+                    let CodingMcpArgs { permission_mode, mut rules_dirs, disable_lsp, root_dir: arg_root_dir } = parsed;
+                    let root_dir = arg_root_dir.map_or_else(|| context.root_dir.clone(), |path| context.resolve(path));
+                    rules_dirs = rules_dirs.into_iter().map(|path| resolve_path(&root_dir, path)).collect();
                     debug!(
                         "CodingMcp created, disable_lsp={}, permission_mode={:?}, rules_dirs={}",
                         disable_lsp,
@@ -56,9 +63,9 @@ impl McpBuilderExt for McpBuilder {
                     );
                     let server = CodingMcp::with_tools(DefaultCodingTools::new())
                         .with_rules_dirs(rules_dirs)
-                        .with_root_dir(project_path.clone())
+                        .with_root_dir(root_dir.clone())
                         .with_permission_mode(permission_mode);
-                    let server = if disable_lsp { server } else { server.with_lsp(project_path) };
+                    let server = if disable_lsp { server } else { server.with_lsp(root_dir) };
                     server.into_dyn()
                 }
                 .boxed()
@@ -67,9 +74,9 @@ impl McpBuilderExt for McpBuilder {
         .register_in_memory_server(
             "skills",
             Box::new(move |args, _input| {
-                let cwd = skills_cwd.clone();
+                let context = skills_context.clone();
                 async move {
-                    SkillsMcp::from_args_with_workspace_root(args, &cwd)
+                    SkillsMcp::from_args_with_base_dir(args, &context.root_dir)
                         .expect("Failed to parse SkillsMcp args")
                         .into_dyn()
                 }
@@ -79,12 +86,11 @@ impl McpBuilderExt for McpBuilder {
         .register_in_memory_server(
             "subagents",
             Box::new(move |args, _input| {
-                let store = oauth_credential_store.clone();
-                let cwd = subagents_cwd.clone();
+                let context = subagents_context.clone();
                 async move {
-                    let mut mcp = SubAgentsMcp::from_args_with_default_project_root(args, &cwd)
+                    let mut mcp = SubAgentsMcp::from_args_with_default_project_root(args, &context.root_dir)
                         .expect("Failed to parse SubAgentsMcp args");
-                    if let Some(store) = store {
+                    if let Some(store) = context.oauth_credential_store {
                         mcp = mcp.with_oauth_credential_store(store);
                     }
                     mcp.into_dyn()
@@ -99,10 +105,10 @@ impl McpBuilderExt for McpBuilder {
         .register_in_memory_server(
             "plan",
             Box::new(move |args, _input| {
-                let default_plans_dir = plan_cwd.join(DEFAULT_PLANS_DIR);
-                let workspace_root = plan_cwd.clone();
+                let default_plans_dir = plan_context.root_dir.join(DEFAULT_PLANS_DIR);
+                let root_dir = plan_context.root_dir.clone();
                 async move {
-                    PlanMcp::from_args_with_workspace_root(args, default_plans_dir, &workspace_root)
+                    PlanMcp::from_args_with_base_dir(args, default_plans_dir, &root_dir)
                         .expect("Failed to parse PlanMcp args")
                         .into_dyn()
                 }
@@ -112,9 +118,9 @@ impl McpBuilderExt for McpBuilder {
         .register_in_memory_server(
             "tasks",
             Box::new(move |args, _input| {
-                let cwd = tasks_cwd.clone();
+                let context = tasks_context.clone();
                 async move {
-                    TasksMcp::from_args_with_workspace_root(args, &cwd)
+                    TasksMcp::from_args_with_base_dir(args, &context.root_dir)
                         .unwrap_or_else(|e| {
                             tracing::warn!("Failed to parse TasksMcp args: {e}, using defaults");
                             TasksMcp::new()
@@ -124,6 +130,5 @@ impl McpBuilderExt for McpBuilder {
                 .boxed()
             }),
         )
-        .with_roots(vec![roots_path.to_path_buf()])
     }
 }

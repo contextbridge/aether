@@ -1,6 +1,5 @@
 use aether_project::PromptCatalog;
 use clap::Parser;
-use mcp_utils::client::{InMemoryServerConfig, McpConfig, McpServerConfig};
 use rmcp::{
     RoleServer, ServerHandler,
     handler::server::{
@@ -18,7 +17,6 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::{
     collections::{HashMap, HashSet},
-    path::Path,
     sync::Arc,
 };
 use tokio::{
@@ -35,6 +33,9 @@ pub mod tools_trait;
 pub use default_tools::DefaultCodingTools;
 pub use tools_trait::CodingTools;
 
+use crate::lsp::tools::check_errors::{
+    LspDiagnosticsInput, LspDiagnosticsOutput, LspDiagnosticsRequest, execute_lsp_diagnostics,
+};
 use crate::lsp::tools::symbol_lookup::{LspSymbolInput, LspSymbolOutput, execute_lsp_symbol};
 use crate::lsp::tools::workspace_search::{
     LspWorkspaceSearchInput, LspWorkspaceSearchOutput, execute_lsp_workspace_search,
@@ -45,14 +46,8 @@ use crate::{
     lsp::tools::rename::{LspRenameInput, LspRenameOutput, execute_lsp_rename},
 };
 use crate::{
-    lsp::tools::check_errors::{
-        LspDiagnosticsInput, LspDiagnosticsOutput, LspDiagnosticsRequest, execute_lsp_diagnostics,
-    },
-    workspace_paths::primary_root,
-};
-use crate::{
     lsp::tools::document_info::{LspDocumentInput, LspDocumentOutput, execute_lsp_document},
-    workspace_paths::{resolve_dir, resolve_file},
+    workspace_paths::WorkspacePaths,
 };
 
 use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename, truncate};
@@ -97,7 +92,7 @@ pub enum PermissionMode {
 /// CLI arguments for `CodingMcp` server
 #[derive(Debug, Clone, Default, Parser)]
 pub struct CodingMcpArgs {
-    /// Root directory for workspace (used for LSP initialization)
+    /// Root directory for path resolution and LSP initialization.
     #[arg(long = "root-dir")]
     pub root_dir: Option<PathBuf>,
 
@@ -122,27 +117,6 @@ impl CodingMcpArgs {
 
         Self::try_parse_from(full_args).map_err(ServerInitError::InvalidArgs)
     }
-
-    /// Parse the root directory from an mcp.json config file.
-    ///
-    /// Looks for the "coding" server entry and parses its args for `--root-dir`.
-    /// Relative paths (like ".") are resolved against the mcp.json's directory.
-    pub fn parse_root_dir_from_config(mcp_config_path: &Path) -> Option<PathBuf> {
-        let raw_config = McpConfig::from_json_file(mcp_config_path).ok()?;
-        let McpServerConfig::InMemory(InMemoryServerConfig { args, .. }) = raw_config.servers.get("coding")? else {
-            return None;
-        };
-
-        let parsed_args = Self::from_args(args.clone()).ok()?;
-        let root_dir = parsed_args.root_dir?;
-
-        if root_dir.is_relative() {
-            let config_dir = mcp_config_path.parent()?;
-            Some(config_dir.join(&root_dir).canonicalize().ok()?)
-        } else {
-            Some(root_dir)
-        }
-    }
 }
 
 #[doc = include_str!("../docs/coding_mcp.md")]
@@ -157,8 +131,8 @@ pub struct CodingMcp<T: CodingTools = DefaultCodingTools> {
     lsp: Option<Arc<LspRegistry>>,
     web_fetcher: WebFetcher,
     web_searcher: Option<WebSearcher<BraveSearchClient>>,
-    /// Workspace roots (from MCP protocol or CLI args)
-    roots: RwLock<Vec<PathBuf>>,
+    /// Root directory used for path resolution and tool instructions.
+    root_dir: PathBuf,
     /// Read rules discovered from skill files (activated on file reads)
     read_rule_state: prompt_rule_matcher::PromptRuleMatcher,
     /// Configured prompt directories used to build read rules.
@@ -258,7 +232,7 @@ impl<T: CodingTools + 'static> CodingMcp<T> {
             lsp: None,
             web_fetcher: WebFetcher::new(),
             web_searcher: WebSearcher::try_new().ok(),
-            roots: RwLock::new(Vec::new()),
+            root_dir: crate::workspace_paths::current_dir(),
             read_rule_state: prompt_rule_matcher::PromptRuleMatcher::default(),
             configured_rules_dirs: Vec::new(),
             permission_mode: PermissionMode::AlwaysAllow,
@@ -274,11 +248,9 @@ impl<T: CodingTools + 'static> CodingMcp<T> {
         self
     }
 
-    /// Set workspace roots.
-    pub fn with_roots(mut self, roots: Vec<PathBuf>) -> Self {
-        let catalog = build_rule_catalog(&self.configured_rules_dirs);
-        self.read_rule_state = prompt_rule_matcher::PromptRuleMatcher::new(catalog);
-        self.roots = RwLock::new(roots);
+    /// Set the root directory.
+    pub fn with_root_dir(mut self, root_dir: PathBuf) -> Self {
+        self.root_dir = root_dir;
         self
     }
 
@@ -290,25 +262,14 @@ impl<T: CodingTools + 'static> CodingMcp<T> {
         self
     }
 
-    /// Set the workspace root directory from a single path.
-    pub fn with_root_dir(self, root_dir: PathBuf) -> Self {
-        self.with_roots(vec![root_dir])
-    }
-
     /// Set the permission mode controlling user approval for tool calls.
     pub fn with_permission_mode(mut self, mode: PermissionMode) -> Self {
         self.permission_mode = mode;
         self
     }
 
-    /// Get the current workspace root.
-    fn get_workspace_root(&self) -> Option<PathBuf> {
-        self.roots.try_read().ok().and_then(|roots| roots.first().cloned())
-    }
-
-    async fn primary_workspace_root(&self) -> PathBuf {
-        let roots = self.roots.read().await;
-        primary_root(&roots)
+    fn workspace_paths(&self) -> WorkspacePaths {
+        WorkspacePaths::new(self.root_dir.clone())
     }
 
     fn build_instructions(&self) -> String {
@@ -338,17 +299,14 @@ File I/O, search, shell, and optional LSP code intelligence tools for coding wor
             );
         }
 
-        match self.get_workspace_root() {
-            Some(root) => format!(
-                r"{}
+        format!(
+            r"{}
 
 When using tools that take file paths, always use absolute paths from:
 <workspace-root>{}</workspace-root>",
-                base,
-                root.display()
-            ),
-            None => base,
-        }
+            base,
+            self.root_dir.display()
+        )
     }
 
     /// Prompt the user for approval via elicitation. Always sends the prompt —
@@ -429,14 +387,13 @@ When using tools that take file paths, always use absolute paths from:
         }
     }
 
-    /// Resolves a required file-path argument against the primary workspace root,
+    /// Resolves a required file-path argument against the root directory,
     /// returning the normalized absolute path as a string.
-    async fn resolve_file_arg(&self, raw: &str) -> Result<String, String> {
-        let root = self.primary_workspace_root().await;
-        Ok(resolve_file(&root, raw).map_err(|e| e.to_string())?.to_string_lossy().to_string())
+    fn resolve_file_arg(&self, raw: &str) -> Result<String, String> {
+        Ok(self.workspace_paths().resolve_file(raw).map_err(|e| e.to_string())?.to_string_lossy().to_string())
     }
 
-    /// Reads `args.file_path` (already resolved against the workspace root),
+    /// Reads `args.file_path` (already resolved against the root directory),
     /// records it in the read set, and appends any matching read-rule reminders.
     async fn read_and_track(&self, args: ReadFileArgs) -> Result<Json<ReadFileResult>, String> {
         let file_path = args.file_path.clone();
@@ -444,8 +401,7 @@ When using tools that take file paths, always use absolute paths from:
         self.files_read.write().await.insert(file_path.clone());
 
         let total_lines = result.total_lines;
-        let roots = self.roots.read().await;
-        let matched = self.read_rule_state.get_matched_rules(&roots, &file_path);
+        let matched = self.read_rule_state.get_matched_rules(&self.root_dir, &file_path);
         for rule in &matched {
             write!(result.content, "\n\n<system-reminder>\n{}\n</system-reminder>", rule.body).unwrap();
         }
@@ -491,8 +447,7 @@ When using tools that take file paths, always use absolute paths from:
         context: RequestContext<RoleServer>,
     ) -> Result<Json<GrepOutput>, String> {
         let Parameters(mut args) = request;
-        let root = self.primary_workspace_root().await;
-        let normalized_path = resolve_dir(&root, args.path.as_deref());
+        let normalized_path = self.workspace_paths().resolve_dir(args.path.as_deref());
         args.path = Some(normalized_path.to_string_lossy().to_string());
         notify_preview(&context, ToolDisplayMeta::new("Grep", format!("'{}'", args.pattern))).await;
         self.tools.grep(args).await.into_mcp()
@@ -506,8 +461,7 @@ When using tools that take file paths, always use absolute paths from:
         context: RequestContext<RoleServer>,
     ) -> Result<Json<AstGrepOutput>, String> {
         let Parameters(mut args) = request;
-        let root = self.primary_workspace_root().await;
-        let normalized_path = resolve_dir(&root, args.path.as_deref());
+        let normalized_path = self.workspace_paths().resolve_dir(args.path.as_deref());
         args.path = Some(normalized_path.to_string_lossy().to_string());
         notify_preview(&context, ToolDisplayMeta::new("AST grep", format!("'{}'", args.pattern))).await;
         self.tools.ast_grep(args).await.into_mcp()
@@ -521,8 +475,7 @@ When using tools that take file paths, always use absolute paths from:
         context: RequestContext<RoleServer>,
     ) -> Result<Json<FindOutput>, String> {
         let Parameters(mut args) = request;
-        let root = self.primary_workspace_root().await;
-        let normalized_path = resolve_dir(&root, args.path.as_deref());
+        let normalized_path = self.workspace_paths().resolve_dir(args.path.as_deref());
         args.path = Some(normalized_path.to_string_lossy().to_string());
         notify_preview(&context, ToolDisplayMeta::new("Find", format!("'{}'", args.pattern))).await;
         self.tools.find(args).await.into_mcp()
@@ -536,7 +489,7 @@ When using tools that take file paths, always use absolute paths from:
         context: RequestContext<RoleServer>,
     ) -> Result<Json<ReadFileResult>, String> {
         let Parameters(mut args) = request;
-        args.file_path = self.resolve_file_arg(&args.file_path).await?;
+        args.file_path = self.resolve_file_arg(&args.file_path)?;
         notify_preview(&context, ToolDisplayMeta::new("Read file", basename(&args.file_path))).await;
         self.read_and_track(args).await
     }
@@ -554,7 +507,7 @@ When using tools that take file paths, always use absolute paths from:
         context: RequestContext<RoleServer>,
     ) -> Result<Json<WriteFileResponse>, String> {
         let Parameters(mut args) = request;
-        args.file_path = self.resolve_file_arg(&args.file_path).await?;
+        args.file_path = self.resolve_file_arg(&args.file_path)?;
         notify_preview(&context, ToolDisplayMeta::new("Write file", basename(&args.file_path))).await;
 
         self.check_write_permission(&context, "write_file", &args.file_path).await?;
@@ -580,7 +533,7 @@ When using tools that take file paths, always use absolute paths from:
         context: RequestContext<RoleServer>,
     ) -> Result<Json<EditFileResponse>, String> {
         let Parameters(mut args) = request;
-        args.file_path = self.resolve_file_arg(&args.file_path).await?;
+        args.file_path = self.resolve_file_arg(&args.file_path)?;
         notify_preview(&context, ToolDisplayMeta::new("Edit file", basename(&args.file_path))).await;
 
         self.check_write_permission(&context, "edit_file", &args.file_path).await?;
@@ -601,8 +554,7 @@ When using tools that take file paths, always use absolute paths from:
         context: RequestContext<RoleServer>,
     ) -> Result<Json<ListFilesResult>, String> {
         let Parameters(mut args) = request;
-        let root = self.primary_workspace_root().await;
-        let normalized_path = resolve_dir(&root, args.path.as_deref());
+        let normalized_path = self.workspace_paths().resolve_dir(args.path.as_deref());
         let preview_value = basename(&normalized_path.to_string_lossy());
         args.path = Some(normalized_path.to_string_lossy().to_string());
         notify_preview(&context, ToolDisplayMeta::new("List files", preview_value)).await;
@@ -627,7 +579,7 @@ When using tools that take file paths, always use absolute paths from:
         self.check_bash_permission(&context, &args.command).await?;
 
         let command = args.command.clone();
-        let cwd = self.primary_workspace_root().await;
+        let cwd = self.root_dir.clone();
         let result = self.tools.bash(args, Some(cwd)).await.map_err(|e| e.to_string())?;
 
         match result {
@@ -795,20 +747,20 @@ impl Default for CodingMcp<DefaultCodingTools> {
 impl<T: CodingTools + 'static> CodingMcp<T> {
     /// Read a file and track it in the read set (test helper, no MCP context needed).
     pub async fn test_read_file(&self, mut args: ReadFileArgs) -> Result<Json<ReadFileResult>, String> {
-        args.file_path = self.resolve_file_arg(&args.file_path).await?;
+        args.file_path = self.resolve_file_arg(&args.file_path)?;
         self.read_and_track(args).await
     }
 
     /// Write a file with read-before-write safety check (test helper, no MCP context needed).
     pub async fn test_write_file(&self, mut args: WriteFileArgs) -> Result<Json<WriteFileResponse>, String> {
-        args.file_path = self.resolve_file_arg(&args.file_path).await?;
+        args.file_path = self.resolve_file_arg(&args.file_path)?;
         self.ensure_read_before_overwrite(&args.file_path).await?;
         self.tools.write_file(args).await.map(Json).map_err(|e| e.to_string())
     }
 
     /// Edit a file with read-before-edit safety check (test helper, no MCP context needed).
     pub async fn test_edit_file(&self, mut args: EditFileArgs) -> Result<Json<EditFileResponse>, String> {
-        args.file_path = self.resolve_file_arg(&args.file_path).await?;
+        args.file_path = self.resolve_file_arg(&args.file_path)?;
         self.ensure_read_before_edit(&args.file_path).await?;
         self.tools.edit_file(args).await.map(Json).map_err(|e| e.to_string())
     }

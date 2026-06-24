@@ -10,7 +10,7 @@ use rmcp::{
 };
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::Mutex;
 
 use crate::error::ServerInitError;
 use crate::{
@@ -47,8 +47,6 @@ impl TasksMcpArgs {
 pub struct TasksMcp {
     task_store: Mutex<TaskStore>,
     tool_router: ToolRouter<Self>,
-    /// Workspace roots (from MCP protocol or CLI args)
-    roots: RwLock<Vec<PathBuf>>,
     /// Holds the temp directory alive for session-scoped storage.
     /// Dropped (and cleaned up) when the server is dropped.
     _temp_dir: Option<TempDir>,
@@ -72,7 +70,6 @@ impl TasksMcp {
         Self {
             task_store: Mutex::new(TaskStore::new(task_path)),
             tool_router: Self::tool_router(),
-            roots: RwLock::new(vec![]),
             _temp_dir: Some(temp_dir),
         }
     }
@@ -81,11 +78,11 @@ impl TasksMcp {
     ///
     /// Tasks will be stored in `{base_dir}/.aether-tasks/` and persist across
     /// sessions.
-    pub fn new_persistent(base_dir: PathBuf) -> Self {
+    pub fn new_persistent(base_dir: impl Into<PathBuf>) -> Self {
+        let base_dir = base_dir.into();
         Self {
             task_store: Mutex::new(TaskStore::new(base_dir.join(".aether-tasks"))),
             tool_router: Self::tool_router(),
-            roots: RwLock::new(vec![base_dir]),
             _temp_dir: None,
         }
     }
@@ -102,20 +99,12 @@ impl TasksMcp {
         })
     }
 
-    pub fn from_args_with_workspace_root(args: Vec<String>, workspace_root: &Path) -> Result<Self, ServerInitError> {
+    pub fn from_args_with_base_dir(args: Vec<String>, base_dir: &Path) -> Result<Self, ServerInitError> {
         let parsed_args = TasksMcpArgs::from_args(args)?;
         Ok(match parsed_args.dir {
-            Some(dir) => Self::new_persistent(resolve_path(workspace_root, dir)),
-            None => Self::new().with_roots(vec![workspace_root.to_path_buf()]),
+            Some(dir) => Self::new_persistent(resolve_path(base_dir, dir)),
+            None => Self::new(),
         })
-    }
-
-    /// Set workspace roots.
-    ///
-    /// Can be used to set roots from MCP protocol or to override CLI arguments.
-    pub fn with_roots(mut self, roots: Vec<PathBuf>) -> Self {
-        self.roots = RwLock::new(roots);
-        self
     }
 
     #[cfg(test)]
@@ -218,19 +207,16 @@ mod tests {
     }
 
     #[test]
-    fn test_from_args_with_workspace_root_resolves_relative_dir() {
+    fn test_from_args_with_base_dir_resolves_relative_dir() {
         let server =
-            TasksMcp::from_args_with_workspace_root(vec!["--dir".into(), "tasks".into()], Path::new("/workspace"))
-                .unwrap();
+            TasksMcp::from_args_with_base_dir(vec!["--dir".into(), "tasks".into()], Path::new("/workspace")).unwrap();
 
         assert!(!server.is_session_scoped());
-        assert_eq!(server.roots.blocking_read().as_slice(), &[PathBuf::from("/workspace/tasks")]);
     }
 
     #[test]
-    fn test_from_args_with_workspace_root_no_dir_stays_session_scoped() {
-        let server = TasksMcp::from_args_with_workspace_root(vec![], Path::new("/workspace")).unwrap();
+    fn test_from_args_with_base_dir_no_dir_stays_session_scoped() {
+        let server = TasksMcp::from_args_with_base_dir(vec![], Path::new("/workspace")).unwrap();
         assert!(server.is_session_scoped());
-        assert_eq!(server.roots.blocking_read().as_slice(), &[PathBuf::from("/workspace")]);
     }
 }

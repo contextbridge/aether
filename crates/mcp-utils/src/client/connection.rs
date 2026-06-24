@@ -2,14 +2,13 @@ use super::{
     McpClientEvent, McpError, OAuthHandlerFactory, Result,
     config::{McpServer, McpTransport},
     mcp_client::McpClient,
-    roots::primary_root_path,
 };
 use crate::{client::OAuthHandlerContext, transport::create_in_memory_transport};
 use aether_auth::{OAuthCredentialStorage, create_auth_manager_from_store, perform_oauth_flow};
 use llm::ToolAnnotations;
 use rmcp::{
     RoleClient, RoleServer, ServiceExt,
-    model::{ClientInfo, Root, Tool as RmcpTool},
+    model::{ClientInfo, Tool as RmcpTool},
     serve_client,
     service::{DynService, RunningService},
     transport::{
@@ -25,7 +24,7 @@ use std::sync::Arc;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::{ChildStderr, Command},
-    sync::{RwLock, mpsc},
+    sync::mpsc,
     task::JoinHandle,
 };
 
@@ -67,7 +66,7 @@ impl From<&RmcpTool> for Tool {
 pub(super) struct ConnectConfig {
     pub client_info: ClientInfo,
     pub event_sender: mpsc::Sender<McpClientEvent>,
-    pub roots: Arc<RwLock<Vec<Root>>>,
+    pub root_dir: PathBuf,
     pub oauth_handler_factory: Option<OAuthHandlerFactory>,
     pub oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
 }
@@ -129,14 +128,11 @@ impl McpServerConnection {
 pub(super) async fn connect_server(server: McpServer, ctx: &ConnectConfig) -> McpConnectAttempt {
     let McpServer { name, transport, proxy: proxied } = server;
     let reauth_config = reauth_config_for(&transport, ctx.oauth_handler_factory.as_ref());
-    let mcp_client =
-        McpClient::new(ctx.client_info.clone(), name.clone(), ctx.event_sender.clone(), Arc::clone(&ctx.roots));
+    let mcp_client = McpClient::new(ctx.client_info.clone(), name.clone(), ctx.event_sender.clone());
 
     let outcome = match transport {
         McpTransport::Stdio { command, args, env } => {
-            let roots = ctx.roots.read().await;
-            let cwd = primary_root_path(&roots);
-            connect_stdio(&name, command, args, env, mcp_client, cwd).await
+            connect_stdio(&name, command, args, env, mcp_client, ctx.root_dir.clone()).await
         }
         McpTransport::InMemory { server } => connect_in_memory(&name, server, mcp_client).await,
         McpTransport::Http { config } => {
@@ -171,8 +167,7 @@ pub async fn authenticate_http(
             .await
             .map_err(|e| McpError::ConnectionFailed(format!("OAuth failed for '{name}': {e}")))?;
 
-        let mcp_client =
-            McpClient::new(ctx.client_info.clone(), name.clone(), ctx.event_sender.clone(), Arc::clone(&ctx.roots));
+        let mcp_client = McpClient::new(ctx.client_info.clone(), name.clone(), ctx.event_sender.clone());
         McpServerConnection::reconnect_with_auth(&name, config.clone(), auth_client, mcp_client).await
     }
     .await
@@ -199,14 +194,10 @@ async fn connect_stdio(
     args: Vec<String>,
     env: HashMap<String, String>,
     mcp_client: McpClient,
-    cwd: Option<PathBuf>,
+    cwd: PathBuf,
 ) -> McpConnectOutcome {
     let mut cmd = Command::new(&command);
-    cmd.args(&args).envs(&env);
-
-    if let Some(ref dir) = cwd {
-        cmd.current_dir(dir);
-    }
+    cmd.args(&args).envs(&env).current_dir(&cwd);
 
     let (proc, stderr) = match TokioChildProcess::builder(cmd).stderr(Stdio::piped()).spawn() {
         Ok(parts) => parts,

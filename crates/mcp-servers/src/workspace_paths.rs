@@ -1,9 +1,42 @@
 use std::path::{Path, PathBuf};
 
-/// Returns the primary (first) workspace root, falling back to `.` when none
-/// are configured.
-pub fn primary_root(roots: &[PathBuf]) -> PathBuf {
-    roots.first().cloned().unwrap_or_else(|| PathBuf::from("."))
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspacePaths {
+    root: PathBuf,
+}
+
+impl WorkspacePaths {
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+
+    pub fn current() -> Self {
+        Self::new(current_dir())
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn resolve_path(&self, path: PathBuf) -> PathBuf {
+        resolve_path(&self.root, path)
+    }
+
+    pub fn resolve_file(&self, raw: &str) -> Result<PathBuf, EmptyFilePathError> {
+        resolve_file(&self.root, raw)
+    }
+
+    pub fn resolve_dir(&self, raw: Option<&str>) -> PathBuf {
+        resolve_dir(&self.root, raw)
+    }
+
+    pub fn make_relative(&self, path: &Path) -> Option<PathBuf> {
+        path.strip_prefix(&self.root).ok().map(Path::to_path_buf)
+    }
+}
+
+pub fn current_dir() -> PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
 /// Resolves `path` against `root`, leaving absolute paths untouched.
@@ -39,9 +72,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn primary_root_falls_back_to_dot_when_empty() {
-        assert_eq!(primary_root(&[]), PathBuf::from("."));
-        assert_eq!(primary_root(&[PathBuf::from("/a"), PathBuf::from("/b")]), PathBuf::from("/a"));
+    fn workspace_paths_resolve_against_root() {
+        let workspace = WorkspacePaths::new("/workspace");
+        assert_eq!(workspace.root(), Path::new("/workspace"));
+        assert_eq!(workspace.resolve_path(PathBuf::from("src/main.rs")), PathBuf::from("/workspace/src/main.rs"));
+        assert_eq!(workspace.resolve_dir(None), PathBuf::from("/workspace"));
+        assert_eq!(workspace.make_relative(Path::new("/workspace/src/main.rs")), Some(PathBuf::from("src/main.rs")));
     }
 
     #[test]

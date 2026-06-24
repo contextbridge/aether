@@ -101,16 +101,16 @@ impl PlanMcp {
         })
     }
 
-    pub fn from_args_with_workspace_root(
+    pub fn from_args_with_base_dir(
         args: Vec<String>,
         default_plans_dir: PathBuf,
-        workspace_root: &Path,
+        base_dir: &Path,
     ) -> Result<Self, ServerInitError> {
         let PlanMcpArgs { plans_dir, prompt_file, submit_command } = PlanMcpArgs::from_args(args)?;
         Ok(Self {
             tool_router: Self::tool_router(),
-            plans_dir: plans_dir.map_or(default_plans_dir, |path| resolve_path(workspace_root, path)),
-            prompt_file: prompt_file.map(|path| resolve_path(workspace_root, path)),
+            plans_dir: plans_dir.map_or(default_plans_dir, |path| resolve_path(base_dir, path)),
+            prompt_file: prompt_file.map(|path| resolve_path(base_dir, path)),
             submit_command,
         })
     }
@@ -516,9 +516,9 @@ mod tests {
     }
 
     #[test]
-    fn from_args_with_workspace_root_resolves_relative_paths() {
+    fn from_args_with_base_dir_resolves_relative_paths() {
         let workspace = PathBuf::from("/workspace");
-        let server = PlanMcp::from_args_with_workspace_root(
+        let server = PlanMcp::from_args_with_base_dir(
             vec!["--plans-dir".into(), "plans".into(), "--prompt-file".into(), "prompts/plan.md".into()],
             default(),
             &workspace,
@@ -530,9 +530,9 @@ mod tests {
     }
 
     #[test]
-    fn from_args_with_workspace_root_keeps_absolute_paths() {
+    fn from_args_with_base_dir_keeps_absolute_paths() {
         let workspace = PathBuf::from("/workspace");
-        let server = PlanMcp::from_args_with_workspace_root(
+        let server = PlanMcp::from_args_with_base_dir(
             vec!["--plans-dir".into(), "/tmp/plans".into(), "--prompt-file".into(), "/tmp/plan.md".into()],
             default(),
             &workspace,

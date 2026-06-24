@@ -11,7 +11,7 @@ use llm::ToolDefinition;
 use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::{spawn, sync::mpsc};
 
@@ -156,18 +156,18 @@ pub type ProgressCallback = Box<dyn Fn(&str, &str, &AgentMessage) + Send + Sync>
 pub struct AgentExecutor {
     catalog: Arc<AgentCatalog>,
     progress_callback: Option<Arc<ProgressCallback>>,
-    roots: Vec<PathBuf>,
+    project_root: PathBuf,
     oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
 }
 
 impl AgentExecutor {
-    /// Create a new `AgentExecutor` with the given agent catalog and workspace roots.
+    /// Create a new `AgentExecutor` with the given agent catalog and project root.
     pub fn new(
         catalog: AgentCatalog,
-        roots: Vec<PathBuf>,
+        project_root: PathBuf,
         oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
     ) -> Self {
-        Self { catalog: Arc::new(catalog), progress_callback: None, roots, oauth_credential_store }
+        Self { catalog: Arc::new(catalog), progress_callback: None, project_root, oauth_credential_store }
     }
 
     /// Set a callback for receiving progress updates during agent execution
@@ -191,7 +191,7 @@ impl AgentExecutor {
 
         let catalog = Arc::clone(&self.catalog);
         let progress_callback = self.progress_callback.clone();
-        let roots = self.roots.clone();
+        let project_root = self.project_root.clone();
         let oauth_credential_store = self.oauth_credential_store.clone();
         let handles: Vec<_> = tasks
             .into_iter()
@@ -200,10 +200,18 @@ impl AgentExecutor {
                 let task_id = format!("task_{i}");
                 let catalog = Arc::clone(&catalog);
                 let progress_callback = progress_callback.clone();
-                let roots = roots.clone();
+                let project_root = project_root.clone();
                 let oauth_credential_store = oauth_credential_store.clone();
                 spawn(async move {
-                    execute_single_agent(task_id, task, catalog, progress_callback, roots, oauth_credential_store).await
+                    execute_single_agent(
+                        task_id,
+                        task,
+                        catalog,
+                        progress_callback,
+                        project_root,
+                        oauth_credential_store,
+                    )
+                    .await
                 })
             })
             .collect();
@@ -240,7 +248,7 @@ async fn execute_single_agent(
     task: SubAgentTask,
     catalog: Arc<AgentCatalog>,
     progress_callback: Option<Arc<ProgressCallback>>,
-    roots: Vec<PathBuf>,
+    project_root: PathBuf,
     oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
 ) -> SubAgentResult {
     let agent_name = task.agent_name.clone();
@@ -253,7 +261,7 @@ async fn execute_single_agent(
         }
 
         let mut spawn_result =
-            spawn_mcps(&spec.mcp_config_sources, roots, catalog.project_root(), oauth_credential_store.clone()).await?;
+            spawn_mcps(&spec.mcp_config_sources, project_root, oauth_credential_store.clone()).await?;
         let snapshot = spawn_result
             .block_until_ready()
             .await
@@ -334,13 +342,14 @@ async fn execute_single_agent(
 
 async fn spawn_mcps(
     effective_mcp_config_sources: &[McpConfigSource],
-    roots: Vec<PathBuf>,
-    project_root: &Path,
+    project_root: PathBuf,
     oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
 ) -> Result<McpSpawnResult, String> {
-    let mut builder =
-        mcp(project_root).with_builtin_servers(project_root.to_path_buf(), project_root, oauth_credential_store);
-    builder = builder.with_roots(roots);
+    let mut builder = mcp(&project_root);
+    if let Some(store) = oauth_credential_store {
+        builder = builder.with_oauth_credential_store(store);
+    }
+    builder = builder.with_builtin_servers();
 
     if !effective_mcp_config_sources.is_empty() {
         builder = builder

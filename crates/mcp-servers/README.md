@@ -158,4 +158,3 @@ let server = CodingMcp::new()
 - **`survey`** -- structured human elicitation tooling
 - **`plan`** -- markdown plan submission and approval workflow
 - **`all`** -- explicit alias enabling all built-in servers
-

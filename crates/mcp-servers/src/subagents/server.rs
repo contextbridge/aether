@@ -16,7 +16,6 @@ use rmcp::{
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::sync::RwLock;
 
 use super::tools::{AgentExecutor, SpawnSubAgentsInput, SpawnSubAgentsOutput};
 use crate::error::ServerInitError;
@@ -45,7 +44,7 @@ impl SubAgentsMcpArgs {
 pub struct SubAgentsMcp {
     catalog: AgentCatalog,
     tool_router: ToolRouter<Self>,
-    roots: Arc<RwLock<Vec<PathBuf>>>,
+    project_root: PathBuf,
     oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
 }
 
@@ -63,12 +62,7 @@ impl SubAgentsMcp {
     }
 
     pub fn new(catalog: AgentCatalog, project_root: PathBuf) -> Self {
-        Self {
-            catalog,
-            tool_router: Self::tool_router(),
-            roots: Arc::new(RwLock::new(vec![project_root])),
-            oauth_credential_store: None,
-        }
+        Self { catalog, tool_router: Self::tool_router(), project_root, oauth_credential_store: None }
     }
 
     pub fn with_oauth_credential_store(mut self, store: Arc<dyn OAuthCredentialStorage>) -> Self {
@@ -91,11 +85,6 @@ impl SubAgentsMcp {
             .project_root
             .map_or_else(|| default_root.to_path_buf(), |path| resolve_path(default_root, path));
         Self::from_project_root(project_root)
-    }
-
-    pub fn with_roots(mut self, roots: Vec<PathBuf>) -> Self {
-        self.roots = Arc::new(RwLock::new(roots));
-        self
     }
 
     fn build_instructions(&self) -> String {
@@ -189,9 +178,9 @@ impl SubAgentsMcp {
             })
         };
 
-        let roots = self.roots.read().await.clone();
-        let executor = AgentExecutor::new(self.catalog.clone(), roots, self.oauth_credential_store.clone())
-            .with_progress_callback(progress_callback);
+        let executor =
+            AgentExecutor::new(self.catalog.clone(), self.project_root.clone(), self.oauth_credential_store.clone())
+                .with_progress_callback(progress_callback);
 
         let output = executor.execute_tasks(args.tasks).await;
         Ok(Json(output))
