@@ -17,7 +17,7 @@ Implement this trait to provide a custom backend -- for example, a sandboxed fil
 
 - **`grep`** -- Regex search across files. Delegates to [`perform_grep`](crate::coding::tools::grep::perform_grep).
 - **`ast_grep`** -- Structural AST search across files. Delegates to [`perform_ast_grep`](crate::coding::tools::ast_grep::perform_ast_grep).
-- **`find`** -- Glob-based file discovery. Delegates to [`find_files_by_name`](crate::coding::tools::find::find_files_by_name).
+- **`find`** -- Glob-based file discovery. Bare patterns match basenames recursively; slash-containing patterns match paths relative to the search path. Limited searches stop early and set `truncated` when more matches exist. Delegates to [`find_files`](crate::coding::tools::find::find_files).
 
 # See also
 

@@ -1,7 +1,7 @@
 pub mod common;
 
 use crate::coding::error::GrepError;
-use crate::coding::tools::glob_filter::build_glob_set;
+use crate::coding::tools::glob_filter::{PathGlobMatcher, build_path_matcher};
 use aether_lspd::extensions_for_alias as extensions_for_type;
 use common::{CountSink, HasMatchSink, MatchCollectorSink, MatchData, OutputMode};
 use grep::{
@@ -124,10 +124,14 @@ impl ParallelGrepState {
     }
 }
 
-fn should_include_file(path: &Path, file_type: Option<&String>, glob_pattern: Option<&globset::GlobSet>) -> bool {
-    // Check glob pattern first (more specific)
-    if let Some(glob_set) = glob_pattern {
-        return glob_set.is_match(path);
+fn should_include_file(
+    path: &Path,
+    search_root: &Path,
+    file_type: Option<&String>,
+    path_matcher: Option<&PathGlobMatcher>,
+) -> bool {
+    if let Some(path_matcher) = path_matcher {
+        return path_matcher.matches(path, search_root);
     }
 
     // Check file type filter
@@ -147,7 +151,7 @@ pub async fn perform_grep(mut args: GrepInput) -> Result<GrepOutput, GrepError> 
         args.path = None;
     }
 
-    let glob_set = build_glob_set(args.glob.as_deref())?;
+    let path_matcher = build_path_matcher(args.glob.as_deref(), false)?;
 
     let matcher = build_matcher(&args.pattern, args.case_insensitive, args.multiline)?;
 
@@ -170,12 +174,12 @@ pub async fn perform_grep(mut args: GrepInput) -> Result<GrepOutput, GrepError> 
             search_path,
             args.head_limit,
             &matcher,
-            glob_set.as_ref(),
+            path_matcher.as_ref(),
             &config,
             &searcher_builder,
         )?
     } else {
-        search_directory(search_path, &args, glob_set, matcher, &config, &searcher_builder)
+        search_directory(search_path, &args, path_matcher, matcher, &config, &searcher_builder)
     };
 
     Ok(build_grep_output(results, output_mode, &args.pattern, search_path))
@@ -242,11 +246,11 @@ fn search_single_file(
     search_path: &str,
     head_limit: Option<usize>,
     matcher: &RegexMatcher,
-    glob_set: Option<&globset::GlobSet>,
+    path_matcher: Option<&PathGlobMatcher>,
     config: &SearchConfig<'_>,
     searcher_builder: &SearcherBuilder,
 ) -> Result<SearchResults, GrepError> {
-    if !should_include_file(path_obj, config.file_type, glob_set) {
+    if !should_include_file(path_obj, path_obj.parent().unwrap_or(path_obj), config.file_type, path_matcher) {
         return Ok(SearchResults::empty());
     }
 
@@ -281,7 +285,7 @@ fn search_single_file(
 fn search_directory(
     search_path: &str,
     args: &GrepInput,
-    glob_set: Option<globset::GlobSet>,
+    path_matcher: Option<PathGlobMatcher>,
     matcher: RegexMatcher,
     config: &SearchConfig<'_>,
     searcher_builder: &SearcherBuilder,
@@ -291,20 +295,22 @@ fn search_directory(
     let max_items = args.head_limit.unwrap_or(usize::MAX);
     let state = Arc::new(ParallelGrepState::new(max_items));
     let matcher = Arc::new(matcher);
-    let glob_set = Arc::new(glob_set);
+    let path_matcher = Arc::new(path_matcher);
     let file_type = args.file_type.clone();
     let output_mode = config.output_mode;
     let line_numbers = config.line_numbers;
+    let search_root = Path::new(search_path);
 
     walker.run(|| {
         let state = state.clone();
         let matcher = matcher.clone();
-        let glob_set = glob_set.clone();
+        let path_matcher = path_matcher.clone();
         let file_type = file_type.clone();
         let mut thread_searcher = searcher_builder.build();
 
         Box::new(move |result| {
-            let filter = FileFilter { glob_set: glob_set.as_ref().as_ref(), file_type: file_type.as_ref() };
+            let filter =
+                FileFilter { path_matcher: path_matcher.as_ref().as_ref(), file_type: file_type.as_ref(), search_root };
             search_directory_entry(result, &state, &matcher, &filter, &mut thread_searcher, output_mode, line_numbers)
         })
     });
@@ -330,8 +336,9 @@ fn search_directory(
 
 /// Filter criteria for file selection during directory walks.
 struct FileFilter<'a> {
-    glob_set: Option<&'a globset::GlobSet>,
+    path_matcher: Option<&'a PathGlobMatcher>,
     file_type: Option<&'a String>,
+    search_root: &'a Path,
 }
 
 fn search_directory_entry(
@@ -355,7 +362,7 @@ fn search_directory_entry(
         return WalkState::Continue;
     }
 
-    if !should_include_file(entry.path(), filter.file_type, filter.glob_set) {
+    if !should_include_file(entry.path(), filter.search_root, filter.file_type, filter.path_matcher) {
         return WalkState::Continue;
     }
 

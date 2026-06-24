@@ -6,7 +6,7 @@ use super::error::CodingError;
 use super::tools::ast_grep::{AstGrepInput, AstGrepOutput, perform_ast_grep};
 use super::tools::bash::{BackgroundProcessHandle, BashInput, BashResult, ReadBackgroundBashOutput};
 use super::tools::edit_file::{EditFileArgs, EditFileResponse};
-use super::tools::find::{FindInput, FindOutput, find_files_by_name};
+use super::tools::find::{FindInput, FindOutput, find_files};
 use super::tools::grep::{GrepInput, GrepOutput, perform_grep};
 use super::tools::list_files::{ListFilesArgs, ListFilesResult};
 use super::tools::read_file::{ReadFileArgs, ReadFileResult};
@@ -49,8 +49,8 @@ pub trait CodingTools: Send + Sync + Debug {
         async move { perform_ast_grep(args).await.map_err(CodingError::from) }
     }
 
-    /// Find files by name using glob patterns.
+    /// Find files by glob pattern. Bare patterns match basenames recursively; slash-containing patterns match paths relative to the search path. Limited searches stop early and set `truncated` when more matches exist.
     fn find(&self, args: FindInput) -> impl Future<Output = Result<FindOutput, CodingError>> + Send {
-        async move { find_files_by_name(args).await.map_err(CodingError::from) }
+        async move { find_files(args).await.map_err(CodingError::from) }
     }
 }
