@@ -33,7 +33,6 @@ coding = [
     "dep:aether-project",
     "dep:aether-lspd",
     "dep:futures",
-    "dep:glob",
     "dep:globset",
     "dep:grep",
     "dep:ignore",
@@ -90,7 +89,6 @@ mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.
 utils = { package = "aether-utils", path = "../utils", version = "0.2.8" }
 aether-lspd = { path = "../aether-lspd", optional = true, version = "0.1.20" }
 futures = { workspace = true, optional = true }
-glob = { workspace = true, optional = true }
 globset = { workspace = true, optional = true }
 grep = { workspace = true, optional = true }
 ignore = { workspace = true, optional = true }

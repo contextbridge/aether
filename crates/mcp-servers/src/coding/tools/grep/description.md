@@ -16,7 +16,7 @@ Text/pattern search using ripgrep.
 - `path` — absolute path to file or directory (defaults to cwd)
 - `outputMode` — `content` (default, shows matching lines), `filesWithMatches` (file paths only), or `count` (match counts per file)
 - `type` — file type filter (`js`, `py`, `rust`, etc.)
-- `glob` — glob pattern filter (e.g., `*.ts`, `*.{js,jsx}`)
+- `glob` — glob pattern filter. Bare patterns like `*.ts` or `*.{js,jsx}` match file names at any depth; patterns containing `/` like `src/**/*.ts` match paths relative to `path`.
 - `caseInsensitive` — case insensitive search (default: false)
 - `lineNumbers` — show line numbers (content mode only, default: true)
 - `contextBefore` — lines before each match (content mode only)

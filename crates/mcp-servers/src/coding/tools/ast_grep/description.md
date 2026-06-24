@@ -31,7 +31,7 @@ Use `constraints` to keep only matches whose captured text matches a regex. For 
 - `pattern` — required ast-grep pattern code.
 - `language` — required ast-grep language alias such as `rs`, `rust`, `ts`, `tsx`, `py`, or `js`.
 - `path` — file or directory to search. Defaults to the workspace root.
-- `glob` — optional file filter such as `**/*.rs` or `*.{ts,tsx}`.
+- `glob` — optional file filter. Bare patterns like `*.rs` or `*.{ts,tsx}` match file names at any depth; patterns containing `/` like `crates/**/*.rs` match paths relative to `path`.
 - `constraints` — optional map from metavariable name (without `$`) to a regex the captured text must match. Only matches where every constraint is satisfied are returned. Example: `{"CRATE": "^crossterm"}` with pattern `use $CRATE;`.
 - `contextBefore` — lines before each match.
 - `contextAfter` — lines after each match.

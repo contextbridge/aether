@@ -150,9 +150,9 @@ pub enum FindError {
     #[error("Search path does not exist: {0}")]
     PathNotFound(String),
 
-    /// Invalid glob pattern
-    #[error("Invalid glob pattern '{pattern}': {reason}")]
-    InvalidGlobPattern { pattern: String, reason: String },
+    /// Glob filter errors
+    #[error(transparent)]
+    Glob(#[from] GlobError),
 
     /// Failed to lock results (mutex poisoned)
     #[error("Failed to lock results")]

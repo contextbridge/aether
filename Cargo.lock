@@ -261,7 +261,6 @@ dependencies = [
  "clap",
  "dom_smoothie",
  "futures",
- "glob",
  "globset",
  "grep",
  "htmd",

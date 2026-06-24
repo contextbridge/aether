@@ -1,9 +1,8 @@
 use crate::coding::error::AstGrepError;
-use crate::coding::tools::glob_filter::build_glob_set;
+use crate::coding::tools::glob_filter::{PathGlobMatcher, build_path_matcher};
 use ast_grep_core::Doc;
 use ast_grep_core::matcher::{NodeMatch, Pattern};
 use ast_grep_language::{Language, LanguageExt, SupportLang};
-use globset::GlobSet;
 use ignore::{WalkBuilder, WalkState};
 use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename};
 use regex::Regex;
@@ -100,7 +99,7 @@ pub async fn perform_ast_grep(mut args: AstGrepInput) -> Result<AstGrepOutput, A
         let pattern = Pattern::try_new(&args.pattern, lang).map_err(|e| AstGrepError::InvalidPattern(e.to_string()))?;
 
         let constraint_regexes = compile_constraints(args.constraints.as_ref())?;
-        let glob_set = build_glob_set(args.glob.as_deref())?;
+        let path_matcher = build_path_matcher(args.glob.as_deref(), false)?;
         let search_path = args.path.as_deref().unwrap_or(".");
         let path = Path::new(search_path);
         if !path.exists() {
@@ -110,13 +109,13 @@ pub async fn perform_ast_grep(mut args: AstGrepInput) -> Result<AstGrepOutput, A
         let (context_before, context_after) = context_counts(&args);
         let limit = args.head_limit.unwrap_or(usize::MAX);
         let mut matches = if path.is_file() {
-            if glob_matches(path, path, glob_set.as_ref()) {
+            if single_file_matches(path_matcher.as_ref(), path) {
                 search_file(path, lang, &pattern, &constraint_regexes, context_before, context_after)?
             } else {
                 Vec::new()
             }
         } else {
-            search_directory(path, lang, pattern, glob_set, &constraint_regexes, context_before, context_after)
+            search_directory(path, lang, pattern, path_matcher, &constraint_regexes, context_before, context_after)
         };
 
         matches.sort_by(|a, b| {
@@ -151,25 +150,23 @@ fn search_directory(
     search_path: &Path,
     lang: SupportLang,
     pattern: Pattern,
-    glob: Option<GlobSet>,
+    path_matcher: Option<PathGlobMatcher>,
     constraints: &HashMap<String, Regex>,
     context_before: usize,
     context_after: usize,
 ) -> Vec<AstGrepMatch> {
     let matches = Arc::new(Mutex::new(Vec::new()));
     let pattern = Arc::new(pattern);
-    let glob = Arc::new(glob);
+    let path_matcher = Arc::new(path_matcher);
     let constraints = Arc::new(constraints.clone());
-    let search_root = Arc::new(search_path.to_path_buf());
     let mut walker = WalkBuilder::new(search_path);
     walker.follow_links(false);
 
     walker.build_parallel().run(|| {
         let matches = matches.clone();
         let pattern = pattern.clone();
-        let glob = glob.clone();
+        let path_matcher = path_matcher.clone();
         let constraints = constraints.clone();
-        let search_root = search_root.clone();
 
         Box::new(move |result| {
             let Ok(entry) = result else {
@@ -180,7 +177,7 @@ fn search_directory(
                 return WalkState::Continue;
             }
 
-            if !file_matches_filters(entry.path(), search_root.as_ref().as_path(), lang, glob.as_ref().as_ref()) {
+            if !file_matches_filters(entry.path(), search_path, lang, path_matcher.as_ref().as_ref()) {
                 return WalkState::Continue;
             }
 
@@ -203,16 +200,18 @@ fn search_directory(
     matches.lock().map(|matches| matches.clone()).unwrap_or_default()
 }
 
-fn file_matches_filters(path: &Path, search_root: &Path, lang: SupportLang, glob: Option<&GlobSet>) -> bool {
-    <SupportLang as Language>::from_path(path) == Some(lang) && glob_matches(path, search_root, glob)
+fn file_matches_filters(
+    path: &Path,
+    search_root: &Path,
+    lang: SupportLang,
+    path_matcher: Option<&PathGlobMatcher>,
+) -> bool {
+    <SupportLang as Language>::from_path(path) == Some(lang)
+        && path_matcher.is_none_or(|matcher| matcher.matches(path, search_root))
 }
 
-fn glob_matches(path: &Path, search_root: &Path, glob: Option<&GlobSet>) -> bool {
-    let Some(glob) = glob else {
-        return true;
-    };
-
-    glob.is_match(path) || path.strip_prefix(search_root).is_ok_and(|relative| glob.is_match(relative))
+fn single_file_matches(path_matcher: Option<&PathGlobMatcher>, path: &Path) -> bool {
+    path_matcher.is_none_or(|matcher| matcher.matches(path, path.parent().unwrap_or(path)))
 }
 
 fn search_file(

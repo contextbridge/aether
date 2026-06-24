@@ -57,7 +57,7 @@ use tools::bash::{
     execute_command_in_dir, read_background_bash,
 };
 use tools::edit_file::{EditFileArgs, EditFileResponse, edit_file_contents};
-use tools::find::{FindInput, FindOutput, find_files_by_name};
+use tools::find::{FindInput, FindOutput, find_files};
 use tools::grep::{GrepInput, GrepOutput, perform_grep};
 use tools::list_files::{ListFilesArgs, ListFilesResult, list_files};
 use tools::read_file::{ReadFileArgs, ReadFileResult, read_file_contents};
