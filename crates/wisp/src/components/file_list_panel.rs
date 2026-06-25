@@ -1,7 +1,7 @@
 use crate::components::common::VerticalCursor;
 use crate::components::file_tree::{FileTree, FileTreeEntry, FileTreeEntryKind};
 use crate::components::git_diff::{file_status_color, header_rule, push_diff_stats};
-use crate::git_diff::{FileDiff, FileStatus};
+use crate::git_diff::{FileDiff, FileStatus, StageState};
 use tui::{Component, Event, Frame, KeyCode, Line, MouseEventKind, Style, ViewContext, truncate_line, truncate_text};
 
 const CHROME_HEIGHT: usize = 2;
@@ -200,8 +200,15 @@ impl Component for FileListPanel {
                     FileTreeEntryKind::Directory { name, expanded, .. } => {
                         render_directory_entry(&mut content, name, *expanded, entry.depth, flags, theme);
                     }
-                    FileTreeEntryKind::File { name, status, additions, deletions, .. } => {
-                        render_file_entry(&mut content, name, *status, *additions, *deletions, flags, theme);
+                    FileTreeEntryKind::File { name, status, staged, additions, deletions, .. } => {
+                        let row = FileRow {
+                            name,
+                            status: *status,
+                            staged: *staged,
+                            additions: *additions,
+                            deletions: *deletions,
+                        };
+                        render_file_entry(&mut content, row, flags, theme);
                     }
                 }
             } else {
@@ -240,46 +247,56 @@ fn render_directory_entry(
 ) {
     let EntryFlags { is_selected, indent, width, .. } = flags;
     let icon = if expanded { "▾" } else { "▸" };
-    let connector = if depth == 0 { "" } else { "── " };
+    let connector = if depth == 0 { "" } else { "─" };
+    let icon_gap = if depth == 0 { "  " } else { " " };
     let dir_style = row_fg_style(theme.info(), is_selected, theme);
     let indicator = if is_selected { "▎" } else { " " };
-    let prefix_width = format!("{indicator}{indent}{connector}{icon}  ").chars().count();
+    let prefix_width = format!("{indicator}{indent}{connector}{icon}{icon_gap}").chars().count();
     let name_budget = width.saturating_sub(prefix_width);
     let display_name = format!("{name}/");
     let truncated = truncate_text(&display_name, name_budget);
 
     line.push_with_style(indicator, row_fg_style(theme.accent(), is_selected, theme));
     line.push_with_style(format!("{indent}{connector}"), row_fg_style(theme.muted(), is_selected, theme));
-    line.push_with_style(format!("{icon}  "), dir_style);
+    line.push_with_style(format!("{icon}{icon_gap}"), dir_style);
     line.push_with_style(truncated.as_ref(), dir_style.bold());
     line.extend_bg_to_width(width);
 }
 
-fn render_file_entry(
-    line: &mut Line,
-    name: &str,
+#[derive(Clone, Copy)]
+struct FileRow<'a> {
+    name: &'a str,
     status: FileStatus,
+    staged: StageState,
     additions: usize,
     deletions: usize,
-    flags: EntryFlags<'_>,
-    theme: &tui::Theme,
-) {
+}
+
+fn render_file_entry(line: &mut Line, row: FileRow<'_>, flags: EntryFlags<'_>, theme: &tui::Theme) {
+    let FileRow { name, status, staged, additions, deletions } = row;
     let EntryFlags { is_selected, indent, width, comments } = flags;
     let style = row_style(is_selected, theme);
     let guide_style = row_fg_style(theme.muted(), is_selected, theme);
+    let indicator = if is_selected { "▎" } else { " " };
+    let (checkbox, checkbox_color) = stage_checkbox(staged, theme);
 
     let badge = (comments > 0).then(|| format!("◆{comments} "));
     let badge_width = badge.as_deref().map_or(0, |b| b.chars().count());
     let add_str = format!("+{additions}");
     let del_str = format!(" -{deletions}");
     let marker_str = format!(" {}", status.marker());
-    let suffix_width = badge_width + add_str.chars().count() + del_str.chars().count() + marker_str.chars().count();
-    let prefix = format!("{}{indent}── ", if is_selected { "▎" } else { " " });
+    let checkbox_str = format!(" {checkbox}");
+    let suffix_width = badge_width
+        + add_str.chars().count()
+        + del_str.chars().count()
+        + marker_str.chars().count()
+        + checkbox_str.chars().count();
+    let prefix = format!("{indicator}{indent}── ");
     let prefix_width = prefix.chars().count();
     let name_budget = width.saturating_sub(prefix_width + suffix_width + 1);
     let truncated = truncate_text(name, name_budget);
 
-    line.push_with_style(if is_selected { "▎" } else { " " }, row_fg_style(theme.accent(), is_selected, theme));
+    line.push_with_style(indicator, row_fg_style(theme.accent(), is_selected, theme));
     line.push_with_style(format!("{indent}── "), guide_style);
     line.push_with_style(truncated.as_ref(), style);
     let padding = width.saturating_sub(prefix_width + truncated.chars().count() + suffix_width);
@@ -292,6 +309,15 @@ fn render_file_entry(
     line.push_with_style(add_str, row_fg_style(theme.diff_added_fg(), is_selected, theme));
     line.push_with_style(del_str, row_fg_style(theme.diff_removed_fg(), is_selected, theme));
     line.push_with_style(marker_str, row_fg_style(file_status_color(status, theme), is_selected, theme));
+    line.push_with_style(checkbox_str, row_fg_style(checkbox_color, is_selected, theme));
+}
+
+fn stage_checkbox(staged: StageState, theme: &tui::Theme) -> (&'static str, tui::Color) {
+    match staged {
+        StageState::Staged => ("☑", theme.diff_added_fg()),
+        StageState::PartiallyStaged => ("▣", theme.warning()),
+        StageState::Unstaged => ("☐", theme.muted()),
+    }
 }
 
 fn row_style(is_selected: bool, theme: &tui::Theme) -> Style {
@@ -340,6 +366,7 @@ mod tests {
             old_path: None,
             path: path.to_string(),
             status: FileStatus::Modified,
+            staged: StageState::Unstaged,
             hunks: vec![Hunk {
                 header: "@@ -1 +1 @@".to_string(),
                 old_start: 1,

@@ -121,13 +121,14 @@ pub(crate) fn lang_hint_from_path(path: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::git_diff::{FileDiff, FileStatus, Hunk, PatchLine};
+    use crate::git_diff::{FileDiff, FileStatus, Hunk, PatchLine, StageState};
 
     fn make_file(lines: Vec<PatchLine>) -> FileDiff {
         FileDiff {
             old_path: Some("test.rs".to_string()),
             path: "test.rs".to_string(),
             status: FileStatus::Modified,
+            staged: StageState::Unstaged,
             hunks: vec![Hunk {
                 header: "@@ -1,1 +1,1 @@".to_string(),
                 old_start: 1,

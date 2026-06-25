@@ -8,8 +8,8 @@ use tui::{Component, Event, KeyCode, MIN_GUTTER_WIDTH, SEPARATOR_WIDTH, ViewCont
 use wisp::components::app::{GitDiffLoadState, GitDiffMode};
 use wisp::git_diff::GitDiffDocument;
 
-const LEFT_HINT_LINE: &str = "j/k move  h/l fold/open  enter view  u undo  r refresh  Esc close";
-const RIGHT_HINT_LINE: &str = "j/k move  h back  c comment  s submit  o full file  u undo  r refresh  Esc close";
+const LEFT_HINT_LINE: &str = "j/k move  space stage  A stage all  C commit  d discard  Esc close";
+const RIGHT_HINT_LINE: &str = "space stage  c comment  C commit  d discard  s submit  o full file  Esc close";
 
 fn make_mode(doc: GitDiffDocument) -> GitDiffMode {
     let mut mode = GitDiffMode::new(PathBuf::from("."));
@@ -117,7 +117,7 @@ fn git_diff_view_keeps_wrapped_code_out_of_the_line_number_gutter() {
         &[
             cols(&[(" Git Diff  1 file  +1 -1", 28), ("│", 1), (" x.rs  modified  +1 -1", 0)]),
             cols(&[(&"─".repeat(28), 28), ("│", 1), (&"─".repeat(111), 0)]),
-            cols(&[("▎── x.rs", 21), ("+1 -1 M", 7), ("│", 1), (" 1 LEFT_MARK", 55), ("", 1), (" 1 RIGHT_HEAD", 55)]),
+            cols(&[("▎── x.rs", 19), ("+1 -1 M ☐", 9), ("│", 1), (" 1 LEFT_MARK", 55), ("", 1), (" 1 RIGHT_HEAD", 55)]),
             cols(&[("", 28), ("│", 1), ("", 55), ("", 1), (" ↪ ", 3), (filler.as_str(), 0)]),
             cols(&[("", 28), ("│", 1), ("", 55), ("", 1), (" ↪ ", 3), ("RIGHT_TAIL", 0)]),
             cols(&[("", 28), ("│", 1)]),
@@ -262,8 +262,8 @@ fn render_shows_file_list_and_patch() {
         &[
             cols(&[(" Git Diff  2 files  +2 -1", sb), ("│", 1), ("a.rs  modified  +1 -1", 0)]),
             cols(&[(&"─".repeat(sb), sb), ("│", 1), (&"─".repeat(71), 0)]),
-            cols(&[("▎── a.rs", 21), ("+1 -1 M", 7), ("│", 1), ("1   fn main() {", 0)]),
-            cols(&[(" ── b.rs", 21), ("+1 -0 A", 7), ("│", 1), ("2 -     old();", 0)]),
+            cols(&[("▎── a.rs", 19), ("+1 -1 M ☐", 9), ("│", 1), ("1   fn main() {", 0)]),
+            cols(&[(" ── b.rs", 19), ("+1 -0 A ☐", 9), ("│", 1), ("2 -     old();", 0)]),
             cols(&[("", sb), ("│", 1), ("2 +     new();", 0)]),
             cols(&[("", sb), ("│", 1), ("3   }", 0)]),
             cols(&[("", sb), ("│", 1)]),
@@ -512,6 +512,51 @@ async fn send_keys(mode: &mut GitDiffMode, codes: &[KeyCode]) {
         mode.render(&ctx);
         mode.on_event(&Event::Key(key(code))).await;
     }
+}
+
+#[tokio::test]
+async fn commit_composer_keeps_cursor_off_the_last_row() {
+    use wisp::git_diff::StageState;
+    let body: Vec<_> = (0..40).map(|i| context_line(format!("line {i}"), i + 1, i + 1)).collect();
+    let mut file = modified_file_with_hunks("a.rs", vec![hunk("@@ -1,40 +1,40 @@", 1, 40, 1, 40, body)]);
+    file.staged = StageState::Staged;
+    let mut mode = make_mode(git_diff_document(vec![file]));
+
+    let ctx = ViewContext::new((80, 10));
+    mode.on_event(&Event::Key(key(KeyCode::Char('C')))).await;
+    mode.on_event(&Event::Key(key(KeyCode::Char('h')))).await;
+    let frame = mode.render(&ctx);
+
+    assert_eq!(frame.lines().len(), 10, "frame must fit the viewport height");
+    let cursor = frame.cursor();
+    assert!(cursor.is_visible, "commit composer should show a cursor");
+    assert!(
+        cursor.row < frame.lines().len() - 1,
+        "cursor must not sit on the terminal's last row (row {} of {}); a hint line should be below it",
+        cursor.row,
+        frame.lines().len()
+    );
+    assert!(
+        frame.lines().last().is_some_and(|line| line.plain_text().contains("cancel")),
+        "the row below the commit input should show the enter/esc hint"
+    );
+}
+
+#[tokio::test]
+async fn empty_commit_message_surfaces_error() {
+    use wisp::git_diff::StageState;
+    let body: Vec<_> = (0..3).map(|i| context_line(format!("line {i}"), i + 1, i + 1)).collect();
+    let mut file = modified_file_with_hunks("a.rs", vec![hunk("@@ -1,3 +1,3 @@", 1, 3, 1, 3, body)]);
+    file.staged = StageState::Staged;
+    let mut mode = make_mode(git_diff_document(vec![file]));
+
+    let ctx = ViewContext::new((80, 10));
+    mode.on_event(&Event::Key(key(KeyCode::Char('C')))).await;
+    mode.on_event(&Event::Key(key(KeyCode::Enter))).await;
+    let frame = mode.render(&ctx);
+
+    let text = frame.lines().iter().map(tui::Line::plain_text).collect::<Vec<_>>().join("\n");
+    assert!(text.contains("Commit message cannot be empty"), "expected empty-message error, got:\n{text}");
 }
 
 #[tokio::test]

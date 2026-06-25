@@ -117,6 +117,7 @@ pub(super) struct RendererTest {
     config_options: Vec<SessionConfigOption>,
     session_capabilities: SessionCapabilities,
     auth_methods: Vec<AuthMethod>,
+    working_dir: PathBuf,
 }
 
 impl Default for RendererTest {
@@ -133,11 +134,17 @@ impl RendererTest {
             config_options: Vec::new(),
             session_capabilities: preview_session_capabilities(),
             auth_methods: Vec::new(),
+            working_dir: PathBuf::from("."),
         }
     }
 
     pub(super) fn size(mut self, size: (u16, u16)) -> Self {
         self.size = size;
+        self
+    }
+
+    pub(super) fn working_dir(mut self, working_dir: PathBuf) -> Self {
+        self.working_dir = working_dir;
         self
     }
 
@@ -170,7 +177,7 @@ impl RendererTest {
             session_capabilities: self.session_capabilities,
             config_options: self.config_options,
             auth_methods: self.auth_methods,
-            working_dir: PathBuf::from("."),
+            working_dir: self.working_dir,
             workspace_status: test_workspace_status(),
             prompt_handle,
             settings: wisp::settings::WispSettings::default()

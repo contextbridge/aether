@@ -3,10 +3,16 @@ use crate::components::file_list_panel::{FileListMessage, FileListPanel};
 use crate::components::git_diff::git_diff_panel::{GitDiffPanel, GitDiffPanelMessage};
 use crate::components::git_diff::{DiffAnchor, PatchAnchor};
 use crate::components::review_comments::{CommentAnchor, ReviewComment};
-use crate::git_diff::{GitDiffDocument, PatchLineKind, load_git_diff};
+use crate::git_diff::{
+    FileDiff, FileStatus, GitDiffDocument, GitDiffError, PatchLineKind, StageState, commit, load_git_diff, stage_all,
+    stage_file, unstage_all, unstage_file,
+};
 use std::collections::HashMap;
-use std::path::PathBuf;
-use tui::{Component, Either, Event, Frame, KeyCode, Line, SplitLayout, SplitPanel, Style, ViewContext};
+use std::path::{Path, PathBuf};
+use tui::{
+    Component, Cursor, Either, Event, Frame, KeyCode, Line, SplitLayout, SplitPanel, Style, TextField, ViewContext,
+    display_width_text, truncate_line,
+};
 
 pub enum GitDiffViewMessage {
     Close,
@@ -43,6 +49,7 @@ pub struct GitDiffMode {
     split: SplitPanel<FileListPanel, GitDiffPanel>,
     comments: ReviewQueue,
     pending_restore: Option<RefreshState>,
+    bottom: BottomBar,
 }
 
 impl GitDiffMode {
@@ -57,6 +64,7 @@ impl GitDiffMode {
                 .with_resize_keys(),
             comments: ReviewQueue::default(),
             pending_restore: None,
+            bottom: BottomBar::Help,
         }
     }
 
@@ -96,6 +104,7 @@ impl GitDiffMode {
 
     fn reset(&mut self, load_state: GitDiffLoadState) {
         self.pending_restore = None;
+        self.bottom = BottomBar::Help;
         self.load_state = load_state;
         *self.split.left_mut() = FileListPanel::new();
         *self.split.right_mut() = GitDiffPanel::new();
@@ -116,6 +125,13 @@ impl Component for GitDiffMode {
     type Message = GitDiffViewMessage;
 
     async fn on_event(&mut self, event: &Event) -> Option<Vec<GitDiffViewMessage>> {
+        match &self.bottom {
+            BottomBar::Commit(_) => return Some(self.on_commit_composer_event(event).await),
+            BottomBar::ConfirmDiscard(_) => return Some(self.on_discard_confirm_event(event).await),
+            BottomBar::Error(_) if matches!(event, Event::Key(_)) => self.bottom = BottomBar::Help,
+            _ => {}
+        }
+
         if self.split.right().is_in_comment_mode() {
             return Some(self.on_comment_mode_event(event).await);
         }
@@ -123,6 +139,11 @@ impl Component for GitDiffMode {
         if let Event::Key(key) = event {
             match key.code {
                 KeyCode::Esc => return Some(vec![GitDiffViewMessage::Close]),
+                KeyCode::Char(' ') => return Some(self.toggle_stage_selected().await),
+                KeyCode::Char('a') => return Some(self.stage_all().await),
+                KeyCode::Char('A') => return Some(self.unstage_all().await),
+                KeyCode::Char('C') => return Some(self.begin_commit()),
+                KeyCode::Char('d') => return Some(self.request_discard()),
                 KeyCode::Char('r') => return Some(vec![GitDiffViewMessage::Refresh]),
                 KeyCode::Char('u') => {
                     self.comments.pop();
@@ -150,7 +171,9 @@ impl Component for GitDiffMode {
             return Frame::new(vec![Line::new("Too narrow")]);
         }
 
-        let body_height = context.size.height.saturating_sub(1);
+        let bottom = self.render_bottom_bar(theme, context.size.width as usize);
+        let bottom_height = u16::try_from(bottom.lines().len()).unwrap_or(1).max(1);
+        let body_height = context.size.height.saturating_sub(bottom_height);
         let body_context = context.with_size((context.size.width, body_height));
 
         let status_msg = match &self.load_state {
@@ -187,8 +210,7 @@ impl Component for GitDiffMode {
             self.split.render(&body_context)
         };
 
-        let help_keys: &[(&str, &str)] = if self.split.is_left_focused() { &LEFT_HELP_KEYS } else { &RIGHT_HELP_KEYS };
-        Frame::vstack([body, Frame::new(vec![render_key_hints(theme, help_keys)])])
+        Frame::vstack([body, bottom])
     }
 }
 
@@ -299,6 +321,183 @@ impl GitDiffMode {
         doc.files.get(idx).map(|f| f.path.as_str())
     }
 
+    fn repo_root(&self) -> Option<&Path> {
+        match &self.load_state {
+            GitDiffLoadState::Ready(doc) => Some(&doc.repo_root),
+            _ => self.cached_repo_root.as_deref(),
+        }
+    }
+
+    fn repo_root_buf(&self) -> Option<PathBuf> {
+        self.repo_root().map(Path::to_path_buf)
+    }
+
+    fn selected_file(&self) -> Option<&FileDiff> {
+        let GitDiffLoadState::Ready(doc) = &self.load_state else {
+            return None;
+        };
+        let idx = self.split.left().selected_file_index()?;
+        doc.files.get(idx)
+    }
+
+    fn any_staged(&self) -> bool {
+        matches!(&self.load_state, GitDiffLoadState::Ready(doc)
+            if doc.files.iter().any(|file| matches!(file.staged, StageState::Staged | StageState::PartiallyStaged)))
+    }
+
+    async fn toggle_stage_selected(&mut self) -> Vec<GitDiffViewMessage> {
+        let Some(file) = self.selected_file() else {
+            return vec![];
+        };
+        let (path, staged) = (file.path.clone(), file.staged);
+        let Some(root) = self.repo_root_buf() else {
+            return vec![];
+        };
+        let result = match staged {
+            StageState::Staged => unstage_file(&root, &path).await,
+            StageState::Unstaged | StageState::PartiallyStaged => stage_file(&root, &path).await,
+        };
+        self.apply_action_result(result)
+    }
+
+    async fn stage_all(&mut self) -> Vec<GitDiffViewMessage> {
+        let Some(root) = self.repo_root_buf() else {
+            return vec![];
+        };
+        let result = stage_all(&root).await;
+        self.apply_action_result(result)
+    }
+
+    async fn unstage_all(&mut self) -> Vec<GitDiffViewMessage> {
+        let Some(root) = self.repo_root_buf() else {
+            return vec![];
+        };
+        let result = unstage_all(&root).await;
+        self.apply_action_result(result)
+    }
+
+    fn apply_action_result(&mut self, result: Result<(), GitDiffError>) -> Vec<GitDiffViewMessage> {
+        match result {
+            Ok(()) => vec![GitDiffViewMessage::Refresh],
+            Err(error) => {
+                self.bottom = BottomBar::Error(error.to_string());
+                vec![]
+            }
+        }
+    }
+
+    fn request_discard(&mut self) -> Vec<GitDiffViewMessage> {
+        let Some(file) = self.selected_file() else {
+            return vec![];
+        };
+        self.bottom = BottomBar::ConfirmDiscard(PendingDiscard { path: file.path.clone(), status: file.status });
+        vec![]
+    }
+
+    fn begin_commit(&mut self) -> Vec<GitDiffViewMessage> {
+        if !self.any_staged() {
+            self.bottom = BottomBar::Error("Nothing staged to commit".to_string());
+            return vec![];
+        }
+        self.bottom = BottomBar::Commit(TextField::new(String::new()));
+        vec![]
+    }
+
+    async fn on_commit_composer_event(&mut self, event: &Event) -> Vec<GitDiffViewMessage> {
+        if let Event::Key(key) = event {
+            match key.code {
+                KeyCode::Esc => {
+                    self.bottom = BottomBar::Help;
+                    return vec![];
+                }
+                KeyCode::Enter => {
+                    let message = match &self.bottom {
+                        BottomBar::Commit(field) => field.value.trim().to_string(),
+                        _ => String::new(),
+                    };
+                    if message.is_empty() {
+                        self.bottom = BottomBar::Error("Commit message cannot be empty".to_string());
+                        return vec![];
+                    }
+                    self.bottom = BottomBar::Help;
+                    let Some(root) = self.repo_root_buf() else {
+                        return vec![];
+                    };
+                    let result = commit(&root, &message).await;
+                    return self.apply_action_result(result);
+                }
+                _ => {}
+            }
+        }
+        if let BottomBar::Commit(field) = &mut self.bottom {
+            field.on_event(event).await;
+        }
+        vec![]
+    }
+
+    async fn on_discard_confirm_event(&mut self, event: &Event) -> Vec<GitDiffViewMessage> {
+        let Event::Key(key) = event else {
+            return vec![];
+        };
+        match key.code {
+            KeyCode::Char('y' | 'Y') => {
+                let BottomBar::ConfirmDiscard(PendingDiscard { path, status }) =
+                    std::mem::replace(&mut self.bottom, BottomBar::Help)
+                else {
+                    return vec![];
+                };
+                let Some(root) = self.repo_root_buf() else {
+                    return vec![];
+                };
+                let result = crate::git_diff::discard_file(&root, &path, status).await;
+                self.apply_action_result(result)
+            }
+            KeyCode::Char('n' | 'N') | KeyCode::Esc => {
+                self.bottom = BottomBar::Help;
+                vec![]
+            }
+            _ => vec![],
+        }
+    }
+
+    fn render_bottom_bar(&self, theme: &tui::Theme, width: usize) -> Frame {
+        match &self.bottom {
+            BottomBar::Commit(field) => {
+                let prefix_width = display_width_text("commit › ");
+                let avail = width.saturating_sub(prefix_width + 1).max(1);
+                let (visible, cursor_col) = field.single_line_window(avail);
+
+                let mut input = Line::default();
+                input.push_with_style("commit", Style::fg(theme.accent()).bold());
+                input.push_with_style(" › ", Style::fg(theme.muted()));
+                input.push_with_style(&visible, Style::fg(theme.text_primary()));
+                let hint = truncate_line(&render_key_hints(theme, &COMMIT_HELP_KEYS), width);
+                Frame::new(vec![input, hint]).with_cursor(Cursor::visible(0, prefix_width + cursor_col))
+            }
+            BottomBar::ConfirmDiscard(pending) => {
+                let mut line = Line::default();
+                line.push_with_style("Discard changes to ", Style::fg(theme.warning()));
+                line.push_with_style(&pending.path, Style::fg(theme.warning()).bold());
+                line.push_with_style("?  ", Style::fg(theme.warning()));
+                line.push_with_style("y", Style::fg(theme.accent()));
+                line.push_with_style(" confirm  ", Style::fg(theme.muted()));
+                line.push_with_style("n", Style::fg(theme.accent()));
+                line.push_with_style(" cancel", Style::fg(theme.muted()));
+                Frame::new(vec![truncate_line(&line, width)])
+            }
+            BottomBar::Error(error) => {
+                let mut line = Line::default();
+                line.push_with_style(error, Style::fg(theme.warning()));
+                Frame::new(vec![truncate_line(&line, width)])
+            }
+            BottomBar::Help => {
+                let help_keys: &[(&str, &str)] =
+                    if self.split.is_left_focused() { &LEFT_HELP_KEYS } else { &RIGHT_HELP_KEYS };
+                Frame::new(vec![truncate_line(&render_key_hints(theme, help_keys), width)])
+            }
+        }
+    }
+
     fn apply_loaded_document(&mut self, doc: GitDiffDocument, restore: Option<RefreshState>) {
         self.document_revision = self.document_revision.saturating_add(1);
 
@@ -332,18 +531,31 @@ impl GitDiffMode {
 }
 
 const LEFT_HELP_KEYS: [(&str, &str); 6] =
-    [("j/k", "move"), ("h/l", "fold/open"), ("enter", "view"), ("u", "undo"), ("r", "refresh"), ("Esc", "close")];
+    [("j/k", "move"), ("space", "stage"), ("A", "stage all"), ("C", "commit"), ("d", "discard"), ("Esc", "close")];
 
-const RIGHT_HELP_KEYS: [(&str, &str); 8] = [
-    ("j/k", "move"),
-    ("h", "back"),
+const COMMIT_HELP_KEYS: [(&str, &str); 2] = [("enter", "commit"), ("esc", "cancel")];
+
+const RIGHT_HELP_KEYS: [(&str, &str); 7] = [
+    ("space", "stage"),
     ("c", "comment"),
+    ("C", "commit"),
+    ("d", "discard"),
     ("s", "submit"),
     ("o", "full file"),
-    ("u", "undo"),
-    ("r", "refresh"),
     ("Esc", "close"),
 ];
+
+enum BottomBar {
+    Help,
+    Commit(TextField),
+    ConfirmDiscard(PendingDiscard),
+    Error(String),
+}
+
+struct PendingDiscard {
+    path: String,
+    status: FileStatus,
+}
 
 #[derive(Default)]
 struct ReviewQueue {

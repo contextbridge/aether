@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -12,6 +13,7 @@ pub struct FileDiff {
     pub old_path: Option<String>,
     pub path: String,
     pub status: FileStatus,
+    pub staged: StageState,
     pub hunks: Vec<Hunk>,
     pub binary: bool,
 }
@@ -23,6 +25,13 @@ pub enum FileStatus {
     Deleted,
     Renamed,
     Untracked,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StageState {
+    Unstaged,
+    Staged,
+    PartiallyStaged,
 }
 
 #[allow(dead_code)]
@@ -121,16 +130,84 @@ pub(crate) async fn load_git_diff(
         Some(root) => root.to_path_buf(),
         None => resolve_repo_root(working_dir).await?,
     };
-    let diff_output = run_git_command(&repo_root, &["diff", "--no-ext-diff", "--find-renames", "HEAD"]).await?;
+    let diff_output = git(&repo_root, &["diff", "--no-ext-diff", "--find-renames", "HEAD"]).await?;
 
     let mut files = if diff_output.trim().is_empty() { Vec::new() } else { parse_unified_diff(&diff_output)? };
 
-    let untracked_stdout = run_git_command(&repo_root, &["ls-files", "--others", "--exclude-standard"]).await?;
+    let untracked_stdout = git(&repo_root, &["ls-files", "--others", "--exclude-standard"]).await?;
     for path in untracked_stdout.lines().filter(|l| !l.is_empty()).map(String::from) {
         files.push(build_untracked_file_diff(&repo_root, path).await);
     }
 
+    let status_map = load_status_map(&repo_root).await?;
+    for file in &mut files {
+        file.staged = status_map.get(&file.path).copied().unwrap_or(StageState::Unstaged);
+    }
+
     Ok(GitDiffDocument { repo_root, files })
+}
+
+pub(crate) async fn stage_file(repo_root: &Path, path: &str) -> Result<(), GitDiffError> {
+    git(repo_root, &["add", "--", path]).await.map(drop)
+}
+
+pub(crate) async fn unstage_file(repo_root: &Path, path: &str) -> Result<(), GitDiffError> {
+    git(repo_root, &["reset", "--quiet", "--", path]).await.map(drop)
+}
+
+pub(crate) async fn stage_all(repo_root: &Path) -> Result<(), GitDiffError> {
+    git(repo_root, &["add", "-A"]).await.map(drop)
+}
+
+pub(crate) async fn unstage_all(repo_root: &Path) -> Result<(), GitDiffError> {
+    git(repo_root, &["reset", "--quiet"]).await.map(drop)
+}
+
+pub(crate) async fn discard_file(repo_root: &Path, path: &str, status: FileStatus) -> Result<(), GitDiffError> {
+    match status {
+        FileStatus::Untracked => git(repo_root, &["clean", "-f", "--", path]).await.map(drop),
+        _ => git(repo_root, &["restore", "--source=HEAD", "--staged", "--worktree", "--", path]).await.map(drop),
+    }
+}
+
+pub(crate) async fn commit(repo_root: &Path, message: &str) -> Result<(), GitDiffError> {
+    if message.trim().is_empty() {
+        return Err(GitDiffError::CommandFailed { stderr: "empty commit message".to_string() });
+    }
+    git(repo_root, &["commit", "-m", message]).await.map(drop)
+}
+
+async fn load_status_map(repo_root: &Path) -> Result<HashMap<String, StageState>, GitDiffError> {
+    let output = git(repo_root, &["status", "--porcelain=v1", "-z"]).await?;
+    Ok(parse_porcelain_status(&output))
+}
+
+fn parse_porcelain_status(input: &str) -> HashMap<String, StageState> {
+    let mut map = HashMap::new();
+    let mut tokens = input.split('\0').filter(|token| !token.is_empty());
+
+    while let Some(record) = tokens.next() {
+        if record.len() < 3 {
+            continue;
+        }
+        let bytes = record.as_bytes();
+        let index = bytes[0] as char;
+        let worktree = bytes[1] as char;
+        let path = &record[3..];
+
+        if matches!(index, 'R' | 'C') || matches!(worktree, 'R' | 'C') {
+            tokens.next();
+        }
+
+        let state = match (index, worktree) {
+            ('?', '?') | (' ', _) => StageState::Unstaged,
+            (_, ' ') => StageState::Staged,
+            _ => StageState::PartiallyStaged,
+        };
+        map.insert(path.to_string(), state);
+    }
+
+    map
 }
 
 async fn resolve_repo_root(working_dir: &Path) -> Result<PathBuf, GitDiffError> {
@@ -154,7 +231,7 @@ async fn resolve_repo_root(working_dir: &Path) -> Result<PathBuf, GitDiffError> 
     Ok(PathBuf::from(root))
 }
 
-async fn run_git_command(repo_root: &Path, args: &[&str]) -> Result<String, GitDiffError> {
+async fn git(repo_root: &Path, args: &[&str]) -> Result<String, GitDiffError> {
     let output = tokio::process::Command::new("git")
         .args(args)
         .current_dir(repo_root)
@@ -214,11 +291,25 @@ async fn build_untracked_file_diff(repo_root: &Path, relative_path: String) -> F
         lines: patch_lines,
     };
 
-    FileDiff { old_path: None, path: relative_path, status: FileStatus::Untracked, hunks: vec![hunk], binary: false }
+    FileDiff {
+        old_path: None,
+        path: relative_path,
+        status: FileStatus::Untracked,
+        staged: StageState::Unstaged,
+        hunks: vec![hunk],
+        binary: false,
+    }
 }
 
 fn binary_untracked(path: String) -> FileDiff {
-    FileDiff { old_path: None, path, status: FileStatus::Untracked, hunks: Vec::new(), binary: true }
+    FileDiff {
+        old_path: None,
+        path,
+        status: FileStatus::Untracked,
+        staged: StageState::Unstaged,
+        hunks: Vec::new(),
+        binary: true,
+    }
 }
 
 pub(crate) fn parse_unified_diff(input: &str) -> Result<Vec<FileDiff>, GitDiffError> {
@@ -261,7 +352,14 @@ fn parse_file_diff(chunk: &str) -> Result<FileDiff, GitDiffError> {
     let (status, binary, rename_from, hunk_start) = scan_file_metadata(&lines);
     let hunks = if binary { Vec::new() } else { parse_file_hunks(&lines[hunk_start..])? };
 
-    Ok(FileDiff { old_path: resolve_old_path(status, rename_from, old_path), path: new_path, status, hunks, binary })
+    Ok(FileDiff {
+        old_path: resolve_old_path(status, rename_from, old_path),
+        path: new_path,
+        status,
+        staged: StageState::Unstaged,
+        hunks,
+        binary,
+    })
 }
 
 fn scan_file_metadata(lines: &[&str]) -> (FileStatus, bool, Option<String>, usize) {
@@ -737,5 +835,135 @@ index abc..def 100644
         let diff = build_untracked_file_diff(dir.path(), "does_not_exist.txt".to_string()).await;
         assert!(diff.binary);
         assert!(diff.hunks.is_empty());
+    }
+
+    async fn init_repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+        git(path, &["init", "--quiet"]).await.unwrap();
+        git(path, &["config", "user.email", "test@example.com"]).await.unwrap();
+        git(path, &["config", "user.name", "Test"]).await.unwrap();
+        git(path, &["config", "commit.gpgsign", "false"]).await.unwrap();
+        dir
+    }
+
+    async fn write_file(dir: &Path, name: &str, content: &str) {
+        tokio::fs::write(dir.join(name), content).await.unwrap();
+    }
+
+    async fn commit_file(dir: &Path, name: &str, content: &str, message: &str) {
+        write_file(dir, name, content).await;
+        git(dir, &["add", "-A"]).await.unwrap();
+        git(dir, &["commit", "--quiet", "-m", message]).await.unwrap();
+    }
+
+    fn staged_of(doc: &GitDiffDocument, path: &str) -> StageState {
+        doc.files.iter().find(|file| file.path == path).unwrap_or_else(|| panic!("{path} not in diff")).staged
+    }
+
+    #[tokio::test]
+    async fn stage_toggles_status() {
+        let repo = init_repo().await;
+        let dir = repo.path();
+        commit_file(dir, "a.txt", "one\n", "init").await;
+        write_file(dir, "a.txt", "one\ntwo\n").await;
+
+        let doc = load_git_diff(dir, None).await.unwrap();
+        assert_eq!(staged_of(&doc, "a.txt"), StageState::Unstaged);
+
+        stage_file(dir, "a.txt").await.unwrap();
+        let doc = load_git_diff(dir, None).await.unwrap();
+        assert_eq!(staged_of(&doc, "a.txt"), StageState::Staged);
+
+        unstage_file(dir, "a.txt").await.unwrap();
+        let doc = load_git_diff(dir, None).await.unwrap();
+        assert_eq!(staged_of(&doc, "a.txt"), StageState::Unstaged);
+    }
+
+    #[tokio::test]
+    async fn stage_all_marks_all_staged() {
+        let repo = init_repo().await;
+        let dir = repo.path();
+        commit_file(dir, "a.txt", "a1\n", "init").await;
+        commit_file(dir, "b.txt", "b1\n", "add b").await;
+        write_file(dir, "a.txt", "a2\n").await;
+        write_file(dir, "b.txt", "b2\n").await;
+        write_file(dir, "c.txt", "c1\n").await;
+
+        stage_all(dir).await.unwrap();
+        let doc = load_git_diff(dir, None).await.unwrap();
+        assert_eq!(staged_of(&doc, "a.txt"), StageState::Staged);
+        assert_eq!(staged_of(&doc, "b.txt"), StageState::Staged);
+        assert_eq!(staged_of(&doc, "c.txt"), StageState::Staged);
+    }
+
+    #[tokio::test]
+    async fn commit_creates_commit_and_clears_staged() {
+        let repo = init_repo().await;
+        let dir = repo.path();
+        commit_file(dir, "a.txt", "one\n", "init").await;
+        write_file(dir, "a.txt", "one\ntwo\n").await;
+        stage_file(dir, "a.txt").await.unwrap();
+        commit(dir, "second commit").await.unwrap();
+        let log = git(dir, &["log", "--oneline", "-1"]).await.unwrap();
+        assert!(log.contains("second commit"), "log was: {log}");
+
+        let doc = load_git_diff(dir, None).await.unwrap();
+        assert!(doc.files.is_empty(), "expected clean tree, got {} files", doc.files.len());
+    }
+
+    #[tokio::test]
+    async fn discard_reverts_tracked_file() {
+        let repo = init_repo().await;
+        let dir = repo.path();
+        commit_file(dir, "a.txt", "v1\n", "init").await;
+        write_file(dir, "a.txt", "v2\n").await;
+        discard_file(dir, "a.txt", FileStatus::Modified).await.unwrap();
+        let content = tokio::fs::read_to_string(dir.join("a.txt")).await.unwrap();
+        assert_eq!(content, "v1\n");
+    }
+
+    #[tokio::test]
+    async fn discard_removes_untracked_file() {
+        let repo = init_repo().await;
+        let dir = repo.path();
+        commit_file(dir, "a.txt", "a1\n", "init").await;
+        write_file(dir, "new.txt", "scratch\n").await;
+        discard_file(dir, "new.txt", FileStatus::Untracked).await.unwrap();
+        assert!(!dir.join("new.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn commit_with_empty_message_is_rejected() {
+        let repo = init_repo().await;
+        assert!(commit(repo.path(), "   ").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn unstage_on_unborn_branch_untracks_file() {
+        let repo = init_repo().await;
+        let dir = repo.path();
+        write_file(dir, "a.txt", "hi\n").await;
+        git(dir, &["add", "a.txt"]).await.unwrap();
+        unstage_file(dir, "a.txt").await.unwrap();
+        let status = git(dir, &["status", "--porcelain"]).await.unwrap();
+        assert!(status.contains("?? a.txt"), "status was: {status}");
+    }
+
+    #[test]
+    fn parse_porcelain_status_handles_rename() {
+        let map = parse_porcelain_status("R  new.txt\0old.txt\0 M other.txt\0");
+        assert_eq!(map.get("new.txt"), Some(&StageState::Staged));
+        assert_eq!(map.get("old.txt"), None);
+        assert_eq!(map.get("other.txt"), Some(&StageState::Unstaged));
+    }
+
+    #[test]
+    fn parse_porcelain_status_classifies_states() {
+        let map = parse_porcelain_status("M  staged.txt\0 M unstaged.txt\0MM partial.txt\0?? untracked.txt\0");
+        assert_eq!(map.get("staged.txt"), Some(&StageState::Staged));
+        assert_eq!(map.get("unstaged.txt"), Some(&StageState::Unstaged));
+        assert_eq!(map.get("partial.txt"), Some(&StageState::PartiallyStaged));
+        assert_eq!(map.get("untracked.txt"), Some(&StageState::Unstaged));
     }
 }

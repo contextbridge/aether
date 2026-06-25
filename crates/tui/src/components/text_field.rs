@@ -3,7 +3,7 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use crate::components::{Component, Event, ViewContext};
 use crate::line::Line;
 use crate::rendering::frame::Frame;
-use crate::rendering::soft_wrap::{soft_wrap_text_byte_offset, soft_wrap_text_position};
+use crate::rendering::soft_wrap::{display_width_text, soft_wrap_text_byte_offset, soft_wrap_text_position};
 
 /// Single-line text input with cursor tracking and navigation.
 pub struct TextField {
@@ -69,6 +69,31 @@ impl TextField {
             line.push_styled("▏", context.theme.primary());
         }
         vec![line]
+    }
+
+    /// Horizontally scrolls the value so the cursor stays within `avail` display columns,
+    /// returning the visible slice and the cursor's column offset within it. Use for
+    /// single-line inputs that must scroll rather than wrap.
+    pub fn single_line_window(&self, avail: usize) -> (String, usize) {
+        let cursor_col = display_width_text(&self.value[..self.cursor_pos]);
+        let scroll = cursor_col.saturating_sub(avail);
+        let mut visible = String::new();
+        let mut col = 0;
+
+        for (offset, ch) in self.value.char_indices() {
+            let char_width = display_width_text(&self.value[offset..offset + ch.len_utf8()]);
+            if col < scroll {
+                col += char_width;
+                continue;
+            }
+            if col + char_width > scroll + avail {
+                break;
+            }
+            visible.push(ch);
+            col += char_width;
+        }
+
+        (visible, cursor_col - scroll)
     }
 
     fn delete_after_cursor(&mut self) {
