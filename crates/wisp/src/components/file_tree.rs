@@ -1,8 +1,8 @@
-use crate::git_diff::{FileDiff, FileStatus};
+use crate::git_diff::{FileDiff, FileStatus, StageState};
 
 pub enum FileTreeNode {
     Directory { name: String, children: Vec<FileTreeNode>, expanded: bool },
-    File { file_index: usize, name: String, status: FileStatus, additions: usize, deletions: usize },
+    File { file_index: usize, name: String, status: FileStatus, staged: StageState, additions: usize, deletions: usize },
 }
 
 #[derive(Debug, Clone)]
@@ -14,7 +14,7 @@ pub struct FileTreeEntry {
 #[derive(Debug, Clone)]
 pub enum FileTreeEntryKind {
     Directory { name: String, expanded: bool },
-    File { file_index: usize, name: String, status: FileStatus, additions: usize, deletions: usize },
+    File { file_index: usize, name: String, status: FileStatus, staged: StageState, additions: usize, deletions: usize },
 }
 
 pub struct FileTree {
@@ -135,6 +135,7 @@ fn insert_into_tree(nodes: &mut Vec<FileTreeNode>, parts: &[&str], file_index: u
             file_index,
             name: parts[0].to_string(),
             status: file.status,
+            staged: file.staged,
             additions: file.additions(),
             deletions: file.deletions(),
         });
@@ -218,13 +219,14 @@ fn collect_visible(node: &FileTreeNode, depth: usize, entries: &mut Vec<FileTree
                 }
             }
         }
-        FileTreeNode::File { file_index, name, status, additions, deletions } => {
+        FileTreeNode::File { file_index, name, status, staged, additions, deletions } => {
             entries.push(FileTreeEntry {
                 depth,
                 kind: FileTreeEntryKind::File {
                     file_index: *file_index,
                     name: name.clone(),
                     status: *status,
+                    staged: *staged,
                     additions: *additions,
                     deletions: *deletions,
                 },
@@ -269,7 +271,7 @@ fn find_parent_dir(entries: &[FileTreeEntry], idx: usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::git_diff::{FileDiff, FileStatus, Hunk, PatchLine, PatchLineKind};
+    use crate::git_diff::{FileDiff, FileStatus, Hunk, PatchLine, PatchLineKind, StageState};
 
     fn file(path: &str, status: FileStatus, additions: usize, deletions: usize) -> FileDiff {
         let mut lines = Vec::new();
@@ -293,6 +295,7 @@ mod tests {
             old_path: None,
             path: path.to_string(),
             status,
+            staged: StageState::Unstaged,
             hunks: if lines.is_empty() {
                 vec![]
             } else {

@@ -138,7 +138,7 @@ mod tests {
     use crate::components::app::git_diff_mode::GitDiffCommentContext;
     use crate::components::git_diff::PatchAnchor;
     use crate::components::review_comments::{CommentAnchor, ReviewComment};
-    use crate::git_diff::{FileStatus, Hunk, PatchLine, PatchLineKind};
+    use crate::git_diff::{FileStatus, Hunk, PatchLine, PatchLineKind, StageState};
 
     fn context() -> ViewContext {
         ViewContext::new((120, 24))
@@ -153,6 +153,7 @@ mod tests {
             old_path: Some(path.to_string()),
             path: path.to_string(),
             status: FileStatus::Modified,
+            staged: StageState::Unstaged,
             hunks: vec![Hunk {
                 header: "@@ -1,1 +1,1 @@".to_string(),
                 old_start: 1,

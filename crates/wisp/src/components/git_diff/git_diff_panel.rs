@@ -4,7 +4,7 @@ use super::split_patch_renderer::build_split_patch_base_lines;
 use super::{DiffAnchor, PatchAnchor, file_status_color, header_rule, push_diff_stats};
 use crate::components::app::git_diff_mode::QueuedComment;
 use crate::components::review_comments::{AnchoredRows, KeyOutcome, Navigation, ReviewSurface, ReviewSurfaceEvent};
-use crate::git_diff::{FileDiff, FileStatus, Hunk, PatchLine, PatchLineKind};
+use crate::git_diff::{FileDiff, FileStatus, Hunk, PatchLine, PatchLineKind, StageState};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use tui::{Component, Cursor, Event, Frame, FramePart, KeyCode, Line, MouseEventKind, Style, ViewContext};
@@ -97,6 +97,7 @@ impl FileView {
                 old_path: None,
                 path: self.path.clone(),
                 status: file_status,
+                staged: StageState::Unstaged,
                 hunks: Vec::new(),
                 binary: false,
             };
@@ -123,6 +124,7 @@ impl FileView {
             old_path: None,
             path: self.path.clone(),
             status: file_status,
+            staged: StageState::Unstaged,
             hunks: vec![Hunk {
                 header: format!("@@ -0,0 +1,{} @@", file_lines.len()),
                 old_start: 0,
@@ -475,6 +477,7 @@ mod tests {
             old_path: None,
             path: "src/main.rs".to_string(),
             status: FileStatus::Modified,
+            staged: StageState::Unstaged,
             hunks: vec![Hunk {
                 header: "@@ -1,1 +1,2 @@".to_string(),
                 old_start: 1,

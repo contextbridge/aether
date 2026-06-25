@@ -1,7 +1,7 @@
 use tui::testing::{TestTerminal, assert_buffer_eq, cols, key, render_component};
 use tui::{Component, Event, KeyCode, KeyModifiers, MouseEvent, MouseEventKind, ViewContext};
 use wisp::components::file_list_panel::FileListPanel;
-use wisp::git_diff::{FileDiff, FileStatus, Hunk, PatchLine, PatchLineKind};
+use wisp::git_diff::{FileDiff, FileStatus, Hunk, PatchLine, PatchLineKind, StageState};
 
 const W: u16 = 40;
 
@@ -45,6 +45,7 @@ fn file(path: &str, status: FileStatus, additions: usize, deletions: usize) -> F
         old_path: None,
         path: path.to_string(),
         status,
+        staged: StageState::Unstaged,
         hunks: if lines.is_empty() {
             vec![]
         } else {
@@ -81,13 +82,13 @@ fn flat_rows(selected: usize) -> [String; 4] {
     [
         " Git Diff  2 files  +8 -1".to_string(),
         rule(),
-        cols(&[(format!("{app_indicator}── app.rs").as_str(), 33), ("+3 -1 M", 0)]),
-        cols(&[(format!("{lib_indicator}── lib.rs").as_str(), 33), ("+5 -0 A", 0)]),
+        cols(&[(format!("{app_indicator}── app.rs").as_str(), 31), ("+3 -1 M ☐", 0)]),
+        cols(&[(format!("{lib_indicator}── lib.rs").as_str(), 31), ("+5 -0 A ☐", 0)]),
     ]
 }
 
 #[test]
-fn nested_directory_and_file_share_horizontal_connector() {
+fn nested_directory_uses_compact_connector_to_align_child_branch() {
     let files = vec![
         file("src/components/button.rs", FileStatus::Modified, 1, 0),
         file("src/lib.rs", FileStatus::Modified, 1, 0),
@@ -99,15 +100,68 @@ fn nested_directory_and_file_share_horizontal_connector() {
     let dir_row = lines.iter().find(|line| line.contains("components/")).expect("components directory row");
     let file_row = lines.iter().find(|line| line.contains("button.rs")).expect("components child row");
 
-    let dashes_after = |row: &str, branch: char| {
-        let start = row.find(branch).map(|i| i + branch.len_utf8()).expect("branch char");
-        row[start..].chars().take_while(|&ch| ch == '─').count()
+    assert!(dir_row.contains("├─▾ components/"), "directory rows should use a compact connector: {dir_row:?}");
+    assert!(file_row.contains("│ └── button.rs"), "child rows should advance by two columns: {file_row:?}");
+}
+
+#[test]
+fn sibling_directory_and_file_align_their_connectors() {
+    let files =
+        vec![file("pkg/dir/inner.rs", FileStatus::Modified, 1, 0), file("pkg/file.rs", FileStatus::Modified, 1, 0)];
+    let mut panel = FileListPanel::new();
+    panel.rebuild_from_files(&files);
+    let lines = render_component(|ctx| panel.render(ctx), W, 8).get_lines();
+
+    let connector_col = |needle: &str, branch: char| {
+        let row = lines.iter().find(|line| line.contains(needle)).unwrap_or_else(|| panic!("{needle} row"));
+        row[..row.find(branch).expect("branch char")].chars().count()
     };
 
     assert_eq!(
-        dashes_after(dir_row, '├'),
-        dashes_after(file_row, '└'),
-        "directory and file rows should draw the same horizontal connector\n dir: {dir_row:?}\nfile: {file_row:?}",
+        connector_col("dir/", '├'),
+        connector_col("file.rs", '└'),
+        "a directory and its sibling file must draw their connector in the same column so the vertical guide stays continuous",
+    );
+}
+
+#[test]
+fn file_rows_keep_single_space_after_horizontal_connector() {
+    let mut panel = panel_with_directory();
+    let lines = render_component(|ctx| panel.render(ctx), W, 5).get_lines();
+    let main_row = lines.iter().find(|line| line.contains("main.rs")).expect("main.rs row");
+
+    assert!(
+        main_row.contains("├── main.rs"),
+        "file row should have one space after the horizontal guide: {main_row:?}"
+    );
+    assert!(!main_row.contains("├──    main.rs"), "file row should not leave an icon-sized gutter: {main_row:?}");
+}
+
+#[test]
+fn child_branch_aligns_with_parent_directory_indicator() {
+    let files = vec![
+        file("crates/tui/src/components/text_field.rs", FileStatus::Modified, 1, 0),
+        file("crates/wisp/src/lib.rs", FileStatus::Modified, 1, 0),
+    ];
+    let mut panel = FileListPanel::new();
+    panel.rebuild_from_files(&files);
+    let lines = render_component(|ctx| panel.render(ctx), W, 8).get_lines();
+
+    let parent_row =
+        lines.iter().find(|line| line.contains("tui/src/components/")).expect("compressed parent directory row");
+    let child_row = lines.iter().find(|line| line.contains("text_field.rs")).expect("child file row");
+    let parent_branch_col = parent_row[..parent_row.find('├').expect("parent branch")].chars().count();
+    let parent_indicator_col = parent_row[..parent_row.find('▾').expect("parent expand indicator")].chars().count();
+    let child_branch_col = child_row[..child_row.find('└').expect("child branch")].chars().count();
+
+    assert_eq!(
+        child_branch_col, parent_indicator_col,
+        "child branch should line up with its parent directory indicator\n parent: {parent_row:?}\n  child: {child_row:?}",
+    );
+    assert_eq!(
+        child_branch_col - parent_branch_col,
+        2,
+        "each child level should indent by two columns\n parent: {parent_row:?}\n  child: {child_row:?}",
     );
 }
 
@@ -131,8 +185,8 @@ fn renders_directory_tree() {
             " Git Diff  2 files  +6 -1".to_string(),
             rule(),
             "▎▾  src/".to_string(),
-            cols(&[(" ├── main.rs", 33), ("+2 -1 M", 0)]),
-            cols(&[(" └── util.rs", 33), ("+4 -0 A", 0)]),
+            cols(&[(" ├── main.rs", 31), ("+2 -1 M ☐", 0)]),
+            cols(&[(" └── util.rs", 31), ("+4 -0 A ☐", 0)]),
         ],
     );
 }
@@ -161,7 +215,7 @@ fn tree_guides_are_muted() {
     let term = render_component(|c| panel.render(c), W, 13);
     let lines = term.get_lines();
 
-    let row = lines.iter().position(|line| line.contains("├── main.rs")).expect("main.rs row should render");
+    let row = lines.iter().position(|line| line.contains("main.rs")).expect("main.rs row should render");
     let guide_col = lines[row][..lines[row].find('├').unwrap()].chars().count();
     let name_col = lines[row][..lines[row].find("main.rs").unwrap()].chars().count();
 
@@ -295,7 +349,7 @@ fn renders_queued_comment_indicator() {
 
     assert_buffer_eq(
         &term,
-        &[" Git Diff  1 file  +1 -1  ◆3".to_string(), rule(), cols(&[("▎── a.rs", 33), ("+1 -1 M", 0)])],
+        &[" Git Diff  1 file  +1 -1  ◆3".to_string(), rule(), cols(&[("▎── a.rs", 31), ("+1 -1 M ☐", 0)])],
     );
 }
 
@@ -335,9 +389,9 @@ fn file_status_markers_render_correctly() {
         &[
             " Git Diff  3 files  +2 -2".to_string(),
             rule(),
-            cols(&[("▎── added.rs", 33), ("+1 -0 A", 0)]),
-            cols(&[(" ── deleted.rs", 33), ("+0 -1 D", 0)]),
-            cols(&[(" ── modified.rs", 33), ("+1 -1 M", 0)]),
+            cols(&[("▎── added.rs", 31), ("+1 -0 A ☐", 0)]),
+            cols(&[(" ── deleted.rs", 31), ("+0 -1 D ☐", 0)]),
+            cols(&[(" ── modified.rs", 31), ("+1 -1 M ☐", 0)]),
         ],
     );
 }
@@ -399,12 +453,12 @@ async fn renders_only_viewport_rows_after_scrolling_many_files() {
         &[
             " Git Diff  20 files  +20 -20".to_string(),
             rule(),
-            cols(&[(" ── file-02.rs", 33), ("+1 -1 M", 0)]),
-            cols(&[(" ── file-03.rs", 33), ("+1 -1 M", 0)]),
-            cols(&[(" ── file-04.rs", 33), ("+1 -1 M", 0)]),
-            cols(&[(" ── file-05.rs", 33), ("+1 -1 M", 0)]),
-            cols(&[(" ── file-06.rs", 33), ("+1 -1 M", 0)]),
-            cols(&[("▎── file-07.rs", 33), ("+1 -1 M", 0)]),
+            cols(&[(" ── file-02.rs", 31), ("+1 -1 M ☐", 0)]),
+            cols(&[(" ── file-03.rs", 31), ("+1 -1 M ☐", 0)]),
+            cols(&[(" ── file-04.rs", 31), ("+1 -1 M ☐", 0)]),
+            cols(&[(" ── file-05.rs", 31), ("+1 -1 M ☐", 0)]),
+            cols(&[(" ── file-06.rs", 31), ("+1 -1 M ☐", 0)]),
+            cols(&[("▎── file-07.rs", 31), ("+1 -1 M ☐", 0)]),
         ],
     );
     assert_selected_tree_row(&term, 7, 6);

@@ -238,7 +238,7 @@ fn split_row<'a>(left: Option<SideInfo<'a>>, right: Option<SideInfo<'a>>) -> Pai
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::git_diff::{FileStatus, Hunk};
+    use crate::git_diff::{FileStatus, Hunk, StageState};
 
     fn pl(kind: PatchLineKind, text: &str, old: Option<usize>, new: Option<usize>) -> PatchLine {
         PatchLine { kind, text: text.to_string(), old_line_no: old, new_line_no: new }
@@ -249,6 +249,7 @@ mod tests {
             old_path: Some("test.rs".to_string()),
             path: "test.rs".to_string(),
             status: FileStatus::Modified,
+            staged: StageState::Unstaged,
             hunks,
             binary: false,
         }

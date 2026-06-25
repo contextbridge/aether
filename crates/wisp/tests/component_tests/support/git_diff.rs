@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use wisp::git_diff::{FileDiff, FileStatus, GitDiffDocument, Hunk, PatchLine, PatchLineKind};
+use wisp::git_diff::{FileDiff, FileStatus, GitDiffDocument, Hunk, PatchLine, PatchLineKind, StageState};
 
 pub fn git_diff_document(files: Vec<FileDiff>) -> GitDiffDocument {
     GitDiffDocument { repo_root: PathBuf::from("/tmp/test"), files }
@@ -15,6 +15,7 @@ pub fn modified_file_with_hunks(path: &str, hunks: Vec<Hunk>) -> FileDiff {
         old_path: Some(path.to_string()),
         path: path.to_string(),
         status: FileStatus::Modified,
+        staged: StageState::Unstaged,
         hunks,
         binary: false,
     }
@@ -26,6 +27,7 @@ pub fn added_file(path: &str, lines: &[&str]) -> FileDiff {
         old_path: None,
         path: path.to_string(),
         status: FileStatus::Added,
+        staged: StageState::Unstaged,
         hunks: vec![hunk(&format!("@@ -0,0 +1,{} @@", lines.len()), 0, 0, 1, lines.len(), body_lines)],
         binary: false,
     }
@@ -87,6 +89,7 @@ pub fn wrapping_split_document() -> GitDiffDocument {
         old_path: Some("x.rs".to_string()),
         path: "x.rs".to_string(),
         status: FileStatus::Modified,
+        staged: StageState::Unstaged,
         hunks: vec![hunk(
             "@@ -1,2 +1,2 @@",
             1,
@@ -108,6 +111,7 @@ pub fn comment_diff_document() -> GitDiffDocument {
         old_path: Some("test.rs".to_string()),
         path: "test.rs".to_string(),
         status: FileStatus::Added,
+        staged: StageState::Unstaged,
         hunks: vec![hunk(
             "@@ -0,0 +1,3 @@",
             0,
