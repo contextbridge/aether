@@ -29,7 +29,7 @@ use super::protocol::events::{
     try_extract_plan_notification, try_into_agent_notification,
 };
 use super::session_config_state::{SessionConfigState, Switch};
-use super::session_store::{SessionStore, is_streaming_event};
+use super::session_store::{SessionStore, should_persist_session_event};
 use super::slash_commands::{dedupe_commands_by_name, expand_slash_command_in_content, send_available_commands};
 
 /// Capacity of the per-session command channel feeding the actor loop.
@@ -275,10 +275,9 @@ impl SessionActor {
     }
 
     fn record_event(&mut self, event: SessionEvent) {
-        if is_streaming_event(&event) {
-            return;
+        if should_persist_session_event(&event) {
+            self.transcript.push(event);
         }
-        self.transcript.push(event);
     }
 }
 

@@ -65,15 +65,17 @@ impl SessionStore {
     }
 
     pub fn append_event(&self, session_id: &str, event: &SessionEvent) -> io::Result<()> {
-        if is_streaming_event(event) {
+        if !should_persist_session_event(event) {
             return Ok(());
         }
+
         self.append_line(session_id, event)?;
         if let Some(prompt) = user_prompt_text_from_event(event)
             && let Some(meta) = self.session_meta(session_id)
         {
             self.prompt_history.append_prompt(&meta, prompt)?;
         }
+
         Ok(())
     }
 
@@ -270,7 +272,8 @@ impl SessionLogReader {
                 continue;
             }
             match serde_json::from_str::<SessionEvent>(trimmed) {
-                Ok(event) => events.push(event),
+                Ok(event) if should_persist_session_event(&event) => events.push(event),
+                Ok(_) => {}
                 Err(e) => warn!("Skipping malformed session log line: {e}"),
             }
         }
@@ -327,13 +330,29 @@ fn user_prompt_text_from_event(event: &SessionEvent) -> Option<String> {
     }
 }
 
-pub(crate) fn is_streaming_event(event: &SessionEvent) -> bool {
-    matches!(
-        event,
-        SessionEvent::Agent(
-            AgentMessage::Text { is_complete: false, .. } | AgentMessage::Thought { is_complete: false, .. }
-        )
-    )
+/// Whether a session event should be persisted to the session log
+/// Transient high-volume streaming events are excluded so logs stay compact
+pub(crate) fn should_persist_session_event(event: &SessionEvent) -> bool {
+    match event {
+        SessionEvent::User(_) | SessionEvent::Control(_) => true,
+        SessionEvent::Agent(message) => match message {
+            AgentMessage::Text { is_complete, .. } | AgentMessage::Thought { is_complete, .. } => *is_complete,
+            AgentMessage::ToolCall { .. }
+            | AgentMessage::ToolResult { .. }
+            | AgentMessage::ToolError { .. }
+            | AgentMessage::Error { .. }
+            | AgentMessage::Cancelled { .. }
+            | AgentMessage::Done
+            | AgentMessage::ContextCleared
+            | AgentMessage::ContextCompactionStarted { .. }
+            | AgentMessage::ContextCompactionResult { .. }
+            | AgentMessage::ContextUsageUpdate { .. }
+            | AgentMessage::AutoContinue { .. }
+            | AgentMessage::Retrying { .. }
+            | AgentMessage::ModelSwitched { .. } => true,
+            AgentMessage::ToolCallUpdate { .. } | AgentMessage::ToolProgress { .. } => false,
+        },
+    }
 }
 
 #[cfg(test)]
@@ -374,6 +393,72 @@ mod tests {
             from: from.map(str::to_string),
             to: to.map(str::to_string),
         })
+    }
+
+    fn agent_thought(msg_id: &str, chunk: &str, complete: bool) -> SessionEvent {
+        SessionEvent::Agent(AgentMessage::Thought {
+            message_id: msg_id.to_string(),
+            chunk: chunk.to_string(),
+            is_complete: complete,
+            model_name: "test".to_string(),
+        })
+    }
+
+    fn tool_call(id: &str, name: &str, arguments: &str) -> SessionEvent {
+        SessionEvent::Agent(AgentMessage::ToolCall {
+            request: llm::ToolCallRequest {
+                id: id.to_string(),
+                name: name.to_string(),
+                arguments: arguments.to_string(),
+            },
+            model_name: "test".to_string(),
+        })
+    }
+
+    fn tool_result(id: &str, result: &str) -> SessionEvent {
+        SessionEvent::Agent(AgentMessage::ToolResult {
+            result: ToolCallResult {
+                id: id.to_string(),
+                name: "t".to_string(),
+                arguments: "{}".to_string(),
+                result: result.to_string(),
+            },
+            result_meta: None,
+            model_name: "test".to_string(),
+        })
+    }
+
+    fn tool_error(id: &str) -> SessionEvent {
+        SessionEvent::Agent(AgentMessage::ToolError {
+            error: llm::ToolCallError {
+                id: id.to_string(),
+                name: "t".to_string(),
+                arguments: None,
+                error: "boom".to_string(),
+            },
+            model_name: "test".to_string(),
+        })
+    }
+
+    fn tool_call_update(id: &str, chunk: &str) -> SessionEvent {
+        SessionEvent::Agent(AgentMessage::ToolCallUpdate {
+            tool_call_id: id.to_string(),
+            chunk: chunk.to_string(),
+            model_name: "test".to_string(),
+        })
+    }
+
+    fn tool_progress(id: &str) -> SessionEvent {
+        SessionEvent::Agent(AgentMessage::ToolProgress {
+            request: llm::ToolCallRequest { id: id.to_string(), name: "t".to_string(), arguments: "{}".to_string() },
+            progress: 1.0,
+            total: Some(2.0),
+            message: None,
+        })
+    }
+
+    fn agent_message(message: AgentMessage) -> SessionEvent {
+        SessionEvent::Agent(message)
     }
 
     fn temp_store() -> (tempfile::TempDir, SessionStore) {
@@ -458,38 +543,40 @@ mod tests {
     }
 
     #[test]
-    fn append_drops_streaming_chunks_and_persists_everything_else() {
+    fn append_persists_only_replayable_events() {
         let (_dir, store) = temp_store();
         store.append_meta("s1", &default_meta()).unwrap();
 
         let dropped = [
             agent_text("m", "partial", false),
-            SessionEvent::Agent(AgentMessage::Thought {
-                message_id: "m".to_string(),
-                chunk: "thinking".to_string(),
-                is_complete: false,
-                model_name: "test".to_string(),
-            }),
+            agent_thought("m", "thinking", false),
+            tool_call_update("1", r#"{"filePath":"Cargo.toml"}"#),
+            tool_progress("1"),
         ];
         let kept = vec![
             agent_text("m", "full", true),
-            SessionEvent::Agent(AgentMessage::Error { message: "oops".to_string() }),
-            SessionEvent::Agent(AgentMessage::Done),
-            SessionEvent::Agent(AgentMessage::ToolResult {
-                result: ToolCallResult {
-                    id: "1".to_string(),
-                    name: "t".to_string(),
-                    arguments: "{}".to_string(),
-                    result: "ok".to_string(),
-                },
-                result_meta: None,
-                model_name: "test".to_string(),
+            agent_thought("m", "final reasoning", true),
+            tool_call("1", "coding__read_file", r#"{"filePath":"Cargo.toml"}"#),
+            tool_result("1", "ok"),
+            tool_error("2"),
+            agent_message(AgentMessage::Error { message: "oops".to_string() }),
+            agent_message(AgentMessage::Cancelled { message: "aborted".to_string() }),
+            agent_message(AgentMessage::Done),
+            agent_message(AgentMessage::ContextCleared),
+            agent_message(AgentMessage::ContextCompactionStarted { message_count: 4 }),
+            agent_message(AgentMessage::ContextCompactionResult {
+                summary: "summary".to_string(),
+                messages_removed: 2,
             }),
-            SessionEvent::Agent(AgentMessage::ToolCallUpdate {
-                tool_call_id: "1".to_string(),
-                chunk: r#"{"filePath":"Cargo.toml"}"#.to_string(),
-                model_name: "test".to_string(),
+            agent_message(AgentMessage::ContextUsageUpdate { usage: aether_core::events::ContextUsage::default() }),
+            agent_message(AgentMessage::AutoContinue { attempt: 1, max_attempts: 3 }),
+            agent_message(AgentMessage::Retrying {
+                attempt: 1,
+                max_attempts: 3,
+                delay_ms: 100,
+                error: "transient".to_string(),
             }),
+            agent_message(AgentMessage::ModelSwitched { previous: "a".to_string(), new: "b".to_string() }),
         ];
 
         for e in &dropped {
@@ -501,6 +588,19 @@ mod tests {
 
         let (_, events) = store.load("s1").unwrap();
         assert_eq!(events, kept);
+    }
+
+    #[test]
+    fn load_filters_legacy_transient_events() {
+        let (_dir, store) = temp_store();
+        store.append_meta("s1", &default_meta()).unwrap();
+        store.append_line("s1", &tool_call_update("1", r#"{"filePath":"Cargo.toml"}"#)).unwrap();
+        store.append_line("s1", &tool_progress("1")).unwrap();
+        let kept = agent_text("m", "final", true);
+        store.append_line("s1", &kept).unwrap();
+
+        let (_, events) = store.load("s1").unwrap();
+        assert_eq!(events, vec![kept]);
     }
 
     #[test]
