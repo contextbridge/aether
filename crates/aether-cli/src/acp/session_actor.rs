@@ -30,7 +30,8 @@ use super::protocol::events::{
 };
 use super::session_config_state::{SessionConfigState, Switch};
 use super::session_store::{SessionStore, should_persist_session_event};
-use super::slash_commands::{dedupe_commands_by_name, expand_slash_command_in_content, send_available_commands};
+use super::slash_commands::{expand_slash_command_in_content, send_available_commands};
+use crate::slash_commands::dedupe_commands_by_name;
 
 /// Capacity of the per-session command channel feeding the actor loop.
 const SESSION_COMMAND_CHANNEL_CAPACITY: usize = 50;

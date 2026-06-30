@@ -3,10 +3,7 @@ mod harness;
 mod recommendations;
 mod tui_runner;
 use aether_project::user_settings_path;
-pub use build_settings::{
-    Preset, build_batteries_included_build_agent, build_batteries_included_explore_agent,
-    build_batteries_included_plan_agent, build_batteries_included_settings,
-};
+pub use build_settings::{Preset, build_batteries_included_settings};
 pub use harness::HarnessIntegration;
 use llm::catalog::Provider;
 use recommendations::recommended_for_provider;

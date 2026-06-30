@@ -4,20 +4,23 @@ use aether_project::{AetherSettings, McpSourceSpec};
 use internal_evals::{EvalAgent, EvalHarnessError, batteries_included_settings};
 use std::fs::read_to_string;
 
+const NOTES_TXT_CONTENT: &str = "old value\n";
+const EDIT_NOTES_PROMPT: &str =
+    "/plan Edit notes.txt, replace 'old value' with 'new value'. Don't make a plan, just make change.";
+
 #[tokio::test]
 async fn plan_agent_reports_missing_non_plan_edit_tools_eval() -> Result<(), EvalHarnessError> {
-    let workspace = Workspace::from_files([("notes.txt", "old value\n")])?;
-    let prompt =
-        "/plan Edit notes.txt, replace 'old value' with 'new value'. Don't make a plan, just make change.".to_string();
+    let workspace = Workspace::from_files([("notes.txt", NOTES_TXT_CONTENT)])?;
 
-    let (_container, stream) = EvalAgent::new().agent("Plan").run(&workspace, Task::new(prompt)).await?;
+    let (_container, stream) =
+        EvalAgent::new().agent("Plan").run(&workspace, Task::new(EDIT_NOTES_PROMPT.to_string())).await?;
     let trace = Transcript::from_stream(stream).await?;
     let final_message = final_text_message(&trace);
 
     assert_eq!(trace.tool_call_count("coding__edit_file"), 0);
     assert_eq!(trace.tool_call_count("coding__write_file"), 0);
     assert_eq!(trace.tool_call_count("plan__write_plan"), 0);
-    assert_eq!(read_to_string(workspace.join("notes.txt"))?, "old value\n");
+    assert_eq!(read_to_string(workspace.join("notes.txt"))?, NOTES_TXT_CONTENT);
     assert!(
         final_message.contains("I don't have tools to modify non-plan files, you must switch to another agent"),
         "unexpected final message: {final_message}"
@@ -28,19 +31,20 @@ async fn plan_agent_reports_missing_non_plan_edit_tools_eval() -> Result<(), Eva
 
 #[tokio::test]
 async fn plan_prompt_with_edit_tools_plans_before_modifying_non_plan_files_eval() -> Result<(), EvalHarnessError> {
-    let workspace = Workspace::from_files([("notes.txt", "old value\n")])?;
-    let prompt =
-        "/plan Edit notes.txt, replace 'old value' with 'new value'. Don't make a plan, just make change.".to_string();
+    let workspace = Workspace::from_files([("notes.txt", NOTES_TXT_CONTENT)])?;
     let settings = build_agent_settings_with_plan_mcp()?;
 
-    let (_container, stream) =
-        EvalAgent::new().settings(settings).agent("Build").run(&workspace, Task::new(prompt)).await?;
+    let (_container, stream) = EvalAgent::new()
+        .settings(settings)
+        .agent("Build")
+        .run(&workspace, Task::new(EDIT_NOTES_PROMPT.to_string()))
+        .await?;
     let trace = Transcript::from_stream(stream).await?;
     let final_message = final_text_message(&trace).to_lowercase();
 
     assert_eq!(trace.tool_call_count("coding__edit_file"), 0);
     assert_eq!(trace.tool_call_count("coding__write_file"), 0);
-    assert_eq!(read_to_string(workspace.join("notes.txt"))?, "old value\n");
+    assert_eq!(read_to_string(workspace.join("notes.txt"))?, NOTES_TXT_CONTENT);
     assert!(
         final_message.contains("would you like to exit plan mode?"),
         "expected explicit approval request before editing, got: {final_message}"

@@ -1,6 +1,7 @@
 use super::agent_key::AgentKey;
 use super::error::SessionError;
 use crate::runtime::{Runtime, RuntimeBuilder};
+use crate::slash_commands::{SlashCommandError, list_prompts};
 use aether_auth::OAuthCredentialStorage;
 use aether_auth::OAuthHandler;
 use aether_core::agent_spec::AgentSpec;
@@ -13,11 +14,11 @@ use mcp_utils::client::{
     ElicitingOAuthHandler, McpClientEvent, McpConnectionDetails, McpError, McpServer, McpServerStatusEntry,
     OAuthHandlerFactory,
 };
-use rmcp::model::{GetPromptResult, Prompt as McpPrompt};
+use rmcp::model::Prompt as McpPrompt;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
 /// Capacity of the channel that fans runtime events from every spawned agent
@@ -92,32 +93,15 @@ impl AgentRuntime {
             .map_err(|e| SessionError::CommandChannel(format!("failed to sync active conversation: {e}")))
     }
 
-    pub(crate) async fn list_prompts(&self) -> Result<Vec<McpPrompt>, SessionError> {
-        let (tx, rx) = oneshot::channel();
-        self.mcp_tx
-            .send(McpCommand::ListPrompts { tx })
-            .await
-            .map_err(|e| SessionError::CommandChannel(format!("failed to send ListPrompts command: {e}")))?;
-
-        rx.await
-            .map_err(|e| SessionError::CommandChannel(format!("failed to receive prompts: {e}")))?
-            .map_err(SessionError::McpOperation)
+    pub(crate) fn mcp_tx(&self) -> &mpsc::Sender<McpCommand> {
+        &self.mcp_tx
     }
 
-    pub(crate) async fn get_prompt(
-        &self,
-        name: String,
-        arguments: Option<serde_json::Map<String, serde_json::Value>>,
-    ) -> Result<GetPromptResult, SessionError> {
-        let (tx, rx) = oneshot::channel();
-        self.mcp_tx
-            .send(McpCommand::GetPrompt { name, arguments, tx })
-            .await
-            .map_err(|e| SessionError::CommandChannel(format!("failed to send GetPrompt command: {e}")))?;
-
-        rx.await
-            .map_err(|e| SessionError::CommandChannel(format!("failed to receive prompt: {e}")))?
-            .map_err(SessionError::McpOperation)
+    pub(crate) async fn list_prompts(&self) -> Result<Vec<McpPrompt>, SessionError> {
+        list_prompts(&self.mcp_tx).await.map_err(|error| match error {
+            SlashCommandError::CommandChannel(message) => SessionError::CommandChannel(message),
+            other => SessionError::McpOperation(other.to_string()),
+        })
     }
 
     pub(crate) async fn authenticate_mcp_server(&self, name: &str) -> Result<(), SessionError> {
