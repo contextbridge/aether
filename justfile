@@ -107,9 +107,8 @@ sweep DAYS="7":
 sweep-installed:
     cargo sweep --time 1
 
-# Build the sandbox image from the eval example Dockerfile (copies the aether debug binary)
+# Build the sandbox image from the eval example Dockerfile
 build-sandbox TAG="aether-sandbox:latest":
-    cargo build -p aether-agent-cli --bin aether
     docker build -t {{TAG}} -f crates/internal-evals/examples/Dockerfile .
 
 # Run wisp + aether agent inside the sandbox
