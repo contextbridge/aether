@@ -1,12 +1,10 @@
-mod common;
-use aether_evals::{Agent, Task, Transcript, Workspace};
-use common::{EvalHarnessError, create_aether_agent};
+use aether_evals::{Task, Transcript, Workspace};
+use internal_evals::{EvalAgent, EvalHarnessError};
 
 #[tokio::test]
 async fn edit_file_multi_point_revision_in_single_call_eval() -> Result<(), EvalHarnessError> {
     let workspace =
         Workspace::from_files([("config.txt", &file_contents(&["host = localhost", "port = 8080", "debug = false"]))])?;
-    let (_container, agent) = create_aether_agent(&workspace).await?;
     let prompt = lines(&[
         "Use the coding MCP tools to update config.txt.",
         "Read the file first, then call coding__edit_file EXACTLY ONCE, passing all three changes together in the edits array:",
@@ -14,8 +12,9 @@ async fn edit_file_multi_point_revision_in_single_call_eval() -> Result<(), Eval
         "- set port to 443",
         "- set debug to true",
     ]);
+    let (_container, stream) = EvalAgent::new().run(&workspace, Task::new(prompt.clone())).await?;
 
-    let trace = Transcript::from_stream(agent.run(Task::new(prompt.clone()))).await?;
+    let trace = Transcript::from_stream(stream).await?;
 
     assert_single_edit_call(&trace, "coding__edit_file");
     assert_eq!(
@@ -28,7 +27,6 @@ async fn edit_file_multi_point_revision_in_single_call_eval() -> Result<(), Eval
 #[tokio::test]
 async fn edit_plan_multi_point_revision_in_single_call_eval() -> Result<(), EvalHarnessError> {
     let workspace = Workspace::empty()?;
-    let (_container, agent) = create_aether_agent(&workspace).await?;
     let prompt = lines(&[
         "Use the plan MCP tools.",
         "First call plan__write_plan with planName 'feature' and this exact body:",
@@ -39,8 +37,9 @@ async fn edit_plan_multi_point_revision_in_single_call_eval() -> Result<(), Eval
         "- change 'Step one: scaffold' to 'Step one: design'",
         "- change 'Step two: wire it up' to 'Step two: implement'",
     ]);
+    let (_container, stream) = EvalAgent::new().run(&workspace, Task::new(prompt.clone())).await?;
 
-    let trace = Transcript::from_stream(agent.run(Task::new(prompt.clone()))).await?;
+    let trace = Transcript::from_stream(stream).await?;
 
     assert_single_edit_call(&trace, "plan__edit_plan");
     assert_eq!(

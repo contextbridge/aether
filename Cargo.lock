@@ -3411,9 +3411,13 @@ dependencies = [
 name = "internal-evals"
 version = "0.1.0"
 dependencies = [
+ "aether-agent-cli",
  "aether-agent-core",
  "aether-evals",
+ "aether-llm",
  "aether-project",
+ "async-stream",
+ "futures",
  "serde_json",
  "tempfile",
  "testcontainers",

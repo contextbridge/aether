@@ -10,12 +10,18 @@ dist = false
 [lints]
 workspace = true
 
-[dev-dependencies]
-aether-core = { package = "aether-agent-core", path = "../aether-core" }
+[dependencies]
+aether-cli = { package = "aether-agent-cli", path = "../aether-cli" }
 aether-evals = { path = "../aether-evals" }
 aether-project = { path = "../aether-project" }
+async-stream = { workspace = true }
+futures = { workspace = true }
+llm = { package = "aether-llm", path = "../llm" }
 serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+aether-core = { package = "aether-agent-core", path = "../aether-core" }
 tempfile = { workspace = true }
 testcontainers = { workspace = true }
-thiserror = { workspace = true }
 tokio = { workspace = true }
