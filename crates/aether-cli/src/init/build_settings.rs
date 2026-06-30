@@ -56,7 +56,7 @@ pub fn build_batteries_included_settings(
     }
 }
 
-pub fn build_batteries_included_plan_agent(
+fn build_batteries_included_plan_agent(
     display: &str,
     model: String,
     reasoning_effort: Option<ReasoningEffort>,
@@ -83,7 +83,7 @@ pub fn build_batteries_included_plan_agent(
     }
 }
 
-pub fn build_batteries_included_build_agent(
+fn build_batteries_included_build_agent(
     display: &str,
     model: String,
     reasoning_effort: Option<ReasoningEffort>,
@@ -108,7 +108,7 @@ pub fn build_batteries_included_build_agent(
     }
 }
 
-pub fn build_batteries_included_explore_agent(
+fn build_batteries_included_explore_agent(
     model: String,
     reasoning_effort: Option<ReasoningEffort>,
     scope: InitScope,

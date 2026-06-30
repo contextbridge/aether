@@ -1,7 +1,9 @@
+use aether_core::mcp::run_mcp_task::McpCommand;
 use agent_client_protocol::schema::AvailableCommand;
 use rmcp::model::{GetPromptResult, Prompt as McpPrompt, PromptMessageContent};
 use std::collections::HashSet;
 use thiserror::Error;
+use tokio::sync::{mpsc, oneshot};
 
 pub(crate) struct SlashCommand<'a> {
     pub(crate) command_name: &'a str,
@@ -38,7 +40,47 @@ pub(crate) fn dedupe_commands_by_name(commands: Vec<AvailableCommand>) -> Vec<Av
     commands.into_iter().filter(|command| seen_names.insert(command.name.clone())).collect()
 }
 
-pub(crate) fn find_prompt_name(prompts: &[McpPrompt], command_name: &str) -> Result<String, SlashCommandError> {
+pub(crate) async fn expand_slash_command(
+    mcp_tx: &mpsc::Sender<McpCommand>,
+    command_name: &str,
+    args_text: &str,
+) -> Result<String, SlashCommandError> {
+    let arguments = parse_slash_command_arguments(args_text);
+    let prompts = list_prompts(mcp_tx).await?;
+    let prompt_name = find_prompt_name(&prompts, command_name)?;
+    let prompt_result = get_prompt(mcp_tx, prompt_name, arguments).await?;
+    prompt_result_text(&prompt_result)
+}
+
+pub(crate) async fn list_prompts(mcp_tx: &mpsc::Sender<McpCommand>) -> Result<Vec<McpPrompt>, SlashCommandError> {
+    let (tx, rx) = oneshot::channel();
+    mcp_tx
+        .send(McpCommand::ListPrompts { tx })
+        .await
+        .map_err(|e| SlashCommandError::CommandChannel(format!("failed to send ListPrompts command: {e}")))?;
+
+    rx.await
+        .map_err(|e| SlashCommandError::CommandChannel(format!("failed to receive prompts: {e}")))?
+        .map_err(SlashCommandError::McpOperation)
+}
+
+async fn get_prompt(
+    mcp_tx: &mpsc::Sender<McpCommand>,
+    name: String,
+    arguments: Option<serde_json::Map<String, serde_json::Value>>,
+) -> Result<GetPromptResult, SlashCommandError> {
+    let (tx, rx) = oneshot::channel();
+    mcp_tx
+        .send(McpCommand::GetPrompt { name, arguments, tx })
+        .await
+        .map_err(|e| SlashCommandError::CommandChannel(format!("failed to send GetPrompt command: {e}")))?;
+
+    rx.await
+        .map_err(|e| SlashCommandError::CommandChannel(format!("failed to receive prompt: {e}")))?
+        .map_err(SlashCommandError::McpOperation)
+}
+
+fn find_prompt_name(prompts: &[McpPrompt], command_name: &str) -> Result<String, SlashCommandError> {
     prompts
         .iter()
         .find(|p| p.name.split("__").last().unwrap_or("") == command_name)
@@ -46,7 +88,7 @@ pub(crate) fn find_prompt_name(prompts: &[McpPrompt], command_name: &str) -> Res
         .ok_or_else(|| SlashCommandError::NotFound(command_name.to_string()))
 }
 
-pub(crate) fn prompt_result_text(prompt_result: &GetPromptResult) -> Result<String, SlashCommandError> {
+fn prompt_result_text(prompt_result: &GetPromptResult) -> Result<String, SlashCommandError> {
     prompt_result
         .messages
         .first()
@@ -57,7 +99,7 @@ pub(crate) fn prompt_result_text(prompt_result: &GetPromptResult) -> Result<Stri
         .ok_or(SlashCommandError::NoTextContent)
 }
 
-pub(crate) fn parse_slash_command_arguments(args_text: &str) -> Option<serde_json::Map<String, serde_json::Value>> {
+fn parse_slash_command_arguments(args_text: &str) -> Option<serde_json::Map<String, serde_json::Value>> {
     if args_text.is_empty() {
         None
     } else {
