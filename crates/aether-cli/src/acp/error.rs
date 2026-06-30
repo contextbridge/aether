@@ -17,15 +17,3 @@ pub enum SessionError {
     #[error("active agent runtime is not running")]
     ActiveRuntimeNotRunning,
 }
-
-#[derive(Error, Debug)]
-pub(super) enum SlashCommandError {
-    #[error("command channel error: {0}")]
-    CommandChannel(String),
-    #[error("MCP operation failed: {0}")]
-    McpOperation(String),
-    #[error("slash command '/{0}' not found")]
-    NotFound(String),
-    #[error("prompt result contains no text content")]
-    NoTextContent,
-}

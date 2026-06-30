@@ -6,6 +6,10 @@ cp -R /repo/.aether /workspace/.aether
 cp /repo/AGENTS.md /workspace/AGENTS.md
 cp /repo/mcp.json /workspace/mcp.json
 
+if [ "${AETHER_EVAL_OPTIONS_JSON:-}" ]; then
+  exec aether headless --options-json "$AETHER_EVAL_OPTIONS_JSON"
+fi
+
 if [ "${AETHER_EVAL_AGENT:-}" ]; then
   exec aether headless \
     --output json \

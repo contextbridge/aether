@@ -1,9 +1,7 @@
-mod common;
-
 use std::fs::read_to_string;
 
-use aether_evals::{Agent, Task, Transcript, Workspace};
-use common::{EvalHarnessError, create_aether_agent};
+use aether_evals::{Task, Transcript, Workspace};
+use internal_evals::{EvalAgent, EvalHarnessError};
 use serde_json::Value;
 
 #[tokio::test]
@@ -14,14 +12,14 @@ async fn find_bare_readme_pattern_matches_nested_basenames_eval() -> Result<(), 
         .with_file_contents("docs/guide.md", "not a readme\n")
         .workspace()?;
 
-    let (_container, agent) = create_aether_agent(&workspace).await?;
     let prompt = lines(&[
         "Use the coding MCP tools, not shell commands.",
         "Read every README file in this workspace, including README files in nested directories.",
         "Write find-report.txt summarizing the path and contents of each README you read.",
     ]);
+    let (_container, stream) = EvalAgent::new().run(&workspace, Task::new(prompt)).await?;
 
-    let trace = Transcript::from_stream(agent.run(Task::new(prompt))).await?;
+    let trace = Transcript::from_stream(stream).await?;
 
     assert!(trace.tool_called("coding__find"));
     assert_eq!(trace.tool_call_count("coding__bash"), 0);
@@ -42,14 +40,14 @@ async fn find_slash_pattern_is_relative_to_workspace_root_eval() -> Result<(), E
         .with_file("crates/cli/src/main.rs")
         .with_file("examples/demo.rs")
         .workspace()?;
-    let (_container, agent) = create_aether_agent(&workspace).await?;
     let prompt = lines(&[
         "Use the coding MCP tools to inventory this Rust workspace.",
         "List only Rust source files that are inside the crates directory; ignore Rust files at the workspace root or under examples.",
         "Write crates-rust-files.txt with the paths you found, one path per line.",
     ]);
+    let (_container, stream) = EvalAgent::new().run(&workspace, Task::new(prompt)).await?;
 
-    let trace = Transcript::from_stream(agent.run(Task::new(prompt))).await?;
+    let trace = Transcript::from_stream(stream).await?;
 
     assert!(trace.tool_called("coding__find"));
     let report = read_file(&workspace, "crates-rust-files.txt")?;
@@ -67,15 +65,15 @@ async fn find_hidden_case_insensitive_limited_search_eval() -> Result<(), EvalHa
         .with_file("CONFIG/SETTINGS.JSON")
         .with_file("notes/settings.toml")
         .workspace()?;
-    let (_container, agent) = create_aether_agent(&workspace).await?;
     let prompt = lines(&[
         "Use exactly one coding__find call and no shell commands.",
         "Find settings JSON files in this workspace, including files in hidden directories and files whose names use different casing.",
         "Only return one matching path from the search, and report whether the result list was truncated.",
         "Write settings-find-summary.txt with two lines: count=<returned count>, truncated=<true or false>.",
     ]);
+    let (_container, stream) = EvalAgent::new().run(&workspace, Task::new(prompt)).await?;
 
-    let trace = Transcript::from_stream(agent.run(Task::new(prompt))).await?;
+    let trace = Transcript::from_stream(stream).await?;
 
     assert_eq!(trace.tool_call_count("coding__find"), 1);
     assert_eq!(trace.tool_call_count("coding__bash"), 0);

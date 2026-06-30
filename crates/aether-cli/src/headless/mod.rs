@@ -6,6 +6,8 @@ use aether_project::AetherSettings;
 use error::CliError;
 use llm::{ProviderConnectionOverride, ProviderConnectionOverrides};
 use mcp_utils::client::McpConfig;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io::{IsTerminal, Read as _, stdin};
 use std::path::{Path, PathBuf};
@@ -20,7 +22,7 @@ use crate::settings_args::SettingsSourceArgs;
 use aether_auth::OAuthCredentialStorage;
 use std::sync::Arc;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, clap::ValueEnum, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, clap::ValueEnum, Deserialize, Serialize, JsonSchema)]
 #[clap(rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub enum CliEventKind {
@@ -54,7 +56,7 @@ pub struct RunConfig {
     pub oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
 }
 
-#[derive(Clone, Debug, Default, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HeadlessOptions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -89,7 +91,7 @@ pub async fn run_headless(args: HeadlessArgs) -> Result<ExitCode, CliError> {
 
 #[derive(clap::Args)]
 pub struct HeadlessArgs {
-    #[arg(long = "options-json", value_name = "JSON")]
+    #[arg(long = "options-json", value_name = "JSON", hide = true)]
     pub options_json: Option<String>,
 
     /// Prompt to send (reads stdin if omitted and stdin is not a TTY)

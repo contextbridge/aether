@@ -7,15 +7,26 @@
 # Build it with `just build-sandbox`, or point an eval file at this file with
 # `"docker": { "file": "Dockerfile", "context": "../../.." }` (paths relative to the eval file).
 
-FROM archlinux:latest
+FROM rust:bookworm AS builder
 
-RUN pacman -Syu --noconfirm ca-certificates git dbus \
-    && pacman -Scc --noconfirm
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends cmake libdbus-1-dev pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /repo
+COPY . .
+RUN cargo build -p aether-agent-cli --bin aether
+
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates git dbus \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install your project's toolchain here, e.g.:
 # RUN apt-get update && apt-get install -y python3 python3-pip
 
-COPY target/debug/aether /usr/local/bin/aether
+COPY --from=builder /repo/target/debug/aether /usr/local/bin/aether
 COPY .aether /repo/.aether
 COPY AGENTS.md /repo/AGENTS.md
 COPY mcp.json /repo/mcp.json
