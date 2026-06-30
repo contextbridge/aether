@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.27](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.26...aether-wisp-v0.4.27) - 2026-06-30
+
+### Added
+
+- *(wisp)* Git controls for staging/unstaging and commiting in git d… ([#201](https://github.com/contextbridge/aether/pull/201))
+
+### Other
+
+- *(mcp-servers)* Remove MCP roots functionality  ([#199](https://github.com/contextbridge/aether/pull/199))
+
 ## [0.4.26](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.25...aether-wisp-v0.4.26) - 2026-06-22
 
 ### Other

@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.23](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.22...aether-mcp-servers-v0.4.23) - 2026-06-30
+
+### Added
+
+- *(mcp-servers)* Improve find tool for agents ([#200](https://github.com/contextbridge/aether/pull/200))
+
+### Fixed
+
+- *(mcp-servers)* Make agent fail fast when asked to modify files after using "/plan" cmd from plan MCP ([#207](https://github.com/contextbridge/aether/pull/207))
+
+### Other
+
+- *(mcp-servers)* Remove MCP roots functionality  ([#199](https://github.com/contextbridge/aether/pull/199))
+- *(aether-cli)* Remove old notes tools as they're subsumed by skills and rules ([#195](https://github.com/contextbridge/aether/pull/195))
+
 ## [0.4.22](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.21...aether-mcp-servers-v0.4.22) - 2026-06-22
 
 ### Other

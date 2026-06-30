@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.20](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.19...aether-agent-cli-v0.7.20) - 2026-06-30
+
+### Fixed
+
+- *(mcp-servers)* Make agent fail fast when asked to modify files after using "/plan" cmd from plan MCP ([#207](https://github.com/contextbridge/aether/pull/207))
+
+### Other
+
+- *(aether-cli)* Consolidate and cleanup slash command expansion… ([#208](https://github.com/contextbridge/aether/pull/208))
+- *(aether-cli)* Trim session logs by not logging partial, streamin… ([#202](https://github.com/contextbridge/aether/pull/202))
+- *(mcp-servers)* Remove MCP roots functionality  ([#199](https://github.com/contextbridge/aether/pull/199))
+- *(aether-cli)* Remove old notes tools as they're subsumed by skills and rules ([#195](https://github.com/contextbridge/aether/pull/195))
+
 ## [0.7.19](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.18...aether-agent-cli-v0.7.19) - 2026-06-22
 
 ### Other
