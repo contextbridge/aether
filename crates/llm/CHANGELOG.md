@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.16](https://github.com/contextbridge/aether/compare/aether-llm-v0.7.15...aether-llm-v0.7.16) - 2026-06-30
+
+### Other
+
+- Update models ([#205](https://github.com/contextbridge/aether/pull/205))
+
 ## [0.7.15](https://github.com/contextbridge/aether/compare/aether-llm-v0.7.14...aether-llm-v0.7.15) - 2026-06-22
 
 ### Other

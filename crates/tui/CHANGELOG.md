@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.15](https://github.com/contextbridge/aether/compare/aether-tui-v0.2.14...aether-tui-v0.2.15) - 2026-06-30
+
+### Added
+
+- *(wisp)* Git controls for staging/unstaging and commiting in git d… ([#201](https://github.com/contextbridge/aether/pull/201))
+
 ## [0.2.14](https://github.com/contextbridge/aether/compare/aether-tui-v0.2.13...aether-tui-v0.2.14) - 2026-06-18
 
 ### Other

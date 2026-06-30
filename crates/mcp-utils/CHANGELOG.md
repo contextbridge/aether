@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.21](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.5.20...aether-mcp-utils-v0.5.21) - 2026-06-30
+
+### Other
+
+- *(mcp-servers)* Remove MCP roots functionality  ([#199](https://github.com/contextbridge/aether/pull/199))
+
 ## [0.5.20](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.5.19...aether-mcp-utils-v0.5.20) - 2026-06-22
 
 ### Other

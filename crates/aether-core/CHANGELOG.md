@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.18](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.6.17...aether-agent-core-v0.6.18) - 2026-06-30
+
+### Other
+
+- *(mcp-servers)* Remove MCP roots functionality  ([#199](https://github.com/contextbridge/aether/pull/199))
+
 ## [0.6.17](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.6.16...aether-agent-core-v0.6.17) - 2026-06-22
 
 ### Other
