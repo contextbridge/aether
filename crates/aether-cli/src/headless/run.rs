@@ -1,13 +1,19 @@
 use aether_core::core::Prompt;
 use aether_core::events::{AgentMessage, Command};
+use aether_core::mcp::run_mcp_task::McpCommand;
+use rmcp::model::{GetPromptResult, Prompt as McpPrompt};
 use std::io;
 use std::process::ExitCode;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
+use tracing::error;
 
 use super::error::CliError;
 use super::{CliEventKind, RunConfig};
 use crate::output::OutputFormat;
 use crate::runtime::RuntimeBuilder;
+use crate::slash_commands::{
+    SlashCommandError, find_prompt_name, parse_slash_command, parse_slash_command_arguments, prompt_result_text,
+};
 
 pub async fn run(config: RunConfig) -> Result<ExitCode, CliError> {
     setup_tracing(config.verbose);
@@ -23,13 +29,69 @@ pub async fn run(config: RunConfig) -> Result<ExitCode, CliError> {
         .build_ready(vec![])
         .await?;
 
+    let prompt = expand_prompt(&agent.mcp_tx, config.prompt).await;
+
     agent
         .agent_tx
-        .send(Command::text(&config.prompt))
+        .send(Command::text(&prompt))
         .await
         .map_err(|e| CliError::AgentError(format!("Failed to send prompt: {e}")))?;
 
     Ok(stream_output(agent.agent_rx, config.output, &config.events).await)
+}
+
+async fn expand_prompt(mcp_tx: &mpsc::Sender<McpCommand>, prompt: String) -> String {
+    let Some(slash_command) = parse_slash_command(&prompt) else {
+        return prompt;
+    };
+
+    match expand_slash_command(mcp_tx, slash_command.command_name, slash_command.args_text).await {
+        Ok(expanded) => expanded,
+        Err(error) => {
+            error!("Failed to expand slash command: {error}");
+            prompt
+        }
+    }
+}
+
+async fn expand_slash_command(
+    mcp_tx: &mpsc::Sender<McpCommand>,
+    command_name: &str,
+    args_text: &str,
+) -> Result<String, SlashCommandError> {
+    let arguments = parse_slash_command_arguments(args_text);
+    let prompts = list_prompts(mcp_tx).await?;
+    let prompt_name = find_prompt_name(&prompts, command_name)?;
+    let prompt_result = get_prompt(mcp_tx, prompt_name, arguments).await?;
+    prompt_result_text(&prompt_result)
+}
+
+async fn list_prompts(mcp_tx: &mpsc::Sender<McpCommand>) -> Result<Vec<McpPrompt>, SlashCommandError> {
+    let (tx, rx) = oneshot::channel();
+    mcp_tx
+        .send(McpCommand::ListPrompts { tx })
+        .await
+        .map_err(|e| SlashCommandError::CommandChannel(format!("failed to send ListPrompts command: {e}")))?;
+
+    rx.await
+        .map_err(|e| SlashCommandError::CommandChannel(format!("failed to receive prompts: {e}")))?
+        .map_err(SlashCommandError::McpOperation)
+}
+
+async fn get_prompt(
+    mcp_tx: &mpsc::Sender<McpCommand>,
+    name: String,
+    arguments: Option<serde_json::Map<String, serde_json::Value>>,
+) -> Result<GetPromptResult, SlashCommandError> {
+    let (tx, rx) = oneshot::channel();
+    mcp_tx
+        .send(McpCommand::GetPrompt { name, arguments, tx })
+        .await
+        .map_err(|e| SlashCommandError::CommandChannel(format!("failed to send GetPrompt command: {e}")))?;
+
+    rx.await
+        .map_err(|e| SlashCommandError::CommandChannel(format!("failed to receive prompt: {e}")))?
+        .map_err(SlashCommandError::McpOperation)
 }
 
 async fn stream_output(
