@@ -1,7 +1,8 @@
+use aether_core::events::{MessageEvent, TurnEvent};
 use std::error::Error;
 
 use aether_core::{
-    events::{AgentMessage, Command, UserCommand},
+    events::{AgentEvent, Command, UserCommand},
     testing::test_agent,
 };
 use llm::{ChatMessage, LlmError, LlmResponse};
@@ -34,11 +35,11 @@ async fn test_api_error_mid_stream_does_not_add_empty_assistant_message() -> Res
     let has_empty_complete_text = result.messages.iter().any(|m| {
         matches!(
             m,
-            AgentMessage::Text {
+            AgentEvent::Message(MessageEvent::Text {
                 chunk,
                 is_complete: true,
                 ..
-            } if chunk.is_empty()
+            }) if chunk.is_empty()
         )
     });
 
@@ -50,7 +51,7 @@ async fn test_api_error_mid_stream_does_not_add_empty_assistant_message() -> Res
 
     // Should end with Done
     assert!(
-        matches!(result.messages.last(), Some(AgentMessage::Done)),
+        matches!(result.messages.last(), Some(AgentEvent::Turn(TurnEvent::Ended { .. }))),
         "Expected Done message, got: {:?}",
         result.messages.last()
     );

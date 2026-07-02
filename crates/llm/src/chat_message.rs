@@ -1,3 +1,4 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::catalog::LlmModel;
@@ -6,7 +7,7 @@ use crate::types::IsoString;
 use super::{ToolCallError, ToolCallRequest, ToolCallResult};
 
 #[doc = include_str!("docs/content_block.md")]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ContentBlock {
     Text { text: String },

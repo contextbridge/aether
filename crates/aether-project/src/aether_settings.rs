@@ -8,6 +8,7 @@ use llm::ProviderConnectionOverrides;
 use mcp_utils::client::McpConfig;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
 use utils::variables::VarError;
@@ -94,9 +95,96 @@ pub struct AetherSettings {
     /// when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credentials_store: Option<CredentialsStoreConfig>,
+    /// OpenTelemetry `GenAI` telemetry configuration. Disabled by default.
+    #[serde(default, skip_serializing_if = "TelemetrySettings::is_default")]
+    pub telemetry: TelemetrySettings,
     /// The agents defined for this project. At least one agent is required.
     #[schemars(length(min = 1))]
     pub agents: Vec<AgentConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TelemetrySettings {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_name: Option<String>,
+    #[serde(default = "default_sample_ratio")]
+    pub sample_ratio: f64,
+    #[serde(default)]
+    pub capture_content: bool,
+    #[serde(default)]
+    pub traces: TelemetrySignalSettings,
+    #[serde(default)]
+    pub metrics: TelemetrySignalSettings,
+    #[serde(default)]
+    pub otlp: OtlpTelemetrySettings,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TelemetrySignalSettings {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OtlpTelemetrySettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+    #[serde(default)]
+    pub protocol: OtlpProtocol,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub headers: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum OtlpProtocol {
+    #[default]
+    #[serde(rename = "grpc")]
+    Grpc,
+    #[serde(rename = "http/protobuf")]
+    HttpProtobuf,
+}
+
+impl Default for TelemetrySettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            service_name: None,
+            sample_ratio: default_sample_ratio(),
+            capture_content: false,
+            traces: TelemetrySignalSettings::default(),
+            metrics: TelemetrySignalSettings::default(),
+            otlp: OtlpTelemetrySettings::default(),
+        }
+    }
+}
+
+impl Default for TelemetrySignalSettings {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+impl TelemetrySettings {
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+
+    pub fn effective_enabled(&self) -> bool {
+        self.enabled && (self.traces.enabled || self.metrics.enabled)
+    }
+}
+
+fn default_sample_ratio() -> f64 {
+    1.0
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,7 +198,7 @@ pub enum AetherSettingsSource {
     File(SettingsFileSource),
     OptionalFile(SettingsFileSource),
     Json(String),
-    Value(AetherSettings),
+    Value(Box<AetherSettings>),
 }
 
 impl SettingsFileSource {
@@ -160,6 +248,10 @@ impl AetherSettings {
             self.credentials_store = next.credentials_store;
         }
 
+        if !next.telemetry.is_default() {
+            self.telemetry = next.telemetry;
+        }
+
         for next_agent in next.agents {
             if let Some(existing) = self.agents.iter_mut().find(|agent| agent.name.trim() == next_agent.name.trim()) {
                 *existing = next_agent;
@@ -192,7 +284,7 @@ impl AetherSettings {
             AetherSettingsSource::File(source) => load_file_source(project_root, source, false),
             AetherSettingsSource::OptionalFile(source) => load_file_source(project_root, source, true),
             AetherSettingsSource::Json(json) => Self::try_from(json.as_str()),
-            AetherSettingsSource::Value(settings) => Ok(settings),
+            AetherSettingsSource::Value(settings) => Ok(*settings),
         }
     }
 }
@@ -342,6 +434,64 @@ mod tests {
     use std::fs::{create_dir_all, write};
 
     #[test]
+    #[allow(clippy::float_cmp)]
+    fn telemetry_defaults_to_disabled_without_content_capture() {
+        let settings = AetherSettings::default();
+
+        assert!(!settings.telemetry.enabled);
+        assert!(!settings.telemetry.capture_content);
+        assert_eq!(settings.telemetry.sample_ratio, 1.0);
+        assert!(settings.telemetry.traces.enabled);
+        assert!(settings.telemetry.metrics.enabled);
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn parses_telemetry_camel_case_and_http_protobuf() {
+        let config = AetherSettings::try_from(
+            r#"{
+                "telemetry": {
+                    "enabled": true,
+                    "serviceName": "aether-test",
+                    "sampleRatio": 0.5,
+                    "captureContent": true,
+                    "traces": { "enabled": true },
+                    "metrics": { "enabled": false },
+                    "otlp": {
+                        "endpoint": "http://localhost:4318",
+                        "protocol": "http/protobuf",
+                        "headers": { "authorization": "Bearer token" }
+                    }
+                },
+                "agents": [{"name":"alpha","description":"Alpha","model":"anthropic:claude-sonnet-4-5","userInvocable":true}]
+            }"#,
+        )
+        .unwrap();
+
+        assert!(config.telemetry.enabled);
+        assert_eq!(config.telemetry.service_name.as_deref(), Some("aether-test"));
+        assert_eq!(config.telemetry.sample_ratio, 0.5);
+        assert!(config.telemetry.capture_content);
+        assert!(config.telemetry.traces.enabled);
+        assert!(!config.telemetry.metrics.enabled);
+        assert_eq!(config.telemetry.otlp.protocol, OtlpProtocol::HttpProtobuf);
+        assert_eq!(config.telemetry.otlp.headers.get("authorization").map(String::as_str), Some("Bearer token"));
+    }
+
+    #[test]
+    fn telemetry_with_no_enabled_signals_does_not_require_endpoint() {
+        let config = AetherSettings::try_from(
+            r#"{
+                "telemetry": { "enabled": true, "traces": { "enabled": false }, "metrics": { "enabled": false } },
+                "agents": [{"name":"alpha","description":"Alpha","model":"anthropic:claude-sonnet-4-5","userInvocable":true}]
+            }"#,
+        )
+        .unwrap();
+
+        assert!(!config.telemetry.effective_enabled());
+    }
+
+    #[test]
     fn project_settings_path_points_at_project_aether_settings() {
         assert_eq!(project_settings_path(Path::new("/repo")), PathBuf::from("/repo/.aether/settings.json"));
     }
@@ -429,7 +579,7 @@ mod tests {
 
         let config = AetherSettings::load(
             dir.path(),
-            [AetherSettingsSource::Value(base), AetherSettingsSource::Value(override_config)],
+            [AetherSettingsSource::Value(Box::new(base)), AetherSettingsSource::Value(Box::new(override_config))],
         )
         .unwrap();
 
@@ -890,13 +1040,13 @@ mod tests {
 
         let value_config = AetherSettings::load(
             project.path(),
-            [AetherSettingsSource::Value(AetherSettings {
+            [AetherSettingsSource::Value(Box::new(AetherSettings {
                 agents: vec![AgentConfig {
                     prompts: vec![PromptSource::file("${WORKSPACE}/AGENTS.md")],
                     ..agent_config("alpha")
                 }],
                 ..AetherSettings::default()
-            })],
+            }))],
         )
         .unwrap();
         assert_eq!(value_config.agents[0].prompts[0], PromptSource::file("${WORKSPACE}/AGENTS.md"));
@@ -915,7 +1065,7 @@ mod tests {
             ..AetherSettings::default()
         };
 
-        let config = AetherSettings::load(project.path(), [AetherSettingsSource::Value(config)]).unwrap();
+        let config = AetherSettings::load(project.path(), [AetherSettingsSource::Value(Box::new(config))]).unwrap();
         let catalog = AgentCatalog::from_settings(project.path(), config).unwrap();
         let spec = catalog.resolve("alpha").unwrap();
 
@@ -935,7 +1085,7 @@ mod tests {
             ..AetherSettings::default()
         };
 
-        let config = AetherSettings::load(project.path(), [AetherSettingsSource::Value(config)]).unwrap();
+        let config = AetherSettings::load(project.path(), [AetherSettingsSource::Value(Box::new(config))]).unwrap();
         let catalog = AgentCatalog::from_settings(project.path(), config).unwrap();
         let spec = catalog.resolve("alpha").unwrap();
 

@@ -1,4 +1,4 @@
-use aether_core::events::AgentMessage;
+use aether_core::events::{AgentEvent, TurnEvent};
 
 use aether_evals::{
     Agent, Container, ContainerError, DockerAgent, Image, Task, Transcript, TranscriptError, Workspace, WorkspaceError,
@@ -15,7 +15,7 @@ enum DockerAgentTestError {
 }
 
 #[tokio::test]
-async fn docker_agent_direct_agent_message_eval() -> Result<(), DockerAgentTestError> {
+async fn docker_agent_direct_agent_event_eval() -> Result<(), DockerAgentTestError> {
     let workspace = Workspace::empty()?;
     let container = Container::builder(Image::parse("alpine:3").unwrap()).start(&workspace).await?;
     let agent = DockerAgent::new(
@@ -23,13 +23,13 @@ async fn docker_agent_direct_agent_message_eval() -> Result<(), DockerAgentTestE
         vec![
             "/bin/sh".to_string(),
             "-c".to_string(),
-            r#"printf '%s\n' '{"type":"text","message_id":"m1","chunk":"ok","is_complete":true,"model_name":"test"}' '{"type":"done"}'"#
+            r#"printf '%s\n' '{"type":"text","message_id":"m1","chunk":"ok","is_complete":true,"model_name":"test"}' '{"type":"turn_ended","outcome":{"status":"completed"}}'"#
                 .to_string(),
         ],
     );
 
     let trace = Transcript::from_stream(agent.run(Task::new("Reply with one short sentence."))).await?;
-    assert!(trace.messages().iter().any(|message| matches!(message, AgentMessage::Done)));
+    assert!(trace.messages().iter().any(|message| matches!(message, AgentEvent::Turn(TurnEvent::Ended { .. }))));
     Ok(())
 }
 

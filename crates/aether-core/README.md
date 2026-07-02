@@ -33,7 +33,7 @@ aether-agent-core = "0.1"
 ### Minimal Agent (No Tools)
 
 ```rust,no_run
-use aether_core::core::{AgentMessage, Command, Prompt, agent};
+use aether_core::core::{AgentEvent, Command, Prompt, agent};
 use llm::providers::openrouter::OpenRouterProvider;
 use std::io::{self, Write};
 
@@ -56,11 +56,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 4. Stream the agent's response back
     loop {
         match rx.recv().await {
-            Some(AgentMessage::Text { chunk, is_complete, .. }) => {
+            Some(AgentEvent::Text { chunk, is_complete, .. }) => {
                 if !is_complete { print!("{chunk}"); io::stdout().flush()?; }
             }
-            Some(AgentMessage::Done) => break,
-            Some(AgentMessage::Error { message }) => { eprintln!("Error: {message}"); break; }
+            Some(AgentEvent::TurnEnded { outcome }) => { println!("Turn ended: {outcome:?}"); break; }
             _ => {}
         }
     }
@@ -99,7 +98,7 @@ You are Mr. BotBot, a kickass coding agent equipped with SOTA filesystem and web
 And bring Mr. `BotBot` to life!
 
 ```rust,no_run
-use aether_core::core::{AgentMessage, Command, Prompt, agent};
+use aether_core::core::{AgentEvent, Command, Prompt, agent};
 use aether_core::mcp::mcp;
 use llm::providers::openrouter::OpenRouterProvider;
 use std::io::{self, Write};
@@ -130,7 +129,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
 
     loop {
-        use AgentMessage::*;
+        use AgentEvent::*;
         match rx.recv().await {
             Some(Text { chunk, is_complete, .. }) => {
                 if !is_complete {
@@ -152,16 +151,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some(ToolProgress { .. }) => {
                 // Tool progress updates (can be used to show progress bars, etc.)
             }
-            Some(Done) => {
-                println!("\nAgent finished");
-                break;
-            }
-            Some(Error { message }) => {
-                eprintln!("Error: {message}");
-                break;
-            }
-            Some(Cancelled { .. }) => {
-                eprintln!("Agent cancelled");
+            Some(TurnEnded { outcome }) => {
+                println!("\nTurn ended: {outcome:?}");
                 break;
             }
             _ => {}

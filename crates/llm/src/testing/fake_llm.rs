@@ -6,7 +6,7 @@ use tokio::spawn;
 use tokio::sync::{Notify, mpsc};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
-use crate::{Context, LlmError, LlmResponse, LlmResponseStream, StreamingModelProvider};
+use crate::{Context, LlmError, LlmModel, LlmResponse, LlmResponseStream, StreamingModelProvider};
 
 pub struct FakeLlmProvider {
     responses: Vec<Vec<Result<LlmResponse, LlmError>>>,
@@ -15,6 +15,7 @@ pub struct FakeLlmProvider {
     /// Captured contexts from each call to `stream_response`
     captured_contexts: Arc<Mutex<Vec<Context>>>,
     display_name: String,
+    model: Option<LlmModel>,
     context_window: Option<u32>,
 }
 
@@ -35,12 +36,18 @@ impl FakeLlmProvider {
             call_count: AtomicUsize::new(0),
             captured_contexts: Arc::new(Mutex::new(Vec::new())),
             display_name: "Fake LLM".to_string(),
+            model: None,
             context_window: None,
         }
     }
 
     pub fn with_display_name(mut self, name: &str) -> Self {
         self.display_name = name.to_string();
+        self
+    }
+
+    pub fn with_model(mut self, model: LlmModel) -> Self {
+        self.model = Some(model);
         self
     }
 
@@ -103,5 +110,9 @@ impl StreamingModelProvider for FakeLlmProvider {
 
     fn context_window(&self) -> Option<u32> {
         self.context_window
+    }
+
+    fn model(&self) -> Option<LlmModel> {
+        self.model.clone()
     }
 }

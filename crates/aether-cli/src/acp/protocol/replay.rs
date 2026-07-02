@@ -4,7 +4,7 @@ use agent_client_protocol::schema::{ContentChunk, SessionId, SessionNotification
 use agent_client_protocol::{Client, ConnectionTo};
 
 use super::content::map_user_content_block;
-use super::events::{NotificationMode, map_agent_message_to_notification};
+use super::events::{NotificationMode, map_agent_event_to_notification};
 
 /// Replay session events to the client as ACP notifications.
 pub async fn replay_to_client(events: &[SessionEvent], connection: &ConnectionTo<Client>, session_id: &SessionId) {
@@ -31,7 +31,7 @@ pub fn map_session_events_to_notifications(
                 }
             }
             SessionEvent::Agent(message) => {
-                out.extend(map_agent_message_to_notification(session_id.clone(), message, NotificationMode::Replay));
+                out.extend(map_agent_event_to_notification(session_id.clone(), message, NotificationMode::Replay));
             }
             SessionEvent::User(_) | SessionEvent::Control(_) => {}
         }

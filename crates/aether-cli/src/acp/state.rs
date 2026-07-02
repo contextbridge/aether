@@ -5,6 +5,7 @@ use acp_utils::notifications::{
 };
 use acp_utils::server::AcpServerError;
 use aether_auth::OAuthCredentialStorage;
+use aether_telemetry::TelemetryRuntime;
 use agent_client_protocol::schema::{
     self as acp, AgentCapabilities, AuthMethod, AuthenticateRequest, AuthenticateResponse, CancelNotification,
     ConfigOptionUpdate, Implementation, InitializeRequest, InitializeResponse, ListSessionsRequest,
@@ -43,6 +44,9 @@ pub(crate) struct AcpState {
     workspace_manager: Arc<WorkspaceManager>,
     oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
     factory: SessionFactory,
+    /// Process-level OTLP runtime shared by every session; flushed once when
+    /// the server shuts down.
+    telemetry: Option<Arc<TelemetryRuntime>>,
 }
 
 pub(crate) struct AcpStateConfig {
@@ -52,6 +56,7 @@ pub(crate) struct AcpStateConfig {
     pub(crate) initial_selection: InitialSessionSelection,
     pub(crate) settings_source: SettingsSourceArgs,
     pub(crate) provider_connections: ProviderConnectionOverrides,
+    pub(crate) telemetry: Option<Arc<TelemetryRuntime>>,
 }
 
 impl AcpState {
@@ -62,6 +67,7 @@ impl AcpState {
             Arc::clone(&config.oauth_credential_store),
             Arc::clone(&config.session_store),
             config.initial_selection,
+            config.telemetry.clone(),
         );
         Self {
             sessions: Mutex::new(HashMap::new()),
@@ -69,6 +75,7 @@ impl AcpState {
             workspace_manager: config.workspace_manager,
             oauth_credential_store: config.oauth_credential_store,
             factory,
+            telemetry: config.telemetry,
         }
     }
 
@@ -331,13 +338,17 @@ impl AcpState {
     }
 
     /// Drain every session and stop its actor task. Fans out cancellation before
-    /// awaiting any join so shutdowns run concurrently.
+    /// awaiting any join so shutdowns run concurrently. Telemetry is flushed
+    /// last so spans from the drained sessions are exported.
     pub(crate) async fn shutdown_all(&self) {
         let handles: Vec<SessionHandle> = self.sessions.lock().await.drain().map(|(_, handle)| handle).collect();
         for handle in &handles {
             handle.cancel();
         }
         futures::future::join_all(handles.into_iter().map(SessionHandle::join)).await;
+        if let Some(telemetry) = &self.telemetry {
+            telemetry.shutdown_or_log();
+        }
     }
 
     pub(crate) async fn register_session(&self, session_id: &SessionId, handle: SessionHandle) {
@@ -500,6 +511,7 @@ mod tests {
             initial_selection: InitialSessionSelection::default(),
             settings_source: SettingsSourceArgs::default(),
             provider_connections: ProviderConnectionOverrides::default(),
+            telemetry: None,
         })
     }
 

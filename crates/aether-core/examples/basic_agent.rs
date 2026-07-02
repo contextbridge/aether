@@ -1,5 +1,7 @@
 use aether_core::core::{Prompt, agent};
-use aether_core::events::{AgentMessage, Command, UserCommand};
+use aether_core::events::{
+    AgentEvent, Command, ContextEvent, MessageEvent, ModelEvent, ToolEvent, TurnEvent, TurnOutcome, UserCommand,
+};
 use llm::ContentBlock;
 use llm::providers::openrouter::OpenRouterProvider;
 use std::io::{self, Write};
@@ -18,13 +20,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
 
     loop {
-        use AgentMessage::{
-            AutoContinue, Cancelled, ContextCleared, ContextCompactionResult, ContextCompactionStarted,
-            ContextUsageUpdate, Done, Error, ModelSwitched, Retrying, Text, Thought, ToolCall, ToolCallUpdate,
-            ToolError, ToolProgress, ToolResult,
-        };
         match rx.recv().await {
-            Some(Text { chunk, is_complete, .. }) => {
+            Some(AgentEvent::Message(MessageEvent::Text { chunk, is_complete, .. })) => {
                 if is_complete {
                     println!("\n\nMessage complete");
                 } else {
@@ -32,66 +29,73 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     io::stdout().flush().unwrap();
                 }
             }
-            Some(ToolCall { request, .. }) => {
+            Some(AgentEvent::Tool(ToolEvent::Call { request, .. })) => {
                 println!("Tool '{}' in progress", request.name);
             }
-            Some(ToolCallUpdate { .. }) => {}
-            Some(ToolResult { result, .. }) => {
+            Some(AgentEvent::Tool(ToolEvent::Result { result, .. })) => {
                 println!("Tool '{}' completed", result.name);
                 println!("   Result: {}", result.result);
             }
-            Some(ToolError { error, .. }) => {
+            Some(AgentEvent::Tool(ToolEvent::Error { error, .. })) => {
                 eprintln!("Tool '{}' failed: {}", error.name, error.error);
             }
-            Some(ToolProgress { request, progress, total, message }) => {
+            Some(AgentEvent::Tool(ToolEvent::Progress { request, progress, total, message })) => {
                 let msg = message.as_ref().map(|m| format!("{m} ")).unwrap_or_default();
                 let total_str = total.map(|t| format!("/{t}")).unwrap_or_default();
                 println!("Tool '{}' progress: {}{}{}", request.name, msg, progress, total_str);
             }
-            Some(Done) => {
-                println!("Agent finished processing");
+            Some(AgentEvent::Turn(TurnEvent::Ended { outcome })) => {
+                match outcome {
+                    TurnOutcome::Completed => println!("Agent finished processing"),
+                    TurnOutcome::Failed { error } => eprintln!("Error: {error}"),
+                    TurnOutcome::Cancelled => println!("Processing cancelled"),
+                }
                 break;
             }
-            Some(Error { message }) => {
-                eprintln!("Error: {message}");
-                break;
-            }
-            Some(Cancelled { .. }) => {
-                println!("Processing cancelled");
-                break;
-            }
-            Some(ContextCompactionStarted { message_count }) => {
+            Some(AgentEvent::Context(ContextEvent::CompactionStarted { message_count })) => {
                 println!("Context compaction started: {message_count} messages");
             }
-            Some(ContextCompactionResult { messages_removed, .. }) => {
+            Some(AgentEvent::Context(ContextEvent::CompactionResult { messages_removed, .. })) => {
                 println!("Context compacted: {messages_removed} messages removed");
             }
-            Some(ContextUsageUpdate { usage }) => match (usage.usage_ratio, usage.context_limit) {
-                (Some(usage_ratio), Some(context_limit)) => {
-                    println!(
-                        "Context usage: {:.1}% ({}/{} tokens)",
-                        usage_ratio * 100.0,
-                        usage.input_tokens,
-                        context_limit
-                    );
+            Some(AgentEvent::Context(ContextEvent::UsageUpdated { usage })) => {
+                match (usage.usage_ratio, usage.context_limit) {
+                    (Some(usage_ratio), Some(context_limit)) => {
+                        println!(
+                            "Context usage: {:.1}% ({}/{} tokens)",
+                            usage_ratio * 100.0,
+                            usage.input_tokens,
+                            context_limit
+                        );
+                    }
+                    _ => {
+                        println!("Context usage: unknown limit ({} tokens used)", usage.input_tokens);
+                    }
                 }
-                _ => {
-                    println!("Context usage: unknown limit ({} tokens used)", usage.input_tokens);
-                }
-            },
-            Some(AutoContinue { attempt, max_attempts }) => {
+            }
+            Some(AgentEvent::Turn(TurnEvent::AutoContinue { attempt, max_attempts })) => {
                 println!("Auto-continuing: attempt {attempt}/{max_attempts} (LLM stopped due to length)");
             }
-            Some(Retrying { attempt, max_attempts, delay_ms, error }) => {
-                println!("Retrying ({attempt}/{max_attempts}) in {delay_ms}ms: {error}");
+            Some(AgentEvent::Turn(turn @ TurnEvent::LlmCallStarted { .. })) => {
+                if let Some(retry) = turn.retry_info() {
+                    println!("Retrying ({}/{}) in {}ms", retry.attempt, retry.max_attempts, retry.delay_ms);
+                }
             }
-            Some(ModelSwitched { previous, new }) => {
+            Some(
+                AgentEvent::Tool(
+                    ToolEvent::CallUpdate { .. }
+                    | ToolEvent::ExecutionStarted { .. }
+                    | ToolEvent::DefinitionsUpdated { .. },
+                )
+                | AgentEvent::Turn(TurnEvent::Started { .. } | TurnEvent::LlmCallEnded { .. }),
+            ) => {}
+            Some(AgentEvent::Model(ModelEvent::Switched { previous, new })) => {
                 println!("Model switched: {previous} -> {new}");
             }
-            Some(ContextCleared) => {
+            Some(AgentEvent::Context(ContextEvent::Cleared)) => {
                 println!("Context cleared");
             }
-            Some(Thought { chunk, .. }) => {
+            Some(AgentEvent::Message(MessageEvent::Thought { chunk, .. })) => {
                 print!("{chunk}");
                 io::stdout().flush().unwrap();
             }

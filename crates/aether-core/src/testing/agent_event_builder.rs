@@ -1,19 +1,20 @@
-use crate::events::AgentMessage;
+use crate::events::AgentEvent;
+use crate::events::ToolEvent;
 use llm::{ToolCallError, ToolCallRequest, ToolCallResult};
 use serde::Serialize;
 
-pub fn agent_message(message_id: &str) -> AgentMessageBuilder {
-    AgentMessageBuilder::new(message_id)
+pub fn agent_event(message_id: &str) -> AgentEventBuilder {
+    AgentEventBuilder::new(message_id)
 }
 
-pub struct AgentMessageBuilder {
+pub struct AgentEventBuilder {
     message_id: String,
     model_name: String,
-    chunks: Vec<AgentMessage>,
+    chunks: Vec<AgentEvent>,
     full_text: String,
 }
 
-impl AgentMessageBuilder {
+impl AgentEventBuilder {
     pub fn new(message_id: &str) -> Self {
         Self {
             message_id: message_id.to_string(),
@@ -25,7 +26,7 @@ impl AgentMessageBuilder {
 
     pub fn text(mut self, chunks: &[&str]) -> Self {
         for chunk in chunks {
-            self.chunks.push(AgentMessage::text(&self.message_id, chunk, false, &self.model_name));
+            self.chunks.push(AgentEvent::text(&self.message_id, chunk, false, &self.model_name));
             self.full_text.push_str(chunk);
         }
         self
@@ -45,7 +46,7 @@ impl AgentMessageBuilder {
         self.push_tool_call_start(tool_call_id, name);
         self.push_tool_call_chunk(tool_call_id, &request_json);
 
-        self.chunks.push(AgentMessage::ToolResult {
+        self.chunks.push(AgentEvent::Tool(ToolEvent::Result {
             result: ToolCallResult {
                 id: tool_call_id.to_string(),
                 name: name.to_string(),
@@ -54,7 +55,7 @@ impl AgentMessageBuilder {
             },
             result_meta: None,
             model_name: self.model_name.clone(),
-        });
+        }));
 
         self
     }
@@ -75,7 +76,7 @@ impl AgentMessageBuilder {
         self.push_tool_call_start(tool_call_id, name);
         self.push_tool_call_chunk(tool_call_id, &request_json);
 
-        self.chunks.push(AgentMessage::ToolError {
+        self.chunks.push(AgentEvent::Tool(ToolEvent::Error {
             error: ToolCallError {
                 id: tool_call_id.to_string(),
                 name: name.to_string(),
@@ -83,29 +84,29 @@ impl AgentMessageBuilder {
                 error: error_result,
             },
             model_name: self.model_name.clone(),
-        });
+        }));
 
         self
     }
 
-    pub fn build(mut self) -> Vec<AgentMessage> {
-        self.chunks.push(AgentMessage::text(&self.message_id, &self.full_text, true, &self.model_name));
+    pub fn build(mut self) -> Vec<AgentEvent> {
+        self.chunks.push(AgentEvent::text(&self.message_id, &self.full_text, true, &self.model_name));
 
         self.chunks
     }
 
     fn push_tool_call_start(&mut self, tool_call_id: &str, name: &str) {
-        self.chunks.push(AgentMessage::ToolCall {
+        self.chunks.push(AgentEvent::Tool(ToolEvent::Call {
             request: ToolCallRequest { id: tool_call_id.to_string(), name: name.to_string(), arguments: String::new() },
             model_name: self.model_name.clone(),
-        });
+        }));
     }
 
     fn push_tool_call_chunk(&mut self, tool_call_id: &str, chunk: &str) {
-        self.chunks.push(AgentMessage::ToolCallUpdate {
+        self.chunks.push(AgentEvent::Tool(ToolEvent::CallUpdate {
             tool_call_id: tool_call_id.to_string(),
             chunk: chunk.to_string(),
             model_name: self.model_name.clone(),
-        });
+        }));
     }
 }

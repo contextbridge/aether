@@ -4,7 +4,7 @@ use acp_utils::notifications::{
     SessionPreviewTurn,
 };
 use aether_core::context::ext::{SessionEvent, UserEvent};
-use aether_core::events::AgentMessage;
+use aether_core::events::{AgentEvent, ContextEvent, MessageEvent, ModelEvent, ToolEvent, TurnEvent};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Write};
@@ -195,12 +195,12 @@ fn read_session_preview(path: &Path, limits: ScanLimits) -> io::Result<SessionPr
                     truncated = true;
                 }
             }
-            SessionEvent::Agent(AgentMessage::Text { chunk, .. })
+            SessionEvent::Agent(AgentEvent::Message(MessageEvent::Text { chunk, .. }))
                 if !push_preview_turn(&mut transcript, SessionPreviewRole::Assistant, &chunk) =>
             {
                 truncated = true;
             }
-            SessionEvent::Agent(AgentMessage::ToolCall { .. }) => {
+            SessionEvent::Agent(AgentEvent::Tool(ToolEvent::Call { .. })) => {
                 tool_call_count += 1;
             }
             _ => {}
@@ -330,27 +330,34 @@ fn user_prompt_text_from_event(event: &SessionEvent) -> Option<String> {
     }
 }
 
-/// Whether a session event should be persisted to the session log
-/// Transient high-volume streaming events are excluded so logs stay compact
+/// Whether a session event should be persisted to the session log.
+/// Internal trace events and transient high-volume streaming events are
+/// excluded so logs stay compact.
 pub(crate) fn should_persist_session_event(event: &SessionEvent) -> bool {
     match event {
         SessionEvent::User(_) | SessionEvent::Control(_) => true,
-        SessionEvent::Agent(message) => match message {
-            AgentMessage::Text { is_complete, .. } | AgentMessage::Thought { is_complete, .. } => *is_complete,
-            AgentMessage::ToolCall { .. }
-            | AgentMessage::ToolResult { .. }
-            | AgentMessage::ToolError { .. }
-            | AgentMessage::Error { .. }
-            | AgentMessage::Cancelled { .. }
-            | AgentMessage::Done
-            | AgentMessage::ContextCleared
-            | AgentMessage::ContextCompactionStarted { .. }
-            | AgentMessage::ContextCompactionResult { .. }
-            | AgentMessage::ContextUsageUpdate { .. }
-            | AgentMessage::AutoContinue { .. }
-            | AgentMessage::Retrying { .. }
-            | AgentMessage::ModelSwitched { .. } => true,
-            AgentMessage::ToolCallUpdate { .. } | AgentMessage::ToolProgress { .. } => false,
+        SessionEvent::Agent(event) => match event {
+            AgentEvent::Message(MessageEvent::Text { is_complete, .. } | MessageEvent::Thought { is_complete, .. }) => {
+                *is_complete
+            }
+            AgentEvent::Tool(ToolEvent::Call { .. } | ToolEvent::Result { .. } | ToolEvent::Error { .. })
+            | AgentEvent::Turn(TurnEvent::AutoContinue { .. } | TurnEvent::Ended { .. })
+            | AgentEvent::Context(
+                ContextEvent::CompactionStarted { .. }
+                | ContextEvent::CompactionResult { .. }
+                | ContextEvent::UsageUpdated { .. }
+                | ContextEvent::Cleared,
+            )
+            | AgentEvent::Model(ModelEvent::Switched { .. }) => true,
+            AgentEvent::Tool(
+                ToolEvent::CallUpdate { .. }
+                | ToolEvent::ExecutionStarted { .. }
+                | ToolEvent::Progress { .. }
+                | ToolEvent::DefinitionsUpdated { .. },
+            )
+            | AgentEvent::Turn(
+                TurnEvent::Started { .. } | TurnEvent::LlmCallStarted { .. } | TurnEvent::LlmCallEnded { .. },
+            ) => false,
         },
     }
 }
@@ -380,12 +387,12 @@ mod tests {
     }
 
     fn agent_text(msg_id: &str, chunk: &str, complete: bool) -> SessionEvent {
-        SessionEvent::Agent(AgentMessage::Text {
+        SessionEvent::Agent(AgentEvent::Message(MessageEvent::Text {
             message_id: msg_id.to_string(),
             chunk: chunk.to_string(),
             is_complete: complete,
             model_name: "test".to_string(),
-        })
+        }))
     }
 
     fn switch_agent(from: Option<&str>, to: Option<&str>) -> SessionEvent {
@@ -396,27 +403,27 @@ mod tests {
     }
 
     fn agent_thought(msg_id: &str, chunk: &str, complete: bool) -> SessionEvent {
-        SessionEvent::Agent(AgentMessage::Thought {
+        SessionEvent::Agent(AgentEvent::Message(MessageEvent::Thought {
             message_id: msg_id.to_string(),
             chunk: chunk.to_string(),
             is_complete: complete,
             model_name: "test".to_string(),
-        })
+        }))
     }
 
     fn tool_call(id: &str, name: &str, arguments: &str) -> SessionEvent {
-        SessionEvent::Agent(AgentMessage::ToolCall {
+        SessionEvent::Agent(AgentEvent::Tool(ToolEvent::Call {
             request: llm::ToolCallRequest {
                 id: id.to_string(),
                 name: name.to_string(),
                 arguments: arguments.to_string(),
             },
             model_name: "test".to_string(),
-        })
+        }))
     }
 
     fn tool_result(id: &str, result: &str) -> SessionEvent {
-        SessionEvent::Agent(AgentMessage::ToolResult {
+        SessionEvent::Agent(AgentEvent::Tool(ToolEvent::Result {
             result: ToolCallResult {
                 id: id.to_string(),
                 name: "t".to_string(),
@@ -425,11 +432,11 @@ mod tests {
             },
             result_meta: None,
             model_name: "test".to_string(),
-        })
+        }))
     }
 
     fn tool_error(id: &str) -> SessionEvent {
-        SessionEvent::Agent(AgentMessage::ToolError {
+        SessionEvent::Agent(AgentEvent::Tool(ToolEvent::Error {
             error: llm::ToolCallError {
                 id: id.to_string(),
                 name: "t".to_string(),
@@ -437,27 +444,27 @@ mod tests {
                 error: "boom".to_string(),
             },
             model_name: "test".to_string(),
-        })
+        }))
     }
 
     fn tool_call_update(id: &str, chunk: &str) -> SessionEvent {
-        SessionEvent::Agent(AgentMessage::ToolCallUpdate {
+        SessionEvent::Agent(AgentEvent::Tool(ToolEvent::CallUpdate {
             tool_call_id: id.to_string(),
             chunk: chunk.to_string(),
             model_name: "test".to_string(),
-        })
+        }))
     }
 
     fn tool_progress(id: &str) -> SessionEvent {
-        SessionEvent::Agent(AgentMessage::ToolProgress {
+        SessionEvent::Agent(AgentEvent::Tool(ToolEvent::Progress {
             request: llm::ToolCallRequest { id: id.to_string(), name: "t".to_string(), arguments: "{}".to_string() },
             progress: 1.0,
             total: Some(2.0),
             message: None,
-        })
+        }))
     }
 
-    fn agent_message(message: AgentMessage) -> SessionEvent {
+    fn agent_event(message: AgentEvent) -> SessionEvent {
         SessionEvent::Agent(message)
     }
 
@@ -552,6 +559,25 @@ mod tests {
             agent_thought("m", "thinking", false),
             tool_call_update("1", r#"{"filePath":"Cargo.toml"}"#),
             tool_progress("1"),
+            agent_event(AgentEvent::Turn(TurnEvent::Started { content: vec![] })),
+            agent_event(AgentEvent::Turn(TurnEvent::LlmCallStarted {
+                purpose: aether_core::events::LlmCallPurpose::Chat,
+                provider: None,
+                model: None,
+                display_name: "Claude".to_string(),
+                attempt: 0,
+                max_attempts: 3,
+                delay_ms: None,
+            })),
+            agent_event(AgentEvent::Turn(TurnEvent::LlmCallEnded {
+                purpose: aether_core::events::LlmCallPurpose::Chat,
+                outcome: aether_core::events::LlmCallOutcome::Cancelled,
+            })),
+            agent_event(AgentEvent::Tool(ToolEvent::ExecutionStarted {
+                tool_id: "1".to_string(),
+                tool_name: "coding__read_file".to_string(),
+            })),
+            agent_event(AgentEvent::Tool(ToolEvent::DefinitionsUpdated { tools: vec![] })),
         ];
         let kept = vec![
             agent_text("m", "full", true),
@@ -559,24 +585,21 @@ mod tests {
             tool_call("1", "coding__read_file", r#"{"filePath":"Cargo.toml"}"#),
             tool_result("1", "ok"),
             tool_error("2"),
-            agent_message(AgentMessage::Error { message: "oops".to_string() }),
-            agent_message(AgentMessage::Cancelled { message: "aborted".to_string() }),
-            agent_message(AgentMessage::Done),
-            agent_message(AgentMessage::ContextCleared),
-            agent_message(AgentMessage::ContextCompactionStarted { message_count: 4 }),
-            agent_message(AgentMessage::ContextCompactionResult {
+            agent_event(AgentEvent::Turn(TurnEvent::Ended {
+                outcome: aether_core::events::TurnOutcome::Failed { error: "oops".to_string() },
+            })),
+            agent_event(AgentEvent::Turn(TurnEvent::Ended { outcome: aether_core::events::TurnOutcome::Completed })),
+            agent_event(AgentEvent::Context(ContextEvent::Cleared)),
+            agent_event(AgentEvent::Context(ContextEvent::CompactionStarted { message_count: 4 })),
+            agent_event(AgentEvent::Context(ContextEvent::CompactionResult {
                 summary: "summary".to_string(),
                 messages_removed: 2,
-            }),
-            agent_message(AgentMessage::ContextUsageUpdate { usage: aether_core::events::ContextUsage::default() }),
-            agent_message(AgentMessage::AutoContinue { attempt: 1, max_attempts: 3 }),
-            agent_message(AgentMessage::Retrying {
-                attempt: 1,
-                max_attempts: 3,
-                delay_ms: 100,
-                error: "transient".to_string(),
-            }),
-            agent_message(AgentMessage::ModelSwitched { previous: "a".to_string(), new: "b".to_string() }),
+            })),
+            agent_event(AgentEvent::Context(ContextEvent::UsageUpdated {
+                usage: aether_core::events::ContextUsage::default(),
+            })),
+            agent_event(AgentEvent::Turn(TurnEvent::AutoContinue { attempt: 1, max_attempts: 3 })),
+            agent_event(AgentEvent::Model(ModelEvent::Switched { previous: "a".to_string(), new: "b".to_string() })),
         ];
 
         for e in &dropped {

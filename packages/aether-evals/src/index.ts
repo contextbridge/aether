@@ -46,7 +46,7 @@ export type {
   WorkspaceSource,
 } from "./workspace.js";
 export type {
-  AgentMessage,
+  AgentEvent,
   ContextUsage,
   FileDiff,
   PlanMeta,

@@ -1,7 +1,7 @@
 # The repository sandbox image, also serving as the example for `aether eval`.
 #
 # The eval command must be on the container's PATH and emit newline-delimited
-# AgentMessage JSON on stdout. Install whatever toolchain your repo's evals need
+# AgentEvent JSON on stdout. Install whatever toolchain your repo's evals need
 # (python, node, a JDK, build tools, ...).
 #
 # Build it with `just build-sandbox`, or point an eval file at this file with

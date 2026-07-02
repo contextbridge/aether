@@ -44,7 +44,7 @@ pub fn assert_tool_call_with_args(transcript: &Transcript, name: &str, expected:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aether_core::events::AgentMessage;
+    use aether_core::events::{AgentEvent, ToolEvent};
     use llm::ToolCallResult;
 
     #[test]
@@ -70,12 +70,12 @@ mod tests {
         assert_tool_called(&trace, "missing");
     }
 
-    fn transcript_with_messages(messages: Vec<AgentMessage>) -> Transcript {
+    fn transcript_with_messages(messages: Vec<AgentEvent>) -> Transcript {
         Transcript::new(messages)
     }
 
-    fn tool_result(name: &str, arguments: &str) -> AgentMessage {
-        AgentMessage::ToolResult {
+    fn tool_result(name: &str, arguments: &str) -> AgentEvent {
+        AgentEvent::Tool(ToolEvent::Result {
             result: ToolCallResult {
                 id: name.to_string(),
                 name: name.to_string(),
@@ -84,6 +84,6 @@ mod tests {
             },
             result_meta: None,
             model_name: "test".to_string(),
-        }
+        })
     }
 }

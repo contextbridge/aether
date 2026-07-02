@@ -1,9 +1,10 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::ToolCallRequest;
 
 #[doc = include_str!("docs/stop_reason.md")]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum StopReason {
     EndTurn,
@@ -16,7 +17,7 @@ pub enum StopReason {
 
 /// Token usage reported by a single LLM API response. Providers fill in only
 /// the dimensions they expose; the rest stay `None`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct TokenUsage {
     pub input_tokens: u32,
     pub output_tokens: u32,

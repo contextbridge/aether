@@ -1,12 +1,12 @@
 use super::{AgentRunResult, RunError};
 use crate::EvalRunError;
-use aether_core::events::{AgentMessage, ContextUsage};
+use aether_core::events::{AgentEvent, ContextEvent, ContextUsage, ToolEvent, TurnEvent};
 use futures::{Stream, StreamExt};
 use std::fmt::Debug;
 use thiserror::Error;
 
 pub struct Transcript {
-    messages: Vec<AgentMessage>,
+    messages: Vec<AgentEvent>,
 }
 
 pub struct ToolCall<'a> {
@@ -23,7 +23,7 @@ pub struct TranscriptError {
 }
 
 impl Transcript {
-    pub fn new(messages: Vec<AgentMessage>) -> Self {
+    pub fn new(messages: Vec<AgentEvent>) -> Self {
         Self { messages }
     }
 
@@ -41,20 +41,20 @@ impl Transcript {
         Ok(transcript)
     }
 
-    pub fn add(&mut self, message: AgentMessage) {
+    pub fn add(&mut self, message: AgentEvent) {
         self.messages.push(message);
     }
 
-    pub fn messages(&self) -> &[AgentMessage] {
+    pub fn messages(&self) -> &[AgentEvent] {
         &self.messages
     }
 
     pub fn all_tool_calls(&self) -> impl Iterator<Item = ToolCall<'_>> + '_ {
         self.messages.iter().filter_map(|message| match message {
-            AgentMessage::ToolResult { result, .. } => {
+            AgentEvent::Tool(ToolEvent::Result { result, .. }) => {
                 Some(ToolCall { name: &result.name, arguments: &result.arguments })
             }
-            AgentMessage::ToolError { error, .. } => {
+            AgentEvent::Tool(ToolEvent::Error { error, .. }) => {
                 Some(ToolCall { name: &error.name, arguments: error.arguments.as_deref().unwrap_or("") })
             }
             _ => None,
@@ -80,7 +80,7 @@ impl Transcript {
             .iter()
             .rev()
             .find_map(|msg| match msg {
-                AgentMessage::ContextUsageUpdate { usage } => Some(usage.clone()),
+                AgentEvent::Context(ContextEvent::UsageUpdated { usage }) => Some(usage.clone()),
                 _ => None,
             })
             .unwrap_or_default()
@@ -93,8 +93,8 @@ impl Default for Transcript {
     }
 }
 
-impl From<Vec<AgentMessage>> for Transcript {
-    fn from(messages: Vec<AgentMessage>) -> Self {
+impl From<Vec<AgentEvent>> for Transcript {
+    fn from(messages: Vec<AgentEvent>) -> Self {
         Self::new(messages)
     }
 }
@@ -129,8 +129,8 @@ impl Debug for TranscriptError {
     }
 }
 
-pub(crate) fn is_terminal(message: &AgentMessage) -> bool {
-    matches!(message, AgentMessage::Done | AgentMessage::Error { .. } | AgentMessage::Cancelled { .. })
+pub(crate) fn is_terminal(message: &AgentEvent) -> bool {
+    matches!(message, AgentEvent::Turn(TurnEvent::Ended { .. }))
 }
 
 #[cfg(test)]
@@ -146,7 +146,7 @@ mod tests {
         let transcript = Transcript::from_stream(stream).await.unwrap();
 
         assert!(transcript.tool_called("bash"));
-        assert!(matches!(transcript.messages().last(), Some(AgentMessage::Done)));
+        assert!(matches!(transcript.messages().last(), Some(AgentEvent::Turn(TurnEvent::Ended { .. }))));
     }
 
     #[test]
@@ -212,8 +212,8 @@ mod tests {
         total_output: u64,
         cache_read: u32,
         reasoning: u32,
-    ) -> AgentMessage {
-        AgentMessage::ContextUsageUpdate {
+    ) -> AgentEvent {
+        AgentEvent::Context(ContextEvent::UsageUpdated {
             usage: ContextUsage {
                 usage_ratio: Some(0.5),
                 context_limit: Some(200_000),
@@ -225,22 +225,22 @@ mod tests {
                 total_output_tokens: total_output,
                 ..Default::default()
             },
-        }
+        })
     }
 
-    fn transcript_with_messages(messages: Vec<AgentMessage>) -> Transcript {
+    fn transcript_with_messages(messages: Vec<AgentEvent>) -> Transcript {
         Transcript::new(messages)
     }
 
-    fn tool_call(name: &str) -> AgentMessage {
-        AgentMessage::ToolCall {
+    fn tool_call(name: &str) -> AgentEvent {
+        AgentEvent::Tool(ToolEvent::Call {
             request: ToolCallRequest { id: name.to_string(), name: name.to_string(), arguments: "{}".to_string() },
             model_name: "test".to_string(),
-        }
+        })
     }
 
-    fn tool_result(name: &str) -> AgentMessage {
-        AgentMessage::ToolResult {
+    fn tool_result(name: &str) -> AgentEvent {
+        AgentEvent::Tool(ToolEvent::Result {
             result: ToolCallResult {
                 id: name.to_string(),
                 name: name.to_string(),
@@ -249,6 +249,6 @@ mod tests {
             },
             result_meta: None,
             model_name: "test".to_string(),
-        }
+        })
     }
 }

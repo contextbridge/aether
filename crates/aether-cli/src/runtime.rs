@@ -1,12 +1,13 @@
 use crate::error::CliError;
 use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::{AgentSpec, McpConfigSource};
-use aether_core::core::{AgentBuilder, AgentHandle, Prompt};
-use aether_core::events::{AgentMessage, Command};
+use aether_core::core::{AgentBuilder, AgentDeps, AgentHandle, Prompt};
+use aether_core::events::{AgentEvent, AgentObserver, Command, ObserverFactory};
 use aether_core::mcp::McpBuilder;
 use aether_core::mcp::McpSpawnResult;
 use aether_core::mcp::mcp;
 use aether_core::mcp::run_mcp_task::McpCommand;
+use aether_telemetry::{OtelObserver, TelemetryRuntime};
 use llm::{ChatMessage, LlmModel, ToolDefinition};
 use mcp_servers::McpBuilderExt;
 use mcp_utils::client::{McpClientEvent, McpConnectionDetails, McpServer, OAuthHandlerFactory};
@@ -24,11 +25,12 @@ pub struct RuntimeBuilder {
     oauth_applicator: Option<Box<dyn FnOnce(McpBuilder) -> McpBuilder + Send>>,
     oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
     prompt_cache_key: Option<String>,
+    telemetry_runtime: Option<Arc<TelemetryRuntime>>,
 }
 
 pub struct Runtime {
     pub agent_tx: Sender<Command>,
-    pub agent_rx: Receiver<AgentMessage>,
+    pub agent_rx: Receiver<AgentEvent>,
     pub agent_handle: AgentHandle,
     pub mcp_tx: Sender<McpCommand>,
     pub event_rx: Receiver<McpClientEvent>,
@@ -54,6 +56,7 @@ impl RuntimeBuilder {
             oauth_applicator: None,
             oauth_credential_store: None,
             prompt_cache_key: None,
+            telemetry_runtime: None,
         })
     }
 
@@ -66,12 +69,35 @@ impl RuntimeBuilder {
             oauth_applicator: None,
             oauth_credential_store: None,
             prompt_cache_key: None,
+            telemetry_runtime: None,
         }
     }
 
     pub fn prompt_cache_key(mut self, key: String) -> Self {
         self.prompt_cache_key = Some(key);
         self
+    }
+
+    pub fn telemetry_runtime(mut self, runtime: Option<Arc<TelemetryRuntime>>) -> Self {
+        self.telemetry_runtime = runtime;
+        self
+    }
+
+    fn observer_factory(&self) -> Option<ObserverFactory> {
+        self.telemetry_runtime.as_ref().map(|runtime| {
+            let instrumentation = runtime.instrumentation();
+            Arc::new(move || Box::new(OtelObserver::new(instrumentation.clone())) as Box<dyn AgentObserver>)
+                as ObserverFactory
+        })
+    }
+
+    /// The cross-cutting dependencies handed to every agent this runtime
+    /// spawns — the root agent and, via the MCP builder, any sub-agents.
+    fn agent_deps(&self) -> AgentDeps {
+        AgentDeps {
+            oauth_credential_store: self.oauth_credential_store.clone(),
+            observer_factory: self.observer_factory(),
+        }
     }
 
     /// Set MCP config source overrides. When non-empty, these completely
@@ -101,12 +127,12 @@ impl RuntimeBuilder {
         custom_prompt: Option<Prompt>,
         messages: Option<Vec<ChatMessage>>,
     ) -> Result<Runtime, CliError> {
+        let deps = self.agent_deps();
         let prompt_cache_key = self.prompt_cache_key.clone();
-        let oauth_credential_store = self.oauth_credential_store.clone();
         let (spec, spawn) = self.spawn_mcp().await?;
         let McpSpawnResult { command_tx: mcp_tx, event_rx, handle: mcp_handle } = spawn;
 
-        let mut agent_builder = AgentBuilder::from_spec(&spec, vec![], oauth_credential_store)
+        let mut agent_builder = AgentBuilder::from_spec(&spec, vec![], &deps)
             .await
             .map_err(|e| CliError::AgentError(e.to_string()))?
             .tools(mcp_tx.clone(), Vec::new());
@@ -136,8 +162,8 @@ impl RuntimeBuilder {
     /// relies on the MCP event stream to populate them later), this is for
     /// callers that need the agent ready to use tools on its first turn.
     pub async fn build_ready(self, messages: Vec<ChatMessage>) -> Result<(Runtime, McpConnectionDetails), CliError> {
+        let deps = self.agent_deps();
         let prompt_cache_key = self.prompt_cache_key.clone();
-        let oauth_credential_store = self.oauth_credential_store.clone();
         let (spec, mut spawn) = self.spawn_mcp().await?;
         let snapshot = spawn
             .block_until_ready()
@@ -149,7 +175,7 @@ impl RuntimeBuilder {
         let mut runtime_spec = spec;
         runtime_spec.prompts.push(Prompt::McpInstructions(snapshot.instructions.clone()));
 
-        let mut agent_builder = AgentBuilder::from_spec(&runtime_spec, vec![], oauth_credential_store)
+        let mut agent_builder = AgentBuilder::from_spec(&runtime_spec, vec![], &deps)
             .await
             .map_err(|e| CliError::AgentError(e.to_string()))?
             .tools(mcp_tx.clone(), filtered_tools)
@@ -176,11 +202,7 @@ impl RuntimeBuilder {
     }
 
     async fn spawn_mcp(self) -> Result<(AgentSpec, McpSpawnResult), CliError> {
-        let mut builder = mcp(&self.cwd);
-
-        if let Some(store) = self.oauth_credential_store.clone() {
-            builder = builder.with_oauth_credential_store(store);
-        }
+        let mut builder = mcp(&self.cwd).with_agent_deps(self.agent_deps());
 
         if let Some(apply_oauth) = self.oauth_applicator {
             builder = apply_oauth(builder);

@@ -1,4 +1,12 @@
-import type { AgentMessage, ContextUsage } from "@aether-agent/sdk";
+import type { AgentEvent, ContextUsage } from "@aether-agent/sdk";
+
+type TurnPayload = { type: string };
+type ToolPayload = {
+  type: string;
+  result?: { name: string; arguments: string };
+  error?: { name: string; arguments?: string | null };
+};
+type ContextPayload = { type: string; usage?: ContextUsage };
 
 export class ToolCall {
   readonly arguments: string;
@@ -26,14 +34,14 @@ export class TranscriptError extends Error {
 }
 
 export class Transcript {
-  readonly messages: AgentMessage[];
+  readonly messages: AgentEvent[];
 
-  constructor(messages: AgentMessage[] = []) {
+  constructor(messages: AgentEvent[] = []) {
     this.messages = [...messages];
   }
 
   static async fromStream(
-    stream: AsyncIterable<AgentMessage>,
+    stream: AsyncIterable<AgentEvent>,
   ): Promise<Transcript> {
     const transcript = new Transcript();
     try {
@@ -46,7 +54,7 @@ export class Transcript {
     return transcript;
   }
 
-  add(message: AgentMessage): void {
+  add(message: AgentEvent): void {
     this.messages.push(message);
   }
 
@@ -72,7 +80,6 @@ export class Transcript {
 }
 
 const ZERO_USAGE: ContextUsage = {
-  type: "context_usage",
   input_tokens: 0,
   output_tokens: 0,
   cache_read_tokens: null,
@@ -87,32 +94,36 @@ const ZERO_USAGE: ContextUsage = {
   total_reasoning_tokens: 0,
 };
 
-export function isTerminalMessage(message: AgentMessage): boolean {
+export function isTerminalMessage(event: AgentEvent): boolean {
   return (
-    message.type === "done" ||
-    message.type === "error" ||
-    message.type === "cancelled"
+    event.category === "turn" && (event.event as TurnPayload).type === "ended"
   );
 }
 
-function extractToolCalls(messages: AgentMessage[]): ToolCall[] {
+function extractToolCalls(events: AgentEvent[]): ToolCall[] {
   const calls: ToolCall[] = [];
-  for (const message of messages) {
-    if (message.type === "tool_result") {
-      calls.push(new ToolCall(message.result.name, message.result.arguments));
-    } else if (message.type === "tool_error") {
-      calls.push(
-        new ToolCall(message.error.name, message.error.arguments ?? ""),
-      );
+  for (const event of events) {
+    if (event.category !== "tool") continue;
+    const tool = event.event as ToolPayload;
+    if (tool.type === "result") {
+      calls.push(new ToolCall(tool.result!.name, tool.result!.arguments));
+    } else if (tool.type === "error") {
+      calls.push(new ToolCall(tool.error!.name, tool.error!.arguments ?? ""));
     }
   }
   return calls;
 }
 
-function summarizeUsage(messages: AgentMessage[]): ContextUsage {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i];
-    if (message && message.type === "context_usage") return message;
+function summarizeUsage(events: AgentEvent[]): ContextUsage {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i];
+    const context = event?.event as ContextPayload | undefined;
+    if (
+      event?.category === "context" &&
+      context?.type === "usage_updated" &&
+      context.usage
+    )
+      return context.usage;
   }
   return { ...ZERO_USAGE };
 }

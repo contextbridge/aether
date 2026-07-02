@@ -1,7 +1,7 @@
 export type AetherEvalErrorCode =
   | "configuration_error"
   | "command_exit_without_terminal"
-  | "agent_message_json_line"
+  | "agent_event_json_line"
   | "invalid_image_reference";
 
 export class AetherEvalError extends Error {

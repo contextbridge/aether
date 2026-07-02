@@ -4,7 +4,7 @@ use tui::testing::assert_buffer_eq;
 use super::common::*;
 
 #[tokio::test]
-async fn test_agent_message_text_chunks() -> TestResult {
+async fn test_agent_event_text_chunks() -> TestResult {
     let renderer = render(vec![text_chunk("Hello"), text_chunk(" World"), prompt_done()])?;
 
     let expected = expected_with_prompt(&[&p("Hello World")], TEST_WIDTH, "", TEST_AGENT);

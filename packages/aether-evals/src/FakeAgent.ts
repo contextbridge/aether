@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import type { AgentMessage } from "@aether-agent/sdk";
+import type { AgentEvent } from "@aether-agent/sdk";
 import { AetherEvalError } from "./errors.js";
 import type { Agent } from "./Agent.js";
 import type { Task } from "./task.js";
@@ -13,7 +13,7 @@ import type { Workspace } from "./workspace.js";
  */
 export class FakeAgent implements Agent {
   constructor(
-    readonly messages: AgentMessage[],
+    readonly messages: AgentEvent[],
     readonly fileWrites: ReadonlyArray<readonly [string, string]> = [],
     readonly workspace: Workspace | undefined = undefined,
   ) {}
@@ -21,31 +21,51 @@ export class FakeAgent implements Agent {
   static success(): FakeAgent {
     return new FakeAgent([
       {
-        type: "text",
-        message_id: "fake_1",
-        chunk: "Task completed successfully",
-        is_complete: true,
-        model_name: "fake",
+        category: "message",
+        event: {
+          type: "text",
+          message_id: "fake_1",
+          chunk: "Task completed successfully",
+          is_complete: true,
+          model_name: "fake",
+        },
       },
-      { type: "done" },
+      {
+        category: "turn",
+        event: { type: "ended", outcome: { status: "completed" } },
+      },
     ]);
   }
 
   static withToolCall(toolName: string, result: string): FakeAgent {
     return new FakeAgent([
       {
-        type: "tool_result",
-        model_name: "fake",
-        result: { id: "fake_call_1", name: toolName, arguments: "{}", result },
+        category: "tool",
+        event: {
+          type: "result",
+          model_name: "fake",
+          result: {
+            id: "fake_call_1",
+            name: toolName,
+            arguments: "{}",
+            result,
+          },
+        },
       },
       {
-        type: "text",
-        message_id: "fake_2",
-        chunk: "Task completed using tools",
-        is_complete: true,
-        model_name: "fake",
+        category: "message",
+        event: {
+          type: "text",
+          message_id: "fake_2",
+          chunk: "Task completed using tools",
+          is_complete: true,
+          model_name: "fake",
+        },
       },
-      { type: "done" },
+      {
+        category: "turn",
+        event: { type: "ended", outcome: { status: "completed" } },
+      },
     ]);
   }
 
@@ -65,7 +85,7 @@ export class FakeAgent implements Agent {
     return new FakeAgent(this.messages, this.fileWrites, workspace);
   }
 
-  async *run(_task: Task): AsyncIterable<AgentMessage> {
+  async *run(_task: Task): AsyncIterable<AgentEvent> {
     if (this.fileWrites.length > 0 && !this.workspace) {
       throw new AetherEvalError(
         "configuration_error",

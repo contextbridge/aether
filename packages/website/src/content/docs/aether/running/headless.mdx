@@ -83,7 +83,7 @@ aether headless --model bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0 \
 
   </TabItem>
   <TabItem label="pretty">
-    Pretty-printed `AgentMessage` JSON for humans. Each emitted event is serialized with `serde_json::to_string_pretty`.
+    Pretty-printed `AgentEvent` JSON for humans. Each emitted event is serialized with `serde_json::to_string_pretty`.
 
     ```bash
     aether headless --output pretty "Summarize the README"
@@ -91,7 +91,7 @@ aether headless --model bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0 \
 
   </TabItem>
   <TabItem label="json">
-    Newline-delimited `AgentMessage` JSON. Each stdout line is one compact object with a `type` discriminator such as `tool_call`, `text`, or `done`.
+    Newline-delimited `AgentEvent` JSON. Each stdout line is one compact object with a `type` discriminator such as `tool_call`, `text`, or `done`.
 
     ```bash
     aether headless --output json --events text,tool_call,tool_result,done \
@@ -103,10 +103,10 @@ aether headless --model bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0 \
 
 ## Structured JSON output
 
-`--output json` writes NDJSON to stdout: one `aether_core::events::AgentMessage` JSON object per line. Parse each line independently:
+`--output json` writes NDJSON to stdout: one `aether_core::events::AgentEvent` JSON object per line. Parse each line independently:
 
 ```rust
-let event: aether_core::events::AgentMessage = serde_json::from_str(line)?;
+let event: aether_core::events::AgentEvent = serde_json::from_str(line)?;
 ```
 
 Example lines:

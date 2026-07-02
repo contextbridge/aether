@@ -1,4 +1,4 @@
-use aether_core::events::AgentMessage;
+use aether_core::events::{AgentEvent, MessageEvent};
 use aether_evals::{Task, Transcript, Workspace};
 use aether_project::{AetherSettings, McpSourceSpec};
 use internal_evals::{EvalAgent, EvalHarnessError, batteries_included_settings};
@@ -84,7 +84,7 @@ fn final_text_message(trace: &Transcript) -> &str {
         .iter()
         .rev()
         .find_map(|message| match message {
-            AgentMessage::Text { chunk, .. } => Some(chunk.as_str()),
+            AgentEvent::Message(MessageEvent::Text { chunk, .. }) => Some(chunk.as_str()),
             _ => None,
         })
         .expect("expected final text message")

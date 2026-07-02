@@ -51,7 +51,7 @@ describe("runAetherHeadless()", () => {
         },
       },
       output: "json",
-      events: ["tool_call", "done"],
+      events: ["tool_call", "turn_ended"],
       env: { ...process.env, FAKE_AETHER_LOG_FILE: logFile },
     });
 
@@ -68,7 +68,7 @@ describe("runAetherHeadless()", () => {
       settings: { agents: [] },
       model: "anthropic:claude-sonnet-4-5",
       output: "json",
-      events: ["tool_call", "done"],
+      events: ["tool_call", "turn_ended"],
       providers: {
         bedrock: {
           url: "http://127.0.0.1:8787",

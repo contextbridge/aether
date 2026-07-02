@@ -1,6 +1,7 @@
 use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::AgentSpec;
 use aether_core::context::ext::{SessionEvent, last_agent_from_events};
+use aether_telemetry::TelemetryRuntime;
 use agent_client_protocol::schema::{self as acp, LoadSessionRequest, NewSessionRequest, SessionId};
 use agent_client_protocol::{Client, ConnectionTo};
 use llm::catalog::{LlmModel, get_local_models};
@@ -50,6 +51,9 @@ pub(crate) struct SessionFactory {
     oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
     session_store: Arc<SessionStore>,
     initial_selection: InitialSessionSelection,
+    /// Process-level OTLP runtime shared by every session; owned (and shut
+    /// down) by [`AcpState`](super::state::AcpState).
+    telemetry: Option<Arc<TelemetryRuntime>>,
 }
 
 /// The fully-built session ready to be registered with [`AcpState`](super::state::AcpState).
@@ -67,8 +71,16 @@ impl SessionFactory {
         oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
         session_store: Arc<SessionStore>,
         initial_selection: InitialSessionSelection,
+        telemetry: Option<Arc<TelemetryRuntime>>,
     ) -> Self {
-        Self { settings_source, provider_connections, oauth_credential_store, session_store, initial_selection }
+        Self {
+            settings_source,
+            provider_connections,
+            oauth_credential_store,
+            session_store,
+            initial_selection,
+            telemetry,
+        }
     }
 
     pub(crate) async fn create(
@@ -140,6 +152,7 @@ impl SessionFactory {
             map_acp_mcp_servers(mcp_servers),
             Arc::clone(&self.oauth_credential_store),
             Some(session_id.to_string()),
+            self.telemetry.clone(),
         ))
     }
 

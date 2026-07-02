@@ -1,6 +1,6 @@
-import type { AgentMessage } from "@aether-agent/sdk";
+import type { AgentEvent } from "@aether-agent/sdk";
 
-export function logMessage(message: AgentMessage): void {
+export function logMessage(message: AgentEvent): void {
   switch (message.type) {
     case "text":
     case "thought":

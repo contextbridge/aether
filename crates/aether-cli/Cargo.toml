@@ -32,6 +32,7 @@ path = "src/main.rs"
 aether-auth = { path = "../aether-auth", version = "0.1.6", features = ["keyring"] }
 aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.6.18" }
 aether-project = { path = "../aether-project", version = "0.5.18" }
+aether-telemetry = { path = "../aether-telemetry", version = "0.1.0" }
 llm = { package = "aether-llm", path = "../llm", features = ["bedrock", "codex"], version = "0.7.16" }
 mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.5.21" }
 mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", features = ["all"], version = "0.4.23" }

@@ -1,14 +1,14 @@
 use crate::{Task, containers::ContainerError};
-use aether_core::events::AgentMessage;
+use aether_core::events::AgentEvent;
 use futures::Stream;
 use thiserror::Error;
 
-pub type AgentRunResult = Result<AgentMessage, RunError>;
+pub type AgentRunResult = Result<AgentEvent, RunError>;
 
 /// Trait for an agent under evaluation.
 ///
 /// Implementors run a [`Task`] in their configured execution environment and stream the observed
-/// [`AgentMessage`]s.
+/// [`AgentEvent`]s.
 ///
 /// # Example
 ///
@@ -28,11 +28,11 @@ pub enum RunError {
     #[error("Agent configuration error: {0}")]
     ConfigurationError(String),
 
-    #[error("Agent command exited without emitting a terminal AgentMessage: {stderr}")]
+    #[error("Agent command exited without emitting a terminal AgentEvent: {stderr}")]
     CommandExitWithoutTerminal { stderr: String },
 
-    #[error("Agent command emitted invalid AgentMessage JSON line: {line}")]
-    AgentMessageJsonLine {
+    #[error("Agent command emitted invalid AgentEvent JSON line: {line}")]
+    AgentEventJsonLine {
         line: String,
         #[source]
         source: serde_json::Error,

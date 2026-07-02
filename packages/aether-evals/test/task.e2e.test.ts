@@ -12,13 +12,13 @@ import {
   Workspace,
 } from "../src/index.js";
 import { logMessage } from "./logMessage.js";
-import type { AgentMessage } from "@aether-agent/sdk";
+import type { AgentEvent } from "@aether-agent/sdk";
 
 describe.skipIf(!process.env.AETHER_EVALS_E2E)(
   "Transcript Docker collection (e2e, requires Docker)",
   () => {
     it("runs an agent in a real container and returns its result", async () => {
-      const seen: AgentMessage[] = [];
+      const seen: AgentEvent[] = [];
       await using workspace = await Workspace.fromFiles({
         "notes.txt": "seed\n",
       });
@@ -89,12 +89,12 @@ describe.skipIf(!process.env.AETHER_EVALS_E2E)(
   },
 );
 
-const toolResult: AgentMessage = {
+const toolResult: AgentEvent = {
   type: "tool_result",
   model_name: "e2e",
   result: { id: "1", name: "write", arguments: "{}", result: "ok" },
 };
-const done: AgentMessage = { type: "done" };
+const done: AgentEvent = { type: "done" };
 
 const script = [
   'echo modified > "$AETHER_EVAL_CWD/out.txt"',

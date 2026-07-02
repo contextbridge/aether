@@ -2,7 +2,7 @@ use super::transcript::is_terminal;
 use super::{Agent, AgentRunResult, RunError};
 use crate::Task;
 use crate::containers::{Container, ContainerError};
-use aether_core::events::AgentMessage;
+use aether_core::events::AgentEvent;
 use async_stream::try_stream;
 use futures::Stream;
 use std::collections::{BTreeMap, HashMap};
@@ -22,7 +22,7 @@ pub struct DockerAgent {
 
 impl DockerAgent {
     /// `command` is the in-container argv to exec; its stdout must be newline-delimited
-    /// `AgentMessage` JSON.
+    /// `AgentEvent` JSON.
     pub fn new(container: Container, command: Vec<String>) -> Self {
         Self { container, command, env_vars: HashMap::new() }
     }
@@ -61,8 +61,8 @@ impl Agent for DockerAgent {
                         continue;
                     }
                     tracing::debug!("docker agent stdout: {line}");
-                    let message: AgentMessage = serde_json::from_str(&line)
-                        .map_err(|source| RunError::AgentMessageJsonLine { line, source })?;
+                    let message: AgentEvent = serde_json::from_str(&line)
+                        .map_err(|source| RunError::AgentEventJsonLine { line, source })?;
                     let terminal = is_terminal(&message);
                     yield message;
                     if terminal {
@@ -79,7 +79,7 @@ impl Agent for DockerAgent {
             }
 
             if !finished {
-                Err::<AgentMessage, RunError>(RunError::CommandExitWithoutTerminal { stderr })?;
+                Err::<AgentEvent, RunError>(RunError::CommandExitWithoutTerminal { stderr })?;
             }
         }
     }

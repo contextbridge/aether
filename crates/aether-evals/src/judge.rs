@@ -1,4 +1,4 @@
-use aether_core::events::AgentMessage;
+use aether_core::events::{AgentEvent, MessageEvent, ToolEvent, TurnEvent, TurnOutcome};
 use futures::StreamExt;
 use llm::types::IsoString;
 use llm::{ChatMessage, ContentBlock, Context, LlmResponse, StreamingModelProvider};
@@ -36,7 +36,7 @@ pub struct JudgeBuilder {
 /// Evidence the judge grades against: the agent transcript, a workspace diff, and/or final files.
 #[derive(Debug, Clone, Default)]
 pub struct JudgeContext {
-    pub transcript: Option<Vec<AgentMessage>>,
+    pub transcript: Option<Vec<AgentEvent>>,
     pub diff: Option<String>,
     pub files: BTreeMap<String, String>,
 }
@@ -211,7 +211,7 @@ impl JudgeBuilder {
         self
     }
 
-    pub fn transcript(mut self, transcript: impl Into<Vec<AgentMessage>>) -> Self {
+    pub fn transcript(mut self, transcript: impl Into<Vec<AgentEvent>>) -> Self {
         self.context.transcript = Some(transcript.into());
         self
     }
@@ -420,7 +420,7 @@ fn default_threshold() -> f64 {
     1.0
 }
 
-fn format_transcript(messages: &[AgentMessage]) -> String {
+fn format_transcript(messages: &[AgentEvent]) -> String {
     let mut transcript = String::new();
     for message in messages {
         if let Some(line) = get_transcript_line(message, TRANSCRIPT_PAYLOAD_CHARS) {
@@ -430,27 +430,27 @@ fn format_transcript(messages: &[AgentMessage]) -> String {
     transcript
 }
 
-fn get_transcript_line(message: &AgentMessage, max_payload_chars: usize) -> Option<String> {
+fn get_transcript_line(message: &AgentEvent, max_payload_chars: usize) -> Option<String> {
     match message {
-        AgentMessage::Text { chunk, is_complete: true, .. } if !chunk.is_empty() => {
+        AgentEvent::Message(MessageEvent::Text { chunk, is_complete: true, .. }) if !chunk.is_empty() => {
             Some(format!("[agent] {}", truncate_chars(chunk, max_payload_chars)))
         }
-        AgentMessage::ToolCall { request, .. } => Some(format!(
+        AgentEvent::Tool(ToolEvent::Call { request, .. }) => Some(format!(
             "[tool-call] {} arguments={}",
             request.name,
             truncate_chars(&request.arguments, max_payload_chars)
         )),
-        AgentMessage::ToolResult { result, .. } => {
+        AgentEvent::Tool(ToolEvent::Result { result, .. }) => {
             Some(format!("[tool-result] {}: {}", result.name, truncate_chars(&result.result, max_payload_chars)))
         }
-        AgentMessage::ToolError { error, .. } => {
+        AgentEvent::Tool(ToolEvent::Error { error, .. }) => {
             Some(format!("[tool-error] {}", truncate_chars(&format!("{error:?}"), max_payload_chars)))
         }
-        AgentMessage::Error { message } => Some(format!("[error] {}", truncate_chars(message, max_payload_chars))),
-        AgentMessage::Cancelled { message } => {
-            Some(format!("[error] Cancelled: {}", truncate_chars(message, max_payload_chars)))
+        AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Failed { error } }) => {
+            Some(format!("[error] {}", truncate_chars(error, max_payload_chars)))
         }
-        AgentMessage::Done => Some("[done]".to_string()),
+        AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Cancelled }) => Some("[error] Cancelled".to_string()),
+        AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Completed }) => Some("[done]".to_string()),
         _ => None,
     }
 }
@@ -467,7 +467,7 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aether_core::events::AgentMessage;
+    use aether_core::events::{AgentEvent, TurnOutcome};
     use llm::testing::FakeLlmProvider;
     use llm::{LlmError, ToolCallRequest, ToolCallResult};
 
@@ -475,30 +475,33 @@ mod tests {
 
     #[test]
     fn transcript_lines_label_each_message_kind() {
-        let call = AgentMessage::ToolCall {
+        let call = AgentEvent::Tool(ToolEvent::Call {
             request: ToolCallRequest {
                 id: "call_1".to_string(),
                 name: "bash".to_string(),
                 arguments: "{}".to_string(),
             },
             model_name: "test".to_string(),
-        };
+        });
 
-        assert_eq!(get_transcript_line(&AgentMessage::text("msg_1", "hi", true, "test"), 100).unwrap(), "[agent] hi");
+        assert_eq!(get_transcript_line(&AgentEvent::text("msg_1", "hi", true, "test"), 100).unwrap(), "[agent] hi");
         assert_eq!(get_transcript_line(&call, 100).unwrap(), "[tool-call] bash arguments={}");
-        assert_eq!(get_transcript_line(&AgentMessage::Done, 100).unwrap(), "[done]");
+        assert_eq!(
+            get_transcript_line(&AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Completed }), 100).unwrap(),
+            "[done]"
+        );
     }
 
     #[test]
     fn transcript_lines_truncate_long_payloads() {
-        let line = get_transcript_line(&AgentMessage::text("msg_1", &"a".repeat(50), true, "test"), 10).unwrap();
+        let line = get_transcript_line(&AgentEvent::text("msg_1", &"a".repeat(50), true, "test"), 10).unwrap();
 
         assert_eq!(line, format!("[agent] {}... [truncated]", "a".repeat(10)));
     }
 
     #[test]
     fn tool_result_transcript_uses_result_arguments() {
-        let message = AgentMessage::ToolResult {
+        let message = AgentEvent::Tool(ToolEvent::Result {
             result: ToolCallResult {
                 id: "call_1".to_string(),
                 name: "coding__read_file".to_string(),
@@ -507,7 +510,7 @@ mod tests {
             },
             result_meta: None,
             model_name: "test".to_string(),
-        };
+        });
 
         assert_eq!(get_transcript_line(&message, 100).unwrap(), "[tool-result] coding__read_file: file contents");
     }
@@ -542,15 +545,15 @@ mod tests {
     #[test]
     fn judge_builder_renders_transcript_context() {
         let messages = vec![
-            AgentMessage::ToolCall {
+            AgentEvent::Tool(ToolEvent::Call {
                 request: ToolCallRequest {
                     id: "call_1".to_string(),
                     name: "bash".to_string(),
                     arguments: "{}".to_string(),
                 },
                 model_name: "test".to_string(),
-            },
-            AgentMessage::text("msg_1", "all done", true, "test"),
+            }),
+            AgentEvent::text("msg_1", "all done", true, "test"),
         ];
 
         let judge = judge()

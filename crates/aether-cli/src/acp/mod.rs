@@ -39,11 +39,14 @@ use tracing::info;
 use tracing_appender::rolling::daily;
 use tracing_subscriber::EnvFilter;
 
-use crate::credentials::build_oauth_credential_store;
+use crate::credentials::oauth_credential_store_from_config;
+use crate::telemetry::build_telemetry_runtime;
 use crate::workspace::WorkspaceManager;
 use aether_auth::OAuthError;
+use aether_project::SettingsError;
 use session_factory::InitialSessionSelection;
 use session_store::SessionStore;
+use tracing::warn;
 
 #[derive(clap::Args, Debug)]
 pub struct AcpArgs {
@@ -114,6 +117,9 @@ pub enum AcpRunError {
     #[error("Invalid --options-json: {0}")]
     OptionsJson(#[from] AcpOptionsJsonError),
 
+    #[error("Failed to load settings: {0}")]
+    Settings(#[from] SettingsError),
+
     #[error("Failed to initialize OAuth credential store: {0}")]
     CredentialStore(#[from] OAuthError),
 
@@ -152,7 +158,15 @@ pub async fn run_acp(args: AcpArgs) -> Result<AcpRunOutcome, AcpRunError> {
     let session_store = Arc::new(SessionStore::new().map_err(AcpRunError::SessionStore)?);
     let workspace_manager = Arc::new(WorkspaceManager::new().map_err(AcpRunError::WorkspaceManager)?);
     let cwd = current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let oauth_credential_store = build_oauth_credential_store(&config.settings_source, &cwd)?;
+    let settings = config.settings_source.load_settings(&cwd)?;
+    // Telemetry is process-level infrastructure, resolved once from the
+    // settings visible where the server was launched. An invalid telemetry
+    // configuration must not take down an interactive session.
+    let telemetry = build_telemetry_runtime(&settings.telemetry).unwrap_or_else(|error| {
+        warn!("Telemetry disabled: {error}");
+        None
+    });
+    let oauth_credential_store = oauth_credential_store_from_config(settings.credentials_store)?;
     let state = Arc::new(AcpState::new(AcpStateConfig {
         session_store,
         workspace_manager,
@@ -160,6 +174,7 @@ pub async fn run_acp(args: AcpArgs) -> Result<AcpRunOutcome, AcpRunError> {
         initial_selection,
         settings_source: config.settings_source,
         provider_connections: config.provider_connections,
+        telemetry,
     }));
 
     let connect_result = acp_agent_builder(state.clone()).connect_to(Stdio::new()).await;

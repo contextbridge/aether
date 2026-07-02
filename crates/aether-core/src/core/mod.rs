@@ -1,12 +1,14 @@
 mod agent;
 mod agent_builder;
+mod agent_deps;
 mod error;
 mod prompt;
 mod retry_config;
 
-pub use crate::events::{AgentCommand, AgentMessage, Command, UserCommand};
+pub use crate::events::{AgentCommand, AgentEvent, Command, UserCommand};
 pub use agent::*;
 pub use agent_builder::*;
+pub use agent_deps::*;
 pub use error::*;
 pub use prompt::*;
 pub use retry_config::RetryConfig;

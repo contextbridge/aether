@@ -1,6 +1,7 @@
 mod common;
 
 use aether_auth::FakeOAuthCredentialStore;
+use aether_core::core::AgentDeps;
 use aether_project::{AetherSettings, AetherSettingsSource, AgentCatalog, SettingsFileSource};
 use common::{TestClient, TestResult};
 use mcp_servers::subagents::SubAgentsMcp;
@@ -52,7 +53,10 @@ async fn test_spawn_agent_with_coding_mcp_from_settings_catalog() {
 async fn test_spawn_subagent_codex_uses_oauth_store() -> TestResult {
     let temp_dir = create_project_with_codex_agent();
     let mcp = TestClient::start(|| {
-        create_test_server(temp_dir.path()).with_oauth_credential_store(Arc::new(FakeOAuthCredentialStore::new()))
+        create_test_server(temp_dir.path()).with_agent_deps(AgentDeps {
+            oauth_credential_store: Some(Arc::new(FakeOAuthCredentialStore::new())),
+            ..AgentDeps::default()
+        })
     })
     .await?;
 

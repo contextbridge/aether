@@ -1,5 +1,5 @@
-use aether_auth::OAuthCredentialStorage;
-use aether_core::events::AgentMessage;
+use aether_core::core::AgentDeps;
+use aether_core::events::AgentEvent;
 use aether_core::events::SubAgentProgressPayload;
 use aether_project::{AetherSettings, AgentCatalog};
 use clap::Parser;
@@ -21,7 +21,7 @@ use super::tools::{AgentExecutor, SpawnSubAgentsInput, SpawnSubAgentsOutput};
 use crate::error::ServerInitError;
 use crate::workspace_paths::resolve_path;
 
-type ProgressCallback = Box<dyn Fn(&str, &str, &AgentMessage) + Send + Sync>;
+type ProgressCallback = Box<dyn Fn(&str, &str, &AgentEvent) + Send + Sync>;
 
 #[derive(Debug, Clone, Parser)]
 pub struct SubAgentsMcpArgs {
@@ -45,7 +45,7 @@ pub struct SubAgentsMcp {
     catalog: AgentCatalog,
     tool_router: ToolRouter<Self>,
     project_root: PathBuf,
-    oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
+    agent_deps: AgentDeps,
 }
 
 impl SubAgentsMcp {
@@ -62,11 +62,13 @@ impl SubAgentsMcp {
     }
 
     pub fn new(catalog: AgentCatalog, project_root: PathBuf) -> Self {
-        Self { catalog, tool_router: Self::tool_router(), project_root, oauth_credential_store: None }
+        Self { catalog, tool_router: Self::tool_router(), project_root, agent_deps: AgentDeps::default() }
     }
 
-    pub fn with_oauth_credential_store(mut self, store: Arc<dyn OAuthCredentialStorage>) -> Self {
-        self.oauth_credential_store = Some(store);
+    /// Cross-cutting dependencies (OAuth credentials, observers) passed to
+    /// every sub-agent this server spawns.
+    pub fn with_agent_deps(mut self, deps: AgentDeps) -> Self {
+        self.agent_deps = deps;
         self
     }
 
@@ -150,7 +152,7 @@ impl SubAgentsMcp {
             let peer = Arc::clone(&peer);
             let message_counter = Arc::clone(&message_counter);
 
-            Box::new(move |task_id: &str, agent_name: &str, message: &AgentMessage| {
+            Box::new(move |task_id: &str, agent_name: &str, message: &AgentEvent| {
                 if let Some(ref token) = progress_token {
                     let counter = message_counter.fetch_add(1, Ordering::Relaxed);
                     let progress_payload = SubAgentProgressPayload {
@@ -178,9 +180,8 @@ impl SubAgentsMcp {
             })
         };
 
-        let executor =
-            AgentExecutor::new(self.catalog.clone(), self.project_root.clone(), self.oauth_credential_store.clone())
-                .with_progress_callback(progress_callback);
+        let executor = AgentExecutor::new(self.catalog.clone(), self.project_root.clone(), self.agent_deps.clone())
+            .with_progress_callback(progress_callback);
 
         let output = executor.execute_tasks(args.tasks).await;
         Ok(Json(output))

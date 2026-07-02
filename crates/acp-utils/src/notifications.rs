@@ -286,7 +286,7 @@ pub struct SubAgentProgressParams {
 
 /// Subset of agent message variants relevant for sub-agent status display.
 ///
-/// The ACP server (`aether-cli`) converts `AgentMessage` to this type before
+/// The ACP server (`aether-cli`) converts `AgentEvent` to this type before
 /// serializing, so the wire format only contains these known variants.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SubAgentEvent {

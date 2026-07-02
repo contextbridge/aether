@@ -1,13 +1,28 @@
+use aether_core::events::TurnEvent;
 use std::error::Error;
 use std::time::Duration;
 
 use aether_core::core::RetryConfig;
-use aether_core::events::{AgentMessage, Command, UserCommand};
+use aether_core::events::{AgentEvent, Command, TurnOutcome, UserCommand};
 use aether_core::testing::test_agent;
 use llm::{LlmError, LlmResponse};
 
 fn fast_retry(max_attempts: u32) -> RetryConfig {
     RetryConfig { max_attempts, base_delay: Duration::from_millis(1), max_delay: Duration::from_millis(5) }
+}
+
+fn retry_attempts(messages: &[AgentEvent]) -> Vec<u32> {
+    messages
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::Turn(turn @ TurnEvent::LlmCallStarted { .. }) => turn.retry_info().map(|retry| retry.attempt),
+            _ => None,
+        })
+        .collect()
+}
+
+fn has_failed_turn(messages: &[AgentEvent]) -> bool {
+    messages.iter().any(|m| matches!(m, AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Failed { .. } })))
 }
 
 #[tokio::test(start_paused = true)]
@@ -25,26 +40,14 @@ async fn retries_then_succeeds_on_third_attempt() -> Result<(), Box<dyn Error>> 
         .run_with_context()
         .await?;
 
-    let retry_events: Vec<_> = result.messages.iter().filter(|m| matches!(m, AgentMessage::Retrying { .. })).collect();
-    assert_eq!(retry_events.len(), 2, "expected 2 Retrying events, got {:?}", result.messages);
-
-    let attempts_seen: Vec<u32> = retry_events
-        .iter()
-        .filter_map(|m| match m {
-            AgentMessage::Retrying { attempt, .. } => Some(*attempt),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(attempts_seen, vec![1, 2], "attempt counter should increment per retry");
+    let attempts_seen = retry_attempts(&result.messages);
+    assert_eq!(attempts_seen, vec![1, 2], "attempt counter should increment per retry: {:?}", result.messages);
 
     assert!(
-        matches!(result.messages.last(), Some(AgentMessage::Done)),
-        "expected final Done, got {:?}",
+        matches!(result.messages.last(), Some(AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Completed }))),
+        "expected the turn to complete, got {:?}",
         result.messages.last()
     );
-
-    let has_error = result.messages.iter().any(|m| matches!(m, AgentMessage::Error { .. }));
-    assert!(!has_error, "no terminal Error after successful retry");
 
     let captured = result.captured_contexts.lock().unwrap();
     assert_eq!(captured.len(), 3, "should have called LLM 3 times (2 failures + 1 success)");
@@ -64,11 +67,14 @@ async fn exhausts_retries_then_emits_error() -> Result<(), Box<dyn Error>> {
         .run_with_context()
         .await?;
 
-    let retry_count = result.messages.iter().filter(|m| matches!(m, AgentMessage::Retrying { .. })).count();
+    let retry_count = retry_attempts(&result.messages).len();
     assert_eq!(retry_count, 3, "should retry exactly max_attempts times before giving up");
 
-    let has_error = result.messages.iter().any(|m| matches!(m, AgentMessage::Error { .. }));
-    assert!(has_error, "expected terminal Error after exhausting retries: {:?}", result.messages);
+    assert!(
+        has_failed_turn(&result.messages),
+        "expected a failed turn after exhausting retries: {:?}",
+        result.messages
+    );
 
     let captured = result.captured_contexts.lock().unwrap();
     assert_eq!(captured.len(), 4, "should call LLM max_attempts + 1 times (1 initial + 3 retries)");
@@ -88,11 +94,10 @@ async fn non_retryable_error_surfaces_immediately() -> Result<(), Box<dyn Error>
         .run_with_context()
         .await?;
 
-    let retry_count = result.messages.iter().filter(|m| matches!(m, AgentMessage::Retrying { .. })).count();
+    let retry_count = retry_attempts(&result.messages).len();
     assert_eq!(retry_count, 0, "non-retryable errors must not trigger retry");
 
-    let has_error = result.messages.iter().any(|m| matches!(m, AgentMessage::Error { .. }));
-    assert!(has_error, "expected terminal Error for non-retryable failure");
+    assert!(has_failed_turn(&result.messages), "expected a failed turn for non-retryable failure");
 
     let captured = result.captured_contexts.lock().unwrap();
     assert_eq!(captured.len(), 1, "should call LLM exactly once");
@@ -112,11 +117,10 @@ async fn retry_disabled_surfaces_retryable_error_immediately() -> Result<(), Box
         .run_with_context()
         .await?;
 
-    let retry_count = result.messages.iter().filter(|m| matches!(m, AgentMessage::Retrying { .. })).count();
+    let retry_count = retry_attempts(&result.messages).len();
     assert_eq!(retry_count, 0, "RetryConfig::disabled() must skip all retries");
 
-    let has_error = result.messages.iter().any(|m| matches!(m, AgentMessage::Error { .. }));
-    assert!(has_error, "expected terminal Error when retry is disabled");
+    assert!(has_failed_turn(&result.messages), "expected a failed turn when retry is disabled");
 
     Ok(())
 }
@@ -149,11 +153,13 @@ async fn mid_stream_interrupts_consume_retry_budget() -> Result<(), Box<dyn Erro
         .run_with_context()
         .await?;
 
-    let retry_count = result.messages.iter().filter(|m| matches!(m, AgentMessage::Retrying { .. })).count();
+    let retry_count = retry_attempts(&result.messages).len();
     assert_eq!(retry_count, 3, "mid-stream interrupts must respect max_attempts; got {retry_count} retries");
 
-    let has_error = result.messages.iter().any(|m| matches!(m, AgentMessage::Error { .. }));
-    assert!(has_error, "expected terminal Error after exhausting retries on mid-stream interrupts");
+    assert!(
+        has_failed_turn(&result.messages),
+        "expected a failed turn after exhausting retries on mid-stream interrupts"
+    );
 
     let captured = result.captured_contexts.lock().unwrap();
     assert_eq!(
@@ -180,9 +186,12 @@ async fn rate_limited_error_is_retried() -> Result<(), Box<dyn Error>> {
         .run_with_context()
         .await?;
 
-    let retry_count = result.messages.iter().filter(|m| matches!(m, AgentMessage::Retrying { .. })).count();
+    let retry_count = retry_attempts(&result.messages).len();
     assert_eq!(retry_count, 1);
-    assert!(matches!(result.messages.last(), Some(AgentMessage::Done)));
+    assert!(matches!(
+        result.messages.last(),
+        Some(AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Completed }))
+    ));
 
     Ok(())
 }
@@ -209,9 +218,9 @@ async fn cancel_during_retry_wait_aborts_pending_retry() -> Result<(), Box<dyn E
 
     loop {
         match rx.recv().await {
-            Some(AgentMessage::Retrying { .. }) => break,
+            Some(AgentEvent::Turn(TurnEvent::LlmCallStarted { attempt: 1, .. })) => break,
             Some(_) => {}
-            None => panic!("channel closed before Retrying"),
+            None => panic!("channel closed before the retry attempt started"),
         }
     }
 
@@ -219,15 +228,16 @@ async fn cancel_during_retry_wait_aborts_pending_retry() -> Result<(), Box<dyn E
 
     let mut messages = Vec::new();
     while let Some(msg) = rx.recv().await {
-        let is_done = matches!(msg, AgentMessage::Done);
+        let is_turn_end = matches!(msg, AgentEvent::Turn(TurnEvent::Ended { .. }));
         messages.push(msg);
-        if is_done {
+        if is_turn_end {
             break;
         }
     }
 
-    let has_cancelled = messages.iter().any(|m| matches!(m, AgentMessage::Cancelled { .. }));
-    assert!(has_cancelled, "expected Cancelled event, got {messages:?}");
+    let has_cancelled =
+        messages.iter().any(|m| matches!(m, AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Cancelled })));
+    assert!(has_cancelled, "expected the turn to end as cancelled, got {messages:?}");
 
     // The retry should never have fired — only the original failed call counts.
     let captured = captured.lock().unwrap();

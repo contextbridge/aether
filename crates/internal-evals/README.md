@@ -39,7 +39,7 @@ just evals-list
 
 ## Docker and agent configuration
 
-All evals in this repo run in the `aether-sandbox:latest` image, built from [`examples/Dockerfile`](examples/Dockerfile). `just evals` builds it (via `just build-sandbox`) before running anything, so a fresh checkout works without manual setup. Both the internal Rust tests and the declarative examples drive the same in-image `/usr/local/bin/aether-eval-agent` wrapper, which runs `aether headless --output json` and emits `AgentMessage` NDJSON.
+All evals in this repo run in the `aether-sandbox:latest` image, built from [`examples/Dockerfile`](examples/Dockerfile). `just evals` builds it (via `just build-sandbox`) before running anything, so a fresh checkout works without manual setup. Both the internal Rust tests and the declarative examples drive the same in-image `/usr/local/bin/aether-eval-agent` wrapper, which runs `aether headless --output json` and emits `AgentEvent` NDJSON.
 
 Set `AETHER_EVAL_AGENT` to pass `--agent` through to `aether headless`:
 
@@ -51,7 +51,7 @@ AETHER_EVAL_AGENT="Fast" just evals
 
 - Put real LLM scenarios in `crates/internal-evals/tests` or add declarative `*.eval.json` files under `crates/internal-evals/examples`; shared Rust setup code lives in `tests/common`.
 - `just evals` runs tests ending in `_eval` with nextest's default filter disabled and the `evals` group selected; keep that suffix for real provider-backed eval tests.
-- Drive real Aether evals through the in-image `aether-eval-agent` wrapper command, which emits `AgentMessage` NDJSON via `aether headless --output json`.
+- Drive real Aether evals through the in-image `aether-eval-agent` wrapper command, which emits `AgentEvent` NDJSON via `aether headless --output json`.
 - Run the agent with `aether_evals::Transcript::from_stream(agent.run(aether_evals::Task::new(prompt))).await?`.
 - Assert Aether namespaced MCP tool names, such as `coding__read_file` and `coding__edit_file`, with `Transcript` helpers.
 - Prefer direct filesystem assertions over shell commands for file outcomes.

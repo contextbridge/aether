@@ -1,6 +1,7 @@
 use thiserror::Error;
 
 use crate::error::CliError;
+use crate::slash_commands::SlashCommandError;
 
 #[derive(Debug, Error)]
 pub enum SessionError {
@@ -16,4 +17,13 @@ pub enum SessionError {
     AgentNotFound(String),
     #[error("active agent runtime is not running")]
     ActiveRuntimeNotRunning,
+}
+
+impl From<SlashCommandError> for SessionError {
+    fn from(error: SlashCommandError) -> Self {
+        match error {
+            SlashCommandError::CommandChannel(message) => Self::CommandChannel(message),
+            other => Self::McpOperation(other.to_string()),
+        }
+    }
 }

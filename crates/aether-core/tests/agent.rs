@@ -6,4 +6,5 @@ mod agent {
     mod model_switch_tests;
     mod queued_message_tests;
     mod retry_tests;
+    mod trace_tests;
 }

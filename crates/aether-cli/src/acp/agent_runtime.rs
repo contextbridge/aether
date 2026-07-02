@@ -1,14 +1,15 @@
 use super::agent_key::AgentKey;
 use super::error::SessionError;
 use crate::runtime::{Runtime, RuntimeBuilder};
-use crate::slash_commands::{SlashCommandError, list_prompts};
+use crate::slash_commands::list_prompts;
 use aether_auth::OAuthCredentialStorage;
 use aether_auth::OAuthHandler;
 use aether_core::agent_spec::AgentSpec;
 use aether_core::agent_spec::ToolFilter;
 use aether_core::core::AgentHandle;
-use aether_core::events::{AgentCommand, AgentMessage, Command};
+use aether_core::events::{AgentCommand, AgentEvent, Command};
 use aether_core::mcp::run_mcp_task::McpCommand;
+use aether_telemetry::TelemetryRuntime;
 use llm::ChatMessage;
 use mcp_utils::client::{
     ElicitingOAuthHandler, McpClientEvent, McpConnectionDetails, McpError, McpServer, McpServerStatusEntry,
@@ -42,7 +43,7 @@ impl AgentRuntime {
         agent: AgentKey,
         spec: &AgentSpec,
         agent_tx: mpsc::Sender<Command>,
-        mut agent_rx: mpsc::Receiver<AgentMessage>,
+        mut agent_rx: mpsc::Receiver<AgentEvent>,
         agent_handle: Option<AgentHandle>,
         mcp_tx: mpsc::Sender<McpCommand>,
         mut event_rx: mpsc::Receiver<McpClientEvent>,
@@ -93,15 +94,8 @@ impl AgentRuntime {
             .map_err(|e| SessionError::CommandChannel(format!("failed to sync active conversation: {e}")))
     }
 
-    pub(crate) fn mcp_tx(&self) -> &mpsc::Sender<McpCommand> {
-        &self.mcp_tx
-    }
-
     pub(crate) async fn list_prompts(&self) -> Result<Vec<McpPrompt>, SessionError> {
-        list_prompts(&self.mcp_tx).await.map_err(|error| match error {
-            SlashCommandError::CommandChannel(message) => SessionError::CommandChannel(message),
-            other => SessionError::McpOperation(other.to_string()),
-        })
+        Ok(list_prompts(&self.mcp_tx).await?)
     }
 
     pub(crate) async fn authenticate_mcp_server(&self, name: &str) -> Result<(), SessionError> {
@@ -109,6 +103,10 @@ impl AgentRuntime {
             .send(McpCommand::AuthenticateServer { name: name.to_string() })
             .await
             .map_err(|e| SessionError::CommandChannel(format!("failed to send AuthenticateServer command: {e}")))
+    }
+
+    pub(crate) fn mcp_tx(&self) -> &mpsc::Sender<McpCommand> {
+        &self.mcp_tx
     }
 
     pub(crate) fn mcp_server_statuses(&self) -> Vec<McpServerStatusEntry> {
@@ -128,7 +126,7 @@ impl Drop for AgentRuntime {
 }
 
 pub(crate) enum RuntimeEvent {
-    Agent { agent: AgentKey, message: AgentMessage },
+    Agent { agent: AgentKey, message: AgentEvent },
     Mcp { agent: AgentKey, event: McpClientEvent },
 }
 
@@ -151,6 +149,7 @@ pub(crate) struct ProductionRuntimeFactory {
     mcp_servers: Vec<McpServer>,
     oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
     prompt_cache_key: Option<String>,
+    telemetry: Option<Arc<TelemetryRuntime>>,
 }
 
 impl ProductionRuntimeFactory {
@@ -159,8 +158,9 @@ impl ProductionRuntimeFactory {
         client_servers: Vec<McpServer>,
         oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
         prompt_cache_key: Option<String>,
+        telemetry: Option<Arc<TelemetryRuntime>>,
     ) -> Self {
-        Self { cwd, mcp_servers: client_servers, oauth_credential_store, prompt_cache_key }
+        Self { cwd, mcp_servers: client_servers, oauth_credential_store, prompt_cache_key, telemetry }
     }
 }
 
@@ -183,7 +183,8 @@ impl RuntimeFactory for ProductionRuntimeFactory {
         let mut builder = RuntimeBuilder::from_spec(self.cwd.clone(), spec.clone())
             .extra_servers(extra_servers)
             .oauth_handler_factory(mcp_oauth_handler_factory())
-            .oauth_credential_store(self.oauth_credential_store.clone());
+            .oauth_credential_store(self.oauth_credential_store.clone())
+            .telemetry_runtime(self.telemetry.clone());
 
         if let Some(key) = self.prompt_cache_key.clone() {
             builder = builder.prompt_cache_key(key);

@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { AetherSdkError } from "@aether-agent/sdk";
 import type {
-  AgentMessage,
+  AgentEvent,
   JudgeCriterionResponse,
   JudgeCriterionSpec,
   JudgeCriterionSummary,
@@ -31,7 +31,7 @@ export interface JudgeInput {
 
 export interface JudgeContext {
   /** The agent transcript, e.g. messages collected from `Agent.run` with `Transcript.fromStream`. */
-  transcript?: AgentMessage[];
+  transcript?: AgentEvent[];
   /** A workspace diff to grade against. */
   diff?: string;
   /** Final file contents to include, keyed by path. */
@@ -119,8 +119,8 @@ export function judge(input: JudgeInput): Judge {
   };
 }
 
-/** Render a transcript of streamed `AgentMessage`s as readable lines for a judge prompt. */
-export function formatTranscript(messages: AgentMessage[]): string {
+/** Render a transcript of streamed `AgentEvent`s as readable lines for a judge prompt. */
+export function formatTranscript(messages: AgentEvent[]): string {
   const lines: string[] = [];
   const buffers = new Map<
     string,
@@ -152,7 +152,7 @@ export function formatTranscript(messages: AgentMessage[]): string {
 }
 
 /** Format a single agent message into a readable line for a judge prompt. */
-export function messageToString(message: AgentMessage): string {
+export function messageToString(message: AgentEvent): string {
   switch (message.type) {
     case "tool_call":
       return `[tool-call] ${message.request.name} ${message.request.arguments}`.trimEnd();

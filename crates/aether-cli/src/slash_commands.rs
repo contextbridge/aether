@@ -52,6 +52,17 @@ pub(crate) async fn expand_slash_command(
     prompt_result_text(&prompt_result)
 }
 
+pub(crate) async fn try_expand_slash_command(mcp_tx: &mpsc::Sender<McpCommand>, text: &str) -> Option<String> {
+    let slash_command = parse_slash_command(text)?;
+    match expand_slash_command(mcp_tx, slash_command.command_name, slash_command.args_text).await {
+        Ok(expanded) => Some(expanded),
+        Err(error) => {
+            tracing::error!("Failed to expand slash command: {error}");
+            None
+        }
+    }
+}
+
 pub(crate) async fn list_prompts(mcp_tx: &mpsc::Sender<McpCommand>) -> Result<Vec<McpPrompt>, SlashCommandError> {
     let (tx, rx) = oneshot::channel();
     mcp_tx

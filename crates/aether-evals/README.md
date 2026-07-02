@@ -52,11 +52,11 @@ Aether Evals' fake-agent coverage should use normal test names. Reserve `_eval` 
 ## Core API
 
 - `Task::new(prompt)` describes the problem to solve.
-- `Agent::run(task)` streams `AgentMessage`s from an agent's configured execution environment.
+- `Agent::run(task)` streams `AgentEvent`s from an agent's configured execution environment.
 - `Transcript::from_stream(agent.run(task))` collects the stream into a `Transcript`.
 - `Transcript::default()` plus `transcript.add(message)` supports observing each streamed message while building the transcript manually.
 - `Container::builder(image).start(&workspace)` starts a caller-owned Docker container with the workspace mounted at `/workspace`.
-- `DockerAgent::new(container, command)` runs an in-container command whose stdout is newline-delimited `AgentMessage` JSON.
+- `DockerAgent::new(container, command)` runs an in-container command whose stdout is newline-delimited `AgentEvent` JSON.
 - `Container::exec_shell(script)` runs follow-up assertions or test commands in the same caller-owned container.
 - `default_eval_env_vars()` forwards provider credentials and Aether-related environment into Docker while setting `AETHER_HOME=/root/.aether`.
 - `Workspace::empty()` creates an isolated temp directory.
@@ -72,7 +72,7 @@ Aether Evals mounts the workspace root at `/workspace` and runs the command from
 - `AETHER_EVAL_WORKSPACE_ROOT=/workspace` — the mounted workspace root.
 - `AETHER_EVAL_CWD` — the command's effective cwd inside the workspace.
 
-Stdout is reserved for `AgentMessage` JSON lines and must end with a terminal message such as `{"type":"done"}`. Diagnostic logging should go to stderr.
+Stdout is reserved for `AgentEvent` JSON lines and must end with a terminal message such as `{"type":"done"}`. Diagnostic logging should go to stderr.
 
 ```rust
 use aether_evals::{
