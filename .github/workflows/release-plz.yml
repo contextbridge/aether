@@ -30,8 +30,6 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.97
       - uses: Swatinem/rust-cache@v2
       - name: Run release-plz
         uses: release-plz/action@v0.5.130
@@ -67,8 +65,6 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.97
       - uses: Swatinem/rust-cache@v2
       - name: Run release-plz
         uses: release-plz/action@v0.5.130
