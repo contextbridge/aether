@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.9](https://github.com/contextbridge/aether/compare/aether-utils-v0.2.8...aether-utils-v0.2.9) - 2026-07-09
+
+### Other
+
+- Update models ([#214](https://github.com/contextbridge/aether/pull/214))
+
 ## [0.2.8](https://github.com/contextbridge/aether/compare/aether-utils-v0.2.7...aether-utils-v0.2.8) - 2026-06-18
 
 ### Other

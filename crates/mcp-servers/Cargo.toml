@@ -1,6 +1,6 @@
 [package]
 name = "aether-mcp-servers"
-version = "0.4.23"
+version = "0.4.24"
 edition = "2024"
 description = "Built-in MCP tool servers for the Aether AI agent framework"
 license = "MIT"
@@ -85,9 +85,9 @@ tokio = { workspace = true }
 rmcp = { workspace = true }
 schemars = { workspace = true }
 clap = { workspace = true, features = ["env"] }
-mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.5.21" }
-utils = { package = "aether-utils", path = "../utils", version = "0.2.8" }
-aether-lspd = { path = "../aether-lspd", optional = true, version = "0.1.20" }
+mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.5.22" }
+utils = { package = "aether-utils", path = "../utils", version = "0.2.9" }
+aether-lspd = { path = "../aether-lspd", optional = true, version = "0.1.21" }
 futures = { workspace = true, optional = true }
 globset = { workspace = true, optional = true }
 grep = { workspace = true, optional = true }
@@ -110,13 +110,13 @@ tempfile = { workspace = true, optional = true }
 
 # subagents feature
 aether-auth = { path = "../aether-auth", optional = true, version = "0.1.6", features = ["keyring"] }
-aether-core = { package = "aether-agent-core", path = "../aether-core", optional = true, version = "0.6.18" }
-aether-project = { path = "../aether-project", optional = true, version = "0.5.18" }
-llm = { package = "aether-llm", path = "../llm", optional = true, version = "0.7.16" }
+aether-core = { package = "aether-agent-core", path = "../aether-core", optional = true, version = "0.6.19" }
+aether-project = { path = "../aether-project", optional = true, version = "0.5.19" }
+llm = { package = "aether-llm", path = "../llm", optional = true, version = "0.7.17" }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-aether-lspd = { path = "../aether-lspd", features = ["testing"], version = "0.1.20" }
+aether-lspd = { path = "../aether-lspd", features = ["testing"], version = "0.1.21" }
 mcp-servers = { package = "aether-mcp-servers", path = ".", features = ["test-helpers"] }
 
 [[bin]]
