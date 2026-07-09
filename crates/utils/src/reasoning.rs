@@ -9,6 +9,7 @@ pub enum ReasoningEffort {
     Medium,
     High,
     Xhigh,
+    Max,
 }
 
 impl ReasoningEffort {
@@ -18,11 +19,12 @@ impl ReasoningEffort {
             Self::Medium => "medium",
             Self::High => "high",
             Self::Xhigh => "xhigh",
+            Self::Max => "max",
         }
     }
 
     pub fn all() -> &'static [ReasoningEffort] {
-        &[Self::Low, Self::Medium, Self::High, Self::Xhigh]
+        &[Self::Low, Self::Medium, Self::High, Self::Xhigh, Self::Max]
     }
 
     /// Numeric position derived from `all()` ordering.
@@ -62,7 +64,7 @@ impl ReasoningEffort {
     }
 
     /// Parse a string into an optional effort level.
-    /// Accepts "none" / "" as `None`, and "low"/"medium"/"high"/"xhigh" as `Some`.
+    /// Accepts "none" / "" as `None`, and supported effort names as `Some`.
     pub fn parse(s: &str) -> Result<Option<Self>, String> {
         match s {
             "none" | "" => Ok(None),
@@ -86,6 +88,7 @@ impl FromStr for ReasoningEffort {
             "medium" => Ok(Self::Medium),
             "high" => Ok(Self::High),
             "xhigh" => Ok(Self::Xhigh),
+            "max" => Ok(Self::Max),
             _ => Err(format!("Unknown reasoning effort: '{s}'")),
         }
     }
@@ -113,12 +116,12 @@ mod tests {
 
     #[test]
     fn from_str_rejects_unknown() {
-        assert!("max".parse::<ReasoningEffort>().is_err());
+        assert!("extreme".parse::<ReasoningEffort>().is_err());
     }
 
     #[test]
-    fn all_returns_four_variants() {
-        assert_eq!(ReasoningEffort::all().len(), 4);
+    fn all_returns_five_variants() {
+        assert_eq!(ReasoningEffort::all().len(), 5);
     }
 
     #[test]
@@ -135,7 +138,7 @@ mod tests {
 
     #[test]
     fn parse_rejects_unknown() {
-        assert!(ReasoningEffort::parse("max").is_err());
+        assert!(ReasoningEffort::parse("extreme").is_err());
     }
 
     #[test]
@@ -159,6 +162,7 @@ mod tests {
         assert_eq!(ReasoningEffort::Medium.ordinal(), 1);
         assert_eq!(ReasoningEffort::High.ordinal(), 2);
         assert_eq!(ReasoningEffort::Xhigh.ordinal(), 3);
+        assert_eq!(ReasoningEffort::Max.ordinal(), 4);
     }
 
     #[test]
@@ -172,12 +176,13 @@ mod tests {
     }
 
     #[test]
-    fn cycle_within_four_levels() {
+    fn cycle_within_five_levels() {
         use ReasoningEffort::*;
-        let levels = &[Low, Medium, High, Xhigh];
+        let levels = &[Low, Medium, High, Xhigh, Max];
         assert_eq!(ReasoningEffort::cycle_within(None, levels), Some(Low));
         assert_eq!(ReasoningEffort::cycle_within(Some(High), levels), Some(Xhigh));
-        assert_eq!(ReasoningEffort::cycle_within(Some(Xhigh), levels), None);
+        assert_eq!(ReasoningEffort::cycle_within(Some(Xhigh), levels), Some(Max));
+        assert_eq!(ReasoningEffort::cycle_within(Some(Max), levels), None);
     }
 
     #[test]
@@ -198,13 +203,14 @@ mod tests {
         use ReasoningEffort::*;
         assert_eq!(High.clamp_to(&[Low, Medium, High]), High);
         assert_eq!(Xhigh.clamp_to(&[Low, Medium, High, Xhigh]), Xhigh);
+        assert_eq!(Max.clamp_to(&[Low, Medium, High, Xhigh, Max]), Max);
     }
 
     #[test]
     fn clamp_to_highest_le() {
         use ReasoningEffort::*;
-        // Xhigh not in [Low, Medium, High] → clamp to High
-        assert_eq!(Xhigh.clamp_to(&[Low, Medium, High]), High);
+        // Max not in [Low, Medium, High, Xhigh] -> clamp to Xhigh
+        assert_eq!(Max.clamp_to(&[Low, Medium, High, Xhigh]), Xhigh);
     }
 
     #[test]
@@ -215,7 +221,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_xhigh() {
+    fn parse_extended_levels() {
         assert_eq!(ReasoningEffort::parse("xhigh").unwrap(), Some(ReasoningEffort::Xhigh));
+        assert_eq!(ReasoningEffort::parse("max").unwrap(), Some(ReasoningEffort::Max));
+        assert!(ReasoningEffort::parse("ultra").is_err());
     }
 }

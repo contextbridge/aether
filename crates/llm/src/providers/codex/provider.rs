@@ -11,6 +11,7 @@ use async_openai::types::responses::{
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
+use serde_json::Value;
 use std::sync::Arc;
 use tracing::debug;
 
@@ -58,6 +59,16 @@ impl CodexProvider {
         })
     }
 
+    fn build_request_body(&self, context: &Context) -> Result<Value> {
+        let mut body = serde_json::to_value(self.build_request(context)?)?;
+        if context.reasoning_effort() == Some(crate::ReasoningEffort::Max)
+            && let Some(reasoning) = body.get_mut("reasoning")
+        {
+            reasoning["effort"] = Value::String("max".to_string());
+        }
+        Ok(body)
+    }
+
     async fn build_headers(&self) -> Result<HeaderMap> {
         let (access_token, account_id) = self.token_manager.get_valid_token().await?;
 
@@ -84,7 +95,7 @@ impl CodexProvider {
     /// (used by `async-openai`'s `create_stream`) requires.
     async fn send_request(
         &self,
-        request: CreateResponse,
+        request: Value,
         headers: HeaderMap,
     ) -> Result<impl futures::Stream<Item = Result<CodexStreamEvent>>> {
         let url = format!("{CODEX_API_BASE}/responses");
@@ -156,7 +167,7 @@ impl StreamingModelProvider for CodexProvider {
                 }
             };
 
-            let request = match provider.build_request(&context) {
+            let request = match provider.build_request_body(&context) {
                 Ok(r) => r,
                 Err(e) => {
                     yield Err(e);
@@ -189,7 +200,7 @@ fn to_codex_effort(effort: crate::ReasoningEffort) -> ReasoningEffort {
         crate::ReasoningEffort::Low => ReasoningEffort::Low,
         crate::ReasoningEffort::Medium => ReasoningEffort::Medium,
         crate::ReasoningEffort::High => ReasoningEffort::High,
-        crate::ReasoningEffort::Xhigh => ReasoningEffort::Xhigh,
+        crate::ReasoningEffort::Xhigh | crate::ReasoningEffort::Max => ReasoningEffort::Xhigh,
     }
 }
 
@@ -284,8 +295,21 @@ mod tests {
         context.set_reasoning_effort(Some(crate::ReasoningEffort::High));
 
         let request = provider.build_request(&context).unwrap();
-        let json = serde_json::to_value(&request).unwrap();
-        assert_eq!(json["reasoning"]["effort"], "high");
+        let body = serde_json::to_value(request).unwrap();
+        assert_eq!(body["reasoning"]["effort"], "high");
+    }
+
+    #[test]
+    fn build_request_sends_max_effort() {
+        let provider = create_test_provider();
+        let mut context = Context::new(
+            vec![ChatMessage::User { content: vec![ContentBlock::text("Think harder")], timestamp: IsoString::now() }],
+            vec![],
+        );
+        context.set_reasoning_effort(Some(crate::ReasoningEffort::Max));
+
+        let request = provider.build_request_body(&context).unwrap();
+        assert_eq!(request["reasoning"]["effort"], "max");
     }
 
     #[test]

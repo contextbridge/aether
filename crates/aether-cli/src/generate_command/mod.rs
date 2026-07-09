@@ -32,7 +32,7 @@ pub struct GenerateArgs {
     pub model_settings: ModelSettingsArgs,
 
     /// Reasoning effort for models that support extended thinking
-    /// (`low`, `medium`, `high`, `xhigh`).
+    /// (`low`, `medium`, `high`, `xhigh`, `max`).
     #[arg(long)]
     pub reasoning_effort: Option<ReasoningEffort>,
 

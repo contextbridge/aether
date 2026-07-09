@@ -49,11 +49,52 @@ mod tests {
     }
 
     #[test]
-    fn codex_gpt56_sol_uses_canonical_model_id() {
-        let model: LlmModel = "codex:gpt-5.6".parse().unwrap();
-        assert_eq!(model.to_string(), "codex:gpt-5.6");
-        assert!("codex:gpt-5.6-sol".parse::<LlmModel>().is_err());
-        assert!("openai:gpt-5.6-sol".parse::<LlmModel>().is_ok());
+    fn codex_gpt56_sol_uses_subscription_model_id() {
+        let model: LlmModel = "codex:gpt-5.6-sol".parse().unwrap();
+        assert_eq!(model.to_string(), "codex:gpt-5.6-sol");
+        assert_eq!(model.context_window(), Some(372_000));
+        assert!("codex:gpt-5.6".parse::<LlmModel>().is_err());
+        assert!("codex:gpt-5.1-codex".parse::<LlmModel>().is_err());
+        assert!("openai:gpt-5.6".parse::<LlmModel>().is_ok());
+    }
+
+    #[test]
+    fn codex_gpt56_named_models_parse() {
+        for id in ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] {
+            let model: LlmModel = format!("codex:{id}").parse().unwrap();
+            assert_eq!(model.model_id(), id);
+            assert_eq!(model.context_window(), Some(372_000));
+        }
+    }
+
+    #[test]
+    fn codex_gpt56_named_models_use_new_reasoning_levels() {
+        let sol: LlmModel = "codex:gpt-5.6-sol".parse().unwrap();
+        assert_eq!(
+            sol.reasoning_levels(),
+            &[
+                ReasoningEffort::Low,
+                ReasoningEffort::Medium,
+                ReasoningEffort::High,
+                ReasoningEffort::Xhigh,
+                ReasoningEffort::Max,
+            ]
+        );
+
+        let terra: LlmModel = "codex:gpt-5.6-terra".parse().unwrap();
+        assert_eq!(terra.reasoning_levels(), sol.reasoning_levels());
+
+        let luna: LlmModel = "codex:gpt-5.6-luna".parse().unwrap();
+        assert_eq!(
+            luna.reasoning_levels(),
+            &[
+                ReasoningEffort::Low,
+                ReasoningEffort::Medium,
+                ReasoningEffort::High,
+                ReasoningEffort::Xhigh,
+                ReasoningEffort::Max,
+            ]
+        );
     }
 
     #[test]

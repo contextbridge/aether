@@ -176,7 +176,7 @@ const PROVIDERS: &[ProviderConfig] = &[
         display_name: "Codex",
         env_var: None,
         oauth_provider_id: Some("codex"),
-        default_reasoning_levels: &["low", "medium", "high", "xhigh"],
+        default_reasoning_levels: &[],
         is_hybrid_dynamic: false,
     },
     ProviderConfig::standard("deepseek", "DeepSeek", "deepseek", "DeepSeek", Some("DEEPSEEK_API_KEY")),
@@ -201,15 +201,25 @@ const DYNAMIC_PROVIDERS: &[DynamicProviderConfig] = &[
 
 const CODEX_SUBSCRIPTION_CONTEXT_WINDOW: u32 = 272_000;
 
+const CODEX_SUBSCRIPTION_MODEL_IDS: &[&str] = &[
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.2",
+    "codex-auto-review",
+];
+
 fn is_codex_model(model_id: &str) -> bool {
-    model_id != "gpt-5.6-sol" && (model_id.contains("codex") || model_id.starts_with("gpt-5.") || model_id == "gpt-5")
+    CODEX_SUBSCRIPTION_MODEL_IDS.contains(&model_id)
 }
 
 fn codex_subscription_context_window(model_id: &str, default_context_window: u32) -> u32 {
     match model_id {
-        "gpt-5.5" | "gpt-5.4" | "gpt-5.4-mini" | "gpt-5.3-codex" | "gpt-5.2" | "codex-auto-review" => {
-            CODEX_SUBSCRIPTION_CONTEXT_WINDOW
-        }
+        "gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-5.6-luna" => 372_000,
+        "gpt-5.5" | "gpt-5.4" | "gpt-5.4-mini" | "gpt-5.2" | "codex-auto-review" => CODEX_SUBSCRIPTION_CONTEXT_WINDOW,
         _ => default_context_window,
     }
 }
@@ -294,11 +304,8 @@ fn collect_models_from(cfg: &ProviderConfig, models: &HashMap<String, ModelData>
         .filter(|m| !is_alias(&m.id))
         .filter(|m| cfg.model_filter.is_none_or(|f| f(&m.id)))
         .map(|m| {
-            let reasoning_levels = if m.reasoning.unwrap_or(false) {
-                cfg.default_reasoning_levels.iter().map(|s| (*s).to_string()).collect()
-            } else {
-                Vec::new()
-            };
+            let reasoning_levels =
+                if m.reasoning.unwrap_or(false) { reasoning_levels_for_model(cfg, &m.id) } else { Vec::new() };
             let input_modalities =
                 m.modalities.as_ref().map_or_else(|| vec!["text".to_string()], |md| md.input.clone());
             let source_context_window = m.limit.as_ref().map_or(0, |l| l.context);
@@ -316,6 +323,18 @@ fn collect_models_from(cfg: &ProviderConfig, models: &HashMap<String, ModelData>
             }
         })
         .collect()
+}
+
+fn reasoning_levels_for_model(cfg: &ProviderConfig, model_id: &str) -> Vec<String> {
+    if cfg.dev_id == "codex" {
+        let levels = match model_id {
+            "gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-5.6-luna" => &["low", "medium", "high", "xhigh", "max"][..],
+            _ => &["low", "medium", "high", "xhigh"],
+        };
+        return levels.iter().map(|s| (*s).to_string()).collect();
+    }
+
+    cfg.default_reasoning_levels.iter().map(|s| (*s).to_string()).collect()
 }
 
 /// Returns true for "latest" alias IDs that just point to another model
@@ -692,6 +711,7 @@ fn level_str_to_variant(level: &str) -> &'static str {
         "medium" => "Medium",
         "high" => "High",
         "xhigh" => "Xhigh",
+        "max" => "Max",
         other => panic!("Unknown reasoning level: {other}"),
     }
 }
@@ -1274,13 +1294,17 @@ mod tests {
 
     #[test]
     fn codex_subscription_context_window_overrides_known_codex_models() {
-        for model_id in ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.2", "codex-auto-review"] {
+        for model_id in ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "codex-auto-review"] {
             assert_eq!(codex_subscription_context_window(model_id, 1_050_000), 272_000);
+        }
+        for model_id in ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] {
+            assert_eq!(codex_subscription_context_window(model_id, 1_050_000), 372_000);
         }
     }
 
     #[test]
     fn codex_subscription_context_window_leaves_unknown_models_unchanged() {
+        assert_eq!(codex_subscription_context_window("gpt-5.3-codex", 400_000), 400_000);
         assert_eq!(codex_subscription_context_window("gpt-5.3-codex-spark", 128_000), 128_000);
         assert_eq!(codex_subscription_context_window("some-future-model", 400_000), 400_000);
     }
@@ -1375,22 +1399,32 @@ mod tests {
     }
 
     #[test]
-    fn build_assigns_codex_four_reasoning_levels() {
+    fn build_assigns_codex_model_specific_reasoning_levels() {
         let mut data = minimal_models_dev_json();
         insert_models(
             &mut data,
             "openai",
             json!({
-                "gpt-5.4-codex": {
-                    "id": "gpt-5.4-codex", "name": "GPT-5.4 Codex", "tool_call": true, "reasoning": true,
+                "gpt-5.6-sol": {
+                    "id": "gpt-5.6-sol", "name": "GPT-5.6 Sol", "tool_call": true, "reasoning": true,
+                    "limit": {"context": 200_000, "output": 0}
+                },
+                "gpt-5.6-luna": {
+                    "id": "gpt-5.6-luna", "name": "GPT-5.6 Luna", "tool_call": true, "reasoning": true,
+                    "limit": {"context": 200_000, "output": 0}
+                },
+                "gpt-5.4": {
+                    "id": "gpt-5.4", "name": "GPT-5.4", "tool_call": true, "reasoning": true,
                     "limit": {"context": 200_000, "output": 0}
                 }
             }),
         );
 
         let models = build_from_value(&data);
-        let codex_model = models["codex"].iter().find(|m| m.model_id == "gpt-5.4-codex").unwrap();
-        assert_eq!(codex_model.reasoning_levels, vec!["low", "medium", "high", "xhigh"]);
+        let levels = |id: &str| models["codex"].iter().find(|m| m.model_id == id).unwrap().reasoning_levels.clone();
+        assert_eq!(levels("gpt-5.6-sol"), vec!["low", "medium", "high", "xhigh", "max"]);
+        assert_eq!(levels("gpt-5.6-luna"), vec!["low", "medium", "high", "xhigh", "max"]);
+        assert_eq!(levels("gpt-5.4"), vec!["low", "medium", "high", "xhigh"]);
     }
 
     #[test]
@@ -1417,18 +1451,30 @@ mod tests {
     // ── Markdown docs ────────────────────────────────────────────────────────
 
     #[test]
-    fn generate_excludes_unsupported_gpt56_sol_from_codex_only() {
+    fn generate_uses_codex_subscription_model_ids() {
         let mut data = minimal_models_dev_json();
         insert_models(
             &mut data,
             "openai",
             json!({
+                "gpt-5.1-codex": {
+                    "id": "gpt-5.1-codex", "name": "GPT-5.1 Codex", "tool_call": true, "reasoning": true,
+                    "limit": {"context": 400_000, "output": 128_000}
+                },
                 "gpt-5.6": {
                     "id": "gpt-5.6", "name": "GPT-5.6 Sol", "tool_call": true, "reasoning": true,
                     "limit": {"context": 1_050_000, "output": 128_000}
                 },
                 "gpt-5.6-sol": {
                     "id": "gpt-5.6-sol", "name": "GPT-5.6 Sol", "tool_call": true, "reasoning": true,
+                    "limit": {"context": 1_050_000, "output": 128_000}
+                },
+                "gpt-5.6-terra": {
+                    "id": "gpt-5.6-terra", "name": "GPT-5.6 Terra", "tool_call": true, "reasoning": true,
+                    "limit": {"context": 1_050_000, "output": 128_000}
+                },
+                "gpt-5.6-luna": {
+                    "id": "gpt-5.6-luna", "name": "GPT-5.6 Luna", "tool_call": true, "reasoning": true,
                     "limit": {"context": 1_050_000, "output": 128_000}
                 }
             }),
@@ -1439,11 +1485,15 @@ mod tests {
         let output = generate(tmp.path()).unwrap();
 
         let codex_doc = &output.provider_docs["codex"];
-        assert!(codex_doc.contains("| `gpt-5.6` | `GPT-5.6 Sol` |"));
-        assert!(!codex_doc.contains("`gpt-5.6-sol`"));
+        assert!(!codex_doc.contains("`gpt-5.6`"));
+        assert!(!codex_doc.contains("`gpt-5.1-codex`"));
+        assert!(codex_doc.contains("| `gpt-5.6-sol` | `GPT-5.6 Sol` | `372k` |"));
+        assert!(codex_doc.contains("| `gpt-5.6-terra` | `GPT-5.6 Terra` | `372k` |"));
+        assert!(codex_doc.contains("| `gpt-5.6-luna` | `GPT-5.6 Luna` | `372k` |"));
 
         let openai_doc = &output.provider_docs["openai"];
         assert!(openai_doc.contains("`gpt-5.6`"));
+        assert!(openai_doc.contains("`gpt-5.1-codex`"));
         assert!(openai_doc.contains("`gpt-5.6-sol`"));
     }
 

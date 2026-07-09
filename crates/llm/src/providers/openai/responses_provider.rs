@@ -331,7 +331,7 @@ fn map_reasoning_effort(effort: ReasoningEffort) -> OaiReasoningEffort {
         ReasoningEffort::Low => OaiReasoningEffort::Low,
         ReasoningEffort::Medium => OaiReasoningEffort::Medium,
         ReasoningEffort::High => OaiReasoningEffort::High,
-        ReasoningEffort::Xhigh => OaiReasoningEffort::Xhigh,
+        ReasoningEffort::Xhigh | ReasoningEffort::Max => OaiReasoningEffort::Xhigh,
     }
 }
 
@@ -422,17 +422,21 @@ mod tests {
     }
 
     #[test]
-    fn test_build_request_with_reasoning_effort() {
-        let mut context = Context::new(
-            vec![ChatMessage::User { content: vec![ContentBlock::text("Think")], timestamp: IsoString::now() }],
-            vec![],
-        );
-        context.set_reasoning_effort(Some(ReasoningEffort::High));
+    fn test_build_request_maps_reasoning_effort() {
+        for (effort, expected) in
+            [(ReasoningEffort::High, OaiReasoningEffort::High), (ReasoningEffort::Max, OaiReasoningEffort::Xhigh)]
+        {
+            let mut context = Context::new(
+                vec![ChatMessage::User { content: vec![ContentBlock::text("Think")], timestamp: IsoString::now() }],
+                vec![],
+            );
+            context.set_reasoning_effort(Some(effort));
 
-        let req = build_response_request("o3", &context).unwrap();
-        let reasoning = req.reasoning.unwrap();
-        assert_eq!(reasoning.effort, Some(OaiReasoningEffort::High));
-        assert_eq!(reasoning.summary, Some(ReasoningSummary::Auto));
+            let req = build_response_request("o3", &context).unwrap();
+            let reasoning = req.reasoning.unwrap();
+            assert_eq!(reasoning.effort, Some(expected));
+            assert_eq!(reasoning.summary, Some(ReasoningSummary::Auto));
+        }
     }
 
     #[test]

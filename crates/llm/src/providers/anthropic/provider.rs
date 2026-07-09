@@ -239,7 +239,7 @@ fn effort_to_budget_tokens(effort: ReasoningEffort) -> u32 {
     match effort {
         ReasoningEffort::Low => 1024,
         ReasoningEffort::Medium => 4096,
-        ReasoningEffort::High | ReasoningEffort::Xhigh => 10240,
+        ReasoningEffort::High | ReasoningEffort::Xhigh | ReasoningEffort::Max => 10240,
     }
 }
 

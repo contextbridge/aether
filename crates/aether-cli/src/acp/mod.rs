@@ -69,7 +69,7 @@ pub struct AcpArgs {
     pub model: Option<String>,
 
     /// Initial reasoning effort for an explicit model session. Requires `--model` and is mutually exclusive with `--agent`.
-    #[clap(long, value_name = "low|medium|high|xhigh", requires = "model", conflicts_with = "agent")]
+    #[clap(long, value_name = "low|medium|high|xhigh|max", requires = "model", conflicts_with = "agent")]
     pub reasoning_effort: Option<ReasoningEffort>,
 
     #[command(flatten)]
