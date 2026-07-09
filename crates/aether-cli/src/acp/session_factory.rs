@@ -13,7 +13,7 @@ use tracing::{error, info, warn};
 
 use super::agent_key::AgentKey;
 use super::agent_runtime::{ProductionRuntimeFactory, RuntimeFactory};
-use super::model_config::{Modes, model_exists, pick_default_model};
+use super::model_config::{Modes, pick_default_model};
 use super::protocol::mcp::map_acp_mcp_servers;
 use super::session_actor::{SessionActor, SessionActorInit, SessionHandle};
 use super::session_config_state::SessionConfigState;
@@ -284,7 +284,7 @@ fn parse_available_model(model: &str, available: &[LlmModel]) -> Result<LlmModel
         acp::Error::invalid_params()
     })?;
 
-    if model_exists(available, model) {
+    if available.contains(&parsed) {
         Ok(parsed)
     } else {
         warn!("Requested model `{model}` is not available");

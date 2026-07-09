@@ -334,11 +334,11 @@ mod tests {
     #[test]
     fn wire_method_names_are_prefixed() {
         assert_eq!(ContextClearedParams::default().method(), "_aether/context_cleared");
-        assert!(AuthMethodsUpdatedParams { auth_methods: vec![] }.method() == "_aether/auth_methods_updated");
-        assert!(McpNotification::ServerStatus { servers: vec![] }.method() == "_aether/mcp_event");
-        assert!(
-            McpRequest::Authenticate { session_id: String::new(), server_name: String::new() }.method()
-                == "_aether/mcp_request"
+        assert_eq!(AuthMethodsUpdatedParams { auth_methods: vec![] }.method(), "_aether/auth_methods_updated");
+        assert_eq!(McpNotification::ServerStatus { servers: vec![] }.method(), "_aether/mcp_event");
+        assert_eq!(
+            McpRequest::Authenticate { session_id: String::new(), server_name: String::new() }.method(),
+            "_aether/mcp_request"
         );
         assert_eq!(PromptSearchParams { query: String::new(), limit: None }.method(), "_aether/prompt_search");
         assert_eq!(SessionPreviewParams { session_id: String::new() }.method(), "_aether/session_preview");

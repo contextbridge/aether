@@ -3,8 +3,10 @@
 use crate::providers::local::discovery::discover_local_models;
 
 mod bedrock;
+mod model_spec;
 
 pub use bedrock::BedrockModel;
+pub use model_spec::{ModelSpec, ModelSpecError, ReasoningEffortError, validate_reasoning_effort};
 
 include!(concat!(env!("OUT_DIR"), "/generated.rs"));
 
@@ -46,6 +48,27 @@ mod tests {
             let parsed: LlmModel = s.parse().unwrap();
             assert_eq!(&parsed, model);
         }
+    }
+
+    #[test]
+    fn codex_gpt56_subscription_models_have_expected_metadata() {
+        let expected_levels = &[
+            ReasoningEffort::Low,
+            ReasoningEffort::Medium,
+            ReasoningEffort::High,
+            ReasoningEffort::Xhigh,
+            ReasoningEffort::Max,
+        ];
+        for id in ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] {
+            let model: LlmModel = format!("codex:{id}").parse().unwrap();
+            assert_eq!(model.model_id(), id);
+            assert_eq!(model.context_window(), Some(372_000));
+            assert_eq!(model.reasoning_levels(), expected_levels);
+        }
+
+        assert!("codex:gpt-5.6".parse::<LlmModel>().is_err());
+        assert!("codex:gpt-5.1-codex".parse::<LlmModel>().is_err());
+        assert!("openai:gpt-5.6".parse::<LlmModel>().is_ok());
     }
 
     #[test]
@@ -139,9 +162,12 @@ mod tests {
     }
 
     #[test]
-    fn anthropic_reasoning_models_use_three_levels() {
+    fn anthropic_reasoning_models_use_catalog_levels() {
         let claude: LlmModel = "anthropic:claude-opus-4-6".parse().unwrap();
-        assert_eq!(claude.reasoning_levels(), &[ReasoningEffort::Low, ReasoningEffort::Medium, ReasoningEffort::High]);
+        assert_eq!(
+            claude.reasoning_levels(),
+            &[ReasoningEffort::Low, ReasoningEffort::Medium, ReasoningEffort::High, ReasoningEffort::Max,]
+        );
     }
 
     #[test]

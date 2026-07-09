@@ -13,7 +13,7 @@ use agent_client_protocol::schema::{
     SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
 };
 use agent_client_protocol::{Client, ConnectionTo, Responder};
-use llm::catalog::{LlmModel, get_local_models};
+use llm::catalog::{LlmModel, ModelSpec, get_local_models};
 use llm::{ContentBlock, ProviderConnectionOverrides};
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -451,12 +451,7 @@ impl PromptModalities {
 }
 
 fn selected_models(model_value: &str) -> Result<Vec<LlmModel>, acp::Error> {
-    model_value
-        .split(',')
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-        .map(|part| part.parse::<LlmModel>().map_err(|_| acp::Error::invalid_params()))
-        .collect()
+    model_value.parse::<ModelSpec>().map(|spec| spec.models().to_vec()).map_err(|_| acp::Error::invalid_params())
 }
 
 fn validate_prompt_support(model_value: &str, content: &[ContentBlock]) -> Result<(), acp::Error> {

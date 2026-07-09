@@ -31,7 +31,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 syn = { version = "2.0.117", features = ["full"] }
 thiserror = { workspace = true }
+utils = { package = "aether-utils", path = "../utils", version = "0.2.8" }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-utils = { package = "aether-utils", path = "../utils", version = "0.2.8" }

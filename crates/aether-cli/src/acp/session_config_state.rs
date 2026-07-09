@@ -1,10 +1,10 @@
 use agent_client_protocol::schema as acp;
 use llm::ReasoningEffort;
-use llm::catalog::LlmModel;
+use llm::catalog::{LlmModel, validate_reasoning_effort};
 use tracing::error;
 
 use super::config_setting::ConfigSetting;
-use super::model_config::{Modes, model_exists};
+use super::model_config::{Modes, parse_available_spec};
 
 #[derive(Debug)]
 pub(crate) enum Switch {
@@ -91,13 +91,19 @@ impl SessionConfigState {
                 self.selected_mode = Some(value.clone());
             }
             ConfigSetting::Model(value) => {
-                if !model_exists(available, value) {
+                let Some(spec) = parse_available_spec(available, value) else {
                     error!("Unknown model in set_session_config_option: {}", value);
                     return Err(acp::Error::invalid_params());
-                }
+                };
                 self.pending = (self.active_model != *value).then(|| Pending::Model(value.clone()));
+                self.reasoning_effort = spec.clamp_reasoning_effort(self.reasoning_effort);
             }
             ConfigSetting::ReasoningEffort(effort) => {
+                let model_id = self.effective_model(modes);
+                if let Err(error) = validate_reasoning_effort(&model_id, *effort) {
+                    error!("Invalid reasoning effort in set_session_config_option: {error}");
+                    return Err(acp::Error::invalid_params());
+                }
                 self.reasoning_effort = *effort;
             }
         }

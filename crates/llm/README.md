@@ -139,18 +139,23 @@ let (provider, _) = parser.parse("llamacpp").await.unwrap();
 
 ### Direct provider construction
 
-When you need fine-grained control (temperature, max tokens), construct the provider directly:
+When you need fine-grained control, construct the provider directly and configure request settings on the context:
 
 ```rust,no_run
 # async fn example() {
 use llm::providers::anthropic::AnthropicProvider;
-use llm::ProviderFactory;
+use llm::{Context, ModelSettings, ProviderFactory};
 
 let provider = AnthropicProvider::from_env().await
     .unwrap()
-    .with_model("claude-sonnet-4-5-20250929")
-    .with_temperature(0.7)
-    .with_max_tokens(4096);
+    .with_model("claude-sonnet-4-5-20250929");
+
+let mut context = Context::new(Vec::new(), Vec::new());
+context.set_model_settings(ModelSettings {
+    temperature: Some(0.7),
+    max_tokens: Some(4096),
+    ..ModelSettings::default()
+});
 # }
 ```
 

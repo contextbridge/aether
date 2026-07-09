@@ -1,5 +1,6 @@
 use crate::output::OutputFormat;
 use futures::StreamExt;
+use llm::catalog::{ReasoningEffortError, validate_reasoning_effort};
 use llm::parser::ModelProviderParser;
 use llm::types::IsoString;
 use llm::{
@@ -32,7 +33,7 @@ pub struct GenerateArgs {
     pub model_settings: ModelSettingsArgs,
 
     /// Reasoning effort for models that support extended thinking
-    /// (`low`, `medium`, `high`, `xhigh`).
+    /// (`minimal`, `low`, `medium`, `high`, `xhigh`, `max`).
     #[arg(long)]
     pub reasoning_effort: Option<ReasoningEffort>,
 
@@ -69,6 +70,9 @@ pub enum GenerateCommandError {
     #[error("failed to read prompt from {path}: {source}")]
     ReadPrompt { path: String, source: std::io::Error },
 
+    #[error("invalid reasoning effort: {0}")]
+    ReasoningEffort(#[from] ReasoningEffortError),
+
     #[error("failed to initialize model `{model}`: {source}")]
     Model { model: String, source: LlmError },
 
@@ -80,6 +84,7 @@ pub enum GenerateCommandError {
 /// the caller supplies a grading prompt and parses the structured verdict out of the response.
 pub async fn run(args: GenerateArgs) -> Result<ExitCode, GenerateCommandError> {
     let prompt = resolve_prompt(args.prompt.as_deref(), args.prompt_file.as_deref())?;
+    validate_reasoning_effort(&args.model, args.reasoning_effort)?;
     let (provider, _) = ModelProviderParser::default()
         .parse(&args.model)
         .await
@@ -153,6 +158,23 @@ mod tests {
             serde_json::from_str(&format_output("hi", "anthropic:m", OutputFormat::Json)).unwrap();
         assert_eq!(json["text"], "hi");
         assert_eq!(json["model"], "anthropic:m");
+    }
+
+    #[tokio::test]
+    async fn run_rejects_reasoning_effort_unsupported_by_model_before_initializing_provider() {
+        let args = GenerateArgs {
+            model: "anthropic:claude-opus-4-6".to_string(),
+            prompt: Some("the prompt".to_string()),
+            prompt_file: None,
+            system: None,
+            model_settings: ModelSettingsArgs::default(),
+            reasoning_effort: Some(ReasoningEffort::Xhigh),
+            output: OutputFormat::Text,
+        };
+
+        let error = run(args).await.unwrap_err();
+
+        assert!(matches!(error, GenerateCommandError::ReasoningEffort(_)));
     }
 
     #[tokio::test]

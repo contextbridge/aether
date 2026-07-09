@@ -3,7 +3,8 @@ use crate::error::SettingsError;
 use crate::{AetherSettings, AgentConfig, McpFileSpec, McpSourceSpec};
 use aether_core::agent_spec::{AgentSpec, AgentSpecExposure, McpConfigSource};
 use aether_core::core::Prompt;
-use llm::{LlmModel, ProviderConnectionOverrides};
+use llm::ProviderConnectionOverrides;
+use llm::catalog::{ModelSpec, ModelSpecError};
 use mcp_utils::client::McpConfig;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -152,6 +153,9 @@ fn resolve_agent_entry(
     }
 
     let model = parse_model(&name, &entry.model)?;
+    model
+        .validate_reasoning_effort(entry.reasoning_effort)
+        .map_err(|source| SettingsError::InvalidReasoningEffort { agent: name.clone(), source })?;
     if entry.context_window == Some(0) {
         return Err(SettingsError::InvalidContextWindow { agent: name.clone(), context_window: 0 });
     }
@@ -176,7 +180,7 @@ fn resolve_agent_entry(
     Ok(AgentSpec {
         name,
         description,
-        model,
+        model: model.to_string(),
         reasoning_effort: entry.reasoning_effort,
         model_settings: entry.model_settings,
         context_window: entry.context_window,
@@ -222,30 +226,12 @@ fn resolve_mcp_config_sources(
         .collect()
 }
 
-fn parse_model(agent: &str, model: &str) -> Result<String, SettingsError> {
-    canonicalize_model_spec(model).map_err(|error| SettingsError::InvalidModel {
+fn parse_model(agent: &str, model: &str) -> Result<ModelSpec, SettingsError> {
+    model.parse().map_err(|error: ModelSpecError| SettingsError::InvalidModel {
         agent: agent.to_string(),
         model: model.to_string(),
-        error,
+        error: error.to_string(),
     })
-}
-
-fn canonicalize_model_spec(model: &str) -> Result<String, String> {
-    let trimmed = model.trim();
-    if trimmed.is_empty() {
-        return Err("Model spec cannot be empty".to_string());
-    }
-
-    let mut canonical_parts = Vec::new();
-    for part in trimmed.split(',').map(str::trim) {
-        if part.is_empty() {
-            return Err("Model spec contains an empty entry".to_string());
-        }
-        part.parse::<LlmModel>().map_err(|error: String| error)?;
-        canonical_parts.push(part.to_string());
-    }
-
-    Ok(canonical_parts.join(","))
 }
 
 #[cfg(test)]
@@ -374,6 +360,28 @@ mod tests {
         let catalog = create_test_catalog(dir.path().to_path_buf());
         let result = catalog.get("nonexistent");
         assert!(matches!(result, Err(SettingsError::AgentNotFound { .. })));
+    }
+
+    #[test]
+    fn agent_rejects_reasoning_effort_unsupported_by_model() {
+        let dir = create_temp_project();
+        write_file(dir.path(), "BASE.md", "Base instructions");
+        let config = AetherSettings {
+            agents: vec![AgentConfig {
+                name: "planner".to_string(),
+                description: "Planner agent".to_string(),
+                model: "anthropic:claude-opus-4-6".to_string(),
+                reasoning_effort: Some(llm::ReasoningEffort::Xhigh),
+                user_invocable: true,
+                prompts: vec![crate::PromptSource::file("BASE.md")],
+                ..AgentConfig::default()
+            }],
+            ..AetherSettings::default()
+        };
+
+        let error = AgentCatalog::from_settings(dir.path(), config).unwrap_err();
+
+        assert!(matches!(error, SettingsError::InvalidReasoningEffort { .. }));
     }
 
     #[test]

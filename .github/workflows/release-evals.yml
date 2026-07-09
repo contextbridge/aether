@@ -31,9 +31,6 @@ jobs:
           node-version-file: .tool-versions
           registry-url: "https://registry.npmjs.org"
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 

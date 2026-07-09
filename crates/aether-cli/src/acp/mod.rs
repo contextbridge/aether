@@ -25,6 +25,7 @@ use crate::provider_connection_args::ProviderConnectionArgs;
 use crate::settings_args::{ConflictingSettingsSources, SettingsSourceArgs};
 use aether_project::AetherSettings;
 use agent_client_protocol as acp;
+use llm::catalog::{ReasoningEffortError, validate_reasoning_effort};
 use llm::{ProviderConnectionOverride, ProviderConnectionOverrides, ReasoningEffort};
 use std::collections::BTreeMap;
 use std::env::current_dir;
@@ -69,7 +70,7 @@ pub struct AcpArgs {
     pub model: Option<String>,
 
     /// Initial reasoning effort for an explicit model session. Requires `--model` and is mutually exclusive with `--agent`.
-    #[clap(long, value_name = "low|medium|high|xhigh", requires = "model", conflicts_with = "agent")]
+    #[clap(long, value_name = "minimal|low|medium|high|xhigh|max", requires = "model", conflicts_with = "agent")]
     pub reasoning_effort: Option<ReasoningEffort>,
 
     #[command(flatten)]
@@ -134,6 +135,8 @@ pub enum AcpOptionsJsonError {
     ConflictingAgentSelection,
     #[error("reasoningEffort requires model")]
     ReasoningEffortWithoutModel,
+    #[error("invalid reasoningEffort: {0}")]
+    UnsupportedReasoningEffort(#[from] ReasoningEffortError),
 }
 
 pub async fn run_acp(args: AcpArgs) -> Result<AcpRunOutcome, AcpRunError> {
@@ -187,14 +190,16 @@ impl AcpRunConfig {
             return Self::from_options(serde_json::from_str(&json)?);
         }
 
-        Ok(Self {
+        let config = Self {
             log_dir: args.log_dir.unwrap_or_else(default_log_dir),
             agent: args.agent,
             model: args.model,
             reasoning_effort: args.reasoning_effort,
             provider_connections: args.provider_connection.into_overrides(),
             settings_source: args.settings_source,
-        })
+        };
+        config.validate_reasoning_effort()?;
+        Ok(config)
     }
 
     fn from_options(options: AcpOptions) -> Result<Self, AcpOptionsJsonError> {
@@ -207,14 +212,23 @@ impl AcpRunConfig {
 
         let settings_source = SettingsSourceArgs::from_json_options(options.settings, options.settings_file)?;
 
-        Ok(Self {
+        let config = Self {
             log_dir: options.log_dir.unwrap_or_else(default_log_dir),
             agent: options.agent,
             model: options.model,
             reasoning_effort: options.reasoning_effort,
             provider_connections: ProviderConnectionOverrides::new(options.providers.unwrap_or_default()),
             settings_source,
-        })
+        };
+        config.validate_reasoning_effort()?;
+        Ok(config)
+    }
+
+    fn validate_reasoning_effort(&self) -> Result<(), AcpOptionsJsonError> {
+        if let Some(model) = self.model.as_deref() {
+            validate_reasoning_effort(model, self.reasoning_effort)?;
+        }
+        Ok(())
     }
 }
 
@@ -303,6 +317,18 @@ mod tests {
         let bedrock = config.provider_connections.config_for("bedrock");
         assert_eq!(bedrock.base_url.as_deref(), Some("http://127.0.0.1:8787"));
         assert_eq!(bedrock.auth_mode, llm::ProviderAuthMode::None);
+    }
+
+    #[test]
+    fn options_json_rejects_unsupported_reasoning_effort() {
+        let error = AcpRunConfig::from_options(AcpOptions {
+            model: Some("anthropic:claude-opus-4-6".to_string()),
+            reasoning_effort: Some(ReasoningEffort::Xhigh),
+            ..AcpOptions::default()
+        })
+        .unwrap_err();
+
+        assert!(matches!(error, AcpOptionsJsonError::UnsupportedReasoningEffort(_)));
     }
 
     #[test]

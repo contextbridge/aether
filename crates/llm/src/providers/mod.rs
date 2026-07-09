@@ -10,4 +10,6 @@ pub mod local;
 pub mod openai;
 pub mod openai_compatible;
 pub mod openrouter;
+#[cfg(test)]
+pub(crate) mod test_capture_server;
 pub(crate) mod tool_call_collector;

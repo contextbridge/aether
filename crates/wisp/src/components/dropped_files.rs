@@ -18,12 +18,8 @@ pub fn parse_dropped_file_paths(pasted: &str) -> Option<Vec<PathBuf>> {
         if candidate.is_empty() {
             continue;
         }
-        if let Some(path) = try_parse_single_path(candidate) {
-            paths.push(path);
-        } else {
-            // If any line doesn't look like a path, treat the whole payload as plain text
-            return None;
-        }
+        let path = try_parse_single_path(candidate)?;
+        paths.push(path);
     }
 
     if paths.is_empty() {

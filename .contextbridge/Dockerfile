@@ -2,7 +2,7 @@
 # Docker image for cloud agents
 # Only contains the toolchain needed for agents to run this repo's just targets.
 
-ARG RUST_VERSION=1.95.0
+ARG RUST_VERSION=1.97.0
 ARG DEBIAN_VERSION=13.4
 
 FROM rust:${RUST_VERSION}-slim-trixie AS rust-toolchain

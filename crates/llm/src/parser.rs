@@ -83,10 +83,12 @@ impl ModelProviderParser {
     pub fn with_codex_provider(mut self, store: Arc<dyn OAuthCredentialStorage>) -> Self {
         self.factories.insert(
             "codex".to_string(),
-            Box::new(move |model: &str, _connection: ProviderConnectionConfig| {
+            Box::new(move |model: &str, connection: ProviderConnectionConfig| {
                 let store = Arc::clone(&store);
                 let model = model.to_string();
-                Box::pin(async move { Ok(Box::new(CodexProvider::new(store).with_model(&model)) as _) })
+                Box::pin(async move {
+                    Ok(Box::new(CodexProvider::new(store).with_connection(connection).with_model(&model)) as _)
+                })
             }),
         );
         self
@@ -199,10 +201,10 @@ mod tests {
     #[tokio::test]
     async fn test_parse_anthropic() {
         let parser = ModelProviderParser::default();
-        let result = parser.parse("anthropic:claude-3-5-sonnet-20241022").await;
+        let result = parser.parse("anthropic:claude-sonnet-4-6").await;
         match result {
             Ok((_, model)) => {
-                assert_eq!(model, LlmModel::Anthropic(crate::catalog::AnthropicModel::Claude35Sonnet20241022));
+                assert_eq!(model, LlmModel::Anthropic(crate::catalog::AnthropicModel::ClaudeSonnet46));
             }
             Err(e) => {
                 let err = e.to_string();

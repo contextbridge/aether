@@ -4,7 +4,7 @@ use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::AgentSpec;
 use agent_client_protocol::schema::{self as acp, SessionConfigOption, SessionConfigOptionCategory};
 use llm::ReasoningEffort;
-use llm::catalog::LlmModel;
+use llm::catalog::{LlmModel, ModelSpec};
 use std::collections::{BTreeMap, HashSet};
 use std::ops::Deref;
 
@@ -29,8 +29,9 @@ pub(crate) fn unavailable_reason(model: &LlmModel, store: &dyn OAuthCredentialSt
         .map_or_else(|| "Unavailable: provider is not configured".to_string(), |var| format!("Unavailable: set {var}"))
 }
 
-pub(crate) fn model_exists(available: &[LlmModel], model_str: &str) -> bool {
-    model_str.split(',').map(str::trim).all(|part| available.iter().any(|m| m.to_string() == part))
+/// Parse a model spec, requiring every model in it to be in `available`.
+pub(crate) fn parse_available_spec(available: &[LlmModel], model_str: &str) -> Option<ModelSpec> {
+    model_str.parse::<ModelSpec>().ok().filter(|spec| spec.models().iter().all(|model| available.contains(model)))
 }
 
 /// Build the "Model" select config option with all models from all providers.
@@ -168,7 +169,7 @@ impl Modes {
                 .filter(|spec| spec.exposure.user_invocable)
                 .filter_map(|spec| {
                     let model = spec.model.clone();
-                    model_exists(available, &model).then(|| ValidatedMode {
+                    parse_available_spec(available, &model).map(|_| ValidatedMode {
                         name: spec.name.clone(),
                         model,
                         reasoning_effort: spec.reasoning_effort,
@@ -219,7 +220,7 @@ impl Modes {
 
         options.push(build_model_config_option(available, current_model, all_models, credential_store));
 
-        let levels = intersect_reasoning_levels(current_model);
+        let levels = current_model.parse::<ModelSpec>().map(|spec| spec.reasoning_levels()).unwrap_or_default();
 
         if let Some(opt) = build_reasoning_effort_config_option(reasoning_effort, &levels) {
             options.push(opt);
@@ -227,22 +228,6 @@ impl Modes {
 
         options
     }
-}
-
-/// Compute the intersection of reasoning levels across all selected models.
-/// If any model doesn't support reasoning, the intersection naturally becomes empty.
-fn intersect_reasoning_levels(current_model: &str) -> Vec<ReasoningEffort> {
-    let mut models = current_model.split(',').map(str::trim).filter_map(|m| m.parse::<LlmModel>().ok());
-
-    let Some(first) = models.next() else {
-        return Vec::new();
-    };
-
-    let mut result: Vec<ReasoningEffort> = first.reasoning_levels().to_vec();
-    for m in models {
-        result.retain(|level| m.reasoning_levels().contains(level));
-    }
-    result
 }
 
 /// Pick a default model from the available list.
@@ -394,7 +379,7 @@ mod tests {
     }
 
     #[test]
-    fn model_exists_known_and_unknown() {
+    fn parse_available_spec_known_and_unknown() {
         let models = test_models();
         for (input, expected) in [
             ("anthropic:claude-sonnet-4-5", true),
@@ -404,7 +389,7 @@ mod tests {
             ("anthropic:claude-sonnet-4-5,deepseek:deepseek-chat", true),
             ("anthropic:claude-sonnet-4-5,mystery:nope", false),
         ] {
-            assert_eq!(model_exists(&models, input), expected, "model_exists({input})");
+            assert_eq!(parse_available_spec(&models, input).is_some(), expected, "parse_available_spec({input})");
         }
     }
 

@@ -78,10 +78,16 @@ mod tests {
     }
 
     #[test]
+    fn parse_reasoning_effort_max() {
+        let setting = ConfigSetting::parse("reasoning_effort", "max").unwrap();
+        assert_eq!(setting, ConfigSetting::ReasoningEffort(Some(ReasoningEffort::Max)));
+    }
+
+    #[test]
     fn invalid_reasoning_effort_returns_error() {
-        let err = ConfigSetting::parse("reasoning_effort", "max").unwrap_err();
+        let err = ConfigSetting::parse("reasoning_effort", "ultra").unwrap_err();
         assert!(matches!(err, ConfigSettingError::InvalidValue { .. }));
-        assert!(err.to_string().contains("max"));
+        assert!(err.to_string().contains("ultra"));
         assert!(err.to_string().contains("reasoning_effort"));
     }
 }

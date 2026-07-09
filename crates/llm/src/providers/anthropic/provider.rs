@@ -237,9 +237,11 @@ fn build_client() -> Result<Client> {
 
 fn effort_to_budget_tokens(effort: ReasoningEffort) -> u32 {
     match effort {
-        ReasoningEffort::Low => 1024,
+        // 1024 is the Anthropic API's minimum thinking budget.
+        ReasoningEffort::Minimal | ReasoningEffort::Low => 1024,
         ReasoningEffort::Medium => 4096,
         ReasoningEffort::High | ReasoningEffort::Xhigh => 10240,
+        ReasoningEffort::Max => 32768,
     }
 }
 

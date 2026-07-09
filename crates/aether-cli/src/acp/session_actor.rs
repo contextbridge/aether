@@ -681,6 +681,31 @@ mod tests {
     }
 
     #[test]
+    fn unsupported_reasoning_effort_is_rejected() {
+        let (result, state) = apply(SONNET, Some(RE::High), None, &ConfigSetting::ReasoningEffort(Some(RE::Max)));
+
+        assert!(result.is_err());
+        assert_eq!(state.reasoning_effort, Some(RE::High));
+    }
+
+    #[test]
+    fn model_change_clears_reasoning_effort_for_non_reasoning_model() {
+        let (result, state) = apply(SONNET, Some(RE::High), None, &ConfigSetting::Model(DEEPSEEK.into()));
+
+        assert!(result.is_ok());
+        assert_eq!(state.reasoning_effort, None);
+    }
+
+    #[test]
+    fn model_change_clamps_reasoning_effort_to_nearest_supported_level() {
+        let (result, state) =
+            apply("anthropic:claude-opus-4-6", Some(RE::Max), None, &ConfigSetting::Model(SONNET.into()));
+
+        assert!(result.is_ok());
+        assert_eq!(state.reasoning_effort, Some(RE::High));
+    }
+
+    #[test]
     fn new_state_has_no_pending_model_or_mode() {
         let s = SessionConfigState::with_selection(DEEPSEEK.into(), None, None);
         assert!(s.pending.is_none());
