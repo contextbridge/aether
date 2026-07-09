@@ -83,10 +83,12 @@ impl ModelProviderParser {
     pub fn with_codex_provider(mut self, store: Arc<dyn OAuthCredentialStorage>) -> Self {
         self.factories.insert(
             "codex".to_string(),
-            Box::new(move |model: &str, _connection: ProviderConnectionConfig| {
+            Box::new(move |model: &str, connection: ProviderConnectionConfig| {
                 let store = Arc::clone(&store);
                 let model = model.to_string();
-                Box::pin(async move { Ok(Box::new(CodexProvider::new(store).with_model(&model)) as _) })
+                Box::pin(async move {
+                    Ok(Box::new(CodexProvider::new(store).with_connection(connection).with_model(&model)) as _)
+                })
             }),
         );
         self

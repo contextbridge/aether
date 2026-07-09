@@ -5,7 +5,7 @@ use crate::provider::{LlmResponseStream, StreamingModelProvider, get_context_win
 use crate::{Context, LlmError, Result};
 use aether_auth::OAuthCredentialStorage;
 use async_openai::types::responses::{
-    CreateResponse, IncludeEnum, InputParam, Reasoning, ReasoningEffort, ReasoningSummary, ResponseTextParam,
+    CreateResponse, IncludeEnum, InputParam, Reasoning, ReasoningSummary, ResponseTextParam,
     TextResponseFormatConfiguration, Verbosity,
 };
 use eventsource_stream::Eventsource;
@@ -19,6 +19,7 @@ const CODEX_API_BASE: &str = "https://chatgpt.com/backend-api/codex";
 
 #[derive(Clone)]
 pub struct CodexProvider {
+    base_url: String,
     client: reqwest::Client,
     model: String,
     token_manager: Arc<CodexTokenManager>,
@@ -27,7 +28,19 @@ pub struct CodexProvider {
 impl CodexProvider {
     pub fn new(store: Arc<dyn OAuthCredentialStorage>) -> Self {
         let token_manager = CodexTokenManager::new(store, super::PROVIDER_ID);
-        Self { client: reqwest::Client::new(), model: "gpt-5.5".to_string(), token_manager: Arc::new(token_manager) }
+        Self {
+            base_url: CODEX_API_BASE.to_string(),
+            client: reqwest::Client::new(),
+            model: "gpt-5.5".to_string(),
+            token_manager: Arc::new(token_manager),
+        }
+    }
+
+    pub fn with_connection(mut self, connection: crate::ProviderConnectionConfig) -> Self {
+        if let Some(base_url) = connection.base_url {
+            self.base_url = base_url.trim_end_matches('/').to_string();
+        }
+        self
     }
 
     pub fn with_model(mut self, model: &str) -> Self {
@@ -35,11 +48,9 @@ impl CodexProvider {
         self
     }
 
-    fn build_request(&self, context: &Context) -> Result<CreateResponse> {
+    fn build_typed_request(&self, context: &Context) -> Result<CreateResponse> {
         let (system_prompt, input) = map_messages(context.messages())?;
         let tools = if context.tools().is_empty() { None } else { Some(map_tools(context.tools())?) };
-
-        let codex_effort = context.reasoning_effort().map_or(ReasoningEffort::Medium, to_codex_effort);
 
         Ok(CreateResponse {
             model: Some(self.model.clone()),
@@ -48,7 +59,7 @@ impl CodexProvider {
             tools,
             store: Some(false),
             stream: Some(true),
-            reasoning: Some(Reasoning { effort: Some(codex_effort), summary: Some(ReasoningSummary::Auto) }),
+            reasoning: Some(Reasoning { effort: None, summary: Some(ReasoningSummary::Auto) }),
             include: Some(vec![IncludeEnum::ReasoningEncryptedContent]),
             text: Some(ResponseTextParam {
                 format: TextResponseFormatConfiguration::Text,
@@ -59,13 +70,13 @@ impl CodexProvider {
         })
     }
 
-    fn build_request_body(&self, context: &Context) -> Result<Value> {
-        let mut body = serde_json::to_value(self.build_request(context)?)?;
-        if context.reasoning_effort() == Some(crate::ReasoningEffort::Max)
-            && let Some(reasoning) = body.get_mut("reasoning")
-        {
-            reasoning["effort"] = Value::String("max".to_string());
-        }
+    /// The typed `async-openai` request cannot encode every effort the Codex
+    /// API accepts (e.g. `max`), so the effort is written onto the serialized
+    /// wire body instead.
+    fn build_wire_request(&self, context: &Context) -> Result<Value> {
+        let mut body = serde_json::to_value(self.build_typed_request(context)?)?;
+        let effort = context.reasoning_effort().map_or("medium", crate::ReasoningEffort::as_str);
+        body["reasoning"]["effort"] = effort.into();
         Ok(body)
     }
 
@@ -98,7 +109,7 @@ impl CodexProvider {
         request: Value,
         headers: HeaderMap,
     ) -> Result<impl futures::Stream<Item = Result<CodexStreamEvent>>> {
-        let url = format!("{CODEX_API_BASE}/responses");
+        let url = format!("{}/responses", self.base_url);
 
         debug!("Sending request to Codex API: {url}");
         debug!(
@@ -167,7 +178,7 @@ impl StreamingModelProvider for CodexProvider {
                 }
             };
 
-            let request = match provider.build_request_body(&context) {
+            let request = match provider.build_wire_request(&context) {
                 Ok(r) => r,
                 Err(e) => {
                     yield Err(e);
@@ -195,70 +206,17 @@ impl StreamingModelProvider for CodexProvider {
     }
 }
 
-fn to_codex_effort(effort: crate::ReasoningEffort) -> ReasoningEffort {
-    match effort {
-        crate::ReasoningEffort::Low => ReasoningEffort::Low,
-        crate::ReasoningEffort::Medium => ReasoningEffort::Medium,
-        crate::ReasoningEffort::High => ReasoningEffort::High,
-        crate::ReasoningEffort::Xhigh | crate::ReasoningEffort::Max => ReasoningEffort::Xhigh,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ChatMessage;
     use crate::ContentBlock;
     use crate::ToolDefinition;
+    use crate::providers::test_capture_server::CaptureServer;
     use crate::types::IsoString;
-    use aether_auth::FakeOAuthCredentialStore;
-
-    #[test]
-    fn build_request_simple() {
-        let provider = create_test_provider();
-        let context = Context::new(
-            vec![ChatMessage::User { content: vec![ContentBlock::text("Hello")], timestamp: IsoString::now() }],
-            vec![],
-        );
-
-        let request = provider.build_request(&context).unwrap();
-        assert_eq!(request.model.as_deref(), Some("gpt-5.5"));
-        assert_eq!(request.store, Some(false));
-        assert_eq!(request.stream, Some(true));
-        assert!(request.tools.is_none());
-        assert!(request.instructions.is_none());
-        if let InputParam::Items(items) = &request.input {
-            assert_eq!(items.len(), 1);
-        } else {
-            panic!("Expected InputParam::Items");
-        }
-    }
-
-    #[test]
-    fn build_request_with_system_and_tools() {
-        let provider = create_test_provider();
-        let context = Context::new(
-            vec![
-                ChatMessage::System { content: "You are helpful".to_string(), timestamp: IsoString::now() },
-                ChatMessage::User { content: vec![ContentBlock::text("Hello")], timestamp: IsoString::now() },
-            ],
-            vec![ToolDefinition::new(
-                "bash",
-                "Run a command",
-                r#"{"type": "object", "properties": {"cmd": {"type": "string"}}}"#,
-            )],
-        );
-
-        let request = provider.build_request(&context).unwrap();
-        assert!(request.instructions.is_some());
-        if let InputParam::Items(items) = &request.input {
-            assert_eq!(items.len(), 1);
-        } else {
-            panic!("Expected InputParam::Items");
-        }
-        assert!(request.tools.is_some());
-        assert_eq!(request.tools.as_ref().unwrap().len(), 1);
-    }
+    use aether_auth::{FakeOAuthCredentialStore, OAuthCredential};
+    use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
     #[test]
     fn context_window_uses_codex_subscription_limit() {
@@ -272,88 +230,75 @@ mod tests {
         assert_eq!(provider.display_name(), "Codex (gpt-5.5)");
     }
 
-    #[test]
-    fn build_request_defaults_to_medium_effort() {
-        let provider = create_test_provider();
-        let context = Context::new(
-            vec![ChatMessage::User { content: vec![ContentBlock::text("Hi")], timestamp: IsoString::now() }],
-            vec![],
-        );
-
-        let request = provider.build_request(&context).unwrap();
-        let json = serde_json::to_value(&request).unwrap();
-        assert_eq!(json["reasoning"]["effort"], "medium");
-    }
-
-    #[test]
-    fn build_request_uses_context_reasoning_effort() {
-        let provider = create_test_provider();
+    #[tokio::test]
+    async fn stream_response_sends_max_effort_on_the_wire() {
+        let mut server = CaptureServer::start().await;
+        let provider = server_backed_provider(&server).with_model("gpt-5.6-sol");
         let mut context = Context::new(
-            vec![ChatMessage::User { content: vec![ContentBlock::text("Think hard")], timestamp: IsoString::now() }],
-            vec![],
-        );
-        context.set_reasoning_effort(Some(crate::ReasoningEffort::High));
-
-        let request = provider.build_request(&context).unwrap();
-        let body = serde_json::to_value(request).unwrap();
-        assert_eq!(body["reasoning"]["effort"], "high");
-    }
-
-    #[test]
-    fn build_request_sends_max_effort() {
-        let provider = create_test_provider();
-        let mut context = Context::new(
-            vec![ChatMessage::User { content: vec![ContentBlock::text("Think harder")], timestamp: IsoString::now() }],
-            vec![],
+            vec![
+                ChatMessage::System { content: "You are helpful".to_string(), timestamp: IsoString::now() },
+                ChatMessage::User { content: vec![ContentBlock::text("Think harder")], timestamp: IsoString::now() },
+            ],
+            vec![ToolDefinition::new(
+                "bash",
+                "Run a command",
+                r#"{"type": "object", "properties": {"cmd": {"type": "string"}}}"#,
+            )],
         );
         context.set_reasoning_effort(Some(crate::ReasoningEffort::Max));
-
-        let request = provider.build_request_body(&context).unwrap();
-        assert_eq!(request["reasoning"]["effort"], "max");
-    }
-
-    #[test]
-    fn build_request_serializes_correctly() {
-        let provider = create_test_provider();
-        let context = Context::new(
-            vec![ChatMessage::User { content: vec![ContentBlock::text("Hi")], timestamp: IsoString::now() }],
-            vec![],
-        );
-
-        let request = provider.build_request(&context).unwrap();
-        let json = serde_json::to_value(&request).unwrap();
-
-        assert_eq!(json["model"], "gpt-5.5");
-        assert_eq!(json["store"], false);
-        assert_eq!(json["stream"], true);
-        assert_eq!(json["reasoning"]["effort"], "medium");
-        assert_eq!(json["text"]["verbosity"], "medium");
-        assert_eq!(json["include"][0], "reasoning.encrypted_content");
-    }
-
-    #[test]
-    fn build_request_includes_prompt_cache_key_when_set() {
-        let provider = create_test_provider();
-        let mut context = Context::new(
-            vec![ChatMessage::User { content: vec![ContentBlock::text("Hi")], timestamp: IsoString::now() }],
-            vec![],
-        );
         context.set_prompt_cache_key(Some("session-abc".to_string()));
 
-        let request = provider.build_request(&context).unwrap();
-        assert_eq!(request.prompt_cache_key.as_deref(), Some("session-abc"));
+        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+        let captured = server.captured().await;
+
+        assert!(responses.iter().all(Result::is_ok), "{responses:?}");
+        assert_eq!(captured.body["reasoning"]["effort"], "max");
+        assert_eq!(captured.body["model"], "gpt-5.6-sol");
+        assert_eq!(captured.body["instructions"], "You are helpful");
+        assert_eq!(captured.body["tools"].as_array().unwrap().len(), 1);
+        assert_eq!(captured.body["prompt_cache_key"], "session-abc");
+        assert_eq!(captured.body["store"], false);
+        assert_eq!(captured.body["stream"], true);
+        assert_eq!(captured.headers["chatgpt-account-id"], "account-1");
     }
 
-    #[test]
-    fn build_request_omits_prompt_cache_key_when_unset() {
-        let provider = create_test_provider();
+    #[tokio::test]
+    async fn stream_response_defaults_to_medium_effort_on_the_wire() {
+        let mut server = CaptureServer::start().await;
+        let provider = server_backed_provider(&server);
         let context = Context::new(
-            vec![ChatMessage::User { content: vec![ContentBlock::text("Hi")], timestamp: IsoString::now() }],
+            vec![ChatMessage::User { content: vec![ContentBlock::text("Hello")], timestamp: IsoString::now() }],
             vec![],
         );
 
-        let request = provider.build_request(&context).unwrap();
-        assert!(request.prompt_cache_key.is_none());
+        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+        let captured = server.captured().await;
+
+        assert!(responses.iter().all(Result::is_ok), "{responses:?}");
+        assert_eq!(captured.body["reasoning"]["effort"], "medium");
+    }
+
+    fn server_backed_provider(server: &CaptureServer) -> CodexProvider {
+        let credential = OAuthCredential {
+            client_id: "test".to_string(),
+            access_token: test_jwt("account-1"),
+            refresh_token: None,
+            expires_at: Some(u64::MAX),
+            granted_scopes: Vec::new(),
+        };
+        let store: Arc<dyn OAuthCredentialStorage> =
+            Arc::new(FakeOAuthCredentialStore::new().with_credential("codex", credential));
+        CodexProvider::new(store).with_connection(crate::ProviderConnectionConfig {
+            base_url: Some(server.base_url.clone()),
+            ..Default::default()
+        })
+    }
+
+    fn test_jwt(account_id: &str) -> String {
+        let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"none"}"#);
+        let payload = URL_SAFE_NO_PAD
+            .encode(serde_json::json!({"https://api.openai.com/auth": {"chatgpt_account_id": account_id}}).to_string());
+        format!("{header}.{payload}.signature")
     }
 
     fn create_test_provider() -> CodexProvider {

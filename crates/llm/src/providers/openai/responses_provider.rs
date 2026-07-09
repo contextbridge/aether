@@ -5,9 +5,10 @@ use async_openai::config::OpenAIConfig;
 use async_openai::types::responses::{
     CreateResponse, EasyInputContent, EasyInputMessage, FunctionCallOutput, FunctionCallOutputItemParam, FunctionTool,
     FunctionToolCall, ImageDetail, IncludeEnum, InputContent, InputImageContent, InputItem, InputParam,
-    InputTextContent, Item, MessageType, OutputItem, Reasoning, ReasoningEffort as OaiReasoningEffort,
-    ReasoningSummary, ResponseStreamEvent, ResponseUsage, Role, Tool,
+    InputTextContent, Item, MessageType, OutputItem, Reasoning, ReasoningSummary, ResponseStreamEvent, ResponseUsage,
+    Role, Tool,
 };
+use serde_json::Value;
 use tokio_stream::StreamExt;
 use tracing::{debug, error};
 
@@ -15,8 +16,7 @@ use crate::provider::get_context_window;
 use crate::providers::openai_compatible::AetherOpenAiConfig;
 use crate::{
     ChatMessage, ContentBlock, Context, LlmError, LlmModel, LlmResponse, LlmResponseStream, ProviderAuthMode,
-    ProviderConnectionConfig, ProviderFactory, ReasoningEffort, Result, StopReason, StreamingModelProvider, TokenUsage,
-    ToolDefinition,
+    ProviderConnectionConfig, ProviderFactory, Result, StopReason, StreamingModelProvider, TokenUsage, ToolDefinition,
 };
 
 impl From<ResponseUsage> for TokenUsage {
@@ -92,7 +92,7 @@ impl StreamingModelProvider for OpenAiProvider {
     fn stream_response(&self, context: &Context) -> LlmResponseStream {
         let client = self.client.clone();
         let model = self.model.clone();
-        let request = match build_response_request(&model, context) {
+        let request = match build_wire_request(&model, context) {
             Ok(req) => req,
             Err(e) => return Box::pin(async_stream::stream! { yield Err(e); }),
         };
@@ -100,7 +100,7 @@ impl StreamingModelProvider for OpenAiProvider {
         Box::pin(async_stream::stream! {
             debug!("Starting OpenAI Responses API stream for model: {model}");
 
-            let stream = match client.responses().create_stream(request).await {
+            let stream = match client.responses().create_stream_byot::<Value, ResponseStreamEvent>(request).await {
                 Ok(s) => s,
                 Err(e) => {
                     error!("Failed to create OpenAI Responses stream: {e:?}");
@@ -271,9 +271,8 @@ fn build_response_request(model: &str, context: &Context) -> Result<CreateRespon
 
     let tools = map_tools(context.tools())?;
 
-    let reasoning = context
-        .reasoning_effort()
-        .map(|effort| Reasoning { effort: Some(map_reasoning_effort(effort)), summary: Some(ReasoningSummary::Auto) });
+    let reasoning =
+        context.reasoning_effort().map(|_| Reasoning { effort: None, summary: Some(ReasoningSummary::Auto) });
 
     let settings = context.model_settings();
 
@@ -326,20 +325,24 @@ fn map_tools(tools: &[ToolDefinition]) -> Result<Vec<Tool>> {
         .collect()
 }
 
-fn map_reasoning_effort(effort: ReasoningEffort) -> OaiReasoningEffort {
-    match effort {
-        ReasoningEffort::Low => OaiReasoningEffort::Low,
-        ReasoningEffort::Medium => OaiReasoningEffort::Medium,
-        ReasoningEffort::High => OaiReasoningEffort::High,
-        ReasoningEffort::Xhigh | ReasoningEffort::Max => OaiReasoningEffort::Xhigh,
+/// The typed `async-openai` request cannot encode every effort the Responses
+/// API accepts (e.g. `max`), so the effort is written onto the serialized wire
+/// body instead.
+fn build_wire_request(model: &str, context: &Context) -> Result<Value> {
+    let mut body = serde_json::to_value(build_response_request(model, context)?)?;
+    if let Some(effort) = context.reasoning_effort() {
+        body["reasoning"]["effort"] = effort.as_str().into();
     }
+    Ok(body)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::AssistantReasoning;
+    use crate::ReasoningEffort;
     use crate::ToolCallRequest;
+    use crate::providers::test_capture_server::CaptureServer;
     use crate::types::IsoString;
 
     #[test]
@@ -422,21 +425,53 @@ mod tests {
     }
 
     #[test]
-    fn test_build_request_maps_reasoning_effort() {
-        for (effort, expected) in
-            [(ReasoningEffort::High, OaiReasoningEffort::High), (ReasoningEffort::Max, OaiReasoningEffort::Xhigh)]
-        {
+    fn test_build_wire_request_maps_every_reasoning_effort() {
+        for effort in ReasoningEffort::all() {
             let mut context = Context::new(
                 vec![ChatMessage::User { content: vec![ContentBlock::text("Think")], timestamp: IsoString::now() }],
                 vec![],
             );
-            context.set_reasoning_effort(Some(effort));
+            context.set_reasoning_effort(Some(*effort));
 
-            let req = build_response_request("o3", &context).unwrap();
-            let reasoning = req.reasoning.unwrap();
-            assert_eq!(reasoning.effort, Some(expected));
-            assert_eq!(reasoning.summary, Some(ReasoningSummary::Auto));
+            let body = build_wire_request("gpt-5.6", &context).unwrap();
+            assert_eq!(body["reasoning"]["effort"], effort.as_str());
+            assert_eq!(body["reasoning"]["summary"], "auto");
         }
+    }
+
+    #[test]
+    fn test_build_wire_request_omits_reasoning_without_effort() {
+        let context = Context::new(
+            vec![ChatMessage::User { content: vec![ContentBlock::text("Hi")], timestamp: IsoString::now() }],
+            vec![],
+        );
+
+        let body = build_wire_request("gpt-4.1", &context).unwrap();
+        assert!(body["reasoning"].is_null());
+    }
+
+    #[tokio::test]
+    async fn stream_response_sends_max_effort_on_the_wire() {
+        let mut server = CaptureServer::start().await;
+        let connection = ProviderConnectionConfig {
+            base_url: Some(server.base_url.clone()),
+            auth_mode: ProviderAuthMode::None,
+            ..Default::default()
+        };
+        let provider = OpenAiProvider::from_env_with_connection(connection).await.unwrap().with_model("gpt-5.6");
+        let mut context = Context::new(
+            vec![ChatMessage::User { content: vec![ContentBlock::text("Think harder")], timestamp: IsoString::now() }],
+            vec![],
+        );
+        context.set_reasoning_effort(Some(ReasoningEffort::Max));
+
+        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+        let captured = server.captured().await;
+
+        assert!(responses.iter().all(Result::is_ok), "{responses:?}");
+        assert_eq!(captured.body["reasoning"]["effort"], "max");
+        assert_eq!(captured.body["model"], "gpt-5.6");
+        assert_eq!(captured.body["stream"], true);
     }
 
     #[test]
