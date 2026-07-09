@@ -14,6 +14,14 @@ pub enum SettingsError {
     #[error("Invalid model '{model}' for agent '{agent}': {error}")]
     InvalidModel { agent: String, model: String, error: String },
 
+    /// An agent entry selects a reasoning effort unsupported by its model.
+    #[error("Agent '{agent}' has invalid reasoning effort: {source}")]
+    InvalidReasoningEffort {
+        agent: String,
+        #[source]
+        source: llm::catalog::ReasoningEffortError,
+    },
+
     /// An agent entry is missing required fields.
     #[error("Agent '{agent}' is missing required field: {field}")]
     MissingField { agent: String, field: String },

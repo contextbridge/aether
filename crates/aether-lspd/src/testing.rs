@@ -82,6 +82,9 @@ edition = "2021"
     }
 }
 
+const TYPESCRIPT_PACKAGE: &str = "typescript@6.0.3";
+const TYPESCRIPT_LANGUAGE_SERVER_PACKAGE: &str = "typescript-language-server@5.2.0";
+
 /// A temporary Node.js/TypeScript project for testing.
 pub struct NodeProject {
     temp_dir: TempDir,
@@ -96,7 +99,7 @@ impl TestProject for NodeProject {
 impl NodeProject {
     /// Create a new minimal Node/TypeScript project.
     ///
-    /// Runs `npm install typescript@5.9.3 typescript-language-server` so tests do not depend on global Node tools.
+    /// Installs pinned TypeScript tooling locally so tests do not depend on global Node tools.
     pub fn new(name: &str) -> Result<Self, TestProjectError> {
         let temp_dir = TempDir::new()?;
         let project = Self { temp_dir };
@@ -137,14 +140,12 @@ impl NodeProject {
     }
 
     fn install_typescript(&self) -> Result<(), TestProjectError> {
-        let output = Command::new("npm")
-            .args(["install", "--save-dev", "typescript@5.9.3", "typescript-language-server"])
-            .current_dir(self.root())
-            .output()?;
+        let args = ["install", "--save-dev", TYPESCRIPT_PACKAGE, TYPESCRIPT_LANGUAGE_SERVER_PACKAGE];
+        let output = Command::new("npm").args(args).current_dir(self.root()).output()?;
 
         if !output.status.success() {
             return Err(TestProjectError::CommandFailed {
-                command: "npm install --save-dev typescript@5.9.3 typescript-language-server".to_string(),
+                command: format!("npm {}", args.join(" ")),
                 stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
             });
         }

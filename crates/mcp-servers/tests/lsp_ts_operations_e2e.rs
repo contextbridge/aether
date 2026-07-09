@@ -2,8 +2,7 @@
 //! through the MCP tool layer, using TypeScript projects with typescript-language-server.
 //!
 //! Requirements:
-//! - `typescript-language-server` must be installed and in PATH
-//! - `typescript` must be installed (globally or in PATH)
+//! - `npm` must be installed (the test project installs pinned TypeScript tooling locally)
 //! - `aether-lspd` binary must be built (`cargo build -p aether-lspd`)
 //!
 //! Run with: `cargo test -p mcp-servers -- lsp_ts_operations`
