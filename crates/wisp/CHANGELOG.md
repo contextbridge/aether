@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.28](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.27...aether-wisp-v0.4.28) - 2026-07-09
+
+### Other
+
+- Update models ([#214](https://github.com/contextbridge/aether/pull/214))
+
 ## [0.4.27](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.26...aether-wisp-v0.4.27) - 2026-06-30
 
 ### Added

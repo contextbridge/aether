@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.19](https://github.com/contextbridge/aether/compare/aether-project-v0.5.18...aether-project-v0.5.19) - 2026-07-09
+
+### Other
+
+- Update models ([#214](https://github.com/contextbridge/aether/pull/214))
+
 ## [0.5.18](https://github.com/contextbridge/aether/compare/aether-project-v0.5.17...aether-project-v0.5.18) - 2026-06-30
 
 ### Other

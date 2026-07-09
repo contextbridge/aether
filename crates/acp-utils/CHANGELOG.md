@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.28](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.3.27...aether-acp-utils-v0.3.28) - 2026-07-09
+
+### Other
+
+- Update models ([#214](https://github.com/contextbridge/aether/pull/214))
+
 ## [0.3.27](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.3.26...aether-acp-utils-v0.3.27) - 2026-06-30
 
 ### Other

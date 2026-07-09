@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.24](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.23...aether-mcp-servers-v0.4.24) - 2026-07-09
+
+### Other
+
+- Update models ([#214](https://github.com/contextbridge/aether/pull/214))
+
 ## [0.4.23](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.22...aether-mcp-servers-v0.4.23) - 2026-06-30
 
 ### Added
