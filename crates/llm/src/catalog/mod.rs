@@ -49,6 +49,14 @@ mod tests {
     }
 
     #[test]
+    fn codex_gpt56_sol_uses_canonical_model_id() {
+        let model: LlmModel = "codex:gpt-5.6".parse().unwrap();
+        assert_eq!(model.to_string(), "codex:gpt-5.6");
+        assert!("codex:gpt-5.6-sol".parse::<LlmModel>().is_err());
+        assert!("openai:gpt-5.6-sol".parse::<LlmModel>().is_ok());
+    }
+
+    #[test]
     fn codex_gpt55_uses_subscription_context_window() {
         let model: LlmModel = "codex:gpt-5.5".parse().unwrap();
         assert_eq!(model.context_window(), Some(272_000));

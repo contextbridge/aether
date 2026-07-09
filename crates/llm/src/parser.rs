@@ -199,10 +199,10 @@ mod tests {
     #[tokio::test]
     async fn test_parse_anthropic() {
         let parser = ModelProviderParser::default();
-        let result = parser.parse("anthropic:claude-3-5-sonnet-20241022").await;
+        let result = parser.parse("anthropic:claude-sonnet-4-6").await;
         match result {
             Ok((_, model)) => {
-                assert_eq!(model, LlmModel::Anthropic(crate::catalog::AnthropicModel::Claude35Sonnet20241022));
+                assert_eq!(model, LlmModel::Anthropic(crate::catalog::AnthropicModel::ClaudeSonnet46));
             }
             Err(e) => {
                 let err = e.to_string();

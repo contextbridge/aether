@@ -169,7 +169,7 @@ const PROVIDERS: &[ProviderConfig] = &[
         dev_id: "codex",
         source_dev_id: Some("openai"),
         extra_source_ids: &[],
-        model_filter: Some(|id| id.contains("codex") || id.starts_with("gpt-5.") || id == "gpt-5"),
+        model_filter: Some(is_codex_model),
         context_window_override: Some(codex_subscription_context_window),
         enum_name: "Codex",
         parser_name: "codex",
@@ -200,6 +200,10 @@ const DYNAMIC_PROVIDERS: &[DynamicProviderConfig] = &[
 ];
 
 const CODEX_SUBSCRIPTION_CONTEXT_WINDOW: u32 = 272_000;
+
+fn is_codex_model(model_id: &str) -> bool {
+    model_id != "gpt-5.6-sol" && (model_id.contains("codex") || model_id.starts_with("gpt-5.") || model_id == "gpt-5")
+}
 
 fn codex_subscription_context_window(model_id: &str, default_context_window: u32) -> u32 {
     match model_id {
@@ -1411,6 +1415,37 @@ mod tests {
     }
 
     // ── Markdown docs ────────────────────────────────────────────────────────
+
+    #[test]
+    fn generate_excludes_unsupported_gpt56_sol_from_codex_only() {
+        let mut data = minimal_models_dev_json();
+        insert_models(
+            &mut data,
+            "openai",
+            json!({
+                "gpt-5.6": {
+                    "id": "gpt-5.6", "name": "GPT-5.6 Sol", "tool_call": true, "reasoning": true,
+                    "limit": {"context": 1_050_000, "output": 128_000}
+                },
+                "gpt-5.6-sol": {
+                    "id": "gpt-5.6-sol", "name": "GPT-5.6 Sol", "tool_call": true, "reasoning": true,
+                    "limit": {"context": 1_050_000, "output": 128_000}
+                }
+            }),
+        );
+
+        let tmp = NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), serde_json::to_string(&data).unwrap()).unwrap();
+        let output = generate(tmp.path()).unwrap();
+
+        let codex_doc = &output.provider_docs["codex"];
+        assert!(codex_doc.contains("| `gpt-5.6` | `GPT-5.6 Sol` |"));
+        assert!(!codex_doc.contains("`gpt-5.6-sol`"));
+
+        let openai_doc = &output.provider_docs["openai"];
+        assert!(openai_doc.contains("`gpt-5.6`"));
+        assert!(openai_doc.contains("`gpt-5.6-sol`"));
+    }
 
     #[test]
     fn generate_emits_provider_docs() {
