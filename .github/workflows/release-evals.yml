@@ -32,7 +32,7 @@ jobs:
           registry-url: "https://registry.npmjs.org"
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.97
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
