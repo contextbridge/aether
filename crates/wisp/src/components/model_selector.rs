@@ -357,7 +357,7 @@ impl Component for ModelSelector {
                     let mut line = Line::with_style(label, context.theme.selected_row_style());
                     let indicator_style = context.theme.selected_row_style_with_fg(context.theme.highlight_fg());
                     if !entry.reasoning_levels.is_empty() {
-                        let bar = reasoning_bar(self.reasoning_effort, entry.reasoning_levels.len());
+                        let bar = reasoning_bar(self.reasoning_effort, &entry.reasoning_levels);
                         line.push_with_style(format!("    {bar}"), indicator_style);
                     }
                     let caps = capability_tags(entry.supports_image, entry.supports_audio);

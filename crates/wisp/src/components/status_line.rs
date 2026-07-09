@@ -121,8 +121,8 @@ fn render_segment(segment: &StatusLineSegmentConfig, status: &StatusLine<'_>, co
             let reasoning_effort = extract_reasoning_effort(status.config_options);
             let mut line = Line::default();
             line.push_styled(
-                reasoning_bar(reasoning_effort, reasoning_levels.len()),
-                reasoning_color(reasoning_effort, reasoning_levels.len(), &context.theme),
+                reasoning_bar(reasoning_effort, &reasoning_levels),
+                reasoning_color(reasoning_effort, &reasoning_levels, &context.theme),
             );
             Some(line)
         }

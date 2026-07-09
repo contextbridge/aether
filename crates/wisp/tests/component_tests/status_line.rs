@@ -36,6 +36,23 @@ fn reasoning_option(value: impl Into<String>) -> SessionConfigOption {
     )
 }
 
+fn five_level_reasoning_option(value: impl Into<String>) -> SessionConfigOption {
+    let value = value.into();
+    SessionConfigOption::select(
+        ConfigOptionId::ReasoningEffort.as_str(),
+        "Reasoning",
+        value,
+        vec![
+            acp::SessionConfigSelectOption::new("none", "None"),
+            acp::SessionConfigSelectOption::new("low", "Low"),
+            acp::SessionConfigSelectOption::new("medium", "Medium"),
+            acp::SessionConfigSelectOption::new("high", "High"),
+            acp::SessionConfigSelectOption::new("xhigh", "Xhigh"),
+            acp::SessionConfigSelectOption::new("max", "Max"),
+        ],
+    )
+}
+
 fn status_line<'a>(
     workspace_status: &'a WorkspaceStatus,
     settings: &'a wisp::settings::ResolvedStatusLineSettings,
@@ -316,4 +333,23 @@ fn renders_reasoning_bar_high_with_success_color() {
     let ctx = ViewContext::new((80, 24));
     let (_, term) = StatusBuilder::new("wisp").model("gpt-4o").reasoning("high").render();
     assert_eq!(term.style_of_text(0, "■").unwrap().fg, Some(ctx.theme.success()));
+}
+
+#[test]
+fn renders_max_reasoning_with_distinct_warning_color() {
+    let ctx = ViewContext::new((80, 24));
+
+    let mut xhigh_status = StatusBuilder::new("wisp").model("gpt-4o");
+    xhigh_status.options.push(five_level_reasoning_option("xhigh"));
+    let (_, xhigh_term) = xhigh_status.render();
+
+    let mut max_status = StatusBuilder::new("wisp").model("gpt-4o");
+    max_status.options.push(five_level_reasoning_option("max"));
+    let (_, max_term) = max_status.render();
+
+    let xhigh_color = xhigh_term.style_of_text(0, "■").unwrap().fg;
+    let max_color = max_term.style_of_text(0, "■").unwrap().fg;
+    assert_eq!(xhigh_color, Some(ctx.theme.success()));
+    assert_eq!(max_color, Some(ctx.theme.warning()));
+    assert_ne!(max_color, xhigh_color);
 }
