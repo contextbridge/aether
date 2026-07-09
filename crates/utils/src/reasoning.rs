@@ -2,9 +2,10 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ReasoningEffort {
+    Minimal,
     Low,
     Medium,
     High,
@@ -15,6 +16,7 @@ pub enum ReasoningEffort {
 impl ReasoningEffort {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Minimal => "minimal",
             Self::Low => "low",
             Self::Medium => "medium",
             Self::High => "high",
@@ -24,12 +26,7 @@ impl ReasoningEffort {
     }
 
     pub fn all() -> &'static [ReasoningEffort] {
-        &[Self::Low, Self::Medium, Self::High, Self::Xhigh, Self::Max]
-    }
-
-    /// Numeric position derived from `all()` ordering.
-    pub fn ordinal(self) -> usize {
-        Self::all().iter().position(|&e| e == self).expect("variant must be in all()")
+        &[Self::Minimal, Self::Low, Self::Medium, Self::High, Self::Xhigh, Self::Max]
     }
 
     /// Cycles through only the given `levels`, wrapping to `None` after the last.
@@ -44,18 +41,10 @@ impl ReasoningEffort {
         }
     }
 
-    /// Returns `self` if it's in `levels`, otherwise the highest level ≤ self by ordinal.
+    /// Returns `self` if it's in `levels`, otherwise the highest level ≤ self.
     /// Falls back to the first element of `levels`. Panics if `levels` is empty.
     pub fn clamp_to(self, levels: &[Self]) -> Self {
-        if levels.contains(&self) {
-            return self;
-        }
-        levels
-            .iter()
-            .rev()
-            .find(|&&l| l.ordinal() <= self.ordinal())
-            .copied()
-            .unwrap_or(*levels.first().expect("levels must not be empty"))
+        levels.iter().rev().find(|&&l| l <= self).copied().unwrap_or(*levels.first().expect("levels must not be empty"))
     }
 
     /// Converts `Option<ReasoningEffort>` to a config string value.
@@ -84,6 +73,7 @@ impl FromStr for ReasoningEffort {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
+            "minimal" => Ok(Self::Minimal),
             "low" => Ok(Self::Low),
             "medium" => Ok(Self::Medium),
             "high" => Ok(Self::High),
@@ -120,8 +110,8 @@ mod tests {
     }
 
     #[test]
-    fn all_returns_five_variants() {
-        assert_eq!(ReasoningEffort::all().len(), 5);
+    fn all_returns_six_variants() {
+        assert_eq!(ReasoningEffort::all().len(), 6);
     }
 
     #[test]
@@ -157,12 +147,12 @@ mod tests {
     }
 
     #[test]
-    fn ordinal_values() {
-        assert_eq!(ReasoningEffort::Low.ordinal(), 0);
-        assert_eq!(ReasoningEffort::Medium.ordinal(), 1);
-        assert_eq!(ReasoningEffort::High.ordinal(), 2);
-        assert_eq!(ReasoningEffort::Xhigh.ordinal(), 3);
-        assert_eq!(ReasoningEffort::Max.ordinal(), 4);
+    fn variants_are_ordered_by_effort() {
+        let mut sorted = ReasoningEffort::all().to_vec();
+        sorted.sort();
+        assert_eq!(sorted, ReasoningEffort::all());
+        assert!(ReasoningEffort::Minimal < ReasoningEffort::Low);
+        assert!(ReasoningEffort::Xhigh < ReasoningEffort::Max);
     }
 
     #[test]
@@ -222,6 +212,7 @@ mod tests {
 
     #[test]
     fn parse_extended_levels() {
+        assert_eq!(ReasoningEffort::parse("minimal").unwrap(), Some(ReasoningEffort::Minimal));
         assert_eq!(ReasoningEffort::parse("xhigh").unwrap(), Some(ReasoningEffort::Xhigh));
         assert_eq!(ReasoningEffort::parse("max").unwrap(), Some(ReasoningEffort::Max));
         assert!(ReasoningEffort::parse("ultra").is_err());
