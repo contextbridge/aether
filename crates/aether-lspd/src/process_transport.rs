@@ -7,7 +7,7 @@ use lsp_types::{
     CallHierarchyClientCapabilities, ClientCapabilities, DidChangeWatchedFilesClientCapabilities,
     GeneralClientCapabilities, GotoCapability, HoverClientCapabilities, InitializeParams, MarkupKind,
     PublishDiagnosticsClientCapabilities, RegistrationParams, TextDocumentClientCapabilities,
-    WorkspaceClientCapabilities,
+    WorkspaceClientCapabilities, WorkspaceFolder,
 };
 use lsp_types::{DocumentSymbolClientCapabilities, DynamicRegistrationClientCapabilities};
 use serde_json::Value;
@@ -220,6 +220,11 @@ impl ProcessTransportActor {
             process_id: Some(std::process::id()),
             #[allow(deprecated)]
             root_uri: Some(root_uri),
+            workspace_folders: Some(vec![WorkspaceFolder {
+                uri: crate::path_to_uri(root_path)
+                    .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err))?,
+                name: root_path.file_name().and_then(|name| name.to_str()).unwrap_or("workspace").to_string(),
+            }]),
             capabilities,
             ..Default::default()
         };

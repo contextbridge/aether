@@ -138,13 +138,14 @@ impl NodeProject {
 
     fn install_typescript(&self) -> Result<(), TestProjectError> {
         let output = Command::new("npm")
-            .args(["install", "--save-dev", "typescript", "typescript-language-server"])
+            .args(["install", "--save-dev", "--save-exact", "typescript@6.0.3", "typescript-language-server@5.3.0"])
             .current_dir(self.root())
             .output()?;
 
         if !output.status.success() {
             return Err(TestProjectError::CommandFailed {
-                command: "npm install --save-dev typescript typescript-language-server".to_string(),
+                command: "npm install --save-dev --save-exact typescript@6.0.3 typescript-language-server@5.3.0"
+                    .to_string(),
                 stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
             });
         }
