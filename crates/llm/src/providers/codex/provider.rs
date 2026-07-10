@@ -10,12 +10,13 @@ use async_openai::types::responses::{
 };
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
-use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
+use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderValue};
 use serde_json::Value;
 use std::sync::Arc;
 use tracing::debug;
 
 const CODEX_API_BASE: &str = "https://chatgpt.com/backend-api/codex";
+const CODEX_CLIENT_VERSION: &str = "0.144.0";
 
 #[derive(Clone)]
 pub struct CodexProvider {
@@ -93,8 +94,9 @@ impl CodexProvider {
             "chatgpt-account-id",
             HeaderValue::from_str(&account_id).map_err(|e| LlmError::InvalidApiKey(e.to_string()))?,
         );
-        headers.insert("OpenAI-Beta", HeaderValue::from_static("responses=experimental"));
+        headers.insert(ACCEPT, HeaderValue::from_static("text/event-stream"));
         headers.insert("originator", HeaderValue::from_static("codex_cli_rs"));
+        headers.insert("version", HeaderValue::from_static(CODEX_CLIENT_VERSION));
 
         Ok(headers)
     }
@@ -231,9 +233,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stream_response_sends_max_effort_on_the_wire() {
+    async fn stream_response_sends_supported_protocol_version_for_gpt_5_6_luna() {
         let mut server = CaptureServer::start().await;
-        let provider = server_backed_provider(&server).with_model("gpt-5.6-sol");
+        let provider = server_backed_provider(&server).with_model("gpt-5.6-luna");
         let mut context = Context::new(
             vec![
                 ChatMessage::System { content: "You are helpful".to_string(), timestamp: IsoString::now() },
@@ -253,13 +255,20 @@ mod tests {
 
         assert!(responses.iter().all(Result::is_ok), "{responses:?}");
         assert_eq!(captured.body["reasoning"]["effort"], "max");
-        assert_eq!(captured.body["model"], "gpt-5.6-sol");
+        assert!(captured.body["reasoning"].get("context").is_none());
+        assert_eq!(captured.body["model"], "gpt-5.6-luna");
         assert_eq!(captured.body["instructions"], "You are helpful");
         assert_eq!(captured.body["tools"].as_array().unwrap().len(), 1);
+        assert!(captured.body.get("parallel_tool_calls").is_none());
+        assert_eq!(captured.body["input"][0]["role"], "user");
         assert_eq!(captured.body["prompt_cache_key"], "session-abc");
         assert_eq!(captured.body["store"], false);
         assert_eq!(captured.body["stream"], true);
         assert_eq!(captured.headers["chatgpt-account-id"], "account-1");
+        assert_eq!(captured.headers["version"], "0.144.0");
+        assert_eq!(captured.headers["accept"], "text/event-stream");
+        assert!(captured.headers.get("x-openai-internal-codex-responses-lite").is_none());
+        assert!(captured.headers.get("OpenAI-Beta").is_none());
     }
 
     #[tokio::test]
