@@ -63,6 +63,7 @@ impl ProcessTransport {
     ) -> DaemonResult<(Self, mpsc::Receiver<TransportEvent>)> {
         let resolved_command = resolve_command(root_path, command);
         let mut process = Command::new(&resolved_command)
+            .current_dir(root_path)
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

@@ -33,7 +33,7 @@ pub struct ResolvedSymbol {
 
 use lsp_types::Diagnostic;
 
-use super::common::{find_symbol_column, path_to_uri, uri_to_path};
+use super::common::{find_symbol_column, path_to_uri};
 use super::error::LspError;
 
 #[doc = include_str!("../docs/lsp_registry.md")]
@@ -272,8 +272,7 @@ fn merge_diagnostics(
     params_list: Vec<lsp_types::PublishDiagnosticsParams>,
 ) {
     for params in params_list {
-        let path = uri_to_path(&params.uri);
-        result.entry(path).or_default().extend(params.diagnostics);
+        result.entry(params.uri.as_str().to_string()).or_default().extend(params.diagnostics);
     }
 }
 

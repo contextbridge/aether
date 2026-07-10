@@ -189,7 +189,7 @@ async fn bootstrap_workspace_refresh(
     } else {
         tokio::task::spawn_blocking(move || {
             let mut builder = WalkBuilder::new(&workspace_root);
-            builder.standard_filters(true);
+            builder.standard_filters(true).filter_entry(|entry| !path_contains_ignored_component(entry.path()));
 
             let mut uris = Vec::new();
             for entry in builder.build() {
@@ -266,6 +266,15 @@ fn filter_supported_uris(uris: Vec<Uri>, supported_extensions: &HashSet<String>)
 fn uri_is_supported(uri: &Uri, supported_extensions: &HashSet<String>) -> bool {
     let path = crate::uri_to_path(uri);
     path_is_supported(Path::new(&path), supported_extensions)
+}
+
+fn path_contains_ignored_component(path: &Path) -> bool {
+    path.components().any(|component| {
+        let std::path::Component::Normal(name) = component else {
+            return false;
+        };
+        matches!(name.to_string_lossy().as_ref(), ".git" | "node_modules" | ".next" | "dist" | "build" | "target")
+    })
 }
 
 fn path_is_supported(path: &Path, supported_extensions: &HashSet<String>) -> bool {

@@ -495,10 +495,6 @@ mod tests {
 
         for (msg, kind) in &samples {
             assert_eq!(event_kind(msg), Some(*kind), "event_kind disagrees for {kind:?}");
-            let tag = serde_json::to_value(msg).unwrap();
-            let tag = tag["type"].as_str().unwrap().to_string();
-            let clap_name = kind.to_possible_value().unwrap();
-            assert_eq!(tag, clap_name.get_name(), "`--events` value and serialized `type` tag diverged for {kind:?}");
         }
     }
 

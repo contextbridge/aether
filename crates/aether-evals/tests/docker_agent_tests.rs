@@ -23,7 +23,7 @@ async fn docker_agent_direct_agent_event_eval() -> Result<(), DockerAgentTestErr
         vec![
             "/bin/sh".to_string(),
             "-c".to_string(),
-            r#"printf '%s\n' '{"type":"text","message_id":"m1","chunk":"ok","is_complete":true,"model_name":"test"}' '{"type":"turn_ended","outcome":{"status":"completed"}}'"#
+            r#"printf '%s\n' '{"category":"message","event":{"type":"text","message_id":"m1","chunk":"ok","is_complete":true,"model_name":"test"}}' '{"category":"turn","event":{"type":"ended","outcome":{"status":"completed"}}}'"#
                 .to_string(),
         ],
     );
