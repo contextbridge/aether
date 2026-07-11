@@ -30,7 +30,7 @@ async fn hello_world_test() -> Result<(), aether_evals::WorkspaceError> {
     let agent = FakeAgent::writes_file("hello.txt", "Hello, World!").with_workspace(workspace.path());
     let transcript = Transcript::from_stream(agent.run(Task::new(prompt))).await.unwrap();
 
-    assert!(!transcript.messages().is_empty());
+    assert!(!transcript.events().is_empty());
     assert!(workspace.join("hello.txt").exists());
     Ok(())
 }
@@ -52,11 +52,11 @@ Aether Evals' fake-agent coverage should use normal test names. Reserve `_eval` 
 ## Core API
 
 - `Task::new(prompt)` describes the problem to solve.
-- `Agent::run(task)` streams `AgentMessage`s from an agent's configured execution environment.
+- `Agent::run(task)` streams `AgentEvent`s from an agent's configured execution environment.
 - `Transcript::from_stream(agent.run(task))` collects the stream into a `Transcript`.
 - `Transcript::default()` plus `transcript.add(message)` supports observing each streamed message while building the transcript manually.
 - `Container::builder(image).start(&workspace)` starts a caller-owned Docker container with the workspace mounted at `/workspace`.
-- `DockerAgent::new(container, command)` runs an in-container command whose stdout is newline-delimited `AgentMessage` JSON.
+- `DockerAgent::new(container, command)` runs an in-container command whose stdout is newline-delimited `AgentEvent` JSON.
 - `Container::exec_shell(script)` runs follow-up assertions or test commands in the same caller-owned container.
 - `default_eval_env_vars()` forwards provider credentials and Aether-related environment into Docker while setting `AETHER_HOME=/root/.aether`.
 - `Workspace::empty()` creates an isolated temp directory.
@@ -72,7 +72,7 @@ Aether Evals mounts the workspace root at `/workspace` and runs the command from
 - `AETHER_EVAL_WORKSPACE_ROOT=/workspace` — the mounted workspace root.
 - `AETHER_EVAL_CWD` — the command's effective cwd inside the workspace.
 
-Stdout is reserved for `AgentMessage` JSON lines and must end with a terminal message such as `{"type":"done"}`. Diagnostic logging should go to stderr.
+Stdout is reserved for `AgentEvent` JSON lines and must end with a terminal event such as `{"category":"turn","event":{"type":"ended","outcome":{"status":"completed"}}}`. Diagnostic logging should go to stderr.
 
 ```rust
 use aether_evals::{
@@ -97,7 +97,7 @@ let prompt = "fix the failing test";
 let transcript = Transcript::from_stream(agent.run(Task::new(prompt))).await?;
 let tests = container.exec_shell("cargo test").await?;
 assert_eq!(tests.exit_code, 0, "stdout:\n{}\nstderr:\n{}", tests.stdout, tests.stderr);
-assert!(!transcript.messages().is_empty());
+assert!(!transcript.events().is_empty());
 ```
 
 Run follow-up `container.exec_shell(...)` assertions before dropping the caller-owned container and workspace.
@@ -148,7 +148,7 @@ Judge faults — transient LLM stream failures, unparseable responses, criterion
 
 ## Debugging failed evals
 
-`TranscriptError` preserves the partial transcript if an agent stream returns an error. Use `error.transcript().messages()` or `error.into_parts()` to inspect messages that were emitted before the failure.
+`TranscriptError` preserves the partial transcript if an agent stream returns an error. Use `error.transcript().events()` or `error.into_parts()` to inspect events that were emitted before the failure.
 
 `Workspace` removes its temporary directory when dropped. To retain files for debugging, call `workspace.persist()` and remove the returned path manually when finished.
 
