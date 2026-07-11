@@ -19,7 +19,7 @@ use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::{AgentSpec, AgentSpecExposure};
 use aether_core::context::ext::{SessionControlEvent, SessionEvent, UserEvent, last_agent_from_events};
 use aether_core::core::{AgentBuilder, AgentHandle, Prompt};
-use aether_core::events::{AgentMessage, Command};
+use aether_core::events::{AgentEvent, Command, MessageEvent};
 use aether_core::mcp::McpSpawnResult;
 use aether_core::mcp::mcp;
 use agent_client_protocol::schema::{SessionId, SessionUpdate};
@@ -173,7 +173,7 @@ impl AcpTestHarness {
     pub async fn insert_stub_session(
         &self,
         agent_tx: mpsc::Sender<Command>,
-        agent_rx: mpsc::Receiver<AgentMessage>,
+        agent_rx: mpsc::Receiver<AgentEvent>,
         agent_handle: AgentHandle,
         id: SessionId,
         model: &str,
@@ -232,12 +232,11 @@ impl AcpTestHarness {
     pub fn append_stored_agent_text(&self, session_id: &str, text: &str) {
         self.append_stored_event(
             session_id,
-            &SessionEvent::Agent(AgentMessage::Text {
+            &SessionEvent::Agent(AgentEvent::Message(MessageEvent::Text {
                 message_id: "msg".to_string(),
                 chunk: text.to_string(),
                 is_complete: true,
-                model_name: "test".to_string(),
-            }),
+            })),
         );
     }
 
@@ -428,7 +427,7 @@ struct StubRuntimeFactory {
 
 struct StubAgentParts {
     tx: mpsc::Sender<Command>,
-    rx: mpsc::Receiver<AgentMessage>,
+    rx: mpsc::Receiver<AgentEvent>,
     handle: AgentHandle,
 }
 

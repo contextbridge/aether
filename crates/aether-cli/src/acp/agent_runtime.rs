@@ -7,7 +7,7 @@ use aether_auth::OAuthHandler;
 use aether_core::agent_spec::AgentSpec;
 use aether_core::agent_spec::ToolFilter;
 use aether_core::core::AgentHandle;
-use aether_core::events::{AgentCommand, AgentMessage, Command};
+use aether_core::events::{AgentCommand, AgentEvent, Command};
 use aether_core::mcp::run_mcp_task::McpCommand;
 use llm::ChatMessage;
 use mcp_utils::client::{
@@ -42,7 +42,7 @@ impl AgentRuntime {
         agent: AgentKey,
         spec: &AgentSpec,
         agent_tx: mpsc::Sender<Command>,
-        mut agent_rx: mpsc::Receiver<AgentMessage>,
+        mut agent_rx: mpsc::Receiver<AgentEvent>,
         agent_handle: Option<AgentHandle>,
         mcp_tx: mpsc::Sender<McpCommand>,
         mut event_rx: mpsc::Receiver<McpClientEvent>,
@@ -128,7 +128,7 @@ impl Drop for AgentRuntime {
 }
 
 pub(crate) enum RuntimeEvent {
-    Agent { agent: AgentKey, message: AgentMessage },
+    Agent { agent: AgentKey, message: AgentEvent },
     Mcp { agent: AgentKey, event: McpClientEvent },
 }
 

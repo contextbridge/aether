@@ -1,4 +1,6 @@
-use acp_utils::notifications::{ContextUsageParams, SubAgentEvent, SubAgentProgressParams, SubAgentToolRequest};
+use acp_utils::notifications::{
+    ContextUsage, ContextUsageParams, SubAgentEvent, SubAgentProgressParams, SubAgentToolRequest,
+};
 use agent_client_protocol::schema as acp;
 
 use super::common::*;
@@ -31,18 +33,12 @@ async fn test_context_usage_notification_updates_nominal_display() -> TestResult
     let mut renderer = RendererTest::new().size((TEST_WIDTH, 40)).build()?;
 
     let params = ContextUsageParams {
-        usage_ratio: Some(0.75),
-        context_limit: Some(200_000),
-        input_tokens: 150_000,
-        output_tokens: 0,
-        cache_read_tokens: None,
-        cache_creation_tokens: None,
-        reasoning_tokens: None,
-        total_input_tokens: 0,
-        total_output_tokens: 0,
-        total_cache_read_tokens: 0,
-        total_cache_creation_tokens: 0,
-        total_reasoning_tokens: 0,
+        usage: ContextUsage {
+            usage_ratio: Some(0.75),
+            context_limit: Some(200_000),
+            input_tokens: 150_000,
+            ..ContextUsage::default()
+        },
     };
     renderer.on_context_usage(params)?;
 
@@ -60,35 +56,16 @@ async fn test_context_usage_notification_with_unknown_limit_clears_meter() -> Te
     let mut renderer = RendererTest::new().size((TEST_WIDTH, 40)).build()?;
 
     let nominal = ContextUsageParams {
-        usage_ratio: Some(0.67),
-        context_limit: Some(150_000),
-        input_tokens: 100_000,
-        output_tokens: 0,
-        cache_read_tokens: None,
-        cache_creation_tokens: None,
-        reasoning_tokens: None,
-        total_input_tokens: 0,
-        total_output_tokens: 0,
-        total_cache_read_tokens: 0,
-        total_cache_creation_tokens: 0,
-        total_reasoning_tokens: 0,
+        usage: ContextUsage {
+            usage_ratio: Some(0.67),
+            context_limit: Some(150_000),
+            input_tokens: 100_000,
+            ..ContextUsage::default()
+        },
     };
     renderer.on_context_usage(nominal)?;
 
-    let cleared = ContextUsageParams {
-        usage_ratio: None,
-        context_limit: None,
-        input_tokens: 0,
-        output_tokens: 0,
-        cache_read_tokens: None,
-        cache_creation_tokens: None,
-        reasoning_tokens: None,
-        total_input_tokens: 0,
-        total_output_tokens: 0,
-        total_cache_read_tokens: 0,
-        total_cache_creation_tokens: 0,
-        total_reasoning_tokens: 0,
-    };
+    let cleared = ContextUsageParams { usage: ContextUsage::default() };
     renderer.on_context_usage(cleared)?;
 
     let lines = renderer.writer().get_lines();
