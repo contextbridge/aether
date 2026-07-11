@@ -34,6 +34,7 @@ agent-client-protocol = { workspace = true }
 futures = { workspace = true }
 tokio-util = { workspace = true, features = ["compat"] }
 rmcp = { workspace = true }
+schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.5.22" }
