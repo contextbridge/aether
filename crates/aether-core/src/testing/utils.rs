@@ -1,8 +1,9 @@
-use crate::events::TurnEvent;
+use crate::events::{ToolEvent, TurnEvent};
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::sync::mpsc;
 
 use futures::future::join_all;
 
@@ -14,6 +15,35 @@ use crate::testing::fake_mcp::fake_mcp;
 use llm::{Context, LlmError, LlmResponse};
 
 use llm::testing::FakeLlmProvider;
+
+pub async fn drain_until(
+    receiver: &mut mpsc::Receiver<AgentEvent>,
+    predicate: impl Fn(&AgentEvent) -> bool,
+) -> Vec<AgentEvent> {
+    let mut events = Vec::new();
+    while let Some(event) = receiver.recv().await {
+        let matched = predicate(&event);
+        events.push(event);
+        if matched {
+            return events;
+        }
+    }
+    panic!("agent event channel closed before predicate matched");
+}
+
+pub fn content_events(events: Vec<AgentEvent>) -> Vec<AgentEvent> {
+    events
+        .into_iter()
+        .filter(|event| {
+            !matches!(
+                event,
+                AgentEvent::Turn(
+                    TurnEvent::Started | TurnEvent::LlmCallStarted { .. } | TurnEvent::LlmCallEnded { .. }
+                ) | AgentEvent::Tool(ToolEvent::ExecutionStarted { .. } | ToolEvent::DefinitionsUpdated { .. })
+            )
+        })
+        .collect()
+}
 
 pub fn mcp_instructions(entries: &[(&str, &str)]) -> BTreeMap<String, String> {
     entries.iter().map(|(k, v)| ((*k).to_string(), (*v).to_string())).collect()

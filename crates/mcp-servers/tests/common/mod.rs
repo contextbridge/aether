@@ -10,7 +10,10 @@ use rmcp::model::{CallToolRequestParams, CallToolResult, ClientCapabilities, Cli
 use rmcp::service::RunningService;
 use rmcp::{RoleServer, Service};
 use serde::Serialize;
+use std::fs::{create_dir_all, read_to_string};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+use tempfile::{TempDir, tempdir};
 
 /// Default timeout for polling operations (60 seconds).
 const POLL_TIMEOUT: Duration = Duration::from_mins(1);
@@ -26,6 +29,41 @@ pub fn test_error(message: impl Into<String>) -> std::io::Error {
     std::io::Error::other(message.into())
 }
 
+/// An isolated workspace connected to a `CodingMcp` through the public MCP protocol.
+pub struct CodingWorkspace {
+    root: TempDir,
+    pub client: TestClient<CodingMcp>,
+}
+
+impl CodingWorkspace {
+    pub async fn new() -> TestResult<Self> {
+        let root = tempdir()?;
+        let client = TestClient::start(|| CodingMcp::new().with_root_dir(root.path().to_path_buf())).await?;
+        Ok(Self { root, client })
+    }
+
+    pub fn root(&self) -> &Path {
+        self.root.path()
+    }
+
+    pub fn path(&self, relative_path: impl AsRef<Path>) -> PathBuf {
+        self.root.path().join(relative_path)
+    }
+
+    pub fn write(&self, relative_path: impl AsRef<Path>, content: &str) -> TestResult<PathBuf> {
+        let path = self.path(relative_path);
+        if let Some(parent) = path.parent() {
+            create_dir_all(parent)?;
+        }
+        std::fs::write(&path, content)?;
+        Ok(path)
+    }
+
+    pub fn read(&self, relative_path: impl AsRef<Path>) -> TestResult<String> {
+        Ok(read_to_string(self.path(relative_path))?)
+    }
+}
+
 /// Generic test client wrapping a connected MCP server.
 pub struct TestClient<T: Service<RoleServer>, U: Service<RoleClient> = ClientInfo> {
     _server_handle: RunningService<RoleServer, T>,
@@ -34,8 +72,6 @@ pub struct TestClient<T: Service<RoleServer>, U: Service<RoleClient> = ClientInf
 
 impl<T: Service<RoleServer>> TestClient<T, ClientInfo> {
     /// Connect a default test `ClientInfo` to a server built by `configure`.
-    ///
-    /// Use the closure to apply `.with_root_dir(...)`, `.with_lsp(...)`, etc.
     pub async fn start(configure: impl FnOnce() -> T) -> TestResult<Self> {
         let (server_handle, client) = connect(configure(), test_client_info()).await?;
         Ok(Self { _server_handle: server_handle, client })
@@ -43,47 +79,33 @@ impl<T: Service<RoleServer>> TestClient<T, ClientInfo> {
 }
 
 impl<T: Service<RoleServer>, U: Service<RoleClient>> TestClient<T, U> {
-    /// Connect a caller-provided client to a server built by `configure_server`.
-    ///
-    /// Use this when the test needs to intercept client-side behaviour (for
-    /// example, auto-responding to elicitation requests via `McpClient`).
     pub async fn start_with(configure_server: impl FnOnce() -> T, client: U) -> TestResult<Self> {
         let (server_handle, client) = connect(configure_server(), client).await?;
         Ok(Self { _server_handle: server_handle, client })
     }
 
-    /// Call a tool with typed args, returning the first text content parsed as JSON.
     pub async fn call<V: Serialize>(&self, tool: &str, args: V) -> TestResult<serde_json::Value> {
         let result = self.call_raw(tool, args).await?;
-
         let text = result
             .content
             .first()
             .and_then(|c| c.as_text())
             .ok_or_else(|| test_error(format!("{tool} should return text content")))?;
-
         Ok(serde_json::from_str(&text.text)?)
     }
 
-    /// Call a tool with typed args, returning the raw MCP tool result.
     pub async fn call_raw<V: Serialize>(&self, tool: &str, args: V) -> TestResult<CallToolResult> {
         let args = serde_json::to_value(args)?;
         let arguments =
             args.as_object().ok_or_else(|| test_error("tool arguments must serialize to a JSON object"))?.clone();
-
         Ok(self.client.call_tool(CallToolRequestParams::new(tool.to_string()).with_arguments(arguments)).await?)
     }
 
-    /// Borrow the raw client for cases that need `CallToolRequestParams` directly
     pub fn raw(&self) -> &RunningService<RoleClient, U> {
         &self.client
     }
 }
 
-/// Connect a `CodingMcp` server to a test project with LSP enabled.
-///
-/// Returns `(server_handle, client)`. The caller must keep the server handle
-/// alive (bind it to `_server_handle`) for the connection to stay open.
 pub async fn connect_lsp(
     project: &impl TestProject,
 ) -> (RunningService<RoleServer, CodingMcp>, RunningService<RoleClient, ClientInfo>) {
@@ -91,7 +113,6 @@ pub async fn connect_lsp(
     connect(server, test_client_info()).await.expect("Failed to connect")
 }
 
-/// Call an MCP tool and parse the JSON response from the first text content block.
 pub async fn call_tool(
     client: &RunningService<RoleClient, ClientInfo>,
     name: &str,
@@ -100,39 +121,33 @@ pub async fn call_tool(
     try_call_tool(client, name, args).await.unwrap_or_else(|| panic!("Tool '{name}' did not return valid JSON"))
 }
 
-/// Try to call an MCP tool and parse JSON. Returns `None` if the tool returns
-/// a non-JSON response (e.g. during LSP startup when the server isn't ready yet).
 pub async fn try_call_tool(
     client: &RunningService<RoleClient, ClientInfo>,
     name: &str,
     args: serde_json::Value,
 ) -> Option<serde_json::Value> {
-    let name_owned = name.to_string();
     let result = match client
-        .call_tool(CallToolRequestParams::new(name_owned).with_arguments(args.as_object().unwrap().clone()))
+        .call_tool(CallToolRequestParams::new(name.to_string()).with_arguments(args.as_object().unwrap().clone()))
         .await
     {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("[try_call_tool] {name} RPC error: {e}");
+        Ok(result) => result,
+        Err(error) => {
+            eprintln!("[try_call_tool] {name} RPC error: {error}");
             return None;
         }
     };
-
     let Some(text) = result.content.first().and_then(|c| c.as_text()) else {
         eprintln!("[try_call_tool] {name} no text content in response");
         return None;
     };
-
-    if let Ok(v) = serde_json::from_str(&text.text) {
-        Some(v)
+    if let Ok(value) = serde_json::from_str(&text.text) {
+        Some(value)
     } else {
         eprintln!("[try_call_tool] {name} non-JSON response: {}", text.text);
         None
     }
 }
 
-/// Poll `lsp_check_errors` until a predicate is satisfied or timeout is reached.
 pub async fn poll_diagnostics(
     client: &RunningService<RoleClient, ClientInfo>,
     file_path: Option<&str>,
@@ -140,17 +155,11 @@ pub async fn poll_diagnostics(
 ) -> serde_json::Value {
     let args = match file_path {
         Some(path) => serde_json::json!({ "input": { "scope": "file", "filePath": path } }),
-        None => serde_json::json!({ "input": { "scope": "workspace" } }),
+        None => serde_json::json!({ "input": { "scope": "workspace"} }),
     };
     poll_lsp_tool(client, "lsp_check_errors", args, predicate).await
 }
 
-/// Poll an LSP tool until its result satisfies a predicate or timeout is reached.
-///
-/// Useful for operations like hover/definition that may return empty results
-/// while the LSP server is still indexing. Gracefully handles errors during
-/// LSP startup (e.g. "No LSP configured for this file type" before the
-/// background spawning completes).
 pub async fn poll_lsp_tool(
     client: &RunningService<RoleClient, ClientInfo>,
     tool_name: &str,
@@ -159,7 +168,6 @@ pub async fn poll_lsp_tool(
 ) -> serde_json::Value {
     let start = Instant::now();
     let mut last_result = None;
-
     while start.elapsed() < POLL_TIMEOUT {
         if let Some(result) = try_call_tool(client, tool_name, args.clone()).await {
             if predicate(&result) {
@@ -167,10 +175,8 @@ pub async fn poll_lsp_tool(
             }
             last_result = Some(result);
         }
-
         tokio::time::sleep(POLL_INTERVAL).await;
     }
-
     panic!(
         "poll_lsp_tool({tool_name}) timed out after {POLL_TIMEOUT:?}. Last result: {}",
         last_result.as_ref().map_or_else(|| "(no valid response)".to_string(), ToString::to_string)
@@ -189,14 +195,8 @@ pub fn has_no_errors(result: &serde_json::Value) -> bool {
     error_count(result).is_some_and(|n| n == 0)
 }
 
-/// Clean up daemon socket artifacts for a test project's workspace root.
-///
-/// The actual daemon process is terminated by the workspace-root liveness check
-/// (once the `TempDir` is dropped, the daemon detects the missing root and exits).
-/// This helper removes leftover socket/lock/log files from the filesystem.
 pub async fn cleanup_daemon(project: &impl TestProject) {
     use aether_lspd::{LanguageId, socket_path};
-
     for lang in [LanguageId::Rust, LanguageId::TypeScript] {
         let sock = socket_path(project.root(), lang);
         let _ = tokio::fs::remove_file(&sock).await;

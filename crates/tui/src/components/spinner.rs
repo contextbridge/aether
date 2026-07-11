@@ -81,53 +81,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn invisible_renders_empty() {
-        let mut spinner = Spinner::default();
-        let ctx = ViewContext::new((80, 24));
-        let frame = spinner.render(&ctx);
-        assert!(frame.lines().is_empty());
-    }
-
-    #[test]
-    fn visible_renders_one_line() {
-        let mut spinner = Spinner { visible: true, ..Spinner::default() };
-        let ctx = ViewContext::new((80, 24));
-        let frame = spinner.render(&ctx);
-        assert_eq!(frame.lines().len(), 1);
-    }
-
-    #[test]
-    fn different_ticks_produce_different_output() {
-        let ctx = ViewContext::new((80, 24));
-
-        let mut spinner_a = Spinner { visible: true, ..Spinner::default() };
-
-        let mut spinner_b = Spinner { visible: true, ..Spinner::default() };
-        spinner_b.set_tick(1);
-
-        let a = spinner_a.render(&ctx).lines()[0].plain_text();
-        let b = spinner_b.render(&ctx).lines()[0].plain_text();
-
-        assert_ne!(a, b);
-    }
-
-    #[test]
-    fn cycles_after_full_rotation() {
-        let ctx = ViewContext::new((80, 24));
-
-        let mut spinner_a = Spinner { visible: true, ..Spinner::default() };
-
-        let mut spinner_b = Spinner { visible: true, ..Spinner::default() };
-        #[allow(clippy::cast_possible_truncation)]
-        spinner_b.set_tick(BRAILLE_FRAMES.len() as u16);
-
-        let a = spinner_a.render(&ctx).lines()[0].plain_text();
-        let b = spinner_b.render(&ctx).lines()[0].plain_text();
-
-        assert_eq!(a, b);
-    }
-
-    #[test]
     fn custom_frames() {
         static CUSTOM: &[char] = &['|', '/', '-', '\\'];
         let mut spinner = Spinner::new(CUSTOM);

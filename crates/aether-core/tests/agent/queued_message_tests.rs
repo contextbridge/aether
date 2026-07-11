@@ -4,10 +4,10 @@ use std::sync::Arc;
 use aether_core::core::agent;
 use aether_core::events::{AgentEvent, Command, TurnOutcome, UserCommand};
 use aether_core::mcp::mcp;
-use aether_core::testing::{AddNumbersRequest, FakeMcpServer, fake_mcp};
+use aether_core::testing::{AddNumbersRequest, FakeMcpServer, drain_until, fake_mcp};
 use llm::testing::{FakeLlmProvider, llm_response};
 use llm::{ChatMessage, ContentBlock, Context, LlmResponse, StopReason};
-use tokio::sync::{Notify, mpsc};
+use tokio::sync::Notify;
 
 #[tokio::test]
 async fn queued_text_does_not_cancel_active_stream_and_drains_into_single_turn() {
@@ -150,19 +150,6 @@ async fn scenario(first_stop_reason: Option<StopReason>, queued: &[&str]) -> Sce
 
     let contexts = captured.lock().expect("captured contexts lock poisoned").clone();
     Scenario { messages, contexts }
-}
-
-async fn drain_until(rx: &mut mpsc::Receiver<AgentEvent>, stop: impl Fn(&AgentEvent) -> bool) -> Vec<AgentEvent> {
-    let mut collected = Vec::new();
-    loop {
-        let m = rx.recv().await.expect("Channel should stay open");
-        let done = stop(&m);
-        collected.push(m);
-        if done {
-            break;
-        }
-    }
-    collected
 }
 
 fn is_partial_text(m: &AgentEvent, id: &str, chunk: &str) -> bool {
