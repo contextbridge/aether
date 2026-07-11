@@ -1,5 +1,5 @@
 use aether_auth::OAuthCredentialStorage;
-use aether_core::events::AgentMessage;
+use aether_core::events::AgentEvent;
 use aether_core::events::SubAgentProgressPayload;
 use aether_project::{AetherSettings, AgentCatalog};
 use clap::Parser;
@@ -21,7 +21,7 @@ use super::tools::{AgentExecutor, SpawnSubAgentsInput, SpawnSubAgentsOutput};
 use crate::error::ServerInitError;
 use crate::workspace_paths::resolve_path;
 
-type ProgressCallback = Box<dyn Fn(&str, &str, &AgentMessage) + Send + Sync>;
+type ProgressCallback = Box<dyn Fn(&str, &str, &AgentEvent) + Send + Sync>;
 
 #[derive(Debug, Clone, Parser)]
 pub struct SubAgentsMcpArgs {
@@ -150,7 +150,7 @@ impl SubAgentsMcp {
             let peer = Arc::clone(&peer);
             let message_counter = Arc::clone(&message_counter);
 
-            Box::new(move |task_id: &str, agent_name: &str, message: &AgentMessage| {
+            Box::new(move |task_id: &str, agent_name: &str, message: &AgentEvent| {
                 if let Some(ref token) = progress_token {
                     let counter = message_counter.fetch_add(1, Ordering::Relaxed);
                     let progress_payload = SubAgentProgressPayload {
