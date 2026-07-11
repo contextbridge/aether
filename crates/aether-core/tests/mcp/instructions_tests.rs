@@ -1,5 +1,6 @@
 use aether_core::core::Prompt;
-use aether_core::events::{AgentMessage, Command, UserCommand};
+use aether_core::events::TurnEvent;
+use aether_core::events::{AgentEvent, Command, UserCommand};
 use aether_core::mcp::mcp;
 use aether_core::testing::{FakeMcpServer, fake_mcp, mcp_instructions as instructions};
 use llm::testing::FakeLlmProvider;
@@ -90,7 +91,7 @@ async fn test_agent_builder_includes_mcp_instructions_in_system_prompt() {
 
     // Wait for the agent to process
     while let Some(msg) = rx.recv().await {
-        if matches!(msg, AgentMessage::Done) {
+        if matches!(msg, AgentEvent::Turn(TurnEvent::Ended { .. })) {
             break;
         }
     }
@@ -136,7 +137,7 @@ async fn test_agent_builder_works_without_mcp_instructions() {
 
     // Wait for the agent to process
     while let Some(msg) = rx.recv().await {
-        if matches!(msg, AgentMessage::Done) {
+        if matches!(msg, AgentEvent::Turn(TurnEvent::Ended { .. })) {
             break;
         }
     }

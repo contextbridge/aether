@@ -1,3 +1,4 @@
+use crate::events::TurnEvent;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::sync::{Arc, Mutex};
@@ -6,7 +7,7 @@ use std::time::Duration;
 use futures::future::join_all;
 
 use crate::core::{RetryConfig, agent};
-use crate::events::{AgentMessage, Command};
+use crate::events::{AgentEvent, Command, UserCommand};
 use crate::mcp::mcp;
 use crate::testing::FakeMcpServer;
 use crate::testing::fake_mcp::fake_mcp;
@@ -24,7 +25,7 @@ pub fn test_agent() -> TestAgentBuilder {
 
 /// Result of running a test agent, including messages and captured contexts.
 pub struct TestAgentResult {
-    pub messages: Vec<AgentMessage>,
+    pub messages: Vec<AgentEvent>,
     pub captured_contexts: Arc<Mutex<Vec<Context>>>,
 }
 
@@ -58,6 +59,12 @@ impl TestAgentBuilder {
         self
     }
 
+    pub fn user_text(self, text: &str) -> Self {
+        self.user_messages(vec![Command::UserCommand(UserCommand::Text {
+            content: vec![llm::ContentBlock::text(text)],
+        })])
+    }
+
     pub fn llm_responses(mut self, llm_responses: &[Vec<LlmResponse>]) -> Self {
         self.responses = llm_responses.iter().map(|turn| turn.iter().cloned().map(Ok).collect()).collect();
         self
@@ -83,7 +90,7 @@ impl TestAgentBuilder {
         self
     }
 
-    pub async fn run(self) -> Result<Vec<AgentMessage>, Box<dyn Error>> {
+    pub async fn run(self) -> Result<Vec<AgentEvent>, Box<dyn Error>> {
         let result = self.run_with_context().await?;
         Ok(result.messages)
     }
@@ -112,7 +119,7 @@ impl TestAgentBuilder {
             builder = builder.retry(RetryConfig::disabled());
         }
 
-        let (tx, mut rx, _handle) = builder.spawn().await?;
+        let (tx, mut rx, handle) = builder.spawn().await?;
         let futures: Vec<_> = self.messages.into_iter().map(|m| tx.send(m)).collect();
 
         join_all(futures).await;
@@ -121,10 +128,12 @@ impl TestAgentBuilder {
         let mut messages = Vec::new();
         while let Some(message) = rx.recv().await {
             messages.push(message.clone());
-            if matches!(message, AgentMessage::Done) {
+            if matches!(message, AgentEvent::Turn(TurnEvent::Ended { .. })) {
                 break;
             }
         }
+
+        handle.await_completion().await;
 
         Ok(TestAgentResult { messages, captured_contexts })
     }

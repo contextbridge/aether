@@ -33,7 +33,8 @@ aether-agent-core = "0.1"
 ### Minimal Agent (No Tools)
 
 ```rust,no_run
-use aether_core::core::{AgentMessage, Command, Prompt, agent};
+use aether_core::core::{Command, Prompt, agent};
+use aether_core::events::{AgentEvent, MessageEvent, ToolEvent, TurnEvent};
 use llm::providers::openrouter::OpenRouterProvider;
 use std::io::{self, Write};
 
@@ -56,11 +57,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 4. Stream the agent's response back
     loop {
         match rx.recv().await {
-            Some(AgentMessage::Text { chunk, is_complete, .. }) => {
+            Some(AgentEvent::Message(MessageEvent::Text { chunk, is_complete, .. })) => {
                 if !is_complete { print!("{chunk}"); io::stdout().flush()?; }
             }
-            Some(AgentMessage::Done) => break,
-            Some(AgentMessage::Error { message }) => { eprintln!("Error: {message}"); break; }
+            Some(AgentEvent::Turn(TurnEvent::Ended { outcome })) => {
+                println!("Turn ended: {outcome:?}");
+                break;
+            }
             _ => {}
         }
     }
@@ -99,7 +102,8 @@ You are Mr. BotBot, a kickass coding agent equipped with SOTA filesystem and web
 And bring Mr. `BotBot` to life!
 
 ```rust,no_run
-use aether_core::core::{AgentMessage, Command, Prompt, agent};
+use aether_core::core::{Command, Prompt, agent};
+use aether_core::events::{AgentEvent, MessageEvent, ToolEvent, TurnEvent};
 use aether_core::mcp::mcp;
 use llm::providers::openrouter::OpenRouterProvider;
 use std::io::{self, Write};
@@ -130,9 +134,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
 
     loop {
-        use AgentMessage::*;
         match rx.recv().await {
-            Some(Text { chunk, is_complete, .. }) => {
+            Some(AgentEvent::Message(MessageEvent::Text { chunk, is_complete, .. })) => {
                 if !is_complete {
                     print!("{chunk}");
                     io::stdout().flush().unwrap();
@@ -140,28 +143,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!();
                 }
             }
-            Some(ToolCall { request, .. }) => {
+            Some(AgentEvent::Tool(ToolEvent::Call { request, .. })) => {
                 println!("\nCalling tool: {}", request.name);
             }
-            Some(ToolResult { result, .. }) => {
+            Some(AgentEvent::Tool(ToolEvent::Result { result, .. })) => {
                 println!("Tool '{}' completed", result.name);
             }
-            Some(ToolError { error, .. }) => {
+            Some(AgentEvent::Tool(ToolEvent::Error { error, .. })) => {
                 eprintln!("Tool '{}' failed: {}", error.name, error.error);
             }
-            Some(ToolProgress { .. }) => {
+            Some(AgentEvent::Tool(ToolEvent::Progress { .. })) => {
                 // Tool progress updates (can be used to show progress bars, etc.)
             }
-            Some(Done) => {
-                println!("\nAgent finished");
-                break;
-            }
-            Some(Error { message }) => {
-                eprintln!("Error: {message}");
-                break;
-            }
-            Some(Cancelled { .. }) => {
-                eprintln!("Agent cancelled");
+            Some(AgentEvent::Turn(TurnEvent::Ended { outcome })) => {
+                println!("\nTurn ended: {outcome:?}");
                 break;
             }
             _ => {}

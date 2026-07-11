@@ -1,10 +1,10 @@
-use super::AgentMessage;
+use super::AgentEvent;
 use serde::{Deserialize, Serialize};
 
 /// Payload for sub-agent progress updates emitted by MCP tools.
 ///
 /// This is the internal payload embedded in MCP progress messages between
-/// `mcp-subagents` and the ACP relay (in `aether-cli`). It uses `AgentMessage`
+/// `mcp-subagents` and the ACP relay (in `aether-cli`). It uses `AgentEvent`
 /// for the event (the full fat type). The relay converts this to
 /// `SubAgentProgressParams` (which uses the lightweight `SubAgentEvent`)
 /// before sending to clients.
@@ -12,20 +12,20 @@ use serde::{Deserialize, Serialize};
 pub struct SubAgentProgressPayload {
     pub task_id: String,
     pub agent_name: String,
-    pub event: AgentMessage,
+    pub event: AgentEvent,
 }
 
 #[cfg(test)]
 mod tests {
     use super::SubAgentProgressPayload;
-    use crate::events::AgentMessage;
+    use crate::events::{AgentEvent, TurnOutcome};
 
     #[test]
     fn test_sub_agent_progress_payload_roundtrip() {
         let payload = SubAgentProgressPayload {
             task_id: "task_123".to_string(),
             agent_name: "explorer".to_string(),
-            event: AgentMessage::Done,
+            event: AgentEvent::turn_ended(TurnOutcome::Completed),
         };
 
         let json = serde_json::to_string(&payload).expect("serializable");

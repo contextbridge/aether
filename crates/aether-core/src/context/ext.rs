@@ -1,4 +1,5 @@
-use crate::events::AgentMessage;
+use crate::events::AgentEvent;
+use crate::events::{ContextEvent, MessageEvent, ToolEvent, TurnEvent};
 use llm::types::IsoString;
 use llm::{AssistantReasoning, ChatMessage, Context, ToolCallError, ToolCallResult};
 use serde::{Deserialize, Serialize};
@@ -21,7 +22,7 @@ pub enum SessionControlEvent {
 #[allow(clippy::large_enum_variant)]
 pub enum SessionEvent {
     User(UserEvent),
-    Agent(AgentMessage),
+    Agent(AgentEvent),
     Control(SessionControlEvent),
 }
 
@@ -79,21 +80,21 @@ fn apply_user_event(ctx: &mut Context, event: &UserEvent) {
     }
 }
 
-fn apply_agent_event(ctx: &mut Context, event: &AgentMessage, acc: &mut TurnAccumulator) {
+fn apply_agent_event(ctx: &mut Context, event: &AgentEvent, acc: &mut TurnAccumulator) {
     match event {
-        AgentMessage::Text { chunk, is_complete: true, .. } => {
+        AgentEvent::Message(MessageEvent::Text { chunk, is_complete: true, .. }) => {
             acc.text.clone_from(chunk);
         }
-        AgentMessage::Thought { chunk, is_complete: true, .. } => {
+        AgentEvent::Message(MessageEvent::Thought { chunk, is_complete: true, .. }) => {
             acc.reasoning.clone_from(chunk);
         }
-        AgentMessage::ToolResult { result, .. } => {
+        AgentEvent::Tool(ToolEvent::Result { result, .. }) => {
             acc.tool_results.push(Ok(result.clone()));
         }
-        AgentMessage::ToolError { error, .. } => {
+        AgentEvent::Tool(ToolEvent::Error { error, .. }) => {
             acc.tool_results.push(Err(error.clone()));
         }
-        AgentMessage::Done => {
+        AgentEvent::Turn(TurnEvent::Ended { .. }) => {
             let text = std::mem::take(&mut acc.text);
             let reasoning_text = std::mem::take(&mut acc.reasoning);
             let tools = std::mem::take(&mut acc.tool_results);
@@ -102,13 +103,13 @@ fn apply_agent_event(ctx: &mut Context, event: &AgentMessage, acc: &mut TurnAccu
                 ctx.push_assistant_turn(&text, reasoning, tools);
             }
         }
-        AgentMessage::ContextCleared => {
+        AgentEvent::Context(ContextEvent::Cleared) => {
             ctx.clear_conversation();
             acc.text.clear();
             acc.reasoning.clear();
             acc.tool_results.clear();
         }
-        AgentMessage::ContextCompactionResult { summary, .. } => {
+        AgentEvent::Context(ContextEvent::CompactionResult { summary, .. }) => {
             *ctx = ctx.with_compacted_summary(summary);
         }
         _ => {}
@@ -118,6 +119,7 @@ fn apply_agent_event(ctx: &mut Context, event: &AgentMessage, acc: &mut TurnAccu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::events::TurnOutcome;
     use llm::ToolCallResult;
 
     fn system_context() -> Context {
@@ -135,12 +137,12 @@ mod tests {
         SessionEvent::User(user_msg(content))
     }
 
-    fn text_complete(chunk: &str) -> AgentMessage {
-        AgentMessage::text("msg_1", chunk, true, "test")
+    fn text_complete(chunk: &str) -> AgentEvent {
+        AgentEvent::text("msg_1", chunk, true)
     }
 
-    fn tool_result(id: &str, name: &str, result: &str) -> AgentMessage {
-        AgentMessage::ToolResult {
+    fn tool_result(id: &str, name: &str, result: &str) -> AgentEvent {
+        AgentEvent::Tool(ToolEvent::Result {
             result: ToolCallResult {
                 id: id.to_string(),
                 name: name.to_string(),
@@ -148,16 +150,15 @@ mod tests {
                 result: result.to_string(),
             },
             result_meta: None,
-            model_name: "test".to_string(),
-        }
+        })
     }
 
-    fn agent_session(msg: AgentMessage) -> SessionEvent {
+    fn agent_session(msg: AgentEvent) -> SessionEvent {
         SessionEvent::Agent(msg)
     }
 
     /// Runs a sequence of agent events against a `system_context` and returns the context.
-    fn run_agent_events(events: &[AgentMessage]) -> Context {
+    fn run_agent_events(events: &[AgentEvent]) -> Context {
         let mut ctx = system_context();
         let mut acc = TurnAccumulator::default();
         for event in events {
@@ -175,7 +176,7 @@ mod tests {
                 to: Some("Coder".to_string()),
             }),
             agent_session(text_complete("Hi there!")),
-            agent_session(AgentMessage::Done),
+            agent_session(AgentEvent::turn_ended(TurnOutcome::Completed)),
         ]);
 
         assert_eq!(ctx.message_count(), 2);
@@ -188,7 +189,7 @@ mod tests {
         let messages = conversation_messages_from_events(&[
             user_session("Hello"),
             agent_session(text_complete("Hi there!")),
-            agent_session(AgentMessage::Done),
+            agent_session(AgentEvent::turn_ended(TurnOutcome::Completed)),
         ]);
 
         assert_eq!(messages.len(), 2);
@@ -236,7 +237,7 @@ mod tests {
         let ctx = run_agent_events(&[
             tool_result("call_1", "read_file", "file contents"),
             text_complete("Here is the file"),
-            AgentMessage::Done,
+            AgentEvent::turn_ended(TurnOutcome::Completed),
         ]);
 
         assert_eq!(ctx.message_count(), 3);
@@ -256,7 +257,7 @@ mod tests {
         let mut ctx = system_context();
         let mut acc = TurnAccumulator::default();
         apply_user_event(&mut ctx, &user_msg("Hello"));
-        apply_agent_event(&mut ctx, &AgentMessage::ContextCleared, &mut acc);
+        apply_agent_event(&mut ctx, &AgentEvent::Context(ContextEvent::Cleared), &mut acc);
         assert_eq!(ctx.message_count(), 1);
         assert!(ctx.messages()[0].is_system());
     }
@@ -268,10 +269,10 @@ mod tests {
         apply_user_event(&mut ctx, &user_msg("Hello"));
         apply_agent_event(
             &mut ctx,
-            &AgentMessage::ContextCompactionResult {
+            &AgentEvent::Context(ContextEvent::CompactionResult {
                 summary: "Summary of conversation".to_string(),
                 messages_removed: 1,
-            },
+            }),
             &mut acc,
         );
         assert_eq!(ctx.message_count(), 2);
@@ -281,13 +282,13 @@ mod tests {
 
     #[test]
     fn done_without_content_does_not_add_message() {
-        let ctx = run_agent_events(&[AgentMessage::Done]);
+        let ctx = run_agent_events(&[AgentEvent::turn_ended(TurnOutcome::Completed)]);
         assert_eq!(ctx.message_count(), 1);
     }
 
     #[test]
     fn streaming_chunks_are_ignored() {
-        let ctx = run_agent_events(&[AgentMessage::text("msg_1", "partial", false, "test")]);
+        let ctx = run_agent_events(&[AgentEvent::text("msg_1", "partial", false)]);
         assert_eq!(ctx.message_count(), 1);
     }
 
@@ -295,9 +296,9 @@ mod tests {
     fn accumulator_resets_after_done() {
         let ctx = run_agent_events(&[
             text_complete("Turn 1"),
-            AgentMessage::Done,
-            AgentMessage::text("msg_2", "Turn 2", true, "test"),
-            AgentMessage::Done,
+            AgentEvent::turn_ended(TurnOutcome::Completed),
+            AgentEvent::text("msg_2", "Turn 2", true),
+            AgentEvent::turn_ended(TurnOutcome::Completed),
         ]);
         assert_eq!(ctx.message_count(), 3);
     }
@@ -317,7 +318,7 @@ mod tests {
         let ctx = Context::from_events(&[
             user_session("Hello"),
             agent_session(text_complete("Hi there!")),
-            agent_session(AgentMessage::Done),
+            agent_session(AgentEvent::turn_ended(TurnOutcome::Completed)),
         ]);
         assert_eq!(ctx.message_count(), 2);
         assert!(matches!(ctx.messages()[0], ChatMessage::User { .. }));
@@ -328,17 +329,16 @@ mod tests {
     fn from_events_with_tool_calls() {
         let ctx = Context::from_events(&[
             user_session("Read Cargo.toml"),
-            agent_session(AgentMessage::ToolCall {
+            agent_session(AgentEvent::Tool(ToolEvent::Call {
                 request: llm::ToolCallRequest {
                     id: "call_1".to_string(),
                     name: "read_file".to_string(),
                     arguments: "{}".to_string(),
                 },
-                model_name: "test".to_string(),
-            }),
+            })),
             agent_session(tool_result("call_1", "read_file", "file contents")),
             agent_session(text_complete("Here is the file")),
-            agent_session(AgentMessage::Done),
+            agent_session(AgentEvent::turn_ended(TurnOutcome::Completed)),
         ]);
 
         assert_eq!(ctx.message_count(), 3);
@@ -357,7 +357,7 @@ mod tests {
         let ctx = Context::from_events(&[
             user_session("Hello"),
             agent_session(text_complete("Hi!")),
-            agent_session(AgentMessage::Done),
+            agent_session(AgentEvent::turn_ended(TurnOutcome::Completed)),
             SessionEvent::User(UserEvent::ClearContext),
             user_session("Start fresh"),
         ]);
@@ -370,11 +370,11 @@ mod tests {
         let ctx = Context::from_events(&[
             user_session("Hello"),
             agent_session(text_complete("Hi!")),
-            agent_session(AgentMessage::Done),
-            agent_session(AgentMessage::ContextCompactionResult {
+            agent_session(AgentEvent::turn_ended(TurnOutcome::Completed)),
+            agent_session(AgentEvent::Context(ContextEvent::CompactionResult {
                 summary: "Earlier we greeted each other.".to_string(),
                 messages_removed: 2,
-            }),
+            })),
             user_session("What did we talk about?"),
         ]);
         assert_eq!(ctx.message_count(), 2);

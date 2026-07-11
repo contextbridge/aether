@@ -2,7 +2,7 @@ use super::agent::{AgentConfig, AutoContinue, RetryConfig};
 use crate::agent_spec::AgentSpec;
 use crate::context::CompactionConfig;
 use crate::core::{Agent, Prompt, PromptCache, Result};
-use crate::events::{AgentMessage, Command};
+use crate::events::{AgentEvent, Command};
 use crate::mcp::run_mcp_task::McpCommand;
 use aether_auth::OAuthCredentialStorage;
 use llm::parser::ModelProviderParser;
@@ -165,7 +165,7 @@ impl AgentBuilder {
     /// reasons (for example, token length limits).
     ///
     /// This setting limits how many times the agent will attempt to continue
-    /// before giving up and returning `AgentMessage::Done`.
+    /// before giving up and ending the turn with [`TurnEvent::Ended`](crate::events::TurnEvent::Ended).
     ///
     /// Default: 3
     ///
@@ -218,21 +218,18 @@ impl AgentBuilder {
         self
     }
 
-    pub async fn spawn(self) -> Result<(Sender<Command>, Receiver<AgentMessage>, AgentHandle)> {
+    pub async fn spawn(self) -> Result<(Sender<Command>, Receiver<AgentEvent>, AgentHandle)> {
         let mut prompt_cache = PromptCache::new(self.prompts);
         let system_content = prompt_cache.render().await?;
-
         let mut messages = Vec::new();
+
         if !system_content.is_empty() {
             messages.push(ChatMessage::System { content: system_content, timestamp: IsoString::now() });
         }
 
         messages.extend(self.initial_messages);
-
         let (command_tx, command_rx) = mpsc::channel::<Command>(self.channel_capacity);
-
-        let (message_tx, agent_message_rx) = mpsc::channel::<AgentMessage>(self.channel_capacity);
-
+        let (message_tx, agent_event_rx) = mpsc::channel::<AgentEvent>(self.channel_capacity);
         let mut context = Context::new(messages, self.tool_definitions);
         context.set_prompt_cache_key(self.prompt_cache_key);
         context.set_model_settings(self.model_settings);
@@ -250,10 +247,9 @@ impl AgentBuilder {
         };
 
         let agent = Agent::new(config, command_rx, message_tx);
-
         let agent_handle = tokio::spawn(agent.run());
 
-        Ok((command_tx, agent_message_rx, AgentHandle { handle: agent_handle }))
+        Ok((command_tx, agent_event_rx, AgentHandle { handle: agent_handle }))
     }
 }
 
@@ -261,7 +257,7 @@ impl AgentBuilder {
 mod tests {
     use super::*;
     use crate::agent_spec::{AgentSpecExposure, ToolFilter};
-    use crate::events::{AgentCommand, UserCommand};
+    use crate::events::{AgentCommand, ContextEvent, UserCommand};
     use llm::testing::FakeLlmProvider;
     use llm::{LlmResponse, ProviderConnectionOverrides};
 
@@ -344,9 +340,9 @@ mod tests {
         handle.abort();
     }
 
-    async fn next_context_usage(rx: &mut Receiver<AgentMessage>) -> ContextUsageUpdate {
+    async fn next_context_usage(rx: &mut Receiver<AgentEvent>) -> ContextUsageUpdate {
         loop {
-            if let AgentMessage::ContextUsageUpdate { usage } =
+            if let AgentEvent::Context(ContextEvent::UsageUpdated { usage }) =
                 rx.recv().await.expect("agent should emit context usage")
             {
                 return ContextUsageUpdate {

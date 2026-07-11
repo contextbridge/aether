@@ -1,7 +1,7 @@
-mod agent_message_builder;
+mod agent_event_builder;
 mod fake_mcp;
 mod utils;
 
-pub use agent_message_builder::*;
+pub use agent_event_builder::*;
 pub use fake_mcp::*;
 pub use utils::*;
