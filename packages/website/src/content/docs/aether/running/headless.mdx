@@ -83,7 +83,7 @@ aether headless --model bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0 \
 
   </TabItem>
   <TabItem label="pretty">
-    Pretty-printed `AgentMessage` JSON for humans. Each emitted event is serialized with `serde_json::to_string_pretty`.
+    Pretty-printed `AgentEvent` JSON for humans. Each emitted event is serialized with `serde_json::to_string_pretty`.
 
     ```bash
     aether headless --output pretty "Summarize the README"
@@ -91,10 +91,10 @@ aether headless --model bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0 \
 
   </TabItem>
   <TabItem label="json">
-    Newline-delimited `AgentMessage` JSON. Each stdout line is one compact object with a `type` discriminator such as `tool_call`, `text`, or `done`.
+    Newline-delimited `AgentEvent` JSON. Each stdout line has a top-level `category` discriminator and a nested event with a `type` discriminator.
 
     ```bash
-    aether headless --output json --events text,tool_call,tool_result,done \
+    aether headless --output json --events text,tool_call,tool_result,turn_ended \
       "List TODO comments"
     ```
 
@@ -103,18 +103,18 @@ aether headless --model bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0 \
 
 ## Structured JSON output
 
-`--output json` writes NDJSON to stdout: one `aether_core::events::AgentMessage` JSON object per line. Parse each line independently:
+`--output json` writes NDJSON to stdout: one `aether_core::events::AgentEvent` JSON object per line. Parse each line independently:
 
 ```rust
-let event: aether_core::events::AgentMessage = serde_json::from_str(line)?;
+let event: aether_core::events::AgentEvent = serde_json::from_str(line)?;
 ```
 
 Example lines:
 
 ```json
-{"type":"tool_call","request":{"id":"tc1","name":"bash","arguments":"{}"},"model_name":"test"}
-{"type":"text","message_id":"msg1","chunk":"done","is_complete":true,"model_name":"claude"}
-{"type":"done"}
+{"category":"tool","event":{"type":"call","request":{"id":"tc1","name":"bash","arguments":"{}"}}}
+{"category":"message","event":{"type":"text","message_id":"msg1","chunk":"done","is_complete":true}}
+{"category":"turn","event":{"type":"ended","outcome":{"status":"completed"}}}
 ```
 
 Diagnostics from tracing are written to stderr. Keep stdout and stderr separate when parsing JSON output.
@@ -137,19 +137,23 @@ Available event kinds:
 | `tool_call`                  | Tool invocation.                |
 | `tool_result`                | Tool return value.              |
 | `tool_error`                 | Tool failure.                   |
-| `error`                      | Agent-level error.              |
-| `cancelled`                  | Operation cancelled.            |
 | `auto_continue`              | Agent auto-continuing.          |
-| `retrying`                   | Agent retrying after a failure. |
 | `model_switched`             | Model changed through alloying. |
 | `tool_progress`              | Tool execution progress.        |
 | `context_compaction_started` | Context compaction beginning.   |
 | `context_compaction_result`  | Context compaction completed.   |
 | `context_usage`              | Token usage update.             |
 | `context_cleared`            | Context was cleared.            |
-| `done`                       | Agent run completed.            |
+| `turn_started`               | Turn processing began.          |
+| `turn_ended`                 | Turn completed, failed, or was cancelled. |
+| `llm_call_started`           | LLM call began, including retries. |
+| `llm_call_ended`             | LLM call completed, failed, or was cancelled. |
+| `tool_execution_started`     | Tool execution began.           |
+| `tool_definitions_updated`   | Available tool definitions changed. |
 
-When `--events` is set, `error` events are shown only if `error` is explicitly listed.
+When `--events` is set, terminal outcomes are shown only if `turn_ended` is explicitly listed.
+
+The process exits non-zero when the turn ends with a failed outcome, regardless of event filtering.
 
 ## MCP and settings overrides
 

@@ -1,21 +1,28 @@
-import type { AgentMessage } from "@aether-agent/sdk";
+import type { AgentEvent } from "@aether-agent/sdk";
 
-export function logMessage(message: AgentMessage): void {
-  switch (message.type) {
-    case "text":
-    case "thought":
-      process.stderr.write(message.chunk);
-      return;
-    case "tool_call":
-      process.stderr.write(`\n[tool-call] ${message.request.name}\n`);
-      return;
-    case "tool_result":
-      process.stderr.write(`\n[tool-result] ${message.result.name}\n`);
-      return;
-    case "tool_error":
-      process.stderr.write(`\n[tool-error] ${message.error.name}\n`);
-      return;
-    default:
-      process.stderr.write(`\n[${message.type}]\n`);
+export function eventName(event: AgentEvent): string {
+  return `${event.category}:${event.event.type}`;
+}
+
+export function logMessage(message: AgentEvent): void {
+  if (message.category === "message") {
+    process.stderr.write(message.event.chunk);
+    return;
   }
+
+  if (message.category === "tool") {
+    switch (message.event.type) {
+      case "call":
+        process.stderr.write(`\n[tool-call] ${message.event.request.name}\n`);
+        return;
+      case "result":
+        process.stderr.write(`\n[tool-result] ${message.event.result.name}\n`);
+        return;
+      case "error":
+        process.stderr.write(`\n[tool-error] ${message.event.error.name}\n`);
+        return;
+    }
+  }
+
+  process.stderr.write(`\n[${message.category}:${message.event.type}]\n`);
 }

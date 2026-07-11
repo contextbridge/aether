@@ -1,10 +1,10 @@
 import { env as processEnv } from "node:process";
-import type { AgentMessage } from "@aether-agent/sdk";
+import type { AgentEvent } from "@aether-agent/sdk";
 import { Container } from "./containers/container.js";
 import { AetherEvalError } from "./errors.js";
 import type { Agent } from "./Agent.js";
 import type { Task } from "./task.js";
-import { isTerminalMessage } from "./transcript.js";
+import { isTerminalEvent } from "./transcript.js";
 
 export const CONTAINER_AETHER_HOME = "/root/.aether";
 export const AETHER_EVAL_TASK_PROMPT_ENV = "AETHER_EVAL_TASK_PROMPT";
@@ -62,7 +62,7 @@ export class DockerAgent implements Agent {
     });
   }
 
-  async *run(task: Task): AsyncIterable<AgentMessage> {
+  async *run(task: Task): AsyncIterable<AgentEvent> {
     const env = {
       ...this.env,
       [AETHER_EVAL_WORKSPACE_ROOT_ENV]: this.container.workspaceRoot,
@@ -82,8 +82,8 @@ export class DockerAgent implements Agent {
     })) {
       const trimmed = line.trim();
       if (!trimmed) continue;
-      const message = parseAgentMessage(trimmed);
-      finished = isTerminalMessage(message);
+      const message = parseAgentEvent(trimmed);
+      finished = isTerminalEvent(message);
       yield message;
       if (finished) break;
     }
@@ -91,7 +91,7 @@ export class DockerAgent implements Agent {
     if (!finished) {
       throw new AetherEvalError(
         "command_exit_without_terminal",
-        `agent command exited without emitting a terminal AgentMessage.\nstderr:\n${stderr}`,
+        `agent command exited without emitting a terminal AgentEvent.\nstderr:\n${stderr}`,
       );
     }
   }
@@ -116,13 +116,13 @@ export function defaultEvalEnvVars(
   return env;
 }
 
-function parseAgentMessage(line: string): AgentMessage {
+function parseAgentEvent(line: string): AgentEvent {
   try {
-    return JSON.parse(line) as AgentMessage;
+    return JSON.parse(line) as AgentEvent;
   } catch (err) {
     throw new AetherEvalError(
-      "agent_message_json_line",
-      `agent emitted an invalid AgentMessage JSON line: ${line}`,
+      "agent_event_json_line",
+      `agent emitted an invalid AgentEvent JSON line: ${line}`,
       err,
     );
   }

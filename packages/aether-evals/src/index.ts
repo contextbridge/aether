@@ -37,7 +37,13 @@ export type {
   JudgeRubricResponse,
   JudgeSummary,
 } from "./judge.js";
-export { Transcript, TranscriptError, ToolCall } from "./transcript.js";
+export {
+  isTerminalEvent,
+  Transcript,
+  TranscriptError,
+  ToolCall,
+  turnEnded,
+} from "./transcript.js";
 export { createGitBundle, Workspace } from "./workspace.js";
 export type {
   GitBundleSpec,
@@ -46,15 +52,25 @@ export type {
   WorkspaceSource,
 } from "./workspace.js";
 export type {
-  AgentMessage,
+  AgentEvent,
+  ContextEvent,
   ContextUsage,
   FileDiff,
+  LlmCallOutcome,
+  LlmCallPurpose,
+  MessageEvent,
+  ModelEvent,
   PlanMeta,
   PlanMetaEntry,
   PlanMetaStatus,
+  StopReason,
+  TokenUsage,
   ToolCallError,
   ToolCallRequest,
   ToolCallResult,
   ToolDisplayMeta,
+  ToolEvent,
   ToolResultMeta,
+  TurnEvent,
+  TurnOutcome,
 } from "@aether-agent/sdk";

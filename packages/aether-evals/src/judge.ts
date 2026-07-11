@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { AetherSdkError } from "@aether-agent/sdk";
 import type {
-  AgentMessage,
+  AgentEvent,
   JudgeCriterionResponse,
   JudgeCriterionSpec,
   JudgeCriterionSummary,
@@ -31,7 +31,7 @@ export interface JudgeInput {
 
 export interface JudgeContext {
   /** The agent transcript, e.g. messages collected from `Agent.run` with `Transcript.fromStream`. */
-  transcript?: AgentMessage[];
+  transcript?: AgentEvent[];
   /** A workspace diff to grade against. */
   diff?: string;
   /** Final file contents to include, keyed by path. */
@@ -119,8 +119,8 @@ export function judge(input: JudgeInput): Judge {
   };
 }
 
-/** Render a transcript of streamed `AgentMessage`s as readable lines for a judge prompt. */
-export function formatTranscript(messages: AgentMessage[]): string {
+/** Render a transcript of streamed `AgentEvent`s as readable lines for a judge prompt. */
+export function formatTranscript(events: AgentEvent[]): string {
   const lines: string[] = [];
   const buffers = new Map<
     string,
@@ -134,15 +134,19 @@ export function formatTranscript(messages: AgentMessage[]): string {
     buffers.delete(id);
   };
 
-  for (const message of messages) {
-    if (message.type === "text" || message.type === "thought") {
+  for (const event of events) {
+    if (
+      event.category === "message" &&
+      (event.event.type === "text" || event.event.type === "thought")
+    ) {
+      const message = event.event;
       const kind = message.type === "text" ? "agent" : "thinking";
       const buffer = buffers.get(message.message_id) ?? { kind, text: "" };
       buffer.text += message.chunk;
       buffers.set(message.message_id, buffer);
       if (message.is_complete) flush(message.message_id);
     } else {
-      const formatted = messageToString(message);
+      const formatted = eventToString(event);
       if (formatted) lines.push(formatted);
     }
   }
@@ -151,20 +155,31 @@ export function formatTranscript(messages: AgentMessage[]): string {
   return lines.join("\n");
 }
 
-/** Format a single agent message into a readable line for a judge prompt. */
-export function messageToString(message: AgentMessage): string {
-  switch (message.type) {
-    case "tool_call":
-      return `[tool-call] ${message.request.name} ${message.request.arguments}`.trimEnd();
-    case "tool_result":
-      return `[tool-result] ${message.result.name}: ${message.result.result}`;
-    case "tool_error":
-      return `[tool-error] ${message.error.name}: ${message.error.error}`;
-    case "error":
-      return `[error] ${message.message}`;
-    default:
-      return "";
+/** Format a single agent event into a readable line for a judge prompt. */
+export function eventToString(event: AgentEvent): string {
+  if (event.category === "tool") {
+    switch (event.event.type) {
+      case "call":
+        return `[tool-call] ${event.event.request.name} arguments=${event.event.request.arguments}`.trimEnd();
+      case "result":
+        return `[tool-result] ${event.event.result.name}: ${event.event.result.result}`;
+      case "error":
+        return `[tool-error] ${event.event.error.name}: ${event.event.error.error}`;
+    }
   }
+
+  if (event.category === "turn" && event.event.type === "ended") {
+    switch (event.event.outcome.status) {
+      case "failed":
+        return `[error] ${event.event.outcome.error}`;
+      case "cancelled":
+        return "[cancelled]";
+      case "completed":
+        return "[done]";
+    }
+  }
+
+  return "";
 }
 
 function normalizeCriteria(

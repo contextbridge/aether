@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import type { AgentMessage } from "@aether-agent/sdk";
+import type { AgentEvent } from "@aether-agent/sdk";
 import type { Agent } from "../src/index.js";
 import {
   FakeAgent,
@@ -11,6 +11,7 @@ import {
   ToolCall,
   Transcript,
   TranscriptError,
+  turnEnded,
   Workspace,
 } from "../src/index.js";
 
@@ -20,18 +21,19 @@ describe("Transcript", () => {
       "notes.txt": "alpha\n",
     });
     const trace = await Transcript.fromStream(
-      new FakeAgent([TOOL_RESULT, { type: "done" }]).run(
-        new Task("do the thing"),
-      ),
+      new FakeAgent([
+        TOOL_RESULT,
+        turnEnded(),
+      ]).run(new Task("do the thing")),
     );
 
-    expect(trace.messages.at(-1)?.type).toBe("done");
+    expect(trace.events.at(-1)?.category).toBe("turn");
     expect(trace.allToolCalls()).toEqual([
       new ToolCall("weather__get_current", '{"city":"Tokyo"}'),
     ]);
     expect(trace.toolCalled("weather__get_current")).toBe(true);
     expect(trace.toolCallCount("weather__get_current")).toBe(1);
-    expect(trace.messages).toHaveLength(2);
+    expect(trace.events).toHaveLength(2);
     expect(existsSync(workspace.path)).toBe(true);
     expect(workspace.rootPath).toBe(workspace.path);
     expect(await readFile(join(workspace.path, "notes.txt"), "utf8")).toBe(
@@ -47,31 +49,37 @@ describe("Transcript", () => {
     expect(agent.taskPrompt).toBe("do the thing");
   });
 
-  it("records the terminal message even when it is not `done`", async () => {
+  it("records failed terminal turns", async () => {
     const trace = await Transcript.fromStream(
-      new FakeAgent([{ type: "error", message: "boom" }]).run(
-        new Task("do the thing"),
-      ),
+      new FakeAgent([
+        turnEnded({ status: "failed", error: "boom" }),
+      ]).run(new Task("do the thing")),
     );
 
-    expect(trace.messages.at(-1)?.type).toBe("error");
+    expect(trace.events.at(-1)).toMatchObject({
+      category: "turn",
+      event: { type: "ended", outcome: { status: "failed" } },
+    });
   });
 
   it("add supports custom observation while walking the stream", async () => {
-    const seen: AgentMessage[] = [];
+    const seen: AgentEvent[] = [];
     const trace = new Transcript();
 
     for await (const message of new FakeAgent([
       TOOL_RESULT,
-      { type: "done" },
+      turnEnded(),
     ]).run(new Task("do the thing"))) {
       seen.push(message);
       trace.add(message);
     }
 
-    expect(trace.messages.at(-1)?.type).toBe("done");
+    expect(trace.events.at(-1)?.category).toBe("turn");
     expect(seen).toHaveLength(2);
-    expect(seen[0]).toMatchObject({ type: "tool_result" });
+    expect(seen[0]).toMatchObject({
+      category: "tool",
+      event: { type: "result" },
+    });
   });
 
   it("leaves workspace cleanup with the caller", async () => {
@@ -115,21 +123,23 @@ describe("Transcript", () => {
   });
 });
 
-const TOOL_RESULT: AgentMessage = {
-  type: "tool_result",
-  model_name: "fake",
-  result: {
-    id: "call_1",
-    name: "weather__get_current",
-    arguments: '{"city":"Tokyo"}',
-    result: "sunny",
+const TOOL_RESULT: AgentEvent = {
+  category: "tool",
+  event: {
+    type: "result",
+    result: {
+      id: "call_1",
+      name: "weather__get_current",
+      arguments: '{"city":"Tokyo"}',
+      result: "sunny",
+    },
   },
 };
 
 class CapturingAgent implements Agent {
   taskPrompt?: string;
 
-  async *run(task: Task): AsyncIterable<AgentMessage> {
+  async *run(task: Task): AsyncIterable<AgentEvent> {
     this.taskPrompt = task.prompt;
     yield* FakeAgent.success().run(task);
   }
@@ -138,7 +148,7 @@ class CapturingAgent implements Agent {
 class ThrowingAgent implements Agent {
   constructor(private readonly message: string) {}
 
-  async *run(_task: Task): AsyncIterable<AgentMessage> {
+  async *run(_task: Task): AsyncIterable<AgentEvent> {
     throw new Error(this.message);
   }
 }

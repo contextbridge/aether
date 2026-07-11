@@ -184,7 +184,7 @@ export const proxyConfigCode = `{
 export const runHeadlessCode = `$ aether headless "refactor auth"`;
 export const runAcpCode = `$ aether acp`;
 export const rustLibraryCode = `use aether_core::core::{Prompt, agent};
-use aether_core::events::{AgentMessage, UserMessage};
+use aether_core::events::{AgentEvent, Command, MessageEvent, TurnEvent};
 use llm::{ProviderFactory, providers::AnthropicProvider};
 
 let provider = AnthropicProvider::from_env()
@@ -196,12 +196,12 @@ let (user_tx, mut agent_rx, handle) = agent(provider)
 .spawn()
 .await?;
 
-user_tx.send(UserMessage::text("Review this diff")).await?;
+user_tx.send(Command::text("Review this diff")).await?;
 
 while let Some(message) = agent\*rx.recv().await {
 match message {
-AgentMessage::Text { chunk, .. } => print!("{chunk}"),
-AgentMessage::Done => break,
+AgentEvent::Message(MessageEvent::Text { chunk, .. }) => print!("{chunk}"),
+AgentEvent::Turn(TurnEvent::Ended { .. }) => break,
 
 - => {}
   }
