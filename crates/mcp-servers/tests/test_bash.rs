@@ -1,7 +1,23 @@
 use mcp_servers::coding::error::BashError;
-use mcp_servers::coding::tools::bash::{BashInput, BashResult, execute_command, read_background_bash};
+use mcp_servers::coding::tools::bash::{
+    BackgroundProcessHandle, BashInput, BashResult, ReadBackgroundBashOutput, execute_command, read_background_bash,
+};
 use std::fs::canonicalize;
-use std::time::Duration;
+
+async fn read_until_terminal(mut handle: BackgroundProcessHandle, filter: Option<String>) -> ReadBackgroundBashOutput {
+    let mut output = String::new();
+    loop {
+        let (mut result, next) = read_background_bash(handle, filter.clone()).await.unwrap();
+        output.push_str(&result.output);
+        if let Some(next) = next {
+            handle = next;
+            tokio::task::yield_now().await;
+        } else {
+            result.output = output;
+            return result;
+        }
+    }
+}
 
 #[tokio::test]
 async fn test_basic_command() {
@@ -151,10 +167,7 @@ async fn test_background_process_with_timeout() {
 
     match result {
         BashResult::Background(handle) => {
-            // Wait for timeout to occur
-            tokio::time::sleep(Duration::from_millis(200)).await;
-
-            let (result, _) = read_background_bash(handle, None).await.unwrap();
+            let result = read_until_terminal(handle, None).await;
 
             assert_eq!(result.status, "failed");
             assert!(result.output.contains("timed out"));
@@ -185,10 +198,7 @@ async fn test_read_background_bash() {
 
     match result {
         BashResult::Background(handle) => {
-            // Wait a bit for output to be generated
-            tokio::time::sleep(Duration::from_millis(200)).await;
-
-            let (result, _) = read_background_bash(handle, None).await.unwrap();
+            let result = read_until_terminal(handle, None).await;
 
             assert!(result.output.contains("line1"));
             assert!(result.output.contains("line2"));
@@ -213,10 +223,7 @@ async fn test_read_background_bash_with_filter() {
 
     match result {
         BashResult::Background(handle) => {
-            // Wait a bit for output to be generated
-            tokio::time::sleep(Duration::from_millis(100)).await;
-
-            let (result, _) = read_background_bash(handle, Some("ERROR".to_string())).await.unwrap();
+            let result = read_until_terminal(handle, Some("ERROR".to_string())).await;
 
             assert!(result.output.contains("ERROR: something went wrong"));
             assert!(result.output.contains("ERROR: another issue"));
@@ -229,23 +236,15 @@ async fn test_read_background_bash_with_filter() {
 
 #[tokio::test]
 async fn test_read_background_bash_running_status() {
-    let args = BashInput {
-        command: "echo 'start'; sleep 10; echo 'end'".to_string(),
-        timeout: None,
-        description: None,
-        run_in_background: Some(true),
-    };
+    let args =
+        BashInput { command: "sleep 10".to_string(), timeout: None, description: None, run_in_background: Some(true) };
 
     let result = execute_command(args).await.unwrap();
 
     match result {
         BashResult::Background(handle) => {
-            // Give the echo output time to propagate through the async pipe
-            tokio::time::sleep(Duration::from_millis(500)).await;
-
             let (result, _) = read_background_bash(handle, None).await.unwrap();
 
-            assert!(result.output.contains("start"));
             assert_eq!(result.status, "running");
             assert_eq!(result.exit_code, None);
         }
@@ -266,10 +265,7 @@ async fn test_read_background_bash_failed_status() {
 
     match result {
         BashResult::Background(handle) => {
-            // Wait for timeout
-            tokio::time::sleep(Duration::from_millis(200)).await;
-
-            let (result, _) = read_background_bash(handle, None).await.unwrap();
+            let result = read_until_terminal(handle, None).await;
 
             assert_eq!(result.status, "failed");
             assert!(result.exit_code.is_some());

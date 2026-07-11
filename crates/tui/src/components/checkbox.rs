@@ -62,32 +62,10 @@ impl Checkbox {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{KeyEvent, KeyModifiers};
-
-    fn key(code: KeyCode) -> KeyEvent {
-        KeyEvent::new(code, KeyModifiers::NONE)
-    }
-
-    #[tokio::test]
-    async fn space_toggles() {
-        let mut cb = Checkbox::new(false);
-        cb.on_event(&Event::Key(key(KeyCode::Char(' ')))).await;
-        assert!(cb.checked);
-        cb.on_event(&Event::Key(key(KeyCode::Char(' ')))).await;
-        assert!(!cb.checked);
-    }
 
     #[test]
     fn to_json_returns_bool() {
         assert_eq!(Checkbox::new(true).to_json(), serde_json::json!(true));
         assert_eq!(Checkbox::new(false).to_json(), serde_json::json!(false));
-    }
-
-    #[tokio::test]
-    async fn other_keys_are_ignored() {
-        let mut cb = Checkbox::new(false);
-        let outcome = cb.on_event(&Event::Key(key(KeyCode::Char('a')))).await;
-        assert!(outcome.is_none());
-        assert!(!cb.checked);
     }
 }

@@ -1,12 +1,11 @@
 use aether_core::events::{ContextEvent, TurnEvent};
-use std::time::Duration;
+use aether_core::testing::drain_until;
 
 use aether_core::core::{Prompt, agent};
 use aether_core::events::{AgentEvent, Command, UserCommand};
 use llm::LlmResponse;
 use llm::testing::FakeLlmProvider;
 use llm::{ChatMessage, ContentBlock};
-use tokio::sync::mpsc;
 
 #[tokio::test]
 async fn test_clear_context_resets_history_and_preserves_system_prompt() {
@@ -23,19 +22,16 @@ async fn test_clear_context_resets_history_and_preserves_system_prompt() {
     tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("first question")] }))
         .await
         .unwrap();
-    drain_until_done(&mut rx).await;
+    drain_until(&mut rx, |event| matches!(event, AgentEvent::Turn(TurnEvent::Ended { .. }))).await;
 
     tx.send(Command::UserCommand(UserCommand::ClearContext)).await.unwrap();
-    let cleared = tokio::time::timeout(Duration::from_secs(2), rx.recv())
-        .await
-        .expect("Timed out waiting for ContextCleared")
-        .expect("Channel closed before ContextCleared");
+    let cleared = rx.recv().await.expect("Channel closed before ContextCleared");
     assert!(matches!(cleared, AgentEvent::Context(ContextEvent::Cleared)), "Expected ContextCleared, got: {cleared:?}");
 
     tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("second question")] }))
         .await
         .unwrap();
-    drain_until_done(&mut rx).await;
+    drain_until(&mut rx, |event| matches!(event, AgentEvent::Turn(TurnEvent::Ended { .. }))).await;
 
     let contexts = captured_contexts.lock().unwrap();
     assert_eq!(contexts.len(), 2, "expected two LLM requests");
@@ -63,16 +59,4 @@ async fn test_clear_context_resets_history_and_preserves_system_prompt() {
         )
     });
     assert!(has_second_question, "new prompt should be present after clear");
-}
-
-async fn drain_until_done(rx: &mut mpsc::Receiver<AgentEvent>) {
-    loop {
-        let msg = tokio::time::timeout(Duration::from_secs(5), rx.recv())
-            .await
-            .expect("Timed out waiting for Done")
-            .expect("Channel closed before Done");
-        if matches!(msg, AgentEvent::Turn(TurnEvent::Ended { .. })) {
-            break;
-        }
-    }
 }
