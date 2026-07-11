@@ -118,7 +118,7 @@ Use `aether-agent-core` as a Rust library to build your own agent in ~25 lines. 
    ```rust
    use aether_core::{
        core::{Prompt, agent},
-       events::{AgentMessage, UserMessage},
+       events::{AgentEvent, Command, MessageEvent, TurnEvent, TurnOutcome},
        mcp::{McpSpawnResult, mcp},
    };
    use llm::providers::anthropic::AnthropicProvider;
@@ -141,15 +141,17 @@ Use `aether-agent-core` as a Rust library to build your own agent in ~25 lines. 
            .await?;
 
        // 4. Send a message and stream the response
-       tx.send(UserMessage::text("Hello!")).await?;
+       tx.send(Command::text("Hello!")).await?;
 
        loop {
            match rx.recv().await {
-               Some(AgentMessage::Text { chunk, is_complete, .. }) => {
+               Some(AgentEvent::Message(MessageEvent::Text { chunk, is_complete, .. })) => {
                    if !is_complete { print!("{chunk}"); io::stdout().flush()?; }
                }
-               Some(AgentMessage::Done) => break,
-               Some(AgentMessage::Error { message }) => { eprintln!("Error: {message}"); break; }
+               Some(AgentEvent::Turn(TurnEvent::Ended { outcome })) => {
+                   if let TurnOutcome::Failed { error } = outcome { eprintln!("Error: {error}"); }
+                   break;
+               }
                _ => {}
            }
        }
