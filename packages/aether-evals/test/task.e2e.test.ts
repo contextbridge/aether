@@ -37,7 +37,10 @@ describe.skipIf(!process.env.AETHER_EVALS_E2E)(
         trace.add(message);
       }
 
-      expect(trace.events.at(-1)).toMatchObject({ category: "turn", event: { type: "ended" } });
+      expect(trace.events.at(-1)).toMatchObject({
+        category: "turn",
+        event: { type: "ended" },
+      });
       expect(trace.allToolCalls()).toEqual([new ToolCall("write", "{}")]);
       expect(seen.map(eventName)).toEqual(["tool:result", "turn:ended"]);
       expect(await readFile(join(workspace.path, "out.txt"), "utf8")).toBe(
@@ -66,7 +69,10 @@ describe.skipIf(!process.env.AETHER_EVALS_E2E)(
         command: ["/bin/sh", "-c", "cat /tmp/aether-marker"],
       });
 
-      expect(trace.events.at(-1)).toMatchObject({ category: "turn", event: { type: "ended" } });
+      expect(trace.events.at(-1)).toMatchObject({
+        category: "turn",
+        event: { type: "ended" },
+      });
       expect(output.exitCode).toBe(0);
       expect(output.stdout).toContain("same-container");
     }, 120_000);

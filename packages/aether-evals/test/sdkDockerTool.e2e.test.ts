@@ -43,7 +43,10 @@ describe.skipIf(process.env.AETHER_EVALS_DOCKER_E2E !== "1")(
 
       const getWeatherCall = trace.toolCalls("weather__get_weather").at(0);
 
-      expect(trace.events.at(-1)).toMatchObject({ category: "turn", event: { type: "ended" } });
+      expect(trace.events.at(-1)).toMatchObject({
+        category: "turn",
+        event: { type: "ended" },
+      });
       expect(getWeatherCall?.argumentsJson()).toMatchObject({ city: "Tokyo" });
     }, 1_200_000);
   },

@@ -21,10 +21,7 @@ describe("Transcript", () => {
       "notes.txt": "alpha\n",
     });
     const trace = await Transcript.fromStream(
-      new FakeAgent([
-        TOOL_RESULT,
-        turnEnded(),
-      ]).run(new Task("do the thing")),
+      new FakeAgent([TOOL_RESULT, turnEnded()]).run(new Task("do the thing")),
     );
 
     expect(trace.events.at(-1)?.category).toBe("turn");
@@ -51,9 +48,9 @@ describe("Transcript", () => {
 
   it("records failed terminal turns", async () => {
     const trace = await Transcript.fromStream(
-      new FakeAgent([
-        turnEnded({ status: "failed", error: "boom" }),
-      ]).run(new Task("do the thing")),
+      new FakeAgent([turnEnded({ status: "failed", error: "boom" })]).run(
+        new Task("do the thing"),
+      ),
     );
 
     expect(trace.events.at(-1)).toMatchObject({
@@ -66,10 +63,9 @@ describe("Transcript", () => {
     const seen: AgentEvent[] = [];
     const trace = new Transcript();
 
-    for await (const message of new FakeAgent([
-      TOOL_RESULT,
-      turnEnded(),
-    ]).run(new Task("do the thing"))) {
+    for await (const message of new FakeAgent([TOOL_RESULT, turnEnded()]).run(
+      new Task("do the thing"),
+    )) {
       seen.push(message);
       trace.add(message);
     }
