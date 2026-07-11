@@ -146,6 +146,7 @@ impl NodeProject {
         if !output.status.success() {
             return Err(TestProjectError::CommandFailed {
                 command: format!("npm {}", args.join(" ")),
+
                 stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
             });
         }

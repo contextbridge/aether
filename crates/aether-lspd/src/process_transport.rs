@@ -1,5 +1,6 @@
 use crate::error::{DaemonError, DaemonResult};
 use crate::file_watcher::{FileWatcherBatch, FileWatcherHandle};
+use crate::path_to_uri;
 use crate::protocol::{LspErrorResponse, LspNotification};
 use lsp_types::notification::{DidChangeWatchedFiles, Initialized, Notification, PublishDiagnostics};
 use lsp_types::request::{Initialize, RegisterCapability, Request, UnregisterCapability, WorkDoneProgressCreate};
@@ -7,11 +8,12 @@ use lsp_types::{
     CallHierarchyClientCapabilities, ClientCapabilities, DidChangeWatchedFilesClientCapabilities,
     GeneralClientCapabilities, GotoCapability, HoverClientCapabilities, InitializeParams, MarkupKind,
     PublishDiagnosticsClientCapabilities, RegistrationParams, TextDocumentClientCapabilities,
-    WorkspaceClientCapabilities,
+    WorkspaceClientCapabilities, WorkspaceFolder,
 };
 use lsp_types::{DocumentSymbolClientCapabilities, DynamicRegistrationClientCapabilities};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -63,6 +65,7 @@ impl ProcessTransport {
     ) -> DaemonResult<(Self, mpsc::Receiver<TransportEvent>)> {
         let resolved_command = resolve_command(root_path, command);
         let mut process = Command::new(&resolved_command)
+            .current_dir(root_path)
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -219,6 +222,10 @@ impl ProcessTransportActor {
             process_id: Some(std::process::id()),
             #[allow(deprecated)]
             root_uri: Some(root_uri),
+            workspace_folders: Some(vec![WorkspaceFolder {
+                uri: path_to_uri(root_path).map_err(|err| std::io::Error::new(ErrorKind::InvalidInput, err))?,
+                name: root_path.file_name().and_then(|name| name.to_str()).unwrap_or("workspace").to_string(),
+            }]),
             capabilities,
             ..Default::default()
         };
