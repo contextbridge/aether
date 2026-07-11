@@ -183,9 +183,10 @@ impl App {
             }
             AcpEvent::ContextUsage(params) => {
                 self.context_usage = params
+                    .usage
                     .context_limit
                     .filter(|limit| *limit > 0)
-                    .map(|limit| ContextUsageDisplay::new(params.input_tokens, limit));
+                    .map(|limit| ContextUsageDisplay::new(params.usage.input_tokens, limit));
             }
             AcpEvent::SubAgentProgress(progress) => self.conversation_screen.on_sub_agent_progress(&progress),
             AcpEvent::AuthMethodsUpdated(params) => self.update_auth_methods(params.auth_methods),

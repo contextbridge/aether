@@ -1,12 +1,12 @@
 use super::{AgentRunResult, RunError};
 use crate::EvalRunError;
-use aether_core::events::{AgentMessage, ContextUsage};
+use aether_core::events::{AgentEvent, ContextEvent, ContextUsage, ToolEvent};
 use futures::{Stream, StreamExt};
 use std::fmt::Debug;
 use thiserror::Error;
 
 pub struct Transcript {
-    messages: Vec<AgentMessage>,
+    events: Vec<AgentEvent>,
 }
 
 pub struct ToolCall<'a> {
@@ -23,8 +23,8 @@ pub struct TranscriptError {
 }
 
 impl Transcript {
-    pub fn new(messages: Vec<AgentMessage>) -> Self {
-        Self { messages }
+    pub fn new(events: Vec<AgentEvent>) -> Self {
+        Self { events }
     }
 
     pub async fn from_stream<T: Stream<Item = AgentRunResult>>(stream: T) -> Result<Self, TranscriptError> {
@@ -32,8 +32,8 @@ impl Transcript {
         futures::pin_mut!(stream);
         while let Some(result) = stream.next().await {
             match result {
-                Ok(message) => {
-                    transcript.add(message);
+                Ok(event) => {
+                    transcript.add(event);
                 }
                 Err(error) => return Err(TranscriptError::new(transcript, error)),
             }
@@ -41,20 +41,20 @@ impl Transcript {
         Ok(transcript)
     }
 
-    pub fn add(&mut self, message: AgentMessage) {
-        self.messages.push(message);
+    pub fn add(&mut self, event: AgentEvent) {
+        self.events.push(event);
     }
 
-    pub fn messages(&self) -> &[AgentMessage] {
-        &self.messages
+    pub fn events(&self) -> &[AgentEvent] {
+        &self.events
     }
 
     pub fn all_tool_calls(&self) -> impl Iterator<Item = ToolCall<'_>> + '_ {
-        self.messages.iter().filter_map(|message| match message {
-            AgentMessage::ToolResult { result, .. } => {
+        self.events.iter().filter_map(|event| match event {
+            AgentEvent::Tool(ToolEvent::Result { result, .. }) => {
                 Some(ToolCall { name: &result.name, arguments: &result.arguments })
             }
-            AgentMessage::ToolError { error, .. } => {
+            AgentEvent::Tool(ToolEvent::Error { error, .. }) => {
                 Some(ToolCall { name: &error.name, arguments: error.arguments.as_deref().unwrap_or("") })
             }
             _ => None,
@@ -76,11 +76,11 @@ impl Transcript {
     /// Returns the aggregated usage from the final `ContextUsageUpdate`, or a
     /// zeroed summary if no usage was recorded.
     pub fn usage(&self) -> ContextUsage {
-        self.messages
+        self.events
             .iter()
             .rev()
-            .find_map(|msg| match msg {
-                AgentMessage::ContextUsageUpdate { usage } => Some(usage.clone()),
+            .find_map(|event| match event {
+                AgentEvent::Context(ContextEvent::UsageUpdated { usage }) => Some(usage.clone()),
                 _ => None,
             })
             .unwrap_or_default()
@@ -93,9 +93,9 @@ impl Default for Transcript {
     }
 }
 
-impl From<Vec<AgentMessage>> for Transcript {
-    fn from(messages: Vec<AgentMessage>) -> Self {
-        Self::new(messages)
+impl From<Vec<AgentEvent>> for Transcript {
+    fn from(events: Vec<AgentEvent>) -> Self {
+        Self::new(events)
     }
 }
 
@@ -129,14 +129,15 @@ impl Debug for TranscriptError {
     }
 }
 
-pub(crate) fn is_terminal(message: &AgentMessage) -> bool {
-    matches!(message, AgentMessage::Done | AgentMessage::Error { .. } | AgentMessage::Cancelled { .. })
+pub(crate) fn is_terminal(event: &AgentEvent) -> bool {
+    event.turn_outcome().is_some()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{Agent, FakeAgent, Task};
+    use aether_core::events::TurnEvent;
     use llm::{ToolCallRequest, ToolCallResult};
 
     #[tokio::test]
@@ -146,12 +147,12 @@ mod tests {
         let transcript = Transcript::from_stream(stream).await.unwrap();
 
         assert!(transcript.tool_called("bash"));
-        assert!(matches!(transcript.messages().last(), Some(AgentMessage::Done)));
+        assert!(matches!(transcript.events().last(), Some(AgentEvent::Turn(TurnEvent::Ended { .. }))));
     }
 
     #[test]
     fn tool_call_count_counts_matching_tool_calls() {
-        let transcript = transcript_with_messages(vec![tool_call("bash"), tool_call("read"), tool_result("bash")]);
+        let transcript = transcript_with_events(vec![tool_call("bash"), tool_call("read"), tool_result("bash")]);
 
         assert!(transcript.tool_called("bash"));
         assert!(!transcript.tool_called("read"));
@@ -176,14 +177,14 @@ mod tests {
 
     #[test]
     fn usage_returns_zeroed_summary_when_no_context_usage() {
-        let transcript = transcript_with_messages(vec![tool_call("bash")]);
+        let transcript = transcript_with_events(vec![tool_call("bash")]);
         let usage = transcript.usage();
         assert_eq!(usage, ContextUsage::default());
     }
 
     #[test]
     fn usage_extracts_final_cumulative_totals() {
-        let transcript = transcript_with_messages(vec![
+        let transcript = transcript_with_events(vec![
             context_usage(100, 10, 1000, 100, 0, 0),
             context_usage(200, 20, 3000, 600, 50, 0),
         ]);
@@ -200,7 +201,7 @@ mod tests {
 
     #[test]
     fn total_tokens_sums_input_and_output() {
-        let transcript = transcript_with_messages(vec![context_usage(0, 0, 3000, 600, 0, 0)]);
+        let transcript = transcript_with_events(vec![context_usage(0, 0, 3000, 600, 0, 0)]);
 
         assert_eq!(transcript.usage().total_tokens(), 3600);
     }
@@ -212,8 +213,8 @@ mod tests {
         total_output: u64,
         cache_read: u32,
         reasoning: u32,
-    ) -> AgentMessage {
-        AgentMessage::ContextUsageUpdate {
+    ) -> AgentEvent {
+        AgentEvent::Context(ContextEvent::UsageUpdated {
             usage: ContextUsage {
                 usage_ratio: Some(0.5),
                 context_limit: Some(200_000),
@@ -225,22 +226,21 @@ mod tests {
                 total_output_tokens: total_output,
                 ..Default::default()
             },
-        }
+        })
     }
 
-    fn transcript_with_messages(messages: Vec<AgentMessage>) -> Transcript {
-        Transcript::new(messages)
+    fn transcript_with_events(events: Vec<AgentEvent>) -> Transcript {
+        Transcript::new(events)
     }
 
-    fn tool_call(name: &str) -> AgentMessage {
-        AgentMessage::ToolCall {
+    fn tool_call(name: &str) -> AgentEvent {
+        AgentEvent::Tool(ToolEvent::Call {
             request: ToolCallRequest { id: name.to_string(), name: name.to_string(), arguments: "{}".to_string() },
-            model_name: "test".to_string(),
-        }
+        })
     }
 
-    fn tool_result(name: &str) -> AgentMessage {
-        AgentMessage::ToolResult {
+    fn tool_result(name: &str) -> AgentEvent {
+        AgentEvent::Tool(ToolEvent::Result {
             result: ToolCallResult {
                 id: name.to_string(),
                 name: name.to_string(),
@@ -248,7 +248,6 @@ mod tests {
                 result: "ok".to_string(),
             },
             result_meta: None,
-            model_name: "test".to_string(),
-        }
+        })
     }
 }

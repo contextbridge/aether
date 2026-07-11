@@ -3,7 +3,7 @@ use aether_auth::OAuthCredentialStorage;
 use aether_core::{
     agent_spec::McpConfigSource,
     core::{AgentBuilder, AgentHandle, Prompt},
-    events::{AgentMessage, Command, UserCommand},
+    events::{AgentEvent, Command, MessageEvent, TurnEvent, TurnOutcome, UserCommand},
     mcp::{McpSpawnResult, mcp, run_mcp_task::McpCommand},
 };
 use aether_project::AgentCatalog;
@@ -150,7 +150,7 @@ pub fn extract_json_from_markdown(text: &str) -> Option<String> {
 }
 
 /// Callback for receiving progress updates during agent execution
-pub type ProgressCallback = Box<dyn Fn(&str, &str, &AgentMessage) + Send + Sync>;
+pub type ProgressCallback = Box<dyn Fn(&str, &str, &AgentEvent) + Send + Sync>;
 
 /// Executor for spawning and running sub-agents
 pub struct AgentExecutor {
@@ -282,12 +282,10 @@ async fn execute_single_agent(
             .map_err(|e| format!("Failed to send message to agent: {e}"))?;
 
         if let Some(ref callback) = progress_callback {
-            callback(&task_id, &agent_name, &AgentMessage::text("", "", false, ""));
+            callback(&task_id, &agent_name, &AgentEvent::Turn(TurnEvent::Started));
         }
 
         let mut final_output = String::new();
-        let mut was_cancelled = false;
-        let mut error_message: Option<String> = None;
 
         while let Some(message) = agent_rx.recv().await {
             if let Some(ref callback) = progress_callback {
@@ -295,35 +293,18 @@ async fn execute_single_agent(
             }
 
             match &message {
-                AgentMessage::Text { chunk, is_complete, .. } if *is_complete => {
+                AgentEvent::Message(MessageEvent::Text { chunk, is_complete, .. }) if *is_complete => {
                     final_output.clone_from(chunk);
                 }
 
-                AgentMessage::Error { message } => {
-                    error_message = Some(message.clone());
-                    break;
-                }
-
-                AgentMessage::Cancelled { message } => {
-                    was_cancelled = true;
-                    error_message = Some(message.clone());
-                    break;
-                }
-
-                AgentMessage::Done => {
-                    break;
-                }
+                AgentEvent::Turn(TurnEvent::Ended { outcome }) => match outcome {
+                    TurnOutcome::Completed => return Ok(final_output),
+                    TurnOutcome::Failed { error } => return Err(format!("Agent error: {error}")),
+                    TurnOutcome::Cancelled => return Err("Agent cancelled".to_string()),
+                },
 
                 _ => {}
             }
-        }
-
-        if was_cancelled {
-            return Err(format!("Agent cancelled: {}", error_message.unwrap_or_default()));
-        }
-
-        if let Some(err) = error_message {
-            return Err(format!("Agent error: {err}"));
         }
 
         Ok(final_output)
@@ -366,7 +347,7 @@ async fn spawn_agent(
     mcp_tx: mpsc::Sender<McpCommand>,
     tools: Vec<ToolDefinition>,
     oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
-) -> Result<(mpsc::Sender<Command>, mpsc::Receiver<AgentMessage>, AgentHandle), String> {
+) -> Result<(mpsc::Sender<Command>, mpsc::Receiver<AgentEvent>, AgentHandle), String> {
     AgentBuilder::from_spec(&spec, vec![], oauth_credential_store)
         .await
         .map_err(|e| format!("Failed to build agent from spec: {e}"))?

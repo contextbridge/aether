@@ -1,7 +1,8 @@
+use aether_core::events::{MessageEvent, TurnEvent};
 use std::time::Duration;
 
 use aether_core::core::agent;
-use aether_core::events::{AgentMessage, Command, UserCommand};
+use aether_core::events::{AgentEvent, Command, UserCommand};
 use llm::LlmResponse;
 use llm::testing::FakeLlmProvider;
 
@@ -38,12 +39,12 @@ async fn test_prompt_after_cancel_produces_response() {
     // Send cancel immediately
     tx.send(Command::UserCommand(UserCommand::Cancel)).await.unwrap();
 
-    // Drain until Done (from the cancel)
+    // Drain until TurnEnded (from the cancel)
     loop {
         match rx.recv().await {
-            Some(AgentMessage::Done) => break,
+            Some(AgentEvent::Turn(TurnEvent::Ended { .. })) => break,
             Some(_) => {}
-            None => panic!("Channel closed before Done"),
+            None => panic!("Channel closed before TurnEnded"),
         }
     }
 
@@ -59,19 +60,19 @@ async fn test_prompt_after_cancel_produces_response() {
 
     loop {
         match tokio::time::timeout_at(deadline, rx.recv()).await {
-            Ok(Some(AgentMessage::Text { is_complete: false, .. })) => {
+            Ok(Some(AgentEvent::Message(MessageEvent::Text { is_complete: false, .. }))) => {
                 got_text = true;
             }
-            Ok(Some(AgentMessage::Done)) => {
+            Ok(Some(AgentEvent::Turn(TurnEvent::Ended { .. }))) => {
                 got_done = true;
                 break;
             }
             Ok(Some(_)) => {}
-            Ok(None) => panic!("Channel closed before second Done"),
+            Ok(None) => panic!("Channel closed before second TurnEnded"),
             Err(elapsed) => panic!("Timed out waiting for second prompt response — agent is stuck: {elapsed}"),
         }
     }
 
     assert!(got_text, "Expected text from the second prompt");
-    assert!(got_done, "Expected Done from the second prompt");
+    assert!(got_done, "Expected TurnEnded from the second prompt");
 }

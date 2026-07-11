@@ -3,7 +3,7 @@ use acp_utils::server::AcpServerError;
 use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::AgentSpec;
 use aether_core::context::ext::{SessionControlEvent, SessionEvent, UserEvent, conversation_messages_from_events};
-use aether_core::events::{AgentCommand, AgentMessage, Command};
+use aether_core::events::{AgentCommand, AgentEvent, Command, ToolEvent, TurnOutcome};
 use agent_client_protocol::schema::{self as acp, PromptResponse, SessionId, SetSessionConfigOptionResponse};
 use agent_client_protocol::{Client, ConnectionTo, Responder};
 use llm::catalog::LlmModel;
@@ -25,8 +25,8 @@ use super::error::SessionError;
 use super::model_config::{Modes, get_all_models};
 use super::protocol::commands::map_mcp_prompt_to_available_command;
 use super::protocol::events::{
-    AgentExtNotification, map_agent_message_to_session_notification, map_agent_message_to_stop_reason,
-    try_extract_plan_notification, try_into_agent_notification,
+    AgentExtNotification, map_agent_event_to_session_notification, try_extract_plan_notification,
+    try_into_agent_notification,
 };
 use super::session_config_state::{SessionConfigState, Switch};
 use super::session_store::{SessionStore, should_persist_session_event};
@@ -336,7 +336,6 @@ async fn handle_prompt(
     persist_event(actor, io, SessionEvent::User(UserEvent::Message { content: content.clone() }));
     actor.send_active_command(Command::with_content(content)).await?;
 
-    let mut early_stop_reason: Option<acp::StopReason> = None;
     let turn_result: Result<acp::StopReason, SessionError> = loop {
         tokio::select! {
             () = io.cancel.cancelled() => {
@@ -350,7 +349,7 @@ async fn handle_prompt(
                     break Err(SessionError::CommandChannel("agent channel closed".to_string()));
                 };
                 if let Some(message) = on_runtime_event(actor, io, event).await
-                    && let Some(reason) = turn_stop_reason(&message, &mut early_stop_reason)
+                    && let Some(reason) = turn_stop_reason(&message)
                 {
                     info!("Turn completed, stop reason: {:?}", reason);
                     break Ok(reason);
@@ -370,21 +369,11 @@ async fn handle_prompt(
     turn_result
 }
 
-fn turn_stop_reason(
-    message: &AgentMessage,
-    early_stop_reason: &mut Option<acp::StopReason>,
-) -> Option<acp::StopReason> {
-    match message {
-        AgentMessage::Cancelled { .. } => {
-            *early_stop_reason = Some(map_agent_message_to_stop_reason(message));
-            None
-        }
-        AgentMessage::Done => {
-            Some(early_stop_reason.take().unwrap_or_else(|| map_agent_message_to_stop_reason(message)))
-        }
-        AgentMessage::Error { .. } => Some(map_agent_message_to_stop_reason(message)),
-        _ => None,
-    }
+fn turn_stop_reason(message: &AgentEvent) -> Option<acp::StopReason> {
+    message.turn_outcome().map(|outcome| match outcome {
+        TurnOutcome::Cancelled => acp::StopReason::Cancelled,
+        TurnOutcome::Completed | TurnOutcome::Failed { .. } => acp::StopReason::EndTurn,
+    })
 }
 
 async fn handle_in_flight_command(actor: &mut SessionActor, io: &SessionIo, cmd: SessionCommand) {
@@ -478,7 +467,7 @@ fn publish_snapshot(actor: &SessionActor, io: &SessionIo) {
     let _ = io.snapshot_tx.send(actor.get_config());
 }
 
-async fn on_runtime_event(actor: &mut SessionActor, io: &SessionIo, event: RuntimeEvent) -> Option<AgentMessage> {
+async fn on_runtime_event(actor: &mut SessionActor, io: &SessionIo, event: RuntimeEvent) -> Option<AgentEvent> {
     let from_active = match &event {
         RuntimeEvent::Agent { agent, .. } | RuntimeEvent::Mcp { agent, .. } => agent == actor.active_agent(),
     };
@@ -538,8 +527,8 @@ fn send_mcp_server_status(connection: &ConnectionTo<Client>, servers: Vec<McpSer
     }
 }
 
-fn forward_notification(connection: &ConnectionTo<Client>, acp_session_id: &SessionId, msg: &AgentMessage) {
-    if let Some(notification) = map_agent_message_to_session_notification(acp_session_id.clone(), msg) {
+fn forward_notification(connection: &ConnectionTo<Client>, acp_session_id: &SessionId, msg: &AgentEvent) {
+    if let Some(notification) = map_agent_event_to_session_notification(acp_session_id.clone(), msg) {
         if let Err(e) =
             connection.send_notification(notification).map_err(|e| AcpServerError::protocol("session/update", e))
         {
@@ -551,7 +540,7 @@ fn forward_notification(connection: &ConnectionTo<Client>, acp_session_id: &Sess
         error!("Failed to send ext notification: {:?}", e);
     }
 
-    if let AgentMessage::ToolResult { result_meta, .. } = msg
+    if let AgentEvent::Tool(ToolEvent::Result { result_meta, .. }) = msg
         && let Some(plan_notif) = try_extract_plan_notification(acp_session_id.clone(), result_meta.as_ref())
         && let Err(e) =
             connection.send_notification(plan_notif).map_err(|e| AcpServerError::protocol("session/update", e))

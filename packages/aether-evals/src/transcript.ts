@@ -1,4 +1,4 @@
-import type { AgentMessage, ContextUsage } from "@aether-agent/sdk";
+import type { AgentEvent, ContextUsage, TurnOutcome } from "@aether-agent/sdk";
 
 export class ToolCall {
   readonly arguments: string;
@@ -26,19 +26,19 @@ export class TranscriptError extends Error {
 }
 
 export class Transcript {
-  readonly messages: AgentMessage[];
+  readonly events: AgentEvent[];
 
-  constructor(messages: AgentMessage[] = []) {
-    this.messages = [...messages];
+  constructor(events: AgentEvent[] = []) {
+    this.events = [...events];
   }
 
   static async fromStream(
-    stream: AsyncIterable<AgentMessage>,
+    stream: AsyncIterable<AgentEvent>,
   ): Promise<Transcript> {
     const transcript = new Transcript();
     try {
-      for await (const message of stream) {
-        transcript.add(message);
+      for await (const event of stream) {
+        transcript.add(event);
       }
     } catch (err) {
       throw new TranscriptError(transcript, err);
@@ -46,12 +46,12 @@ export class Transcript {
     return transcript;
   }
 
-  add(message: AgentMessage): void {
-    this.messages.push(message);
+  add(event: AgentEvent): void {
+    this.events.push(event);
   }
 
   allToolCalls(): ToolCall[] {
-    return extractToolCalls(this.messages);
+    return extractToolCalls(this.events);
   }
 
   toolCalls(name: string): ToolCall[] {
@@ -67,12 +67,11 @@ export class Transcript {
   }
 
   usage(): ContextUsage {
-    return summarizeUsage(this.messages);
+    return summarizeUsage(this.events);
   }
 }
 
 const ZERO_USAGE: ContextUsage = {
-  type: "context_usage",
   input_tokens: 0,
   output_tokens: 0,
   cache_read_tokens: null,
@@ -87,32 +86,36 @@ const ZERO_USAGE: ContextUsage = {
   total_reasoning_tokens: 0,
 };
 
-export function isTerminalMessage(message: AgentMessage): boolean {
-  return (
-    message.type === "done" ||
-    message.type === "error" ||
-    message.type === "cancelled"
-  );
+export function isTerminalEvent(event: AgentEvent): boolean {
+  return event.category === "turn" && event.event.type === "ended";
 }
 
-function extractToolCalls(messages: AgentMessage[]): ToolCall[] {
+/** Build the terminal turn event, defaulting to a completed turn. */
+export function turnEnded(
+  outcome: TurnOutcome = { status: "completed" },
+): AgentEvent {
+  return { category: "turn", event: { type: "ended", outcome } };
+}
+
+function extractToolCalls(events: AgentEvent[]): ToolCall[] {
   const calls: ToolCall[] = [];
-  for (const message of messages) {
-    if (message.type === "tool_result") {
-      calls.push(new ToolCall(message.result.name, message.result.arguments));
-    } else if (message.type === "tool_error") {
-      calls.push(
-        new ToolCall(message.error.name, message.error.arguments ?? ""),
-      );
+  for (const event of events) {
+    if (event.category !== "tool") continue;
+    const tool = event.event;
+    if (tool.type === "result") {
+      calls.push(new ToolCall(tool.result.name, tool.result.arguments));
+    } else if (tool.type === "error") {
+      calls.push(new ToolCall(tool.error.name, tool.error.arguments ?? ""));
     }
   }
   return calls;
 }
 
-function summarizeUsage(messages: AgentMessage[]): ContextUsage {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i];
-    if (message && message.type === "context_usage") return message;
+function summarizeUsage(events: AgentEvent[]): ContextUsage {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i];
+    if (event?.category === "context" && event.event.type === "usage_updated")
+      return event.event.usage;
   }
   return { ...ZERO_USAGE };
 }

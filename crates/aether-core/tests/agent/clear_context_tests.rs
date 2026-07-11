@@ -1,7 +1,8 @@
+use aether_core::events::{ContextEvent, TurnEvent};
 use std::time::Duration;
 
 use aether_core::core::{Prompt, agent};
-use aether_core::events::{AgentMessage, Command, UserCommand};
+use aether_core::events::{AgentEvent, Command, UserCommand};
 use llm::LlmResponse;
 use llm::testing::FakeLlmProvider;
 use llm::{ChatMessage, ContentBlock};
@@ -29,7 +30,7 @@ async fn test_clear_context_resets_history_and_preserves_system_prompt() {
         .await
         .expect("Timed out waiting for ContextCleared")
         .expect("Channel closed before ContextCleared");
-    assert!(matches!(cleared, AgentMessage::ContextCleared), "Expected ContextCleared, got: {cleared:?}");
+    assert!(matches!(cleared, AgentEvent::Context(ContextEvent::Cleared)), "Expected ContextCleared, got: {cleared:?}");
 
     tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("second question")] }))
         .await
@@ -64,13 +65,13 @@ async fn test_clear_context_resets_history_and_preserves_system_prompt() {
     assert!(has_second_question, "new prompt should be present after clear");
 }
 
-async fn drain_until_done(rx: &mut mpsc::Receiver<AgentMessage>) {
+async fn drain_until_done(rx: &mut mpsc::Receiver<AgentEvent>) {
     loop {
         let msg = tokio::time::timeout(Duration::from_secs(5), rx.recv())
             .await
             .expect("Timed out waiting for Done")
             .expect("Channel closed before Done");
-        if matches!(msg, AgentMessage::Done) {
+        if matches!(msg, AgentEvent::Turn(TurnEvent::Ended { .. })) {
             break;
         }
     }

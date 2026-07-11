@@ -2,7 +2,7 @@ use crate::error::CliError;
 use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::{AgentSpec, McpConfigSource};
 use aether_core::core::{AgentBuilder, AgentHandle, Prompt};
-use aether_core::events::{AgentMessage, Command};
+use aether_core::events::{AgentEvent, Command};
 use aether_core::mcp::McpBuilder;
 use aether_core::mcp::McpSpawnResult;
 use aether_core::mcp::mcp;
@@ -28,7 +28,7 @@ pub struct RuntimeBuilder {
 
 pub struct Runtime {
     pub agent_tx: Sender<Command>,
-    pub agent_rx: Receiver<AgentMessage>,
+    pub agent_rx: Receiver<AgentEvent>,
     pub agent_handle: AgentHandle,
     pub mcp_tx: Sender<McpCommand>,
     pub event_rx: Receiver<McpClientEvent>,

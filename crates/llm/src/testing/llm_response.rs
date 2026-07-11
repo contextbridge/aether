@@ -33,6 +33,11 @@ impl LlmResponseBuilder {
         self
     }
 
+    pub fn usage(mut self, input_tokens: u32, output_tokens: u32) -> Self {
+        self.chunks.push(LlmResponse::usage(input_tokens, output_tokens));
+        self
+    }
+
     pub fn tool_call_with_invalid_json(mut self, id: &str, name: &str) -> Self {
         self.chunks.push(LlmResponse::tool_request_start(id, name));
         self.chunks.push(LlmResponse::tool_request_complete(id, name, "invalid json"));

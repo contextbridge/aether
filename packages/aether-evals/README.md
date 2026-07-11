@@ -51,7 +51,10 @@ test("agent edits notes.txt", async () => {
   });
 
   const trace = await Transcript.fromStream(agent.run(task));
-  expect(trace.messages.at(-1)?.type).toBe("done");
+  expect(trace.events.at(-1)).toMatchObject({
+    category: "turn",
+    event: { type: "ended" },
+  });
   
   // Assert against the retained workspace and the recorded tool calls.
   expect(await readFile(join(workspace.path, "notes.txt"), "utf8")).toBe(
@@ -102,7 +105,7 @@ test("agent makes a maintainer-quality edit", async () => {
     instructions: "Grade strictly using only the provided transcript and files.",
     task: "Change the first line of notes.txt from alpha to beta",
     context: {
-      transcript: trace.messages,
+      transcript: trace.events,
       files: {
         "notes.txt": await readFile(join(workspace.path, "notes.txt"), "utf8"),
       },

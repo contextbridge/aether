@@ -1,6 +1,6 @@
 use super::agent::{Agent, AgentRunResult, RunError};
 use crate::Task;
-use aether_core::events::AgentMessage;
+use aether_core::events::{AgentEvent, ToolEvent, TurnOutcome};
 use async_stream::try_stream;
 use futures::Stream;
 use llm::ToolCallResult;
@@ -9,24 +9,27 @@ use tokio::fs::{create_dir_all, write};
 
 #[derive(Clone)]
 pub struct FakeAgent {
-    messages: Vec<AgentMessage>,
+    events: Vec<AgentEvent>,
     file_writes: Vec<(PathBuf, String)>,
     workspace: Option<PathBuf>,
 }
 
 impl FakeAgent {
-    pub fn new(messages: Vec<AgentMessage>) -> Self {
-        Self { messages, file_writes: Vec::new(), workspace: None }
+    pub fn new(events: Vec<AgentEvent>) -> Self {
+        Self { events, file_writes: Vec::new(), workspace: None }
     }
 
     pub fn success() -> Self {
-        Self::new(vec![AgentMessage::text("fake_1", "Task completed successfully", true, "fake"), AgentMessage::Done])
+        Self::new(vec![
+            AgentEvent::text("fake_1", "Task completed successfully", true),
+            AgentEvent::turn_ended(TurnOutcome::Completed),
+        ])
     }
 
     pub fn with_tool_call(tool_name: impl Into<String>, result: impl Into<String>) -> Self {
         let tool_name = tool_name.into();
         Self::new(vec![
-            AgentMessage::ToolResult {
+            AgentEvent::Tool(ToolEvent::Result {
                 result: ToolCallResult {
                     id: "fake_call_1".to_string(),
                     name: tool_name,
@@ -34,10 +37,9 @@ impl FakeAgent {
                     result: result.into(),
                 },
                 result_meta: None,
-                model_name: "fake".to_string(),
-            },
-            AgentMessage::text("fake_2", "Task completed using tools", true, "fake"),
-            AgentMessage::Done,
+            }),
+            AgentEvent::text("fake_2", "Task completed using tools", true),
+            AgentEvent::turn_ended(TurnOutcome::Completed),
         ])
     }
 
@@ -75,8 +77,8 @@ impl Agent for FakeAgent {
                     .map_err(|error| RunError::ExecutionFailed(format!("failed to write fake file: {error}")))?;
             }
 
-            for message in &self.messages {
-                yield message.clone();
+            for event in &self.events {
+                yield event.clone();
             }
         }
     }
@@ -85,25 +87,26 @@ impl Agent for FakeAgent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aether_core::events::{MessageEvent, TurnEvent};
 
     #[tokio::test]
     async fn fake_agent_success_sends_done() {
         let agent = FakeAgent::success();
         let transcript = crate::Transcript::from_stream(agent.run(Task::new("test task"))).await.unwrap();
-        let messages = transcript.messages();
+        let messages = transcript.events();
 
-        assert!(matches!(messages.first(), Some(AgentMessage::Text { .. })));
-        assert!(matches!(messages.get(1), Some(AgentMessage::Done)));
+        assert!(matches!(messages.first(), Some(AgentEvent::Message(MessageEvent::Text { .. }))));
+        assert!(matches!(messages.get(1), Some(AgentEvent::Turn(TurnEvent::Ended { .. }))));
     }
 
     #[tokio::test]
     async fn fake_agent_with_tool_call_sends_tool_messages() {
         let agent = FakeAgent::with_tool_call("bash", "success");
         let transcript = crate::Transcript::from_stream(agent.run(Task::new("test task"))).await.unwrap();
-        let messages = transcript.messages();
+        let messages = transcript.events();
 
         assert_eq!(messages.len(), 3);
-        assert!(matches!(messages.last(), Some(AgentMessage::Done)));
+        assert!(matches!(messages.last(), Some(AgentEvent::Turn(TurnEvent::Ended { .. }))));
     }
 
     #[tokio::test]

@@ -1,5 +1,6 @@
 use aether_core::core::agent;
-use aether_core::events::{AgentCommand, AgentMessage, Command, UserCommand};
+use aether_core::events::{AgentCommand, AgentEvent, Command, UserCommand};
+use aether_core::events::{ContextEvent, ModelEvent, TurnEvent};
 use llm::LlmResponse;
 use llm::testing::FakeLlmProvider;
 
@@ -22,7 +23,7 @@ async fn test_switch_model_emits_model_switched() {
     // Wait for initial response to complete
     let mut got_initial_done = false;
     while let Some(msg) = rx.recv().await {
-        if matches!(msg, AgentMessage::Done) {
+        if matches!(msg, AgentEvent::Turn(TurnEvent::Ended { .. })) {
             got_initial_done = true;
             break;
         }
@@ -45,9 +46,9 @@ async fn test_switch_model_emits_model_switched() {
     }
 
     // Should have ModelSwitched with display name strings
-    let switched = messages.iter().find(|m| matches!(m, AgentMessage::ModelSwitched { .. }));
+    let switched = messages.iter().find(|m| matches!(m, AgentEvent::Model(ModelEvent::Switched { .. })));
     assert!(switched.is_some(), "Expected ModelSwitched message, got: {messages:?}");
-    if let Some(AgentMessage::ModelSwitched { previous, new }) = switched {
+    if let Some(AgentEvent::Model(ModelEvent::Switched { previous, new })) = switched {
         // FakeLlmProvider::display_name() returns "Fake LLM"
         assert_eq!(previous, "Fake LLM");
         assert_eq!(new, "Fake LLM");
@@ -75,7 +76,7 @@ async fn test_switch_model_unknown_context_limit_resets_context_meter() {
 
     tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("hi")] })).await.unwrap();
     while let Some(msg) = rx.recv().await {
-        if matches!(msg, AgentMessage::Done) {
+        if matches!(msg, AgentEvent::Turn(TurnEvent::Ended { .. })) {
             break;
         }
     }
@@ -89,14 +90,14 @@ async fn test_switch_model_unknown_context_limit_resets_context_meter() {
     }
 
     assert!(
-        messages.iter().any(|m| matches!(m, AgentMessage::ModelSwitched { .. })),
+        messages.iter().any(|m| matches!(m, AgentEvent::Model(ModelEvent::Switched { .. }))),
         "Expected ModelSwitched message, got: {messages:?}"
     );
     assert!(
         messages.iter().any(|m| {
             matches!(
                 m,
-                AgentMessage::ContextUsageUpdate { usage }
+                AgentEvent::Context(ContextEvent::UsageUpdated { usage })
                     if usage.usage_ratio.is_none() && usage.context_limit.is_none() && usage.input_tokens == 0
             )
         }),

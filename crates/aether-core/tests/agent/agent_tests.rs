@@ -1,13 +1,14 @@
+use aether_core::events::{LlmCallOutcome, MessageEvent, ToolEvent, TurnEvent};
 use std::error::Error;
 use std::time::Duration;
 
 use aether_core::{
-    events::{AgentMessage, Command, UserCommand},
+    events::{AgentEvent, Command, TurnOutcome, UserCommand},
     testing::{
-        agent_message, test_agent, {AddNumbersRequest, AddNumbersResult, DivideNumbersRequest, SlowToolRequest},
+        agent_event, test_agent, {AddNumbersRequest, AddNumbersResult, DivideNumbersRequest, SlowToolRequest},
     },
 };
-use llm::testing::llm_response;
+use llm::testing::{FakeLlmProvider, llm_response};
 use llm::{ChatMessage, ContentBlock, LlmResponse, StopReason};
 
 fn split_json_in_half(input: &str) -> (&str, &str) {
@@ -15,20 +16,82 @@ fn split_json_in_half(input: &str) -> (&str, &str) {
     input.split_at(split)
 }
 
+/// Strips turn/call lifecycle noise, leaving only the content events the
+/// `agent_event` builder describes.
+fn content_events(events: Vec<AgentEvent>) -> Vec<AgentEvent> {
+    events
+        .into_iter()
+        .filter(|event| {
+            !matches!(
+                event,
+                AgentEvent::Turn(
+                    TurnEvent::Started | TurnEvent::LlmCallStarted { .. } | TurnEvent::LlmCallEnded { .. }
+                ) | AgentEvent::Tool(ToolEvent::ExecutionStarted { .. } | ToolEvent::DefinitionsUpdated { .. })
+            )
+        })
+        .collect()
+}
+
 #[tokio::test]
 async fn test_text_message() -> Result<(), Box<dyn Error>> {
     let id = "message_1";
     let chunks = ["Hello", "user"];
     let llm_responses = [llm_response(id).text(&chunks).build()];
-    let mut expected_messages = agent_message(id).text(&chunks).build();
-    expected_messages.push(AgentMessage::Done);
+    let mut expected_messages = agent_event(id).text(&chunks).build();
+    expected_messages.push(AgentEvent::turn_ended(TurnOutcome::Completed));
 
     let messages = test_agent()
         .llm_responses(&llm_responses)
         .user_messages(vec![Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("hi")] })])
         .run()
         .await?;
-    assert_eq!(messages, expected_messages);
+    assert_eq!(content_events(messages), expected_messages);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_llm_call_lifecycle_reports_model_and_usage() -> Result<(), Box<dyn Error>> {
+    let model: llm::LlmModel = "anthropic:claude-opus-4-6".parse()?;
+    let llm =
+        FakeLlmProvider::new(vec![llm_response("msg_1").text(&["hi"]).usage(120, 7).build()]).with_model(model.clone());
+    let (tx, mut rx, _handle) = aether_core::core::agent(llm).spawn().await?;
+
+    tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("hello")] })).await?;
+
+    let mut events = Vec::new();
+    while let Some(event) = rx.recv().await {
+        let is_turn_end = event.turn_outcome().is_some();
+        events.push(event);
+        if is_turn_end {
+            break;
+        }
+    }
+
+    let started = events
+        .iter()
+        .find_map(|event| match event {
+            AgentEvent::Turn(TurnEvent::LlmCallStarted { provider, model, attempt, .. }) => {
+                Some((provider.clone(), model.clone(), *attempt))
+            }
+            _ => None,
+        })
+        .expect("LlmCallStarted should be emitted");
+    assert_eq!(started.0.as_deref(), Some(model.provider().to_string().as_str()));
+    assert_eq!(started.1.as_deref(), Some(model.model_id().as_ref()));
+    assert_eq!(started.2, 0, "initial call should be attempt 0");
+
+    let usage = events
+        .iter()
+        .find_map(|event| match event {
+            AgentEvent::Turn(TurnEvent::LlmCallEnded { outcome: LlmCallOutcome::Completed { usage, .. }, .. }) => {
+                *usage
+            }
+            _ => None,
+        })
+        .expect("completed LLM call should carry usage");
+    assert_eq!(usage.input_tokens, 120);
+    assert_eq!(usage.output_tokens, 7);
+
     Ok(())
 }
 
@@ -47,10 +110,10 @@ async fn test_single_tool_call() -> Result<(), Box<dyn Error>> {
 
     let expected_messages = {
         let mut messages = Vec::new();
-        messages.extend(agent_message(m1_id).tool_call(t1_id, t1_name, &tool_request, &tool_result).build());
+        messages.extend(agent_event(m1_id).tool_call(t1_id, t1_name, &tool_request, &tool_result).build());
 
-        messages.extend(agent_message(m2_id).text(&chunks).build());
-        messages.push(AgentMessage::Done);
+        messages.extend(agent_event(m2_id).text(&chunks).build());
+        messages.push(AgentEvent::turn_ended(TurnOutcome::Completed));
         messages
     };
 
@@ -61,7 +124,7 @@ async fn test_single_tool_call() -> Result<(), Box<dyn Error>> {
         })])
         .run()
         .await?;
-    assert_eq!(messages, expected_messages);
+    assert_eq!(content_events(messages), expected_messages);
     Ok(())
 }
 
@@ -86,7 +149,7 @@ async fn test_tool_request_arg_emits_tool_call_update() -> Result<(), Box<dyn Er
         .filter(|message| {
             matches!(
                 message,
-                AgentMessage::ToolCall { request, .. }
+                AgentEvent::Tool(ToolEvent::Call { request, .. })
                     if request.id == "call_1" && request.name == "test__add_numbers"
             )
         })
@@ -96,7 +159,9 @@ async fn test_tool_request_arg_emits_tool_call_update() -> Result<(), Box<dyn Er
     let update_chunks: Vec<String> = messages
         .iter()
         .filter_map(|message| match message {
-            AgentMessage::ToolCallUpdate { tool_call_id, chunk, .. } if tool_call_id == "call_1" => Some(chunk.clone()),
+            AgentEvent::Tool(ToolEvent::CallUpdate { tool_call_id, chunk, .. }) if tool_call_id == "call_1" => {
+                Some(chunk.clone())
+            }
             _ => None,
         })
         .collect();
@@ -108,7 +173,7 @@ async fn test_tool_request_arg_emits_tool_call_update() -> Result<(), Box<dyn Er
     assert!(messages.iter().any(|message| {
         matches!(
             message,
-            AgentMessage::ToolResult { result, .. }
+            AgentEvent::Tool(ToolEvent::Result { result, .. })
                 if result.id == "call_1" && result.result.contains("sum")
         )
     }));
@@ -129,13 +194,13 @@ async fn test_tool_call_failure() -> Result<(), Box<dyn Error>> {
     let expected_messages = {
         let mut messages = Vec::new();
         messages.extend(
-            agent_message("message_1")
+            agent_event("message_1")
                 .tool_call_with_error("call_1", "test__divide_numbers", &tool_request, "Division by zero")
                 .build(),
         );
 
-        messages.extend(agent_message("message_2").text(&chunks).build());
-        messages.push(AgentMessage::Done);
+        messages.extend(agent_event("message_2").text(&chunks).build());
+        messages.push(AgentEvent::turn_ended(TurnOutcome::Completed));
         messages
     };
 
@@ -146,7 +211,7 @@ async fn test_tool_call_failure() -> Result<(), Box<dyn Error>> {
         })])
         .run()
         .await?;
-    assert_eq!(messages, expected_messages);
+    assert_eq!(content_events(messages), expected_messages);
     Ok(())
 }
 
@@ -176,11 +241,12 @@ async fn test_cancellation() -> Result<(), Box<dyn Error>> {
         .run()
         .await?;
 
-    let text_chunks_received = messages.iter().filter(|m| matches!(m, AgentMessage::Text { .. })).count();
+    let text_chunks_received =
+        messages.iter().filter(|m| matches!(m, AgentEvent::Message(MessageEvent::Text { .. }))).count();
 
     assert!(
-        messages.iter().any(|m| matches!(m, AgentMessage::Cancelled { .. })),
-        "Expected to receive a Cancelled message"
+        messages.iter().any(|m| matches!(m.turn_outcome(), Some(TurnOutcome::Cancelled))),
+        "Expected the turn to end as cancelled"
     );
 
     // Due to Agent's merging of N async streams, it's hard to control
@@ -217,7 +283,7 @@ async fn test_tool_timeout() -> Result<(), Box<dyn Error>> {
     let has_tool_error = messages.iter().any(|m| {
         matches!(
             m,
-            AgentMessage::ToolError { error, .. } if error.error.contains("timeout")
+            AgentEvent::Tool(ToolEvent::Error { error, .. }) if error.error.contains("timeout")
         )
     });
 
@@ -270,10 +336,11 @@ async fn test_auto_continue_not_triggered_for_end_turn() -> Result<(), Box<dyn E
         .run()
         .await?;
 
-    let auto_continue_count = messages.iter().filter(|m| matches!(m, AgentMessage::AutoContinue { .. })).count();
+    let auto_continue_count =
+        messages.iter().filter(|m| matches!(m, AgentEvent::Turn(TurnEvent::AutoContinue { .. }))).count();
     assert_eq!(auto_continue_count, 0, "Expected no AutoContinue messages for normal end-turn completion");
 
-    assert!(matches!(messages.last(), Some(AgentMessage::Done)), "Expected Done message");
+    assert!(matches!(messages.last().and_then(AgentEvent::turn_outcome), Some(TurnOutcome::Completed)));
 
     Ok(())
 }
@@ -293,10 +360,11 @@ async fn test_auto_continue_not_triggered_for_opening_message() -> Result<(), Bo
         .run()
         .await?;
 
-    let auto_continue_count = messages.iter().filter(|m| matches!(m, AgentMessage::AutoContinue { .. })).count();
+    let auto_continue_count =
+        messages.iter().filter(|m| matches!(m, AgentEvent::Turn(TurnEvent::AutoContinue { .. }))).count();
     assert_eq!(auto_continue_count, 0, "Expected no AutoContinue messages for opening message without tool calls");
 
-    assert!(matches!(messages.last(), Some(AgentMessage::Done)), "Expected Done message for opening message");
+    assert!(matches!(messages.last().and_then(AgentEvent::turn_outcome), Some(TurnOutcome::Completed)));
 
     Ok(())
 }
@@ -332,7 +400,8 @@ async fn test_auto_continue_triggers_on_length_stop_reason() -> Result<(), Box<d
         .run()
         .await?;
 
-    let auto_continue_count = messages.iter().filter(|m| matches!(m, AgentMessage::AutoContinue { .. })).count();
+    let auto_continue_count =
+        messages.iter().filter(|m| matches!(m, AgentEvent::Turn(TurnEvent::AutoContinue { .. }))).count();
     assert_eq!(
         auto_continue_count, 2,
         "Expected 2 AutoContinue messages after length stop reasons, got {auto_continue_count}"
@@ -341,7 +410,7 @@ async fn test_auto_continue_triggers_on_length_stop_reason() -> Result<(), Box<d
     let auto_continues: Vec<_> = messages
         .iter()
         .filter_map(|m| match m {
-            AgentMessage::AutoContinue { attempt, max_attempts } => Some((*attempt, *max_attempts)),
+            AgentEvent::Turn(TurnEvent::AutoContinue { attempt, max_attempts }) => Some((*attempt, *max_attempts)),
             _ => None,
         })
         .collect();
@@ -370,18 +439,19 @@ async fn test_auto_continue_triggers_on_empty_length_stop_reason() -> Result<(),
         .run()
         .await?;
 
-    let auto_continue_count = messages.iter().filter(|m| matches!(m, AgentMessage::AutoContinue { .. })).count();
+    let auto_continue_count =
+        messages.iter().filter(|m| matches!(m, AgentEvent::Turn(TurnEvent::AutoContinue { .. }))).count();
     assert_eq!(auto_continue_count, 1, "Expected AutoContinue after an empty length stop, got {messages:?}");
 
     assert!(
         messages.iter().any(|m| matches!(
             m,
-            AgentMessage::Text { chunk, .. } if chunk == "Recovered after compaction"
+            AgentEvent::Message(MessageEvent::Text { chunk, .. }) if chunk == "Recovered after compaction"
         )),
         "Expected follow-up response after empty length stop, got {messages:?}"
     );
 
-    assert!(matches!(messages.last(), Some(AgentMessage::Done)), "Expected Done message");
+    assert!(matches!(messages.last().and_then(AgentEvent::turn_outcome), Some(TurnOutcome::Completed)));
 
     Ok(())
 }
@@ -418,12 +488,13 @@ async fn test_auto_continue_respects_max_limit() -> Result<(), Box<dyn Error>> {
         .run()
         .await?;
 
-    let auto_continue_count = messages.iter().filter(|m| matches!(m, AgentMessage::AutoContinue { .. })).count();
+    let auto_continue_count =
+        messages.iter().filter(|m| matches!(m, AgentEvent::Turn(TurnEvent::AutoContinue { .. }))).count();
     assert_eq!(auto_continue_count, 2, "Expected 2 AutoContinue messages (max limit), got {auto_continue_count}");
 
     assert!(
-        matches!(messages.last(), Some(AgentMessage::Done)),
-        "Expected Done message after hitting max_auto_continues"
+        matches!(messages.last().and_then(AgentEvent::turn_outcome), Some(TurnOutcome::Completed)),
+        "Expected the turn to complete after hitting max_auto_continues"
     );
 
     Ok(())
@@ -451,10 +522,11 @@ async fn test_auto_continue_disabled_with_zero() -> Result<(), Box<dyn Error>> {
         .run()
         .await?;
 
-    let auto_continue_count = messages.iter().filter(|m| matches!(m, AgentMessage::AutoContinue { .. })).count();
+    let auto_continue_count =
+        messages.iter().filter(|m| matches!(m, AgentEvent::Turn(TurnEvent::AutoContinue { .. }))).count();
     assert_eq!(auto_continue_count, 0, "Expected no AutoContinue messages when max_auto_continues=0");
 
-    assert!(matches!(messages.last(), Some(AgentMessage::Done)), "Expected Done message");
+    assert!(matches!(messages.last().and_then(AgentEvent::turn_outcome), Some(TurnOutcome::Completed)));
 
     Ok(())
 }
@@ -522,11 +594,14 @@ async fn test_reasoning_chunks_emit_thought_messages() -> Result<(), Box<dyn Err
     assert!(
         messages.iter().any(|m| matches!(
             m,
-            AgentMessage::Thought { chunk, .. } if chunk == "internal plan"
+            AgentEvent::Message(MessageEvent::Thought { chunk, .. }) if chunk == "internal plan"
         )),
         "Expected at least one Thought message from reasoning chunks, got: {messages:?}"
     );
-    assert!(messages.iter().any(|m| matches!(m, AgentMessage::Done)), "Expected Done message");
+    assert!(
+        messages.iter().any(|m| matches!(m, AgentEvent::Turn(TurnEvent::Ended { .. }))),
+        "Expected the turn to end"
+    );
 
     Ok(())
 }

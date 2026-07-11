@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio_stream::StreamExt;
 
 use llm::types::IsoString;
-use llm::{ChatMessage, Context, LlmResponse, StreamingModelProvider};
+use llm::{ChatMessage, Context, LlmResponse, StreamingModelProvider, TokenUsage};
 
 const SUMMARIZATION_PROMPT: &str = include_str!("prompts/summarization.md");
 
@@ -16,6 +16,8 @@ pub struct CompactionResult {
     pub summary: String,
     /// Number of messages that were removed/compacted
     pub messages_removed: usize,
+    /// Token usage reported by the summarization LLM call, if any
+    pub usage: Option<TokenUsage>,
 }
 
 /// Errors that can occur during compaction
@@ -81,12 +83,14 @@ impl Compactor {
 
         let mut stream = self.llm.stream_response(&summary_context);
         let mut summary = String::new();
+        let mut usage = None;
 
         while let Some(result) = stream.next().await {
             match result {
                 Ok(LlmResponse::Text { chunk }) => {
                     summary.push_str(&chunk);
                 }
+                Ok(LlmResponse::Usage { tokens }) => usage = Some(tokens),
                 Ok(LlmResponse::Done { .. }) => break,
                 Ok(LlmResponse::Error { message }) => {
                     return Err(CompactionError::SummarizationFailed(message));
@@ -104,7 +108,7 @@ impl Compactor {
 
         let compacted_context = context.with_compacted_summary(&summary);
 
-        Ok(CompactionResult { context: compacted_context, summary, messages_removed })
+        Ok(CompactionResult { context: compacted_context, summary, messages_removed, usage })
     }
 }
 

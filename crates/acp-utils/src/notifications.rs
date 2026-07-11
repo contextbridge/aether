@@ -12,37 +12,63 @@ pub use mcp_utils::status::{McpServerAuthCapability, McpServerStatus, McpServerS
 
 pub const AETHER_META_NAMESPACE: &str = "contextbridge/aether";
 
-/// Parameters for `_aether/context_usage` notifications.
+/// Context/token usage reported after an LLM call.
 ///
-/// Per-turn fields (`input_tokens`, `output_tokens`, `cache_read_tokens`,
+/// Per-call fields (`input_tokens`, `output_tokens`, `cache_read_tokens`,
 /// `cache_creation_tokens`, `reasoning_tokens`) come from the most recent
 /// API response. The `total_*` fields are cumulative across the agent's
 /// lifetime. The optional fields are `None` when the provider doesn't
 /// expose that dimension; this is semantically distinct from `Some(0)`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ContextUsage {
+    /// Current usage ratio (0.0 - 1.0), if context window is known.
+    pub usage_ratio: Option<f64>,
+    /// Maximum context limit, if known.
+    pub context_limit: Option<u32>,
+    /// Input tokens on the most recent API call (the current context size).
+    pub input_tokens: u32,
+    /// Output tokens on the most recent API call.
+    #[serde(default)]
+    pub output_tokens: u32,
+    /// Prompt tokens served from cache on the most recent API call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_tokens: Option<u32>,
+    /// Prompt tokens written to cache on the most recent API call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_creation_tokens: Option<u32>,
+    /// Reasoning tokens spent on the most recent API call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_tokens: Option<u32>,
+    /// Cumulative input tokens since the agent started.
+    #[serde(default)]
+    pub total_input_tokens: u64,
+    /// Cumulative output tokens since the agent started.
+    #[serde(default)]
+    pub total_output_tokens: u64,
+    /// Cumulative cache-read tokens since the agent started.
+    #[serde(default)]
+    pub total_cache_read_tokens: u64,
+    /// Cumulative cache-creation tokens since the agent started.
+    #[serde(default)]
+    pub total_cache_creation_tokens: u64,
+    /// Cumulative reasoning tokens since the agent started.
+    #[serde(default)]
+    pub total_reasoning_tokens: u64,
+}
+
+impl ContextUsage {
+    /// Sum of cumulative input + output tokens.
+    pub fn total_tokens(&self) -> u64 {
+        self.total_input_tokens + self.total_output_tokens
+    }
+}
+
+/// Parameters for `_aether/context_usage` notifications.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonRpcNotification)]
 #[notification(method = "_aether/context_usage")]
 pub struct ContextUsageParams {
-    pub usage_ratio: Option<f64>,
-    pub context_limit: Option<u32>,
-    pub input_tokens: u32,
-    #[serde(default)]
-    pub output_tokens: u32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache_read_tokens: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache_creation_tokens: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reasoning_tokens: Option<u32>,
-    #[serde(default)]
-    pub total_input_tokens: u64,
-    #[serde(default)]
-    pub total_output_tokens: u64,
-    #[serde(default)]
-    pub total_cache_read_tokens: u64,
-    #[serde(default)]
-    pub total_cache_creation_tokens: u64,
-    #[serde(default)]
-    pub total_reasoning_tokens: u64,
+    #[serde(flatten)]
+    pub usage: ContextUsage,
 }
 
 /// Parameters for `_aether/context_cleared` notifications.
@@ -286,7 +312,7 @@ pub struct SubAgentProgressParams {
 
 /// Subset of agent message variants relevant for sub-agent status display.
 ///
-/// The ACP server (`aether-cli`) converts `AgentMessage` to this type before
+/// The ACP server (`aether-cli`) converts `AgentEvent` to this type before
 /// serializing, so the wire format only contains these known variants.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SubAgentEvent {
@@ -351,18 +377,20 @@ mod tests {
     #[test]
     fn context_usage_params_roundtrip() {
         let params = ContextUsageParams {
-            usage_ratio: Some(0.75),
-            context_limit: Some(100_000),
-            input_tokens: 75_000,
-            output_tokens: 1_200,
-            cache_read_tokens: Some(40_000),
-            cache_creation_tokens: Some(2_000),
-            reasoning_tokens: Some(500),
-            total_input_tokens: 200_000,
-            total_output_tokens: 8_000,
-            total_cache_read_tokens: 90_000,
-            total_cache_creation_tokens: 5_000,
-            total_reasoning_tokens: 1_500,
+            usage: ContextUsage {
+                usage_ratio: Some(0.75),
+                context_limit: Some(100_000),
+                input_tokens: 75_000,
+                output_tokens: 1_200,
+                cache_read_tokens: Some(40_000),
+                cache_creation_tokens: Some(2_000),
+                reasoning_tokens: Some(500),
+                total_input_tokens: 200_000,
+                total_output_tokens: 8_000,
+                total_cache_read_tokens: 90_000,
+                total_cache_creation_tokens: 5_000,
+                total_reasoning_tokens: 1_500,
+            },
         };
 
         let untyped = params.to_untyped_message().expect("serializable");
@@ -374,18 +402,12 @@ mod tests {
     #[test]
     fn context_usage_params_omits_unset_optional_token_fields() {
         let params = ContextUsageParams {
-            usage_ratio: Some(0.1),
-            context_limit: Some(1_000),
-            input_tokens: 100,
-            output_tokens: 0,
-            cache_read_tokens: None,
-            cache_creation_tokens: None,
-            reasoning_tokens: None,
-            total_input_tokens: 0,
-            total_output_tokens: 0,
-            total_cache_read_tokens: 0,
-            total_cache_creation_tokens: 0,
-            total_reasoning_tokens: 0,
+            usage: ContextUsage {
+                usage_ratio: Some(0.1),
+                context_limit: Some(1_000),
+                input_tokens: 100,
+                ..ContextUsage::default()
+            },
         };
 
         let raw = serde_json::to_string(&params).unwrap();

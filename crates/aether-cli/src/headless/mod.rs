@@ -31,17 +31,19 @@ pub enum CliEventKind {
     ToolCall,
     ToolResult,
     ToolError,
-    Error,
-    Cancelled,
     AutoContinue,
-    Retrying,
     ModelSwitched,
     ToolProgress,
     ContextCompactionStarted,
     ContextCompactionResult,
     ContextUsage,
     ContextCleared,
-    Done,
+    TurnStarted,
+    TurnEnded,
+    LlmCallStarted,
+    LlmCallEnded,
+    ToolExecutionStarted,
+    ToolDefinitionsUpdated,
 }
 
 pub struct RunConfig {
@@ -130,8 +132,8 @@ pub struct HeadlessArgs {
     #[arg(short, long)]
     pub verbose: bool,
 
-    /// Comma-separated list of events to emit (e.g. `tool_call,tool_result,done`).
-    /// Omit to emit every output event. When set, `error` is only shown if explicitly listed.
+    /// Comma-separated list of events to emit (e.g. `tool_call,tool_result,turn_ended`).
+    /// Omit to emit every output event. When set, turn outcomes are only shown if `turn_ended` is listed.
     #[arg(long = "events", value_enum, value_delimiter = ',')]
     pub events: Vec<CliEventKind>,
 }

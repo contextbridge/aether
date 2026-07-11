@@ -1,7 +1,10 @@
 use crate::context::{CompactionConfig, Compactor, TokenTracker};
 use crate::core::PromptCache;
 pub use crate::core::retry_config::RetryConfig;
-use crate::events::{AgentCommand, AgentMessage, Command, ContextUsage, UserCommand};
+use crate::events::{
+    AgentCommand, AgentEvent, Command, ContextEvent, ContextUsage, LlmCallOutcome, LlmCallPurpose, ModelEvent,
+    ToolEvent, TurnEvent, TurnOutcome, UserCommand,
+};
 use crate::mcp::run_mcp_task::{McpCommand, ToolExecutionEvent};
 use futures::Stream;
 use llm::types::IsoString;
@@ -48,7 +51,7 @@ pub struct Agent {
     llm: Arc<dyn StreamingModelProvider>,
     context: Context,
     mcp_command_tx: Option<mpsc::Sender<McpCommand>>,
-    message_tx: mpsc::Sender<AgentMessage>,
+    message_tx: mpsc::Sender<AgentEvent>,
     streams: StreamMap<String, EventStream>,
     tool_timeout: Duration,
     token_tracker: TokenTracker,
@@ -59,13 +62,14 @@ pub struct Agent {
     queued_user_messages: VecDeque<Vec<llm::ContentBlock>>,
     context_window: Option<u32>,
     prompt_cache: PromptCache,
+    turn_active: bool,
 }
 
 impl Agent {
     pub(crate) fn new(
         config: AgentConfig,
         command_rx: mpsc::Receiver<Command>,
-        message_tx: mpsc::Sender<AgentMessage>,
+        message_tx: mpsc::Sender<AgentEvent>,
     ) -> Self {
         let mut streams: StreamMap<String, EventStream> = StreamMap::new();
         streams
@@ -88,6 +92,7 @@ impl Agent {
             queued_user_messages: VecDeque::new(),
             context_window: config.context_window,
             prompt_cache: config.prompt_cache,
+            turn_active: false,
         }
     }
 
@@ -102,6 +107,7 @@ impl Agent {
 
     pub async fn run(mut self) {
         let mut state = IterationState::new();
+        self.emit_tool_definitions().await;
 
         while let Some((_, event)) = self.streams.next().await {
             match event {
@@ -118,7 +124,7 @@ impl Agent {
                         self.queued_user_messages.push_back(content);
                     } else {
                         state = IterationState::new();
-                        self.on_user_text(content);
+                        self.on_user_text(content).await;
                     }
                 }
 
@@ -128,6 +134,7 @@ impl Agent {
 
                 StreamEvent::Command(Command::AgentCommand(AgentCommand::UpdateTools(tools))) => {
                     self.context.set_tools(tools);
+                    self.emit_tool_definitions().await;
                 }
 
                 StreamEvent::Command(Command::AgentCommand(AgentCommand::UpdateMcpInstructions { server, body })) => {
@@ -180,26 +187,10 @@ impl Agent {
             let reasoning = AssistantReasoning::from_parts(reasoning_summary_text.clone(), encrypted_reasoning);
             self.update_context(&message_content, reasoning, completed_tool_calls);
 
-            let _ = self
-                .message_tx
-                .send(AgentMessage::Text {
-                    message_id: id.clone(),
-                    chunk: message_content.clone(),
-                    is_complete: true,
-                    model_name: self.llm.display_name(),
-                })
-                .await;
+            self.emit(AgentEvent::text(&id, &message_content, true)).await;
 
             if !reasoning_summary_text.is_empty() {
-                let _ = self
-                    .message_tx
-                    .send(AgentMessage::Thought {
-                        message_id: id.clone(),
-                        chunk: reasoning_summary_text,
-                        is_complete: true,
-                        model_name: self.llm.display_name(),
-                    })
-                    .await;
+                self.emit(AgentEvent::thought(&id, &reasoning_summary_text, true)).await;
             }
         }
 
@@ -221,59 +212,58 @@ impl Agent {
                 self.auto_continue.max()
             );
 
-            let _ = self
-                .message_tx
-                .send(AgentMessage::AutoContinue {
-                    attempt: self.auto_continue.count(),
-                    max_attempts: self.auto_continue.max(),
-                })
-                .await;
+            self.emit(AgentEvent::Turn(TurnEvent::AutoContinue {
+                attempt: self.auto_continue.count(),
+                max_attempts: self.auto_continue.max(),
+            }))
+            .await;
 
             self.inject_continuation_prompt(&message_content, stop_reason.as_ref());
             self.start_next_turn().await;
         } else {
             tracing::debug!("LLM completed turn with stop reason: {:?}", stop_reason);
             self.auto_continue.reset();
-            if let Err(e) = self.message_tx.send(AgentMessage::Done).await {
-                tracing::warn!("Failed to send Done message: {:?}", e);
-            }
+            self.finish_turn(TurnOutcome::Completed).await;
         }
     }
 
     async fn start_next_turn(&mut self) {
         self.maybe_preflight_compact().await;
-        self.start_llm_stream(None);
+        self.start_llm_stream(None, 0).await;
     }
 
     async fn on_user_cancel(&mut self, state: &mut IterationState) {
-        self.abort_in_flight_work();
+        self.abort_in_flight_work().await;
         *state = IterationState::new();
-        let _ = self.message_tx.send(AgentMessage::Cancelled { message: "Processing cancelled".to_string() }).await;
-        let _ = self.message_tx.send(AgentMessage::Done).await;
+        self.finish_turn(TurnOutcome::Cancelled).await;
     }
 
     async fn on_user_clear_context(&mut self, state: &mut IterationState) {
-        self.abort_in_flight_work();
+        self.abort_in_flight_work().await;
         self.context.clear_conversation();
         self.token_tracker.reset_current_usage();
         self.auto_continue.reset();
         *state = IterationState::new();
 
-        let _ = self.message_tx.send(AgentMessage::ContextCleared).await;
+        self.emit(AgentEvent::Context(ContextEvent::Cleared)).await;
+        self.finish_turn(TurnOutcome::Cancelled).await;
     }
 
     async fn on_replace_conversation(&mut self, messages: Vec<ChatMessage>, state: &mut IterationState) {
-        self.abort_in_flight_work();
+        self.abort_in_flight_work().await;
         self.context.replace_conversation(messages);
         self.auto_continue.reset();
         *state = IterationState::new();
-        let _ = self.message_tx.send(self.context_usage_message()).await;
+        self.emit(self.context_usage_message()).await;
+        self.finish_turn(TurnOutcome::Cancelled).await;
     }
 
-    fn on_user_text(&mut self, content: Vec<llm::ContentBlock>) {
+    async fn on_user_text(&mut self, content: Vec<llm::ContentBlock>) {
         self.context.add_message(ChatMessage::User { content, timestamp: IsoString::now() });
         self.auto_continue.reset();
-        self.start_llm_stream(None);
+        self.turn_active = true;
+        self.emit(AgentEvent::Turn(TurnEvent::Started)).await;
+        self.start_llm_stream(None, 0).await;
     }
 
     async fn on_update_instruction(&mut self, server: String, body: Option<String>) {
@@ -291,12 +281,13 @@ impl Agent {
         self.token_tracker.reset_current_usage();
         self.token_tracker.set_context_limit(new_context_limit);
         let new = self.llm.display_name();
-        let _ = self.message_tx.send(AgentMessage::ModelSwitched { previous, new }).await;
+        self.emit(AgentEvent::Model(ModelEvent::Switched { previous, new })).await;
 
-        let _ = self.message_tx.send(self.context_usage_message()).await;
+        self.emit(self.context_usage_message()).await;
     }
 
-    fn start_llm_stream(&mut self, delay: Option<Duration>) {
+    async fn start_llm_stream(&mut self, delay: Option<Duration>, attempt: u32) {
+        self.emit(self.llm_call_started(LlmCallPurpose::Chat, attempt, delay)).await;
         self.streams.remove(LLM_STREAM_KEY);
         let stream: EventStream = match delay {
             None => Box::pin(self.llm.stream_response(&self.context).map(StreamEvent::Llm)),
@@ -316,44 +307,48 @@ impl Agent {
     }
 
     async fn on_llm_error(&mut self, error: LlmError, state: &mut IterationState) {
-        if !error.is_retryable() || state.retry_attempt >= self.retry_config.max_attempts {
-            let _ = self.message_tx.send(AgentMessage::Error { message: error.to_string() }).await;
+        let will_retry = error.is_retryable() && state.retry_attempt < self.retry_config.max_attempts;
+        let error_message = error.to_string();
+        self.emit(AgentEvent::Turn(TurnEvent::LlmCallEnded {
+            purpose: LlmCallPurpose::Chat,
+            outcome: LlmCallOutcome::Failed { error: error_message.clone(), will_retry },
+        }))
+        .await;
+
+        if !will_retry {
+            self.finish_turn(TurnOutcome::Failed { error: error_message }).await;
             return;
         }
 
         state.retry_attempt += 1;
         let delay = self.retry_config.compute_delay(state.retry_attempt);
-        let delay_ms = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX);
 
         tracing::warn!(
             attempt = state.retry_attempt,
             max_attempts = self.retry_config.max_attempts,
-            delay_ms,
+            delay_ms = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
             error = %error,
             "Retrying LLM request after transient failure"
         );
 
-        let _ = self
-            .message_tx
-            .send(AgentMessage::Retrying {
-                attempt: state.retry_attempt,
-                max_attempts: self.retry_config.max_attempts,
-                delay_ms,
-                error: error.to_string(),
-            })
-            .await;
-
         // The previous stream may have emitted partial tool-call deltas
         // before interrupting so we drop them to ensure we rebuild tool state
         self.active_requests.clear();
-        self.start_llm_stream(Some(delay));
+        self.start_llm_stream(Some(delay), state.retry_attempt).await;
     }
 
     fn is_busy(&self) -> bool {
         self.streams.contains_key(LLM_STREAM_KEY) || !self.active_requests.is_empty()
     }
 
-    fn abort_in_flight_work(&mut self) {
+    async fn abort_in_flight_work(&mut self) {
+        if self.streams.contains_key(LLM_STREAM_KEY) {
+            self.emit(AgentEvent::Turn(TurnEvent::LlmCallEnded {
+                purpose: LlmCallPurpose::Chat,
+                outcome: LlmCallOutcome::Cancelled,
+            }))
+            .await;
+        }
         self.streams.remove(LLM_STREAM_KEY);
         for stream_key in self.active_requests.keys().cloned().collect::<Vec<_>>() {
             self.streams.remove(&stream_key);
@@ -408,16 +403,8 @@ impl Agent {
 
             Reasoning { chunk } => {
                 state.reasoning_summary_text.push_str(&chunk);
-                if let Some(id) = &state.current_message_id {
-                    let _ = self
-                        .message_tx
-                        .send(AgentMessage::Thought {
-                            message_id: id.clone(),
-                            chunk,
-                            is_complete: false,
-                            model_name: self.llm.display_name(),
-                        })
-                        .await;
+                if let Some(id) = state.current_message_id.clone() {
+                    self.emit(AgentEvent::thought(&id, &chunk, false)).await;
                 }
             }
 
@@ -442,14 +429,27 @@ impl Agent {
             Done { stop_reason } => {
                 state.llm_done = true;
                 state.stop_reason = stop_reason;
+                self.emit(AgentEvent::Turn(TurnEvent::LlmCallEnded {
+                    purpose: LlmCallPurpose::Chat,
+                    outcome: LlmCallOutcome::Completed {
+                        stop_reason: state.stop_reason.clone(),
+                        usage: state.call_usage.take(),
+                    },
+                }))
+                .await;
             }
 
             Error { message } => {
-                let _ = self.message_tx.send(AgentMessage::Error { message }).await;
+                self.emit(AgentEvent::Turn(TurnEvent::LlmCallEnded {
+                    purpose: LlmCallPurpose::Chat,
+                    outcome: LlmCallOutcome::Failed { error: message.clone(), will_retry: false },
+                }))
+                .await;
+                self.finish_turn(TurnOutcome::Failed { error: message }).await;
             }
 
             Usage { tokens: sample } => {
-                self.handle_llm_usage(sample).await;
+                self.handle_llm_usage(sample, state).await;
             }
         }
     }
@@ -457,16 +457,8 @@ impl Agent {
     async fn handle_llm_text(&mut self, chunk: String, state: &mut IterationState) {
         state.message_content.push_str(&chunk);
 
-        if let Some(id) = &state.current_message_id {
-            let _ = self
-                .message_tx
-                .send(AgentMessage::Text {
-                    message_id: id.clone(),
-                    chunk,
-                    is_complete: false,
-                    model_name: self.llm.display_name(),
-                })
-                .await;
+        if let Some(id) = state.current_message_id.clone() {
+            self.emit(AgentEvent::text(&id, &chunk, false)).await;
         }
     }
 
@@ -474,7 +466,7 @@ impl Agent {
         let request = ToolCallRequest { id: id.clone(), name, arguments: String::new() };
         self.active_requests.insert(id, request.clone());
 
-        let _ = self.message_tx.send(AgentMessage::ToolCall { request, model_name: self.llm.display_name() }).await;
+        self.emit(AgentEvent::Tool(ToolEvent::Call { request })).await;
     }
 
     async fn handle_tool_request_arg(&mut self, id: String, chunk: String) {
@@ -483,10 +475,7 @@ impl Agent {
         };
         request.arguments.push_str(&chunk);
 
-        let _ = self
-            .message_tx
-            .send(AgentMessage::ToolCallUpdate { tool_call_id: id, chunk, model_name: self.llm.display_name() })
-            .await;
+        self.emit(AgentEvent::Tool(ToolEvent::CallUpdate { tool_call_id: id, chunk })).await;
     }
 
     async fn handle_tool_completion(&mut self, tool_call: ToolCallRequest, state: &mut IterationState) {
@@ -511,20 +500,21 @@ impl Agent {
         }
     }
 
-    async fn handle_llm_usage(&mut self, sample: TokenUsage) {
+    async fn handle_llm_usage(&mut self, sample: TokenUsage, state: &mut IterationState) {
+        state.call_usage = Some(sample);
         self.token_tracker.record_usage(sample);
         let ratio_pct = self.token_tracker.usage_ratio().map(|r| r * 100.0);
         let remaining = self.token_tracker.tokens_remaining();
         tracing::debug!(?sample, ?ratio_pct, ?remaining, "Token usage");
 
-        let _ = self.message_tx.send(self.context_usage_message()).await;
+        self.emit(self.context_usage_message()).await;
 
         self.maybe_compact_context().await;
     }
 
-    fn context_usage_message(&self) -> AgentMessage {
+    fn context_usage_message(&self) -> AgentEvent {
         let last = self.token_tracker.last_usage();
-        AgentMessage::ContextUsageUpdate {
+        AgentEvent::Context(ContextEvent::UsageUpdated {
             usage: ContextUsage {
                 usage_ratio: self.token_tracker.usage_ratio(),
                 context_limit: self.token_tracker.context_limit(),
@@ -539,7 +529,7 @@ impl Agent {
                 total_cache_creation_tokens: self.token_tracker.total_cache_creation_tokens(),
                 total_reasoning_tokens: self.token_tracker.total_reasoning_tokens(),
             },
-        }
+        })
     }
 
     /// Pre-flight check: estimate context size and compact proactively if it would
@@ -599,30 +589,39 @@ impl Agent {
             }
         }
 
-        let _ = self
-            .message_tx
-            .send(AgentMessage::ContextCompactionStarted { message_count: self.context.message_count() })
+        self.emit(AgentEvent::Context(ContextEvent::CompactionStarted { message_count: self.context.message_count() }))
             .await;
 
         let compactor = Compactor::new(self.llm.clone());
 
+        self.emit(self.llm_call_started(LlmCallPurpose::Compaction, 0, None)).await;
         match compactor.compact(&self.context).await {
             Ok(result) => {
                 tracing::info!("Context compacted: {} messages removed", result.messages_removed);
+                self.emit(AgentEvent::Turn(TurnEvent::LlmCallEnded {
+                    purpose: LlmCallPurpose::Compaction,
+                    outcome: LlmCallOutcome::Completed { stop_reason: None, usage: result.usage },
+                }))
+                .await;
 
                 self.context = result.context;
                 self.token_tracker.reset_current_usage();
 
-                let _ = self
-                    .message_tx
-                    .send(AgentMessage::ContextCompactionResult {
-                        summary: result.summary,
-                        messages_removed: result.messages_removed,
-                    })
-                    .await;
+                self.emit(AgentEvent::Context(ContextEvent::CompactionResult {
+                    summary: result.summary,
+                    messages_removed: result.messages_removed,
+                }))
+                .await;
                 CompactionOutcome::Compacted
             }
-            Err(e) => CompactionOutcome::Failed(e.to_string()),
+            Err(e) => {
+                self.emit(AgentEvent::Turn(TurnEvent::LlmCallEnded {
+                    purpose: LlmCallPurpose::Compaction,
+                    outcome: LlmCallOutcome::Failed { error: e.to_string(), will_retry: false },
+                }))
+                .await;
+                CompactionOutcome::Failed(e.to_string())
+            }
         }
     }
 
@@ -630,6 +629,7 @@ impl Agent {
         match event {
             ToolExecutionEvent::Started { tool_id, tool_name } => {
                 tracing::debug!("Tool execution started: {} ({})", tool_name, tool_id);
+                self.emit(AgentEvent::Tool(ToolEvent::ExecutionStarted { tool_id, tool_name })).await;
             }
 
             ToolExecutionEvent::Progress { tool_id, progress } => {
@@ -640,16 +640,14 @@ impl Agent {
                     progress.total.unwrap_or(0.0)
                 );
 
-                if let Some(request) = self.active_requests.get(&tool_id) {
-                    let _ = self
-                        .message_tx
-                        .send(AgentMessage::ToolProgress {
-                            request: request.clone(),
-                            progress: progress.progress,
-                            total: progress.total,
-                            message: progress.message.clone(),
-                        })
-                        .await;
+                if let Some(request) = self.active_requests.get(&tool_id).cloned() {
+                    self.emit(AgentEvent::Tool(ToolEvent::Progress {
+                        request,
+                        progress: progress.progress,
+                        total: progress.total,
+                        message: progress.message.clone(),
+                    }))
+                    .await;
                 }
             }
 
@@ -661,15 +659,7 @@ impl Agent {
                         self.active_requests.remove(&tool_result.id);
                         state.completed_tool_calls.push(Ok(tool_result.clone()));
 
-                        let msg = AgentMessage::ToolResult {
-                            result: tool_result,
-                            result_meta,
-                            model_name: self.llm.display_name(),
-                        };
-
-                        if let Err(e) = self.message_tx.send(msg).await {
-                            tracing::warn!("Failed to send ToolCall completion message: {:?}", e);
-                        }
+                        self.emit(AgentEvent::Tool(ToolEvent::Result { result: tool_result, result_meta })).await;
                     } else {
                         tracing::debug!("Ignoring stale tool result for id: {}", tool_result.id);
                     }
@@ -680,10 +670,7 @@ impl Agent {
                         self.active_requests.remove(&tool_error.id);
                         state.completed_tool_calls.push(Err(tool_error.clone()));
 
-                        let _ = self
-                            .message_tx
-                            .send(AgentMessage::ToolError { error: tool_error, model_name: self.llm.display_name() })
-                            .await;
+                        self.emit(AgentEvent::Tool(ToolEvent::Error { error: tool_error })).await;
                     }
                 }
             },
@@ -697,6 +684,38 @@ impl Agent {
         completed_tools: Vec<Result<ToolCallResult, ToolCallError>>,
     ) {
         self.context.push_assistant_turn(message_content, reasoning, completed_tools);
+    }
+
+    async fn emit_tool_definitions(&mut self) {
+        let tools = self.context.tools().clone();
+        if !tools.is_empty() {
+            self.emit(AgentEvent::Tool(ToolEvent::DefinitionsUpdated { tools })).await;
+        }
+    }
+
+    async fn emit(&mut self, message: AgentEvent) {
+        if let Err(e) = self.message_tx.send(message).await {
+            tracing::warn!("Failed to send agent message: {e:?}");
+        }
+    }
+
+    async fn finish_turn(&mut self, outcome: TurnOutcome) {
+        if std::mem::take(&mut self.turn_active) {
+            self.emit(AgentEvent::turn_ended(outcome)).await;
+        }
+    }
+
+    fn llm_call_started(&self, purpose: LlmCallPurpose, attempt: u32, delay: Option<Duration>) -> AgentEvent {
+        let model = self.llm.model();
+        AgentEvent::Turn(TurnEvent::LlmCallStarted {
+            purpose,
+            provider: model.as_ref().map(|m| m.provider().to_string()),
+            model: model.map(|m| m.model_id().into_owned()),
+            display_name: self.llm.display_name(),
+            attempt,
+            max_attempts: self.retry_config.max_attempts,
+            delay_ms: delay.map(|delay| u64::try_from(delay.as_millis()).unwrap_or(u64::MAX)),
+        })
     }
 }
 
@@ -749,6 +768,7 @@ struct IterationState {
     llm_done: bool,
     stop_reason: Option<StopReason>,
     retry_attempt: u32,
+    call_usage: Option<TokenUsage>,
 }
 
 impl IterationState {
@@ -763,6 +783,7 @@ impl IterationState {
             llm_done: false,
             stop_reason: None,
             retry_attempt: 0,
+            call_usage: None,
         }
     }
 
@@ -772,6 +793,7 @@ impl IterationState {
         self.reasoning_summary_text.clear();
         self.encrypted_reasoning = None;
         self.stop_reason = None;
+        self.call_usage = None;
     }
 
     fn is_complete(&self) -> bool {
@@ -812,7 +834,7 @@ mod tests {
             .unwrap();
 
         while let Some(message) = rx.recv().await {
-            if matches!(message, AgentMessage::Done) {
+            if matches!(message, AgentEvent::Turn(TurnEvent::Ended { .. })) {
                 break;
             }
         }
@@ -845,7 +867,7 @@ mod tests {
             .unwrap();
 
         while let Some(message) = rx.recv().await {
-            if matches!(message, AgentMessage::Done) {
+            if matches!(message, AgentEvent::Turn(TurnEvent::Ended { .. })) {
                 break;
             }
         }
@@ -857,7 +879,7 @@ mod tests {
         .await
         .unwrap();
 
-        let Some(AgentMessage::ContextUsageUpdate { usage }) = rx.recv().await else {
+        let Some(AgentEvent::Context(ContextEvent::UsageUpdated { usage })) = rx.recv().await else {
             panic!("expected context usage update after conversation replacement");
         };
 

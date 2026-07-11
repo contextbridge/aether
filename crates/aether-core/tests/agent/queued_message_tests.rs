@@ -1,7 +1,8 @@
+use aether_core::events::{MessageEvent, ToolEvent, TurnEvent};
 use std::sync::Arc;
 
 use aether_core::core::agent;
-use aether_core::events::{AgentMessage, Command, UserCommand};
+use aether_core::events::{AgentEvent, Command, TurnOutcome, UserCommand};
 use aether_core::mcp::mcp;
 use aether_core::testing::{AddNumbersRequest, FakeMcpServer, fake_mcp};
 use llm::testing::{FakeLlmProvider, llm_response};
@@ -12,7 +13,7 @@ use tokio::sync::{Notify, mpsc};
 async fn queued_text_does_not_cancel_active_stream_and_drains_into_single_turn() {
     let Scenario { messages, contexts } = scenario(None, &["beep", "boop", "zap"]).await;
 
-    assert!(!messages.iter().any(|m| matches!(m, AgentMessage::Cancelled { .. })),);
+    assert!(!messages.iter().any(|m| matches!(m.turn_outcome(), Some(TurnOutcome::Cancelled))),);
     assert_eq!(complete_text(&messages, "msg_1").as_deref(), Some("hello world"));
     assert_eq!(complete_text(&messages, "msg_2").as_deref(), Some("next turn"));
     assert_eq!(contexts.len(), 2);
@@ -33,8 +34,12 @@ async fn queued_text_suppresses_intermediate_done_between_turns() {
     let second_stream =
         messages.iter().position(|m| is_partial_text_for(m, "msg_2")).expect("Expected streamed text for second turn");
 
-    assert!(!messages[first_complete + 1..second_stream].iter().any(|m| matches!(m, AgentMessage::Done)),);
-    assert_eq!(messages.iter().filter(|m| matches!(m, AgentMessage::Done)).count(), 1);
+    assert!(
+        !messages[first_complete + 1..second_stream]
+            .iter()
+            .any(|m| matches!(m, AgentEvent::Turn(TurnEvent::Ended { .. }))),
+    );
+    assert_eq!(messages.iter().filter(|m| matches!(m, AgentEvent::Turn(TurnEvent::Ended { .. }))).count(), 1);
 }
 
 #[tokio::test]
@@ -65,13 +70,14 @@ async fn user_message_during_tool_execution_is_queued() {
         .await
         .expect("Initial prompt should send");
 
-    drain_until(&mut rx, |m| matches!(m, AgentMessage::ToolCall { request, .. } if request.id == "call_1")).await;
+    drain_until(&mut rx, |m| matches!(m, AgentEvent::Tool(ToolEvent::Call { request, .. }) if request.id == "call_1"))
+        .await;
     tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("now add 10 and 20")] }))
         .await
         .expect("Queued message should send");
     release.notify_one();
 
-    drain_until(&mut rx, |m| matches!(m, AgentMessage::Done)).await;
+    drain_until(&mut rx, |m| matches!(m, AgentEvent::Turn(TurnEvent::Ended { .. }))).await;
     drop(tx);
 
     let contexts = captured.lock().expect("captured contexts lock poisoned").clone();
@@ -94,7 +100,7 @@ async fn queued_text_takes_precedence_over_auto_continue() {
     let Scenario { messages, contexts } = scenario(Some(StopReason::Length), &["beep"]).await;
 
     assert!(
-        !messages.iter().any(|m| matches!(m, AgentMessage::AutoContinue { .. })),
+        !messages.iter().any(|m| matches!(m, AgentEvent::Turn(TurnEvent::AutoContinue { .. }))),
         "Expected queued text to suppress auto-continue, got: {messages:?}",
     );
     assert_eq!(contexts.len(), 2);
@@ -110,7 +116,7 @@ async fn queued_text_takes_precedence_over_auto_continue() {
 }
 
 struct Scenario {
-    messages: Vec<AgentMessage>,
+    messages: Vec<AgentEvent>,
     contexts: Vec<Context>,
 }
 
@@ -139,14 +145,14 @@ async fn scenario(first_stop_reason: Option<StopReason>, queued: &[&str]) -> Sce
     }
     release.notify_one();
 
-    messages.extend(drain_until(&mut rx, |m| matches!(m, AgentMessage::Done)).await);
+    messages.extend(drain_until(&mut rx, |m| matches!(m, AgentEvent::Turn(TurnEvent::Ended { .. }))).await);
     drop(tx);
 
     let contexts = captured.lock().expect("captured contexts lock poisoned").clone();
     Scenario { messages, contexts }
 }
 
-async fn drain_until(rx: &mut mpsc::Receiver<AgentMessage>, stop: impl Fn(&AgentMessage) -> bool) -> Vec<AgentMessage> {
+async fn drain_until(rx: &mut mpsc::Receiver<AgentEvent>, stop: impl Fn(&AgentEvent) -> bool) -> Vec<AgentEvent> {
     let mut collected = Vec::new();
     loop {
         let m = rx.recv().await.expect("Channel should stay open");
@@ -159,21 +165,23 @@ async fn drain_until(rx: &mut mpsc::Receiver<AgentMessage>, stop: impl Fn(&Agent
     collected
 }
 
-fn is_partial_text(m: &AgentMessage, id: &str, chunk: &str) -> bool {
-    matches!(m, AgentMessage::Text { message_id, chunk: c, is_complete: false, .. } if message_id == id && c == chunk)
+fn is_partial_text(m: &AgentEvent, id: &str, chunk: &str) -> bool {
+    matches!(m, AgentEvent::Message(MessageEvent::Text { message_id, chunk: c, is_complete: false, .. }) if message_id == id && c == chunk)
 }
 
-fn is_partial_text_for(m: &AgentMessage, id: &str) -> bool {
-    matches!(m, AgentMessage::Text { message_id, is_complete: false, .. } if message_id == id)
+fn is_partial_text_for(m: &AgentEvent, id: &str) -> bool {
+    matches!(m, AgentEvent::Message(MessageEvent::Text { message_id, is_complete: false, .. }) if message_id == id)
 }
 
-fn is_complete_text(m: &AgentMessage, id: &str, chunk: &str) -> bool {
-    matches!(m, AgentMessage::Text { message_id, chunk: c, is_complete: true, .. } if message_id == id && c == chunk)
+fn is_complete_text(m: &AgentEvent, id: &str, chunk: &str) -> bool {
+    matches!(m, AgentEvent::Message(MessageEvent::Text { message_id, chunk: c, is_complete: true, .. }) if message_id == id && c == chunk)
 }
 
-fn complete_text(messages: &[AgentMessage], id: &str) -> Option<String> {
+fn complete_text(messages: &[AgentEvent], id: &str) -> Option<String> {
     messages.iter().find_map(|m| match m {
-        AgentMessage::Text { message_id, chunk, is_complete: true, .. } if message_id == id => Some(chunk.clone()),
+        AgentEvent::Message(MessageEvent::Text { message_id, chunk, is_complete: true, .. }) if message_id == id => {
+            Some(chunk.clone())
+        }
         _ => None,
     })
 }
