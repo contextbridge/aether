@@ -121,8 +121,9 @@ pub(crate) fn map_agent_event_to_notification(
             | ContextEvent::CompactionResult { .. },
         )
         | AgentEvent::Turn(
-            TurnEvent::Started
+            TurnEvent::Started { .. }
             | TurnEvent::Ended { outcome: TurnOutcome::Completed | TurnOutcome::Cancelled }
+            | TurnEvent::RetryScheduled { .. }
             | TurnEvent::LlmCallStarted { .. }
             | TurnEvent::LlmCallEnded { .. }
             | TurnEvent::AutoContinue { .. },

@@ -52,11 +52,10 @@ pub fn build_tools(tools: &[ToolDefinition]) -> String {
     let mut grouped: BTreeMap<&str, Vec<Value>> = BTreeMap::new();
     for tool in tools {
         let server = tool.server.as_deref().unwrap_or("(built-in)");
-        let input_schema = serde_json::from_str::<Value>(&tool.parameters).unwrap_or(Value::Null);
         let entry = serde_json::json!({
             "name": tool.name,
             "description": tool.description,
-            "input_schema": input_schema,
+            "input_schema": tool.parameters,
         });
         grouped.entry(server).or_default().push(entry);
     }
@@ -86,7 +85,7 @@ mod tests {
     use super::*;
 
     fn tool(name: &str, desc: &str, params: &str, server: Option<&str>) -> ToolDefinition {
-        let mut tool = ToolDefinition::new(name, desc, params);
+        let mut tool = ToolDefinition::new(name, desc, serde_json::from_str(params).unwrap());
         tool.server = server.map(String::from);
         tool
     }
@@ -172,13 +171,5 @@ mod tests {
     #[test]
     fn build_tools_empty() {
         assert_eq!(build_tools(&[]), "");
-    }
-
-    #[test]
-    fn build_tools_malformed_params() {
-        let tools = vec![tool("bad_tool", "Broken params", "not valid json", Some("srv"))];
-        let output = build_tools(&tools);
-        assert!(output.contains("bad_tool"));
-        assert!(output.contains("null"));
     }
 }

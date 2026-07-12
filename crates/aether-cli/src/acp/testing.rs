@@ -78,6 +78,7 @@ impl AcpTestHarness {
             initial_selection: InitialSessionSelection::default(),
             settings_source: SettingsSourceArgs::default(),
             provider_connections: ProviderConnectionOverrides::default(),
+            telemetry: None,
         }));
 
         let (peer, client_builder) = TestPeer::new();
