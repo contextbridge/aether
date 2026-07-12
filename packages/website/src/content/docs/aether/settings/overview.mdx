@@ -5,7 +5,7 @@ description: Where Aether settings live and how settings files are structured.
 
 import { FileTree } from "@astrojs/starlight/components";
 
-Aether uses JSON for configuration. **Agents**, along with thier **models** (LLM), **prompts**, and **tools** are configured via a `.aether/settings.json` file, which looks like this:
+Aether uses JSON for configuration. **Agents**, along with their **models** (LLM), **prompts**, **tools**, and optional **OpenTelemetry telemetry** are configured via a `.aether/settings.json` file, which looks like this:
 
 ```json title=".aether/settings.json"
 {
@@ -252,4 +252,5 @@ The fields agents point at are documented in detail on their own pages:
 - [LLMs](/aether/settings/llm-providers/) covers model specs, credentials, reasoning effort, and provider overrides.
 - [Prompts](/aether/settings/system-prompts/) covers prompt source formats, path resolution, optional files, globs, and shell interpolation.
 - [Tools](/aether/settings/mcp-servers/) covers MCP source formats, server configuration, proxying, and tool filters.
+- [Telemetry](/aether/settings/telemetry/) covers OpenTelemetry traces, metrics, OTLP export, and content-capture privacy.
 - [Subagents](/aether/built-in-servers/subagents/) covers how agents spawn other agents.

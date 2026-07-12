@@ -88,6 +88,7 @@ export default defineConfig({
               slug: "aether/settings/system-prompts",
             },
             { label: "Tools", slug: "aether/settings/mcp-servers" },
+            { label: "Telemetry", slug: "aether/settings/telemetry" },
             {
               label: "Field reference",
               slug: "aether/settings/reference",
