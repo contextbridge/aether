@@ -4,7 +4,7 @@ use async_openai::types::responses::{
 };
 
 use crate::providers::openai::responses_provider::map_user_content_for_responses;
-use crate::{ChatMessage, LlmError, Result, ToolDefinition};
+use crate::{ChatMessage, Result, ToolDefinition};
 
 /// Map internal `ChatMessage`s to Codex Responses API input items.
 ///
@@ -86,13 +86,10 @@ pub fn map_tools(tools: &[ToolDefinition]) -> Result<Vec<Tool>> {
     tools
         .iter()
         .map(|tool| {
-            let parameters: serde_json::Value = serde_json::from_str(&tool.parameters)
-                .map_err(|e| LlmError::ToolParameterParsing { tool_name: tool.name.clone(), error: e.to_string() })?;
-
             Ok(Tool::Function(FunctionTool {
                 name: tool.name.clone(),
                 description: Some(tool.description.clone()),
-                parameters: Some(parameters),
+                parameters: Some(tool.parameters.clone()),
                 strict: None,
                 defer_loading: None,
             }))
@@ -109,7 +106,8 @@ mod tests {
     use super::*;
     use crate::types::IsoString;
     use crate::{
-        AssistantReasoning, ContentBlock, EncryptedReasoningContent, ToolCallError, ToolCallRequest, ToolCallResult,
+        AssistantReasoning, ContentBlock, EncryptedReasoningContent, LlmError, ToolCallError, ToolCallRequest,
+        ToolCallResult,
     };
 
     #[test]
@@ -258,7 +256,7 @@ mod tests {
         let tools = vec![ToolDefinition::new(
             "read_file",
             "Read a file from disk",
-            r#"{"type": "object", "properties": {"path": {"type": "string"}}}"#,
+            serde_json::from_str(r#"{"type": "object", "properties": {"path": {"type": "string"}}}"#).unwrap(),
         )];
 
         let mapped = map_tools(&tools).unwrap();
@@ -270,16 +268,6 @@ mod tests {
         } else {
             panic!("Expected Tool::Function");
         }
-    }
-
-    #[test]
-    fn map_tools_returns_error_on_invalid_json_parameters() {
-        let tools = vec![ToolDefinition::new("broken", "A tool with invalid params", "not valid json")];
-
-        let result = map_tools(&tools);
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(matches!(err, LlmError::ToolParameterParsing { ref tool_name, .. } if tool_name == "broken"));
     }
 
     #[test]

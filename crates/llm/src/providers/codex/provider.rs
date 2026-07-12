@@ -244,7 +244,7 @@ mod tests {
             vec![ToolDefinition::new(
                 "bash",
                 "Run a command",
-                r#"{"type": "object", "properties": {"cmd": {"type": "string"}}}"#,
+                serde_json::from_str(r#"{"type": "object", "properties": {"cmd": {"type": "string"}}}"#).unwrap(),
             )],
         );
         context.set_reasoning_effort(Some(crate::ReasoningEffort::Max));

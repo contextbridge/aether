@@ -100,6 +100,8 @@ struct ProviderConfig {
     enum_name: &'static str,
     /// Our internal provider name used for parsing (e.g. "gemini")
     parser_name: &'static str,
+    /// OpenTelemetry `GenAI` semantic-convention provider name.
+    genai_provider_name: &'static str,
     /// Human-readable provider name (e.g. "AWS Bedrock")
     display_name: &'static str,
     /// Env var our code actually checks (None for providers with complex credential chains)
@@ -138,6 +140,7 @@ impl ProviderConfig {
             explicit_models: None,
             enum_name,
             parser_name,
+            genai_provider_name: parser_name,
             display_name,
             env_var,
             oauth_provider_id: None,
@@ -178,6 +181,8 @@ struct DynamicProviderConfig {
     enum_name: &'static str,
     /// Parser name used in "provider:model" strings (e.g. "ollama")
     parser_name: &'static str,
+    /// OpenTelemetry `GenAI` semantic-convention provider name.
+    genai_provider_name: &'static str,
     /// Human-readable provider name (e.g. "Ollama")
     display_name: &'static str,
 }
@@ -191,6 +196,7 @@ const PROVIDERS: &[ProviderConfig] = &[
         explicit_models: Some(CODEX_SUBSCRIPTION_MODELS),
         enum_name: "Codex",
         parser_name: "codex",
+        genai_provider_name: "openai",
         display_name: "Codex",
         env_var: None,
         oauth_provider_id: Some("codex"),
@@ -198,8 +204,14 @@ const PROVIDERS: &[ProviderConfig] = &[
         is_hybrid_dynamic: false,
     },
     ProviderConfig::standard("deepseek", "DeepSeek", "deepseek", "DeepSeek", Some("DEEPSEEK_API_KEY")),
-    ProviderConfig::standard("google", "Gemini", "gemini", "Gemini", Some("GEMINI_API_KEY")),
-    ProviderConfig::standard("moonshotai", "Moonshot", "moonshot", "Moonshot", Some("MOONSHOT_API_KEY")),
+    ProviderConfig {
+        genai_provider_name: "gcp.gemini",
+        ..ProviderConfig::standard("google", "Gemini", "gemini", "Gemini", Some("GEMINI_API_KEY"))
+    },
+    ProviderConfig {
+        genai_provider_name: "moonshot_ai",
+        ..ProviderConfig::standard("moonshotai", "Moonshot", "moonshot", "Moonshot", Some("MOONSHOT_API_KEY"))
+    },
     ProviderConfig::standard("openai", "Openai", "openai", "OpenAI", Some("OPENAI_API_KEY")),
     ProviderConfig::standard("openrouter", "OpenRouter", "openrouter", "OpenRouter", Some("OPENROUTER_API_KEY")),
     ProviderConfig {
@@ -207,14 +219,25 @@ const PROVIDERS: &[ProviderConfig] = &[
         ..ProviderConfig::standard("zai", "ZAi", "zai", "ZAI", Some("ZAI_API_KEY"))
     },
     ProviderConfig {
+        genai_provider_name: "aws.bedrock",
         is_hybrid_dynamic: true,
         ..ProviderConfig::standard("amazon-bedrock", "Bedrock", "bedrock", "AWS Bedrock", None)
     },
 ];
 
 const DYNAMIC_PROVIDERS: &[DynamicProviderConfig] = &[
-    DynamicProviderConfig { enum_name: "Ollama", parser_name: "ollama", display_name: "Ollama" },
-    DynamicProviderConfig { enum_name: "LlamaCpp", parser_name: "llamacpp", display_name: "LlamaCpp" },
+    DynamicProviderConfig {
+        enum_name: "Ollama",
+        parser_name: "ollama",
+        genai_provider_name: "ollama",
+        display_name: "Ollama",
+    },
+    DynamicProviderConfig {
+        enum_name: "LlamaCpp",
+        parser_name: "llamacpp",
+        genai_provider_name: "llama.cpp",
+        display_name: "LlamaCpp",
+    },
 ];
 
 const CODEX_SUBSCRIPTION_CONTEXT_WINDOW: u32 = 272_000;
@@ -473,6 +496,7 @@ fn emit_provider_enum() -> TokenStream {
 
 fn emit_provider_enum_impl() -> TokenStream {
     let parser_arms = provider_match_arms(|cfg| cfg.parser_name, |d| d.parser_name);
+    let genai_provider_name_arms = provider_match_arms(|cfg| cfg.genai_provider_name, |d| d.genai_provider_name);
     let display_arms = provider_match_arms(|cfg| cfg.display_name, |d| d.display_name);
 
     let env_var_some = PROVIDERS.iter().filter_map(|cfg| {
@@ -507,6 +531,12 @@ fn emit_provider_enum_impl() -> TokenStream {
             /// Parser name used in `provider:model` strings (e.g. `"anthropic"`).
             pub fn parser_name(self) -> &'static str {
                 match self { #parser_arms }
+            }
+
+            /// OpenTelemetry `GenAI` semantic-convention provider name.
+            #[allow(clippy::match_same_arms)]
+            pub fn genai_provider_name(self) -> &'static str {
+                match self { #genai_provider_name_arms }
             }
 
             /// Human-readable provider name (e.g. `"AWS Bedrock"`).

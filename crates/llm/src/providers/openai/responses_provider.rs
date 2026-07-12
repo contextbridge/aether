@@ -310,14 +310,11 @@ fn build_response_request(model: &str, context: &Context) -> Result<CreateRespon
 fn map_tools(tools: &[ToolDefinition]) -> Result<Vec<Tool>> {
     tools
         .iter()
-        .map(|t| {
-            let parameters: serde_json::Value = serde_json::from_str(&t.parameters)
-                .map_err(|e| LlmError::ToolParameterParsing { tool_name: t.name.clone(), error: e.to_string() })?;
-
+        .map(|tool| {
             Ok(Tool::Function(FunctionTool {
-                name: t.name.clone(),
-                description: Some(t.description.clone()),
-                parameters: Some(parameters),
+                name: tool.name.clone(),
+                description: Some(tool.description.clone()),
+                parameters: Some(tool.parameters.clone()),
                 strict: Some(false),
                 defer_loading: None,
             }))
@@ -404,7 +401,7 @@ mod tests {
                     result: "Found results".to_string(),
                 })),
             ],
-            vec![ToolDefinition::new("search", "Search", r#"{"type":"object"}"#)],
+            vec![ToolDefinition::new("search", "Search", serde_json::json!({ "type": "object" }))],
         );
 
         let req = build_response_request("gpt-4.1", &context).unwrap();
@@ -510,7 +507,7 @@ mod tests {
         let tools = vec![ToolDefinition::new(
             "read_file",
             "Read a file",
-            r#"{"type":"object","properties":{"path":{"type":"string"}}}"#,
+            serde_json::from_str(r#"{"type":"object","properties":{"path":{"type":"string"}}}"#).unwrap(),
         )];
 
         let result = map_tools(&tools).unwrap();
@@ -519,20 +516,6 @@ mod tests {
         let json = serde_json::to_value(&result[0]).unwrap();
         assert_eq!(json["type"], "function");
         assert_eq!(json["name"], "read_file");
-    }
-
-    #[test]
-    fn test_map_tools_invalid_json() {
-        let tools = vec![ToolDefinition::new("broken", "Broken", "not json{")];
-
-        let result = map_tools(&tools);
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            LlmError::ToolParameterParsing { tool_name, .. } => {
-                assert_eq!(tool_name, "broken");
-            }
-            other => panic!("Expected ToolParameterParsing, got: {other}"),
-        }
     }
 
     #[test]

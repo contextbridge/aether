@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 pub struct ToolDefinition {
     pub name: String,
     pub description: String,
-    pub parameters: String,
+    pub parameters: serde_json::Value,
     pub server: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotations: Option<ToolAnnotations>,
@@ -23,14 +23,8 @@ pub struct ToolAnnotations {
 }
 
 impl ToolDefinition {
-    pub fn new(name: impl Into<String>, description: impl Into<String>, parameters: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            description: description.into(),
-            parameters: parameters.into(),
-            server: None,
-            annotations: None,
-        }
+    pub fn new(name: impl Into<String>, description: impl Into<String>, parameters: serde_json::Value) -> Self {
+        Self { name: name.into(), description: description.into(), parameters, server: None, annotations: None }
     }
 
     pub fn with_server(mut self, server: impl Into<String>) -> Self {

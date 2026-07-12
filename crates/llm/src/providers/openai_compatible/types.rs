@@ -305,7 +305,7 @@ mod tests {
                 ChatMessage::User { content: vec![ContentBlock::text("run a tool")], timestamp: IsoString::now() },
                 message,
             ],
-            vec![ToolDefinition::new("test__tool", "test", "{\"type\":\"object\"}")],
+            vec![ToolDefinition::new("test__tool", "test", serde_json::json!({ "type": "object" }))],
         )
     }
 

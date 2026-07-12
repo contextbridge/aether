@@ -119,8 +119,7 @@ pub fn map_tools(tools: &[ToolDefinition]) -> Result<Vec<Tool>> {
     let mut anthropic_tools = Vec::new();
 
     for tool in tools {
-        let input_schema: serde_json::Value = serde_json::from_str(&tool.parameters)
-            .map_err(|e| LlmError::ToolParameterParsing { tool_name: tool.name.clone(), error: e.to_string() })?;
+        let input_schema = tool.parameters.clone();
 
         anthropic_tools.push(Tool {
             name: tool.name.clone(),
@@ -252,7 +251,7 @@ mod tests {
         let tools = vec![ToolDefinition::new(
             "search",
             "Search for information",
-            r#"{"type": "object", "properties": {"query": {"type": "string"}}}"#,
+            serde_json::from_str(r#"{"type": "object", "properties": {"query": {"type": "string"}}}"#).unwrap(),
         )];
 
         let mapped = map_tools(&tools).unwrap();
@@ -266,7 +265,7 @@ mod tests {
         let tools = vec![ToolDefinition::new(
             "search",
             "Search for information",
-            r#"{"type": "object", "properties": {"query": {"type": "string"}}}"#,
+            serde_json::from_str(r#"{"type": "object", "properties": {"query": {"type": "string"}}}"#).unwrap(),
         )];
 
         let mapped = map_tools(&tools).unwrap();

@@ -90,7 +90,11 @@ use llm::{
 let tools = vec![ToolDefinition::new(
     "get_weather",
     "Get current weather for a city",
-    r#"{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}"#,
+    serde_json::json!({
+        "type": "object",
+        "properties": { "city": { "type": "string" } },
+        "required": ["city"]
+    }),
 )];
 
 let mut context = Context::new(

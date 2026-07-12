@@ -78,12 +78,10 @@ pub fn map_tools(tools: &[ToolDefinition], cache_point: Option<&CachePointBlock>
     let mut bedrock_tools: Vec<Tool> = tools
         .iter()
         .map(|tool| {
-            let schema_value: serde_json::Value = serde_json::from_str(&tool.parameters)
-                .map_err(|e| LlmError::ToolParameterParsing { tool_name: tool.name.clone(), error: e.to_string() })?;
             let spec = ToolSpecification::builder()
                 .name(&tool.name)
                 .description(&tool.description)
-                .input_schema(ToolInputSchema::Json(json_to_document(&schema_value)))
+                .input_schema(ToolInputSchema::Json(json_to_document(&tool.parameters)))
                 .build()
                 .map_err(bedrock_err)?;
             Ok(Tool::ToolSpec(spec))
@@ -441,7 +439,7 @@ mod tests {
         let tools = vec![ToolDefinition::new(
             "search",
             "Search for information",
-            r#"{"type": "object", "properties": {"query": {"type": "string"}}}"#,
+            serde_json::from_str(r#"{"type": "object", "properties": {"query": {"type": "string"}}}"#).unwrap(),
         )];
 
         let config = map_tools(&tools, None).unwrap();
@@ -537,7 +535,7 @@ mod tests {
         let tools = vec![ToolDefinition::new(
             "search",
             "Search for information",
-            r#"{"type": "object", "properties": {"query": {"type": "string"}}}"#,
+            serde_json::from_str(r#"{"type": "object", "properties": {"query": {"type": "string"}}}"#).unwrap(),
         )];
         let cache_point = default_cache_point().unwrap();
 
@@ -546,20 +544,6 @@ mod tests {
         assert_eq!(config.tools().len(), 2);
         assert!(config.tools()[0].is_tool_spec());
         assert!(config.tools()[1].is_cache_point());
-    }
-
-    #[test]
-    fn test_map_tools_invalid_json() {
-        let tools = vec![ToolDefinition::new("broken", "A broken tool", "not valid json")];
-
-        let result = map_tools(&tools, None);
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            LlmError::ToolParameterParsing { tool_name, .. } => {
-                assert_eq!(tool_name, "broken");
-            }
-            other => panic!("Expected ToolParameterParsing, got {other:?}"),
-        }
     }
 
     #[test]
