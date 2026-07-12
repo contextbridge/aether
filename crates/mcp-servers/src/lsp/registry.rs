@@ -9,6 +9,9 @@
 //! This avoids spawning duplicate LSP servers when running multiple agents
 //! concurrently.
 
+// `Uri` only uses interior mutability to cache parsed components; its identity is stable.
+#![allow(clippy::mutable_key_type)]
+
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
@@ -16,7 +19,7 @@ use std::sync::Arc;
 
 use aether_lspd::{LanguageId, LspClient, get_config_for_language, socket_path};
 use futures::future::join_all;
-use lsp_types::Uri;
+use lsp_types::{Diagnostic, Uri};
 use tokio::sync::RwLock;
 
 /// A resolved symbol location with its LSP client, ready for protocol calls.
@@ -30,8 +33,6 @@ pub struct ResolvedSymbol {
     /// The LSP client for this file's language
     pub client: Arc<LspClient>,
 }
-
-use lsp_types::Diagnostic;
 
 use super::common::{find_symbol_column, path_to_uri};
 use super::error::LspError;
@@ -202,13 +203,13 @@ impl LspRegistry {
     /// If `file_path` is provided, queries only the LSP for that file and requests
     /// diagnostics for that specific document URI.
     /// If `file_path` is `None`, iterates every active client and returns all
-    /// diagnostics grouped by file path.
-    pub async fn collect_diagnostics(&self, file_path: Option<&str>) -> HashMap<String, Vec<Diagnostic>> {
+    /// diagnostics grouped by document URI.
+    pub async fn collect_diagnostics(&self, file_path: Option<&str>) -> HashMap<Uri, Vec<Diagnostic>> {
         if let Some(file_path) = file_path {
             return self.collect_file_diagnostics(file_path).await;
         }
 
-        let mut result: HashMap<String, Vec<Diagnostic>> = HashMap::new();
+        let mut result: HashMap<Uri, Vec<Diagnostic>> = HashMap::new();
         for client in self.active_clients().await {
             if let Ok(params_list) = client.get_diagnostics(None).await {
                 merge_diagnostics(&mut result, params_list);
@@ -237,7 +238,7 @@ impl LspRegistry {
         }
     }
 
-    async fn collect_file_diagnostics(&self, file_path: &str) -> HashMap<String, Vec<Diagnostic>> {
+    async fn collect_file_diagnostics(&self, file_path: &str) -> HashMap<Uri, Vec<Diagnostic>> {
         let resolved_path = self.resolve_path(file_path);
 
         let Some(client) = self.get_or_spawn(&resolved_path).await else {
@@ -248,7 +249,7 @@ impl LspRegistry {
             return HashMap::new();
         };
 
-        let mut result: HashMap<String, Vec<Diagnostic>> = HashMap::new();
+        let mut result: HashMap<Uri, Vec<Diagnostic>> = HashMap::new();
         if let Ok(params_list) = client.get_diagnostics(Some(uri)).await {
             merge_diagnostics(&mut result, params_list);
         }
@@ -268,11 +269,11 @@ impl LspRegistry {
 }
 
 fn merge_diagnostics(
-    result: &mut HashMap<String, Vec<Diagnostic>>,
+    result: &mut HashMap<Uri, Vec<Diagnostic>>,
     params_list: Vec<lsp_types::PublishDiagnosticsParams>,
 ) {
     for params in params_list {
-        result.entry(params.uri.as_str().to_string()).or_default().extend(params.diagnostics);
+        result.entry(params.uri).or_default().extend(params.diagnostics);
     }
 }
 

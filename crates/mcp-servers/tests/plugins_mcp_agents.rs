@@ -53,10 +53,8 @@ async fn test_spawn_agent_with_coding_mcp_from_settings_catalog() {
 async fn test_spawn_subagent_codex_uses_oauth_store() -> TestResult {
     let temp_dir = create_project_with_codex_agent();
     let mcp = TestClient::start(|| {
-        create_test_server(temp_dir.path()).with_agent_deps(AgentDeps {
-            oauth_credential_store: Some(Arc::new(FakeOAuthCredentialStore::new())),
-            ..AgentDeps::default()
-        })
+        create_test_server(temp_dir.path())
+            .with_agent_deps(AgentDeps::new(Arc::new(FakeOAuthCredentialStore::new()), None))
     })
     .await?;
 

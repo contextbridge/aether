@@ -224,7 +224,7 @@ impl McpManager {
                 ToolDefinition::new(
                     create_namespaced_tool_name(name, &tool.name),
                     tool.description.clone(),
-                    tool.parameters.to_string(),
+                    tool.parameters.clone(),
                 )
                 .with_server(name.clone())
                 .with_annotations(tool.annotations.clone())
