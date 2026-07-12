@@ -1,8 +1,7 @@
 use crate::setup::McpBuilderExt;
-use aether_auth::OAuthCredentialStorage;
 use aether_core::{
     agent_spec::McpConfigSource,
-    core::{AgentBuilder, AgentHandle, Prompt},
+    core::{AgentBuilder, AgentDeps, AgentHandle, Prompt},
     events::{AgentEvent, Command, MessageEvent, TurnEvent, TurnOutcome, UserCommand},
     mcp::{McpSpawnResult, mcp, run_mcp_task::McpCommand},
 };
@@ -153,21 +152,18 @@ pub fn extract_json_from_markdown(text: &str) -> Option<String> {
 pub type ProgressCallback = Box<dyn Fn(&str, &str, &AgentEvent) + Send + Sync>;
 
 /// Executor for spawning and running sub-agents
+#[derive(Clone)]
 pub struct AgentExecutor {
     catalog: Arc<AgentCatalog>,
     progress_callback: Option<Arc<ProgressCallback>>,
     project_root: PathBuf,
-    oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
+    deps: AgentDeps,
 }
 
 impl AgentExecutor {
     /// Create a new `AgentExecutor` with the given agent catalog and project root.
-    pub fn new(
-        catalog: AgentCatalog,
-        project_root: PathBuf,
-        oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
-    ) -> Self {
-        Self { catalog: Arc::new(catalog), progress_callback: None, project_root, oauth_credential_store }
+    pub fn new(catalog: AgentCatalog, project_root: PathBuf, deps: AgentDeps) -> Self {
+        Self { catalog: Arc::new(catalog), progress_callback: None, project_root, deps }
     }
 
     /// Set a callback for receiving progress updates during agent execution
@@ -182,37 +178,15 @@ impl AgentExecutor {
             return SpawnSubAgentsOutput { results: vec![], success_count: 0, error_count: 0, meta: None };
         }
 
-        // Store task count and first task for display metadata
         let task_count = tasks.len();
+        let first_agent_name = tasks.first().unwrap().agent_name.clone();
 
-        // Clone the first task for display metadata (we need to keep the original for execution)
-        let first_task = tasks.first().unwrap();
-        let first_agent_name = first_task.agent_name.clone();
-
-        let catalog = Arc::clone(&self.catalog);
-        let progress_callback = self.progress_callback.clone();
-        let project_root = self.project_root.clone();
-        let oauth_credential_store = self.oauth_credential_store.clone();
         let handles: Vec<_> = tasks
             .into_iter()
             .enumerate()
             .map(|(i, task)| {
-                let task_id = format!("task_{i}");
-                let catalog = Arc::clone(&catalog);
-                let progress_callback = progress_callback.clone();
-                let project_root = project_root.clone();
-                let oauth_credential_store = oauth_credential_store.clone();
-                spawn(async move {
-                    execute_single_agent(
-                        task_id,
-                        task,
-                        catalog,
-                        progress_callback,
-                        project_root,
-                        oauth_credential_store,
-                    )
-                    .await
-                })
+                let executor = self.clone();
+                spawn(async move { executor.execute_single(format!("task_{i}"), task).await })
             })
             .collect();
 
@@ -239,122 +213,109 @@ impl AgentExecutor {
 
         SpawnSubAgentsOutput { results, success_count, error_count, meta: Some(display_meta.into()) }
     }
-}
 
-/// Execute a single sub-agent and return its result
-#[allow(clippy::too_many_lines)]
-async fn execute_single_agent(
-    task_id: String,
-    task: SubAgentTask,
-    catalog: Arc<AgentCatalog>,
-    progress_callback: Option<Arc<ProgressCallback>>,
-    project_root: PathBuf,
-    oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
-) -> SubAgentResult {
-    let agent_name = task.agent_name.clone();
+    /// Execute a single sub-agent and return its result
+    async fn execute_single(&self, task_id: String, task: SubAgentTask) -> SubAgentResult {
+        let agent_name = task.agent_name.clone();
 
-    let result: Result<String, String> = async {
-        let mut spec = catalog.resolve(&task.agent_name).map_err(|e| e.to_string())?;
+        let result: Result<String, String> = async {
+            let mut spec = self.catalog.resolve(&task.agent_name).map_err(|e| e.to_string())?;
 
-        if !spec.exposure.agent_invocable {
-            return Err(format!("Agent '{}' is not agent-invocable", task.agent_name));
-        }
-
-        let mut spawn_result =
-            spawn_mcps(&spec.mcp_config_sources, project_root, oauth_credential_store.clone()).await?;
-        let snapshot = spawn_result
-            .block_until_ready()
-            .await
-            .ok_or_else(|| "MCP bootstrap aborted before completion".to_string())?;
-        let filtered_tools = spec.tools.apply(snapshot.tool_definitions);
-        spec.prompts.push(Prompt::McpInstructions(snapshot.instructions));
-        let command_tx = spawn_result.command_tx;
-
-        let (user_tx, mut agent_rx, _agent_handle) =
-            spawn_agent(spec, command_tx, filtered_tools, oauth_credential_store).await?;
-
-        let prompt_with_instructions = format!("{}\n\n{}", task.prompt, STRUCTURED_OUTPUT_INSTRUCTIONS);
-        user_tx
-            .send(Command::UserCommand(UserCommand::Text {
-                content: vec![llm::ContentBlock::text(&prompt_with_instructions)],
-            }))
-            .await
-            .map_err(|e| format!("Failed to send message to agent: {e}"))?;
-
-        if let Some(ref callback) = progress_callback {
-            callback(&task_id, &agent_name, &AgentEvent::Turn(TurnEvent::Started));
-        }
-
-        let mut final_output = String::new();
-
-        while let Some(message) = agent_rx.recv().await {
-            if let Some(ref callback) = progress_callback {
-                callback(&task_id, &agent_name, &message);
+            if !spec.exposure.agent_invocable {
+                return Err(format!("Agent '{}' is not agent-invocable", task.agent_name));
             }
 
-            match &message {
-                AgentEvent::Message(MessageEvent::Text { chunk, is_complete, .. }) if *is_complete => {
-                    final_output.clone_from(chunk);
+            let mut spawn_result = self.spawn_mcps(&spec.mcp_config_sources).await?;
+            let snapshot = spawn_result
+                .block_until_ready()
+                .await
+                .ok_or_else(|| "MCP bootstrap aborted before completion".to_string())?;
+
+            let filtered_tools = spec.tools.apply(snapshot.tool_definitions);
+            spec.prompts.push(Prompt::McpInstructions(snapshot.instructions));
+            let command_tx = spawn_result.command_tx;
+
+            let (user_tx, mut agent_rx, _agent_handle) = self.spawn_agent(spec, command_tx, filtered_tools).await?;
+
+            let prompt_with_instructions = format!("{}\n\n{}", task.prompt, STRUCTURED_OUTPUT_INSTRUCTIONS);
+            user_tx
+                .send(Command::UserCommand(UserCommand::Text {
+                    content: vec![llm::ContentBlock::text(&prompt_with_instructions)],
+                }))
+                .await
+                .map_err(|e| format!("Failed to send message to agent: {e}"))?;
+
+            if let Some(ref callback) = self.progress_callback {
+                callback(&task_id, &agent_name, &AgentEvent::Turn(TurnEvent::Started { content: vec![] }));
+            }
+
+            let mut final_output = String::new();
+
+            while let Some(message) = agent_rx.recv().await {
+                if let Some(ref callback) = self.progress_callback {
+                    callback(&task_id, &agent_name, &message);
                 }
 
-                AgentEvent::Turn(TurnEvent::Ended { outcome }) => match outcome {
-                    TurnOutcome::Completed => return Ok(final_output),
-                    TurnOutcome::Failed { error } => return Err(format!("Agent error: {error}")),
-                    TurnOutcome::Cancelled => return Err("Agent cancelled".to_string()),
-                },
+                match &message {
+                    AgentEvent::Message(MessageEvent::Text { chunk, is_complete, .. }) if *is_complete => {
+                        final_output.clone_from(chunk);
+                    }
 
-                _ => {}
+                    AgentEvent::Turn(TurnEvent::Ended { outcome }) => match outcome {
+                        TurnOutcome::Completed => return Ok(final_output),
+                        TurnOutcome::Failed { error } => return Err(format!("Agent error: {error}")),
+                        TurnOutcome::Cancelled => return Err("Agent cancelled".to_string()),
+                    },
+
+                    _ => {}
+                }
+            }
+
+            Ok(final_output)
+        }
+        .await;
+
+        match result {
+            Ok(output) => SubAgentResult {
+                task_id,
+                agent_name,
+                status: SubAgentStatus::Success,
+                output: Some(output),
+                error: None,
+            },
+            Err(error) => {
+                SubAgentResult { task_id, agent_name, status: SubAgentStatus::Error, output: None, error: Some(error) }
             }
         }
-
-        Ok(final_output)
     }
-    .await;
 
-    match result {
-        Ok(output) => {
-            SubAgentResult { task_id, agent_name, status: SubAgentStatus::Success, output: Some(output), error: None }
+    async fn spawn_mcps(&self, effective_mcp_config_sources: &[McpConfigSource]) -> Result<McpSpawnResult, String> {
+        let mut builder = mcp(&self.project_root).with_agent_deps(self.deps.clone()).with_builtin_servers();
+
+        if !effective_mcp_config_sources.is_empty() {
+            builder = builder
+                .from_mcp_config_sources(effective_mcp_config_sources)
+                .await
+                .map_err(|e| format!("Failed to load mcp configs: {e}"))?;
         }
-        Err(error) => {
-            SubAgentResult { task_id, agent_name, status: SubAgentStatus::Error, output: None, error: Some(error) }
-        }
-    }
-}
 
-async fn spawn_mcps(
-    effective_mcp_config_sources: &[McpConfigSource],
-    project_root: PathBuf,
-    oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
-) -> Result<McpSpawnResult, String> {
-    let mut builder = mcp(&project_root);
-    if let Some(store) = oauth_credential_store {
-        builder = builder.with_oauth_credential_store(store);
+        builder.spawn().await.map_err(|e| format!("Failed to spawn MCP manager: {e}"))
     }
-    builder = builder.with_builtin_servers();
 
-    if !effective_mcp_config_sources.is_empty() {
-        builder = builder
-            .from_mcp_config_sources(effective_mcp_config_sources)
+    async fn spawn_agent(
+        &self,
+        spec: aether_core::agent_spec::AgentSpec,
+        mcp_tx: mpsc::Sender<McpCommand>,
+        tools: Vec<ToolDefinition>,
+    ) -> Result<(mpsc::Sender<Command>, mpsc::Receiver<AgentEvent>, AgentHandle), String> {
+        AgentBuilder::from_spec(&spec, vec![], &self.deps)
             .await
-            .map_err(|e| format!("Failed to load mcp configs: {e}"))?;
+            .map_err(|e| format!("Failed to build agent from spec: {e}"))?
+            .tools(mcp_tx, tools)
+            .spawn()
+            .await
+            .map_err(|e| format!("Failed to spawn agent: {e}"))
     }
-
-    builder.spawn().await.map_err(|e| format!("Failed to spawn MCP manager: {e}"))
-}
-
-async fn spawn_agent(
-    spec: aether_core::agent_spec::AgentSpec,
-    mcp_tx: mpsc::Sender<McpCommand>,
-    tools: Vec<ToolDefinition>,
-    oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
-) -> Result<(mpsc::Sender<Command>, mpsc::Receiver<AgentEvent>, AgentHandle), String> {
-    AgentBuilder::from_spec(&spec, vec![], oauth_credential_store)
-        .await
-        .map_err(|e| format!("Failed to build agent from spec: {e}"))?
-        .tools(mcp_tx, tools)
-        .spawn()
-        .await
-        .map_err(|e| format!("Failed to spawn agent: {e}"))
 }
 
 #[cfg(test)]
