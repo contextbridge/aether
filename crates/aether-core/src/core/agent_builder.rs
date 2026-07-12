@@ -1,10 +1,9 @@
 use super::agent::{AgentConfig, AutoContinue, RetryConfig};
 use crate::agent_spec::AgentSpec;
 use crate::context::CompactionConfig;
-use crate::core::{Agent, Prompt, PromptCache, Result};
-use crate::events::{AgentEvent, Command};
+use crate::core::{Agent, AgentDeps, Prompt, PromptCache, Result};
+use crate::events::{AgentEvent, AgentObserver, Command};
 use crate::mcp::run_mcp_task::McpCommand;
-use aether_auth::OAuthCredentialStorage;
 use llm::parser::ModelProviderParser;
 use llm::types::IsoString;
 use llm::{ChatMessage, Context, ModelSettings, StreamingModelProvider, ToolDefinition};
@@ -49,6 +48,7 @@ pub struct AgentBuilder {
     prompt_cache_key: Option<String>,
     context_window: Option<u32>,
     model_settings: ModelSettings,
+    observers: Vec<Box<dyn AgentObserver>>,
 }
 
 impl AgentBuilder {
@@ -67,6 +67,7 @@ impl AgentBuilder {
             prompt_cache_key: None,
             context_window: None,
             model_settings: ModelSettings::default(),
+            observers: Vec::new(),
         }
     }
 
@@ -74,13 +75,9 @@ impl AgentBuilder {
     ///
     /// The LLM provider is derived from `spec.model` via `ModelProviderParser`.
     /// `base_prompts` are prepended before the spec's own prompts.
-    pub async fn from_spec(
-        spec: &AgentSpec,
-        base_prompts: Vec<Prompt>,
-        oauth_store: Option<Arc<dyn OAuthCredentialStorage>>,
-    ) -> Result<Self> {
+    pub async fn from_spec(spec: &AgentSpec, base_prompts: Vec<Prompt>, deps: &AgentDeps) -> Result<Self> {
         let parser = ModelProviderParser::default().with_provider_connections(spec.provider_connections.clone());
-        let parser = match oauth_store {
+        let parser = match deps.oauth_credential_store.clone() {
             Some(store) => parser.with_codex_provider(store),
             None => parser,
         };
@@ -88,6 +85,10 @@ impl AgentBuilder {
         let mut builder = Self::new(Arc::from(provider))
             .context_window(spec.context_window)
             .model_settings(spec.model_settings.clone());
+
+        if let Some(observer) = deps.observer() {
+            builder = builder.observer(observer);
+        }
 
         for prompt in base_prompts {
             builder = builder.system_prompt(prompt);
@@ -218,6 +219,12 @@ impl AgentBuilder {
         self
     }
 
+    /// Attach an observer of the agent's event stream.
+    pub fn observer(mut self, observer: Box<dyn AgentObserver>) -> Self {
+        self.observers.push(observer);
+        self
+    }
+
     pub async fn spawn(self) -> Result<(Sender<Command>, Receiver<AgentEvent>, AgentHandle)> {
         let mut prompt_cache = PromptCache::new(self.prompts);
         let system_content = prompt_cache.render().await?;
@@ -244,6 +251,7 @@ impl AgentBuilder {
             retry_config: self.retry_config,
             context_window: self.context_window,
             prompt_cache,
+            observers: self.observers,
         };
 
         let agent = Agent::new(config, command_rx, message_tx);
@@ -389,7 +397,7 @@ mod tests {
             tools: ToolFilter::default(),
         };
 
-        let builder = AgentBuilder::from_spec(&spec, vec![], None).await.unwrap();
+        let builder = AgentBuilder::from_spec(&spec, vec![], &AgentDeps::default()).await.unwrap();
 
         assert_eq!(builder.context_window, Some(200_000));
         assert_eq!(builder.model_settings, settings);
@@ -436,7 +444,7 @@ mod tests {
             tools: ToolFilter::default(),
         };
 
-        let builder = AgentBuilder::from_spec(&spec, vec![], None).await;
+        let builder = AgentBuilder::from_spec(&spec, vec![], &AgentDeps::default()).await;
         assert!(builder.is_ok());
     }
 }

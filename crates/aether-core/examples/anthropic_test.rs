@@ -70,8 +70,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     }
                 },
                 "required": ["query"]
-            })
-            .to_string(),
+            }),
         ),
         ToolDefinition::new(
             "calculate",
@@ -85,8 +84,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     }
                 },
                 "required": ["expression"]
-            })
-            .to_string(),
+            }),
         ),
     ];
     let mut context = Context::new(messages, tools);

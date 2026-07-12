@@ -240,11 +240,11 @@ mod tests {
     }
 
     fn make_tool(name: &str) -> ToolDefinition {
-        ToolDefinition::new(name, "", "")
+        ToolDefinition::new(name, "", serde_json::json!({}))
     }
 
     fn make_annotated_tool(name: &str, annotations: ToolAnnotations) -> ToolDefinition {
-        ToolDefinition::new(name, "", "").with_annotations(annotations)
+        ToolDefinition::new(name, "", serde_json::json!({})).with_annotations(annotations)
     }
 
     #[test]

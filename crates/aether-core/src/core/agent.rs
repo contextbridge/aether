@@ -2,8 +2,8 @@ use crate::context::{CompactionConfig, Compactor, TokenTracker};
 use crate::core::PromptCache;
 pub use crate::core::retry_config::RetryConfig;
 use crate::events::{
-    AgentCommand, AgentEvent, Command, ContextEvent, ContextUsage, LlmCallOutcome, LlmCallPurpose, ModelEvent,
-    ToolEvent, TurnEvent, TurnOutcome, UserCommand,
+    AgentCommand, AgentEvent, AgentObserver, Command, ContextEvent, ContextUsage, LlmCallOutcome, LlmCallPurpose,
+    ModelEvent, ToolEvent, TurnEvent, TurnOutcome, UserCommand,
 };
 use crate::mcp::run_mcp_task::{McpCommand, ToolExecutionEvent};
 use futures::Stream;
@@ -25,6 +25,7 @@ use tokio_stream::wrappers::ReceiverStream;
 /// Internal event type for merging LLM and tool result streams
 #[derive(Debug)]
 enum StreamEvent {
+    LlmRequestStarted { attempt: u32 },
     Llm(Result<LlmResponse, LlmError>),
     ToolExecution(ToolExecutionEvent),
     Command(Command),
@@ -45,6 +46,7 @@ pub(crate) struct AgentConfig {
     pub retry_config: RetryConfig,
     pub context_window: Option<u32>,
     pub prompt_cache: PromptCache,
+    pub observers: Vec<Box<dyn AgentObserver>>,
 }
 
 pub struct Agent {
@@ -52,6 +54,7 @@ pub struct Agent {
     context: Context,
     mcp_command_tx: Option<mpsc::Sender<McpCommand>>,
     message_tx: mpsc::Sender<AgentEvent>,
+    observers: Vec<Box<dyn AgentObserver>>,
     streams: StreamMap<String, EventStream>,
     tool_timeout: Duration,
     token_tracker: TokenTracker,
@@ -63,6 +66,7 @@ pub struct Agent {
     context_window: Option<u32>,
     prompt_cache: PromptCache,
     turn_active: bool,
+    llm_call_active: bool,
 }
 
 impl Agent {
@@ -82,6 +86,7 @@ impl Agent {
             context: config.context,
             mcp_command_tx: config.mcp_command_tx,
             message_tx,
+            observers: config.observers,
             streams,
             tool_timeout: config.tool_timeout,
             token_tracker: TokenTracker::new(context_limit),
@@ -93,6 +98,7 @@ impl Agent {
             context_window: config.context_window,
             prompt_cache: config.prompt_cache,
             turn_active: false,
+            llm_call_active: false,
         }
     }
 
@@ -147,6 +153,10 @@ impl Agent {
 
                 StreamEvent::Command(Command::AgentCommand(AgentCommand::ReplaceConversation(messages))) => {
                     self.on_replace_conversation(messages, &mut state).await;
+                }
+
+                StreamEvent::LlmRequestStarted { attempt } => {
+                    self.begin_chat_call(attempt).await;
                 }
 
                 StreamEvent::Llm(llm_event) => {
@@ -259,10 +269,10 @@ impl Agent {
     }
 
     async fn on_user_text(&mut self, content: Vec<llm::ContentBlock>) {
-        self.context.add_message(ChatMessage::User { content, timestamp: IsoString::now() });
+        self.context.add_message(ChatMessage::User { content: content.clone(), timestamp: IsoString::now() });
         self.auto_continue.reset();
         self.turn_active = true;
-        self.emit(AgentEvent::Turn(TurnEvent::Started)).await;
+        self.emit(AgentEvent::Turn(TurnEvent::Started { content })).await;
         self.start_llm_stream(None, 0).await;
     }
 
@@ -287,15 +297,25 @@ impl Agent {
     }
 
     async fn start_llm_stream(&mut self, delay: Option<Duration>, attempt: u32) {
-        self.emit(self.llm_call_started(LlmCallPurpose::Chat, attempt, delay)).await;
         self.streams.remove(LLM_STREAM_KEY);
         let stream: EventStream = match delay {
-            None => Box::pin(self.llm.stream_response(&self.context).map(StreamEvent::Llm)),
+            None => {
+                self.begin_chat_call(attempt).await;
+                Box::pin(self.llm.stream_response(&self.context).map(StreamEvent::Llm))
+            }
             Some(delay) => {
+                self.emit(AgentEvent::Turn(TurnEvent::RetryScheduled {
+                    purpose: LlmCallPurpose::Chat,
+                    attempt,
+                    max_attempts: self.retry_config.max_attempts,
+                    delay_ms: u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
+                }))
+                .await;
                 let llm = Arc::clone(&self.llm);
                 let context = self.context.clone();
                 Box::pin(async_stream::stream! {
                     sleep(delay).await;
+                    yield StreamEvent::LlmRequestStarted { attempt };
                     let mut inner = llm.stream_response(&context);
                     while let Some(item) = inner.next().await {
                         yield StreamEvent::Llm(item);
@@ -309,11 +329,7 @@ impl Agent {
     async fn on_llm_error(&mut self, error: LlmError, state: &mut IterationState) {
         let will_retry = error.is_retryable() && state.retry_attempt < self.retry_config.max_attempts;
         let error_message = error.to_string();
-        self.emit(AgentEvent::Turn(TurnEvent::LlmCallEnded {
-            purpose: LlmCallPurpose::Chat,
-            outcome: LlmCallOutcome::Failed { error: error_message.clone(), will_retry },
-        }))
-        .await;
+        self.finish_chat_call(LlmCallOutcome::Failed { error: error_message.clone(), will_retry }).await;
 
         if !will_retry {
             self.finish_turn(TurnOutcome::Failed { error: error_message }).await;
@@ -342,12 +358,8 @@ impl Agent {
     }
 
     async fn abort_in_flight_work(&mut self) {
-        if self.streams.contains_key(LLM_STREAM_KEY) {
-            self.emit(AgentEvent::Turn(TurnEvent::LlmCallEnded {
-                purpose: LlmCallPurpose::Chat,
-                outcome: LlmCallOutcome::Cancelled,
-            }))
-            .await;
+        if self.llm_call_active {
+            self.finish_chat_call(LlmCallOutcome::Cancelled).await;
         }
         self.streams.remove(LLM_STREAM_KEY);
         for stream_key in self.active_requests.keys().cloned().collect::<Vec<_>>() {
@@ -429,22 +441,15 @@ impl Agent {
             Done { stop_reason } => {
                 state.llm_done = true;
                 state.stop_reason = stop_reason;
-                self.emit(AgentEvent::Turn(TurnEvent::LlmCallEnded {
-                    purpose: LlmCallPurpose::Chat,
-                    outcome: LlmCallOutcome::Completed {
-                        stop_reason: state.stop_reason.clone(),
-                        usage: state.call_usage.take(),
-                    },
-                }))
+                self.finish_chat_call(LlmCallOutcome::Completed {
+                    stop_reason: state.stop_reason.clone(),
+                    usage: state.call_usage.take(),
+                })
                 .await;
             }
 
             Error { message } => {
-                self.emit(AgentEvent::Turn(TurnEvent::LlmCallEnded {
-                    purpose: LlmCallPurpose::Chat,
-                    outcome: LlmCallOutcome::Failed { error: message.clone(), will_retry: false },
-                }))
-                .await;
+                self.finish_chat_call(LlmCallOutcome::Failed { error: message.clone(), will_retry: false }).await;
                 self.finish_turn(TurnOutcome::Failed { error: message }).await;
             }
 
@@ -594,7 +599,7 @@ impl Agent {
 
         let compactor = Compactor::new(self.llm.clone());
 
-        self.emit(self.llm_call_started(LlmCallPurpose::Compaction, 0, None)).await;
+        self.emit(self.llm_call_started(LlmCallPurpose::Compaction, 0)).await;
         match compactor.compact(&self.context).await {
             Ok(result) => {
                 tracing::info!("Context compacted: {} messages removed", result.messages_removed);
@@ -694,6 +699,10 @@ impl Agent {
     }
 
     async fn emit(&mut self, message: AgentEvent) {
+        for observer in &mut self.observers {
+            observer.on_event(&message);
+        }
+
         if let Err(e) = self.message_tx.send(message).await {
             tracing::warn!("Failed to send agent message: {e:?}");
         }
@@ -705,7 +714,18 @@ impl Agent {
         }
     }
 
-    fn llm_call_started(&self, purpose: LlmCallPurpose, attempt: u32, delay: Option<Duration>) -> AgentEvent {
+    async fn begin_chat_call(&mut self, attempt: u32) {
+        self.llm_call_active = true;
+        self.emit(self.llm_call_started(LlmCallPurpose::Chat, attempt)).await;
+    }
+
+    async fn finish_chat_call(&mut self, outcome: LlmCallOutcome) {
+        if std::mem::take(&mut self.llm_call_active) {
+            self.emit(AgentEvent::Turn(TurnEvent::LlmCallEnded { purpose: LlmCallPurpose::Chat, outcome })).await;
+        }
+    }
+
+    fn llm_call_started(&self, purpose: LlmCallPurpose, attempt: u32) -> AgentEvent {
         let model = self.llm.model();
         AgentEvent::Turn(TurnEvent::LlmCallStarted {
             purpose,
@@ -714,7 +734,6 @@ impl Agent {
             display_name: self.llm.display_name(),
             attempt,
             max_attempts: self.retry_config.max_attempts,
-            delay_ms: delay.map(|delay| u64::try_from(delay.as_millis()).unwrap_or(u64::MAX)),
         })
     }
 }
@@ -920,6 +939,7 @@ mod tests {
                 retry_config: RetryConfig::disabled(),
                 context_window: None,
                 prompt_cache: PromptCache::new(vec![]),
+                observers: Vec::new(),
             },
             user_rx,
             message_tx,

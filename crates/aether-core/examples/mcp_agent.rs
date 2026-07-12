@@ -85,10 +85,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some(AgentEvent::Turn(TurnEvent::AutoContinue { attempt, max_attempts })) => {
                 println!("Auto-continuing: attempt {attempt}/{max_attempts} (LLM stopped due to length)");
             }
-            Some(AgentEvent::Turn(turn @ TurnEvent::LlmCallStarted { .. })) => {
-                if let Some(retry) = turn.retry_info() {
-                    println!("Retrying ({}/{}) in {}ms", retry.attempt, retry.max_attempts, retry.delay_ms);
-                }
+            Some(AgentEvent::Turn(turn @ TurnEvent::RetryScheduled { .. })) => {
+                let retry = turn.retry_info().expect("retry event");
+                println!("Retrying ({}/{}) in {}ms", retry.attempt, retry.max_attempts, retry.delay_ms);
             }
             Some(
                 AgentEvent::Tool(
@@ -96,7 +95,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     | ToolEvent::ExecutionStarted { .. }
                     | ToolEvent::DefinitionsUpdated { .. },
                 )
-                | AgentEvent::Turn(TurnEvent::Started | TurnEvent::LlmCallEnded { .. }),
+                | AgentEvent::Turn(
+                    TurnEvent::Started { .. } | TurnEvent::LlmCallStarted { .. } | TurnEvent::LlmCallEnded { .. },
+                ),
             ) => {}
             Some(AgentEvent::Model(ModelEvent::Switched { previous, new })) => {
                 println!("Model switched: {previous} -> {new}");

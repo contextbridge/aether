@@ -1,4 +1,4 @@
-use llm::{StopReason, TokenUsage};
+use llm::{ContentBlock, StopReason, TokenUsage};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -49,8 +49,13 @@ pub struct RetryInfo {
 pub enum TurnEvent {
     /// A user message began a turn. Messages queued while a turn is active are
     /// folded into that turn and do not start a new one.
-    Started,
-    /// An LLM call was issued.
+    Started {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        content: Vec<ContentBlock>,
+    },
+    /// A retry is waiting for its backoff delay before the request starts.
+    RetryScheduled { purpose: LlmCallPurpose, attempt: u32, max_attempts: u32, delay_ms: u64 },
+    /// An LLM request was issued.
     LlmCallStarted {
         purpose: LlmCallPurpose,
         provider: Option<String>,
@@ -59,8 +64,6 @@ pub enum TurnEvent {
         /// 0 for the initial call, incrementing per retry.
         attempt: u32,
         max_attempts: u32,
-        /// Backoff delay before a retry fires; `None` on the initial call.
-        delay_ms: Option<u64>,
     },
     /// An LLM call reached a terminal state.
     LlmCallEnded { purpose: LlmCallPurpose, outcome: LlmCallOutcome },
@@ -74,7 +77,7 @@ pub enum TurnEvent {
 impl TurnEvent {
     pub fn retry_info(&self) -> Option<RetryInfo> {
         match self {
-            Self::LlmCallStarted { attempt, max_attempts, delay_ms: Some(delay_ms), .. } if *attempt > 0 => {
+            Self::RetryScheduled { attempt, max_attempts, delay_ms, .. } => {
                 Some(RetryInfo { attempt: *attempt, max_attempts: *max_attempts, delay_ms: *delay_ms })
             }
             _ => None,
