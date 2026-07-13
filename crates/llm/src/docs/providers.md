@@ -12,13 +12,13 @@ Each submodule implements [`StreamingModelProvider`](crate::StreamingModelProvid
 | [`gemini`] | Google Gemini | `GEMINI_API_KEY` | -- |
 | [`local::ollama`] | Ollama | -- (local) | -- |
 | [`local::llama_cpp`] | llama.cpp | -- (local) | -- |
-| [`openai_compatible`] | `DeepSeek`, ZAI, Moonshot | varies | -- |
+| [`openai_compatible`] | `DeepSeek`, Fireworks AI, Microsoft Foundry, Moonshot, ZAI | varies | -- |
 | [`bedrock`] | AWS Bedrock | AWS credentials | `bedrock` |
 | [`codex`] | `OpenAI` Codex (OAuth) | -- (OAuth) | `codex` |
 
 # OpenAI-compatible providers
 
-The [`openai_compatible`] module provides a shared [`GenericOpenAiProvider`](openai_compatible::generic::GenericOpenAiProvider) that works with any `OpenAI`-compatible API. `DeepSeek`, ZAI, and Moonshot use this with pre-configured [`ProviderConfig`](openai_compatible::generic::ProviderConfig) constants.
+The [`openai_compatible`] module provides a shared [`GenericOpenAiProvider`](openai_compatible::generic::GenericOpenAiProvider) that works with any `OpenAI`-compatible API. `DeepSeek`, Fireworks AI, Microsoft Foundry, Moonshot, and ZAI use this with pre-configured [`ProviderConfig`](openai_compatible::generic::ProviderConfig) constants.
 
 # Adding a new provider
 

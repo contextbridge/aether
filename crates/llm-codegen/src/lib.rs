@@ -190,6 +190,17 @@ struct DynamicProviderConfig {
 const PROVIDERS: &[ProviderConfig] = &[
     ProviderConfig::standard("anthropic", "Anthropic", "anthropic", "Anthropic", Some("ANTHROPIC_API_KEY")),
     ProviderConfig {
+        source_dev_id: Some("azure"),
+        genai_provider_name: "azure.ai.openai",
+        ..ProviderConfig::standard(
+            "azure-foundry",
+            "AzureFoundry",
+            "azure-foundry",
+            "Microsoft Foundry",
+            Some("AZURE_OPENAI_API_KEY"),
+        )
+    },
+    ProviderConfig {
         dev_id: "codex",
         source_dev_id: Some("openai"),
         extra_source_ids: &[],
@@ -204,6 +215,10 @@ const PROVIDERS: &[ProviderConfig] = &[
         is_hybrid_dynamic: false,
     },
     ProviderConfig::standard("deepseek", "DeepSeek", "deepseek", "DeepSeek", Some("DEEPSEEK_API_KEY")),
+    ProviderConfig {
+        source_dev_id: Some("fireworks-ai"),
+        ..ProviderConfig::standard("fireworks", "Fireworks", "fireworks", "Fireworks AI", Some("FIREWORKS_API_KEY"))
+    },
     ProviderConfig {
         genai_provider_name: "gcp.gemini",
         ..ProviderConfig::standard("google", "Gemini", "gemini", "Gemini", Some("GEMINI_API_KEY"))

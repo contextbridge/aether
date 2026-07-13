@@ -20,11 +20,11 @@ fn main() {
         std::fs::write(docs_dir.join(format!("{provider_id}.md")), markdown).unwrap();
     }
 
-    // Combine deepseek + moonshot + zai into a single doc for the openai_compatible module
+    // Combine OpenAI-compatible providers into a single module doc.
     let mut combined = String::from(
         "`OpenAI`-compatible LLM providers.\n\nShared infrastructure for providers whose APIs are compatible with the `OpenAI` chat completions format.\n\n",
     );
-    for key in ["deepseek", "moonshotai", "zai"] {
+    for key in ["azure-foundry", "deepseek", "fireworks", "moonshotai", "zai"] {
         if let Some(doc) = output.provider_docs.get(key) {
             combined.push_str(doc);
             combined.push('\n');

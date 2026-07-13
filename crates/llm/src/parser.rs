@@ -19,7 +19,7 @@ use crate::{
 #[cfg(feature = "codex")]
 use aether_auth::OAuthCredentialStorage;
 use futures::future::BoxFuture;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 #[cfg(feature = "codex")]
 use std::sync::Arc;
 
@@ -48,7 +48,9 @@ impl Default for ModelProviderParser {
             .with_provider::<OpenAiProvider>("openai")
             .with_openai_provider("deepseek", &generic::DEEPSEEK)
             .with_openai_provider("moonshot", &generic::MOONSHOT)
-            .with_openai_provider("zai", &generic::ZAI);
+            .with_openai_provider("zai", &generic::ZAI)
+            .with_openai_provider("azure-foundry", &generic::AZURE_FOUNDRY)
+            .with_openai_provider("fireworks", &generic::FIREWORKS);
 
         #[cfg(feature = "bedrock")]
         let parser = parser.with_provider::<BedrockProvider>("bedrock");
@@ -137,6 +139,7 @@ impl ModelProviderParser {
         let bedrock_has_inference_profile_arn =
             self.provider_connections.config_for("bedrock").inference_profile_arn.is_some();
         let mut seen_bedrock = false;
+        let mut seen_request_model_providers = HashSet::new();
         let mut providers = Vec::new();
         let mut first_identity: Option<LlmModel> = None;
 
@@ -151,6 +154,14 @@ impl ModelProviderParser {
                     ));
                 }
                 seen_bedrock = true;
+            }
+
+            if self.provider_connections.config_for(provider_name).request_model.is_some()
+                && !seen_request_model_providers.insert(provider_name)
+            {
+                return Err(LlmError::Other(format!(
+                    "providers.{provider_name}.requestModel cannot be used with multiple {provider_name} models in one alloy spec"
+                )));
             }
 
             let factory = self
@@ -187,6 +198,8 @@ pub type CreateProviderFn = Box<
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
 
     #[tokio::test]
@@ -291,6 +304,26 @@ mod tests {
         };
 
         assert!(error.contains("providers.bedrock.inferenceProfileArn"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn test_parse_rejects_repeated_request_model_provider() {
+        let parser = ModelProviderParser::default().with_provider_connections(ProviderConnectionOverrides::new(
+            BTreeMap::from([(
+                "azure-foundry".to_string(),
+                crate::ProviderConnectionOverride {
+                    base_url: Some("http://127.0.0.1:8787".to_string()),
+                    auth_mode: Some(crate::ProviderAuthMode::None),
+                    request_model: Some("production-coding".to_string()),
+                    inference_profile_arn: None,
+                },
+            )]),
+        ));
+
+        let Err(error) = parser.parse("azure-foundry:gpt-5.5,azure-foundry:gpt-5.5").await else {
+            panic!("repeated request-model provider should be rejected");
+        };
+        assert!(error.to_string().contains("providers.azure-foundry.requestModel"));
     }
 
     #[tokio::test]
