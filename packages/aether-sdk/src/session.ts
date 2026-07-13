@@ -16,7 +16,7 @@ import type {
   AgentSelection,
 } from "./types.js";
 
-const SDK_VERSION = "0.2.3";
+const SDK_VERSION = "0.3.6";
 
 export type PermissionRequestHandler = (
   request: acp.RequestPermissionRequest,

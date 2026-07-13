@@ -14,10 +14,74 @@ use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use prost::Message;
 
 #[tokio::test(flavor = "multi_thread")]
+async fn runtime_exports_metrics_to_a_signal_specific_endpoint() {
+    let collector = FakeOtlpCollector::start().await;
+    let runtime = TelemetryRuntime::new(&TelemetryConfig {
+        endpoint: None,
+        traces_endpoint: None,
+        metrics_endpoint: Some(collector.signal_specific_metrics_endpoint()),
+        headers: HashMap::from([("x-telemetry-test".to_string(), "signal-specific".to_string())]),
+        service_name: "aether-test".to_string(),
+        service_version: "test".to_string(),
+        sample_ratio: 1.0,
+        capture_content: false,
+        traces_enabled: false,
+        metrics_enabled: true,
+    })
+    .expect("runtime initializes against a signal-specific endpoint");
+    {
+        let factory = runtime.observer_factory();
+        let mut observer = factory();
+        for event in events() {
+            observer.on_event(&event);
+        }
+    };
+
+    runtime.shutdown().expect("runtime flushes metrics");
+    let exports = collector.exports();
+
+    assert!(exports.traces.is_empty());
+    assert_eq!(exports.metrics.len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn runtime_exports_traces_to_a_signal_specific_endpoint() {
+    let collector = FakeOtlpCollector::start().await;
+    let runtime = TelemetryRuntime::new(&TelemetryConfig {
+        endpoint: None,
+        traces_endpoint: Some(collector.signal_specific_traces_endpoint()),
+        metrics_endpoint: None,
+        headers: HashMap::from([("x-telemetry-test".to_string(), "signal-specific".to_string())]),
+        service_name: "aether-test".to_string(),
+        service_version: "test".to_string(),
+        sample_ratio: 1.0,
+        capture_content: false,
+        traces_enabled: true,
+        metrics_enabled: false,
+    })
+    .expect("runtime initializes against a signal-specific endpoint");
+    {
+        let factory = runtime.observer_factory();
+        let mut observer = factory();
+        for event in events() {
+            observer.on_event(&event);
+        }
+    };
+
+    runtime.shutdown().expect("runtime flushes traces");
+    let exports = collector.exports();
+
+    assert_eq!(exports.traces.len(), 1);
+    assert!(exports.metrics.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn runtime_exports_genai_spans_and_metrics_to_an_otlp_collector() {
     let collector = FakeOtlpCollector::start().await;
     let runtime = TelemetryRuntime::new(&TelemetryConfig {
         endpoint: Some(collector.endpoint()),
+        traces_endpoint: None,
+        metrics_endpoint: None,
         headers: HashMap::from([("x-telemetry-test".to_string(), "collector-test".to_string())]),
         service_name: "aether-test".to_string(),
         service_version: "test".to_string(),
@@ -103,6 +167,8 @@ impl FakeOtlpCollector {
         let exports = Arc::new(Mutex::new(Exports::default()));
         let app = Router::new()
             .route("/v1/traces", post(export_traces))
+            .route("/i/v0/ai/otel", post(export_traces))
+            .route("/custom/metrics", post(export_metrics))
             .route("/v1/metrics", post(export_metrics))
             .with_state(exports.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind fake collector");
@@ -116,6 +182,14 @@ impl FakeOtlpCollector {
 
     fn endpoint(&self) -> String {
         format!("http://{}", self.address)
+    }
+
+    fn signal_specific_traces_endpoint(&self) -> String {
+        format!("http://{}/i/v0/ai/otel", self.address)
+    }
+
+    fn signal_specific_metrics_endpoint(&self) -> String {
+        format!("http://{}/custom/metrics", self.address)
     }
 
     fn exports(&self) -> Exports {

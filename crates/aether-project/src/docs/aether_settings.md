@@ -89,3 +89,5 @@ Prompt, response, reasoning, and tool argument content is not exported unless `c
   ]
 }
 ```
+
+For an OTLP backend with exact signal URLs, set `otlp.tracesEndpoint` and `otlp.metricsEndpoint`. Aether sends each configured signal to its matching URL unchanged; an unconfigured signal uses the `/v1/traces` or `/v1/metrics` URL derived from `otlp.endpoint`.

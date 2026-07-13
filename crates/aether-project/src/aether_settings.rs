@@ -140,8 +140,18 @@ pub struct TelemetrySignalSettings {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OtlpTelemetrySettings {
+    /// Base URL for an OTLP/HTTP collector. Aether appends `/v1/traces` or
+    /// `/v1/metrics` for the respective signal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<String>,
+    /// Exact OTLP/HTTP trace export URL. Overrides the traces URL derived from
+    /// `endpoint`, for providers that require a signal-specific endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub traces_endpoint: Option<String>,
+    /// Exact OTLP/HTTP metric export URL. Overrides the metrics URL derived from
+    /// `endpoint`, for providers that require a signal-specific endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metrics_endpoint: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub headers: BTreeMap<String, String>,
 }
@@ -178,6 +188,8 @@ impl TelemetrySettings {
         merge_field(&mut self.traces.enabled, next.traces.enabled);
         merge_field(&mut self.metrics.enabled, next.metrics.enabled);
         merge_field(&mut self.otlp.endpoint, next.otlp.endpoint);
+        merge_field(&mut self.otlp.traces_endpoint, next.otlp.traces_endpoint);
+        merge_field(&mut self.otlp.metrics_endpoint, next.otlp.metrics_endpoint);
         self.otlp.headers.extend(next.otlp.headers);
     }
 }
@@ -190,7 +202,10 @@ impl TelemetrySignalSettings {
 
 impl OtlpTelemetrySettings {
     fn is_unset(&self) -> bool {
-        self.endpoint.is_none() && self.headers.is_empty()
+        self.endpoint.is_none()
+            && self.traces_endpoint.is_none()
+            && self.metrics_endpoint.is_none()
+            && self.headers.is_empty()
     }
 }
 
@@ -508,7 +523,11 @@ mod tests {
                             "captureContent": true,
                             "traces": { "enabled": true },
                             "metrics": { "enabled": true },
-                            "otlp": { "endpoint": "http://localhost:4318" }
+                            "otlp": {
+                                "endpoint": "http://localhost:4318",
+                                "tracesEndpoint": "https://traces.example.com/export",
+                                "metricsEndpoint": "https://metrics.example.com/export"
+                            }
                         },
                         "agents": []
                     }"#
@@ -533,6 +552,8 @@ mod tests {
         assert!(telemetry.traces_enabled(), "omitted nested fields remain inherited");
         assert!(!telemetry.metrics_enabled(), "nested overrides merge independently");
         assert_eq!(telemetry.otlp.endpoint.as_deref(), Some("http://localhost:4318"));
+        assert_eq!(telemetry.otlp.traces_endpoint.as_deref(), Some("https://traces.example.com/export"));
+        assert_eq!(telemetry.otlp.metrics_endpoint.as_deref(), Some("https://metrics.example.com/export"));
     }
 
     #[test]
