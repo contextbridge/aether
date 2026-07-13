@@ -5,8 +5,7 @@ use std::time::Duration;
 use aether_core::{
     events::{AgentEvent, Command, TurnOutcome, UserCommand},
     testing::{
-        agent_event, content_events, test_agent,
-        {AddNumbersRequest, AddNumbersResult, DivideNumbersRequest, SlowToolRequest},
+        agent_event, test_agent, {AddNumbersRequest, AddNumbersResult, DivideNumbersRequest, SlowToolRequest},
     },
 };
 use llm::testing::{FakeLlmProvider, llm_response};
