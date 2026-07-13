@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.14](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.13...aether-llm-codegen-v0.2.14) - 2026-07-13
+
+### Added
+
+- *(aether-cli)* Add support for exporting genai OTEL traces ([#219](https://github.com/contextbridge/aether/pull/219))
+
 ## [0.2.13](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.12...aether-llm-codegen-v0.2.13) - 2026-07-09
 
 ### Other

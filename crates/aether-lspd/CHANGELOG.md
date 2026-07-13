@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.22](https://github.com/contextbridge/aether/compare/aether-lspd-v0.1.21...aether-lspd-v0.1.22) - 2026-07-13
+
+### Added
+
+- *(aether-cli)* Add support for exporting genai OTEL traces ([#219](https://github.com/contextbridge/aether/pull/219))
+
+### Other
+
+- fix lspd tests
+
 ## [0.1.21](https://github.com/contextbridge/aether/compare/aether-lspd-v0.1.20...aether-lspd-v0.1.21) - 2026-07-09
 
 ### Other

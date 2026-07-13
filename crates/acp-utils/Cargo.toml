@@ -1,6 +1,6 @@
 [package]
 name = "aether-acp-utils"
-version = "0.3.28"
+version = "0.3.29"
 edition = "2024"
 description = "Agent Client Protocol (ACP) utilities for the Aether AI agent framework"
 license = "MIT"
@@ -37,7 +37,7 @@ rmcp = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.5.22" }
+mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.5.23" }
 tokio = { workspace = true }
 tracing = { workspace = true }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.9" }

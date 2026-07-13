@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.6](https://github.com/contextbridge/aether/compare/aether-schemas-v0.1.5...aether-schemas-v0.1.6) - 2026-07-13
+
+### Other
+
+- Rename AgentMessage => AgentEvent and better organize variants ([#217](https://github.com/contextbridge/aether/pull/217))
+
 ## [0.1.5](https://github.com/contextbridge/aether/compare/aether-schemas-v0.1.4...aether-schemas-v0.1.5) - 2026-07-09
 
 ### Other
