@@ -7,7 +7,7 @@ use llm::{ProviderAuthMode, ProviderConnectionOverride, ProviderConnectionOverri
 pub struct ProviderConnectionArgs {
     #[arg(
         long = "provider",
-        value_name = "PROVIDER.url=URL|PROVIDER.auth=default|none|bedrock.inference-profile-arn=ARN"
+        value_name = "PROVIDER.url=URL|PROVIDER.auth=default|none|PROVIDER.request-model=MODEL|bedrock.inference-profile-arn=ARN"
     )]
     pub providers: Vec<ProviderArg>,
 }
@@ -35,7 +35,7 @@ impl FromStr for ProviderArg {
         let (key, setting) = split_key_value(value)?;
         let (provider, field) = key
             .split_once('.')
-            .ok_or_else(|| "provider override must be PROVIDER.url=URL, PROVIDER.auth=default|none, or bedrock.inference-profile-arn=ARN".to_string())?;
+            .ok_or_else(|| "provider override must be PROVIDER.url=URL, PROVIDER.auth=default|none, PROVIDER.request-model=MODEL, or bedrock.inference-profile-arn=ARN".to_string())?;
 
         validate_provider(provider)?;
         if setting.trim().is_empty() {
@@ -48,13 +48,18 @@ impl FromStr for ProviderArg {
                 ProviderConnectionOverride::url(setting)
             }
             "auth" => ProviderConnectionOverride::auth(parse_auth_mode(setting)?),
+            "request-model" => ProviderConnectionOverride::request_model(setting),
             "inference-profile-arn" => {
                 if provider != "bedrock" {
                     return Err("inference-profile-arn is only supported for the bedrock provider".to_string());
                 }
                 ProviderConnectionOverride::inference_profile_arn(setting)
             }
-            _ => return Err("provider override field must be url, auth, or inference-profile-arn".to_string()),
+            _ => {
+                return Err(
+                    "provider override field must be url, auth, request-model, or inference-profile-arn".to_string()
+                );
+            }
         };
 
         Ok(Self { provider: provider.to_string(), connection })
@@ -112,21 +117,30 @@ mod tests {
     }
 
     #[test]
+    fn parses_provider_request_model() {
+        let arg: ProviderArg = "azure-foundry.request-model=production-coding".parse().unwrap();
+        assert_eq!(arg.connection.request_model.as_deref(), Some("production-coding"));
+    }
+
+    #[test]
     fn combines_repeated_provider_overrides() {
         let args = ProviderConnectionArgs {
             providers: vec![
                 "bedrock.url=http://127.0.0.1:8787".parse().unwrap(),
                 "bedrock.auth=none".parse().unwrap(),
+                "azure-foundry.request-model=production-coding".parse().unwrap(),
                 "bedrock.inference-profile-arn=arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/000000000000"
                     .parse()
                     .unwrap(),
             ],
         };
 
-        let config = args.into_overrides().config_for("bedrock");
+        let overrides = args.into_overrides();
+        let config = overrides.config_for("bedrock");
 
         assert_eq!(config.base_url.as_deref(), Some("http://127.0.0.1:8787"));
         assert_eq!(config.auth_mode, ProviderAuthMode::None);
+        assert_eq!(overrides.config_for("azure-foundry").request_model.as_deref(), Some("production-coding"));
         assert_eq!(
             config.inference_profile_arn.as_deref(),
             Some("arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/000000000000")
