@@ -43,7 +43,16 @@ aether headless --model zai:glm-5.1 \
   "Summarize the architecture"
 ```
 
-Use `--provider` for provider-specific request routing and connection overrides. For Bedrock inference profiles, keep `--model` as the Bedrock model ID and pass the ARN separately:
+Use `--provider` for provider-specific request routing and connection overrides. For Microsoft Foundry, configure the resource endpoint and optionally map the catalog model to its deployment name:
+
+```bash
+aether headless --model azure-foundry:gpt-5.5 \
+  --provider azure-foundry.url=https://my-resource.openai.azure.com/openai/v1 \
+  --provider azure-foundry.request-model=production-coding-deployment \
+  "Summarize the architecture"
+```
+
+For Bedrock inference profiles, keep `--model` as the Bedrock model ID and pass the ARN separately:
 
 ```bash
 aether headless --model bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0 \
@@ -67,7 +76,7 @@ aether headless --model bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0 \
 | `--output`          | `text \| pretty \| json` | Output format. Defaults to `text`.                                                                |
 | `-v, --verbose`     | flag                     | Verbose diagnostic logging to stderr.                                                             |
 | `--events`          | comma-separated list     | Event kinds to emit. Omit to emit all.                                                            |
-| `--provider`        | `provider.field=value`   | Provider override. Supports `PROVIDER.url`, `PROVIDER.auth`, and `bedrock.inference-profile-arn`. |
+| `--provider`        | `provider.field=value`   | Provider override. Supports `PROVIDER.url`, `PROVIDER.auth`, `PROVIDER.request-model`, and `bedrock.inference-profile-arn`. |
 
 `--sandbox-image` is a global CLI flag, so it can appear before the subcommand or in the subcommand options shown by help.
 
