@@ -178,11 +178,25 @@ mod tests {
     };
     use std::collections::{BTreeMap, HashMap};
 
+    fn write_config_file(name: &str, json: &str) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(name);
+        std::fs::write(&path, json).unwrap();
+        (dir, path)
+    }
+
+    fn json_source(json: &str) -> McpConfigSource {
+        McpConfigSource::Json(json.to_string())
+    }
+
+    async fn builder_from_sources(sources: &[McpConfigSource]) -> McpBuilder {
+        McpBuilder::new("/workspace").from_mcp_config_sources(sources).await.unwrap()
+    }
+
     #[tokio::test]
     async fn mixed_direct_sources_preserve_last_wins_order() {
-        let dir = tempfile::tempdir().unwrap();
-        let file_path = dir.path().join("mcp.json");
-        std::fs::write(&file_path, r#"{"servers":{"coding":{"type":"stdio","command":"from_file"}}}"#).unwrap();
+        let (_dir, file_path) =
+            write_config_file("mcp.json", r#"{"servers":{"coding":{"type":"stdio","command":"from_file"}}}"#);
         let inline = McpConfig::new(BTreeMap::from([(
             "coding".to_string(),
             McpServerConfig::Stdio(StdioServerConfig {
@@ -194,12 +208,12 @@ mod tests {
             }),
         )]));
         let sources = vec![
-            McpConfigSource::direct(file_path.clone()),
-            McpConfigSource::Json(r#"{"servers":{"coding":{"type":"stdio","command":"from_json"}}}"#.to_string()),
+            McpConfigSource::direct(file_path),
+            json_source(r#"{"servers":{"coding":{"type":"stdio","command":"from_json"}}}"#),
             McpConfigSource::Inline(inline),
         ];
 
-        let builder = McpBuilder::new("/workspace").from_mcp_config_sources(&sources).await.unwrap();
+        let builder = builder_from_sources(&sources).await;
 
         assert_eq!(command_for(&builder, "coding"), Some("from_inline"));
         assert_eq!(proxy_for(&builder, "coding"), Some(false));
@@ -207,28 +221,24 @@ mod tests {
 
     #[tokio::test]
     async fn file_sources_keep_their_position_relative_to_json_sources() {
-        let dir = tempfile::tempdir().unwrap();
-        let file_path = dir.path().join("mcp.json");
-        std::fs::write(&file_path, r#"{"servers":{"coding":{"type":"stdio","command":"from_file"}}}"#).unwrap();
+        let (_dir, file_path) =
+            write_config_file("mcp.json", r#"{"servers":{"coding":{"type":"stdio","command":"from_file"}}}"#);
         let sources = vec![
-            McpConfigSource::Json(r#"{"servers":{"coding":{"type":"stdio","command":"from_json"}}}"#.to_string()),
+            json_source(r#"{"servers":{"coding":{"type":"stdio","command":"from_json"}}}"#),
             McpConfigSource::direct(file_path),
         ];
 
-        let builder = McpBuilder::new("/workspace").from_mcp_config_sources(&sources).await.unwrap();
+        let builder = builder_from_sources(&sources).await;
 
         assert_eq!(command_for(&builder, "coding"), Some("from_file"));
     }
 
     #[tokio::test]
     async fn file_source_proxy_true_marks_all_file_servers_proxied() {
-        let dir = tempfile::tempdir().unwrap();
-        let file_path = dir.path().join("proxied.json");
-        std::fs::write(
-            &file_path,
+        let (_dir, file_path) = write_config_file(
+            "proxied.json",
             r#"{"servers":{"github":{"type":"stdio","command":"g","proxy":false},"browser":{"type":"stdio","command":"b"}}}"#,
-        )
-        .unwrap();
+        );
 
         let builder = McpBuilder::new("/workspace")
             .from_mcp_config_sources(&[McpConfigSource::File { path: file_path, proxy: true }])
@@ -241,17 +251,14 @@ mod tests {
 
     #[tokio::test]
     async fn later_sources_override_proxy_flag() {
-        let dir = tempfile::tempdir().unwrap();
-        let file_path = dir.path().join("proxied.json");
-        std::fs::write(&file_path, r#"{"servers":{"coding":{"type":"stdio","command":"from_file"}}}"#).unwrap();
+        let (_dir, file_path) =
+            write_config_file("proxied.json", r#"{"servers":{"coding":{"type":"stdio","command":"from_file"}}}"#);
         let sources = vec![
             McpConfigSource::File { path: file_path, proxy: true },
-            McpConfigSource::Json(
-                r#"{"servers":{"coding":{"type":"stdio","command":"from_json","proxy":false}}}"#.to_string(),
-            ),
+            json_source(r#"{"servers":{"coding":{"type":"stdio","command":"from_json","proxy":false}}}"#),
         ];
 
-        let builder = McpBuilder::new("/workspace").from_mcp_config_sources(&sources).await.unwrap();
+        let builder = builder_from_sources(&sources).await;
 
         assert_eq!(command_for(&builder, "coding"), Some("from_json"));
         assert_eq!(proxy_for(&builder, "coding"), Some(false));
@@ -259,12 +266,10 @@ mod tests {
 
     #[tokio::test]
     async fn spawn_returns_immediately_and_emits_initial_connecting_status() {
-        let sources = vec![McpConfigSource::Json(
-            r#"{"servers":{"slow":{"type":"stdio","command":"sleep","args":["30"]}}}"#.to_string(),
-        )];
-
         let mut spawn = McpBuilder::new("/workspace")
-            .from_mcp_config_sources(&sources)
+            .from_mcp_config_sources(&[json_source(
+                r#"{"servers":{"slow":{"type":"stdio","command":"sleep","args":["30"]}}}"#,
+            )])
             .await
             .unwrap()
             .spawn()
@@ -281,23 +286,25 @@ mod tests {
 
     #[tokio::test]
     async fn from_mcp_config_sources_expands_workspace_var_in_stdio_args() {
-        let json = r#"{"servers":{"notes":{"type":"stdio","command":"server","args":["--dir","${WORKSPACE}/notes"]}}}"#;
-
-        let builder =
-            McpBuilder::new("/work").from_mcp_config_sources(&[McpConfigSource::Json(json.to_string())]).await.unwrap();
+        let builder = McpBuilder::new("/work")
+            .from_mcp_config_sources(&[json_source(
+                r#"{"servers":{"notes":{"type":"stdio","command":"server","args":["--dir","${WORKSPACE}/notes"]}}}"#,
+            )])
+            .await
+            .unwrap();
 
         assert_eq!(args_for(&builder, "notes"), Some(vec!["--dir".to_string(), "/work/notes".to_string()]));
     }
 
     #[tokio::test]
     async fn from_mcp_config_sources_expands_aether_home_var_in_stdio_args() {
-        let json =
-            r#"{"servers":{"skills":{"type":"stdio","command":"server","args":["--dir","${AETHER_HOME}/skills"]}}}"#;
         let home = tempfile::tempdir().unwrap();
 
         let builder = McpBuilder::new("/work")
             .with_aether_home(home.path())
-            .from_mcp_config_sources(&[McpConfigSource::Json(json.to_string())])
+            .from_mcp_config_sources(&[json_source(
+                r#"{"servers":{"skills":{"type":"stdio","command":"server","args":["--dir","${AETHER_HOME}/skills"]}}}"#,
+            )])
             .await
             .unwrap();
 

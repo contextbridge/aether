@@ -12,6 +12,32 @@ fn http_mcp(name: &str, uri: &str) -> McpServer {
     McpServer::new(name, McpTransport::Http { config: StreamableHttpClientTransportConfig::with_uri(uri) }, false)
 }
 
+fn failing_http_mcp(name: &str) -> McpServer {
+    http_mcp(name, "http://localhost:19999/mcp")
+}
+
+fn failing_http_mcp_proxied(name: &str) -> McpServer {
+    McpServer::new(
+        name,
+        McpTransport::Http { config: StreamableHttpClientTransportConfig::with_uri("http://localhost:19999/mcp") },
+        true,
+    )
+}
+
+fn test_manager(with_oauth: bool) -> McpManager {
+    let (event_tx, _) = mpsc::channel::<McpClientEvent>(50);
+    let factory = if with_oauth { Some(fake_oauth_handler_factory()) } else { None };
+    McpManager::new(event_tx, factory)
+}
+
+fn test_manager_with_home(with_oauth: bool) -> (tempfile::TempDir, McpManager) {
+    let home = tempfile::tempdir().unwrap();
+    let (event_tx, _) = mpsc::channel::<McpClientEvent>(50);
+    let factory = if with_oauth { Some(fake_oauth_handler_factory()) } else { None };
+    let manager = McpManager::new(event_tx, factory).with_aether_home(home.path());
+    (home, manager)
+}
+
 struct FakeOAuthHandler {
     callback: OAuthCallback,
     redirect_uri: String,
@@ -87,29 +113,21 @@ async fn builder_with_oauth_handler_factory_spawns_successfully() {
 
 #[tokio::test]
 async fn http_server_without_handler_stashes_failed_status() {
-    let (event_tx, _event_rx) = mpsc::channel::<McpClientEvent>(50);
-    let mut manager = mcp_utils::client::McpManager::new(event_tx, None);
-
-    let result = manager.add_mcps(vec![http_mcp("test_server", "http://localhost:19999/mcp")]).await;
-
-    assert!(result.is_ok());
+    let mut manager = test_manager(false);
+    assert!(manager.add_mcps(vec![failing_http_mcp("test_server")]).await.is_ok());
 }
 
 #[tokio::test]
 async fn http_server_with_handler_stashes_needs_oauth_on_failure() {
-    let (event_tx, _event_rx) = mpsc::channel::<McpClientEvent>(50);
-    let mut manager = mcp_utils::client::McpManager::new(event_tx, Some(fake_oauth_handler_factory()));
+    let mut manager = test_manager(true);
 
-    let result = manager.add_mcps(vec![http_mcp("test_oauth_server", "http://localhost:19999/mcp")]).await;
-
-    // Connection fails, server should be stashed as NeedsOAuth (not auto-trigger OAuth)
-    assert!(result.is_ok());
+    assert!(manager.add_mcps(vec![failing_http_mcp("test_oauth_server")]).await.is_ok());
 
     let statuses = manager.server_statuses();
     assert_eq!(statuses.len(), 1);
     assert_eq!(statuses[0].name, "test_oauth_server");
     assert!(
-        matches!(statuses[0].status, mcp_utils::status::McpServerStatus::NeedsOAuth),
+        matches!(statuses[0].status, McpServerStatus::NeedsOAuth),
         "Expected NeedsOAuth, got: {:?}",
         statuses[0].status
     );
@@ -118,16 +136,14 @@ async fn http_server_with_handler_stashes_needs_oauth_on_failure() {
 
 #[tokio::test]
 async fn add_mcps_continues_on_oauth_failure() {
-    let (event_tx, _event_rx) = mpsc::channel::<McpClientEvent>(50);
-    let mut manager = mcp_utils::client::McpManager::new(event_tx, Some(fake_oauth_handler_factory()));
+    let mut manager = test_manager(true);
 
-    let direct = vec![
-        http_mcp("failing_server_1", "http://localhost:19998/mcp"),
-        http_mcp("failing_server_2", "http://localhost:19997/mcp"),
-    ];
-
-    let result = manager.add_mcps(direct).await;
-    assert!(result.is_ok());
+    assert!(
+        manager
+            .add_mcps(vec![failing_http_mcp("failing_server_1"), failing_http_mcp("failing_server_2")])
+            .await
+            .is_ok()
+    );
     assert!(manager.tool_definitions().is_empty());
 }
 
@@ -161,19 +177,9 @@ async fn oauth_handler_is_dyn_compatible() {
 
 #[tokio::test]
 async fn tool_proxy_with_failing_http_surfaces_needs_oauth() {
-    let (event_tx, _event_rx) = mpsc::channel::<McpClientEvent>(50);
-    let aether_home = tempfile::tempdir().unwrap();
-    let mut manager =
-        McpManager::new(event_tx, Some(fake_oauth_handler_factory())).with_aether_home(aether_home.path());
+    let (_home, mut manager) = test_manager_with_home(true);
 
-    let servers = vec![
-        fake_mcp_with_proxy("local", FakeMcpServer::new(), true),
-        McpServer::new(
-            "remote",
-            McpTransport::Http { config: StreamableHttpClientTransportConfig::with_uri("http://localhost:19999/mcp") },
-            true,
-        ),
-    ];
+    let servers = vec![fake_mcp_with_proxy("local", FakeMcpServer::new(), true), failing_http_mcp_proxied("remote")];
 
     let _ = manager.add_mcps(servers).await;
     let statuses = manager.server_statuses();
@@ -189,11 +195,10 @@ async fn tool_proxy_with_failing_http_surfaces_needs_oauth() {
     assert!(remote_status.proxied, "Expected remote to be marked as proxied");
 
     let local_status = statuses.iter().find(|s| s.name == "local").expect("Expected status entry for 'local'");
-    assert!(matches!(local_status.status, McpServerStatus::Connected { .. }),);
+    assert!(matches!(local_status.status, McpServerStatus::Connected { .. }));
     assert!(local_status.proxied);
     assert!(!statuses.iter().any(|s| s.name == "proxy"));
 
-    // The proxy's call_tool should still be available
     let defs = manager.tool_definitions();
     assert_eq!(defs.len(), 1);
     assert_eq!(defs[0].name, "proxy__call_tool");
@@ -201,27 +206,16 @@ async fn tool_proxy_with_failing_http_surfaces_needs_oauth() {
 
 #[tokio::test]
 async fn tool_proxy_partial_connection_works() {
-    let (event_tx, _event_rx) = mpsc::channel::<McpClientEvent>(50);
-    let aether_home = tempfile::tempdir().unwrap();
-    let mut manager = McpManager::new(event_tx, None).with_aether_home(aether_home.path());
+    let (_home, mut manager) = test_manager_with_home(false);
 
-    let servers = vec![
-        fake_mcp_with_proxy("working", FakeMcpServer::new(), true),
-        McpServer::new(
-            "broken",
-            McpTransport::Http { config: StreamableHttpClientTransportConfig::with_uri("http://localhost:19999/mcp") },
-            true,
-        ),
-    ];
+    let servers = vec![fake_mcp_with_proxy("working", FakeMcpServer::new(), true), failing_http_mcp_proxied("broken")];
 
     let _ = manager.add_mcps(servers).await;
 
-    // The proxy should be connected with 1 tool (call_tool)
     let defs = manager.tool_definitions();
     assert_eq!(defs.len(), 1);
     assert_eq!(defs[0].name, "proxy__call_tool");
 
-    // Instructions should mention the working server
     let instructions = manager.server_instructions();
     let proxy_instr = instructions.get("proxy").expect("Expected proxy instructions");
     assert!(proxy_instr.contains("working"), "Instructions should mention the connected server");

@@ -193,6 +193,17 @@ async fn spawn_scripted(
     (command_tx, script_handle)
 }
 
+async fn call_needs_browser(
+    command_tx: &mpsc::Sender<McpCommand>,
+) -> (Result<llm::ToolCallResult, llm::ToolCallError>, Option<mcp_utils::display_meta::ToolResultMeta>) {
+    let (event_tx, mut event_rx) = mpsc::channel(10);
+    command_tx
+        .send(McpCommand::ExecuteTool { request: call_tool_request(), timeout: Duration::from_secs(10), tx: event_tx })
+        .await
+        .unwrap();
+    drain_until_complete(&mut event_rx).await
+}
+
 #[tokio::test]
 async fn malformed_url_elicitation_required_data_returns_protocol_error() {
     let server = MalformedUrlElicitationRequiredServer::new(json!({ "elicitations": "not-an-array" }));
@@ -200,15 +211,8 @@ async fn malformed_url_elicitation_required_data_returns_protocol_error() {
 
     let mut spawn = mcp("/workspace").with_servers(vec![config]).spawn().await.unwrap();
     let _snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
-    let command_tx = spawn.command_tx;
 
-    let (event_tx, mut event_rx) = mpsc::channel(10);
-    command_tx
-        .send(McpCommand::ExecuteTool { request: call_tool_request(), timeout: Duration::from_secs(10), tx: event_tx })
-        .await
-        .unwrap();
-
-    let (result, _meta) = drain_until_complete(&mut event_rx).await;
+    let (result, _meta) = call_needs_browser(&spawn.command_tx).await;
     let err = result.expect_err("malformed payload should surface as a protocol error");
     assert!(
         err.error.contains("invalid") || err.error.contains("malformed"),
@@ -223,13 +227,7 @@ async fn url_elicitation_required_accept_returns_retry_needed_error_without_url(
     let url = "https://github.com/login/oauth?elicitationId=el-42";
     let (command_tx, script_handle) = spawn_scripted("el-42", url, ElicitationAction::Accept).await;
 
-    let (event_tx, mut event_rx) = mpsc::channel(10);
-    command_tx
-        .send(McpCommand::ExecuteTool { request: call_tool_request(), timeout: Duration::from_secs(10), tx: event_tx })
-        .await
-        .unwrap();
-
-    let (result, _meta) = drain_until_complete(&mut event_rx).await;
+    let (result, _meta) = call_needs_browser(&command_tx).await;
     let err = result.expect_err("accept should still surface as tool error asking for retry");
     assert!(err.error.contains("browser flow"), "message should mention browser flow: {}", err.error);
     assert!(err.error.contains("Retry") || err.error.contains("retry"), "message should mention retry: {}", err.error);
@@ -253,13 +251,7 @@ async fn url_elicitation_required_decline_returns_decline_error_without_url() {
     let url = "https://example.com/auth";
     let (command_tx, _script_handle) = spawn_scripted("el-decl", url, ElicitationAction::Decline).await;
 
-    let (event_tx, mut event_rx) = mpsc::channel(10);
-    command_tx
-        .send(McpCommand::ExecuteTool { request: call_tool_request(), timeout: Duration::from_secs(10), tx: event_tx })
-        .await
-        .unwrap();
-
-    let (result, _meta) = drain_until_complete(&mut event_rx).await;
+    let (result, _meta) = call_needs_browser(&command_tx).await;
     let err = result.expect_err("decline should surface as tool error");
     assert!(err.error.contains("declined"), "message should mention decline: {}", err.error);
     assert!(!err.error.contains("https://"), "URL must not leak into tool error text: {}", err.error);
@@ -270,13 +262,7 @@ async fn url_elicitation_required_cancel_returns_cancel_error_without_url() {
     let url = "https://example.com/auth";
     let (command_tx, _script_handle) = spawn_scripted("el-canc", url, ElicitationAction::Cancel).await;
 
-    let (event_tx, mut event_rx) = mpsc::channel(10);
-    command_tx
-        .send(McpCommand::ExecuteTool { request: call_tool_request(), timeout: Duration::from_secs(10), tx: event_tx })
-        .await
-        .unwrap();
-
-    let (result, _meta) = drain_until_complete(&mut event_rx).await;
+    let (result, _meta) = call_needs_browser(&command_tx).await;
     let err = result.expect_err("cancel should surface as tool error");
     assert!(err.error.contains("cancelled"), "message should mention cancel: {}", err.error);
     assert!(!err.error.contains("https://"), "URL must not leak into tool error text: {}", err.error);
