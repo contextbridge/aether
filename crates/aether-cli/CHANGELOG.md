@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.23](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.22...aether-agent-cli-v0.7.23) - 2026-07-13
+
+### Added
+
+- *(aether-cli)* Support exact trace and metric endpoints for otel e… ([#228](https://github.com/contextbridge/aether/pull/228))
+
 ## [0.7.22](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.21...aether-agent-cli-v0.7.22) - 2026-07-13
 
 ### Added
