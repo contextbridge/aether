@@ -659,7 +659,29 @@ When using tools that take file paths, always use absolute paths from:
                 .to_string()
         })?;
 
-        searcher.search(args).await.map_err(|e| e.to_string()).map(Json)
+        let peer = context.peer.clone();
+        let progress_token = context.meta.get_progress_token();
+        searcher
+            .search(args, move |delay| {
+                let peer = peer.clone();
+                let progress_token = progress_token.clone();
+                async move {
+                    if let Some(token) = progress_token {
+                        let message = format!("Search rate limited; retrying in {} seconds.", delay.as_secs());
+                        let _ = peer
+                            .notify_progress(ProgressNotificationParam {
+                                progress_token: token,
+                                progress: 0.0,
+                                total: None,
+                                message: Some(message),
+                            })
+                            .await;
+                    }
+                }
+            })
+            .await
+            .map_err(|e| e.to_string())
+            .map(Json)
     }
 
     #[doc = include_str!("../lsp/tools/symbol_lookup/description.md")]

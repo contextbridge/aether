@@ -1,5 +1,6 @@
 //! Search client abstraction for web search operations
 
+use reqwest::header::RETRY_AFTER;
 use serde::Deserialize;
 use std::future::Future;
 use std::time::Duration;
@@ -97,10 +98,11 @@ impl SearchClient for BraveSearchClient {
         let status = response.status();
 
         if status.is_client_error() || status.is_server_error() {
+            let retry_after = parse_retry_after(response.headers().get(RETRY_AFTER));
             let error_text = response.text().await.unwrap_or_else(|_| "Unable to read error response".to_string());
 
             if status.as_u16() == 429 {
-                return Err(WebSearchError::RateLimited(error_text));
+                return Err(WebSearchError::RateLimited { message: error_text, retry_after });
             }
 
             return Err(WebSearchError::ApiError(format!("API returned {}: {error_text}", status.as_u16())));
@@ -125,6 +127,19 @@ impl SearchClient for BraveSearchClient {
     }
 }
 
+fn parse_retry_after(value: Option<&reqwest::header::HeaderValue>) -> Option<Duration> {
+    let value = value?.to_str().ok()?.trim();
+
+    value.parse::<u64>().ok().map(Duration::from_secs).or_else(|| {
+        chrono::DateTime::parse_from_rfc2822(value)
+            .ok()?
+            .with_timezone(&chrono::Utc)
+            .signed_duration_since(chrono::Utc::now())
+            .to_std()
+            .ok()
+    })
+}
+
 /// Brave API response structure
 #[derive(Debug, Deserialize)]
 struct BraveWebResponse {
@@ -143,6 +158,10 @@ struct BraveResult {
     description: String,
 }
 
+/// The result of a single search call: either matching results or an error.
+#[cfg(test)]
+type SearchOutcome = Result<Vec<RawSearchResult>, WebSearchError>;
+
 /// Fake search client for testing without network calls
 #[cfg(test)]
 #[derive(Debug, Clone)]
@@ -150,6 +169,9 @@ pub struct FakeSearchClient {
     responses: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Vec<RawSearchResult>>>>,
     search_history: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     default_response: Option<Vec<RawSearchResult>>,
+    /// When set, responses are served in call order (indexed by call count)
+    /// instead of being looked up by query. Use for retry/error tests.
+    sequential_responses: Option<std::sync::Arc<std::sync::Mutex<Vec<SearchOutcome>>>>,
 }
 
 #[cfg(test)]
@@ -166,6 +188,7 @@ impl FakeSearchClient {
             responses: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             search_history: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             default_response: None,
+            sequential_responses: None,
         }
     }
 
@@ -176,6 +199,13 @@ impl FakeSearchClient {
 
     pub fn with_default(mut self, results: Vec<RawSearchResult>) -> Self {
         self.default_response = Some(results);
+        self
+    }
+
+    /// Queue a sequence of responses served in call order, regardless of query.
+    /// Enables retry/error tests where the same query returns different results.
+    pub fn with_sequential_results(mut self, responses: Vec<SearchOutcome>) -> Self {
+        self.sequential_responses = Some(std::sync::Arc::new(std::sync::Mutex::new(responses)));
         self
     }
 
@@ -191,7 +221,18 @@ impl FakeSearchClient {
 #[cfg(test)]
 impl SearchClient for FakeSearchClient {
     async fn search(&self, params: SearchParams) -> Result<Vec<RawSearchResult>, WebSearchError> {
-        self.search_history.lock().unwrap().push(params.query.clone());
+        let call_index = {
+            let mut history = self.search_history.lock().unwrap();
+            let index = history.len();
+            history.push(params.query.clone());
+            index
+        };
+
+        if let Some(ref sequential) = self.sequential_responses {
+            return sequential.lock().unwrap().get(call_index).cloned().unwrap_or_else(|| {
+                Err(WebSearchError::ApiError(format!("No sequential response at index {call_index}")))
+            });
+        }
 
         let responses = self.responses.lock().unwrap();
         if let Some(results) = responses.get(&params.query) {
