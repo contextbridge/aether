@@ -1,7 +1,6 @@
 use super::error::AcpClientError;
 use super::event::AcpEvent;
 use super::prompt_handle::{AcpPromptHandle, PromptCommand};
-use super::tokio_agent::TokioAcpAgent;
 use crate::notifications::{
     AuthMethodsUpdatedParams, ContextClearedParams, ContextUsageParams, ElicitationParams, McpNotification, McpRequest,
     SubAgentProgressParams,
@@ -13,7 +12,7 @@ use agent_client_protocol::schema::{
     RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome, SessionCapabilities,
     SessionConfigOption, SessionId, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, TextContent,
 };
-use agent_client_protocol::{self as acp, Client, ConnectionTo, JsonRpcRequest};
+use agent_client_protocol::{self as acp, Client, ConnectTo, ConnectionTo, JsonRpcRequest};
 use tokio::sync::mpsc;
 use tracing::info;
 
@@ -31,13 +30,13 @@ pub struct AcpSession {
     pub prompt_handle: AcpPromptHandle,
 }
 
-/// Spawn an agent subprocess and establish an ACP session.
+/// Spawn an ACP agent and establish an ACP session.
 ///
 /// The connection auto-approves permissions, forwards session notifications as
 /// [`AcpEvent`]s, and tunnels elicitation requests through the `_aether/elicitation`
 /// extension method.
 pub async fn spawn_acp_session(
-    agent: TokioAcpAgent,
+    agent: impl ConnectTo<Client> + 'static,
     init_request: InitializeRequest,
     new_session_request: NewSessionRequest,
 ) -> Result<AcpSession, AcpClientError> {
@@ -70,7 +69,7 @@ pub async fn spawn_acp_session(
 
 #[allow(clippy::too_many_lines)]
 async fn run_client_connection(
-    agent: TokioAcpAgent,
+    agent: impl ConnectTo<Client> + 'static,
     event_tx: mpsc::UnboundedSender<AcpEvent>,
     cmd_rx: mpsc::UnboundedReceiver<PromptCommand>,
     init_tx: mpsc::UnboundedSender<InitializeResult>,
@@ -229,93 +228,34 @@ async fn run_main(
                             break;
                         }
                         Some(cmd) = cmd_rx.recv() => {
-                            handle_side_command(&cx, &event_tx, cmd).await;
+                            handle_command(&cx, &event_tx, cmd, ClientState::Prompting).await;
                         }
                     }
                 }
             }
-            PromptCommand::ListSessions => {
-                request_to_event(
-                    &cx,
-                    &event_tx,
-                    ListSessionsRequest::new(),
-                    |resp| AcpEvent::SessionsListed { sessions: resp.sessions },
-                    AcpEvent::PromptError,
-                )
-                .await;
-            }
-            PromptCommand::LoadSession { session_id, cwd } => {
-                request_to_event(
-                    &cx,
-                    &event_tx,
-                    LoadSessionRequest::new(session_id.clone(), cwd),
-                    |resp| AcpEvent::SessionLoaded {
-                        session_id,
-                        config_options: resp.config_options.unwrap_or_default(),
-                    },
-                    AcpEvent::PromptError,
-                )
-                .await;
-            }
-            PromptCommand::NewSession { cwd } => {
-                request_to_event(
-                    &cx,
-                    &event_tx,
-                    NewSessionRequest::new(cwd),
-                    |resp| AcpEvent::NewSessionCreated {
-                        session_id: resp.session_id,
-                        config_options: resp.config_options.unwrap_or_default(),
-                    },
-                    AcpEvent::PromptError,
-                )
-                .await;
-            }
-            PromptCommand::MoveWorkspace(params) => {
-                request_to_event(&cx, &event_tx, params, AcpEvent::WorkspaceMoved, |e| AcpEvent::WorkspaceMoveFailed {
-                    error: format!("{e}"),
-                })
-                .await;
-            }
-            cmd => handle_side_command(&cx, &event_tx, cmd).await,
+            cmd => handle_command(&cx, &event_tx, cmd, ClientState::Idle).await,
         }
     }
 }
 
-async fn handle_side_command(
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ClientState {
+    Idle,
+    Prompting,
+}
+
+async fn handle_command(
     cx: &ConnectionTo<acp::Agent>,
     event_tx: &mpsc::UnboundedSender<AcpEvent>,
     cmd: PromptCommand,
+    state: ClientState,
 ) {
     match cmd {
-        PromptCommand::Cancel { session_id } => {
-            let _ = cx.send_notification(CancelNotification::new(session_id));
-        }
-        PromptCommand::SetConfigOption { session_id, config_id, value } => {
-            let req = SetSessionConfigOptionRequest::new(session_id.clone(), config_id, value);
-            match cx.send_request(req).block_task().await {
-                Ok(resp) => {
-                    let update = ConfigOptionUpdate::new(resp.config_options);
-                    let _ = event_tx.send(AcpEvent::SessionUpdate {
-                        session_id,
-                        update: Box::new(SessionUpdate::ConfigOptionUpdate(update)),
-                    });
-                }
-                Err(e) => {
-                    tracing::warn!("set_session_config_option failed: {e:?}");
-                }
-            }
-        }
         PromptCommand::Prompt { .. } => {
             tracing::warn!("ignoring duplicate Prompt while one is in-flight");
         }
-        PromptCommand::ListSessions => {
-            tracing::warn!("ignoring ListSessions while prompt is in-flight");
-        }
-        PromptCommand::LoadSession { .. } => {
-            tracing::warn!("ignoring LoadSession while prompt is in-flight");
-        }
-        PromptCommand::NewSession { .. } => {
-            tracing::warn!("ignoring NewSession while prompt is in-flight");
+        PromptCommand::Cancel { session_id } => {
+            let _ = cx.send_notification(CancelNotification::new(session_id));
         }
         PromptCommand::AuthenticateMcpServer { session_id, server_name } => {
             let msg = McpRequest::Authenticate { session_id: session_id.0.to_string(), server_name };
@@ -323,57 +263,142 @@ async fn handle_side_command(
                 tracing::warn!("authenticate_mcp_server notification failed: {e:?}");
             }
         }
+        PromptCommand::SetConfigOption { session_id, config_id, value } => {
+            let req = SetSessionConfigOptionRequest::new(session_id.clone(), config_id, value);
+            spawn_request_to_event(
+                cx,
+                event_tx,
+                req,
+                move |resp| {
+                    let update = ConfigOptionUpdate::new(resp.config_options);
+                    AcpEvent::SessionUpdate { session_id, update: Box::new(SessionUpdate::ConfigOptionUpdate(update)) }
+                },
+                |e| AcpEvent::ConfigOptionUpdateFailed { error: format!("{e:?}") },
+            );
+        }
         PromptCommand::Authenticate { method_id } => {
-            match cx.send_request(AuthenticateRequest::new(method_id.clone())).block_task().await {
-                Ok(_) => {
-                    let _ = event_tx.send(AcpEvent::AuthenticateComplete { method_id });
-                }
-                Err(e) => {
-                    tracing::warn!("authenticate failed: {e:?}");
-                    let _ = event_tx.send(AcpEvent::AuthenticateFailed { method_id, error: format!("{e:?}") });
-                }
-            }
+            let failed_method_id = method_id.clone();
+            spawn_request_to_event(
+                cx,
+                event_tx,
+                AuthenticateRequest::new(method_id.clone()),
+                move |_| AcpEvent::AuthenticateComplete { method_id },
+                move |e| AcpEvent::AuthenticateFailed { method_id: failed_method_id, error: format!("{e:?}") },
+            );
         }
         PromptCommand::SearchPrompts(params) => {
             let query = params.query.clone();
-            request_to_event(cx, event_tx, params, AcpEvent::PromptSearchResults, |e| AcpEvent::PromptSearchFailed {
-                query,
-                error: format!("{e}"),
-            })
-            .await;
+            spawn_request_to_event(cx, event_tx, params, AcpEvent::PromptSearchResults, move |e| {
+                AcpEvent::PromptSearchFailed { query, error: format!("{e}") }
+            });
         }
         PromptCommand::SessionPreview(params) => {
             let session_id = params.session_id.clone();
-            request_to_event(cx, event_tx, params, AcpEvent::SessionPreviewLoaded, |e| {
+            spawn_request_to_event(cx, event_tx, params, AcpEvent::SessionPreviewLoaded, move |e| {
                 AcpEvent::SessionPreviewFailed { session_id, error: format!("{e}") }
-            })
-            .await;
+            });
         }
         PromptCommand::ListWorkspaces(params) => {
-            request_to_event(cx, event_tx, params, AcpEvent::WorkspacesListed, |e| AcpEvent::WorkspaceListFailed {
+            spawn_request_to_event(cx, event_tx, params, AcpEvent::WorkspacesListed, |e| {
+                AcpEvent::WorkspaceListFailed { error: format!("{e}") }
+            });
+        }
+        cmd => handle_lifecycle_command(cx, event_tx, cmd, state).await,
+    }
+}
+
+/// Handle the session-lifecycle commands (`ListSessions`, `LoadSession`,
+/// `NewSession`, `MoveWorkspace`).
+async fn handle_lifecycle_command(
+    cx: &ConnectionTo<acp::Agent>,
+    event_tx: &mpsc::UnboundedSender<AcpEvent>,
+    cmd: PromptCommand,
+    state: ClientState,
+) {
+    if state == ClientState::Prompting {
+        tracing::warn!("ignoring session-lifecycle command while prompt is in-flight: {cmd:?}");
+        if matches!(cmd, PromptCommand::MoveWorkspace(_)) {
+            let _ = event_tx.send(AcpEvent::WorkspaceMoveFailed { error: "a prompt is in flight".to_string() });
+        }
+        return;
+    }
+
+    match cmd {
+        PromptCommand::ListSessions => {
+            request_to_event(
+                cx,
+                event_tx,
+                ListSessionsRequest::new(),
+                |resp| AcpEvent::SessionsListed { sessions: resp.sessions },
+                AcpEvent::PromptError,
+            )
+            .await;
+        }
+        PromptCommand::LoadSession { session_id, cwd } => {
+            request_to_event(
+                cx,
+                event_tx,
+                LoadSessionRequest::new(session_id.clone(), cwd),
+                |resp| AcpEvent::SessionLoaded { session_id, config_options: resp.config_options.unwrap_or_default() },
+                AcpEvent::PromptError,
+            )
+            .await;
+        }
+        PromptCommand::NewSession { cwd } => {
+            request_to_event(
+                cx,
+                event_tx,
+                NewSessionRequest::new(cwd),
+                |resp| AcpEvent::NewSessionCreated {
+                    session_id: resp.session_id,
+                    config_options: resp.config_options.unwrap_or_default(),
+                },
+                AcpEvent::PromptError,
+            )
+            .await;
+        }
+        PromptCommand::MoveWorkspace(params) => {
+            request_to_event(cx, event_tx, params, AcpEvent::WorkspaceMoved, |e| AcpEvent::WorkspaceMoveFailed {
                 error: format!("{e}"),
             })
             .await;
         }
-        PromptCommand::MoveWorkspace(_) => {
-            tracing::warn!("ignoring MoveWorkspace while prompt is in-flight");
-            let _ = event_tx.send(AcpEvent::WorkspaceMoveFailed { error: "a prompt is in flight".to_string() });
-        }
+        cmd => unreachable!("non-lifecycle command routed to handle_lifecycle_command: {cmd:?}"),
     }
 }
 
-async fn request_to_event<T: JsonRpcRequest>(
+fn request_to_event<T: JsonRpcRequest>(
     cx: &ConnectionTo<acp::Agent>,
     event_tx: &mpsc::UnboundedSender<AcpEvent>,
     params: T,
-    ok: impl FnOnce(T::Response) -> AcpEvent,
-    err: impl FnOnce(acp::Error) -> AcpEvent,
+    ok: impl FnOnce(T::Response) -> AcpEvent + Send + 'static,
+    err: impl FnOnce(acp::Error) -> AcpEvent + Send + 'static,
+) -> impl Future<Output = ()> + 'static {
+    let sent = cx.send_request(params);
+    let event_tx = event_tx.clone();
+    async move {
+        let event = match sent.block_task().await {
+            Ok(resp) => ok(resp),
+            Err(e) => err(e),
+        };
+        let _ = event_tx.send(event);
+    }
+}
+
+fn spawn_request_to_event<T: JsonRpcRequest>(
+    cx: &ConnectionTo<acp::Agent>,
+    event_tx: &mpsc::UnboundedSender<AcpEvent>,
+    params: T,
+    ok: impl FnOnce(T::Response) -> AcpEvent + Send + 'static,
+    err: impl FnOnce(acp::Error) -> AcpEvent + Send + 'static,
 ) {
-    let event = match cx.send_request(params).block_task().await {
-        Ok(resp) => ok(resp),
-        Err(e) => err(e),
-    };
-    let _ = event_tx.send(event);
+    let fut = request_to_event(cx, event_tx, params, ok, err);
+    if let Err(e) = cx.spawn(async move {
+        fut.await;
+        Ok(())
+    }) {
+        tracing::warn!("failed to spawn request task: {e:?}");
+    }
 }
 
 fn auto_approve_option(req: &RequestPermissionRequest) -> PermissionOptionId {

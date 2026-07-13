@@ -33,6 +33,7 @@ dependencies = [
 name = "aether-acp-utils"
 version = "0.3.31"
 dependencies = [
+ "aether-acp-utils",
  "aether-mcp-utils",
  "aether-utils",
  "agent-client-protocol",
@@ -5871,6 +5872,7 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
+ "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2 0.6.4",
