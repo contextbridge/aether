@@ -15,6 +15,8 @@ pub(crate) fn build_telemetry_runtime(
 
     TelemetryRuntime::new(&TelemetryConfig {
         endpoint: settings.otlp.endpoint.clone(),
+        traces_endpoint: settings.otlp.traces_endpoint.clone(),
+        metrics_endpoint: settings.otlp.metrics_endpoint.clone(),
         headers: settings.otlp.headers.clone().into_iter().collect(),
         service_name: settings.service_name().to_string(),
         service_version: env!("CARGO_PKG_VERSION").to_string(),

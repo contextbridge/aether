@@ -26,6 +26,12 @@ pub struct TelemetryRuntime {
 pub struct TelemetryConfig {
     /// Base URL for the OTLP/HTTP collector, required whenever a signal needs an exporter.
     pub endpoint: Option<String>,
+    /// Exact OTLP/HTTP trace export URL. When set, this takes precedence over the
+    /// trace URL derived from `endpoint`.
+    pub traces_endpoint: Option<String>,
+    /// Exact OTLP/HTTP metric export URL. When set, this takes precedence over the
+    /// metric URL derived from `endpoint`.
+    pub metrics_endpoint: Option<String>,
     pub headers: HashMap<String, String>,
     pub service_name: String,
     pub service_version: String,
@@ -82,6 +88,15 @@ impl TelemetryRuntime {
 
 impl TelemetryConfig {
     fn signal_endpoint(&self, signal: &str) -> Result<String, TelemetryInitError> {
+        let signal_specific_endpoint = match signal {
+            "traces" => self.traces_endpoint.as_deref(),
+            "metrics" => self.metrics_endpoint.as_deref(),
+            _ => None,
+        };
+        if let Some(endpoint) = signal_specific_endpoint.filter(|endpoint| !endpoint.is_empty()) {
+            return Ok(endpoint.to_string());
+        }
+
         Ok(format!("{}/v1/{signal}", self.required_endpoint()?.trim_end_matches('/')))
     }
 

@@ -5,6 +5,8 @@ use std::collections::HashMap;
 fn disabled_signals_do_not_require_an_endpoint_or_exporters() {
     let runtime = TelemetryRuntime::new(&TelemetryConfig {
         endpoint: None,
+        traces_endpoint: None,
+        metrics_endpoint: None,
         traces_enabled: false,
         metrics_enabled: false,
         ..test_config()
@@ -28,6 +30,8 @@ fn enabled_signals_validate_their_endpoint() {
     for (traces_enabled, metrics_enabled) in [(true, false), (false, true)] {
         let result = TelemetryRuntime::new(&TelemetryConfig {
             endpoint: Some("not a valid endpoint".to_string()),
+            traces_endpoint: None,
+            metrics_endpoint: None,
             traces_enabled,
             metrics_enabled,
             ..test_config()
@@ -69,6 +73,8 @@ fn headers_are_validated_even_when_signals_are_disabled() {
 fn test_config() -> TelemetryConfig {
     TelemetryConfig {
         endpoint: Some("http://localhost:4318".to_string()),
+        traces_endpoint: None,
+        metrics_endpoint: None,
         headers: HashMap::new(),
         service_name: "aether".to_string(),
         service_version: "test".to_string(),
