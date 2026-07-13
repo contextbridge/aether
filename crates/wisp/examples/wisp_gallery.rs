@@ -385,7 +385,7 @@ fn stories() -> Vec<(String, WispStory)> {
             "ProgressIndicator".into(),
             WispStory::ProgressIndicator({
                 let mut indicator = ProgressIndicator::default();
-                indicator.update(1, 3, true, WorkspaceProgress::None);
+                indicator.update(true, WorkspaceProgress::None);
                 ProgressIndicatorStory { indicator }
             }),
         ),

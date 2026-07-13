@@ -8,6 +8,23 @@ use crate::components::tool_call_status_view::{ToolCallStatus, diff_preview_from
 use crate::components::tracked_tool_call::{TrackedToolCall, raw_input_fragment, upsert_tracked_tool_call};
 use tui::{Frame, ViewContext};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PromptTermination {
+    EndTurn,
+    Cancelled,
+    Failed(String),
+}
+
+impl PromptTermination {
+    pub(crate) fn terminal_status(&self) -> ToolCallStatus {
+        match self {
+            PromptTermination::EndTurn => ToolCallStatus::Success,
+            PromptTermination::Cancelled => ToolCallStatus::Error("cancelled".to_string()),
+            PromptTermination::Failed(msg) => ToolCallStatus::Error(format!("failed: {msg}")),
+        }
+    }
+}
+
 /// Tracks active tool calls and produces status lines for the frame.
 #[derive(Clone)]
 pub struct ToolCallStatuses {
@@ -21,26 +38,18 @@ pub struct ToolCallStatuses {
     tick: u16,
 }
 
-pub struct ToolProgress {
-    pub running_any: bool,
-    pub completed_top_level: usize,
-    pub total_top_level: usize,
-}
-
 impl ToolCallStatuses {
     pub fn new() -> Self {
         Self { tool_order: Vec::new(), tool_calls: HashMap::new(), sub_agents: SubAgentTracker::default(), tick: 0 }
     }
 
-    pub fn progress(&self) -> ToolProgress {
-        let running_any = self.any_running_including_subagents();
-        let (completed_top_level, total_top_level) = self.top_level_counts();
-        ToolProgress { running_any, completed_top_level, total_top_level }
+    pub fn running_any(&self) -> bool {
+        self.tool_calls.values().any(|tc| matches!(tc.status, ToolCallStatus::Running)) || self.sub_agents.any_running()
     }
 
     /// Advance the animation state. Call this on tick events.
     pub fn on_tick(&mut self, _now: Instant) {
-        if self.progress().running_any {
+        if self.running_any() {
             self.tick = self.tick.wrapping_add(1);
         }
     }
@@ -91,9 +100,8 @@ impl ToolCallStatuses {
         }
     }
 
-    pub fn finalize_running(&mut self, cancelled: bool) {
-        let terminal_status =
-            if cancelled { ToolCallStatus::Error("cancelled".to_string()) } else { ToolCallStatus::Success };
+    pub fn finalize_running(&mut self, termination: &PromptTermination) {
+        let terminal_status = termination.terminal_status();
 
         for tool_call in self.tool_calls.values_mut() {
             if matches!(tool_call.status, ToolCallStatus::Running) {
@@ -101,7 +109,7 @@ impl ToolCallStatuses {
             }
         }
 
-        self.sub_agents.finalize_running(cancelled);
+        self.sub_agents.finalize_running(termination);
     }
 
     pub fn has_tool(&self, id: &str) -> bool {
@@ -134,22 +142,6 @@ impl ToolCallStatuses {
         self.tool_order.clear();
         self.tool_calls.clear();
         self.sub_agents.clear();
-    }
-
-    fn top_level_counts(&self) -> (usize, usize) {
-        let total = self.tool_order.iter().filter(|id| !self.sub_agents.has_sub_agents(id)).count();
-        let completed = self
-            .tool_order
-            .iter()
-            .filter(|id| !self.sub_agents.has_sub_agents(id))
-            .filter_map(|id| self.tool_calls.get(id))
-            .filter(|tc| !matches!(tc.status, ToolCallStatus::Running))
-            .count();
-        (completed, total)
-    }
-
-    fn any_running_including_subagents(&self) -> bool {
-        self.tool_calls.values().any(|tc| matches!(tc.status, ToolCallStatus::Running)) || self.sub_agents.any_running()
     }
 }
 
@@ -208,7 +200,7 @@ mod tests {
             r#"{"ToolCall":{"request":{"id":"c1","name":"grep","arguments":"{}"},"model_name":"m"}}"#,
         ));
 
-        assert!(statuses.progress().running_any);
+        assert!(statuses.running_any());
     }
 
     #[test]
@@ -222,7 +214,7 @@ mod tests {
         ));
 
         statuses.remove_tool("parent-1");
-        assert!(!statuses.progress().running_any);
+        assert!(!statuses.running_any());
         assert!(statuses.render_tool("parent-1", &ctx()).lines().is_empty());
     }
 
@@ -237,7 +229,7 @@ mod tests {
         ));
 
         statuses.clear();
-        assert!(!statuses.progress().running_any);
+        assert!(!statuses.running_any());
     }
 
     #[test]
@@ -335,10 +327,10 @@ mod tests {
         let mut statuses = ToolCallStatuses::new();
         statuses.on_tool_call(&make_tool_call("tool-1", "Read", None));
 
-        statuses.finalize_running(false);
+        statuses.finalize_running(&PromptTermination::EndTurn);
 
         assert!(!statuses.is_tool_running("tool-1"));
-        assert!(!statuses.progress().running_any);
+        assert!(!statuses.running_any());
         let frame = statuses.render_tool("tool-1", &ctx());
         assert!(frame.lines()[0].plain_text().contains('✓'));
     }
@@ -352,10 +344,55 @@ mod tests {
             r#"{"ToolCall":{"request":{"id":"c1","name":"grep","arguments":"{}"},"model_name":"m"}}"#,
         ));
 
-        assert!(statuses.progress().running_any);
+        assert!(statuses.running_any());
 
-        statuses.finalize_running(true);
+        statuses.finalize_running(&PromptTermination::Cancelled);
 
-        assert!(!statuses.progress().running_any);
+        assert!(!statuses.running_any());
+    }
+
+    #[test]
+    fn finalize_running_failed_variant_preserves_cause() {
+        let mut statuses = ToolCallStatuses::new();
+        statuses.on_tool_call(&make_tool_call("tool-1", "Read", None));
+        assert!(statuses.is_tool_running("tool-1"));
+
+        statuses.finalize_running(&PromptTermination::Failed("error".to_string()));
+
+        assert!(!statuses.is_tool_running("tool-1"));
+        assert!(!statuses.running_any());
+    }
+
+    #[test]
+    fn finalize_running_cancelled_vs_failed_both_error() {
+        let mut cancelled = ToolCallStatuses::new();
+        cancelled.on_tool_call(&make_tool_call("t1", "test", None));
+        cancelled.finalize_running(&PromptTermination::Cancelled);
+
+        let mut failed = ToolCallStatuses::new();
+        failed.on_tool_call(&make_tool_call("t1", "test", None));
+        failed.finalize_running(&PromptTermination::Failed("error".to_string()));
+
+        let cancelled_frame = cancelled.render_tool("t1", &ctx());
+        let failed_frame = failed.render_tool("t1", &ctx());
+        assert!(!cancelled_frame.lines()[0].plain_text().contains('\u{2713}'));
+        assert!(!failed_frame.lines()[0].plain_text().contains('\u{2713}'));
+    }
+
+    #[test]
+    fn running_any_false_when_sub_agent_done() {
+        let mut statuses = ToolCallStatuses::new();
+        statuses.on_sub_agent_progress(&make_sub_agent_notification(
+            "parent-1",
+            "explorer",
+            r#"{"ToolCall":{"request":{"id":"c1","name":"grep","arguments":"{}"},"model_name":"m"}}"#,
+        ));
+        assert!(statuses.running_any());
+
+        statuses.on_sub_agent_progress(&make_sub_agent_notification("parent-1", "explorer", r#""Done""#));
+        assert!(statuses.running_any());
+
+        statuses.finalize_running(&PromptTermination::EndTurn);
+        assert!(!statuses.running_any());
     }
 }

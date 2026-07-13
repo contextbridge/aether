@@ -24,8 +24,7 @@ pub enum WorkspaceProgress {
 
 #[derive(Default)]
 pub struct ProgressIndicator {
-    tools_running: bool,
-    waiting_for_response: bool,
+    agent_busy: bool,
     workspace_progress: WorkspaceProgress,
     tick: u16,
     was_active: bool,
@@ -33,16 +32,9 @@ pub struct ProgressIndicator {
 }
 
 impl ProgressIndicator {
-    pub fn update(
-        &mut self,
-        completed: usize,
-        total: usize,
-        waiting_for_response: bool,
-        workspace_progress: WorkspaceProgress,
-    ) {
+    pub fn update(&mut self, agent_busy: bool, workspace_progress: WorkspaceProgress) {
         let previously_active = self.was_active;
-        self.tools_running = total > 0 && completed < total;
-        self.waiting_for_response = waiting_for_response;
+        self.agent_busy = agent_busy;
         self.workspace_progress = workspace_progress;
         let now_active = self.is_active();
         self.was_active = now_active;
@@ -62,7 +54,7 @@ impl ProgressIndicator {
     }
 
     fn is_active(&self) -> bool {
-        self.tools_running || self.waiting_for_response || self.workspace_progress != WorkspaceProgress::None
+        self.agent_busy || self.workspace_progress != WorkspaceProgress::None
     }
 
     fn current_message(&self) -> &'static str {
@@ -73,10 +65,6 @@ impl ProgressIndicator {
                 self.turn_count.checked_sub(1).and_then(|i| MESSAGES.get(i)).copied().unwrap_or("Working...")
             }
         }
-    }
-
-    fn agent_is_busy(&self) -> bool {
-        self.tools_running || self.waiting_for_response
     }
 
     /// Advance the animation state. Call this on tick events.
@@ -97,7 +85,7 @@ impl ProgressIndicator {
         let mut line = Line::default();
         line.push_styled(frame_char.to_string(), context.theme.info());
         line.push_styled(format!(" {}", self.current_message()), context.theme.text_secondary());
-        if self.agent_is_busy() {
+        if self.agent_busy {
             line.push_with_style("  (esc to interrupt)".to_string(), Style::fg(context.theme.muted()).italic());
         }
 
@@ -122,27 +110,17 @@ mod tests {
     }
 
     #[test]
-    fn renders_nothing_when_all_complete_and_not_waiting() {
+    fn renders_nothing_after_busy_clears() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(3, 3, false, WorkspaceProgress::None);
+        indicator.update(true, WorkspaceProgress::None);
+        indicator.update(false, WorkspaceProgress::None);
         assert!(indicator.render(&ctx()).lines().is_empty());
     }
 
     #[test]
-    fn renders_when_tools_running() {
+    fn renders_esc_hint_when_agent_busy() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(1, 3, false, WorkspaceProgress::None);
-        let frame = indicator.render(&ctx());
-        let lines = frame.lines();
-        assert_eq!(lines.len(), 3);
-        let text = lines[1].plain_text();
-        assert!(text.contains("esc to interrupt"));
-    }
-
-    #[test]
-    fn renders_when_waiting_for_response_without_tools() {
-        let mut indicator = ProgressIndicator::default();
-        indicator.update(0, 0, true, WorkspaceProgress::None);
+        indicator.update(true, WorkspaceProgress::None);
         let frame = indicator.render(&ctx());
         let lines = frame.lines();
         assert_eq!(lines.len(), 3);
@@ -153,9 +131,9 @@ mod tests {
     #[test]
     fn spinner_animates_with_tick() {
         let mut a = ProgressIndicator::default();
-        a.update(0, 1, false, WorkspaceProgress::None);
+        a.update(true, WorkspaceProgress::None);
         let mut b = ProgressIndicator::default();
-        b.update(0, 1, false, WorkspaceProgress::None);
+        b.update(true, WorkspaceProgress::None);
         b.set_tick(1);
         let text_a = a.render(&ctx()).lines()[1].plain_text();
         let text_b = b.render(&ctx()).lines()[1].plain_text();
@@ -163,27 +141,18 @@ mod tests {
     }
 
     #[test]
-    fn on_tick_advances_when_running() {
+    fn on_tick_advances_when_busy() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(1, 3, false, WorkspaceProgress::None);
+        indicator.update(true, WorkspaceProgress::None);
+        let tick_before = indicator.tick;
         indicator.on_tick();
-        let frame = indicator.render(&ctx());
-        assert!(!frame.lines().is_empty());
-    }
-
-    #[test]
-    fn on_tick_advances_when_waiting() {
-        let mut indicator = ProgressIndicator::default();
-        indicator.update(0, 0, true, WorkspaceProgress::None);
-        let frame_before = indicator.tick;
-        indicator.on_tick();
-        assert_ne!(indicator.tick, frame_before);
+        assert_ne!(indicator.tick, tick_before);
     }
 
     #[test]
     fn on_tick_noop_when_idle() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(3, 3, false, WorkspaceProgress::None);
+        indicator.update(false, WorkspaceProgress::None);
         indicator.on_tick();
         assert!(indicator.render(&ctx()).lines().is_empty());
     }
@@ -191,7 +160,7 @@ mod tests {
     #[test]
     fn first_turn_shows_first_tip() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(0, 0, true, WorkspaceProgress::None);
+        indicator.update(true, WorkspaceProgress::None);
         indicator.set_turn_count(1);
         let frame = indicator.render(&ctx());
         let text = frame.lines()[1].plain_text();
@@ -201,16 +170,13 @@ mod tests {
     #[test]
     fn tip_advances_each_turn() {
         let mut indicator = ProgressIndicator::default();
-        // First turn: inactive → active
-        indicator.update(0, 0, true, WorkspaceProgress::None);
+        indicator.update(true, WorkspaceProgress::None);
         assert_eq!(indicator.turn_count, 1);
         let tip_0 = indicator.render(&ctx()).lines()[1].plain_text();
 
-        // Go inactive
-        indicator.update(0, 0, false, WorkspaceProgress::None);
+        indicator.update(false, WorkspaceProgress::None);
 
-        // Second turn: inactive → active
-        indicator.update(0, 0, true, WorkspaceProgress::None);
+        indicator.update(true, WorkspaceProgress::None);
         assert_eq!(indicator.turn_count, 2);
         let tip_1 = indicator.render(&ctx()).lines()[1].plain_text();
 
@@ -222,7 +188,7 @@ mod tests {
     #[test]
     fn shows_working_after_tips_exhausted() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(0, 0, true, WorkspaceProgress::None);
+        indicator.update(true, WorkspaceProgress::None);
         indicator.set_turn_count(MESSAGES.len() + 1);
         let text = indicator.render(&ctx()).lines()[1].plain_text();
         assert!(text.contains("Working..."));
@@ -231,7 +197,7 @@ mod tests {
     #[test]
     fn reset_restarts_tips() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(0, 0, true, WorkspaceProgress::None);
+        indicator.update(true, WorkspaceProgress::None);
         assert_eq!(indicator.turn_count, 1);
 
         let indicator = ProgressIndicator::default();
@@ -241,7 +207,7 @@ mod tests {
     #[test]
     fn renders_workspace_move_without_interrupt_hint() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(0, 0, false, WorkspaceProgress::Moving);
+        indicator.update(false, WorkspaceProgress::Moving);
         let text = indicator.render(&ctx()).lines()[1].plain_text();
         assert!(text.contains("Moving workspace..."));
         assert!(!text.contains("esc to interrupt"));
@@ -250,7 +216,7 @@ mod tests {
     #[test]
     fn workspace_move_message_takes_precedence_when_agent_is_busy() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(0, 0, true, WorkspaceProgress::Moving);
+        indicator.update(true, WorkspaceProgress::Moving);
         let text = indicator.render(&ctx()).lines()[1].plain_text();
         assert!(text.contains("Moving workspace..."));
         assert!(text.contains("esc to interrupt"));
@@ -259,7 +225,7 @@ mod tests {
     #[test]
     fn renders_workspace_session_load_without_interrupt_hint() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(0, 0, false, WorkspaceProgress::LoadingSession);
+        indicator.update(false, WorkspaceProgress::LoadingSession);
         let text = indicator.render(&ctx()).lines()[1].plain_text();
         assert!(text.contains("Loading session in new workspace..."));
         assert!(!text.contains("esc to interrupt"));
@@ -268,14 +234,11 @@ mod tests {
     #[test]
     fn staying_active_does_not_advance_tip() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(0, 0, true, WorkspaceProgress::None);
+        indicator.update(true, WorkspaceProgress::None);
         assert_eq!(indicator.turn_count, 1);
 
-        // Multiple updates while staying active
-        indicator.update(1, 3, true, WorkspaceProgress::None);
-        indicator.update(2, 3, true, WorkspaceProgress::None);
-        indicator.update(3, 3, true, WorkspaceProgress::None);
-        // Still waiting_for_response so still active
+        indicator.update(true, WorkspaceProgress::None);
+        indicator.update(true, WorkspaceProgress::None);
         assert_eq!(indicator.turn_count, 1);
     }
 }

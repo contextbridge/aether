@@ -7,7 +7,7 @@ use crate::components::plan_view::PlanView;
 use crate::components::progress_indicator::{ProgressIndicator, WorkspaceProgress};
 use crate::components::prompt_composer::{PromptComposer, PromptComposerMessage};
 use crate::components::session_picker::{SessionEntry, SessionPicker, SessionPickerMessage};
-use crate::components::tool_call_statuses::ToolCallStatuses;
+use crate::components::tool_call_statuses::{PromptTermination, ToolCallStatuses};
 use crate::components::workspace_picker::{WorkspacePicker, WorkspacePickerMessage};
 use crate::keybindings::Keybindings;
 use acp_utils::CreateElicitationRequestParams;
@@ -73,7 +73,7 @@ pub struct ConversationScreen {
     pub(crate) plan_tracker: PlanTracker,
     pub(crate) progress_indicator: ProgressIndicator,
     pub(crate) workspace_move_state: WorkspaceMoveState,
-    pub(crate) waiting_for_response: bool,
+    waiting_for_response: bool,
     pub(crate) active_modal: Option<Modal>,
     pub(crate) content_padding: usize,
     pub(crate) pending_url_elicitations: HashSet<(String, String)>,
@@ -118,10 +118,17 @@ impl ConversationScreen {
         self.waiting_for_response
     }
 
+    pub fn on_prompt_sent(&mut self) {
+        self.waiting_for_response = true;
+    }
+
+    pub fn is_busy(&self) -> bool {
+        self.waiting_for_response || self.tool_call_statuses.running_any()
+    }
+
     pub fn wants_tick(&self) -> bool {
-        self.waiting_for_response
+        self.is_busy()
             || self.workspace_move_state.progress() != WorkspaceProgress::None
-            || self.tool_call_statuses.progress().running_any
             || self.plan_tracker_has_tick_driven_visibility()
     }
 
@@ -132,13 +139,7 @@ impl ConversationScreen {
     }
 
     pub fn refresh_caches(&mut self, _context: &ViewContext) {
-        let progress = self.tool_call_statuses.progress();
-        self.progress_indicator.update(
-            progress.completed_top_level,
-            progress.total_top_level,
-            self.waiting_for_response,
-            self.workspace_move_state.progress(),
-        );
+        self.progress_indicator.update(self.is_busy(), self.workspace_move_state.progress());
         self.plan_tracker.cached_visible_entries();
     }
 
@@ -267,14 +268,21 @@ impl ConversationScreen {
     }
 
     pub fn on_prompt_done(&mut self, stop_reason: acp::StopReason) {
-        self.waiting_for_response = false;
-        self.tool_call_statuses.finalize_running(matches!(stop_reason, acp::StopReason::Cancelled));
-        self.conversation.close_thought_block();
+        self.on_prompt_terminated(&match stop_reason {
+            acp::StopReason::Cancelled => PromptTermination::Cancelled,
+            _ => PromptTermination::EndTurn,
+        });
     }
 
     pub fn on_prompt_error(&mut self, error: &acp::Error) {
         tracing::error!("Prompt error: {error}");
+        self.on_prompt_terminated(&PromptTermination::Failed(error.to_string()));
+    }
+
+    fn on_prompt_terminated(&mut self, termination: &PromptTermination) {
         self.waiting_for_response = false;
+        self.tool_call_statuses.finalize_running(termination);
+        self.conversation.close_thought_block();
     }
 
     pub fn reject_local_prompt(&mut self, message: &str) {
@@ -400,7 +408,7 @@ impl ConversationScreen {
                     Err(message) => self.conversation.push_user_message(&format!("[wisp] {message}")),
                 },
                 PromptComposerMessage::SubmitRequested { user_input, attachments } => {
-                    self.waiting_for_response = true;
+                    self.on_prompt_sent();
                     out.push(ConversationScreenMessage::SendPrompt { user_input, attachments });
                 }
                 PromptComposerMessage::SearchPrompts(params) => {
