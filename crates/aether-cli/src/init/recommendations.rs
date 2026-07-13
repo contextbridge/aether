@@ -72,7 +72,13 @@ pub(crate) fn recommended_for_provider(provider: Provider) -> Option<ProviderRec
             explore: ModelWithReasoning::new(OpenRouterModel::DeepseekDeepseekV4Flash, Some(ReasoningEffort::High)),
         }),
 
-        Provider::DeepSeek | Provider::Gemini | Provider::Moonshot | Provider::Ollama | Provider::LlamaCpp => None,
+        Provider::AzureFoundry
+        | Provider::DeepSeek
+        | Provider::Fireworks
+        | Provider::Gemini
+        | Provider::Moonshot
+        | Provider::Ollama
+        | Provider::LlamaCpp => None,
     }
 }
 
@@ -104,7 +110,8 @@ mod tests {
     fn local_and_unsupported_providers_return_none() {
         assert!(recommended_for_provider(Provider::Ollama).is_none());
         assert!(recommended_for_provider(Provider::LlamaCpp).is_none());
-        assert!(recommended_for_provider(Provider::Gemini).is_none());
+        assert!(recommended_for_provider(Provider::AzureFoundry).is_none());
+        assert!(recommended_for_provider(Provider::Fireworks).is_none());
         assert!(recommended_for_provider(Provider::DeepSeek).is_none());
         assert!(recommended_for_provider(Provider::Moonshot).is_none());
     }

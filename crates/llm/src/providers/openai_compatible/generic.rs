@@ -15,7 +15,7 @@ use super::{AetherOpenAiConfig, build_chat_request, create_custom_stream_generic
 /// Each provider that uses the standard `build_chat_request → create_custom_stream_generic`
 /// flow differs only in these constants.
 pub struct ProviderConfig {
-    pub api_base: &'static str,
+    pub api_base: Option<&'static str>,
     pub env_var: &'static str,
     pub default_model: &'static str,
     pub prefix: &'static str,
@@ -24,7 +24,7 @@ pub struct ProviderConfig {
 }
 
 pub const DEEPSEEK: ProviderConfig = ProviderConfig {
-    api_base: "https://api.deepseek.com",
+    api_base: Some("https://api.deepseek.com"),
     env_var: "DEEPSEEK_API_KEY",
     default_model: "deepseek-chat",
     prefix: "deepseek",
@@ -33,7 +33,7 @@ pub const DEEPSEEK: ProviderConfig = ProviderConfig {
 };
 
 pub const MOONSHOT: ProviderConfig = ProviderConfig {
-    api_base: "https://api.moonshot.ai/v1",
+    api_base: Some("https://api.moonshot.ai/v1"),
     env_var: "MOONSHOT_API_KEY",
     default_model: "moonshot-v1-8k",
     prefix: "moonshot",
@@ -42,7 +42,7 @@ pub const MOONSHOT: ProviderConfig = ProviderConfig {
 };
 
 pub const ZAI: ProviderConfig = ProviderConfig {
-    api_base: "https://api.z.ai/api/coding/paas/v4",
+    api_base: Some("https://api.z.ai/api/coding/paas/v4"),
     env_var: "ZAI_API_KEY",
     default_model: "GLM-4.6",
     prefix: "zai",
@@ -50,10 +50,29 @@ pub const ZAI: ProviderConfig = ProviderConfig {
     tool_schema_transform: None,
 };
 
+pub const AZURE_FOUNDRY: ProviderConfig = ProviderConfig {
+    api_base: None,
+    env_var: "AZURE_OPENAI_API_KEY",
+    default_model: "gpt-5.5",
+    prefix: "azure-foundry",
+    display_name: "Microsoft Foundry",
+    tool_schema_transform: None,
+};
+
+pub const FIREWORKS: ProviderConfig = ProviderConfig {
+    api_base: Some("https://api.fireworks.ai/inference/v1"),
+    env_var: "FIREWORKS_API_KEY",
+    default_model: "accounts/fireworks/models/glm-5p1",
+    prefix: "fireworks",
+    display_name: "Fireworks AI",
+    tool_schema_transform: None,
+};
+
 /// A generic provider for APIs that are fully OpenAI-compatible.
 pub struct GenericOpenAiProvider {
     client: Client<AetherOpenAiConfig>,
     model: String,
+    request_model: Option<String>,
     config: &'static ProviderConfig,
 }
 
@@ -72,10 +91,10 @@ impl GenericOpenAiProvider {
             }
             ProviderAuthMode::None => String::new(),
         };
-        Ok(Self::new_with_connection(api_key, config, connection))
+        Self::new_with_connection(api_key, config, connection)
     }
 
-    pub fn new(api_key: String, config: &'static ProviderConfig) -> Self {
+    pub fn new(api_key: String, config: &'static ProviderConfig) -> Result<Self> {
         Self::new_with_connection(api_key, config, ProviderConnectionConfig::default())
     }
 
@@ -83,12 +102,22 @@ impl GenericOpenAiProvider {
         api_key: String,
         config: &'static ProviderConfig,
         connection: ProviderConnectionConfig,
-    ) -> Self {
-        let api_base = connection.base_url.unwrap_or_else(|| config.api_base.to_string());
+    ) -> Result<Self> {
+        let api_base = connection
+            .base_url
+            .or_else(|| config.api_base.map(str::to_string))
+            .ok_or_else(|| LlmError::MissingProviderUrl { provider: config.prefix.to_string() })?
+            .trim_end_matches('/')
+            .to_string();
         let openai_config = OpenAIConfig::new().with_api_key(api_key).with_api_base(api_base);
         let openai_config = AetherOpenAiConfig::new(openai_config, connection.auth_mode);
 
-        Self { client: Client::with_config(openai_config), model: config.default_model.to_string(), config }
+        Ok(Self {
+            client: Client::with_config(openai_config),
+            model: config.default_model.to_string(),
+            request_model: connection.request_model,
+            config,
+        })
     }
 
     pub fn with_model(mut self, model: &str) -> Self {
@@ -107,7 +136,11 @@ impl StreamingModelProvider for GenericOpenAiProvider {
     }
 
     fn stream_response(&self, context: &Context) -> LlmResponseStream {
-        let request = match build_chat_request(&self.model, context, self.config.tool_schema_transform) {
+        let request = match build_chat_request(
+            self.request_model.as_deref().unwrap_or(&self.model),
+            context,
+            self.config.tool_schema_transform,
+        ) {
             Ok(req) => req,
             Err(e) => return Box::pin(async_stream::stream! { yield Err(e); }),
         };
@@ -116,5 +149,56 @@ impl StreamingModelProvider for GenericOpenAiProvider {
 
     fn display_name(&self) -> String {
         format!("{} ({})", self.config.display_name, self.model)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use futures::StreamExt;
+
+    use super::*;
+    use crate::providers::test_capture_server::CaptureServer;
+    use crate::types::IsoString;
+    use crate::{ChatMessage, ContentBlock};
+
+    #[test]
+    fn azure_foundry_requires_a_configured_url() {
+        let Err(error) = GenericOpenAiProvider::new("key".to_string(), &AZURE_FOUNDRY) else {
+            panic!("Azure Foundry must require a URL");
+        };
+        assert!(matches!(error, LlmError::MissingProviderUrl { provider } if provider == "azure-foundry"));
+    }
+
+    #[tokio::test]
+    async fn request_model_routes_the_request_without_changing_catalog_identity() {
+        let mut server = CaptureServer::start().await;
+        let provider = GenericOpenAiProvider::new_with_connection(
+            "key".to_string(),
+            &AZURE_FOUNDRY,
+            ProviderConnectionConfig {
+                base_url: Some(format!("{}/", server.base_url)),
+                auth_mode: ProviderAuthMode::None,
+                request_model: Some("production-coding".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .with_model("gpt-5.5");
+        let context = Context::new(
+            vec![ChatMessage::User { content: vec![ContentBlock::text("Hello")], timestamp: IsoString::now() }],
+            vec![],
+        );
+
+        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+        let captured = server.captured().await;
+
+        assert!(!responses.is_empty());
+        assert_eq!(captured.path, "/chat/completions");
+        assert_eq!(captured.body["model"], "production-coding");
+        assert_eq!(captured.body["stream"], true);
+        assert_eq!(captured.body["stream_options"]["include_usage"], true);
+        assert!(captured.headers.get("authorization").is_none());
+        assert_eq!(provider.model().unwrap().to_string(), "azure-foundry:gpt-5.5");
+        assert_eq!(provider.display_name(), "Microsoft Foundry (gpt-5.5)");
     }
 }

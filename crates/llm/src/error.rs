@@ -90,6 +90,9 @@ pub enum LlmError {
     /// The message contained only content types this provider doesn't support
     #[error("Unsupported content: {0}")]
     UnsupportedContent(String),
+    /// Provider endpoint URL has not been configured.
+    #[error("Provider '{provider}' requires a URL configured via providers.{provider}.url")]
+    MissingProviderUrl { provider: String },
     /// Generic error for other cases
     #[error("{0}")]
     Other(String),
@@ -191,6 +194,7 @@ mod tests {
         assert!(!LlmError::ToolParameterParsing { tool_name: "t".into(), error: "e".into() }.is_retryable());
         assert!(!LlmError::OAuthError("x".into()).is_retryable());
         assert!(!LlmError::UnsupportedContent("x".into()).is_retryable());
+        assert!(!LlmError::MissingProviderUrl { provider: "azure-foundry".into() }.is_retryable());
         assert!(!LlmError::Other("x".into()).is_retryable());
         assert!(!LlmError::ContextOverflow(ContextOverflowError::new("p", None, None, None, "m")).is_retryable());
     }

@@ -370,6 +370,7 @@ mod tests {
         let provider = BedrockProvider::new_with_connection(ProviderConnectionConfig {
             base_url: Some(endpoint.url.clone()),
             auth_mode: ProviderAuthMode::None,
+            request_model: None,
             inference_profile_arn: Some(application_inference_profile_arn().to_string()),
         })
         .await

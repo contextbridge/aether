@@ -63,11 +63,48 @@ Use the `vendor/model` format from the [OpenRouter model list](https://openroute
 
 Aether has built-in OpenAI-compatible provider configs for:
 
-| Provider | Syntax                | Env var            |
-| -------- | --------------------- | ------------------ |
-| DeepSeek | `deepseek:<model-id>` | `DEEPSEEK_API_KEY` |
-| Moonshot | `moonshot:<model-id>` | `MOONSHOT_API_KEY` |
-| ZAI      | `zai:<model-id>`      | `ZAI_API_KEY`      |
+| Provider | Syntax                         | Env var                |
+| -------- | ------------------------------ | ---------------------- |
+| DeepSeek | `deepseek:<model-id>`          | `DEEPSEEK_API_KEY`     |
+| Fireworks AI | `fireworks:<model-id>`      | `FIREWORKS_API_KEY`    |
+| Microsoft Foundry | `azure-foundry:<model-id>` | `AZURE_OPENAI_API_KEY` |
+| Moonshot | `moonshot:<model-id>`          | `MOONSHOT_API_KEY`     |
+| ZAI      | `zai:<model-id>`               | `ZAI_API_KEY`          |
+
+### Microsoft Foundry
+
+Microsoft Foundry uses the OpenAI v1 Chat Completions API with API-key authentication only. Configure your resource-specific endpoint with `providers.azure-foundry.url`; the canonical form is `https://<resource>.openai.azure.com/openai/v1`. The model remains the catalog identity, while `requestModel` optionally specifies the Azure deployment name:
+
+```json title=".aether/settings.json"
+{
+  "providers": {
+    "azure-foundry": {
+      "url": "https://my-resource.openai.azure.com/openai/v1",
+      "requestModel": "production-coding-deployment"
+    }
+  },
+  "agents": [{ "model": "azure-foundry:gpt-5.5", "userInvocable": true }]
+}
+```
+
+Microsoft Entra ID is not supported yet. See the [Microsoft Foundry Chat Completions documentation](https://learn.microsoft.com/en-us/azure/ai-foundry/foundry-models/how-to/use-chat-completions).
+
+### Fireworks AI
+
+Fireworks uses `https://api.fireworks.ai/inference/v1` by default. Serverless catalog IDs use `accounts/fireworks/models/<model>`. For a dedicated deployment, retain that catalog model identity and set `requestModel` to the deployment ID:
+
+```json title=".aether/settings.json"
+{
+  "providers": {
+    "fireworks": {
+      "requestModel": "accounts/acme/deployments/coding-prod"
+    }
+  },
+  "agents": [{ "model": "fireworks:accounts/fireworks/models/glm-5p1", "userInvocable": true }]
+}
+```
+
+`requestModel` only changes the request target; model capabilities, context window, display name, and telemetry continue to use `model`. See the [Fireworks querying guide](https://docs.fireworks.ai/guides/querying-text-models).
 
 ### Gemini
 
