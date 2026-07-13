@@ -48,7 +48,7 @@ async fn context_window_override_beats_provider_limit() {
     assert_eq!(usage.usage_ratio, Some(0.5));
 }
 
-/// Requires sequential messaging (SwitchModel after initial setup).
+/// Requires sequential messaging (`SwitchModel` after initial setup).
 #[tokio::test]
 async fn context_window_override_survives_model_switch() {
     let events = test_agent()
