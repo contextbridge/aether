@@ -8,12 +8,17 @@ pub use search_client::FakeSearchClient;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::future::Future;
+use std::time::Duration;
 
 use crate::coding::error::WebSearchError;
 use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
 
 const DEFAULT_COUNT: u32 = 10;
 const MAX_COUNT: u32 = 20;
+const MAX_RATE_LIMIT_RETRIES: u32 = 3;
+const MAX_RETRY_AFTER: Duration = Duration::from_mins(1);
+const DEFAULT_RETRY_DELAY: Duration = Duration::from_secs(2);
 
 /// Input parameters for `web_search` tool
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -77,7 +82,11 @@ impl<C: SearchClient> WebSearcher<C> {
     }
 
     /// Performs a web search with the given parameters
-    pub async fn search(&self, args: WebSearchInput) -> Result<WebSearchOutput, WebSearchError> {
+    pub async fn search<T, U>(&self, args: WebSearchInput, mut on_retry: T) -> Result<WebSearchOutput, WebSearchError>
+    where
+        T: FnMut(Duration) -> U,
+        U: Future<Output = ()>,
+    {
         let query = args.query.trim();
 
         if query.is_empty() {
@@ -86,9 +95,22 @@ impl<C: SearchClient> WebSearcher<C> {
 
         let count = args.count.unwrap_or(DEFAULT_COUNT).min(MAX_COUNT);
 
-        let params = SearchParams { query: query.to_string(), count };
+        let query_owned = query.to_string();
+        let mut retries = 0;
+        let mut results = loop {
+            let params = SearchParams { query: query_owned.clone(), count };
 
-        let mut results = self.client.search(params).await?;
+            match self.client.search(params).await {
+                Ok(results) => break results,
+                Err(WebSearchError::RateLimited { retry_after, .. }) if retries < MAX_RATE_LIMIT_RETRIES => {
+                    let delay = retry_after.unwrap_or(DEFAULT_RETRY_DELAY).min(MAX_RETRY_AFTER);
+                    retries += 1;
+                    on_retry(delay).await;
+                    tokio::time::sleep(delay).await;
+                }
+                Err(error) => return Err(error),
+            }
+        };
 
         // Ensure we don't return more than requested
         if results.len() > count as usize {
@@ -180,6 +202,9 @@ fn extract_domain(url: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
     use super::*;
 
     fn make_result(url: &str) -> RawSearchResult {
@@ -229,8 +254,80 @@ mod tests {
     #[tokio::test]
     async fn test_empty_query_returns_error() {
         let searcher = WebSearcher::with_client(FakeSearchClient::new());
-        let result = searcher.search(input("   ")).await;
+        let result = searcher.search(input("   "), |_| async {}).await;
         assert!(matches!(result, Err(WebSearchError::InvalidQuery(_))));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn retries_rate_limited_search_after_retry_after_period() {
+        let client = FakeSearchClient::new().with_sequential_results(vec![
+            Err(WebSearchError::RateLimited {
+                message: "too many requests".to_string(),
+                retry_after: Some(Duration::ZERO),
+            }),
+            Ok(vec![make_result("https://example.com")]),
+        ]);
+        let searcher = WebSearcher::with_client(client);
+
+        let retry_delays = Arc::new(Mutex::new(Vec::new()));
+        let notified_delays = retry_delays.clone();
+        let output = searcher
+            .search(input("rust"), move |delay| {
+                let notified_delays = notified_delays.clone();
+                async move {
+                    notified_delays.lock().unwrap().push(delay);
+                }
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(output.results.len(), 1);
+        assert_eq!(*retry_delays.lock().unwrap(), vec![Duration::ZERO]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn retries_rate_limited_search_when_retry_after_header_is_missing() {
+        let client = FakeSearchClient::new().with_sequential_results(vec![
+            Err(WebSearchError::RateLimited { message: "too many requests".to_string(), retry_after: None }),
+            Ok(vec![make_result("https://example.com")]),
+        ]);
+        let searcher = WebSearcher::with_client(client);
+
+        let retry_delays = Arc::new(Mutex::new(Vec::new()));
+        let notified_delays = retry_delays.clone();
+        let output = searcher
+            .search(input("rust"), move |delay| {
+                let notified_delays = notified_delays.clone();
+                async move {
+                    notified_delays.lock().unwrap().push(delay);
+                }
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(output.results.len(), 1);
+        assert_eq!(retry_delays.lock().unwrap().len(), 1, "should have retried once");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn returns_rate_limited_error_after_retry_budget_is_exhausted() {
+        let rate_limited = || -> Result<Vec<RawSearchResult>, WebSearchError> {
+            Err(WebSearchError::RateLimited {
+                message: "too many requests".to_string(),
+                retry_after: Some(Duration::ZERO),
+            })
+        };
+        let client = FakeSearchClient::new().with_sequential_results(vec![
+            rate_limited(),
+            rate_limited(),
+            rate_limited(),
+            rate_limited(),
+            Err(WebSearchError::ApiError("retry budget was exceeded".to_string())),
+        ]);
+        let searcher = WebSearcher::with_client(client);
+        let result = searcher.search(input("rust"), |_| async {}).await;
+
+        assert!(matches!(result, Err(WebSearchError::RateLimited { .. })));
     }
 
     #[tokio::test]
@@ -246,7 +343,7 @@ mod tests {
 
         let mut q = input("test query");
         q.count = Some(15);
-        let output = searcher.search(q).await.unwrap();
+        let output = searcher.search(q, |_| async {}).await.unwrap();
         assert_eq!(output.results.len(), 15);
     }
 
@@ -263,7 +360,7 @@ mod tests {
 
         let mut q = input("test query");
         q.blocked_domains = Some(strs(&["blocked.com"]));
-        let output = searcher.search(q).await.unwrap();
+        let output = searcher.search(q, |_| async {}).await.unwrap();
         assert_eq!(output.results.len(), 2);
         assert!(!output.results.iter().any(|r| r.url.contains("blocked.com")));
     }
@@ -278,7 +375,7 @@ mod tests {
                 description: "A systems language".to_string(),
             }],
         );
-        let output = searcher.search(input("rust programming")).await.unwrap();
+        let output = searcher.search(input("rust programming"), |_| async {}).await.unwrap();
         assert_eq!(output.results.len(), 1);
         assert_eq!(output.results[0].title, "Rust Language");
         assert_eq!(output.results[0].snippet, "A systems language");

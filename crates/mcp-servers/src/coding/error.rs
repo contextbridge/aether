@@ -200,7 +200,7 @@ pub enum WebFetchError {
 }
 
 /// Errors related to web search operations
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum WebSearchError {
     /// Invalid search query
     #[error("Invalid search query: {0}")]
@@ -211,8 +211,8 @@ pub enum WebSearchError {
     ApiError(String),
 
     /// Rate limit exceeded
-    #[error("Rate limit exceeded: {0}")]
-    RateLimited(String),
+    #[error("Rate limit exceeded: {message}")]
+    RateLimited { message: String, retry_after: Option<std::time::Duration> },
 
     /// Request timed out
     #[error("Request timed out after {0}ms")]
