@@ -31,14 +31,14 @@ futures = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros", "sync", "io-util", "net", "time"] }
 tracing = { workspace = true }
 
 # keyring feature
 keyring-core = { workspace = true, optional = true }
 
 # mcp feature
-rmcp = { workspace = true, optional = true }
+rmcp = { workspace = true, optional = true, features = ["auth", "client"] }
 oauth2 = { workspace = true }
 reqwest = { workspace = true }
 url = { workspace = true, optional = true }

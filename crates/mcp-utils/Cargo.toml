@@ -38,8 +38,8 @@ client = [
 [dependencies]
 futures = { workspace = true }
 serde = { workspace = true }
-tokio = { workspace = true }
-rmcp = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros", "sync", "net", "time"] }
+rmcp = { workspace = true, features = ["client", "server"] }
 tracing = { workspace = true }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.9" }
 schemars = { workspace = true }

@@ -29,7 +29,7 @@ path = "src/lib.rs"
 
 [dependencies]
 # Async runtime
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "io-util", "net", "fs", "process", "time", "signal"] }
 futures = { workspace = true }
 
 # Serialization

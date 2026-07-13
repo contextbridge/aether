@@ -75,17 +75,17 @@ subagents = [
 ]
 survey = []
 all = ["coding", "skills", "tasks", "subagents", "survey", "plan"]
-stdio = ["coding", "skills", "tasks", "survey", "subagents", "plan"]
+stdio = ["coding", "skills", "tasks", "survey", "subagents", "plan", "rmcp/transport-io"]
 
 [dependencies]
 # Always required
 serde = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true }
-rmcp = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros", "sync", "io-util", "fs", "process", "time"] }
+rmcp = { workspace = true, features = ["elicitation", "macros", "server"] }
 schemars = { workspace = true }
 clap = { workspace = true, features = ["env"] }
-mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.5.24" }
+mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", default-features = false, version = "0.5.24" }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.9" }
 aether-lspd = { path = "../aether-lspd", optional = true, version = "0.1.22" }
 futures = { workspace = true, optional = true }
@@ -118,6 +118,7 @@ llm = { package = "aether-llm", path = "../llm", optional = true, version = "0.7
 tempfile = { workspace = true }
 aether-lspd = { path = "../aether-lspd", features = ["testing"], version = "0.1.22" }
 mcp-servers = { package = "aether-mcp-servers", path = ".", features = ["test-helpers"] }
+mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", features = ["client"], version = "0.5.24" }
 
 [[bin]]
 name = "mcp-servers-stdio"
