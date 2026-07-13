@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.21](https://github.com/contextbridge/aether/compare/aether-project-v0.5.20...aether-project-v0.5.21) - 2026-07-13
+
+### Added
+
+- *(aether-cli)* Support exact trace and metric endpoints for otel e… ([#228](https://github.com/contextbridge/aether/pull/228))
+
 ## [0.5.20](https://github.com/contextbridge/aether/compare/aether-project-v0.5.19...aether-project-v0.5.20) - 2026-07-13
 
 ### Added
