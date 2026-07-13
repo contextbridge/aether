@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.22](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.6.21...aether-agent-core-v0.6.22) - 2026-07-13
+
+### Other
+
+- reduce development compile costs ([#231](https://github.com/contextbridge/aether/pull/231))
+
 ## [0.6.21](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.6.20...aether-agent-core-v0.6.21) - 2026-07-13
 
 ### Other

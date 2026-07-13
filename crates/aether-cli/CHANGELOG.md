@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.24](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.23...aether-agent-cli-v0.7.24) - 2026-07-13
+
+### Other
+
+- reduce development compile costs ([#231](https://github.com/contextbridge/aether/pull/231))
+
 ## [0.7.23](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.22...aether-agent-cli-v0.7.23) - 2026-07-13
 
 ### Added

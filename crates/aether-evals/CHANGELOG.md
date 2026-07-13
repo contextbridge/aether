@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.13](https://github.com/contextbridge/aether/compare/aether-evals-v0.2.12...aether-evals-v0.2.13) - 2026-07-13
+
+### Other
+
+- reduce development compile costs ([#231](https://github.com/contextbridge/aether/pull/231))
+
 ## [0.2.12](https://github.com/contextbridge/aether/compare/aether-evals-v0.2.11...aether-evals-v0.2.12) - 2026-07-13
 
 ### Other

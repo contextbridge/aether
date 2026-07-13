@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.25](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.5.24...aether-mcp-utils-v0.5.25) - 2026-07-13
+
+### Other
+
+- reduce development compile costs ([#231](https://github.com/contextbridge/aether/pull/231))
+
 ## [0.5.24](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.5.23...aether-mcp-utils-v0.5.24) - 2026-07-13
 
 ### Other

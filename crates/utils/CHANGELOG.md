@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.10](https://github.com/contextbridge/aether/compare/aether-utils-v0.2.9...aether-utils-v0.2.10) - 2026-07-13
+
+### Other
+
+- reduce development compile costs ([#231](https://github.com/contextbridge/aether/pull/231))
+
 ## [0.2.9](https://github.com/contextbridge/aether/compare/aether-utils-v0.2.8...aether-utils-v0.2.9) - 2026-07-09
 
 ### Other
