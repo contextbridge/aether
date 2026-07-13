@@ -43,7 +43,7 @@ thiserror = { workspace = true }
 time = { workspace = true, optional = true }
 uuid = { workspace = true }
 
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "io-util", "net", "time"] }
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
 

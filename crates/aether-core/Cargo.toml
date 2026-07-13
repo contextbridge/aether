@@ -29,10 +29,10 @@ futures = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yml = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
 tokio-stream = { workspace = true }
 async-openai = { workspace = true }
-rmcp = { workspace = true }
+rmcp = { workspace = true, features = ["client", "elicitation"] }
 schemars = { workspace = true }
 chrono = { workspace = true }
 tracing = { workspace = true }
@@ -49,7 +49,7 @@ llm = { package = "aether-llm", path = "../llm", version = "0.7.19", features = 
 utils = { package = "aether-utils", path = "../utils", version = "0.2.9" }
 
 [features]
-testing = []
+testing = ["rmcp/macros", "rmcp/server"]
 
 [dev-dependencies]
 aether-core = { package = "aether-agent-core", path = ".", features = ["testing"] }

@@ -16,7 +16,7 @@ dist = false
 workspace = true
 
 [dependencies]
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros", "io-util", "fs"] }
 futures = { workspace = true }
 async-stream = { workspace = true }
 serde = { workspace = true }

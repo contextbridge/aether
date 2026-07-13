@@ -41,9 +41,9 @@ tui = { package = "aether-tui", path = "../tui", default-features = false, featu
 acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["server", "testing"], version = "0.3.30" }
 agent-client-protocol = { workspace = true }
 aether-lspd = { path = "../aether-lspd", version = "0.1.22" }
-rmcp = { workspace = true }
+rmcp = { workspace = true, features = ["client", "elicitation", "server", "transport-streamable-http-client-reqwest"] }
 thiserror = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "io-util", "net", "fs", "time"] }
 tokio-util = { workspace = true, features = ["compat"] }
 serde = { workspace = true }
 serde_json = { workspace = true }

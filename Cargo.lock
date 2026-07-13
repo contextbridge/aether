@@ -4845,7 +4845,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d1f571c72940a19d9532fe52dbea8bc9912bf1d766c2970bb824056b86f3f59"
 dependencies = [
  "async-trait",
- "base64 0.22.1",
  "chrono",
  "futures",
  "http 1.4.2",
@@ -5872,7 +5871,6 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
- "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2 0.6.4",

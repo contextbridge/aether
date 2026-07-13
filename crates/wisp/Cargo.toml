@@ -33,7 +33,7 @@ tui = { package = "aether-tui", path = "../tui", version = "0.2.16" }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.9" }
 agent-client-protocol = { workspace = true }
 base64 = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "io-util", "fs", "process", "time"] }
 serde_json = { workspace = true }
 clap = { workspace = true }
 tracing = { workspace = true }

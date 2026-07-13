@@ -30,4 +30,4 @@ axum = { workspace = true }
 opentelemetry-proto = { version = "0.32.0", default-features = false, features = ["gen-tonic-messages", "trace", "metrics"] }
 opentelemetry_sdk = { version = "0.32.0", default-features = false, features = ["trace", "metrics", "rt-tokio", "testing"] }
 prost = "0.14"
-tokio = { workspace = true, features = ["test-util"] }
+tokio = { workspace = true, features = ["rt", "macros", "test-util"] }

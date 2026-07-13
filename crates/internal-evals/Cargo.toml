@@ -24,4 +24,4 @@ thiserror = { workspace = true }
 aether-core = { package = "aether-agent-core", path = "../aether-core" }
 tempfile = { workspace = true }
 testcontainers = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros"] }
