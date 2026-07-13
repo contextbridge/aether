@@ -1,4 +1,6 @@
 use aether_auth::OAuthError;
+use aether_project::SettingsError;
+use aether_telemetry::TelemetryInitError;
 use std::io;
 use thiserror::Error;
 
@@ -12,6 +14,10 @@ pub enum CliError {
     InvalidOptionsJson(#[source] serde_json::Error),
     #[error(transparent)]
     ConflictingSettingsSources(#[from] crate::settings_args::ConflictingSettingsSources),
+    #[error("Failed to load settings: {0}")]
+    Settings(#[from] SettingsError),
+    #[error("Failed to initialize telemetry: {0}")]
+    Telemetry(#[from] TelemetryInitError),
     #[error("Model error: {0}")]
     ModelError(String),
     #[error("MCP error: {0}")]

@@ -1,6 +1,8 @@
 use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::AgentSpec;
 use aether_core::context::ext::{SessionEvent, last_agent_from_events};
+use aether_core::core::AgentDeps;
+use aether_core::events::ObserverFactory;
 use agent_client_protocol::schema::{self as acp, LoadSessionRequest, NewSessionRequest, SessionId};
 use agent_client_protocol::{Client, ConnectionTo};
 use llm::catalog::{LlmModel, get_local_models};
@@ -50,6 +52,7 @@ pub(crate) struct SessionFactory {
     oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
     session_store: Arc<SessionStore>,
     initial_selection: InitialSessionSelection,
+    observer_factory: Option<ObserverFactory>,
 }
 
 /// The fully-built session ready to be registered with [`AcpState`](super::state::AcpState).
@@ -67,8 +70,16 @@ impl SessionFactory {
         oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
         session_store: Arc<SessionStore>,
         initial_selection: InitialSessionSelection,
+        observer_factory: Option<ObserverFactory>,
     ) -> Self {
-        Self { settings_source, provider_connections, oauth_credential_store, session_store, initial_selection }
+        Self {
+            settings_source,
+            provider_connections,
+            oauth_credential_store,
+            session_store,
+            initial_selection,
+            observer_factory,
+        }
     }
 
     pub(crate) async fn create(
@@ -135,10 +146,11 @@ impl SessionFactory {
         mcp_servers: Vec<acp::McpServer>,
         session_id: &str,
     ) -> Arc<dyn RuntimeFactory> {
+        let deps = AgentDeps::new(Arc::clone(&self.oauth_credential_store), self.observer_factory.clone());
         Arc::new(ProductionRuntimeFactory::new(
             cwd,
             map_acp_mcp_servers(mcp_servers),
-            Arc::clone(&self.oauth_credential_store),
+            deps,
             Some(session_id.to_string()),
         ))
     }

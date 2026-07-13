@@ -89,8 +89,11 @@ impl Context {
     /// Includes messages and tool definitions. Used for pre-flight overflow detection.
     pub fn estimated_token_count(&self) -> u32 {
         let message_bytes: usize = self.messages.iter().map(ChatMessage::estimated_bytes).sum();
-        let tool_bytes: usize =
-            self.tools.iter().map(|t| t.name.len() + t.description.len() + t.parameters.len()).sum();
+        let tool_bytes: usize = self
+            .tools
+            .iter()
+            .map(|tool| tool.name.len() + tool.description.len() + tool.parameters.to_string().len())
+            .sum();
         let total_bytes = message_bytes + tool_bytes;
         u32::try_from(total_bytes / 4).unwrap_or(u32::MAX)
     }
@@ -282,7 +285,7 @@ mod tests {
 
     #[test]
     fn replace_conversation_does_not_change_tools() {
-        let tool = ToolDefinition::new("read_file", "Reads a file", "{}");
+        let tool = ToolDefinition::new("read_file", "Reads a file", serde_json::json!({}));
         let mut ctx = Context::new(
             vec![ChatMessage::System { content: "system".to_string(), timestamp: IsoString::now() }],
             vec![tool.clone()],
@@ -406,7 +409,7 @@ mod tests {
         // With no tools, estimate = message_bytes / 4
         assert_eq!(base_estimate, 87 / 4);
 
-        let tool = ToolDefinition::new("read_file", "Reads a file", "{}");
+        let tool = ToolDefinition::new("read_file", "Reads a file", serde_json::json!({}));
         let ctx_with_tools = Context::new(ctx.messages().clone(), vec![tool]);
         let with_tools_estimate = ctx_with_tools.estimated_token_count();
         assert_eq!(with_tools_estimate, (87 + 9 + 12 + 2) / 4);

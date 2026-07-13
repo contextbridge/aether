@@ -2,11 +2,10 @@ use super::agent_key::AgentKey;
 use super::error::SessionError;
 use crate::runtime::{Runtime, RuntimeBuilder};
 use crate::slash_commands::{SlashCommandError, list_prompts};
-use aether_auth::OAuthCredentialStorage;
 use aether_auth::OAuthHandler;
 use aether_core::agent_spec::AgentSpec;
 use aether_core::agent_spec::ToolFilter;
-use aether_core::core::AgentHandle;
+use aether_core::core::{AgentDeps, AgentHandle};
 use aether_core::events::{AgentCommand, AgentEvent, Command};
 use aether_core::mcp::run_mcp_task::McpCommand;
 use llm::ChatMessage;
@@ -149,7 +148,7 @@ pub(crate) trait RuntimeFactory: Send + Sync {
 pub(crate) struct ProductionRuntimeFactory {
     cwd: PathBuf,
     mcp_servers: Vec<McpServer>,
-    oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
+    agent_deps: AgentDeps,
     prompt_cache_key: Option<String>,
 }
 
@@ -157,10 +156,10 @@ impl ProductionRuntimeFactory {
     pub fn new(
         cwd: PathBuf,
         client_servers: Vec<McpServer>,
-        oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
+        agent_deps: AgentDeps,
         prompt_cache_key: Option<String>,
     ) -> Self {
-        Self { cwd, mcp_servers: client_servers, oauth_credential_store, prompt_cache_key }
+        Self { cwd, mcp_servers: client_servers, agent_deps, prompt_cache_key }
     }
 }
 
@@ -183,7 +182,7 @@ impl RuntimeFactory for ProductionRuntimeFactory {
         let mut builder = RuntimeBuilder::from_spec(self.cwd.clone(), spec.clone())
             .extra_servers(extra_servers)
             .oauth_handler_factory(mcp_oauth_handler_factory())
-            .oauth_credential_store(self.oauth_credential_store.clone());
+            .agent_deps(self.agent_deps.clone());
 
         if let Some(key) = self.prompt_cache_key.clone() {
             builder = builder.prompt_cache_key(key);

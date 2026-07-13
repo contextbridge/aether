@@ -1,5 +1,8 @@
 //! LSP diagnostics tool for querying compiler errors and warnings
 
+// `Uri` only uses interior mutability to cache parsed components; its identity is stable.
+#![allow(clippy::mutable_key_type)]
+
 use crate::lsp::diagnostics::{DiagnosticCounts, FormattedDiagnostic, count_by_severity};
 use crate::lsp::registry::LspRegistry;
 use lsp_types::Diagnostic;
@@ -133,15 +136,13 @@ pub async fn execute_lsp_diagnostics(
 fn build_output(
     input: &LspDiagnosticsInput,
     root_path: &Path,
-    diagnostics_cache: &HashMap<String, Vec<Diagnostic>>,
+    diagnostics_cache: &HashMap<lsp_types::Uri, Vec<Diagnostic>>,
 ) -> LspDiagnosticsOutput {
     let mut diagnostics: Vec<FormattedDiagnostic> = diagnostics_cache
         .iter()
-        .filter_map(|(uri_str, diagnostics)| {
-            let uri = uri_str.parse().ok()?;
-            Some(diagnostics.iter().map(move |diagnostic| FormattedDiagnostic::from_diagnostic(&uri, diagnostic)))
+        .flat_map(|(uri, diagnostics)| {
+            diagnostics.iter().map(move |diagnostic| FormattedDiagnostic::from_diagnostic(uri, diagnostic))
         })
-        .flatten()
         .collect();
 
     diagnostics.sort_by(|a, b| a.file.cmp(&b.file).then(a.line.cmp(&b.line)).then(a.column.cmp(&b.column)));
@@ -166,8 +167,8 @@ mod tests {
     use lsp_types::{DiagnosticSeverity, Position, Range};
     use tempfile::TempDir;
 
-    fn uri(path: &str) -> String {
-        format!("file://{path}")
+    fn uri(path: &str) -> lsp_types::Uri {
+        format!("file://{path}").parse().unwrap()
     }
 
     fn diag(severity: DiagnosticSeverity, message: &str, line: u32) -> Diagnostic {
@@ -184,7 +185,7 @@ mod tests {
         }
     }
 
-    fn workspace_output(cache: &HashMap<String, Vec<Diagnostic>>) -> LspDiagnosticsOutput {
+    fn workspace_output(cache: &HashMap<lsp_types::Uri, Vec<Diagnostic>>) -> LspDiagnosticsOutput {
         build_output(&LspDiagnosticsInput::Workspace {}, Path::new("/project"), cache)
     }
 

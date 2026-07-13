@@ -1,12 +1,11 @@
 use crate::plan::DEFAULT_PLANS_DIR;
 use crate::workspace_paths::resolve_path;
 use crate::{CodingMcp, CodingMcpArgs, DefaultCodingTools, PlanMcp, SkillsMcp, SubAgentsMcp, SurveyMcp, TasksMcp};
-use aether_auth::OAuthCredentialStorage;
+use aether_core::core::AgentDeps;
 use aether_core::mcp::McpBuilder;
 use futures::FutureExt;
 use mcp_utils::ServiceExt;
 use std::path::PathBuf;
-use std::sync::Arc;
 use tracing::{debug, warn};
 
 #[doc = include_str!("docs/mcp_builder_ext.md")]
@@ -19,7 +18,7 @@ pub trait McpBuilderExt {
 #[derive(Clone)]
 struct BuiltinServerContext {
     root_dir: PathBuf,
-    oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
+    agent_deps: AgentDeps,
 }
 
 impl BuiltinServerContext {
@@ -30,10 +29,7 @@ impl BuiltinServerContext {
 
 impl McpBuilderExt for McpBuilder {
     fn with_builtin_servers(self) -> Self {
-        let context = BuiltinServerContext {
-            root_dir: self.root_dir().to_path_buf(),
-            oauth_credential_store: self.oauth_credential_store(),
-        };
+        let context = BuiltinServerContext { root_dir: self.root_dir().to_path_buf(), agent_deps: self.agent_deps() };
         let coding_context = context.clone();
         let skills_context = context.clone();
         let subagents_context = context.clone();
@@ -88,12 +84,10 @@ impl McpBuilderExt for McpBuilder {
             Box::new(move |args, _input| {
                 let context = subagents_context.clone();
                 async move {
-                    let mut mcp = SubAgentsMcp::from_args_with_default_project_root(args, &context.root_dir)
-                        .expect("Failed to parse SubAgentsMcp args");
-                    if let Some(store) = context.oauth_credential_store {
-                        mcp = mcp.with_oauth_credential_store(store);
-                    }
-                    mcp.into_dyn()
+                    SubAgentsMcp::from_args_with_default_project_root(args, &context.root_dir)
+                        .expect("Failed to parse SubAgentsMcp args")
+                        .with_agent_deps(context.agent_deps)
+                        .into_dyn()
                 }
                 .boxed()
             }),

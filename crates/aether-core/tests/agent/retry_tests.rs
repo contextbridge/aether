@@ -15,7 +15,7 @@ fn retry_attempts(messages: &[AgentEvent]) -> Vec<u32> {
     messages
         .iter()
         .filter_map(|event| match event {
-            AgentEvent::Turn(turn @ TurnEvent::LlmCallStarted { .. }) => turn.retry_info().map(|retry| retry.attempt),
+            AgentEvent::Turn(turn @ TurnEvent::RetryScheduled { .. }) => turn.retry_info().map(|retry| retry.attempt),
             _ => None,
         })
         .collect()
@@ -215,9 +215,9 @@ async fn cancel_during_retry_wait_aborts_pending_retry() -> Result<(), Box<dyn E
 
     loop {
         match rx.recv().await {
-            Some(AgentEvent::Turn(TurnEvent::LlmCallStarted { attempt: 1, .. })) => break,
+            Some(AgentEvent::Turn(TurnEvent::RetryScheduled { attempt: 1, .. })) => break,
             Some(_) => {}
-            None => panic!("channel closed before the retry attempt started"),
+            None => panic!("channel closed before the retry was scheduled"),
         }
     }
 
@@ -231,6 +231,11 @@ async fn cancel_during_retry_wait_aborts_pending_retry() -> Result<(), Box<dyn E
             break;
         }
     }
+
+    let retry_started = messages
+        .iter()
+        .any(|message| matches!(message, AgentEvent::Turn(TurnEvent::LlmCallStarted { attempt: 1, .. })));
+    assert!(!retry_started, "cancelled backoff must not emit a call start: {messages:?}");
 
     let has_cancelled = messages.iter().any(|m| matches!(m.turn_outcome(), Some(TurnOutcome::Cancelled)));
     assert!(has_cancelled, "expected the turn to end as cancelled, got {messages:?}");

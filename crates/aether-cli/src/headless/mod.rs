@@ -2,7 +2,7 @@ pub mod error;
 pub mod run;
 
 use aether_core::agent_spec::{AgentSpec, McpConfigSource};
-use aether_project::AetherSettings;
+use aether_project::{AetherSettings, AgentCatalog, TelemetrySettings};
 use error::CliError;
 use llm::{ProviderConnectionOverride, ProviderConnectionOverrides};
 use mcp_utils::client::McpConfig;
@@ -13,7 +13,7 @@ use std::io::{IsTerminal, Read as _, stdin};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use crate::credentials::build_oauth_credential_store;
+use crate::credentials::oauth_credential_store_from_config;
 use crate::mcp_config_args::McpConfigArgs;
 use crate::output::OutputFormat;
 use crate::provider_connection_args::ProviderConnectionArgs;
@@ -40,6 +40,7 @@ pub enum CliEventKind {
     ContextCleared,
     TurnStarted,
     TurnEnded,
+    LlmRetryScheduled,
     LlmCallStarted,
     LlmCallEnded,
     ToolExecutionStarted,
@@ -56,6 +57,7 @@ pub struct RunConfig {
     pub verbose: bool,
     pub events: Vec<CliEventKind>,
     pub oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
+    pub telemetry: Option<TelemetrySettings>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
@@ -146,16 +148,18 @@ impl RunConfig {
 
         let prompt = resolve_prompt(&args)?;
         let cwd = args.cwd.canonicalize().map_err(CliError::IoError)?;
+        let settings = args.settings_source.load_settings(&cwd)?;
         let provider_connections = args.provider_connection.clone().into_overrides();
-        let spec = resolve_spec(
+        let oauth_credential_store = oauth_credential_store_from_config(settings.credentials_store.clone())?;
+        let telemetry = settings.telemetry.clone();
+        let spec = resolve_spec_from_settings(
             args.agent.as_deref(),
             args.model.as_deref(),
             &cwd,
-            &args.settings_source,
+            settings,
             provider_connections,
         )?;
         let mcp_config_sources = args.mcp_config.sources(&cwd);
-        let oauth_credential_store = build_oauth_credential_store(&args.settings_source, &cwd)?;
 
         Ok(Self {
             prompt,
@@ -167,6 +171,7 @@ impl RunConfig {
             verbose: args.verbose,
             events: args.events,
             oauth_credential_store,
+            telemetry,
         })
     }
 
@@ -174,12 +179,15 @@ impl RunConfig {
         let prompt = options.prompt.ok_or(CliError::NoPrompt)?;
         let cwd = options.cwd.unwrap_or_else(|| PathBuf::from(".")).canonicalize().map_err(CliError::IoError)?;
         let settings_source = SettingsSourceArgs::from_json_options(options.settings, options.settings_file)?;
+        let settings = settings_source.load_settings(&cwd)?;
         let provider_connections = ProviderConnectionOverrides::new(options.providers.unwrap_or_default());
-        let spec = resolve_spec(
+        let oauth_credential_store = oauth_credential_store_from_config(settings.credentials_store.clone())?;
+        let telemetry = settings.telemetry.clone();
+        let spec = resolve_spec_from_settings(
             options.agent.as_deref(),
             options.model.as_deref(),
             &cwd,
-            &settings_source,
+            settings,
             provider_connections,
         )?;
         let mcp_config_sources = options
@@ -188,7 +196,6 @@ impl RunConfig {
             .map(McpConfigSource::Json)
             .into_iter()
             .collect();
-        let oauth_credential_store = build_oauth_credential_store(&settings_source, &cwd)?;
 
         Ok(Self {
             prompt,
@@ -200,6 +207,7 @@ impl RunConfig {
             verbose: options.verbose.unwrap_or(false),
             events: options.events.unwrap_or_default(),
             oauth_credential_store,
+            telemetry,
         })
     }
 }
@@ -221,18 +229,18 @@ fn resolve_prompt(args: &HeadlessArgs) -> Result<String, CliError> {
     }
 }
 
-fn resolve_spec(
+fn resolve_spec_from_settings(
     agent: Option<&str>,
     model: Option<&str>,
     cwd: &Path,
-    settings_source: &SettingsSourceArgs,
+    settings: AetherSettings,
     provider_connections: ProviderConnectionOverrides,
 ) -> Result<AgentSpec, CliError> {
     if agent.is_some() && model.is_some() {
         return Err(CliError::ConflictingArgs("Cannot specify both --agent and --model".to_string()));
     }
 
-    let catalog = settings_source.load_agent_catalog(cwd).map_err(|e| CliError::AgentError(e.to_string()))?;
+    let catalog = AgentCatalog::from_settings_or_empty(cwd, settings)?;
 
     let mut spec = match model {
         Some(m) => {
@@ -250,6 +258,17 @@ mod tests {
     use std::fs::{create_dir_all, write};
 
     use super::*;
+
+    fn resolve_spec(
+        agent: Option<&str>,
+        model: Option<&str>,
+        cwd: &Path,
+        settings_source: &SettingsSourceArgs,
+        provider_connections: ProviderConnectionOverrides,
+    ) -> Result<AgentSpec, CliError> {
+        let settings = settings_source.load_settings(cwd)?;
+        resolve_spec_from_settings(agent, model, cwd, settings, provider_connections)
+    }
 
     #[test]
     fn resolve_spec_with_named_agent() {

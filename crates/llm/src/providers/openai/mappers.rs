@@ -8,7 +8,6 @@ use async_openai::types::chat::{
     ImageUrl, InputAudio, InputAudioFormat,
 };
 use schemars::Schema;
-use serde_json::from_str;
 
 use crate::{ChatMessage, ContentBlock, LlmError, Result, ToolDefinition};
 
@@ -129,8 +128,8 @@ fn tool_definition_to_openai(
     tool: &ToolDefinition,
     tool_schema_transform: Option<fn(&mut Schema)>,
 ) -> Result<ChatCompletionTools> {
-    let mut schema: Schema = from_str(&tool.parameters)
-        .map_err(|e| LlmError::ToolParameterParsing { tool_name: tool.name.clone(), error: e.to_string() })?;
+    let mut schema = Schema::try_from(tool.parameters.clone())
+        .map_err(|error| LlmError::ToolParameterParsing { tool_name: tool.name.clone(), error: error.to_string() })?;
 
     if let Some(transform) = tool_schema_transform {
         transform(&mut schema);
@@ -282,7 +281,7 @@ mod tests {
         let tools = vec![ToolDefinition::new(
             "search",
             "Search for things",
-            r#"{"type": "object", "properties": {"q": {"type": "string"}}}"#,
+            serde_json::from_str(r#"{"type": "object", "properties": {"q": {"type": "string"}}}"#).unwrap(),
         )];
         let result = map_tools(&tools, None);
         assert!(result.is_ok());
@@ -290,21 +289,11 @@ mod tests {
     }
 
     #[test]
-    fn map_tools_with_invalid_json_returns_error() {
-        let tools = vec![ToolDefinition::new("broken_tool", "A tool with bad params", "not valid json{{{")];
-        let result = map_tools(&tools, None);
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            LlmError::ToolParameterParsing { tool_name, .. } => {
-                assert_eq!(tool_name, "broken_tool");
-            }
-            other => panic!("Expected ToolParameterParsing, got: {other}"),
-        }
-    }
-
-    #[test]
     fn map_tools_applies_transform_when_provided() {
-        let raw_params = r#"{"$schema": "https://json-schema.org/draft/2020-12/schema", "title": "MySchema", "type": "object", "properties": {"q": {"type": "string", "format": "uri"}}}"#;
+        let raw_params = serde_json::from_str(
+            r#"{"$schema": "https://json-schema.org/draft/2020-12/schema", "title": "MySchema", "type": "object", "properties": {"q": {"type": "string", "format": "uri"}}}"#,
+        )
+        .unwrap();
         let tools = vec![ToolDefinition::new("search", "Search", raw_params)];
         let result = map_tools(&tools, Some(normalize_for_moonshot)).unwrap();
         let ChatCompletionTools::Function(f) = &result[0] else {

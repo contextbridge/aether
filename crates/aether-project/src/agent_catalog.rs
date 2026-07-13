@@ -36,6 +36,13 @@ impl AgentCatalog {
         Ok(Some(catalog))
     }
 
+    pub fn from_settings_or_empty(project_root: &Path, settings: AetherSettings) -> Result<Self, SettingsError> {
+        if settings.agents.is_empty() {
+            return Ok(Self::empty(project_root.to_path_buf()));
+        }
+        Self::from_settings(project_root, settings)
+    }
+
     pub fn from_settings(project_root: &Path, settings: AetherSettings) -> Result<Self, SettingsError> {
         validate_selected_agent(&settings)?;
         let selected_agent =

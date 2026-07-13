@@ -14,7 +14,8 @@ use lsp_types::{
 };
 use serde_json::Value;
 use std::collections::HashSet;
-use std::path::{Component, Path, PathBuf};
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -189,7 +190,9 @@ async fn bootstrap_workspace_refresh(
     } else {
         tokio::task::spawn_blocking(move || {
             let mut builder = WalkBuilder::new(&workspace_root);
-            builder.standard_filters(true).filter_entry(|entry| !path_contains_ignored_component(entry.path()));
+            builder
+                .standard_filters(true)
+                .filter_entry(|entry| entry.depth() == 0 || !is_ignored_directory_name(entry.file_name()));
 
             let mut uris = Vec::new();
             for entry in builder.build() {
@@ -268,13 +271,8 @@ fn uri_is_supported(uri: &Uri, supported_extensions: &HashSet<String>) -> bool {
     path_is_supported(Path::new(&path), supported_extensions)
 }
 
-fn path_contains_ignored_component(path: &Path) -> bool {
-    path.components().any(|component| {
-        let Component::Normal(name) = component else {
-            return false;
-        };
-        matches!(name.to_string_lossy().as_ref(), ".git" | "node_modules" | ".next" | "dist" | "build" | "target")
-    })
+fn is_ignored_directory_name(name: &OsStr) -> bool {
+    matches!(name.to_string_lossy().as_ref(), ".git" | "node_modules" | ".next" | "dist" | "build" | "target")
 }
 
 fn path_is_supported(path: &Path, supported_extensions: &HashSet<String>) -> bool {

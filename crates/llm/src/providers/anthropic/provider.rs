@@ -332,7 +332,7 @@ mod tests {
             vec![ToolDefinition::new(
                 "search",
                 "Search for information",
-                r#"{"type": "object", "properties": {"query": {"type": "string"}}}"#,
+                serde_json::from_str(r#"{"type": "object", "properties": {"query": {"type": "string"}}}"#).unwrap(),
             )],
         );
 
@@ -366,7 +366,7 @@ mod tests {
             vec![ToolDefinition::new(
                 "search",
                 "Search for information",
-                r#"{"type": "object", "properties": {"query": {"type": "string"}}}"#,
+                serde_json::from_str(r#"{"type": "object", "properties": {"query": {"type": "string"}}}"#).unwrap(),
             )],
         );
 

@@ -117,7 +117,7 @@ impl ToolProxy {
         ToolDefinition::new(
             namespaced_name,
             "Execute a tool on a nested MCP server. Browse the tool-proxy directory to discover available tools first.",
-            Value::Object((*schema).clone()).to_string(),
+            Value::Object((*schema).clone()),
         )
         .with_server(proxy_name.to_string())
     }

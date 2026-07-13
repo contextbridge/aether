@@ -16,6 +16,9 @@
 //! - `rust-analyzer` must be installed and in PATH (for Rust projects)
 //! - The target project must be a valid Rust project with `Cargo.toml`
 
+// `Uri` only uses interior mutability to cache parsed components; its identity is stable.
+#![allow(clippy::mutable_key_type)]
+
 use std::env;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -50,16 +53,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if diagnostics_by_file.values().all(Vec::is_empty) {
         println!("No diagnostics reported (project is clean!)");
     } else {
-        for (file_path, diagnostics) in &diagnostics_by_file {
+        for (uri, diagnostics) in &diagnostics_by_file {
             if diagnostics.is_empty() {
                 continue;
             }
-            let uri: lsp_types::Uri = format!("file://{file_path}").parse().unwrap();
             let formatted: Vec<FormattedDiagnostic> =
-                diagnostics.iter().map(|d| FormattedDiagnostic::from_diagnostic(&uri, d)).collect();
+                diagnostics.iter().map(|diagnostic| FormattedDiagnostic::from_diagnostic(uri, diagnostic)).collect();
 
             let counts = count_by_severity(&formatted);
-            println!("\n{file_path}: {counts}");
+            println!("\n{}: {counts}", uri.as_str());
 
             for diag in &formatted {
                 println!("  {}", diag.format());

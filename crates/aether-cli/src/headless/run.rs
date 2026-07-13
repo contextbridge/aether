@@ -1,12 +1,16 @@
-use aether_core::core::Prompt;
+use aether_core::core::{AgentDeps, Prompt};
 use aether_core::events::{
     AgentEvent, Command, ContextEvent, LlmCallOutcome, MessageEvent, ModelEvent, ToolEvent, TurnEvent, TurnOutcome,
 };
 use aether_core::mcp::run_mcp_task::McpCommand;
+use aether_telemetry::TelemetryRuntime;
 use std::io;
 use std::process::ExitCode;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::error;
+
+use crate::telemetry::build_telemetry_runtime;
 
 use super::error::CliError;
 use super::{CliEventKind, RunConfig};
@@ -17,14 +21,26 @@ use crate::slash_commands::{expand_slash_command, parse_slash_command};
 pub async fn run(config: RunConfig) -> Result<ExitCode, CliError> {
     setup_tracing(config.verbose);
 
+    let telemetry = build_telemetry_runtime(config.telemetry.as_ref())?;
+    let result = run_agent(config, telemetry.clone()).await;
+
+    if let Some(telemetry) = telemetry {
+        telemetry.shutdown_or_log();
+    }
+    result
+}
+
+async fn run_agent(config: RunConfig, telemetry: Option<Arc<TelemetryRuntime>>) -> Result<ExitCode, CliError> {
     let mut spec = config.spec;
     if let Some(system_prompt) = config.system_prompt {
         spec.prompts.push(Prompt::text(&system_prompt));
     }
 
+    let deps =
+        AgentDeps::new(config.oauth_credential_store, telemetry.as_ref().map(|runtime| runtime.observer_factory()));
     let (agent, _mcp_snapshot) = RuntimeBuilder::from_spec(config.cwd.clone(), spec)
         .mcp_sources(config.mcp_config_sources)
-        .oauth_credential_store(config.oauth_credential_store)
+        .agent_deps(deps)
         .build_ready(vec![])
         .await?;
 
@@ -36,7 +52,12 @@ pub async fn run(config: RunConfig) -> Result<ExitCode, CliError> {
         .await
         .map_err(|e| CliError::AgentError(format!("Failed to send prompt: {e}")))?;
 
-    Ok(stream_output(agent.agent_rx, config.output, &config.events).await)
+    let exit_code = stream_output(agent.agent_rx, config.output, &config.events).await;
+
+    drop(agent.agent_tx);
+    agent.agent_handle.await_completion().await;
+
+    Ok(exit_code)
 }
 
 async fn expand_prompt(mcp_tx: &mpsc::Sender<McpCommand>, prompt: String) -> String {
@@ -109,8 +130,9 @@ fn event_kind(msg: &AgentEvent) -> Option<CliEventKind> {
         AgentEvent::Context(ContextEvent::CompactionResult { .. }) => Some(CliEventKind::ContextCompactionResult),
         AgentEvent::Context(ContextEvent::UsageUpdated { .. }) => Some(CliEventKind::ContextUsage),
         AgentEvent::Context(ContextEvent::Cleared) => Some(CliEventKind::ContextCleared),
-        AgentEvent::Turn(TurnEvent::Started) => Some(CliEventKind::TurnStarted),
+        AgentEvent::Turn(TurnEvent::Started { .. }) => Some(CliEventKind::TurnStarted),
         AgentEvent::Turn(TurnEvent::Ended { .. }) => Some(CliEventKind::TurnEnded),
+        AgentEvent::Turn(TurnEvent::RetryScheduled { .. }) => Some(CliEventKind::LlmRetryScheduled),
         AgentEvent::Turn(TurnEvent::LlmCallStarted { .. }) => Some(CliEventKind::LlmCallStarted),
         AgentEvent::Turn(TurnEvent::LlmCallEnded { .. }) => Some(CliEventKind::LlmCallEnded),
         AgentEvent::Tool(ToolEvent::ExecutionStarted { .. }) => Some(CliEventKind::ToolExecutionStarted),
@@ -152,7 +174,7 @@ fn format_text(msg: &AgentEvent) -> Option<String> {
             Some(format!("Continuing ({attempt}/{max_attempts})..."))
         }
 
-        AgentEvent::Turn(event @ TurnEvent::LlmCallStarted { .. }) => event
+        AgentEvent::Turn(event @ TurnEvent::RetryScheduled { .. }) => event
             .retry_info()
             .map(|retry| format!("Retrying ({}/{}) in {}ms", retry.attempt, retry.max_attempts, retry.delay_ms)),
 
@@ -190,7 +212,8 @@ fn format_text(msg: &AgentEvent) -> Option<String> {
         AgentEvent::Context(ContextEvent::Cleared) => Some("Context cleared".to_string()),
 
         AgentEvent::Turn(
-            TurnEvent::Started
+            TurnEvent::Started { .. }
+            | TurnEvent::LlmCallStarted { .. }
             | TurnEvent::LlmCallEnded {
                 outcome:
                     LlmCallOutcome::Completed { .. }
@@ -298,8 +321,8 @@ mod tests {
     }
 
     #[test]
-    fn format_text_formats_retrying_call_start() {
-        let msg = llm_call_started(1, Some(10));
+    fn format_text_formats_retry_schedule() {
+        let msg = retry_scheduled(1, 10);
         assert_eq!(format_text(&msg), Some("Retrying (1/3) in 10ms".to_string()));
     }
 
@@ -323,7 +346,7 @@ mod tests {
 
     #[test]
     fn format_text_skips_first_call_start() {
-        assert_eq!(format_text(&llm_call_started(0, None)), None);
+        assert_eq!(format_text(&llm_call_started(0)), None);
     }
 
     #[test]
@@ -476,9 +499,10 @@ mod tests {
             ),
             (usage_update(), CliEventKind::ContextUsage),
             (AgentEvent::Context(ContextEvent::Cleared), CliEventKind::ContextCleared),
-            (AgentEvent::Turn(TurnEvent::Started), CliEventKind::TurnStarted),
+            (AgentEvent::Turn(TurnEvent::Started { content: vec![] }), CliEventKind::TurnStarted),
             (AgentEvent::turn_ended(TurnOutcome::Completed), CliEventKind::TurnEnded),
-            (llm_call_started(0, None), CliEventKind::LlmCallStarted),
+            (retry_scheduled(1, 10), CliEventKind::LlmRetryScheduled),
+            (llm_call_started(0), CliEventKind::LlmCallStarted),
             (
                 AgentEvent::Turn(TurnEvent::LlmCallEnded {
                     purpose: aether_core::events::LlmCallPurpose::Chat,
@@ -557,7 +581,16 @@ mod tests {
         })
     }
 
-    fn llm_call_started(attempt: u32, delay_ms: Option<u64>) -> AgentEvent {
+    fn retry_scheduled(attempt: u32, delay_ms: u64) -> AgentEvent {
+        AgentEvent::Turn(TurnEvent::RetryScheduled {
+            purpose: aether_core::events::LlmCallPurpose::Chat,
+            attempt,
+            max_attempts: 3,
+            delay_ms,
+        })
+    }
+
+    fn llm_call_started(attempt: u32) -> AgentEvent {
         AgentEvent::Turn(TurnEvent::LlmCallStarted {
             purpose: aether_core::events::LlmCallPurpose::Chat,
             provider: None,
@@ -565,7 +598,6 @@ mod tests {
             display_name: "test".to_string(),
             attempt,
             max_attempts: 3,
-            delay_ms,
         })
     }
 

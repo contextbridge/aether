@@ -49,11 +49,7 @@ impl SettingsSourceArgs {
 
     pub fn load_agent_catalog(&self, cwd: &Path) -> Result<AgentCatalog, SettingsError> {
         let settings = self.load_settings(cwd)?;
-        if settings.agents.is_empty() {
-            Ok(AgentCatalog::empty(cwd.to_path_buf()))
-        } else {
-            AgentCatalog::from_settings(cwd, settings)
-        }
+        AgentCatalog::from_settings_or_empty(cwd, settings)
     }
 }
 

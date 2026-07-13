@@ -360,7 +360,8 @@ pub(crate) fn should_persist_session_event(event: &SessionEvent) -> bool {
                 | ToolEvent::DefinitionsUpdated { .. },
             )
             | AgentEvent::Turn(
-                TurnEvent::Started
+                TurnEvent::Started { .. }
+                | TurnEvent::RetryScheduled { .. }
                 | TurnEvent::LlmCallStarted { .. }
                 | TurnEvent::LlmCallEnded {
                     outcome: LlmCallOutcome::Completed { .. } | LlmCallOutcome::Cancelled, ..
@@ -561,7 +562,7 @@ mod tests {
             agent_thought("m", "thinking", false),
             tool_call_update("1", r#"{"filePath":"Cargo.toml"}"#),
             tool_progress("1"),
-            agent_event(AgentEvent::Turn(TurnEvent::Started)),
+            agent_event(AgentEvent::Turn(TurnEvent::Started { content: vec![] })),
             agent_event(AgentEvent::Turn(TurnEvent::LlmCallStarted {
                 purpose: aether_core::events::LlmCallPurpose::Chat,
                 provider: None,
@@ -569,7 +570,6 @@ mod tests {
                 display_name: "Claude".to_string(),
                 attempt: 0,
                 max_attempts: 3,
-                delay_ms: None,
             })),
             agent_event(AgentEvent::Turn(TurnEvent::LlmCallEnded {
                 purpose: aether_core::events::LlmCallPurpose::Chat,

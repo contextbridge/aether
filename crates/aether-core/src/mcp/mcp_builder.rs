@@ -1,5 +1,3 @@
-use aether_auth::OAuthCredentialStorage;
-
 use mcp_utils::client::{
     McpClientEvent, McpConfig, McpConnectionDetails, McpError, McpManager, McpServer, OAuthHandlerFactory, ParseError,
     ServerFactory,
@@ -7,11 +5,11 @@ use mcp_utils::client::{
 use utils::{SettingsStore, variables::Vars};
 
 use crate::agent_spec::McpConfigSource;
+use crate::core::AgentDeps;
 
 use super::run_mcp_task::{McpCommand, run_mcp_task};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use tokio::{
     sync::mpsc::{self, Receiver, Sender},
     task::JoinHandle,
@@ -52,7 +50,7 @@ pub struct McpBuilder {
     mcp_channel_capacity: usize,
     root_dir: PathBuf,
     oauth_handler_factory: Option<OAuthHandlerFactory>,
-    oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
+    agent_deps: AgentDeps,
     aether_home: Option<PathBuf>,
     vars: Vars,
 }
@@ -71,7 +69,7 @@ impl McpBuilder {
             mcp_channel_capacity: 1000,
             root_dir: root_dir.as_ref().to_path_buf(),
             oauth_handler_factory: None,
-            oauth_credential_store: None,
+            agent_deps: AgentDeps::default(),
             aether_home: None,
             vars,
         }
@@ -91,17 +89,19 @@ impl McpBuilder {
         &self.root_dir
     }
 
-    pub fn oauth_credential_store(&self) -> Option<Arc<dyn OAuthCredentialStorage>> {
-        self.oauth_credential_store.clone()
+    /// Cross-cutting dependencies handed to every agent spawned behind this
+    /// builder's in-memory servers.
+    pub fn agent_deps(&self) -> AgentDeps {
+        self.agent_deps.clone()
+    }
+
+    pub fn with_agent_deps(mut self, deps: AgentDeps) -> Self {
+        self.agent_deps = deps;
+        self
     }
 
     pub fn with_oauth_handler_factory(mut self, factory: OAuthHandlerFactory) -> Self {
         self.oauth_handler_factory = Some(factory);
-        self
-    }
-
-    pub fn with_oauth_credential_store(mut self, store: Arc<dyn OAuthCredentialStorage>) -> Self {
-        self.oauth_credential_store = Some(store);
         self
     }
 
@@ -151,7 +151,7 @@ impl McpBuilder {
         let (event_tx, event_rx) = mpsc::channel::<McpClientEvent>(self.mcp_channel_capacity);
 
         let mut mcp_manager = McpManager::new(event_tx, self.oauth_handler_factory);
-        if let Some(store) = self.oauth_credential_store {
+        if let Some(store) = self.agent_deps.oauth_credential_store {
             mcp_manager = mcp_manager.with_oauth_credential_store(store);
         }
         if let Some(aether_home) = self.aether_home {

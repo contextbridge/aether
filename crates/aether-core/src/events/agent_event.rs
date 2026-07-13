@@ -72,6 +72,6 @@ mod tests {
     fn turn_outcome_returns_outcome_only_for_turn_end() {
         assert_eq!(AgentEvent::turn_ended(TurnOutcome::Completed).turn_outcome(), Some(&TurnOutcome::Completed));
         assert_eq!(AgentEvent::text("m", "text", true).turn_outcome(), None);
-        assert_eq!(AgentEvent::Turn(TurnEvent::Started).turn_outcome(), None);
+        assert_eq!(AgentEvent::Turn(TurnEvent::Started { content: vec![] }).turn_outcome(), None);
     }
 }

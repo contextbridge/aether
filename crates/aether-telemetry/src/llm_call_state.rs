@@ -1,0 +1,172 @@
+use crate::content_capture::ContentBuffer;
+use crate::content_json::messages_json;
+use crate::gen_ai_metrics::GenAiMetrics;
+use crate::genai_constants::{
+    ERROR_TYPE, GEN_AI_OUTPUT_MESSAGES, GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK, GEN_AI_TOKEN_TYPE,
+    GEN_AI_USAGE_INPUT_TOKENS, GEN_AI_USAGE_OUTPUT_TOKENS, GENAI_RESPONSE_START_EVENT, GENAI_TOOL_CALL_START_EVENT,
+    MESSAGE_ID, TOOL_CALL_ID, TOOL_CALL_NAME,
+};
+use crate::span_guard::{ErrorKind, SpanGuard};
+use aether_core::events::{LlmCallOutcome, LlmCallPurpose};
+use llm::TokenUsage;
+use opentelemetry::{Context, KeyValue};
+use std::time::Instant;
+
+/// One LLM call's span, metrics context, and streaming state. Ends as
+/// cancelled on drop unless explicitly finished.
+pub(crate) struct LlmCallState {
+    span: SpanGuard,
+    metrics: GenAiMetrics,
+    start: Instant,
+    chunk_timing: ChunkTiming,
+    response_started: bool,
+    output: ContentBuffer,
+    metric_attributes: Vec<KeyValue>,
+}
+
+impl LlmCallState {
+    pub(crate) fn new(
+        context: Context,
+        metrics: GenAiMetrics,
+        purpose: LlmCallPurpose,
+        output: ContentBuffer,
+        metric_attributes: Vec<KeyValue>,
+    ) -> Self {
+        Self {
+            span: SpanGuard::new(context, LLM_CANCEL_MESSAGE),
+            metrics,
+            start: Instant::now(),
+            chunk_timing: ChunkTiming::for_purpose(purpose),
+            response_started: false,
+            output,
+            metric_attributes,
+        }
+    }
+
+    pub(crate) fn record_response_chunk(&mut self, message_id: &str, chunk: &str) {
+        self.record_response_start(message_id);
+        self.record_output_chunk();
+        self.output.push(chunk);
+    }
+
+    pub(crate) fn record_tool_call_start(&mut self, tool_call_id: &str, tool_call_name: &str) {
+        self.record_output_chunk();
+        self.span.add_event(
+            GENAI_TOOL_CALL_START_EVENT,
+            vec![
+                KeyValue::new(TOOL_CALL_ID, tool_call_id.to_string()),
+                KeyValue::new(TOOL_CALL_NAME, tool_call_name.to_string()),
+            ],
+        );
+    }
+
+    pub(crate) fn record_output_chunk(&mut self) {
+        let now = Instant::now();
+        match self.chunk_timing {
+            ChunkTiming::Disabled => return,
+            ChunkTiming::AwaitingFirst => {
+                let elapsed = self.start.elapsed().as_secs_f64();
+                self.span.set_attribute(KeyValue::new(GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK, elapsed));
+                self.metrics.time_to_first_chunk.record(elapsed, &self.metric_attributes);
+            }
+            ChunkTiming::Streaming { last_chunk } => {
+                self.metrics
+                    .time_per_output_chunk
+                    .record(now.duration_since(last_chunk).as_secs_f64(), &self.metric_attributes);
+            }
+        }
+        self.chunk_timing = ChunkTiming::Streaming { last_chunk: now };
+    }
+
+    pub(crate) fn finish(mut self, outcome: &LlmCallOutcome) {
+        match outcome {
+            LlmCallOutcome::Completed { usage, .. } => {
+                if let Some(output) = self.output.get() {
+                    self.span.set_attribute(KeyValue::new(GEN_AI_OUTPUT_MESSAGES, messages_json("assistant", output)));
+                }
+                if let Some(usage) = usage {
+                    self.span.set_attribute(KeyValue::new(GEN_AI_USAGE_INPUT_TOKENS, i64::from(usage.input_tokens)));
+                    self.span.set_attribute(KeyValue::new(GEN_AI_USAGE_OUTPUT_TOKENS, i64::from(usage.output_tokens)));
+                    self.record_token_usage(*usage);
+                }
+                self.span.end_ok();
+                self.record_duration(None);
+            }
+            LlmCallOutcome::Failed { error, .. } => self.fail(ErrorKind::LlmError, error.clone()),
+            LlmCallOutcome::Cancelled => self.cancel(),
+        }
+    }
+
+    fn record_response_start(&mut self, message_id: &str) {
+        if self.response_started {
+            return;
+        }
+        self.response_started = true;
+        self.span.add_event(GENAI_RESPONSE_START_EVENT, vec![KeyValue::new(MESSAGE_ID, message_id.to_string())]);
+    }
+
+    fn cancel(&mut self) {
+        self.fail(ErrorKind::Cancelled, LLM_CANCEL_MESSAGE.to_string());
+    }
+
+    fn fail(&mut self, kind: ErrorKind, message: String) {
+        self.span.end_error(Some(kind), message);
+        self.record_duration(Some(kind));
+    }
+
+    fn record_duration(&self, error: Option<ErrorKind>) {
+        self.metrics.duration.record(self.start.elapsed().as_secs_f64(), &self.attributes_with_error(error));
+    }
+
+    fn record_token_usage(&self, usage: TokenUsage) {
+        self.metrics.token_usage.record(u64::from(usage.input_tokens), &self.token_attributes("input"));
+        self.metrics.token_usage.record(u64::from(usage.output_tokens), &self.token_attributes("output"));
+        if let Some(tokens) = usage.cache_read_tokens {
+            self.metrics.token_usage.record(u64::from(tokens), &self.token_attributes("input_cache_read"));
+        }
+        if let Some(tokens) = usage.reasoning_tokens {
+            self.metrics.token_usage.record(u64::from(tokens), &self.token_attributes("output_reasoning"));
+        }
+    }
+
+    fn attributes_with_error(&self, error: Option<ErrorKind>) -> Vec<KeyValue> {
+        let mut attributes = self.metric_attributes.clone();
+        if let Some(error) = error {
+            attributes.push(KeyValue::new(ERROR_TYPE, error.as_str()));
+        }
+        attributes
+    }
+
+    fn token_attributes(&self, token_type: &'static str) -> Vec<KeyValue> {
+        let mut attributes = self.attributes_with_error(None);
+        attributes.push(KeyValue::new(GEN_AI_TOKEN_TYPE, token_type));
+        attributes
+    }
+}
+
+impl Drop for LlmCallState {
+    fn drop(&mut self) {
+        if !self.span.is_finished() {
+            self.cancel();
+        }
+    }
+}
+
+const LLM_CANCEL_MESSAGE: &str = "llm call cancelled";
+
+/// Streaming-chunk timing state for one LLM call; only chat calls report
+/// chunk timing.
+enum ChunkTiming {
+    Disabled,
+    AwaitingFirst,
+    Streaming { last_chunk: Instant },
+}
+
+impl ChunkTiming {
+    fn for_purpose(purpose: LlmCallPurpose) -> Self {
+        match purpose {
+            LlmCallPurpose::Chat => Self::AwaitingFirst,
+            LlmCallPurpose::Compaction => Self::Disabled,
+        }
+    }
+}

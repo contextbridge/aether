@@ -1,0 +1,33 @@
+[package]
+name = "aether-telemetry"
+version = "0.1.0"
+edition = "2024"
+description = "OpenTelemetry support for Aether GenAI calls"
+license = "MIT"
+repository = "https://github.com/contextbridge/aether"
+
+[package.metadata.dist]
+dist = false
+
+[lints]
+workspace = true
+
+[dependencies]
+aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.6.18" }
+llm = { package = "aether-llm", path = "../llm", version = "0.7.16" }
+opentelemetry = { version = "0.32.0", default-features = false, features = ["trace", "metrics"] }
+opentelemetry_sdk = { version = "0.32.0", default-features = false, features = ["trace", "metrics", "rt-tokio", "experimental_trace_batch_span_processor_with_async_runtime", "experimental_metrics_periodicreader_with_async_runtime"] }
+opentelemetry-otlp = { version = "0.32.0", default-features = false, features = ["trace", "metrics", "http-proto", "reqwest-client"] }
+opentelemetry-semantic-conventions = { version = "0.32.1", features = ["semconv_experimental"] }
+reqwest = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.6.18", features = ["testing"] }
+axum = { workspace = true }
+opentelemetry-proto = { version = "0.32.0", default-features = false, features = ["gen-tonic-messages", "trace", "metrics"] }
+opentelemetry_sdk = { version = "0.32.0", default-features = false, features = ["trace", "metrics", "rt-tokio", "testing"] }
+prost = "0.14"
+tokio = { workspace = true, features = ["test-util"] }

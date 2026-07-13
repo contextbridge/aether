@@ -91,10 +91,17 @@ async fn diagnostics_are_available_across_clients_without_explicit_open() {
 async fn workspace_bootstrap_diagnostics_are_available_without_explicit_open() {
     use_fake_rust_server();
 
-    let project = CargoProject::new("workspace_bootstrap").expect("Failed to create project");
-    project.add_file("src/main.rs", "fn main() { let error = 1; }\n").expect("Failed to add source file");
+    let temp = tempfile::tempdir().expect("Failed to create temp directory");
+    let root = temp.path().join("build");
+    std::fs::create_dir_all(root.join("src")).expect("Failed to create source directory");
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"build_root\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .expect("Failed to write Cargo.toml");
+    std::fs::write(root.join("src/main.rs"), "fn main() { let error = 1; }\n").expect("Failed to add source file");
 
-    let harness = DaemonHarness::spawn(project.root(), LanguageId::Rust).await.expect("Failed to spawn daemon");
+    let harness = DaemonHarness::spawn(&root, LanguageId::Rust).await.expect("Failed to spawn daemon");
     let client = harness.connect().await.expect("Failed to connect client");
 
     let diagnostics = poll_workspace_diagnostics(
