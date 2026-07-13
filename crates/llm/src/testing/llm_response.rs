@@ -1,4 +1,4 @@
-use crate::LlmResponse;
+use crate::{LlmResponse, StopReason};
 
 pub fn llm_response(message_id: &str) -> LlmResponseBuilder {
     LlmResponseBuilder::new(message_id)
@@ -48,5 +48,30 @@ impl LlmResponseBuilder {
     pub fn build(mut self) -> Vec<LlmResponse> {
         self.chunks.push(LlmResponse::done());
         self.chunks
+    }
+
+    pub fn build_with_stop_reason(mut self, stop_reason: StopReason) -> Vec<LlmResponse> {
+        self.chunks.push(LlmResponse::done_with_stop_reason(stop_reason));
+        self.chunks
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_with_stop_reason_preserves_response_chunks() {
+        let response = llm_response("message").text(&["hello"]).usage(10, 2).build_with_stop_reason(StopReason::Length);
+
+        assert!(matches!(
+            response.as_slice(),
+            [
+                LlmResponse::Start { .. },
+                LlmResponse::Text { .. },
+                LlmResponse::Usage { .. },
+                LlmResponse::Done { stop_reason: Some(StopReason::Length) },
+            ]
+        ));
     }
 }

@@ -9,7 +9,7 @@ use aether_telemetry::{
     GENAI_SEMCONV_SCHEMA_URL, GenAiMetrics, OtelInstrumentation, OtelObserver, genai_instrumentation_scope,
 };
 use llm::testing::llm_response;
-use llm::{LlmError, LlmResponse};
+use llm::{LlmError, LlmResponse, StopReason};
 use opentelemetry::Value;
 use opentelemetry::metrics::MeterProvider as _;
 use opentelemetry::trace::{Status, TracerProvider as _};
@@ -171,8 +171,9 @@ async fn tool_error_ends_the_tool_span_with_error_status() -> Result<(), Box<dyn
 #[tokio::test]
 async fn compaction_call_is_tagged_and_parented_to_the_turn() -> Result<(), Box<dyn Error>> {
     let responses = [
-        llm_response("m1").text(&["hi"]).usage(90_000, 10).build(),
+        llm_response("m1").text(&["hi"]).usage(90_000, 10).build_with_stop_reason(StopReason::Length),
         llm_response("summary").text(&["summary"]).usage(50, 5).build(),
+        llm_response("m2").text(&["done"]).build(),
     ];
     let trace = test_agent().context_window(100_000).llm_responses(&responses).user_text("go").run_trace().await?;
 
@@ -190,10 +191,10 @@ async fn compaction_call_is_tagged_and_parented_to_the_turn() -> Result<(), Box<
 
     let chats: Vec<_> =
         spans.prefixed("chat").into_iter().filter(|span| span.attr("aether.llm.purpose").is_none()).collect();
-    assert_eq!(chats.len(), 1, "the outer chat call still gets its own span");
+    assert_eq!(chats.len(), 2, "each chat call gets its own span");
     assert!(
-        chats[0].attr("gen_ai.input.messages").is_some(),
-        "the turn input belongs to the chat call, not the compaction call"
+        chats.iter().all(|chat| chat.attr("gen_ai.input.messages").is_some()),
+        "the turn input belongs to the chat calls, not the compaction call"
     );
     Ok(())
 }

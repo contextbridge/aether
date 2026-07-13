@@ -141,9 +141,6 @@ impl SettingsOverlay {
     }
 
     pub fn on_elicitation_request(&mut self, params: ElicitationParams, responder: Responder<ElicitationResponse>) {
-        if let Some(mut prior) = self.pending_elicitation.take() {
-            prior.cancel_pending();
-        }
         self.pending_elicitation = Some(ElicitationForm::from_params(params, responder));
     }
 

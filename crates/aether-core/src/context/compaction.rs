@@ -10,9 +10,7 @@ const SUMMARIZATION_PROMPT: &str = include_str!("prompts/summarization.md");
 /// Result of a compaction operation
 #[derive(Debug, Clone)]
 pub struct CompactionResult {
-    /// The compacted context with summary message
-    pub context: Context,
-    /// The summary text that replaced the compacted messages
+    /// The summary text that replaces the compacted messages
     pub summary: String,
     /// Number of messages that were removed/compacted
     pub messages_removed: usize,
@@ -61,11 +59,12 @@ impl Compactor {
         Self { llm }
     }
 
-    /// Generate a structured summary of the conversation and return a new compacted context.
+    /// Generate a structured summary of the conversation.
     ///
-    /// This is a pure function that takes a reference to the context and returns a new
-    /// context with the compacted messages replaced by a summary.
-    pub async fn compact(&self, context: &Context) -> Result<CompactionResult, CompactionError> {
+    /// Takes the context snapshot by value since the caller applies the summary
+    /// to its live context (which may have changed while the summarization
+    /// request was in flight) via [`Context::with_compacted_summary`].
+    pub async fn compact(&self, mut context: Context) -> Result<CompactionResult, CompactionError> {
         let messages_to_summarize = context.messages_for_summary();
         if messages_to_summarize.is_empty() {
             return Err(CompactionError::NothingToCompact);
@@ -73,15 +72,14 @@ impl Compactor {
 
         let messages_removed = messages_to_summarize.len();
 
-        let mut summary_context = context.clone();
-        summary_context.add_message(ChatMessage::User {
+        context.add_message(ChatMessage::User {
             content: vec![llm::ContentBlock::text(format!(
                 "{SUMMARIZATION_PROMPT}\n\nPlease perform a structured handoff of the conversation above."
             ))],
             timestamp: IsoString::now(),
         });
 
-        let mut stream = self.llm.stream_response(&summary_context);
+        let mut stream = self.llm.stream_response(&context);
         let mut summary = String::new();
         let mut usage = None;
 
@@ -106,9 +104,7 @@ impl Compactor {
             return Err(CompactionError::SummarizationFailed("LLM returned empty summary".to_string()));
         }
 
-        let compacted_context = context.with_compacted_summary(&summary);
-
-        Ok(CompactionResult { context: compacted_context, summary, messages_removed, usage })
+        Ok(CompactionResult { summary, messages_removed, usage })
     }
 }
 
@@ -156,7 +152,7 @@ mod tests {
             vec![],
         );
 
-        let result = compactor.compact(&context).await;
+        let result = compactor.compact(context).await;
         assert!(result.is_ok());
 
         let result = result.unwrap();
@@ -183,7 +179,7 @@ mod tests {
             vec![],
         );
 
-        let result = compactor.compact(&context).await;
+        let result = compactor.compact(context).await;
         assert!(matches!(result, Err(CompactionError::SummarizationFailed(_))));
     }
 
@@ -199,7 +195,7 @@ mod tests {
             vec![],
         );
 
-        let result = compactor.compact(&context).await;
+        let result = compactor.compact(context).await;
         assert!(matches!(result, Err(CompactionError::NothingToCompact)));
     }
 }

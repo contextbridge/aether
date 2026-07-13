@@ -199,6 +199,12 @@ impl App {
             AcpEvent::ElicitationRequest { params, responder } => self.on_elicitation_request(params, responder),
             AcpEvent::AuthenticateComplete { method_id } => self.on_authenticate_complete(&method_id),
             AcpEvent::AuthenticateFailed { method_id, error } => self.on_authenticate_failed(&method_id, &error),
+            AcpEvent::ConfigOptionUpdateFailed { error } => {
+                tracing::warn!("set_session_config_option failed: {error}");
+                self.conversation_screen
+                    .conversation
+                    .push_user_message(&format!("[wisp] Failed to update setting: {error}"));
+            }
             AcpEvent::SessionsListed { sessions } => {
                 let current_id = &self.session_id;
                 let filtered: Vec<_> = sessions.into_iter().filter(|s| s.session_id != *current_id).collect();
@@ -350,7 +356,7 @@ impl App {
         for msg in outcome.unwrap_or_default() {
             match msg {
                 ConversationScreenMessage::SendPrompt { user_input, attachments } => {
-                    self.conversation_screen.waiting_for_response = true;
+                    self.conversation_screen.on_prompt_sent();
                     self.submit_prompt(user_input, attachments).await;
                 }
                 ConversationScreenMessage::ClearScreen => {
@@ -428,7 +434,7 @@ impl App {
         }
 
         if self.keybindings.cancel.matches(key_event)
-            && self.conversation_screen.is_waiting()
+            && self.conversation_screen.is_busy()
             && let Err(e) = self.prompt_handle.cancel(&self.session_id)
         {
             tracing::warn!("Failed to send cancel: {e}");
@@ -522,7 +528,7 @@ impl App {
                     return;
                 }
 
-                self.conversation_screen.waiting_for_response = true;
+                self.conversation_screen.on_prompt_sent();
                 self.submit_prompt(user_input, Vec::new()).await;
                 self.screen_router.close_git_diff();
             }
@@ -1267,14 +1273,14 @@ mod tests {
     #[tokio::test]
     async fn esc_in_diff_mode_does_not_cancel() {
         let mut app = make_app();
-        app.conversation_screen.waiting_for_response = true;
+        app.conversation_screen.on_prompt_sent();
         app.screen_router.enter_git_diff_for_test();
 
         send_key(&mut app, KeyCode::Esc, KeyModifiers::NONE).await;
 
         assert!(!app.exit_requested());
         assert!(
-            app.conversation_screen.waiting_for_response,
+            app.conversation_screen.is_waiting(),
             "Esc should NOT cancel a running prompt while git diff mode is active"
         );
     }
@@ -1294,7 +1300,7 @@ mod tests {
         .await;
 
         assert!(!app.screen_router.is_git_diff(), "successful submit should exit git diff mode");
-        assert!(app.conversation_screen.waiting_for_response, "submit should transition into waiting state");
+        assert!(app.conversation_screen.is_waiting(), "submit should transition into waiting state");
 
         let cmd = rx.try_recv().expect("expected Prompt command to be sent");
         match cmd {
@@ -1308,7 +1314,7 @@ mod tests {
     #[tokio::test]
     async fn git_diff_submit_while_waiting_is_ignored_and_keeps_diff_open() {
         let (mut app, mut rx) = make_app_with_config_recording(&[]);
-        app.conversation_screen.waiting_for_response = true;
+        app.conversation_screen.on_prompt_sent();
         app.screen_router.enter_git_diff_for_test();
 
         let mut commands = Vec::new();
@@ -1370,7 +1376,7 @@ mod tests {
         .await;
 
         assert!(rx.try_recv().is_err(), "prompt should be blocked locally");
-        assert!(!app.conversation_screen.waiting_for_response);
+        assert!(!app.conversation_screen.is_waiting());
         let messages: Vec<_> = app
             .conversation_screen
             .conversation
@@ -1434,7 +1440,7 @@ mod tests {
         let mut app = make_app();
         let tool_call = acp::ToolCall::new("tool-1".to_string(), "test_tool");
         app.conversation_screen.tool_call_statuses.on_tool_call(&tool_call);
-        app.conversation_screen.progress_indicator.update(0, 1, true, WorkspaceProgress::default());
+        app.conversation_screen.progress_indicator.update(true, WorkspaceProgress::default());
 
         let ctx = ViewContext::new((80, 24));
         let tool_before = app.conversation_screen.tool_call_statuses.render_tool("tool-1", &ctx);
@@ -1467,7 +1473,7 @@ mod tests {
         }
 
         let mut app = make_app();
-        app.conversation_screen.waiting_for_response = true;
+        app.conversation_screen.on_prompt_sent();
         let outcome = app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::Cancelled));
         match outcome {
             EventOutcome::Render { commands } => assert!(commands.is_empty(), "cancelled prompt should not bell"),
@@ -1478,9 +1484,9 @@ mod tests {
     #[test]
     fn on_prompt_error_clears_waiting_state() {
         let mut app = make_app();
-        app.conversation_screen.waiting_for_response = true;
+        app.conversation_screen.on_prompt_sent();
         app.conversation_screen.on_prompt_error(&acp::Error::internal_error());
-        assert!(!app.conversation_screen.waiting_for_response);
+        assert!(!app.conversation_screen.is_waiting());
         assert!(!app.exit_requested());
     }
 
@@ -1514,7 +1520,7 @@ mod tests {
     #[tokio::test]
     async fn cancel_sends_directly_via_prompt_handle() {
         let mut app = make_app();
-        app.conversation_screen.waiting_for_response = true;
+        app.conversation_screen.on_prompt_sent();
         send_key(&mut app, KeyCode::Esc, KeyModifiers::NONE).await;
         assert!(!app.exit_requested());
     }
@@ -1706,6 +1712,104 @@ mod tests {
         assert!(app.exit_confirmation_active());
         app.on_event(&Event::Tick).await;
         assert!(!app.exit_confirmation_active(), "confirmation should expire after timeout");
+    }
+
+    #[tokio::test]
+    async fn prompt_error_mid_tool_call_finalizes_running_tools() {
+        let (mut app, mut rx) = make_app_with_config_recording(&[]);
+        app.conversation_screen.on_prompt_sent();
+        app.on_session_update(&acp::SessionUpdate::ToolCall(acp::ToolCall::new("tool-1".to_string(), "slow_tool")));
+        assert!(
+            app.conversation_screen.tool_call_statuses.running_any(),
+            "precondition: tool call should be tracked as running"
+        );
+
+        app.on_acp_event(AcpEvent::PromptError(acp::Error::internal_error()));
+
+        assert!(
+            !app.conversation_screen.tool_call_statuses.running_any(),
+            "prompt error should finalize running tool calls like on_prompt_done does"
+        );
+
+        let ctx = ViewContext::new((200, 24));
+        app.conversation_screen.refresh_caches(&ctx);
+        let frame = app.conversation_screen.progress_indicator.render(&ctx);
+        assert!(
+            frame.lines().is_empty(),
+            "progress indicator must go idle after a prompt error; otherwise it renders an animated spinner \
+             with '(esc to interrupt)' while Esc is dead (cancel is gated on waiting_for_response, already false)"
+        );
+
+        send_key(&mut app, KeyCode::Esc, KeyModifiers::NONE).await;
+        assert!(rx.try_recv().is_err(), "no cancel should be needed once the UI is idle");
+    }
+
+    #[tokio::test]
+    async fn esc_hint_renders_when_only_sub_agents_are_running() {
+        use acp_utils::notifications::{SubAgentEvent, SubAgentProgressParams};
+
+        let (mut app, _rx) = make_app_with_config_recording(&[]);
+        app.on_session_update(&acp::SessionUpdate::ToolCall(acp::ToolCall::new(
+            "tool-1".to_string(),
+            "spawn_subagent",
+        )));
+        app.conversation_screen.tool_call_statuses.on_sub_agent_progress(&SubAgentProgressParams {
+            parent_tool_id: "tool-1".to_string(),
+            task_id: "task-1".to_string(),
+            agent_name: "researcher".to_string(),
+            event: SubAgentEvent::Other,
+        });
+        assert!(app.conversation_screen.is_busy(), "precondition: sub-agent work counts as busy");
+
+        let ctx = ViewContext::new((200, 24));
+        app.conversation_screen.refresh_caches(&ctx);
+        let frame = app.conversation_screen.progress_indicator.render(&ctx);
+        let rendered: String = frame.lines().iter().map(tui::Line::plain_text).collect();
+        assert!(
+            rendered.contains("esc to interrupt"),
+            "the indicator must advertise Esc whenever the Esc gate would accept it; deriving indicator state \
+             from top-level tool counts hid sub-agent-only activity"
+        );
+    }
+
+    #[tokio::test]
+    async fn esc_cancels_while_tools_running_even_when_not_waiting() {
+        use acp_utils::client::PromptCommand;
+
+        let (mut app, mut rx) = make_app_with_config_recording(&[]);
+        app.on_session_update(&acp::SessionUpdate::ToolCall(acp::ToolCall::new("tool-1".to_string(), "slow_tool")));
+        assert!(!app.conversation_screen.is_waiting());
+
+        send_key(&mut app, KeyCode::Esc, KeyModifiers::NONE).await;
+
+        let cmd = rx.try_recv().expect("Esc should send cancel whenever the UI advertises '(esc to interrupt)'");
+        assert!(matches!(cmd, PromptCommand::Cancel { .. }));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn replacing_pending_elicitation_modal_cancels_previous_responder() {
+        LocalSet::new()
+            .run_until(async {
+                let mut app = make_app();
+                let (cx, mut peer) = test_connection().await;
+                let (first_responder, first_rx) = peer.fake_elicitation(&cx).await;
+                let (second_responder, _second_rx) = peer.fake_elicitation(&cx).await;
+
+                app.on_elicitation_request(
+                    elicitation_params("server-a", "first", ElicitationSchema::builder().build().unwrap()),
+                    first_responder,
+                );
+                app.on_elicitation_request(
+                    elicitation_params("server-b", "second", ElicitationSchema::builder().build().unwrap()),
+                    second_responder,
+                );
+
+                // The requesting agent blocks awaiting this response; dropping the
+                // responder without answering would wedge it forever.
+                let first_response = first_rx.await.expect("replaced elicitation must receive a response");
+                assert_eq!(first_response.action, acp_utils::notifications::ElicitationAction::Cancel);
+            })
+            .await;
     }
 
     #[test]

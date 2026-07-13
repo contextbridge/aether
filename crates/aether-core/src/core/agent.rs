@@ -1,4 +1,4 @@
-use crate::context::{CompactionConfig, Compactor, TokenTracker};
+use crate::context::{CompactionConfig, CompactionError, CompactionResult, Compactor, TokenTracker};
 use crate::core::PromptCache;
 pub use crate::core::retry_config::RetryConfig;
 use crate::events::{
@@ -29,12 +29,20 @@ enum StreamEvent {
     Llm(Result<LlmResponse, LlmError>),
     ToolExecution(ToolExecutionEvent),
     Command(Command),
+    Compaction(Result<CompactionResult, CompactionError>),
 }
 
 type EventStream = Pin<Box<dyn Stream<Item = StreamEvent> + Send>>;
 
-const USER_STREAM_KEY: &str = "user";
-const LLM_STREAM_KEY: &str = "llm";
+/// Keys for the merged stream map. Tool-call ids come from the provider, so a
+/// typed key keeps them from colliding with the reserved streams.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum StreamKey {
+    User,
+    Llm,
+    Compaction,
+    Tool(String),
+}
 
 pub(crate) struct AgentConfig {
     pub llm: Arc<dyn StreamingModelProvider>,
@@ -55,7 +63,7 @@ pub struct Agent {
     mcp_command_tx: Option<mpsc::Sender<McpCommand>>,
     message_tx: mpsc::Sender<AgentEvent>,
     observers: Vec<Box<dyn AgentObserver>>,
-    streams: StreamMap<String, EventStream>,
+    streams: StreamMap<StreamKey, EventStream>,
     tool_timeout: Duration,
     token_tracker: TokenTracker,
     compaction_config: Option<CompactionConfig>,
@@ -63,6 +71,7 @@ pub struct Agent {
     retry_config: RetryConfig,
     active_requests: HashMap<String, ToolCallRequest>,
     queued_user_messages: VecDeque<Vec<llm::ContentBlock>>,
+    pending_turn_messages: Vec<Vec<llm::ContentBlock>>,
     context_window: Option<u32>,
     prompt_cache: PromptCache,
     turn_active: bool,
@@ -75,9 +84,8 @@ impl Agent {
         command_rx: mpsc::Receiver<Command>,
         message_tx: mpsc::Sender<AgentEvent>,
     ) -> Self {
-        let mut streams: StreamMap<String, EventStream> = StreamMap::new();
-        streams
-            .insert(USER_STREAM_KEY.to_string(), Box::pin(ReceiverStream::new(command_rx).map(StreamEvent::Command)));
+        let mut streams: StreamMap<StreamKey, EventStream> = StreamMap::new();
+        streams.insert(StreamKey::User, Box::pin(ReceiverStream::new(command_rx).map(StreamEvent::Command)));
 
         let context_limit = config.context_window.or_else(|| config.llm.context_window());
 
@@ -95,6 +103,7 @@ impl Agent {
             retry_config: config.retry_config,
             active_requests: HashMap::new(),
             queued_user_messages: VecDeque::new(),
+            pending_turn_messages: Vec::new(),
             context_window: config.context_window,
             prompt_cache: config.prompt_cache,
             turn_active: false,
@@ -166,6 +175,10 @@ impl Agent {
                 StreamEvent::ToolExecution(tool_event) => {
                     self.on_tool_execution_event(tool_event, &mut state).await;
                 }
+
+                StreamEvent::Compaction(result) => {
+                    self.on_compaction_complete(result).await;
+                }
             }
 
             if state.is_complete() {
@@ -205,11 +218,6 @@ impl Agent {
         }
 
         let has_queued_text = !self.queued_user_messages.is_empty();
-        if has_queued_text {
-            let content: Vec<_> = self.queued_user_messages.drain(..).flatten().collect();
-            self.context.add_message(ChatMessage::User { content, timestamp: IsoString::now() });
-        }
-
         if has_queued_text || has_tool_calls {
             self.auto_continue.reset();
             self.start_next_turn().await;
@@ -238,18 +246,31 @@ impl Agent {
     }
 
     async fn start_next_turn(&mut self) {
-        self.maybe_preflight_compact().await;
+        self.pending_turn_messages.extend(self.queued_user_messages.drain(..));
+        if self.compaction_needed() {
+            self.begin_compaction().await;
+        } else {
+            self.start_chat_turn().await;
+        }
+    }
+
+    async fn start_chat_turn(&mut self) {
+        self.commit_pending_turn_messages();
         self.start_llm_stream(None, 0).await;
     }
 
     async fn on_user_cancel(&mut self, state: &mut IterationState) {
         self.abort_in_flight_work().await;
+        self.commit_pending_turn_messages();
+        self.queued_user_messages.clear();
         *state = IterationState::new();
         self.finish_turn(TurnOutcome::Cancelled).await;
     }
 
     async fn on_user_clear_context(&mut self, state: &mut IterationState) {
         self.abort_in_flight_work().await;
+        self.queued_user_messages.clear();
+        self.pending_turn_messages.clear();
         self.context.clear_conversation();
         self.token_tracker.reset_current_usage();
         self.auto_continue.reset();
@@ -261,6 +282,8 @@ impl Agent {
 
     async fn on_replace_conversation(&mut self, messages: Vec<ChatMessage>, state: &mut IterationState) {
         self.abort_in_flight_work().await;
+        self.queued_user_messages.clear();
+        self.pending_turn_messages.clear();
         self.context.replace_conversation(messages);
         self.auto_continue.reset();
         *state = IterationState::new();
@@ -269,11 +292,11 @@ impl Agent {
     }
 
     async fn on_user_text(&mut self, content: Vec<llm::ContentBlock>) {
-        self.context.add_message(ChatMessage::User { content: content.clone(), timestamp: IsoString::now() });
         self.auto_continue.reset();
         self.turn_active = true;
-        self.emit(AgentEvent::Turn(TurnEvent::Started { content })).await;
-        self.start_llm_stream(None, 0).await;
+        self.emit(AgentEvent::Turn(TurnEvent::Started { content: content.clone() })).await;
+        self.queued_user_messages.push_back(content);
+        self.start_next_turn().await;
     }
 
     async fn on_update_instruction(&mut self, server: String, body: Option<String>) {
@@ -297,7 +320,7 @@ impl Agent {
     }
 
     async fn start_llm_stream(&mut self, delay: Option<Duration>, attempt: u32) {
-        self.streams.remove(LLM_STREAM_KEY);
+        self.streams.remove(&StreamKey::Llm);
         let stream: EventStream = match delay {
             None => {
                 self.begin_chat_call(attempt).await;
@@ -323,7 +346,7 @@ impl Agent {
                 })
             }
         };
-        self.streams.insert(LLM_STREAM_KEY.to_string(), stream);
+        self.streams.insert(StreamKey::Llm, stream);
     }
 
     async fn on_llm_error(&mut self, error: LlmError, state: &mut IterationState) {
@@ -354,19 +377,27 @@ impl Agent {
     }
 
     fn is_busy(&self) -> bool {
-        self.streams.contains_key(LLM_STREAM_KEY) || !self.active_requests.is_empty()
+        self.streams.contains_key(&StreamKey::Llm)
+            || self.streams.contains_key(&StreamKey::Compaction)
+            || !self.active_requests.is_empty()
     }
 
     async fn abort_in_flight_work(&mut self) {
         if self.llm_call_active {
             self.finish_chat_call(LlmCallOutcome::Cancelled).await;
         }
-        self.streams.remove(LLM_STREAM_KEY);
-        for stream_key in self.active_requests.keys().cloned().collect::<Vec<_>>() {
-            self.streams.remove(&stream_key);
+        if self.streams.remove(&StreamKey::Compaction).is_some() {
+            self.emit(AgentEvent::Turn(TurnEvent::LlmCallEnded {
+                purpose: LlmCallPurpose::Compaction,
+                outcome: LlmCallOutcome::Cancelled,
+            }))
+            .await;
+        }
+        self.streams.remove(&StreamKey::Llm);
+        for tool_id in self.active_requests.keys().cloned().collect::<Vec<_>>() {
+            self.streams.remove(&StreamKey::Tool(tool_id));
         }
         self.active_requests.clear();
-        self.queued_user_messages.clear();
     }
 
     /// Inject a continuation prompt when the LLM stops due to a resumable reason.
@@ -493,8 +524,7 @@ impl Agent {
 
         let (tx, rx) = mpsc::channel(100);
         let stream = ReceiverStream::new(rx).map(StreamEvent::ToolExecution);
-        let stream_key = tool_call.id.clone();
-        self.streams.insert(stream_key, Box::pin(stream));
+        self.streams.insert(StreamKey::Tool(tool_call.id.clone()), Box::pin(stream));
 
         if let Some(ref mcp_command_tx) = self.mcp_command_tx {
             let mcp_future =
@@ -513,8 +543,6 @@ impl Agent {
         tracing::debug!(?sample, ?ratio_pct, ?remaining, "Token usage");
 
         self.emit(self.context_usage_message()).await;
-
-        self.maybe_compact_context().await;
     }
 
     fn context_usage_message(&self) -> AgentEvent {
@@ -537,97 +565,47 @@ impl Agent {
         })
     }
 
-    /// Pre-flight check: estimate context size and compact proactively if it would
-    /// overflow before the LLM even sees it. This catches the case where large tool
-    /// results push context past the limit before usage-based compaction can fire.
-    async fn maybe_preflight_compact(&mut self) {
-        let Some(context_limit) = self.token_tracker.context_limit() else {
-            return;
-        };
-        let Some(config) = self.compaction_config.as_ref() else {
-            return;
-        };
-        let estimated = self.context.estimated_token_count();
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let threshold = (f64::from(context_limit) * config.threshold).ceil() as u32;
-        if estimated >= threshold {
-            tracing::info!(
-                "Pre-flight compaction triggered: estimated {estimated} tokens >= {:.1}% of {context_limit} limit",
-                config.threshold * 100.0
-            );
-            if let CompactionOutcome::Failed(e) = self.compact_context().await {
-                tracing::warn!("Pre-flight compaction failed: {e}");
-            }
-        }
+    fn compaction_needed(&self) -> bool {
+        self.compaction_config.as_ref().is_some_and(|config| {
+            self.token_tracker.needs_compaction(self.context.estimated_token_count(), config.threshold)
+        })
     }
 
-    /// Check if compaction is needed and perform it if so.
-    async fn maybe_compact_context(&mut self) {
-        if !self.compaction_config.as_ref().is_some_and(|config| self.token_tracker.should_compact(config.threshold)) {
-            return;
-        }
-
-        if let CompactionOutcome::Failed(error_message) = self.compact_context().await {
-            tracing::warn!("Context compaction failed: {}", error_message);
-        }
-    }
-
-    async fn compact_context(&mut self) -> CompactionOutcome {
-        let Some(ref _config) = self.compaction_config else {
-            tracing::warn!("Context compaction requested but compaction is disabled");
-            return CompactionOutcome::SkippedDisabled;
-        };
-
-        match self.token_tracker.usage_ratio() {
-            Some(usage_ratio) => {
-                tracing::info!(
-                    "Starting context compaction - {} messages, {:.1}% of context limit",
-                    self.context.message_count(),
-                    usage_ratio * 100.0
-                );
-            }
-            None => {
-                tracing::info!(
-                    "Starting context compaction - {} messages (context limit unknown)",
-                    self.context.message_count(),
-                );
-            }
-        }
-
+    async fn begin_compaction(&mut self) {
+        tracing::info!("Starting context compaction - {} messages", self.context.message_count());
         self.emit(AgentEvent::Context(ContextEvent::CompactionStarted { message_count: self.context.message_count() }))
             .await;
+        self.emit(self.llm_call_started(LlmCallPurpose::Compaction, 0)).await;
 
         let compactor = Compactor::new(self.llm.clone());
+        let context = self.context.clone();
+        let stream: EventStream =
+            Box::pin(futures::stream::once(async move { StreamEvent::Compaction(compactor.compact(context).await) }));
+        self.streams.insert(StreamKey::Compaction, stream);
+    }
 
-        self.emit(self.llm_call_started(LlmCallPurpose::Compaction, 0)).await;
-        match compactor.compact(&self.context).await {
+    async fn on_compaction_complete(&mut self, result: Result<CompactionResult, CompactionError>) {
+        let outcome = match &result {
+            Ok(result) => LlmCallOutcome::Completed { stop_reason: None, usage: result.usage },
+            Err(e) => LlmCallOutcome::Failed { error: e.to_string(), will_retry: false },
+        };
+        self.emit(AgentEvent::Turn(TurnEvent::LlmCallEnded { purpose: LlmCallPurpose::Compaction, outcome })).await;
+
+        match result {
             Ok(result) => {
                 tracing::info!("Context compacted: {} messages removed", result.messages_removed);
-                self.emit(AgentEvent::Turn(TurnEvent::LlmCallEnded {
-                    purpose: LlmCallPurpose::Compaction,
-                    outcome: LlmCallOutcome::Completed { stop_reason: None, usage: result.usage },
-                }))
-                .await;
-
-                self.context = result.context;
+                self.context = self.context.with_compacted_summary(&result.summary);
                 self.token_tracker.reset_current_usage();
-
                 self.emit(AgentEvent::Context(ContextEvent::CompactionResult {
                     summary: result.summary,
                     messages_removed: result.messages_removed,
                 }))
                 .await;
-                CompactionOutcome::Compacted
             }
-            Err(e) => {
-                self.emit(AgentEvent::Turn(TurnEvent::LlmCallEnded {
-                    purpose: LlmCallPurpose::Compaction,
-                    outcome: LlmCallOutcome::Failed { error: e.to_string(), will_retry: false },
-                }))
-                .await;
-                CompactionOutcome::Failed(e.to_string())
-            }
+            Err(e) => tracing::warn!("Context compaction failed: {e}"),
         }
+
+        self.start_chat_turn().await;
     }
 
     async fn on_tool_execution_event(&mut self, event: ToolExecutionEvent, state: &mut IterationState) {
@@ -691,6 +669,13 @@ impl Agent {
         self.context.push_assistant_turn(message_content, reasoning, completed_tools);
     }
 
+    fn commit_pending_turn_messages(&mut self) {
+        let content: Vec<_> = self.pending_turn_messages.drain(..).flatten().collect();
+        if !content.is_empty() {
+            self.context.add_message(ChatMessage::User { content, timestamp: IsoString::now() });
+        }
+    }
+
     async fn emit_tool_definitions(&mut self) {
         let tools = self.context.tools().clone();
         if !tools.is_empty() {
@@ -736,13 +721,6 @@ impl Agent {
             max_attempts: self.retry_config.max_attempts,
         })
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum CompactionOutcome {
-    Compacted,
-    SkippedDisabled,
-    Failed(String),
 }
 
 pub(crate) struct AutoContinue {
@@ -823,10 +801,10 @@ impl IterationState {
 #[cfg(test)]
 mod tests {
     use crate::core::{AgentBuilder, Prompt};
+    use crate::testing::drain_until;
 
     use super::*;
     use llm::{ContentBlock, testing::FakeLlmProvider};
-    use tokio::sync::mpsc;
 
     #[tokio::test]
     async fn replace_conversation_preserves_system_prompt_for_next_request() {
@@ -852,11 +830,7 @@ mod tests {
             .await
             .unwrap();
 
-        while let Some(message) = rx.recv().await {
-            if matches!(message, AgentEvent::Turn(TurnEvent::Ended { .. })) {
-                break;
-            }
-        }
+        drain_until(&mut rx, |event| matches!(event, AgentEvent::Turn(TurnEvent::Ended { .. }))).await;
 
         let contexts = captured_contexts.lock().unwrap();
         let messages = contexts.last().expect("provider should receive a context").messages();
@@ -885,11 +859,7 @@ mod tests {
             .await
             .unwrap();
 
-        while let Some(message) = rx.recv().await {
-            if matches!(message, AgentEvent::Turn(TurnEvent::Ended { .. })) {
-                break;
-            }
-        }
+        drain_until(&mut rx, |event| matches!(event, AgentEvent::Turn(TurnEvent::Ended { .. }))).await;
 
         tx.send(Command::AgentCommand(AgentCommand::ReplaceConversation(vec![ChatMessage::User {
             content: vec![ContentBlock::text("replacement user")],
@@ -908,52 +878,129 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_preflight_compaction_uses_configured_threshold() {
-        let llm = Arc::new(
-            FakeLlmProvider::with_single_response(vec![
-                LlmResponse::start("summary"),
-                LlmResponse::text("summary"),
-                LlmResponse::done(),
-            ])
-            .with_context_window(Some(100)),
-        );
-        let context = Context::new(
-            vec![ChatMessage::User {
-                content: vec![llm::ContentBlock::text("x".repeat(344))],
+    async fn oversized_context_is_compacted_before_the_llm_call() {
+        let llm = FakeLlmProvider::new(vec![
+            vec![LlmResponse::start("sum"), LlmResponse::text("summary"), LlmResponse::done()],
+            vec![LlmResponse::start("msg"), LlmResponse::text("hello"), LlmResponse::done()],
+        ])
+        .with_context_window(Some(100));
+        let captured_contexts = llm.captured_contexts();
+
+        let (tx, mut rx, handle) = AgentBuilder::new(Arc::new(llm))
+            .compaction(CompactionConfig::with_threshold(0.85))
+            .messages(vec![ChatMessage::User {
+                content: vec![ContentBlock::text("x".repeat(400))],
                 timestamp: IsoString::now(),
-            }],
-            vec![],
-        );
-        let (user_tx, user_rx) = mpsc::channel(1);
-        let (message_tx, _message_rx) = mpsc::channel(8);
-        drop(user_tx);
+            }])
+            .spawn()
+            .await
+            .unwrap();
 
-        let mut agent = Agent::new(
-            AgentConfig {
-                llm,
-                context,
-                mcp_command_tx: None,
-                tool_timeout: Duration::from_secs(1),
-                compaction_config: Some(CompactionConfig::with_threshold(0.85)),
-                auto_continue: AutoContinue::new(0),
-                retry_config: RetryConfig::disabled(),
-                context_window: None,
-                prompt_cache: PromptCache::new(vec![]),
-                observers: Vec::new(),
-            },
-            user_rx,
-            message_tx,
-        );
+        tx.send(Command::UserCommand(UserCommand::Text { content: vec![ContentBlock::text("go")] })).await.unwrap();
 
-        agent.maybe_preflight_compact().await;
+        drain_until(&mut rx, |event| matches!(event, AgentEvent::Turn(TurnEvent::Ended { .. }))).await;
 
+        let contexts = captured_contexts.lock().unwrap();
+        let chat_messages = contexts.last().expect("chat request should reach the provider").messages();
         assert!(
-            matches!(
-                agent.context.messages().as_slice(),
-                [ChatMessage::Summary { content, .. }] if content == "summary"
-            ),
-            "expected context to be compacted, got {:?}",
-            agent.context.messages()
+            matches!(&chat_messages[0], ChatMessage::Summary { content, .. } if content == "summary"),
+            "expected the prior conversation compacted into a summary, got {chat_messages:?}"
         );
+        assert!(
+            matches!(&chat_messages[1], ChatMessage::User { content, .. } if content == &vec![ContentBlock::text("go")]),
+            "the fresh user message must survive compaction as a real turn, got {chat_messages:?}"
+        );
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn cancel_during_compaction_ends_the_turn() {
+        let release = Arc::new(tokio::sync::Notify::new());
+        let llm = FakeLlmProvider::new(vec![vec![
+            LlmResponse::start("sum"),
+            LlmResponse::text("summary"),
+            LlmResponse::done(),
+        ]])
+        .with_context_window(Some(100))
+        .pause_turn_after(0, 0, Arc::clone(&release));
+
+        let (tx, mut rx, handle) = AgentBuilder::new(Arc::new(llm))
+            .compaction(CompactionConfig::with_threshold(0.85))
+            .messages(vec![ChatMessage::User {
+                content: vec![ContentBlock::text("x".repeat(400))],
+                timestamp: IsoString::now(),
+            }])
+            .spawn()
+            .await
+            .unwrap();
+
+        tx.send(Command::UserCommand(UserCommand::Text { content: vec![ContentBlock::text("go")] })).await.unwrap();
+
+        drain_until(&mut rx, |event| matches!(event, AgentEvent::Context(ContextEvent::CompactionStarted { .. })))
+            .await;
+
+        tx.send(Command::UserCommand(UserCommand::Cancel)).await.unwrap();
+
+        let events = drain_until(&mut rx, |event| matches!(event, AgentEvent::Turn(TurnEvent::Ended { .. }))).await;
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                AgentEvent::Turn(TurnEvent::LlmCallEnded {
+                    purpose: LlmCallPurpose::Compaction,
+                    outcome: LlmCallOutcome::Cancelled,
+                })
+            )),
+            "cancel should end the in-flight compaction call"
+        );
+        assert!(
+            matches!(events.last(), Some(AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Cancelled }))),
+            "the turn must end as cancelled"
+        );
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn cancel_during_compaction_preserves_the_initiating_message() {
+        let release = Arc::new(tokio::sync::Notify::new());
+        let llm = FakeLlmProvider::new(vec![
+            vec![LlmResponse::start("sum"), LlmResponse::text("summary"), LlmResponse::done()],
+            vec![LlmResponse::start("sum2"), LlmResponse::text("summary"), LlmResponse::done()],
+            vec![LlmResponse::start("msg"), LlmResponse::text("hello"), LlmResponse::done()],
+        ])
+        .with_context_window(Some(100))
+        .pause_turn_after(0, 0, Arc::clone(&release));
+        let captured_contexts = llm.captured_contexts();
+
+        let (tx, mut rx, handle) = AgentBuilder::new(Arc::new(llm))
+            .compaction(CompactionConfig::with_threshold(0.85))
+            .messages(vec![ChatMessage::User {
+                content: vec![ContentBlock::text("x".repeat(400))],
+                timestamp: IsoString::now(),
+            }])
+            .spawn()
+            .await
+            .unwrap();
+
+        tx.send(Command::UserCommand(UserCommand::Text { content: vec![ContentBlock::text("go")] })).await.unwrap();
+        drain_until(&mut rx, |event| matches!(event, AgentEvent::Context(ContextEvent::CompactionStarted { .. })))
+            .await;
+        tx.send(Command::UserCommand(UserCommand::Cancel)).await.unwrap();
+        drain_until(&mut rx, |event| matches!(event, AgentEvent::Turn(TurnEvent::Ended { .. }))).await;
+
+        tx.send(Command::UserCommand(UserCommand::Text { content: vec![ContentBlock::text("next")] })).await.unwrap();
+        drain_until(&mut rx, |event| matches!(event, AgentEvent::Turn(TurnEvent::Ended { .. }))).await;
+
+        let contexts = captured_contexts.lock().unwrap();
+        let preserved = contexts.iter().any(|context| {
+            context.messages().iter().any(
+                |message| matches!(message, ChatMessage::User { content, .. } if content == &vec![ContentBlock::text("go")]),
+            )
+        });
+        assert!(
+            preserved,
+            "the message that initiated the cancelled turn must stay in the conversation, as it did before \
+             compaction became cancellable"
+        );
+        handle.abort();
     }
 }

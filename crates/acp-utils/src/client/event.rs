@@ -23,6 +23,7 @@ pub enum AcpEvent {
     PromptError(Error),
     AuthenticateComplete { method_id: String },
     AuthenticateFailed { method_id: String, error: String },
+    ConfigOptionUpdateFailed { error: String },
     SessionsListed { sessions: Vec<SessionInfo> },
     SessionLoaded { session_id: SessionId, config_options: Vec<SessionConfigOption> },
     NewSessionCreated { session_id: SessionId, config_options: Vec<SessionConfigOption> },

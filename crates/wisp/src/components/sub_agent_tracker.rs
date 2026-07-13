@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use acp_utils::notifications::{SubAgentEvent, SubAgentProgressParams};
 
 use crate::components::tool_call_status_view::ToolCallStatus;
+use crate::components::tool_call_statuses::PromptTermination;
 use crate::components::tracked_tool_call::{TrackedToolCall, upsert_tracked_tool_call};
 
 pub(crate) const SUB_AGENT_VISIBLE_TOOL_LIMIT: usize = 3;
@@ -105,9 +106,8 @@ impl SubAgentTracker {
         self.agents.values().any(|agents| agents.iter().any(SubAgentState::is_active_for_render))
     }
 
-    pub(crate) fn finalize_running(&mut self, cancelled: bool) {
-        let terminal_status =
-            if cancelled { ToolCallStatus::Error("cancelled".to_string()) } else { ToolCallStatus::Success };
+    pub(crate) fn finalize_running(&mut self, termination: &PromptTermination) {
+        let terminal_status = termination.terminal_status();
 
         for agents in self.agents.values_mut() {
             for agent in agents {

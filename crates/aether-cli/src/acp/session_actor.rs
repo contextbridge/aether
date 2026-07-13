@@ -304,7 +304,11 @@ async fn on_session_command(
     match cmd {
         SessionCommand::Prompt { content, responder } => {
             let result = handle_prompt(actor, runtime_event_rx, cmd_rx, io, content).await;
+            let turn_ok = result.is_ok();
             respond_prompt(responder, result);
+            if turn_ok {
+                let _ = apply_deferred_agent_switch(actor, io).await;
+            }
         }
         SessionCommand::Cancel => info!("Cancel received while idle, ignoring"),
         SessionCommand::SetConfig { setting, available, responder } => {
@@ -336,7 +340,7 @@ async fn handle_prompt(
     persist_event(actor, io, SessionEvent::User(UserEvent::Message { content: content.clone() }));
     actor.send_active_command(Command::with_content(content)).await?;
 
-    let turn_result: Result<acp::StopReason, SessionError> = loop {
+    loop {
         tokio::select! {
             () = io.cancel.cancelled() => {
                 info!("Cancellation observed during active prompt; forwarding Cancel to agent");
@@ -359,14 +363,24 @@ async fn handle_prompt(
                 handle_in_flight_command(actor, io, cmd).await;
             }
         }
-    };
-
-    if turn_result.is_ok() {
-        let switch = actor.config.take_agent_switch(&actor.modes);
-        apply_switch(actor, io, switch).await?;
     }
+}
 
-    turn_result
+async fn apply_deferred_agent_switch(actor: &mut SessionActor, io: &SessionIo) -> Result<(), SessionError> {
+    let switch = actor.config.take_agent_switch(&actor.modes);
+    apply_switch(actor, io, switch).await.inspect_err(|error| error!("Failed to activate selected mode: {error}"))
+}
+
+async fn apply_idle_config_change(
+    actor: &mut SessionActor,
+    io: &SessionIo,
+    setting: &ConfigSetting,
+    available: &[LlmModel],
+) -> Result<SetSessionConfigOptionResponse, acp::Error> {
+    apply_config_change(actor, io, setting, available)?;
+    apply_deferred_agent_switch(actor, io).await.map_err(|_| acp::Error::internal_error())?;
+    let options = actor.get_config().config_options(available, io.oauth_credential_store.as_ref());
+    Ok(SetSessionConfigOptionResponse::new(options))
 }
 
 fn turn_stop_reason(message: &AgentEvent) -> Option<acp::StopReason> {
@@ -397,31 +411,6 @@ async fn handle_in_flight_command(actor: &mut SessionActor, io: &SessionIo, cmd:
     }
 }
 
-async fn apply_idle_config_change(
-    actor: &mut SessionActor,
-    io: &SessionIo,
-    setting: &ConfigSetting,
-    available: &[LlmModel],
-) -> Result<SetSessionConfigOptionResponse, acp::Error> {
-    actor.config.apply_config_change(&actor.modes, available, setting)?;
-
-    let switch = if matches!(setting, ConfigSetting::Mode(_)) {
-        actor.config.take_agent_switch(&actor.modes)
-    } else {
-        Switch::None
-    };
-    let committed = apply_switch(actor, io, switch).await.map_err(|error| {
-        error!("Failed to activate selected mode: {error}");
-        acp::Error::internal_error()
-    })?;
-    if !committed {
-        publish_snapshot(actor, io);
-    }
-
-    let options = actor.get_config().config_options(available, io.oauth_credential_store.as_ref());
-    Ok(SetSessionConfigOptionResponse::new(options))
-}
-
 fn apply_config_change(
     actor: &mut SessionActor,
     io: &SessionIo,
@@ -435,25 +424,23 @@ fn apply_config_change(
     Ok(SetSessionConfigOptionResponse::new(options))
 }
 
-async fn apply_switch(actor: &mut SessionActor, io: &SessionIo, switch: Switch) -> Result<bool, SessionError> {
+async fn apply_switch(actor: &mut SessionActor, io: &SessionIo, switch: Switch) -> Result<(), SessionError> {
     match switch {
         Switch::Agent(agent_name) => {
             publish_snapshot(actor, io);
             if let Some(event) = actor.select_agent(&agent_name).await? {
                 persist_event(actor, io, event);
             }
-            publish_active_mcps(actor, io).await?;
-            Ok(true)
+            publish_active_mcps(actor, io).await
         }
         Switch::Model(model) => {
             let parser = ModelProviderParser::default()
                 .with_provider_connections(actor.active_provider_connections())
                 .with_codex_provider(Arc::clone(&io.oauth_credential_store));
             let (provider, _) = parser.parse(&model).await.map_err(|e| SessionError::McpOperation(format!("{e}")))?;
-            actor.send_active_command(Command::agent(AgentCommand::SwitchModel(provider))).await?;
-            Ok(true)
+            actor.send_active_command(Command::agent(AgentCommand::SwitchModel(provider))).await
         }
-        Switch::None => Ok(false),
+        Switch::None => Ok(()),
     }
 }
 
@@ -483,7 +470,7 @@ async fn on_runtime_event(actor: &mut SessionActor, io: &SessionIo, event: Runti
         }
         RuntimeEvent::Mcp { event, .. } => {
             let refresh_commands = matches!(event, McpClientEvent::ConnectionReady(_));
-            on_mcp_client_event(&io.connection, event).await;
+            on_mcp_client_event(&io.connection, event);
             if refresh_commands {
                 match actor.list_available_commands().await {
                     Ok(commands) => send_available_commands(&io.connection, io.session_id.clone(), commands),
@@ -566,18 +553,10 @@ fn send_agent_notification(
     }
 }
 
-async fn on_mcp_client_event(connection: &ConnectionTo<Client>, event: McpClientEvent) {
+fn on_mcp_client_event(connection: &ConnectionTo<Client>, event: McpClientEvent) {
     match event {
-        McpClientEvent::Elicitation(
-            elicitation @ ElicitationRequest {
-                request: CreateElicitationRequestParams::UrlElicitationParams { .. },
-                ..
-            },
-        ) => {
-            spawn_url_elicitation_request(connection, elicitation);
-        }
         McpClientEvent::Elicitation(elicitation) => {
-            on_elicitation_request(connection, elicitation).await;
+            spawn_elicitation_request(connection, elicitation);
         }
         McpClientEvent::UrlElicitationComplete(params) => {
             if let Err(e) = connection
@@ -621,13 +600,13 @@ async fn on_elicitation_request(connection: &ConnectionTo<Client>, elicitation: 
     }
 }
 
-fn spawn_url_elicitation_request(connection: &ConnectionTo<Client>, elicitation: ElicitationRequest) {
+fn spawn_elicitation_request(connection: &ConnectionTo<Client>, elicitation: ElicitationRequest) {
     let connection = connection.clone();
     if let Err(e) = connection.clone().spawn(async move {
         on_elicitation_request(&connection, elicitation).await;
         Ok(())
     }) {
-        error!("Failed to spawn URL elicitation request handler: {e:?}");
+        error!("Failed to spawn elicitation request handler: {e:?}");
     }
 }
 
@@ -857,7 +836,7 @@ mod tests {
                             elicitation_id: "el-42".to_string(),
                         });
 
-                    on_mcp_client_event(&cx, event).await;
+                    on_mcp_client_event(&cx, event);
 
                     let received = peer.next_mcp_notification().await;
                     assert!(matches!(received, McpNotification::UrlElicitationComplete(_)));
@@ -875,7 +854,7 @@ mod tests {
                         mcp_utils::client::McpServerStatus::Connected { tool_count: 1 },
                     )];
 
-                    on_mcp_client_event(&cx, McpClientEvent::ServerStatusesChanged(servers)).await;
+                    on_mcp_client_event(&cx, McpClientEvent::ServerStatusesChanged(servers));
 
                     let received = peer.next_mcp_notification().await;
                     assert!(matches!(received, McpNotification::ServerStatus { .. }));
@@ -895,15 +874,14 @@ mod tests {
                         },
                     )];
 
-                    on_mcp_client_event(&cx, McpClientEvent::ServerStatusesChanged(servers)).await;
+                    on_mcp_client_event(&cx, McpClientEvent::ServerStatusesChanged(servers));
                     on_mcp_client_event(
                         &cx,
                         McpClientEvent::AuthenticationFailed {
                             server: "github".to_string(),
                             error: "authentication timed out after 3 minutes".to_string(),
                         },
-                    )
-                    .await;
+                    );
 
                     assert!(matches!(peer.next_mcp_notification().await, McpNotification::ServerStatus { .. }));
                 })
@@ -916,7 +894,7 @@ mod tests {
                 .run_until(async {
                     let (cx, mut peer) = test_connection().await;
 
-                    on_mcp_client_event(&cx, McpClientEvent::ServerStatusesChanged(vec![])).await;
+                    on_mcp_client_event(&cx, McpClientEvent::ServerStatusesChanged(vec![]));
 
                     match peer.next_mcp_notification().await {
                         McpNotification::ServerStatus { servers } => assert!(servers.is_empty()),
@@ -943,7 +921,7 @@ mod tests {
                         server_statuses: servers,
                     };
 
-                    on_mcp_client_event(&cx, McpClientEvent::ConnectionReady(snapshot)).await;
+                    on_mcp_client_event(&cx, McpClientEvent::ConnectionReady(snapshot));
 
                     match peer.next_mcp_notification().await {
                         McpNotification::ServerStatus { servers } => assert_eq!(servers[0].name, "github"),
@@ -1009,7 +987,7 @@ mod tests {
                         response_sender: tx,
                     };
 
-                    on_mcp_client_event(&cx, McpClientEvent::Elicitation(elicitation)).await;
+                    on_mcp_client_event(&cx, McpClientEvent::Elicitation(elicitation));
                     let responder = responder_rx.await.expect("URL elicitation request should reach peer");
 
                     on_mcp_client_event(
@@ -1018,8 +996,7 @@ mod tests {
                             server_name: "github".to_string(),
                             elicitation_id: "el-1".to_string(),
                         }),
-                    )
-                    .await;
+                    );
 
                     match peer.next_mcp_notification().await {
                         McpNotification::UrlElicitationComplete(params) => {
@@ -1036,6 +1013,40 @@ mod tests {
                         content: None,
                     });
                     let result = rx.await.expect("spawned URL request should forward response");
+                    assert_eq!(result.action, rmcp::model::ElicitationAction::Accept);
+                })
+                .await;
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn form_elicitation_request_does_not_block_the_caller() {
+            LocalSet::new()
+                .run_until(async {
+                    let (cx, peer) = test_connection().await;
+                    let responder_rx = peer.capture_next_elicitation();
+                    let (tx, rx) = oneshot::channel();
+                    let elicitation = ElicitationRequest {
+                        server_name: "test-server".to_string(),
+                        request: CreateElicitationRequestParams::FormElicitationParams {
+                            meta: None,
+                            message: "Pick a color".to_string(),
+                            requested_schema: rmcp::model::ElicitationSchema::builder()
+                                .required_bool("approved")
+                                .build()
+                                .unwrap(),
+                        },
+                        response_sender: tx,
+                    };
+
+                    on_mcp_client_event(&cx, McpClientEvent::Elicitation(elicitation));
+
+                    let responder = responder_rx.await.expect("form elicitation request should reach peer");
+                    let _ = responder.respond(acp_utils::notifications::ElicitationResponse {
+                        action: rmcp::model::ElicitationAction::Accept,
+                        content: Some(serde_json::json!({ "approved": true })),
+                    });
+
+                    let result = rx.await.expect("spawned form request should forward response");
                     assert_eq!(result.action, rmcp::model::ElicitationAction::Accept);
                 })
                 .await;

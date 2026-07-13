@@ -241,14 +241,6 @@ impl ElicitationForm {
         ElicitationResponse { action: ElicitationAction::Cancel, content: None }
     }
 
-    /// Send `Cancel` to the responder if one is still attached. Used when the
-    /// owning container is displacing this form before the user responded.
-    pub fn cancel_pending(&mut self) {
-        if let Some(responder) = self.responder.take() {
-            let _ = responder.respond(Self::cancel());
-        }
-    }
-
     /// If this form is showing the URL prompt that `params` refers to, accept
     /// it and consume the responder. Returns true iff the form was answered.
     pub fn accept_url_complete(&mut self, params: &UrlElicitationCompleteParams) -> bool {
@@ -263,6 +255,16 @@ impl ElicitationForm {
             let _ = responder.respond(response);
         }
         true
+    }
+}
+
+/// A form dropped without being answered (dismissed, replaced, or the app shut
+/// down) still owes the requesting agent a response, or it would block forever.
+impl Drop for ElicitationForm {
+    fn drop(&mut self) {
+        if let Some(responder) = self.responder.take() {
+            let _ = responder.respond(Self::cancel());
+        }
     }
 }
 
@@ -633,6 +635,23 @@ mod tests {
                 assert_eq!(content["name"], "");
                 assert_eq!(content["approved"], true);
                 assert_eq!(content["color"], "green");
+            })
+            .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn dropping_unanswered_form_responds_cancel() {
+        LocalSet::new()
+            .run_until(async {
+                let (cx, mut peer) = test_connection().await;
+                let (responder, rx) = peer.fake_elicitation(&cx).await;
+                let params = elicitation_params("test-server", "Test", ElicitationSchema::builder().build().unwrap());
+
+                drop(ElicitationForm::from_params(params, responder));
+
+                let response = rx.await.expect("dropped form must still answer the requester");
+                assert_eq!(response.action, ElicitationAction::Cancel);
+                assert!(response.content.is_none());
             })
             .await;
     }
