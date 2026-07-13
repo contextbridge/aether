@@ -41,7 +41,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
 
 # ACP
-agent-client-protocol = "0.14.0"
+agent-client-protocol = "1.2.0"
 
 # MCP and API clients
 rmcp = { version = "^1.7.0", features = ["client", "server", "macros", "schemars", "auth", "elicitation", "transport-io"] }
