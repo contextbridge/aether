@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.7](https://github.com/contextbridge/aether/compare/aether-auth-v0.1.6...aether-auth-v0.1.7) - 2026-07-13
+
+### Other
+
+- reduce development compile costs ([#231](https://github.com/contextbridge/aether/pull/231))
+
 ## [0.1.6](https://github.com/contextbridge/aether/compare/aether-auth-v0.1.5...aether-auth-v0.1.6) - 2026-06-10
 
 ### Other

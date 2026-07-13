@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.23](https://github.com/contextbridge/aether/compare/aether-lspd-v0.1.22...aether-lspd-v0.1.23) - 2026-07-13
+
+### Other
+
+- reduce development compile costs ([#231](https://github.com/contextbridge/aether/pull/231))
+
 ## [0.1.22](https://github.com/contextbridge/aether/compare/aether-lspd-v0.1.21...aether-lspd-v0.1.22) - 2026-07-13
 
 ### Added

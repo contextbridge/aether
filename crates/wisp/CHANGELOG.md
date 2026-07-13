@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.31](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.30...aether-wisp-v0.4.31) - 2026-07-13
+
+### Other
+
+- reduce development compile costs ([#231](https://github.com/contextbridge/aether/pull/231))
+
 ## [0.4.30](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.29...aether-wisp-v0.4.30) - 2026-07-13
 
 ### Other

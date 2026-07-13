@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.17](https://github.com/contextbridge/aether/compare/aether-tui-v0.2.16...aether-tui-v0.2.17) - 2026-07-13
+
+### Other
+
+- reduce development compile costs ([#231](https://github.com/contextbridge/aether/pull/231))
+
 ## [0.2.16](https://github.com/contextbridge/aether/compare/aether-tui-v0.2.15...aether-tui-v0.2.16) - 2026-07-13
 
 ### Other

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.20](https://github.com/contextbridge/aether/compare/aether-llm-v0.7.19...aether-llm-v0.7.20) - 2026-07-13
+
+### Other
+
+- reduce development compile costs ([#231](https://github.com/contextbridge/aether/pull/231))
+
 ## [0.7.19](https://github.com/contextbridge/aether/compare/aether-llm-v0.7.18...aether-llm-v0.7.19) - 2026-07-13
 
 ### Other
