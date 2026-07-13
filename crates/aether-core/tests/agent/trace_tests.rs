@@ -6,7 +6,7 @@ use aether_core::core::RetryConfig;
 use aether_core::events::{AgentEvent, LlmCallOutcome, LlmCallPurpose, TurnOutcome};
 use aether_core::testing::{AddNumbersRequest, test_agent};
 use llm::testing::llm_response;
-use llm::{LlmError, LlmResponse};
+use llm::{LlmError, LlmResponse, StopReason};
 
 #[tokio::test]
 async fn tool_call_turn_emits_full_trace() -> Result<(), Box<dyn Error>> {
@@ -158,10 +158,11 @@ async fn cancel_during_retry_wait_traces_cancelled_turn_without_starting_call() 
 }
 
 #[tokio::test]
-async fn compaction_call_is_traced_nested_in_the_chat_call() -> Result<(), Box<dyn Error>> {
+async fn usage_triggered_compaction_runs_before_the_next_chat_call() -> Result<(), Box<dyn Error>> {
     let responses = [
-        llm_response("m1").text(&["hi"]).usage(90_000, 10).build(),
+        llm_response("m1").text(&["hi"]).usage(90_000, 10).build_with_stop_reason(StopReason::Length),
         llm_response("summary").text(&["summary"]).usage(50, 5).build(),
+        llm_response("m2").text(&["done"]).build(),
     ];
 
     let trace = test_agent().context_window(100_000).llm_responses(&responses).user_text("go").run_trace().await?;
@@ -170,8 +171,10 @@ async fn compaction_call_is_traced_nested_in_the_chat_call() -> Result<(), Box<d
         "tool_definitions",
         "turn_started",
         "call_started:Chat:0",
+        "call_ended:Chat:completed",
         "call_started:Compaction:0",
         "call_ended:Compaction:completed",
+        "call_started:Chat:0",
         "call_ended:Chat:completed",
         "turn_ended:completed",
     ]);

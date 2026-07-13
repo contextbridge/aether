@@ -51,16 +51,11 @@ impl TokenTracker {
         self.usage_ratio().is_some_and(|ratio| ratio >= threshold)
     }
 
-    /// Check if context should be compacted based on the given threshold.
-    /// This is a convenience method that combines usage ratio check with
-    /// a minimum context size requirement to avoid unnecessary compaction
-    /// on small conversations.
-    pub fn should_compact(&self, threshold: f64) -> bool {
-        let Some(context_limit) = self.context_limit else {
-            return false;
-        };
-        let min_tokens = std::cmp::max(context_limit / 10, 1000);
-        self.last_usage.input_tokens >= min_tokens && self.exceeds_threshold(threshold)
+    /// Whether the context needs compaction
+    pub fn needs_compaction(&self, estimated_tokens: u32, threshold: f64) -> bool {
+        self.context_limit.is_some_and(|limit| {
+            f64::from(self.last_usage.input_tokens.max(estimated_tokens)) >= f64::from(limit) * threshold
+        })
     }
 
     /// Tokens remaining before hitting limit
@@ -162,7 +157,7 @@ mod tests {
         let tracker = TokenTracker::new(None);
         assert_eq!(tracker.usage_ratio(), None);
         assert_eq!(tracker.tokens_remaining(), None);
-        assert!(!tracker.should_compact(0.85));
+        assert!(!tracker.needs_compaction(1_000_000, 0.85));
     }
 
     #[test]
@@ -179,17 +174,22 @@ mod tests {
     }
 
     #[test]
-    fn test_should_compact() {
+    fn test_needs_compaction_from_recorded_usage() {
         let mut tracker = TokenTracker::new(Some(10000));
 
-        tracker.record_usage(TokenUsage::new(500, 100));
-        assert!(!tracker.should_compact(0.04));
-
         tracker.record_usage(TokenUsage::new(9000, 100));
-        assert!(tracker.should_compact(0.85));
+        assert!(tracker.needs_compaction(0, 0.85));
 
         tracker.record_usage(TokenUsage::new(7000, 100));
-        assert!(!tracker.should_compact(0.85));
+        assert!(!tracker.needs_compaction(0, 0.85));
+    }
+
+    #[test]
+    fn test_needs_compaction_from_estimate_before_usage_recorded() {
+        let tracker = TokenTracker::new(Some(10000));
+
+        assert!(tracker.needs_compaction(9000, 0.85));
+        assert!(!tracker.needs_compaction(1000, 0.85));
     }
 
     #[test]
@@ -217,12 +217,12 @@ mod tests {
         let mut tracker = TokenTracker::new(Some(10000));
         tracker.record_usage(TokenUsage::new(9000, 100));
 
-        assert!(tracker.should_compact(0.85));
+        assert!(tracker.needs_compaction(0, 0.85));
 
         tracker.reset_current_usage();
 
         assert_eq!(tracker.last_input_tokens(), 0);
-        assert!(!tracker.should_compact(0.85));
+        assert!(!tracker.needs_compaction(0, 0.85));
         assert_eq!(tracker.total_input_tokens(), 9000);
         assert_eq!(tracker.total_output_tokens(), 100);
     }
