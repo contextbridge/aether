@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.25](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.24...aether-mcp-servers-v0.4.25) - 2026-07-13
+
+### Added
+
+- *(aether-cli)* Add support for exporting genai OTEL traces ([#219](https://github.com/contextbridge/aether/pull/219))
+
+### Other
+
+- fix lspd tests
+- cleanup tests ([#218](https://github.com/contextbridge/aether/pull/218))
+- Rename AgentMessage => AgentEvent and better organize variants ([#217](https://github.com/contextbridge/aether/pull/217))
+
 ## [0.4.24](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.23...aether-mcp-servers-v0.4.24) - 2026-07-09
 
 ### Other

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.11](https://github.com/contextbridge/aether/compare/aether-evals-v0.2.10...aether-evals-v0.2.11) - 2026-07-13
+
+### Other
+
+- Rename AgentMessage => AgentEvent and better organize variants ([#217](https://github.com/contextbridge/aether/pull/217))
+
 ## [0.2.10](https://github.com/contextbridge/aether/compare/aether-evals-v0.2.9...aether-evals-v0.2.10) - 2026-07-09
 
 ### Other

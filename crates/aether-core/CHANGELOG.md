@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.20](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.6.19...aether-agent-core-v0.6.20) - 2026-07-13
+
+### Added
+
+- *(aether-cli)* Add support for exporting genai OTEL traces ([#219](https://github.com/contextbridge/aether/pull/219))
+
+### Other
+
+- cleanup tests ([#218](https://github.com/contextbridge/aether/pull/218))
+- Rename AgentMessage => AgentEvent and better organize variants ([#217](https://github.com/contextbridge/aether/pull/217))
+
 ## [0.6.19](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.6.18...aether-agent-core-v0.6.19) - 2026-07-09
 
 ### Other

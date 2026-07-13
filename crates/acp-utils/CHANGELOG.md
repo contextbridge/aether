@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.29](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.3.28...aether-acp-utils-v0.3.29) - 2026-07-13
+
+### Other
+
+- Rename AgentMessage => AgentEvent and better organize variants ([#217](https://github.com/contextbridge/aether/pull/217))
+
 ## [0.3.28](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.3.27...aether-acp-utils-v0.3.28) - 2026-07-09
 
 ### Other

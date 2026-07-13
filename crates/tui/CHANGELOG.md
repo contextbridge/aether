@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.16](https://github.com/contextbridge/aether/compare/aether-tui-v0.2.15...aether-tui-v0.2.16) - 2026-07-13
+
+### Other
+
+- cleanup tests ([#218](https://github.com/contextbridge/aether/pull/218))
+
 ## [0.2.15](https://github.com/contextbridge/aether/compare/aether-tui-v0.2.14...aether-tui-v0.2.15) - 2026-06-30
 
 ### Added

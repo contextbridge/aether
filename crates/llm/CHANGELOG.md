@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.18](https://github.com/contextbridge/aether/compare/aether-llm-v0.7.17...aether-llm-v0.7.18) - 2026-07-13
+
+### Added
+
+- *(aether-cli)* Add support for exporting genai OTEL traces ([#219](https://github.com/contextbridge/aether/pull/219))
+
+### Fixed
+
+- send supported Codex protocol version ([#215](https://github.com/contextbridge/aether/pull/215))
+
+### Other
+
+- Rename AgentMessage => AgentEvent and better organize variants ([#217](https://github.com/contextbridge/aether/pull/217))
+
 ## [0.7.17](https://github.com/contextbridge/aether/compare/aether-llm-v0.7.16...aether-llm-v0.7.17) - 2026-07-09
 
 ### Other

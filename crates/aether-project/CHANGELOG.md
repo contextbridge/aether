@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.20](https://github.com/contextbridge/aether/compare/aether-project-v0.5.19...aether-project-v0.5.20) - 2026-07-13
+
+### Added
+
+- *(aether-cli)* Add support for exporting genai OTEL traces ([#219](https://github.com/contextbridge/aether/pull/219))
+
 ## [0.5.19](https://github.com/contextbridge/aether/compare/aether-project-v0.5.18...aether-project-v0.5.19) - 2026-07-09
 
 ### Other

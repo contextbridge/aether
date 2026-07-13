@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.29](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.28...aether-wisp-v0.4.29) - 2026-07-13
+
+### Other
+
+- Rename AgentMessage => AgentEvent and better organize variants ([#217](https://github.com/contextbridge/aether/pull/217))
+
 ## [0.4.28](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.27...aether-wisp-v0.4.28) - 2026-07-09
 
 ### Other

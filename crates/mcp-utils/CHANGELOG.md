@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.23](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.5.22...aether-mcp-utils-v0.5.23) - 2026-07-13
+
+### Added
+
+- *(aether-cli)* Add support for exporting genai OTEL traces ([#219](https://github.com/contextbridge/aether/pull/219))
+
 ## [0.5.22](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.5.21...aether-mcp-utils-v0.5.22) - 2026-07-09
 
 ### Other
