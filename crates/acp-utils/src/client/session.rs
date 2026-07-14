@@ -2,8 +2,8 @@ use super::error::AcpClientError;
 use super::event::AcpEvent;
 use super::prompt_handle::{AcpPromptHandle, PromptCommand};
 use crate::notifications::{
-    AuthMethodsUpdatedParams, ContextClearedParams, ContextUsageParams, ElicitationParams, McpNotification, McpRequest,
-    SubAgentProgressParams,
+    AuthMethodsUpdatedParams, ContextClearedParams, ContextCompactionParams, ContextUsageParams, ElicitationParams,
+    McpNotification, McpRequest, SubAgentProgressParams,
 };
 use agent_client_protocol::schema::{
     AuthMethod, AuthenticateRequest, CancelNotification, ConfigOptionUpdate, ContentBlock, InitializeRequest,
@@ -114,8 +114,8 @@ async fn run_client_connection(
         .on_receive_notification(
             {
                 let event_tx = event_tx.clone();
-                async move |p: ContextUsageParams, _cx| {
-                    let _ = event_tx.send(AcpEvent::ContextUsage(p));
+                async move |params: ContextUsageParams, _cx| {
+                    let _ = event_tx.send(AcpEvent::ContextUsage(params));
                     Ok(())
                 }
             },
@@ -124,8 +124,8 @@ async fn run_client_connection(
         .on_receive_notification(
             {
                 let event_tx = event_tx.clone();
-                async move |p: ContextClearedParams, _cx| {
-                    let _ = event_tx.send(AcpEvent::ContextCleared(p));
+                async move |params: ContextCompactionParams, _cx| {
+                    let _ = event_tx.send(AcpEvent::ContextCompaction(params));
                     Ok(())
                 }
             },
@@ -134,8 +134,8 @@ async fn run_client_connection(
         .on_receive_notification(
             {
                 let event_tx = event_tx.clone();
-                async move |p: SubAgentProgressParams, _cx| {
-                    let _ = event_tx.send(AcpEvent::SubAgentProgress(p));
+                async move |params: ContextClearedParams, _cx| {
+                    let _ = event_tx.send(AcpEvent::ContextCleared(params));
                     Ok(())
                 }
             },
@@ -144,8 +144,8 @@ async fn run_client_connection(
         .on_receive_notification(
             {
                 let event_tx = event_tx.clone();
-                async move |p: AuthMethodsUpdatedParams, _cx| {
-                    let _ = event_tx.send(AcpEvent::AuthMethodsUpdated(p));
+                async move |params: SubAgentProgressParams, _cx| {
+                    let _ = event_tx.send(AcpEvent::SubAgentProgress(params));
                     Ok(())
                 }
             },
@@ -154,8 +154,18 @@ async fn run_client_connection(
         .on_receive_notification(
             {
                 let event_tx = event_tx.clone();
-                async move |n: McpNotification, _cx| {
-                    let _ = event_tx.send(AcpEvent::McpNotification(n));
+                async move |params: AuthMethodsUpdatedParams, _cx| {
+                    let _ = event_tx.send(AcpEvent::AuthMethodsUpdated(params));
+                    Ok(())
+                }
+            },
+            acp::on_receive_notification!(),
+        )
+        .on_receive_notification(
+            {
+                let event_tx = event_tx.clone();
+                async move |params: McpNotification, _cx| {
+                    let _ = event_tx.send(AcpEvent::McpNotification(params));
                     Ok(())
                 }
             },

@@ -22,25 +22,78 @@ pub enum WorkspaceProgress {
     LoadingSession,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ProgressActivity {
+    pub agent_busy: bool,
+    pub workspace: WorkspaceProgress,
+    pub compaction_active: bool,
+}
+
+impl ProgressActivity {
+    pub fn new(agent_busy: bool, workspace: WorkspaceProgress, compaction_active: bool) -> Self {
+        Self { agent_busy, workspace, compaction_active }
+    }
+
+    fn display(self) -> ProgressDisplay {
+        match self.workspace {
+            WorkspaceProgress::Moving => ProgressDisplay::MovingWorkspace { interruptible: self.agent_busy },
+            WorkspaceProgress::LoadingSession => ProgressDisplay::LoadingSession { interruptible: self.agent_busy },
+            WorkspaceProgress::None if self.compaction_active => {
+                ProgressDisplay::Compacting { interruptible: self.agent_busy }
+            }
+            WorkspaceProgress::None if self.agent_busy => ProgressDisplay::AgentWorking,
+            WorkspaceProgress::None => ProgressDisplay::Idle,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum ProgressDisplay {
+    #[default]
+    Idle,
+    AgentWorking,
+    Compacting {
+        interruptible: bool,
+    },
+    MovingWorkspace {
+        interruptible: bool,
+    },
+    LoadingSession {
+        interruptible: bool,
+    },
+}
+
+impl ProgressDisplay {
+    fn is_active(self) -> bool {
+        self != Self::Idle
+    }
+
+    fn is_interruptible(self) -> bool {
+        match self {
+            Self::AgentWorking => true,
+            Self::Compacting { interruptible }
+            | Self::MovingWorkspace { interruptible }
+            | Self::LoadingSession { interruptible } => interruptible,
+            Self::Idle => false,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct ProgressIndicator {
-    agent_busy: bool,
-    workspace_progress: WorkspaceProgress,
+    display: ProgressDisplay,
     tick: u16,
-    was_active: bool,
+    agent_was_busy: bool,
     turn_count: usize,
 }
 
 impl ProgressIndicator {
-    pub fn update(&mut self, agent_busy: bool, workspace_progress: WorkspaceProgress) {
-        let previously_active = self.was_active;
-        self.agent_busy = agent_busy;
-        self.workspace_progress = workspace_progress;
-        let now_active = self.is_active();
-        self.was_active = now_active;
-        if !previously_active && now_active {
+    pub fn update(&mut self, activity: ProgressActivity) {
+        if !self.agent_was_busy && activity.agent_busy {
             self.turn_count += 1;
         }
+        self.agent_was_busy = activity.agent_busy;
+        self.display = activity.display();
     }
 
     #[cfg(test)]
@@ -54,16 +107,18 @@ impl ProgressIndicator {
     }
 
     fn is_active(&self) -> bool {
-        self.agent_busy || self.workspace_progress != WorkspaceProgress::None
+        self.display.is_active()
     }
 
     fn current_message(&self) -> &'static str {
-        match self.workspace_progress {
-            WorkspaceProgress::Moving => "Moving workspace...",
-            WorkspaceProgress::LoadingSession => "Loading session in new workspace...",
-            WorkspaceProgress::None => {
+        match self.display {
+            ProgressDisplay::MovingWorkspace { .. } => "Moving workspace...",
+            ProgressDisplay::LoadingSession { .. } => "Loading session in new workspace...",
+            ProgressDisplay::Compacting { .. } => "Compacting context...",
+            ProgressDisplay::AgentWorking => {
                 self.turn_count.checked_sub(1).and_then(|i| MESSAGES.get(i)).copied().unwrap_or("Working...")
             }
+            ProgressDisplay::Idle => "",
         }
     }
 
@@ -83,9 +138,14 @@ impl ProgressIndicator {
 
         let frame_char = FRAMES[self.tick as usize % FRAMES.len()];
         let mut line = Line::default();
-        line.push_styled(frame_char.to_string(), context.theme.info());
+        let spinner_color = if matches!(self.display, ProgressDisplay::Compacting { .. }) {
+            context.theme.warning()
+        } else {
+            context.theme.info()
+        };
+        line.push_styled(frame_char.to_string(), spinner_color);
         line.push_styled(format!(" {}", self.current_message()), context.theme.text_secondary());
-        if self.agent_busy {
+        if self.display.is_interruptible() {
             line.push_with_style("  (esc to interrupt)".to_string(), Style::fg(context.theme.muted()).italic());
         }
 
@@ -112,15 +172,15 @@ mod tests {
     #[test]
     fn renders_nothing_after_busy_clears() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(true, WorkspaceProgress::None);
-        indicator.update(false, WorkspaceProgress::None);
+        indicator.update(ProgressActivity::new(true, WorkspaceProgress::None, false));
+        indicator.update(ProgressActivity::new(false, WorkspaceProgress::None, false));
         assert!(indicator.render(&ctx()).lines().is_empty());
     }
 
     #[test]
     fn renders_esc_hint_when_agent_busy() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(true, WorkspaceProgress::None);
+        indicator.update(ProgressActivity::new(true, WorkspaceProgress::None, false));
         let frame = indicator.render(&ctx());
         let lines = frame.lines();
         assert_eq!(lines.len(), 3);
@@ -131,9 +191,9 @@ mod tests {
     #[test]
     fn spinner_animates_with_tick() {
         let mut a = ProgressIndicator::default();
-        a.update(true, WorkspaceProgress::None);
+        a.update(ProgressActivity::new(true, WorkspaceProgress::None, false));
         let mut b = ProgressIndicator::default();
-        b.update(true, WorkspaceProgress::None);
+        b.update(ProgressActivity::new(true, WorkspaceProgress::None, false));
         b.set_tick(1);
         let text_a = a.render(&ctx()).lines()[1].plain_text();
         let text_b = b.render(&ctx()).lines()[1].plain_text();
@@ -143,7 +203,7 @@ mod tests {
     #[test]
     fn on_tick_advances_when_busy() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(true, WorkspaceProgress::None);
+        indicator.update(ProgressActivity::new(true, WorkspaceProgress::None, false));
         let tick_before = indicator.tick;
         indicator.on_tick();
         assert_ne!(indicator.tick, tick_before);
@@ -152,7 +212,7 @@ mod tests {
     #[test]
     fn on_tick_noop_when_idle() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(false, WorkspaceProgress::None);
+        indicator.update(ProgressActivity::new(false, WorkspaceProgress::None, false));
         indicator.on_tick();
         assert!(indicator.render(&ctx()).lines().is_empty());
     }
@@ -160,7 +220,7 @@ mod tests {
     #[test]
     fn first_turn_shows_first_tip() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(true, WorkspaceProgress::None);
+        indicator.update(ProgressActivity::new(true, WorkspaceProgress::None, false));
         indicator.set_turn_count(1);
         let frame = indicator.render(&ctx());
         let text = frame.lines()[1].plain_text();
@@ -170,13 +230,13 @@ mod tests {
     #[test]
     fn tip_advances_each_turn() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(true, WorkspaceProgress::None);
+        indicator.update(ProgressActivity::new(true, WorkspaceProgress::None, false));
         assert_eq!(indicator.turn_count, 1);
         let tip_0 = indicator.render(&ctx()).lines()[1].plain_text();
 
-        indicator.update(false, WorkspaceProgress::None);
+        indicator.update(ProgressActivity::new(false, WorkspaceProgress::None, false));
 
-        indicator.update(true, WorkspaceProgress::None);
+        indicator.update(ProgressActivity::new(true, WorkspaceProgress::None, false));
         assert_eq!(indicator.turn_count, 2);
         let tip_1 = indicator.render(&ctx()).lines()[1].plain_text();
 
@@ -188,7 +248,7 @@ mod tests {
     #[test]
     fn shows_working_after_tips_exhausted() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(true, WorkspaceProgress::None);
+        indicator.update(ProgressActivity::new(true, WorkspaceProgress::None, false));
         indicator.set_turn_count(MESSAGES.len() + 1);
         let text = indicator.render(&ctx()).lines()[1].plain_text();
         assert!(text.contains("Working..."));
@@ -197,7 +257,7 @@ mod tests {
     #[test]
     fn reset_restarts_tips() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(true, WorkspaceProgress::None);
+        indicator.update(ProgressActivity::new(true, WorkspaceProgress::None, false));
         assert_eq!(indicator.turn_count, 1);
 
         let indicator = ProgressIndicator::default();
@@ -207,7 +267,7 @@ mod tests {
     #[test]
     fn renders_workspace_move_without_interrupt_hint() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(false, WorkspaceProgress::Moving);
+        indicator.update(ProgressActivity::new(false, WorkspaceProgress::Moving, false));
         let text = indicator.render(&ctx()).lines()[1].plain_text();
         assert!(text.contains("Moving workspace..."));
         assert!(!text.contains("esc to interrupt"));
@@ -216,7 +276,7 @@ mod tests {
     #[test]
     fn workspace_move_message_takes_precedence_when_agent_is_busy() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(true, WorkspaceProgress::Moving);
+        indicator.update(ProgressActivity::new(true, WorkspaceProgress::Moving, false));
         let text = indicator.render(&ctx()).lines()[1].plain_text();
         assert!(text.contains("Moving workspace..."));
         assert!(text.contains("esc to interrupt"));
@@ -225,20 +285,33 @@ mod tests {
     #[test]
     fn renders_workspace_session_load_without_interrupt_hint() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(false, WorkspaceProgress::LoadingSession);
+        indicator.update(ProgressActivity::new(false, WorkspaceProgress::LoadingSession, false));
         let text = indicator.render(&ctx()).lines()[1].plain_text();
         assert!(text.contains("Loading session in new workspace..."));
         assert!(!text.contains("esc to interrupt"));
     }
 
     #[test]
+    fn non_agent_activity_does_not_advance_turn_tips() {
+        let mut indicator = ProgressIndicator::default();
+        indicator.update(ProgressActivity::new(false, WorkspaceProgress::Moving, false));
+        indicator.update(ProgressActivity::new(false, WorkspaceProgress::None, false));
+        indicator.update(ProgressActivity::new(false, WorkspaceProgress::None, true));
+        indicator.update(ProgressActivity::new(false, WorkspaceProgress::None, false));
+        indicator.update(ProgressActivity::new(true, WorkspaceProgress::None, false));
+
+        let text = indicator.render(&ctx()).lines()[1].plain_text();
+        assert!(text.contains(MESSAGES[0]));
+    }
+
+    #[test]
     fn staying_active_does_not_advance_tip() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(true, WorkspaceProgress::None);
+        indicator.update(ProgressActivity::new(true, WorkspaceProgress::None, false));
         assert_eq!(indicator.turn_count, 1);
 
-        indicator.update(true, WorkspaceProgress::None);
-        indicator.update(true, WorkspaceProgress::None);
+        indicator.update(ProgressActivity::new(true, WorkspaceProgress::None, false));
+        indicator.update(ProgressActivity::new(true, WorkspaceProgress::None, false));
         assert_eq!(indicator.turn_count, 1);
     }
 }

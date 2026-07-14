@@ -348,6 +348,7 @@ pub(crate) fn should_persist_session_event(event: &SessionEvent) -> bool {
             )
             | AgentEvent::Context(
                 ContextEvent::CompactionStarted { .. }
+                | ContextEvent::CompactionEnded { .. }
                 | ContextEvent::CompactionResult { .. }
                 | ContextEvent::UsageUpdated { .. }
                 | ContextEvent::Cleared,

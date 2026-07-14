@@ -2,8 +2,8 @@ use crate::context::{CompactionConfig, CompactionError, CompactionResult, Compac
 use crate::core::PromptCache;
 pub use crate::core::retry_config::RetryConfig;
 use crate::events::{
-    AgentCommand, AgentEvent, AgentObserver, Command, ContextEvent, ContextUsage, LlmCallOutcome, LlmCallPurpose,
-    ModelEvent, ToolEvent, TurnEvent, TurnOutcome, UserCommand,
+    AgentCommand, AgentEvent, AgentObserver, Command, CompactionOutcome, ContextEvent, ContextUsage, LlmCallOutcome,
+    LlmCallPurpose, ModelEvent, ToolEvent, TurnEvent, TurnOutcome, UserCommand,
 };
 use crate::mcp::run_mcp_task::{McpCommand, ToolExecutionEvent};
 use futures::Stream;
@@ -392,6 +392,8 @@ impl Agent {
                 outcome: LlmCallOutcome::Cancelled,
             }))
             .await;
+            self.emit(AgentEvent::Context(ContextEvent::CompactionEnded { outcome: CompactionOutcome::Cancelled }))
+                .await;
         }
         self.streams.remove(&StreamKey::Llm);
         for tool_id in self.active_requests.keys().cloned().collect::<Vec<_>>() {
@@ -601,8 +603,16 @@ impl Agent {
                     messages_removed: result.messages_removed,
                 }))
                 .await;
+                self.emit(AgentEvent::Context(ContextEvent::CompactionEnded { outcome: CompactionOutcome::Completed }))
+                    .await;
             }
-            Err(e) => tracing::warn!("Context compaction failed: {e}"),
+            Err(e) => {
+                tracing::warn!("Context compaction failed: {e}");
+                self.emit(AgentEvent::Context(ContextEvent::CompactionEnded {
+                    outcome: CompactionOutcome::Failed { error: e.to_string() },
+                }))
+                .await;
+            }
         }
 
         self.start_chat_turn().await;

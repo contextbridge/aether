@@ -17,7 +17,7 @@ mod user_message;
 
 pub use acp::{aether_tool_name_meta, humanize_tool_name, parse_tool_call_chunk};
 pub use agent_event::AgentEvent;
-pub use context_event::{ContextEvent, ContextUsage};
+pub use context_event::{CompactionOutcome, ContextEvent, ContextUsage};
 pub use message_event::MessageEvent;
 pub use model_event::ModelEvent;
 pub use observer::{AgentObserver, ObserverFactory};
