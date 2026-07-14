@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            insert into parse_errors (source_path, session_id, line_number, error, line_excerpt)\n            values (?1, ?2, ?3, ?4, ?5)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "50c2745dc429e199da2e1d98d066cb2a2954f4f3fd033e61f5ce7381224ff8ab"
+}

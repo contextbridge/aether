@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "select source_path as \"source_path!\" from session_files",
+  "describe": {
+    "columns": [
+      {
+        "name": "source_path!",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "62aa7c1fed92f88dc6f69aeccbeb21bb3c1ac8312e7405013cbca66a3d039ecc"
+}
