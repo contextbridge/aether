@@ -3,27 +3,16 @@ use acp_utils::notifications::{
     PromptSearchParams, PromptSearchResponse, SessionPreviewParams, SessionPreviewResponse, SessionPreviewRole,
     SessionPreviewTurn,
 };
-use aether_core::context::ext::{SessionEvent, UserEvent};
-use aether_core::events::{AgentEvent, ContextEvent, LlmCallOutcome, MessageEvent, ModelEvent, ToolEvent, TurnEvent};
-use serde::{Deserialize, Serialize};
+use aether_core::events::{AgentEvent, MessageEvent, ToolEvent};
+use aether_core::session::{SessionEvent, SessionLog, SessionLogEntry, SessionLogError, SessionMeta, UserEvent};
+use serde::Serialize;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use tracing::warn;
 
 const PROMPT_HISTORY_FILE: &str = "prompt-history.jsonl";
 const PREVIEW_TRANSCRIPT_TURNS: usize = 8;
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionMeta {
-    pub session_id: String,
-    pub cwd: PathBuf,
-    pub model: String,
-    #[serde(default)]
-    pub selected_mode: Option<String>,
-    pub created_at: String,
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionSummary {
@@ -65,12 +54,15 @@ impl SessionStore {
     }
 
     pub fn append_event(&self, session_id: &str, event: &SessionEvent) -> io::Result<()> {
-        if !should_persist_session_event(event) {
+        if !event.is_persisted() {
             return Ok(());
         }
+        self.append_recorded_event(session_id, event)
+    }
 
+    pub(crate) fn append_recorded_event(&self, session_id: &str, event: &SessionEvent) -> io::Result<()> {
         self.append_line(session_id, event)?;
-        if let Some(prompt) = user_prompt_text_from_event(event)
+        if let Some(prompt) = event.user_content()
             && let Some(meta) = self.session_meta(session_id)
         {
             self.prompt_history.append_prompt(&meta, prompt)?;
@@ -80,7 +72,7 @@ impl SessionStore {
     }
 
     pub fn load(&self, session_id: &str) -> Option<(SessionMeta, Vec<SessionEvent>)> {
-        let scan = SessionLogReader::open(&self.session_path(session_id)).ok()?.scan(ScanLimits::UNBOUNDED).ok()?;
+        let scan = read_bounded_session(&self.session_path(session_id), ScanLimits::UNBOUNDED).ok()?;
         Some((scan.meta, scan.events))
     }
 
@@ -147,11 +139,7 @@ impl SessionStore {
     }
 
     fn session_meta(&self, session_id: &str) -> Option<SessionMeta> {
-        let file = File::open(self.session_path(session_id)).ok()?;
-        let mut reader = BufReader::new(file);
-        let mut first_line = String::new();
-        reader.read_line(&mut first_line).ok()?;
-        serde_json::from_str(first_line.trim()).ok()
+        SessionLog::open(self.session_path(session_id)).ok().map(|log| log.meta)
     }
 
     fn append_line<T: Serialize>(&self, session_id: &str, value: &T) -> io::Result<()> {
@@ -219,71 +207,46 @@ fn read_session_preview(path: &Path, limits: ScanLimits) -> io::Result<SessionPr
     })
 }
 
-struct SessionLogReader {
-    reader: BufReader<File>,
-    meta: SessionMeta,
-    bytes_read: usize,
-}
-
 struct SessionLogScan {
     meta: SessionMeta,
     events: Vec<SessionEvent>,
     truncated: bool,
 }
 
-impl SessionLogReader {
-    fn open(path: &Path) -> io::Result<Self> {
-        let file = File::open(path)?;
-        let mut reader = BufReader::new(file);
-        let mut line = String::new();
-        let bytes_read = reader.read_line(&mut line)?;
-        if bytes_read == 0 {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "session file is empty"));
+fn read_bounded_session(path: &Path, limits: ScanLimits) -> io::Result<SessionLogScan> {
+    let mut log = SessionLog::open(path).map_err(session_log_error_to_io)?;
+    let meta = log.meta.clone();
+    let mut events = Vec::new();
+    let mut truncated = false;
+    let mut lines_since_meta = 0_usize;
+    let mut bytes_since_meta = 0_usize;
+
+    while let Some(entry) = log.next_entry()? {
+        let line = entry.line();
+        if lines_since_meta >= limits.max_lines || bytes_since_meta.saturating_add(line.bytes_read) > limits.max_bytes {
+            truncated = true;
+            break;
         }
-        let meta = serde_json::from_str::<SessionMeta>(line.trim())
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("invalid session metadata: {e}")))?;
-        Ok(Self { reader, meta, bytes_read })
+        lines_since_meta += 1;
+        bytes_since_meta = bytes_since_meta.saturating_add(line.bytes_read);
+        match entry {
+            SessionLogEntry::Persisted { event, .. } => events.push(*event),
+            SessionLogEntry::Transient { .. } => {}
+            SessionLogEntry::Malformed { error, .. } => warn!("Skipping malformed session log line: {error}"),
+        }
     }
 
-    fn scan(mut self, limits: ScanLimits) -> io::Result<SessionLogScan> {
-        let mut line = String::new();
-        let mut lines_read = 0;
-        let mut events = Vec::new();
-        let mut truncated = false;
-
-        loop {
-            if lines_read >= limits.max_lines || self.bytes_read >= limits.max_bytes {
-                truncated = true;
-                break;
-            }
-            line.clear();
-            let read = self.reader.read_line(&mut line)?;
-            if read == 0 {
-                break;
-            }
-            self.bytes_read = self.bytes_read.saturating_add(read);
-            lines_read += 1;
-            if self.bytes_read > limits.max_bytes {
-                truncated = true;
-                break;
-            }
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            match serde_json::from_str::<SessionEvent>(trimmed) {
-                Ok(event) if should_persist_session_event(&event) => events.push(event),
-                Ok(_) => {}
-                Err(e) => warn!("Skipping malformed session log line: {e}"),
-            }
-        }
-
-        Ok(SessionLogScan { meta: self.meta, events, truncated })
-    }
+    Ok(SessionLogScan { meta, events, truncated })
 }
 
-fn read_bounded_session(path: &Path, limits: ScanLimits) -> io::Result<SessionLogScan> {
-    SessionLogReader::open(path)?.scan(limits)
+fn session_log_error_to_io(error: SessionLogError) -> io::Error {
+    match error {
+        SessionLogError::Io(io) => io,
+        SessionLogError::MissingMetadata => io::Error::new(io::ErrorKind::UnexpectedEof, "session file is empty"),
+        SessionLogError::InvalidMetadata { source, .. } => {
+            io::Error::new(io::ErrorKind::InvalidData, format!("invalid session metadata: {source}"))
+        }
+    }
 }
 
 fn push_preview_turn(transcript: &mut Vec<SessionPreviewTurn>, role: SessionPreviewRole, text: &str) -> bool {
@@ -320,63 +283,10 @@ fn extract_title(content: &[llm::ContentBlock]) -> String {
     }
 }
 
-fn user_prompt_text_from_event(event: &SessionEvent) -> Option<String> {
-    match event {
-        SessionEvent::User(UserEvent::Message { content }) => {
-            let joined = llm::ContentBlock::join_text(content);
-            if joined.is_empty() { None } else { Some(joined) }
-        }
-        _ => None,
-    }
-}
-
-/// Whether a session event should be persisted to the session log.
-/// Internal trace events and transient high-volume streaming events are
-/// excluded so logs stay compact.
-pub(crate) fn should_persist_session_event(event: &SessionEvent) -> bool {
-    match event {
-        SessionEvent::User(_) | SessionEvent::Control(_) => true,
-        SessionEvent::Agent(event) => match event {
-            AgentEvent::Message(MessageEvent::Text { is_complete, .. } | MessageEvent::Thought { is_complete, .. }) => {
-                *is_complete
-            }
-            AgentEvent::Tool(ToolEvent::Call { .. } | ToolEvent::Result { .. } | ToolEvent::Error { .. })
-            | AgentEvent::Turn(
-                TurnEvent::AutoContinue { .. }
-                | TurnEvent::Ended { .. }
-                | TurnEvent::LlmCallEnded { outcome: LlmCallOutcome::Failed { .. }, .. },
-            )
-            | AgentEvent::Context(
-                ContextEvent::CompactionStarted { .. }
-                | ContextEvent::CompactionEnded { .. }
-                | ContextEvent::CompactionResult { .. }
-                | ContextEvent::UsageUpdated { .. }
-                | ContextEvent::Cleared,
-            )
-            | AgentEvent::Model(ModelEvent::Switched { .. }) => true,
-            AgentEvent::Tool(
-                ToolEvent::CallUpdate { .. }
-                | ToolEvent::ExecutionStarted { .. }
-                | ToolEvent::Progress { .. }
-                | ToolEvent::DefinitionsUpdated { .. },
-            )
-            | AgentEvent::Turn(
-                TurnEvent::Started { .. }
-                | TurnEvent::RetryScheduled { .. }
-                | TurnEvent::LlmCallStarted { .. }
-                | TurnEvent::LlmCallEnded {
-                    outcome: LlmCallOutcome::Completed { .. } | LlmCallOutcome::Cancelled, ..
-                },
-            ) => false,
-        },
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aether_core::context::ext::{SessionControlEvent, UserEvent};
-    use llm::ToolCallResult;
+    use aether_core::session::SessionControlEvent;
 
     fn meta(id: &str, created_at: &str, mode: Option<&str>) -> SessionMeta {
         SessionMeta {
@@ -411,47 +321,6 @@ mod tests {
         })
     }
 
-    fn agent_thought(msg_id: &str, chunk: &str, complete: bool) -> SessionEvent {
-        SessionEvent::Agent(AgentEvent::Message(MessageEvent::Thought {
-            message_id: msg_id.to_string(),
-            chunk: chunk.to_string(),
-            is_complete: complete,
-        }))
-    }
-
-    fn tool_call(id: &str, name: &str, arguments: &str) -> SessionEvent {
-        SessionEvent::Agent(AgentEvent::Tool(ToolEvent::Call {
-            request: llm::ToolCallRequest {
-                id: id.to_string(),
-                name: name.to_string(),
-                arguments: arguments.to_string(),
-            },
-        }))
-    }
-
-    fn tool_result(id: &str, result: &str) -> SessionEvent {
-        SessionEvent::Agent(AgentEvent::Tool(ToolEvent::Result {
-            result: ToolCallResult {
-                id: id.to_string(),
-                name: "t".to_string(),
-                arguments: "{}".to_string(),
-                result: result.to_string(),
-            },
-            result_meta: None,
-        }))
-    }
-
-    fn tool_error(id: &str) -> SessionEvent {
-        SessionEvent::Agent(AgentEvent::Tool(ToolEvent::Error {
-            error: llm::ToolCallError {
-                id: id.to_string(),
-                name: "t".to_string(),
-                arguments: None,
-                error: "boom".to_string(),
-            },
-        }))
-    }
-
     fn tool_call_update(id: &str, chunk: &str) -> SessionEvent {
         SessionEvent::Agent(AgentEvent::Tool(ToolEvent::CallUpdate {
             tool_call_id: id.to_string(),
@@ -466,10 +335,6 @@ mod tests {
             total: Some(2.0),
             message: None,
         }))
-    }
-
-    fn agent_event(message: AgentEvent) -> SessionEvent {
-        SessionEvent::Agent(message)
     }
 
     fn temp_store() -> (tempfile::TempDir, SessionStore) {
@@ -554,73 +419,17 @@ mod tests {
     }
 
     #[test]
-    fn append_persists_only_replayable_events() {
+    fn append_uses_persist_policy() {
         let (_dir, store) = temp_store();
         store.append_meta("s1", &default_meta()).unwrap();
+        let dropped = agent_text("m", "partial", false);
+        let kept = agent_text("m", "full", true);
 
-        let dropped = [
-            agent_text("m", "partial", false),
-            agent_thought("m", "thinking", false),
-            tool_call_update("1", r#"{"filePath":"Cargo.toml"}"#),
-            tool_progress("1"),
-            agent_event(AgentEvent::Turn(TurnEvent::Started { content: vec![] })),
-            agent_event(AgentEvent::Turn(TurnEvent::LlmCallStarted {
-                purpose: aether_core::events::LlmCallPurpose::Chat,
-                provider: None,
-                model: None,
-                display_name: "Claude".to_string(),
-                attempt: 0,
-                max_attempts: 3,
-            })),
-            agent_event(AgentEvent::Turn(TurnEvent::LlmCallEnded {
-                purpose: aether_core::events::LlmCallPurpose::Chat,
-                outcome: aether_core::events::LlmCallOutcome::Cancelled,
-            })),
-            agent_event(AgentEvent::Tool(ToolEvent::ExecutionStarted {
-                tool_id: "1".to_string(),
-                tool_name: "coding__read_file".to_string(),
-            })),
-            agent_event(AgentEvent::Tool(ToolEvent::DefinitionsUpdated { tools: vec![] })),
-        ];
-        let kept = vec![
-            agent_text("m", "full", true),
-            agent_thought("m", "final reasoning", true),
-            tool_call("1", "coding__read_file", r#"{"filePath":"Cargo.toml"}"#),
-            tool_result("1", "ok"),
-            tool_error("2"),
-            agent_event(AgentEvent::Turn(TurnEvent::LlmCallEnded {
-                purpose: aether_core::events::LlmCallPurpose::Chat,
-                outcome: aether_core::events::LlmCallOutcome::Failed {
-                    error: "overloaded".to_string(),
-                    will_retry: true,
-                },
-            })),
-            agent_event(AgentEvent::Turn(TurnEvent::Ended {
-                outcome: aether_core::events::TurnOutcome::Failed { error: "oops".to_string() },
-            })),
-            agent_event(AgentEvent::Turn(TurnEvent::Ended { outcome: aether_core::events::TurnOutcome::Completed })),
-            agent_event(AgentEvent::Context(ContextEvent::Cleared)),
-            agent_event(AgentEvent::Context(ContextEvent::CompactionStarted { message_count: 4 })),
-            agent_event(AgentEvent::Context(ContextEvent::CompactionResult {
-                summary: "summary".to_string(),
-                messages_removed: 2,
-            })),
-            agent_event(AgentEvent::Context(ContextEvent::UsageUpdated {
-                usage: aether_core::events::ContextUsage::default(),
-            })),
-            agent_event(AgentEvent::Turn(TurnEvent::AutoContinue { attempt: 1, max_attempts: 3 })),
-            agent_event(AgentEvent::Model(ModelEvent::Switched { previous: "a".to_string(), new: "b".to_string() })),
-        ];
-
-        for e in &dropped {
-            store.append_event("s1", e).unwrap();
-        }
-        for e in &kept {
-            store.append_event("s1", e).unwrap();
-        }
+        store.append_event("s1", &dropped).unwrap();
+        store.append_event("s1", &kept).unwrap();
 
         let (_, events) = store.load("s1").unwrap();
-        assert_eq!(events, kept);
+        assert_eq!(events, vec![kept]);
     }
 
     #[test]
@@ -634,6 +443,39 @@ mod tests {
 
         let (_, events) = store.load("s1").unwrap();
         assert_eq!(events, vec![kept]);
+    }
+
+    #[test]
+    fn bounded_scan_includes_event_at_exact_line_limit() {
+        let (dir, store) = temp_store();
+        store.append_meta("s1", &default_meta()).unwrap();
+        let event = user_msg("exact limit");
+        store.append_event("s1", &event).unwrap();
+
+        let scan =
+            read_bounded_session(&dir.path().join("s1.jsonl"), ScanLimits { max_lines: 1, max_bytes: usize::MAX })
+                .unwrap();
+
+        assert_eq!(scan.events, vec![event]);
+        assert!(!scan.truncated);
+    }
+
+    #[test]
+    fn bounded_scan_includes_event_at_exact_byte_limit() {
+        let (dir, store) = temp_store();
+        store.append_meta("s1", &default_meta()).unwrap();
+        let event = user_msg("exact limit");
+        let raw = serde_json::to_string(&event).unwrap();
+        store.append_event("s1", &event).unwrap();
+
+        let scan = read_bounded_session(
+            &dir.path().join("s1.jsonl"),
+            ScanLimits { max_lines: usize::MAX, max_bytes: raw.len() + 1 },
+        )
+        .unwrap();
+
+        assert_eq!(scan.events, vec![event]);
+        assert!(!scan.truncated);
     }
 
     #[test]

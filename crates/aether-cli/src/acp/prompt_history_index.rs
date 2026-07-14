@@ -1,5 +1,5 @@
-use super::session_store::SessionMeta;
 use acp_utils::notifications::{PromptSearchParams, PromptSearchResponse, PromptSearchResult};
+use aether_core::session::SessionMeta;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::fs::{self, File, OpenOptions};
