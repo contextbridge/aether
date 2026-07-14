@@ -25,6 +25,33 @@ async fn open_git_diff(renderer: &mut Renderer) -> TestResult {
 }
 
 #[tokio::test]
+async fn git_diff_scope_cycles_between_both_unstaged_and_staged() -> TestResult {
+    let repo = init_temp_repo();
+    let dir = repo.path().to_path_buf();
+    std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+    run_git(&dir, &["add", "-A"]);
+    run_git(&dir, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(dir.join("a.txt"), "two\n").unwrap();
+    run_git(&dir, &["add", "a.txt"]);
+    std::fs::write(dir.join("a.txt"), "three\n").unwrap();
+    std::fs::write(dir.join("untracked.txt"), "scratch\n").unwrap();
+
+    let mut renderer = RendererTest::new().size((TEST_WIDTH, 40)).working_dir(dir).build()?;
+    open_git_diff(&mut renderer).await?;
+    assert_buffer_contains(renderer.writer(), "Git Diff · Both");
+    assert_buffer_contains(renderer.writer(), "untracked.txt");
+
+    press(&mut renderer, KeyCode::Char('t')).await?;
+    assert_buffer_contains(renderer.writer(), "Git Diff · Unstaged");
+    assert_buffer_contains(renderer.writer(), "untracked.txt");
+
+    press(&mut renderer, KeyCode::Char('t')).await?;
+    assert_buffer_contains(renderer.writer(), "Git Diff · Staged");
+    assert_buffer_not_contains(renderer.writer(), "untracked.txt");
+    Ok(())
+}
+
+#[tokio::test]
 async fn typing_long_commit_message_keeps_diff_rows_visible() -> TestResult {
     let repo = init_temp_repo();
     let dir = repo.path().to_path_buf();
