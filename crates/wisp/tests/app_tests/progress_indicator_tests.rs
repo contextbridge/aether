@@ -1,6 +1,66 @@
 use tui::testing::assert_buffer_eq;
+use tui::{BRAILLE_FRAMES, ViewContext};
 
 use super::common::*;
+
+fn spinner_on_row(lines: &[String], row: usize) -> char {
+    lines[row].chars().find(|character| BRAILLE_FRAMES.contains(character)).expect("spinner")
+}
+
+#[tokio::test]
+async fn test_compaction_overrides_progress_indicator_and_restores_it_afterward() -> TestResult {
+    let mut renderer = RendererTest::new().size((TEST_WIDTH, 40)).build()?;
+
+    type_string(&mut renderer, "Hello").await?;
+    press(&mut renderer, Enter).await?;
+    renderer.on_context_compaction(true)?;
+
+    let lines = renderer.writer().get_lines();
+    let row = lines.iter().position(|line| line.contains("Compacting context...")).expect("compaction message");
+    assert!(lines[row].contains("esc to interrupt"));
+    let spinner = spinner_on_row(&lines, row);
+    let spinner_style = renderer.writer().style_of_text(row, &spinner.to_string()).expect("spinner style");
+    assert_eq!(spinner_style.fg, Some(ViewContext::new((TEST_WIDTH, 40)).theme.warning()));
+
+    renderer.on_context_compaction(false)?;
+    let lines = renderer.writer().get_lines();
+    assert!(!lines.iter().any(|line| line.contains("Compacting context...")));
+    let row = lines
+        .iter()
+        .position(|line| line.contains("esc to interrupt") && !line.contains("Compacting context..."))
+        .expect("normal progress message");
+    let spinner = spinner_on_row(&lines, row);
+    let spinner_style = renderer.writer().style_of_text(row, &spinner.to_string()).expect("spinner style");
+    assert_eq!(spinner_style.fg, Some(ViewContext::new((TEST_WIDTH, 40)).theme.info()));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_prompt_done_clears_compaction_indicator() -> TestResult {
+    let mut renderer = RendererTest::new().size((TEST_WIDTH, 40)).build()?;
+
+    type_string(&mut renderer, "Hello").await?;
+    press(&mut renderer, Enter).await?;
+    renderer.on_context_compaction(true)?;
+    renderer.on_prompt_done()?;
+
+    assert!(!renderer.writer().get_lines().iter().any(|line| line.contains("Compacting context...")));
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_context_clear_resets_compaction_indicator() -> TestResult {
+    let mut renderer = RendererTest::new().size((TEST_WIDTH, 40)).build()?;
+
+    type_string(&mut renderer, "Hello").await?;
+    press(&mut renderer, Enter).await?;
+    renderer.on_context_compaction(true)?;
+    renderer.on_context_cleared()?;
+
+    assert!(!renderer.writer().get_lines().iter().any(|line| line.contains("Compacting context...")));
+    Ok(())
+}
 
 #[tokio::test]
 async fn test_spinner_visible_after_prompt_submit() -> TestResult {

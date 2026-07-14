@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use aether_core::core::RetryConfig;
 use aether_core::events::{AgentEvent, AgentObserver, LlmCallOutcome, LlmCallPurpose, TurnEvent, TurnOutcome};
-use aether_core::testing::{AddNumbersRequest, AgentTrace, DivideNumbersRequest, test_agent};
+use aether_core::testing::{AddNumbersRequest, AgentTrace, DivideNumbersRequest, TestScenario, test_agent};
 use aether_telemetry::{
     GENAI_SEMCONV_SCHEMA_URL, GenAiMetrics, OtelInstrumentation, OtelObserver, genai_instrumentation_scope,
 };
@@ -59,8 +59,7 @@ async fn failed_and_cancelled_calls_carry_error_attributes() -> Result<(), Box<d
     let trace = test_agent()
         .retry_config(retry)
         .llm_result_responses(&attempts)
-        .cancel_when(|event| matches!(event, AgentEvent::Turn(TurnEvent::RetryScheduled { attempt: 1, .. })))
-        .user_text("go")
+        .scenario(TestScenario::new().user_text("go").wait_for_retry(1).cancel().wait_for_turn_end())
         .run_trace()
         .await?;
 
@@ -175,7 +174,8 @@ async fn compaction_call_is_tagged_and_parented_to_the_turn() -> Result<(), Box<
         llm_response("summary").text(&["summary"]).usage(50, 5).build(),
         llm_response("m2").text(&["done"]).build(),
     ];
-    let trace = test_agent().context_window(100_000).llm_responses(&responses).user_text("go").run_trace().await?;
+    let trace =
+        test_agent().context_window_override(100_000).llm_responses(&responses).user_text("go").run_trace().await?;
 
     let spans = otel_test().capturing().observe_trace(&trace).spans();
 

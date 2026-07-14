@@ -39,7 +39,7 @@ impl AgentEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::{ContextUsage, LlmCallOutcome, LlmCallPurpose};
+    use crate::events::{CompactionOutcome, ContextUsage, LlmCallOutcome, LlmCallPurpose};
 
     #[test]
     fn serializes_nested_event_contract() {
@@ -60,6 +60,7 @@ mod tests {
                 outcome: LlmCallOutcome::Cancelled,
             }),
             AgentEvent::Context(ContextEvent::UsageUpdated { usage: ContextUsage::default() }),
+            AgentEvent::Context(ContextEvent::CompactionEnded { outcome: CompactionOutcome::Completed }),
             AgentEvent::Model(ModelEvent::Switched { previous: "a".into(), new: "b".into() }),
         ];
         for event in events {

@@ -64,6 +64,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some(AgentEvent::Context(ContextEvent::CompactionStarted { message_count })) => {
                 println!("Context compaction started: {message_count} messages");
             }
+            Some(AgentEvent::Context(ContextEvent::CompactionEnded { outcome })) => {
+                println!("Context compaction ended: {outcome:?}");
+            }
             Some(AgentEvent::Context(ContextEvent::CompactionResult { messages_removed, .. })) => {
                 println!("Context compacted: {messages_removed} messages removed");
             }

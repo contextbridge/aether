@@ -265,9 +265,7 @@ impl AgentBuilder {
 mod tests {
     use super::*;
     use crate::agent_spec::{AgentSpecExposure, ToolFilter};
-    use crate::events::{AgentCommand, ContextEvent, UserCommand};
-    use llm::testing::FakeLlmProvider;
-    use llm::{LlmResponse, ProviderConnectionOverrides};
+    use llm::ProviderConnectionOverrides;
 
     #[tokio::test]
     async fn test_agent_handle_is_finished() {
@@ -287,85 +285,6 @@ mod tests {
         // Give the runtime a moment to process the abort
         tokio::time::sleep(Duration::from_millis(10)).await;
         assert!(handle.is_finished());
-    }
-
-    #[tokio::test]
-    async fn context_window_override_supplies_unknown_provider_limit() {
-        let llm = Arc::new(FakeLlmProvider::with_single_response(vec![
-            LlmResponse::start("msg"),
-            LlmResponse::usage(100_000, 10),
-            LlmResponse::done(),
-        ]));
-
-        let (tx, mut rx, handle) = AgentBuilder::new(llm).context_window(Some(200_000)).spawn().await.unwrap();
-        tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("hello")] }))
-            .await
-            .unwrap();
-
-        let update = next_context_usage(&mut rx).await;
-        assert_eq!(update.context_limit, Some(200_000));
-        assert_eq!(update.usage_ratio, Some(0.5));
-        assert_eq!(update.input_tokens, 100_000);
-        handle.abort();
-    }
-
-    #[tokio::test]
-    async fn context_window_override_beats_provider_limit() {
-        let llm = Arc::new(
-            FakeLlmProvider::with_single_response(vec![
-                LlmResponse::start("msg"),
-                LlmResponse::usage(100_000, 10),
-                LlmResponse::done(),
-            ])
-            .with_context_window(Some(128_000)),
-        );
-
-        let (tx, mut rx, handle) = AgentBuilder::new(llm).context_window(Some(200_000)).spawn().await.unwrap();
-        tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("hello")] }))
-            .await
-            .unwrap();
-
-        let update = next_context_usage(&mut rx).await;
-        assert_eq!(update.context_limit, Some(200_000));
-        assert_eq!(update.usage_ratio, Some(0.5));
-        handle.abort();
-    }
-
-    #[tokio::test]
-    async fn context_window_override_survives_model_switch() {
-        let llm = Arc::new(FakeLlmProvider::new(vec![]).with_context_window(Some(128_000)));
-        let (tx, mut rx, handle) = AgentBuilder::new(llm).context_window(Some(200_000)).spawn().await.unwrap();
-
-        tx.send(Command::AgentCommand(AgentCommand::SwitchModel(Box::new(
-            FakeLlmProvider::new(vec![]).with_display_name("new fake").with_context_window(Some(32_000)),
-        ))))
-        .await
-        .unwrap();
-
-        let update = next_context_usage(&mut rx).await;
-        assert_eq!(update.context_limit, Some(200_000));
-        assert_eq!(update.usage_ratio, Some(0.0));
-        handle.abort();
-    }
-
-    async fn next_context_usage(rx: &mut Receiver<AgentEvent>) -> ContextUsageUpdate {
-        loop {
-            if let AgentEvent::Context(ContextEvent::UsageUpdated { usage }) =
-                rx.recv().await.expect("agent should emit context usage")
-            {
-                return ContextUsageUpdate {
-                    usage_ratio: usage.usage_ratio,
-                    context_limit: usage.context_limit,
-                    input_tokens: usage.input_tokens,
-                };
-            }
-        }
-    }
-
-    struct ContextUsageUpdate {
-        usage_ratio: Option<f64>,
-        context_limit: Option<u32>,
-        input_tokens: u32,
     }
 
     #[tokio::test]
@@ -401,31 +320,6 @@ mod tests {
 
         assert_eq!(builder.context_window, Some(200_000));
         assert_eq!(builder.model_settings, settings);
-    }
-
-    #[tokio::test]
-    async fn spawn_applies_model_settings_to_context() {
-        let fake = FakeLlmProvider::with_single_response(vec![
-            LlmResponse::start("msg"),
-            LlmResponse::usage(10, 10),
-            LlmResponse::done(),
-        ]);
-
-        let captured = fake.captured_contexts();
-        let settings = ModelSettings { temperature: Some(0.0), max_tokens: Some(64), ..Default::default() };
-
-        let (tx, mut rx, handle) =
-            AgentBuilder::new(Arc::new(fake)).model_settings(settings.clone()).spawn().await.unwrap();
-
-        tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("hello")] }))
-            .await
-            .unwrap();
-
-        let _ = next_context_usage(&mut rx).await;
-        let contexts = captured.lock().unwrap();
-
-        assert_eq!(contexts[0].model_settings(), &settings);
-        handle.abort();
     }
 
     #[tokio::test]

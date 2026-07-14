@@ -5,15 +5,16 @@ use agent_client_protocol as acp;
 use agent_client_protocol::schema::{SessionConfigOption, SessionId, SessionInfo};
 
 use crate::notifications::{
-    AuthMethodsUpdatedParams, ContextClearedParams, ContextUsageParams, ElicitationParams, ElicitationResponse,
-    McpNotification, PromptSearchResponse, SessionPreviewResponse, SubAgentProgressParams, WorkspaceListResponse,
-    WorkspaceMoveResponse,
+    AuthMethodsUpdatedParams, ContextClearedParams, ContextCompactionParams, ContextUsageParams, ElicitationParams,
+    ElicitationResponse, McpNotification, PromptSearchResponse, SessionPreviewResponse, SubAgentProgressParams,
+    WorkspaceListResponse, WorkspaceMoveResponse,
 };
 
 /// Events forwarded from the ACP connection to the main event loop.
 pub enum AcpEvent {
     SessionUpdate { session_id: SessionId, update: Box<SessionUpdate> },
     ContextCleared(ContextClearedParams),
+    ContextCompaction(ContextCompactionParams),
     ContextUsage(ContextUsageParams),
     SubAgentProgress(SubAgentProgressParams),
     AuthMethodsUpdated(AuthMethodsUpdatedParams),

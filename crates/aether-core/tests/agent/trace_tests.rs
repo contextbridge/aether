@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use aether_core::core::RetryConfig;
 use aether_core::events::{AgentEvent, LlmCallOutcome, LlmCallPurpose, TurnOutcome};
-use aether_core::testing::{AddNumbersRequest, test_agent};
+use aether_core::testing::{AddNumbersRequest, TestScenario, test_agent};
 use llm::testing::llm_response;
 use llm::{LlmError, LlmResponse, StopReason};
 
@@ -140,8 +140,7 @@ async fn cancel_during_retry_wait_traces_cancelled_turn_without_starting_call() 
     let trace = test_agent()
         .retry_config(retry)
         .llm_result_responses(&attempts)
-        .cancel_when(|event| matches!(event, AgentEvent::Turn(TurnEvent::RetryScheduled { attempt: 1, .. })))
-        .user_text("go")
+        .scenario(TestScenario::new().user_text("go").wait_for_retry(1).cancel().wait_for_turn_end())
         .run_trace()
         .await?;
 
@@ -165,7 +164,8 @@ async fn usage_triggered_compaction_runs_before_the_next_chat_call() -> Result<(
         llm_response("m2").text(&["done"]).build(),
     ];
 
-    let trace = test_agent().context_window(100_000).llm_responses(&responses).user_text("go").run_trace().await?;
+    let trace =
+        test_agent().context_window_override(100_000).llm_responses(&responses).user_text("go").run_trace().await?;
 
     trace.assert_names(&[
         "tool_definitions",

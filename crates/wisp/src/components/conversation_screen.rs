@@ -4,7 +4,7 @@ use crate::components::conversation_window::{ConversationBuffer, ConversationWin
 use crate::components::elicitation_form::{ElicitationForm, ElicitationMessage};
 use crate::components::plan_tracker::PlanTracker;
 use crate::components::plan_view::PlanView;
-use crate::components::progress_indicator::{ProgressIndicator, WorkspaceProgress};
+use crate::components::progress_indicator::{ProgressActivity, ProgressIndicator, WorkspaceProgress};
 use crate::components::prompt_composer::{PromptComposer, PromptComposerMessage};
 use crate::components::session_picker::{SessionEntry, SessionPicker, SessionPickerMessage};
 use crate::components::tool_call_statuses::{PromptTermination, ToolCallStatuses};
@@ -73,6 +73,7 @@ pub struct ConversationScreen {
     pub(crate) plan_tracker: PlanTracker,
     pub(crate) progress_indicator: ProgressIndicator,
     pub(crate) workspace_move_state: WorkspaceMoveState,
+    compaction_active: bool,
     waiting_for_response: bool,
     pub(crate) active_modal: Option<Modal>,
     pub(crate) content_padding: usize,
@@ -94,6 +95,7 @@ impl ConversationScreen {
             plan_tracker: PlanTracker::default(),
             progress_indicator: ProgressIndicator::default(),
             workspace_move_state: WorkspaceMoveState::Idle,
+            compaction_active: false,
             waiting_for_response: false,
             active_modal: None,
             content_padding,
@@ -122,12 +124,17 @@ impl ConversationScreen {
         self.waiting_for_response = true;
     }
 
+    pub fn set_compaction_active(&mut self, active: bool) {
+        self.compaction_active = active;
+    }
+
     pub fn is_busy(&self) -> bool {
         self.waiting_for_response || self.tool_call_statuses.running_any()
     }
 
     pub fn wants_tick(&self) -> bool {
         self.is_busy()
+            || self.compaction_active
             || self.workspace_move_state.progress() != WorkspaceProgress::None
             || self.plan_tracker_has_tick_driven_visibility()
     }
@@ -139,7 +146,11 @@ impl ConversationScreen {
     }
 
     pub fn refresh_caches(&mut self, _context: &ViewContext) {
-        self.progress_indicator.update(self.is_busy(), self.workspace_move_state.progress());
+        self.progress_indicator.update(ProgressActivity::new(
+            self.is_busy(),
+            self.workspace_move_state.progress(),
+            self.compaction_active,
+        ));
         self.plan_tracker.cached_visible_entries();
     }
 
@@ -148,6 +159,7 @@ impl ConversationScreen {
         self.tool_call_statuses.clear();
         self.waiting_for_response = false;
         self.workspace_move_state = WorkspaceMoveState::Idle;
+        self.compaction_active = false;
         self.plan_tracker.clear();
         self.progress_indicator = ProgressIndicator::default();
         self.pending_url_elicitations.clear();
@@ -281,12 +293,14 @@ impl ConversationScreen {
 
     fn on_prompt_terminated(&mut self, termination: &PromptTermination) {
         self.waiting_for_response = false;
+        self.compaction_active = false;
         self.tool_call_statuses.finalize_running(termination);
         self.conversation.close_thought_block();
     }
 
     pub fn reject_local_prompt(&mut self, message: &str) {
         self.waiting_for_response = false;
+        self.compaction_active = false;
         self.conversation.push_user_message(&format!("[wisp] {message}"));
     }
 
