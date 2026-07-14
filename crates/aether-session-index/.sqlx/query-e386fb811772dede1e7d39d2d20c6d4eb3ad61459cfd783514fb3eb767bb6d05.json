@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "delete from session_files where source_path = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "e386fb811772dede1e7d39d2d20c6d4eb3ad61459cfd783514fb3eb767bb6d05"
+}

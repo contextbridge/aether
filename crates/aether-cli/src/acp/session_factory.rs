@@ -1,8 +1,8 @@
 use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::AgentSpec;
-use aether_core::context::ext::{SessionEvent, last_agent_from_events};
 use aether_core::core::AgentDeps;
 use aether_core::events::ObserverFactory;
+use aether_core::session::{SessionEvent, SessionMeta, last_agent_from_events};
 use agent_client_protocol::schema::{self as acp, LoadSessionRequest, NewSessionRequest, SessionId};
 use agent_client_protocol::{Client, ConnectionTo};
 use llm::catalog::{LlmModel, get_local_models};
@@ -19,7 +19,7 @@ use super::model_config::{Modes, pick_default_model};
 use super::protocol::mcp::map_acp_mcp_servers;
 use super::session_actor::{SessionActor, SessionActorInit, SessionHandle};
 use super::session_config_state::SessionConfigState;
-use super::session_store::{SessionMeta, SessionStore};
+use super::session_store::SessionStore;
 use crate::settings_args::SettingsSourceArgs;
 
 /// Initial session selection supplied when `aether acp` starts.

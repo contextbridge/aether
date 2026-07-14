@@ -27,6 +27,19 @@ impl AgentEvent {
         Self::Turn(TurnEvent::Ended { outcome })
     }
 
+    /// Human-readable text content of this event, if any.
+    pub fn content(&self) -> Option<String> {
+        match self {
+            Self::Message(MessageEvent::Text { chunk, .. } | MessageEvent::Thought { chunk, .. }) => {
+                Some(chunk.clone())
+            }
+            Self::Tool(ToolEvent::Result { result, .. }) => Some(result.result.clone()),
+            Self::Tool(ToolEvent::Error { error }) => Some(error.error.clone()),
+            Self::Context(ContextEvent::CompactionResult { summary, .. }) => Some(summary.clone()),
+            _ => None,
+        }
+    }
+
     /// The turn's terminal outcome, if this event ends a turn.
     pub fn turn_outcome(&self) -> Option<&TurnOutcome> {
         match self {

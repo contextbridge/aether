@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            insert into session_files (source_path, status, error, file_size, file_mtime_ns, indexed_at)\n            values (?1, 'error', ?2, ?3, ?4, ?5)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "1488ec358c2a03c2f82245138e3cb3c5475c4425747f31333c8cc5203cc0010c"
+}

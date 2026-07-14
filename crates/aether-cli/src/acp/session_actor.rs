@@ -2,8 +2,9 @@ use acp_utils::notifications::{ElicitationParams, McpNotification};
 use acp_utils::server::AcpServerError;
 use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::AgentSpec;
-use aether_core::context::ext::{SessionControlEvent, SessionEvent, UserEvent, conversation_messages_from_events};
+use aether_core::context::ext::conversation_messages_from_events;
 use aether_core::events::{AgentCommand, AgentEvent, Command, ToolEvent, TurnOutcome};
+use aether_core::session::{SessionControlEvent, SessionEvent, UserEvent};
 use agent_client_protocol::schema::{self as acp, PromptResponse, SessionId, SetSessionConfigOptionResponse};
 use agent_client_protocol::{Client, ConnectionTo, JsonRpcNotification, Responder};
 use llm::catalog::LlmModel;
@@ -29,7 +30,7 @@ use super::protocol::events::{
     try_into_agent_notification,
 };
 use super::session_config_state::{SessionConfigState, Switch};
-use super::session_store::{SessionStore, should_persist_session_event};
+use super::session_store::SessionStore;
 use super::slash_commands::{expand_slash_command_in_content, send_available_commands};
 use crate::slash_commands::dedupe_commands_by_name;
 
@@ -276,9 +277,7 @@ impl SessionActor {
     }
 
     fn record_event(&mut self, event: SessionEvent) {
-        if should_persist_session_event(&event) {
-            self.transcript.push(event);
-        }
+        self.transcript.push(event);
     }
 }
 
@@ -499,9 +498,14 @@ fn respond_prompt(responder: Responder<PromptResponse>, result: Result<acp::Stop
 }
 
 fn persist_event(actor: &mut SessionActor, io: &SessionIo, event: SessionEvent) {
-    if let Err(e) = io.repository.append_event(&io.session_id.0, &event) {
+    if !event.is_persisted() {
+        return;
+    }
+
+    if let Err(e) = io.repository.append_recorded_event(&io.session_id.0, &event) {
         warn!("Failed to append session log entry: {e}");
     }
+
     actor.record_event(event);
 }
 

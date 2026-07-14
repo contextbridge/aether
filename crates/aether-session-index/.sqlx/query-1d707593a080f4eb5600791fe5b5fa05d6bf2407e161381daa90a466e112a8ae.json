@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        insert into session_files (\n          source_path, session_id, status, file_size, file_mtime_ns, indexed_at, event_count, parse_error_count,\n          cwd, model, selected_mode, created_at\n        ) values (?1, ?2, 'indexed', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 11
+    },
+    "nullable": []
+  },
+  "hash": "1d707593a080f4eb5600791fe5b5fa05d6bf2407e161381daa90a466e112a8ae"
+}

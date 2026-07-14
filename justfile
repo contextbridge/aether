@@ -41,6 +41,16 @@ fmt:
 lint *PKGS:
     cargo clippy --all-targets --all-features {{ if PKGS == "" { "--workspace" } else { PKGS } }} -- -D warnings
 
+# Verify checked SQL queries match the session-index schema
+sqlx-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    db="$(mktemp /tmp/aether-session-index.XXXXXX)"
+    trap 'rm -f "$db" "$db-wal" "$db-shm"' EXIT
+    cd crates/aether-session-index
+    DATABASE_URL="sqlite://$db" cargo sqlx migrate run
+    DATABASE_URL="sqlite://$db" cargo sqlx prepare --check
+
 # Check documentation builds without warnings
 doc-check *PKGS:
     RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items --all-features {{ if PKGS == "" { "--workspace --examples" } else { PKGS } }}
@@ -66,7 +76,7 @@ sdk-e2e *ARGS:
     pnpm sdk:e2e {{ARGS}}
 
 # Run all CI checks
-ci: fmt-check lint test-ci doc-check
+ci: fmt-check lint test-ci doc-check sqlx-check
     pnpm fmt-check
     pnpm sdk:typecheck
     pnpm sdk:test
