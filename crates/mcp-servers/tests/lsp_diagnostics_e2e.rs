@@ -28,9 +28,7 @@ async fn poll_workspace_diagnostics(
     let mut last_result = None;
 
     while start.elapsed() < timeout {
-        if let Some(result) =
-            try_call_tool(client, "lsp_check_errors", serde_json::json!({"input": {"scope": "workspace"}})).await
-        {
+        if let Some(result) = try_call_tool(client, "lsp_check_errors", serde_json::json!({})).await {
             if predicate(&result) {
                 return result;
             }

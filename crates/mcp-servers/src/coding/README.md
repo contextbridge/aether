@@ -59,7 +59,7 @@ These tools provide code-aware navigation. They require a running language serve
 | Tool | Description |
 |------|-------------|
 | `lsp_symbol` | Go-to-definition, find references, find implementations, hover info, or incoming/outgoing call hierarchy for a symbol. |
-| `lsp_workspace_search` | Search for symbols across the workspace when you do not know the file path. |
+| `lsp_workspace_search` | Search one explicitly selected language for workspace symbols when you do not know the file path. |
 | `lsp_document` | Get all symbols in a document (functions, structs, traits, etc.) with nested structure. |
 | `lsp_check_errors` | Get compiler diagnostics (errors, warnings) for a file or the entire workspace. |
 | `lsp_rename` | Rename a symbol across the project. |

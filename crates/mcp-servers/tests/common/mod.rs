@@ -154,8 +154,8 @@ pub async fn poll_diagnostics(
     predicate: impl Fn(&serde_json::Value) -> bool,
 ) -> serde_json::Value {
     let args = match file_path {
-        Some(path) => serde_json::json!({ "input": { "scope": "file", "filePath": path } }),
-        None => serde_json::json!({ "input": { "scope": "workspace"} }),
+        Some(path) => serde_json::json!({ "filePath": path }),
+        None => serde_json::json!({}),
     };
     poll_lsp_tool(client, "lsp_check_errors", args, predicate).await
 }

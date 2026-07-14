@@ -4,22 +4,22 @@ Gets instant compiler errors and warnings without running a build.
 
 ## Usage
 
-The tool has two explicit modes:
+The tool infers scope from `filePath`:
 
 **Workspace-wide diagnostics:**
 
 ```json
-{"input":{"scope":"workspace"}}
+{}
 ```
 
 **Single-file diagnostics:**
 
 ```json
-{"input":{"scope":"file","filePath":"/absolute/path/to/file.rs"}}
+{"filePath":"/absolute/path/to/file.rs"}
 ```
 
 ## Parameters
 
-- `input` — **required**, wrapper object for the diagnostics query
-- `input.scope` — **required**, either `"workspace"` or `"file"`
-- `input.filePath` — required when `input.scope="file"`, must be an absolute path to an existing file
+- `filePath` — optional absolute path to an existing file. When omitted, checks the workspace.
+
+If the required language server cannot start, the tool returns the startup error. For a missing TypeScript server, the error includes local and global npm installation commands.

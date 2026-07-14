@@ -1,8 +1,9 @@
 //! Common types and utilities shared across LSP tools
 
 use std::collections::HashMap;
+use std::path::Path;
 
-use lsp_types::Location;
+use lsp_types::{DocumentSymbol, DocumentSymbolResponse, Location};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -46,10 +47,56 @@ impl LocationResult {
     }
 }
 
+/// Return whether a source path belongs to the project rather than a dependency or build directory.
+pub fn is_project_local(path: &str, project_root: &Path) -> bool {
+    Path::new(path).starts_with(project_root)
+        && !Path::new(path)
+            .components()
+            .any(|component| matches!(component.as_os_str().to_str(), Some("node_modules" | ".pnpm" | "target")))
+}
+
+/// Return a compact source path for display.
+pub fn display_path(path: &str, project_root: &Path) -> String {
+    if let Some(pnpm_index) = path.find("/.pnpm/") {
+        let encoded = &path[pnpm_index + "/.pnpm/".len()..];
+        if let Some(node_modules_index) = encoded.find("/node_modules/") {
+            return encoded[node_modules_index + "/node_modules/".len()..].to_string();
+        }
+    }
+    if let Ok(relative) = Path::new(path).strip_prefix(project_root) {
+        return relative.to_string_lossy().to_string();
+    }
+    path.to_string()
+}
+
+/// Find an exact symbol in an LSP document-symbol response and return its 1-indexed line.
+pub fn find_document_symbol_line(response: &DocumentSymbolResponse, symbol: &str) -> Option<u32> {
+    match response {
+        DocumentSymbolResponse::Flat(symbols) => symbols
+            .iter()
+            .find(|candidate| candidate.name == symbol)
+            .map(|candidate| candidate.location.range.start.line + 1),
+        DocumentSymbolResponse::Nested(symbols) => find_nested_document_symbol_line(symbols, symbol),
+    }
+}
+
+fn find_nested_document_symbol_line(symbols: &[DocumentSymbol], target: &str) -> Option<u32> {
+    for symbol in symbols {
+        if symbol.name == target {
+            return Some(symbol.selection_range.start.line + 1);
+        }
+        if let Some(children) = &symbol.children
+            && let Some(line) = find_nested_document_symbol_line(children, target)
+        {
+            return Some(line);
+        }
+    }
+    None
+}
+
 /// Re-export from `aether_lspd` for convenience.
 pub use aether_lspd::uri_to_path;
 
-/// Find the first word-boundary match of `symbol` in `line`.
 ///
 /// Returns the byte offset of the match, or `None` if not found.
 /// A word boundary is defined as: the character before/after the match is

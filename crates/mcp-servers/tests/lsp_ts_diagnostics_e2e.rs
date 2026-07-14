@@ -136,12 +136,7 @@ async fn test_ts_diagnostics_after_edit_without_polling() {
     //    tsserver is slower than rust-analyzer, so give it more time.
     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
-    let result = call_tool(
-        &client,
-        "lsp_check_errors",
-        serde_json::json!({ "input": { "scope": "file", "filePath": index_ts } }),
-    )
-    .await;
+    let result = call_tool(&client, "lsp_check_errors", serde_json::json!({ "filePath": index_ts })).await;
 
     let errors = result["summary"]["errors"].as_u64().unwrap_or(0);
     assert!(

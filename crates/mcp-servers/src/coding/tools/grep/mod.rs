@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use tokio::task::spawn_blocking;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -146,7 +147,31 @@ fn should_include_file(
     true
 }
 
-pub async fn perform_grep(mut args: GrepInput) -> Result<GrepOutput, GrepError> {
+pub async fn perform_grep(args: GrepInput) -> Result<GrepOutput, GrepError> {
+    perform_grep_with_exclusions(args, Vec::new()).await
+}
+
+pub(crate) async fn perform_grep_excluding(
+    args: GrepInput,
+    excluded_directories: &[&str],
+) -> Result<GrepOutput, GrepError> {
+    let excluded_directories = excluded_directories.iter().map(|name| (*name).to_string()).collect();
+    perform_grep_with_exclusions(args, excluded_directories).await
+}
+
+async fn perform_grep_with_exclusions(
+    args: GrepInput,
+    excluded_directories: Vec<String>,
+) -> Result<GrepOutput, GrepError> {
+    spawn_blocking(move || {
+        let excluded_directories = excluded_directories.iter().map(String::as_str).collect::<Vec<_>>();
+        perform_grep_sync(args, &excluded_directories)
+    })
+    .await
+    .map_err(|error| GrepError::SearchFailed(error.to_string()))?
+}
+
+fn perform_grep_sync(mut args: GrepInput, excluded_directories: &[&str]) -> Result<GrepOutput, GrepError> {
     if args.path.as_deref().is_some_and(|p| p.trim().is_empty()) {
         args.path = None;
     }
@@ -179,7 +204,7 @@ pub async fn perform_grep(mut args: GrepInput) -> Result<GrepOutput, GrepError> 
             &searcher_builder,
         )?
     } else {
-        search_directory(search_path, &args, path_matcher, matcher, &config, &searcher_builder)
+        search_directory(search_path, &args, path_matcher, matcher, &config, &searcher_builder, excluded_directories)
     };
 
     Ok(build_grep_output(results, output_mode, &args.pattern, search_path))
@@ -289,8 +314,21 @@ fn search_directory(
     matcher: RegexMatcher,
     config: &SearchConfig<'_>,
     searcher_builder: &SearcherBuilder,
+    excluded_directories: &[&str],
 ) -> SearchResults {
-    let walker = WalkBuilder::new(search_path).hidden(false).git_ignore(true).build_parallel();
+    let mut walker = WalkBuilder::new(search_path);
+    walker.hidden(false).git_ignore(true);
+    if !excluded_directories.is_empty() {
+        let excluded_directories = excluded_directories.iter().map(|name| (*name).to_string()).collect::<Vec<_>>();
+        walker.filter_entry(move |entry| {
+            entry.depth() == 0
+                || !entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| excluded_directories.iter().any(|excluded| excluded == name))
+        });
+    }
+    let walker = walker.build_parallel();
 
     let max_items = args.head_limit.unwrap_or(usize::MAX);
     let state = Arc::new(ParallelGrepState::new(max_items));

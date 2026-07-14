@@ -14,6 +14,14 @@ pub enum LspError {
     #[error(transparent)]
     Client(#[from] ClientError),
 
+    /// The language server is configured but unavailable.
+    #[error("Language server unavailable: {0}")]
+    ServerUnavailable(String),
+
+    /// No language server is configured for the requested language.
+    #[error("No LSP configured for {0}")]
+    UnsupportedLanguage(String),
+
     /// Transport or protocol error
     #[error("Transport error: {0}")]
     Transport(String),

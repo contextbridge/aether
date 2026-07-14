@@ -10,7 +10,7 @@
 mod common;
 
 use aether_lspd::testing::{NodeProject, TestProject};
-use common::{connect_lsp, poll_lsp_tool};
+use common::{call_tool, connect_lsp, poll_lsp_tool};
 
 /// Test: hover returns type information for a TypeScript variable
 #[tokio::test]
@@ -36,6 +36,178 @@ async fn test_ts_hover_returns_type_info() {
 
     let hover = result["hoverContents"].as_str().unwrap();
     assert!(hover.contains("number"), "Expected hover to contain 'number', got: {hover}");
+}
+
+#[tokio::test]
+async fn test_ts_workspace_search_requires_language_and_finds_exported_symbol() {
+    let project = NodeProject::new("ts_workspace_search_test").expect("Failed to create project");
+    project.add_file("requirements.txt", "pyright\n").expect("Failed to add requirements.txt");
+    std::fs::write(project.root().join("node_modules/.bin/pyright-langserver"), "not executable\n")
+        .expect("write unavailable Python language server");
+    project
+        .add_file("src/safety.ts", "export function isSafeToAutoMerge(): boolean { return true; }\n")
+        .expect("Failed to add safety.ts");
+    project
+        .add_file("src/index.ts", "import { isSafeToAutoMerge } from './safety.js';\nvoid isSafeToAutoMerge();\n")
+        .expect("Failed to add index.ts");
+
+    let index_ts = project.file_path_str("src/index.ts");
+    let (_server_handle, client) = connect_lsp(&project).await;
+    poll_lsp_tool(&client, "lsp_document", serde_json::json!({ "file_path": index_ts }), |result| {
+        result.get("symbols").and_then(|symbols| symbols.as_array()).is_some()
+    })
+    .await;
+
+    let result = poll_lsp_tool(
+        &client,
+        "lsp_workspace_search",
+        serde_json::json!({ "query": "isSafeToAutoMerge", "language": "typescript" }),
+        |result| {
+            result["results"]
+                .as_array()
+                .is_some_and(|results| results.iter().any(|entry| entry["name"] == "isSafeToAutoMerge"))
+        },
+    )
+    .await;
+
+    assert!(result["results"].as_array().unwrap().iter().any(|entry| entry["name"] == "isSafeToAutoMerge"));
+    assert!(result.get("languageCoverage").is_none());
+    assert!(result.get("partial").is_none());
+}
+
+#[tokio::test]
+async fn test_ts_outgoing_calls_use_caller_paths_and_deduplicate_ranges() {
+    let project = NodeProject::new("ts_outgoing_calls_test").expect("Failed to create project");
+    project
+        .add_file(
+            "node_modules/.pnpm/example@1.0.0/node_modules/example/index.d.ts",
+            "export declare function external(): void;\n",
+        )
+        .expect("Failed to add dependency declaration");
+    project
+        .add_file(
+            "src/index.ts",
+            r#"import { external } from "../node_modules/.pnpm/example@1.0.0/node_modules/example/index.js";
+const logger = { info(_message: string): void {} };
+function helper(): void {}
+function run(): void {
+    logger.info("first");
+    logger.info("second");
+    helper();
+    external();
+}
+run();
+"#,
+        )
+        .expect("Failed to add index.ts");
+
+    let index_ts = project.file_path_str("src/index.ts");
+    let (_server_handle, client) = connect_lsp(&project).await;
+    let result = poll_lsp_tool(
+        &client,
+        "lsp_symbol",
+        serde_json::json!({
+            "operation": "outgoingCalls",
+            "file_path": index_ts,
+            "symbol": "run",
+            "line": 4,
+            "callScope": "all"
+        }),
+        |result| result["callSites"].as_array().is_some_and(|calls| !calls.is_empty()),
+    )
+    .await;
+
+    let calls = result["callSites"].as_array().unwrap();
+    let mut ranges = std::collections::HashSet::new();
+    for call in calls {
+        for site in call["callSites"].as_array().unwrap() {
+            assert_eq!(site["filePath"], index_ts);
+            let key = (
+                site["filePath"].as_str().unwrap(),
+                site["startLine"].as_u64().unwrap(),
+                site["startColumn"].as_u64().unwrap(),
+                site["endLine"].as_u64().unwrap(),
+                site["endColumn"].as_u64().unwrap(),
+            );
+            assert!(ranges.insert(key), "duplicate call-site range: {site}");
+        }
+    }
+    assert!(calls.iter().any(|call| call["item"]["name"] == "helper"));
+    let external = calls.iter().find(|call| call["item"]["name"] == "external").expect("external dependency call");
+    assert_eq!(external["projectLocal"], false);
+    assert!(
+        external["item"]["displayPath"]
+            .as_str()
+            .is_some_and(|path| { path.starts_with("example/") && !path.contains(".pnpm") })
+    );
+
+    let project_calls = call_tool(
+        &client,
+        "lsp_symbol",
+        serde_json::json!({
+            "operation": "outgoingCalls",
+            "file_path": index_ts,
+            "symbol": "run",
+            "line": 4,
+            "callScope": "project"
+        }),
+    )
+    .await;
+    assert!(!project_calls["callSites"].as_array().unwrap().iter().any(|call| { call["item"]["name"] == "external" }));
+}
+
+#[tokio::test]
+async fn test_ts_incoming_calls_omit_context_by_default() {
+    let project = NodeProject::new("ts_incoming_test_label").expect("Failed to create project");
+    project
+        .add_file(
+            "src/index.ts",
+            r#"function target(): void {}
+function test(_name: string, callback: () => void): void { callback(); }
+test("runs migration", () => {
+    target();
+});
+"#,
+        )
+        .expect("Failed to add index.ts");
+
+    let index_ts = project.file_path_str("src/index.ts");
+    let (_server_handle, client) = connect_lsp(&project).await;
+    let result = poll_lsp_tool(
+        &client,
+        "lsp_symbol",
+        serde_json::json!({
+            "operation": "incomingCalls",
+            "file_path": index_ts,
+            "symbol": "target",
+            "line": 1,
+            "callScope": "project"
+        }),
+        |result| result["callSites"].as_array().is_some_and(|calls| !calls.is_empty()),
+    )
+    .await;
+
+    assert!(result["callSites"].as_array().unwrap().iter().all(|call| {
+        call.get("label").is_none()
+            && call["callSites"].as_array().is_some_and(|sites| sites.iter().all(|site| site.get("context").is_none()))
+    }));
+
+    let result = call_tool(
+        &client,
+        "lsp_symbol",
+        serde_json::json!({
+            "operation": "incomingCalls",
+            "file_path": index_ts,
+            "symbol": "target",
+            "line": 1,
+            "callScope": "project",
+            "contextLines": 1
+        }),
+    )
+    .await;
+    assert!(result["callSites"].as_array().unwrap().iter().any(|call| {
+        call["callSites"].as_array().is_some_and(|sites| sites.iter().any(|site| site.get("context").is_some()))
+    }));
 }
 
 /// Test: goto definition resolves to the correct function definition in TypeScript

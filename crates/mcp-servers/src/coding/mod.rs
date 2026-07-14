@@ -33,9 +33,7 @@ pub mod tools_trait;
 pub use default_tools::DefaultCodingTools;
 pub use tools_trait::CodingTools;
 
-use crate::lsp::tools::check_errors::{
-    LspDiagnosticsInput, LspDiagnosticsOutput, LspDiagnosticsRequest, execute_lsp_diagnostics,
-};
+use crate::lsp::tools::check_errors::{LspDiagnosticsOutput, LspDiagnosticsRequest, execute_lsp_diagnostics};
 use crate::lsp::tools::symbol_lookup::{LspSymbolInput, LspSymbolOutput, execute_lsp_symbol};
 use crate::lsp::tools::workspace_search::{
     LspWorkspaceSearchInput, LspWorkspaceSearchOutput, execute_lsp_workspace_search,
@@ -731,10 +729,7 @@ When using tools that take file paths, always use absolute paths from:
         context: RequestContext<RoleServer>,
     ) -> Result<Json<LspDiagnosticsOutput>, String> {
         let Parameters(request) = request;
-        let preview_value = match &request.input {
-            LspDiagnosticsInput::Workspace {} => "workspace".to_string(),
-            LspDiagnosticsInput::File { file_path } => basename(file_path),
-        };
+        let preview_value = request.file_path.as_ref().map_or_else(|| "workspace".to_string(), |path| basename(path));
         notify_preview(&context, ToolDisplayMeta::new("LSP errors", preview_value)).await;
         let lsp = self.lsp.as_ref().ok_or("LSP not configured")?;
         execute_lsp_diagnostics(request, lsp.as_ref()).await.map(Json)
