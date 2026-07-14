@@ -134,8 +134,10 @@ async fn test_tool_request_arg_emits_tool_call_update() -> Result<(), Box<dyn Er
     let tool_request = AddNumbersRequest::new(3, 5);
     let request_json = tool_request.json()?;
     let (arg_chunk_1, arg_chunk_2) = split_json_in_half(&request_json);
-    let llm_responses =
-        [llm_response("message_1").tool_call("call_1", "test__add_numbers", &[arg_chunk_1, arg_chunk_2]).build()];
+    let llm_responses = [
+        llm_response("message_1").tool_call("call_1", "test__add_numbers", &[arg_chunk_1, arg_chunk_2]).build(),
+        llm_response("message_2").text(&["done"]).build(),
+    ];
 
     let messages = test_agent()
         .llm_responses(&llm_responses)
@@ -268,7 +270,10 @@ async fn test_tool_timeout() -> Result<(), Box<dyn Error>> {
     let tool_request = SlowToolRequest::new(tool_duration);
     let (m1_id, t1_id, t1_name) = ("message_1", "call_1", "test__slow_tool");
 
-    let llm_responses = [llm_response(m1_id).tool_call(t1_id, t1_name, &[&tool_request.json()?]).build()];
+    let llm_responses = [
+        llm_response(m1_id).tool_call(t1_id, t1_name, &[&tool_request.json()?]).build(),
+        llm_response("message_2").text(&["done"]).build(),
+    ];
 
     let messages = test_agent()
         .llm_responses(&llm_responses)

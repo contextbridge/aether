@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use aether_core::core::RetryConfig;
 use aether_core::events::{AgentEvent, LlmCallOutcome, LlmCallPurpose, TurnOutcome};
-use aether_core::testing::{AddNumbersRequest, TestAgentStep, test_agent};
+use aether_core::testing::{AddNumbersRequest, TestScenario, test_agent};
 use llm::testing::llm_response;
 use llm::{LlmError, LlmResponse, StopReason};
 
@@ -140,16 +140,7 @@ async fn cancel_during_retry_wait_traces_cancelled_turn_without_starting_call() 
     let trace = test_agent()
         .retry_config(retry)
         .llm_result_responses(&attempts)
-        .scenario(vec![
-            TestAgentStep::send(aether_core::events::Command::UserCommand(aether_core::events::UserCommand::Text {
-                content: vec![llm::ContentBlock::text("go")],
-            })),
-            TestAgentStep::wait_for(|event| {
-                matches!(event, AgentEvent::Turn(TurnEvent::RetryScheduled { attempt: 1, .. }))
-            }),
-            TestAgentStep::send(aether_core::events::Command::UserCommand(aether_core::events::UserCommand::Cancel)),
-            TestAgentStep::wait_for(|event| matches!(event, AgentEvent::Turn(TurnEvent::Ended { .. }))),
-        ])
+        .scenario(TestScenario::new().user_text("go").wait_for_retry(1).cancel().wait_for_turn_end())
         .run_trace()
         .await?;
 

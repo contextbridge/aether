@@ -1,5 +1,5 @@
-use aether_core::events::{AgentEvent, Command, MessageEvent, TurnEvent, UserCommand};
-use aether_core::testing::{TestAgentStep, test_agent};
+use aether_core::events::{AgentEvent, MessageEvent, TurnEvent};
+use aether_core::testing::{TestScenario, test_agent};
 use llm::testing::llm_response;
 
 /// After cancelling, a new prompt should produce a normal response.
@@ -12,17 +12,14 @@ async fn test_prompt_after_cancel_produces_response() {
             llm_response("msg_1").text(&["Hello", " world", " this", " is", " a", " long", " response"]).build(),
             llm_response("msg_2").text(&["Second response"]).build(),
         ])
-        .scenario(vec![
-            TestAgentStep::send(Command::UserCommand(UserCommand::Text {
-                content: vec![llm::ContentBlock::text("first question")],
-            })),
-            TestAgentStep::send(Command::UserCommand(UserCommand::Cancel)),
-            TestAgentStep::wait_for(|event| matches!(event, AgentEvent::Turn(TurnEvent::Ended { .. }))),
-            TestAgentStep::send(Command::UserCommand(UserCommand::Text {
-                content: vec![llm::ContentBlock::text("second question")],
-            })),
-            TestAgentStep::wait_for(|event| matches!(event, AgentEvent::Turn(TurnEvent::Ended { .. }))),
-        ])
+        .scenario(
+            TestScenario::new()
+                .user_text("first question")
+                .cancel()
+                .wait_for_turn_end()
+                .user_text("second question")
+                .wait_for_turn_end(),
+        )
         .run()
         .await
         .unwrap();

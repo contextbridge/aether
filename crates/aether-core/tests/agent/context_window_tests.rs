@@ -1,5 +1,5 @@
-use aether_core::events::{AgentCommand, AgentEvent, Command, ContextEvent, ContextUsage};
-use aether_core::testing::{TestAgentStep, test_agent};
+use aether_core::events::{AgentEvent, ContextEvent, ContextUsage};
+use aether_core::testing::{TestScenario, test_agent};
 use llm::ModelSettings;
 use llm::testing::{FakeLlmProvider, llm_response};
 
@@ -55,12 +55,13 @@ async fn context_window_override_survives_model_switch() {
         .without_mcp()
         .provider_context_window(Some(128_000))
         .context_window_override(200_000)
-        .scenario(vec![
-            TestAgentStep::send(Command::AgentCommand(AgentCommand::SwitchModel(Box::new(
-                FakeLlmProvider::new(vec![]).with_display_name("new fake").with_context_window(Some(32_000)),
-            )))),
-            TestAgentStep::wait_for(|event| matches!(event, AgentEvent::Context(ContextEvent::UsageUpdated { .. }))),
-        ])
+        .scenario(
+            TestScenario::new()
+                .switch_model(
+                    FakeLlmProvider::new(vec![]).with_display_name("new fake").with_context_window(Some(32_000)),
+                )
+                .wait_for(|event| matches!(event, AgentEvent::Context(ContextEvent::UsageUpdated { .. }))),
+        )
         .run()
         .await
         .unwrap();
