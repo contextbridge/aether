@@ -8,8 +8,8 @@ use tui::{Component, Event, KeyCode, MIN_GUTTER_WIDTH, SEPARATOR_WIDTH, ViewCont
 use wisp::components::app::{GitDiffLoadState, GitDiffMode};
 use wisp::git_diff::GitDiffDocument;
 
-const LEFT_HINT_LINE: &str = "j/k move  space stage  A stage all  C commit  d discard  Esc close";
-const RIGHT_HINT_LINE: &str = "space stage  c comment  C commit  d discard  s submit  o full file  Esc close";
+const LEFT_HINT_LINE: &str = "j/k move  space stage  t scope  A stage all  C commit  d discard  Esc close";
+const RIGHT_HINT_LINE: &str = "space stage  t scope  c comment  C commit  d discard  s submit  o full file  Esc close";
 
 fn make_mode(doc: GitDiffDocument) -> GitDiffMode {
     let mut mode = GitDiffMode::new(PathBuf::from("."));
@@ -115,7 +115,7 @@ fn git_diff_view_keeps_wrapped_code_out_of_the_line_number_gutter() {
     assert_buffer_eq(
         &term,
         &[
-            cols(&[(" Git Diff  1 file  +1 -1", 28), ("│", 1), (" x.rs  modified  +1 -1", 0)]),
+            cols(&[(" Git Diff · Both  1 file  +1", 28), ("│", 1), (" x.rs  modified  +1 -1", 0)]),
             cols(&[(&"─".repeat(28), 28), ("│", 1), (&"─".repeat(111), 0)]),
             cols(&[("▎── x.rs", 19), ("+1 -1 M ☐", 9), ("│", 1), (" 1 LEFT_MARK", 55), ("", 1), (" 1 RIGHT_HEAD", 55)]),
             cols(&[("", 28), ("│", 1), ("", 55), ("", 1), (" ↪ ", 3), (filler.as_str(), 0)]),
@@ -260,7 +260,7 @@ fn render_shows_file_list_and_patch() {
     assert_buffer_eq(
         &term,
         &[
-            cols(&[(" Git Diff  2 files  +2 -1", sb), ("│", 1), ("a.rs  modified  +1 -1", 0)]),
+            cols(&[(" Git Diff · Both  2 files  +", sb), ("│", 1), ("a.rs  modified  +1 -1", 0)]),
             cols(&[(&"─".repeat(sb), sb), ("│", 1), (&"─".repeat(71), 0)]),
             cols(&[("▎── a.rs", 19), ("+1 -1 M ☐", 9), ("│", 1), ("1   fn main() {", 0)]),
             cols(&[(" ── b.rs", 19), ("+1 -0 A ☐", 9), ("│", 1), ("2 -     old();", 0)]),

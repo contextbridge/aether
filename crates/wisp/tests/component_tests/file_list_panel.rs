@@ -80,7 +80,7 @@ fn flat_rows(selected: usize) -> [String; 4] {
     let app_indicator = if selected == 0 { "▎" } else { " " };
     let lib_indicator = if selected == 1 { "▎" } else { " " };
     [
-        " Git Diff  2 files  +8 -1".to_string(),
+        " Git Diff · Both  2 files  +8 -1".to_string(),
         rule(),
         cols(&[(format!("{app_indicator}── app.rs").as_str(), 31), ("+3 -1 M ☐", 0)]),
         cols(&[(format!("{lib_indicator}── lib.rs").as_str(), 31), ("+5 -0 A ☐", 0)]),
@@ -182,7 +182,7 @@ fn renders_directory_tree() {
     assert_buffer_eq(
         &term,
         &[
-            " Git Diff  2 files  +6 -1".to_string(),
+            " Git Diff · Both  2 files  +6 -1".to_string(),
             rule(),
             "▎▾  src/".to_string(),
             cols(&[(" ├── main.rs", 31), ("+2 -1 M ☐", 0)]),
@@ -335,7 +335,7 @@ async fn collapse_directory_hides_children() {
 
     assert_buffer_eq(
         &term,
-        &[" Git Diff  2 files  +6 -1".to_string(), rule(), "▎▸  src/".to_string(), String::new(), String::new()],
+        &[" Git Diff · Both  2 files  +6 -1".to_string(), rule(), "▎▸  src/".to_string(), String::new(), String::new()],
     );
 }
 
@@ -349,7 +349,7 @@ fn renders_queued_comment_indicator() {
 
     assert_buffer_eq(
         &term,
-        &[" Git Diff  1 file  +1 -1  ◆3".to_string(), rule(), cols(&[("▎── a.rs", 31), ("+1 -1 M ☐", 0)])],
+        &[" Git Diff · Both  1 file  +1 -1  ◆3".to_string(), rule(), cols(&[("▎── a.rs", 31), ("+1 -1 M ☐", 0)])],
     );
 }
 
@@ -370,7 +370,7 @@ fn empty_panel_renders_chrome_only() {
     let mut panel = FileListPanel::new();
     let term = render_component(|ctx| panel.render(ctx), 30, 2);
 
-    assert_buffer_eq(&term, &[" Git Diff  0 files  +0 -0", &"─".repeat(30)]);
+    assert_buffer_eq(&term, &[" Git Diff · Both  0 files  +0", &"─".repeat(30)]);
 }
 
 #[test]
@@ -387,7 +387,7 @@ fn file_status_markers_render_correctly() {
     assert_buffer_eq(
         &term,
         &[
-            " Git Diff  3 files  +2 -2".to_string(),
+            " Git Diff · Both  3 files  +2 -2".to_string(),
             rule(),
             cols(&[("▎── added.rs", 31), ("+1 -0 A ☐", 0)]),
             cols(&[(" ── deleted.rs", 31), ("+0 -1 D ☐", 0)]),
@@ -451,7 +451,7 @@ async fn renders_only_viewport_rows_after_scrolling_many_files() {
     assert_buffer_eq(
         &term,
         &[
-            " Git Diff  20 files  +20 -20".to_string(),
+            " Git Diff · Both  20 files  +20 -20".to_string(),
             rule(),
             cols(&[(" ── file-02.rs", 31), ("+1 -1 M ☐", 0)]),
             cols(&[(" ── file-03.rs", 31), ("+1 -1 M ☐", 0)]),

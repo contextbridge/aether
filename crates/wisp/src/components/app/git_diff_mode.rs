@@ -4,8 +4,8 @@ use crate::components::git_diff::git_diff_panel::{GitDiffPanel, GitDiffPanelMess
 use crate::components::git_diff::{DiffAnchor, PatchAnchor};
 use crate::components::review_comments::{CommentAnchor, ReviewComment};
 use crate::git_diff::{
-    FileDiff, FileStatus, GitDiffDocument, GitDiffError, PatchLineKind, StageState, commit, load_git_diff, stage_all,
-    stage_file, unstage_all, unstage_file,
+    DiffScope, FileDiff, FileStatus, GitDiffDocument, GitDiffError, PatchLineKind, StageState, commit, load_git_diff,
+    stage_all, stage_file, unstage_all, unstage_file,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -45,6 +45,7 @@ pub struct GitDiffMode {
     working_dir: PathBuf,
     cached_repo_root: Option<PathBuf>,
     document_revision: usize,
+    diff_scope: DiffScope,
     pub load_state: GitDiffLoadState,
     split: SplitPanel<FileListPanel, GitDiffPanel>,
     comments: ReviewQueue,
@@ -58,6 +59,7 @@ impl GitDiffMode {
             working_dir,
             cached_repo_root: None,
             document_revision: 0,
+            diff_scope: DiffScope::default(),
             load_state: GitDiffLoadState::Empty,
             split: SplitPanel::new(FileListPanel::new(), GitDiffPanel::new(), SplitLayout::fraction(1, 3, 20, 28))
                 .with_separator("│", Style::default())
@@ -82,7 +84,7 @@ impl GitDiffMode {
     }
 
     pub(crate) async fn complete_load(&mut self) {
-        match load_git_diff(&self.working_dir, self.cached_repo_root.as_deref()).await {
+        match load_git_diff(&self.working_dir, self.cached_repo_root.as_deref(), self.diff_scope).await {
             Ok(doc) => {
                 if self.cached_repo_root.is_none() {
                     self.cached_repo_root = Some(doc.repo_root.clone());
@@ -145,6 +147,10 @@ impl Component for GitDiffMode {
                 KeyCode::Char('C') => return Some(self.begin_commit()),
                 KeyCode::Char('d') => return Some(self.request_discard()),
                 KeyCode::Char('r') => return Some(vec![GitDiffViewMessage::Refresh]),
+                KeyCode::Char('t') => {
+                    self.diff_scope = self.diff_scope.next();
+                    return Some(vec![GitDiffViewMessage::Refresh]);
+                }
                 KeyCode::Char('u') => {
                     self.comments.pop();
                     self.sync_comment_state();
@@ -507,6 +513,7 @@ impl GitDiffMode {
             return;
         }
 
+        self.split.left_mut().set_diff_scope(self.diff_scope);
         self.split.left_mut().rebuild_from_files(&doc.files);
         self.split.right_mut().clear_rendered_patches();
         self.split.right_mut().set_repo_root(doc.repo_root.clone());
@@ -530,13 +537,21 @@ impl GitDiffMode {
     }
 }
 
-const LEFT_HELP_KEYS: [(&str, &str); 6] =
-    [("j/k", "move"), ("space", "stage"), ("A", "stage all"), ("C", "commit"), ("d", "discard"), ("Esc", "close")];
+const LEFT_HELP_KEYS: [(&str, &str); 7] = [
+    ("j/k", "move"),
+    ("space", "stage"),
+    ("t", "scope"),
+    ("A", "stage all"),
+    ("C", "commit"),
+    ("d", "discard"),
+    ("Esc", "close"),
+];
 
 const COMMIT_HELP_KEYS: [(&str, &str); 2] = [("enter", "commit"), ("esc", "cancel")];
 
-const RIGHT_HELP_KEYS: [(&str, &str); 7] = [
+const RIGHT_HELP_KEYS: [(&str, &str); 8] = [
     ("space", "stage"),
+    ("t", "scope"),
     ("c", "comment"),
     ("C", "commit"),
     ("d", "discard"),

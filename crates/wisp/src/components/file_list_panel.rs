@@ -1,7 +1,7 @@
 use crate::components::common::VerticalCursor;
 use crate::components::file_tree::{FileTree, FileTreeEntry, FileTreeEntryKind};
 use crate::components::git_diff::{file_status_color, header_rule, push_diff_stats};
-use crate::git_diff::{FileDiff, FileStatus, StageState};
+use crate::git_diff::{DiffScope, FileDiff, FileStatus, StageState};
 use tui::{Component, Event, Frame, KeyCode, Line, MouseEventKind, Style, ViewContext, truncate_line, truncate_text};
 
 const CHROME_HEIGHT: usize = 2;
@@ -15,6 +15,7 @@ pub struct FileListPanel {
     deletions: usize,
     focused: bool,
     file_comment_counts: Vec<usize>,
+    diff_scope: DiffScope,
     scroll_consumed_this_frame: bool,
 }
 
@@ -34,6 +35,7 @@ impl Default for FileListPanel {
             deletions: 0,
             focused: false,
             file_comment_counts: Vec::new(),
+            diff_scope: DiffScope::default(),
             scroll_consumed_this_frame: false,
         }
     }
@@ -64,6 +66,10 @@ impl FileListPanel {
     pub fn sync_view_state(&mut self, queued_comment_count: usize, file_comment_counts: Vec<usize>) {
         self.queued_comment_count = queued_comment_count;
         self.file_comment_counts = file_comment_counts;
+    }
+
+    pub fn set_diff_scope(&mut self, diff_scope: DiffScope) {
+        self.diff_scope = diff_scope;
     }
 
     pub fn set_focused(&mut self, focused: bool) {
@@ -99,7 +105,7 @@ impl FileListPanel {
         let title_fg = if self.focused { theme.accent() } else { theme.text_primary() };
         let mut row = Line::default();
         row.push_text(" ");
-        row.push_with_style("Git Diff", Style::fg(title_fg).bold());
+        row.push_with_style(format!("Git Diff · {}", self.diff_scope.label()), Style::fg(title_fg).bold());
         row.push_text("  ");
         row.push_with_style(
             format!("{} file{}", self.file_count, if self.file_count == 1 { "" } else { "s" }),

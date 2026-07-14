@@ -18,6 +18,14 @@ pub struct FileDiff {
     pub binary: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DiffScope {
+    Unstaged,
+    Staged,
+    #[default]
+    Both,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileStatus {
     Modified,
@@ -69,6 +77,28 @@ pub enum GitDiffError {
     CommandFailed { stderr: String },
     #[error("Failed to parse diff: {0}")]
     ParseError(String),
+}
+
+impl DiffScope {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Unstaged => "Unstaged",
+            Self::Staged => "Staged",
+            Self::Both => "Both",
+        }
+    }
+
+    pub(crate) fn next(self) -> Self {
+        match self {
+            Self::Both => Self::Unstaged,
+            Self::Unstaged => Self::Staged,
+            Self::Staged => Self::Both,
+        }
+    }
+
+    fn includes_untracked(self) -> bool {
+        !matches!(self, Self::Staged)
+    }
 }
 
 impl FileStatus {
@@ -125,18 +155,26 @@ impl Hunk {
 pub(crate) async fn load_git_diff(
     working_dir: &Path,
     cached_repo_root: Option<&Path>,
+    scope: DiffScope,
 ) -> Result<GitDiffDocument, GitDiffError> {
     let repo_root = match cached_repo_root {
         Some(root) => root.to_path_buf(),
         None => resolve_repo_root(working_dir).await?,
     };
-    let diff_output = git(&repo_root, &["diff", "--no-ext-diff", "--find-renames", "HEAD"]).await?;
+    let diff_args = match scope {
+        DiffScope::Unstaged => &["diff", "--no-ext-diff", "--find-renames"][..],
+        DiffScope::Staged => &["diff", "--cached", "--no-ext-diff", "--find-renames"][..],
+        DiffScope::Both => &["diff", "--no-ext-diff", "--find-renames", "HEAD"][..],
+    };
+    let diff_output = git(&repo_root, diff_args).await?;
 
     let mut files = if diff_output.trim().is_empty() { Vec::new() } else { parse_unified_diff(&diff_output)? };
 
-    let untracked_stdout = git(&repo_root, &["ls-files", "--others", "--exclude-standard"]).await?;
-    for path in untracked_stdout.lines().filter(|l| !l.is_empty()).map(String::from) {
-        files.push(build_untracked_file_diff(&repo_root, path).await);
+    if scope.includes_untracked() {
+        let untracked_stdout = git(&repo_root, &["ls-files", "--others", "--exclude-standard"]).await?;
+        for path in untracked_stdout.lines().filter(|l| !l.is_empty()).map(String::from) {
+            files.push(build_untracked_file_diff(&repo_root, path).await);
+        }
     }
 
     let status_map = load_status_map(&repo_root).await?;
@@ -868,15 +906,15 @@ index abc..def 100644
         commit_file(dir, "a.txt", "one\n", "init").await;
         write_file(dir, "a.txt", "one\ntwo\n").await;
 
-        let doc = load_git_diff(dir, None).await.unwrap();
+        let doc = load_git_diff(dir, None, DiffScope::Both).await.unwrap();
         assert_eq!(staged_of(&doc, "a.txt"), StageState::Unstaged);
 
         stage_file(dir, "a.txt").await.unwrap();
-        let doc = load_git_diff(dir, None).await.unwrap();
+        let doc = load_git_diff(dir, None, DiffScope::Both).await.unwrap();
         assert_eq!(staged_of(&doc, "a.txt"), StageState::Staged);
 
         unstage_file(dir, "a.txt").await.unwrap();
-        let doc = load_git_diff(dir, None).await.unwrap();
+        let doc = load_git_diff(dir, None, DiffScope::Both).await.unwrap();
         assert_eq!(staged_of(&doc, "a.txt"), StageState::Unstaged);
     }
 
@@ -891,7 +929,7 @@ index abc..def 100644
         write_file(dir, "c.txt", "c1\n").await;
 
         stage_all(dir).await.unwrap();
-        let doc = load_git_diff(dir, None).await.unwrap();
+        let doc = load_git_diff(dir, None, DiffScope::Both).await.unwrap();
         assert_eq!(staged_of(&doc, "a.txt"), StageState::Staged);
         assert_eq!(staged_of(&doc, "b.txt"), StageState::Staged);
         assert_eq!(staged_of(&doc, "c.txt"), StageState::Staged);
@@ -908,7 +946,7 @@ index abc..def 100644
         let log = git(dir, &["log", "--oneline", "-1"]).await.unwrap();
         assert!(log.contains("second commit"), "log was: {log}");
 
-        let doc = load_git_diff(dir, None).await.unwrap();
+        let doc = load_git_diff(dir, None, DiffScope::Both).await.unwrap();
         assert!(doc.files.is_empty(), "expected clean tree, got {} files", doc.files.len());
     }
 
@@ -948,6 +986,45 @@ index abc..def 100644
         unstage_file(dir, "a.txt").await.unwrap();
         let status = git(dir, &["status", "--porcelain"]).await.unwrap();
         assert!(status.contains("?? a.txt"), "status was: {status}");
+    }
+
+    #[tokio::test]
+    async fn load_git_diff_filters_changes_by_scope() {
+        let repo = init_repo().await;
+        let dir = repo.path();
+        commit_file(dir, "a.txt", "one\n", "init").await;
+
+        write_file(dir, "a.txt", "two\n").await;
+        stage_file(dir, "a.txt").await.unwrap();
+        write_file(dir, "a.txt", "three\n").await;
+        write_file(dir, "untracked.txt", "scratch\n").await;
+
+        let unstaged = load_git_diff(dir, None, DiffScope::Unstaged).await.unwrap();
+        assert_eq!(
+            unstaged.files.iter().map(|file| file.path.as_str()).collect::<Vec<_>>(),
+            vec!["a.txt", "untracked.txt"]
+        );
+        assert!(
+            unstaged
+                .files
+                .iter()
+                .any(|file| file.path == "a.txt" && file.hunks[0].lines.iter().any(|line| line.text == "three"))
+        );
+
+        let staged = load_git_diff(dir, None, DiffScope::Staged).await.unwrap();
+        assert_eq!(staged.files.iter().map(|file| file.path.as_str()).collect::<Vec<_>>(), vec!["a.txt"]);
+        assert!(staged.files[0].hunks[0].lines.iter().any(|line| line.text == "two"));
+
+        let both = load_git_diff(dir, None, DiffScope::Both).await.unwrap();
+        assert_eq!(
+            both.files.iter().map(|file| file.path.as_str()).collect::<Vec<_>>(),
+            vec!["a.txt", "untracked.txt"]
+        );
+        assert!(
+            both.files
+                .iter()
+                .any(|file| file.path == "a.txt" && file.hunks[0].lines.iter().any(|line| line.text == "three"))
+        );
     }
 
     #[test]
