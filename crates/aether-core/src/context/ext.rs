@@ -1,44 +1,10 @@
-use crate::events::AgentEvent;
-use crate::events::{ContextEvent, MessageEvent, ToolEvent, TurnEvent};
+use crate::events::{AgentEvent, ContextEvent, MessageEvent, ToolEvent, TurnEvent};
+use crate::session::{SessionEvent, UserEvent};
 use llm::types::IsoString;
 use llm::{AssistantReasoning, ChatMessage, Context, ToolCallError, ToolCallResult};
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "type", rename_all = "camelCase")]
-pub enum UserEvent {
-    Message { content: Vec<llm::ContentBlock> },
-    ClearContext,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "type", rename_all = "camelCase")]
-pub enum SessionControlEvent {
-    AgentSwitched { from: Option<String>, to: Option<String> },
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "data", rename_all = "camelCase")]
-#[allow(clippy::large_enum_variant)]
-pub enum SessionEvent {
-    User(UserEvent),
-    Agent(AgentEvent),
-    Control(SessionControlEvent),
-}
 
 pub fn conversation_messages_from_events(events: &[SessionEvent]) -> Vec<ChatMessage> {
     Context::from_events(events).messages().iter().filter(|message| !message.is_system()).cloned().collect()
-}
-
-pub fn last_agent_from_events(initial: Option<String>, events: &[SessionEvent]) -> Option<String> {
-    events
-        .iter()
-        .rev()
-        .find_map(|event| match event {
-            SessionEvent::Control(SessionControlEvent::AgentSwitched { to, .. }) => Some(to.clone()),
-            _ => None,
-        })
-        .unwrap_or(initial)
 }
 
 pub trait ContextExt {
@@ -118,8 +84,10 @@ fn apply_agent_event(ctx: &mut Context, event: &AgentEvent, acc: &mut TurnAccumu
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::events::TurnOutcome;
+    use crate::session::{SessionControlEvent, last_agent_from_events};
+
+    use super::*;
     use llm::ToolCallResult;
 
     fn system_context() -> Context {

@@ -37,6 +37,15 @@ impl SettingsStore {
     }
 }
 
+pub fn aether_home() -> Option<PathBuf> {
+    resolve_home(
+        std::env::var("AETHER_HOME").ok().as_deref(),
+        std::env::var("HOME").ok().as_deref(),
+        std::env::var("USERPROFILE").ok().as_deref(),
+        ".aether",
+    )
+}
+
 pub fn resolve_home(
     env_override: Option<&str>,
     home: Option<&str>,

@@ -5,6 +5,7 @@ pub mod context;
 pub mod core;
 pub mod events;
 pub mod mcp;
+pub mod session;
 #[cfg(feature = "testing")]
 pub mod testing;
 
