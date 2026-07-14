@@ -1,0 +1,35 @@
+[package]
+name = "aether-session-index"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[package.metadata.dist]
+dist = false
+
+[lints]
+workspace = true
+
+[lib]
+name = "aether_session_index"
+path = "src/lib.rs"
+
+[[bin]]
+name = "aether-session-index"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+sqlx = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+utils = { package = "aether-utils", path = "../utils" }
+aether-core = { package = "aether-agent-core", path = "../aether-core" }
+llm = { package = "aether-llm", path = "../llm" }
+
+[dev-dependencies]
+tempfile = { workspace = true }
