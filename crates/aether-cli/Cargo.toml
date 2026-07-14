@@ -56,6 +56,7 @@ tracing-appender = { workspace = true }
 futures = { workspace = true }
 dirs = { workspace = true }
 uuid = { workspace = true }
+utils = { package = "aether-utils", path = "../utils", version = "0.2.10" }
 tempfile = { workspace = true }
 crossterm = { workspace = true }
 url = { workspace = true }
