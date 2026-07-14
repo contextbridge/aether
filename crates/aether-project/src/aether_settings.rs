@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
-use utils::variables::VarError;
+use utils::variables::{VarError, Vars};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
@@ -201,6 +201,10 @@ impl TelemetrySignalSettings {
 }
 
 impl OtlpTelemetrySettings {
+    pub fn resolved_headers(&self, vars: &Vars) -> Result<BTreeMap<String, String>, VarError> {
+        self.headers.iter().map(|(name, value)| Ok((name.clone(), vars.expand(value)?))).collect()
+    }
+
     fn is_unset(&self) -> bool {
         self.endpoint.is_none()
             && self.traces_endpoint.is_none()
@@ -1417,6 +1421,41 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.credentials_store, Some(CredentialsStoreConfig::Memory));
+    }
+
+    #[test]
+    fn expands_otlp_header_environment_variables() {
+        let settings = OtlpTelemetrySettings {
+            headers: BTreeMap::from([
+                ("authorization".to_string(), "Bearer $POSTHOG_PROJECT_TOKEN".to_string()),
+                ("x-project".to_string(), "${POSTHOG_PROJECT_TOKEN}".to_string()),
+                ("x-literal".to_string(), "$$POSTHOG_PROJECT_TOKEN".to_string()),
+            ]),
+            ..OtlpTelemetrySettings::default()
+        };
+        let vars = Vars::new().with_env_lookup(|name| (name == "POSTHOG_PROJECT_TOKEN").then(|| "token-value".into()));
+
+        assert_eq!(
+            settings.resolved_headers(&vars).unwrap(),
+            BTreeMap::from([
+                ("authorization".to_string(), "Bearer token-value".to_string()),
+                ("x-project".to_string(), "token-value".to_string()),
+                ("x-literal".to_string(), "$POSTHOG_PROJECT_TOKEN".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn reports_missing_otlp_header_environment_variables() {
+        let settings = OtlpTelemetrySettings {
+            headers: BTreeMap::from([("authorization".to_string(), "Bearer $POSTHOG_PROJECT_TOKEN".to_string())]),
+            ..OtlpTelemetrySettings::default()
+        };
+
+        assert!(matches!(
+            settings.resolved_headers(&Vars::new().with_env_lookup(|_| None)),
+            Err(VarError::NotFound(variable)) if variable == "POSTHOG_PROJECT_TOKEN"
+        ));
     }
 
     #[test]

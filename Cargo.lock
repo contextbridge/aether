@@ -64,6 +64,7 @@ dependencies = [
  "aether-project",
  "aether-telemetry",
  "aether-tui",
+ "aether-utils",
  "aether-wisp",
  "agent-client-protocol",
  "async-trait",
@@ -345,6 +346,7 @@ version = "0.1.2"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
+ "aether-utils",
  "axum",
  "opentelemetry",
  "opentelemetry-otlp",

@@ -22,6 +22,7 @@ opentelemetry-semantic-conventions = { version = "0.32.1", features = ["semconv_
 reqwest = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+utils = { package = "aether-utils", path = "../utils", version = "0.2.10" }
 tracing = { workspace = true }
 
 [dev-dependencies]

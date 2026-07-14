@@ -1,9 +1,13 @@
+use utils::variables::VarError;
+
 use opentelemetry_otlp::ExporterBuildError;
 use opentelemetry_sdk::error::OTelSdkError;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum TelemetryInitError {
+    #[error("failed to resolve telemetry configuration: {0}")]
+    Variable(#[from] VarError),
     #[error("telemetry OTLP endpoint is required")]
     MissingOtlpEndpoint,
     #[error("telemetry sample ratio must be between 0.0 and 1.0, got {0}")]
