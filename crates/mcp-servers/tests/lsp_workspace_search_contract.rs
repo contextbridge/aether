@@ -1,16 +1,12 @@
 mod common;
 
-use mcp_servers::coding::CodingMcp;
-use rmcp::model::CallToolRequestParams;
+use common::{CodingWorkspace, call_tool_error};
 
 #[tokio::test]
 async fn lsp_workspace_search_schema_requires_one_language() {
-    let workspace = tempfile::tempdir().expect("create workspace");
-    let server = CodingMcp::new().with_lsp(workspace.path().to_path_buf());
-    let (_server_handle, client) =
-        mcp_utils::testing::connect(server, common::test_client_info()).await.expect("connect coding server");
+    let workspace = CodingWorkspace::new_with_lsp().await.expect("create workspace");
 
-    let tools = client.peer().list_all_tools().await.expect("list tools");
+    let tools = workspace.client.raw().peer().list_all_tools().await.expect("list tools");
     let tool = tools
         .into_iter()
         .find(|tool| tool.name.as_ref() == "lsp_workspace_search")
@@ -25,52 +21,23 @@ async fn lsp_workspace_search_schema_requires_one_language() {
 
 #[tokio::test]
 async fn lsp_workspace_search_rejects_missing_language() {
-    let workspace = tempfile::tempdir().expect("create workspace");
-    let server = CodingMcp::new().with_lsp(workspace.path().to_path_buf());
-    let (_server_handle, client) =
-        mcp_utils::testing::connect(server, common::test_client_info()).await.expect("connect coding server");
-
-    let result = client
-        .call_tool(
-            CallToolRequestParams::new("lsp_workspace_search")
-                .with_arguments(serde_json::json!({ "query": "AppState" }).as_object().unwrap().clone()),
-        )
-        .await;
-    let error = match result {
-        Ok(result) => result
-            .content
-            .first()
-            .and_then(|content| content.as_text())
-            .map(|text| text.text.clone())
-            .unwrap_or_default(),
-        Err(error) => error.to_string(),
-    };
+    let workspace = CodingWorkspace::new_with_lsp().await.expect("create workspace");
+    let error =
+        call_tool_error(workspace.client.raw(), "lsp_workspace_search", serde_json::json!({ "query": "AppState" }))
+            .await;
 
     assert!(error.contains("language"), "{error}");
 }
 
 #[tokio::test]
 async fn lsp_workspace_search_rejects_all_language() {
-    let workspace = tempfile::tempdir().expect("create workspace");
-    let server = CodingMcp::new().with_lsp(workspace.path().to_path_buf());
-    let (_server_handle, client) =
-        mcp_utils::testing::connect(server, common::test_client_info()).await.expect("connect coding server");
-
-    let result =
-        client
-            .call_tool(CallToolRequestParams::new("lsp_workspace_search").with_arguments(
-                serde_json::json!({ "query": "AppState", "language": "all" }).as_object().unwrap().clone(),
-            ))
-            .await;
-    let error = match result {
-        Ok(result) => result
-            .content
-            .first()
-            .and_then(|content| content.as_text())
-            .map(|text| text.text.clone())
-            .unwrap_or_default(),
-        Err(error) => error.to_string(),
-    };
+    let workspace = CodingWorkspace::new_with_lsp().await.expect("create workspace");
+    let error = call_tool_error(
+        workspace.client.raw(),
+        "lsp_workspace_search",
+        serde_json::json!({ "query": "AppState", "language": "all" }),
+    )
+    .await;
 
     assert!(error.contains("unknown variant `all`"), "{error}");
 }
