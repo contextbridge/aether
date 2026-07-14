@@ -116,6 +116,12 @@ impl ServerKind {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub struct LanguageServerMetadata {
+    pub display_name: &'static str,
+    pub installation_instructions: Option<&'static str>,
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct LanguageMetadata {
     pub id: LanguageId,
     pub primary_extension: Option<&'static str>,
@@ -150,7 +156,9 @@ impl LspConfig {
 struct ServerSpec {
     kind: ServerKind,
     command: &'static str,
+    display_name: &'static str,
     args: &'static [&'static str],
+    installation_instructions: Option<&'static str>,
 }
 
 #[derive(Clone, Copy)]
@@ -160,15 +168,52 @@ struct LanguageSpec {
 }
 
 const SERVER_SPECS: &[ServerSpec] = &[
-    ServerSpec { kind: ServerKind::RustAnalyzer, command: "rust-analyzer", args: &[] },
+    ServerSpec {
+        kind: ServerKind::RustAnalyzer,
+        command: "rust-analyzer",
+        display_name: "rust-analyzer",
+        args: &[],
+        installation_instructions: None,
+    },
     ServerSpec {
         kind: ServerKind::TypeScriptLanguageServer,
         command: "typescript-language-server",
+        display_name: "TypeScript language server",
         args: &["--stdio"],
+        installation_instructions: Some(
+            "Install it in this workspace with `npm install --save-dev typescript typescript-language-server`, or \
+             install it globally with `npm install --global typescript typescript-language-server`, then retry.",
+        ),
     },
-    ServerSpec { kind: ServerKind::Pyright, command: "pyright-langserver", args: &["--stdio"] },
-    ServerSpec { kind: ServerKind::Gopls, command: "gopls", args: &[] },
-    ServerSpec { kind: ServerKind::Clangd, command: "clangd", args: &[] },
+    ServerSpec {
+        kind: ServerKind::Pyright,
+        command: "pyright-langserver",
+        display_name: "Pyright language server",
+        args: &["--stdio"],
+        installation_instructions: None,
+    },
+    ServerSpec {
+        kind: ServerKind::Gopls,
+        command: "gopls",
+        display_name: "gopls language server",
+        args: &[],
+        installation_instructions: None,
+    },
+    ServerSpec {
+        kind: ServerKind::Clangd,
+        command: "clangd",
+        display_name: "clangd language server",
+        args: &[],
+        installation_instructions: None,
+    },
+];
+
+const PROJECT_LANGUAGE_SPECS: &[(LanguageId, &[&str])] = &[
+    (LanguageId::Rust, &["Cargo.toml"]),
+    (LanguageId::TypeScript, &["package.json"]),
+    (LanguageId::Python, &["pyproject.toml", "setup.py", "requirements.txt"]),
+    (LanguageId::Go, &["go.mod"]),
+    (LanguageId::Cpp, &["CMakeLists.txt"]),
 ];
 
 const LANGUAGE_SPECS: &[LanguageSpec] = &[
@@ -483,6 +528,23 @@ pub fn extensions_for_alias(alias: &str) -> Vec<&'static str> {
         .collect()
 }
 
+pub fn detect_project_languages(root: &Path) -> Vec<LanguageId> {
+    PROJECT_LANGUAGE_SPECS
+        .iter()
+        .filter(|(_, manifests)| manifests.iter().any(|manifest| root.join(manifest).is_file()))
+        .map(|(language, _)| *language)
+        .collect()
+}
+
+pub fn server_metadata_for_language(language: LanguageId) -> Option<LanguageServerMetadata> {
+    let server_kind = server_kind_for_language(language)?;
+    let server = SERVER_SPECS.iter().find(|server| server.kind == server_kind)?;
+    Some(LanguageServerMetadata {
+        display_name: server.display_name,
+        installation_instructions: server.installation_instructions,
+    })
+}
+
 pub fn get_config_for_language(language: LanguageId) -> Option<&'static LspConfig> {
     CONFIG_MAP.get(&language)
 }
@@ -490,6 +552,23 @@ pub fn get_config_for_language(language: LanguageId) -> Option<&'static LspConfi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detects_project_languages_from_manifests() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("Cargo.toml"), "").unwrap();
+        std::fs::write(root.path().join("package.json"), "{}").unwrap();
+
+        assert_eq!(detect_project_languages(root.path()), vec![LanguageId::Rust, LanguageId::TypeScript]);
+    }
+
+    #[test]
+    fn typescript_server_metadata_has_installation_instructions() {
+        let metadata = server_metadata_for_language(LanguageId::TypeScript).unwrap();
+
+        assert_eq!(metadata.display_name, "TypeScript language server");
+        assert!(metadata.installation_instructions.unwrap().contains("npm install --save-dev"));
+    }
 
     #[test]
     fn typescript_family_shares_server_kind() {

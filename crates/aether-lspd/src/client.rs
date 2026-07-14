@@ -230,6 +230,11 @@ impl LspClient {
         self.send_and_await(request, client_id).await.map(|_| ())
     }
 
+    /// Whether the daemon connection's reader task is still running.
+    pub fn is_connected(&self) -> bool {
+        !self.reader_task.is_finished()
+    }
+
     pub async fn disconnect(self) -> ClientResult<()> {
         let request = DaemonRequest::Disconnect;
         let mut writer = self.writer.lock().await;
