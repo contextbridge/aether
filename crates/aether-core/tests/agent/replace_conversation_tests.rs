@@ -1,6 +1,6 @@
 use aether_core::core::Prompt;
-use aether_core::events::{AgentCommand, AgentEvent, Command, ContextEvent, TurnEvent, UserCommand};
-use aether_core::testing::{TestAgentStep, test_agent};
+use aether_core::events::{AgentEvent, ContextEvent};
+use aether_core::testing::{TestScenario, test_agent};
 use llm::testing::llm_response;
 use llm::types::IsoString;
 use llm::{AssistantReasoning, ChatMessage, ContentBlock};
@@ -10,18 +10,20 @@ async fn replace_conversation_preserves_system_prompt_for_next_request() {
     let result = test_agent()
         .system_prompt(Prompt::text("original system"))
         .llm_responses(&[llm_response("msg").build()])
-        .commands(vec![
-            Command::AgentCommand(AgentCommand::ReplaceConversation(vec![
-                ChatMessage::User { content: vec![ContentBlock::text("old user")], timestamp: IsoString::now() },
-                ChatMessage::Assistant {
-                    content: "old assistant".to_string(),
-                    reasoning: AssistantReasoning::default(),
-                    timestamp: IsoString::now(),
-                    tool_calls: vec![],
-                },
-            ])),
-            Command::UserCommand(UserCommand::Text { content: vec![ContentBlock::text("new user")] }),
-        ])
+        .scenario(
+            TestScenario::new()
+                .replace_conversation(vec![
+                    ChatMessage::User { content: vec![ContentBlock::text("old user")], timestamp: IsoString::now() },
+                    ChatMessage::Assistant {
+                        content: "old assistant".to_string(),
+                        reasoning: AssistantReasoning::default(),
+                        timestamp: IsoString::now(),
+                        tool_calls: vec![],
+                    },
+                ])
+                .user_text("new user")
+                .wait_for_turn_end(),
+        )
         .run_with_context()
         .await
         .unwrap();
@@ -44,17 +46,16 @@ async fn replace_conversation_preserves_token_usage() {
     let events = test_agent()
         .llm_responses(&[llm_response("msg").usage(800, 10).build()])
         .provider_context_window(Some(1000))
-        .scenario(vec![
-            TestAgentStep::send(Command::UserCommand(UserCommand::Text {
-                content: vec![ContentBlock::text("first user")],
-            })),
-            TestAgentStep::wait_for(|event| matches!(event, AgentEvent::Turn(TurnEvent::Ended { .. }))),
-            TestAgentStep::send(Command::AgentCommand(AgentCommand::ReplaceConversation(vec![ChatMessage::User {
-                content: vec![ContentBlock::text("replacement user")],
-                timestamp: IsoString::now(),
-            }]))),
-            TestAgentStep::wait_for(|event| matches!(event, AgentEvent::Context(ContextEvent::UsageUpdated { .. }))),
-        ])
+        .scenario(
+            TestScenario::new()
+                .user_text("first user")
+                .wait_for_turn_end()
+                .replace_conversation(vec![ChatMessage::User {
+                    content: vec![ContentBlock::text("replacement user")],
+                    timestamp: IsoString::now(),
+                }])
+                .wait_for(|event| matches!(event, AgentEvent::Context(ContextEvent::UsageUpdated { .. }))),
+        )
         .run()
         .await
         .unwrap();

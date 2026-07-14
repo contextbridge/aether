@@ -3,10 +3,8 @@ use std::error::Error;
 use std::time::Duration;
 
 use aether_core::core::RetryConfig;
-use aether_core::events::{
-    AgentEvent, AgentObserver, Command, LlmCallOutcome, LlmCallPurpose, TurnEvent, TurnOutcome, UserCommand,
-};
-use aether_core::testing::{AddNumbersRequest, AgentTrace, DivideNumbersRequest, TestAgentStep, test_agent};
+use aether_core::events::{AgentEvent, AgentObserver, LlmCallOutcome, LlmCallPurpose, TurnEvent, TurnOutcome};
+use aether_core::testing::{AddNumbersRequest, AgentTrace, DivideNumbersRequest, TestScenario, test_agent};
 use aether_telemetry::{
     GENAI_SEMCONV_SCHEMA_URL, GenAiMetrics, OtelInstrumentation, OtelObserver, genai_instrumentation_scope,
 };
@@ -61,16 +59,7 @@ async fn failed_and_cancelled_calls_carry_error_attributes() -> Result<(), Box<d
     let trace = test_agent()
         .retry_config(retry)
         .llm_result_responses(&attempts)
-        .scenario(vec![
-            TestAgentStep::send(Command::UserCommand(UserCommand::Text {
-                content: vec![llm::ContentBlock::text("go")],
-            })),
-            TestAgentStep::wait_for(|event| {
-                matches!(event, AgentEvent::Turn(TurnEvent::RetryScheduled { attempt: 1, .. }))
-            }),
-            TestAgentStep::send(Command::UserCommand(UserCommand::Cancel)),
-            TestAgentStep::wait_for(|event| matches!(event, AgentEvent::Turn(TurnEvent::Ended { .. }))),
-        ])
+        .scenario(TestScenario::new().user_text("go").wait_for_retry(1).cancel().wait_for_turn_end())
         .run_trace()
         .await?;
 

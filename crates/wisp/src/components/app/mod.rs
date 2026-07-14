@@ -181,6 +181,9 @@ impl App {
                 self.conversation_screen.reset_after_context_cleared();
                 self.context_usage = None;
             }
+            AcpEvent::ContextCompaction(params) => {
+                self.conversation_screen.set_compaction_active(params.active);
+            }
             AcpEvent::ContextUsage(params) => {
                 self.context_usage = params
                     .usage
@@ -852,7 +855,7 @@ mod tests {
     use crate::components::conversation_screen::Modal;
     use crate::components::conversation_window::SegmentContent;
     use crate::components::elicitation_form::ElicitationForm;
-    use crate::components::progress_indicator::WorkspaceProgress;
+    use crate::components::progress_indicator::{ProgressActivity, WorkspaceProgress};
     use crate::settings::{DEFAULT_CONTENT_PADDING, save_settings};
     use crate::settings::{ThemeSettings, WispSettings};
     use crate::test_helpers::{elicitation_params, modified_key, url_elicitation_params, with_wisp_home};
@@ -1440,7 +1443,11 @@ mod tests {
         let mut app = make_app();
         let tool_call = acp::ToolCall::new("tool-1".to_string(), "test_tool");
         app.conversation_screen.tool_call_statuses.on_tool_call(&tool_call);
-        app.conversation_screen.progress_indicator.update(true, WorkspaceProgress::default());
+        app.conversation_screen.progress_indicator.update(ProgressActivity::new(
+            true,
+            WorkspaceProgress::default(),
+            false,
+        ));
 
         let ctx = ViewContext::new((80, 24));
         let tool_before = app.conversation_screen.tool_call_statuses.render_tool("tool-1", &ctx);

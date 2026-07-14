@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use aether_core::context::CompactionConfig;
 use aether_core::events::{
-    AgentEvent, Command, ContextEvent, LlmCallOutcome, LlmCallPurpose, TurnEvent, TurnOutcome, UserCommand,
+    AgentEvent, CompactionOutcome, ContextEvent, LlmCallOutcome, LlmCallPurpose, TurnEvent, TurnOutcome,
 };
-use aether_core::testing::{TestAgentStep, test_agent};
+use aether_core::testing::{TestScenario, test_agent};
 use llm::testing::llm_response;
 use llm::types::IsoString;
 use llm::{ChatMessage, ContentBlock};
@@ -47,14 +47,7 @@ async fn cancel_during_compaction_ends_the_turn() {
         .compaction_config(CompactionConfig::with_threshold(0.85))
         .messages(vec![user_message(&"x".repeat(400))])
         .pause_turn_after(0, 0, release)
-        .scenario(vec![
-            TestAgentStep::send(Command::UserCommand(UserCommand::Text { content: vec![ContentBlock::text("go")] })),
-            TestAgentStep::wait_for(|event| {
-                matches!(event, AgentEvent::Context(ContextEvent::CompactionStarted { .. }))
-            }),
-            TestAgentStep::send(Command::UserCommand(UserCommand::Cancel)),
-            TestAgentStep::wait_for(|event| matches!(event, AgentEvent::Turn(TurnEvent::Ended { .. }))),
-        ])
+        .scenario(TestScenario::new().user_text("go").wait_for_compaction_start().cancel().wait_for_turn_end())
         .run_trace()
         .await
         .unwrap();
@@ -69,6 +62,13 @@ async fn cancel_during_compaction_ends_the_turn() {
             })
         )),
         "cancel should end the in-flight compaction call"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AgentEvent::Context(ContextEvent::CompactionEnded { outcome: CompactionOutcome::Cancelled })
+        )),
+        "cancel should end the semantic compaction lifecycle"
     );
     assert!(
         matches!(events.last(), Some(AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Cancelled }))),
@@ -91,16 +91,15 @@ async fn cancel_during_compaction_preserves_the_initiating_message() {
         .compaction_config(CompactionConfig::with_threshold(0.85))
         .messages(vec![user_message(&"x".repeat(400))])
         .pause_turn_after(0, 0, release)
-        .scenario(vec![
-            TestAgentStep::send(Command::UserCommand(UserCommand::Text { content: vec![ContentBlock::text("go")] })),
-            TestAgentStep::wait_for(|event| {
-                matches!(event, AgentEvent::Context(ContextEvent::CompactionStarted { .. }))
-            }),
-            TestAgentStep::send(Command::UserCommand(UserCommand::Cancel)),
-            TestAgentStep::wait_for(|event| matches!(event, AgentEvent::Turn(TurnEvent::Ended { .. }))),
-            TestAgentStep::send(Command::UserCommand(UserCommand::Text { content: vec![ContentBlock::text("next")] })),
-            TestAgentStep::wait_for(|event| matches!(event, AgentEvent::Turn(TurnEvent::Ended { .. }))),
-        ])
+        .scenario(
+            TestScenario::new()
+                .user_text("go")
+                .wait_for_compaction_start()
+                .cancel()
+                .wait_for_turn_end()
+                .user_text("next")
+                .wait_for_turn_end(),
+        )
         .run_with_context()
         .await
         .unwrap();

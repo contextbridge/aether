@@ -5,7 +5,7 @@ use aether_core::agent_spec::AgentSpec;
 use aether_core::context::ext::{SessionControlEvent, SessionEvent, UserEvent, conversation_messages_from_events};
 use aether_core::events::{AgentCommand, AgentEvent, Command, ToolEvent, TurnOutcome};
 use agent_client_protocol::schema::{self as acp, PromptResponse, SessionId, SetSessionConfigOptionResponse};
-use agent_client_protocol::{Client, ConnectionTo, Responder};
+use agent_client_protocol::{Client, ConnectionTo, JsonRpcNotification, Responder};
 use llm::catalog::LlmModel;
 use llm::parser::ModelProviderParser;
 use llm::{ChatMessage, ContentBlock, ProviderConnectionOverrides, ReasoningEffort};
@@ -541,16 +541,19 @@ fn send_agent_notification(
     notification: AgentExtNotification,
 ) -> Result<(), AcpServerError> {
     match notification {
-        AgentExtNotification::ContextUsage(p) => {
-            connection.send_notification(p).map_err(|e| AcpServerError::protocol("_aether/context_usage", e))
-        }
-        AgentExtNotification::ContextCleared(p) => {
-            connection.send_notification(p).map_err(|e| AcpServerError::protocol("_aether/context_cleared", e))
-        }
-        AgentExtNotification::SubAgentProgress(p) => {
-            connection.send_notification(p).map_err(|e| AcpServerError::protocol("_aether/sub_agent_progress", e))
-        }
+        AgentExtNotification::ContextUsage(params) => send_extension_notification(connection, params),
+        AgentExtNotification::ContextCompaction(params) => send_extension_notification(connection, params),
+        AgentExtNotification::ContextCleared(params) => send_extension_notification(connection, params),
+        AgentExtNotification::SubAgentProgress(params) => send_extension_notification(connection, params),
     }
+}
+
+fn send_extension_notification<N: JsonRpcNotification>(
+    connection: &ConnectionTo<Client>,
+    notification: N,
+) -> Result<(), AcpServerError> {
+    let method = notification.method().to_string();
+    connection.send_notification(notification).map_err(|error| AcpServerError::protocol(method, error))
 }
 
 fn on_mcp_client_event(connection: &ConnectionTo<Client>, event: McpClientEvent) {

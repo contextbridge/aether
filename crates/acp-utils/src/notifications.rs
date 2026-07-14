@@ -71,6 +71,13 @@ pub struct ContextUsageParams {
     pub usage: ContextUsage,
 }
 
+/// Parameters for `_aether/context_compaction` notifications.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonRpcNotification)]
+#[notification(method = "_aether/context_compaction")]
+pub struct ContextCompactionParams {
+    pub active: bool,
+}
+
 /// Parameters for `_aether/context_cleared` notifications.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, JsonRpcNotification)]
 #[notification(method = "_aether/context_cleared")]
@@ -414,6 +421,17 @@ mod tests {
         assert!(!raw.contains("\"cache_read_tokens\""));
         assert!(!raw.contains("\"cache_creation_tokens\""));
         assert!(!raw.contains("\"reasoning_tokens\""));
+    }
+
+    #[test]
+    fn context_compaction_params_roundtrip() {
+        for active in [true, false] {
+            let params = ContextCompactionParams { active };
+            let untyped = params.to_untyped_message().expect("serializable");
+            assert_eq!(untyped.method(), "_aether/context_compaction");
+            let parsed = ContextCompactionParams::parse_message(untyped.method(), untyped.params()).expect("roundtrip");
+            assert_eq!(parsed, params);
+        }
     }
 
     #[test]

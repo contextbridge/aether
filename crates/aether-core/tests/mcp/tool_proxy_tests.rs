@@ -5,13 +5,17 @@ use mcp_utils::client::McpConnectionDetails;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
-type ProxyEnv = (tempfile::TempDir, McpSpawnResult, McpConnectionDetails);
+struct ProxyFixture {
+    _home: tempfile::TempDir,
+    spawn: McpSpawnResult,
+    snapshot: McpConnectionDetails,
+}
 
-async fn spawn_proxy(servers: Vec<mcp_utils::client::McpServer>) -> ProxyEnv {
+async fn spawn_proxy(servers: Vec<mcp_utils::client::McpServer>) -> ProxyFixture {
     let aether_home = tempfile::tempdir().unwrap();
     let mut spawn = mcp("/workspace").with_aether_home(aether_home.path()).with_servers(servers).spawn().await.unwrap();
     let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
-    (aether_home, spawn, snapshot)
+    ProxyFixture { _home: aether_home, spawn, snapshot }
 }
 
 async fn call_proxy_tool(
@@ -47,17 +51,10 @@ fn extract_tool_dir(instructions: &str) -> Option<String> {
     Some(instructions[start..end].to_string())
 }
 
-fn cleanup_tool_dir(instructions: &std::collections::BTreeMap<String, String>, proxy_name: &str) {
-    if let Some(instr) = instructions.get(proxy_name)
-        && let Some(tool_dir) = extract_tool_dir(instr)
-    {
-        let _ = std::fs::remove_dir_all(tool_dir);
-    }
-}
-
 #[tokio::test]
 async fn test_tool_proxy_exposes_only_call_tool() {
-    let (_home, _spawn, snapshot) = spawn_proxy(vec![fake_mcp_with_proxy("math", FakeMcpServer::new(), true)]).await;
+    let ProxyFixture { _home, snapshot, .. } =
+        spawn_proxy(vec![fake_mcp_with_proxy("math", FakeMcpServer::new(), true)]).await;
 
     assert_eq!(snapshot.tool_definitions.len(), 1);
     assert_eq!(snapshot.tool_definitions[0].name, "proxy__call_tool");
@@ -66,7 +63,8 @@ async fn test_tool_proxy_exposes_only_call_tool() {
 
 #[tokio::test]
 async fn test_tool_proxy_instructions_mention_tool_directory() {
-    let (_home, _spawn, snapshot) = spawn_proxy(vec![fake_mcp_with_proxy("math", FakeMcpServer::new(), true)]).await;
+    let ProxyFixture { _home, snapshot, .. } =
+        spawn_proxy(vec![fake_mcp_with_proxy("math", FakeMcpServer::new(), true)]).await;
     let proxy_instr = proxy_instructions(&snapshot);
 
     assert!(proxy_instr.contains("tool-proxy"), "Instructions should mention tool-proxy directory: {proxy_instr}");
@@ -80,7 +78,8 @@ async fn test_tool_proxy_instructions_mention_tool_directory() {
 
 #[tokio::test]
 async fn test_tool_proxy_does_not_expose_nested_server_tools() {
-    let (_home, _spawn, snapshot) = spawn_proxy(vec![fake_mcp_with_proxy("math", FakeMcpServer::new(), true)]).await;
+    let ProxyFixture { _home, snapshot, .. } =
+        spawn_proxy(vec![fake_mcp_with_proxy("math", FakeMcpServer::new(), true)]).await;
 
     for td in &snapshot.tool_definitions {
         assert!(!td.name.contains("add_numbers"), "Nested tool should not be exposed: {}", td.name);
@@ -92,7 +91,8 @@ async fn test_tool_proxy_does_not_expose_nested_server_tools() {
 
 #[tokio::test]
 async fn test_tool_proxy_does_not_leak_nested_instructions() {
-    let (_home, _spawn, snapshot) = spawn_proxy(vec![fake_mcp_with_proxy("math", FakeMcpServer::new(), true)]).await;
+    let ProxyFixture { _home, snapshot, .. } =
+        spawn_proxy(vec![fake_mcp_with_proxy("math", FakeMcpServer::new(), true)]).await;
 
     assert!(
         !snapshot.instructions.contains_key("math"),
@@ -103,7 +103,8 @@ async fn test_tool_proxy_does_not_leak_nested_instructions() {
 
 #[tokio::test]
 async fn test_tool_proxy_writes_tool_files_to_disk() {
-    let (_home, _spawn, snapshot) = spawn_proxy(vec![fake_mcp_with_proxy("math", FakeMcpServer::new(), true)]).await;
+    let ProxyFixture { _home, snapshot, .. } =
+        spawn_proxy(vec![fake_mcp_with_proxy("math", FakeMcpServer::new(), true)]).await;
 
     let tool_dir = extract_tool_dir(proxy_instructions(&snapshot)).expect("Should find tool directory");
     let tool_dir = std::path::Path::new(&tool_dir);
@@ -120,23 +121,21 @@ async fn test_tool_proxy_writes_tool_files_to_disk() {
     assert_eq!(parsed["name"], "add_numbers");
     assert_eq!(parsed["server"], "math");
     assert!(parsed["description"].as_str().unwrap().contains("Adds two numbers"));
-
-    let _ = std::fs::remove_dir_all(tool_dir);
 }
 
 #[tokio::test]
 async fn test_tool_proxy_call_tool_routes_to_nested_server() {
-    let (_home, spawn, snapshot) = spawn_proxy(vec![fake_mcp_with_proxy("math", FakeMcpServer::new(), true)]).await;
+    let ProxyFixture { _home, spawn, snapshot: _snapshot } =
+        spawn_proxy(vec![fake_mcp_with_proxy("math", FakeMcpServer::new(), true)]).await;
 
     let result = call_proxy_tool(&spawn, "math", "add_numbers", serde_json::json!({"a": 3, "b": 4})).await;
     assert!(result.unwrap().contains('7'), "Expected result to contain sum of 3+4=7");
-
-    cleanup_tool_dir(&snapshot.instructions, "proxy");
 }
 
 #[tokio::test]
 async fn test_tool_proxy_call_tool_unknown_server_returns_error() {
-    let (_home, spawn, snapshot) = spawn_proxy(vec![fake_mcp_with_proxy("math", FakeMcpServer::new(), true)]).await;
+    let ProxyFixture { _home, spawn, snapshot: _snapshot } =
+        spawn_proxy(vec![fake_mcp_with_proxy("math", FakeMcpServer::new(), true)]).await;
 
     let err = call_proxy_tool(&spawn, "nonexistent", "some_tool", serde_json::json!({}))
         .await
@@ -145,13 +144,11 @@ async fn test_tool_proxy_call_tool_unknown_server_returns_error() {
         err.contains("nonexistent") || err.contains("not part of proxy") || err.contains("not connected"),
         "Expected error mentioning unknown server, got: {err}"
     );
-
-    cleanup_tool_dir(&snapshot.instructions, "proxy");
 }
 
 #[tokio::test]
 async fn test_tool_proxy_multiple_nested_servers() {
-    let (_home, _spawn, snapshot) = spawn_proxy(vec![
+    let ProxyFixture { _home, snapshot, .. } = spawn_proxy(vec![
         fake_mcp_with_proxy("server_a", FakeMcpServer::new(), true),
         fake_mcp_with_proxy("server_b", FakeMcpServer::new(), true),
     ])
@@ -167,19 +164,16 @@ async fn test_tool_proxy_multiple_nested_servers() {
     assert!(tool_dir.join("server_b").exists());
     assert!(tool_dir.join("server_a/add_numbers.json").exists());
     assert!(tool_dir.join("server_b/add_numbers.json").exists());
-
-    let _ = std::fs::remove_dir_all(tool_dir);
 }
 
 #[tokio::test]
 async fn test_tool_proxy_member_server_status_shows_connected_and_proxied() {
-    let (_home, _spawn, snapshot) = spawn_proxy(vec![fake_mcp_with_proxy("math", FakeMcpServer::new(), true)]).await;
+    let ProxyFixture { _home, snapshot, .. } =
+        spawn_proxy(vec![fake_mcp_with_proxy("math", FakeMcpServer::new(), true)]).await;
 
     assert!(!snapshot.server_statuses.iter().any(|s| s.name == "proxy"));
 
     let math_status = snapshot.server_statuses.iter().find(|s| s.name == "math").expect("Expected 'math' status entry");
     assert!(matches!(math_status.status, mcp_utils::status::McpServerStatus::Connected { .. }));
     assert!(math_status.proxied);
-
-    cleanup_tool_dir(&snapshot.instructions, "proxy");
 }

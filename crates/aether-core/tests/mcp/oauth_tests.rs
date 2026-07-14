@@ -7,21 +7,38 @@ use mcp_utils::status::{McpServerAuthCapability, McpServerStatus};
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
-fn http_mcp(name: &str, uri: &str) -> McpServer {
-    McpServer::new(name, McpTransport::Http { config: StreamableHttpClientTransportConfig::with_uri(uri) }, false)
+struct FailingHttpEndpoint {
+    uri: String,
+    task: JoinHandle<()>,
 }
 
-fn failing_http_mcp(name: &str) -> McpServer {
-    http_mcp(name, "http://localhost:19999/mcp")
+impl FailingHttpEndpoint {
+    async fn bind() -> Self {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let uri = format!("http://{}/mcp", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                drop(stream);
+            }
+        });
+        Self { uri, task }
+    }
+
+    fn server(&self, name: &str, proxied: bool) -> McpServer {
+        McpServer::new(
+            name,
+            McpTransport::Http { config: StreamableHttpClientTransportConfig::with_uri(self.uri.as_str()) },
+            proxied,
+        )
+    }
 }
 
-fn failing_http_mcp_proxied(name: &str) -> McpServer {
-    McpServer::new(
-        name,
-        McpTransport::Http { config: StreamableHttpClientTransportConfig::with_uri("http://localhost:19999/mcp") },
-        true,
-    )
+impl Drop for FailingHttpEndpoint {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
 }
 
 fn test_manager(with_oauth: bool) -> McpManager {
@@ -113,15 +130,17 @@ async fn builder_with_oauth_handler_factory_spawns_successfully() {
 
 #[tokio::test]
 async fn http_server_without_handler_stashes_failed_status() {
+    let endpoint = FailingHttpEndpoint::bind().await;
     let mut manager = test_manager(false);
-    assert!(manager.add_mcps(vec![failing_http_mcp("test_server")]).await.is_ok());
+    assert!(manager.add_mcps(vec![endpoint.server("test_server", false)]).await.is_ok());
 }
 
 #[tokio::test]
 async fn http_server_with_handler_stashes_needs_oauth_on_failure() {
+    let endpoint = FailingHttpEndpoint::bind().await;
     let mut manager = test_manager(true);
 
-    assert!(manager.add_mcps(vec![failing_http_mcp("test_oauth_server")]).await.is_ok());
+    assert!(manager.add_mcps(vec![endpoint.server("test_oauth_server", false)]).await.is_ok());
 
     let statuses = manager.server_statuses();
     assert_eq!(statuses.len(), 1);
@@ -136,11 +155,12 @@ async fn http_server_with_handler_stashes_needs_oauth_on_failure() {
 
 #[tokio::test]
 async fn add_mcps_continues_on_oauth_failure() {
+    let endpoint = FailingHttpEndpoint::bind().await;
     let mut manager = test_manager(true);
 
     assert!(
         manager
-            .add_mcps(vec![failing_http_mcp("failing_server_1"), failing_http_mcp("failing_server_2")])
+            .add_mcps(vec![endpoint.server("failing_server_1", false), endpoint.server("failing_server_2", false)])
             .await
             .is_ok()
     );
@@ -177,9 +197,10 @@ async fn oauth_handler_is_dyn_compatible() {
 
 #[tokio::test]
 async fn tool_proxy_with_failing_http_surfaces_needs_oauth() {
+    let endpoint = FailingHttpEndpoint::bind().await;
     let (_home, mut manager) = test_manager_with_home(true);
 
-    let servers = vec![fake_mcp_with_proxy("local", FakeMcpServer::new(), true), failing_http_mcp_proxied("remote")];
+    let servers = vec![fake_mcp_with_proxy("local", FakeMcpServer::new(), true), endpoint.server("remote", true)];
 
     let _ = manager.add_mcps(servers).await;
     let statuses = manager.server_statuses();
@@ -206,9 +227,10 @@ async fn tool_proxy_with_failing_http_surfaces_needs_oauth() {
 
 #[tokio::test]
 async fn tool_proxy_partial_connection_works() {
+    let endpoint = FailingHttpEndpoint::bind().await;
     let (_home, mut manager) = test_manager_with_home(false);
 
-    let servers = vec![fake_mcp_with_proxy("working", FakeMcpServer::new(), true), failing_http_mcp_proxied("broken")];
+    let servers = vec![fake_mcp_with_proxy("working", FakeMcpServer::new(), true), endpoint.server("broken", true)];
 
     let _ = manager.add_mcps(servers).await;
 

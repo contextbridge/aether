@@ -1,6 +1,7 @@
 use aether_core::core::{AgentDeps, Prompt};
 use aether_core::events::{
-    AgentEvent, Command, ContextEvent, LlmCallOutcome, MessageEvent, ModelEvent, ToolEvent, TurnEvent, TurnOutcome,
+    AgentEvent, Command, CompactionOutcome, ContextEvent, LlmCallOutcome, MessageEvent, ModelEvent, ToolEvent,
+    TurnEvent, TurnOutcome,
 };
 use aether_core::mcp::run_mcp_task::McpCommand;
 use aether_telemetry::TelemetryRuntime;
@@ -127,6 +128,7 @@ fn event_kind(msg: &AgentEvent) -> Option<CliEventKind> {
         AgentEvent::Model(ModelEvent::Switched { .. }) => Some(CliEventKind::ModelSwitched),
         AgentEvent::Tool(ToolEvent::Progress { .. }) => Some(CliEventKind::ToolProgress),
         AgentEvent::Context(ContextEvent::CompactionStarted { .. }) => Some(CliEventKind::ContextCompactionStarted),
+        AgentEvent::Context(ContextEvent::CompactionEnded { .. }) => Some(CliEventKind::ContextCompactionEnded),
         AgentEvent::Context(ContextEvent::CompactionResult { .. }) => Some(CliEventKind::ContextCompactionResult),
         AgentEvent::Context(ContextEvent::UsageUpdated { .. }) => Some(CliEventKind::ContextUsage),
         AgentEvent::Context(ContextEvent::Cleared) => Some(CliEventKind::ContextCleared),
@@ -199,6 +201,12 @@ fn format_text(msg: &AgentEvent) -> Option<String> {
         AgentEvent::Context(ContextEvent::CompactionStarted { message_count }) => {
             Some(format!("Context compaction started ({message_count} messages)"))
         }
+
+        AgentEvent::Context(ContextEvent::CompactionEnded { outcome }) => Some(match outcome {
+            CompactionOutcome::Completed => "Context compaction completed".to_string(),
+            CompactionOutcome::Failed { error } => format!("Context compaction failed: {error}"),
+            CompactionOutcome::Cancelled => "Context compaction cancelled".to_string(),
+        }),
 
         AgentEvent::Context(ContextEvent::CompactionResult { summary, messages_removed }) => {
             Some(format!("Context compacted: {messages_removed} messages removed. {summary}"))
@@ -492,6 +500,10 @@ mod tests {
             (
                 AgentEvent::Context(ContextEvent::CompactionStarted { message_count: 1 }),
                 CliEventKind::ContextCompactionStarted,
+            ),
+            (
+                AgentEvent::Context(ContextEvent::CompactionEnded { outcome: CompactionOutcome::Completed }),
+                CliEventKind::ContextCompactionEnded,
             ),
             (
                 AgentEvent::Context(ContextEvent::CompactionResult { summary: "s".to_string(), messages_removed: 1 }),

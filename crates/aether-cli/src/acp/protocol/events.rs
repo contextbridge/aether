@@ -1,6 +1,6 @@
 use acp_utils::notifications::{
-    ContextClearedParams, ContextUsageParams, SubAgentEvent, SubAgentProgressParams, SubAgentToolCallUpdate,
-    SubAgentToolError, SubAgentToolRequest, SubAgentToolResult,
+    ContextClearedParams, ContextCompactionParams, ContextUsageParams, SubAgentEvent, SubAgentProgressParams,
+    SubAgentToolCallUpdate, SubAgentToolError, SubAgentToolRequest, SubAgentToolResult,
 };
 use aether_core::events::{
     AgentEvent, ContextEvent, MessageEvent, ModelEvent, SubAgentProgressPayload, ToolEvent, TurnEvent, TurnOutcome,
@@ -24,6 +24,7 @@ pub fn map_agent_event_to_session_notification(session_id: SessionId, msg: &Agen
 /// and is sent via [`ConnectionTo<Client>::send_notification`].
 pub enum AgentExtNotification {
     ContextUsage(ContextUsageParams),
+    ContextCompaction(ContextCompactionParams),
     ContextCleared(ContextClearedParams),
     SubAgentProgress(SubAgentProgressParams),
 }
@@ -32,6 +33,12 @@ pub fn try_into_agent_notification(msg: &AgentEvent) -> Option<AgentExtNotificat
     match msg {
         AgentEvent::Context(ContextEvent::UsageUpdated { usage }) => {
             Some(AgentExtNotification::ContextUsage(ContextUsageParams { usage: usage.clone() }))
+        }
+        AgentEvent::Context(ContextEvent::CompactionStarted { .. }) => {
+            Some(AgentExtNotification::ContextCompaction(ContextCompactionParams { active: true }))
+        }
+        AgentEvent::Context(ContextEvent::CompactionEnded { .. }) => {
+            Some(AgentExtNotification::ContextCompaction(ContextCompactionParams { active: false }))
         }
         AgentEvent::Tool(ToolEvent::Progress { request, message, .. }) => {
             let msg_str = message.as_ref()?;
@@ -118,6 +125,7 @@ pub(crate) fn map_agent_event_to_notification(
             ContextEvent::UsageUpdated { .. }
             | ContextEvent::Cleared
             | ContextEvent::CompactionStarted { .. }
+            | ContextEvent::CompactionEnded { .. }
             | ContextEvent::CompactionResult { .. },
         )
         | AgentEvent::Turn(
@@ -327,6 +335,7 @@ fn to_sub_agent_event(event: &AgentEvent) -> SubAgentEvent {
 mod tests {
     use super::*;
     use acp_utils::notifications::SubAgentEvent;
+    use aether_core::events::CompactionOutcome;
     use llm::ToolCallRequest;
 
     #[test]
@@ -545,6 +554,31 @@ mod tests {
             };
             assert_eq!(text.text, expected_text);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_compaction_lifecycle_maps_to_agent_notifications() -> Result<(), String> {
+        let started = AgentEvent::Context(ContextEvent::CompactionStarted { message_count: 12 });
+        let started = try_into_agent_notification(&started).ok_or("compaction start notification")?;
+        let AgentExtNotification::ContextCompaction(started) = started else {
+            return Err("expected ContextCompaction".to_string());
+        };
+        assert!(started.active);
+
+        for outcome in [
+            CompactionOutcome::Completed,
+            CompactionOutcome::Failed { error: "failed".to_string() },
+            CompactionOutcome::Cancelled,
+        ] {
+            let ended = AgentEvent::Context(ContextEvent::CompactionEnded { outcome });
+            let ended = try_into_agent_notification(&ended).ok_or("compaction end notification")?;
+            let AgentExtNotification::ContextCompaction(ended) = ended else {
+                return Err("expected ContextCompaction".to_string());
+            };
+            assert!(!ended.active);
+        }
+
         Ok(())
     }
 

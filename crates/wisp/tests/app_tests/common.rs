@@ -307,6 +307,13 @@ impl Renderer {
         Ok(())
     }
 
+    pub(super) fn on_context_compaction(&mut self, active: bool) -> Result<(), Box<dyn std::error::Error>> {
+        self.handle_acp_event(AcpEvent::ContextCompaction(acp_utils::notifications::ContextCompactionParams {
+            active,
+        }))?;
+        Ok(())
+    }
+
     pub(super) fn on_context_cleared(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         self.handle_acp_event(AcpEvent::ContextCleared(acp_utils::notifications::ContextClearedParams::default()))?;
         Ok(())

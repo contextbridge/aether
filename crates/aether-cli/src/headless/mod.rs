@@ -35,6 +35,7 @@ pub enum CliEventKind {
     ModelSwitched,
     ToolProgress,
     ContextCompactionStarted,
+    ContextCompactionEnded,
     ContextCompactionResult,
     ContextUsage,
     ContextCleared,

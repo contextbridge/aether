@@ -10,7 +10,7 @@ pub enum AcpServerError {
 }
 
 impl AcpServerError {
-    pub fn protocol(operation: &'static str, source: agent_client_protocol::Error) -> Self {
-        Self::Protocol { operation: operation.to_string(), source }
+    pub fn protocol(operation: impl Into<String>, source: agent_client_protocol::Error) -> Self {
+        Self::Protocol { operation: operation.into(), source }
     }
 }
