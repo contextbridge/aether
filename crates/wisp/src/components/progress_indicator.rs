@@ -30,10 +30,6 @@ pub struct ProgressActivity {
 }
 
 impl ProgressActivity {
-    pub fn new(agent_busy: bool, workspace: WorkspaceProgress, compaction_active: bool) -> Self {
-        Self { agent_busy, workspace, compaction_active }
-    }
-
     fn display(self) -> ProgressDisplay {
         match self.workspace {
             WorkspaceProgress::Moving => ProgressDisplay::MovingWorkspace { interruptible: self.agent_busy },
@@ -172,15 +168,15 @@ mod tests {
     #[test]
     fn renders_nothing_after_busy_clears() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(ProgressActivity::new(true, WorkspaceProgress::None, false));
-        indicator.update(ProgressActivity::new(false, WorkspaceProgress::None, false));
+        indicator.update(ProgressActivity { agent_busy: true, ..Default::default() });
+        indicator.update(ProgressActivity::default());
         assert!(indicator.render(&ctx()).lines().is_empty());
     }
 
     #[test]
     fn renders_esc_hint_when_agent_busy() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(ProgressActivity::new(true, WorkspaceProgress::None, false));
+        indicator.update(ProgressActivity { agent_busy: true, ..Default::default() });
         let frame = indicator.render(&ctx());
         let lines = frame.lines();
         assert_eq!(lines.len(), 3);
@@ -191,9 +187,9 @@ mod tests {
     #[test]
     fn spinner_animates_with_tick() {
         let mut a = ProgressIndicator::default();
-        a.update(ProgressActivity::new(true, WorkspaceProgress::None, false));
+        a.update(ProgressActivity { agent_busy: true, ..Default::default() });
         let mut b = ProgressIndicator::default();
-        b.update(ProgressActivity::new(true, WorkspaceProgress::None, false));
+        b.update(ProgressActivity { agent_busy: true, ..Default::default() });
         b.set_tick(1);
         let text_a = a.render(&ctx()).lines()[1].plain_text();
         let text_b = b.render(&ctx()).lines()[1].plain_text();
@@ -203,7 +199,7 @@ mod tests {
     #[test]
     fn on_tick_advances_when_busy() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(ProgressActivity::new(true, WorkspaceProgress::None, false));
+        indicator.update(ProgressActivity { agent_busy: true, ..Default::default() });
         let tick_before = indicator.tick;
         indicator.on_tick();
         assert_ne!(indicator.tick, tick_before);
@@ -212,7 +208,7 @@ mod tests {
     #[test]
     fn on_tick_noop_when_idle() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(ProgressActivity::new(false, WorkspaceProgress::None, false));
+        indicator.update(ProgressActivity::default());
         indicator.on_tick();
         assert!(indicator.render(&ctx()).lines().is_empty());
     }
@@ -220,7 +216,7 @@ mod tests {
     #[test]
     fn first_turn_shows_first_tip() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(ProgressActivity::new(true, WorkspaceProgress::None, false));
+        indicator.update(ProgressActivity { agent_busy: true, ..Default::default() });
         indicator.set_turn_count(1);
         let frame = indicator.render(&ctx());
         let text = frame.lines()[1].plain_text();
@@ -230,13 +226,13 @@ mod tests {
     #[test]
     fn tip_advances_each_turn() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(ProgressActivity::new(true, WorkspaceProgress::None, false));
+        indicator.update(ProgressActivity { agent_busy: true, ..Default::default() });
         assert_eq!(indicator.turn_count, 1);
         let tip_0 = indicator.render(&ctx()).lines()[1].plain_text();
 
-        indicator.update(ProgressActivity::new(false, WorkspaceProgress::None, false));
+        indicator.update(ProgressActivity::default());
 
-        indicator.update(ProgressActivity::new(true, WorkspaceProgress::None, false));
+        indicator.update(ProgressActivity { agent_busy: true, ..Default::default() });
         assert_eq!(indicator.turn_count, 2);
         let tip_1 = indicator.render(&ctx()).lines()[1].plain_text();
 
@@ -248,7 +244,7 @@ mod tests {
     #[test]
     fn shows_working_after_tips_exhausted() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(ProgressActivity::new(true, WorkspaceProgress::None, false));
+        indicator.update(ProgressActivity { agent_busy: true, ..Default::default() });
         indicator.set_turn_count(MESSAGES.len() + 1);
         let text = indicator.render(&ctx()).lines()[1].plain_text();
         assert!(text.contains("Working..."));
@@ -257,7 +253,7 @@ mod tests {
     #[test]
     fn reset_restarts_tips() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(ProgressActivity::new(true, WorkspaceProgress::None, false));
+        indicator.update(ProgressActivity { agent_busy: true, ..Default::default() });
         assert_eq!(indicator.turn_count, 1);
 
         let indicator = ProgressIndicator::default();
@@ -267,7 +263,7 @@ mod tests {
     #[test]
     fn renders_workspace_move_without_interrupt_hint() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(ProgressActivity::new(false, WorkspaceProgress::Moving, false));
+        indicator.update(ProgressActivity { workspace: WorkspaceProgress::Moving, ..Default::default() });
         let text = indicator.render(&ctx()).lines()[1].plain_text();
         assert!(text.contains("Moving workspace..."));
         assert!(!text.contains("esc to interrupt"));
@@ -276,7 +272,11 @@ mod tests {
     #[test]
     fn workspace_move_message_takes_precedence_when_agent_is_busy() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(ProgressActivity::new(true, WorkspaceProgress::Moving, false));
+        indicator.update(ProgressActivity {
+            agent_busy: true,
+            workspace: WorkspaceProgress::Moving,
+            ..Default::default()
+        });
         let text = indicator.render(&ctx()).lines()[1].plain_text();
         assert!(text.contains("Moving workspace..."));
         assert!(text.contains("esc to interrupt"));
@@ -285,7 +285,7 @@ mod tests {
     #[test]
     fn renders_workspace_session_load_without_interrupt_hint() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(ProgressActivity::new(false, WorkspaceProgress::LoadingSession, false));
+        indicator.update(ProgressActivity { workspace: WorkspaceProgress::LoadingSession, ..Default::default() });
         let text = indicator.render(&ctx()).lines()[1].plain_text();
         assert!(text.contains("Loading session in new workspace..."));
         assert!(!text.contains("esc to interrupt"));
@@ -294,11 +294,11 @@ mod tests {
     #[test]
     fn non_agent_activity_does_not_advance_turn_tips() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(ProgressActivity::new(false, WorkspaceProgress::Moving, false));
-        indicator.update(ProgressActivity::new(false, WorkspaceProgress::None, false));
-        indicator.update(ProgressActivity::new(false, WorkspaceProgress::None, true));
-        indicator.update(ProgressActivity::new(false, WorkspaceProgress::None, false));
-        indicator.update(ProgressActivity::new(true, WorkspaceProgress::None, false));
+        indicator.update(ProgressActivity { workspace: WorkspaceProgress::Moving, ..Default::default() });
+        indicator.update(ProgressActivity::default());
+        indicator.update(ProgressActivity { compaction_active: true, ..Default::default() });
+        indicator.update(ProgressActivity::default());
+        indicator.update(ProgressActivity { agent_busy: true, ..Default::default() });
 
         let text = indicator.render(&ctx()).lines()[1].plain_text();
         assert!(text.contains(MESSAGES[0]));
@@ -307,11 +307,11 @@ mod tests {
     #[test]
     fn staying_active_does_not_advance_tip() {
         let mut indicator = ProgressIndicator::default();
-        indicator.update(ProgressActivity::new(true, WorkspaceProgress::None, false));
+        indicator.update(ProgressActivity { agent_busy: true, ..Default::default() });
         assert_eq!(indicator.turn_count, 1);
 
-        indicator.update(ProgressActivity::new(true, WorkspaceProgress::None, false));
-        indicator.update(ProgressActivity::new(true, WorkspaceProgress::None, false));
+        indicator.update(ProgressActivity { agent_busy: true, ..Default::default() });
+        indicator.update(ProgressActivity { agent_busy: true, ..Default::default() });
         assert_eq!(indicator.turn_count, 1);
     }
 }

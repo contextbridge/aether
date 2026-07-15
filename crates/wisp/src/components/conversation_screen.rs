@@ -146,11 +146,11 @@ impl ConversationScreen {
     }
 
     pub fn refresh_caches(&mut self, _context: &ViewContext) {
-        self.progress_indicator.update(ProgressActivity::new(
-            self.is_busy(),
-            self.workspace_move_state.progress(),
-            self.compaction_active,
-        ));
+        self.progress_indicator.update(ProgressActivity {
+            agent_busy: self.is_busy(),
+            workspace: self.workspace_move_state.progress(),
+            compaction_active: self.compaction_active,
+        });
         self.plan_tracker.cached_visible_entries();
     }
 
