@@ -59,6 +59,17 @@ Each root task tree is stored in one JSONL file when persistent storage is enabl
 
 `in_progress` is accepted as an input alias for `inProgress`.
 
+## Listing and filtering
+
+`task_list` accepts optional filters:
+
+| Field       | Type      | Description                                                                          |
+| ----------- | --------- | ------------------------------------------------------------------------------------ |
+| `assignee`  | `string`  | Only return tasks assigned to this agent or worker.                                  |
+| `status`    | `string`  | Filter by status: `pending`, `inProgress`, `completed`, or `blocked`.                |
+| `treeId`    | `string`  | Only return tasks in one tree, identified by its root task ID.                       |
+| `readyOnly` | `boolean` | Only return tasks that are ready to start (pending with all dependencies completed).  |
+
 ## Examples
 
 Create a root task:
@@ -104,6 +115,8 @@ Complete a task and attach handoff context:
 ```
 
 ## Handoff fields
+
+`task_update` accepts an `id` plus any combination of fields to change. In addition to `title`, `description`, `status`, `assignee`, and `deps`, you can attach handoff metadata:
 
 | Field       | Purpose                                 |
 | ----------- | --------------------------------------- |

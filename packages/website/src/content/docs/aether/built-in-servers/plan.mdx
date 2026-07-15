@@ -93,12 +93,18 @@ Without a submit command, `submit_plan` uses MCP elicitation and the client disp
 
 ### Input
 
-| Field        | Type      | Description                                          |
-| ------------ | --------- | ---------------------------------------------------- |
-| `planName`   | `string`  | Stable plan identifier originally used by the plan.  |
-| `oldString`  | `string`  | Exact string to replace.                             |
-| `newString`  | `string`  | Replacement string.                                  |
-| `replaceAll` | `boolean` | Replace every occurrence. Defaults to `false`.       |
+| Field      | Type         | Description                                                                                     |
+| ---------- | ------------ | ----------------------------------------------------------------------------------------------- |
+| `planName` | `string`     | Stable plan identifier originally used by the plan.                                             |
+| `edits`    | `FileEdit[]` | Exact-string replacements to apply, in one atomic batch. All edits must apply, or none are written. |
+
+Each entry in `edits` is a `FileEdit`:
+
+| Field        | Type      | Description                                                        |
+| ------------ | --------- | ------------------------------------------------------------------ |
+| `oldString`  | `string`  | Exact text to find. Must match whitespace (e.g. indentation).      |
+| `newString`  | `string`  | Replacement text.                                                  |
+| `replaceAll` | `boolean` | Replace every occurrence instead of just the first. Defaults to `false`. |
 
 ### Output
 
@@ -107,6 +113,18 @@ Without a submit command, `submit_plan` uses MCP elicitation and the client disp
 | `planName`         | `string` | Plan identifier.                   |
 | `planPath`         | `string` | Absolute path edited by the server. |
 | `replacementsMade` | `number` | Number of replacements made.       |
+
+### Example request
+
+```json
+{
+  "planName": "auth-refactor",
+  "edits": [
+    { "oldString": "## Old approach\n\nUse cookies.", "newString": "## Revised approach\n\nUse JWT sessions." },
+    { "oldString": "Phase 2", "newString": "Phase 3", "replaceAll": true }
+  ]
+}
+```
 
 ## `submit_plan`
 

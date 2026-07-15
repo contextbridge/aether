@@ -60,10 +60,12 @@ await AetherSession.start({
 | `cwd`                 | Working directory for the spawned `aether acp` process. Defaults to `process.cwd()`.  |
 | `agent`               | Agent name from `.aether/settings.json`.                                              |
 | `model`               | Direct model id, such as `anthropic:claude-sonnet-4-5`.                               |
-| `reasoningEffort`     | `"low"`, `"medium"`, `"high"`, or `"xhigh"` when using a direct model.                |
+| `reasoningEffort`     | `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`, or `"max"` when using a direct model. |
 | `settings`            | Inline Aether settings object using the `.aether/settings.json` shape. SDK-hosted and external MCP servers live here under `mcps`. |
 | `settingsFile`        | Path to an alternate settings JSON file.                                              |
 | `binaryPath`          | Override the bundled CLI binary with an absolute path or command available on `PATH`. |
+| `env`                 | Environment variables for the spawned `aether acp` process.                            |
+| `logDir`              | Custom directory for ACP logs.                                                         |
 | `providers`           | Provider connection overrides, such as custom Bedrock endpoints or auth behavior.     |
 | `abortSignal`         | Cancel the active session and tear down the subprocess.                               |
 | `onPermissionRequest` | Custom policy for ACP permission requests. Defaults to `autoApprovePermissions`.      |

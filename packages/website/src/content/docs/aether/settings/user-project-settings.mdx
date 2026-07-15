@@ -87,6 +87,27 @@ Plain relative paths in project settings resolve from the **workspace root** (th
 
 Here `AGENTS.md` resolves to `<workspace-root>/AGENTS.md`.
 
+## Initialization options
+
+`aether settings init` runs an interactive wizard by default. Pass flags to answer the prompts non-interactively, which is useful for scripts and CI:
+
+| Flag | Description |
+| ---- | ----------- |
+| `--user` / `--project` | Required. Choose the settings scope. |
+| `--path <dir>` | Project directory to initialize (defaults to `.`). Only with `--project`. |
+| `--provider <name>` | Provider to use, e.g. `anthropic`, `codex`, or `bedrock`. Skips the provider prompt. |
+| `--preset <name>` | `minimal` (a single agent with bash and skills tools) or `batteries-included` (Plan, Build, and Explore agents wired to the built-in MCP servers). Skips the preset prompt. |
+| `--harness <name>` | Harness conventions to auto-load with `batteries-included`. Repeatable: `claude`, `agents`. |
+| `--force` | Overwrite an existing settings file at the selected target. |
+
+```bash
+# Batteries-included project setup, fully non-interactive
+aether settings init --project \
+  --provider anthropic \
+  --preset batteries-included \
+  --harness claude --harness agents
+```
+
 ## Variable expansion
 
 All resource paths support `$VAR` / `${VAR}` variable expansion. This lets user-level settings reference project files without knowing the project's location.
