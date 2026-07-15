@@ -3,6 +3,18 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use thiserror::Error;
 
+/// Controls how much of a repository's object set is downloaded during [`GitRepo::clone`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloneMode {
+    /// Download the full object set so the clone is self-contained
+    /// (e.g. so it can be bundled, or because `source` is a bundle
+    /// and not a promisor remote).
+    Full,
+    /// Defer downloading file blobs until they are needed via a partial
+    /// clone (`--filter=blob:none`) -- cheaper for large repos.
+    Blobless,
+}
+
 /// Represents a git repository used for evaluation purposes
 pub struct GitRepo {
     path: PathBuf,
@@ -23,14 +35,14 @@ impl GitRepo {
 
     /// Clone `source` (a URL or a local bundle/path) into `dest` with `--no-checkout`.
     ///
-    /// When `blobless` is true, uses a partial blobless clone (`--filter=blob:none`) that
-    /// defers downloading file blobs until they're needed -- cheaper for large repos. When
-    /// false, the full object set is downloaded so the clone is self-contained (e.g. so it
-    /// can be bundled, or because `source` is a bundle and not a promisor remote).
+    /// [`CloneMode::Blobless`] defers downloading file blobs until they're needed --
+    /// cheaper for large repos. [`CloneMode::Full`] downloads the complete object set so
+    /// the clone is self-contained (e.g. so it can be bundled, or because `source` is a
+    /// bundle and not a promisor remote).
     #[tracing::instrument(skip(source, dest))]
-    pub fn clone(source: impl AsRef<OsStr>, dest: &Path, blobless: bool) -> Result<Self, GitRepoError> {
+    pub fn clone(source: impl AsRef<OsStr>, dest: &Path, mode: CloneMode) -> Result<Self, GitRepoError> {
         let mut args = vec![OsStr::new("clone"), OsStr::new("--no-checkout")];
-        if blobless {
+        if mode == CloneMode::Blobless {
             args.push(OsStr::new("--filter=blob:none"));
         }
         args.push(source.as_ref());
@@ -293,7 +305,7 @@ mod tests {
         .to_string();
 
         let clone_dir = tempfile::tempdir().unwrap();
-        let repo = GitRepo::clone(source_path.to_str().unwrap(), clone_dir.path(), true).unwrap();
+        let repo = GitRepo::clone(source_path.to_str().unwrap(), clone_dir.path(), CloneMode::Blobless).unwrap();
 
         let entries: Vec<_> = fs::read_dir(clone_dir.path())
             .unwrap()

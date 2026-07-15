@@ -10,7 +10,7 @@ use wisp::components::command_picker::{CommandEntry, CommandPicker};
 use wisp::components::file_picker::{FileMatch, FilePicker};
 use wisp::components::plan_review::PlanDocument;
 use wisp::components::plan_view::PlanView;
-use wisp::components::progress_indicator::{ProgressActivity, ProgressIndicator, WorkspaceProgress};
+use wisp::components::progress_indicator::{ProgressActivity, ProgressIndicator};
 use wisp::components::status_line::{ContextUsageDisplay, StatusLine};
 use wisp::components::text_input::TextInput;
 use wisp::components::thought_message::ThoughtMessage;
@@ -385,7 +385,7 @@ fn stories() -> Vec<(String, WispStory)> {
             "ProgressIndicator".into(),
             WispStory::ProgressIndicator({
                 let mut indicator = ProgressIndicator::default();
-                indicator.update(ProgressActivity::new(true, WorkspaceProgress::None, false));
+                indicator.update(ProgressActivity { agent_busy: true, ..Default::default() });
                 ProgressIndicatorStory { indicator }
             }),
         ),

@@ -1,6 +1,6 @@
 use super::diff::{DiffStats, GitDiff};
 use crate::WorkspaceError;
-use crate::git_repo::GitRepo;
+use crate::git_repo::{CloneMode, GitRepo};
 use schemars::JsonSchema;
 use serde::Serialize;
 use std::{
@@ -92,7 +92,7 @@ impl Workspace {
         let temp_dir = new_temp_dir()?;
 
         tracing::debug!("Cloning git repo {} at commit {}", url, start_commit);
-        let repo = GitRepo::clone(&url, temp_dir.path(), true)?;
+        let repo = GitRepo::clone(&url, temp_dir.path(), CloneMode::Blobless)?;
 
         let source = WorkspaceSource::GitRepo { url, start_commit: start_commit.clone(), gold_commit };
         Self::from_cloned(temp_dir, &repo, &start_commit, subdir, source)
@@ -107,7 +107,7 @@ impl Workspace {
 
         tracing::debug!("Cloning git bundle {} at commit {}", bundle_path.display(), start_commit);
         let temp_dir = new_temp_dir()?;
-        let repo = GitRepo::clone(&bundle_path, temp_dir.path(), false)?;
+        let repo = GitRepo::clone(&bundle_path, temp_dir.path(), CloneMode::Full)?;
         let source = WorkspaceSource::Bundle { start_commit: start_commit.clone(), gold_commit };
         Self::from_cloned(temp_dir, &repo, &start_commit, subdir, source)
     }
