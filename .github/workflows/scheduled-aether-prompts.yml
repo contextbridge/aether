@@ -1,0 +1,132 @@
+name: Scheduled Aether prompts
+
+on:
+  schedule:
+    - cron: "0 9 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  discover-prompts:
+    name: Discover scheduled prompts
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.prompts.outputs.matrix }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Build prompt matrix
+        id: prompts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          prompt_dir=".aether/scheduled-prompts"
+          mapfile -t prompts < <(find "$prompt_dir" -maxdepth 1 -type f -name '*.md' -printf '%f\n' | sort)
+
+          if (( ${#prompts[@]} == 0 )); then
+            echo "No scheduled prompts found in $prompt_dir." >&2
+            exit 1
+          fi
+
+          entries=()
+          for filename in "${prompts[@]}"; do
+            id="${filename%.md}"
+            if [[ ! "$id" =~ ^[a-z0-9][a-z0-9-]{0,63}$ ]]; then
+              echo "Invalid scheduled prompt filename: $filename" >&2
+              exit 1
+            fi
+            entries+=("$(jq -cn --arg id "$id" --arg path "$prompt_dir/$filename" '{id: $id, path: $path}')")
+          done
+
+          matrix="$(printf '%s\n' "${entries[@]}" | jq -sc '{include: .}')"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  run-prompt:
+    name: Run ${{ matrix.prompt.id }}
+    needs: discover-prompts
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: ci
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        prompt: ${{ fromJSON(needs.discover-prompts.outputs.matrix).include }}
+    concurrency:
+      group: scheduled-aether-${{ matrix.prompt.id }}
+      cancel-in-progress: false
+    steps:
+      - name: Generate ContextBridge app token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.CB_PR_AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.CB_PR_AUTOMATION_APP_PRIVATE_KEY }}
+          owner: contextbridge
+          repositories: aether
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev
+
+      - uses: jdx/mise-action@v4
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install latest released Aether
+        shell: bash
+        run: |
+          set -euo pipefail
+          export CARGO_HOME="$RUNNER_TEMP/aether-cargo"
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            https://github.com/contextbridge/aether/releases/latest/download/aether-agent-cli-installer.sh \
+            | sh -s -- --no-modify-path
+          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+          "$CARGO_HOME/bin/aether" --version
+
+      - name: Run Aether prompt
+        env:
+          ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          aether headless \
+            --agent Cheap \
+            --cwd "$GITHUB_WORKSPACE" \
+            --output json \
+            --events text,tool_call,tool_result,tool_error,turn_ended \
+            < "${{ matrix.prompt.path }}" \
+            | tee "$RUNNER_TEMP/aether-headless.jsonl"
+
+      - name: Create or update pull request
+        uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          branch: automation/aether/${{ matrix.prompt.id }}
+          delete-branch: true
+          title: "chore: scheduled ${{ matrix.prompt.id }}"
+          commit-message: "chore: scheduled ${{ matrix.prompt.id }}"
+          labels: |
+            automated
+            aether
+          body: |
+            ## Scheduled Aether task
+
+            Prompt: `${{ matrix.prompt.path }}`
+
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            Repository CI runs automatically on this pull request.
