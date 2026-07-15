@@ -59,15 +59,16 @@ Zed is the primary editor integration today.
 aether acp [OPTIONS]
 ```
 
-| Flag                 | Type                             | Description                                                                                                |
-| -------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `--log-dir`          | `path`                           | Log output directory. Defaults to `/tmp/aether-acp-logs`.                                                  |
-| `--agent`            | `string`                         | Initial agent/mode for new sessions. Mutually exclusive with `--model` and `--reasoning-effort`.           |
-| `--model`            | `string`                         | Initial model spec for new sessions. Mutually exclusive with `--agent`.                                    |
-| `--reasoning-effort` | `low \| medium \| high \| xhigh` | Initial reasoning effort for an explicit `--model`. Requires `--model`; mutually exclusive with `--agent`. |
-| `--settings-json`    | `string`                         | Inline settings JSON.                                                                                      |
-| `--settings-file`    | `path`                           | Settings JSON file.                                                                                        |
-| `--sandbox-image`    | `string`                         | Run inside a Docker sandbox using the given image.                                                         |
+| Flag                 | Type                                               | Description                                                                                                                 |
+| -------------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `--log-dir`          | `path`                                             | Log output directory. Defaults to `/tmp/aether-acp-logs`.                                                                   |
+| `--agent`            | `string`                                           | Initial agent/mode for new sessions. Mutually exclusive with `--model` and `--reasoning-effort`.                            |
+| `--model`            | `string`                                           | Initial model spec for new sessions. Mutually exclusive with `--agent`.                                                     |
+| `--reasoning-effort` | `minimal \| low \| medium \| high \| xhigh \| max` | Initial reasoning effort for an explicit `--model`. Requires `--model`; mutually exclusive with `--agent`.                  |
+| `--provider`         | `provider.field=value`                             | Provider override. Supports `PROVIDER.url`, `PROVIDER.auth`, `PROVIDER.request-model`, and `bedrock.inference-profile-arn`. |
+| `--settings-json`    | `string`                                           | Inline settings JSON.                                                                                                       |
+| `--settings-file`    | `path`                                             | Settings JSON file.                                                                                                         |
+| `--sandbox-image`    | `string`                                           | Run inside a Docker sandbox using the given image.                                                                          |
 
 Examples:
 

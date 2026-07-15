@@ -139,27 +139,28 @@ aether headless --output json --events tool_call,tool_result \
 
 Available event kinds:
 
-| Event kind                   | Description                     |
-| ---------------------------- | ------------------------------- |
-| `text`                       | Final text chunks.              |
-| `thought`                    | Final reasoning/thought chunks. |
-| `tool_call`                  | Tool invocation.                |
-| `tool_result`                | Tool return value.              |
-| `tool_error`                 | Tool failure.                   |
-| `auto_continue`              | Agent auto-continuing.          |
-| `model_switched`             | Model changed through alloying. |
-| `tool_progress`              | Tool execution progress.        |
-| `context_compaction_started` | Context compaction beginning.   |
-| `context_compaction_result`  | Context compaction completed.   |
-| `context_usage`              | Token usage update.             |
-| `context_cleared`            | Context was cleared.            |
-| `turn_started`               | Turn processing began.          |
-| `turn_ended`                 | Turn completed, failed, or was cancelled. |
-| `llm_retry_scheduled`        | LLM retry backoff was scheduled. |
-| `llm_call_started`           | LLM call began, including retries. |
-| `llm_call_ended`             | LLM call completed, failed, or was cancelled. |
-| `tool_execution_started`     | Tool execution began.           |
-| `tool_definitions_updated`   | Available tool definitions changed. |
+| Event kind                   | Description                                                    |
+| ---------------------------- | -------------------------------------------------------------- |
+| `text`                       | Final text chunks.                                             |
+| `thought`                    | Final reasoning/thought chunks.                                |
+| `tool_call`                  | Tool invocation.                                               |
+| `tool_result`                | Tool return value.                                             |
+| `tool_error`                 | Tool failure.                                                  |
+| `auto_continue`              | Agent auto-continuing.                                         |
+| `model_switched`             | Model changed through alloying.                                |
+| `tool_progress`              | Tool execution progress.                                       |
+| `context_compaction_started` | Context compaction beginning.                                  |
+| `context_compaction_ended`   | Context compaction finished (completed, failed, or cancelled). |
+| `context_compaction_result`  | Context compaction completed.                                  |
+| `context_usage`              | Token usage update.                                            |
+| `context_cleared`            | Context was cleared.                                           |
+| `turn_started`               | Turn processing began.                                         |
+| `turn_ended`                 | Turn completed, failed, or was cancelled.                      |
+| `llm_retry_scheduled`        | LLM retry backoff was scheduled.                               |
+| `llm_call_started`           | LLM call began, including retries.                             |
+| `llm_call_ended`             | LLM call completed, failed, or was cancelled.                  |
+| `tool_execution_started`     | Tool execution began.                                          |
+| `tool_definitions_updated`   | Available tool definitions changed.                            |
 
 When `--events` is set, terminal outcomes are shown only if `turn_ended` is explicitly listed.
 
@@ -190,14 +191,30 @@ aether show-prompt --agent Researcher
 
 `show-prompt` accepts `--cwd`, settings overrides, MCP config overrides, `--system-prompt`, `--agent`, and `--sandbox-image`.
 
-### `agent`
+### `generate`
 
-Manage project agents:
+Call a model directly with a single prompt and print its response. Unlike headless mode, `generate` runs no agent loop, no tools, and no MCP servers — it is a raw model call.
 
 ```bash
-aether agent new [path]
-aether agent list [path]
-aether agent remove <name> [path]
+aether generate --model anthropic:claude-sonnet-4-5-20250929 --prompt "Explain traits in Rust"
 ```
+
+Read the prompt from a file or stdin with `--prompt-file -`:
+
+```bash
+cat schema.json | aether generate --model zai:glm-5.1 --prompt-file -
+```
+
+| Flag                 | Type                                          | Description                                                              |
+| -------------------- | --------------------------------------------- | ------------------------------------------------------------------------ |
+| `--model`            | `string`                                      | Model spec (`provider:model`). Required.                                 |
+| `--prompt`           | `string`                                      | Prompt text. Mutually exclusive with `--prompt-file`.                    |
+| `--prompt-file`      | `path` or `-`                                 | Read the prompt from a file, or `-` for stdin. Mutually exclusive with `--prompt`. |
+| `--system`           | `string`                                      | Optional system prompt.                                                  |
+| `--temperature`      | `number`                                      | Sampling temperature.                                                    |
+| `--top-p`            | `number`                                      | Nucleus sampling probability mass.                                       |
+| `--max-tokens`       | `number`                                      | Upper bound on generated tokens.                                         |
+| `--reasoning-effort` | `minimal \| low \| medium \| high \| xhigh \| max` | Reasoning effort for models that support extended thinking.              |
+| `--output`           | `text \| pretty \| json`                      | Output format. `text` prints the raw response; `json`/`pretty` wrap it as `{ "text", "model" }`. Defaults to `text`. |
 
 See [Getting Started](/getting-started/overview/) and [Settings](/aether/settings/overview/#agents) for project scaffolding details.

@@ -1,15 +1,15 @@
 ---
 title: Git Diff View
-description: Review changes and add inline comments with the two-pane diff viewer.
+description: Review changes, stage, commit, and add inline comments with the two-pane diff viewer.
 ---
 
-Press `Ctrl+G` to open or close the git diff view. It shows changed files on the left and the working-tree diff relative to `HEAD` on the right. You can navigate hunks, queue inline comments, and submit those comments back to the agent as a structured prompt.
+Press `Ctrl+G` to open or close the git diff view. It shows changed files on the left and the diff on the right. By default the diff shows all changes relative to `HEAD` (both staged and unstaged); press `t` to cycle the scope between **Both**, **Unstaged**, and **Staged**. You can navigate hunks, stage and unstage files, create commits, discard changes, queue inline comments, and submit those comments back to the agent as a structured prompt.
 
 ## Layout
 
 ```
 ┌─────────────────┬───────────────────────────┐
-│  Changed Files   │  Unified Diff             │
+│ Git Diff · Both  │  Unified Diff             │
 │                  │                           │
 │  ● src/main.rs   │  @@ -10,6 +10,8 @@       │
 │    src/lib.rs    │   fn main() {             │
@@ -19,32 +19,65 @@ Press `Ctrl+G` to open or close the git diff view. It shows changed files on the
 │                  │   }                        │
 │                  │                           │
 ├─────────────────┴───────────────────────────┤
-│  j/k:move  n/p:hunk  c:comment  s:submit    │
+│ j/k move · space stage · t scope · C commit │
 └─────────────────────────────────────────────┘
 ```
 
+The file-list header shows the active scope: `Git Diff · Both`, `Git Diff · Unstaged`, or `Git Diff · Staged`. The bottom help bar changes depending on which pane is focused.
+
 ## Navigation
 
-| Key                   | Action                                                                              |
-| --------------------- | ----------------------------------------------------------------------------------- |
-| `Tab` / `Shift+Tab`   | Move focus between the file list and diff pane                                      |
-| `h` / `←`             | In the diff pane, focus the file list; in the file list, collapse or move to parent |
-| `l` / `→` or `Enter`  | In the file list, expand/open the selected entry and focus the diff                 |
-| `j` / `↓`             | Move down                                                                           |
-| `k` / `↑`             | Move up                                                                             |
-| `g`                   | Jump to top of the diff pane                                                        |
-| `G`                   | Jump to bottom of the diff pane                                                     |
-| `PageDown` / `PageUp` | Page through the diff pane                                                          |
-| `n` / `p`             | Jump to next / previous hunk in the diff pane                                       |
-| `c`                   | Add a comment at the current diff location                                          |
-| `Enter`               | Submit a comment while editing that comment                                         |
-| `s`                   | Submit all queued comments to the agent                                             |
-| `u`                   | Undo the last queued comment                                                        |
-| `r`                   | Refresh the diff                                                                    |
-| `<` / `>`             | Resize the split panes                                                              |
-| `Esc`                 | Close git diff view                                                                 |
+| Key | Action |
+| --- | --- |
+| `Tab` / `Shift+Tab` | Move focus between the file list and diff pane |
+| `h` / `←` | In the diff pane, focus the file list; in the file list, collapse or move to parent |
+| `l` / `→` or `Enter` | In the file list, expand/open the selected entry and focus the diff |
+| `j` / `↓` | Move down |
+| `k` / `↑` | Move up |
+| `g` | Jump to top of the diff pane |
+| `G` | Jump to bottom of the diff pane |
+| `PageDown` / `PageUp` | Page through the diff pane |
+| `n` / `p` | Jump to next / previous hunk in the diff pane |
+| `o` | Toggle between the hunk-diff view and the full-file view (in the diff pane) |
+| `<` / `>` | Resize the split panes |
+| `r` | Refresh the diff |
+| `Esc` | Close git diff view |
+
+## Diff scope
+
+Press `t` to cycle what the diff shows:
+
+| Scope | Comparison | Includes untracked files |
+| --- | --- | --- |
+| **Both** (default) | `HEAD` → worktree | Yes |
+| **Unstaged** | index → worktree | Yes |
+| **Staged** | `HEAD` → index | No |
+
+The active scope is shown in the file-list header.
+
+## Staging and committing
+
+| Key | Action |
+| --- | --- |
+| `Space` | Toggle staging of the selected file (stages unstaged files, unstages staged files) |
+| `a` | Stage all changes |
+| `A` | Unstage all changes |
+| `C` | Commit staged changes |
+
+`C` opens a commit-message composer at the bottom of the screen. Type a message and press `Enter` to create the commit, or `Esc` to cancel. You can only commit when at least one file is staged.
+
+## Discarding changes
+
+Press `d` to discard changes to the selected file. A confirmation prompt appears — press `y` to confirm or `n` / `Esc` to cancel. Discard restores the file to its state in `HEAD` (for tracked files) or removes it (for untracked files).
 
 ## Inline comments
+
+| Key | Action |
+| --- | --- |
+| `c` | Add a comment at the current diff location |
+| `Enter` | Submit a comment while editing that comment |
+| `s` | Submit all queued comments to the agent (from the diff pane) |
+| `u` | Undo the last queued comment |
 
 1. Navigate to a diff line you want to comment on.
 2. Press `c` to open the comment editor.
@@ -59,5 +92,7 @@ All queued comments are sent as a single prompt to the agent, grouped by file an
 The git diff view is designed for reviewing agent-generated changes. After the agent modifies files, open the diff to:
 
 - See exactly what changed
+- Stage the changes you want to keep and commit them directly
+- Discard changes you don't want
 - Add targeted feedback on specific lines
 - Request fixes to particular hunks without describing them in prose

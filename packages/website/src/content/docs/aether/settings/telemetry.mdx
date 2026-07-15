@@ -23,7 +23,9 @@ Aether supports exporting [OpenTelemetry](https://opentelemetry.io/) GenAI trace
 }
 ```
 
-Aether sends OTLP over HTTP/Protobuf. Set `otlp.endpoint` to the collector's base URL; Aether sends traces to `/v1/traces` and metrics to `/v1/metrics`. An endpoint is required whenever either signal is enabled.
+Aether sends OTLP over HTTP/Protobuf. Set `otlp.endpoint` to the collector's base URL; Aether sends traces to `/v1/traces` and metrics to `/v1/metrics`. For providers that require signal-specific URLs, set `otlp.tracesEndpoint` or `otlp.metricsEndpoint` to override the derived URL for that signal. An endpoint is required whenever either signal is enabled (either the shared `endpoint` or the corresponding signal-specific override).
+
+`otlp.headers` values support `$VAR` and `${VAR}` environment variable expansion (and `$$` for a literal `$`), so you can reference secrets such as `Bearer $OTEL_TOKEN` without hard-coding them. Missing variables are errors, not empty substitutions.
 
 ## Settings
 
@@ -34,8 +36,10 @@ Aether sends OTLP over HTTP/Protobuf. Set `otlp.endpoint` to the collector's bas
 | `captureContent` | `false` | Whether to export prompt, response, reasoning, tool-definition, and tool-argument content. |
 | `traces.enabled` | `true` | Export trace spans. |
 | `metrics.enabled` | `true` | Export metrics. |
-| `otlp.endpoint` | — | Base URL for the OTLP/HTTP collector. Required when traces or metrics are enabled. |
-| `otlp.headers` | `{}` | HTTP headers sent with OTLP requests, such as an `authorization` header. |
+| `otlp.endpoint` | — | Base URL for the OTLP/HTTP collector. Required when traces or metrics are enabled (unless a signal-specific override is set). |
+| `otlp.tracesEndpoint` | — | Exact OTLP/HTTP trace export URL. Overrides the traces URL derived from `endpoint`. |
+| `otlp.metricsEndpoint` | — | Exact OTLP/HTTP metric export URL. Overrides the metrics URL derived from `endpoint`. |
+| `otlp.headers` | `{}` | HTTP headers sent with OTLP requests, such as an `authorization` header. Values support `$VAR` / `${VAR}` environment variable expansion. |
 
 Set both `traces.enabled` and `metrics.enabled` to `false` to keep a telemetry section without creating an exporter.
 

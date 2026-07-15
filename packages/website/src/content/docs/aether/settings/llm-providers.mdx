@@ -170,10 +170,12 @@ Some providers support extended thinking. Set `reasoningEffort` on an agent to r
 
 | Value      | Meaning                                                          |
 | ---------- | ---------------------------------------------------------------- |
-| `"low"`    | Minimal thinking                                                 |
-| `"medium"` | Moderate thinking                                                |
-| `"high"`   | Extended thinking                                                |
-| `"xhigh"`  | Maximum thinking budget for providers that expose a fourth level |
+| `"minimal"` | Minimal or no thinking                                           |
+| `"low"`     | Minimal thinking                                                 |
+| `"medium"`  | Moderate thinking                                                |
+| `"high"`    | Extended thinking                                                |
+| `"xhigh"`   | High thinking budget for providers that expose additional levels |
+| `"max"`     | Maximum thinking budget for providers that expose a top level    |
 
 ```json title=".aether/settings.json"
 {
