@@ -262,7 +262,7 @@ async fn test_cancellation() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn test_tool_timeout() -> Result<(), Box<dyn Error>> {
     let tool_duration = 2000;
     let tool_timeout = 500;
