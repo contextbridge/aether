@@ -101,6 +101,7 @@ jobs:
       - name: Run Aether prompt
         env:
           ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: |
           set -euo pipefail
           aether headless \
