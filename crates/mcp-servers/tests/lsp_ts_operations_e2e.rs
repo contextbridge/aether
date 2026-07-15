@@ -41,9 +41,6 @@ async fn test_ts_hover_returns_type_info() {
 #[tokio::test]
 async fn test_ts_workspace_search_requires_language_and_finds_exported_symbol() {
     let project = NodeProject::new("ts_workspace_search_test").expect("Failed to create project");
-    project.add_file("requirements.txt", "pyright\n").expect("Failed to add requirements.txt");
-    std::fs::write(project.root().join("node_modules/.bin/pyright-langserver"), "not executable\n")
-        .expect("write unavailable Python language server");
     project
         .add_file("src/safety.ts", "export function isSafeToAutoMerge(): boolean { return true; }\n")
         .expect("Failed to add safety.ts");
@@ -71,8 +68,6 @@ async fn test_ts_workspace_search_requires_language_and_finds_exported_symbol() 
     .await;
 
     assert!(result["results"].as_array().unwrap().iter().any(|entry| entry["name"] == "isSafeToAutoMerge"));
-    assert!(result.get("languageCoverage").is_none());
-    assert!(result.get("partial").is_none());
 }
 
 #[tokio::test]

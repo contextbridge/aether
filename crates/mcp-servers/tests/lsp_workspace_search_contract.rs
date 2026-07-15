@@ -17,6 +17,7 @@ async fn lsp_workspace_search_schema_requires_one_language() {
 
     assert!(properties.contains_key("language"));
     assert!(required.iter().any(|field| field == "language"));
+    assert!(schema.to_string().contains("\"cpp\""));
 }
 
 #[tokio::test]

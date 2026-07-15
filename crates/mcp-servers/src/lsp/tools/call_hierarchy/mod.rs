@@ -35,8 +35,8 @@ pub struct CallHierarchyItemResult {
     pub selection_range: LocationResult,
 }
 
-impl From<CallHierarchyItem> for CallHierarchyItemResult {
-    fn from(item: CallHierarchyItem) -> Self {
+impl CallHierarchyItemResult {
+    fn new(item: CallHierarchyItem, project_root: &Path) -> Self {
         let file_path = uri_to_path(&item.uri);
         let range = LocationResult::from_range(file_path.clone(), &item.range);
         let selection_range = LocationResult::from_range(file_path.clone(), &item.selection_range);
@@ -44,8 +44,8 @@ impl From<CallHierarchyItem> for CallHierarchyItemResult {
             name: item.name,
             kind: symbol_kind_to_string(item.kind).to_string(),
             detail: item.detail,
-            file_path: file_path.clone(),
-            display_path: file_path,
+            display_path: display_path(&file_path, project_root),
+            file_path,
             range,
             selection_range,
         }
@@ -65,8 +65,11 @@ pub struct CallSiteResult {
 }
 
 /// Convert LSP incoming calls to serializable `CallSiteResult`s.
-pub fn convert_incoming_calls(incoming: Vec<lsp_types::CallHierarchyIncomingCall>) -> Vec<CallSiteResult> {
-    incoming.into_iter().map(|call| convert_call(call.from, &call.from_ranges, None)).collect()
+pub fn convert_incoming_calls(
+    incoming: Vec<lsp_types::CallHierarchyIncomingCall>,
+    project_root: &Path,
+) -> Vec<CallSiteResult> {
+    incoming.into_iter().map(|call| convert_call(call.from, &call.from_ranges, None, project_root)).collect()
 }
 
 /// Convert LSP outgoing calls to serializable `CallSiteResult`s.
@@ -74,28 +77,31 @@ pub fn convert_incoming_calls(incoming: Vec<lsp_types::CallHierarchyIncomingCall
 /// Outgoing `from_ranges` belong to the source item, not the callee.
 pub fn convert_outgoing_calls(
     source_file_path: &str,
+    project_root: &Path,
     outgoing: Vec<lsp_types::CallHierarchyOutgoingCall>,
 ) -> Vec<CallSiteResult> {
-    outgoing.into_iter().map(|call| convert_call(call.to, &call.from_ranges, Some(source_file_path))).collect()
+    outgoing
+        .into_iter()
+        .map(|call| convert_call(call.to, &call.from_ranges, Some(source_file_path), project_root))
+        .collect()
 }
 
-/// Merge duplicate hierarchy items and ranges, classify project paths, and sort local results first.
-pub fn normalize_calls(calls: Vec<CallSiteResult>, project_root: &Path) -> Vec<CallSiteResult> {
+/// Merge duplicate hierarchy items and ranges, then sort local results first.
+pub fn normalize_calls(calls: Vec<CallSiteResult>) -> Vec<CallSiteResult> {
     let mut merged: HashMap<CallItemKey, CallSiteResult> = HashMap::new();
     for mut call in calls {
-        call.project_local = is_project_local(&call.item.file_path, project_root);
-        call.item.display_path = display_path(&call.item.file_path, project_root);
-        deduplicate_ranges(&mut call.call_sites);
         let key = CallItemKey::from(&call.item);
         if let Some(existing) = merged.get_mut(&key) {
             existing.call_sites.append(&mut call.call_sites);
-            deduplicate_ranges(&mut existing.call_sites);
         } else {
             merged.insert(key, call);
         }
     }
 
     let mut calls: Vec<_> = merged.into_values().collect();
+    for call in &mut calls {
+        deduplicate_ranges(&mut call.call_sites);
+    }
     calls.sort_by(|left, right| {
         right
             .project_local
@@ -112,15 +118,8 @@ pub async fn enrich_call_sites(calls: &mut [CallSiteResult], context_lines: Opti
         return;
     };
 
-    let mut locations: Vec<_> = calls.iter().flat_map(|call| call.call_sites.iter().cloned()).collect();
-    enrich_locations(&mut locations, context_lines).await;
-    let mut enriched = locations.into_iter();
     for call in calls {
-        for call_site in &mut call.call_sites {
-            if let Some(location) = enriched.next() {
-                *call_site = location;
-            }
-        }
+        enrich_locations(&mut call.call_sites, context_lines).await;
     }
 }
 
@@ -147,29 +146,18 @@ fn convert_call(
     item: CallHierarchyItem,
     from_ranges: &[lsp_types::Range],
     source_file_path: Option<&str>,
+    project_root: &Path,
 ) -> CallSiteResult {
     let call_site_path = source_file_path.map_or_else(|| uri_to_path(&item.uri), ToOwned::to_owned);
+    let item = CallHierarchyItemResult::new(item, project_root);
     let call_sites =
         from_ranges.iter().map(|range| LocationResult::from_range(call_site_path.clone(), range)).collect();
-    CallSiteResult { item: CallHierarchyItemResult::from(item), project_local: false, call_sites }
+    CallSiteResult { project_local: is_project_local(&item.file_path, project_root), item, call_sites }
 }
 
 fn deduplicate_ranges(ranges: &mut Vec<LocationResult>) {
-    ranges.sort_by(|left, right| {
-        left.file_path
-            .cmp(&right.file_path)
-            .then(left.start_line.cmp(&right.start_line))
-            .then(left.start_column.cmp(&right.start_column))
-            .then(left.end_line.cmp(&right.end_line))
-            .then(left.end_column.cmp(&right.end_column))
-    });
-    ranges.dedup_by(|left, right| {
-        left.file_path == right.file_path
-            && left.start_line == right.start_line
-            && left.start_column == right.start_column
-            && left.end_line == right.end_line
-            && left.end_column == right.end_column
-    });
+    ranges.sort_by_key(|range| (range.start_line, range.start_column));
+    ranges.dedup_by_key(|range| (range.start_line, range.start_column));
 }
 
 #[cfg(test)]
@@ -215,9 +203,11 @@ mod tests {
             from_ranges: vec![make_range(12, 4), make_range(14, 8)],
         }];
 
-        let result = convert_incoming_calls(incoming);
+        let result = convert_incoming_calls(incoming, Path::new("/src"));
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].item.name, "caller_fn");
+        assert!(result[0].project_local);
+        assert_eq!(result[0].item.display_path, "lib.rs");
         assert_eq!(result[0].call_sites.len(), 2);
         // Lines are 1-indexed in the output
         assert_eq!(result[0].call_sites[0].start_line, 13); // 12 + 1
@@ -226,7 +216,7 @@ mod tests {
 
     #[test]
     fn test_convert_incoming_calls_empty() {
-        let result = convert_incoming_calls(vec![]);
+        let result = convert_incoming_calls(vec![], Path::new("/src"));
         assert!(result.is_empty());
     }
 
@@ -235,7 +225,7 @@ mod tests {
         let outgoing =
             vec![CallHierarchyOutgoingCall { to: make_item("callee_fn", 20), from_ranges: vec![make_range(5, 10)] }];
 
-        let result = convert_outgoing_calls("/src/caller.rs", outgoing);
+        let result = convert_outgoing_calls("/src/caller.rs", Path::new("/src"), outgoing);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].item.name, "callee_fn");
         assert_eq!(result[0].call_sites.len(), 1);
@@ -245,7 +235,7 @@ mod tests {
 
     #[test]
     fn test_convert_outgoing_calls_empty() {
-        let result = convert_outgoing_calls("/src/caller.rs", vec![]);
+        let result = convert_outgoing_calls("/src/caller.rs", Path::new("/src"), vec![]);
         assert!(result.is_empty());
     }
 }

@@ -42,7 +42,7 @@ async fn lsp_check_errors_schema_is_flat_and_has_only_file_path() {
 
 #[tokio::test]
 async fn lsp_check_errors_rejects_redundant_scope_parameter() {
-    let project = CargoProject::new("diag_contract_stringified_workspace").expect("Failed to create project");
+    let project = CargoProject::new("diag_contract_redundant_scope").expect("Failed to create project");
     project.add_file("src/main.rs", "fn main() {}\n").expect("Failed to add file");
 
     let (_server_handle, client) = connect_lsp(&project).await;

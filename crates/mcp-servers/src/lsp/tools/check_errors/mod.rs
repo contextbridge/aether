@@ -22,10 +22,6 @@ pub struct LspDiagnosticsRequest {
 }
 
 impl LspDiagnosticsRequest {
-    fn file_path(&self) -> Option<&str> {
-        self.file_path.as_deref()
-    }
-
     fn validate(&self) -> Result<(), String> {
         if let Some(file_path) = &self.file_path {
             if file_path.trim().is_empty() {
@@ -66,7 +62,7 @@ pub struct LspDiagnosticsOutput {
 }
 
 /// Scope label for output serialization
-#[derive(Debug, Clone, Copy, Serialize, JsonSchema, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Scope {
     Workspace,
@@ -81,7 +77,7 @@ pub async fn execute_lsp_diagnostics(
     request.validate()?;
 
     let diagnostics_cache =
-        registry.collect_diagnostics(request.file_path()).await.map_err(|error| error.to_string())?;
+        registry.collect_diagnostics(request.file_path.as_deref()).await.map_err(|error| error.to_string())?;
     let mut output = build_output(&request, registry.root_path(), &diagnostics_cache);
 
     let detail = if output.summary.errors == 0 && output.summary.warnings == 0 {

@@ -4,7 +4,7 @@
 //! workspace-wide symbol search without knowing the file path upfront.
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use lsp_types::DocumentSymbolResponse;
@@ -14,11 +14,10 @@ use serde::{Deserialize, Serialize};
 
 use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
 
-use crate::coding::tools::grep::common::OutputMode;
-use crate::coding::tools::grep::{GrepInput, GrepOutput, perform_grep_excluding};
-use crate::lsp::common::{LocationResult, enrich_locations, path_to_uri, uri_to_path};
+use crate::lsp::common::{LocationResult, enrich_locations, for_each_document_symbol, path_to_uri, uri_to_path};
 use crate::lsp::registry::LspRegistry;
-use aether_lspd::{LanguageId, LspClient, metadata_for, symbol_kind_to_string};
+use crate::search::find_files_containing;
+use aether_lspd::{LanguageId, LspClient, get_config_for_language, metadata_for, symbol_kind_to_string};
 
 /// Language server selected for a workspace symbol search.
 #[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
@@ -50,12 +49,11 @@ impl From<LspWorkspaceSearchLanguage> for LanguageId {
         }
     }
 }
-
 /// Input for the `lsp_workspace_search` tool
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LspWorkspaceSearchInput {
-    /// LSP language identifier to query, such as "rust", "typescript", or "python".
+    /// Language identifier to query. Languages sharing a server search their combined file extensions.
     pub language: LspWorkspaceSearchLanguage,
     /// Search query (e.g., "`AppState`", "Repository")
     pub query: String,
@@ -123,10 +121,11 @@ pub async fn execute_lsp_workspace_search(
     }
     let language = LanguageId::from(input.language);
     let client = registry.get_or_spawn_for_language(language).await.map_err(|error| error.to_string())?;
+    let server_extensions = server_extensions(language);
     let symbols = client.workspace_symbol(input.query.clone()).await.map_err(|error| error.to_string())?;
     let mut all_results: Vec<_> = symbols
         .into_iter()
-        .filter(|symbol| is_language_path(&uri_to_path(&symbol.location.uri), language))
+        .filter(|symbol| is_server_language_path(&uri_to_path(&symbol.location.uri), &server_extensions))
         .map(|symbol| WorkspaceSymbolResult {
             name: symbol.name,
             kind: symbol_kind_to_string(symbol.kind).to_string(),
@@ -137,7 +136,7 @@ pub async fn execute_lsp_workspace_search(
         .collect();
 
     if all_results.is_empty() {
-        all_results = document_symbol_fallback(&input.query, language, registry.root_path(), &client).await?;
+        all_results = document_symbol_fallback(&input.query, registry.root_path(), &client, &server_extensions).await?;
     }
 
     // Deduplicate by (name, file_path, start_line)
@@ -170,107 +169,78 @@ pub async fn execute_lsp_workspace_search(
     })
 }
 
-fn is_language_path(path: &str, language: LanguageId) -> bool {
-    let path = Path::new(path);
-    let Some(extension) = path.extension().and_then(|extension| extension.to_str()) else {
-        return false;
-    };
-    metadata_for(language).is_some_and(|metadata| metadata.extensions.contains(&extension))
+fn is_server_language_path(path: &str, extensions: &[&str]) -> bool {
+    Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extensions.contains(&extension))
+}
+
+fn server_extensions(language: LanguageId) -> Vec<&'static str> {
+    get_config_for_language(language)
+        .into_iter()
+        .flat_map(|config| config.languages.iter())
+        .filter_map(|language| metadata_for(*language))
+        .flat_map(|metadata| metadata.extensions.iter().copied())
+        .collect()
 }
 
 async fn document_symbol_fallback(
     query: &str,
-    language: LanguageId,
     root: &Path,
     client: &Arc<LspClient>,
+    extensions: &[&'static str],
 ) -> Result<Vec<WorkspaceSymbolResult>, String> {
-    let candidates = candidate_files(root, query, language).await?;
+    let candidates = find_files_containing(root.to_path_buf(), query.to_string(), extensions.to_vec(), 100).await?;
     let mut results = Vec::new();
     for path in candidates {
         let path_text = path.to_string_lossy().to_string();
-        let uri = path_to_uri(&path).map_err(|error| error.to_string())?;
-        let response = client.document_symbol(uri).await.map_err(|error| error.to_string())?;
-        collect_matching_document_symbols(&path_text, query, response, &mut results);
+        let Ok(uri) = path_to_uri(&path) else {
+            continue;
+        };
+        let Ok(response) = client.document_symbol(uri).await else {
+            continue;
+        };
+        collect_matching_document_symbols(&path_text, query, &response, &mut results);
     }
     Ok(results)
-}
-
-async fn candidate_files(root: &Path, query: &str, language: LanguageId) -> Result<Vec<PathBuf>, String> {
-    let extensions =
-        metadata_for(language).into_iter().flat_map(|metadata| metadata.extensions.iter().copied()).collect::<Vec<_>>();
-    let glob = match extensions.as_slice() {
-        [extension] => format!("*.{extension}"),
-        extensions => format!("*.{{{}}}", extensions.join(",")),
-    };
-    let output = perform_grep_excluding(
-        GrepInput {
-            pattern: regex::escape(query),
-            path: Some(root.to_string_lossy().into_owned()),
-            glob: Some(glob),
-            output_mode: Some(OutputMode::FilesWithMatches),
-            case_insensitive: Some(true),
-            ..GrepInput::default()
-        },
-        &[".git", ".pnpm", "node_modules", "target"],
-    )
-    .await
-    .map_err(|error| error.to_string())?;
-
-    match output {
-        GrepOutput::Files(output) => Ok(output.files.into_iter().map(PathBuf::from).collect()),
-        _ => unreachable!("files-with-matches grep returns file output"),
-    }
 }
 
 fn collect_matching_document_symbols(
     file_path: &str,
     query: &str,
-    response: DocumentSymbolResponse,
+    response: &DocumentSymbolResponse,
     results: &mut Vec<WorkspaceSymbolResult>,
 ) {
-    match response {
-        DocumentSymbolResponse::Flat(symbols) => {
-            for symbol in symbols.into_iter().filter(|symbol| symbol_name_matches(&symbol.name, query)) {
-                results.push(WorkspaceSymbolResult {
-                    name: symbol.name,
-                    kind: symbol_kind_to_string(symbol.kind).to_string(),
-                    container_name: symbol.container_name,
-                    source: WorkspaceSymbolSource::DocumentSymbolFallback,
-                    location: LocationResult::from_location(&symbol.location),
-                });
-            }
+    let query = query.to_lowercase();
+    for_each_document_symbol(response, &mut |name, kind, selection_range, container_name| {
+        if symbol_name_matches(name, &query) {
+            results.push(WorkspaceSymbolResult {
+                name: name.to_string(),
+                kind: symbol_kind_to_string(kind).to_string(),
+                container_name: container_name.map(ToOwned::to_owned),
+                source: WorkspaceSymbolSource::DocumentSymbolFallback,
+                location: LocationResult::from_range(file_path.to_string(), selection_range),
+            });
         }
-        DocumentSymbolResponse::Nested(symbols) => {
-            for symbol in symbols {
-                collect_nested_symbol(file_path, query, None, symbol, results);
-            }
-        }
-    }
+    });
 }
 
-fn collect_nested_symbol(
-    file_path: &str,
-    query: &str,
-    container_name: Option<&str>,
-    symbol: lsp_types::DocumentSymbol,
-    results: &mut Vec<WorkspaceSymbolResult>,
-) {
-    if symbol_name_matches(&symbol.name, query) {
-        results.push(WorkspaceSymbolResult {
-            name: symbol.name.clone(),
-            kind: symbol_kind_to_string(symbol.kind).to_string(),
-            container_name: container_name.map(ToOwned::to_owned),
-            source: WorkspaceSymbolSource::DocumentSymbolFallback,
-            location: LocationResult::from_range(file_path.to_string(), &symbol.selection_range),
-        });
-    }
-    if let Some(children) = symbol.children {
-        for child in children {
-            collect_nested_symbol(file_path, query, Some(&symbol.name), child, results);
-        }
-    }
+fn symbol_name_matches(name: &str, lowercase_query: &str) -> bool {
+    name.to_lowercase().contains(lowercase_query)
 }
 
-fn symbol_name_matches(name: &str, query: &str) -> bool {
-    name.to_lowercase().contains(&query.to_lowercase())
+#[cfg(test)]
+mod tests {
+    use aether_lspd::LANGUAGE_METADATA;
+
+    use super::*;
+
+    #[test]
+    fn language_schema_matches_configured_languages() {
+        for metadata in LANGUAGE_METADATA.iter().filter(|metadata| get_config_for_language(metadata.id).is_some()) {
+            let value = serde_json::json!(metadata.id.as_str());
+            assert!(serde_json::from_value::<LspWorkspaceSearchLanguage>(value).is_ok());
+        }
+    }
 }

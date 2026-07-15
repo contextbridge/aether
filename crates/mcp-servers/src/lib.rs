@@ -1,6 +1,10 @@
 #![doc = include_str!("../README.md")]
 
 pub mod error;
+
+#[cfg(feature = "coding")]
+pub(crate) mod search;
+
 pub mod workspace_paths;
 
 #[cfg(any(feature = "all", feature = "subagents"))]

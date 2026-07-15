@@ -139,6 +139,7 @@ pub async fn call_tool_error(
         Err(error) => error.to_string(),
     }
 }
+
 pub async fn call_tool(
     client: &RunningService<RoleClient, ClientInfo>,
     name: &str,

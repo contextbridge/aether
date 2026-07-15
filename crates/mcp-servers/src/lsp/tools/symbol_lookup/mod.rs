@@ -7,6 +7,8 @@
 //! - hover: Get type and documentation info for a symbol
 //! - `incoming_calls` / `outgoing_calls`: One-step call hierarchy lookup
 
+use std::path::Path;
+
 use lsp_types::GotoDefinitionResponse;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -146,12 +148,12 @@ impl LspSymbolOutput {
 }
 
 /// Execute the `lsp_symbol` operation
-#[allow(clippy::too_many_lines)]
 pub async fn execute_lsp_symbol(input: LspSymbolInput, registry: &LspRegistry) -> Result<LspSymbolOutput, String> {
     let resolved = registry
         .resolve_symbol(&input.file_path, &input.symbol, input.line)
         .await
         .map_err(|error| error.to_string())?;
+    let source_file_path = input.file_path.clone();
     let mut output = match input.operation {
         SymbolLookupOperation::Definition => {
             let response = resolved
@@ -199,6 +201,7 @@ pub async fn execute_lsp_symbol(input: LspSymbolInput, registry: &LspRegistry) -
             execute_one_step_call_hierarchy(
                 registry,
                 resolved,
+                &source_file_path,
                 CallDirection::Incoming,
                 input.context_lines,
                 input.call_scope,
@@ -210,6 +213,7 @@ pub async fn execute_lsp_symbol(input: LspSymbolInput, registry: &LspRegistry) -
             execute_one_step_call_hierarchy(
                 registry,
                 resolved,
+                &source_file_path,
                 CallDirection::Outgoing,
                 input.context_lines,
                 input.call_scope,
@@ -230,6 +234,7 @@ pub async fn execute_lsp_symbol(input: LspSymbolInput, registry: &LspRegistry) -
 async fn execute_one_step_call_hierarchy(
     registry: &LspRegistry,
     resolved: ResolvedSymbol,
+    source_file_path: &str,
     direction: CallDirection,
     context_lines: Option<u32>,
     call_scope: CallScope,
@@ -253,20 +258,20 @@ async fn execute_one_step_call_hierarchy(
     // For incoming/outgoing calls, we need a client for the item's file.
     // The item may be in a different file than the original request.
     let item_file_path = uri_to_path(&item.uri);
-    let item_client = registry.require_client(&item_file_path).await.map_err(|e| e.to_string())?;
+    let item_client = registry.get_or_spawn(Path::new(&item_file_path)).await.map_err(|e| e.to_string())?;
 
     let calls = match direction {
         CallDirection::Incoming => {
             let incoming = item_client.incoming_calls(item).await.map_err(|e| e.to_string())?;
-            super::call_hierarchy::convert_incoming_calls(incoming)
+            super::call_hierarchy::convert_incoming_calls(incoming, registry.root_path())
         }
         CallDirection::Outgoing => {
             let outgoing = item_client.outgoing_calls(item).await.map_err(|e| e.to_string())?;
-            super::call_hierarchy::convert_outgoing_calls(&item_file_path, outgoing)
+            super::call_hierarchy::convert_outgoing_calls(source_file_path, registry.root_path(), outgoing)
         }
     };
 
-    let mut calls = super::call_hierarchy::normalize_calls(calls, registry.root_path());
+    let mut calls = super::call_hierarchy::normalize_calls(calls);
     if matches!(call_scope, CallScope::Project) {
         calls.retain(|call| call.project_local);
     }
