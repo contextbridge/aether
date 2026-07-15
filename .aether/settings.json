@@ -25,6 +25,48 @@
       "userInvocable": true,
       "prompts": [".aether/SYSTEM.md", "AGENTS.md"],
       "mcps": ["mcp.json"]
+    },
+    {
+      "name": "Explore",
+      "description": "Explores codebases to find relevant files, patterns, and integration points",
+      "model": "deepseek:deepseek-v4-flash",
+      "reasoningEffort": "high",
+      "userInvocable": false,
+      "agentInvocable": true,
+      "prompts": [".aether/agents/codebase-explorer/AGENTS.md"],
+      "mcps": [
+        {
+          "type": "inline",
+          "servers": {
+            "coding": {
+              "type": "in-memory",
+              "args": [
+                "--rules-dir",
+                "${HOME}/.claude/rules",
+                "--rules-dir",
+                "${WORKSPACE}/.claude/rules",
+                "--rules-dir",
+                "${HOME}/.agents/rules",
+                "--rules-dir",
+                "${WORKSPACE}/.agents/rules"
+              ],
+              "input": null
+            }
+          }
+        }
+      ],
+      "tools": {
+        "allow": [
+          {
+            "readOnly": true
+          },
+          "plan__*",
+          "skills__*",
+          "subagents__*",
+          "tasks__*",
+          "survey__*"
+        ]
+      }
     }
   ]
 }
