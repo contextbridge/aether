@@ -57,6 +57,8 @@ pub fn test_agent() -> TestAgentBuilder {
 pub enum TestAgentStep {
     Send(Command),
     WaitFor(Box<dyn Fn(&AgentEvent) -> bool + Send>),
+    /// Run an arbitrary side effect (e.g. releasing a paused LLM stream) between steps.
+    Perform(Box<dyn FnOnce() + Send>),
 }
 
 impl TestAgentStep {
@@ -78,6 +80,10 @@ impl TestAgentStep {
 
     pub fn replace_conversation(messages: Vec<ChatMessage>) -> Self {
         Self::send(Command::AgentCommand(AgentCommand::ReplaceConversation(messages)))
+    }
+
+    pub fn perform(action: impl FnOnce() + Send + 'static) -> Self {
+        Self::Perform(Box::new(action))
     }
 
     pub fn wait_for(predicate: impl Fn(&AgentEvent) -> bool + Send + 'static) -> Self {
@@ -152,6 +158,13 @@ impl TestScenario {
 
     pub fn wait_for_retry(mut self, attempt: u32) -> Self {
         self.steps.push(TestAgentStep::wait_for_retry(attempt));
+        self
+    }
+
+    /// Run an arbitrary side effect between scenario steps, e.g. releasing a
+    /// paused LLM stream so a queued message can be injected mid-turn.
+    pub fn perform(mut self, action: impl FnOnce() + Send + 'static) -> Self {
+        self.steps.push(TestAgentStep::perform(action));
         self
     }
 }
@@ -414,6 +427,7 @@ impl TestAgentBuilder {
                         break;
                     }
                 },
+                TestAgentStep::Perform(action) => action(),
             }
         }
         drop(tx);

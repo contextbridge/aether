@@ -1,17 +1,15 @@
-use aether_core::events::{MessageEvent, ToolEvent, TurnEvent};
+use aether_core::events::{AgentEvent, MessageEvent, ToolEvent, TurnEvent};
 use std::sync::Arc;
 
-use aether_core::core::agent;
-use aether_core::events::{AgentEvent, Command, TurnOutcome, UserCommand};
-use aether_core::mcp::mcp;
-use aether_core::testing::{AddNumbersRequest, FakeMcpServer, drain_until, fake_mcp};
-use llm::testing::{FakeLlmProvider, llm_response};
+use aether_core::events::TurnOutcome;
+use aether_core::testing::{AddNumbersRequest, TestScenario, test_agent};
+use llm::testing::llm_response;
 use llm::{ChatMessage, ContentBlock, Context, LlmResponse, StopReason};
 use tokio::sync::Notify;
 
 #[tokio::test]
 async fn queued_text_does_not_cancel_active_stream_and_drains_into_single_turn() {
-    let Scenario { messages, contexts } = scenario(None, &["beep", "boop", "zap"]).await;
+    let Scenario { messages, contexts } = run_queued_scenario(None, &["beep", "boop", "zap"]).await;
 
     assert!(!messages.iter().any(|m| matches!(m.turn_outcome(), Some(TurnOutcome::Cancelled))),);
     assert_eq!(complete_text(&messages, "msg_1").as_deref(), Some("hello world"));
@@ -25,7 +23,7 @@ async fn queued_text_does_not_cancel_active_stream_and_drains_into_single_turn()
 
 #[tokio::test]
 async fn queued_text_suppresses_intermediate_done_between_turns() {
-    let Scenario { messages, .. } = scenario(None, &["beep", "boop", "zap"]).await;
+    let Scenario { messages, .. } = run_queued_scenario(None, &["beep", "boop", "zap"]).await;
     let first_complete = messages
         .iter()
         .position(|m| is_complete_text(m, "msg_1", "hello world"))
@@ -54,33 +52,22 @@ async fn user_message_during_tool_execution_is_queued() {
     // agent has populated `active_requests` and emitted `ToolCall`, so `is_busy()`
     // returns true even though no real tool work has begun.
     let release = Arc::new(Notify::new());
-    let llm = FakeLlmProvider::new(turns).pause_turn_after(0, 1, Arc::clone(&release));
-    let captured = llm.captured_contexts();
-
-    let mut spawn = mcp("/workspace")
-        .with_servers(vec![fake_mcp("test", FakeMcpServer::new())])
-        .spawn()
+    let result = test_agent()
+        .llm_responses(&turns)
+        .pause_turn_after(0, 1, Arc::clone(&release))
+        .scenario(
+            TestScenario::new()
+                .user_text("add 2 and 3")
+                .wait_for(|m| matches!(m, AgentEvent::Tool(ToolEvent::Call { request, .. }) if request.id == "call_1"))
+                .user_text("now add 10 and 20")
+                .perform(move || release.notify_one())
+                .wait_for_turn_end(),
+        )
+        .run_with_context()
         .await
-        .expect("MCP should spawn");
-    let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
+        .expect("Agent should run");
 
-    let (tx, mut rx, _handle) =
-        agent(llm).tools(spawn.command_tx, snapshot.tool_definitions).spawn().await.expect("Agent should spawn");
-    tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("add 2 and 3")] }))
-        .await
-        .expect("Initial prompt should send");
-
-    drain_until(&mut rx, |m| matches!(m, AgentEvent::Tool(ToolEvent::Call { request, .. }) if request.id == "call_1"))
-        .await;
-    tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("now add 10 and 20")] }))
-        .await
-        .expect("Queued message should send");
-    release.notify_one();
-
-    drain_until(&mut rx, |m| matches!(m, AgentEvent::Turn(TurnEvent::Ended { .. }))).await;
-    drop(tx);
-
-    let contexts = captured.lock().expect("captured contexts lock poisoned").clone();
+    let contexts = result.captured_contexts.lock().expect("captured contexts lock poisoned").clone();
     assert_eq!(contexts.len(), 2, "Expected exactly two LLM calls");
 
     let second_call = &contexts[1];
@@ -97,7 +84,7 @@ async fn user_message_during_tool_execution_is_queued() {
 
 #[tokio::test]
 async fn queued_text_takes_precedence_over_auto_continue() {
-    let Scenario { messages, contexts } = scenario(Some(StopReason::Length), &["beep"]).await;
+    let Scenario { messages, contexts } = run_queued_scenario(Some(StopReason::Length), &["beep"]).await;
 
     assert!(
         !messages.iter().any(|m| matches!(m, AgentEvent::Turn(TurnEvent::AutoContinue { .. }))),
@@ -120,7 +107,9 @@ struct Scenario {
     contexts: Vec<Context>,
 }
 
-async fn scenario(first_stop_reason: Option<StopReason>, queued: &[&str]) -> Scenario {
+/// Drives a two-turn conversation where one or more user messages are queued
+/// while the first turn's LLM stream is deliberately paused mid-flight.
+async fn run_queued_scenario(first_stop_reason: Option<StopReason>, queued: &[&str]) -> Scenario {
     let first_done = first_stop_reason.map_or_else(LlmResponse::done, LlmResponse::done_with_stop_reason);
     let turns = vec![
         vec![LlmResponse::start("msg_1"), LlmResponse::text("hello"), LlmResponse::text(" world"), first_done],
@@ -128,28 +117,25 @@ async fn scenario(first_stop_reason: Option<StopReason>, queued: &[&str]) -> Sce
     ];
 
     let release = Arc::new(Notify::new());
-    let llm = FakeLlmProvider::new(turns).pause_turn_after(0, 1, Arc::clone(&release));
-    let captured = llm.captured_contexts();
-
-    let (tx, mut rx, _handle) = agent(llm).spawn().await.expect("Agent should spawn");
-
-    tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("original prompt")] }))
-        .await
-        .expect("Initial prompt should send");
-    let mut messages = drain_until(&mut rx, |m| is_partial_text(m, "msg_1", "hello")).await;
-
+    let mut scenario =
+        TestScenario::new().user_text("original prompt").wait_for(|m| is_partial_text(m, "msg_1", "hello"));
     for text in queued {
-        tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text(*text)] }))
-            .await
-            .expect("Queued message should send");
+        scenario = scenario.user_text(*text);
     }
-    release.notify_one();
 
-    messages.extend(drain_until(&mut rx, |m| matches!(m, AgentEvent::Turn(TurnEvent::Ended { .. }))).await);
-    drop(tx);
+    let result = test_agent()
+        .without_mcp()
+        .llm_responses(&turns)
+        .pause_turn_after(0, 1, Arc::clone(&release))
+        .scenario(scenario.perform(move || release.notify_one()).wait_for_turn_end())
+        .run_with_context()
+        .await
+        .expect("Agent should run");
 
-    let contexts = captured.lock().expect("captured contexts lock poisoned").clone();
-    Scenario { messages, contexts }
+    Scenario {
+        messages: result.messages,
+        contexts: result.captured_contexts.lock().expect("captured contexts lock poisoned").clone(),
+    }
 }
 
 fn is_partial_text(m: &AgentEvent, id: &str, chunk: &str) -> bool {
