@@ -65,6 +65,7 @@ pub enum PickerMessage<T> {
     CloseWithChar(char),
     Confirm(T),
     CharTyped(char),
+    TextTyped(String),
     PopChar,
 }
 

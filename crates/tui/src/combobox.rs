@@ -189,10 +189,17 @@ impl<T: Searchable + Send + Sync + 'static> Combobox<T> {
 
     /// Standard event dispatch for picker-style components.
     ///
-    /// Handles Escape, Up/Down, Tab/Enter (confirm), Char (query + whitespace-close),
+    /// Handles paste, Escape, Up/Down, Tab/Enter (confirm), Char (query + whitespace-close),
     /// Backspace, and `BackspaceOnEmpty`. Returns `PickerMessage<T>` for each action.
     pub fn handle_picker_event(&mut self, event: &crate::components::Event) -> Option<Vec<PickerMessage<T>>> {
         let crate::components::Event::Key(key_event) = event else {
+            if let crate::components::Event::Paste(text) = event {
+                let sanitized: String = text.chars().filter(|c| !c.is_control()).collect();
+                for c in sanitized.chars() {
+                    self.push_query_char(c);
+                }
+                return Some(if sanitized.is_empty() { vec![] } else { vec![PickerMessage::TextTyped(sanitized)] });
+            }
             return None;
         };
         match classify_key(*key_event, self.fuzzy.query().is_empty()) {

@@ -149,7 +149,7 @@ async fn test_paste_strips_control_characters() -> TestResult {
 }
 
 #[tokio::test]
-async fn test_paste_closes_file_picker() -> TestResult {
+async fn test_paste_keeps_file_picker_open() -> TestResult {
     let mut renderer = RendererTest::new().size((80, 24)).build()?;
 
     // Open file picker with @
@@ -163,12 +163,11 @@ async fn test_paste_closes_file_picker() -> TestResult {
         .await?;
     assert!(has_file_picker(renderer.writer()), "File picker should be open");
 
-    // Paste should close the picker and append text
+    // Paste should keep the picker open and append filter text
     renderer.on_paste("pasted text").await?;
 
-    assert!(!has_file_picker(renderer.writer()), "File picker should be closed");
-    let expected = expected_prompt(80, "@pasted text", TEST_AGENT);
-    assert_buffer_eq(renderer.writer(), &expected);
+    assert!(has_file_picker(renderer.writer()), "File picker should remain open");
+    assert_buffer_contains(renderer.writer(), "> @pasted text");
     Ok(())
 }
 
