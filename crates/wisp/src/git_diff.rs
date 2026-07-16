@@ -185,12 +185,16 @@ pub(crate) async fn load_git_diff(
     Ok(GitDiffDocument { repo_root, files })
 }
 
-pub(crate) async fn stage_file(repo_root: &Path, path: &str) -> Result<(), GitDiffError> {
-    git(repo_root, &["add", "--", path]).await.map(drop)
+pub(crate) async fn stage_files(repo_root: &Path, paths: &[&str]) -> Result<(), GitDiffError> {
+    let mut args = vec!["add", "--"];
+    args.extend_from_slice(paths);
+    git(repo_root, &args).await.map(drop)
 }
 
-pub(crate) async fn unstage_file(repo_root: &Path, path: &str) -> Result<(), GitDiffError> {
-    git(repo_root, &["reset", "--quiet", "--", path]).await.map(drop)
+pub(crate) async fn unstage_files(repo_root: &Path, paths: &[&str]) -> Result<(), GitDiffError> {
+    let mut args = vec!["reset", "--quiet", "--"];
+    args.extend_from_slice(paths);
+    git(repo_root, &args).await.map(drop)
 }
 
 pub(crate) async fn stage_all(repo_root: &Path) -> Result<(), GitDiffError> {
@@ -909,11 +913,11 @@ index abc..def 100644
         let doc = load_git_diff(dir, None, DiffScope::Both).await.unwrap();
         assert_eq!(staged_of(&doc, "a.txt"), StageState::Unstaged);
 
-        stage_file(dir, "a.txt").await.unwrap();
+        stage_files(dir, &["a.txt"]).await.unwrap();
         let doc = load_git_diff(dir, None, DiffScope::Both).await.unwrap();
         assert_eq!(staged_of(&doc, "a.txt"), StageState::Staged);
 
-        unstage_file(dir, "a.txt").await.unwrap();
+        unstage_files(dir, &["a.txt"]).await.unwrap();
         let doc = load_git_diff(dir, None, DiffScope::Both).await.unwrap();
         assert_eq!(staged_of(&doc, "a.txt"), StageState::Unstaged);
     }
@@ -941,7 +945,7 @@ index abc..def 100644
         let dir = repo.path();
         commit_file(dir, "a.txt", "one\n", "init").await;
         write_file(dir, "a.txt", "one\ntwo\n").await;
-        stage_file(dir, "a.txt").await.unwrap();
+        stage_files(dir, &["a.txt"]).await.unwrap();
         commit(dir, "second commit").await.unwrap();
         let log = git(dir, &["log", "--oneline", "-1"]).await.unwrap();
         assert!(log.contains("second commit"), "log was: {log}");
@@ -983,7 +987,7 @@ index abc..def 100644
         let dir = repo.path();
         write_file(dir, "a.txt", "hi\n").await;
         git(dir, &["add", "a.txt"]).await.unwrap();
-        unstage_file(dir, "a.txt").await.unwrap();
+        unstage_files(dir, &["a.txt"]).await.unwrap();
         let status = git(dir, &["status", "--porcelain"]).await.unwrap();
         assert!(status.contains("?? a.txt"), "status was: {status}");
     }
@@ -995,7 +999,7 @@ index abc..def 100644
         commit_file(dir, "a.txt", "one\n", "init").await;
 
         write_file(dir, "a.txt", "two\n").await;
-        stage_file(dir, "a.txt").await.unwrap();
+        stage_files(dir, &["a.txt"]).await.unwrap();
         write_file(dir, "a.txt", "three\n").await;
         write_file(dir, "untracked.txt", "scratch\n").await;
 

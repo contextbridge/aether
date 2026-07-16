@@ -1,11 +1,13 @@
+use std::fs::{create_dir_all, read_to_string, write};
 use std::path::Path;
+use std::process::Command;
 
 use tui::{KeyCode, KeyModifiers};
 
 use super::common::*;
 
 fn run_git(dir: &Path, args: &[&str]) -> String {
-    let output = std::process::Command::new("git").args(args).current_dir(dir).output().unwrap();
+    let output = Command::new("git").args(args).current_dir(dir).output().unwrap();
     assert!(output.status.success(), "git {args:?} failed: {}", String::from_utf8_lossy(&output.stderr));
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
@@ -28,13 +30,13 @@ async fn open_git_diff(renderer: &mut Renderer) -> TestResult {
 async fn git_diff_scope_cycles_between_both_unstaged_and_staged() -> TestResult {
     let repo = init_temp_repo();
     let dir = repo.path().to_path_buf();
-    std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+    write(dir.join("a.txt"), "one\n").unwrap();
     run_git(&dir, &["add", "-A"]);
     run_git(&dir, &["commit", "--quiet", "-m", "init"]);
-    std::fs::write(dir.join("a.txt"), "two\n").unwrap();
+    write(dir.join("a.txt"), "two\n").unwrap();
     run_git(&dir, &["add", "a.txt"]);
-    std::fs::write(dir.join("a.txt"), "three\n").unwrap();
-    std::fs::write(dir.join("untracked.txt"), "scratch\n").unwrap();
+    write(dir.join("a.txt"), "three\n").unwrap();
+    write(dir.join("untracked.txt"), "scratch\n").unwrap();
 
     let mut renderer = RendererTest::new().size((TEST_WIDTH, 40)).working_dir(dir).build()?;
     open_git_diff(&mut renderer).await?;
@@ -55,10 +57,10 @@ async fn git_diff_scope_cycles_between_both_unstaged_and_staged() -> TestResult 
 async fn typing_long_commit_message_keeps_diff_rows_visible() -> TestResult {
     let repo = init_temp_repo();
     let dir = repo.path().to_path_buf();
-    std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+    write(dir.join("a.txt"), "one\n").unwrap();
     run_git(&dir, &["add", "-A"]);
     run_git(&dir, &["commit", "--quiet", "-m", "init"]);
-    std::fs::write(dir.join("a.txt"), "one\ntwo\n").unwrap();
+    write(dir.join("a.txt"), "one\ntwo\n").unwrap();
 
     let mut renderer = RendererTest::new().size((50, 12)).working_dir(dir.clone()).build()?;
     open_git_diff(&mut renderer).await?;
@@ -76,11 +78,11 @@ async fn typing_short_chars_in_commit_box_does_not_scroll_tall_diff() -> TestRes
     let repo = init_temp_repo();
     let dir = repo.path().to_path_buf();
     let initial = (0..40).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n") + "\n";
-    std::fs::write(dir.join("a.txt"), &initial).unwrap();
+    write(dir.join("a.txt"), &initial).unwrap();
     run_git(&dir, &["add", "-A"]);
     run_git(&dir, &["commit", "--quiet", "-m", "init"]);
     let modified = (0..40).map(|i| format!("line {i} edited")).collect::<Vec<_>>().join("\n") + "\n";
-    std::fs::write(dir.join("a.txt"), &modified).unwrap();
+    write(dir.join("a.txt"), &modified).unwrap();
 
     let mut renderer = RendererTest::new().size((80, 10)).working_dir(dir.clone()).build()?;
     open_git_diff(&mut renderer).await?;
@@ -100,10 +102,10 @@ async fn typing_short_chars_in_commit_box_does_not_scroll_tall_diff() -> TestRes
 async fn space_stages_selected_file() -> TestResult {
     let repo = init_temp_repo();
     let dir = repo.path().to_path_buf();
-    std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+    write(dir.join("a.txt"), "one\n").unwrap();
     run_git(&dir, &["add", "-A"]);
     run_git(&dir, &["commit", "--quiet", "-m", "init"]);
-    std::fs::write(dir.join("a.txt"), "one\ntwo\n").unwrap();
+    write(dir.join("a.txt"), "one\ntwo\n").unwrap();
 
     let mut renderer = RendererTest::new().size((TEST_WIDTH, 40)).working_dir(dir.clone()).build()?;
     open_git_diff(&mut renderer).await?;
@@ -117,13 +119,55 @@ async fn space_stages_selected_file() -> TestResult {
 }
 
 #[tokio::test]
+async fn space_toggles_staging_for_selected_directory() -> TestResult {
+    let repo = init_temp_repo();
+    let dir = repo.path().to_path_buf();
+    create_dir_all(dir.join("src/nested")).unwrap();
+    write(dir.join("src/a.txt"), "one\n").unwrap();
+    write(dir.join("src/b.txt"), "one\n").unwrap();
+    write(dir.join("src/nested/c.txt"), "one\n").unwrap();
+    run_git(&dir, &["add", "-A"]);
+    run_git(&dir, &["commit", "--quiet", "-m", "init"]);
+    write(dir.join("src/a.txt"), "two\n").unwrap();
+    write(dir.join("src/b.txt"), "two\n").unwrap();
+    write(dir.join("src/nested/c.txt"), "two\n").unwrap();
+
+    let mut renderer = RendererTest::new().size((TEST_WIDTH, 40)).working_dir(dir.clone()).build()?;
+    open_git_diff(&mut renderer).await?;
+
+    assert!(
+        renderer.writer().get_lines().iter().any(|line| {
+            let line = line.trim_end();
+            line.contains("src/") && line.contains("☐")
+        }),
+        "directory should show its unstaged checkbox"
+    );
+
+    press(&mut renderer, KeyCode::Char(' ')).await?;
+
+    assert!(
+        renderer.writer().get_lines().iter().any(|line| {
+            let line = line.trim_end();
+            line.contains("src/") && line.contains("☑")
+        }),
+        "directory should show its staged checkbox"
+    );
+    assert_eq!(run_git(&dir, &["status", "--porcelain"]), "M  src/a.txt\nM  src/b.txt\nM  src/nested/c.txt\n");
+
+    press(&mut renderer, KeyCode::Char(' ')).await?;
+
+    assert_eq!(run_git(&dir, &["status", "--porcelain"]), " M src/a.txt\n M src/b.txt\n M src/nested/c.txt\n");
+    Ok(())
+}
+
+#[tokio::test]
 async fn commit_via_composer_creates_commit_and_clears_changes() -> TestResult {
     let repo = init_temp_repo();
     let dir = repo.path().to_path_buf();
-    std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+    write(dir.join("a.txt"), "one\n").unwrap();
     run_git(&dir, &["add", "-A"]);
     run_git(&dir, &["commit", "--quiet", "-m", "init"]);
-    std::fs::write(dir.join("a.txt"), "one\ntwo\n").unwrap();
+    write(dir.join("a.txt"), "one\ntwo\n").unwrap();
 
     let mut renderer = RendererTest::new().size((TEST_WIDTH, 40)).working_dir(dir.clone()).build()?;
     open_git_diff(&mut renderer).await?;
@@ -143,10 +187,10 @@ async fn commit_via_composer_creates_commit_and_clears_changes() -> TestResult {
 async fn commit_with_nothing_staged_shows_hint() -> TestResult {
     let repo = init_temp_repo();
     let dir = repo.path().to_path_buf();
-    std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+    write(dir.join("a.txt"), "one\n").unwrap();
     run_git(&dir, &["add", "-A"]);
     run_git(&dir, &["commit", "--quiet", "-m", "init"]);
-    std::fs::write(dir.join("a.txt"), "one\ntwo\n").unwrap();
+    write(dir.join("a.txt"), "one\ntwo\n").unwrap();
 
     let mut renderer = RendererTest::new().size((TEST_WIDTH, 40)).working_dir(dir.clone()).build()?;
     open_git_diff(&mut renderer).await?;
@@ -161,10 +205,10 @@ async fn commit_with_nothing_staged_shows_hint() -> TestResult {
 async fn discard_confirm_reverts_file() -> TestResult {
     let repo = init_temp_repo();
     let dir = repo.path().to_path_buf();
-    std::fs::write(dir.join("a.txt"), "v1\n").unwrap();
+    write(dir.join("a.txt"), "v1\n").unwrap();
     run_git(&dir, &["add", "-A"]);
     run_git(&dir, &["commit", "--quiet", "-m", "init"]);
-    std::fs::write(dir.join("a.txt"), "v2\n").unwrap();
+    write(dir.join("a.txt"), "v2\n").unwrap();
 
     let mut renderer = RendererTest::new().size((TEST_WIDTH, 40)).working_dir(dir.clone()).build()?;
     open_git_diff(&mut renderer).await?;
@@ -174,7 +218,7 @@ async fn discard_confirm_reverts_file() -> TestResult {
 
     press(&mut renderer, KeyCode::Char('y')).await?;
 
-    assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "v1\n", "file should be reverted");
+    assert_eq!(read_to_string(dir.join("a.txt")).unwrap(), "v1\n", "file should be reverted");
     assert_buffer_contains(renderer.writer(), "No changes");
     Ok(())
 }

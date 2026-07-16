@@ -5,7 +5,7 @@ use crate::components::git_diff::{DiffAnchor, PatchAnchor};
 use crate::components::review_comments::{CommentAnchor, ReviewComment};
 use crate::git_diff::{
     DiffScope, FileDiff, FileStatus, GitDiffDocument, GitDiffError, PatchLineKind, StageState, commit, load_git_diff,
-    stage_all, stage_file, unstage_all, unstage_file,
+    stage_all, stage_files, unstage_all, unstage_files,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -49,7 +49,7 @@ pub struct GitDiffMode {
     pub load_state: GitDiffLoadState,
     split: SplitPanel<FileListPanel, GitDiffPanel>,
     comments: ReviewQueue,
-    pending_restore: Option<RefreshState>,
+    pending_focus: Option<FocusSide>,
     bottom: BottomBar,
 }
 
@@ -65,7 +65,7 @@ impl GitDiffMode {
                 .with_separator("│", Style::default())
                 .with_resize_keys(),
             comments: ReviewQueue::default(),
-            pending_restore: None,
+            pending_focus: None,
             bottom: BottomBar::Help,
         }
     }
@@ -75,10 +75,7 @@ impl GitDiffMode {
     }
 
     pub(crate) fn begin_refresh(&mut self) {
-        self.pending_restore = Some(RefreshState {
-            selected_path: self.selected_file_path().map(ToOwned::to_owned),
-            was_right_focused: !self.split.is_left_focused(),
-        });
+        self.pending_focus = Some(if self.split.is_left_focused() { FocusSide::Left } else { FocusSide::Right });
         self.load_state = GitDiffLoadState::Loading;
         self.split.right_mut().clear_rendered_patches();
     }
@@ -89,11 +86,11 @@ impl GitDiffMode {
                 if self.cached_repo_root.is_none() {
                     self.cached_repo_root = Some(doc.repo_root.clone());
                 }
-                let restore = self.pending_restore.take();
+                let restore = self.pending_focus.take();
                 self.apply_loaded_document(doc, restore);
             }
             Err(error) => {
-                self.pending_restore = None;
+                self.pending_focus = None;
                 self.load_state = GitDiffLoadState::Error { message: error.to_string() };
                 self.split.right_mut().clear_rendered_patches();
             }
@@ -105,7 +102,7 @@ impl GitDiffMode {
     }
 
     fn reset(&mut self, load_state: GitDiffLoadState) {
-        self.pending_restore = None;
+        self.pending_focus = None;
         self.bottom = BottomBar::Help;
         self.load_state = load_state;
         *self.split.left_mut() = FileListPanel::new();
@@ -319,14 +316,6 @@ impl GitDiffMode {
         vec![GitDiffViewMessage::SubmitPrompt(self.comments.format_prompt())]
     }
 
-    fn selected_file_path(&self) -> Option<&str> {
-        let GitDiffLoadState::Ready(doc) = &self.load_state else {
-            return None;
-        };
-        let idx = self.split.left().selected_file_index()?;
-        doc.files.get(idx).map(|f| f.path.as_str())
-    }
-
     fn repo_root(&self) -> Option<&Path> {
         match &self.load_state {
             GitDiffLoadState::Ready(doc) => Some(&doc.repo_root),
@@ -352,16 +341,19 @@ impl GitDiffMode {
     }
 
     async fn toggle_stage_selected(&mut self) -> Vec<GitDiffViewMessage> {
-        let Some(file) = self.selected_file() else {
+        let (Some(root), GitDiffLoadState::Ready(doc)) = (self.repo_root_buf(), &self.load_state) else {
             return vec![];
         };
-        let (path, staged) = (file.path.clone(), file.staged);
-        let Some(root) = self.repo_root_buf() else {
+        let files: Vec<&FileDiff> =
+            self.split.left().selected_file_indices().into_iter().filter_map(|index| doc.files.get(index)).collect();
+        if files.is_empty() {
             return vec![];
-        };
-        let result = match staged {
-            StageState::Staged => unstage_file(&root, &path).await,
-            StageState::Unstaged | StageState::PartiallyStaged => stage_file(&root, &path).await,
+        }
+        let paths: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
+        let result = if files.iter().all(|file| file.staged == StageState::Staged) {
+            unstage_files(&root, &paths).await
+        } else {
+            stage_files(&root, &paths).await
         };
         self.apply_action_result(result)
     }
@@ -504,7 +496,7 @@ impl GitDiffMode {
         }
     }
 
-    fn apply_loaded_document(&mut self, doc: GitDiffDocument, restore: Option<RefreshState>) {
+    fn apply_loaded_document(&mut self, doc: GitDiffDocument, restore: Option<FocusSide>) {
         self.document_revision = self.document_revision.saturating_add(1);
 
         if doc.files.is_empty() {
@@ -518,18 +510,12 @@ impl GitDiffMode {
         self.split.right_mut().clear_rendered_patches();
         self.split.right_mut().set_repo_root(doc.repo_root.clone());
 
-        if let Some(restore) = restore {
-            if restore.was_right_focused {
-                self.split.focus_right();
-            } else {
-                self.split.focus_left();
+        if let Some(focus) = restore {
+            match focus {
+                FocusSide::Left => self.split.focus_left(),
+                FocusSide::Right => self.split.focus_right(),
             }
             self.split.right_mut().reset_scroll();
-            if let Some(path) = &restore.selected_path
-                && let Some(idx) = doc.files.iter().position(|file| file.path == *path)
-            {
-                self.split.left_mut().select_file_index(idx);
-            }
         }
 
         self.load_state = GitDiffLoadState::Ready(doc);
@@ -649,7 +635,7 @@ impl ReviewQueue {
     }
 }
 
-struct RefreshState {
-    selected_path: Option<String>,
-    was_right_focused: bool,
+enum FocusSide {
+    Left,
+    Right,
 }

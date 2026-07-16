@@ -184,7 +184,7 @@ fn renders_directory_tree() {
         &[
             " Git Diff · Both  2 files  +6 -1".to_string(),
             rule(),
-            "▎▾  src/".to_string(),
+            cols(&[("▎▾  src/", 39), ("☐", 0)]),
             cols(&[(" ├── main.rs", 31), ("+2 -1 M ☐", 0)]),
             cols(&[(" └── util.rs", 31), ("+4 -0 A ☐", 0)]),
         ],
@@ -335,7 +335,13 @@ async fn collapse_directory_hides_children() {
 
     assert_buffer_eq(
         &term,
-        &[" Git Diff · Both  2 files  +6 -1".to_string(), rule(), "▎▸  src/".to_string(), String::new(), String::new()],
+        &[
+            " Git Diff · Both  2 files  +6 -1".to_string(),
+            rule(),
+            cols(&[("▎▸  src/", 39), ("☐", 0)]),
+            String::new(),
+            String::new(),
+        ],
     );
 }
 

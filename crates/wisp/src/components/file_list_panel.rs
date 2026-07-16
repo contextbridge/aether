@@ -50,13 +50,16 @@ impl FileListPanel {
         self.file_count = files.len();
         self.additions = files.iter().map(FileDiff::additions).sum();
         self.deletions = files.iter().map(FileDiff::deletions).sum();
-        self.tree = FileTree::from_files(files);
-        self.cursor = VerticalCursor::new();
+        self.tree.rebuild_from_files(files);
         self.file_comment_counts = vec![0; files.len()];
     }
 
     pub fn selected_file_index(&self) -> Option<usize> {
         self.tree.selected_file_index()
+    }
+
+    pub fn selected_file_indices(&self) -> Vec<usize> {
+        self.tree.selected_file_indices()
     }
 
     pub fn select_file_index(&mut self, file_index: usize) {
@@ -95,10 +98,6 @@ impl FileListPanel {
     pub(crate) fn tree_expand_or_enter(&mut self) -> Option<usize> {
         let is_file = self.tree.expand_or_enter();
         if is_file { self.tree.selected_file_index() } else { None }
-    }
-
-    pub fn tree_mut(&mut self) -> &mut FileTree {
-        &mut self.tree
     }
 
     fn header_row(&self, width: usize, theme: &tui::Theme) -> Line {
@@ -200,11 +199,11 @@ impl Component for FileListPanel {
                 let is_selected = entry_index == tree_selected;
                 let comments =
                     entry_file_index(entry).and_then(|index| self.file_comment_counts.get(index).copied()).unwrap_or(0);
-                let indent = tree_indent(visible_entries, entry_index);
+                let indent = tree_indent(&visible_entries, entry_index);
                 let flags = EntryFlags { is_selected, indent: &indent, width, comments };
                 match &entry.kind {
-                    FileTreeEntryKind::Directory { name, expanded, .. } => {
-                        render_directory_entry(&mut content, name, *expanded, entry.depth, flags, theme);
+                    FileTreeEntryKind::Directory { name, expanded, staged, .. } => {
+                        render_directory_entry(&mut content, name, *expanded, *staged, entry.depth, flags, theme);
                     }
                     FileTreeEntryKind::File { name, status, staged, additions, deletions, .. } => {
                         let row = FileRow {
@@ -247,6 +246,7 @@ fn render_directory_entry(
     line: &mut Line,
     name: &str,
     expanded: bool,
+    staged: StageState,
     depth: usize,
     flags: EntryFlags<'_>,
     theme: &tui::Theme,
@@ -257,16 +257,21 @@ fn render_directory_entry(
     let icon_gap = if depth == 0 { "  " } else { " " };
     let dir_style = row_fg_style(theme.info(), is_selected, theme);
     let indicator = if is_selected { "▎" } else { " " };
+    let (checkbox, checkbox_color) = stage_checkbox(staged, theme);
     let prefix_width = format!("{indicator}{indent}{connector}{icon}{icon_gap}").chars().count();
-    let name_budget = width.saturating_sub(prefix_width);
-    let display_name = format!("{name}/");
-    let truncated = truncate_text(&display_name, name_budget);
 
     line.push_with_style(indicator, row_fg_style(theme.accent(), is_selected, theme));
     line.push_with_style(format!("{indent}{connector}"), row_fg_style(theme.muted(), is_selected, theme));
     line.push_with_style(format!("{icon}{icon_gap}"), dir_style);
-    line.push_with_style(truncated.as_ref(), dir_style.bold());
-    line.extend_bg_to_width(width);
+    push_name_padded_to_suffix(
+        line,
+        &format!("{name}/"),
+        dir_style.bold(),
+        dir_style,
+        prefix_width,
+        vec![(format!(" {checkbox}"), row_fg_style(checkbox_color, is_selected, theme))],
+        width,
+    );
 }
 
 #[derive(Clone, Copy)]
@@ -286,36 +291,41 @@ fn render_file_entry(line: &mut Line, row: FileRow<'_>, flags: EntryFlags<'_>, t
     let indicator = if is_selected { "▎" } else { " " };
     let (checkbox, checkbox_color) = stage_checkbox(staged, theme);
 
-    let badge = (comments > 0).then(|| format!("◆{comments} "));
-    let badge_width = badge.as_deref().map_or(0, |b| b.chars().count());
-    let add_str = format!("+{additions}");
-    let del_str = format!(" -{deletions}");
-    let marker_str = format!(" {}", status.marker());
-    let checkbox_str = format!(" {checkbox}");
-    let suffix_width = badge_width
-        + add_str.chars().count()
-        + del_str.chars().count()
-        + marker_str.chars().count()
-        + checkbox_str.chars().count();
-    let prefix = format!("{indicator}{indent}── ");
-    let prefix_width = prefix.chars().count();
-    let name_budget = width.saturating_sub(prefix_width + suffix_width + 1);
-    let truncated = truncate_text(name, name_budget);
+    let mut suffix = vec![(" ".to_string(), style)];
+    if comments > 0 {
+        suffix.push((format!("◆{comments} "), row_fg_style(theme.accent(), is_selected, theme)));
+    }
+    suffix.push((format!("+{additions}"), row_fg_style(theme.diff_added_fg(), is_selected, theme)));
+    suffix.push((format!(" -{deletions}"), row_fg_style(theme.diff_removed_fg(), is_selected, theme)));
+    suffix.push((format!(" {}", status.marker()), row_fg_style(file_status_color(status, theme), is_selected, theme)));
+    suffix.push((format!(" {checkbox}"), row_fg_style(checkbox_color, is_selected, theme)));
+    let prefix_width = format!("{indicator}{indent}── ").chars().count();
 
     line.push_with_style(indicator, row_fg_style(theme.accent(), is_selected, theme));
     line.push_with_style(format!("{indent}── "), guide_style);
-    line.push_with_style(truncated.as_ref(), style);
+    push_name_padded_to_suffix(line, name, style, style, prefix_width, suffix, width);
+}
+
+fn push_name_padded_to_suffix(
+    line: &mut Line,
+    name: &str,
+    name_style: Style,
+    pad_style: Style,
+    prefix_width: usize,
+    suffix: Vec<(String, Style)>,
+    width: usize,
+) {
+    let suffix_width: usize = suffix.iter().map(|(text, _)| text.chars().count()).sum();
+    let truncated = truncate_text(name, width.saturating_sub(prefix_width + suffix_width));
+    line.push_with_style(truncated.as_ref(), name_style);
     let padding = width.saturating_sub(prefix_width + truncated.chars().count() + suffix_width);
     if padding > 0 {
-        line.push_with_style(" ".repeat(padding), style);
+        line.push_with_style(" ".repeat(padding), pad_style);
     }
-    if let Some(badge) = badge {
-        line.push_with_style(badge, row_fg_style(theme.accent(), is_selected, theme));
+    for (text, style) in suffix {
+        line.push_with_style(text, style);
     }
-    line.push_with_style(add_str, row_fg_style(theme.diff_added_fg(), is_selected, theme));
-    line.push_with_style(del_str, row_fg_style(theme.diff_removed_fg(), is_selected, theme));
-    line.push_with_style(marker_str, row_fg_style(file_status_color(status, theme), is_selected, theme));
-    line.push_with_style(checkbox_str, row_fg_style(checkbox_color, is_selected, theme));
+    line.extend_bg_to_width(width);
 }
 
 fn stage_checkbox(staged: StageState, theme: &tui::Theme) -> (&'static str, tui::Color) {
@@ -334,7 +344,7 @@ fn row_fg_style(fg: tui::Color, is_selected: bool, theme: &tui::Theme) -> Style 
     if is_selected { theme.selected_row_style_with_fg(fg) } else { Style::fg(fg) }
 }
 
-fn tree_indent(entries: &[FileTreeEntry], index: usize) -> String {
+fn tree_indent(entries: &[&FileTreeEntry], index: usize) -> String {
     let Some(entry) = entries.get(index) else {
         return String::new();
     };
@@ -349,7 +359,7 @@ fn tree_indent(entries: &[FileTreeEntry], index: usize) -> String {
     indent
 }
 
-fn level_continues(entries: &[FileTreeEntry], index: usize, level: usize) -> bool {
+fn level_continues(entries: &[&FileTreeEntry], index: usize, level: usize) -> bool {
     for next in &entries[index + 1..] {
         if next.depth < level {
             return false;
