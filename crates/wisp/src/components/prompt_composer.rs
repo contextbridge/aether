@@ -252,6 +252,10 @@ impl PromptComposer {
                 self.text_input.insert_char_at_cursor(c);
                 (false, None)
             }
+            PickerMessage::TextTyped(text) => {
+                self.text_input.insert_paste(&text);
+                (false, None)
+            }
             PickerMessage::PopChar => {
                 self.text_input.delete_char_before_cursor();
                 (false, None)
@@ -383,6 +387,10 @@ impl Component for PromptComposer {
                 if let Some(Overlay::PromptSearch { picker, .. }) = self.active_overlay.as_mut() {
                     let outcome = picker.on_event(event).await;
                     return Some(self.handle_prompt_search_outcome(outcome));
+                }
+                if let Some(Overlay::File(picker)) = self.active_overlay.as_mut() {
+                    let outcome = picker.on_event(event).await;
+                    return Some(self.handle_file_picker_outcome(outcome));
                 }
                 self.close_all();
                 let added = parse_dropped_file_paths(text).is_some_and(|paths| self.add_dropped_media(paths));
@@ -665,14 +673,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn paste_closes_picker_and_inserts_text() {
+    async fn paste_keeps_file_picker_open_and_filters() {
         let mut composer = PromptComposer::default();
         type_chars(&mut composer, "@").await;
         assert!(composer.has_file_picker());
 
-        let msgs = composer.on_event(&Event::Paste("pasted text".into())).await.unwrap();
+        let msgs = composer.on_event(&Event::Paste("pasted \ntext".into())).await.unwrap();
         assert!(msgs.is_empty());
-        assert!(!composer.has_active_picker());
+        assert!(composer.has_file_picker());
         assert_eq!(composer.buffer(), "@pasted text");
     }
 
@@ -751,7 +759,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn paste_closes_file_picker_before_processing_drop() {
+    async fn paste_media_path_filters_file_picker_instead_of_adding_attachment() {
         let tmp = TempDir::new().unwrap();
         let img = create_temp_media(&tmp, "screen.png");
 
@@ -761,8 +769,9 @@ mod tests {
 
         composer.on_event(&Event::Paste(img.to_str().unwrap().into())).await;
 
-        assert!(!composer.has_active_picker());
-        assert_eq!(composer.pending_media().len(), 1);
+        assert!(composer.has_file_picker());
+        assert_eq!(composer.pending_media().len(), 0);
+        assert_eq!(composer.buffer(), format!("@{}", img.display()));
     }
 
     #[tokio::test]

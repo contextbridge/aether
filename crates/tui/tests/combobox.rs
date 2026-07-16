@@ -313,6 +313,17 @@ fn move_down_where_noop_when_all_filtered() {
 }
 
 #[test]
+fn handle_picker_event_paste_appends_sanitized_text() {
+    let mut combobox = combo(&["fix login", "add tests"]);
+    let event = Event::Paste("fix \nlogin".into());
+
+    let outcome = combobox.handle_picker_event(&event).expect("paste consumed");
+
+    assert!(matches!(outcome.as_slice(), [PickerMessage::TextTyped(text)] if text == "fix login"));
+    assert_eq!(combobox.query(), "fix login");
+}
+
+#[test]
 fn handle_picker_event_whitespace_closes_by_default() {
     let mut combobox = combo(&["alpha", "beta"]);
     let event = Event::Key(key(KeyCode::Char(' ')));
