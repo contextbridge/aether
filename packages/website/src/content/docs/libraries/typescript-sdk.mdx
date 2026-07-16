@@ -91,6 +91,19 @@ for await (const message of session.prompt("Now list likely refactors")) {
 
 Only one prompt can be in progress per session.
 
+## Messages
+
+`session.prompt()` yields `AetherMessage` objects. Each has a `type` discriminator:
+
+| Type                | Description                                                                                     |
+| ------------------- | -------------------------------------------------------------------------------------------- |
+| `session_update`    | An ACP session update (agent text, tool calls, tool results, progress, etc.). Access `.update`. |
+| `ext_notification`  | A custom extension notification (e.g. plan or task updates). Access `.method` and `.params`.  |
+| `result`            | The prompt finished. `.stopReason` describes why (e.g. `end_turn`, `cancelled`).              |
+| `error`             | An unrecoverable error occurred. Access `.error`.                                             |
+
+A `result` message is always emitted last (unless the stream errors), so it is a reliable place to stop consuming the iterator.
+
 ## TypeScript tools
 
 Use `tool()` to define a TypeScript function and `mcp()` to host one or more of
@@ -237,3 +250,5 @@ await AetherSession.start({
 ```
 
 Set `auth: "none"` only when a trusted proxy injects or signs provider authentication.
+
+The `onElicitation` response `action` may be `"accept"` (with optional `content`), `"decline"`, or `"cancel"`. When `onElicitation` is omitted, the SDK cancels by default.

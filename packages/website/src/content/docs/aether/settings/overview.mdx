@@ -96,6 +96,28 @@ If you selected a model with reasoning capabilities, use the `reasoningEffort` f
 }
 ```
 
+#### Sampling and context window
+
+Fine-tune sampling with `modelSettings` (`temperature`, `topP`, `maxTokens`) and override the model's advertised token limit with `contextWindow`. Any field you omit keeps the provider/model default.
+
+```json {7-11} title=".aether/settings.json"
+{
+  "agents": [
+    {
+      "name": "Build",
+      "description": "Builds features and fixes bugs",
+      "model": "anthropic:claude-sonnet-4-5-20250929",
+      "modelSettings": {
+        "temperature": 0.2,
+        "topP": 0.95,
+        "maxTokens": 8192
+      },
+      "contextWindow": 180000
+    }
+  ]
+}
+```
+
 See [LLMs](/aether/settings/llm-providers/) for more information on LLM and provider settings.
 
 ### System Prompt
