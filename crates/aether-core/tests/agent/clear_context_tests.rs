@@ -1,39 +1,30 @@
-use aether_core::events::{ContextEvent, TurnEvent};
-use aether_core::testing::drain_until;
-
-use aether_core::core::{Prompt, agent};
-use aether_core::events::{AgentEvent, Command, UserCommand};
-use llm::LlmResponse;
-use llm::testing::FakeLlmProvider;
-use llm::{ChatMessage, ContentBlock};
+use aether_core::core::Prompt;
+use aether_core::events::{AgentEvent, Command, ContextEvent, UserCommand};
+use aether_core::testing::{TestScenario, test_agent};
+use llm::{ChatMessage, ContentBlock, LlmResponse};
 
 #[tokio::test]
-async fn test_clear_context_resets_history_and_preserves_system_prompt() {
-    let llm_responses = vec![
-        vec![LlmResponse::start("msg_1"), LlmResponse::text("First response"), LlmResponse::done()],
-        vec![LlmResponse::start("msg_2"), LlmResponse::text("Second response"), LlmResponse::done()],
-    ];
+async fn test_clear_context_resets_history_and_preserves_system_prompt() -> Result<(), Box<dyn std::error::Error>> {
+    let result = test_agent()
+        .without_mcp()
+        .system_prompt(Prompt::text("You are a test agent."))
+        .llm_responses(&[
+            vec![LlmResponse::start("msg_1"), LlmResponse::text("First response"), LlmResponse::done()],
+            vec![LlmResponse::start("msg_2"), LlmResponse::text("Second response"), LlmResponse::done()],
+        ])
+        .scenario(
+            TestScenario::new()
+                .user_text("first question")
+                .wait_for_turn_end()
+                .send(Command::UserCommand(UserCommand::ClearContext))
+                .wait_for(|event| matches!(event, AgentEvent::Context(ContextEvent::Cleared)))
+                .user_text("second question")
+                .wait_for_turn_end(),
+        )
+        .run_with_context()
+        .await?;
 
-    let llm = FakeLlmProvider::new(llm_responses);
-    let captured_contexts = llm.captured_contexts();
-
-    let (tx, mut rx, _handle) = agent(llm).system_prompt(Prompt::text("You are a test agent.")).spawn().await.unwrap();
-
-    tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("first question")] }))
-        .await
-        .unwrap();
-    drain_until(&mut rx, |event| matches!(event, AgentEvent::Turn(TurnEvent::Ended { .. }))).await;
-
-    tx.send(Command::UserCommand(UserCommand::ClearContext)).await.unwrap();
-    let cleared = rx.recv().await.expect("Channel closed before ContextCleared");
-    assert!(matches!(cleared, AgentEvent::Context(ContextEvent::Cleared)), "Expected ContextCleared, got: {cleared:?}");
-
-    tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("second question")] }))
-        .await
-        .unwrap();
-    drain_until(&mut rx, |event| matches!(event, AgentEvent::Turn(TurnEvent::Ended { .. }))).await;
-
-    let contexts = captured_contexts.lock().unwrap();
+    let contexts = result.captured_contexts.lock().unwrap();
     assert_eq!(contexts.len(), 2, "expected two LLM requests");
 
     let second = &contexts[1];
@@ -59,4 +50,6 @@ async fn test_clear_context_resets_history_and_preserves_system_prompt() {
         )
     });
     assert!(has_second_question, "new prompt should be present after clear");
+
+    Ok(())
 }
