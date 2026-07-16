@@ -20,10 +20,12 @@ Stored in `~/.wisp/settings.json`:
     "separator": " · ",
     "left": ["cwd", "gitRef"],
     "right": [
+      "agent",
       "mode",
       { "type": "model", "maxWidth": 32 },
       "reasoning",
-      "context"
+      "context",
+      "serverHealth"
     ]
   }
 }
@@ -34,6 +36,24 @@ Override the home directory with `WISP_HOME`:
 ```bash
 export WISP_HOME=~/my-wisp-config
 ```
+
+## Status line segments
+
+Each `left` and `right` entry is a segment. Shorthand names are strings; segments that take options use an object form.
+
+| Segment     | Form                              | Description                                            |
+| ----------- | --------------------------------- | ------------------------------------------------------ |
+| `cwd`       | `"cwd"` or `{ "type": "cwd", "maxWidth": 40 }` | Current working directory (truncatable). |
+| `gitRef`    | `"gitRef"`                        | Active git branch or tag.                              |
+| `agent`     | `"agent"`                         | Active agent name.                                     |
+| `mode`      | `"mode"`                          | Active mode (user-invocable agent profile).            |
+| `model`     | `"model"` or `{ "type": "model", "maxWidth": 32 }` | Active model (truncatable).              |
+| `reasoning` | `"reasoning"`                     | Current reasoning effort, when applicable.             |
+| `context`   | `"context"`                       | Context window usage indicator.                        |
+| `serverHealth` | `"serverHealth"`               | MCP server connection health summary.                  |
+| `text`      | `{ "type": "text", "value": "...", "style": "muted" }` | Arbitrary fixed text. `style` is optional. |
+
+`text` segment styles: `primary`, `secondary`, `muted`, `info`, `success`, `warning`, `error`.
 
 ## Themes
 

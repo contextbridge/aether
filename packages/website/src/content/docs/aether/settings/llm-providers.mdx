@@ -150,9 +150,17 @@ Do not use `bedrock:arn:aws:bedrock:...` as the model. The ARN only identifies t
 | ----------------- | ------------------- |
 | **Credentials**   | None                |
 | **Model syntax**  | `ollama:<model-id>` |
-| **Host override** | `OLLAMA_HOST`       |
+| **Discovery host** | `OLLAMA_HOST`      |
 
-Aether discovers models you have pulled into Ollama.
+Aether discovers models you have pulled into Ollama by querying `$OLLAMA_HOST/api/tags` (`http://localhost:11434` by default). To route inference requests to a different host, override the provider URL:
+
+```json title=".aether/settings.json"
+{
+  "providers": {
+    "ollama": { "url": "http://ollama-host:11434/v1" }
+  }
+}
+```
 
 ### llama.cpp
 
@@ -160,9 +168,70 @@ Aether discovers models you have pulled into Ollama.
 | ----------------- | --------------------- |
 | **Credentials**   | None                  |
 | **Model syntax**  | `llamacpp:<model-id>` |
-| **Host override** | `LLAMA_CPP_HOST`      |
+| **Discovery host** | `LLAMA_CPP_HOST`     |
 
-Aether queries the server's `/v1/models` endpoint for the currently loaded model.
+Aether queries `$LLAMA_CPP_HOST/v1/models` (`http://localhost:8080` by default) for the currently loaded model. To route inference requests to a different host, override the provider URL:
+
+```json title=".aether/settings.json"
+{
+  "providers": {
+    "llamacpp": { "url": "http://llamacpp-host:8080/v1" }
+  }
+}
+```
+
+## Credentials store
+
+OAuth tokens (such as Codex login) are stored in a credential store. By default Aether uses the OS keyring. Override it with the top-level `credentialsStore` field:
+
+```json title=".aether/settings.json"
+{
+  "credentialsStore": { "type": "keyring" }
+}
+```
+
+| Type             | Properties                                              | Description                                                              |
+| ---------------- | ------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `keyring`        | —                                                       | OS keyring (default).                                                    |
+| `memory`         | —                                                       | In-memory only; cleared when the process exits. Intended for tests.      |
+| `encryptedFile`  | `path` (optional), `passwordEnv` (optional)             | Encrypted file. `path` defaults to `.aether/credentials.enc` in the Aether home; `passwordEnv` names the env var holding the passphrase (defaults to `AETHER_CREDENTIALS_PASSWORD`). |
+
+```json title=".aether/settings.json"
+{
+  "credentialsStore": {
+    "type": "encryptedFile",
+    "path": "/secure/aether-credentials.enc",
+    "passwordEnv": "AETHER_CREDENTIALS_PASSWORD"
+  }
+}
+```
+
+## Provider overrides
+
+The top-level `providers` object (or per-agent `providers`) overrides how Aether connects to a provider. Each entry is keyed by provider name:
+
+| Field                 | Description                                                                 |
+| --------------------- | --------------------------------------------------------------------------- |
+| `url`                 | Base URL for API requests. Used by OpenAI-compatible, Foundry, and local providers. |
+| `auth`                | Authentication mode: `default` (provider default) or `none` (skip auth). Use `none` only behind a trusted proxy that injects credentials. |
+| `requestModel`        | Overrides the model id sent in requests without changing the catalog identity used for capabilities, context window, and display. |
+| `inferenceProfileArn` | Bedrock application inference profile ARN to route requests through.       |
+
+```json title=".aether/settings.json"
+{
+  "providers": {
+    "azure-foundry": {
+      "url": "https://my-resource.openai.azure.com/openai/v1",
+      "requestModel": "production-coding-deployment"
+    },
+    "bedrock": {
+      "inferenceProfileArn": "arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/000000000000"
+    }
+  }
+}
+```
+
+The CLI equivalents are `--provider PROVIDER.url=...`, `--provider PROVIDER.auth=...`, `--provider PROVIDER.request-model=...`, and `--provider bedrock.inference-profile-arn=...`.
 
 ## Reasoning effort
 
