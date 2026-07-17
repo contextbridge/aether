@@ -11,13 +11,21 @@
 //! off a placeholder elicitation request, hands back the captured responder,
 //! and returns a receiver that resolves when the responder is consumed.
 
-use crate::notifications::{ElicitationParams, ElicitationResponse, McpNotification};
-use agent_client_protocol::schema::SessionNotification;
+use crate::client::{AcpEvent, AcpSession, spawn_acp_session};
+use crate::notifications::{
+    ElicitationParams, ElicitationResponse, McpNotification, WorkspaceMoveParams, WorkspaceMoveResponse,
+};
+use agent_client_protocol::schema::{
+    CancelNotification, Implementation, InitializeRequest, InitializeResponse, NewSessionRequest, NewSessionResponse,
+    PromptRequest, PromptResponse, ProtocolVersion, SessionId, SessionNotification, SetSessionConfigOptionRequest,
+    SetSessionConfigOptionResponse,
+};
 use agent_client_protocol::{
     self as acp, Agent, Builder, ByteStreams, Client, ConnectionTo, HandleDispatchFrom, NullRun, Responder,
 };
 use rmcp::model::{CreateElicitationRequestParams, ElicitationSchema};
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::io::DuplexStream;
 use tokio::sync::{mpsc, oneshot};
@@ -153,6 +161,122 @@ impl TestPeer {
 
         let responder = responder_rx.await.expect("client handler must capture responder");
         (responder, response_rx)
+    }
+}
+
+pub struct FakeAgent {
+    prompt_responders: mpsc::UnboundedReceiver<Responder<PromptResponse>>,
+    config_responders: mpsc::UnboundedReceiver<Responder<SetSessionConfigOptionResponse>>,
+    cancellations: mpsc::UnboundedReceiver<CancelNotification>,
+}
+
+impl FakeAgent {
+    /// Build a `FakeAgent` plus its pre-wired `Agent.builder()`
+    pub fn new() -> (Self, Builder<Agent, impl HandleDispatchFrom<Client>, NullRun>) {
+        let (prompt_tx, prompt_rx) = mpsc::unbounded_channel::<Responder<PromptResponse>>();
+        let (config_tx, config_rx) = mpsc::unbounded_channel::<Responder<SetSessionConfigOptionResponse>>();
+        let (cancel_tx, cancel_rx) = mpsc::unbounded_channel::<CancelNotification>();
+
+        let builder = Agent
+            .builder()
+            .on_receive_request(
+                async |_req: InitializeRequest, responder, _cx| {
+                    responder.respond(
+                        InitializeResponse::new(ProtocolVersion::V1)
+                            .agent_info(Implementation::new("Fake Agent", "0.0.0")),
+                    )
+                },
+                acp::on_receive_request!(),
+            )
+            .on_receive_request(
+                async |_req: NewSessionRequest, responder, _cx| {
+                    responder.respond(NewSessionResponse::new(SessionId::new("sess-1")))
+                },
+                acp::on_receive_request!(),
+            )
+            .on_receive_request(
+                async move |_req: PromptRequest, responder, _cx| {
+                    let _ = prompt_tx.send(responder);
+                    Ok(())
+                },
+                acp::on_receive_request!(),
+            )
+            .on_receive_request(
+                async move |_req: SetSessionConfigOptionRequest, responder, _cx| {
+                    let _ = config_tx.send(responder);
+                    Ok(())
+                },
+                acp::on_receive_request!(),
+            )
+            .on_receive_request(
+                async |_req: WorkspaceMoveParams, responder, _cx| {
+                    responder.respond(WorkspaceMoveResponse { new_cwd: PathBuf::from("/tmp") })
+                },
+                acp::on_receive_request!(),
+            )
+            .on_receive_notification(
+                async move |n: CancelNotification, _cx| {
+                    let _ = cancel_tx.send(n);
+                    Ok(())
+                },
+                acp::on_receive_notification!(),
+            );
+
+        let agent = Self { prompt_responders: prompt_rx, config_responders: config_rx, cancellations: cancel_rx };
+        (agent, builder)
+    }
+
+    /// Wait for the next prompt request and hand back its responder. Drop the
+    /// responder (or never respond) to keep the prompt in flight.
+    pub async fn next_prompt_responder(&mut self) -> Responder<PromptResponse> {
+        self.prompt_responders.recv().await.expect("fake agent connection closed")
+    }
+
+    /// Non-blocking variant of [`Self::next_prompt_responder`], for asserting a
+    /// prompt has already reached the agent.
+    pub fn try_next_prompt_responder(&mut self) -> Option<Responder<PromptResponse>> {
+        self.prompt_responders.try_recv().ok()
+    }
+
+    pub async fn next_config_responder(&mut self) -> Responder<SetSessionConfigOptionResponse> {
+        self.config_responders.recv().await.expect("fake agent connection closed")
+    }
+
+    pub async fn next_cancellation(&mut self) -> CancelNotification {
+        self.cancellations.recv().await.expect("fake agent connection closed")
+    }
+}
+
+/// Spawn a [`FakeAgent`] on one end of an in-memory transport and establish a
+/// live [`AcpSession`] against it. Must be called inside a `LocalSet`.
+pub async fn fake_agent_session() -> (FakeAgent, AcpSession) {
+    let (agent, builder) = FakeAgent::new();
+    let (agent_transport, client_transport) = duplex_pair();
+    spawn_local(async move {
+        let _ = builder.connect_to(agent_transport).await;
+    });
+
+    let session = spawn_acp_session(
+        client_transport,
+        InitializeRequest::new(ProtocolVersion::V1),
+        NewSessionRequest::new(PathBuf::from("/tmp")),
+    )
+    .await
+    .expect("fake agent session establishes");
+    (agent, session)
+}
+
+/// Skip events until one matches `predicate`, returning it. Panics if the
+/// event stream closes first.
+pub async fn next_event_matching(
+    event_rx: &mut mpsc::UnboundedReceiver<AcpEvent>,
+    mut predicate: impl FnMut(&AcpEvent) -> bool,
+) -> AcpEvent {
+    loop {
+        let event = event_rx.recv().await.expect("event stream closed while waiting for a matching event");
+        if predicate(&event) {
+            return event;
+        }
     }
 }
 

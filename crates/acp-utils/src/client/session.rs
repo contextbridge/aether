@@ -1,6 +1,6 @@
 use super::error::AcpClientError;
 use super::event::AcpEvent;
-use super::prompt_handle::{AcpPromptHandle, PromptCommand};
+use super::prompt_handle::{AcpPromptHandle, PromptCommand, SessionCommand};
 use crate::notifications::{
     AuthMethodsUpdatedParams, ContextClearedParams, ContextCompactionParams, ContextUsageParams, ElicitationParams,
     McpNotification, McpRequest, SubAgentProgressParams,
@@ -8,11 +8,15 @@ use crate::notifications::{
 use agent_client_protocol::schema::{
     AuthMethod, AuthenticateRequest, CancelNotification, ConfigOptionUpdate, ContentBlock, InitializeRequest,
     InitializeResponse, ListSessionsRequest, LoadSessionRequest, NewSessionRequest, NewSessionResponse,
-    PermissionOptionId, PermissionOptionKind, PromptCapabilities, PromptRequest, RequestPermissionOutcome,
-    RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome, SessionCapabilities,
-    SessionConfigOption, SessionId, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, TextContent,
+    PermissionOptionId, PermissionOptionKind, PromptCapabilities, PromptRequest, PromptResponse,
+    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
+    SessionCapabilities, SessionConfigOption, SessionId, SessionNotification, SessionUpdate,
+    SetSessionConfigOptionRequest, TextContent,
 };
 use agent_client_protocol::{self as acp, Client, ConnectTo, ConnectionTo, JsonRpcRequest};
+use futures::future::BoxFuture;
+use futures::stream::FuturesUnordered;
+use futures::{FutureExt, StreamExt};
 use tokio::sync::mpsc;
 use tracing::info;
 
@@ -188,7 +192,6 @@ async fn run_client_connection(
     let _ = event_tx.send(AcpEvent::ConnectionClosed);
 }
 
-#[allow(clippy::too_many_lines)]
 async fn run_main(
     cx: ConnectionTo<acp::Agent>,
     event_tx: mpsc::UnboundedSender<AcpEvent>,
@@ -217,52 +220,34 @@ async fn run_main(
 
     let _ = init_tx.send(Ok((init_resp, session_resp)));
 
-    while let Some(cmd) = cmd_rx.recv().await {
-        match cmd {
-            PromptCommand::Prompt { session_id, text, content } => {
-                let mut prompt = vec![ContentBlock::Text(TextContent::new(text))];
-                if let Some(extra_content) = content {
-                    prompt.extend(extra_content);
-                }
-                let prompt_fut = cx.send_request(PromptRequest::new(session_id, prompt)).block_task();
-                tokio::pin!(prompt_fut);
-
-                loop {
-                    tokio::select! {
-                        result = &mut prompt_fut => {
-                            let event = match result {
-                                Ok(resp) => AcpEvent::PromptDone(resp.stop_reason),
-                                Err(e) => AcpEvent::PromptError(e),
-                            };
-                            let _ = event_tx.send(event);
-                            break;
-                        }
-                        Some(cmd) = cmd_rx.recv() => {
-                            handle_command(&cx, &event_tx, cmd, ClientState::Prompting).await;
-                        }
-                    }
-                }
+    let mut prompts = FuturesUnordered::new();
+    loop {
+        tokio::select! {
+            Some(result) = prompts.next() => {
+                let _ = event_tx.send(prompt_outcome_event(result));
             }
-            cmd => handle_command(&cx, &event_tx, cmd, ClientState::Idle).await,
+            cmd = cmd_rx.recv() => match cmd {
+                Some(cmd) => handle_command(&cx, &event_tx, cmd, &mut prompts).await,
+                None => break,
+            },
         }
+    }
+    while let Some(result) = prompts.next().await {
+        let _ = event_tx.send(prompt_outcome_event(result));
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ClientState {
-    Idle,
-    Prompting,
-}
+type PromptFuture = BoxFuture<'static, Result<PromptResponse, acp::Error>>;
 
 async fn handle_command(
     cx: &ConnectionTo<acp::Agent>,
     event_tx: &mpsc::UnboundedSender<AcpEvent>,
     cmd: PromptCommand,
-    state: ClientState,
+    prompts: &mut FuturesUnordered<PromptFuture>,
 ) {
     match cmd {
-        PromptCommand::Prompt { .. } => {
-            tracing::warn!("ignoring duplicate Prompt while one is in-flight");
+        PromptCommand::Prompt { session_id, text, content } => {
+            prompts.push(cx.send_request(prompt_request(session_id, text, content)).block_task().boxed());
         }
         PromptCommand::Cancel { session_id } => {
             let _ = cx.send_notification(CancelNotification::new(session_id));
@@ -313,48 +298,46 @@ async fn handle_command(
                 AcpEvent::WorkspaceListFailed { error: format!("{e}") }
             });
         }
-        cmd => handle_lifecycle_command(cx, event_tx, cmd, state).await,
+        PromptCommand::Session(cmd) => handle_lifecycle_command(cx, event_tx, cmd, !prompts.is_empty()).await,
     }
 }
 
-/// Handle the session-lifecycle commands (`ListSessions`, `LoadSession`,
-/// `NewSession`, `MoveWorkspace`).
 async fn handle_lifecycle_command(
     cx: &ConnectionTo<acp::Agent>,
     event_tx: &mpsc::UnboundedSender<AcpEvent>,
-    cmd: PromptCommand,
-    state: ClientState,
+    cmd: SessionCommand,
+    prompt_in_flight: bool,
 ) {
-    if state == ClientState::Prompting {
+    if prompt_in_flight {
         tracing::warn!("ignoring session-lifecycle command while prompt is in-flight: {cmd:?}");
-        if matches!(cmd, PromptCommand::MoveWorkspace(_)) {
+        if matches!(cmd, SessionCommand::MoveWorkspace(_)) {
             let _ = event_tx.send(AcpEvent::WorkspaceMoveFailed { error: "a prompt is in flight".to_string() });
         }
         return;
     }
 
     match cmd {
-        PromptCommand::ListSessions => {
+        SessionCommand::ListSessions => {
             request_to_event(
                 cx,
                 event_tx,
                 ListSessionsRequest::new(),
                 |resp| AcpEvent::SessionsListed { sessions: resp.sessions },
-                AcpEvent::PromptError,
+                |e| AcpEvent::SessionListFailed { error: format!("{e}") },
             )
             .await;
         }
-        PromptCommand::LoadSession { session_id, cwd } => {
+        SessionCommand::LoadSession { session_id, cwd } => {
             request_to_event(
                 cx,
                 event_tx,
                 LoadSessionRequest::new(session_id.clone(), cwd),
                 |resp| AcpEvent::SessionLoaded { session_id, config_options: resp.config_options.unwrap_or_default() },
-                AcpEvent::PromptError,
+                |e| AcpEvent::SessionLoadFailed { error: format!("{e}") },
             )
             .await;
         }
-        PromptCommand::NewSession { cwd } => {
+        SessionCommand::NewSession { cwd } => {
             request_to_event(
                 cx,
                 event_tx,
@@ -363,18 +346,30 @@ async fn handle_lifecycle_command(
                     session_id: resp.session_id,
                     config_options: resp.config_options.unwrap_or_default(),
                 },
-                AcpEvent::PromptError,
+                |e| AcpEvent::NewSessionFailed { error: format!("{e}") },
             )
             .await;
         }
-        PromptCommand::MoveWorkspace(params) => {
+        SessionCommand::MoveWorkspace(params) => {
             request_to_event(cx, event_tx, params, AcpEvent::WorkspaceMoved, |e| AcpEvent::WorkspaceMoveFailed {
                 error: format!("{e}"),
             })
             .await;
         }
-        cmd => unreachable!("non-lifecycle command routed to handle_lifecycle_command: {cmd:?}"),
     }
+}
+
+fn prompt_outcome_event(result: Result<PromptResponse, acp::Error>) -> AcpEvent {
+    match result {
+        Ok(resp) => AcpEvent::PromptDone(resp.stop_reason),
+        Err(e) => AcpEvent::PromptError(e),
+    }
+}
+
+fn prompt_request(session_id: SessionId, text: String, content: Option<Vec<ContentBlock>>) -> PromptRequest {
+    let prompt =
+        std::iter::once(ContentBlock::Text(TextContent::new(text))).chain(content.into_iter().flatten()).collect();
+    PromptRequest::new(session_id, prompt)
 }
 
 fn request_to_event<T: JsonRpcRequest>(

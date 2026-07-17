@@ -1,82 +1,73 @@
-use acp_utils::client::spawn_acp_session;
-use acp_utils::testing::duplex_pair;
-use agent_client_protocol::schema::{
-    CancelNotification, Implementation, InitializeRequest, InitializeResponse, NewSessionRequest, NewSessionResponse,
-    PromptRequest, ProtocolVersion, SessionId, SetSessionConfigOptionRequest,
-};
-use agent_client_protocol::{self as acp, Agent};
-use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::sync::Notify;
-use tokio::task::{LocalSet, spawn_local};
+use acp_utils::client::AcpEvent;
+use acp_utils::notifications::WorkspaceMoveTarget;
+use acp_utils::testing::{fake_agent_session, next_event_matching};
+use agent_client_protocol::schema::{PromptResponse, StopReason};
+use tokio::task::LocalSet;
+
+#[tokio::test(flavor = "current_thread")]
+async fn lifecycle_commands_stay_rejected_while_an_overlapping_prompt_is_in_flight() {
+    LocalSet::new()
+        .run_until(async {
+            let (mut agent, mut session) = fake_agent_session().await;
+
+            session.prompt_handle.prompt(&session.session_id, "first", None).expect("first prompt queues");
+            let first = agent.next_prompt_responder().await;
+
+            session.prompt_handle.prompt(&session.session_id, "second", None).expect("second prompt queues");
+            // Keep the responder alive so the second prompt stays in flight.
+            let _second = agent.next_prompt_responder().await;
+
+            first.respond(PromptResponse::new(StopReason::EndTurn)).expect("first prompt completes");
+            next_event_matching(&mut session.event_rx, |e| matches!(e, AcpEvent::PromptDone(_))).await;
+
+            session
+                .prompt_handle
+                .move_workspace(&session.session_id, WorkspaceMoveTarget::New { name: "ws".into() })
+                .expect("move workspace queues");
+            let outcome = next_event_matching(&mut session.event_rx, |e| {
+                matches!(e, AcpEvent::WorkspaceMoved(_) | AcpEvent::WorkspaceMoveFailed { .. })
+            })
+            .await;
+            match outcome {
+                AcpEvent::WorkspaceMoveFailed { error } => assert_eq!(error, "a prompt is in flight"),
+                _ => panic!("workspace move must be rejected while a prompt is still in flight"),
+            }
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn prompt_reaches_the_agent_while_another_prompt_is_outstanding() {
+    LocalSet::new()
+        .run_until(async {
+            let (mut agent, session) = fake_agent_session().await;
+
+            session.prompt_handle.prompt(&session.session_id, "first", None).expect("first prompt queues");
+            // Never answered, so the first prompt stays in flight for the whole test.
+            let _first = agent.next_prompt_responder().await;
+
+            session.prompt_handle.prompt(&session.session_id, "second", None).expect("second prompt queues");
+            session.prompt_handle.cancel(&session.session_id).expect("cancel queues");
+            agent.next_cancellation().await;
+
+            let _second = agent.try_next_prompt_responder().expect("second prompt reaches agent before later commands");
+        })
+        .await;
+}
 
 #[tokio::test(flavor = "current_thread")]
 async fn cancel_reaches_the_agent_while_a_config_response_is_outstanding() {
     LocalSet::new()
         .run_until(async {
-            let (agent_transport, client_transport) = duplex_pair();
-            let cancelled = Arc::new(Notify::new());
+            let (mut agent, session) = fake_agent_session().await;
 
-            let agent_builder = Agent
-                .builder()
-                .on_receive_request(
-                    async |_req: InitializeRequest, responder, _cx| {
-                        responder.respond(
-                            InitializeResponse::new(ProtocolVersion::V1)
-                                .agent_info(Implementation::new("Fake Agent", "0.0.0")),
-                        )
-                    },
-                    acp::on_receive_request!(),
-                )
-                .on_receive_request(
-                    async |_req: NewSessionRequest, responder, _cx| {
-                        responder.respond(NewSessionResponse::new(SessionId::new("sess-1")))
-                    },
-                    acp::on_receive_request!(),
-                )
-                .on_receive_request(
-                    // Never answer, so the prompt stays in flight for the whole test.
-                    async |_req: PromptRequest, responder, _cx| {
-                        std::mem::forget(responder);
-                        Ok(())
-                    },
-                    acp::on_receive_request!(),
-                )
-                .on_receive_request(
-                    // Never answer, so the config response stays outstanding when Cancel is sent.
-                    async |_req: SetSessionConfigOptionRequest, responder, _cx| {
-                        std::mem::forget(responder);
-                        Ok(())
-                    },
-                    acp::on_receive_request!(),
-                )
-                .on_receive_notification(
-                    {
-                        let cancelled = Arc::clone(&cancelled);
-                        async move |_n: CancelNotification, _cx| {
-                            cancelled.notify_one();
-                            Ok(())
-                        }
-                    },
-                    acp::on_receive_notification!(),
-                );
-            spawn_local(async move {
-                let _ = agent_builder.connect_to(agent_transport).await;
-            });
-
-            let session = spawn_acp_session(
-                client_transport,
-                InitializeRequest::new(ProtocolVersion::V1),
-                NewSessionRequest::new(PathBuf::from("/tmp")),
-            )
-            .await
-            .expect("session establishes");
-
+            // Neither the prompt nor the config request is answered, so both
+            // stay outstanding when Cancel is sent.
             session.prompt_handle.prompt(&session.session_id, "hi", None).expect("prompt queues");
             session.prompt_handle.set_config_option(&session.session_id, "mode", "Plan").expect("config queues");
             session.prompt_handle.cancel(&session.session_id).expect("cancel queues");
 
-            cancelled.notified().await;
+            agent.next_cancellation().await;
         })
         .await;
 }

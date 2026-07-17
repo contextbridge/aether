@@ -302,10 +302,10 @@ async fn on_session_command(
 ) {
     match cmd {
         SessionCommand::Prompt { content, responder } => {
-            let result = handle_prompt(actor, runtime_event_rx, cmd_rx, io, content).await;
-            let turn_ok = result.is_ok();
-            respond_prompt(responder, result);
-            if turn_ok {
+            let mut responders = vec![responder];
+            let result = handle_prompt(actor, runtime_event_rx, cmd_rx, io, content, &mut responders).await;
+            respond_prompts(responders, &result);
+            if result.is_ok() {
                 let _ = apply_deferred_agent_switch(actor, io).await;
             }
         }
@@ -314,11 +314,7 @@ async fn on_session_command(
             let result = apply_idle_config_change(actor, io, &setting, &available).await;
             let _ = responder.respond_with_result(result);
         }
-        SessionCommand::AuthenticateMcp { server_name } => {
-            if let Err(error) = actor.authenticate_active_mcp_server(&server_name).await {
-                error!("MCP server authentication failed: {error}");
-            }
-        }
+        SessionCommand::AuthenticateMcp { server_name } => authenticate_mcp(actor, &server_name).await,
     }
 }
 
@@ -328,6 +324,7 @@ async fn handle_prompt(
     cmd_rx: &mut mpsc::Receiver<SessionCommand>,
     io: &SessionIo,
     content: Vec<ContentBlock>,
+    responders: &mut Vec<Responder<PromptResponse>>,
 ) -> Result<acp::StopReason, SessionError> {
     let switch = actor.config.begin_prompt(&actor.modes);
     publish_snapshot(actor, io);
@@ -335,12 +332,13 @@ async fn handle_prompt(
 
     actor.send_active_command(Command::agent(AgentCommand::SetReasoningEffort(actor.config.reasoning_effort))).await?;
 
-    let content = expand_slash_command_in_content(actor.active_runtime()?, content).await;
-    persist_event(actor, io, SessionEvent::User(UserEvent::Message { content: content.clone() }));
-    actor.send_active_command(Command::with_content(content)).await?;
+    send_user_prompt(actor, io, content).await?;
 
     loop {
         tokio::select! {
+            // Deliberately unbiased: preferring runtime events would
+            // starve Cancel whenever the event channel is saturated, e.g. by a
+            // large tool result -- exactly when cancellation matters most.
             () = io.cancel.cancelled() => {
                 info!("Cancellation observed during active prompt; forwarding Cancel to agent");
                 let _ = actor.send_active_command(Command::cancel()).await;
@@ -359,7 +357,7 @@ async fn handle_prompt(
                 }
             }
             Some(cmd) = cmd_rx.recv() => {
-                handle_in_flight_command(actor, io, cmd).await;
+                handle_in_flight_command(actor, io, cmd, responders).await;
             }
         }
     }
@@ -389,25 +387,43 @@ fn turn_stop_reason(message: &AgentEvent) -> Option<acp::StopReason> {
     })
 }
 
-async fn handle_in_flight_command(actor: &mut SessionActor, io: &SessionIo, cmd: SessionCommand) {
+async fn handle_in_flight_command(
+    actor: &mut SessionActor,
+    io: &SessionIo,
+    cmd: SessionCommand,
+    responders: &mut Vec<Responder<PromptResponse>>,
+) {
     match cmd {
         SessionCommand::Cancel => {
             info!("Cancel received during prompt processing");
             let _ = actor.send_active_command(Command::cancel()).await;
         }
-        SessionCommand::AuthenticateMcp { server_name } => {
-            if let Err(error) = actor.authenticate_active_mcp_server(&server_name).await {
-                error!("MCP server authentication failed: {error}");
-            }
-        }
+        SessionCommand::AuthenticateMcp { server_name } => authenticate_mcp(actor, &server_name).await,
         SessionCommand::SetConfig { setting, available, responder } => {
             let result = apply_config_change(actor, io, &setting, &available);
             let _ = responder.respond_with_result(result);
         }
-        SessionCommand::Prompt { responder, .. } => {
-            respond_prompt(responder, Err(SessionError::CommandChannel("prompt already in progress".to_string())));
-        }
+        SessionCommand::Prompt { content, responder } => match send_user_prompt(actor, io, content).await {
+            Ok(()) => responders.push(responder),
+            Err(error) => respond_prompts([responder], &Err(error)),
+        },
     }
+}
+
+async fn authenticate_mcp(actor: &SessionActor, server_name: &str) {
+    if let Err(error) = actor.authenticate_active_mcp_server(server_name).await {
+        error!("MCP server authentication failed: {error}");
+    }
+}
+
+async fn send_user_prompt(
+    actor: &mut SessionActor,
+    io: &SessionIo,
+    content: Vec<ContentBlock>,
+) -> Result<(), SessionError> {
+    let content = expand_slash_command_in_content(actor.active_runtime()?, content).await;
+    persist_event(actor, io, SessionEvent::User(UserEvent::Message { content: content.clone() }));
+    actor.send_active_command(Command::with_content(content)).await
 }
 
 fn apply_config_change(
@@ -481,19 +497,22 @@ async fn on_runtime_event(actor: &mut SessionActor, io: &SessionIo, event: Runti
     }
 }
 
-fn respond_prompt(responder: Responder<PromptResponse>, result: Result<acp::StopReason, SessionError>) {
-    let response = match result {
-        Ok(stop_reason) => {
-            info!("Prompt completed with stop reason: {:?}", stop_reason);
-            Ok(PromptResponse::new(stop_reason))
+fn respond_prompts(
+    responders: impl IntoIterator<Item = Responder<PromptResponse>>,
+    result: &Result<acp::StopReason, SessionError>,
+) {
+    match result {
+        Ok(stop_reason) => info!("Prompt completed with stop reason: {:?}", stop_reason),
+        Err(e) => error!("Prompt failed: {e}"),
+    }
+    for responder in responders {
+        let response = match result {
+            Ok(stop_reason) => Ok(PromptResponse::new(*stop_reason)),
+            Err(_) => Err(acp::Error::internal_error()),
+        };
+        if let Err(e) = responder.respond_with_result(response) {
+            warn!("failed to send prompt response: {e:?}");
         }
-        Err(e) => {
-            error!("Prompt failed: {e}");
-            Err(acp::Error::internal_error())
-        }
-    };
-    if let Err(e) = responder.respond_with_result(response) {
-        warn!("failed to send prompt response: {e:?}");
     }
 }
 

@@ -6,6 +6,6 @@ mod tokio_agent;
 
 pub use error::AcpClientError;
 pub use event::AcpEvent;
-pub use prompt_handle::{AcpPromptHandle, PromptCommand};
+pub use prompt_handle::{AcpPromptHandle, PromptCommand, SessionCommand};
 pub use session::{AcpSession, spawn_acp_session};
 pub use tokio_agent::TokioAcpAgent;

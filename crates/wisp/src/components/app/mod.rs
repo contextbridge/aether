@@ -195,10 +195,7 @@ impl App {
             AcpEvent::AuthMethodsUpdated(params) => self.update_auth_methods(params.auth_methods),
             AcpEvent::McpNotification(notification) => self.on_mcp_notification(notification),
             AcpEvent::PromptDone(stop_reason) => self.on_prompt_done(stop_reason, &mut commands),
-            AcpEvent::PromptError(error) => {
-                self.session_loading_buffer.clear();
-                self.conversation_screen.on_prompt_error(&error);
-            }
+            AcpEvent::PromptError(error) => self.conversation_screen.on_prompt_error(&error),
             AcpEvent::ElicitationRequest { params, responder } => self.on_elicitation_request(params, responder),
             AcpEvent::AuthenticateComplete { method_id } => self.on_authenticate_complete(&method_id),
             AcpEvent::AuthenticateFailed { method_id, error } => self.on_authenticate_failed(&method_id, &error),
@@ -214,6 +211,7 @@ impl App {
                 let messages = self.conversation_screen.open_session_picker(filtered);
                 self.handle_conversation_messages_sync(messages);
             }
+            AcpEvent::SessionListFailed { error } => self.report_lifecycle_failure("list sessions", &error),
             // SessionLoaded intentionally does NOT restore previous config selections:
             // when the user loads an existing session, the server's stored config for
             // that session is authoritative.
@@ -226,6 +224,10 @@ impl App {
                 }
                 self.update_config_options(&config_options);
             }
+            AcpEvent::SessionLoadFailed { error } => {
+                self.session_loading_buffer.clear();
+                self.report_lifecycle_failure("load session", &error);
+            }
             AcpEvent::NewSessionCreated { session_id, config_options } => {
                 self.session_loading_buffer.clear();
                 let previous_selections = current_config_selections(&self.config_options);
@@ -234,6 +236,7 @@ impl App {
                 self.context_usage = None;
                 self.restore_config_selections(&previous_selections);
             }
+            AcpEvent::NewSessionFailed { error } => self.report_lifecycle_failure("create session", &error),
             AcpEvent::ConnectionClosed => {
                 self.session_loading_buffer.clear();
                 self.exit_requested = true;
@@ -264,6 +267,11 @@ impl App {
             }
         }
         EventOutcome::Render { commands }
+    }
+
+    fn report_lifecycle_failure(&mut self, action: &str, error: &str) {
+        tracing::warn!("failed to {action}: {error}");
+        self.conversation_screen.conversation.push_user_message(&format!("[wisp] Failed to {action}: {error}"));
     }
 
     fn on_workspace_moved(&mut self, new_cwd: &Path, commands: &mut Vec<RendererCommand>) {
@@ -344,11 +352,14 @@ impl App {
             return;
         }
 
-        let _ = self.prompt_handle.prompt(
+        let dispatched = self.prompt_handle.prompt(
             &self.session_id,
             &user_input,
             if outcome.blocks.is_empty() { None } else { Some(outcome.blocks) },
         );
+        if dispatched.is_ok() {
+            self.conversation_screen.on_prompt_sent();
+        }
     }
 
     async fn handle_conversation_messages(
@@ -359,7 +370,6 @@ impl App {
         for msg in outcome.unwrap_or_default() {
             match msg {
                 ConversationScreenMessage::SendPrompt { user_input, attachments } => {
-                    self.conversation_screen.on_prompt_sent();
                     self.submit_prompt(user_input, attachments).await;
                 }
                 ConversationScreenMessage::ClearScreen => {
@@ -531,7 +541,6 @@ impl App {
                     return;
                 }
 
-                self.conversation_screen.on_prompt_sent();
                 self.submit_prompt(user_input, Vec::new()).await;
                 self.screen_router.close_git_diff();
             }
@@ -565,7 +574,7 @@ impl App {
         let was_waiting = self.conversation_screen.is_waiting();
         let cancelled = matches!(stop_reason, acp::StopReason::Cancelled);
         self.conversation_screen.on_prompt_done(stop_reason);
-        if was_waiting && !cancelled {
+        if was_waiting && !self.conversation_screen.is_waiting() && !cancelled {
             commands.push(RendererCommand::Bell);
         }
     }
@@ -1482,6 +1491,31 @@ mod tests {
             EventOutcome::Render { commands } => assert!(commands.is_empty(), "cancelled prompt should not bell"),
             EventOutcome::DontRender => panic!("prompt done should render"),
         }
+    }
+
+    #[test]
+    fn waiting_persists_until_all_overlapping_prompts_complete() {
+        let mut app = make_app();
+        app.conversation_screen.on_prompt_sent();
+        app.conversation_screen.on_prompt_sent();
+
+        let outcome = app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+        match outcome {
+            EventOutcome::Render { commands } => {
+                assert!(commands.is_empty(), "first completion of two should not bell");
+            }
+            EventOutcome::DontRender => panic!("prompt done should render"),
+        }
+        assert!(app.conversation_screen.is_waiting(), "second prompt is still in flight");
+
+        let outcome = app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+        match outcome {
+            EventOutcome::Render { commands } => {
+                assert!(commands.iter().any(|c| matches!(c, RendererCommand::Bell)), "last completion should bell");
+            }
+            EventOutcome::DontRender => panic!("prompt done should render"),
+        }
+        assert!(!app.conversation_screen.is_waiting(), "all prompts completed");
     }
 
     #[test]

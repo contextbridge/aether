@@ -15,12 +15,19 @@ pub enum PromptCommand {
     SetConfigOption { session_id: SessionId, config_id: String, value: String },
     AuthenticateMcpServer { session_id: SessionId, server_name: String },
     Authenticate { method_id: String },
-    ListSessions,
-    LoadSession { session_id: SessionId, cwd: PathBuf },
-    NewSession { cwd: std::path::PathBuf },
     SearchPrompts(PromptSearchParams),
     SessionPreview(SessionPreviewParams),
     ListWorkspaces(WorkspaceListParams),
+    Session(SessionCommand),
+}
+
+/// Commands that change which session the connection is on. Only valid while
+/// no prompt is in flight; the client task rejects them otherwise.
+#[derive(Debug)]
+pub enum SessionCommand {
+    ListSessions,
+    LoadSession { session_id: SessionId, cwd: PathBuf },
+    NewSession { cwd: PathBuf },
     MoveWorkspace(WorkspaceMoveParams),
 }
 
@@ -84,15 +91,18 @@ impl AcpPromptHandle {
     }
 
     pub fn list_sessions(&self) -> Result<(), AcpClientError> {
-        self.send(PromptCommand::ListSessions)
+        self.send(PromptCommand::Session(SessionCommand::ListSessions))
     }
 
     pub fn load_session(&self, session_id: &SessionId, cwd: &Path) -> Result<(), AcpClientError> {
-        self.send(PromptCommand::LoadSession { session_id: session_id.clone(), cwd: cwd.to_path_buf() })
+        self.send(PromptCommand::Session(SessionCommand::LoadSession {
+            session_id: session_id.clone(),
+            cwd: cwd.to_path_buf(),
+        }))
     }
 
     pub fn new_session(&self, cwd: &Path) -> Result<(), AcpClientError> {
-        self.send(PromptCommand::NewSession { cwd: cwd.to_path_buf() })
+        self.send(PromptCommand::Session(SessionCommand::NewSession { cwd: cwd.to_path_buf() }))
     }
 
     pub fn search_prompts(&self, params: PromptSearchParams) -> Result<(), AcpClientError> {
@@ -108,7 +118,10 @@ impl AcpPromptHandle {
     }
 
     pub fn move_workspace(&self, session_id: &SessionId, target: WorkspaceMoveTarget) -> Result<(), AcpClientError> {
-        self.send(PromptCommand::MoveWorkspace(WorkspaceMoveParams { session_id: session_id.0.to_string(), target }))
+        self.send(PromptCommand::Session(SessionCommand::MoveWorkspace(WorkspaceMoveParams {
+            session_id: session_id.0.to_string(),
+            target,
+        })))
     }
 
     fn send(&self, cmd: PromptCommand) -> Result<(), AcpClientError> {
@@ -208,7 +221,7 @@ mod tests {
         handle.list_sessions().unwrap();
 
         let cmd = rx.try_recv().unwrap();
-        assert!(matches!(cmd, PromptCommand::ListSessions));
+        assert!(matches!(cmd, PromptCommand::Session(SessionCommand::ListSessions)));
     }
 
     #[test]
@@ -222,7 +235,7 @@ mod tests {
 
         let cmd = rx.try_recv().unwrap();
         match cmd {
-            PromptCommand::LoadSession { session_id, cwd } => {
+            PromptCommand::Session(SessionCommand::LoadSession { session_id, cwd }) => {
                 assert_eq!(session_id.0.as_ref(), "sess-restore");
                 assert_eq!(cwd, std::path::PathBuf::from("/tmp/project"));
             }
@@ -251,7 +264,7 @@ mod tests {
 
         let cmd = rx.try_recv().unwrap();
         match cmd {
-            PromptCommand::MoveWorkspace(params) => {
+            PromptCommand::Session(SessionCommand::MoveWorkspace(params)) => {
                 assert_eq!(params.session_id, "sess-1");
                 assert_eq!(params.target, WorkspaceMoveTarget::New { name: "ws".into() });
             }
@@ -269,7 +282,7 @@ mod tests {
 
         let cmd = rx.try_recv().unwrap();
         match cmd {
-            PromptCommand::NewSession { cwd } => {
+            PromptCommand::Session(SessionCommand::NewSession { cwd }) => {
                 assert_eq!(cwd, std::path::PathBuf::from("/tmp/project"));
             }
             _ => panic!("Expected NewSession command"),

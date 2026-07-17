@@ -74,7 +74,7 @@ pub struct ConversationScreen {
     pub(crate) progress_indicator: ProgressIndicator,
     pub(crate) workspace_move_state: WorkspaceMoveState,
     compaction_active: bool,
-    waiting_for_response: bool,
+    pending_prompts: usize,
     pub(crate) active_modal: Option<Modal>,
     pub(crate) content_padding: usize,
     pub(crate) pending_url_elicitations: HashSet<(String, String)>,
@@ -96,7 +96,7 @@ impl ConversationScreen {
             progress_indicator: ProgressIndicator::default(),
             workspace_move_state: WorkspaceMoveState::Idle,
             compaction_active: false,
-            waiting_for_response: false,
+            pending_prompts: 0,
             active_modal: None,
             content_padding,
             pending_url_elicitations: HashSet::new(),
@@ -117,11 +117,11 @@ impl ConversationScreen {
     }
 
     pub fn is_waiting(&self) -> bool {
-        self.waiting_for_response
+        self.pending_prompts > 0
     }
 
     pub fn on_prompt_sent(&mut self) {
-        self.waiting_for_response = true;
+        self.pending_prompts += 1;
     }
 
     pub fn set_compaction_active(&mut self, active: bool) {
@@ -129,7 +129,7 @@ impl ConversationScreen {
     }
 
     pub fn is_busy(&self) -> bool {
-        self.waiting_for_response || self.tool_call_statuses.running_any()
+        self.is_waiting() || self.tool_call_statuses.running_any()
     }
 
     pub fn wants_tick(&self) -> bool {
@@ -157,7 +157,7 @@ impl ConversationScreen {
     pub fn reset_after_context_cleared(&mut self) {
         self.conversation.clear();
         self.tool_call_statuses.clear();
-        self.waiting_for_response = false;
+        self.pending_prompts = 0;
         self.workspace_move_state = WorkspaceMoveState::Idle;
         self.compaction_active = false;
         self.plan_tracker.clear();
@@ -166,7 +166,7 @@ impl ConversationScreen {
     }
 
     pub fn request_workspace_picker(&mut self) -> Result<ConversationScreenMessage, &'static str> {
-        if self.waiting_for_response {
+        if self.is_waiting() {
             return Err("Cannot move workspaces while a prompt is running.");
         }
         if !self.workspace_move_state.is_idle() {
@@ -292,15 +292,15 @@ impl ConversationScreen {
     }
 
     fn on_prompt_terminated(&mut self, termination: &PromptTermination) {
-        self.waiting_for_response = false;
+        // Saturating: reset_after_context_cleared zeroes the count while a
+        // prompt may still be in flight and complete afterwards.
+        self.pending_prompts = self.pending_prompts.saturating_sub(1);
         self.compaction_active = false;
         self.tool_call_statuses.finalize_running(termination);
         self.conversation.close_thought_block();
     }
 
     pub fn reject_local_prompt(&mut self, message: &str) {
-        self.waiting_for_response = false;
-        self.compaction_active = false;
         self.conversation.push_user_message(&format!("[wisp] {message}"));
     }
 
@@ -422,7 +422,6 @@ impl ConversationScreen {
                     Err(message) => self.conversation.push_user_message(&format!("[wisp] {message}")),
                 },
                 PromptComposerMessage::SubmitRequested { user_input, attachments } => {
-                    self.on_prompt_sent();
                     out.push(ConversationScreenMessage::SendPrompt { user_input, attachments });
                 }
                 PromptComposerMessage::SearchPrompts(params) => {

@@ -1,4 +1,4 @@
-use acp_utils::client::PromptCommand;
+use acp_utils::client::{PromptCommand, SessionCommand};
 use acp_utils::notifications::{WorkspaceEntry, WorkspaceMoveTarget};
 use agent_client_protocol::schema as acp;
 use std::{io, path::PathBuf};
@@ -67,7 +67,7 @@ async fn selecting_existing_workspace_sends_move_command() -> TestResult {
     press(&mut renderer, Enter).await?;
 
     match renderer.commands().try_recv().expect("expected move workspace command") {
-        PromptCommand::MoveWorkspace(params) => {
+        PromptCommand::Session(SessionCommand::MoveWorkspace(params)) => {
             assert_eq!(params.session_id, "test");
             assert_eq!(params.target, WorkspaceMoveTarget::Existing { path: PathBuf::from("/repo/aether-fix") });
         }
@@ -95,7 +95,7 @@ async fn workspace_move_spinner_transitions_to_session_load_and_clears_when_load
     renderer.on_workspace_moved(PathBuf::from("/elsewhere/aether-2"))?;
 
     let command = renderer.commands().try_recv().map_err(|_| io::Error::other("expected load session command"))?;
-    let PromptCommand::LoadSession { session_id, cwd } = command else {
+    let PromptCommand::Session(SessionCommand::LoadSession { session_id, cwd }) = command else {
         return Err(io::Error::other(format!("expected LoadSession command, got {command:?}")).into());
     };
     assert_eq!(session_id.0.as_ref(), "test");
@@ -128,7 +128,7 @@ async fn create_new_workspace_flow_submits_typed_name() -> TestResult {
     press(&mut renderer, Enter).await?;
 
     match renderer.commands().try_recv().expect("expected move workspace command") {
-        PromptCommand::MoveWorkspace(params) => {
+        PromptCommand::Session(SessionCommand::MoveWorkspace(params)) => {
             assert_eq!(params.target, WorkspaceMoveTarget::New { name: "aether-2".to_string() });
         }
         other => panic!("expected MoveWorkspace command, got {other:?}"),
@@ -164,7 +164,7 @@ async fn workspace_moved_updates_status_line_and_reloads_session() -> TestResult
     renderer.on_workspace_moved(PathBuf::from("/elsewhere/aether-2"))?;
 
     match renderer.commands().try_recv().expect("expected load session command") {
-        PromptCommand::LoadSession { session_id, cwd } => {
+        PromptCommand::Session(SessionCommand::LoadSession { session_id, cwd }) => {
             assert_eq!(session_id.0.as_ref(), "test");
             assert_eq!(cwd, PathBuf::from("/elsewhere/aether-2"));
         }
@@ -234,7 +234,7 @@ async fn mouse_selecting_existing_workspace_sends_move_command() -> TestResult {
     renderer.on_mouse_down(4, 4).await?;
 
     match renderer.commands().try_recv().expect("expected move workspace command") {
-        PromptCommand::MoveWorkspace(params) => {
+        PromptCommand::Session(SessionCommand::MoveWorkspace(params)) => {
             assert_eq!(params.target, WorkspaceMoveTarget::Existing { path: PathBuf::from("/repo/aether-fix") });
         }
         other => panic!("expected MoveWorkspace command, got {other:?}"),

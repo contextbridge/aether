@@ -1,4 +1,4 @@
-use acp_utils::client::PromptCommand;
+use acp_utils::client::{PromptCommand, SessionCommand};
 use acp_utils::notifications::{SessionDisplayMeta, SessionPreviewResponse, SessionPreviewRole, SessionPreviewTurn};
 use agent_client_protocol::schema as acp;
 use std::path::PathBuf;
@@ -404,7 +404,7 @@ async fn test_replay_history_only_visible_after_session_loaded() -> TestResult {
 
 fn assert_list_sessions_command(commands: &mut UnboundedReceiver<PromptCommand>) {
     match commands.try_recv().expect("expected list sessions command") {
-        PromptCommand::ListSessions => {}
+        PromptCommand::Session(SessionCommand::ListSessions) => {}
         other => panic!("expected ListSessions command, got {other:?}"),
     }
 }
