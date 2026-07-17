@@ -68,7 +68,8 @@ aether acp [OPTIONS]
 | `--provider`         | `provider.field=value`                             | Provider override. Supports `PROVIDER.url`, `PROVIDER.auth`, `PROVIDER.request-model`, and `bedrock.inference-profile-arn`. |
 | `--settings-json`    | `string`                                           | Inline settings JSON.                                                                                                       |
 | `--settings-file`    | `path`                                             | Settings JSON file.                                                                                                         |
-| `--sandbox-image`    | `string`                                           | Run inside a Docker sandbox using the given image.                                                                          |
+
+`--sandbox-image` is a global CLI flag, so it can appear before the subcommand or in the subcommand options shown by help.
 
 Examples:
 
