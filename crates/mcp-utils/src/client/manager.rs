@@ -2,7 +2,7 @@ use llm::ToolDefinition;
 
 use super::{
     McpError, Result,
-    config::McpServer,
+    config::{McpHttpConfig, McpServer},
     connection::{
         ConnectConfig, McpConnectAttempt, McpConnectOutcome, McpServerConnection, Tool, authenticate_http,
         connect_server,
@@ -20,12 +20,12 @@ use rmcp::{
         ElicitationAction, FormElicitationCapability, Implementation, Tool as RmcpTool, UrlElicitationCapability,
     },
     service::RunningService,
-    transport::streamable_http_client::StreamableHttpClientTransportConfig,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
+use std::num::NonZeroU16;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
@@ -41,6 +41,7 @@ pub type OAuthHandlerFactory = Arc<dyn Fn(OAuthHandlerContext) -> Result<Arc<dyn
 #[derive(Clone)]
 pub struct OAuthHandlerContext {
     pub server_name: String,
+    pub callback_port: Option<NonZeroU16>,
     pub tx: mpsc::Sender<McpClientEvent>,
 }
 
@@ -503,7 +504,7 @@ impl McpManager {
         &mut self,
         name: &str,
         conn: McpServerConnection,
-        reauth_config: Option<StreamableHttpClientTransportConfig>,
+        reauth_config: Option<McpHttpConfig>,
         proxied: bool,
     ) -> Result<Vec<RmcpTool>> {
         let tools = conn
@@ -519,7 +520,7 @@ impl McpManager {
         name: &str,
         conn: McpServerConnection,
         tools: &[RmcpTool],
-        reauth_config: Option<StreamableHttpClientTransportConfig>,
+        reauth_config: Option<McpHttpConfig>,
         proxied: bool,
     ) {
         let existing_reauth = self.servers.get(name).and_then(|r| r.reauth_config.clone());
@@ -572,13 +573,7 @@ impl McpManager {
         }
     }
 
-    fn register_record(
-        &mut self,
-        name: &str,
-        state: ServerState,
-        reauth_config: Option<StreamableHttpClientTransportConfig>,
-        proxied: bool,
-    ) {
+    fn register_record(&mut self, name: &str, state: ServerState, reauth_config: Option<McpHttpConfig>, proxied: bool) {
         self.remember_server_order(name);
         self.servers.insert(name.to_string(), ServerRecord::new(state, reauth_config, proxied));
     }
@@ -621,7 +616,7 @@ impl Drop for McpManager {
 /// Internal record holding all mutable state for a single MCP server.
 struct ServerRecord {
     state: ServerState,
-    reauth_config: Option<StreamableHttpClientTransportConfig>,
+    reauth_config: Option<McpHttpConfig>,
     proxied: bool,
 }
 
@@ -646,14 +641,14 @@ impl From<&ServerState> for McpServerStatus {
 }
 
 impl ServerRecord {
-    fn new(state: ServerState, reauth_config: Option<StreamableHttpClientTransportConfig>, proxied: bool) -> Self {
+    fn new(state: ServerState, reauth_config: Option<McpHttpConfig>, proxied: bool) -> Self {
         Self { state, reauth_config, proxied }
     }
 
     fn connected(
         connection: McpServerConnection,
         tools: Vec<Tool>,
-        reauth_config: Option<StreamableHttpClientTransportConfig>,
+        reauth_config: Option<McpHttpConfig>,
         proxied: bool,
     ) -> Self {
         Self::new(ServerState::Connected { connection, tools }, reauth_config, proxied)
@@ -716,7 +711,7 @@ impl ServerRecord {
 mod tests {
     use super::{DEFAULT_PROXY_NAME, McpClientEvent, McpManager, McpServerStatus, ServerState};
     use crate::client::OAuthHandlerFactory;
-    use crate::client::config::{McpServer, McpTransport};
+    use crate::client::config::{McpHttpConfig, McpServer, McpTransport};
     use crate::client::connection::{McpConnectAttempt, McpConnectOutcome};
     use crate::status::McpServerAuthCapability;
     use aether_auth::{OAuthCallback, OAuthError, OAuthHandler};
@@ -810,6 +805,10 @@ mod tests {
         Arc::new(|_ctx| Ok(Arc::new(TestOAuthHandler)))
     }
 
+    fn http_config(uri: &str) -> McpHttpConfig {
+        StreamableHttpClientTransportConfig::with_uri(uri).into()
+    }
+
     #[tokio::test]
     async fn authenticate_server_task_rejects_record_without_reauth_config() {
         let (event_sender, _event_receiver) = mpsc::channel(1);
@@ -830,7 +829,7 @@ mod tests {
         manager.register_record(
             "remote",
             ServerState::NeedsOAuth,
-            Some(StreamableHttpClientTransportConfig::with_uri("http://localhost:19999/mcp")),
+            Some(http_config("http://localhost:19999/mcp")),
             false,
         );
 
@@ -853,7 +852,7 @@ mod tests {
         manager.register_record(
             "remote",
             ServerState::NeedsOAuth,
-            Some(StreamableHttpClientTransportConfig::with_uri("http://localhost:19999/mcp")),
+            Some(http_config("http://localhost:19999/mcp")),
             false,
         );
         let _task = manager.authenticate_server_task("remote").await.expect("auth should start");
@@ -894,14 +893,14 @@ mod tests {
         manager.register_record(
             "with-oauth",
             ServerState::Connecting,
-            Some(StreamableHttpClientTransportConfig::with_uri("http://localhost/mcp")),
+            Some(http_config("http://localhost/mcp")),
             false,
         );
         manager.register_record("without-oauth", ServerState::Connecting, None, false);
         manager.register_record(
             "needs-oauth",
             ServerState::NeedsOAuth,
-            Some(StreamableHttpClientTransportConfig::with_uri("http://localhost/mcp2")),
+            Some(http_config("http://localhost/mcp2")),
             false,
         );
 

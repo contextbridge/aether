@@ -30,15 +30,13 @@ fn try_map_mcp_server(server: McpServer) -> Option<RuntimeMcpServer> {
 
         Http(http) => Some(RuntimeMcpServer::new(
             http.name,
-            McpTransport::Http { config: http_config(http.url, &http.headers) },
+            McpTransport::Http(http_config(http.url, &http.headers).into()),
             false,
         )),
 
-        Sse(sse) => Some(RuntimeMcpServer::new(
-            sse.name,
-            McpTransport::Http { config: http_config(sse.url, &sse.headers) },
-            false,
-        )),
+        Sse(sse) => {
+            Some(RuntimeMcpServer::new(sse.name, McpTransport::Http(http_config(sse.url, &sse.headers).into()), false))
+        }
 
         _ => None,
     }
@@ -97,10 +95,10 @@ mod tests {
         assert_eq!(configs.len(), 1);
 
         match &configs[0].transport {
-            McpTransport::Http { config } => {
+            McpTransport::Http(config) => {
                 assert_eq!(configs[0].name, "http-server");
-                assert_eq!(config.uri.as_ref(), "https://example.com/mcp");
-                assert_eq!(config.auth_header.as_deref(), Some("token123"));
+                assert_eq!(config.transport.uri.as_ref(), "https://example.com/mcp");
+                assert_eq!(config.transport.auth_header.as_deref(), Some("token123"));
             }
             other => panic!("Expected Http, got {other:?}"),
         }
@@ -126,8 +124,8 @@ mod tests {
             );
             let configs = map_acp_mcp_servers(vec![server]);
             match &configs[0].transport {
-                McpTransport::Http { config } => {
-                    assert_eq!(config.auth_header.as_deref(), Some(expected), "input was {input:?}");
+                McpTransport::Http(config) => {
+                    assert_eq!(config.transport.auth_header.as_deref(), Some(expected), "input was {input:?}");
                 }
                 other => panic!("Expected Http, got {other:?}"),
             }
@@ -142,10 +140,10 @@ mod tests {
         assert_eq!(configs.len(), 1);
 
         match &configs[0].transport {
-            McpTransport::Http { config } => {
+            McpTransport::Http(config) => {
                 assert_eq!(configs[0].name, "sse-server");
-                assert_eq!(config.uri.as_ref(), "https://example.com/sse");
-                assert_eq!(config.auth_header, None);
+                assert_eq!(config.transport.uri.as_ref(), "https://example.com/sse");
+                assert_eq!(config.transport.auth_header, None);
             }
             other => panic!("Expected Http, got {other:?}"),
         }

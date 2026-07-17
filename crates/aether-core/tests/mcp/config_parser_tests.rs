@@ -1,4 +1,4 @@
-use mcp_utils::client::{McpConfig, McpServer, McpTransport, ParseError};
+use mcp_utils::client::{McpConfig, McpHttpConfig, McpServer, McpTransport, ParseError};
 use std::collections::HashMap;
 use std::env;
 use utils::variables::Vars;
@@ -28,9 +28,9 @@ macro_rules! with_env {
 
 fn assert_http(server: McpServer, expected_name: &str, expected_url: &str) -> McpServer {
     match &server.transport {
-        McpTransport::Http { config: c } => {
+        McpTransport::Http(c) => {
             assert_eq!(server.name, expected_name);
-            assert_eq!(c.uri.to_string(), expected_url);
+            assert_eq!(c.transport.uri.to_string(), expected_url);
         }
         other => panic!("Expected Http config, got {other:?}"),
     }
@@ -64,6 +64,44 @@ async fn test_parse_stdio_config() {
 }
 
 #[tokio::test]
+async fn test_parse_http_oauth_config() {
+    let json = server_json(
+        "slack",
+        r#"{
+            "type": "http",
+            "url": "https://mcp.slack.com/mcp",
+            "oauth": {
+                "clientId": "1601185624273.8899143856786",
+                "callbackPort": 3118
+            }
+        }"#,
+    );
+
+    let server = parse_one(&json).await;
+    match server.transport {
+        McpTransport::Http(McpHttpConfig { oauth: Some(oauth), .. }) => {
+            assert_eq!(oauth.client_id, "1601185624273.8899143856786");
+            assert_eq!(oauth.callback_port.get(), 3118);
+        }
+        other => panic!("Expected HTTP OAuth config, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_rejects_zero_oauth_callback_port() {
+    let json = server_json(
+        "bad",
+        r#"{
+            "type": "http",
+            "url": "https://example.com/mcp",
+            "oauth": { "clientId": "client", "callbackPort": 0 }
+        }"#,
+    );
+
+    assert!(McpConfig::from_json(&json).is_err());
+}
+
+#[tokio::test]
 async fn test_parse_http_and_sse_configs() {
     let json = server_json(
         "mcpMesh",
@@ -77,8 +115,8 @@ async fn test_parse_http_and_sse_configs() {
         [("API_TOKEN", "secret_token")],
         assert_http(parse_one(&json).await, "mcpMesh", "http://localhost:3000/mcp")
     );
-    if let McpTransport::Http { config: c } = cfg.transport {
-        assert_eq!(c.auth_header.as_ref().unwrap(), "secret_token");
+    if let McpTransport::Http(c) = cfg.transport {
+        assert_eq!(c.transport.auth_header.as_ref().unwrap(), "secret_token");
     }
 
     let json = server_json("sseServer", r#"{ "type": "sse", "url": "http://localhost:4000/sse", "headers": {} }"#);

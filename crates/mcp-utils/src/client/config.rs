@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Debug, Formatter};
+use std::num::NonZeroU16;
 use std::path::Path;
 use utils::is_false;
 use utils::variables::{VarError, Vars};
@@ -20,8 +21,7 @@ pub struct McpConfig {
 #[serde(untagged)]
 pub enum McpServerConfig {
     Stdio(StdioServerConfig),
-    Http(HttpServerConfig),
-    Sse(SseServerConfig),
+    Remote(RemoteServerConfig),
     InMemory(InMemoryServerConfig),
 }
 
@@ -49,37 +49,29 @@ pub struct StdioServerConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct HttpServerConfig {
-    /// Transport discriminant; always `http`.
-    #[serde(rename = "type")]
-    pub type_: HttpType,
-
-    /// Base URL of the streamable HTTP MCP server.
-    pub url: String,
-
-    /// Extra HTTP headers sent with every request.
-    #[serde(default)]
-    pub headers: HashMap<String, String>,
-
-    /// Expose this server's tools through Aether's tool proxy.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub proxy: bool,
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpOAuthConfig {
+    pub client_id: String,
+    pub callback_port: NonZeroU16,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct SseServerConfig {
-    /// Transport discriminant; always `sse`.
+pub struct RemoteServerConfig {
+    /// Transport discriminant; `http` (streamable HTTP) or `sse` (Server-Sent Events).
     #[serde(rename = "type")]
-    pub type_: SseType,
+    pub type_: RemoteType,
 
-    /// Base URL of the Server-Sent Events MCP server.
+    /// Base URL of the remote MCP server.
     pub url: String,
 
     /// Extra HTTP headers sent with every request.
     #[serde(default)]
     pub headers: HashMap<String, String>,
+
+    /// OAuth settings for a pre-registered public client.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth: Option<McpOAuthConfig>,
 
     /// Expose this server's tools through Aether's tool proxy.
     #[serde(default, skip_serializing_if = "is_false")]
@@ -114,13 +106,9 @@ pub enum StdioType {
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq)]
-pub enum HttpType {
+pub enum RemoteType {
     #[serde(rename = "http")]
     Http,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq)]
-pub enum SseType {
     #[serde(rename = "sse")]
     Sse,
 }
@@ -139,8 +127,30 @@ pub struct McpServer {
 
 pub enum McpTransport {
     Stdio { command: String, args: Vec<String>, env: HashMap<String, String> },
-    Http { config: StreamableHttpClientTransportConfig },
+    Http(McpHttpConfig),
     InMemory { server: Box<dyn DynService<RoleServer>> },
+}
+
+#[derive(Debug, Clone)]
+pub struct McpHttpConfig {
+    pub transport: StreamableHttpClientTransportConfig,
+    pub oauth: Option<McpOAuthConfig>,
+}
+
+impl McpHttpConfig {
+    pub fn oauth_client_id(&self) -> Option<&str> {
+        self.oauth.as_ref().map(|oauth| oauth.client_id.as_str())
+    }
+
+    pub fn callback_port(&self) -> Option<NonZeroU16> {
+        self.oauth.as_ref().map(|oauth| oauth.callback_port)
+    }
+}
+
+impl From<StreamableHttpClientTransportConfig> for McpHttpConfig {
+    fn from(transport: StreamableHttpClientTransportConfig) -> Self {
+        Self { transport, oauth: None }
+    }
 }
 
 impl McpServer {
@@ -156,7 +166,7 @@ impl McpServer {
             McpTransport::Stdio { command, args, env } => {
                 McpTransport::Stdio { command: command.clone(), args: args.clone(), env: env.clone() }
             }
-            McpTransport::Http { config } => McpTransport::Http { config: config.clone() },
+            McpTransport::Http(config) => McpTransport::Http(config.clone()),
             McpTransport::InMemory { .. } => return Err(McpServerCloneError(self.name.clone())),
         };
         Ok(Self { name: self.name.clone(), transport, proxy: self.proxy })
@@ -183,7 +193,7 @@ impl Debug for McpTransport {
             McpTransport::Stdio { command, args, env } => {
                 f.debug_struct("Stdio").field("command", command).field("args", args).field("env", env).finish()
             }
-            McpTransport::Http { config } => f.debug_struct("Http").field("config", config).finish(),
+            McpTransport::Http(config) => f.debug_tuple("Http").field(config).finish(),
             McpTransport::InMemory { .. } => f.debug_struct("InMemory").field("server", &"<DynService>").finish(),
         }
     }
@@ -265,8 +275,7 @@ impl McpServerConfig {
     pub fn proxy(&self) -> bool {
         match self {
             McpServerConfig::Stdio(config) => config.proxy,
-            McpServerConfig::Http(config) => config.proxy,
-            McpServerConfig::Sse(config) => config.proxy,
+            McpServerConfig::Remote(config) => config.proxy,
             McpServerConfig::InMemory(config) => config.proxy,
         }
     }
@@ -274,8 +283,7 @@ impl McpServerConfig {
     pub fn set_proxy(&mut self, value: bool) {
         match self {
             McpServerConfig::Stdio(config) => config.proxy = value,
-            McpServerConfig::Http(config) => config.proxy = value,
-            McpServerConfig::Sse(config) => config.proxy = value,
+            McpServerConfig::Remote(config) => config.proxy = value,
             McpServerConfig::InMemory(config) => config.proxy = value,
         }
     }
@@ -308,8 +316,7 @@ impl McpServerConfig {
                     .collect::<Result<HashMap<_, _>, VarError>>()?,
             }),
 
-            McpServerConfig::Http(HttpServerConfig { url, headers, .. })
-            | McpServerConfig::Sse(SseServerConfig { url, headers, .. }) => {
+            McpServerConfig::Remote(RemoteServerConfig { url, headers, oauth, .. }) => {
                 let auth_header = headers.get("Authorization").map(|v| vars.expand(v)).transpose()?.map(|auth| {
                     // rmcp adds `Bearer`  to the auth header.
                     auth.split_once(' ')
@@ -318,12 +325,18 @@ impl McpServerConfig {
                         .to_string()
                 });
 
-                let mut config = StreamableHttpClientTransportConfig::with_uri(vars.expand(&url)?);
+                let mut transport = StreamableHttpClientTransportConfig::with_uri(vars.expand(&url)?);
                 if let Some(auth) = auth_header {
-                    config = config.auth_header(auth);
+                    transport = transport.auth_header(auth);
                 }
 
-                Ok(McpTransport::Http { config })
+                let oauth = oauth
+                    .map(|oauth| -> Result<McpOAuthConfig, VarError> {
+                        Ok(McpOAuthConfig { client_id: vars.expand(&oauth.client_id)?, ..oauth })
+                    })
+                    .transpose()?;
+
+                Ok(McpTransport::Http(McpHttpConfig { transport, oauth }))
             }
 
             McpServerConfig::InMemory(InMemoryServerConfig { args, input, .. }) => {
@@ -547,11 +560,11 @@ mod tests {
         .map_err(|e| e.to_string())?;
 
         let servers = config.into_servers(&HashMap::new(), &Vars::new()).await.map_err(|e| e.to_string())?;
-        let McpTransport::Http { config } = &servers[0].transport else {
+        let McpTransport::Http(config) = &servers[0].transport else {
             return Err(format!("expected Http transport, got {:?}", servers[0].transport));
         };
 
-        assert_eq!(config.auth_header.as_deref(), Some("secret-token"));
+        assert_eq!(config.transport.auth_header.as_deref(), Some("secret-token"));
         Ok(())
     }
 
@@ -563,10 +576,10 @@ mod tests {
         .map_err(|e| e.to_string())?;
         let servers = config.into_servers(&HashMap::new(), &Vars::new()).await.map_err(|e| e.to_string())?;
 
-        let McpTransport::Http { config } = &servers[0].transport else {
+        let McpTransport::Http(config) = &servers[0].transport else {
             return Err(format!("expected Http transport, got {:?}", servers[0].transport));
         };
-        assert_eq!(config.auth_header.as_deref(), Some("Basic dXNlcjpwYXNz"));
+        assert_eq!(config.transport.auth_header.as_deref(), Some("Basic dXNlcjpwYXNz"));
         Ok(())
     }
 
@@ -579,10 +592,10 @@ mod tests {
         let vars = Vars::new().with("TOKEN", "expanded-token");
         let servers = config.into_servers(&HashMap::new(), &vars).await.map_err(|e| e.to_string())?;
 
-        let McpTransport::Http { config } = &servers[0].transport else {
+        let McpTransport::Http(config) = &servers[0].transport else {
             return Err(format!("expected Http transport, got {:?}", servers[0].transport));
         };
-        assert_eq!(config.auth_header.as_deref(), Some("expanded-token"));
+        assert_eq!(config.transport.auth_header.as_deref(), Some("expanded-token"));
         Ok(())
     }
 }

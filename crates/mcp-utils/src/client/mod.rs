@@ -10,8 +10,9 @@ mod naming;
 mod tool_proxy;
 
 pub use config::{
-    HttpServerConfig, HttpType, InMemoryServerConfig, InMemoryType, McpConfig, McpServer, McpServerCloneError,
-    McpServerConfig, McpTransport, ParseError, ServerFactory, SseServerConfig, SseType, StdioServerConfig, StdioType,
+    InMemoryServerConfig, InMemoryType, McpConfig, McpHttpConfig, McpOAuthConfig, McpServer, McpServerCloneError,
+    McpServerConfig, McpTransport, ParseError, RemoteServerConfig, RemoteType, ServerFactory, StdioServerConfig,
+    StdioType,
 };
 pub use connection::{McpConnectAttempt, McpConnectOutcome, McpServerConnection};
 pub use connection_attempt_manager::McpConnectionAttemptManager;

@@ -29,7 +29,7 @@ impl FailingHttpEndpoint {
     fn server(&self, name: &str, proxied: bool) -> McpServer {
         McpServer::new(
             name,
-            McpTransport::Http { config: StreamableHttpClientTransportConfig::with_uri(self.uri.as_str()) },
+            McpTransport::Http(StreamableHttpClientTransportConfig::with_uri(self.uri.as_str()).into()),
             proxied,
         )
     }
