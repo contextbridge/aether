@@ -76,13 +76,8 @@ impl<T: DeserializeOwned + Send + 'static> MarkdownFile<T> {
         let results = join_all(parse_tasks).await;
         let items = results
             .into_iter()
-            .filter_map(|result| match result {
-                Ok(Ok(item)) => Some(item),
-                Ok(Err(e)) => {
-                    tracing::warn!("Failed to parse file: {}", e);
-                    None
-                }
-                Err(_) => None,
+            .filter_map(|result| {
+                result.ok().and_then(|r| r.inspect_err(|e| tracing::warn!("Failed to parse file: {}", e)).ok())
             })
             .collect();
 
@@ -139,13 +134,8 @@ impl<T: DeserializeOwned + Send + 'static> MarkdownFile<T> {
         let results = join_all(parse_tasks).await;
         let items = results
             .into_iter()
-            .filter_map(|result| match result {
-                Ok(Ok(item)) => Some(item),
-                Ok(Err(e)) => {
-                    tracing::debug!("Skipping directory: {}", e);
-                    None
-                }
-                Err(_) => None,
+            .filter_map(|result| {
+                result.ok().and_then(|r| r.inspect_err(|e| tracing::debug!("Skipping directory: {}", e)).ok())
             })
             .collect();
 

@@ -29,6 +29,7 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinHandle;
 
 pub use crate::status::{McpServerAuthCapability, McpServerStatus, McpServerStatusEntry};
 
@@ -380,18 +381,7 @@ impl McpManager {
                 && let Some(handle) = conn.server_task
             {
                 drop(conn.client);
-
-                match tokio::time::timeout(std::time::Duration::from_secs(5), handle).await {
-                    Ok(Ok(())) => {
-                        tracing::info!("Server '{server_name}' shut down gracefully");
-                    }
-                    Ok(Err(e)) => {
-                        tracing::warn!("Server '{server_name}' task panicked: {e:?}");
-                    }
-                    Err(_) => {
-                        tracing::warn!("Server '{server_name}' shutdown timed out");
-                    }
-                }
+                await_server_shutdown(&server_name, handle).await;
             }
         }
 
@@ -406,18 +396,7 @@ impl McpManager {
             && let Some(handle) = conn.server_task
         {
             drop(conn.client);
-
-            match tokio::time::timeout(std::time::Duration::from_secs(5), handle).await {
-                Ok(Ok(())) => {
-                    tracing::info!("Server '{server_name}' shut down gracefully");
-                }
-                Ok(Err(e)) => {
-                    tracing::warn!("Server '{server_name}' task panicked: {e:?}");
-                }
-                Err(_) => {
-                    tracing::warn!("Server '{server_name}' shutdown timed out");
-                }
-            }
+            await_server_shutdown(server_name, handle).await;
         }
 
         Ok(())
@@ -709,6 +688,19 @@ impl ServerRecord {
         McpServerStatusEntry::new(name, self.status())
             .with_auth_capability(self.auth_capability())
             .with_proxied(self.proxied)
+    }
+}
+
+/// Awaits `handle` for up to 5 seconds, logging whether the server shut down
+/// gracefully, panicked, or timed out. Used during manager teardown.
+async fn await_server_shutdown(server_name: &str, handle: JoinHandle<()>) {
+    let Ok(task_result) = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await else {
+        tracing::warn!("Server '{server_name}' shutdown timed out");
+        return;
+    };
+    match task_result {
+        Ok(()) => tracing::info!("Server '{server_name}' shut down gracefully"),
+        Err(e) => tracing::warn!("Server '{server_name}' task panicked: {e:?}"),
     }
 }
 

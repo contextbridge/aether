@@ -63,10 +63,10 @@ pub async fn accept_oauth_callback(listener: &TcpListener) -> Result<OAuthCallba
         let request_line = {
             let mut reader = BufReader::new(&mut socket);
             let mut line = String::new();
-            match timeout(Duration::from_secs(2), reader.read_line(&mut line)).await {
-                Ok(Ok(1..)) => line,
-                _ => continue,
-            }
+            let bytes_read =
+                timeout(Duration::from_secs(2), reader.read_line(&mut line)).await.ok().and_then(Result::ok);
+            let Some(1..) = bytes_read else { continue };
+            line
         };
 
         match parse_callback_from_request(&request_line) {
