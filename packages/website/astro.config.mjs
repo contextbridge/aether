@@ -100,7 +100,7 @@ export default defineConfig({
           items: [
             { label: "Coding", slug: "aether/built-in-servers/coding" },
             {
-              label: "Skills, Rules & Notes",
+              label: "Skills, Rules & Commands",
               slug: "aether/built-in-servers/skills-commands",
             },
             { label: "Tasks", slug: "aether/built-in-servers/tasks" },
