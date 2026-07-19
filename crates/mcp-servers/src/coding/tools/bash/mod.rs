@@ -176,14 +176,13 @@ async fn run_command_with_timeout(
     };
 
     if let Some(timeout_duration) = timeout {
-        match tokio::time::timeout(timeout_duration, run_command).await {
-            Ok(Ok(result)) => result,
-            Ok(Err(_)) => (-1, false),
-            Err(_) => {
+        tokio::time::timeout(timeout_duration, run_command).await.map_or_else(
+            |_| {
                 let _ = output_tx.send("Command timed out\n".to_string());
                 (-1, true)
-            }
-        }
+            },
+            |inner| inner.unwrap_or((-1, false)),
+        )
     } else {
         run_command.await.unwrap_or((-1, false))
     }
@@ -238,49 +237,45 @@ pub async fn execute_command_in_dir(args: BashInput, cwd: Option<&std::path::Pat
             Ok(cmd.output().await)
         };
 
-        match result {
-            Ok(Ok(output)) => {
-                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                let exit_code = output.status.code().unwrap_or(-1);
+        let Ok(output) = result else {
+            let timeout_ms = timeout.map_or(120_000, |d| d.as_millis());
+            let display_meta =
+                ToolDisplayMeta::new("Run command", format!("{} (exit -1, timed out)", truncate(&args.command, 40)));
+            return Ok(BashResult::Completed(BashOutput {
+                output: format!("Command timed out after {timeout_ms}ms"),
+                exit_code: -1,
+                killed: Some(true),
+                shell_id: None,
+                meta: Some(display_meta.into()),
+            }));
+        };
 
-                let combined_output = if stderr.is_empty() {
-                    stdout
-                } else if stdout.is_empty() {
-                    stderr
-                } else {
-                    format!("{stdout}{stderr}")
-                };
+        let output = match output {
+            Ok(output) => output,
+            Err(e) => return Err(BashError::SpawnFailed { command: args.command, reason: e.to_string() }),
+        };
 
-                let display_meta =
-                    ToolDisplayMeta::new("Run command", format!("{} (exit {exit_code})", truncate(&args.command, 40)));
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let exit_code = output.status.code().unwrap_or(-1);
 
-                Ok(BashResult::Completed(BashOutput {
-                    output: combined_output,
-                    exit_code,
-                    killed: Some(false),
-                    shell_id: None,
-                    meta: Some(display_meta.into()),
-                }))
-            }
-            Ok(Err(e)) => Err(BashError::SpawnFailed { command: args.command, reason: e.to_string() }),
-            Err(_) => {
-                // Timeout occurred
-                let timeout_ms = timeout.map_or(120_000, |d| d.as_millis());
+        let combined_output = if stderr.is_empty() {
+            stdout
+        } else if stdout.is_empty() {
+            stderr
+        } else {
+            format!("{stdout}{stderr}")
+        };
 
-                let display_meta = ToolDisplayMeta::new(
-                    "Run command",
-                    format!("{} (exit -1, timed out)", truncate(&args.command, 40)),
-                );
+        let display_meta =
+            ToolDisplayMeta::new("Run command", format!("{} (exit {exit_code})", truncate(&args.command, 40)));
 
-                Ok(BashResult::Completed(BashOutput {
-                    output: format!("Command timed out after {timeout_ms}ms"),
-                    exit_code: -1,
-                    killed: Some(true),
-                    shell_id: None,
-                    meta: Some(display_meta.into()),
-                }))
-            }
-        }
+        Ok(BashResult::Completed(BashOutput {
+            output: combined_output,
+            exit_code,
+            killed: Some(false),
+            shell_id: None,
+            meta: Some(display_meta.into()),
+        }))
     }
 }
