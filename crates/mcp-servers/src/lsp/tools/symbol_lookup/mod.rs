@@ -7,6 +7,8 @@
 //! - hover: Get type and documentation info for a symbol
 //! - `incoming_calls` / `outgoing_calls`: One-step call hierarchy lookup
 
+use std::path::Path;
+
 use lsp_types::GotoDefinitionResponse;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -14,10 +16,9 @@ use serde::{Deserialize, Serialize};
 use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename};
 
 use crate::lsp::common::{LocationResult, uri_to_path};
-use crate::lsp::registry::LspRegistry;
+use crate::lsp::registry::{LspRegistry, ResolvedSymbol};
 
 use super::call_hierarchy::CallSiteResult;
-use super::resolve_symbol_position;
 
 /// Direction for one-step call hierarchy lookups.
 enum CallDirection {
@@ -54,6 +55,17 @@ pub enum SymbolLookupOperation {
     OutgoingCalls,
 }
 
+/// Scope for call hierarchy results.
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum CallScope {
+    /// Return only callers/callees declared inside the workspace.
+    #[default]
+    Project,
+    /// Include dependency and standard-library symbols.
+    All,
+}
+
 /// Input for the `lsp_symbol` tool
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -65,8 +77,8 @@ pub struct LspSymbolInput {
     pub file_path: String,
     /// The symbol name to look up (e.g., "`HashMap`", "spawn", "`LspClient`")
     pub symbol: String,
-    /// Optional 1-indexed line number. When provided, skips automatic symbol resolution
-    /// (faster). When omitted, the line is resolved via document symbols.
+    /// Optional 1-indexed line hint. A matching line avoids automatic resolution;
+    /// stale hints fall back to searching the document.
     #[serde(default)]
     pub line: Option<u32>,
     /// Whether to include the declaration in references results (default: true, only used for references operation)
@@ -78,9 +90,10 @@ pub struct LspSymbolInput {
     /// `incoming_calls`/`outgoing_calls` on large functions (e.g., `limit: 20`).
     #[serde(default)]
     pub limit: Option<usize>,
-    /// Number of context lines to include around each location (only for
-    /// definition, implementation, references). Each location will include N
-    /// lines before and after the result range, formatted with line numbers.
+    /// Scope for incoming/outgoing call hierarchy results. Defaults to project-only.
+    #[serde(default)]
+    pub call_scope: CallScope,
+    /// Number of context lines to include around returned source locations.
     #[serde(default, alias = "context_lines")]
     pub context_lines: Option<u32>,
 }
@@ -134,29 +147,15 @@ impl LspSymbolOutput {
     }
 }
 
-/// Resolve the line number for a symbol, using the explicit `line` if provided
-/// or falling back to automatic document symbol resolution.
-async fn resolve_line(
-    file_path: &str,
-    symbol: &str,
-    explicit_line: Option<u32>,
-    tools: &LspRegistry,
-) -> Result<u32, String> {
-    match explicit_line {
-        Some(line) => Ok(line),
-        None => resolve_symbol_position(file_path, symbol, tools).await.map_err(|e| e.to_string()),
-    }
-}
-
 /// Execute the `lsp_symbol` operation
-#[allow(clippy::too_many_lines)]
 pub async fn execute_lsp_symbol(input: LspSymbolInput, registry: &LspRegistry) -> Result<LspSymbolOutput, String> {
-    let line = resolve_line(&input.file_path, &input.symbol, input.line, registry).await?;
-
+    let resolved = registry
+        .resolve_symbol(&input.file_path, &input.symbol, input.line)
+        .await
+        .map_err(|error| error.to_string())?;
+    let source_file_path = input.file_path.clone();
     let mut output = match input.operation {
         SymbolLookupOperation::Definition => {
-            let resolved =
-                registry.resolve_symbol(&input.file_path, &input.symbol, line).await.map_err(|e| e.to_string())?;
             let response = resolved
                 .client
                 .goto_definition(resolved.uri, resolved.line, resolved.column)
@@ -168,8 +167,6 @@ pub async fn execute_lsp_symbol(input: LspSymbolInput, registry: &LspRegistry) -
             output
         }
         SymbolLookupOperation::Implementation => {
-            let resolved =
-                registry.resolve_symbol(&input.file_path, &input.symbol, line).await.map_err(|e| e.to_string())?;
             let response = resolved
                 .client
                 .goto_implementation(resolved.uri, resolved.line, resolved.column)
@@ -181,8 +178,6 @@ pub async fn execute_lsp_symbol(input: LspSymbolInput, registry: &LspRegistry) -
             output
         }
         SymbolLookupOperation::References => {
-            let resolved =
-                registry.resolve_symbol(&input.file_path, &input.symbol, line).await.map_err(|e| e.to_string())?;
             let lsp_locations = resolved
                 .client
                 .find_references(resolved.uri, resolved.line, resolved.column, input.include_declaration)
@@ -194,8 +189,6 @@ pub async fn execute_lsp_symbol(input: LspSymbolInput, registry: &LspRegistry) -
             output
         }
         SymbolLookupOperation::Hover => {
-            let resolved =
-                registry.resolve_symbol(&input.file_path, &input.symbol, line).await.map_err(|e| e.to_string())?;
             let hover =
                 resolved.client.hover(resolved.uri, resolved.line, resolved.column).await.map_err(|e| e.to_string())?;
             LspSymbolOutput {
@@ -207,10 +200,11 @@ pub async fn execute_lsp_symbol(input: LspSymbolInput, registry: &LspRegistry) -
         SymbolLookupOperation::IncomingCalls => {
             execute_one_step_call_hierarchy(
                 registry,
-                &input.file_path,
-                &input.symbol,
-                line,
+                resolved,
+                &source_file_path,
                 CallDirection::Incoming,
+                input.context_lines,
+                input.call_scope,
                 input.limit,
             )
             .await?
@@ -218,10 +212,11 @@ pub async fn execute_lsp_symbol(input: LspSymbolInput, registry: &LspRegistry) -
         SymbolLookupOperation::OutgoingCalls => {
             execute_one_step_call_hierarchy(
                 registry,
-                &input.file_path,
-                &input.symbol,
-                line,
+                resolved,
+                &source_file_path,
                 CallDirection::Outgoing,
+                input.context_lines,
+                input.call_scope,
                 input.limit,
             )
             .await?
@@ -238,14 +233,13 @@ pub async fn execute_lsp_symbol(input: LspSymbolInput, registry: &LspRegistry) -
 /// Perform a one-step call hierarchy: prepare + query in a single operation.
 async fn execute_one_step_call_hierarchy(
     registry: &LspRegistry,
-    file_path: &str,
-    symbol: &str,
-    line: u32,
+    resolved: ResolvedSymbol,
+    source_file_path: &str,
     direction: CallDirection,
+    context_lines: Option<u32>,
+    call_scope: CallScope,
     limit: Option<usize>,
 ) -> Result<LspSymbolOutput, String> {
-    let resolved = registry.resolve_symbol(file_path, symbol, line).await.map_err(|e| e.to_string())?;
-
     let items = resolved
         .client
         .prepare_call_hierarchy(resolved.uri, resolved.line, resolved.column)
@@ -264,25 +258,29 @@ async fn execute_one_step_call_hierarchy(
     // For incoming/outgoing calls, we need a client for the item's file.
     // The item may be in a different file than the original request.
     let item_file_path = uri_to_path(&item.uri);
-    let item_client = registry.require_client(&item_file_path).await.map_err(|e| e.to_string())?;
+    let item_client = registry.get_or_spawn(Path::new(&item_file_path)).await.map_err(|e| e.to_string())?;
 
     let calls = match direction {
         CallDirection::Incoming => {
             let incoming = item_client.incoming_calls(item).await.map_err(|e| e.to_string())?;
-            super::call_hierarchy::convert_incoming_calls(incoming)
+            super::call_hierarchy::convert_incoming_calls(incoming, registry.root_path())
         }
         CallDirection::Outgoing => {
             let outgoing = item_client.outgoing_calls(item).await.map_err(|e| e.to_string())?;
-            super::call_hierarchy::convert_outgoing_calls(outgoing)
+            super::call_hierarchy::convert_outgoing_calls(source_file_path, registry.root_path(), outgoing)
         }
     };
 
+    let mut calls = super::call_hierarchy::normalize_calls(calls);
+    if matches!(call_scope, CallScope::Project) {
+        calls.retain(|call| call.project_local);
+    }
     let total_count = calls.len();
-    let truncated = limit.is_some_and(|l| total_count > l);
-    let calls = match limit {
-        Some(l) if total_count > l => calls.into_iter().take(l).collect(),
-        _ => calls,
-    };
+    let truncated = limit.is_some_and(|limit| total_count > limit);
+    if let Some(limit) = limit {
+        calls.truncate(limit);
+    }
+    super::call_hierarchy::enrich_call_sites(&mut calls, context_lines).await;
 
     Ok(LspSymbolOutput {
         operation: direction.as_str().to_string(),

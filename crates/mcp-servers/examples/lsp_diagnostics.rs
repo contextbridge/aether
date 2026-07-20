@@ -48,7 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     sleep(Duration::from_secs(5)).await;
 
     println!("Fetching diagnostics...");
-    let diagnostics_by_file = registry.collect_diagnostics(None).await;
+    let diagnostics_by_file = registry.collect_diagnostics(None).await?;
 
     if diagnostics_by_file.values().all(Vec::is_empty) {
         println!("No diagnostics reported (project is clean!)");

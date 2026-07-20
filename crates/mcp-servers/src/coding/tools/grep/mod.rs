@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use tokio::task::spawn_blocking;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -146,7 +147,11 @@ fn should_include_file(
     true
 }
 
-pub async fn perform_grep(mut args: GrepInput) -> Result<GrepOutput, GrepError> {
+pub async fn perform_grep(args: GrepInput) -> Result<GrepOutput, GrepError> {
+    spawn_blocking(move || perform_grep_sync(args)).await.map_err(|error| GrepError::SearchFailed(error.to_string()))?
+}
+
+fn perform_grep_sync(mut args: GrepInput) -> Result<GrepOutput, GrepError> {
     if args.path.as_deref().is_some_and(|p| p.trim().is_empty()) {
         args.path = None;
     }

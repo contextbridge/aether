@@ -14,7 +14,26 @@ pub enum LspError {
     #[error(transparent)]
     Client(#[from] ClientError),
 
-    /// Transport or protocol error
+    /// The language server is configured but unavailable.
+    #[error("Language server unavailable: {0}")]
+    ServerUnavailable(String),
+
+    /// No language server is configured for the requested language.
+    #[error("No LSP configured for {0}")]
+    UnsupportedLanguage(String),
+
+    /// The requested path cannot be represented as a file URI.
+    #[error("Invalid path: {0}")]
+    InvalidPath(String),
+
+    /// The requested symbol could not be found.
+    #[error("Symbol not found: {0}")]
+    SymbolNotFound(String),
+
+    /// The requested source position is invalid.
+    #[error("Invalid source position: {0}")]
+    InvalidPosition(String),
+
     #[error("Transport error: {0}")]
     Transport(String),
 }

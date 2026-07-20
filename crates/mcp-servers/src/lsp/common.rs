@@ -1,15 +1,18 @@
 //! Common types and utilities shared across LSP tools
 
 use std::collections::HashMap;
+use std::path::Path;
 
-use lsp_types::Location;
+use lsp_types::{DocumentSymbol, DocumentSymbolResponse, Location};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+use crate::search::DEPENDENCY_DIRS;
 
 use super::error::LspError;
 
 /// A location in source code (file path with range)
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LocationResult {
     /// The file path
@@ -46,10 +49,76 @@ impl LocationResult {
     }
 }
 
+/// Return whether a source path belongs to the project rather than a dependency or build directory.
+pub fn is_project_local(path: &str, project_root: &Path) -> bool {
+    Path::new(path).strip_prefix(project_root).is_ok_and(|relative| {
+        !relative
+            .components()
+            .any(|component| component.as_os_str().to_str().is_some_and(|name| DEPENDENCY_DIRS.contains(&name)))
+    })
+}
+
+/// Return a compact source path for display.
+pub fn display_path(path: &str, project_root: &Path) -> String {
+    if let Some(pnpm_index) = path.find("/.pnpm/") {
+        let encoded = &path[pnpm_index + "/.pnpm/".len()..];
+        if let Some(node_modules_index) = encoded.find("/node_modules/") {
+            return encoded[node_modules_index + "/node_modules/".len()..].to_string();
+        }
+    }
+    if let Ok(relative) = Path::new(path).strip_prefix(project_root) {
+        return relative.to_string_lossy().to_string();
+    }
+    path.to_string()
+}
+
+/// Visit every symbol in a document-symbol response.
+pub fn for_each_document_symbol(
+    response: &DocumentSymbolResponse,
+    visit: &mut impl FnMut(&str, lsp_types::SymbolKind, &lsp_types::Range, Option<&str>),
+) {
+    match response {
+        DocumentSymbolResponse::Flat(symbols) => {
+            for symbol in symbols {
+                visit(&symbol.name, symbol.kind, &symbol.location.range, symbol.container_name.as_deref());
+            }
+        }
+        DocumentSymbolResponse::Nested(symbols) => {
+            for symbol in symbols {
+                visit_nested_document_symbol(symbol, None, visit);
+            }
+        }
+    }
+}
+
+/// Find an exact symbol in an LSP document-symbol response and return its 1-indexed line.
+pub fn find_document_symbol_line(response: &DocumentSymbolResponse, symbol: &str) -> Option<u32> {
+    let mut line = None;
+    for_each_document_symbol(response, &mut |name, _, selection_range, _| {
+        if line.is_none() && name == symbol {
+            line = Some(selection_range.start.line + 1);
+        }
+    });
+    line
+}
+
+fn visit_nested_document_symbol(
+    symbol: &DocumentSymbol,
+    container_name: Option<&str>,
+    visit: &mut impl FnMut(&str, lsp_types::SymbolKind, &lsp_types::Range, Option<&str>),
+) {
+    visit(&symbol.name, symbol.kind, &symbol.selection_range, container_name);
+    if let Some(children) = &symbol.children {
+        for child in children {
+            visit_nested_document_symbol(child, Some(&symbol.name), visit);
+        }
+    }
+}
+
 /// Re-export from `aether_lspd` for convenience.
 pub use aether_lspd::uri_to_path;
 
-/// Find the first word-boundary match of `symbol` in `line`.
+/// Find the first word-boundary match and return its byte offset.
 ///
 /// Returns the byte offset of the match, or `None` if not found.
 /// A word boundary is defined as: the character before/after the match is
@@ -93,16 +162,17 @@ pub fn find_symbol_line(content: &str, symbol: &str) -> Option<u32> {
 /// # Returns
 /// The column position (0-indexed) of the first occurrence of the symbol on that line.
 pub fn find_symbol_column(content: &str, symbol: &str, line: u32) -> Result<u32, LspError> {
-    let line_idx = line.checked_sub(1).ok_or_else(|| LspError::Transport("Line number must be >= 1".to_string()))?;
+    let line_idx =
+        line.checked_sub(1).ok_or_else(|| LspError::InvalidPosition("Line number must be >= 1".to_string()))?;
 
     let line_content = content
         .lines()
         .nth(line_idx as usize)
-        .ok_or_else(|| LspError::Transport(format!("Line {line} not found in file")))?;
+        .ok_or_else(|| LspError::InvalidPosition(format!("Line {line} not found in file")))?;
 
     find_word_boundary_match(line_content, symbol)
         .map(|col| u32::try_from(col).unwrap_or(u32::MAX))
-        .ok_or_else(|| LspError::Transport(format!("Symbol '{symbol}' not found on line {line}")))
+        .ok_or_else(|| LspError::SymbolNotFound(format!("Symbol '{symbol}' not found on line {line}")))
 }
 
 /// Re-export from `aether_lspd` for convenience.
@@ -320,6 +390,72 @@ mod tests {
         let content = "let app_state_extra = 1;\nlet app_state = AppState::new();";
         // Should match line 2 where AppState appears as a whole word
         assert_eq!(find_symbol_line(content, "AppState"), Some(2));
+    }
+
+    #[test]
+    fn project_local_ignores_dependency_names_above_project_root() {
+        let project_root = Path::new("/home/ci/target/myrepo");
+
+        assert!(is_project_local("/home/ci/target/myrepo/src/main.rs", project_root));
+        assert!(!is_project_local("/home/ci/target/myrepo/node_modules/package/index.js", project_root));
+    }
+
+    #[allow(deprecated)]
+    #[test]
+    fn test_find_document_symbol_line_nested() {
+        let child = DocumentSymbol {
+            name: "inner_fn".to_string(),
+            detail: None,
+            kind: lsp_types::SymbolKind::FUNCTION,
+            tags: None,
+            deprecated: None,
+            range: lsp_types::Range::default(),
+            selection_range: lsp_types::Range {
+                start: lsp_types::Position { line: 5, character: 7 },
+                end: lsp_types::Position { line: 5, character: 15 },
+            },
+            children: None,
+        };
+        let parent = DocumentSymbol {
+            name: "MyStruct".to_string(),
+            detail: None,
+            kind: lsp_types::SymbolKind::STRUCT,
+            tags: None,
+            deprecated: None,
+            range: lsp_types::Range::default(),
+            selection_range: lsp_types::Range::default(),
+            children: Some(vec![child]),
+        };
+
+        let response = DocumentSymbolResponse::Nested(vec![parent]);
+
+        assert_eq!(find_document_symbol_line(&response, "MyStruct"), Some(1));
+        assert_eq!(find_document_symbol_line(&response, "inner_fn"), Some(6));
+        assert_eq!(find_document_symbol_line(&response, "missing"), None);
+    }
+
+    #[allow(deprecated)]
+    #[test]
+    fn test_find_document_symbol_line_flat() {
+        use std::str::FromStr;
+
+        let response = DocumentSymbolResponse::Flat(vec![lsp_types::SymbolInformation {
+            name: "my_function".to_string(),
+            kind: lsp_types::SymbolKind::FUNCTION,
+            tags: None,
+            deprecated: None,
+            location: Location {
+                uri: lsp_types::Uri::from_str("file:///test.rs").unwrap(),
+                range: lsp_types::Range {
+                    start: lsp_types::Position { line: 10, character: 0 },
+                    end: lsp_types::Position { line: 20, character: 1 },
+                },
+            },
+            container_name: None,
+        }]);
+
+        assert_eq!(find_document_symbol_line(&response, "my_function"), Some(11));
+        assert_eq!(find_document_symbol_line(&response, "missing"), None);
     }
 
     #[test]

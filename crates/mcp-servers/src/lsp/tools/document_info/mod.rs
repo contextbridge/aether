@@ -64,7 +64,7 @@ pub async fn execute_lsp_document(
     registry: &LspRegistry,
 ) -> Result<LspDocumentOutput, String> {
     let uri = path_to_uri(Path::new(&input.file_path)).map_err(|e| e.to_string())?;
-    let client = registry.require_client(&input.file_path).await.map_err(|e| e.to_string())?;
+    let client = registry.get_or_spawn(Path::new(&input.file_path)).await.map_err(|e| e.to_string())?;
     let response = client.document_symbol(uri).await.map_err(|e| e.to_string())?;
 
     let symbols = convert_document_symbols(&input.file_path, response);

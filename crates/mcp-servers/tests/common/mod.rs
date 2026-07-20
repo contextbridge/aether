@@ -37,8 +37,16 @@ pub struct CodingWorkspace {
 
 impl CodingWorkspace {
     pub async fn new() -> TestResult<Self> {
+        Self::start(|root| CodingMcp::new().with_root_dir(root.to_path_buf())).await
+    }
+
+    pub async fn new_with_lsp() -> TestResult<Self> {
+        Self::start(|root| CodingMcp::new().with_lsp(root.to_path_buf())).await
+    }
+
+    async fn start(configure: impl FnOnce(&Path) -> CodingMcp) -> TestResult<Self> {
         let root = tempdir()?;
-        let client = TestClient::start(|| CodingMcp::new().with_root_dir(root.path().to_path_buf())).await?;
+        let client = TestClient::start(|| configure(root.path())).await?;
         Ok(Self { root, client })
     }
 
@@ -113,6 +121,25 @@ pub async fn connect_lsp(
     connect(server, test_client_info()).await.expect("Failed to connect")
 }
 
+pub async fn call_tool_error(
+    client: &RunningService<RoleClient, ClientInfo>,
+    name: &str,
+    args: serde_json::Value,
+) -> String {
+    match client
+        .call_tool(CallToolRequestParams::new(name.to_string()).with_arguments(args.as_object().unwrap().clone()))
+        .await
+    {
+        Ok(result) => {
+            assert!(result.is_error.unwrap_or(false), "tool call should fail: {result:?}");
+            let content = result.content.first().expect("Expected error content");
+            let text = content.as_text().expect("Expected text error content");
+            text.text.clone()
+        }
+        Err(error) => error.to_string(),
+    }
+}
+
 pub async fn call_tool(
     client: &RunningService<RoleClient, ClientInfo>,
     name: &str,
@@ -154,8 +181,8 @@ pub async fn poll_diagnostics(
     predicate: impl Fn(&serde_json::Value) -> bool,
 ) -> serde_json::Value {
     let args = match file_path {
-        Some(path) => serde_json::json!({ "input": { "scope": "file", "filePath": path } }),
-        None => serde_json::json!({ "input": { "scope": "workspace"} }),
+        Some(path) => serde_json::json!({ "filePath": path }),
+        None => serde_json::json!({}),
     };
     poll_lsp_tool(client, "lsp_check_errors", args, predicate).await
 }

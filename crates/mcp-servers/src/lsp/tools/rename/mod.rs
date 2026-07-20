@@ -8,8 +8,6 @@ use serde::{Deserialize, Serialize};
 use crate::lsp::common::uri_to_path;
 use crate::lsp::registry::LspRegistry;
 
-use super::resolve_symbol_position;
-
 /// Input for the `lsp_rename` tool
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -22,7 +20,7 @@ pub struct LspRenameInput {
     /// The new name for the symbol
     #[serde(alias = "new_name")]
     pub new_name: String,
-    /// Optional 1-indexed line number. When provided, skips automatic symbol resolution.
+    /// Optional 1-indexed line hint. Stale hints fall back to automatic symbol resolution.
     #[serde(default)]
     pub line: Option<u32>,
 }
@@ -87,9 +85,8 @@ pub struct LspRenameOutput {
 
 /// Execute the rename operation
 pub async fn execute_lsp_rename(input: LspRenameInput, registry: &LspRegistry) -> Result<LspRenameOutput, String> {
-    let line = resolve_line(&input.file_path, &input.symbol, input.line, registry).await?;
-
-    let resolved = registry.resolve_symbol(&input.file_path, &input.symbol, line).await.map_err(|e| e.to_string())?;
+    let resolved =
+        registry.resolve_symbol(&input.file_path, &input.symbol, input.line).await.map_err(|e| e.to_string())?;
 
     let workspace_edit = resolved
         .client
@@ -121,18 +118,6 @@ pub async fn execute_lsp_rename(input: LspRenameInput, registry: &LspRegistry) -
         meta: Some(rename_display_meta(&input, true, total_edits, files_affected).into()),
         ..Default::default()
     })
-}
-
-async fn resolve_line(
-    file_path: &str,
-    symbol: &str,
-    explicit_line: Option<u32>,
-    registry: &LspRegistry,
-) -> Result<u32, String> {
-    match explicit_line {
-        Some(line) => Ok(line),
-        None => resolve_symbol_position(file_path, symbol, registry).await.map_err(|e| e.to_string()),
-    }
 }
 
 fn rename_failure(input: &LspRenameInput, error: String) -> LspRenameOutput {

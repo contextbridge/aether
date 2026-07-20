@@ -9,57 +9,21 @@ use lsp_types::Diagnostic;
 use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, from_str, from_value};
 use std::collections::HashMap;
 use std::path::Path;
 
-fn deserialize_input<'de, D>(deserializer: D) -> Result<LspDiagnosticsInput, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Value::deserialize(deserializer)?;
-    let normalized = match value {
-        Value::String(s) => from_str(&s).map_err(serde::de::Error::custom)?,
-        other => other,
-    };
-
-    from_value(normalized).map_err(serde::de::Error::custom)
-}
-
-/// Input payload for the `lsp_check_errors` tool
+/// Input payload for the `lsp_check_errors` tool.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LspDiagnosticsRequest {
-    /// Wrapped discriminated union request. Kept under an object field because
-    /// some tool callers reject top-level oneOf schemas.
-    #[serde(deserialize_with = "deserialize_input")]
-    pub input: LspDiagnosticsInput,
+    /// Absolute path to a file. When omitted, checks the workspace.
+    #[serde(default, alias = "file_path")]
+    pub file_path: Option<String>,
 }
 
-/// Input for the `lsp_check_errors` tool
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(tag = "scope", rename_all = "lowercase", deny_unknown_fields)]
-pub enum LspDiagnosticsInput {
-    /// Query diagnostics for the entire workspace.
-    Workspace {},
-    #[serde(rename_all = "camelCase")]
-    File {
-        /// Absolute path to the file to analyze.
-        #[serde(alias = "file_path")]
-        file_path: String,
-    },
-}
-
-impl LspDiagnosticsInput {
-    fn file_path(&self) -> Option<&str> {
-        match self {
-            Self::Workspace {} => None,
-            Self::File { file_path } => Some(file_path),
-        }
-    }
-
+impl LspDiagnosticsRequest {
     fn validate(&self) -> Result<(), String> {
-        if let Self::File { file_path } = self {
+        if let Some(file_path) = &self.file_path {
             if file_path.trim().is_empty() {
                 return Err("filePath cannot be empty".to_string());
             }
@@ -110,11 +74,11 @@ pub async fn execute_lsp_diagnostics(
     request: LspDiagnosticsRequest,
     registry: &LspRegistry,
 ) -> Result<LspDiagnosticsOutput, String> {
-    let input = request.input;
-    input.validate()?;
+    request.validate()?;
 
-    let diagnostics_cache = registry.collect_diagnostics(input.file_path()).await;
-    let mut output = build_output(&input, registry.root_path(), &diagnostics_cache);
+    let diagnostics_cache =
+        registry.collect_diagnostics(request.file_path.as_deref()).await.map_err(|error| error.to_string())?;
+    let mut output = build_output(&request, registry.root_path(), &diagnostics_cache);
 
     let detail = if output.summary.errors == 0 && output.summary.warnings == 0 {
         "no issues".to_string()
@@ -134,7 +98,7 @@ pub async fn execute_lsp_diagnostics(
 }
 
 fn build_output(
-    input: &LspDiagnosticsInput,
+    input: &LspDiagnosticsRequest,
     root_path: &Path,
     diagnostics_cache: &HashMap<lsp_types::Uri, Vec<Diagnostic>>,
 ) -> LspDiagnosticsOutput {
@@ -148,7 +112,7 @@ fn build_output(
     diagnostics.sort_by(|a, b| a.file.cmp(&b.file).then(a.line.cmp(&b.line)).then(a.column.cmp(&b.column)));
 
     let summary = count_by_severity(&diagnostics);
-    let file_path = input.file_path().map(ToOwned::to_owned);
+    let file_path = input.file_path.clone();
     let is_workspace = file_path.is_none();
 
     LspDiagnosticsOutput {
@@ -185,8 +149,16 @@ mod tests {
         }
     }
 
+    fn workspace_request() -> LspDiagnosticsRequest {
+        LspDiagnosticsRequest { file_path: None }
+    }
+
+    fn file_request(path: &str) -> LspDiagnosticsRequest {
+        LspDiagnosticsRequest { file_path: Some(path.to_string()) }
+    }
+
     fn workspace_output(cache: &HashMap<lsp_types::Uri, Vec<Diagnostic>>) -> LspDiagnosticsOutput {
-        build_output(&LspDiagnosticsInput::Workspace {}, Path::new("/project"), cache)
+        build_output(&workspace_request(), Path::new("/project"), cache)
     }
 
     fn parse_request(json: &str) -> Result<LspDiagnosticsRequest, serde_json::Error> {
@@ -195,12 +167,7 @@ mod tests {
 
     fn assert_parses_file_scope(json: &str, expected_path: &str) {
         let request: LspDiagnosticsRequest = parse_request(json).unwrap();
-        match request.input {
-            LspDiagnosticsInput::File { file_path } => {
-                assert_eq!(file_path, expected_path);
-            }
-            LspDiagnosticsInput::Workspace {} => panic!("expected file scope"),
-        }
+        assert_eq!(request.file_path.as_deref(), Some(expected_path));
     }
 
     #[test]
@@ -230,7 +197,7 @@ mod tests {
         let mut cache = HashMap::new();
         cache.insert(uri("/project/src/main.rs"), vec![diag(DiagnosticSeverity::ERROR, "type mismatch", 10)]);
 
-        let input = LspDiagnosticsInput::File { file_path: "/project/src/main.rs".to_string() };
+        let input = file_request("/project/src/main.rs");
         let result = build_output(&input, Path::new("/project"), &cache);
 
         assert_eq!(result.diagnostics.len(), 1);
@@ -259,20 +226,13 @@ mod tests {
 
     #[test]
     fn test_deserialize_workspace_scope() {
-        let workspace_jsons = [r#"{"input":{"scope":"workspace"}}"#, r#"{"input":"{\"scope\":\"workspace\"}"}"#];
-        for json in workspace_jsons {
-            let request: LspDiagnosticsRequest = parse_request(json).unwrap();
-            assert!(matches!(request.input, LspDiagnosticsInput::Workspace {}), "failed for: {json}");
-        }
+        let request: LspDiagnosticsRequest = parse_request(r"{}").unwrap();
+        assert!(request.file_path.is_none());
     }
 
     #[test]
     fn test_deserialize_file_scope() {
-        let cases = [
-            r#"{"input":{"scope":"file","filePath":"/some/path.rs"}}"#,
-            r#"{"input":{"scope":"file","file_path":"/some/path.rs"}}"#,
-            r#"{"input":"{\"scope\":\"file\",\"filePath\":\"/some/path.rs\"}"}"#,
-        ];
+        let cases = [r#"{"filePath":"/some/path.rs"}"#, r#"{"file_path":"/some/path.rs"}"#];
         for json in cases {
             assert_parses_file_scope(json, "/some/path.rs");
         }
@@ -280,15 +240,7 @@ mod tests {
 
     #[test]
     fn test_reject_invalid_json_payloads() {
-        let invalid_jsons = [
-            r#"{"input":"not json"}"#,
-            r#"{"input":{}}"#,
-            r#"{"scope":"workspace"}"#,
-            r#"{"input":{"scope":"invalid"}}"#,
-            r#"{"input":{"scope":"file"}}"#,
-            r#"{"input":{"scope":"workspace","filePath":"/some/path.rs"}}"#,
-            r#"{"input":{"scope":"workspace","file_path":"/some/path.rs"}}"#,
-        ];
+        let invalid_jsons = [r#"{"scope":"workspace"}"#, r#"{"scope":"file"}"#, r#"{"unknown":true}"#];
         for json in invalid_jsons {
             assert!(parse_request(json).is_err(), "should reject: {json}");
         }
@@ -309,7 +261,7 @@ mod tests {
         ];
 
         for (path, expected_msg) in cases {
-            let input = LspDiagnosticsInput::File { file_path: path.to_string() };
+            let input = file_request(path);
             let err = input.validate().unwrap_err();
             assert!(err.contains(expected_msg), "path={path:?}: expected {expected_msg:?}, got {err:?}");
         }
@@ -317,7 +269,7 @@ mod tests {
 
     #[test]
     fn test_output_workspace_metadata() {
-        let output = build_output(&LspDiagnosticsInput::Workspace {}, Path::new("/home/user/project"), &HashMap::new());
+        let output = build_output(&workspace_request(), Path::new("/home/user/project"), &HashMap::new());
 
         let json = serde_json::to_string(&output).unwrap();
         assert!(json.contains(r#""scope":"workspace""#));
@@ -327,7 +279,7 @@ mod tests {
 
     #[test]
     fn test_output_file_metadata() {
-        let input = LspDiagnosticsInput::File { file_path: "/home/user/project/src/main.rs".to_string() };
+        let input = file_request("/home/user/project/src/main.rs");
         let output = build_output(&input, Path::new("/home/user/project"), &HashMap::new());
 
         let json = serde_json::to_string(&output).unwrap();

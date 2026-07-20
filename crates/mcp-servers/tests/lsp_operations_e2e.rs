@@ -14,7 +14,7 @@ use common::{call_tool, connect_lsp, poll_lsp_tool};
 
 /// Test: hover returns type information for a Rust variable
 #[tokio::test]
-async fn test_hover_returns_type_info() {
+async fn test_hover_falls_back_from_stale_line_hint() {
     let project = CargoProject::new("hover_test").expect("Failed to create project");
     project
         .add_file(
@@ -37,7 +37,7 @@ async fn test_hover_returns_type_info() {
             "operation": "hover",
             "file_path": main_rs,
             "symbol": "x",
-            "line": 2
+            "line": 1
         }),
         |r| r.get("hoverContents").and_then(|h| h.as_str()).is_some_and(|s| s.contains("Vec")),
     )
@@ -134,7 +134,7 @@ fn main() {
 
 /// Test: `lsp_rename` applies workspace edits for a Rust symbol
 #[tokio::test]
-async fn test_lsp_rename_applies_workspace_edits() {
+async fn test_lsp_rename_falls_back_from_stale_line_hint() {
     let project = CargoProject::new("rename_test").expect("Failed to create project");
     project
         .add_file(
@@ -190,7 +190,7 @@ async fn test_lsp_rename_applies_workspace_edits() {
             "file_path": lib_rs,
             "symbol": "greet",
             "new_name": "say_hello",
-            "line": 1
+            "line": 2
         }),
     )
     .await;
