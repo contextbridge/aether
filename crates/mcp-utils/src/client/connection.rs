@@ -1,6 +1,6 @@
 use super::{
     McpClientEvent, McpError, OAuthHandlerFactory, Result,
-    config::{McpServer, McpTransport},
+    config::{McpHttpConfig, McpServer, McpTransport},
     mcp_client::McpClient,
 };
 use crate::{client::OAuthHandlerContext, transport::create_in_memory_transport};
@@ -79,8 +79,8 @@ pub struct McpConnectAttempt {
 }
 
 pub enum McpConnectOutcome {
-    Connected { conn: McpServerConnection, reauth_config: Option<StreamableHttpClientTransportConfig> },
-    NeedsOAuth { config: StreamableHttpClientTransportConfig, error: McpError },
+    Connected { conn: McpServerConnection, reauth_config: Option<McpHttpConfig> },
+    NeedsOAuth { config: McpHttpConfig, error: McpError },
     Failed { error: McpError },
 }
 
@@ -135,7 +135,7 @@ pub(super) async fn connect_server(server: McpServer, ctx: &ConnectConfig) -> Mc
             connect_stdio(&name, command, args, env, mcp_client, ctx.root_dir.clone()).await
         }
         McpTransport::InMemory { server } => connect_in_memory(&name, server, mcp_client).await,
-        McpTransport::Http { config } => {
+        McpTransport::Http(config) => {
             connect_http(
                 &name,
                 config,
@@ -152,7 +152,7 @@ pub(super) async fn connect_server(server: McpServer, ctx: &ConnectConfig) -> Mc
 
 pub async fn authenticate_http(
     name: String,
-    config: StreamableHttpClientTransportConfig,
+    config: McpHttpConfig,
     ctx: Arc<ConnectConfig>,
     proxied: bool,
 ) -> McpConnectAttempt {
@@ -161,14 +161,24 @@ pub async fn authenticate_http(
             .oauth_handler_factory
             .as_ref()
             .ok_or_else(|| McpError::ConnectionFailed(format!("No OAuth handler factory available for '{name}'")))?;
-        let handler = factory(OAuthHandlerContext { server_name: name.clone(), tx: ctx.event_sender.clone() })?;
+        let handler = factory(OAuthHandlerContext {
+            server_name: name.clone(),
+            callback_port: config.callback_port(),
+            tx: ctx.event_sender.clone(),
+        })?;
 
-        let auth_client = perform_oauth_flow(&name, &config.uri, handler.as_ref(), ctx.oauth_credential_store.clone())
-            .await
-            .map_err(|e| McpError::ConnectionFailed(format!("OAuth failed for '{name}': {e}")))?;
+        let auth_client = perform_oauth_flow(
+            &name,
+            &config.transport.uri,
+            handler.as_ref(),
+            config.oauth_client_id(),
+            ctx.oauth_credential_store.clone(),
+        )
+        .await
+        .map_err(|e| McpError::ConnectionFailed(format!("OAuth failed for '{name}': {e}")))?;
 
         let mcp_client = McpClient::new(ctx.client_info.clone(), name.clone(), ctx.event_sender.clone());
-        McpServerConnection::reconnect_with_auth(&name, config.clone(), auth_client, mcp_client).await
+        McpServerConnection::reconnect_with_auth(&name, config.transport.clone(), auth_client, mcp_client).await
     }
     .await
     {
@@ -180,7 +190,7 @@ pub async fn authenticate_http(
 }
 
 impl McpConnectOutcome {
-    fn with_reauth(self, reauth_config: Option<StreamableHttpClientTransportConfig>) -> Self {
+    fn with_reauth(self, reauth_config: Option<McpHttpConfig>) -> Self {
         match self {
             Self::Connected { conn, .. } => Self::Connected { conn, reauth_config },
             other => other,
@@ -251,16 +261,18 @@ async fn connect_in_memory(
 
 async fn connect_http(
     name: &str,
-    config: StreamableHttpClientTransportConfig,
+    config: McpHttpConfig,
     mcp_client: McpClient,
     oauth_handler_factory: Option<&OAuthHandlerFactory>,
     oauth_credential_store: Option<&Arc<dyn OAuthCredentialStorage>>,
 ) -> McpConnectOutcome {
     let conn_err = |e| McpError::ConnectionFailed(format!("HTTP MCP server {name}: {e}"));
     let stored_auth_manager = if let Some(store) = oauth_credential_store
-        && config.auth_header.is_none()
+        && config.transport.auth_header.is_none()
     {
-        match create_auth_manager_from_store(name, &config.uri, Arc::clone(store)).await {
+        match create_auth_manager_from_store(name, &config.transport.uri, config.oauth_client_id(), Arc::clone(store))
+            .await
+        {
             Ok(manager) => manager,
             Err(e) => {
                 tracing::warn!(
@@ -277,10 +289,10 @@ async fn connect_http(
     let result = if let Some(auth_manager) = stored_auth_manager {
         tracing::debug!("Using OAuth for server '{name}'");
         let auth_client = AuthClient::new(reqwest::Client::default(), auth_manager);
-        let transport = StreamableHttpClientTransport::with_client(auth_client, config.clone());
+        let transport = StreamableHttpClientTransport::with_client(auth_client, config.transport.clone());
         serve_client(mcp_client, transport).await.map_err(conn_err)
     } else {
-        let transport = StreamableHttpClientTransport::from_config(config.clone());
+        let transport = StreamableHttpClientTransport::from_config(config.transport.clone());
         serve_client(mcp_client, transport).await.map_err(conn_err)
     };
 
@@ -290,7 +302,7 @@ async fn connect_http(
         }
         Err(error) => {
             tracing::warn!("Failed to connect to MCP server '{name}': {error}");
-            if oauth_handler_factory.is_some() && config.auth_header.is_none() {
+            if oauth_handler_factory.is_some() && config.transport.auth_header.is_none() {
                 McpConnectOutcome::NeedsOAuth { config, error }
             } else {
                 McpConnectOutcome::Failed { error }
@@ -302,9 +314,9 @@ async fn connect_http(
 fn reauth_config_for(
     transport: &McpTransport,
     oauth_handler_factory: Option<&OAuthHandlerFactory>,
-) -> Option<StreamableHttpClientTransportConfig> {
+) -> Option<McpHttpConfig> {
     match transport {
-        McpTransport::Http { config } if oauth_handler_factory.is_some() && config.auth_header.is_none() => {
+        McpTransport::Http(config) if oauth_handler_factory.is_some() && config.transport.auth_header.is_none() => {
             Some(config.clone())
         }
         _ => None,

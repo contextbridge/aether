@@ -14,12 +14,20 @@ use crate::{OAuthCredential, OAuthCredentialStorage};
 pub struct McpCredentialStore {
     server_id: String,
     store: Arc<dyn OAuthCredentialStorage>,
+    expected_client_id: Option<String>,
     now_fn: fn() -> SystemTime,
 }
 
 impl McpCredentialStore {
     pub fn new(store: Arc<dyn OAuthCredentialStorage>, server_id: String) -> Self {
-        Self { server_id, store, now_fn: SystemTime::now }
+        Self { server_id, store, expected_client_id: None, now_fn: SystemTime::now }
+    }
+
+    /// Only serve stored credentials issued to this client id; credentials for any
+    /// other client are ignored on load (and replaced on the next successful flow).
+    pub fn with_expected_client_id(mut self, client_id: Option<&str>) -> Self {
+        self.expected_client_id = client_id.map(String::from);
+        self
     }
 
     pub fn with_now_fn(mut self, f: fn() -> SystemTime) -> Self {
@@ -35,8 +43,12 @@ impl McpCredentialStore {
 #[async_trait]
 impl CredentialStore for McpCredentialStore {
     async fn load(&self) -> Result<Option<StoredCredentials>, AuthError> {
-        let cred =
-            self.store.load_credential(&self.server_id).await.map_err(|e| AuthError::InternalError(e.to_string()))?;
+        let cred = self
+            .store
+            .load_credential(&self.server_id)
+            .await
+            .map_err(|e| AuthError::InternalError(e.to_string()))?
+            .filter(|c| self.expected_client_id.as_deref().is_none_or(|expected| c.client_id == expected));
 
         let now = self.now();
         Ok(cred.map(|c| {
@@ -164,6 +176,28 @@ mod tests {
         let token = loaded.token_response.unwrap();
         assert_eq!(token.access_token().secret(), "token");
         assert_eq!(token.refresh_token().map(|t| t.secret().as_str()), Some("refresh"));
+    }
+
+    #[tokio::test]
+    async fn load_filters_credentials_for_unexpected_client() {
+        let store = Arc::new(FakeOAuthCredentialStore::new());
+        store.save_credential("server", credential_expiring_at(fake_now())).await.unwrap();
+
+        let mcp_store = mcp_store(store.clone()).with_expected_client_id(Some("other-client"));
+
+        assert!(CredentialStore::load(&mcp_store).await.unwrap().is_none());
+        assert!(store.load_credential("server").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn load_serves_credentials_for_expected_client() {
+        let store = Arc::new(FakeOAuthCredentialStore::new());
+        store.save_credential("server", credential_expiring_at(fake_now())).await.unwrap();
+
+        let mcp_store = mcp_store(store).with_expected_client_id(Some("client"));
+
+        let loaded = CredentialStore::load(&mcp_store).await.unwrap().unwrap();
+        assert_eq!(loaded.client_id, "client");
     }
 
     #[tokio::test]
