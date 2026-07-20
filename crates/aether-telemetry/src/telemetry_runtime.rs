@@ -1,18 +1,22 @@
+use crate::AgentTraceContext;
 use crate::error::{TelemetryInitError, TelemetryShutdownError};
 use crate::gen_ai_metrics::GenAiMetrics;
 use crate::genai_constants;
 use crate::otel_observer::OtelInstrumentation;
-use opentelemetry::KeyValue;
 use opentelemetry::metrics::MeterProvider as _;
-use opentelemetry::trace::TracerProvider as _;
+use opentelemetry::propagation::TextMapPropagator;
+use opentelemetry::trace::{TraceContextExt, TraceState, TracerProvider as _};
+use opentelemetry::{Context, KeyValue};
 use opentelemetry_otlp::{MetricExporter, SpanExporter, WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::metrics::SdkMeterProvider;
 use opentelemetry_sdk::metrics::periodic_reader_with_async_runtime::PeriodicReader;
+use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::runtime::Tokio;
 use opentelemetry_sdk::trace::span_processor_with_async_runtime::BatchSpanProcessor;
 use opentelemetry_sdk::trace::{Sampler, SdkTracerProvider};
 use std::collections::HashMap;
+use std::str::FromStr;
 
 pub struct TelemetryRuntime {
     tracer_provider: SdkTracerProvider,
@@ -37,6 +41,7 @@ pub struct TelemetryConfig {
     pub service_version: String,
     pub sample_ratio: f64,
     pub capture_content: bool,
+    pub trace_context: Option<AgentTraceContext>,
     pub traces_enabled: bool,
     pub metrics_enabled: bool,
 }
@@ -47,6 +52,7 @@ impl TelemetryRuntime {
             return Err(TelemetryInitError::InvalidSampleRatio(config.sample_ratio));
         }
 
+        let root_parent = extract_root_parent(config.trace_context.as_ref())?;
         let http_client = build_http_client(&config.headers)?;
         let resource = Resource::builder()
             .with_service_name(config.service_name.clone())
@@ -59,6 +65,7 @@ impl TelemetryRuntime {
             tracer: tracer_provider.tracer_with_scope(scope.clone()),
             metrics: GenAiMetrics::new(&meter_provider.meter_with_scope(scope)),
             capture_content: config.capture_content,
+            root_parent,
         };
 
         Ok(Self { tracer_provider, meter_provider, instrumentation })
@@ -105,6 +112,23 @@ impl TelemetryConfig {
     }
 }
 
+fn extract_root_parent(trace_context: Option<&AgentTraceContext>) -> Result<Option<Context>, TelemetryInitError> {
+    let Some(trace_context) = trace_context else {
+        return Ok(None);
+    };
+
+    if let Some(tracestate) = &trace_context.tracestate {
+        TraceState::from_str(tracestate).map_err(|_| TelemetryInitError::InvalidTraceContext("tracestate"))?;
+    }
+
+    let context = TraceContextPropagator::new().extract(trace_context);
+    if !context.span().span_context().is_valid() {
+        return Err(TelemetryInitError::InvalidTraceContext("traceparent"));
+    }
+
+    Ok(Some(context))
+}
+
 fn build_tracer_provider(
     config: &TelemetryConfig,
     resource: Resource,
@@ -124,7 +148,7 @@ fn build_tracer_provider(
         .map_err(TelemetryInitError::TraceExporter)?;
 
     Ok(builder
-        .with_sampler(Sampler::TraceIdRatioBased(config.sample_ratio))
+        .with_sampler(Sampler::ParentBased(Box::new(Sampler::TraceIdRatioBased(config.sample_ratio))))
         .with_span_processor(BatchSpanProcessor::builder(exporter, Tokio).build())
         .build())
 }

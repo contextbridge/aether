@@ -24,6 +24,7 @@ use crate::acp::stdio::Stdio;
 use crate::provider_connection_args::ProviderConnectionArgs;
 use crate::settings_args::{ConflictingSettingsSources, SettingsSourceArgs};
 use aether_project::AetherSettings;
+use aether_telemetry::{AgentTraceContext, TelemetryInitError};
 use agent_client_protocol as acp;
 use llm::catalog::{ReasoningEffortError, validate_reasoning_effort};
 use llm::{ProviderConnectionOverride, ProviderConnectionOverrides, ReasoningEffort};
@@ -99,6 +100,8 @@ pub struct AcpOptions {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<ReasoningEffort>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_context: Option<AgentTraceContext>,
 }
 
 /// Outcome of running the ACP server successfully.
@@ -128,6 +131,9 @@ pub enum AcpRunError {
 
     #[error("Failed to initialize workspace manager: {0}")]
     WorkspaceManager(#[source] io::Error),
+
+    #[error("Failed to initialize telemetry: {0}")]
+    Telemetry(#[source] TelemetryInitError),
 }
 
 #[derive(Debug, Error)]
@@ -161,10 +167,14 @@ pub async fn run_acp(args: AcpArgs) -> Result<AcpRunOutcome, AcpRunError> {
     let workspace_manager = Arc::new(WorkspaceManager::new().map_err(AcpRunError::WorkspaceManager)?);
     let cwd = current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let settings = config.settings_source.load_settings(&cwd)?;
-    let telemetry = build_telemetry_runtime(settings.telemetry.as_ref()).unwrap_or_else(|error| {
-        warn!("Telemetry disabled: {error}");
-        None
-    });
+    let telemetry = match build_telemetry_runtime(settings.telemetry.as_ref(), config.trace_context) {
+        Ok(telemetry) => telemetry,
+        Err(error @ TelemetryInitError::InvalidTraceContext(_)) => return Err(AcpRunError::Telemetry(error)),
+        Err(error) => {
+            warn!("Telemetry disabled: {error}");
+            None
+        }
+    };
     let oauth_credential_store = oauth_credential_store_from_config(settings.credentials_store)?;
     let state = Arc::new(AcpState::new(AcpStateConfig {
         session_store,
@@ -191,6 +201,7 @@ struct AcpRunConfig {
     agent: Option<String>,
     model: Option<String>,
     reasoning_effort: Option<ReasoningEffort>,
+    trace_context: Option<AgentTraceContext>,
     provider_connections: ProviderConnectionOverrides,
     settings_source: SettingsSourceArgs,
 }
@@ -206,6 +217,7 @@ impl AcpRunConfig {
             agent: args.agent,
             model: args.model,
             reasoning_effort: args.reasoning_effort,
+            trace_context: None,
             provider_connections: args.provider_connection.into_overrides(),
             settings_source: args.settings_source,
         };
@@ -228,6 +240,7 @@ impl AcpRunConfig {
             agent: options.agent,
             model: options.model,
             reasoning_effort: options.reasoning_effort,
+            trace_context: options.trace_context,
             provider_connections: ProviderConnectionOverrides::new(options.providers.unwrap_or_default()),
             settings_source,
         };
@@ -324,6 +337,7 @@ mod tests {
         assert_eq!(config.log_dir, PathBuf::from("/tmp/custom-aether-logs"));
         assert_eq!(config.model.as_deref(), Some("anthropic:claude-sonnet-4-5"));
         assert_eq!(config.reasoning_effort, Some(ReasoningEffort::High));
+        assert!(config.trace_context.is_none());
         assert!(config.settings_source.settings_json.as_deref().unwrap().contains(r#""agents":[]"#));
         let bedrock = config.provider_connections.config_for("bedrock");
         assert_eq!(bedrock.base_url.as_deref(), Some("http://127.0.0.1:8787"));

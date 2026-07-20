@@ -351,6 +351,7 @@ impl OtelHarness {
             tracer: tracer_provider.tracer_with_scope(scope),
             metrics,
             capture_content,
+            root_parent: None,
         });
         Self {
             observer: Some(observer),

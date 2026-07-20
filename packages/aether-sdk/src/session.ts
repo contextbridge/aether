@@ -1,4 +1,4 @@
-import type { ProviderConnectionOverride } from "./generated/aether-settings.js";
+import type { AetherAcpOptions } from "./generated/aether-acp-options.js";
 import { addAbortListener } from "node:events";
 import path from "node:path";
 import * as acp from "@agentclientprotocol/sdk";
@@ -22,19 +22,20 @@ export type PermissionRequestHandler = (
   request: acp.RequestPermissionRequest,
 ) => Promise<acp.RequestPermissionResponse>;
 
-export interface CommonAetherSessionOptions {
+export type CommonAetherSessionOptions = Pick<
+  AetherAcpOptions,
+  "logDir" | "providers" | "traceContext"
+> & {
   cwd?: string;
   binaryPath?: string;
   env?: Record<string, string | undefined>;
-  logDir?: string;
-  providers?: Record<string, ProviderConnectionOverride>;
   abortSignal?: AbortSignal;
   /** Defaults to {@link autoApprovePermissions}. */
   onPermissionRequest?: PermissionRequestHandler;
   onElicitation?: (
     request: AetherElicitationRequest,
   ) => Promise<AetherElicitationResponse>;
-}
+};
 
 export type AetherSessionOptions = CommonAetherSessionOptions &
   SettingsSelection &
@@ -71,18 +72,10 @@ export class AetherSession {
   ): Promise<AetherSession> {
     const {
       abortSignal,
-      binaryPath,
-      agent,
-      model,
-      reasoningEffort,
-      settings,
-      settingsFile,
-      providers,
-      logDir,
       cwd = process.cwd(),
-      env,
       onPermissionRequest = autoApprovePermissions,
       onElicitation,
+      ...agentOptions
     } = options;
 
     throwIfAborted(abortSignal);
@@ -92,19 +85,7 @@ export class AetherSession {
 
     throwIfAborted(abortSignal);
 
-    const agentProcess = startAgent({
-      binaryPath,
-      agent,
-      model,
-      reasoningEffort,
-      settings,
-      settingsFile,
-      providers,
-      logDir,
-      cwd,
-      env,
-      events,
-    });
+    const agentProcess = startAgent({ ...agentOptions, cwd, events });
 
     stack.defer(() => agentProcess.close());
 

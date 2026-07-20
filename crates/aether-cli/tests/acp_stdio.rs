@@ -33,8 +33,23 @@ fn socket_backed_stdio_serves_acp() -> TestResult {
 #[test]
 fn pipe_backed_stdio_serves_acp() -> TestResult {
     let log_dir = tempfile::tempdir()?;
-    let mut child = acp_command(log_dir.path()).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?;
+    assert_serves_initialize(acp_command(log_dir.path()))
+}
 
+#[test]
+fn options_json_with_trace_context_serves_acp() -> TestResult {
+    let log_dir = tempfile::tempdir()?;
+    let options = format!(
+        r#"{{"logDir":{},"settings":{{"credentialsStore":{{"type":"memory"}},"agents":[]}},"traceContext":{{"traceparent":"00-00112233445566778899aabbccddeeff-0123456789abcdef-01","tracestate":"vendor=value"}}}}"#,
+        serde_json::to_string(log_dir.path())?
+    );
+    let mut command = Command::new(env!("CARGO_BIN_EXE_aether"));
+    command.arg("acp").arg("--options-json").arg(options).stderr(Stdio::null());
+    assert_serves_initialize(command)
+}
+
+fn assert_serves_initialize(mut command: Command) -> TestResult {
+    let mut child = command.stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?;
     let mut stdin = child.stdin.take().ok_or_else(|| IoError::other("child stdin"))?;
     let stdout = child.stdout.take().ok_or_else(|| IoError::other("child stdout"))?;
 

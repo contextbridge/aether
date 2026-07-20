@@ -22,7 +22,7 @@ use crate::slash_commands::{expand_slash_command, parse_slash_command};
 pub async fn run(config: RunConfig) -> Result<ExitCode, CliError> {
     setup_tracing(config.verbose);
 
-    let telemetry = build_telemetry_runtime(config.telemetry.as_ref())?;
+    let telemetry = build_telemetry_runtime(config.telemetry.as_ref(), config.trace_context.clone())?;
     let result = run_agent(config, telemetry.clone()).await;
 
     if let Some(telemetry) = telemetry {

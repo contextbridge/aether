@@ -1,10 +1,11 @@
 use aether_project::TelemetrySettings;
-use aether_telemetry::{TelemetryConfig, TelemetryInitError, TelemetryRuntime};
+use aether_telemetry::{AgentTraceContext, TelemetryConfig, TelemetryInitError, TelemetryRuntime};
 use std::sync::Arc;
 use utils::variables::Vars;
 
 pub(crate) fn build_telemetry_runtime(
     settings: Option<&TelemetrySettings>,
+    trace_context: Option<AgentTraceContext>,
 ) -> Result<Option<Arc<TelemetryRuntime>>, TelemetryInitError> {
     let Some(settings) = settings else {
         return Ok(None);
@@ -23,6 +24,7 @@ pub(crate) fn build_telemetry_runtime(
         service_version: env!("CARGO_PKG_VERSION").to_string(),
         sample_ratio: settings.sample_ratio(),
         capture_content: settings.capture_content(),
+        trace_context,
         traces_enabled: settings.traces_enabled(),
         metrics_enabled: settings.metrics_enabled(),
     })

@@ -32,15 +32,15 @@ export function assertOptionInvariants(options: {
  * serialized `--options-json` is stable. Shared by the `aether acp` and `aether headless` command
  * builders so both produce identical option encodings.
  */
-export function compactCliOptions<T>(options: T): T {
+export function compactCliOptions(options: object): Record<string, unknown> {
   return Object.fromEntries(
-    Object.entries(options as Record<string, unknown>)
+    Object.entries(options)
       .filter(([, value]) => value !== undefined)
       .map(([key, value]) => [
         key,
         key === "providers" ? sortRecord(value) : value,
       ]),
-  ) as T;
+  );
 }
 
 function sortRecord<T>(value: T): T {

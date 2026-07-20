@@ -373,6 +373,8 @@ dependencies = [
  "opentelemetry_sdk",
  "prost",
  "reqwest 0.13.4",
+ "schemars 1.2.1",
+ "serde",
  "serde_json",
  "thiserror 2.0.19",
  "tokio",

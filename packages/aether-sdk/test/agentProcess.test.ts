@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { buildAetherAcpCommand } from "../src/agentProcess.js";
+import { TRACE_CONTEXT } from "./traceContext.js";
 
 const FAKE_AETHER = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -24,6 +25,7 @@ describe("buildAetherAcpCommand()", () => {
       settings: { credentialsStore: { type: "memory" }, agents: [] },
       model: "anthropic:claude-sonnet-4-5",
       reasoningEffort: "high",
+      traceContext: TRACE_CONTEXT,
       providers: {
         zed: { auth: "none" },
         bedrock: {
@@ -52,6 +54,7 @@ describe("buildAetherAcpCommand()", () => {
       },
       model: "anthropic:claude-sonnet-4-5",
       reasoningEffort: "high",
+      traceContext: TRACE_CONTEXT,
     });
   });
 
