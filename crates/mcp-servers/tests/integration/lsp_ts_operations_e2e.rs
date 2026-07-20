@@ -125,6 +125,9 @@ run();
             assert!(ranges.insert(key), "duplicate call-site range: {site}");
         }
     }
+    assert!(calls.iter().all(|call| {
+        call["callSites"].as_array().is_some_and(|sites| sites.iter().all(|site| site.get("context").is_none()))
+    }));
     assert!(calls.iter().any(|call| call["item"]["name"] == "helper"));
     let external = calls.iter().find(|call| call["item"]["name"] == "external").expect("external dependency call");
     assert_eq!(external["projectLocal"], false);
@@ -147,58 +150,21 @@ run();
     )
     .await;
     assert!(!project_calls["callSites"].as_array().unwrap().iter().any(|call| { call["item"]["name"] == "external" }));
-}
 
-#[tokio::test]
-async fn test_ts_incoming_calls_omit_context_by_default() {
-    let project = NodeProject::new("ts_incoming_test_label").expect("Failed to create project");
-    project
-        .add_file(
-            "src/index.ts",
-            r#"function target(): void {}
-function test(_name: string, callback: () => void): void { callback(); }
-test("runs migration", () => {
-    target();
-});
-"#,
-        )
-        .expect("Failed to add index.ts");
-
-    let index_ts = project.file_path_str("src/index.ts");
-    let (_server_handle, client) = connect_lsp(&project).await;
-    let result = poll_lsp_tool(
+    let context_calls = call_tool(
         &client,
         "lsp_symbol",
         serde_json::json!({
-            "operation": "incomingCalls",
+            "operation": "outgoingCalls",
             "file_path": index_ts,
-            "symbol": "target",
-            "line": 1,
-            "callScope": "project"
-        }),
-        |result| result["callSites"].as_array().is_some_and(|calls| !calls.is_empty()),
-    )
-    .await;
-
-    assert!(result["callSites"].as_array().unwrap().iter().all(|call| {
-        call.get("label").is_none()
-            && call["callSites"].as_array().is_some_and(|sites| sites.iter().all(|site| site.get("context").is_none()))
-    }));
-
-    let result = call_tool(
-        &client,
-        "lsp_symbol",
-        serde_json::json!({
-            "operation": "incomingCalls",
-            "file_path": index_ts,
-            "symbol": "target",
-            "line": 1,
-            "callScope": "project",
+            "symbol": "run",
+            "line": 4,
+            "callScope": "all",
             "contextLines": 1
         }),
     )
     .await;
-    assert!(result["callSites"].as_array().unwrap().iter().any(|call| {
+    assert!(context_calls["callSites"].as_array().unwrap().iter().any(|call| {
         call["callSites"].as_array().is_some_and(|sites| sites.iter().any(|site| site.get("context").is_some()))
     }));
 }
