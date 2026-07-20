@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import { AetherSession, mcp, type AetherMessage, tool } from "../src/index.js";
+import { TRACE_CONTEXT } from "./traceContext.js";
 
 const FAKE_AETHER = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -82,6 +83,29 @@ describe("AetherSession with a fake ACP agent", () => {
           agents: [],
         },
       });
+    } finally {
+      await session.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("forwards trace context to the ACP process", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "aether-sdk-"));
+    const logFile = path.join(dir, "fake-aether.log");
+    const session = await AetherSession.start({
+      binaryPath: FAKE_AETHER,
+      traceContext: TRACE_CONTEXT,
+      env: { PATH: process.env.PATH, FAKE_AETHER_LOG_FILE: logFile },
+    });
+
+    try {
+      const events = (await readFile(logFile, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      const argv = events.find((event) => event.event === "argv");
+      const optionsJson = argv.args[argv.args.indexOf("--options-json") + 1];
+      expect(JSON.parse(optionsJson).traceContext).toEqual(TRACE_CONTEXT);
     } finally {
       await session.close();
       await rm(dir, { recursive: true, force: true });

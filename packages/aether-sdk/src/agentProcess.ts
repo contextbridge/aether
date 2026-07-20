@@ -108,37 +108,14 @@ export interface AcpAgentProcess extends AsyncDisposable {
 export function buildAetherAcpCommand(
   options: AetherAcpAgentProcessOptions = {},
 ): AetherAcpCommand {
-  const {
-    binaryPath,
-    settings,
-    settingsFile,
-    agent,
-    model,
-    reasoningEffort,
-    providers,
-    logDir,
-  } = options;
+  const { binaryPath, cwd, env, events, ...cliOptions } = options;
 
-  assertOptionInvariants({
-    settings,
-    settingsFile,
-    agent,
-    model,
-    reasoningEffort,
-  });
+  assertOptionInvariants(cliOptions);
 
   return buildAetherCliCommand({
     binaryPath,
     subcommand: "acp",
-    options: compactCliOptions({
-      logDir,
-      providers,
-      settings,
-      settingsFile,
-      agent,
-      model,
-      reasoningEffort,
-    }),
+    options: compactCliOptions(cliOptions),
     omitOptionsJsonWhenEmpty: true,
   });
 }
