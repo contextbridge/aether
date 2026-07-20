@@ -2,7 +2,7 @@ name: Scheduled Aether prompts
 
 on:
   schedule:
-    - cron: "0 9 * * *"
+    - cron: "0 4 * * *"
   workflow_dispatch:
 
 permissions:
