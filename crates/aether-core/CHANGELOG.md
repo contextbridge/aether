@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.23](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.6.22...aether-agent-core-v0.6.23) - 2026-07-20
+
+### Added
+
+- *(mcp)* support pre-registered OAuth clients ([#254](https://github.com/contextbridge/aether/pull/254))
+- *(aether-session-index)* Internal tool for self-improvement  ([#240](https://github.com/contextbridge/aether/pull/240))
+
+### Fixed
+
+- keep agent sessions responsive during in-flight work ([#235](https://github.com/contextbridge/aether/pull/235))
+
+### Other
+
+- scheduled code-cleanup ([#248](https://github.com/contextbridge/aether/pull/248))
+- scheduled code-cleanup ([#243](https://github.com/contextbridge/aether/pull/243))
+- streamline agent and MCP integration tests ([#236](https://github.com/contextbridge/aether/pull/236))
+
 ## [0.6.22](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.6.21...aether-agent-core-v0.6.22) - 2026-07-13
 
 ### Other

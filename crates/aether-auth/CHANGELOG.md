@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.8](https://github.com/contextbridge/aether/compare/aether-auth-v0.1.7...aether-auth-v0.1.8) - 2026-07-20
+
+### Added
+
+- *(mcp)* support pre-registered OAuth clients ([#254](https://github.com/contextbridge/aether/pull/254))
+
+### Other
+
+- scheduled code-cleanup ([#253](https://github.com/contextbridge/aether/pull/253))
+
 ## [0.1.7](https://github.com/contextbridge/aether/compare/aether-auth-v0.1.6...aether-auth-v0.1.7) - 2026-07-13
 
 ### Other

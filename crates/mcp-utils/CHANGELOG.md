@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.26](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.5.25...aether-mcp-utils-v0.5.26) - 2026-07-20
+
+### Added
+
+- *(mcp)* support pre-registered OAuth clients ([#254](https://github.com/contextbridge/aether/pull/254))
+
+### Other
+
+- scheduled code-cleanup ([#253](https://github.com/contextbridge/aether/pull/253))
+
 ## [0.5.25](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.5.24...aether-mcp-utils-v0.5.25) - 2026-07-13
 
 ### Other

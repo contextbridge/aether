@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.25](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.24...aether-agent-cli-v0.7.25) - 2026-07-20
+
+### Added
+
+- *(mcp)* support pre-registered OAuth clients ([#254](https://github.com/contextbridge/aether/pull/254))
+- *(aether-session-index)* Internal tool for self-improvement  ([#240](https://github.com/contextbridge/aether/pull/240))
+- *(telemetry)* interpolate OTLP header variables ([#238](https://github.com/contextbridge/aether/pull/238))
+- add Microsoft Foundry and Fireworks providers ([#234](https://github.com/contextbridge/aether/pull/234))
+
+### Fixed
+
+- keep agent sessions responsive during in-flight work ([#235](https://github.com/contextbridge/aether/pull/235))
+
+### Other
+
+- streamline agent and MCP integration tests ([#236](https://github.com/contextbridge/aether/pull/236))
+
 ## [0.7.24](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.23...aether-agent-cli-v0.7.24) - 2026-07-13
 
 ### Other

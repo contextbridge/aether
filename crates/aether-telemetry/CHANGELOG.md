@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3](https://github.com/contextbridge/aether/compare/aether-telemetry-v0.1.2...aether-telemetry-v0.1.3) - 2026-07-20
+
+### Added
+
+- *(telemetry)* interpolate OTLP header variables ([#238](https://github.com/contextbridge/aether/pull/238))
+
+### Fixed
+
+- keep agent sessions responsive during in-flight work ([#235](https://github.com/contextbridge/aether/pull/235))
+
+### Other
+
+- streamline agent and MCP integration tests ([#236](https://github.com/contextbridge/aether/pull/236))
+
 ## [0.1.2](https://github.com/contextbridge/aether/compare/aether-telemetry-v0.1.1...aether-telemetry-v0.1.2) - 2026-07-13
 
 ### Other

@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.21](https://github.com/contextbridge/aether/compare/aether-llm-v0.7.20...aether-llm-v0.7.21) - 2026-07-20
+
+### Added
+
+- add Microsoft Foundry and Fireworks providers ([#234](https://github.com/contextbridge/aether/pull/234))
+
+### Fixed
+
+- keep agent sessions responsive during in-flight work ([#235](https://github.com/contextbridge/aether/pull/235))
+
+### Other
+
+- update llm models for kimi k3 ([#251](https://github.com/contextbridge/aether/pull/251))
+
 ## [0.7.20](https://github.com/contextbridge/aether/compare/aether-llm-v0.7.19...aether-llm-v0.7.20) - 2026-07-13
 
 ### Other

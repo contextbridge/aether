@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.28](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.27...aether-mcp-servers-v0.4.28) - 2026-07-20
+
+### Added
+
+- strengthen LSP tool workflows ([#241](https://github.com/contextbridge/aether/pull/241))
+
+### Fixed
+
+- *(mcp-servers)* Make web search tool retry on rate limit ([#232](https://github.com/contextbridge/aether/pull/232))
+
+### Other
+
+- scheduled code-cleanup ([#253](https://github.com/contextbridge/aether/pull/253))
+
 ## [0.4.27](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.26...aether-mcp-servers-v0.4.27) - 2026-07-13
 
 ### Other

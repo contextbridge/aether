@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.32](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.31...aether-wisp-v0.4.32) - 2026-07-20
+
+### Added
+
+- stage and unstage directories in the git diff file tree ([#249](https://github.com/contextbridge/aether/pull/249))
+- *(wisp)* add staged/unstaged/both scope toggle to git diff mode ([#237](https://github.com/contextbridge/aether/pull/237))
+
+### Fixed
+
+- keep file picker open when pasting ([#250](https://github.com/contextbridge/aether/pull/250))
+- keep agent sessions responsive during in-flight work ([#235](https://github.com/contextbridge/aether/pull/235))
+
+### Other
+
+- scheduled code-cleanup ([#246](https://github.com/contextbridge/aether/pull/246))
+- streamline agent and MCP integration tests ([#236](https://github.com/contextbridge/aether/pull/236))
+
 ## [0.4.31](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.30...aether-wisp-v0.4.31) - 2026-07-13
 
 ### Other
