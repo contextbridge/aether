@@ -3,6 +3,7 @@ pub mod run;
 
 use aether_core::agent_spec::{AgentSpec, McpConfigSource};
 use aether_project::{AetherSettings, AgentCatalog, TelemetrySettings};
+use aether_telemetry::AgentTraceContext;
 use error::CliError;
 use llm::{ProviderConnectionOverride, ProviderConnectionOverrides};
 use mcp_utils::client::McpConfig;
@@ -59,6 +60,7 @@ pub struct RunConfig {
     pub events: Vec<CliEventKind>,
     pub oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
     pub telemetry: Option<TelemetrySettings>,
+    pub trace_context: Option<AgentTraceContext>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
@@ -88,6 +90,8 @@ pub struct HeadlessOptions {
     pub verbose: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub events: Option<Vec<CliEventKind>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_context: Option<AgentTraceContext>,
 }
 
 pub async fn run_headless(args: HeadlessArgs) -> Result<ExitCode, CliError> {
@@ -173,6 +177,7 @@ impl RunConfig {
             events: args.events,
             oauth_credential_store,
             telemetry,
+            trace_context: None,
         })
     }
 
@@ -209,6 +214,7 @@ impl RunConfig {
             events: options.events.unwrap_or_default(),
             oauth_credential_store,
             telemetry,
+            trace_context: options.trace_context,
         })
     }
 }

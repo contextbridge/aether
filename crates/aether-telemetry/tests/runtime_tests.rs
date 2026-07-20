@@ -1,5 +1,45 @@
-use aether_telemetry::{TelemetryConfig, TelemetryInitError, TelemetryRuntime};
+use aether_telemetry::{AgentTraceContext, TelemetryConfig, TelemetryInitError, TelemetryRuntime};
 use std::collections::HashMap;
+
+#[test]
+fn round_trips_agent_trace_context_carriers() {
+    let context: AgentTraceContext = serde_json::from_str(
+        r#"{"traceparent":"00-00112233445566778899aabbccddeeff-0123456789abcdef-01","tracestate":"vendor=value"}"#,
+    )
+    .expect("valid trace context carrier");
+
+    assert_eq!(
+        serde_json::to_string(&context).expect("serializes trace context"),
+        r#"{"traceparent":"00-00112233445566778899aabbccddeeff-0123456789abcdef-01","tracestate":"vendor=value"}"#
+    );
+}
+
+#[test]
+fn rejects_invalid_agent_trace_contexts_when_initializing_runtime() {
+    for (value, header) in [
+        (r#"{"traceparent":"INVALID"}"#, "traceparent"),
+        (r#"{"traceparent":"00-00000000000000000000000000000000-0123456789abcdef-01"}"#, "traceparent"),
+        (r#"{"traceparent":"00-00112233445566778899aabbccddeeff-0000000000000000-01"}"#, "traceparent"),
+        (r#"{"traceparent":"00-00112233445566778899AABBCCDDEEFF-0123456789abcdef-01"}"#, "traceparent"),
+        (
+            r#"{"traceparent":"00-00112233445566778899aabbccddeeff-0123456789abcdef-01","tracestate":"invalid"}"#,
+            "tracestate",
+        ),
+    ] {
+        let trace_context = serde_json::from_str::<AgentTraceContext>(value).expect("valid JSON carrier");
+        let result = TelemetryRuntime::new(&TelemetryConfig {
+            trace_context: Some(trace_context),
+            traces_enabled: false,
+            metrics_enabled: false,
+            ..test_config()
+        });
+
+        assert!(
+            matches!(result, Err(TelemetryInitError::InvalidTraceContext(name)) if name == header),
+            "expected an invalid {header} for {value}"
+        );
+    }
+}
 
 #[test]
 fn disabled_signals_do_not_require_an_endpoint_or_exporters() {
@@ -80,6 +120,7 @@ fn test_config() -> TelemetryConfig {
         service_version: "test".to_string(),
         sample_ratio: 1.0,
         capture_content: false,
+        trace_context: None,
         traces_enabled: true,
         metrics_enabled: true,
     }

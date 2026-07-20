@@ -12,6 +12,8 @@ pub enum TelemetryInitError {
     MissingOtlpEndpoint,
     #[error("telemetry sample ratio must be between 0.0 and 1.0, got {0}")]
     InvalidSampleRatio(f64),
+    #[error("telemetry trace context has an invalid {0} header")]
+    InvalidTraceContext(&'static str),
     #[error("telemetry OTLP header name is invalid: {0}")]
     InvalidHeaderName(String),
     #[error("telemetry OTLP header value is invalid for header {0}")]

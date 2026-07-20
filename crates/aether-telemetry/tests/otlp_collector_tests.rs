@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use aether_core::events::{AgentEvent, LlmCallOutcome, LlmCallPurpose, TurnEvent, TurnOutcome};
-use aether_telemetry::{TelemetryConfig, TelemetryRuntime};
+use aether_telemetry::{AgentTraceContext, TelemetryConfig, TelemetryRuntime};
 use axum::Router;
 use axum::body::Bytes;
 use axum::extract::State;
@@ -11,6 +11,7 @@ use axum::routing::post;
 use llm::TokenUsage;
 use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
+use opentelemetry_proto::tonic::trace::v1::Span;
 use prost::Message;
 
 #[tokio::test(flavor = "multi_thread")]
@@ -18,15 +19,10 @@ async fn runtime_exports_metrics_to_a_signal_specific_endpoint() {
     let collector = FakeOtlpCollector::start().await;
     let runtime = TelemetryRuntime::new(&TelemetryConfig {
         endpoint: None,
-        traces_endpoint: None,
         metrics_endpoint: Some(collector.signal_specific_metrics_endpoint()),
-        headers: HashMap::from([("x-telemetry-test".to_string(), "signal-specific".to_string())]),
-        service_name: "aether-test".to_string(),
-        service_version: "test".to_string(),
-        sample_ratio: 1.0,
-        capture_content: false,
+        headers: test_headers("signal-specific"),
         traces_enabled: false,
-        metrics_enabled: true,
+        ..collector_config(&collector)
     })
     .expect("runtime initializes against a signal-specific endpoint");
     {
@@ -50,14 +46,9 @@ async fn runtime_exports_traces_to_a_signal_specific_endpoint() {
     let runtime = TelemetryRuntime::new(&TelemetryConfig {
         endpoint: None,
         traces_endpoint: Some(collector.signal_specific_traces_endpoint()),
-        metrics_endpoint: None,
-        headers: HashMap::from([("x-telemetry-test".to_string(), "signal-specific".to_string())]),
-        service_name: "aether-test".to_string(),
-        service_version: "test".to_string(),
-        sample_ratio: 1.0,
-        capture_content: false,
-        traces_enabled: true,
+        headers: test_headers("signal-specific"),
         metrics_enabled: false,
+        ..collector_config(&collector)
     })
     .expect("runtime initializes against a signal-specific endpoint");
     {
@@ -76,19 +67,45 @@ async fn runtime_exports_traces_to_a_signal_specific_endpoint() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn runtime_parents_every_turn_to_the_supplied_trace_context() {
+    let collector = FakeOtlpCollector::start().await;
+    let trace_context = serde_json::from_str::<AgentTraceContext>(
+        r#"{"traceparent":"00-00112233445566778899aabbccddeeff-0123456789abcdef-01","tracestate":"vendor=value"}"#,
+    )
+    .expect("valid trace context");
+    let expected_trace_id =
+        vec![0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff];
+    let expected_parent_span_id = vec![0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef];
+    let runtime = TelemetryRuntime::new(&TelemetryConfig {
+        headers: test_headers("fixed-trace"),
+        sample_ratio: 0.0,
+        trace_context: Some(trace_context),
+        ..collector_config(&collector)
+    })
+    .expect("runtime initializes against collector");
+
+    for _ in 0..2 {
+        let factory = runtime.observer_factory();
+        let mut observer = factory();
+        for event in events() {
+            observer.on_event(&event);
+        }
+    }
+
+    runtime.shutdown().expect("runtime flushes traces");
+    let exports = collector.exports();
+    let spans = trace_spans(&exports);
+
+    assert_propagated_hierarchy(&spans, &expected_trace_id, &expected_parent_span_id);
+    assert!(!exports.metrics.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn runtime_exports_genai_spans_and_metrics_to_an_otlp_collector() {
     let collector = FakeOtlpCollector::start().await;
     let runtime = TelemetryRuntime::new(&TelemetryConfig {
-        endpoint: Some(collector.endpoint()),
-        traces_endpoint: None,
-        metrics_endpoint: None,
-        headers: HashMap::from([("x-telemetry-test".to_string(), "collector-test".to_string())]),
-        service_name: "aether-test".to_string(),
-        service_version: "test".to_string(),
-        sample_ratio: 1.0,
-        capture_content: false,
-        traces_enabled: true,
-        metrics_enabled: true,
+        headers: test_headers("collector-test"),
+        ..collector_config(&collector)
     })
     .expect("runtime initializes against collector");
     {
@@ -127,6 +144,51 @@ async fn runtime_exports_genai_spans_and_metrics_to_an_otlp_collector() {
 
     assert_eq!(exports.trace_headers, vec!["collector-test"]);
     assert_eq!(exports.metric_headers, vec!["collector-test"]);
+}
+
+fn collector_config(collector: &FakeOtlpCollector) -> TelemetryConfig {
+    TelemetryConfig {
+        endpoint: Some(collector.endpoint()),
+        traces_endpoint: None,
+        metrics_endpoint: None,
+        headers: HashMap::new(),
+        service_name: "aether-test".to_string(),
+        service_version: "test".to_string(),
+        sample_ratio: 1.0,
+        capture_content: false,
+        trace_context: None,
+        traces_enabled: true,
+        metrics_enabled: true,
+    }
+}
+
+fn test_headers(value: &str) -> HashMap<String, String> {
+    HashMap::from([("x-telemetry-test".to_string(), value.to_string())])
+}
+
+fn trace_spans(exports: &Exports) -> Vec<&Span> {
+    exports
+        .traces
+        .iter()
+        .flat_map(|request| &request.resource_spans)
+        .flat_map(|resource| &resource.scope_spans)
+        .flat_map(|scope| &scope.spans)
+        .collect()
+}
+
+fn assert_propagated_hierarchy(spans: &[&Span], expected_trace_id: &[u8], expected_parent_span_id: &[u8]) {
+    assert_eq!(spans.len(), 4);
+    assert!(spans.iter().all(|span| span.trace_id == expected_trace_id));
+    let roots = spans.iter().filter(|span| span.name == "invoke_agent").copied().collect::<Vec<_>>();
+    assert_eq!(roots.len(), 2);
+    assert!(roots.iter().all(|span| span.parent_span_id == expected_parent_span_id));
+    assert!(roots.iter().all(|span| span.trace_state == "vendor=value"));
+    for child in spans.iter().filter(|span| span.name != "invoke_agent") {
+        assert!(roots.iter().any(|root| child.parent_span_id == root.span_id));
+    }
+    let span_ids = spans.iter().map(|span| span.span_id.clone()).collect::<std::collections::HashSet<_>>();
+    assert_eq!(span_ids.len(), spans.len());
+    assert!(span_ids.iter().all(|span_id| !span_id.is_empty() && span_id.iter().any(|byte| *byte != 0)));
 }
 
 fn events() -> Vec<AgentEvent> {

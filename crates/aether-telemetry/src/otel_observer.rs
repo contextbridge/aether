@@ -25,6 +25,7 @@ pub struct OtelInstrumentation {
     pub tracer: SdkTracer,
     pub metrics: GenAiMetrics,
     pub capture_content: bool,
+    pub root_parent: Option<Context>,
 }
 
 impl OtelObserver {
@@ -67,7 +68,7 @@ impl OtelObserver {
             attributes.push(KeyValue::new(semconv::GEN_AI_INPUT_MESSAGES, messages_json("user", text)));
         }
         let builder = SpanBuilder::from_name("invoke_agent").with_kind(SpanKind::Internal).with_attributes(attributes);
-        let span_context = self.instrumentation.start_span(builder, None);
+        let span_context = self.instrumentation.start_span(builder, self.instrumentation.root_parent.as_ref());
         let span = SpanGuard::new(span_context, TURN_CANCEL_MESSAGE);
         self.turn = Some(TurnState::new(span, input, self.instrumentation.capture()));
     }
