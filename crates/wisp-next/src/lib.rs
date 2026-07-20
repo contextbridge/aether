@@ -1,10 +1,12 @@
 pub mod app;
+pub mod attachments;
 pub mod cli;
 pub mod composer;
 pub mod diff;
 pub mod error;
 pub mod keybindings;
 pub mod markdown;
+pub mod picker;
 pub mod presentation;
 pub mod render;
 pub mod session;
@@ -18,7 +20,10 @@ pub mod wrap;
 
 use acp_utils::client::AcpEvent;
 use app::{App, AppConfig};
-use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste, Event, EventStream};
+use crossterm::event::{
+    DisableBracketedPaste, EnableBracketedPaste, Event, EventStream, KeyboardEnhancementFlags,
+    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+};
 use crossterm::execute;
 use error::AppError;
 use futures::StreamExt;
@@ -45,9 +50,10 @@ pub async fn run_tui(agent_command: &str, settings: UiSettings) -> Result<(), Ap
 
 /// Run the TUI from an already-initialized ACP session.
 pub async fn run_with_session(session: Session) -> Result<(), AppError> {
-    let Session { session_id, agent_name, settings, event_rx, prompt_handle, workspace_status, .. } = session;
+    let Session { session_id, agent_name, settings, event_rx, prompt_handle, working_dir, workspace_status, .. } =
+        session;
     let renderer = TranscriptRenderer::new(&settings);
-    let app = App::new(AppConfig { session_id, agent_name, workspace_status, prompt_handle, settings });
+    let app = App::new(AppConfig { session_id, agent_name, workspace_status, prompt_handle, working_dir, settings });
     run_app(app, renderer, event_rx).await
 }
 
@@ -72,13 +78,21 @@ async fn run_app(
     mut event_rx: mpsc::UnboundedReceiver<AcpEvent>,
 ) -> Result<(), AppError> {
     let mut terminal = ratatui::init_with_options(TerminalOptions { viewport: Viewport::Inline(VIEWPORT_HEIGHT) });
+    let mut stdout = io::stdout();
+    let flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+        | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES;
+    let keyboard_enhancement_enabled = execute!(stdout, PushKeyboardEnhancementFlags(flags)).is_ok();
 
-    let result = match execute!(io::stdout(), EnableBracketedPaste) {
+    let result = match execute!(stdout, EnableBracketedPaste) {
         Ok(()) => event_loop(&mut terminal, &mut app, &mut renderer, &mut event_rx).await,
         Err(e) => Err(AppError::Io(e)),
     };
 
-    let _ = execute!(io::stdout(), DisableBracketedPaste);
+    let _ = execute!(stdout, DisableBracketedPaste);
+    if keyboard_enhancement_enabled {
+        let _ = execute!(stdout, PopKeyboardEnhancementFlags);
+    }
     ratatui::restore();
     result
 }

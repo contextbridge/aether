@@ -1,5 +1,4 @@
 use crate::app::{App, HistoryItem, HistoryKind};
-use crate::composer::Composer;
 use crate::diff::render_diff;
 use crate::markdown::render_markdown;
 use crate::presentation::TranscriptRenderer;
@@ -14,8 +13,6 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Widget};
 use unicode_width::UnicodeWidthStr;
-
-pub const MAX_COMPOSER_HEIGHT: u16 = 5;
 
 pub fn sync_terminal<B: Backend>(
     terminal: &mut Terminal<B>,
@@ -42,7 +39,11 @@ pub fn sync_terminal<B: Backend>(
 }
 
 pub fn draw(frame: &mut Frame, app: &App, renderer: &mut TranscriptRenderer) {
-    let composer_height = u16::try_from(app.composer().line_count()).unwrap_or(u16::MAX).clamp(1, MAX_COMPOSER_HEIGHT);
+    let composer_layout = app.composer().layout(frame.area().width, renderer.theme());
+    let overlay_lines = app.composer().overlay_lines(frame.area().width, 6, renderer.theme());
+    let requested_composer_height = composer_layout.lines.len().saturating_add(overlay_lines.len());
+    let composer_height =
+        u16::try_from(requested_composer_height).unwrap_or(u16::MAX).clamp(1, frame.area().height.saturating_sub(1));
     let [live_area, composer_area, status_area] =
         Layout::vertical([Constraint::Min(0), Constraint::Length(composer_height), Constraint::Length(1)])
             .areas(frame.area());
@@ -61,7 +62,7 @@ pub fn draw(frame: &mut Frame, app: &App, renderer: &mut TranscriptRenderer) {
     }
     frame.render_widget(Paragraph::new(Text::from(lines)), live_area);
 
-    render_composer(frame, app.composer(), composer_area, renderer.theme());
+    render_composer(frame, &composer_layout, &overlay_lines, composer_area);
     render_status_line(frame, app, status_area, renderer.theme());
 }
 
@@ -176,30 +177,22 @@ fn indent_lines(lines: Vec<Line<'static>>, padding: usize) -> Vec<Line<'static>>
         .collect()
 }
 
-fn render_composer(frame: &mut Frame, composer: &Composer, area: Rect, theme: &Theme) {
-    let visible = area.height as usize;
-    let skip = composer.line_count().saturating_sub(visible);
-    let lines: Vec<Line> = composer
-        .lines()
-        .enumerate()
-        .skip(skip)
-        .map(|(index, line)| {
-            let prefix = if index == 0 { "> " } else { "  " };
-            Line::from(vec![
-                Span::styled(prefix, Style::new().fg(theme.accent)),
-                Span::styled(line.to_string(), Style::new().fg(theme.text_primary)),
-            ])
-        })
-        .collect();
-    frame.render_widget(Paragraph::new(Text::from(lines)), area);
+fn render_composer(
+    frame: &mut Frame,
+    layout: &crate::composer::ComposerLayout,
+    overlay_lines: &[Line<'static>],
+    area: Rect,
+) {
+    let mut lines = layout.lines.clone();
+    lines.extend_from_slice(overlay_lines);
+    let skip = lines.len().saturating_sub(usize::from(area.height));
+    let visible: Vec<Line<'static>> = lines.into_iter().skip(skip).collect();
+    frame.render_widget(Paragraph::new(Text::from(visible)), area);
 
-    let (row, column) = composer.cursor_position();
-    if row >= skip {
-        let x = area.x + u16::try_from(2 + column).unwrap_or(u16::MAX);
-        let y = area.y + u16::try_from(row - skip).unwrap_or(u16::MAX);
-        if x < area.right() && y < area.bottom() {
-            frame.set_cursor_position(Position::new(x, y));
-        }
+    let x = area.x.saturating_add(layout.cursor.x);
+    let y = area.y.saturating_add(layout.cursor.y);
+    if x < area.right() && y < area.bottom() {
+        frame.set_cursor_position(Position::new(x, y));
     }
 }
 

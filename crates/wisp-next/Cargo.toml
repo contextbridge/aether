@@ -40,6 +40,10 @@ pulldown-cmark = { workspace = true }
 syntect = { workspace = true }
 two-face = { workspace = true }
 similar = { workspace = true }
+ignore = { workspace = true }
+base64 = { workspace = true }
+mime_guess = { workspace = true }
+url = { workspace = true }
 unicode-width = { workspace = true }
 
 [dev-dependencies]

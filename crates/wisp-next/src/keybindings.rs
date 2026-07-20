@@ -11,6 +11,8 @@ pub struct Keybindings {
     pub exit: KeyBinding,
     pub cancel: KeyBinding,
     pub submit: KeyBinding,
+    pub open_command_picker: KeyBinding,
+    pub open_file_picker: KeyBinding,
 }
 
 impl KeyBinding {
@@ -29,6 +31,8 @@ impl Default for Keybindings {
             exit: KeyBinding::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
             cancel: KeyBinding::new(KeyCode::Esc, KeyModifiers::NONE),
             submit: KeyBinding::new(KeyCode::Enter, KeyModifiers::NONE),
+            open_command_picker: KeyBinding::new(KeyCode::Char('/'), KeyModifiers::NONE),
+            open_file_picker: KeyBinding::new(KeyCode::Char('@'), KeyModifiers::NONE),
         }
     }
 }

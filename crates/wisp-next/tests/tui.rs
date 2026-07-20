@@ -16,6 +16,8 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::LocalSet;
 use wisp_next::app::{App, AppConfig, HistoryItem};
+use wisp_next::composer::Composer;
+use wisp_next::picker::CommandEntry;
 use wisp_next::presentation::TranscriptRenderer;
 use wisp_next::render::sync_terminal as sync_terminal_with_renderer;
 use wisp_next::settings::UiSettings;
@@ -23,15 +25,149 @@ use wisp_next::theme::Theme;
 use wisp_next::workspace_status::WorkspaceStatus;
 
 fn make_app() -> (App, UnboundedReceiver<PromptCommand>) {
+    make_app_in(std::path::PathBuf::from("."))
+}
+
+fn make_app_in(working_dir: std::path::PathBuf) -> (App, UnboundedReceiver<PromptCommand>) {
     let (prompt_handle, command_rx) = AcpPromptHandle::recording();
     let app = App::new(AppConfig {
         session_id: SessionId::new("test-session"),
         agent_name: "aether".to_string(),
         workspace_status: WorkspaceStatus::new("~/code/demo", Some("main".to_string())),
         prompt_handle,
+        working_dir,
         settings: UiSettings::default(),
     });
     (app, command_rx)
+}
+
+#[test]
+fn composer_soft_wraps_and_tracks_cursor() {
+    let mut composer = Composer::new();
+    composer.insert_str("abcdefgh");
+    composer.move_left();
+    composer.move_left();
+
+    let layout = composer.layout(6, &Theme::default());
+
+    assert_eq!(layout.lines.len(), 2);
+    assert_eq!(layout.cursor.x, 4);
+    assert_eq!(layout.cursor.y, 1);
+}
+
+#[test]
+fn composer_moves_vertically_before_recalling_history() {
+    let mut composer = Composer::new();
+    composer.insert_str("one\nsecond");
+    composer.move_left();
+    composer.move_left();
+
+    assert!(composer.move_up());
+    assert_eq!(composer.cursor_position(), (0, 3));
+    assert!(composer.move_down());
+    assert_eq!(composer.cursor_position(), (1, 3));
+}
+
+#[test]
+fn command_picker_filters_and_applies_selected_command() {
+    let mut composer = Composer::new();
+    composer.insert_char('/');
+    composer.open_command_picker(vec![
+        CommandEntry {
+            name: "search".to_string(),
+            description: "Search the workspace".to_string(),
+            has_input: true,
+            hint: Some("query".to_string()),
+        },
+        CommandEntry {
+            name: "status".to_string(),
+            description: "Show status".to_string(),
+            has_input: false,
+            hint: None,
+        },
+    ]);
+    composer.insert_str("sea");
+    composer.refresh_overlay_query();
+
+    assert_eq!(composer.overlay_query(), Some("sea"));
+    assert!(composer.overlay_lines(80, 6, &Theme::default()).iter().any(|line| line_text(line).contains("/search")));
+
+    let selected = composer.accept_command().unwrap();
+    assert_eq!(selected.name, "search");
+    assert_eq!(composer.text(), "/search");
+    assert!(!composer.has_overlay());
+}
+
+#[test]
+fn file_picker_filters_and_inserts_a_mention() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::create_dir(directory.path().join("src")).unwrap();
+    std::fs::write(directory.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+    std::fs::write(directory.path().join("README.md"), "# demo\n").unwrap();
+
+    let mut composer = Composer::new();
+    composer.insert_char('@');
+    composer.open_file_picker(directory.path());
+    composer.insert_str("main");
+    composer.refresh_overlay_query();
+
+    assert_eq!(composer.overlay_query(), Some("main"));
+    assert!(
+        composer.overlay_lines(80, 6, &Theme::default()).iter().any(|line| line_text(line).contains("src/main.rs"))
+    );
+
+    let selected = composer.accept_file().unwrap();
+    assert_eq!(selected.display_name, "src/main.rs");
+    assert_eq!(composer.text(), "@src/main.rs ");
+    assert!(!composer.has_overlay());
+}
+
+#[test]
+fn selected_file_is_sent_as_an_acp_resource_attachment() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(directory.path().join("context.txt"), "attached context").unwrap();
+    let (mut app, mut command_rx) = make_app_in(directory.path().to_path_buf());
+
+    app.on_key(key(KeyCode::Char('@')));
+    app.on_key(key(KeyCode::Char('c')));
+    app.on_key(key(KeyCode::Enter));
+    assert_eq!(app.composer().text(), "@context.txt ");
+    app.on_key(key(KeyCode::Enter));
+
+    let PromptCommand::Prompt { text, content, .. } = command_rx.try_recv().unwrap() else {
+        panic!("expected a prompt command");
+    };
+    assert_eq!(text, "@context.txt ");
+    assert!(matches!(content.as_deref(), Some([acp::ContentBlock::Resource(_)])));
+}
+
+#[test]
+fn file_picker_renders_in_the_live_viewport_not_scrollback() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(directory.path().join("context.txt"), "attached context").unwrap();
+    let (mut app, _command_rx) = make_app_in(directory.path().to_path_buf());
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+
+    app.on_key(key(KeyCode::Char('@')));
+    app.on_key(key(KeyCode::Char('c')));
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+
+    assert!(buffer_text(terminal.backend().buffer()).contains("context.txt"));
+    assert!(!buffer_text(terminal.backend().scrollback()).contains("context.txt"));
+}
+
+#[test]
+fn composer_history_restores_the_unsubmitted_draft() {
+    let mut composer = Composer::new();
+    composer.insert_str("first");
+    assert_eq!(composer.take_submission(), "first");
+    composer.insert_str("draft");
+
+    assert!(composer.recall_previous());
+    assert_eq!(composer.text(), "first");
+    assert!(composer.recall_next());
+    assert_eq!(composer.text(), "draft");
 }
 
 #[test]

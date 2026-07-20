@@ -1,6 +1,7 @@
 use crate::composer::Composer;
 use crate::diff::DiffPreview;
 use crate::keybindings::Keybindings;
+use crate::picker::CommandEntry;
 use crate::settings::{UiSettings, resolve_content_padding};
 use crate::tool_calls::{ToolCallEntry, ToolCallLog, ToolStatus};
 use crate::transcript::{SegmentContent, Transcript};
@@ -9,6 +10,7 @@ use acp_utils::client::{AcpEvent, AcpPromptHandle};
 use acp_utils::notifications::{ElicitationAction, ElicitationResponse};
 use agent_client_protocol::schema::{self as acp, SessionId};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 /// Root UI state: reduces terminal input and ACP events into the transcript,
@@ -20,6 +22,8 @@ pub struct App {
     keybindings: Keybindings,
     workspace_status: WorkspaceStatus,
     content_padding: usize,
+    working_dir: PathBuf,
+    available_commands: Vec<CommandEntry>,
     transcript: Transcript,
     tool_calls: ToolCallLog,
     composer: Composer,
@@ -36,6 +40,7 @@ pub struct AppConfig {
     pub agent_name: String,
     pub workspace_status: WorkspaceStatus,
     pub prompt_handle: AcpPromptHandle,
+    pub working_dir: PathBuf,
     pub settings: UiSettings,
 }
 
@@ -80,6 +85,8 @@ impl App {
             keybindings: Keybindings::default(),
             workspace_status: config.workspace_status,
             content_padding,
+            working_dir: config.working_dir,
+            available_commands: Vec::new(),
             transcript: Transcript::new(),
             tool_calls: ToolCallLog::new(),
             composer: Composer::new(),
@@ -147,8 +154,15 @@ impl App {
             return;
         }
 
-        if key.code == KeyCode::Enter && key.modifiers.contains(KeyModifiers::ALT) {
+        if key.code == KeyCode::Enter && key.modifiers.intersects(KeyModifiers::ALT | KeyModifiers::SHIFT)
+            || key.code == KeyCode::Char('j') && key.modifiers.contains(KeyModifiers::CONTROL)
+        {
             self.composer.insert_newline();
+            return;
+        }
+
+        if self.composer.has_overlay() {
+            self.on_overlay_key(key);
             return;
         }
 
@@ -165,13 +179,24 @@ impl App {
         }
 
         match key.code {
-            KeyCode::Char(c) if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
-                self.composer.insert_char(c);
+            KeyCode::Char(character) if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+                self.composer.insert_char(character);
+                if self.keybindings.open_command_picker.matches(key) && self.composer.text() == "/" {
+                    self.composer.open_command_picker(self.available_commands.clone());
+                } else if self.keybindings.open_file_picker.matches(key) {
+                    self.composer.open_file_picker(&self.working_dir);
+                }
             }
             KeyCode::Backspace => self.composer.backspace(),
             KeyCode::Delete => self.composer.delete(),
             KeyCode::Left => self.composer.move_left(),
             KeyCode::Right => self.composer.move_right(),
+            KeyCode::Up if !self.composer.move_up() => {
+                self.composer.recall_previous();
+            }
+            KeyCode::Down if !self.composer.move_down() => {
+                self.composer.recall_next();
+            }
             KeyCode::Home => self.composer.move_line_start(),
             KeyCode::End => self.composer.move_line_end(),
             _ => {}
@@ -180,6 +205,7 @@ impl App {
 
     pub fn on_paste(&mut self, text: &str) {
         self.composer.insert_str(text);
+        self.composer.refresh_overlay_query();
     }
 
     pub fn on_tick(&mut self, now: Instant) {
@@ -282,6 +308,42 @@ impl App {
         self.spinner_tick
     }
 
+    fn on_overlay_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => self.composer.close_overlay(),
+            KeyCode::Up => self.composer.overlay_move_up(),
+            KeyCode::Down => self.composer.overlay_move_down(),
+            KeyCode::Enter | KeyCode::Tab => {
+                if let Some(command) = self.composer.accept_command() {
+                    if command.has_input {
+                        self.composer.insert_char(' ');
+                    } else {
+                        self.submit();
+                    }
+                } else {
+                    self.composer.accept_file();
+                }
+            }
+            KeyCode::Backspace if self.composer.active_token_is_empty() => {
+                self.composer.backspace();
+                self.composer.close_overlay();
+            }
+            KeyCode::Backspace => {
+                self.composer.backspace();
+                self.composer.refresh_overlay_query();
+            }
+            KeyCode::Char(character) if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+                self.composer.insert_char(character);
+                if character.is_whitespace() {
+                    self.composer.close_overlay();
+                } else {
+                    self.composer.refresh_overlay_query();
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn on_session_update(&mut self, update: &acp::SessionUpdate) {
         match update {
             acp::SessionUpdate::UserMessageChunk(chunk) => {
@@ -311,6 +373,21 @@ impl App {
                     self.transcript.ensure_tool_segment(&update.tool_call_id.0);
                 }
             }
+            acp::SessionUpdate::AvailableCommandsUpdate(update) => {
+                self.available_commands = update
+                    .available_commands
+                    .iter()
+                    .map(|command| CommandEntry {
+                        name: command.name.clone(),
+                        description: command.description.clone(),
+                        has_input: command.input.is_some(),
+                        hint: match &command.input {
+                            Some(acp::AvailableCommandInput::Unstructured(input)) => Some(input.hint.clone()),
+                            _ => None,
+                        },
+                    })
+                    .collect();
+            }
             _ => {
                 self.transcript.close_thought_block();
             }
@@ -322,10 +399,19 @@ impl App {
             return;
         }
 
+        let mentions = self.composer.selected_mentions();
         let text = self.composer.take_submission();
+        let attachments = crate::attachments::build(&mentions);
         self.transcript.push_user_message(&text);
+        for placeholder in &attachments.placeholders {
+            self.transcript.push_user_message(placeholder);
+        }
+        for warning in &attachments.warnings {
+            self.transcript.push_user_message(&format!("[wisp-next] {warning}"));
+        }
         self.prompt_in_flight = true;
-        if let Err(e) = self.prompt_handle.prompt(&self.session_id, &text, None) {
+        let content = (!attachments.blocks.is_empty()).then_some(attachments.blocks);
+        if let Err(e) = self.prompt_handle.prompt(&self.session_id, &text, content) {
             tracing::error!("failed to send prompt: {e}");
         }
     }

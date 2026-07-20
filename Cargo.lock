@@ -470,9 +470,12 @@ dependencies = [
  "aether-acp-utils",
  "aether-utils",
  "agent-client-protocol",
+ "base64 0.22.1",
  "clap",
  "crossterm",
  "futures",
+ "ignore",
+ "mime_guess",
  "pulldown-cmark",
  "ratatui",
  "serde",
@@ -487,6 +490,7 @@ dependencies = [
  "tracing-subscriber",
  "two-face",
  "unicode-width",
+ "url",
 ]
 
 [[package]]
