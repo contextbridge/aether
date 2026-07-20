@@ -1,6 +1,6 @@
 [package]
 name = "aether-mcp-servers"
-version = "0.4.28"
+version = "0.4.29"
 edition = "2024"
 description = "Built-in MCP tool servers for the Aether AI agent framework"
 license = "MIT"
@@ -85,7 +85,7 @@ tokio = { workspace = true, features = ["rt", "macros", "sync", "io-util", "fs",
 rmcp = { workspace = true, features = ["elicitation", "macros", "server"] }
 schemars = { workspace = true }
 clap = { workspace = true, features = ["env"] }
-mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", default-features = false, version = "0.5.26" }
+mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", default-features = false, version = "0.5.27" }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.11" }
 aether-lspd = { path = "../aether-lspd", optional = true, version = "0.1.24" }
 futures = { workspace = true, optional = true }
@@ -110,16 +110,16 @@ tempfile = { workspace = true, optional = true }
 
 # subagents feature
 aether-auth = { path = "../aether-auth", optional = true, version = "0.1.8", features = ["keyring"] }
-aether-core = { package = "aether-agent-core", path = "../aether-core", optional = true, version = "0.6.23" }
-aether-project = { path = "../aether-project", optional = true, version = "0.5.23" }
-llm = { package = "aether-llm", path = "../llm", optional = true, version = "0.7.21" }
+aether-core = { package = "aether-agent-core", path = "../aether-core", optional = true, version = "0.6.24" }
+aether-project = { path = "../aether-project", optional = true, version = "0.5.24" }
+llm = { package = "aether-llm", path = "../llm", optional = true, version = "0.7.22" }
 
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 aether-lspd = { path = "../aether-lspd", features = ["testing"], version = "0.1.24" }
 mcp-servers = { package = "aether-mcp-servers", path = ".", features = ["test-helpers"] }
-mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", features = ["client"], version = "0.5.26" }
+mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", features = ["client"], version = "0.5.27" }
 
 [[bin]]
 name = "mcp-servers-stdio"
