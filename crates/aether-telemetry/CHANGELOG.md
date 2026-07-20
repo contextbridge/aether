@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4](https://github.com/contextbridge/aether/compare/aether-telemetry-v0.1.3...aether-telemetry-v0.1.4) - 2026-07-20
+
+### Added
+
+- Support setting custom OTEL trace id.  ([#262](https://github.com/contextbridge/aether/pull/262))
+
 ## [0.1.3](https://github.com/contextbridge/aether/compare/aether-telemetry-v0.1.2...aether-telemetry-v0.1.3) - 2026-07-20
 
 ### Added

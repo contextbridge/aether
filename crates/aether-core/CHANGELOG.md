@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.24](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.6.23...aether-agent-core-v0.6.24) - 2026-07-20
+
+### Other
+
+- scheduled code-cleanup ([#256](https://github.com/contextbridge/aether/pull/256))
+
 ## [0.6.23](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.6.22...aether-agent-core-v0.6.23) - 2026-07-20
 
 ### Added

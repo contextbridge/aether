@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.29](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.28...aether-mcp-servers-v0.4.29) - 2026-07-20
+
+### Other
+
+- updated the following local packages: aether-llm, aether-agent-core, aether-mcp-utils, aether-mcp-utils, aether-project
+
 ## [0.4.28](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.27...aether-mcp-servers-v0.4.28) - 2026-07-20
 
 ### Added

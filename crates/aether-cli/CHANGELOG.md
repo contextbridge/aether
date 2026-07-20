@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.26](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.25...aether-agent-cli-v0.7.26) - 2026-07-20
+
+### Added
+
+- Support setting custom OTEL trace id.  ([#262](https://github.com/contextbridge/aether/pull/262))
+
 ## [0.7.25](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.24...aether-agent-cli-v0.7.25) - 2026-07-20
 
 ### Added
