@@ -3,7 +3,7 @@ default:
     @just --list
 
 run:
-    cargo run -p wisp -- -a 'cargo run -p aether-agent-cli acp'
+    cargo run -p aether-wisp -- -a 'cargo run -p aether-agent-cli acp'
 
 # Build the workspace
 build:
@@ -123,7 +123,7 @@ build-sandbox TAG="aether-sandbox:latest":
 
 # Run wisp + aether agent inside the sandbox
 run-sandbox:
-    cargo run -p wisp -- -a 'cargo run -p aether-agent-cli -- --sandbox-image aether-sandbox:latest acp'
+    cargo run -p aether-wisp -- -a 'cargo run -p aether-agent-cli -- --sandbox-image aether-sandbox:latest acp'
 
 # Install aether-cli and wisp binaries locally
 install:

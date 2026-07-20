@@ -2,126 +2,86 @@
 
 A terminal interface for AI coding agents, built on the Agent Client Protocol (ACP).
 
-Wisp launches an ACP-compatible agent as a subprocess, streams the conversation in real time, and gives you built-in git diff viewing, file attachments, session management, and a settings overlay — all without leaving the terminal.
-
-## Table of Contents
-
-<!-- START doctoc generated TOC please keep comment here to allow auto update -->
-<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
-
-- [Quick start](#quick-start)
-- [How it works](#how-it-works)
-- [Keybindings](#keybindings)
-- [Slash commands](#slash-commands)
-- [Settings](#settings)
-  - [Themes](#themes)
-- [Logs](#logs)
-- [Documentation](#documentation)
-
-<!-- END doctoc generated TOC please keep comment here to allow auto update -->
+Wisp launches an ACP-compatible agent as a subprocess, streams markdown responses and tool activity, and provides built-in session management, file attachments, plan review, git review, and settings without leaving the terminal.
 
 ## Quick start
 
 ```bash
-cargo install --path crates/wisp
+cargo install aether-wisp
 wisp                       # launches the default agent ("aether acp")
-wisp --agent "my-agent"    # launch a custom ACP agent
+wisp --agent "my-agent"    # launches a custom ACP agent
 ```
 
 The `--agent` flag accepts any shell command that speaks ACP over stdio.
 
-## How it works
-
-```text
-CLI args ──→ RuntimeState (ACP handshake + theme) ──→ App event loop ──→ Renderer
-                                                           │
-                            ┌──────────────────────────────┼──────────────────┐
-                            ▼                              ▼                  ▼
-                    terminal events               ACP events (stream)      tick
-                    (keys, resize)                (text, tool calls,     (100 ms)
-                            │                      plans, thoughts)         │
-                            ▼                              ▼                ▼
-                        on_event ─────────────────→ on_acp_event ────→ on_tick
-                            │                              │                │
-                            └──────────────┬───────────────┘                │
-                                           ▼                                │
-                                    Renderer::render_frame  ◀───────────────┘
-```
-
-1. `RuntimeState` spawns the agent subprocess, performs the ACP `initialize` / `newSession` handshake, and loads the theme.
-2. `App` owns two screens — the conversation and a git diff viewer — plus a settings overlay. It routes terminal events, ACP events, and ticks to the active screen.
-3. The `tui` library's diff-based `Renderer` turns each frame into minimal ANSI output.
-
 ## Keybindings
 
 | Key | Action |
-|-----|--------|
+| --- | --- |
 | `Enter` | Send message |
-| `Esc` | Cancel |
-| `Ctrl+C` | Exit |
+| `Esc` | Cancel the active operation |
+| `Ctrl+C` twice | Exit |
 | `Tab` | Cycle reasoning effort |
 | `Shift+Tab` | Cycle mode/profile |
-| `/` | Command picker |
-| `@` | File picker |
-| `Ctrl+G` | Toggle git diff |
+| `/` | Open command picker |
+| `@` | Open file picker |
+| `Ctrl+G` | Toggle git review |
+| `Ctrl+R` | Search prompt history when supported |
 
-## Slash commands
+Global bindings can be overridden in Wisp settings.
 
-Type `/` in the input to open the command picker. Built-in commands:
+## Commands
+
+Type `/` in the composer to open the command picker. Built-in commands include:
 
 | Command | Description |
-|---------|-------------|
-| `/clear` | Clear screen and start a new session |
-| `/settings` | Open settings overlay |
+| --- | --- |
+| `/clear` | Clear the conversation and start a new session |
+| `/settings` | Open settings and authentication |
 | `/resume` | Resume a previous session |
 
-Additional commands may be available from the agent (e.g., `/search`, `/web`).
+The connected agent may advertise additional commands.
 
-## Settings
+## Settings and themes
 
-Wisp has two kinds of settings:
+UI preferences are stored in `~/.wisp/settings.json`. Set `WISP_HOME` to use a different configuration directory. Supported settings include themes, content padding, status-line segments, and global keybindings.
 
-1. **Wisp settings** (`~/.wisp/settings.json`) — UI preferences like themes and status-line segments. 
-2. **Agent settings** — Model, reasoning effort, MCP servers, etc. These come from the agent and are configured in-app via `/settings`
-
-Override the Wisp home directory with `WISP_HOME` environment variable.
-
-### Status line
-
-The status line is configurable. Segments like `cwd`, `gitRef`, `agent`, `mode`, `model`, `reasoning`, `context`, and `serverHealth` can be reordered or hidden. See the [settings reference](/aether/terminal/settings/) for details.
-
-### Themes
-
-Place `.tmTheme` files in `~/.wisp/themes/`:
-
-```bash
-mkdir -p ~/.wisp/themes
-cp my-theme.tmTheme ~/.wisp/themes/
-```
-
-Then set in `~/.wisp/settings.json`:
+Place TextMate `.tmTheme` files in `~/.wisp/themes/` and select one in settings:
 
 ```json
 {
-  "theme": { "file": "my-theme.tmTheme" }
+  "theme": { "file": "my-theme.tmTheme" },
+  "keybindings": {
+    "toggleGitDiff": "ctrl+d"
+  }
 }
 ```
 
-Remove `"file"` or set it to `null` to use the default theme.
+Agent-provided options such as model, reasoning effort, modes, provider login, and MCP server authentication are available through `/settings`.
 
 ## Logs
 
-Debug logs are written to `/tmp/wisp-logs/wisp.log.YYYY-MM-DD` by default. Override with:
+Logs are written to `/tmp/wisp-logs/wisp.log.YYYY-MM-DD` by default. Override the directory with:
 
 ```bash
 wisp --log-dir ~/logs
 ```
 
-## Documentation
+Use `RUST_LOG` to configure verbosity.
 
-Run `cargo doc -p wisp --open` for full API docs. Key entry points:
+## Library API
 
-- `run_tui` — launch wisp with an agent command
-- `RuntimeState` — ACP session bootstrap
-- `App` — main application component
-- `settings` — Wisp and theme configuration
+Build the API documentation with:
+
+```bash
+cargo doc -p aether-wisp --open
+```
+
+The primary public entry points are:
+
+- `run_tui` — connect to an ACP agent and launch Wisp
+- `run_with_session` — launch Wisp with an initialized `Session`
+- `Session` — an initialized ACP session
+- `UiSettings` and the `settings` module — persistent UI configuration
+
+The `testing` feature exposes Wisp's in-memory integration harness for project tests.

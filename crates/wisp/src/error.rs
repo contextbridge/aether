@@ -1,7 +1,7 @@
 use acp_utils::client::AcpClientError;
 use thiserror::Error;
 
-#[doc = include_str!("docs/app_error.md")]
+/// Fatal errors that can terminate the TUI.
 #[derive(Debug, Error)]
 pub enum AppError {
     #[error("I/O error: {0}")]

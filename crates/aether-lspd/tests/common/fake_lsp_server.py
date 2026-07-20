@@ -7,9 +7,11 @@ docs = {}
 parser = argparse.ArgumentParser()
 parser.add_argument("--wedge-on", action="append", default=[])
 parser.add_argument("--crash-on", action="append", default=[])
+parser.add_argument("--fail-on", action="append", default=[])
 cli_args = parser.parse_args()
 wedge_methods = set(cli_args.wedge_on)
 crash_methods = set(cli_args.crash_on)
+fail_methods = set(cli_args.fail_on)
 
 
 def write_message(msg):
@@ -122,6 +124,16 @@ while True:
 
     if method in crash_methods:
         sys.exit(1)
+
+    if method in fail_methods:
+        write_message(
+            {
+                "jsonrpc": "2.0",
+                "id": message.get("id"),
+                "error": {"code": -32603, "message": "fake server rejected request"},
+            }
+        )
+        continue
 
     if method in wedge_methods:
         continue

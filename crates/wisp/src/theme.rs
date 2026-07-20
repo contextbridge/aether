@@ -1,0 +1,184 @@
+use crate::settings::{UiSettings, resolve_theme_file_path};
+use ratatui::style::Color;
+use std::path::Path;
+use std::sync::Arc;
+use syntect::highlighting::{Highlighter, Theme as SyntectTheme, ThemeSet};
+use syntect::parsing::Scope;
+use tracing::warn;
+
+#[derive(Clone, Debug)]
+pub struct Theme {
+    pub text_primary: Color,
+    pub text_secondary: Color,
+    pub background: Color,
+    pub sidebar_bg: Color,
+    pub accent: Color,
+    pub heading: Color,
+    pub link: Color,
+    pub blockquote: Color,
+    pub code_fg: Color,
+    pub code_bg: Color,
+    pub success: Color,
+    pub warning: Color,
+    pub error: Color,
+    pub info: Color,
+    pub muted: Color,
+    pub diff_added_fg: Color,
+    pub diff_added_bg: Color,
+    pub diff_removed_fg: Color,
+    pub diff_removed_bg: Color,
+    syntect: Arc<SyntectTheme>,
+}
+
+impl Theme {
+    pub fn load(settings: &UiSettings) -> Self {
+        resolve_theme_file_path(settings).map_or_else(Self::default, |path| Self::load_from_path(&path))
+    }
+
+    pub fn load_from_path(path: &Path) -> Self {
+        match ThemeSet::get_theme(path) {
+            Ok(theme) => Self::from_syntect(theme),
+            Err(error) => {
+                warn!("Failed to load theme from {}: {error}; using defaults", path.display());
+                Self::default()
+            }
+        }
+    }
+
+    pub fn syntect(&self) -> &SyntectTheme {
+        &self.syntect
+    }
+
+    fn from_syntect(theme: SyntectTheme) -> Self {
+        let text_primary = theme.settings.foreground.map_or(Color::Rgb(212, 221, 214), color_from_syntect);
+        let background = theme.settings.background.map_or(Color::Rgb(21, 29, 31), color_from_syntect);
+        let accent = theme.settings.caret.map_or(Color::Rgb(143, 188, 176), color_from_syntect);
+        let text_secondary = blend(text_primary, background, 60);
+        let sidebar_bg = blend(background, text_primary, 95);
+        let heading = scope_color(&theme, "markup.heading").unwrap_or(accent);
+        let link = scope_color(&theme, "markup.underline.link").unwrap_or(accent);
+        let blockquote = scope_color(&theme, "markup.quote").unwrap_or(text_secondary);
+        let muted = scope_color(&theme, "markup.list.bullet").unwrap_or(text_secondary);
+        let success =
+            scope_color(&theme, "markup.inserted").or_else(|| scope_color(&theme, "string")).unwrap_or(accent);
+        let warning = scope_color(&theme, "constant.numeric").unwrap_or(accent);
+        let error = scope_color(&theme, "markup.deleted").or_else(|| scope_color(&theme, "invalid")).unwrap_or(accent);
+        let info = scope_color(&theme, "entity.name.function").unwrap_or(accent);
+        let inline_code_foreground = scope_color(&theme, "markup.inline.raw.string.markdown").unwrap_or(text_primary);
+        let inline_code_background = blend(background, text_primary, 90);
+        let diff_added_fg = scope_color(&theme, "markup.inserted.diff").unwrap_or(success);
+        let diff_removed_fg = scope_color(&theme, "markup.deleted.diff").unwrap_or(error);
+
+        Self {
+            text_primary,
+            text_secondary,
+            background,
+            sidebar_bg,
+            accent,
+            heading,
+            link,
+            blockquote,
+            code_fg: inline_code_foreground,
+            code_bg: inline_code_background,
+            success,
+            warning,
+            error,
+            info,
+            muted,
+            diff_added_fg,
+            diff_added_bg: darken(diff_added_fg),
+            diff_removed_fg,
+            diff_removed_bg: darken(diff_removed_fg),
+            syntect: Arc::new(theme),
+        }
+    }
+}
+
+impl Default for Theme {
+    fn default() -> Self {
+        Self::from_syntect(native_default_syntect_theme())
+    }
+}
+
+fn native_default_syntect_theme() -> SyntectTheme {
+    let cursor = std::io::Cursor::new(include_bytes!("../assets/sage.tmTheme"));
+    ThemeSet::load_from_reader(&mut std::io::BufReader::new(cursor)).expect("embedded sage.tmTheme is valid")
+}
+
+fn scope_color(theme: &SyntectTheme, scope: &str) -> Option<Color> {
+    let scope = Scope::new(scope).ok()?;
+    let resolved = Highlighter::new(theme).style_for_stack(&[scope]).foreground;
+    let default = theme.settings.foreground?;
+    (resolved != default).then(|| color_from_syntect(resolved))
+}
+
+fn color_from_syntect(color: syntect::highlighting::Color) -> Color {
+    Color::Rgb(color.r, color.g, color.b)
+}
+
+fn darken(color: Color) -> Color {
+    match color {
+        Color::Rgb(r, g, b) => {
+            let darken_channel = |channel: u8| u8::try_from(u16::from(channel) * 3 / 10).unwrap_or(u8::MAX);
+            Color::Rgb(darken_channel(r), darken_channel(g), darken_channel(b))
+        }
+        other => other,
+    }
+}
+
+fn blend(first: Color, second: Color, first_percent: u16) -> Color {
+    match (first, second) {
+        (Color::Rgb(fr, fg, fb), Color::Rgb(sr, sg, sb)) => {
+            let mix = |a: u8, b: u8| {
+                let value = (u16::from(a) * first_percent + u16::from(b) * (100 - first_percent)) / 100;
+                u8::try_from(value).unwrap_or(u8::MAX)
+            };
+            Color::Rgb(mix(fr, sr), mix(fg, sg), mix(fb, sb))
+        }
+        (color, _) => color,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_default_has_the_application_palette() {
+        let theme = Theme::default();
+        assert_eq!(theme.syntect().name.as_deref(), Some("Sage"));
+        assert_eq!(theme.background, Color::Rgb(0x15, 0x1d, 0x1f));
+        assert_eq!(theme.text_primary, Color::Rgb(0xd4, 0xdd, 0xd6));
+        assert_eq!(theme.accent, Color::Rgb(0x8f, 0xbc, 0xb0));
+    }
+
+    /// The built-in theme is Sage, not syntect's bundled base16-ocean.dark with
+    /// Sage's three main colors bolted on: that stand-in drags Spacegray's red
+    /// and orange through every scope-derived role in the palette.
+    #[test]
+    fn native_default_derives_the_sage_scope_palette() {
+        let theme = Theme::default();
+        assert_eq!(theme.muted, Color::Rgb(0x5c, 0x70, 0x68));
+        assert_eq!(theme.blockquote, Color::Rgb(0xa0, 0xb4, 0xa8));
+        assert_eq!(theme.code_fg, Color::Rgb(0x8f, 0xbc, 0xb0));
+        assert_eq!(theme.heading, Color::Rgb(0xdf, 0xc2, 0x96));
+        assert_eq!(theme.link, Color::Rgb(0x82, 0xb1, 0xcc));
+        assert_eq!(theme.success, Color::Rgb(0xa7, 0xc0, 0x80));
+        assert_eq!(theme.warning, Color::Rgb(0xd8, 0xb5, 0x6a));
+        assert_eq!(theme.error, Color::Rgb(0xe6, 0x7e, 0x80));
+        assert_eq!(theme.info, Color::Rgb(0x82, 0xb1, 0xcc));
+        assert_eq!(theme.diff_added_fg, Color::Rgb(0xa7, 0xc0, 0x80));
+        assert_eq!(theme.diff_removed_fg, Color::Rgb(0xe6, 0x7e, 0x80));
+    }
+
+    #[test]
+    fn derives_distinct_code_background() {
+        let theme = Theme::default();
+        assert_ne!(theme.code_bg, theme.background);
+    }
+
+    #[test]
+    fn darkens_bright_rgb_channels_without_saturation() {
+        assert_eq!(darken(Color::Rgb(200, 180, 100)), Color::Rgb(60, 54, 30));
+    }
+}

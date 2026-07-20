@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.41...aether-wisp-v0.5.0) - 2026-08-22
+
+### Changed
+
+- Replaced the terminal UI implementation with the Ratatui-based Wisp rewrite.
+- Replaced the public component API with `Session`, `run_tui`, `run_with_session`, and `UiSettings`.
+- Added configurable global keybindings and the in-memory `testing` harness.
+
 ## [0.4.41](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.40...aether-wisp-v0.4.41) - 2026-08-20
 
 ### Other

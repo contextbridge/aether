@@ -27,11 +27,15 @@ Stored in `~/.wisp/settings.json`:
       "context",
       "serverHealth"
     ]
+  },
+  "keybindings": {
+    "toggleGitDiff": "ctrl+d",
+    "openPromptSearch": "ctrl+p"
   }
 }
 ```
 
-The top-level fields are `theme`, `statusLine`, and `contentPadding`. `contentPadding` sets the number of blank columns of padding around the conversation content (default `2`, minimum `2`). Status line segments are described below.
+The top-level fields are `theme`, `statusLine`, `contentPadding`, and `keybindings`. `contentPadding` sets the number of blank columns of padding around the conversation content (default `2`, minimum `2`). Status line segments are described below.
 
 Override the home directory with `WISP_HOME`:
 
@@ -56,6 +60,10 @@ Each `left` and `right` entry is a segment. Shorthand names are strings; segment
 | `text`      | `{ "type": "text", "value": "...", "style": "muted" }` | Arbitrary fixed text. `style` is optional. |
 
 `text` segment styles: `primary`, `secondary`, `muted`, `info`, `success`, `warning`, `error`.
+
+## Keybindings
+
+Global bindings accept strings such as `"ctrl+g"`, `"shift+backtab"`, or `"esc"`. Supported keys are `exit`, `cancel`, `submit`, `openCommandPicker`, `openFilePicker`, `toggleGitDiff`, `cycleReasoning`, `cycleMode`, and `openPromptSearch`. Omitted bindings retain their defaults, and invalid bindings are ignored.
 
 ## Themes
 

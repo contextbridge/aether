@@ -1,6 +1,6 @@
 [package]
 name = "aether-wisp"
-version = "0.4.41"
+version = "0.5.0"
 edition = "2024"
 description = "A terminal UI for AI coding agents via the Agent Client Protocol (ACP)"
 license = "MIT"
@@ -12,6 +12,9 @@ categories = ["command-line-interface"]
 [package.metadata.dist]
 dist = false
 
+[features]
+testing = []
+
 [lib]
 name = "wisp"
 path = "src/lib.rs"
@@ -19,6 +22,21 @@ path = "src/lib.rs"
 [[bin]]
 name = "wisp"
 path = "src/main.rs"
+
+[[test]]
+name = "diff_model"
+path = "tests/diff_model.rs"
+required-features = ["testing"]
+
+[[test]]
+name = "git_contract"
+path = "tests/git_contract.rs"
+required-features = ["testing"]
+
+[[test]]
+name = "tui"
+path = "tests/tui/main.rs"
+required-features = ["testing"]
 
 [package.metadata.docs.rs]
 all-features = true
@@ -28,27 +46,32 @@ rustdoc-args = ["--cfg", "docsrs"]
 workspace = true
 
 [dependencies]
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client"], version = "0.3.39" }
-tui = { package = "aether-tui", path = "../tui", version = "0.2.20" }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.12" }
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client"], version = "0.3.39" }
 agent-client-protocol = { workspace = true }
-base64 = { workspace = true }
-tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "io-util", "fs", "process", "time"] }
-serde_json = { workspace = true }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "process", "time"] }
 clap = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender = { workspace = true }
-mime_guess = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+pulldown-cmark = { workspace = true }
+syntect = { workspace = true }
+two-face = { workspace = true }
+similar = { workspace = true }
 ignore = { workspace = true }
+nucleo = { workspace = true }
+base64 = { workspace = true }
+mime_guess = { workspace = true }
 url = { workspace = true }
 unicode-width = { workspace = true }
-serde = { workspace = true }
-similar = { workspace = true }
-chrono = { workspace = true }
-thiserror = { workspace = true }
 
 [dev-dependencies]
 acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client", "testing"], version = "0.3.39" }
-tui = { package = "aether-tui", path = "../tui", features = ["testing"], version = "0.2.20" }
+serde_json = { workspace = true }
 tempfile = { workspace = true }
