@@ -8,6 +8,4 @@ pub enum AppError {
     Io(#[from] std::io::Error),
     #[error("{0}")]
     Acp(#[from] AcpClientError),
-    #[error("{0}")]
-    Startup(#[from] wisp::error::AppError),
 }

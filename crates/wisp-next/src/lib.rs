@@ -1,10 +1,20 @@
 pub mod app;
 pub mod cli;
 pub mod composer;
+pub mod diff;
 pub mod error;
+pub mod keybindings;
+pub mod markdown;
+pub mod presentation;
 pub mod render;
+pub mod session;
+pub mod settings;
+pub mod syntax;
+pub mod theme;
 pub mod tool_calls;
 pub mod transcript;
+pub mod workspace_status;
+pub mod wrap;
 
 use acp_utils::client::AcpEvent;
 use app::{App, AppConfig};
@@ -12,29 +22,43 @@ use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste, Event, Event
 use crossterm::execute;
 use error::AppError;
 use futures::StreamExt;
+use presentation::TranscriptRenderer;
 use ratatui::{DefaultTerminal, TerminalOptions, Viewport};
+use session::Session;
+use settings::UiSettings;
+use std::fs::create_dir_all;
 use std::future::pending;
 use std::io;
 use std::time::{Duration, Instant};
 use tokio::select;
 use tokio::sync::mpsc;
 use tokio::time::{MissedTickBehavior, interval};
-use wisp::runtime_state::RuntimeState;
-use wisp::settings::WispSettings;
+use tracing_appender::rolling::daily;
+use tracing_subscriber::EnvFilter;
 
 /// Launch the experimental ratatui TUI with the given agent subprocess command.
-pub async fn run_tui(agent_command: &str, settings: WispSettings) -> Result<(), AppError> {
-    wisp::setup_logging(Some(DEFAULT_LOG_DIR));
-    let state = RuntimeState::new(agent_command, settings).await?;
-    run_with_state(state).await
+pub async fn run_tui(agent_command: &str, settings: UiSettings) -> Result<(), AppError> {
+    setup_logging(None);
+    let session = Session::connect(agent_command, settings).await?;
+    run_with_session(session).await
 }
 
-/// Run the TUI from an already-initialized [`RuntimeState`].
-pub async fn run_with_state(state: RuntimeState) -> Result<(), AppError> {
-    let RuntimeState { session_id, agent_name, settings, event_rx, prompt_handle, workspace_status, .. } = state;
-
+/// Run the TUI from an already-initialized ACP session.
+pub async fn run_with_session(session: Session) -> Result<(), AppError> {
+    let Session { session_id, agent_name, settings, event_rx, prompt_handle, workspace_status, .. } = session;
+    let renderer = TranscriptRenderer::new(&settings);
     let app = App::new(AppConfig { session_id, agent_name, workspace_status, prompt_handle, settings });
-    run_app(app, event_rx).await
+    run_app(app, renderer, event_rx).await
+}
+
+pub fn setup_logging(log_dir: Option<&str>) {
+    let dir = log_dir.unwrap_or(DEFAULT_LOG_DIR);
+    create_dir_all(dir).ok();
+    let _ = tracing_subscriber::fmt()
+        .with_writer(daily(dir, "wisp-next.log"))
+        .with_ansi(false)
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .try_init();
 }
 
 pub const DEFAULT_LOG_DIR: &str = "/tmp/wisp-next-logs";
@@ -42,11 +66,15 @@ pub const DEFAULT_LOG_DIR: &str = "/tmp/wisp-next-logs";
 const VIEWPORT_HEIGHT: u16 = 15;
 const MAX_ACP_EVENTS_PER_FRAME: usize = 1_000;
 
-async fn run_app(mut app: App, mut event_rx: mpsc::UnboundedReceiver<AcpEvent>) -> Result<(), AppError> {
+async fn run_app(
+    mut app: App,
+    mut renderer: TranscriptRenderer,
+    mut event_rx: mpsc::UnboundedReceiver<AcpEvent>,
+) -> Result<(), AppError> {
     let mut terminal = ratatui::init_with_options(TerminalOptions { viewport: Viewport::Inline(VIEWPORT_HEIGHT) });
 
     let result = match execute!(io::stdout(), EnableBracketedPaste) {
-        Ok(()) => event_loop(&mut terminal, &mut app, &mut event_rx).await,
+        Ok(()) => event_loop(&mut terminal, &mut app, &mut renderer, &mut event_rx).await,
         Err(e) => Err(AppError::Io(e)),
     };
 
@@ -58,6 +86,7 @@ async fn run_app(mut app: App, mut event_rx: mpsc::UnboundedReceiver<AcpEvent>) 
 async fn event_loop(
     terminal: &mut DefaultTerminal,
     app: &mut App,
+    renderer: &mut TranscriptRenderer,
     event_rx: &mut mpsc::UnboundedReceiver<AcpEvent>,
 ) -> Result<(), AppError> {
     let mut terminal_events = EventStream::new();
@@ -67,7 +96,7 @@ async fn event_loop(
         tick
     };
 
-    render::sync_terminal(terminal, app)?;
+    render::sync_terminal(terminal, app, renderer)?;
     loop {
         let tick_fut = async {
             if !app.wants_tick() {
@@ -98,7 +127,7 @@ async fn event_loop(
         if app.exit_requested() {
             return Ok(());
         }
-        render::sync_terminal(terminal, app)?;
+        render::sync_terminal(terminal, app, renderer)?;
     }
 }
 

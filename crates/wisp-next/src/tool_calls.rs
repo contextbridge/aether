@@ -1,4 +1,6 @@
+use crate::diff::DiffPreview;
 use agent_client_protocol::schema as acp;
+use std::path::Path;
 
 /// Minimal tool-call tracker: id, display title, and lifecycle status.
 #[derive(Debug, Default)]
@@ -11,6 +13,7 @@ pub struct ToolCallEntry {
     pub id: String,
     pub title: String,
     pub status: ToolStatus,
+    pub diff: Option<DiffPreview>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,7 +35,12 @@ impl ToolCallLog {
             update_title(&mut entry.title, &tool_call.title);
             entry.status = ToolStatus::Running;
         } else {
-            self.entries.push(ToolCallEntry { id, title: tool_call.title.clone(), status: ToolStatus::Running });
+            self.entries.push(ToolCallEntry {
+                id,
+                title: tool_call.title.clone(),
+                status: ToolStatus::Running,
+                diff: None,
+            });
         }
     }
 
@@ -43,6 +51,19 @@ impl ToolCallLog {
 
         if let Some(title) = &update.fields.title {
             update_title(&mut entry.title, title);
+        }
+        if let Some(content) = &update.fields.content {
+            for item in content {
+                if let acp::ToolCallContent::Diff(diff) = item {
+                    let language =
+                        Path::new(&diff.path).extension().and_then(|extension| extension.to_str()).unwrap_or_default();
+                    entry.diff = Some(DiffPreview::compute(
+                        diff.old_text.as_deref().unwrap_or_default(),
+                        &diff.new_text,
+                        language,
+                    ));
+                }
+            }
         }
         if let Some(status) = update.fields.status {
             match status {

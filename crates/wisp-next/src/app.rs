@@ -1,14 +1,15 @@
 use crate::composer::Composer;
+use crate::diff::DiffPreview;
+use crate::keybindings::Keybindings;
+use crate::settings::{UiSettings, resolve_content_padding};
 use crate::tool_calls::{ToolCallEntry, ToolCallLog, ToolStatus};
 use crate::transcript::{SegmentContent, Transcript};
+use crate::workspace_status::WorkspaceStatus;
 use acp_utils::client::{AcpEvent, AcpPromptHandle};
 use acp_utils::notifications::{ElicitationAction, ElicitationResponse};
 use agent_client_protocol::schema::{self as acp, SessionId};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use std::time::{Duration, Instant};
-use wisp::keybindings::Keybindings;
-use wisp::settings::{WispSettings, resolve_content_padding};
-use wisp::workspace_status::WorkspaceStatus;
 
 /// Root UI state: reduces terminal input and ACP events into the transcript,
 /// tool-call log, and composer that the renderer draws each frame.
@@ -35,7 +36,7 @@ pub struct AppConfig {
     pub agent_name: String,
     pub workspace_status: WorkspaceStatus,
     pub prompt_handle: AcpPromptHandle,
-    pub settings: WispSettings,
+    pub settings: UiSettings,
 }
 
 /// A transcript segment resolved for rendering: tool calls carry their final
@@ -45,7 +46,7 @@ pub enum HistoryItem {
     User(String),
     Text(String),
     Thought(String),
-    Tool { title: String, status: ToolStatus },
+    Tool { title: String, status: ToolStatus, diff: Option<DiffPreview> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -211,9 +212,10 @@ impl App {
                     let entry = self.tool_calls.remove(&id).unwrap_or(ToolCallEntry {
                         title: id.clone(),
                         status: ToolStatus::Success,
+                        diff: None,
                         id,
                     });
-                    HistoryItem::Tool { title: entry.title, status: entry.status }
+                    HistoryItem::Tool { title: entry.title, status: entry.status, diff: entry.diff }
                 }
                 other => resolve_plain_segment(other),
             })
@@ -236,6 +238,7 @@ impl App {
                     HistoryItem::Tool {
                         title: entry.map_or_else(|| id.clone(), |e| e.title.clone()),
                         status: entry.map_or(ToolStatus::Success, |e| e.status.clone()),
+                        diff: entry.and_then(|value| value.diff.clone()),
                     }
                 }
                 other => resolve_plain_segment(other.clone()),
@@ -339,7 +342,7 @@ fn resolve_plain_segment(segment: SegmentContent) -> HistoryItem {
         SegmentContent::UserMessage(text) => HistoryItem::User(text),
         SegmentContent::Text(text) => HistoryItem::Text(text),
         SegmentContent::Thought(text) => HistoryItem::Thought(text),
-        SegmentContent::ToolCall(id) => HistoryItem::Tool { title: id, status: ToolStatus::Success },
+        SegmentContent::ToolCall(id) => HistoryItem::Tool { title: id, status: ToolStatus::Success, diff: None },
     }
 }
 
