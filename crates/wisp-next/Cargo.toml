@@ -1,0 +1,40 @@
+[package]
+name = "aether-wisp-next"
+version = "0.1.0"
+edition = "2024"
+description = "Experimental ratatui-based terminal UI for AI coding agents via the Agent Client Protocol (ACP)"
+license = "MIT"
+repository = "https://github.com/contextbridge/aether"
+keywords = ["tui", "ai", "agent", "acp", "terminal"]
+categories = ["command-line-interface"]
+
+[package.metadata.dist]
+dist = false
+
+[lib]
+name = "wisp_next"
+path = "src/lib.rs"
+
+[[bin]]
+name = "wisp-next"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+wisp = { package = "aether-wisp", path = "../wisp", version = "0.4.31" }
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client"], version = "0.3.31" }
+agent-client-protocol = { workspace = true }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "process", "time"] }
+clap = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+unicode-width = { workspace = true }
+
+[dev-dependencies]
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client", "testing"], version = "0.3.31" }
+serde_json = { workspace = true }

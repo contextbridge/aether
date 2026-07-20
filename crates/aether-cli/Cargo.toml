@@ -37,6 +37,7 @@ llm = { package = "aether-llm", path = "../llm", features = ["bedrock", "codex"]
 mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.5.30" }
 mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", features = ["all"], version = "0.4.37" }
 wisp = { package = "aether-wisp", path = "../wisp", version = "0.4.38" }
+wisp_next = { package = "aether-wisp-next", path = "../wisp-next", version = "0.1.0" }
 tui = { package = "aether-tui", path = "../tui", default-features = false, features = ["syntax"], version = "0.2.19" }
 acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["server", "testing"], version = "0.3.36" }
 agent-client-protocol = { workspace = true }
