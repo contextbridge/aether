@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.32](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.3.31...aether-acp-utils-v0.3.32) - 2026-07-20
+
+### Fixed
+
+- keep agent sessions responsive during in-flight work ([#235](https://github.com/contextbridge/aether/pull/235))
+
+### Other
+
+- streamline agent and MCP integration tests ([#236](https://github.com/contextbridge/aether/pull/236))
+
 ## [0.3.31](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.3.30...aether-acp-utils-v0.3.31) - 2026-07-13
 
 ### Other

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.24](https://github.com/contextbridge/aether/compare/aether-lspd-v0.1.23...aether-lspd-v0.1.24) - 2026-07-20
+
+### Added
+
+- strengthen LSP tool workflows ([#241](https://github.com/contextbridge/aether/pull/241))
+
 ## [0.1.23](https://github.com/contextbridge/aether/compare/aether-lspd-v0.1.22...aether-lspd-v0.1.23) - 2026-07-13
 
 ### Other

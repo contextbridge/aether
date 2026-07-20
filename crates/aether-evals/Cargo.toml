@@ -1,6 +1,6 @@
 [package]
 name = "aether-evals"
-version = "0.2.13"
+version = "0.2.14"
 edition = "2024"
 description = "Dockerized eval harness for Aether AI agents"
 license = "MIT"
@@ -25,9 +25,9 @@ schemars = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tempfile = { workspace = true }
-aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.6.22" }
-aether-project = { path = "../aether-project", version = "0.5.22" }
-llm = { package = "aether-llm", path = "../llm", version = "0.7.20" }
+aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.6.23" }
+aether-project = { path = "../aether-project", version = "0.5.23" }
+llm = { package = "aether-llm", path = "../llm", version = "0.7.21" }
 testcontainers = { workspace = true }
 
 [lib]

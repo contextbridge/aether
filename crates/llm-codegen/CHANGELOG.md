@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.16](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.15...aether-llm-codegen-v0.2.16) - 2026-07-20
+
+### Added
+
+- add Microsoft Foundry and Fireworks providers ([#234](https://github.com/contextbridge/aether/pull/234))
+
 ## [0.2.15](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.14...aether-llm-codegen-v0.2.15) - 2026-07-13
 
 ### Other

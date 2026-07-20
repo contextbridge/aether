@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.18](https://github.com/contextbridge/aether/compare/aether-tui-v0.2.17...aether-tui-v0.2.18) - 2026-07-20
+
+### Fixed
+
+- keep file picker open when pasting ([#250](https://github.com/contextbridge/aether/pull/250))
+
 ## [0.2.17](https://github.com/contextbridge/aether/compare/aether-tui-v0.2.16...aether-tui-v0.2.17) - 2026-07-13
 
 ### Other

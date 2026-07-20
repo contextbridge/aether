@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.14](https://github.com/contextbridge/aether/compare/aether-evals-v0.2.13...aether-evals-v0.2.14) - 2026-07-20
+
+### Other
+
+- scheduled code-cleanup ([#246](https://github.com/contextbridge/aether/pull/246))
+
 ## [0.2.13](https://github.com/contextbridge/aether/compare/aether-evals-v0.2.12...aether-evals-v0.2.13) - 2026-07-13
 
 ### Other

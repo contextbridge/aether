@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.11](https://github.com/contextbridge/aether/compare/aether-utils-v0.2.10...aether-utils-v0.2.11) - 2026-07-20
+
+### Added
+
+- *(aether-session-index)* Internal tool for self-improvement  ([#240](https://github.com/contextbridge/aether/pull/240))
+
+### Other
+
+- scheduled code-cleanup ([#253](https://github.com/contextbridge/aether/pull/253))
+
 ## [0.2.10](https://github.com/contextbridge/aether/compare/aether-utils-v0.2.9...aether-utils-v0.2.10) - 2026-07-13
 
 ### Other

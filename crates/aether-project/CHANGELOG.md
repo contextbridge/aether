@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.23](https://github.com/contextbridge/aether/compare/aether-project-v0.5.22...aether-project-v0.5.23) - 2026-07-20
+
+### Added
+
+- *(telemetry)* interpolate OTLP header variables ([#238](https://github.com/contextbridge/aether/pull/238))
+
 ## [0.5.22](https://github.com/contextbridge/aether/compare/aether-project-v0.5.21...aether-project-v0.5.22) - 2026-07-13
 
 ### Other
