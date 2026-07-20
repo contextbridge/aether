@@ -1,13 +1,15 @@
 use acp_utils::ElicitationSchema;
 use acp_utils::client::{AcpEvent, AcpPromptHandle, PromptCommand};
 use acp_utils::notifications::{
-    ContextUsage, ContextUsageParams, CreateElicitationRequestParams, ElicitationAction, ElicitationParams,
+    ContextClearedParams, ContextUsage, ContextUsageParams, CreateElicitationRequestParams, ElicitationAction,
+    ElicitationParams,
 };
 use acp_utils::testing::test_connection;
 use agent_client_protocol::schema::{self as acp, SessionId};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::backend::TestBackend;
+use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
 use ratatui::buffer::{Buffer, Cell};
+use ratatui::layout::{Position, Size};
 use ratatui::style::{Color, Modifier};
 use ratatui::{Terminal, TerminalOptions, Viewport};
 use std::fmt::Write as _;
@@ -22,7 +24,7 @@ use wisp_next::presentation::TranscriptRenderer;
 use wisp_next::render::sync_terminal as sync_terminal_with_renderer;
 use wisp_next::settings::UiSettings;
 use wisp_next::theme::Theme;
-use wisp_next::workspace_status::WorkspaceStatus;
+use wisp_next::{inline_viewport_height, workspace_status::WorkspaceStatus};
 
 fn make_app() -> (App, UnboundedReceiver<PromptCommand>) {
     make_app_in(std::path::PathBuf::from("."))
@@ -181,20 +183,19 @@ fn markdown_styles_stream_live_and_finalize_once() {
 
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
-    let viewport = terminal.backend().buffer();
-    assert!(buffer_text(viewport).contains("# Heading"));
-    assert!(!buffer_text(terminal.backend().scrollback()).contains("Heading"));
-    assert!(has_cell(viewport, "H", |cell| cell.fg == heading && cell.modifier.contains(Modifier::BOLD)));
-    assert!(has_cell(viewport, "b", |cell| cell.modifier.contains(Modifier::BOLD)));
-    assert!(has_cell(viewport, "i", |cell| cell.modifier.contains(Modifier::ITALIC)));
+    let conversation = conversation_buffer(&mut terminal);
+    assert!(buffer_text(&conversation).contains("# Heading"));
+    assert!(has_cell(&conversation, "H", |cell| cell.fg == heading && cell.modifier.contains(Modifier::BOLD)));
+    assert!(has_cell(&conversation, "b", |cell| cell.modifier.contains(Modifier::BOLD)));
+    assert!(has_cell(&conversation, "i", |cell| cell.modifier.contains(Modifier::ITALIC)));
 
     app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
-    let scrollback = buffer_text(terminal.backend().scrollback());
-    assert_eq!(scrollback.matches("Heading").count(), 1);
-    assert!(!scrollback.contains("**boldword**"));
+    let conversation = buffer_text(&conversation_buffer(&mut terminal));
+    assert_eq!(conversation.matches("Heading").count(), 1);
+    assert!(!conversation.contains("**boldword**"));
 }
 
 #[test]
@@ -209,13 +210,13 @@ fn fenced_code_is_syntax_highlighted_with_code_background() {
 
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
-    let scrollback = terminal.backend().scrollback();
-    assert!(buffer_text(scrollback).contains("fn highlighted()"));
-    assert!(has_cell(scrollback, "f", |cell| cell.bg == code_background));
+    let conversation = conversation_buffer(&mut terminal);
+    assert!(buffer_text(&conversation).contains("fn highlighted()"));
+    assert!(has_cell(&conversation, "f", |cell| cell.bg == code_background));
 }
 
 #[test]
-fn completed_tool_diff_is_themed_and_inserted_once() {
+fn completed_tool_diff_is_themed_and_rendered_once() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
     let mut renderer = TranscriptRenderer::new(&UiSettings::default());
@@ -228,12 +229,12 @@ fn completed_tool_diff_is_themed_and_inserted_once() {
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
-    let scrollback = terminal.backend().scrollback();
-    let text = buffer_text(scrollback);
+    let conversation = conversation_buffer(&mut terminal);
+    let text = buffer_text(&conversation);
     assert_eq!(text.matches("old_name").count(), 1);
     assert_eq!(text.matches("new_name").count(), 1);
-    assert!(has_cell(scrollback, "-", |cell| cell.bg == removed_background));
-    assert!(has_cell(scrollback, "+", |cell| cell.bg == added_background));
+    assert!(has_cell(&conversation, "-", |cell| cell.bg == removed_background));
+    assert!(has_cell(&conversation, "+", |cell| cell.bg == added_background));
 }
 
 #[test]
@@ -247,7 +248,7 @@ fn wide_diff_uses_side_by_side_layout() {
 
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
-    let text = buffer_text(terminal.backend().scrollback());
+    let text = buffer_text(&conversation_buffer(&mut terminal));
     assert!(text.lines().any(|line| line.contains("old_name") && line.contains("new_name")), "{text}");
 }
 
@@ -266,7 +267,7 @@ fn wide_diff_marks_truncated_panel_content() {
 
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
-    let text = buffer_text(terminal.backend().scrollback());
+    let text = buffer_text(&conversation_buffer(&mut terminal));
     assert!(text.contains('…'), "expected visibly truncated split diff:\n{text}");
 }
 
@@ -319,7 +320,7 @@ fn trailing_newline_does_not_add_an_empty_user_content_row() {
 
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
-    let styled_rows = rows_with_background(terminal.backend().scrollback(), user_background);
+    let styled_rows = rows_with_background(&conversation_buffer(&mut terminal), user_background);
     assert_eq!(styled_rows, 3);
 }
 
@@ -364,7 +365,7 @@ fn theme_loads_semantic_colors_from_tmtheme_file() {
 }
 
 #[test]
-fn large_markdown_history_is_inserted_in_order_across_chunks() {
+fn large_markdown_history_preserves_order_across_scrollback_and_viewport() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
     let mut renderer = TranscriptRenderer::new(&UiSettings::default());
@@ -378,8 +379,9 @@ fn large_markdown_history_is_inserted_in_order_across_chunks() {
 
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
-    let text = buffer_text(terminal.backend().scrollback());
-    assert_eq!(text.matches("paragraph-0").count(), 1);
+    let conversation = conversation_buffer(&mut terminal);
+    let text = buffer_text(&conversation);
+    assert_eq!(text.matches("paragraph-0").count(), 1, "conversation:\n{text}");
     assert_eq!(text.matches("paragraph-39").count(), 1);
     assert!(text.find("paragraph-0").unwrap() < text.find("paragraph-39").unwrap());
 }
@@ -395,12 +397,192 @@ fn settings_ignore_unknown_legacy_fields() {
     assert_eq!(settings.theme.file.as_deref(), Some("nord.tmTheme"));
 }
 
+#[test]
+fn inline_viewport_reserves_two_rows_for_scrollback() {
+    assert_eq!(inline_viewport_height(15), 13);
+    assert_eq!(inline_viewport_height(3), 1);
+    assert_eq!(inline_viewport_height(2), 1);
+}
+
+#[test]
+fn one_row_inline_viewport_draws_without_panicking() {
+    let (mut app, _command_rx) = make_app();
+    let terminal_height = 3;
+    let mut terminal = Terminal::with_options(
+        TestBackend::new(40, terminal_height),
+        TerminalOptions { viewport: Viewport::Inline(inline_viewport_height(terminal_height)) },
+    )
+    .unwrap();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+
+    assert_eq!(terminal.get_frame().area().height, 1);
+}
+
+#[test]
+fn live_viewport_is_drawn_before_history_is_inserted() {
+    let (mut app, _command_rx) = make_app();
+    let backend = RecordingBackend::new(40, 15);
+    let mut terminal =
+        Terminal::with_options(backend, TerminalOptions { viewport: Viewport::Inline(inline_viewport_height(15)) })
+            .unwrap();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    terminal.backend_mut().events.clear();
+
+    let mut response = String::new();
+    for index in 0..20 {
+        writeln!(response, "line-{index}\n").unwrap();
+    }
+    submit_prompt(&mut app, "hello");
+    app.on_acp_event(text_chunk(&response));
+    app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+
+    let events = &terminal.backend().events;
+    let draw = events.iter().position(|event| *event == BackendEvent::ShowCursor).unwrap();
+    let insert = events.iter().position(|event| matches!(event, BackendEvent::Scroll)).unwrap();
+    assert!(draw < insert, "expected viewport draw before history insertion: {events:?}");
+}
+
+#[test]
+fn status_line_is_never_inserted_into_scrollback() {
+    let (mut app, _command_rx) = make_app();
+    let mut terminal = Terminal::with_options(
+        TestBackend::new(40, 15),
+        TerminalOptions { viewport: Viewport::Inline(inline_viewport_height(15)) },
+    )
+    .unwrap();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+
+    submit_prompt(&mut app, "hello");
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+
+    let scrollback = buffer_text(&history_buffer(&mut terminal));
+    assert!(!scrollback.contains("working"), "{scrollback}");
+    assert!(!scrollback.contains("esc to cancel"), "{scrollback}");
+    assert!(!scrollback.contains("aether"), "{scrollback}");
+}
+
+#[test]
+fn history_waits_until_resized_viewport_has_scrollback_room() {
+    let (mut app, _command_rx) = make_app();
+    let terminal_height = 15;
+    let mut terminal = Terminal::with_options(
+        TestBackend::new(40, terminal_height),
+        TerminalOptions { viewport: Viewport::Inline(inline_viewport_height(terminal_height)) },
+    )
+    .unwrap();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+
+    terminal.backend_mut().resize(40, 10);
+    submit_prompt(&mut app, "queued while small");
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+
+    assert!(!buffer_text(terminal.backend().scrollback()).contains("queued while small"));
+    assert!(buffer_text(terminal.backend().buffer()).contains("queued while small"));
+
+    terminal.backend_mut().resize(40, terminal_height);
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+
+    assert!(app.pending_items().is_empty());
+    assert!(buffer_text(terminal.backend().buffer()).contains("queued while small"));
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BackendEvent {
+    ShowCursor,
+    Scroll,
+}
+
+#[derive(Debug)]
+struct RecordingBackend {
+    inner: TestBackend,
+    events: Vec<BackendEvent>,
+}
+
+impl RecordingBackend {
+    fn new(width: u16, height: u16) -> Self {
+        Self { inner: TestBackend::new(width, height), events: Vec::new() }
+    }
+}
+
+impl Backend for RecordingBackend {
+    type Error = std::convert::Infallible;
+
+    fn draw<'a, I>(&mut self, content: I) -> Result<(), Self::Error>
+    where
+        I: Iterator<Item = (u16, u16, &'a Cell)>,
+    {
+        self.inner.draw(content)
+    }
+
+    fn append_lines(&mut self, lines: u16) -> Result<(), Self::Error> {
+        self.inner.append_lines(lines)
+    }
+
+    fn hide_cursor(&mut self) -> Result<(), Self::Error> {
+        self.inner.hide_cursor()
+    }
+
+    fn show_cursor(&mut self) -> Result<(), Self::Error> {
+        self.events.push(BackendEvent::ShowCursor);
+        self.inner.show_cursor()
+    }
+
+    fn get_cursor_position(&mut self) -> Result<Position, Self::Error> {
+        self.inner.get_cursor_position()
+    }
+
+    fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> Result<(), Self::Error> {
+        self.inner.set_cursor_position(position)
+    }
+
+    fn clear(&mut self) -> Result<(), Self::Error> {
+        self.inner.clear()
+    }
+
+    fn clear_region(&mut self, clear_type: ClearType) -> Result<(), Self::Error> {
+        self.inner.clear_region(clear_type)
+    }
+
+    fn size(&self) -> Result<Size, Self::Error> {
+        self.inner.size()
+    }
+
+    fn window_size(&mut self) -> Result<WindowSize, Self::Error> {
+        self.inner.window_size()
+    }
+
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        self.inner.flush()
+    }
+
+    fn scroll_region_up(&mut self, region: std::ops::Range<u16>, lines: u16) -> Result<(), Self::Error> {
+        self.events.push(BackendEvent::Scroll);
+        self.inner.scroll_region_up(region, lines)
+    }
+
+    fn scroll_region_down(&mut self, region: std::ops::Range<u16>, lines: u16) -> Result<(), Self::Error> {
+        self.events.push(BackendEvent::Scroll);
+        self.inner.scroll_region_down(region, lines)
+    }
+}
+
 fn make_terminal() -> Terminal<TestBackend> {
     make_terminal_with_width(40)
 }
 
 fn make_terminal_with_width(width: u16) -> Terminal<TestBackend> {
-    Terminal::with_options(TestBackend::new(width, 15), TerminalOptions { viewport: Viewport::Inline(15) }).unwrap()
+    let terminal_height = 15;
+    Terminal::with_options(
+        TestBackend::new(width, terminal_height),
+        TerminalOptions { viewport: Viewport::Inline(inline_viewport_height(terminal_height)) },
+    )
+    .unwrap()
 }
 
 fn sync_terminal(terminal: &mut Terminal<TestBackend>, app: &mut App) -> Result<(), std::convert::Infallible> {
@@ -460,6 +642,68 @@ fn tool_completed_with_diff_contents(id: &str, old: &str, new: &str) -> AcpEvent
             .content(vec![acp::ToolCallContent::Diff(diff)])
             .status(acp::ToolCallStatus::Completed),
     )))
+}
+
+fn viewport_buffer(terminal: &mut Terminal<TestBackend>) -> Buffer {
+    let area = terminal.get_frame().area();
+    let screen = terminal.backend().buffer();
+    let mut viewport = Buffer::empty(ratatui::layout::Rect::new(0, 0, area.width, area.height));
+    for y in 0..area.height {
+        for x in 0..area.width {
+            viewport[(x, y)] = screen[(area.x + x, area.y + y)].clone();
+        }
+    }
+    viewport
+}
+
+fn history_buffer(terminal: &mut Terminal<TestBackend>) -> Buffer {
+    let viewport_area = terminal.get_frame().area();
+    let screen = terminal.backend().buffer();
+    let scrollback = terminal.backend().scrollback();
+    let history_height = scrollback.area.height.saturating_add(viewport_area.top());
+    let mut history = Buffer::empty(ratatui::layout::Rect::new(0, 0, screen.area.width, history_height));
+    for y in 0..scrollback.area.height {
+        for x in 0..scrollback.area.width {
+            history[(x, y)] = scrollback[(x, y)].clone();
+        }
+    }
+    for y in 0..viewport_area.top() {
+        for x in 0..screen.area.width {
+            history[(x, scrollback.area.height + y)] = screen[(x, y)].clone();
+        }
+    }
+    history
+}
+
+fn conversation_buffer(terminal: &mut Terminal<TestBackend>) -> Buffer {
+    let history = history_buffer(terminal);
+    let viewport = viewport_buffer(terminal);
+    let mut conversation = Buffer::empty(ratatui::layout::Rect::new(
+        0,
+        0,
+        viewport.area.width,
+        history.area.height.saturating_add(viewport.area.height),
+    ));
+    for y in 0..history.area.height {
+        for x in 0..history.area.width {
+            conversation[(x, y)] = history[(x, y)].clone();
+        }
+    }
+    for y in 0..viewport.area.height {
+        for x in 0..viewport.area.width {
+            conversation[(x, history.area.height + y)] = viewport[(x, y)].clone();
+        }
+    }
+    conversation
+}
+
+fn row_containing(buffer: &Buffer, needle: &str) -> Option<u16> {
+    (buffer.area.top()..buffer.area.bottom()).find(|&y| {
+        let row = (buffer.area.left()..buffer.area.right())
+            .map(|x| buffer.cell((x, y)).map_or(" ", Cell::symbol))
+            .collect::<String>();
+        row.contains(needle)
+    })
 }
 
 fn buffer_text(buffer: &Buffer) -> String {
@@ -602,59 +846,102 @@ fn context_usage_is_reported_as_percent() {
 }
 
 #[test]
-fn user_message_lands_in_scrollback_immediately() {
+fn context_clear_discards_conversation_retained_in_the_live_viewport() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    submit_prompt(&mut app, "old retained message");
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    assert!(buffer_text(&viewport_buffer(&mut terminal)).contains("old retained message"));
 
-    submit_prompt(&mut app, "hello scrollback");
-    sync_terminal(&mut terminal, &mut app).unwrap();
+    app.on_acp_event(AcpEvent::ContextCleared(ContextClearedParams::default()));
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
-    assert!(buffer_text(terminal.backend().scrollback()).contains("hello scrollback"));
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(!viewport.contains("old retained message"), "{viewport}");
+    assert!(viewport.contains("[wisp-next] Context cleared"), "{viewport}");
 }
 
 #[test]
-fn streaming_text_stays_live_until_prompt_done_then_lands_once() {
+fn fitting_user_message_remains_in_the_live_viewport() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+
+    submit_prompt(&mut app, "hello viewport");
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+
+    assert!(buffer_text(&viewport_buffer(&mut terminal)).contains("hello viewport"));
+    assert!(!buffer_text(&history_buffer(&mut terminal)).contains("hello viewport"));
+}
+
+#[test]
+fn completed_stream_lines_remain_live_until_they_overflow() {
+    let (mut app, _command_rx) = make_app();
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    submit_prompt(&mut app, "hi");
+
+    let mut completed = String::new();
+    for index in 0..20 {
+        writeln!(completed, "line-{index}\n").unwrap();
+    }
+    app.on_acp_event(text_chunk(&format!("{completed}partial")));
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+
+    let scrollback = buffer_text(&history_buffer(&mut terminal));
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(scrollback.contains("line-0"));
+    assert!(!scrollback.contains("partial"));
+    assert!(viewport.contains("line-19"));
+    assert!(viewport.contains("partial"));
+}
+
+#[test]
+fn completed_streaming_text_remains_adjacent_to_the_composer_once() {
+    let (mut app, _command_rx) = make_app();
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
     submit_prompt(&mut app, "hi");
 
     app.on_acp_event(text_chunk("streamed "));
     app.on_acp_event(text_chunk("answer"));
-    sync_terminal(&mut terminal, &mut app).unwrap();
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
-    assert!(buffer_text(terminal.backend().buffer()).contains("streamed answer"));
-    assert!(!buffer_text(terminal.backend().scrollback()).contains("streamed answer"));
+    assert!(buffer_text(&viewport_buffer(&mut terminal)).contains("streamed answer"));
+    assert!(!buffer_text(&history_buffer(&mut terminal)).contains("streamed answer"));
 
     app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
-    sync_terminal(&mut terminal, &mut app).unwrap();
-    sync_terminal(&mut terminal, &mut app).unwrap();
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
-    let scrollback = buffer_text(terminal.backend().scrollback());
-    assert_eq!(scrollback.matches("streamed answer").count(), 1);
-    assert!(!buffer_text(terminal.backend().buffer()).contains("streamed answer"));
+    let conversation = buffer_text(&conversation_buffer(&mut terminal));
+    assert_eq!(conversation.matches("streamed answer").count(), 1);
+    assert!(buffer_text(&viewport_buffer(&mut terminal)).contains("streamed answer"));
 }
 
 #[test]
-fn running_tool_holds_later_content_out_of_scrollback() {
+fn running_tool_holds_later_content_out_of_committed_history() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
     submit_prompt(&mut app, "run a tool");
 
     app.on_acp_event(tool_call("tool-1", "Reading main.rs"));
     app.on_acp_event(text_chunk("tool output summary"));
-    sync_terminal(&mut terminal, &mut app).unwrap();
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
-    let viewport = buffer_text(terminal.backend().buffer());
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("Reading main.rs"));
-    assert!(!buffer_text(terminal.backend().scrollback()).contains("Reading main.rs"));
+    assert!(!buffer_text(&history_buffer(&mut terminal)).contains("Reading main.rs"));
 
     app.on_acp_event(tool_completed("tool-1"));
     app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
-    sync_terminal(&mut terminal, &mut app).unwrap();
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
-    let scrollback = buffer_text(terminal.backend().scrollback());
-    assert!(scrollback.contains("Reading main.rs"));
-    assert!(scrollback.contains("tool output summary"));
+    let conversation = buffer_text(&conversation_buffer(&mut terminal));
+    assert!(conversation.contains("Reading main.rs"));
+    assert!(conversation.contains("tool output summary"));
     assert!(app.pending_items().is_empty());
 }
 
@@ -674,6 +961,23 @@ fn cancelled_prompt_marks_running_tool_as_error() {
 }
 
 #[test]
+fn short_streaming_message_renders_directly_above_composer() {
+    let (mut app, _command_rx) = make_app();
+    let mut terminal = make_terminal();
+    submit_prompt(&mut app, "prompt");
+    app.on_acp_event(text_chunk("short answer"));
+
+    sync_terminal(&mut terminal, &mut app).unwrap();
+
+    let viewport = viewport_buffer(&mut terminal);
+    let prompt_row = row_containing(&viewport, "prompt").unwrap();
+    let message_row = row_containing(&viewport, "short answer").unwrap();
+    let composer_row = row_containing(&viewport, "> ").unwrap();
+    assert!(prompt_row < message_row);
+    assert_eq!(message_row + 1, composer_row);
+}
+
+#[test]
 fn composer_echo_and_status_line_render_in_viewport() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
@@ -681,14 +985,198 @@ fn composer_echo_and_status_line_render_in_viewport() {
     type_text(&mut app, "typing");
     sync_terminal(&mut terminal, &mut app).unwrap();
 
-    let viewport = buffer_text(terminal.backend().buffer());
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("> typing"));
     assert!(viewport.contains("~/code/demo · main"));
     assert!(viewport.contains("aether"));
 }
 
+async fn settle_screen_effects(app: &mut App) {
+    while let Some(effect) = app.take_screen_effect() {
+        app.on_screen_event(effect.execute().await);
+    }
+}
+
+fn run_git(dir: &std::path::Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git").args(args).current_dir(dir).output().unwrap();
+    assert!(output.status.success(), "git {args:?} failed: {}", String::from_utf8_lossy(&output.stderr));
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+fn init_git_repo(dir: &std::path::Path) {
+    run_git(dir, &["init", "--quiet"]);
+    run_git(dir, &["config", "user.email", "test@example.com"]);
+    run_git(dir, &["config", "user.name", "Test"]);
+    run_git(dir, &["config", "commit.gpgsign", "false"]);
+}
+
 #[test]
-fn elicitation_request_is_auto_cancelled() {
+fn ctrl_g_opens_and_esc_closes_git_diff() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut app, _command_rx) = make_app_in(directory.path().to_path_buf());
+    let mut terminal = make_terminal();
+
+    app.on_key(ctrl('g'));
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    assert!(buffer_text(terminal.backend().buffer()).contains("Git Diff"));
+
+    app.on_key(key(KeyCode::Esc));
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    assert!(!buffer_text(terminal.backend().buffer()).contains("Git diff"));
+}
+
+#[tokio::test]
+async fn git_diff_renders_file_drawer_and_highlighted_patch() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::create_dir(root.join("src")).unwrap();
+    std::fs::write(root.join("src/lib.rs"), "fn old_lib() {}\n").unwrap();
+    std::fs::write(root.join("src/main.rs"), "fn old_main() {}\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("src/lib.rs"), "fn new_lib() {}\n").unwrap();
+    std::fs::write(root.join("src/main.rs"), "fn new_main() {}\n").unwrap();
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    let mut terminal = make_terminal_with_width(160);
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let removed_background = renderer.theme().diff_removed_bg;
+    let added_background = renderer.theme().diff_added_bg;
+
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("Git Diff · Both"), "{viewport}");
+    assert!(viewport.contains("lib.rs"), "{viewport}");
+    assert!(viewport.contains("main.rs"), "{viewport}");
+    assert!(viewport.contains("old_lib") && viewport.contains("new_lib"), "{viewport}");
+    assert!(
+        viewport.lines().any(|line| line.contains("old_lib") && line.contains("new_lib")),
+        "expected wide Git patch to use split layout:\n{viewport}"
+    );
+    assert!(has_cell(terminal.backend().buffer(), "f", |cell| {
+        cell.bg == removed_background && cell.fg != renderer.theme().diff_removed_fg
+    }));
+    assert!(has_cell(terminal.backend().buffer(), "f", |cell| {
+        cell.bg == added_background && cell.fg != renderer.theme().diff_added_fg
+    }));
+
+    app.on_key(key(KeyCode::Char('j')));
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    assert!(buffer_text(terminal.backend().buffer()).contains("new_main"));
+}
+
+#[tokio::test]
+async fn git_diff_cycles_scope_and_stages_selected_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(root.join("tracked.rs"), "fn old() {}\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("tracked.rs"), "fn new() {}\n").unwrap();
+    std::fs::write(root.join("untracked.rs"), "fn scratch() {}\n").unwrap();
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    let mut terminal = make_terminal_with_width(100);
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+
+    app.on_key(key(KeyCode::Char(' ')));
+    settle_screen_effects(&mut app).await;
+    let status = run_git(root, &["status", "--porcelain"]);
+    assert!(status.contains("M  tracked.rs"), "{status}");
+
+    app.on_key(key(KeyCode::Char('t')));
+    settle_screen_effects(&mut app).await;
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("Git Diff · Unstaged"), "{viewport}");
+    assert!(viewport.contains("untracked.rs"), "{viewport}");
+}
+
+#[tokio::test]
+async fn git_diff_stages_selected_directory() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::create_dir(root.join("src")).unwrap();
+    std::fs::write(root.join("src/a.rs"), "fn a() {}\n").unwrap();
+    std::fs::write(root.join("src/b.rs"), "fn b() {}\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("src/a.rs"), "fn changed_a() {}\n").unwrap();
+    std::fs::write(root.join("src/b.rs"), "fn changed_b() {}\n").unwrap();
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+    app.on_key(key(KeyCode::Up));
+    app.on_key(key(KeyCode::Char(' ')));
+    settle_screen_effects(&mut app).await;
+
+    let status = run_git(root, &["status", "--porcelain"]);
+    assert!(status.contains("M  src/a.rs"), "{status}");
+    assert!(status.contains("M  src/b.rs"), "{status}");
+}
+
+#[tokio::test]
+async fn git_diff_reports_non_repository_without_blocking_close() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut app, _command_rx) = make_app_in(directory.path().to_path_buf());
+    let mut terminal = make_terminal_with_width(80);
+
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    assert!(buffer_text(terminal.backend().buffer()).contains("Not a git repository"));
+
+    app.on_key(key(KeyCode::Esc));
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    assert!(!buffer_text(terminal.backend().buffer()).contains("Git Diff"));
+}
+
+#[test]
+fn required_elicitation_field_must_be_completed() {
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    LocalSet::new().block_on(&runtime, async {
+        let (mut app, _command_rx) = make_app();
+        let (cx, mut peer) = test_connection().await;
+        let (responder, mut response_rx) = peer.fake_elicitation(&cx).await;
+        let schema: ElicitationSchema = serde_json::from_value(serde_json::json!({
+            "type": "object",
+            "properties": { "name": { "type": "string" } },
+            "required": ["name"]
+        }))
+        .unwrap();
+
+        app.on_acp_event(AcpEvent::ElicitationRequest {
+            params: ElicitationParams {
+                server_name: "test-server".to_string(),
+                request: CreateElicitationRequestParams::FormElicitationParams {
+                    meta: None,
+                    message: String::new(),
+                    requested_schema: schema,
+                },
+            },
+            responder,
+        });
+        app.on_key(key(KeyCode::Enter));
+        assert!(response_rx.try_recv().is_err());
+        type_text(&mut app, "Ada");
+        app.on_key(key(KeyCode::Enter));
+
+        let response = response_rx.await.unwrap();
+        assert_eq!(response.action, ElicitationAction::Accept);
+        assert_eq!(response.content, Some(serde_json::json!({ "name": "Ada" })));
+    });
+}
+
+#[test]
+fn elicitation_request_is_accepted_interactively() {
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
     LocalSet::new().block_on(&runtime, async {
         let (mut app, _command_rx) = make_app();
@@ -700,15 +1188,19 @@ fn elicitation_request_is_auto_cancelled() {
                 server_name: "test-server".to_string(),
                 request: CreateElicitationRequestParams::FormElicitationParams {
                     meta: None,
-                    message: String::new(),
+                    message: "Confirm the action".to_string(),
                     requested_schema: ElicitationSchema::builder().build().unwrap(),
                 },
             },
             responder,
         });
+        assert!(app.has_modal());
+
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
         let response = response_rx.await.unwrap();
-        assert_eq!(response.action, ElicitationAction::Cancel);
-        assert!(response.content.is_none());
+        assert_eq!(response.action, ElicitationAction::Accept);
+        assert_eq!(response.content, Some(serde_json::json!({})));
+        assert!(!app.has_modal());
     });
 }

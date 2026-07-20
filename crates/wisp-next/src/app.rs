@@ -1,13 +1,14 @@
 use crate::composer::Composer;
 use crate::diff::DiffPreview;
 use crate::keybindings::Keybindings;
+use crate::modal::{ElicitationModal, ModalOutcome};
 use crate::picker::CommandEntry;
+use crate::screen_router::{ScreenEffect, ScreenEvent, ScreenRouter};
 use crate::settings::{UiSettings, resolve_content_padding};
 use crate::tool_calls::{ToolCallEntry, ToolCallLog, ToolStatus};
 use crate::transcript::{SegmentContent, Transcript};
 use crate::workspace_status::WorkspaceStatus;
 use acp_utils::client::{AcpEvent, AcpPromptHandle};
-use acp_utils::notifications::{ElicitationAction, ElicitationResponse};
 use agent_client_protocol::schema::{self as acp, SessionId};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use std::path::PathBuf;
@@ -33,6 +34,10 @@ pub struct App {
     exit_requested: bool,
     spinner_tick: usize,
     last_drained_kind: Option<HistoryKind>,
+    transcript_generation: u64,
+    modal: Option<ElicitationModal>,
+    screen_router: ScreenRouter,
+    pending_screen_effects: std::collections::VecDeque<ScreenEffect>,
 }
 
 pub struct AppConfig {
@@ -96,6 +101,10 @@ impl App {
             exit_requested: false,
             spinner_tick: 0,
             last_drained_kind: None,
+            transcript_generation: 0,
+            modal: None,
+            screen_router: ScreenRouter::new(),
+            pending_screen_effects: std::collections::VecDeque::new(),
         }
     }
 
@@ -125,16 +134,36 @@ impl App {
                 self.tool_calls.clear();
                 self.prompt_in_flight = false;
                 self.context_percent = None;
+                self.last_drained_kind = None;
+                self.transcript_generation = self.transcript_generation.wrapping_add(1);
                 self.transcript.push_user_message("[wisp-next] Context cleared");
             }
             AcpEvent::ElicitationRequest { params, responder } => {
-                let _ = responder.respond(ElicitationResponse { action: ElicitationAction::Cancel, content: None });
-                self.transcript.push_user_message(&format!(
-                    "[wisp-next] Request from '{}' auto-declined (interactive elicitation not supported yet)",
-                    params.server_name
-                ));
+                if let Some(mut modal) = self.modal.take() {
+                    modal.cancel();
+                }
+                if let Some(meta) = plan_review_meta(&params) {
+                    self.screen_router.open_plan_review(meta, responder);
+                    return;
+                }
+                self.modal = Some(ElicitationModal::new(params, responder));
             }
-            AcpEvent::ConnectionClosed => self.exit_requested = true,
+            AcpEvent::McpNotification(notification) => {
+                if self
+                    .modal
+                    .as_mut()
+                    .is_some_and(|modal| matches!(modal.on_notification(&notification), ModalOutcome::Close))
+                {
+                    self.modal = None;
+                }
+            }
+            AcpEvent::ConnectionClosed => {
+                if let Some(mut modal) = self.modal.take() {
+                    modal.cancel();
+                }
+                self.screen_router.close();
+                self.exit_requested = true;
+            }
             _ => tracing::debug!("ignoring ACP event unsupported by the experimental UI"),
         }
     }
@@ -151,6 +180,26 @@ impl App {
                 self.composer.clear();
                 self.ctrl_c_armed_at = Some(Instant::now());
             }
+            return;
+        }
+
+        if self.screen_router.is_active() {
+            if let Some(effect) = self.screen_router.on_key(key) {
+                self.pending_screen_effects.push_back(effect);
+            }
+            return;
+        }
+
+        if let Some(modal) = self.modal.as_mut() {
+            if matches!(modal.on_key(key), ModalOutcome::Close) {
+                self.modal = None;
+            }
+            return;
+        }
+
+        if self.keybindings.toggle_git_diff.matches(key) {
+            let effect = self.screen_router.open_git_diff(&self.working_dir);
+            self.pending_screen_effects.push_back(effect);
             return;
         }
 
@@ -223,12 +272,43 @@ impl App {
         self.prompt_in_flight || self.tool_calls.any_running() || self.ctrl_c_armed_at.is_some()
     }
 
+    pub fn has_modal(&self) -> bool {
+        self.modal.is_some()
+    }
+
+    pub fn full_screen_active(&self) -> bool {
+        self.screen_router.is_active()
+    }
+
+    pub fn render_modal(
+        &mut self,
+        frame: &mut ratatui::Frame,
+        theme: &crate::theme::Theme,
+        highlighter: &mut crate::syntax::SyntaxHighlighter,
+    ) {
+        if self.screen_router.is_active() {
+            self.screen_router.render(frame, theme, highlighter);
+        } else if let Some(modal) = &self.modal {
+            modal.render(frame, theme);
+        }
+    }
+
+    pub fn on_screen_event(&mut self, event: ScreenEvent) {
+        if let Some(effect) = self.screen_router.on_event(event) {
+            self.pending_screen_effects.push_back(effect);
+        }
+    }
+
+    pub fn take_screen_effect(&mut self) -> Option<ScreenEffect> {
+        self.pending_screen_effects.pop_front()
+    }
+
     pub fn exit_requested(&self) -> bool {
         self.exit_requested
     }
 
     /// Remove transcript segments that can never mutate again and resolve them
-    /// for one-time insertion into terminal scrollback.
+    /// for one-time handoff to the terminal presenter.
     pub fn drain_finalized(&mut self) -> Vec<HistoryItem> {
         let drained = self.transcript.drain_finalized_prefix(&self.tool_calls, self.prompt_in_flight);
         let items: Vec<HistoryItem> = drained
@@ -274,6 +354,10 @@ impl App {
 
     pub fn last_drained_kind(&self) -> Option<HistoryKind> {
         self.last_drained_kind
+    }
+
+    pub fn transcript_generation(&self) -> u64 {
+        self.transcript_generation
     }
 
     pub fn composer(&self) -> &Composer {
@@ -420,6 +504,17 @@ impl App {
         self.prompt_in_flight = false;
         self.tool_calls.finalize_running(terminal_status);
         self.transcript.close_thought_block();
+    }
+}
+
+fn plan_review_meta(
+    params: &acp_utils::notifications::ElicitationParams,
+) -> Option<utils::plan_review::PlanReviewElicitationMeta> {
+    match &params.request {
+        acp_utils::notifications::CreateElicitationRequestParams::FormElicitationParams { meta, .. } => {
+            utils::plan_review::PlanReviewElicitationMeta::parse(meta.as_ref().map(|meta| &meta.0))
+        }
+        acp_utils::notifications::CreateElicitationRequestParams::UrlElicitationParams { .. } => None,
     }
 }
 

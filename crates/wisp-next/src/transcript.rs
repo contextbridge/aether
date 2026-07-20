@@ -12,7 +12,7 @@ pub enum SegmentContent {
 /// Ordered conversation history with streaming append semantics.
 ///
 /// Streaming chunks coalesce into the trailing segment; completed segments are
-/// handed off to terminal scrollback via [`Transcript::drain_finalized_prefix`].
+/// handed off to presentation state via [`Transcript::drain_finalized_prefix`].
 #[derive(Debug, Default)]
 pub struct Transcript {
     segments: Vec<SegmentContent>,
@@ -44,6 +44,14 @@ impl Transcript {
             existing.push_str(chunk);
         } else {
             self.segments.push(SegmentContent::Text(chunk.to_string()));
+        }
+
+        let SegmentContent::Text(text) = self.segments.last_mut().expect("text segment was just appended") else {
+            unreachable!();
+        };
+        if let Some(last_newline) = text.rfind('\n') {
+            let trailing = text.split_off(last_newline + 1);
+            self.segments.push(SegmentContent::Text(trailing));
         }
     }
 
@@ -81,12 +89,12 @@ impl Transcript {
     }
 
     /// Remove and return the longest prefix of segments that can never mutate
-    /// again, so they can be written to terminal scrollback exactly once.
+    /// again, so presentation state can take ownership exactly once.
     ///
     /// A segment is final when it is a user message, a completed tool call, or
     /// streamed text/thought content that is no longer the trailing segment of
-    /// an in-flight prompt. Draining stops at the first non-final segment so
-    /// scrollback order always matches transcript order.
+    /// an in-flight prompt. Text segments are split after completed lines so
+    /// finalized content can move independently of the trailing streaming line.
     pub fn drain_finalized_prefix(&mut self, tool_calls: &ToolCallLog, prompt_in_flight: bool) -> Vec<SegmentContent> {
         let final_len = self
             .segments

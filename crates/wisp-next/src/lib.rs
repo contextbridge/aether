@@ -4,11 +4,15 @@ pub mod cli;
 pub mod composer;
 pub mod diff;
 pub mod error;
+pub mod git_diff;
 pub mod keybindings;
 pub mod markdown;
+pub mod modal;
 pub mod picker;
 pub mod presentation;
 pub mod render;
+pub mod screen_router;
+pub mod screens;
 pub mod session;
 pub mod settings;
 pub mod syntax;
@@ -24,7 +28,7 @@ use crossterm::event::{
     DisableBracketedPaste, EnableBracketedPaste, Event, EventStream, KeyboardEnhancementFlags,
     PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
-use crossterm::execute;
+use crossterm::{execute, terminal::size};
 use error::AppError;
 use futures::StreamExt;
 use presentation::TranscriptRenderer;
@@ -69,7 +73,11 @@ pub fn setup_logging(log_dir: Option<&str>) {
 
 pub const DEFAULT_LOG_DIR: &str = "/tmp/wisp-next-logs";
 
-const VIEWPORT_HEIGHT: u16 = 15;
+pub fn inline_viewport_height(terminal_height: u16) -> u16 {
+    if terminal_height == 0 { 0 } else { terminal_height.saturating_sub(INLINE_SCROLLBACK_RESERVE).max(1) }
+}
+
+const INLINE_SCROLLBACK_RESERVE: u16 = 2;
 const MAX_ACP_EVENTS_PER_FRAME: usize = 1_000;
 
 async fn run_app(
@@ -77,7 +85,9 @@ async fn run_app(
     mut renderer: TranscriptRenderer,
     mut event_rx: mpsc::UnboundedReceiver<AcpEvent>,
 ) -> Result<(), AppError> {
-    let mut terminal = ratatui::init_with_options(TerminalOptions { viewport: Viewport::Inline(VIEWPORT_HEIGHT) });
+    let (_, terminal_height) = size()?;
+    let viewport_height = inline_viewport_height(terminal_height);
+    let mut terminal = ratatui::init_with_options(TerminalOptions { viewport: Viewport::Inline(viewport_height) });
     let mut stdout = io::stdout();
     let flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
         | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
@@ -104,6 +114,7 @@ async fn event_loop(
     event_rx: &mut mpsc::UnboundedReceiver<AcpEvent>,
 ) -> Result<(), AppError> {
     let mut terminal_events = EventStream::new();
+    let (screen_event_tx, mut screen_event_rx) = mpsc::unbounded_channel();
     let mut tick_interval = {
         let mut tick = interval(Duration::from_millis(100));
         tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -122,7 +133,7 @@ async fn event_loop(
         select! {
             terminal_event = terminal_events.next() => {
                 match terminal_event {
-                    Some(Ok(event)) => on_terminal_event(terminal, app, event)?,
+                    Some(Ok(event)) => on_terminal_event(app, event),
                     Some(Err(e)) => return Err(AppError::Io(e)),
                     None => return Ok(()),
                 }
@@ -135,7 +146,20 @@ async fn event_loop(
                 }
             }
 
+            screen_event = screen_event_rx.recv() => {
+                if let Some(event) = screen_event {
+                    app.on_screen_event(event);
+                }
+            }
+
             () = tick_fut => app.on_tick(Instant::now()),
+        }
+
+        while let Some(effect) = app.take_screen_effect() {
+            let event_tx = screen_event_tx.clone();
+            tokio::spawn(async move {
+                let _ = event_tx.send(effect.execute().await);
+            });
         }
 
         if app.exit_requested() {
@@ -145,14 +169,12 @@ async fn event_loop(
     }
 }
 
-fn on_terminal_event(terminal: &mut DefaultTerminal, app: &mut App, event: Event) -> Result<(), AppError> {
+fn on_terminal_event(app: &mut App, event: Event) {
     match event {
         Event::Key(key) => app.on_key(key),
         Event::Paste(text) => app.on_paste(&text),
-        Event::Resize(_, _) => terminal.autoresize()?,
         _ => {}
     }
-    Ok(())
 }
 
 fn collect_batch<T>(first: T, max: usize, mut try_next: impl FnMut() -> Option<T>) -> Vec<T> {
