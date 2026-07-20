@@ -27,8 +27,6 @@ enum MainError {
     Lspd(#[from] aether_lspd::LspdRunError),
     #[error("{0}")]
     Tui(#[from] wisp::error::AppError),
-    #[error("{0}")]
-    ExperimentalTui(#[from] wisp_next::error::AppError),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
     #[error("{0}")]
@@ -64,16 +62,6 @@ enum Command {
     /// Start the LSP daemon (used internally)
     #[command(hide = true)]
     Lspd(aether_lspd::LspdArgs),
-    /// Launch the experimental ratatui UI (parallel to the default TUI)
-    #[command(hide = true)]
-    Experimental(ExperimentalArgs),
-}
-
-#[derive(clap::Args)]
-struct ExperimentalArgs {
-    /// Agent subprocess command (speaks ACP over stdio)
-    #[arg(long, default_value = "aether acp")]
-    agent: String,
 }
 
 fn main() -> ExitCode {
@@ -103,11 +91,6 @@ fn main() -> ExitCode {
         Some(Command::Settings(SettingsCommand::Init(args))) => rt.block_on(run_init_command(args.into())),
 
         Some(Command::Lspd(args)) => aether_lspd::run_lspd(args).map(|()| ExitCode::SUCCESS).map_err(Into::into),
-
-        Some(Command::Experimental(args)) => rt
-            .block_on(wisp_next::run_tui(&args.agent, load_or_create_settings(default_status_line())))
-            .map(|()| ExitCode::SUCCESS)
-            .map_err(Into::into),
 
         None => rt.block_on(run_default_command()),
     };
