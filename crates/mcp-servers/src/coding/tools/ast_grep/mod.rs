@@ -1,5 +1,5 @@
 use crate::coding::error::AstGrepError;
-use crate::coding::tools::glob_filter::{PathGlobMatcher, build_path_matcher};
+use crate::coding::tools::glob_filter::{CaseSensitivity, PathGlobMatcher, build_path_matcher};
 use ast_grep_core::Doc;
 use ast_grep_core::matcher::{NodeMatch, Pattern};
 use ast_grep_language::{Language, LanguageExt, SupportLang};
@@ -99,7 +99,7 @@ pub async fn perform_ast_grep(mut args: AstGrepInput) -> Result<AstGrepOutput, A
         let pattern = Pattern::try_new(&args.pattern, lang).map_err(|e| AstGrepError::InvalidPattern(e.to_string()))?;
 
         let constraint_regexes = compile_constraints(args.constraints.as_ref())?;
-        let path_matcher = build_path_matcher(args.glob.as_deref(), false)?;
+        let path_matcher = build_path_matcher(args.glob.as_deref(), CaseSensitivity::Sensitive)?;
         let search_path = args.path.as_deref().unwrap_or(".");
         let path = Path::new(search_path);
         if !path.exists() {

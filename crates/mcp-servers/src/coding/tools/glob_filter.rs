@@ -2,6 +2,24 @@ use crate::coding::error::GlobError;
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use std::path::Path;
 
+/// Whether glob pattern matching considers character case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CaseSensitivity {
+    /// Matching distinguishes between upper- and lower-case characters.
+    #[default]
+    Sensitive,
+    /// Matching treats upper- and lower-case characters as equivalent.
+    Insensitive,
+}
+
+impl CaseSensitivity {
+    /// Builds a [`CaseSensitivity`] from a deserialized `case_insensitive` flag
+    /// where `true` requests case-insensitive matching.
+    pub fn from_case_insensitive(flag: bool) -> Self {
+        if flag { Self::Insensitive } else { Self::Sensitive }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PathGlobMatcher {
     matcher: GlobSet,
@@ -14,12 +32,12 @@ enum PathGlobKind {
     RelativePath,
 }
 
-pub fn build_path_matcher(glob: Option<&str>, case_insensitive: bool) -> Result<Option<PathGlobMatcher>, GlobError> {
-    glob.map(|glob| PathGlobMatcher::new(glob, case_insensitive)).transpose()
+pub fn build_path_matcher(glob: Option<&str>, case: CaseSensitivity) -> Result<Option<PathGlobMatcher>, GlobError> {
+    glob.map(|glob| PathGlobMatcher::new(glob, case)).transpose()
 }
 
 impl PathGlobMatcher {
-    pub fn new(pattern: &str, case_insensitive: bool) -> Result<Self, GlobError> {
+    pub fn new(pattern: &str, case: CaseSensitivity) -> Result<Self, GlobError> {
         if pattern.is_empty() {
             return Err(GlobError::InvalidPattern {
                 pattern: pattern.to_string(),
@@ -29,7 +47,7 @@ impl PathGlobMatcher {
 
         let kind = if contains_separator(pattern) { PathGlobKind::RelativePath } else { PathGlobKind::Basename };
         let mut builder = GlobSetBuilder::new();
-        add_glob(&mut builder, pattern, case_insensitive)?;
+        add_glob(&mut builder, pattern, case)?;
 
         // globset's `**/` requires at least one leading directory, so `**/*.rs`
         // on its own misses files at the search root. Also register the
@@ -37,7 +55,7 @@ impl PathGlobMatcher {
         if let Some(root_pattern) = pattern.strip_prefix("**/")
             && !root_pattern.is_empty()
         {
-            add_glob(&mut builder, root_pattern, case_insensitive)?;
+            add_glob(&mut builder, root_pattern, case)?;
         }
 
         Ok(Self { matcher: builder.build().map_err(|e| GlobError::BuildFailed(e.to_string()))?, kind })
@@ -53,9 +71,9 @@ impl PathGlobMatcher {
     }
 }
 
-fn add_glob(builder: &mut GlobSetBuilder, pattern: &str, case_insensitive: bool) -> Result<(), GlobError> {
+fn add_glob(builder: &mut GlobSetBuilder, pattern: &str, case: CaseSensitivity) -> Result<(), GlobError> {
     let glob = GlobBuilder::new(pattern)
-        .case_insensitive(case_insensitive)
+        .case_insensitive(matches!(case, CaseSensitivity::Insensitive))
         .build()
         .map_err(|e| GlobError::InvalidPattern { pattern: pattern.to_string(), reason: e.to_string() })?;
     builder.add(glob);
@@ -72,7 +90,7 @@ mod tests {
 
     #[test]
     fn bare_patterns_match_basenames_at_any_depth() {
-        let matcher = PathGlobMatcher::new("README*", false).unwrap();
+        let matcher = PathGlobMatcher::new("README*", CaseSensitivity::Sensitive).unwrap();
         let root = Path::new("/workspace");
 
         assert!(matcher.matches(Path::new("/workspace/README.md"), root));
@@ -82,7 +100,7 @@ mod tests {
 
     #[test]
     fn slash_patterns_match_relative_paths_only() {
-        let matcher = PathGlobMatcher::new("crates/**/*.rs", false).unwrap();
+        let matcher = PathGlobMatcher::new("crates/**/*.rs", CaseSensitivity::Sensitive).unwrap();
         let root = Path::new("/workspace");
 
         assert!(matcher.matches(Path::new("/workspace/crates/app/src/lib.rs"), root));
@@ -92,7 +110,7 @@ mod tests {
 
     #[test]
     fn recursive_slash_patterns_match_root_files() {
-        let matcher = PathGlobMatcher::new("**/*.rs", false).unwrap();
+        let matcher = PathGlobMatcher::new("**/*.rs", CaseSensitivity::Sensitive).unwrap();
         let root = Path::new("/workspace");
 
         assert!(matcher.matches(Path::new("/workspace/lib.rs"), root));
@@ -101,7 +119,7 @@ mod tests {
 
     #[test]
     fn case_insensitive_patterns_match_basenames() {
-        let matcher = PathGlobMatcher::new("readme*", true).unwrap();
+        let matcher = PathGlobMatcher::new("readme*", CaseSensitivity::Insensitive).unwrap();
         assert!(matcher.matches(Path::new("/workspace/README.md"), Path::new("/workspace")));
     }
 }

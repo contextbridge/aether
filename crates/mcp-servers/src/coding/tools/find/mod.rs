@@ -1,5 +1,5 @@
 use crate::coding::error::FindError;
-use crate::coding::tools::glob_filter::PathGlobMatcher;
+use crate::coding::tools::glob_filter::{CaseSensitivity, PathGlobMatcher};
 use ignore::{WalkBuilder, WalkState};
 use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
 use schemars::JsonSchema;
@@ -54,7 +54,10 @@ pub async fn find_files(args: FindInput) -> Result<FindOutput, FindError> {
         return Err(FindError::PathNotFound(search_path.to_string()));
     }
 
-    let path_matcher = Arc::new(PathGlobMatcher::new(&args.pattern, args.case_insensitive.unwrap_or(false))?);
+    let path_matcher = Arc::new(PathGlobMatcher::new(
+        &args.pattern,
+        CaseSensitivity::from_case_insensitive(args.case_insensitive.unwrap_or(false)),
+    )?);
     let state = Arc::new(FindState::new(args.limit));
 
     let mut walker_builder = WalkBuilder::new(search_root);

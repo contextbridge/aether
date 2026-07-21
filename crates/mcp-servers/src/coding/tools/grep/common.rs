@@ -25,16 +25,34 @@ pub struct MatchData {
     pub after_context: Option<Vec<String>>,
 }
 
+/// Whether line numbers are attached to collected grep matches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LineNumberMode {
+    /// Line numbers are omitted from results.
+    Omitted,
+    /// Line numbers are included with each match.
+    #[default]
+    Included,
+}
+
+impl LineNumberMode {
+    /// Builds a [`LineNumberMode`] from a deserialized `line_numbers` flag
+    /// where `true` requests that line numbers be included.
+    pub fn from_included_flag(include: bool) -> Self {
+        if include { Self::Included } else { Self::Omitted }
+    }
+}
+
 pub struct MatchCollectorSink {
     file_path: std::path::PathBuf,
-    line_numbers: bool,
+    line_numbers: LineNumberMode,
     max_results: Option<usize>,
     pub matches: Vec<MatchData>,
     context_before: Vec<String>,
 }
 
 impl MatchCollectorSink {
-    pub fn new(file_path: &Path, line_numbers: bool) -> Self {
+    pub fn new(file_path: &Path, line_numbers: LineNumberMode) -> Self {
         Self {
             file_path: file_path.to_path_buf(),
             line_numbers,
@@ -44,7 +62,7 @@ impl MatchCollectorSink {
         }
     }
 
-    pub fn with_max_results(file_path: &Path, line_numbers: bool, max_results: Option<usize>) -> Self {
+    pub fn with_max_results(file_path: &Path, line_numbers: LineNumberMode, max_results: Option<usize>) -> Self {
         Self {
             file_path: file_path.to_path_buf(),
             line_numbers,
@@ -72,7 +90,10 @@ impl Sink for MatchCollectorSink {
 
         let match_data = MatchData {
             file: self.file_path.display().to_string(),
-            line_number: if self.line_numbers { mat.line_number().and_then(|n| usize::try_from(n).ok()) } else { None },
+            line_number: match self.line_numbers {
+                LineNumberMode::Included => mat.line_number().and_then(|n| usize::try_from(n).ok()),
+                LineNumberMode::Omitted => None,
+            },
             line: line_str.to_string(),
             before_context,
             after_context: None, // Will be filled by context method

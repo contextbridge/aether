@@ -1,9 +1,9 @@
 pub mod common;
 
 use crate::coding::error::GrepError;
-use crate::coding::tools::glob_filter::{PathGlobMatcher, build_path_matcher};
+use crate::coding::tools::glob_filter::{CaseSensitivity, PathGlobMatcher, build_path_matcher};
 use aether_lspd::extensions_for_alias as extensions_for_type;
-use common::{CountSink, HasMatchSink, MatchCollectorSink, MatchData, OutputMode};
+use common::{CountSink, HasMatchSink, LineNumberMode, MatchCollectorSink, MatchData, OutputMode};
 use grep::{
     regex::{RegexMatcher, RegexMatcherBuilder},
     searcher::{BinaryDetection, Searcher, SearcherBuilder},
@@ -156,12 +156,12 @@ fn perform_grep_sync(mut args: GrepInput) -> Result<GrepOutput, GrepError> {
         args.path = None;
     }
 
-    let path_matcher = build_path_matcher(args.glob.as_deref(), false)?;
+    let path_matcher = build_path_matcher(args.glob.as_deref(), CaseSensitivity::Sensitive)?;
 
     let matcher = build_matcher(&args.pattern, args.case_insensitive, args.multiline)?;
 
     let output_mode = args.output_mode.unwrap_or(OutputMode::Content);
-    let line_numbers = args.line_numbers.unwrap_or(true);
+    let line_numbers = LineNumberMode::from_included_flag(args.line_numbers.unwrap_or(true));
     let searcher_builder = build_searcher(&args);
 
     let search_path = args.path.as_deref().unwrap_or(".");
@@ -193,7 +193,7 @@ fn perform_grep_sync(mut args: GrepInput) -> Result<GrepOutput, GrepError> {
 /// Common search parameters shared across single-file and directory search paths.
 struct SearchConfig<'a> {
     output_mode: OutputMode,
-    line_numbers: bool,
+    line_numbers: LineNumberMode,
     file_type: Option<&'a String>,
 }
 
@@ -353,7 +353,7 @@ fn search_directory_entry(
     filter: &FileFilter<'_>,
     searcher: &mut Searcher,
     output_mode: OutputMode,
-    line_numbers: bool,
+    line_numbers: LineNumberMode,
 ) -> WalkState {
     if state.limit_reached.load(Ordering::Relaxed) {
         return WalkState::Quit;
