@@ -70,7 +70,7 @@ yourself in a `finally` block.
 | `cwd`                | Working directory for the spawned `aether acp` process.                                                                       |
 | `binaryPath`         | Override the bundled `@aether-agent/cli` binary (absolute path or name on `PATH`).                                            |
 | `providers`          | Provider connection overrides, keyed by provider (for example `{ bedrock: { url: "http://127.0.0.1:8787", auth: "none" } }`). |
-| `traceContext`       | Remote W3C `traceparent` and optional `tracestate` used as the parent of every turn in the launched session.                    |
+| `traceContext`       | A remote W3C `traceparent` with optional `tracestate`, or a standalone `traceId` for root spans without a parent.                 |
 | `abortSignal`        | Cancel the active session and tear the subprocess down.                                                                       |
 
 `agent` and `model` are mutually exclusive. `settings` and `settingsFile` are
@@ -107,16 +107,22 @@ await AetherSession.start({
 ## Correlating telemetry traces
 
 ```ts
-await using session = await AetherSession.start({
+await using continuedSession = await AetherSession.start({
   traceContext: {
     traceparent:
       "00-00112233445566778899aabbccddeeff-0123456789abcdef-01",
     tracestate: "vendor=value",
   },
 });
+
+await using rootSession = await AetherSession.start({
+  traceContext: {
+    traceId: "00112233445566778899aabbccddeeff",
+  },
+});
 ```
 
-`traceContext` is also accepted by `runHeadless` and the lower-level ACP process options. Aether treats the supplied W3C `traceparent` as a remote parent, so every turn is a child of the propagated span and every descendant remains in the same trace. Telemetry must still be enabled in Aether settings. See the [telemetry documentation](https://aether-agent.io/aether/settings/telemetry/) for validation and sampling semantics.
+`traceContext` is also accepted by `runHeadless` and the lower-level ACP process options. A `traceparent` makes every turn a child of the propagated span. A standalone `traceId` instead creates root turn spans with that trace ID and no parent span. Telemetry must still be enabled in Aether settings. See the [telemetry documentation](https://aether-agent.io/aether/settings/telemetry/) for validation and sampling semantics.
 
 ## Multi-turn usage
 

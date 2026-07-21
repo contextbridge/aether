@@ -101,6 +101,42 @@ async fn runtime_parents_every_turn_to_the_supplied_trace_context() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn runtime_starts_root_spans_with_the_supplied_trace_id() {
+    let collector = FakeOtlpCollector::start().await;
+    let trace_context = serde_json::from_str::<AgentTraceContext>(r#"{"traceId":"00112233445566778899aabbccddeeff"}"#)
+        .expect("valid trace ID context");
+    let expected_trace_id =
+        vec![0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff];
+    let runtime = TelemetryRuntime::new(&TelemetryConfig {
+        headers: test_headers("fixed-trace-root"),
+        trace_context: Some(trace_context),
+        ..collector_config(&collector)
+    })
+    .expect("runtime initializes against collector");
+
+    for _ in 0..2 {
+        let factory = runtime.observer_factory();
+        let mut observer = factory();
+        for event in events() {
+            observer.on_event(&event);
+        }
+    }
+
+    runtime.shutdown().expect("runtime flushes traces");
+    let exports = collector.exports();
+    let spans = trace_spans(&exports);
+
+    assert_eq!(spans.len(), 4);
+    assert!(spans.iter().all(|span| span.trace_id == expected_trace_id));
+    let roots = spans.iter().filter(|span| span.name == "invoke_agent").copied().collect::<Vec<_>>();
+    assert_eq!(roots.len(), 2);
+    assert!(roots.iter().all(|span| span.parent_span_id.is_empty()));
+    for child in spans.iter().filter(|span| span.name != "invoke_agent") {
+        assert!(roots.iter().any(|root| child.parent_span_id == root.span_id));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn runtime_exports_genai_spans_and_metrics_to_an_otlp_collector() {
     let collector = FakeOtlpCollector::start().await;
     let runtime = TelemetryRuntime::new(&TelemetryConfig {

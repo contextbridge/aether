@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { buildAetherAcpCommand } from "../src/agentProcess.js";
-import { TRACE_CONTEXT } from "./traceContext.js";
+import { TRACE_CONTEXT, TRACE_ID_CONTEXT } from "./traceContext.js";
 
 const FAKE_AETHER = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -55,6 +55,17 @@ describe("buildAetherAcpCommand()", () => {
       model: "anthropic:claude-sonnet-4-5",
       reasoningEffort: "high",
       traceContext: TRACE_CONTEXT,
+    });
+  });
+
+  it("adds a trace-only context to ACP options JSON", () => {
+    const command = buildAetherAcpCommand({
+      binaryPath: FAKE_AETHER,
+      traceContext: TRACE_ID_CONTEXT,
+    });
+
+    expect(JSON.parse(command.args[2]!)).toEqual({
+      traceContext: TRACE_ID_CONTEXT,
     });
   });
 

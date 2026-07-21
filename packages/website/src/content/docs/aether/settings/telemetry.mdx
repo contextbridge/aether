@@ -45,21 +45,29 @@ Set both `traces.enabled` and `metrics.enabled` to `false` to keep a telemetry s
 
 ## Correlating SDK runs
 
-SDK callers can correlate every turn in a launched session or headless run with an existing OpenTelemetry trace:
+SDK callers can either continue beneath an existing OpenTelemetry parent span or start root spans with a caller-supplied trace ID:
 
 ```ts
-await using session = await AetherSession.start({
+await using continuedSession = await AetherSession.start({
   traceContext: {
     traceparent:
       "00-00112233445566778899aabbccddeeff-0123456789abcdef-01",
     tracestate: "vendor=value",
   },
 });
+
+await using rootSession = await AetherSession.start({
+  traceContext: {
+    traceId: "00112233445566778899aabbccddeeff",
+  },
+});
 ```
 
-`traceContext` is a run/session launch option for `AetherSession.start`, `runHeadless`, and the lower-level ACP process API; it is not a persistent telemetry setting. Telemetry still has to be enabled above — without a telemetry section the trace context is ignored. Aether treats the supplied W3C `traceparent` as a remote parent, making every `invoke_agent` turn span its child and preserving the causal hierarchy across the process boundary. Optional `tracestate` is propagated to those spans.
+`traceContext` is a run/session launch option for `AetherSession.start`, `runHeadless`, and the lower-level ACP process API; it is not a persistent telemetry setting. Telemetry still has to be enabled above — without a telemetry section the trace context is ignored.
 
-Both headers are validated when telemetry starts: `traceparent` must follow the W3C Trace Context format with a non-zero trace ID and parent span ID, and `tracestate` must be a valid W3C header. An invalid value fails Aether startup with an error rather than being silently dropped. The parent's sampled flag is authoritative: sampled parents remain sampled and unsampled parents remain unsampled. `sampleRatio` is used only for traces without a propagated parent.
+With `traceparent`, Aether treats the supplied context as a remote parent, making every `invoke_agent` turn span its child and preserving `tracestate`. The parent's sampled flag is authoritative. With `traceId`, each `invoke_agent` span is a root span with no parent span ID, and `sampleRatio` controls sampling.
+
+Values are validated when telemetry starts. `traceparent` must follow the W3C Trace Context format with non-zero trace and parent span IDs. `traceId` must contain exactly 32 lowercase hexadecimal characters and cannot be all zeros. `tracestate` must be a valid W3C header and is only accepted with `traceparent`. Invalid or mixed forms fail Aether startup rather than being silently dropped.
 
 ## Privacy
 

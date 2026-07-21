@@ -15,12 +15,27 @@ fn round_trips_agent_trace_context_carriers() {
 }
 
 #[test]
+fn round_trips_trace_id_only_contexts() {
+    let context: AgentTraceContext =
+        serde_json::from_str(r#"{"traceId":"00112233445566778899aabbccddeeff"}"#).expect("valid trace ID context");
+
+    assert_eq!(
+        serde_json::to_string(&context).expect("serializes trace ID context"),
+        r#"{"traceId":"00112233445566778899aabbccddeeff"}"#
+    );
+}
+
+#[test]
 fn rejects_invalid_agent_trace_contexts_when_initializing_runtime() {
     for (value, header) in [
         (r#"{"traceparent":"INVALID"}"#, "traceparent"),
         (r#"{"traceparent":"00-00000000000000000000000000000000-0123456789abcdef-01"}"#, "traceparent"),
         (r#"{"traceparent":"00-00112233445566778899aabbccddeeff-0000000000000000-01"}"#, "traceparent"),
         (r#"{"traceparent":"00-00112233445566778899AABBCCDDEEFF-0123456789abcdef-01"}"#, "traceparent"),
+        (r#"{"traceId":"00000000000000000000000000000000"}"#, "traceId"),
+        (r#"{"traceId":"00112233445566778899aabbccddee"}"#, "traceId"),
+        (r#"{"traceId":"00112233445566778899AABBCCDDEEFF"}"#, "traceId"),
+        (r#"{"traceId":"00112233445566778899aabbccddeezz"}"#, "traceId"),
         (
             r#"{"traceparent":"00-00112233445566778899aabbccddeeff-0123456789abcdef-01","tracestate":"invalid"}"#,
             "tracestate",
@@ -39,6 +54,15 @@ fn rejects_invalid_agent_trace_contexts_when_initializing_runtime() {
             "expected an invalid {header} for {value}"
         );
     }
+}
+
+#[test]
+fn rejects_mixed_trace_context_forms() {
+    let result = serde_json::from_str::<AgentTraceContext>(
+        r#"{"traceId":"00112233445566778899aabbccddeeff","traceparent":"00-00112233445566778899aabbccddeeff-0123456789abcdef-01"}"#,
+    );
+
+    assert!(result.is_err());
 }
 
 #[test]
