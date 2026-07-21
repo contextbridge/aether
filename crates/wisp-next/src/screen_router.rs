@@ -84,7 +84,7 @@ impl ScreenRouter {
     pub fn render(&mut self, frame: &mut Frame, theme: &Theme, highlighter: &mut SyntaxHighlighter) {
         match self.mode.as_mut() {
             Some(FullScreenMode::GitDiff(screen)) => screen.render(frame, theme, highlighter),
-            Some(FullScreenMode::PlanReview(screen)) => screen.render(frame, theme),
+            Some(FullScreenMode::PlanReview(screen)) => screen.render(frame, theme, highlighter),
             None => {}
         }
     }

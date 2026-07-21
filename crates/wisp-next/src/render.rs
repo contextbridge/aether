@@ -1,12 +1,12 @@
 use crate::INLINE_SCROLLBACK_RESERVE;
-use crate::app::{App, HistoryItem, HistoryKind};
+use crate::app::{App, HistoryItem, HistoryKind, SubAgentHistoryItem};
 use crate::diff::render_diff;
 use crate::markdown::render_markdown;
 use crate::plan_view::render_plan_lines;
 use crate::presentation::TranscriptRenderer;
 use crate::settings::{ContextUsageDisplay, ResolvedStatusLineSettings, StatusLineSegmentConfig, StatusLineStyle};
 use crate::theme::Theme;
-use crate::tool_calls::ToolStatus;
+use crate::tool_calls::{SUB_AGENT_VISIBLE_TOOL_LIMIT, ToolStatus};
 use crate::wrap::wrap_line;
 use acp_utils::config_option_id::ConfigOptionId;
 use agent_client_protocol::schema::{self as acp, SessionConfigKind, SessionConfigOption, SessionConfigSelectOptions};
@@ -96,20 +96,29 @@ pub fn draw(frame: &mut Frame, app: &mut App, renderer: &mut TranscriptRenderer)
     let visible_plan_lines: Vec<Line<'static>> = plan_lines.into_iter().take(clipped_plan_height as usize).collect();
     let plan_height_used = u16::try_from(visible_plan_lines.len()).unwrap_or(0);
 
-    let mut lines = renderer.committed_lines().to_vec();
+    let progress_lines = app.progress_indicator().render(
+        theme.info,
+        theme.warning,
+        theme.text_secondary,
+        theme.muted,
+        app.content_padding(),
+    );
+
+    let mut lines = progress_lines;
+    lines.extend(renderer.committed_lines().to_vec());
     lines.extend(live_history_lines(app, renderer, live_area.width));
     let available = live_area.height.saturating_sub(plan_height_used) as usize;
     if lines.len() > available {
         lines.drain(..lines.len() - available);
     }
-    let transcript_height = u16::try_from(lines.len()).unwrap_or(live_area.height).min(live_area.height);
-    let transcript_area =
-        Rect { y: live_area.bottom().saturating_sub(transcript_height), height: transcript_height, ..live_area };
-    frame.render_widget(Paragraph::new(Text::from(lines)), transcript_area);
+    let content_height = u16::try_from(lines.len()).unwrap_or(live_area.height).min(live_area.height);
+    let content_area =
+        Rect { y: live_area.bottom().saturating_sub(content_height), height: content_height, ..live_area };
+    frame.render_widget(Paragraph::new(Text::from(lines)), content_area);
 
     if plan_height_used > 0 {
         let plan_area =
-            Rect { y: transcript_area.y.saturating_sub(plan_height_used), height: plan_height_used, ..live_area };
+            Rect { y: content_area.y.saturating_sub(plan_height_used), height: plan_height_used, ..live_area };
         frame.render_widget(Paragraph::new(Text::from(visible_plan_lines)), plan_area);
     }
 
@@ -165,13 +174,18 @@ impl TranscriptRenderer {
                 ),
                 padding,
             ),
-            HistoryItem::Tool { title, status, diff } => {
-                let mut lines = tool_lines(title, status, spinner_tick, padding, &theme);
+            HistoryItem::Tool { title, status, diff, raw_input, display_value, sub_agents } => {
+                let mut lines =
+                    tool_lines(title, raw_input, display_value.as_deref(), status, spinner_tick, padding, &theme);
                 if matches!(status, ToolStatus::Success)
                     && let Some(preview) = diff
                 {
                     let rendered = render_diff(preview, content_width, &theme, self.highlighter());
                     lines.extend(indent_lines(rendered, padding));
+                }
+                if !sub_agents.is_empty() {
+                    lines.push(Line::default());
+                    lines.extend(sub_agent_tree_lines(sub_agents, spinner_tick, padding, &theme));
                 }
                 lines
             }
@@ -200,7 +214,8 @@ fn live_area_height(area: Rect, app: &mut App, renderer: &TranscriptRenderer) ->
     };
     let plan_height = u16::try_from(plan_lines.len()).unwrap_or(0);
     let clipped_plan = plan_height.min(remaining.div_ceil(3));
-    remaining.saturating_sub(clipped_plan)
+    let progress_height = u16::try_from(app.progress_indicator().line_count()).unwrap_or(0);
+    remaining.saturating_sub(clipped_plan).saturating_sub(progress_height)
 }
 
 fn live_history_lines(app: &App, renderer: &mut TranscriptRenderer, width: u16) -> Vec<Line<'static>> {
@@ -228,8 +243,12 @@ fn user_block_lines(text: &str, width: u16, padding: usize, theme: &Theme) -> Ve
     lines
 }
 
+const MAX_TOOL_ARG_LENGTH: usize = 200;
+
 fn tool_lines(
     title: &str,
+    raw_input: &str,
+    display_value: Option<&str>,
     status: &ToolStatus,
     spinner_tick: usize,
     padding: usize,
@@ -238,7 +257,7 @@ fn tool_lines(
     let (glyph, glyph_style, suffix) = match status {
         ToolStatus::Running => (spinner_frame(spinner_tick), Style::new().fg(theme.info), None),
         ToolStatus::Success => ("✓", Style::new().fg(theme.success), None),
-        ToolStatus::Error(cause) => ("✗", Style::new().fg(theme.error), Some(format!(" ({cause})"))),
+        ToolStatus::Error(cause) => ("✗", Style::new().fg(theme.error), Some(format!(" {cause}"))),
     };
     let mut spans = vec![
         Span::raw(" ".repeat(padding)),
@@ -246,6 +265,16 @@ fn tool_lines(
         Span::raw(" "),
         Span::styled(title.to_string(), Style::new().fg(theme.text_primary)),
     ];
+
+    let display_text = display_value.filter(|v| !v.is_empty()).map_or_else(
+        || match status {
+            ToolStatus::Running => String::new(),
+            _ => format_arguments(raw_input),
+        },
+        |v| format!(" ({v})"),
+    );
+    spans.push(Span::styled(display_text, Style::new().fg(theme.muted)));
+
     if let Some(suffix) = suffix {
         spans.push(Span::styled(suffix, Style::new().fg(theme.error)));
     }
@@ -261,6 +290,79 @@ fn indent_lines(lines: Vec<Line<'static>>, padding: usize) -> Vec<Line<'static>>
             line
         })
         .collect()
+}
+
+fn sub_agent_tree_lines(
+    sub_agents: &[SubAgentHistoryItem],
+    spinner_tick: usize,
+    padding: usize,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
+    let pad = " ".repeat(padding);
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    for (i, agent) in sub_agents.iter().enumerate() {
+        if i > 0 {
+            lines.push(Line::raw(format!("{pad}  ")));
+        }
+
+        // Agent header: spinner/check + agent name
+        let (glyph, glyph_style) = if agent.done {
+            ("✓", Style::new().fg(theme.success))
+        } else {
+            (spinner_frame(spinner_tick), Style::new().fg(theme.info))
+        };
+        let mut agent_line = Line::raw(format!("{pad}  "));
+        agent_line.push_span(Span::styled(glyph, glyph_style));
+        agent_line.push_span(Span::raw(format!(" {}", agent.agent_name)));
+        lines.push(agent_line);
+
+        let hidden_count = agent.tools.len().saturating_sub(SUB_AGENT_VISIBLE_TOOL_LIMIT);
+        if hidden_count > 0 {
+            lines.push(Line::styled(
+                format!("{pad}  … {hidden_count} earlier tool calls"),
+                Style::new().fg(theme.muted),
+            ));
+        }
+
+        let visible: Vec<_> = agent.tools.iter().skip(hidden_count).collect();
+        let muted = Style::new().fg(theme.muted);
+
+        for (j, tool) in visible.iter().enumerate() {
+            let is_last = j == visible.len() - 1;
+            let (head_str, _tail_str) = if is_last { ("  └─ ", "     ") } else { ("  ├─ ", "  │  ") };
+
+            let (glyph, glyph_style) = match &tool.status {
+                ToolStatus::Running => (spinner_frame(spinner_tick), Style::new().fg(theme.info)),
+                ToolStatus::Success => ("✓", Style::new().fg(theme.success)),
+                ToolStatus::Error(_) => ("✗", Style::new().fg(theme.error)),
+            };
+
+            let display = tool.display_value.as_deref().filter(|v| !v.is_empty()).map_or_else(
+                || match &tool.status {
+                    ToolStatus::Running => String::new(),
+                    _ => format_arguments(&tool.arguments),
+                },
+                |v| format!(" ({v})"),
+            );
+
+            let mut line = Line::from(vec![
+                Span::raw(format!("{pad}{head_str}")),
+                Span::styled(glyph, glyph_style),
+                Span::raw(format!(" {}", tool.name)),
+                Span::styled(display, muted),
+            ]);
+
+            if let ToolStatus::Error(msg) = &tool.status {
+                line.push_span(Span::raw(" "));
+                line.push_span(Span::styled(msg.clone(), Style::new().fg(theme.error)));
+            }
+
+            lines.push(line);
+        }
+    }
+
+    lines
 }
 
 fn render_composer(
@@ -666,6 +768,18 @@ const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "�
 
 fn spinner_frame(tick: usize) -> &'static str {
     SPINNER_FRAMES[tick % SPINNER_FRAMES.len()]
+}
+
+fn format_arguments(arguments: &str) -> String {
+    let mut formatted = format!(" {arguments}");
+    let char_count = formatted.chars().count();
+    if char_count > MAX_TOOL_ARG_LENGTH {
+        let ellipsis = "…";
+        let max_chars = MAX_TOOL_ARG_LENGTH.saturating_sub(ellipsis.chars().count());
+        formatted = formatted.chars().take(max_chars).collect();
+        formatted.push_str(ellipsis);
+    }
+    formatted
 }
 
 fn wrap_text(text: &str, max_width: usize) -> Vec<String> {

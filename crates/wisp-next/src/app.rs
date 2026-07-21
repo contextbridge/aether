@@ -6,6 +6,7 @@ use crate::keybindings::Keybindings;
 use crate::modal::{ElicitationModal, ModalOutcome};
 use crate::picker::CommandEntry;
 use crate::plan_tracker::PlanTracker;
+use crate::progress_indicator::{ProgressActivity, ProgressIndicator, WorkspaceProgress};
 use crate::prompt_search::PromptSearchMessage;
 use crate::screen_router::{ScreenEffect, ScreenEvent, ScreenRouter};
 use crate::session_loading_buffer::SessionLoadingBuffer;
@@ -60,6 +61,8 @@ pub struct App {
     ctrl_c_armed_at: Option<Instant>,
     exit_requested: bool,
     spinner_tick: usize,
+    compaction_active: bool,
+    progress_indicator: ProgressIndicator,
     last_drained_kind: Option<HistoryKind>,
     transcript_generation: u64,
     modal: Option<ElicitationModal>,
@@ -91,7 +94,31 @@ pub enum HistoryItem {
     User(String),
     Text(String),
     Thought(String),
-    Tool { title: String, status: ToolStatus, diff: Option<DiffPreview> },
+    Tool {
+        title: String,
+        status: ToolStatus,
+        diff: Option<DiffPreview>,
+        raw_input: String,
+        display_value: Option<String>,
+        sub_agents: Vec<SubAgentHistoryItem>,
+    },
+}
+
+/// Rendered sub-agent entry for the tree view beneath a parent tool.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubAgentHistoryItem {
+    pub agent_name: String,
+    pub done: bool,
+    pub tools: Vec<SubAgentToolHistoryItem>,
+}
+
+/// A single tool call within a sub-agent, rendered as a tree leaf.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubAgentToolHistoryItem {
+    pub name: String,
+    pub arguments: String,
+    pub display_value: Option<String>,
+    pub status: ToolStatus,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -205,6 +232,8 @@ impl App {
             ctrl_c_armed_at: None,
             exit_requested: false,
             spinner_tick: 0,
+            compaction_active: false,
+            progress_indicator: ProgressIndicator::default(),
             last_drained_kind: None,
             transcript_generation: 0,
             modal: None,
@@ -219,6 +248,12 @@ impl App {
 
     #[allow(clippy::too_many_lines)]
     pub fn on_acp_event(&mut self, event: AcpEvent) {
+        self.on_acp_event_inner(event);
+        self.refresh_progress();
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn on_acp_event_inner(&mut self, event: AcpEvent) {
         match event {
             AcpEvent::SessionUpdate { session_id, update } => {
                 if let Some(passthrough) = self.session_loading_buffer.push(&session_id, *update) {
@@ -241,13 +276,18 @@ impl App {
                 self.context_usage =
                     params.usage.context_limit.map(|limit| ContextUsageDisplay::new(params.usage.input_tokens, limit));
             }
+            AcpEvent::ContextCompaction(params) => {
+                self.compaction_active = params.active;
+            }
             AcpEvent::ContextCleared(_) => {
                 self.transcript.clear();
                 self.tool_calls.clear();
                 self.plan_tracker.clear();
                 self.prompt_in_flight = false;
+                self.compaction_active = false;
                 self.context_usage = None;
                 self.last_drained_kind = None;
+                self.progress_indicator.reset();
                 self.transcript_generation = self.transcript_generation.wrapping_add(1);
                 self.transcript.push_user_message("[wisp-next] Context cleared");
             }
@@ -341,6 +381,8 @@ impl App {
                 self.session_id = session_id.clone();
                 self.config_options = config_options;
                 self.plan_tracker.clear();
+                self.compaction_active = false;
+                self.progress_indicator.reset();
                 for update in updates {
                     self.on_session_update(&update);
                 }
@@ -360,8 +402,10 @@ impl App {
                 self.tool_calls.clear();
                 self.plan_tracker.clear();
                 self.prompt_in_flight = false;
+                self.compaction_active = false;
                 self.context_usage = None;
                 self.last_drained_kind = None;
+                self.progress_indicator.reset();
                 self.transcript_generation = self.transcript_generation.wrapping_add(1);
                 self.transcript.push_user_message("[wisp-next] New session created");
                 self.restore_config_selections(&previous_selections);
@@ -399,7 +443,12 @@ impl App {
                 self.transcript.push_user_message(&format!("[wisp-next] Workspace move failed: {error}"));
                 self.workspace_move_state = WorkspaceMoveState::Idle;
             }
-            _ => tracing::debug!("ignoring ACP event unsupported by the experimental UI"),
+            AcpEvent::SubAgentProgress(progress) => {
+                self.tool_calls.on_sub_agent_progress(&progress);
+                if self.tool_calls.has_tool(&progress.parent_tool_id) {
+                    self.transcript.ensure_tool_segment(&progress.parent_tool_id);
+                }
+            }
         }
     }
 
@@ -409,151 +458,154 @@ impl App {
             return;
         }
 
-        if self.keybindings.exit.matches(key) {
-            if self.ctrl_c_armed_at.is_some() {
-                self.exit_requested = true;
-            } else {
-                self.composer.clear();
-                self.ctrl_c_armed_at = Some(Instant::now());
+        'event: {
+            if self.keybindings.exit.matches(key) {
+                if self.ctrl_c_armed_at.is_some() {
+                    self.exit_requested = true;
+                } else {
+                    self.composer.clear();
+                    self.ctrl_c_armed_at = Some(Instant::now());
+                }
+                break 'event;
             }
-            return;
-        }
 
-        if self.screen_router.is_active() {
-            if let Some(effect) = self.screen_router.on_key(key) {
-                self.pending_screen_effects.push_back(effect);
+            if self.screen_router.is_active() {
+                if let Some(effect) = self.screen_router.on_key(key) {
+                    self.pending_screen_effects.push_back(effect);
+                }
+                break 'event;
             }
-            return;
-        }
 
-        if let Some(overlay) = self.settings_overlay.as_mut() {
-            let messages = overlay.on_key(key);
-            for msg in messages {
-                self.handle_settings_message(msg);
-            }
-            return;
-        }
-
-        if let Some(picker) = &mut self.session_picker {
-            if let Some(messages) = picker.on_key(key) {
+            if let Some(overlay) = self.settings_overlay.as_mut() {
+                let messages = overlay.on_key(key);
                 for msg in messages {
-                    self.handle_session_picker_message(msg);
+                    self.handle_settings_message(msg);
                 }
+                break 'event;
             }
-            return;
-        }
 
-        if let Some(picker) = &mut self.workspace_picker {
-            let messages = picker.on_key(key).unwrap_or_default();
-            for msg in messages {
-                self.handle_workspace_picker_message(msg);
-            }
-            return;
-        }
-
-        if let Some(modal) = self.modal.as_mut() {
-            if matches!(modal.on_key(key), ModalOutcome::Close) {
-                self.modal = None;
-            }
-            return;
-        }
-
-        if self.composer.has_prompt_search() {
-            if let Some(msg) = self.composer.prompt_search_on_key(key) {
-                match msg {
-                    PromptSearchMessage::QueryChanged(query) if !query.trim().is_empty() => {
-                        self.send_prompt_search_query(query);
+            if let Some(picker) = &mut self.session_picker {
+                if let Some(messages) = picker.on_key(key) {
+                    for msg in messages {
+                        self.handle_session_picker_message(msg);
                     }
-                    PromptSearchMessage::QueryChanged(_) => {
-                        self.composer.restore_prompt_search_draft();
+                }
+                break 'event;
+            }
+
+            if let Some(picker) = &mut self.workspace_picker {
+                let messages = picker.on_key(key).unwrap_or_default();
+                for msg in messages {
+                    self.handle_workspace_picker_message(msg);
+                }
+                break 'event;
+            }
+
+            if let Some(modal) = self.modal.as_mut() {
+                if matches!(modal.on_key(key), ModalOutcome::Close) {
+                    self.modal = None;
+                }
+                break 'event;
+            }
+
+            if self.composer.has_prompt_search() {
+                if let Some(msg) = self.composer.prompt_search_on_key(key) {
+                    match msg {
+                        PromptSearchMessage::QueryChanged(query) if !query.trim().is_empty() => {
+                            self.send_prompt_search_query(query);
+                        }
+                        PromptSearchMessage::QueryChanged(_) => {
+                            self.composer.restore_prompt_search_draft();
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
+                break 'event;
             }
-            return;
-        }
 
-        if self.keybindings.open_prompt_search.matches(key)
-            && self.capabilities.prompt_search
-            && !self.composer.has_overlay()
-        {
-            self.composer.open_prompt_search();
-            return;
-        }
-
-        if self.keybindings.toggle_git_diff.matches(key) {
-            let effect = self.screen_router.open_git_diff(&self.working_dir);
-            self.pending_screen_effects.push_back(effect);
-            return;
-        }
-
-        if key.code == KeyCode::Enter && key.modifiers.intersects(KeyModifiers::ALT | KeyModifiers::SHIFT)
-            || key.code == KeyCode::Char('j') && key.modifiers.contains(KeyModifiers::CONTROL)
-        {
-            self.composer.insert_newline();
-            return;
-        }
-
-        if self.composer.has_overlay() {
-            self.on_overlay_key(key);
-            return;
-        }
-
-        if self.keybindings.cycle_reasoning.matches(key) {
-            if let Some((id, val)) = cycle_reasoning_option(&self.config_options)
-                && self.prompt_handle.set_config_option(&self.session_id, &id, &val).is_ok()
+            if self.keybindings.open_prompt_search.matches(key)
+                && self.capabilities.prompt_search
+                && !self.composer.has_overlay()
             {
-                update_config_option_value(&mut self.config_options, &id, &val);
+                self.composer.open_prompt_search();
+                break 'event;
             }
-            return;
-        }
 
-        if self.keybindings.cycle_mode.matches(key) {
-            if let Some((id, val)) = cycle_quick_option(&self.config_options)
-                && self.prompt_handle.set_config_option(&self.session_id, &id, &val).is_ok()
+            if self.keybindings.toggle_git_diff.matches(key) {
+                let effect = self.screen_router.open_git_diff(&self.working_dir);
+                self.pending_screen_effects.push_back(effect);
+                break 'event;
+            }
+
+            if key.code == KeyCode::Enter && key.modifiers.intersects(KeyModifiers::ALT | KeyModifiers::SHIFT)
+                || key.code == KeyCode::Char('j') && key.modifiers.contains(KeyModifiers::CONTROL)
             {
-                update_config_option_value(&mut self.config_options, &id, &val);
+                self.composer.insert_newline();
+                break 'event;
             }
-            return;
-        }
 
-        if self.keybindings.submit.matches(key) {
-            self.submit();
-            return;
-        }
-
-        if self.keybindings.cancel.matches(key) {
-            if self.prompt_in_flight {
-                let _ = self.prompt_handle.cancel(&self.session_id);
+            if self.composer.has_overlay() {
+                self.on_overlay_key(key);
+                break 'event;
             }
-            return;
-        }
 
-        match key.code {
-            KeyCode::Char(character) if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
-                self.composer.insert_char(character);
-                if self.keybindings.open_command_picker.matches(key) && self.composer.text() == "/" {
-                    self.composer.open_command_picker(self.available_commands.clone());
-                } else if self.keybindings.open_file_picker.matches(key) {
-                    self.composer.open_file_picker(&self.working_dir);
+            if self.keybindings.cycle_reasoning.matches(key) {
+                if let Some((id, val)) = cycle_reasoning_option(&self.config_options)
+                    && self.prompt_handle.set_config_option(&self.session_id, &id, &val).is_ok()
+                {
+                    update_config_option_value(&mut self.config_options, &id, &val);
                 }
+                break 'event;
             }
-            KeyCode::Backspace => self.composer.backspace(),
-            KeyCode::Delete => self.composer.delete(),
-            KeyCode::Left => self.composer.move_left(),
-            KeyCode::Right => self.composer.move_right(),
-            KeyCode::Up if !self.composer.move_up() => {
-                self.composer.recall_previous();
+
+            if self.keybindings.cycle_mode.matches(key) {
+                if let Some((id, val)) = cycle_quick_option(&self.config_options)
+                    && self.prompt_handle.set_config_option(&self.session_id, &id, &val).is_ok()
+                {
+                    update_config_option_value(&mut self.config_options, &id, &val);
+                }
+                break 'event;
             }
-            KeyCode::Down if !self.composer.move_down() => {
-                self.composer.recall_next();
+
+            if self.keybindings.submit.matches(key) {
+                self.submit();
+                break 'event;
             }
-            KeyCode::Home => self.composer.move_line_start(),
-            KeyCode::End => self.composer.move_line_end(),
-            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => self.composer.move_line_start(),
-            KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => self.composer.move_line_end(),
-            _ => {}
+
+            if self.keybindings.cancel.matches(key) {
+                if self.prompt_in_flight {
+                    let _ = self.prompt_handle.cancel(&self.session_id);
+                }
+                break 'event;
+            }
+
+            match key.code {
+                KeyCode::Char(character) if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+                    self.composer.insert_char(character);
+                    if self.keybindings.open_command_picker.matches(key) && self.composer.text() == "/" {
+                        self.composer.open_command_picker(self.available_commands.clone());
+                    } else if self.keybindings.open_file_picker.matches(key) {
+                        self.composer.open_file_picker(&self.working_dir);
+                    }
+                }
+                KeyCode::Backspace => self.composer.backspace(),
+                KeyCode::Delete => self.composer.delete(),
+                KeyCode::Left => self.composer.move_left(),
+                KeyCode::Right => self.composer.move_right(),
+                KeyCode::Up if !self.composer.move_up() => {
+                    self.composer.recall_previous();
+                }
+                KeyCode::Down if !self.composer.move_down() => {
+                    self.composer.recall_next();
+                }
+                KeyCode::Home => self.composer.move_line_start(),
+                KeyCode::End => self.composer.move_line_end(),
+                KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => self.composer.move_line_start(),
+                KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => self.composer.move_line_end(),
+                _ => {}
+            }
         }
+        self.refresh_progress();
     }
 
     pub fn on_paste(&mut self, text: &str) {
@@ -587,15 +639,18 @@ impl App {
         if self.prompt_in_flight || self.tool_calls.any_running() {
             self.spinner_tick = self.spinner_tick.wrapping_add(1);
         }
+        self.refresh_progress();
+        self.progress_indicator.on_tick();
         self.plan_tracker.on_tick(now);
     }
 
     pub fn wants_tick(&self) -> bool {
         self.prompt_in_flight
             || self.tool_calls.any_running()
+            || !self.workspace_move_state.is_idle()
+            || self.compaction_active
+            || self.progress_indicator.is_active()
             || self.ctrl_c_armed_at.is_some()
-            || self.workspace_move_state == WorkspaceMoveState::Moving
-            || self.workspace_move_state == WorkspaceMoveState::LoadingSession
             || self.plan_tracker.has_completed_in_grace_period()
     }
 
@@ -662,13 +717,23 @@ impl App {
             .into_iter()
             .map(|segment| match segment {
                 SegmentContent::ToolCall(id) => {
+                    let sub_agents = build_sub_agent_history_items(&self.tool_calls, &id);
                     let entry = self.tool_calls.remove(&id).unwrap_or(ToolCallEntry {
                         title: id.clone(),
                         status: ToolStatus::Success,
                         diff: None,
-                        id,
+                        id: id.clone(),
+                        raw_input: String::new(),
+                        display_value: None,
                     });
-                    HistoryItem::Tool { title: entry.title, status: entry.status, diff: entry.diff }
+                    HistoryItem::Tool {
+                        title: entry.title,
+                        status: entry.status,
+                        diff: entry.diff,
+                        raw_input: entry.raw_input,
+                        display_value: entry.display_value,
+                        sub_agents,
+                    }
                 }
                 other => resolve_plain_segment(other),
             })
@@ -692,6 +757,9 @@ impl App {
                         title: entry.map_or_else(|| id.clone(), |e| e.title.clone()),
                         status: entry.map_or(ToolStatus::Success, |e| e.status.clone()),
                         diff: entry.and_then(|value| value.diff.clone()),
+                        raw_input: entry.map_or(String::new(), |e| e.raw_input.clone()),
+                        display_value: entry.and_then(|e| e.display_value.clone()),
+                        sub_agents: build_sub_agent_history_items(&self.tool_calls, id),
                     }
                 }
                 other => resolve_plain_segment(other.clone()),
@@ -782,6 +850,18 @@ impl App {
         self.prompt_in_flight
     }
 
+    pub fn is_agent_busy(&self) -> bool {
+        self.prompt_in_flight || self.tool_calls.any_running()
+    }
+
+    pub fn compaction_active(&self) -> bool {
+        self.compaction_active
+    }
+
+    pub fn progress_indicator(&self) -> &ProgressIndicator {
+        &self.progress_indicator
+    }
+
     pub fn exit_confirmation_active(&self) -> bool {
         self.ctrl_c_armed_at.is_some()
     }
@@ -800,6 +880,19 @@ impl App {
 
     pub fn plan_tracker_mut(&mut self) -> &mut PlanTracker {
         &mut self.plan_tracker
+    }
+
+    fn refresh_progress(&mut self) {
+        let workspace = match self.workspace_move_state {
+            WorkspaceMoveState::Moving => WorkspaceProgress::Moving,
+            WorkspaceMoveState::LoadingSession => WorkspaceProgress::LoadingSession,
+            _ => WorkspaceProgress::None,
+        };
+        self.progress_indicator.update(ProgressActivity {
+            agent_busy: self.is_agent_busy(),
+            workspace,
+            compaction_active: self.compaction_active,
+        });
     }
 
     fn on_overlay_key(&mut self, key: KeyEvent) {
@@ -939,6 +1032,7 @@ impl App {
 
     fn finish_prompt(&mut self, terminal_status: &ToolStatus) {
         self.prompt_in_flight = false;
+        self.compaction_active = false;
         self.tool_calls.finalize_running(terminal_status);
         self.transcript.close_thought_block();
     }
@@ -1179,12 +1273,43 @@ fn plan_review_meta(
     }
 }
 
+fn build_sub_agent_history_items(tool_calls: &ToolCallLog, tool_id: &str) -> Vec<SubAgentHistoryItem> {
+    let Some(agents) = tool_calls.sub_agent_states(tool_id) else {
+        return Vec::new();
+    };
+    agents
+        .iter()
+        .map(|agent| SubAgentHistoryItem {
+            agent_name: agent.agent_name.clone(),
+            done: agent.done,
+            tools: agent
+                .tool_order
+                .iter()
+                .filter_map(|tool_id| agent.tool_calls.get(tool_id))
+                .map(|tc| SubAgentToolHistoryItem {
+                    name: tc.name.clone(),
+                    arguments: tc.arguments.clone(),
+                    display_value: tc.display_value.clone(),
+                    status: tc.status.clone(),
+                })
+                .collect(),
+        })
+        .collect()
+}
+
 fn resolve_plain_segment(segment: SegmentContent) -> HistoryItem {
     match segment {
         SegmentContent::UserMessage(text) => HistoryItem::User(text),
         SegmentContent::Text(text) => HistoryItem::Text(text),
         SegmentContent::Thought(text) => HistoryItem::Thought(text),
-        SegmentContent::ToolCall(id) => HistoryItem::Tool { title: id, status: ToolStatus::Success, diff: None },
+        SegmentContent::ToolCall(id) => HistoryItem::Tool {
+            title: id,
+            status: ToolStatus::Success,
+            diff: None,
+            raw_input: String::new(),
+            display_value: None,
+            sub_agents: Vec::new(),
+        },
     }
 }
 

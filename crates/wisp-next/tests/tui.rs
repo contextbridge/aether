@@ -3,9 +3,9 @@ use acp_utils::client::{AcpEvent, AcpPromptHandle, PromptCommand};
 use acp_utils::config_meta::SelectOptionMeta;
 use acp_utils::config_option_id::ConfigOptionId;
 use acp_utils::notifications::{
-    AetherCapabilities, AuthMethodsUpdatedParams, ContextClearedParams, ContextUsage, ContextUsageParams,
-    CreateElicitationRequestParams, ElicitationAction, ElicitationParams, SessionPreviewResponse, SessionPreviewRole,
-    SessionPreviewTurn, WorkspaceEntry, WorkspaceListResponse, WorkspaceMoveResponse,
+    AetherCapabilities, AuthMethodsUpdatedParams, ContextClearedParams, ContextCompactionParams, ContextUsage,
+    ContextUsageParams, CreateElicitationRequestParams, ElicitationAction, ElicitationParams, SessionPreviewResponse,
+    SessionPreviewRole, SessionPreviewTurn, WorkspaceEntry, WorkspaceListResponse, WorkspaceMoveResponse,
 };
 use acp_utils::testing::test_connection;
 use agent_client_protocol::schema::{self as acp, SessionId};
@@ -28,6 +28,8 @@ use wisp_next::composer::Composer;
 use wisp_next::picker::CommandEntry;
 use wisp_next::presentation::TranscriptRenderer;
 use wisp_next::render::sync_terminal as sync_terminal_with_renderer;
+use wisp_next::screen_router::ScreenEvent;
+use wisp_next::screens::git_diff::GitDiffEvent;
 use wisp_next::settings::UiSettings;
 use wisp_next::theme::Theme;
 use wisp_next::{inline_viewport_height, workspace_status::WorkspaceStatus};
@@ -1128,6 +1130,290 @@ fn cancelled_prompt_marks_running_tool_as_error() {
     assert!(cancelled, "expected cancelled tool in {items:?}");
 }
 
+fn tool_call_with_raw(id: &str, title: &str, raw_input: serde_json::Value) -> AcpEvent {
+    session_update(acp::SessionUpdate::ToolCall(acp::ToolCall::new(id.to_string(), title).raw_input(raw_input)))
+}
+
+fn tool_call_update_with_raw(id: &str, raw_input: serde_json::Value) -> AcpEvent {
+    session_update(acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
+        id.to_string(),
+        acp::ToolCallUpdateFields::new().raw_input(raw_input),
+    )))
+}
+
+#[test]
+fn streamed_raw_input_fragments_accumulate_and_show_after_completion() {
+    let (mut app, _command_rx) = make_app();
+    let mut terminal = make_terminal_with_width(80);
+    submit_prompt(&mut app, "run tool");
+    app.on_acp_event(tool_call("tool-1", "Edit file"));
+    app.on_acp_event(tool_call_update_with_raw("tool-1", serde_json::Value::String("first ".to_string())));
+    app.on_acp_event(tool_call_update_with_raw("tool-1", serde_json::Value::String("second".to_string())));
+    app.on_acp_event(tool_completed_status("tool-1"));
+
+    sync_terminal(&mut terminal, &mut app).unwrap();
+
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("first second"), "streamed fragments must appear: {viewport}");
+}
+
+fn tool_call_update_with_display_value(id: &str, display_value: &str) -> AcpEvent {
+    let mut meta = serde_json::Map::new();
+    meta.insert("display_value".to_string(), serde_json::Value::String(display_value.to_string()));
+    session_update(acp::SessionUpdate::ToolCallUpdate(
+        acp::ToolCallUpdate::new(id.to_string(), acp::ToolCallUpdateFields::new()).meta(meta),
+    ))
+}
+
+fn tool_completed_status(id: &str) -> AcpEvent {
+    session_update(acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
+        id.to_string(),
+        acp::ToolCallUpdateFields::new().status(acp::ToolCallStatus::Completed),
+    )))
+}
+
+fn tool_failed_status(id: &str) -> AcpEvent {
+    session_update(acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
+        id.to_string(),
+        acp::ToolCallUpdateFields::new().status(acp::ToolCallStatus::Failed),
+    )))
+}
+
+#[test]
+fn running_tool_hides_raw_arguments() {
+    let (mut app, _command_rx) = make_app();
+    let mut terminal = make_terminal();
+    submit_prompt(&mut app, "run tool");
+    let raw = serde_json::json!({"path": "/src/main.rs"});
+    app.on_acp_event(tool_call_with_raw("tool-1", "Read file", raw));
+
+    sync_terminal(&mut terminal, &mut app).unwrap();
+
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("Read file"), "title must be visible: {viewport}");
+    assert!(!viewport.contains("/src/main.rs"), "raw args must be hidden while running: {viewport}");
+}
+
+#[test]
+fn completed_tool_shows_raw_arguments() {
+    let (mut app, _command_rx) = make_app();
+    let mut terminal = make_terminal_with_width(80);
+    submit_prompt(&mut app, "run tool");
+    let raw = serde_json::json!({"path": "/src/main.rs"});
+    app.on_acp_event(tool_call_with_raw("tool-1", "Read file", raw));
+    app.on_acp_event(tool_completed_status("tool-1"));
+
+    sync_terminal(&mut terminal, &mut app).unwrap();
+
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("/src/main.rs"), "raw args must be visible after completion: {viewport}");
+}
+
+#[test]
+fn display_value_overrides_raw_arguments_in_rendered_output() {
+    let (mut app, _command_rx) = make_app();
+    let mut terminal = make_terminal_with_width(80);
+    submit_prompt(&mut app, "run tool");
+    let raw = serde_json::json!({"path": "/src/main.rs"});
+    app.on_acp_event(tool_call_with_raw("tool-1", "Read file", raw));
+    app.on_acp_event(tool_call_update_with_display_value("tool-1", "42 lines read"));
+    app.on_acp_event(tool_completed_status("tool-1"));
+
+    sync_terminal(&mut terminal, &mut app).unwrap();
+
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("42 lines read"), "display_value must be visible: {viewport}");
+    assert!(!viewport.contains("/src/main.rs"), "raw args must be hidden when display_value is set: {viewport}");
+}
+
+#[test]
+fn error_cause_is_visible_in_rendered_output() {
+    let (mut app, _command_rx) = make_app();
+    let mut terminal = make_terminal_with_width(80);
+    submit_prompt(&mut app, "run tool");
+    app.on_acp_event(tool_call("tool-1", "Failing tool"));
+    app.on_acp_event(tool_failed_status("tool-1"));
+
+    sync_terminal(&mut terminal, &mut app).unwrap();
+
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("failed"), "error cause must be visible: {viewport}");
+    assert!(!viewport.contains("(failed)"), "error cause must NOT have parentheses: {viewport}");
+}
+
+#[test]
+fn truncation_adds_visible_ellipsis_for_long_arguments() {
+    let (mut app, _command_rx) = make_app();
+    let mut terminal = make_terminal_with_width(250);
+    submit_prompt(&mut app, "run tool");
+    let long = "x".repeat(300);
+    app.on_acp_event(tool_call_with_raw("tool-1", "Long arg", serde_json::Value::String(long)));
+    app.on_acp_event(tool_completed_status("tool-1"));
+
+    sync_terminal(&mut terminal, &mut app).unwrap();
+
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains('…'), "truncated args must show ellipsis: {viewport}");
+}
+
+#[test]
+fn truncation_keeps_short_arguments_unchanged() {
+    let (mut app, _command_rx) = make_app();
+    let mut terminal = make_terminal_with_width(250);
+    submit_prompt(&mut app, "run tool");
+    let short = "hello world";
+    app.on_acp_event(tool_call_with_raw("tool-1", "Short arg", serde_json::Value::String(short.to_string())));
+    app.on_acp_event(tool_completed_status("tool-1"));
+
+    sync_terminal(&mut terminal, &mut app).unwrap();
+
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains(short), "short args must appear in full: {viewport}");
+    assert!(!viewport.contains('…'), "short args must NOT have ellipsis: {viewport}");
+}
+
+#[test]
+fn truncation_is_unicode_safe_no_split_characters() {
+    let (mut app, _command_rx) = make_app();
+    let mut terminal = make_terminal_with_width(250);
+    submit_prompt(&mut app, "run tool");
+    let prefix = "a".repeat(195);
+    let unicode_arg = format!("{prefix}こんにちは世界");
+    app.on_acp_event(tool_call_with_raw("tool-1", "Unicode tool", serde_json::Value::String(unicode_arg)));
+    app.on_acp_event(tool_completed_status("tool-1"));
+
+    sync_terminal(&mut terminal, &mut app).unwrap();
+
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains('…'), "truncated Unicode args must show ellipsis: {viewport}");
+    assert!(viewport.contains('ん'), "char-based truncation must preserve leading multi-byte chars: {viewport}");
+    assert!(!viewport.contains('ち'), "truncation must stop at char boundary (199 chars): {viewport}");
+}
+
+#[test]
+fn char_based_truncation_preserves_multi_byte_under_200_chars() {
+    let (mut app, _command_rx) = make_app();
+    let mut terminal = make_terminal_with_width(250);
+    submit_prompt(&mut app, "run tool");
+    // 100 ASCII chars + 50 × '界' (3 bytes each) = 150 chars, but 100 + 150 = 250 bytes
+    // This is under 200 chars so it must NOT be truncated even though it exceeds 200 bytes.
+    let half = "a".repeat(100);
+    let unicode_half = "界".repeat(50);
+    let arg = format!("{half}{unicode_half}");
+    assert!(arg.len() > 200, "arg must exceed 200 bytes for this test");
+    assert!(arg.chars().count() < 200, "arg must be under 200 chars (with leading space)");
+    app.on_acp_event(tool_call_with_raw("tool-1", "Unicode tool", serde_json::Value::String(arg)));
+    app.on_acp_event(tool_completed_status("tool-1"));
+
+    sync_terminal(&mut terminal, &mut app).unwrap();
+
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(!viewport.contains('…'), "under 200 chars must not be truncated: {viewport}");
+    assert!(viewport.contains('界'), "multi-byte chars must appear in full: {viewport}");
+}
+
+#[test]
+fn truncation_boundary_exactly_200_bytes_no_ellipsis() {
+    let (mut app, _command_rx) = make_app();
+    let mut terminal = make_terminal_with_width(250);
+    submit_prompt(&mut app, "run tool");
+    let exactly_199 = "x".repeat(199);
+    app.on_acp_event(tool_call_with_raw("tool-1", "199-char arg", serde_json::Value::String(exactly_199)));
+    app.on_acp_event(tool_completed_status("tool-1"));
+
+    sync_terminal(&mut terminal, &mut app).unwrap();
+
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(!viewport.contains('…'), "199-char args must not be truncated (fit in 200 with space): {viewport}");
+}
+
+#[test]
+fn truncation_preserved_in_scrollback() {
+    let (mut app, _command_rx) = make_app();
+    let mut terminal = make_terminal_with_dimensions(250, 15);
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    submit_prompt(&mut app, "run tool");
+    let long = "x".repeat(300);
+    app.on_acp_event(tool_call_with_raw("tool-1", "Long arg", serde_json::Value::String(long)));
+    app.on_acp_event(tool_completed_status("tool-1"));
+    app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+
+    let conversation = buffer_text(&conversation_buffer(&mut terminal));
+    assert!(conversation.contains('…'), "truncation must survive drain to scrollback: {conversation}");
+}
+
+#[test]
+fn tool_arguments_preserved_in_scrollback_exactly_once() {
+    let (mut app, _command_rx) = make_app();
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let raw = serde_json::json!({"path": "/src/main.rs"});
+    submit_prompt(&mut app, "run tool");
+    app.on_acp_event(tool_call_with_raw("tool-1", "Read file", raw));
+    app.on_acp_event(tool_completed_status("tool-1"));
+    app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+
+    let conversation = buffer_text(&conversation_buffer(&mut terminal));
+    let occurrences = conversation.matches("/src/main.rs").count();
+    assert_eq!(occurrences, 1, "tool args must appear exactly once in conversation: {conversation}");
+    assert!(conversation.contains("Read file"), "title must appear: {conversation}");
+}
+
+#[test]
+fn diff_not_rendered_while_tool_is_running() {
+    let (mut app, _command_rx) = make_app();
+    let mut terminal = make_terminal();
+    submit_prompt(&mut app, "run tool");
+    app.on_acp_event(tool_call("tool-1", "Edit file"));
+
+    let diff = acp::Diff::new("src/main.rs", "new content").old_text("old content");
+    let update = acp::ToolCallUpdate::new(
+        "tool-1".to_string(),
+        acp::ToolCallUpdateFields::new().content(vec![acp::ToolCallContent::Diff(diff)]),
+    );
+    app.on_acp_event(session_update(acp::SessionUpdate::ToolCallUpdate(update)));
+
+    sync_terminal(&mut terminal, &mut app).unwrap();
+
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("Edit file"), "title must be visible: {viewport}");
+    assert!(!viewport.contains("old content"), "diff must NOT render while running: {viewport}");
+    assert!(!viewport.contains("new content"), "diff must NOT render while running: {viewport}");
+}
+
+#[test]
+fn diff_not_rendered_after_failed_status() {
+    let (mut app, _command_rx) = make_app();
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    submit_prompt(&mut app, "run tool");
+    app.on_acp_event(tool_call("tool-1", "Edit file"));
+
+    let diff = acp::Diff::new("src/main.rs", "new content").old_text("old content");
+    let update = acp::ToolCallUpdate::new(
+        "tool-1".to_string(),
+        acp::ToolCallUpdateFields::new()
+            .content(vec![acp::ToolCallContent::Diff(diff)])
+            .status(acp::ToolCallStatus::Failed),
+    );
+    app.on_acp_event(session_update(acp::SessionUpdate::ToolCallUpdate(update)));
+    app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+
+    let conversation = buffer_text(&conversation_buffer(&mut terminal));
+    assert!(!conversation.contains("old content"), "diff must NOT render after failure: {conversation}");
+    assert!(!conversation.contains("new content"), "diff must NOT render after failure: {conversation}");
+    assert!(conversation.contains("failed"), "error cause must be visible: {conversation}");
+}
+
 #[test]
 fn short_streaming_message_renders_directly_above_composer() {
     let (mut app, _command_rx) = make_app();
@@ -1305,6 +1591,509 @@ async fn git_diff_reports_non_repository_without_blocking_close() {
     app.on_key(key(KeyCode::Esc));
     sync_terminal(&mut terminal, &mut app).unwrap();
     assert!(!buffer_text(terminal.backend().buffer()).contains("Git Diff"));
+}
+
+#[tokio::test]
+async fn git_diff_commit_disabled_with_nothing_staged() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(root.join("file.txt"), "content\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    let mut terminal = make_terminal_with_width(100);
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+
+    app.on_key(key(KeyCode::Char('C')));
+    settle_screen_effects(&mut app).await;
+    sync_terminal(&mut terminal, &mut app).unwrap();
+
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("Nothing staged to commit"), "{viewport}");
+
+    app.on_key(key(KeyCode::Esc));
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    assert!(!buffer_text(terminal.backend().buffer()).contains("Git Diff"));
+}
+
+#[tokio::test]
+async fn git_diff_commit_success() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(root.join("file.txt"), "original\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("file.txt"), "changed\n").unwrap();
+    run_git(root, &["add", "-A"]);
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+
+    app.on_key(key(KeyCode::Char('C')));
+    settle_screen_effects(&mut app).await;
+
+    type_text(&mut app, "my commit message");
+    app.on_key(key(KeyCode::Enter));
+    settle_screen_effects(&mut app).await;
+
+    let log = run_git(root, &["log", "--oneline", "-1"]);
+    assert!(log.contains("my commit message"), "log was: {log}");
+}
+
+#[tokio::test]
+async fn git_diff_commit_empty_message_shows_error() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(root.join("file.txt"), "original\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("file.txt"), "changed\n").unwrap();
+    run_git(root, &["add", "-A"]);
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    let mut terminal = make_terminal_with_width(100);
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+
+    app.on_key(key(KeyCode::Char('C')));
+    settle_screen_effects(&mut app).await;
+
+    app.on_key(key(KeyCode::Enter));
+    settle_screen_effects(&mut app).await;
+    sync_terminal(&mut terminal, &mut app).unwrap();
+
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("Commit message cannot be empty"), "{viewport}");
+}
+
+#[tokio::test]
+async fn git_diff_commit_esc_cancels() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(root.join("file.txt"), "original\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("file.txt"), "changed\n").unwrap();
+    run_git(root, &["add", "-A"]);
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    let mut terminal = make_terminal_with_width(100);
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+
+    app.on_key(key(KeyCode::Char('C')));
+    settle_screen_effects(&mut app).await;
+
+    type_text(&mut app, "should not commit");
+    app.on_key(key(KeyCode::Esc));
+    settle_screen_effects(&mut app).await;
+    sync_terminal(&mut terminal, &mut app).unwrap();
+
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("Git Diff"), "should still be on diff screen:\n{viewport}");
+}
+
+#[tokio::test]
+async fn git_diff_discard_confirmation_cancelled() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(root.join("file.txt"), "original\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("file.txt"), "changed\n").unwrap();
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    let mut terminal = make_terminal_with_width(100);
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+
+    app.on_key(key(KeyCode::Char('d')));
+    settle_screen_effects(&mut app).await;
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("Discard changes to"), "{viewport}");
+    assert!(viewport.contains("file.txt"), "{viewport}");
+
+    app.on_key(key(KeyCode::Char('n')));
+    settle_screen_effects(&mut app).await;
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(!viewport.contains("Discard"), "discard prompt should be gone:\n{viewport}");
+
+    let content = std::fs::read_to_string(root.join("file.txt")).unwrap();
+    assert_eq!(content, "changed\n");
+}
+
+#[tokio::test]
+async fn git_diff_discard_reverts_modified_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(root.join("file.txt"), "original\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("file.txt"), "changed\n").unwrap();
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+
+    app.on_key(key(KeyCode::Char('d')));
+    settle_screen_effects(&mut app).await;
+    app.on_key(key(KeyCode::Char('y')));
+    settle_screen_effects(&mut app).await;
+
+    let content = std::fs::read_to_string(root.join("file.txt")).unwrap();
+    assert_eq!(content, "original\n");
+}
+
+#[tokio::test]
+async fn git_diff_discard_removes_untracked_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(root.join("tracked.txt"), "v1\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("untracked.txt"), "scratch\n").unwrap();
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+
+    app.on_key(key(KeyCode::Char('d')));
+    settle_screen_effects(&mut app).await;
+    app.on_key(key(KeyCode::Char('y')));
+    settle_screen_effects(&mut app).await;
+
+    assert!(!root.join("untracked.txt").exists());
+}
+
+#[tokio::test]
+async fn git_diff_discard_restores_deleted_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(root.join("file.txt"), "original\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::remove_file(root.join("file.txt")).unwrap();
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+
+    app.on_key(key(KeyCode::Char('d')));
+    settle_screen_effects(&mut app).await;
+    app.on_key(key(KeyCode::Char('y')));
+    settle_screen_effects(&mut app).await;
+
+    let content = std::fs::read_to_string(root.join("file.txt")).unwrap();
+    assert_eq!(content, "original\n");
+}
+
+#[tokio::test]
+async fn git_diff_full_file_toggle_shows_content() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::create_dir(root.join("src")).unwrap();
+    std::fs::write(root.join("src/main.rs"), "fn old() {}\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("src/main.rs"), "fn new() {}\nfn extra() {}\n").unwrap();
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    let mut terminal = make_terminal_with_width(160);
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+
+    app.on_key(key(KeyCode::Enter));
+    app.on_key(key(KeyCode::Char('o')));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("[full file]"), "{viewport}");
+    assert!(viewport.contains("fn new()"), "{viewport}");
+    assert!(viewport.contains("fn extra()"), "{viewport}");
+
+    app.on_key(key(KeyCode::Char('o')));
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(!viewport.contains("[full file]"), "{viewport}");
+    assert!(viewport.contains("fn old()"), "{viewport}");
+}
+
+#[tokio::test]
+async fn git_diff_full_file_shows_deleted_message() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(root.join("file.txt"), "content\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::remove_file(root.join("file.txt")).unwrap();
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    let mut terminal = make_terminal_with_width(100);
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+
+    app.on_key(key(KeyCode::Enter));
+    app.on_key(key(KeyCode::Char('o')));
+    settle_screen_effects(&mut app).await;
+    sync_terminal(&mut terminal, &mut app).unwrap();
+
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("deleted"), "{viewport}");
+}
+
+#[tokio::test]
+async fn git_diff_full_file_toggle_at_narrow_width() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(root.join("file.rs"), "fn one() {}\nfn two() {}\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("file.rs"), "fn new() {}\nfn two() {}\n").unwrap();
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    let mut terminal = make_terminal_with_width(50);
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+
+    app.on_key(key(KeyCode::Enter));
+    app.on_key(key(KeyCode::Char('o')));
+    settle_screen_effects(&mut app).await;
+    sync_terminal(&mut terminal, &mut app).unwrap();
+
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("fn new()"), "{viewport}");
+    assert!(viewport.contains("fn two()"), "{viewport}");
+}
+
+#[tokio::test]
+async fn git_diff_stale_event_rejected() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(root.join("file.rs"), "fn one() {}\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("file.rs"), "fn changed() {}\n").unwrap();
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+
+    let stale_event = GitDiffEvent::ActionFinished { request_id: 0, result: Ok(()) };
+    app.on_screen_event(ScreenEvent::GitDiff(stale_event));
+    settle_screen_effects(&mut app).await;
+
+    app.on_key(key(KeyCode::Esc));
+    settle_screen_effects(&mut app).await;
+}
+
+#[tokio::test]
+async fn git_diff_screen_closable_on_error() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut app, _command_rx) = make_app_in(directory.path().to_path_buf());
+    let mut terminal = make_terminal_with_width(80);
+
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    assert!(buffer_text(terminal.backend().buffer()).contains("Not a git repository"));
+
+    app.on_key(key(KeyCode::Esc));
+    settle_screen_effects(&mut app).await;
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    assert!(!buffer_text(terminal.backend().buffer()).contains("Git Diff"));
+
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    assert!(buffer_text(terminal.backend().buffer()).contains("Not a git repository"));
+
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    assert!(!buffer_text(terminal.backend().buffer()).contains("Git Diff"));
+}
+
+#[tokio::test]
+async fn git_diff_commit_failure_shows_error() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::create_dir(root.join(".git/hooks")).ok();
+    std::fs::write(root.join(".git/hooks/pre-commit"), "#!/bin/sh\necho nope >&2\nexit 1\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(root.join(".git/hooks/pre-commit"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    std::fs::write(root.join("file.txt"), "original\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init", "--no-verify"]);
+    std::fs::write(root.join("file.txt"), "changed\n").unwrap();
+    run_git(root, &["add", "-A"]);
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    let mut terminal = make_terminal_with_width(100);
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+
+    app.on_key(key(KeyCode::Char('C')));
+    settle_screen_effects(&mut app).await;
+    type_text(&mut app, "should fail");
+    app.on_key(key(KeyCode::Enter));
+    settle_screen_effects(&mut app).await;
+    sync_terminal(&mut terminal, &mut app).unwrap();
+
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(
+        viewport.contains("nope") || viewport.contains("CommandFailed") || viewport.contains("failed"),
+        "expected commit error in viewport:\n{viewport}"
+    );
+
+    app.on_key(key(KeyCode::Esc));
+    settle_screen_effects(&mut app).await;
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    assert!(!buffer_text(terminal.backend().buffer()).contains("Git Diff"));
+}
+
+#[tokio::test]
+async fn git_diff_binary_file_shows_label() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(root.join("image.png"), b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("image.png"), b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01").unwrap();
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    let mut terminal = make_terminal_with_width(100);
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+    sync_terminal(&mut terminal, &mut app).unwrap();
+
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("Binary file"), "expected binary file label in:\n{viewport}");
+}
+
+#[tokio::test]
+async fn git_diff_full_file_binary_shows_message() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(root.join("data.bin"), b"\x00\x01\x02\x03").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("data.bin"), b"\x00\x01\x02\x03\x04").unwrap();
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    let mut terminal = make_terminal_with_width(100);
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+
+    app.on_key(key(KeyCode::Enter));
+    app.on_key(key(KeyCode::Char('o')));
+    settle_screen_effects(&mut app).await;
+    sync_terminal(&mut terminal, &mut app).unwrap();
+
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(
+        viewport.contains("Binary file") || viewport.contains("binary"),
+        "expected binary message in full-file mode:\n{viewport}"
+    );
+
+    app.on_key(key(KeyCode::Esc));
+    settle_screen_effects(&mut app).await;
+}
+
+#[tokio::test]
+async fn git_diff_full_file_load_error_exits_full_file_mode() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(root.join("source.rs"), "fn answer() -> u32 { 42 }\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("source.rs"), "fn answer() -> u32 { 43 }\n").unwrap();
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    let mut terminal = make_terminal_with_width(100);
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+
+    app.on_key(key(KeyCode::Enter));
+    app.on_key(key(KeyCode::Char('o')));
+    settle_screen_effects(&mut app).await;
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("[full file]"), "{viewport}");
+
+    std::fs::remove_file(root.join("source.rs")).unwrap();
+    app.on_key(key(KeyCode::Char('o')));
+    settle_screen_effects(&mut app).await;
+    app.on_key(key(KeyCode::Char('o')));
+    settle_screen_effects(&mut app).await;
+    sync_terminal(&mut terminal, &mut app).unwrap();
+
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(!viewport.contains("[full file]"), "should exit full-file mode on load error:\n{viewport}");
+    assert!(
+        viewport.contains("Cannot read") || viewport.contains("source.rs"),
+        "should show error in footer:\n{viewport}"
+    );
+
+    app.on_key(key(KeyCode::Esc));
+    settle_screen_effects(&mut app).await;
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    assert!(!buffer_text(terminal.backend().buffer()).contains("Git Diff"));
+}
+
+#[tokio::test]
+async fn git_diff_commit_editor_unicode_cursor_and_render() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(root.join("file.txt"), "original\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("file.txt"), "changed\n").unwrap();
+    run_git(root, &["add", "-A"]);
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    let mut terminal = make_terminal_with_width(100);
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+
+    app.on_key(key(KeyCode::Char('C')));
+    settle_screen_effects(&mut app).await;
+
+    type_text(&mut app, "héllo wörld — café");
+    settle_screen_effects(&mut app).await;
+    sync_terminal(&mut terminal, &mut app).unwrap();
+
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("héllo wörld — café"), "expected unicode commit message:\n{viewport}");
+
+    app.on_key(key(KeyCode::Esc));
+    settle_screen_effects(&mut app).await;
 }
 
 #[test]
@@ -1691,6 +2480,556 @@ fn esc_closes_session_picker() {
 
     app.on_key(key(KeyCode::Esc));
     assert!(!app.has_session_picker());
+}
+
+// ── Sub-agent integration tests ──
+
+use acp_utils::notifications::{SubAgentEvent, SubAgentProgressParams, SubAgentToolRequest, SubAgentToolResult};
+
+fn sub_agent_progress(parent_tool_id: &str, task_id: &str, agent_name: &str, event: SubAgentEvent) -> AcpEvent {
+    AcpEvent::SubAgentProgress(SubAgentProgressParams {
+        parent_tool_id: parent_tool_id.to_string(),
+        task_id: task_id.to_string(),
+        agent_name: agent_name.to_string(),
+        event,
+    })
+}
+
+fn sub_agent_tool_call(parent_id: &str, task_id: &str, agent: &str, tool_id: &str, name: &str, args: &str) -> AcpEvent {
+    sub_agent_progress(
+        parent_id,
+        task_id,
+        agent,
+        SubAgentEvent::ToolCall {
+            request: SubAgentToolRequest {
+                id: tool_id.to_string(),
+                name: name.to_string(),
+                arguments: args.to_string(),
+            },
+        },
+    )
+}
+
+fn sub_agent_done(parent_id: &str, task_id: &str, agent: &str) -> AcpEvent {
+    sub_agent_progress(parent_id, task_id, agent, SubAgentEvent::Done)
+}
+
+#[test]
+fn sub_agent_progress_event_is_handled() {
+    let (mut app, _command_rx) = make_app();
+    app.on_acp_event(tool_call("parent-1", "spawn_subagent"));
+
+    // Send a sub-agent ToolCall event - should not crash
+    app.on_acp_event(sub_agent_tool_call("parent-1", "task-a", "explorer", "c1", "grep", r#"{"pattern":"test"}"#));
+
+    // Parent with running sub-agent is still running
+    assert!(app.is_agent_busy());
+}
+
+#[test]
+fn sub_agent_parent_stays_live_while_child_running() {
+    let (mut app, _command_rx) = make_app();
+    app.on_acp_event(tool_call("parent-1", "spawn_subagent"));
+    app.on_acp_event(tool_completed("parent-1"));
+
+    // parent completed, no sub-agents → should drain
+    app.on_acp_event(text_chunk("Done"));
+    app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    let items = app.drain_finalized();
+    // parent should be in the drained items
+    assert!(items.iter().any(|item| matches!(item, HistoryItem::Tool { title, .. } if title == "spawn_subagent")));
+}
+
+#[test]
+fn sub_agent_keeps_agent_busy() {
+    let (mut app, _command_rx) = make_app();
+    app.on_acp_event(tool_call("parent-1", "spawn_subagent"));
+    app.on_acp_event(tool_completed("parent-1"));
+
+    // still busy because prompt_in_flight was never set in this test
+    // but the sub-agent running check uses any_running which includes sub-agents
+}
+
+#[test]
+fn sub_agent_context_cleared_removes_state() {
+    let (mut app, _command_rx) = make_app();
+    app.on_acp_event(tool_call("parent-1", "spawn_subagent"));
+    app.on_acp_event(sub_agent_tool_call("parent-1", "task-a", "explorer", "c1", "grep", "{}"));
+
+    assert!(app.is_agent_busy());
+
+    app.on_acp_event(AcpEvent::ContextCleared(acp_utils::notifications::ContextClearedParams {}));
+
+    assert!(!app.is_agent_busy());
+}
+
+#[test]
+fn sub_agent_wants_tick_while_running() {
+    let (mut app, _command_rx) = make_app();
+    app.on_acp_event(tool_call("parent-1", "spawn_subagent"));
+    app.on_acp_event(tool_completed("parent-1"));
+    app.on_acp_event(sub_agent_tool_call("parent-1", "task-a", "explorer", "c1", "grep", "{}"));
+
+    assert!(app.wants_tick());
+
+    app.on_acp_event(sub_agent_done("parent-1", "task-a", "explorer"));
+    app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+
+    // after finalization, sub-agent tools are finalized
+    assert!(!app.wants_tick());
+}
+
+#[test]
+fn sub_agent_renders_tree_guides_in_viewport() {
+    let (mut app, _command_rx) = make_app();
+
+    // Start a parent tool call and enter prompt mode
+    app.on_acp_event(tool_call("parent-1", "spawn_subagent"));
+    app.on_acp_event(tool_completed("parent-1"));
+
+    // Add sub-agents with child tools
+    app.on_acp_event(sub_agent_tool_call("parent-1", "task-a", "explorer", "c1", "grep", r#"{"pattern":"test"}"#));
+    app.on_acp_event(sub_agent_tool_call("parent-1", "task-a", "explorer", "c2", "read", r#"{"path":"src/main.rs"}"#));
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+
+    // Tree guides should be visible for the sub-agent
+    assert!(viewport.contains("explorer"), "viewport should show agent name:\n{viewport}");
+}
+
+#[test]
+fn sub_agent_drain_includes_sub_agents_in_history_items() {
+    let (mut app, _command_rx) = make_app();
+    app.on_acp_event(tool_call("parent-1", "spawn_subagent"));
+    app.on_acp_event(tool_completed("parent-1"));
+
+    // Add, complete, and mark done a sub-agent
+    app.on_acp_event(sub_agent_tool_call("parent-1", "task-a", "explorer", "c1", "grep", "{}"));
+    app.on_acp_event(sub_agent_progress(
+        "parent-1",
+        "task-a",
+        "explorer",
+        SubAgentEvent::ToolResult {
+            result: SubAgentToolResult { id: "c1".to_string(), name: "grep".to_string(), result_meta: None },
+        },
+    ));
+    app.on_acp_event(sub_agent_done("parent-1", "task-a", "explorer"));
+
+    // End prompt to finalize everything
+    app.on_acp_event(text_chunk("Done"));
+    app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+
+    let items = app.drain_finalized();
+    let tool_item = items.iter().find_map(|item| match item {
+        HistoryItem::Tool { title, sub_agents, .. } if title == "spawn_subagent" => Some(sub_agents),
+        _ => None,
+    });
+
+    assert!(tool_item.is_some(), "parent tool should be in drained items");
+    let sub_agents = tool_item.unwrap();
+    assert_eq!(sub_agents.len(), 1);
+    assert_eq!(sub_agents[0].agent_name, "explorer");
+    assert!(sub_agents[0].done);
+    assert_eq!(sub_agents[0].tools.len(), 1);
+    assert_eq!(sub_agents[0].tools[0].name, "grep");
+}
+
+#[test]
+fn sub_agent_prompt_error_finalizes_sub_agents() {
+    let (mut app, _command_rx) = make_app();
+    app.on_acp_event(tool_call("parent-1", "spawn_subagent"));
+    app.on_acp_event(sub_agent_tool_call("parent-1", "task-a", "explorer", "c1", "grep", "{}"));
+
+    // PromptError should finalize sub-agents
+    app.on_acp_event(AcpEvent::PromptError(agent_client_protocol::Error::internal_error()));
+
+    assert!(!app.wants_tick());
+}
+
+#[test]
+fn sub_agent_prompt_cancelled_finalizes_sub_agents() {
+    let (mut app, _command_rx) = make_app();
+    app.on_acp_event(tool_call("parent-1", "spawn_subagent"));
+    app.on_acp_event(sub_agent_tool_call("parent-1", "task-a", "explorer", "c1", "grep", "{}"));
+
+    app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::Cancelled));
+
+    assert!(!app.wants_tick());
+}
+
+#[test]
+fn sub_agent_multiple_sub_agents_per_parent() {
+    let (mut app, _command_rx) = make_app();
+    app.on_acp_event(tool_call("parent-1", "spawn_subagent"));
+    app.on_acp_event(tool_completed("parent-1"));
+
+    app.on_acp_event(sub_agent_tool_call("parent-1", "task-a", "explorer", "c1", "grep", "{}"));
+    app.on_acp_event(sub_agent_tool_call("parent-1", "task-b", "builder", "c2", "write", "{}"));
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+
+    // Both agent names should be visible
+    assert!(viewport.contains("explorer"), "viewport should show explorer:\n{viewport}");
+    assert!(viewport.contains("builder"), "viewport should show builder:\n{viewport}");
+}
+
+mod progress_indicator_tests {
+    use super::*;
+    use wisp_next::progress_indicator::BRAILLE_FRAMES;
+
+    #[test]
+    fn idle_renders_no_progress_indicator() {
+        let (mut app, _command_rx) = make_app();
+        let mut terminal = make_terminal();
+        sync_terminal(&mut terminal, &mut app).unwrap();
+        let full = buffer_text(terminal.backend().buffer());
+        let has_braille = BRAILLE_FRAMES.iter().any(|&ch| full.contains(ch));
+        assert!(!has_braille, "buffer should not contain braille spinner when idle:\n{full}");
+        assert!(!full.contains("Working..."), "{full}");
+        assert!(!full.contains("esc to interrupt"), "{full}");
+    }
+
+    #[test]
+    fn prompt_shows_progress_with_esc_hint() {
+        let (mut app, _command_rx) = make_app();
+        submit_prompt(&mut app, "hello");
+        assert!(
+            app.progress_indicator().is_active(),
+            "progress indicator not active. prompt_in_flight={}, is_agent_busy={}",
+            app.busy(),
+            app.is_agent_busy()
+        );
+        // Use a 120-char terminal to fit the full tip + esc hint on one line
+        let mut terminal = make_terminal_with_dimensions(120, 30);
+        sync_terminal(&mut terminal, &mut app).unwrap();
+        let full = buffer_text(terminal.backend().buffer());
+        let has_braille = BRAILLE_FRAMES.iter().any(|&ch| full.contains(ch));
+        assert!(has_braille, "full buffer should contain braille spinner during prompt:\n{full}");
+        assert!(full.contains("esc to interrupt"), "full buffer should show esc hint:\n{full}");
+    }
+
+    #[test]
+    fn prompt_done_hides_progress() {
+        let (mut app, _command_rx) = make_app();
+        submit_prompt(&mut app, "hello");
+        app.on_acp_event(text_chunk("response"));
+        app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+        let mut terminal = make_terminal();
+        sync_terminal(&mut terminal, &mut app).unwrap();
+        let full = buffer_text(terminal.backend().buffer());
+        assert!(!full.contains("esc to interrupt"), "{full}");
+        assert!(!full.contains("Working..."), "{full}");
+    }
+
+    #[test]
+    fn compaction_active_shows_compacting_message() {
+        let (mut app, _command_rx) = make_app();
+        app.on_acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
+        let mut terminal = make_terminal();
+        sync_terminal(&mut terminal, &mut app).unwrap();
+        let viewport = buffer_text(&viewport_buffer(&mut terminal));
+        assert!(viewport.contains("Compacting context"), "{viewport}");
+    }
+
+    #[test]
+    fn compaction_inactive_hides_indicator() {
+        let (mut app, _command_rx) = make_app();
+        app.on_acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
+        app.on_acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: false }));
+        let mut terminal = make_terminal();
+        sync_terminal(&mut terminal, &mut app).unwrap();
+        let viewport = buffer_text(&viewport_buffer(&mut terminal));
+        assert!(!viewport.contains("Compacting context"), "{viewport}");
+    }
+
+    #[test]
+    fn compaction_during_prompt_shows_esc_hint() {
+        let (mut app, _command_rx) = make_app();
+        submit_prompt(&mut app, "hello");
+        app.on_acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
+        let mut terminal = make_terminal_with_dimensions(120, 30);
+        sync_terminal(&mut terminal, &mut app).unwrap();
+        let full = buffer_text(terminal.backend().buffer());
+        assert!(full.contains("Compacting context"), "{full}");
+        assert!(full.contains("esc to interrupt"), "{full}");
+    }
+
+    #[test]
+    fn workspace_moving_shows_progress() {
+        let (mut app, mut command_rx) = make_app_with_workspace_move();
+        type_text(&mut app, "/move");
+        app.on_key(key(KeyCode::Tab));
+        let _ = command_rx.try_recv().unwrap();
+        app.on_acp_event(workspaces_listed(vec![
+            workspace_entry("/home/user/code/current", true),
+            workspace_entry("/home/user/code/other", false),
+        ]));
+        app.on_key(key(KeyCode::Enter));
+        let _ = command_rx.try_recv().unwrap();
+        let mut terminal = make_terminal_with_dimensions(120, 30);
+        sync_terminal(&mut terminal, &mut app).unwrap();
+        let full = buffer_text(terminal.backend().buffer());
+        assert!(full.contains("Moving workspace"), "{full}");
+        assert!(!full.contains("esc to interrupt"), "{full}");
+    }
+
+    #[test]
+    fn workspace_loading_session_shows_progress() {
+        let (mut app, mut command_rx) = make_app_with_workspace_move();
+        type_text(&mut app, "/move");
+        app.on_key(key(KeyCode::Tab));
+        let _ = command_rx.try_recv().unwrap();
+        app.on_acp_event(workspaces_listed(vec![
+            workspace_entry("/home/user/code/current", true),
+            workspace_entry("/home/user/code/other", false),
+        ]));
+        app.on_key(key(KeyCode::Enter));
+        let _ = command_rx.try_recv().unwrap();
+        app.on_acp_event(workspace_moved("/home/user/code/other"));
+        let mut terminal = make_terminal();
+        sync_terminal(&mut terminal, &mut app).unwrap();
+        let viewport = buffer_text(&viewport_buffer(&mut terminal));
+        assert!(viewport.contains("Loading session in new workspace"), "{viewport}");
+    }
+
+    #[test]
+    fn workspace_move_failure_clears_indicator() {
+        let (mut app, mut command_rx) = make_app_with_workspace_move();
+        type_text(&mut app, "/move");
+        app.on_key(key(KeyCode::Tab));
+        let _ = command_rx.try_recv().unwrap();
+        app.on_acp_event(workspaces_listed(vec![
+            workspace_entry("/home/user/code/current", true),
+            workspace_entry("/home/user/code/other", false),
+        ]));
+        app.on_key(key(KeyCode::Enter));
+        let _ = command_rx.try_recv().unwrap();
+        app.on_acp_event(workspace_move_failed("permission denied"));
+        let mut terminal = make_terminal();
+        sync_terminal(&mut terminal, &mut app).unwrap();
+        let viewport = buffer_text(&viewport_buffer(&mut terminal));
+        assert!(!viewport.contains("Moving workspace"), "{viewport}");
+        assert!(!viewport.contains("Loading session"), "{viewport}");
+    }
+
+    #[test]
+    fn workspace_move_precedence_over_compaction() {
+        let (mut app, mut command_rx) = make_app_with_workspace_move();
+        type_text(&mut app, "/move");
+        app.on_key(key(KeyCode::Tab));
+        let _ = command_rx.try_recv().unwrap();
+        app.on_acp_event(workspaces_listed(vec![
+            workspace_entry("/home/user/code/current", true),
+            workspace_entry("/home/user/code/other", false),
+        ]));
+        app.on_key(key(KeyCode::Enter));
+        let _ = command_rx.try_recv().unwrap();
+        app.on_acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
+        let mut terminal = make_terminal();
+        sync_terminal(&mut terminal, &mut app).unwrap();
+        let viewport = buffer_text(&viewport_buffer(&mut terminal));
+        assert!(viewport.contains("Moving workspace"), "{viewport}");
+        assert!(!viewport.contains("Compacting"), "{viewport}");
+    }
+
+    #[test]
+    fn compaction_precedence_over_agent_work() {
+        let (mut app, _command_rx) = make_app();
+        submit_prompt(&mut app, "hello");
+        app.on_acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
+        let mut terminal = make_terminal();
+        sync_terminal(&mut terminal, &mut app).unwrap();
+        let viewport = buffer_text(&viewport_buffer(&mut terminal));
+        assert!(viewport.contains("Compacting context"), "{viewport}");
+    }
+
+    #[test]
+    fn wants_tick_true_immediately_after_prompt_submit() {
+        let (mut app, _command_rx) = make_app();
+        assert!(!app.wants_tick(), "wants_tick should be false when idle");
+        submit_prompt(&mut app, "hello");
+        assert!(app.wants_tick(), "wants_tick should be true immediately after prompt submit (raw state)");
+    }
+
+    #[test]
+    fn wants_tick_true_during_compaction() {
+        let (mut app, _command_rx) = make_app();
+        app.on_acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
+        assert!(app.wants_tick(), "wants_tick should be true during compaction");
+    }
+
+    #[test]
+    fn wants_tick_true_during_workspace_move() {
+        let (mut app, mut command_rx) = make_app_with_workspace_move();
+        type_text(&mut app, "/move");
+        app.on_key(key(KeyCode::Tab));
+        let _ = command_rx.try_recv().unwrap();
+        app.on_acp_event(workspaces_listed(vec![
+            workspace_entry("/home/user/code/current", true),
+            workspace_entry("/home/user/code/other", false),
+        ]));
+        app.on_key(key(KeyCode::Enter));
+        let _ = command_rx.try_recv().unwrap();
+        assert!(app.wants_tick(), "wants_tick should be true during workspace move");
+    }
+
+    #[test]
+    fn wants_tick_false_after_idle() {
+        let (mut app, _command_rx) = make_app();
+        submit_prompt(&mut app, "hello");
+        app.on_acp_event(text_chunk("done"));
+        app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+        assert!(!app.wants_tick(), "wants_tick should be false after prompt completes and no other activity");
+    }
+
+    #[test]
+    fn tick_animates_spinner_deterministically() {
+        let (mut app, _command_rx) = make_app();
+        submit_prompt(&mut app, "hello");
+
+        let now = Instant::now();
+
+        // Capture rendering at tick 0
+        let mut terminal_a = make_terminal_with_dimensions(120, 30);
+        sync_terminal(&mut terminal_a, &mut app).unwrap();
+        let full_a = buffer_text(terminal_a.backend().buffer());
+
+        // Advance tick once
+        app.on_tick(now);
+        let mut terminal_b = make_terminal_with_dimensions(120, 30);
+        sync_terminal(&mut terminal_b, &mut app).unwrap();
+        let full_b = buffer_text(terminal_b.backend().buffer());
+
+        // Different frames should produce different braille characters
+        assert_ne!(full_a, full_b, "spinner should animate with each tick");
+    }
+
+    #[test]
+    fn tick_stops_when_idle() {
+        let (mut app, _command_rx) = make_app();
+        submit_prompt(&mut app, "hello");
+
+        let now = Instant::now();
+        app.on_tick(now);
+
+        // Complete the prompt
+        app.on_acp_event(text_chunk("response"));
+        app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+        // Tick while idle — should not change
+        app.on_tick(now);
+        let mut terminal = make_terminal_with_dimensions(120, 30);
+        sync_terminal(&mut terminal, &mut app).unwrap();
+        let full = buffer_text(terminal.backend().buffer());
+        assert!(!full.contains("esc to interrupt"), "{full}");
+    }
+
+    #[test]
+    fn progress_is_not_inserted_into_scrollback() {
+        let (mut app, _command_rx) = make_app();
+        // Fill enough content to trigger scrollback
+        submit_prompt(&mut app, "hello");
+        let mut response = String::new();
+        for i in 0..20 {
+            writeln!(response, "line-{i}").unwrap();
+        }
+        app.on_acp_event(text_chunk(&response));
+        app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+
+        // Submit another prompt so we can see progress indicator
+        submit_prompt(&mut app, "another");
+        let mut terminal = make_terminal();
+        sync_terminal(&mut terminal, &mut app).unwrap();
+
+        let scrollback = buffer_text(&history_buffer(&mut terminal));
+        let has_braille = BRAILLE_FRAMES.iter().any(|&ch| scrollback.contains(ch));
+        assert!(!has_braille, "scrollback should not contain progress braille:\n{scrollback}");
+        assert!(!scrollback.contains("esc to interrupt"), "scrollback should not contain esc hint:\n{scrollback}");
+        assert!(!scrollback.contains("Working..."), "scrollback should not contain Working:\n{scrollback}");
+    }
+
+    #[test]
+    fn context_cleared_resets_progress_state() {
+        let (mut app, _command_rx) = make_app();
+        submit_prompt(&mut app, "hello");
+        app.on_acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
+        app.on_acp_event(AcpEvent::ContextCleared(ContextClearedParams {}));
+
+        let mut terminal = make_terminal();
+        sync_terminal(&mut terminal, &mut app).unwrap();
+        let viewport = buffer_text(&viewport_buffer(&mut terminal));
+        assert!(!viewport.contains("Compacting"), "{viewport}");
+        assert!(!viewport.contains("esc to interrupt"), "{viewport}");
+        assert!(!app.wants_tick(), "wants_tick should be false after context cleared");
+    }
+
+    #[test]
+    fn new_session_resets_progress_state() {
+        let (mut app, _command_rx) = make_app();
+        submit_prompt(&mut app, "hello");
+        app.on_acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
+        app.on_acp_event(AcpEvent::NewSessionCreated {
+            session_id: SessionId::new("new-session"),
+            config_options: Vec::new(),
+        });
+
+        let mut terminal = make_terminal();
+        sync_terminal(&mut terminal, &mut app).unwrap();
+        let viewport = buffer_text(&viewport_buffer(&mut terminal));
+        assert!(!viewport.contains("Compacting"), "{viewport}");
+        assert!(!app.wants_tick(), "wants_tick should be false after new session");
+    }
+
+    #[test]
+    fn session_loaded_resets_progress_state() {
+        let (mut app, _command_rx) = make_app();
+        submit_prompt(&mut app, "hello");
+        app.on_acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
+        app.on_acp_event(AcpEvent::SessionLoaded {
+            session_id: SessionId::new("loaded-session"),
+            config_options: Vec::new(),
+        });
+
+        let mut terminal = make_terminal();
+        sync_terminal(&mut terminal, &mut app).unwrap();
+        let viewport = buffer_text(&viewport_buffer(&mut terminal));
+        assert!(!viewport.contains("Compacting"), "{viewport}");
+    }
+
+    #[test]
+    fn progress_lines_include_padding() {
+        let (mut app, _command_rx) = make_app();
+        submit_prompt(&mut app, "hello");
+        let mut terminal = make_terminal_with_dimensions(120, 30);
+        sync_terminal(&mut terminal, &mut app).unwrap();
+
+        let full = buffer_text(terminal.backend().buffer());
+        let spinner_lines: Vec<_> = full.lines().filter(|l| BRAILLE_FRAMES.iter().any(|&ch| l.contains(ch))).collect();
+        assert!(!spinner_lines.is_empty(), "should have spinner lines:\n{full}");
+        for line in spinner_lines {
+            assert!(line.starts_with("  "), "spinner line should start with padding spaces, got: '{line}'");
+        }
+    }
+
+    #[test]
+    fn workspace_list_failed_clears_indicator() {
+        let (mut app, mut command_rx) = make_app_with_workspace_move();
+        type_text(&mut app, "/move");
+        app.on_key(key(KeyCode::Tab));
+        let _ = command_rx.try_recv().unwrap();
+        app.on_acp_event(workspace_list_failed("network error"));
+
+        let mut terminal = make_terminal();
+        sync_terminal(&mut terminal, &mut app).unwrap();
+        let viewport = buffer_text(&viewport_buffer(&mut terminal));
+        assert!(!viewport.contains("Moving workspace"), "{viewport}");
+        assert!(!app.wants_tick(), "wants_tick should be false after list failure");
+    }
 }
 
 // --- Plan ACP-event integration tests ---

@@ -484,6 +484,12 @@ impl SettingsOverlay {
     }
 }
 
+impl Drop for SettingsOverlay {
+    fn drop(&mut self) {
+        self.cancel_pending_elicitation();
+    }
+}
+
 impl PendingElicitation {
     fn matches(&self, params: &UrlElicitationCompleteParams) -> bool {
         self.server_name == params.server_name && self.elicitation_id == params.elicitation_id
@@ -1879,5 +1885,38 @@ mod tests {
         } else {
             panic!("expected model selector");
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn dropping_overlay_cancels_pending_elicitation() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                use acp_utils::notifications::{CreateElicitationRequestParams, ElicitationAction, ElicitationParams};
+                use acp_utils::testing::test_connection;
+
+                let opts = vec![sel("model", "Model", "a", &[("a", "A")])];
+                let mut overlay = SettingsOverlay::new(&opts, vec![], vec![]);
+
+                let (cx, mut peer) = test_connection().await;
+                let (responder, response_rx) = peer.fake_elicitation(&cx).await;
+                overlay.on_elicitation_request(
+                    ElicitationParams {
+                        server_name: "test".into(),
+                        request: CreateElicitationRequestParams::UrlElicitationParams {
+                            meta: None,
+                            message: String::new(),
+                            url: "https://example.com".into(),
+                            elicitation_id: "el-1".into(),
+                        },
+                    },
+                    responder,
+                );
+
+                drop(overlay);
+
+                let response = response_rx.await.unwrap();
+                assert_eq!(response.action, ElicitationAction::Cancel);
+            })
+            .await;
     }
 }

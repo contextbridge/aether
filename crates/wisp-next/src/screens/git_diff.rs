@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use futures::FutureExt;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -10,8 +11,8 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use crate::git_diff::{
-    DiffScope, FileDiff, FileStatus, GitDiffDocument, GitDiffError, PatchLine, PatchLineKind, StageState, stage_all,
-    stage_files, unstage_all, unstage_files,
+    DiffScope, FileDiff, FileStatus, GitDiffDocument, GitDiffError, PatchLine, PatchLineKind, StageState, commit,
+    discard_file, stage_all, stage_files, unstage_all, unstage_files,
 };
 use crate::syntax::SyntaxHighlighter;
 use crate::theme::Theme;
@@ -30,7 +31,9 @@ pub struct GitDiffScreen {
     scroll_offsets: HashMap<String, usize>,
     request_id: u64,
     operation_in_flight: bool,
-    footer_error: Option<String>,
+    bottom_bar: BottomBar,
+    show_full_file: bool,
+    full_file_content: Option<String>,
 }
 
 pub enum GitDiffEffect {
@@ -39,11 +42,15 @@ pub enum GitDiffEffect {
     UnstageFiles { request_id: u64, repo_root: PathBuf, paths: Vec<String> },
     StageAll { request_id: u64, repo_root: PathBuf },
     UnstageAll { request_id: u64, repo_root: PathBuf },
+    Commit { request_id: u64, repo_root: PathBuf, message: String },
+    DiscardFile { request_id: u64, repo_root: PathBuf, path: String, status: FileStatus },
+    LoadFullFile { request_id: u64, repo_root: PathBuf, path: String },
 }
 
 pub enum GitDiffEvent {
     Loaded { request_id: u64, result: Result<GitDiffDocument, GitDiffError> },
     ActionFinished { request_id: u64, result: Result<(), GitDiffError> },
+    FullFileLoaded { request_id: u64, path: String, result: Result<String, GitDiffError> },
 }
 
 pub enum GitDiffOutcome {
@@ -70,6 +77,13 @@ enum DrawerEntry {
     File { index: usize, depth: usize },
 }
 
+enum BottomBar {
+    Help,
+    CommitEditor { message: String, cursor: usize },
+    DiscardConfirmation { path: String, status: FileStatus },
+    Error(String),
+}
+
 impl GitDiffScreen {
     pub fn new(working_dir: PathBuf) -> (Self, GitDiffEffect) {
         let mut screen = Self {
@@ -85,18 +99,36 @@ impl GitDiffScreen {
             scroll_offsets: HashMap::new(),
             request_id: 0,
             operation_in_flight: false,
-            footer_error: None,
+            bottom_bar: BottomBar::Help,
+            show_full_file: false,
+            full_file_content: None,
         };
         let effect = screen.begin_load();
         (screen, effect)
     }
 
     pub fn on_key(&mut self, key: KeyEvent) -> GitDiffOutcome {
+        match &self.bottom_bar {
+            BottomBar::CommitEditor { .. } => return self.on_commit_editor_key(key),
+            BottomBar::DiscardConfirmation { .. } => return self.on_discard_confirm_key(key),
+            BottomBar::Error(_) => {
+                if matches!(key.code, KeyCode::Esc)
+                    || key.code == KeyCode::Char('g') && key.modifiers.contains(KeyModifiers::CONTROL)
+                {
+                    return GitDiffOutcome::Close;
+                }
+                self.bottom_bar = BottomBar::Help;
+                return GitDiffOutcome::None;
+            }
+            BottomBar::Help => {}
+        }
+
         if matches!(key.code, KeyCode::Esc)
             || key.code == KeyCode::Char('g') && key.modifiers.contains(KeyModifiers::CONTROL)
         {
             return GitDiffOutcome::Close;
         }
+
         if self.operation_in_flight {
             return GitDiffOutcome::None;
         }
@@ -104,12 +136,21 @@ impl GitDiffScreen {
         match key.code {
             KeyCode::Char('t') | KeyCode::Tab => {
                 self.scope = self.scope.next();
+                self.show_full_file = false;
+                self.full_file_content = None;
                 GitDiffOutcome::Effect(self.begin_load())
             }
-            KeyCode::Char('r') => GitDiffOutcome::Effect(self.begin_load()),
+            KeyCode::Char('r') => {
+                self.show_full_file = false;
+                self.full_file_content = None;
+                GitDiffOutcome::Effect(self.begin_load())
+            }
             KeyCode::Char('a') => self.stage_all(),
             KeyCode::Char('A') => self.unstage_all(),
             KeyCode::Char(' ') => self.toggle_stage(),
+            KeyCode::Char('C') => self.begin_commit(),
+            KeyCode::Char('d') => self.begin_discard(),
+            KeyCode::Char('o') if self.focus == Focus::Patch => self.toggle_full_file(),
             KeyCode::Left | KeyCode::Char('h') => {
                 if self.focus == Focus::Patch {
                     self.focus = Focus::Drawer;
@@ -157,12 +198,30 @@ impl GitDiffScreen {
             GitDiffEvent::ActionFinished { request_id, result } if request_id == self.request_id => {
                 self.operation_in_flight = false;
                 match result {
-                    Ok(()) => Some(self.begin_load()),
+                    Ok(()) => {
+                        self.show_full_file = false;
+                        self.full_file_content = None;
+                        Some(self.begin_load())
+                    }
                     Err(error) => {
-                        self.footer_error = Some(error.to_string());
+                        self.bottom_bar = BottomBar::Error(error.to_string());
                         None
                     }
                 }
+            }
+            GitDiffEvent::FullFileLoaded { request_id, path: _, result } if request_id == self.request_id => {
+                self.operation_in_flight = false;
+                match result {
+                    Ok(content) => {
+                        self.full_file_content = Some(content);
+                    }
+                    Err(error) => {
+                        self.show_full_file = false;
+                        self.full_file_content = None;
+                        self.bottom_bar = BottomBar::Error(error.to_string());
+                    }
+                }
+                None
             }
             _ => None,
         }
@@ -207,14 +266,7 @@ impl GitDiffScreen {
             GitDiffLoadState::Ready(_) => self.render_document(frame, body, theme, highlighter),
         }
 
-        let footer_text = self.footer_error.as_deref().unwrap_or(if self.operation_in_flight {
-            "Updating repository…"
-        } else {
-            "j/k move · h/l pane · space stage · a/A all · t scope · r refresh · Ctrl-G/Esc close"
-        });
-        let footer_style =
-            if self.footer_error.is_some() { Style::new().fg(theme.error) } else { Style::new().fg(theme.muted) };
-        frame.render_widget(Paragraph::new(Line::styled(footer_text.to_string(), footer_style)), footer);
+        self.render_footer(frame, footer, theme);
     }
 
     pub fn cancel(&mut self) {}
@@ -225,7 +277,6 @@ impl GitDiffScreen {
         }
         self.request_id = next_request_id();
         self.operation_in_flight = true;
-        self.footer_error = None;
         self.state = GitDiffLoadState::Loading;
         GitDiffEffect::Load {
             request_id: self.request_id,
@@ -253,7 +304,6 @@ impl GitDiffScreen {
         };
         self.request_id = next_request_id();
         self.operation_in_flight = true;
-        self.footer_error = None;
         GitDiffOutcome::Effect(GitDiffEffect::StageAll { request_id: self.request_id, repo_root })
     }
 
@@ -263,7 +313,6 @@ impl GitDiffScreen {
         };
         self.request_id = next_request_id();
         self.operation_in_flight = true;
-        self.footer_error = None;
         GitDiffOutcome::Effect(GitDiffEffect::UnstageAll { request_id: self.request_id, repo_root })
     }
 
@@ -283,13 +332,178 @@ impl GitDiffScreen {
         let paths = files.iter().map(|file| file.path.clone()).collect();
         self.request_id = next_request_id();
         self.operation_in_flight = true;
-        self.footer_error = None;
         let effect = if all_staged {
             GitDiffEffect::UnstageFiles { request_id: self.request_id, repo_root, paths }
         } else {
             GitDiffEffect::StageFiles { request_id: self.request_id, repo_root, paths }
         };
         GitDiffOutcome::Effect(effect)
+    }
+
+    fn begin_commit(&mut self) -> GitDiffOutcome {
+        if self.operation_in_flight {
+            return GitDiffOutcome::None;
+        }
+        if !self.any_staged() {
+            self.bottom_bar = BottomBar::Error("Nothing staged to commit".to_string());
+            return GitDiffOutcome::None;
+        }
+        self.bottom_bar = BottomBar::CommitEditor { message: String::new(), cursor: 0 };
+        GitDiffOutcome::None
+    }
+
+    fn on_commit_editor_key(&mut self, key: KeyEvent) -> GitDiffOutcome {
+        if key.code == KeyCode::Esc || key.code == KeyCode::Char('g') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.bottom_bar = BottomBar::Help;
+            return GitDiffOutcome::None;
+        }
+        match key.code {
+            KeyCode::Enter => {
+                let BottomBar::CommitEditor { message, .. } = std::mem::replace(&mut self.bottom_bar, BottomBar::Help)
+                else {
+                    return GitDiffOutcome::None;
+                };
+                let trimmed = message.trim().to_string();
+                if trimmed.is_empty() {
+                    self.bottom_bar = BottomBar::Error("Commit message cannot be empty".to_string());
+                    return GitDiffOutcome::None;
+                }
+                let Some(repo_root) = self.repo_root.clone() else {
+                    return GitDiffOutcome::None;
+                };
+                self.request_id = next_request_id();
+                self.operation_in_flight = true;
+                GitDiffOutcome::Effect(GitDiffEffect::Commit {
+                    request_id: self.request_id,
+                    repo_root,
+                    message: trimmed,
+                })
+            }
+            KeyCode::Char(c) => {
+                if let BottomBar::CommitEditor { message, cursor } = &mut self.bottom_bar {
+                    let pos = (*cursor).min(message.len());
+                    message.insert(pos, c);
+                    *cursor = pos + c.len_utf8();
+                }
+                GitDiffOutcome::None
+            }
+            KeyCode::Backspace => {
+                if let BottomBar::CommitEditor { message, cursor } = &mut self.bottom_bar
+                    && *cursor > 0
+                {
+                    let prev = message.floor_char_boundary(*cursor - 1);
+                    message.remove(prev);
+                    *cursor = prev;
+                }
+                GitDiffOutcome::None
+            }
+            KeyCode::Delete => {
+                if let BottomBar::CommitEditor { message, cursor } = &mut self.bottom_bar
+                    && *cursor < message.len()
+                {
+                    let end = message.ceil_char_boundary(*cursor + 1);
+                    message.drain(*cursor..end);
+                }
+                GitDiffOutcome::None
+            }
+            KeyCode::Left => {
+                if let BottomBar::CommitEditor { message, cursor } = &mut self.bottom_bar
+                    && *cursor > 0
+                {
+                    *cursor = message.floor_char_boundary(*cursor - 1);
+                }
+                GitDiffOutcome::None
+            }
+            KeyCode::Right => {
+                if let BottomBar::CommitEditor { message, cursor } = &mut self.bottom_bar
+                    && *cursor < message.len()
+                {
+                    *cursor = message.ceil_char_boundary(*cursor + 1);
+                }
+                GitDiffOutcome::None
+            }
+            KeyCode::Home => {
+                if let BottomBar::CommitEditor { cursor, .. } = &mut self.bottom_bar {
+                    *cursor = 0;
+                }
+                GitDiffOutcome::None
+            }
+            KeyCode::End => {
+                if let BottomBar::CommitEditor { message, cursor } = &mut self.bottom_bar {
+                    *cursor = message.len();
+                }
+                GitDiffOutcome::None
+            }
+            _ => GitDiffOutcome::None,
+        }
+    }
+
+    fn begin_discard(&mut self) -> GitDiffOutcome {
+        if self.operation_in_flight {
+            return GitDiffOutcome::None;
+        }
+        let Some(file) = self.selected_file().cloned() else {
+            return GitDiffOutcome::None;
+        };
+        self.bottom_bar = BottomBar::DiscardConfirmation { path: file.path.clone(), status: file.status };
+        GitDiffOutcome::None
+    }
+
+    fn on_discard_confirm_key(&mut self, key: KeyEvent) -> GitDiffOutcome {
+        match key.code {
+            KeyCode::Char('y' | 'Y') => {
+                let BottomBar::DiscardConfirmation { path, status } =
+                    std::mem::replace(&mut self.bottom_bar, BottomBar::Help)
+                else {
+                    return GitDiffOutcome::None;
+                };
+                let Some(repo_root) = self.repo_root.clone() else {
+                    return GitDiffOutcome::None;
+                };
+                self.request_id = next_request_id();
+                self.operation_in_flight = true;
+                GitDiffOutcome::Effect(GitDiffEffect::DiscardFile {
+                    request_id: self.request_id,
+                    repo_root,
+                    path,
+                    status,
+                })
+            }
+            KeyCode::Char('n' | 'N') | KeyCode::Esc => {
+                self.bottom_bar = BottomBar::Help;
+                GitDiffOutcome::None
+            }
+            _ => GitDiffOutcome::None,
+        }
+    }
+
+    fn toggle_full_file(&mut self) -> GitDiffOutcome {
+        if self.operation_in_flight {
+            return GitDiffOutcome::None;
+        }
+        self.show_full_file = !self.show_full_file;
+        if !self.show_full_file {
+            self.full_file_content = None;
+        }
+        if self.show_full_file && self.full_file_content.is_none() {
+            let path = self.selected_file().map(|f| f.path.clone());
+            let repo_root = self.repo_root.clone();
+            let (Some(path), Some(repo_root)) = (path, repo_root) else {
+                self.show_full_file = false;
+                return GitDiffOutcome::None;
+            };
+            let request_id = next_request_id();
+            self.request_id = request_id;
+            self.operation_in_flight = true;
+            GitDiffOutcome::Effect(GitDiffEffect::LoadFullFile { request_id, repo_root, path })
+        } else {
+            GitDiffOutcome::None
+        }
+    }
+
+    fn any_staged(&self) -> bool {
+        matches!(&self.state, GitDiffLoadState::Ready(document)
+            if document.files.iter().any(|file| matches!(file.staged, StageState::Staged | StageState::PartiallyStaged)))
     }
 
     fn move_vertical(&mut self, amount: isize) {
@@ -332,6 +546,7 @@ impl GitDiffScreen {
             }
             Some(DrawerEntry::File { index, .. }) => {
                 self.selected_file = *index;
+                self.selected_path = self.file_at(*index).map(|file| file.path.clone());
                 false
             }
             None => false,
@@ -475,24 +690,129 @@ impl GitDiffScreen {
         } else {
             Style::new().fg(theme.text_primary).add_modifier(Modifier::BOLD)
         };
-        let header = Line::from(vec![
-            Span::styled(format!(" {}  {}", file.path, file.status.label()), header_style),
-            Span::styled(format!("  +{} -{}", file.additions(), file.deletions()), Style::new().fg(theme.muted)),
-        ]);
+        let header = if self.show_full_file {
+            Line::from(vec![
+                Span::styled(format!(" {}  {}", file.path, file.status.label()), header_style),
+                Span::styled(format!("  +{} -{}", file.additions(), file.deletions()), Style::new().fg(theme.muted)),
+                Span::styled("  [full file]", Style::new().fg(theme.info)),
+            ])
+        } else {
+            Line::from(vec![
+                Span::styled(format!(" {}  {}", file.path, file.status.label()), header_style),
+                Span::styled(format!("  +{} -{}", file.additions(), file.deletions()), Style::new().fg(theme.muted)),
+            ])
+        };
         let [header_area, content_area] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
         frame.render_widget(Paragraph::new(header), header_area);
 
-        let lines = if file.binary {
+        let lines = if self.show_full_file {
+            self.render_full_file(&file, content_area.width, theme, highlighter)
+        } else if file.binary {
             vec![Line::styled("Binary file", Style::new().fg(theme.muted))]
         } else if area.width >= 96 {
             render_split_patch(&file, area.width, theme, highlighter)
         } else {
             render_unified_patch(&file, area.width, theme, highlighter)
         };
-        let offset = self.scroll_offsets.entry(file.path.clone()).or_default();
+        let offset_key = if self.show_full_file { format!("full:{}", file.path) } else { file.path.clone() };
+        let offset = self.scroll_offsets.entry(offset_key).or_default();
         *offset = (*offset).min(lines.len().saturating_sub(1));
         let visible = lines.into_iter().skip(*offset).take(usize::from(content_area.height)).collect::<Vec<_>>();
         frame.render_widget(Paragraph::new(Text::from(visible)), content_area);
+    }
+
+    fn render_full_file(
+        &self,
+        file: &FileDiff,
+        width: u16,
+        theme: &Theme,
+        highlighter: &mut SyntaxHighlighter,
+    ) -> Vec<Line<'static>> {
+        if file.status == FileStatus::Deleted {
+            return vec![Line::styled("File has been deleted", Style::new().fg(theme.muted))];
+        }
+        if file.binary {
+            return vec![Line::styled("Binary file — cannot display contents", Style::new().fg(theme.muted))];
+        }
+        match &self.full_file_content {
+            None => {
+                vec![Line::styled("Loading file…", Style::new().fg(theme.muted))]
+            }
+            Some(content) => {
+                let language = file.language();
+                let background = theme.background;
+                content
+                    .lines()
+                    .enumerate()
+                    .map(|(index, text)| {
+                        let line_no = format!("{:>4} ", index + 1);
+                        let style = Style::new().fg(theme.text_secondary).bg(background);
+                        let mut spans = vec![Span::styled(line_no, style)];
+                        spans.extend(highlighted_spans(text, language, background, theme, highlighter));
+                        fit_line(
+                            Line::from(spans).style(Style::new().bg(background)),
+                            usize::from(width),
+                            Style::new().fg(theme.text_secondary).bg(background),
+                        )
+                    })
+                    .collect()
+            }
+        }
+    }
+
+    fn render_footer(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        match &self.bottom_bar {
+            BottomBar::CommitEditor { message, cursor } => {
+                let prefix = "commit › ";
+                let prefix_width: u16 = u16::try_from(prefix.len()).unwrap_or(u16::MAX);
+                let avail = area.width.saturating_sub(prefix_width).max(1) as usize;
+                let displayed = if message.len() <= avail {
+                    message.clone()
+                } else {
+                    message[message.len().saturating_sub(avail)..].to_string()
+                };
+                let scroll_start = message.len().saturating_sub(avail);
+                let cursor_col: u16 = if *cursor <= scroll_start {
+                    prefix_width
+                } else {
+                    let offset = (*cursor - scroll_start).min(displayed.len());
+                    let chars_before = displayed[..offset].chars().count();
+                    u16::try_from(prefix_width as usize + chars_before).unwrap_or(u16::MAX)
+                };
+                let line = Line::from(vec![
+                    Span::styled(prefix.to_string(), Style::new().fg(theme.accent).add_modifier(Modifier::BOLD)),
+                    Span::styled(displayed, Style::new().fg(theme.text_primary)),
+                ]);
+                frame.render_widget(Paragraph::new(line), area);
+                frame.set_cursor_position(((area.x + cursor_col).min(area.right().saturating_sub(1)), area.y));
+            }
+            BottomBar::DiscardConfirmation { path, status } => {
+                let status_label = format!("({})", status.label());
+                let line = Line::from(vec![
+                    Span::styled("Discard changes to ", Style::new().fg(theme.warning)),
+                    Span::styled(path.clone(), Style::new().fg(theme.warning).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!(" {status_label}?  "), Style::new().fg(theme.warning)),
+                    Span::styled("y", Style::new().fg(theme.accent)),
+                    Span::styled(" confirm  ", Style::new().fg(theme.muted)),
+                    Span::styled("n", Style::new().fg(theme.accent)),
+                    Span::styled(" cancel", Style::new().fg(theme.muted)),
+                ]);
+                frame.render_widget(Paragraph::new(line), area);
+            }
+            BottomBar::Error(error) => {
+                let line = Line::styled(error.clone(), Style::new().fg(theme.error));
+                frame.render_widget(Paragraph::new(line), area);
+            }
+            BottomBar::Help => {
+                let hint = if self.focus == Focus::Drawer {
+                    "j/k move · h/l pane · space stage · a/A all · t scope · C commit · d discard · o full file · r refresh · Ctrl-G/Esc close"
+                } else {
+                    "j/k scroll · h/l pane · space stage · C commit · d discard · o full file · r refresh · Ctrl-G/Esc close"
+                };
+                let line = Line::styled(hint.to_string(), Style::new().fg(theme.muted));
+                frame.render_widget(Paragraph::new(line), area);
+            }
+        }
     }
 
     fn file_at(&self, index: usize) -> Option<&FileDiff> {
@@ -505,6 +825,31 @@ impl GitDiffScreen {
 
 impl GitDiffEffect {
     pub async fn execute(self) -> GitDiffEvent {
+        let request_id = self.request_id();
+        let result = std::panic::AssertUnwindSafe(self.execute_inner()).catch_unwind().await;
+        match result {
+            Ok(event) => event,
+            Err(_panic) => GitDiffEvent::ActionFinished {
+                request_id,
+                result: Err(GitDiffError::CommandFailed { stderr: "Internal error".to_string() }),
+            },
+        }
+    }
+
+    fn request_id(&self) -> u64 {
+        match self {
+            Self::Load { request_id, .. }
+            | Self::StageFiles { request_id, .. }
+            | Self::UnstageFiles { request_id, .. }
+            | Self::StageAll { request_id, .. }
+            | Self::UnstageAll { request_id, .. }
+            | Self::Commit { request_id, .. }
+            | Self::DiscardFile { request_id, .. }
+            | Self::LoadFullFile { request_id, .. } => *request_id,
+        }
+    }
+
+    async fn execute_inner(self) -> GitDiffEvent {
         match self {
             Self::Load { request_id, working_dir, repo_root, scope } => GitDiffEvent::Loaded {
                 request_id,
@@ -521,6 +866,19 @@ impl GitDiffEffect {
             }
             Self::UnstageAll { request_id, repo_root } => {
                 GitDiffEvent::ActionFinished { request_id, result: unstage_all(&repo_root).await }
+            }
+            Self::Commit { request_id, repo_root, message } => {
+                GitDiffEvent::ActionFinished { request_id, result: commit(&repo_root, &message).await }
+            }
+            Self::DiscardFile { request_id, repo_root, path, status } => {
+                GitDiffEvent::ActionFinished { request_id, result: discard_file(&repo_root, &path, status).await }
+            }
+            Self::LoadFullFile { request_id, repo_root, path } => {
+                let full_path = repo_root.join(&path);
+                let result = tokio::fs::read_to_string(&full_path)
+                    .await
+                    .map_err(|error| GitDiffError::CommandFailed { stderr: format!("Cannot read {path}: {error}") });
+                GitDiffEvent::FullFileLoaded { request_id, path, result }
             }
         }
     }

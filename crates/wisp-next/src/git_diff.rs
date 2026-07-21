@@ -208,6 +208,20 @@ pub async fn unstage_all(repo_root: &Path) -> Result<(), GitDiffError> {
     git(repo_root, &["reset", "--quiet"]).await.map(drop)
 }
 
+pub async fn commit(repo_root: &Path, message: &str) -> Result<(), GitDiffError> {
+    if message.trim().is_empty() {
+        return Err(GitDiffError::CommandFailed { stderr: "empty commit message".to_string() });
+    }
+    git(repo_root, &["commit", "-m", message]).await.map(drop)
+}
+
+pub async fn discard_file(repo_root: &Path, path: &str, status: FileStatus) -> Result<(), GitDiffError> {
+    match status {
+        FileStatus::Untracked => git(repo_root, &["clean", "-f", "--", path]).await.map(drop),
+        _ => git(repo_root, &["restore", "--source=HEAD", "--staged", "--worktree", "--", path]).await.map(drop),
+    }
+}
+
 const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 async fn load_status_map(repo_root: &Path) -> Result<HashMap<String, StageState>, GitDiffError> {
