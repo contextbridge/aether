@@ -5,7 +5,7 @@ use crate::genai_constants;
 use crate::otel_observer::OtelInstrumentation;
 use opentelemetry::metrics::MeterProvider as _;
 use opentelemetry::propagation::TextMapPropagator;
-use opentelemetry::trace::{TraceContextExt, TraceState, TracerProvider as _};
+use opentelemetry::trace::{TraceContextExt, TraceId, TraceState, TracerProvider as _};
 use opentelemetry::{Context, KeyValue};
 use opentelemetry_otlp::{MetricExporter, SpanExporter, WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::Resource;
@@ -14,7 +14,7 @@ use opentelemetry_sdk::metrics::periodic_reader_with_async_runtime::PeriodicRead
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::runtime::Tokio;
 use opentelemetry_sdk::trace::span_processor_with_async_runtime::BatchSpanProcessor;
-use opentelemetry_sdk::trace::{Sampler, SdkTracerProvider};
+use opentelemetry_sdk::trace::{IdGenerator, RandomIdGenerator, Sampler, SdkTracerProvider};
 use std::collections::HashMap;
 use std::str::FromStr;
 
@@ -52,20 +52,21 @@ impl TelemetryRuntime {
             return Err(TelemetryInitError::InvalidSampleRatio(config.sample_ratio));
         }
 
-        let root_parent = extract_root_parent(config.trace_context.as_ref())?;
+        let trace_root = resolve_trace_root(config.trace_context.as_ref())?;
         let http_client = build_http_client(&config.headers)?;
         let resource = Resource::builder()
             .with_service_name(config.service_name.clone())
             .with_attribute(KeyValue::new(genai_constants::SERVICE_VERSION, config.service_version.clone()))
             .build();
         let scope = genai_constants::genai_instrumentation_scope(config.service_version.clone());
-        let tracer_provider = build_tracer_provider(config, resource.clone(), http_client.clone())?;
+        let tracer_provider =
+            build_tracer_provider(config, resource.clone(), http_client.clone(), trace_root.trace_id)?;
         let meter_provider = build_meter_provider(config, resource, http_client)?;
         let instrumentation = OtelInstrumentation {
             tracer: tracer_provider.tracer_with_scope(scope.clone()),
             metrics: GenAiMetrics::new(&meter_provider.meter_with_scope(scope)),
             capture_content: config.capture_content,
-            root_parent,
+            root_parent: trace_root.parent,
         };
 
         Ok(Self { tracer_provider, meter_provider, instrumentation })
@@ -112,29 +113,81 @@ impl TelemetryConfig {
     }
 }
 
-fn extract_root_parent(trace_context: Option<&AgentTraceContext>) -> Result<Option<Context>, TelemetryInitError> {
+#[derive(Default)]
+struct TraceRoot {
+    parent: Option<Context>,
+    trace_id: Option<TraceId>,
+}
+
+#[derive(Debug)]
+struct TraceIdGenerator {
+    trace_id: TraceId,
+    random: RandomIdGenerator,
+}
+
+impl IdGenerator for TraceIdGenerator {
+    fn new_trace_id(&self) -> TraceId {
+        self.trace_id
+    }
+
+    fn new_span_id(&self) -> opentelemetry::trace::SpanId {
+        self.random.new_span_id()
+    }
+}
+
+fn resolve_trace_root(trace_context: Option<&AgentTraceContext>) -> Result<TraceRoot, TelemetryInitError> {
     let Some(trace_context) = trace_context else {
-        return Ok(None);
+        return Ok(TraceRoot::default());
     };
 
-    if let Some(tracestate) = &trace_context.tracestate {
-        TraceState::from_str(tracestate).map_err(|_| TelemetryInitError::InvalidTraceContext("tracestate"))?;
+    match trace_context {
+        AgentTraceContext::Parent { tracestate, .. } => {
+            if let Some(tracestate) = tracestate {
+                TraceState::from_str(tracestate).map_err(|_| TelemetryInitError::InvalidTraceContext("tracestate"))?;
+            }
+
+            let context = TraceContextPropagator::new().extract(trace_context);
+            if !context.span().span_context().is_valid() {
+                return Err(TelemetryInitError::InvalidTraceContext("traceparent"));
+            }
+
+            Ok(TraceRoot { parent: Some(context), trace_id: None })
+        }
+        AgentTraceContext::Root { trace_id } => {
+            let trace_id = parse_trace_id(trace_id)?;
+            Ok(TraceRoot { parent: None, trace_id: Some(trace_id) })
+        }
+    }
+}
+
+fn parse_trace_id(value: &str) -> Result<TraceId, TelemetryInitError> {
+    let valid_hex =
+        value.len() == 32 && value.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+    if !valid_hex {
+        return Err(TelemetryInitError::InvalidTraceContext("traceId"));
     }
 
-    let context = TraceContextPropagator::new().extract(trace_context);
-    if !context.span().span_context().is_valid() {
-        return Err(TelemetryInitError::InvalidTraceContext("traceparent"));
+    let trace_id = TraceId::from_hex(value).map_err(|_| TelemetryInitError::InvalidTraceContext("traceId"))?;
+    if trace_id == TraceId::INVALID {
+        return Err(TelemetryInitError::InvalidTraceContext("traceId"));
     }
 
-    Ok(Some(context))
+    Ok(trace_id)
 }
 
 fn build_tracer_provider(
     config: &TelemetryConfig,
     resource: Resource,
     http_client: reqwest::Client,
+    trace_id: Option<TraceId>,
 ) -> Result<SdkTracerProvider, TelemetryInitError> {
     let builder = SdkTracerProvider::builder().with_resource(resource);
+    let builder = match trace_id {
+        Some(trace_id) => {
+            builder.with_id_generator(TraceIdGenerator { trace_id, random: RandomIdGenerator::default() })
+        }
+        None => builder,
+    };
     if !config.traces_enabled {
         return Ok(builder.with_sampler(Sampler::AlwaysOff).build());
     }

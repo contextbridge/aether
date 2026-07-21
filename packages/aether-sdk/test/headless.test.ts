@@ -9,7 +9,7 @@ import { z } from "zod";
 import { runHeadless } from "../src/headless.js";
 import { mcp } from "../src/mcp/index.js";
 import { tool } from "../src/tool.js";
-import { TRACE_CONTEXT } from "./traceContext.js";
+import { TRACE_ID_CONTEXT } from "./traceContext.js";
 
 const FAKE_AETHER = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -53,7 +53,7 @@ describe("runAetherHeadless()", () => {
       },
       output: "json",
       events: ["tool_call", "turn_ended"],
-      traceContext: TRACE_CONTEXT,
+      traceContext: TRACE_ID_CONTEXT,
       env: { ...process.env, FAKE_AETHER_LOG_FILE: logFile },
     });
 
@@ -71,7 +71,7 @@ describe("runAetherHeadless()", () => {
       model: "anthropic:claude-sonnet-4-5",
       output: "json",
       events: ["tool_call", "turn_ended"],
-      traceContext: TRACE_CONTEXT,
+      traceContext: TRACE_ID_CONTEXT,
       providers: {
         bedrock: {
           url: "http://127.0.0.1:8787",
