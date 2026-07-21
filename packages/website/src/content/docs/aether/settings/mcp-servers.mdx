@@ -125,6 +125,7 @@ If a server entry has a `command` and no `type`, it is treated as `"type": "stdi
     | `type` | `"http"` | Required. |
     | `url` | `string` | Streamable HTTP endpoint URL. |
     | `headers` | `object` | Optional headers. Aether currently forwards the `Authorization` header to the transport. |
+    | `oauth` | `object` | Optional pre-registered public OAuth client. See [Pre-registered OAuth clients](#pre-registered-oauth-clients). |
     | `proxy` | `boolean` | Whether to expose this server through `proxy__call_tool`. |
 
   </TabItem>
@@ -150,10 +151,35 @@ If a server entry has a `command` and no `type`, it is treated as `"type": "stdi
     | `type` | `"sse"` | Required. |
     | `url` | `string` | SSE endpoint URL. |
     | `headers` | `object` | Optional headers. Aether currently forwards the `Authorization` header to the transport. |
+    | `oauth` | `object` | Optional pre-registered public OAuth client. See [Pre-registered OAuth clients](#pre-registered-oauth-clients). |
     | `proxy` | `boolean` | Whether to expose this server through `proxy__call_tool`. |
 
   </TabItem>
 </Tabs>
+
+## Pre-registered OAuth clients
+
+For `http` and `sse` servers that require OAuth, Aether defaults to dynamic client registration (RFC 7591) with a random loopback callback port. Some providers (Slack, for example) only accept a pre-registered public client. Set `oauth` to bind a fixed callback port and advertise `http://localhost:<callbackPort>/`, which must match the redirect URI registered for the client:
+
+```json title=".aether/mcp.json"
+{
+  "servers": {
+    "slack": {
+      "type": "http",
+      "url": "https://mcp.slack.com/mcp",
+      "oauth": {
+        "clientId": "1601185624273.8899143856786",
+        "callbackPort": 3118
+      }
+    }
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `oauth.clientId` | `string` | OAuth client ID registered with the provider. Supports `$VAR` / `${VAR}` expansion. |
+| `oauth.callbackPort` | `number` | Loopback TCP port for the OAuth callback. Must match the redirect URI registered for the client. |
 
 ## Built-in servers
 

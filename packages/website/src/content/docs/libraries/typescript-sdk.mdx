@@ -67,6 +67,7 @@ await AetherSession.start({
 | `env`                 | Environment variables for the spawned `aether acp` process.                            |
 | `logDir`              | Custom directory for ACP logs.                                                         |
 | `providers`           | Provider connection overrides, such as custom Bedrock endpoints or auth behavior.     |
+| `traceContext`        | Remote W3C `traceparent` and optional `tracestate` used as the parent of every turn in the launched session. See [Telemetry](/aether/settings/telemetry/#correlating-sdk-runs) for validation and sampling semantics. |
 | `abortSignal`         | Cancel the active session and tear down the subprocess.                               |
 | `onPermissionRequest` | Custom policy for ACP permission requests. Defaults to `autoApprovePermissions`.      |
 | `onElicitation`       | Handler for Aether's `_aether/elicitation` extension request.                         |
