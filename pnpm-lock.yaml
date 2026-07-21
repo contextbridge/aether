@@ -18,8 +18,8 @@ importers:
   packages/aether-evals:
     dependencies:
       '@aether-agent/sdk':
-        specifier: workspace:^
-        version: link:../aether-sdk
+        specifier: ^0.4.1
+        version: 0.4.1
       testcontainers:
         specifier: ^12.0.3
         version: 12.0.3
@@ -150,6 +150,10 @@ packages:
     resolution: {integrity: sha512-/TOSPbVNXsdSB8LPJFPq+qvtN227EyzYYYrwPvPsS1J79oTmDKxTCrGQpSgOG/z+2fdqXcQu+WKlEN4FSkcMcg==}
     engines: {node: '>=14', npm: '>=6'}
     hasBin: true
+
+  '@aether-agent/sdk@0.4.1':
+    resolution: {integrity: sha512-SqQrMxBTV3mD6eMzJmCYO/ZW1FsZ7x58glGvMXqGFTPyVfv8Evt/0dcpaLolBOdutQLdXGLHV6H5fKL7ebxzQg==}
+    engines: {node: '>=24'}
 
   '@agentclientprotocol/sdk@0.25.1':
     resolution: {integrity: sha512-jx2rF3bdpGwZ75Q/meyEDLLbYmbtxk82Uh9hDCdxDvcEedBnNSF5hZAnL/kJR5VNz56JqwOmqnAqasC84MwwkQ==}
@@ -4424,6 +4428,18 @@ snapshots:
       detect-libc: 2.1.2
       rimraf: 6.1.3
     transitivePeerDependencies:
+      - debug
+      - supports-color
+
+  '@aether-agent/sdk@0.4.1':
+    dependencies:
+      '@aether-agent/cli': 0.7.22
+      '@agentclientprotocol/sdk': 0.25.1(zod@4.4.3)
+      '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
+      express: 5.2.1
+      zod: 4.4.3
+    transitivePeerDependencies:
+      - '@cfworker/json-schema'
       - debug
       - supports-color
 
