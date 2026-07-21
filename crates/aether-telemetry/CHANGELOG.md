@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5](https://github.com/contextbridge/aether/compare/aether-telemetry-v0.1.4...aether-telemetry-v0.1.5) - 2026-07-21
+
+### Added
+
+- support trace IDs without parent spans ([#268](https://github.com/contextbridge/aether/pull/268))
+
 ## [0.1.4](https://github.com/contextbridge/aether/compare/aether-telemetry-v0.1.3...aether-telemetry-v0.1.4) - 2026-07-20
 
 ### Added

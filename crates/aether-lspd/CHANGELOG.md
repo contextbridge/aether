@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.25](https://github.com/contextbridge/aether/compare/aether-lspd-v0.1.24...aether-lspd-v0.1.25) - 2026-07-21
+
+### Other
+
+- update Cargo.lock dependencies
+
 ## [0.1.24](https://github.com/contextbridge/aether/compare/aether-lspd-v0.1.23...aether-lspd-v0.1.24) - 2026-07-20
 
 ### Added

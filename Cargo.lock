@@ -52,7 +52,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-cli"
-version = "0.7.26"
+version = "0.7.27"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
@@ -225,7 +225,7 @@ dependencies = [
 
 [[package]]
 name = "aether-lspd"
-version = "0.1.24"
+version = "0.1.25"
 dependencies = [
  "aether-lspd",
  "clap",
@@ -249,7 +249,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp-servers"
-version = "0.4.29"
+version = "0.4.30"
 dependencies = [
  "aether-agent-core",
  "aether-auth",
@@ -329,7 +329,7 @@ dependencies = [
 
 [[package]]
 name = "aether-schemas"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "aether-agent-cli",
  "aether-agent-core",
@@ -360,7 +360,7 @@ dependencies = [
 
 [[package]]
 name = "aether-telemetry"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -2831,9 +2831,9 @@ checksum = "43503cc176394dd30a6525f5f36e838339b8b5619be33ed9a7783841580a97b6"
 
 [[package]]
 name = "glob"
-version = "0.3.3"
+version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
+checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
 name = "globset"
@@ -3765,9 +3765,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.186"
+version = "0.2.188"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
+checksum = "22053b6a34f84abc97f9129e61334f40174659a1b9bd18c970b83db6a9a6348b"
 
 [[package]]
 name = "libdbus-sys"
@@ -6414,14 +6414,15 @@ dependencies = [
 
 [[package]]
 name = "tokio-util"
-version = "0.7.18"
+version = "0.7.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ae9cec805b01e8fc3fd2fe289f89149a9b66dd16786abd8b19cfa7b48cb0098"
+checksum = "494815d09bf52b5548659851081238f0ca39ff638363907596da739561c62c52"
 dependencies = [
  "bytes",
  "futures-core",
  "futures-io",
  "futures-sink",
+ "libc",
  "pin-project-lite",
  "tokio",
 ]
