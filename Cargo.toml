@@ -78,7 +78,7 @@ htmd = "0.5"
 dom_smoothie = "0.18"
 
 # Encryption
-age = "0.11.3"
+age = "0.12.1"
 
 # Error handling
 thiserror = "2.0"
