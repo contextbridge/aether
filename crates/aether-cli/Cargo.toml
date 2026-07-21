@@ -31,12 +31,12 @@ path = "src/main.rs"
 [dependencies]
 aether-auth = { path = "../aether-auth", version = "0.1.8", features = ["keyring"] }
 aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.6.24" }
-aether-project = { path = "../aether-project", version = "0.5.24" }
+aether-project = { path = "../aether-project", version = "0.5.25" }
 aether-telemetry = { path = "../aether-telemetry", version = "0.1.5" }
 llm = { package = "aether-llm", path = "../llm", features = ["bedrock", "codex"], version = "0.7.22" }
 mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.5.27" }
 mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", features = ["all"], version = "0.4.30" }
-wisp = { package = "aether-wisp", path = "../wisp", version = "0.4.33" }
+wisp = { package = "aether-wisp", path = "../wisp", version = "0.4.34" }
 tui = { package = "aether-tui", path = "../tui", default-features = false, features = ["syntax"], version = "0.2.18" }
 acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["server", "testing"], version = "0.3.33" }
 agent-client-protocol = { workspace = true }

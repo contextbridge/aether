@@ -1,6 +1,6 @@
 [package]
 name = "aether-project"
-version = "0.5.24"
+version = "0.5.25"
 edition = "2024"
 description = "Project-local settings and agent discovery for the Aether AI agent framework"
 license = "MIT"
