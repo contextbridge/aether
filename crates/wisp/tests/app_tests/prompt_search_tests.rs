@@ -247,5 +247,5 @@ fn result_with_cwd(prompt: &str, start: usize, end: usize, cwd: PathBuf) -> Prom
 }
 
 fn response(query: &str, results: Vec<PromptSearchResult>) -> PromptSearchResponse {
-    PromptSearchResponse { query: query.to_string(), results, truncated: false }
+    PromptSearchResponse { query: query.to_string(), results, truncated: false, search_generation: 0 }
 }

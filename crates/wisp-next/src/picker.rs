@@ -9,6 +9,7 @@ pub struct CommandEntry {
     pub description: String,
     pub has_input: bool,
     pub hint: Option<String>,
+    pub builtin: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

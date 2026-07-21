@@ -63,7 +63,7 @@ pub async fn spawn_acp_session(
         config_options: session_resp.config_options.unwrap_or_default(),
         auth_methods: init_resp.auth_methods,
         event_rx,
-        prompt_handle: AcpPromptHandle { cmd_tx },
+        prompt_handle: AcpPromptHandle { cmd_tx, fail_signal: None },
     })
 }
 
@@ -298,8 +298,9 @@ async fn handle_command(
         }
         PromptCommand::SearchPrompts(params) => {
             let query = params.query.clone();
+            let search_generation = params.search_generation;
             spawn_request_to_event(cx, event_tx, params, AcpEvent::PromptSearchResults, move |e| {
-                AcpEvent::PromptSearchFailed { query, error: format!("{e}") }
+                AcpEvent::PromptSearchFailed { query, search_generation, error: format!("{e}") }
             });
         }
         PromptCommand::SessionPreview(params) => {

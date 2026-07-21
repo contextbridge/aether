@@ -241,7 +241,7 @@ impl App {
             AcpEvent::PromptSearchResults(response) => {
                 self.conversation_screen.on_prompt_search_results(response);
             }
-            AcpEvent::PromptSearchFailed { query, error } => {
+            AcpEvent::PromptSearchFailed { query, search_generation: _, error } => {
                 self.conversation_screen.on_prompt_search_failed(&query, error);
             }
             AcpEvent::SessionPreviewLoaded(preview) => {

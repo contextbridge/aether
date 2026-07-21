@@ -1,4 +1,4 @@
-use crate::settings::UiSettings;
+use crate::settings::{ResolvedStatusLineSettings, UiSettings, resolve_status_line_settings};
 use crate::syntax::SyntaxHighlighter;
 use crate::theme::Theme;
 use ratatui::text::Line;
@@ -8,6 +8,7 @@ pub struct TranscriptRenderer {
     highlighter: SyntaxHighlighter,
     committed_lines: Vec<Line<'static>>,
     transcript_generation: u64,
+    settings: ResolvedStatusLineSettings,
 }
 
 impl TranscriptRenderer {
@@ -17,11 +18,16 @@ impl TranscriptRenderer {
             highlighter: SyntaxHighlighter::new(),
             committed_lines: Vec::new(),
             transcript_generation: 0,
+            settings: resolve_status_line_settings(settings),
         }
     }
 
     pub fn theme(&self) -> &Theme {
         &self.theme
+    }
+
+    pub fn settings(&self) -> &ResolvedStatusLineSettings {
+        &self.settings
     }
 
     pub fn highlighter(&mut self) -> &mut SyntaxHighlighter {

@@ -55,7 +55,12 @@ impl PromptHistoryIndex {
         let mut state = self.lock_state();
         let entries = self.ensure_loaded(&mut state)?;
 
-        let response = PromptSearchResponse { query: query.to_string(), results: Vec::new(), truncated: false };
+        let response = PromptSearchResponse {
+            query: query.to_string(),
+            results: Vec::new(),
+            truncated: false,
+            search_generation: params.search_generation,
+        };
         if query.is_empty() {
             return Ok(response);
         }

@@ -357,7 +357,11 @@ impl Renderer {
         query: &str,
         error: impl Into<String>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        self.handle_acp_event(AcpEvent::PromptSearchFailed { query: query.to_string(), error: error.into() })?;
+        self.handle_acp_event(AcpEvent::PromptSearchFailed {
+            query: query.to_string(),
+            search_generation: 0,
+            error: error.into(),
+        })?;
         Ok(())
     }
 

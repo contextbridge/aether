@@ -14,6 +14,9 @@ pub struct Keybindings {
     pub open_command_picker: KeyBinding,
     pub open_file_picker: KeyBinding,
     pub toggle_git_diff: KeyBinding,
+    pub cycle_reasoning: KeyBinding,
+    pub cycle_mode: KeyBinding,
+    pub open_prompt_search: KeyBinding,
 }
 
 impl KeyBinding {
@@ -35,6 +38,9 @@ impl Default for Keybindings {
             open_command_picker: KeyBinding::new(KeyCode::Char('/'), KeyModifiers::NONE),
             open_file_picker: KeyBinding::new(KeyCode::Char('@'), KeyModifiers::NONE),
             toggle_git_diff: KeyBinding::new(KeyCode::Char('g'), KeyModifiers::CONTROL),
+            cycle_reasoning: KeyBinding::new(KeyCode::Tab, KeyModifiers::NONE),
+            cycle_mode: KeyBinding::new(KeyCode::BackTab, KeyModifiers::NONE),
+            open_prompt_search: KeyBinding::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
         }
     }
 }

@@ -395,7 +395,9 @@ mod tests {
         store.append_meta("s1", &default_meta()).unwrap();
         store.append_event("s1", &switch_agent(Some("Planner"), Some("Coder"))).unwrap();
 
-        let response = store.search_prompts(&PromptSearchParams { query: "Coder".to_string(), limit: None }).unwrap();
+        let response = store
+            .search_prompts(&PromptSearchParams { query: "Coder".to_string(), limit: None, search_generation: 0 })
+            .unwrap();
         assert!(response.results.is_empty());
     }
 
@@ -496,11 +498,17 @@ mod tests {
         let (meta2, _) = store.load("s2").unwrap();
         assert_eq!(meta2.cwd, PathBuf::from("/tmp"));
 
-        let moved =
-            store.search_prompts(&PromptSearchParams { query: "hello world".to_string(), limit: None }).unwrap();
+        let moved = store
+            .search_prompts(&PromptSearchParams { query: "hello world".to_string(), limit: None, search_generation: 0 })
+            .unwrap();
         assert_eq!(moved.results[0].cwd, PathBuf::from("/new/workspace"));
-        let untouched =
-            store.search_prompts(&PromptSearchParams { query: "other prompt".to_string(), limit: None }).unwrap();
+        let untouched = store
+            .search_prompts(&PromptSearchParams {
+                query: "other prompt".to_string(),
+                limit: None,
+                search_generation: 0,
+            })
+            .unwrap();
         assert_eq!(untouched.results[0].cwd, PathBuf::from("/tmp"));
     }
 
@@ -564,7 +572,9 @@ mod tests {
         store.append_event("s1", &user_msg("hello world")).unwrap();
         store.append_event("s1", &agent_text("msg", "hello from agent", true)).unwrap();
 
-        let response = store.search_prompts(&PromptSearchParams { query: "hello".to_string(), limit: None }).unwrap();
+        let response = store
+            .search_prompts(&PromptSearchParams { query: "hello".to_string(), limit: None, search_generation: 0 })
+            .unwrap();
         assert_eq!(response.results.len(), 1);
         assert_eq!(response.results[0].prompt, "hello world");
         assert_eq!(
@@ -581,11 +591,14 @@ mod tests {
             store.append_event("s1", &user_msg(&format!("prompt {i}"))).unwrap();
         }
 
-        let old = store.search_prompts(&PromptSearchParams { query: "prompt 0".to_string(), limit: None }).unwrap();
+        let old = store
+            .search_prompts(&PromptSearchParams { query: "prompt 0".to_string(), limit: None, search_generation: 0 })
+            .unwrap();
         assert!(old.results.is_empty());
 
-        let newest =
-            store.search_prompts(&PromptSearchParams { query: "prompt 104".to_string(), limit: None }).unwrap();
+        let newest = store
+            .search_prompts(&PromptSearchParams { query: "prompt 104".to_string(), limit: None, search_generation: 0 })
+            .unwrap();
         assert_eq!(newest.results.len(), 1);
     }
 
@@ -598,19 +611,26 @@ mod tests {
         store.append_event("s1", &user_msg("hello.world")).unwrap();
         store.append_event("s1", &user_msg("café hello")).unwrap();
 
-        let literal =
-            store.search_prompts(&PromptSearchParams { query: "hello.world".to_string(), limit: None }).unwrap();
+        let literal = store
+            .search_prompts(&PromptSearchParams { query: "hello.world".to_string(), limit: None, search_generation: 0 })
+            .unwrap();
         assert_eq!(literal.results.len(), 1);
         assert_eq!(literal.results[0].prompt, "hello.world");
 
-        let lower = store.search_prompts(&PromptSearchParams { query: "hello".to_string(), limit: None }).unwrap();
+        let lower = store
+            .search_prompts(&PromptSearchParams { query: "hello".to_string(), limit: None, search_generation: 0 })
+            .unwrap();
         assert!(lower.results.iter().any(|hit| hit.prompt == "hello world"));
         assert!(lower.results.iter().any(|hit| hit.prompt == "HELLO world"));
 
-        let upper = store.search_prompts(&PromptSearchParams { query: "Hello".to_string(), limit: None }).unwrap();
+        let upper = store
+            .search_prompts(&PromptSearchParams { query: "Hello".to_string(), limit: None, search_generation: 0 })
+            .unwrap();
         assert!(upper.results.is_empty());
 
-        let unicode = store.search_prompts(&PromptSearchParams { query: "fé".to_string(), limit: None }).unwrap();
+        let unicode = store
+            .search_prompts(&PromptSearchParams { query: "fé".to_string(), limit: None, search_generation: 0 })
+            .unwrap();
         assert_eq!(unicode.results.len(), 1);
         let hit = &unicode.results[0];
         assert_eq!(&hit.prompt[hit.match_start..hit.match_end], "fé");

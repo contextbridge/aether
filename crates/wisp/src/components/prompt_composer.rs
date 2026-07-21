@@ -98,7 +98,7 @@ impl PromptComposer {
             self.restore_draft_in_input();
             return None;
         }
-        Some(PromptComposerMessage::SearchPrompts(PromptSearchParams { query, limit: None }))
+        Some(PromptComposerMessage::SearchPrompts(PromptSearchParams { query, limit: None, search_generation: 0 }))
     }
 
     fn restore_draft_in_input(&mut self) {

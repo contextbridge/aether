@@ -126,7 +126,7 @@ where
 async fn search(harness: &AcpTestHarness, query: &str) -> PromptSearchResponse {
     harness
         .client_cx
-        .send_request(PromptSearchParams { query: query.to_string(), limit: None })
+        .send_request(PromptSearchParams { query: query.to_string(), limit: None, search_generation: 0 })
         .block_task()
         .await
         .expect("prompt search succeeds")

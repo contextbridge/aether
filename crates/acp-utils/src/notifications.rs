@@ -112,6 +112,8 @@ pub struct PromptSearchParams {
     pub query: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<usize>,
+    #[serde(default)]
+    pub search_generation: u64,
 }
 
 /// Response for the `_aether/prompt_search` request.
@@ -121,6 +123,8 @@ pub struct PromptSearchResponse {
     pub query: String,
     pub results: Vec<PromptSearchResult>,
     pub truncated: bool,
+    #[serde(default)]
+    pub search_generation: u64,
 }
 
 /// A single prompt-history search hit.
@@ -373,7 +377,10 @@ mod tests {
             McpRequest::Authenticate { session_id: String::new(), server_name: String::new() }.method(),
             "_aether/mcp_request"
         );
-        assert_eq!(PromptSearchParams { query: String::new(), limit: None }.method(), "_aether/prompt_search");
+        assert_eq!(
+            PromptSearchParams { query: String::new(), limit: None, search_generation: 0 }.method(),
+            "_aether/prompt_search"
+        );
         assert_eq!(SessionPreviewParams { session_id: String::new() }.method(), "_aether/session_preview");
         assert_eq!(WorkspaceListParams { session_id: String::new() }.method(), "_aether/workspace_list");
         let move_params =

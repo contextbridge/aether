@@ -29,7 +29,7 @@ pub enum AcpEvent {
     SessionLoaded { session_id: SessionId, config_options: Vec<SessionConfigOption> },
     NewSessionCreated { session_id: SessionId, config_options: Vec<SessionConfigOption> },
     PromptSearchResults(PromptSearchResponse),
-    PromptSearchFailed { query: String, error: String },
+    PromptSearchFailed { query: String, search_generation: u64, error: String },
     SessionPreviewLoaded(SessionPreviewResponse),
     SessionPreviewFailed { session_id: String, error: String },
     WorkspacesListed(WorkspaceListResponse),

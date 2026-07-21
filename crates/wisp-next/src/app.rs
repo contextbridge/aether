@@ -1,35 +1,62 @@
+use crate::attachments::PromptAttachment;
 use crate::composer::Composer;
 use crate::diff::DiffPreview;
+use crate::dropped_files::parse_dropped_file_paths;
 use crate::keybindings::Keybindings;
 use crate::modal::{ElicitationModal, ModalOutcome};
 use crate::picker::CommandEntry;
+use crate::plan_tracker::PlanTracker;
+use crate::prompt_search::PromptSearchMessage;
 use crate::screen_router::{ScreenEffect, ScreenEvent, ScreenRouter};
-use crate::settings::{UiSettings, resolve_content_padding};
+use crate::session_loading_buffer::SessionLoadingBuffer;
+use crate::session_picker::{SessionPicker, SessionPickerMessage};
+use crate::settings::{ContextUsageDisplay, UiSettings, resolve_content_padding};
+use crate::settings_overlay::{
+    SettingsMenuEntry, SettingsMenuEntryKind, SettingsMenuValue, SettingsOverlay, SettingsOverlayMessage,
+};
 use crate::tool_calls::{ToolCallEntry, ToolCallLog, ToolStatus};
 use crate::transcript::{SegmentContent, Transcript};
+use crate::workspace_picker::{WorkspacePicker, WorkspacePickerMessage};
 use crate::workspace_status::WorkspaceStatus;
 use acp_utils::client::{AcpEvent, AcpPromptHandle};
-use agent_client_protocol::schema::{self as acp, SessionId};
+use acp_utils::config_meta::SelectOptionMeta;
+use acp_utils::config_option_id::ConfigOptionId;
+use acp_utils::notifications::AetherCapabilities;
+use acp_utils::notifications::McpNotification;
+use acp_utils::notifications::McpServerStatusEntry;
+use agent_client_protocol::schema::{self as acp, SessionConfigOptionCategory, SessionId};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
+use utils::ReasoningEffort;
 
 /// Root UI state: reduces terminal input and ACP events into the transcript,
 /// tool-call log, and composer that the renderer draws each frame.
 pub struct App {
     session_id: SessionId,
     agent_name: String,
+    prompt_capabilities: acp::PromptCapabilities,
+    session_capabilities: acp::SessionCapabilities,
+    capabilities: AetherCapabilities,
+    config_options: Vec<acp::SessionConfigOption>,
+    auth_methods: Vec<acp::AuthMethod>,
     prompt_handle: AcpPromptHandle,
     keybindings: Keybindings,
     workspace_status: WorkspaceStatus,
     content_padding: usize,
     working_dir: PathBuf,
     available_commands: Vec<CommandEntry>,
+    session_loading_buffer: SessionLoadingBuffer,
+    session_picker: Option<SessionPicker>,
+    workspace_picker: Option<WorkspacePicker>,
+    workspace_move_state: WorkspaceMoveState,
     transcript: Transcript,
     tool_calls: ToolCallLog,
     composer: Composer,
     prompt_in_flight: bool,
-    context_percent: Option<u8>,
+    context_usage: Option<ContextUsageDisplay>,
+    unhealthy_server_count: usize,
+    server_statuses: Vec<McpServerStatusEntry>,
     ctrl_c_armed_at: Option<Instant>,
     exit_requested: bool,
     spinner_tick: usize,
@@ -38,12 +65,20 @@ pub struct App {
     modal: Option<ElicitationModal>,
     screen_router: ScreenRouter,
     pending_screen_effects: std::collections::VecDeque<ScreenEffect>,
+    settings_overlay: Option<SettingsOverlay>,
+    ui_settings: UiSettings,
+    pending_theme: Option<crate::theme::Theme>,
+    plan_tracker: PlanTracker,
 }
 
 pub struct AppConfig {
     pub session_id: SessionId,
     pub agent_name: String,
     pub workspace_status: WorkspaceStatus,
+    pub prompt_capabilities: acp::PromptCapabilities,
+    pub session_capabilities: acp::SessionCapabilities,
+    pub config_options: Vec<acp::SessionConfigOption>,
+    pub auth_methods: Vec<acp::AuthMethod>,
     pub prompt_handle: AcpPromptHandle,
     pub working_dir: PathBuf,
     pub settings: UiSettings,
@@ -78,25 +113,95 @@ impl HistoryItem {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkspaceMoveState {
+    Idle,
+    Listing,
+    Picking,
+    Moving,
+    LoadingSession,
+}
+
+impl WorkspaceMoveState {
+    pub fn is_idle(&self) -> bool {
+        matches!(self, WorkspaceMoveState::Idle)
+    }
+}
+
 const CTRL_C_CONFIRM_WINDOW: Duration = Duration::from_secs(1);
+
+fn builtin_commands(capabilities: &AetherCapabilities) -> Vec<CommandEntry> {
+    let mut commands = vec![
+        CommandEntry {
+            name: "clear".to_string(),
+            description: "Start a new session".to_string(),
+            has_input: false,
+            hint: None,
+            builtin: true,
+        },
+        CommandEntry {
+            name: "resume".to_string(),
+            description: "Resume a previous session".to_string(),
+            has_input: false,
+            hint: None,
+            builtin: true,
+        },
+        CommandEntry {
+            name: "settings".to_string(),
+            description: "Configure agent options".to_string(),
+            has_input: false,
+            hint: None,
+            builtin: true,
+        },
+    ];
+    if capabilities.workspace_move {
+        commands.push(CommandEntry {
+            name: "move".to_string(),
+            description: "Move session to another workspace".to_string(),
+            has_input: false,
+            hint: None,
+            builtin: true,
+        });
+    }
+    commands
+}
+
+fn merge_builtins(agent_commands: Vec<CommandEntry>, capabilities: &AetherCapabilities) -> Vec<CommandEntry> {
+    let mut all = builtin_commands(capabilities);
+    all.extend(agent_commands);
+    all
+}
 
 impl App {
     pub fn new(config: AppConfig) -> Self {
         let content_padding = resolve_content_padding(&config.settings);
+        let capabilities = AetherCapabilities::from_meta(config.session_capabilities.meta.as_ref());
+        let initial_commands = builtin_commands(&capabilities);
         Self {
             session_id: config.session_id,
             agent_name: config.agent_name,
+            prompt_capabilities: config.prompt_capabilities,
+            capabilities,
+            session_capabilities: config.session_capabilities,
+            config_options: config.config_options,
+            auth_methods: config.auth_methods,
             prompt_handle: config.prompt_handle,
             keybindings: Keybindings::default(),
             workspace_status: config.workspace_status,
             content_padding,
             working_dir: config.working_dir,
-            available_commands: Vec::new(),
+            available_commands: initial_commands,
+            session_loading_buffer: SessionLoadingBuffer::new(),
+            session_picker: None,
+            workspace_picker: None,
+            workspace_move_state: WorkspaceMoveState::Idle,
             transcript: Transcript::new(),
             tool_calls: ToolCallLog::new(),
             composer: Composer::new(),
             prompt_in_flight: false,
-            context_percent: None,
+            context_usage: None,
+            unhealthy_server_count: 0,
+            server_statuses: Vec::new(),
             ctrl_c_armed_at: None,
             exit_requested: false,
             spinner_tick: 0,
@@ -105,12 +210,21 @@ impl App {
             modal: None,
             screen_router: ScreenRouter::new(),
             pending_screen_effects: std::collections::VecDeque::new(),
+            settings_overlay: None,
+            ui_settings: config.settings,
+            pending_theme: None,
+            plan_tracker: PlanTracker::default(),
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub fn on_acp_event(&mut self, event: AcpEvent) {
         match event {
-            AcpEvent::SessionUpdate { update, .. } => self.on_session_update(&update),
+            AcpEvent::SessionUpdate { session_id, update } => {
+                if let Some(passthrough) = self.session_loading_buffer.push(&session_id, *update) {
+                    self.on_session_update(&passthrough);
+                }
+            }
             AcpEvent::PromptDone(stop_reason) => {
                 let status = match stop_reason {
                     acp::StopReason::Cancelled => ToolStatus::Error("cancelled".to_string()),
@@ -124,16 +238,15 @@ impl App {
                 self.transcript.push_user_message(&format!("[wisp-next] Prompt failed: {error}"));
             }
             AcpEvent::ContextUsage(params) => {
-                self.context_percent = params.usage.context_limit.filter(|limit| *limit > 0).map(|limit| {
-                    let percent = u64::from(params.usage.input_tokens) * 100 / u64::from(limit);
-                    u8::try_from(percent).unwrap_or(100).min(100)
-                });
+                self.context_usage =
+                    params.usage.context_limit.map(|limit| ContextUsageDisplay::new(params.usage.input_tokens, limit));
             }
             AcpEvent::ContextCleared(_) => {
                 self.transcript.clear();
                 self.tool_calls.clear();
+                self.plan_tracker.clear();
                 self.prompt_in_flight = false;
-                self.context_percent = None;
+                self.context_usage = None;
                 self.last_drained_kind = None;
                 self.transcript_generation = self.transcript_generation.wrapping_add(1);
                 self.transcript.push_user_message("[wisp-next] Context cleared");
@@ -142,13 +255,28 @@ impl App {
                 if let Some(mut modal) = self.modal.take() {
                     modal.cancel();
                 }
+                self.session_picker = None;
                 if let Some(meta) = plan_review_meta(&params) {
                     self.screen_router.open_plan_review(meta, responder);
+                    return;
+                }
+                if let Some(overlay) = &mut self.settings_overlay {
+                    overlay.on_elicitation_request(params, responder);
                     return;
                 }
                 self.modal = Some(ElicitationModal::new(params, responder));
             }
             AcpEvent::McpNotification(notification) => {
+                if let McpNotification::ServerStatus { ref servers } = notification {
+                    self.server_statuses.clone_from(servers);
+                    self.unhealthy_server_count = servers
+                        .iter()
+                        .filter(|s| !matches!(s.status, acp_utils::notifications::McpServerStatus::Connected { .. }))
+                        .count();
+                    if let Some(overlay) = &mut self.settings_overlay {
+                        overlay.update_server_statuses(servers.clone());
+                    }
+                }
                 if self
                     .modal
                     .as_mut()
@@ -156,18 +284,126 @@ impl App {
                 {
                     self.modal = None;
                 }
+                if let McpNotification::UrlElicitationComplete(ref params) = notification
+                    && let Some(overlay) = &mut self.settings_overlay
+                {
+                    overlay.on_url_elicitation_complete(params);
+                }
+            }
+            AcpEvent::AuthMethodsUpdated(params) => {
+                self.auth_methods.clone_from(&params.auth_methods);
+                if let Some(overlay) = &mut self.settings_overlay {
+                    overlay.update_auth_methods(params.auth_methods);
+                }
+            }
+            AcpEvent::AuthenticateComplete { method_id } => {
+                if let Some(overlay) = &mut self.settings_overlay {
+                    overlay.on_authenticate_complete(&method_id);
+                }
+            }
+            AcpEvent::AuthenticateFailed { method_id, error } => {
+                tracing::warn!("Provider authentication failed for {method_id}: {error}");
+                if let Some(overlay) = &mut self.settings_overlay {
+                    overlay.on_authenticate_failed(&method_id);
+                }
             }
             AcpEvent::ConnectionClosed => {
                 if let Some(mut modal) = self.modal.take() {
                     modal.cancel();
                 }
+                self.session_picker = None;
+                self.workspace_picker = None;
+                self.workspace_move_state = WorkspaceMoveState::Idle;
+                if let Some(mut overlay) = self.settings_overlay.take() {
+                    overlay.cancel_pending_elicitation();
+                }
+                self.session_loading_buffer.clear();
                 self.screen_router.close();
                 self.exit_requested = true;
+            }
+            AcpEvent::ConfigOptionUpdateFailed { error } => {
+                tracing::warn!("set_session_config_option failed: {error}");
+                self.transcript.push_user_message(&format!("[wisp-next] Failed to update setting: {error}"));
+            }
+            AcpEvent::SessionsListed { sessions } => {
+                let current_id = self.session_id.clone();
+                let filtered: Vec<_> = sessions.into_iter().filter(|s| s.session_id != current_id).collect();
+                let preview_enabled = self.capabilities.session_preview;
+                let picker = SessionPicker::new(filtered, preview_enabled);
+                if let Some(id) = picker.initial_preview_request() {
+                    let _ = self.prompt_handle.session_preview(&SessionId::new(id));
+                }
+                self.modal = None;
+                self.session_picker = Some(picker);
+            }
+            AcpEvent::SessionLoaded { session_id, config_options } => {
+                let updates = self.session_loading_buffer.take(&session_id);
+                self.session_id = session_id.clone();
+                self.config_options = config_options;
+                self.plan_tracker.clear();
+                for update in updates {
+                    self.on_session_update(&update);
+                }
+                self.transcript_generation = self.transcript_generation.wrapping_add(1);
+                self.session_picker = None;
+                self.workspace_move_state = WorkspaceMoveState::Idle;
+            }
+            AcpEvent::NewSessionCreated { session_id, config_options } => {
+                self.session_loading_buffer.clear();
+                if let Some(mut overlay) = self.settings_overlay.take() {
+                    overlay.cancel_pending_elicitation();
+                }
+                let previous_selections = extract_config_selections(&self.config_options);
+                self.session_id = session_id;
+                self.config_options = config_options;
+                self.transcript.clear();
+                self.tool_calls.clear();
+                self.plan_tracker.clear();
+                self.prompt_in_flight = false;
+                self.context_usage = None;
+                self.last_drained_kind = None;
+                self.transcript_generation = self.transcript_generation.wrapping_add(1);
+                self.transcript.push_user_message("[wisp-next] New session created");
+                self.restore_config_selections(&previous_selections);
+            }
+            AcpEvent::SessionPreviewLoaded(preview) => {
+                if let Some(picker) = &mut self.session_picker {
+                    picker.on_preview_loaded(preview);
+                }
+            }
+            AcpEvent::SessionPreviewFailed { session_id, error } => {
+                if let Some(picker) = &mut self.session_picker {
+                    picker.on_preview_failed(&session_id, error);
+                }
+            }
+            AcpEvent::PromptSearchResults(response) => {
+                self.composer.prompt_search_on_results(response);
+            }
+            AcpEvent::PromptSearchFailed { query: _, search_generation, error } => {
+                self.composer.prompt_search_on_failed(search_generation, error);
+            }
+            AcpEvent::WorkspacesListed(response) => {
+                let picker = WorkspacePicker::new(response.workspaces);
+                self.modal = None;
+                self.workspace_picker = Some(picker);
+                self.workspace_move_state = WorkspaceMoveState::Picking;
+            }
+            AcpEvent::WorkspaceListFailed { error } => {
+                self.transcript.push_user_message(&format!("[wisp-next] Failed to list workspaces: {error}"));
+                self.workspace_move_state = WorkspaceMoveState::Idle;
+            }
+            AcpEvent::WorkspaceMoved(response) => {
+                self.on_workspace_moved(response.new_cwd);
+            }
+            AcpEvent::WorkspaceMoveFailed { error } => {
+                self.transcript.push_user_message(&format!("[wisp-next] Workspace move failed: {error}"));
+                self.workspace_move_state = WorkspaceMoveState::Idle;
             }
             _ => tracing::debug!("ignoring ACP event unsupported by the experimental UI"),
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub fn on_key(&mut self, key: KeyEvent) {
         if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
             return;
@@ -190,10 +426,58 @@ impl App {
             return;
         }
 
+        if let Some(overlay) = self.settings_overlay.as_mut() {
+            let messages = overlay.on_key(key);
+            for msg in messages {
+                self.handle_settings_message(msg);
+            }
+            return;
+        }
+
+        if let Some(picker) = &mut self.session_picker {
+            if let Some(messages) = picker.on_key(key) {
+                for msg in messages {
+                    self.handle_session_picker_message(msg);
+                }
+            }
+            return;
+        }
+
+        if let Some(picker) = &mut self.workspace_picker {
+            let messages = picker.on_key(key).unwrap_or_default();
+            for msg in messages {
+                self.handle_workspace_picker_message(msg);
+            }
+            return;
+        }
+
         if let Some(modal) = self.modal.as_mut() {
             if matches!(modal.on_key(key), ModalOutcome::Close) {
                 self.modal = None;
             }
+            return;
+        }
+
+        if self.composer.has_prompt_search() {
+            if let Some(msg) = self.composer.prompt_search_on_key(key) {
+                match msg {
+                    PromptSearchMessage::QueryChanged(query) if !query.trim().is_empty() => {
+                        self.send_prompt_search_query(query);
+                    }
+                    PromptSearchMessage::QueryChanged(_) => {
+                        self.composer.restore_prompt_search_draft();
+                    }
+                    _ => {}
+                }
+            }
+            return;
+        }
+
+        if self.keybindings.open_prompt_search.matches(key)
+            && self.capabilities.prompt_search
+            && !self.composer.has_overlay()
+        {
+            self.composer.open_prompt_search();
             return;
         }
 
@@ -212,6 +496,24 @@ impl App {
 
         if self.composer.has_overlay() {
             self.on_overlay_key(key);
+            return;
+        }
+
+        if self.keybindings.cycle_reasoning.matches(key) {
+            if let Some((id, val)) = cycle_reasoning_option(&self.config_options)
+                && self.prompt_handle.set_config_option(&self.session_id, &id, &val).is_ok()
+            {
+                update_config_option_value(&mut self.config_options, &id, &val);
+            }
+            return;
+        }
+
+        if self.keybindings.cycle_mode.matches(key) {
+            if let Some((id, val)) = cycle_quick_option(&self.config_options)
+                && self.prompt_handle.set_config_option(&self.session_id, &id, &val).is_ok()
+            {
+                update_config_option_value(&mut self.config_options, &id, &val);
+            }
             return;
         }
 
@@ -248,12 +550,31 @@ impl App {
             }
             KeyCode::Home => self.composer.move_line_start(),
             KeyCode::End => self.composer.move_line_end(),
+            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => self.composer.move_line_start(),
+            KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => self.composer.move_line_end(),
             _ => {}
         }
     }
 
     pub fn on_paste(&mut self, text: &str) {
-        self.composer.insert_str(text);
+        if self.composer.has_prompt_search() {
+            if let Some(msg) = self.composer.prompt_search_on_paste(text) {
+                match msg {
+                    PromptSearchMessage::QueryChanged(query) if !query.trim().is_empty() => {
+                        self.send_prompt_search_query(query);
+                    }
+                    PromptSearchMessage::QueryChanged(_) => {
+                        self.composer.restore_prompt_search_draft();
+                    }
+                    _ => {}
+                }
+            }
+            return;
+        }
+        let added = parse_dropped_file_paths(text).is_some_and(|paths| self.composer.add_dropped_media(paths));
+        if !added {
+            self.composer.insert_paste(text);
+        }
         self.composer.refresh_overlay_query();
     }
 
@@ -266,14 +587,31 @@ impl App {
         if self.prompt_in_flight || self.tool_calls.any_running() {
             self.spinner_tick = self.spinner_tick.wrapping_add(1);
         }
+        self.plan_tracker.on_tick(now);
     }
 
     pub fn wants_tick(&self) -> bool {
-        self.prompt_in_flight || self.tool_calls.any_running() || self.ctrl_c_armed_at.is_some()
+        self.prompt_in_flight
+            || self.tool_calls.any_running()
+            || self.ctrl_c_armed_at.is_some()
+            || self.workspace_move_state == WorkspaceMoveState::Moving
+            || self.workspace_move_state == WorkspaceMoveState::LoadingSession
+            || self.plan_tracker.has_completed_in_grace_period()
     }
 
     pub fn has_modal(&self) -> bool {
         self.modal.is_some()
+            || self.session_picker.is_some()
+            || self.workspace_picker.is_some()
+            || self.settings_overlay.is_some()
+    }
+
+    pub fn has_session_picker(&self) -> bool {
+        self.session_picker.is_some()
+    }
+
+    pub fn workspace_move_state(&self) -> WorkspaceMoveState {
+        self.workspace_move_state
     }
 
     pub fn full_screen_active(&self) -> bool {
@@ -288,6 +626,15 @@ impl App {
     ) {
         if self.screen_router.is_active() {
             self.screen_router.render(frame, theme, highlighter);
+        } else if let Some(overlay) = &self.settings_overlay {
+            let area = frame.area();
+            overlay.render(area, frame.buffer_mut(), theme);
+        } else if let Some(picker) = &self.session_picker {
+            let area = frame.area();
+            picker.render(area, frame.buffer_mut(), theme);
+        } else if let Some(picker) = &self.workspace_picker {
+            let area = frame.area();
+            picker.render(area, frame.buffer_mut(), theme);
         } else if let Some(modal) = &self.modal {
             modal.render(frame, theme);
         }
@@ -364,6 +711,34 @@ impl App {
         &self.composer
     }
 
+    pub fn prompt_capabilities(&self) -> &acp::PromptCapabilities {
+        &self.prompt_capabilities
+    }
+
+    pub fn session_capabilities(&self) -> &acp::SessionCapabilities {
+        &self.session_capabilities
+    }
+
+    pub fn config_options(&self) -> &[acp::SessionConfigOption] {
+        &self.config_options
+    }
+
+    pub fn auth_methods(&self) -> &[acp::AuthMethod] {
+        &self.auth_methods
+    }
+
+    pub fn supports_prompt_search(&self) -> bool {
+        self.capabilities.prompt_search
+    }
+
+    pub fn supports_session_preview(&self) -> bool {
+        self.capabilities.session_preview
+    }
+
+    pub fn supports_workspace_move(&self) -> bool {
+        self.capabilities.workspace_move
+    }
+
     pub fn content_padding(&self) -> usize {
         self.content_padding
     }
@@ -372,12 +747,35 @@ impl App {
         self.workspace_status.label()
     }
 
+    pub fn workspace_status(&self) -> &WorkspaceStatus {
+        &self.workspace_status
+    }
+
     pub fn agent_name(&self) -> &str {
         &self.agent_name
     }
 
+    pub fn context_usage(&self) -> Option<ContextUsageDisplay> {
+        self.context_usage
+    }
+
     pub fn context_percent(&self) -> Option<u8> {
-        self.context_percent
+        self.context_usage.map(|usage| {
+            let percent = u64::from(usage.used_tokens) * 100 / u64::from(usage.limit_tokens).max(1);
+            u8::try_from(percent).unwrap_or(100).min(100)
+        })
+    }
+
+    pub fn unhealthy_server_count(&self) -> usize {
+        self.unhealthy_server_count
+    }
+
+    pub fn waiting_for_response(&self) -> bool {
+        self.prompt_in_flight
+    }
+
+    pub fn ui_settings(&self) -> &UiSettings {
+        &self.ui_settings
     }
 
     pub fn busy(&self) -> bool {
@@ -392,6 +790,18 @@ impl App {
         self.spinner_tick
     }
 
+    pub fn plan_entries(&mut self) -> &[acp::PlanEntry] {
+        self.plan_tracker.cached_visible_entries()
+    }
+
+    pub fn has_plan(&self) -> bool {
+        self.plan_tracker.has_entries()
+    }
+
+    pub fn plan_tracker_mut(&mut self) -> &mut PlanTracker {
+        &mut self.plan_tracker
+    }
+
     fn on_overlay_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Esc => self.composer.close_overlay(),
@@ -399,7 +809,9 @@ impl App {
             KeyCode::Down => self.composer.overlay_move_down(),
             KeyCode::Enter | KeyCode::Tab => {
                 if let Some(command) = self.composer.accept_command() {
-                    if command.has_input {
+                    if command.builtin {
+                        self.dispatch_builtin_command(&command);
+                    } else if command.has_input {
                         self.composer.insert_char(' ');
                     } else {
                         self.submit();
@@ -458,7 +870,7 @@ impl App {
                 }
             }
             acp::SessionUpdate::AvailableCommandsUpdate(update) => {
-                self.available_commands = update
+                let agent_commands: Vec<_> = update
                     .available_commands
                     .iter()
                     .map(|command| CommandEntry {
@@ -469,8 +881,21 @@ impl App {
                             Some(acp::AvailableCommandInput::Unstructured(input)) => Some(input.hint.clone()),
                             _ => None,
                         },
+                        builtin: false,
                     })
                     .collect();
+                self.available_commands = merge_builtins(agent_commands, &self.capabilities);
+            }
+            acp::SessionUpdate::ConfigOptionUpdate(update) => {
+                self.config_options.clone_from(&update.config_options);
+                self.transcript.close_thought_block();
+                if let Some(overlay) = &mut self.settings_overlay {
+                    overlay.update_config_options(&self.config_options);
+                }
+            }
+            acp::SessionUpdate::Plan(plan) => {
+                self.plan_tracker.replace(plan.entries.clone(), Instant::now());
+                self.transcript.close_thought_block();
             }
             _ => {
                 self.transcript.close_thought_block();
@@ -484,19 +909,31 @@ impl App {
         }
 
         let mentions = self.composer.selected_mentions();
-        let text = self.composer.take_submission();
-        let attachments = crate::attachments::build(&mentions);
+        let (text, pending_media) = self.composer.take_submission();
+        let mut all_attachments: Vec<PromptAttachment> =
+            mentions.into_iter().map(|m| PromptAttachment { path: m.path, display_name: m.display_name }).collect();
+        all_attachments.extend(pending_media);
+
+        let outcome = crate::attachments::build_attachments(&all_attachments);
         self.transcript.push_user_message(&text);
-        for placeholder in &attachments.placeholders {
+        for placeholder in &outcome.placeholders {
             self.transcript.push_user_message(placeholder);
         }
-        for warning in &attachments.warnings {
+        for warning in &outcome.warnings {
             self.transcript.push_user_message(&format!("[wisp-next] {warning}"));
         }
+
+        if let Some(message) = self.media_support_error(&outcome.blocks) {
+            self.transcript.push_user_message(&format!("[wisp-next] {message}"));
+            return;
+        }
+
         self.prompt_in_flight = true;
-        let content = (!attachments.blocks.is_empty()).then_some(attachments.blocks);
+        let content = (!outcome.blocks.is_empty()).then_some(outcome.blocks);
         if let Err(e) = self.prompt_handle.prompt(&self.session_id, &text, content) {
             tracing::error!("failed to send prompt: {e}");
+            self.prompt_in_flight = false;
+            self.transcript.push_user_message(&format!("[wisp-next] Failed to send prompt: {e}"));
         }
     }
 
@@ -504,6 +941,230 @@ impl App {
         self.prompt_in_flight = false;
         self.tool_calls.finalize_running(terminal_status);
         self.transcript.close_thought_block();
+    }
+
+    fn media_support_error(&self, blocks: &[acp::ContentBlock]) -> Option<String> {
+        let requires_image = blocks.iter().any(|block| matches!(block, acp::ContentBlock::Image(_)));
+        let requires_audio = blocks.iter().any(|block| matches!(block, acp::ContentBlock::Audio(_)));
+
+        if !requires_image && !requires_audio {
+            return None;
+        }
+
+        if requires_image && !self.prompt_capabilities.image {
+            return Some("ACP agent does not support image input.".to_string());
+        }
+        if requires_audio && !self.prompt_capabilities.audio {
+            return Some("ACP agent does not support audio input.".to_string());
+        }
+
+        let model_option =
+            self.config_options.iter().find(|option| option.id.0.as_ref() == ConfigOptionId::Model.as_str())?;
+        let acp::SessionConfigKind::Select(select) = &model_option.kind else {
+            return None;
+        };
+
+        let values: Vec<_> =
+            select.current_value.0.split(',').map(str::trim).filter(|value| !value.is_empty()).collect();
+
+        if values.is_empty() {
+            return None;
+        }
+
+        let flat_options: Vec<&acp::SessionConfigSelectOption> = match &select.options {
+            acp::SessionConfigSelectOptions::Ungrouped(options) => options.iter().collect(),
+            acp::SessionConfigSelectOptions::Grouped(groups) => groups.iter().flat_map(|g| g.options.iter()).collect(),
+            _ => return None,
+        };
+
+        let selected_meta: Vec<_> = values
+            .iter()
+            .filter_map(|value| {
+                flat_options
+                    .iter()
+                    .find(|option| option.value.0.as_ref() == *value)
+                    .map(|option| SelectOptionMeta::from_meta(option.meta.as_ref()))
+            })
+            .collect();
+
+        if selected_meta.len() != values.len() {
+            return Some("Current model selection is missing prompt capability metadata.".into());
+        }
+
+        if requires_image && selected_meta.iter().any(|meta| !meta.supports_image) {
+            return Some("Current model selection does not support image input.".to_string());
+        }
+        if requires_audio && selected_meta.iter().any(|meta| !meta.supports_audio) {
+            return Some("Current model selection does not support audio input.".to_string());
+        }
+
+        None
+    }
+
+    fn send_prompt_search_query(&mut self, query: String) {
+        let Some(generation) = self.composer.prompt_search_generation() else {
+            return;
+        };
+        let params = acp_utils::notifications::PromptSearchParams { query, limit: None, search_generation: generation };
+        if let Err(e) = self.prompt_handle.search_prompts(params) {
+            self.composer.prompt_search_on_failed(generation, format!("search failed: {e}"));
+        }
+    }
+
+    fn dispatch_builtin_command(&mut self, cmd: &CommandEntry) {
+        match cmd.name.as_str() {
+            "clear" => {
+                self.composer.clear();
+                if let Err(e) = self.prompt_handle.new_session(&self.working_dir) {
+                    self.transcript.push_user_message(&format!("[wisp-next] Failed to create new session: {e}"));
+                }
+            }
+            "resume" => {
+                self.composer.clear();
+                if let Err(e) = self.prompt_handle.list_sessions() {
+                    self.transcript.push_user_message(&format!("[wisp-next] Failed to list sessions: {e}"));
+                }
+            }
+            "settings" => {
+                self.composer.clear();
+                let mut overlay =
+                    SettingsOverlay::new(&self.config_options, self.server_statuses.clone(), self.auth_methods.clone());
+                overlay.add_local_entries(build_theme_entries(&self.ui_settings));
+                overlay.add_mcp_servers_entry();
+                overlay.add_provider_logins_entry();
+                self.settings_overlay = Some(overlay);
+            }
+            "move" => {
+                self.composer.clear();
+                if self.prompt_in_flight || !self.workspace_move_state.is_idle() {
+                    self.transcript.push_user_message(
+                        "[wisp-next] Cannot move workspace while a prompt is running or another move is in progress",
+                    );
+                    return;
+                }
+                self.workspace_move_state = WorkspaceMoveState::Listing;
+                if let Err(e) = self.prompt_handle.list_workspaces(&self.session_id) {
+                    self.transcript.push_user_message(&format!("[wisp-next] Failed to list workspaces: {e}"));
+                    self.workspace_move_state = WorkspaceMoveState::Idle;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_session_picker_message(&mut self, msg: SessionPickerMessage) {
+        match msg {
+            SessionPickerMessage::Close => {
+                self.session_picker = None;
+            }
+            SessionPickerMessage::LoadSession { session_id, cwd } => {
+                self.session_loading_buffer.begin_load(session_id.clone());
+                if let Err(e) = self.prompt_handle.load_session(&session_id, &cwd) {
+                    self.session_loading_buffer.remove(&session_id);
+                    self.transcript.push_user_message(&format!("[wisp-next] Failed to load session: {e}"));
+                } else {
+                    self.session_picker = None;
+                    self.transcript.clear();
+                    self.tool_calls.clear();
+                    self.prompt_in_flight = false;
+                    self.context_usage = None;
+                    self.last_drained_kind = None;
+                }
+            }
+            SessionPickerMessage::RequestPreview { session_id } => {
+                let _ = self.prompt_handle.session_preview(&SessionId::new(session_id));
+            }
+        }
+    }
+
+    fn handle_workspace_picker_message(&mut self, msg: WorkspacePickerMessage) {
+        match msg {
+            WorkspacePickerMessage::Close => {
+                self.workspace_picker = None;
+                self.workspace_move_state = WorkspaceMoveState::Idle;
+            }
+            WorkspacePickerMessage::Move { target } => {
+                self.workspace_picker = None;
+                self.workspace_move_state = WorkspaceMoveState::Moving;
+                if let Err(e) = self.prompt_handle.move_workspace(&self.session_id, target) {
+                    self.transcript.push_user_message(&format!("[wisp-next] Failed to move workspace: {e}"));
+                    self.workspace_move_state = WorkspaceMoveState::Idle;
+                }
+            }
+        }
+    }
+
+    fn on_workspace_moved(&mut self, new_cwd: std::path::PathBuf) {
+        self.workspace_status = WorkspaceStatus::resolve(&new_cwd);
+        self.screen_router.close();
+        self.plan_tracker.clear();
+        self.transcript.clear();
+        self.tool_calls.clear();
+        self.prompt_in_flight = false;
+        self.context_usage = None;
+        self.last_drained_kind = None;
+        self.transcript_generation = self.transcript_generation.wrapping_add(1);
+        self.transcript.push_user_message(&format!(
+            "[wisp-next] Moved to {}",
+            crate::workspace_status::home_relative_path(&new_cwd)
+        ));
+        self.workspace_move_state = WorkspaceMoveState::LoadingSession;
+        self.session_loading_buffer.begin_load(self.session_id.clone());
+        if let Err(e) = self.prompt_handle.load_session(&self.session_id, &new_cwd) {
+            self.session_loading_buffer.remove(&self.session_id);
+            self.transcript.push_user_message(&format!("[wisp-next] Failed to reload session after move: {e}"));
+            self.workspace_move_state = WorkspaceMoveState::Idle;
+        }
+        self.working_dir = new_cwd;
+    }
+
+    fn handle_settings_message(&mut self, msg: SettingsOverlayMessage) {
+        match msg {
+            SettingsOverlayMessage::Close => {
+                if let Some(mut overlay) = self.settings_overlay.take() {
+                    overlay.cancel_pending_elicitation();
+                }
+            }
+            SettingsOverlayMessage::SetConfigOption { config_id, value } => {
+                if self.prompt_handle.set_config_option(&self.session_id, &config_id, &value).is_ok() {
+                    if let Some(overlay) = &mut self.settings_overlay {
+                        overlay.apply_change(&crate::settings_overlay::SettingsChange {
+                            config_id: config_id.clone(),
+                            new_value: value.clone(),
+                        });
+                    }
+                    update_config_option_value(&mut self.config_options, &config_id, &value);
+                }
+            }
+            SettingsOverlayMessage::SetTheme(value) => {
+                self.apply_theme_change(&value);
+            }
+            SettingsOverlayMessage::AuthenticateServer(name) => {
+                let _ = self.prompt_handle.authenticate_mcp_server(&self.session_id, &name);
+            }
+            SettingsOverlayMessage::AuthenticateProvider(method_id) => {
+                if let Some(overlay) = &mut self.settings_overlay {
+                    overlay.on_authenticate_started(&method_id);
+                }
+                let _ = self.prompt_handle.authenticate(&method_id);
+            }
+        }
+    }
+
+    fn restore_config_selections(&mut self, previous: &[(String, String)]) {
+        for (config_id, value) in previous {
+            if let Some(option) = self.config_options.iter().find(|o| o.id.0.as_ref() == config_id) {
+                let current_value = match &option.kind {
+                    acp::SessionConfigKind::Select(s) => s.current_value.0.to_string(),
+                    _ => continue,
+                };
+                if current_value != *value
+                    && let Err(e) = self.prompt_handle.set_config_option(&self.session_id, config_id, value)
+                {
+                    tracing::warn!("Failed to restore config option {config_id} after new session: {e}");
+                }
+            }
+        }
     }
 }
 
@@ -534,4 +1195,151 @@ fn render_user_content_block(block: &acp::ContentBlock) -> Option<String> {
         acp::ContentBlock::Audio(_) => Some("[audio attachment]".to_string()),
         _ => None,
     }
+}
+
+fn is_cycleable_mode_option(option: &acp::SessionConfigOption) -> bool {
+    matches!(option.kind, acp::SessionConfigKind::Select(_))
+        && option.category == Some(SessionConfigOptionCategory::Mode)
+}
+
+fn cycle_quick_option(config_options: &[acp::SessionConfigOption]) -> Option<(String, String)> {
+    let option = config_options.iter().find(|option| is_cycleable_mode_option(option))?;
+
+    let acp::SessionConfigKind::Select(ref select) = option.kind else {
+        return None;
+    };
+
+    let acp::SessionConfigSelectOptions::Ungrouped(ref options) = select.options else {
+        return None;
+    };
+
+    if options.is_empty() {
+        return None;
+    }
+
+    let current_index = options.iter().position(|entry| entry.value == select.current_value).unwrap_or(0);
+    let next_index = (current_index + 1) % options.len();
+    options.get(next_index).map(|next| (option.id.0.to_string(), next.value.0.to_string()))
+}
+
+fn extract_reasoning_levels(config_options: &[acp::SessionConfigOption]) -> Vec<ReasoningEffort> {
+    let Some(option) = config_options.iter().find(|o| o.id.0.as_ref() == ConfigOptionId::ReasoningEffort.as_str())
+    else {
+        return Vec::new();
+    };
+    let acp::SessionConfigKind::Select(ref select) = option.kind else {
+        return Vec::new();
+    };
+    let acp::SessionConfigSelectOptions::Ungrouped(ref options) = select.options else {
+        return Vec::new();
+    };
+    options.iter().filter_map(|o| o.value.0.as_ref().parse().ok()).collect()
+}
+
+fn extract_reasoning_effort(config_options: &[acp::SessionConfigOption]) -> Option<ReasoningEffort> {
+    let option =
+        config_options.iter().find(|option| option.id.0.as_ref() == ConfigOptionId::ReasoningEffort.as_str())?;
+    let acp::SessionConfigKind::Select(ref select) = option.kind else {
+        return None;
+    };
+    ReasoningEffort::parse(&select.current_value.0).unwrap_or(None)
+}
+
+fn cycle_reasoning_option(config_options: &[acp::SessionConfigOption]) -> Option<(String, String)> {
+    let levels = extract_reasoning_levels(config_options);
+    if levels.is_empty() {
+        return None;
+    }
+
+    let current = extract_reasoning_effort(config_options);
+    let next = ReasoningEffort::cycle_within(current, &levels);
+    Some((ConfigOptionId::ReasoningEffort.as_str().to_string(), ReasoningEffort::config_str(next).to_string()))
+}
+
+fn update_config_option_value(options: &mut [acp::SessionConfigOption], config_id: &str, value: &str) {
+    let Some(option) = options.iter_mut().find(|option| option.id.0.as_ref() == config_id) else {
+        return;
+    };
+    let acp::SessionConfigKind::Select(select) = &mut option.kind else {
+        return;
+    };
+    select.current_value = value.to_string().into();
+}
+
+fn extract_config_selections(config_options: &[acp::SessionConfigOption]) -> Vec<(String, String)> {
+    config_options
+        .iter()
+        .filter_map(|option| {
+            if let acp::SessionConfigKind::Select(ref select) = option.kind {
+                Some((option.id.0.to_string(), select.current_value.0.to_string()))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+impl App {
+    pub fn take_pending_theme(&mut self) -> Option<crate::theme::Theme> {
+        self.pending_theme.take()
+    }
+
+    fn apply_theme_change(&mut self, value: &str) {
+        let file = if value.is_empty() { None } else { Some(value.to_string()) };
+        self.ui_settings.theme.file = file;
+        if let Err(e) = crate::settings::save_settings(&self.ui_settings) {
+            tracing::warn!("Failed to save theme settings: {e}");
+        }
+        let theme =
+            if value.is_empty() { crate::theme::Theme::default() } else { crate::settings::load_theme_file(value) };
+        self.pending_theme = Some(theme);
+        if let Some(overlay) = &mut self.settings_overlay {
+            overlay.apply_change(&crate::settings_overlay::SettingsChange {
+                config_id: acp_utils::config_option_id::THEME_CONFIG_ID.to_string(),
+                new_value: value.to_string(),
+            });
+        }
+    }
+}
+
+fn build_theme_entries(settings: &UiSettings) -> Vec<SettingsMenuEntry> {
+    use acp_utils::config_meta::SelectOptionMeta;
+    use acp_utils::config_option_id::THEME_CONFIG_ID;
+
+    let files = crate::settings::list_theme_files();
+    let mut values: Vec<SettingsMenuValue> = Vec::new();
+
+    values.push(SettingsMenuValue {
+        value: String::new(),
+        name: "Default".to_string(),
+        description: Some("Built-in Nord theme".to_string()),
+        is_disabled: false,
+        meta: SelectOptionMeta::default(),
+    });
+
+    for file in &files {
+        let display = file.trim_end_matches(".tmTheme").to_string();
+        values.push(SettingsMenuValue {
+            value: file.clone(),
+            name: display,
+            description: None,
+            is_disabled: false,
+            meta: SelectOptionMeta::default(),
+        });
+    }
+
+    let current_file = settings.theme.file.as_deref().unwrap_or("");
+    let current_value_index =
+        if current_file.is_empty() { 0 } else { values.iter().position(|v| v.value == current_file).unwrap_or(0) };
+
+    vec![SettingsMenuEntry {
+        config_id: THEME_CONFIG_ID.to_string(),
+        title: "Theme".to_string(),
+        values,
+        current_value_index,
+        current_raw_value: current_file.to_string(),
+        entry_kind: SettingsMenuEntryKind::Theme,
+        multi_select: false,
+        display_name: None,
+    }]
 }

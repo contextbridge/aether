@@ -1,8 +1,11 @@
 use acp_utils::ElicitationSchema;
 use acp_utils::client::{AcpEvent, AcpPromptHandle, PromptCommand};
+use acp_utils::config_meta::SelectOptionMeta;
+use acp_utils::config_option_id::ConfigOptionId;
 use acp_utils::notifications::{
-    ContextClearedParams, ContextUsage, ContextUsageParams, CreateElicitationRequestParams, ElicitationAction,
-    ElicitationParams,
+    AetherCapabilities, AuthMethodsUpdatedParams, ContextClearedParams, ContextUsage, ContextUsageParams,
+    CreateElicitationRequestParams, ElicitationAction, ElicitationParams, SessionPreviewResponse, SessionPreviewRole,
+    SessionPreviewTurn, WorkspaceEntry, WorkspaceListResponse, WorkspaceMoveResponse,
 };
 use acp_utils::testing::test_connection;
 use agent_client_protocol::schema::{self as acp, SessionId};
@@ -14,7 +17,10 @@ use ratatui::style::{Color, Modifier};
 use ratatui::{Terminal, TerminalOptions, Viewport};
 use std::fmt::Write as _;
 use std::io::Write as _;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
+use tempfile::TempDir;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::LocalSet;
 use wisp_next::app::{App, AppConfig, HistoryItem};
@@ -31,16 +37,158 @@ fn make_app() -> (App, UnboundedReceiver<PromptCommand>) {
 }
 
 fn make_app_in(working_dir: std::path::PathBuf) -> (App, UnboundedReceiver<PromptCommand>) {
+    make_app_with_metadata(working_dir, acp::SessionCapabilities::new(), Vec::new(), Vec::new())
+}
+
+fn make_app_with_metadata(
+    working_dir: std::path::PathBuf,
+    session_capabilities: acp::SessionCapabilities,
+    config_options: Vec<acp::SessionConfigOption>,
+    auth_methods: Vec<acp::AuthMethod>,
+) -> (App, UnboundedReceiver<PromptCommand>) {
     let (prompt_handle, command_rx) = AcpPromptHandle::recording();
-    let app = App::new(AppConfig {
+    let app = build_app_with_handle(working_dir, session_capabilities, config_options, auth_methods, prompt_handle);
+    (app, command_rx)
+}
+
+fn make_failable_app() -> (App, Arc<AtomicBool>, UnboundedReceiver<PromptCommand>) {
+    let (prompt_handle, fail_signal, command_rx) = AcpPromptHandle::failable();
+    let app = build_app_with_handle(
+        std::path::PathBuf::from("."),
+        acp::SessionCapabilities::new(),
+        Vec::new(),
+        Vec::new(),
+        prompt_handle,
+    );
+    (app, fail_signal, command_rx)
+}
+
+fn make_failable_app_with_prompt_search() -> (App, Arc<AtomicBool>, UnboundedReceiver<PromptCommand>) {
+    let session_capabilities = acp::SessionCapabilities::new().meta(Some(
+        AetherCapabilities { prompt_search: true, session_preview: false, workspace_move: false }.to_meta(),
+    ));
+    let (prompt_handle, fail_signal, command_rx) = AcpPromptHandle::failable();
+    let app = build_app_with_handle(
+        std::path::PathBuf::from("."),
+        session_capabilities,
+        Vec::new(),
+        Vec::new(),
+        prompt_handle,
+    );
+    (app, fail_signal, command_rx)
+}
+
+fn build_app_with_handle(
+    working_dir: std::path::PathBuf,
+    session_capabilities: acp::SessionCapabilities,
+    config_options: Vec<acp::SessionConfigOption>,
+    auth_methods: Vec<acp::AuthMethod>,
+    prompt_handle: AcpPromptHandle,
+) -> App {
+    App::new(AppConfig {
         session_id: SessionId::new("test-session"),
         agent_name: "aether".to_string(),
+        prompt_capabilities: acp::PromptCapabilities::new(),
+        session_capabilities,
+        config_options,
+        auth_methods,
         workspace_status: WorkspaceStatus::new("~/code/demo", Some("main".to_string())),
         prompt_handle,
         working_dir,
         settings: UiSettings::default(),
-    });
-    (app, command_rx)
+    })
+}
+
+fn select_option(id: &str, current_value: &str) -> acp::SessionConfigOption {
+    acp::SessionConfigOption::select(
+        id.to_string(),
+        id.to_string(),
+        current_value.to_string(),
+        vec![acp::SessionConfigSelectOption::new(current_value.to_string(), current_value.to_string())],
+    )
+}
+
+fn reasoning_option(current: &str, levels: &[&str]) -> acp::SessionConfigOption {
+    let options: Vec<acp::SessionConfigSelectOption> =
+        levels.iter().map(|&level| acp::SessionConfigSelectOption::new(level.to_string(), level.to_string())).collect();
+    acp::SessionConfigOption::select("reasoning_effort", "Reasoning", current.to_string(), options)
+}
+
+fn mode_option(current: &str, modes: &[&str]) -> acp::SessionConfigOption {
+    let options: Vec<acp::SessionConfigSelectOption> =
+        modes.iter().map(|&mode| acp::SessionConfigSelectOption::new(mode.to_string(), mode.to_string())).collect();
+    acp::SessionConfigOption::select("mode", "Mode", current.to_string(), options)
+        .category(acp::SessionConfigOptionCategory::Mode)
+}
+
+#[test]
+fn app_exposes_initial_config_option_selections() {
+    let options =
+        vec![select_option("model", "opus"), select_option("mode", "plan"), select_option("reasoning", "high")];
+    let (app, _command_rx) =
+        make_app_with_metadata(std::path::PathBuf::from("."), acp::SessionCapabilities::new(), options, Vec::new());
+
+    let selections: Vec<_> = app
+        .config_options()
+        .iter()
+        .map(|option| {
+            (
+                option.id.0.as_ref(),
+                match &option.kind {
+                    acp::SessionConfigKind::Select(select) => select.current_value.0.as_ref(),
+                    _ => panic!("expected select option"),
+                },
+            )
+        })
+        .collect();
+
+    assert_eq!(selections, [("model", "opus"), ("mode", "plan"), ("reasoning", "high")]);
+}
+
+#[test]
+fn config_option_update_replaces_current_selections() {
+    let (mut app, _command_rx) = make_app_with_metadata(
+        std::path::PathBuf::from("."),
+        acp::SessionCapabilities::new(),
+        vec![select_option("model", "opus")],
+        Vec::new(),
+    );
+
+    app.on_acp_event(session_update(acp::SessionUpdate::ConfigOptionUpdate(acp::ConfigOptionUpdate::new(vec![
+        select_option("model", "sonnet"),
+        select_option("mode", "code"),
+    ]))));
+
+    assert_eq!(app.config_options().len(), 2);
+    let acp::SessionConfigKind::Select(model) = &app.config_options()[0].kind else {
+        panic!("expected model select option");
+    };
+    assert_eq!(model.current_value.0.as_ref(), "sonnet");
+}
+
+#[test]
+fn auth_methods_update_replaces_current_auth_methods() {
+    let initial = vec![acp::AuthMethod::Agent(acp::AuthMethodAgent::new("initial", "Initial"))];
+    let (mut app, _command_rx) =
+        make_app_with_metadata(std::path::PathBuf::from("."), acp::SessionCapabilities::new(), Vec::new(), initial);
+    let updated = vec![acp::AuthMethod::Agent(acp::AuthMethodAgent::new("updated", "Updated"))];
+
+    app.on_acp_event(AcpEvent::AuthMethodsUpdated(AuthMethodsUpdatedParams { auth_methods: updated }));
+
+    assert_eq!(app.auth_methods().len(), 1);
+    assert_eq!(app.auth_methods()[0].id().0.as_ref(), "updated");
+}
+
+#[test]
+fn session_capability_metadata_enables_only_advertised_features() {
+    let session_capabilities = acp::SessionCapabilities::new()
+        .meta(Some(AetherCapabilities { prompt_search: true, session_preview: false, workspace_move: true }.to_meta()));
+    let (app, _command_rx) =
+        make_app_with_metadata(std::path::PathBuf::from("."), session_capabilities, Vec::new(), Vec::new());
+
+    assert!(app.supports_prompt_search());
+    assert!(!app.supports_session_preview());
+    assert!(app.supports_workspace_move());
 }
 
 #[test]
@@ -52,9 +200,9 @@ fn composer_soft_wraps_and_tracks_cursor() {
 
     let layout = composer.layout(6, &Theme::default());
 
-    assert_eq!(layout.lines.len(), 2);
+    assert_eq!(layout.lines.len(), 4);
     assert_eq!(layout.cursor.x, 4);
-    assert_eq!(layout.cursor.y, 1);
+    assert_eq!(layout.cursor.y, 2);
 }
 
 #[test]
@@ -80,12 +228,14 @@ fn command_picker_filters_and_applies_selected_command() {
             description: "Search the workspace".to_string(),
             has_input: true,
             hint: Some("query".to_string()),
+            builtin: false,
         },
         CommandEntry {
             name: "status".to_string(),
             description: "Show status".to_string(),
             has_input: false,
             hint: None,
+            builtin: false,
         },
     ]);
     composer.insert_str("sea");
@@ -163,7 +313,9 @@ fn file_picker_renders_in_the_live_viewport_not_scrollback() {
 fn composer_history_restores_the_unsubmitted_draft() {
     let mut composer = Composer::new();
     composer.insert_str("first");
-    assert_eq!(composer.take_submission(), "first");
+    let (text, pending) = composer.take_submission();
+    assert_eq!(text, "first");
+    assert!(pending.is_empty());
     composer.insert_str("draft");
 
     assert!(composer.recall_previous());
@@ -387,14 +539,18 @@ fn large_markdown_history_preserves_order_across_scrollback_and_viewport() {
 }
 
 #[test]
-fn settings_ignore_unknown_legacy_fields() {
+fn settings_deserializes_status_line() {
     let settings: UiSettings = serde_json::from_str(
-        r#"{"contentPadding":4,"theme":{"file":"nord.tmTheme","future":true},"statusLine":{"left":[]}}"#,
+        r#"{"contentPadding":4,"theme":{"file":"nord.tmTheme","future":true},"statusLine":{"left":["cwd"],"right":["agent"]}}"#,
     )
     .unwrap();
 
     assert_eq!(settings.content_padding, Some(4));
     assert_eq!(settings.theme.file.as_deref(), Some("nord.tmTheme"));
+    assert!(settings.status_line.is_some());
+    let sl = settings.status_line.unwrap();
+    assert_eq!(sl.left, Some(vec![wisp_next::settings::StatusLineSegmentConfig::Cwd { max_width: None }]));
+    assert_eq!(sl.right, Some(vec![wisp_next::settings::StatusLineSegmentConfig::Agent]));
 }
 
 #[test]
@@ -581,6 +737,18 @@ fn make_terminal_with_width(width: u16) -> Terminal<TestBackend> {
     Terminal::with_options(
         TestBackend::new(width, terminal_height),
         TerminalOptions { viewport: Viewport::Inline(inline_viewport_height(terminal_height)) },
+    )
+    .unwrap()
+}
+
+fn make_terminal_tall() -> Terminal<TestBackend> {
+    make_terminal_with_dimensions(80, 30)
+}
+
+fn make_terminal_with_dimensions(width: u16, height: u16) -> Terminal<TestBackend> {
+    Terminal::with_options(
+        TestBackend::new(width, height),
+        TerminalOptions { viewport: Viewport::Inline(inline_viewport_height(height)) },
     )
     .unwrap()
 }
@@ -974,7 +1142,7 @@ fn short_streaming_message_renders_directly_above_composer() {
     let message_row = row_containing(&viewport, "short answer").unwrap();
     let composer_row = row_containing(&viewport, "> ").unwrap();
     assert!(prompt_row < message_row);
-    assert_eq!(message_row + 1, composer_row);
+    assert_eq!(message_row + 2, composer_row);
 }
 
 #[test]
@@ -1203,4 +1371,4265 @@ fn elicitation_request_is_accepted_interactively() {
         assert_eq!(response.content, Some(serde_json::json!({})));
         assert!(!app.has_modal());
     });
+}
+
+#[test]
+fn tab_cycles_reasoning_effort_through_advertised_levels() {
+    let options = vec![reasoning_option("low", &["low", "medium", "high"])];
+    let (mut app, mut command_rx) =
+        make_app_with_metadata(std::path::PathBuf::from("."), acp::SessionCapabilities::new(), options, Vec::new());
+
+    app.on_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    let cmd = command_rx.try_recv().unwrap();
+    assert!(
+        matches!(cmd, PromptCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "reasoning_effort" && value == "medium")
+    );
+
+    app.on_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    let cmd = command_rx.try_recv().unwrap();
+    assert!(
+        matches!(cmd, PromptCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "reasoning_effort" && value == "high")
+    );
+
+    app.on_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    let cmd = command_rx.try_recv().unwrap();
+    assert!(
+        matches!(cmd, PromptCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "reasoning_effort" && value == "none")
+    );
+
+    app.on_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    let cmd = command_rx.try_recv().unwrap();
+    assert!(
+        matches!(cmd, PromptCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "reasoning_effort" && value == "low")
+    );
+}
+
+#[test]
+fn backtab_cycles_mode_option_and_wraps() {
+    let options = vec![mode_option("code", &["code", "plan", "ask"])];
+    let (mut app, mut command_rx) =
+        make_app_with_metadata(std::path::PathBuf::from("."), acp::SessionCapabilities::new(), options, Vec::new());
+
+    app.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
+    let cmd = command_rx.try_recv().unwrap();
+    assert!(
+        matches!(cmd, PromptCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "mode" && value == "plan")
+    );
+
+    app.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
+    let cmd = command_rx.try_recv().unwrap();
+    assert!(
+        matches!(cmd, PromptCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "mode" && value == "ask")
+    );
+
+    app.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
+    let cmd = command_rx.try_recv().unwrap();
+    assert!(
+        matches!(cmd, PromptCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "mode" && value == "code")
+    );
+}
+
+#[test]
+fn tab_and_backtab_noop_without_cycleable_options() {
+    let (mut app, mut command_rx) = make_app();
+
+    app.on_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    app.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
+
+    assert!(command_rx.try_recv().is_err());
+}
+
+#[test]
+fn command_picker_consumes_tab_without_changing_config() {
+    let options = vec![reasoning_option("low", &["low", "medium", "high"])];
+    let (mut app, _command_rx) =
+        make_app_with_metadata(std::path::PathBuf::from("."), acp::SessionCapabilities::new(), options, Vec::new());
+
+    app.on_key(key(KeyCode::Char('/')));
+    assert!(app.composer().has_overlay());
+
+    app.on_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+    assert!(!app.composer().has_overlay());
+}
+
+#[test]
+fn failed_config_update_shows_error_and_does_not_corrupt_state() {
+    let options = vec![reasoning_option("low", &["low", "medium", "high"])];
+    let (mut app, mut command_rx) =
+        make_app_with_metadata(std::path::PathBuf::from("."), acp::SessionCapabilities::new(), options, Vec::new());
+
+    app.on_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(AcpEvent::ConfigOptionUpdateFailed { error: "server error".to_string() });
+
+    let items = app.drain_finalized();
+    let has_error = items.iter().any(|item| matches!(item, HistoryItem::User(msg) if msg.contains("Failed to update")));
+    assert!(has_error, "expected user-visible error, got {items:?}");
+
+    let reasoning = app.config_options().iter().find(|o| o.id.0.as_ref() == "reasoning_effort");
+    let acp::SessionConfigKind::Select(select) = &reasoning.unwrap().kind else {
+        panic!("expected select");
+    };
+    assert_eq!(select.current_value.0.as_ref(), "medium");
+}
+
+fn session_info(id: &str, cwd: &str, title: &str, updated_at: &str) -> acp::SessionInfo {
+    acp::SessionInfo::new(SessionId::new(id), cwd)
+        .title(Some(title.to_string()))
+        .updated_at(Some(updated_at.to_string()))
+}
+
+fn sessions_listed(sessions: Vec<acp::SessionInfo>) -> AcpEvent {
+    AcpEvent::SessionsListed { sessions }
+}
+
+fn session_loaded(session_id: &str, config_options: Vec<acp::SessionConfigOption>) -> AcpEvent {
+    AcpEvent::SessionLoaded { session_id: SessionId::new(session_id), config_options }
+}
+
+fn new_session_created(session_id: &str, config_options: Vec<acp::SessionConfigOption>) -> AcpEvent {
+    AcpEvent::NewSessionCreated { session_id: SessionId::new(session_id), config_options }
+}
+
+fn session_preview_response(session_id: &str) -> SessionPreviewResponse {
+    SessionPreviewResponse {
+        session_id: session_id.to_string(),
+        cwd: std::path::PathBuf::from("/tmp/project"),
+        created_at: "2025-01-01T00:00:00Z".to_string(),
+        model: "claude".to_string(),
+        selected_mode: Some("code".to_string()),
+        transcript: vec![
+            SessionPreviewTurn { role: SessionPreviewRole::User, text: "hello".to_string() },
+            SessionPreviewTurn { role: SessionPreviewRole::Assistant, text: "hi there".to_string() },
+        ],
+        tool_call_count: 1,
+        truncated: false,
+    }
+}
+
+fn session_update_for(session_id: &str, update: acp::SessionUpdate) -> AcpEvent {
+    AcpEvent::SessionUpdate { session_id: SessionId::new(session_id), update: Box::new(update) }
+}
+
+fn user_message_chunk(text: &str) -> acp::SessionUpdate {
+    acp::SessionUpdate::UserMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(acp::TextContent::new(text))))
+}
+
+fn make_app_with_session_preview() -> (App, UnboundedReceiver<PromptCommand>) {
+    let session_capabilities = acp::SessionCapabilities::new().meta(Some(
+        AetherCapabilities { prompt_search: false, session_preview: true, workspace_move: false }.to_meta(),
+    ));
+    make_app_with_metadata(std::path::PathBuf::from("."), session_capabilities, Vec::new(), Vec::new())
+}
+
+fn make_app_with_workspace_move() -> (App, UnboundedReceiver<PromptCommand>) {
+    let session_capabilities = acp::SessionCapabilities::new().meta(Some(
+        AetherCapabilities { prompt_search: false, session_preview: false, workspace_move: true }.to_meta(),
+    ));
+    make_app_with_metadata(std::path::PathBuf::from("."), session_capabilities, Vec::new(), Vec::new())
+}
+
+fn workspace_entry(path: &str, is_current: bool) -> WorkspaceEntry {
+    WorkspaceEntry { path: std::path::PathBuf::from(path), is_current }
+}
+
+fn workspaces_listed(workspaces: Vec<WorkspaceEntry>) -> AcpEvent {
+    AcpEvent::WorkspacesListed(WorkspaceListResponse { workspaces })
+}
+
+fn workspace_list_failed(error: &str) -> AcpEvent {
+    AcpEvent::WorkspaceListFailed { error: error.to_string() }
+}
+
+fn workspace_moved(new_cwd: &str) -> AcpEvent {
+    AcpEvent::WorkspaceMoved(WorkspaceMoveResponse { new_cwd: std::path::PathBuf::from(new_cwd) })
+}
+
+fn workspace_move_failed(error: &str) -> AcpEvent {
+    AcpEvent::WorkspaceMoveFailed { error: error.to_string() }
+}
+
+#[test]
+fn clear_is_builtin_and_issues_new_session_command() {
+    let (mut app, mut command_rx) = make_app();
+
+    type_text(&mut app, "/clear");
+    app.on_key(key(KeyCode::Tab));
+
+    let cmd = command_rx.try_recv().ok();
+    assert!(
+        matches!(cmd, Some(PromptCommand::NewSession { .. })),
+        "expected NewSession command after /clear, got {cmd:?}"
+    );
+}
+
+#[test]
+fn clear_creates_new_session_and_resets_state() {
+    let (mut app, mut command_rx) = make_app();
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+
+    submit_prompt(&mut app, "old message");
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    assert!(buffer_text(&viewport_buffer(&mut terminal)).contains("old message"));
+
+    type_text(&mut app, "/clear");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+
+    let old_generation = app.transcript_generation();
+    app.on_acp_event(new_session_created("new-session", vec![select_option("model", "sonnet")]));
+
+    assert_eq!(app.transcript_generation(), old_generation.wrapping_add(1));
+    assert_eq!(app.pending_items().len(), 1);
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(!viewport.contains("old message"), "old message should be gone after clear:\n{viewport}");
+}
+
+#[test]
+fn clear_restores_compatible_config_selections() {
+    let options = vec![select_option("model", "opus"), mode_option("code", &["code", "plan", "ask"])];
+    let (mut app, mut command_rx) =
+        make_app_with_metadata(std::path::PathBuf::from("."), acp::SessionCapabilities::new(), options, Vec::new());
+
+    type_text(&mut app, "/clear");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(new_session_created(
+        "new-session",
+        vec![select_option("model", "haiku"), mode_option("ask", &["code", "plan", "ask"])],
+    ));
+
+    let restore_cmd = command_rx.try_recv().unwrap();
+    assert!(
+        matches!(&restore_cmd, PromptCommand::SetConfigOption { config_id, value, .. } if config_id == "model" && value == "opus"),
+        "expected model restored to opus, got {restore_cmd:?}"
+    );
+}
+
+#[test]
+fn resume_is_builtin_and_lists_sessions() {
+    let (mut app, mut command_rx) = make_app();
+
+    type_text(&mut app, "/resume");
+    app.on_key(key(KeyCode::Tab));
+
+    let cmd = command_rx.try_recv().ok();
+    assert!(
+        matches!(cmd, Some(PromptCommand::ListSessions)),
+        "expected ListSessions command after /resume, got {cmd:?}"
+    );
+}
+
+#[test]
+fn session_list_excludes_active_session() {
+    let (mut app, mut command_rx) = make_app();
+
+    type_text(&mut app, "/resume");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(sessions_listed(vec![
+        session_info("test-session", "/tmp/current", "Current", "2025-01-01T00:00:00Z"),
+        session_info("other-session", "/tmp/other", "Other", "2025-01-02T00:00:00Z"),
+    ]));
+
+    assert!(app.has_session_picker());
+}
+
+#[test]
+fn resume_loads_selected_session() {
+    let (mut app, mut command_rx) = make_app();
+
+    type_text(&mut app, "/resume");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(sessions_listed(vec![session_info("old", "/tmp/old", "Old Session", "2025-01-01T00:00:00Z")]));
+
+    app.on_key(key(KeyCode::Enter));
+
+    let cmd = command_rx.try_recv().unwrap();
+    assert!(
+        matches!(&cmd, PromptCommand::LoadSession { session_id, cwd } if session_id.0.as_ref() == "old" && cwd == &std::path::PathBuf::from("/tmp/old")),
+        "expected LoadSession for old session, got {cmd:?}"
+    );
+}
+
+#[test]
+fn empty_session_list_shows_no_sessions() {
+    let (mut app, mut command_rx) = make_app();
+
+    type_text(&mut app, "/resume");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(sessions_listed(vec![]));
+
+    assert!(app.has_session_picker());
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("No previous sessions"), "expected empty state:\n{viewport}");
+}
+
+#[test]
+fn esc_closes_session_picker() {
+    let (mut app, mut command_rx) = make_app();
+
+    type_text(&mut app, "/resume");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(sessions_listed(vec![session_info("old", "/tmp/old", "Old", "2025-01-01T00:00:00Z")]));
+    assert!(app.has_session_picker());
+
+    app.on_key(key(KeyCode::Esc));
+    assert!(!app.has_session_picker());
+}
+
+// --- Plan ACP-event integration tests ---
+
+fn plan_entry(content: &str, status: acp::PlanEntryStatus) -> acp::PlanEntry {
+    acp::PlanEntry::new(content.to_string(), acp::PlanEntryPriority::Medium, status)
+}
+
+fn plan_update(entries: Vec<acp::PlanEntry>) -> AcpEvent {
+    session_update(acp::SessionUpdate::Plan(acp::Plan::new(entries)))
+}
+
+#[test]
+fn plan_renders_in_viewport() {
+    let (mut app, _command_rx) = make_app();
+    let mut terminal = make_terminal_tall();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+
+    app.on_acp_event(plan_update(vec![
+        plan_entry("Research", acp::PlanEntryStatus::InProgress),
+        plan_entry("Implement", acp::PlanEntryStatus::Pending),
+    ]));
+
+    assert!(app.has_plan());
+
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+
+    assert!(viewport.contains("Plan"), "viewport should show Plan header:\n{viewport}");
+    assert!(viewport.contains("Research"), "viewport should show Research:\n{viewport}");
+    assert!(viewport.contains("Implement"), "viewport should show Implement:\n{viewport}");
+}
+
+#[test]
+fn plan_ordering_in_viewport() {
+    let (mut app, _command_rx) = make_app();
+    let mut terminal = make_terminal_tall();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+
+    app.on_acp_event(plan_update(vec![
+        plan_entry("Completed task", acp::PlanEntryStatus::Completed),
+        plan_entry("Pending task", acp::PlanEntryStatus::Pending),
+        plan_entry("InProgress task", acp::PlanEntryStatus::InProgress),
+    ]));
+
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+
+    let in_progress_pos = viewport.find("InProgress task").unwrap();
+    let pending_pos = viewport.find("Pending task").unwrap();
+    let completed_pos = viewport.find("Completed task").unwrap();
+
+    assert!(in_progress_pos < pending_pos, "InProgress should render before Pending:\n{viewport}");
+    assert!(pending_pos < completed_pos, "Pending should render before Completed:\n{viewport}");
+}
+
+#[test]
+fn plan_grace_period_hides_completed() {
+    let (mut app, _command_rx) = make_app();
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+
+    let now = Instant::now();
+
+    app.plan_tracker_mut().replace(vec![plan_entry("Done", acp::PlanEntryStatus::Completed)], now);
+    app.plan_tracker_mut().on_tick(now);
+
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("Done"), "completed entry visible at t=0:\n{viewport}");
+
+    app.plan_tracker_mut().on_tick(now + Duration::from_secs(5));
+    app.on_key(key(KeyCode::Enter));
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport_after = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(!viewport_after.contains("Done"), "completed entry hidden after 5s grace:\n{viewport_after}");
+}
+
+#[test]
+fn plan_grace_period_timestamp_preserved_across_repeated_updates() {
+    let (mut app, _command_rx) = make_app();
+
+    let now = Instant::now();
+    app.plan_tracker_mut().replace(vec![plan_entry("Task", acp::PlanEntryStatus::Completed)], now);
+
+    app.on_acp_event(plan_update(vec![plan_entry("Task", acp::PlanEntryStatus::Completed)]));
+
+    app.plan_tracker_mut().on_tick(now);
+    assert!(app.has_plan(), "still visible at original completion time");
+
+    app.plan_tracker_mut().on_tick(now + Duration::from_secs(10));
+    let entries = app.plan_entries().to_vec();
+    assert!(entries.is_empty(), "hidden when original timestamp exceeds grace");
+}
+
+#[test]
+fn plan_coexists_with_streaming_transcript() {
+    let (mut app, _command_rx) = make_app();
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+
+    app.on_acp_event(plan_update(vec![plan_entry("Research", acp::PlanEntryStatus::InProgress)]));
+
+    submit_prompt(&mut app, "explain");
+    app.on_acp_event(text_chunk("Here is the explanation."));
+
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+
+    assert!(viewport.contains("Plan"), "plan header visible:\n{viewport}");
+    assert!(viewport.contains("Research"), "plan entry visible:\n{viewport}");
+    assert!(viewport.contains("Here is the explanation."), "transcript visible:\n{viewport}");
+}
+
+#[test]
+fn plan_coexists_with_tool_calls() {
+    let (mut app, _command_rx) = make_app();
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+
+    app.on_acp_event(plan_update(vec![plan_entry("Edit files", acp::PlanEntryStatus::InProgress)]));
+
+    submit_prompt(&mut app, "fix it");
+    app.on_acp_event(tool_call("tool-1", "Editing main.rs"));
+
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+
+    assert!(viewport.contains("Edit files"), "plan entry visible:\n{viewport}");
+    assert!(viewport.contains("Editing main.rs"), "tool call visible:\n{viewport}");
+}
+
+#[test]
+fn plan_short_terminal_clips_plan() {
+    let (mut app, _command_rx) = make_app();
+    let mut terminal = make_terminal_with_width(40);
+    terminal.backend_mut().resize(40, 8);
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+
+    app.on_acp_event(plan_update(vec![
+        plan_entry("Plan item one", acp::PlanEntryStatus::Pending),
+        plan_entry("Plan item two", acp::PlanEntryStatus::Pending),
+        plan_entry("Plan item three", acp::PlanEntryStatus::Pending),
+        plan_entry("Plan item four", acp::PlanEntryStatus::Pending),
+    ]));
+
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+
+    assert!(viewport.contains("Plan"), "plan header visible on short terminal:\n{viewport}");
+    let visible_entries = vec!["Plan item one", "Plan item two", "Plan item three", "Plan item four"]
+        .into_iter()
+        .filter(|e| viewport.contains(e))
+        .count();
+    assert!(visible_entries < 4, "short terminal should clip plan, but all 4 entries visible:\n{viewport}");
+}
+
+#[test]
+fn plan_not_in_scrollback() {
+    let (mut app, _command_rx) = make_app();
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+
+    app.on_acp_event(plan_update(vec![plan_entry("A plan task", acp::PlanEntryStatus::InProgress)]));
+
+    submit_prompt(&mut app, "hello");
+    app.on_acp_event(text_chunk("response text"));
+    app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let scrollback = buffer_text(&history_buffer(&mut terminal));
+
+    assert!(!scrollback.contains("A plan task"), "plan should not be in scrollback:\n{scrollback}");
+}
+
+#[test]
+fn plan_cleared_on_context_cleared() {
+    let (mut app, _command_rx) = make_app();
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+
+    app.on_acp_event(plan_update(vec![plan_entry("Task", acp::PlanEntryStatus::Pending)]));
+    assert!(app.has_plan());
+
+    app.on_acp_event(AcpEvent::ContextCleared(ContextClearedParams::default()));
+    assert!(!app.has_plan());
+
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(!viewport.contains("Task"), "plan should be gone after context clear:\n{viewport}");
+}
+
+#[test]
+fn plan_cleared_on_new_session() {
+    let (mut app, _command_rx) = make_app();
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+
+    app.on_acp_event(plan_update(vec![plan_entry("Task", acp::PlanEntryStatus::Pending)]));
+    assert!(app.has_plan());
+
+    app.on_acp_event(AcpEvent::NewSessionCreated { session_id: SessionId::new("new-id"), config_options: Vec::new() });
+    assert!(!app.has_plan());
+
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(!viewport.contains("Task"), "plan should be gone after new session:\n{viewport}");
+}
+
+#[test]
+fn plan_cleared_on_session_loaded() {
+    let (mut app, _command_rx) = make_app();
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+
+    app.on_acp_event(plan_update(vec![plan_entry("Task", acp::PlanEntryStatus::Pending)]));
+    assert!(app.has_plan());
+
+    app.on_acp_event(AcpEvent::SessionLoaded {
+        session_id: SessionId::new("other-session"),
+        config_options: Vec::new(),
+    });
+    assert!(!app.has_plan());
+
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(!viewport.contains("Task"), "plan should be gone after session load:\n{viewport}");
+}
+
+// --- MCP Server Status & Provider Login Tests ---
+
+use acp_utils::notifications::{McpNotification, McpServerAuthCapability, McpServerStatus, McpServerStatusEntry};
+
+fn server_status_entry(name: &str, status: McpServerStatus) -> McpServerStatusEntry {
+    McpServerStatusEntry::new(name, status)
+}
+
+fn oauth_server(name: &str, status: McpServerStatus) -> McpServerStatusEntry {
+    McpServerStatusEntry::new(name, status).with_auth_capability(McpServerAuthCapability::OAuth)
+}
+
+fn mcp_notification(servers: Vec<McpServerStatusEntry>) -> AcpEvent {
+    AcpEvent::McpNotification(McpNotification::ServerStatus { servers })
+}
+
+fn auth_complete(method_id: &str) -> AcpEvent {
+    AcpEvent::AuthenticateComplete { method_id: method_id.to_string() }
+}
+
+fn auth_failed(method_id: &str) -> AcpEvent {
+    AcpEvent::AuthenticateFailed { method_id: method_id.to_string(), error: "simulated failure".to_string() }
+}
+
+fn auth_method(id: &str, name: &str, description: Option<&str>) -> acp::AuthMethod {
+    let mut agent = acp::AuthMethodAgent::new(id.to_string(), name);
+    if let Some(desc) = description {
+        agent = agent.description(desc);
+    }
+    acp::AuthMethod::Agent(agent)
+}
+
+fn auth_methods_updated(methods: Vec<acp::AuthMethod>) -> AcpEvent {
+    AcpEvent::AuthMethodsUpdated(AuthMethodsUpdatedParams { auth_methods: methods })
+}
+
+#[test]
+fn server_status_unhealthy_count_updates_status_line() {
+    let (mut app, _command_rx) = make_app();
+    assert_eq!(app.unhealthy_server_count(), 0);
+
+    app.on_acp_event(mcp_notification(vec![
+        server_status_entry("github", McpServerStatus::Connected { tool_count: 5 }),
+        server_status_entry("linear", McpServerStatus::NeedsOAuth),
+        server_status_entry("slack", McpServerStatus::Failed { error: "timeout".to_string() }),
+    ]));
+
+    assert_eq!(app.unhealthy_server_count(), 2);
+}
+
+#[test]
+fn server_status_all_connected_gives_zero_unhealthy() {
+    let (mut app, _command_rx) = make_app();
+
+    app.on_acp_event(mcp_notification(vec![
+        server_status_entry("a", McpServerStatus::Connected { tool_count: 1 }),
+        server_status_entry("b", McpServerStatus::Connected { tool_count: 2 }),
+    ]));
+
+    assert_eq!(app.unhealthy_server_count(), 0);
+}
+
+#[test]
+fn server_status_empty_clears_count() {
+    let (mut app, _command_rx) = make_app();
+
+    app.on_acp_event(mcp_notification(vec![server_status_entry(
+        "x",
+        McpServerStatus::Failed { error: "e".to_string() },
+    )]));
+    assert_eq!(app.unhealthy_server_count(), 1);
+
+    app.on_acp_event(mcp_notification(vec![]));
+    assert_eq!(app.unhealthy_server_count(), 0);
+}
+
+#[test]
+fn settings_overlay_shows_mcp_servers_entry() {
+    let (mut app, _command_rx) = make_app();
+
+    app.on_acp_event(mcp_notification(vec![server_status_entry(
+        "github",
+        McpServerStatus::Connected { tool_count: 3 },
+    )]));
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+
+    let mut terminal = make_terminal();
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+
+    assert!(viewport.contains("MCP Servers"), "settings should show MCP Servers entry:\n{viewport}");
+}
+
+#[test]
+fn settings_overlay_shows_provider_logins_when_auth_methods_present() {
+    let (mut app, _command_rx) = make_app_with_metadata(
+        std::path::PathBuf::from("."),
+        acp::SessionCapabilities::new(),
+        Vec::new(),
+        vec![auth_method("codex", "Codex", None)],
+    );
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+
+    let mut terminal = make_terminal();
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+
+    assert!(viewport.contains("Provider Logins"), "settings should show Provider Logins:\n{viewport}");
+}
+
+#[test]
+fn settings_overlay_no_provider_logins_when_auth_methods_empty() {
+    let (mut app, _command_rx) = make_app();
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+
+    let mut terminal = make_terminal();
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+
+    assert!(!viewport.contains("Provider Logins"), "should not show Provider Logins when empty:\n{viewport}");
+}
+
+#[test]
+fn mcp_server_status_pane_renders_entries() {
+    let (mut app, _command_rx) = make_app();
+
+    app.on_acp_event(mcp_notification(vec![
+        server_status_entry("github", McpServerStatus::Connected { tool_count: 5 }),
+        oauth_server("linear", McpServerStatus::NeedsOAuth),
+        server_status_entry("slack", McpServerStatus::Failed { error: "timeout".to_string() }),
+    ]));
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    // Navigate to MCP Servers entry (after Theme entry)
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+
+    let mut terminal = make_terminal();
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+
+    assert!(viewport.contains("github"), "should show github:\n{viewport}");
+    assert!(viewport.contains("5 tools"), "should show tool count:\n{viewport}");
+    assert!(viewport.contains("linear"), "should show linear:\n{viewport}");
+    assert!(viewport.contains("needs authentication"), "should show auth needed:\n{viewport}");
+    assert!(viewport.contains("slack"), "should show slack:\n{viewport}");
+    assert!(viewport.contains("timeout"), "should show error:\n{viewport}");
+}
+
+#[test]
+fn mcp_server_status_empty_shows_placeholder() {
+    let (mut app, _command_rx) = make_app();
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+
+    let mut terminal = make_terminal();
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+
+    assert!(viewport.contains("no MCP servers configured"), "should show placeholder:\n{viewport}");
+}
+
+#[test]
+fn selecting_oauth_server_emits_authenticate_mcp_server() {
+    let (mut app, mut command_rx) = make_app();
+
+    app.on_acp_event(mcp_notification(vec![oauth_server("linear", McpServerStatus::NeedsOAuth)]));
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+    // Press Enter on the server entry
+    app.on_key(key(KeyCode::Enter));
+
+    let cmd = command_rx.try_recv().unwrap();
+    match cmd {
+        PromptCommand::AuthenticateMcpServer { server_name, .. } => assert_eq!(server_name, "linear"),
+        other => panic!("expected AuthenticateMcpServer, got: {other:?}"),
+    }
+}
+
+#[test]
+fn selecting_non_oauth_server_is_noop() {
+    let (mut app, mut command_rx) = make_app();
+
+    app.on_acp_event(mcp_notification(vec![server_status_entry(
+        "github",
+        McpServerStatus::Connected { tool_count: 5 },
+    )]));
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+    app.on_key(key(KeyCode::Enter));
+
+    assert!(command_rx.try_recv().is_err(), "should not emit command for non-OAuth server");
+}
+
+#[test]
+fn provider_login_emits_authenticate() {
+    let (mut app, mut command_rx) = make_app_with_metadata(
+        std::path::PathBuf::from("."),
+        acp::SessionCapabilities::new(),
+        Vec::new(),
+        vec![auth_method("codex", "Codex", None)],
+    );
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    // Navigate to Provider Logins (menu: Theme, MCP Servers, Provider Logins)
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+    app.on_key(key(KeyCode::Enter));
+
+    let cmd = command_rx.try_recv().unwrap();
+    match cmd {
+        PromptCommand::Authenticate { method_id } => assert_eq!(method_id, "codex"),
+        other => panic!("expected Authenticate, got: {other:?}"),
+    }
+}
+
+#[test]
+fn authenticate_complete_updates_correct_entry() {
+    let (mut app, _command_rx) = make_app_with_metadata(
+        std::path::PathBuf::from("."),
+        acp::SessionCapabilities::new(),
+        Vec::new(),
+        vec![auth_method("a", "A", None), auth_method("b", "B", None)],
+    );
+
+    // Open provider logins and start auth for "a"
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+    app.on_key(key(KeyCode::Enter)); // Authenticate "a"
+
+    // Simulate authenticate complete for method "a"
+    app.on_acp_event(auth_complete("a"));
+
+    let mut terminal = make_terminal();
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("logged in"), "should show logged in for 'a':\n{viewport}");
+}
+
+#[test]
+fn authenticate_failed_resets_to_needs_login() {
+    let (mut app, _command_rx) = make_app_with_metadata(
+        std::path::PathBuf::from("."),
+        acp::SessionCapabilities::new(),
+        Vec::new(),
+        vec![auth_method("x", "X", None)],
+    );
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+    app.on_key(key(KeyCode::Enter)); // Authenticate "x"
+
+    app.on_acp_event(auth_failed("x"));
+
+    let mut terminal = make_terminal();
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("needs login"), "should show needs login after failure:\n{viewport}");
+}
+
+#[test]
+fn auth_methods_updated_replaces_provider_entries() {
+    let (mut app, _command_rx) = make_app_with_metadata(
+        std::path::PathBuf::from("."),
+        acp::SessionCapabilities::new(),
+        Vec::new(),
+        vec![auth_method("old", "Old", None)],
+    );
+
+    // Open provider logins
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+
+    // Replace auth methods
+    app.on_acp_event(auth_methods_updated(vec![auth_method("new", "New", None)]));
+
+    let mut terminal = make_terminal();
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("New"), "should show new provider:\n{viewport}");
+    assert!(!viewport.contains("Old"), "should not show old provider:\n{viewport}");
+}
+
+#[test]
+fn closing_settings_overlay_cancels_pending_elicitation() {
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    LocalSet::new().block_on(&runtime, async {
+        let (mut app, _command_rx) = make_app();
+
+        type_text(&mut app, "/settings");
+        app.on_key(key(KeyCode::Tab));
+        assert!(app.has_modal());
+
+        let (cx, mut peer) = test_connection().await;
+        let (responder, response_rx) = peer.fake_elicitation(&cx).await;
+        app.on_acp_event(AcpEvent::ElicitationRequest {
+            params: ElicitationParams {
+                server_name: "test".to_string(),
+                request: CreateElicitationRequestParams::UrlElicitationParams {
+                    meta: None,
+                    message: "auth".to_string(),
+                    url: "https://example.com".to_string(),
+                    elicitation_id: "el-1".to_string(),
+                },
+            },
+            responder,
+        });
+
+        app.on_key(key(KeyCode::Esc));
+
+        let response = response_rx.await.unwrap();
+        assert_eq!(response.action, acp_utils::notifications::ElicitationAction::Cancel);
+    });
+}
+
+#[test]
+fn server_status_updated_while_pane_open_refreshes() {
+    let (mut app, _command_rx) = make_app();
+
+    app.on_acp_event(mcp_notification(vec![server_status_entry("a", McpServerStatus::Connected { tool_count: 1 })]));
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter)); // Open MCP servers pane
+
+    // Send update while pane is open
+    app.on_acp_event(mcp_notification(vec![server_status_entry(
+        "a",
+        McpServerStatus::Failed { error: "crash".to_string() },
+    )]));
+
+    let mut terminal = make_terminal();
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("crash"), "should show updated status:\n{viewport}");
+}
+
+#[test]
+fn provider_login_pane_shows_all_statuses() {
+    let (mut app, _command_rx) = make_app_with_metadata(
+        std::path::PathBuf::from("."),
+        acp::SessionCapabilities::new(),
+        Vec::new(),
+        vec![auth_method("needs", "NeedsLogin", None), auth_method("authd", "Authed", Some("authenticated"))],
+    );
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+
+    let mut terminal = make_terminal();
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+
+    assert!(viewport.contains("NeedsLogin"), "should show NeedsLogin:\n{viewport}");
+    assert!(viewport.contains("needs login"), "should show needs login status:\n{viewport}");
+    assert!(viewport.contains("Authed"), "should show Authed:\n{viewport}");
+    assert!(viewport.contains("logged in"), "should show logged in status:\n{viewport}");
+}
+
+#[test]
+fn esc_from_server_status_returns_to_menu() {
+    let (mut app, _command_rx) = make_app();
+
+    app.on_acp_event(mcp_notification(vec![server_status_entry("a", McpServerStatus::Connected { tool_count: 1 })]));
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter)); // Enter MCP Servers
+    app.on_key(key(KeyCode::Esc)); // Back to menu
+
+    let mut terminal = make_terminal();
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("MCP Servers"), "should be back at menu:\n{viewport}");
+}
+
+#[test]
+fn esc_from_provider_login_returns_to_menu() {
+    let (mut app, _command_rx) = make_app_with_metadata(
+        std::path::PathBuf::from("."),
+        acp::SessionCapabilities::new(),
+        Vec::new(),
+        vec![auth_method("x", "X", None)],
+    );
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+    app.on_key(key(KeyCode::Esc));
+
+    let mut terminal = make_terminal();
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("Provider Logins"), "should be back at menu:\n{viewport}");
+}
+
+#[test]
+fn server_status_summary_updates_in_menu() {
+    let (mut app, _command_rx) = make_app();
+
+    app.on_acp_event(mcp_notification(vec![
+        server_status_entry("a", McpServerStatus::Connected { tool_count: 1 }),
+        server_status_entry("b", McpServerStatus::Failed { error: "err".to_string() }),
+    ]));
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+
+    let mut terminal = make_terminal();
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("1 connected") || viewport.contains("1 failed"), "should show summary:\n{viewport}");
+}
+
+fn proxied_server_entry(name: &str, status: McpServerStatus) -> McpServerStatusEntry {
+    McpServerStatusEntry::new(name, status).with_proxied(true)
+}
+
+fn proxied_oauth_server(name: &str, status: McpServerStatus) -> McpServerStatusEntry {
+    McpServerStatusEntry::new(name, status).with_proxied(true).with_auth_capability(McpServerAuthCapability::OAuth)
+}
+
+#[test]
+fn server_status_pane_groups_direct_and_proxied_with_headers() {
+    let (mut app, _command_rx) = make_app();
+
+    app.on_acp_event(mcp_notification(vec![
+        server_status_entry("github", McpServerStatus::Connected { tool_count: 5 }),
+        proxied_server_entry("math", McpServerStatus::Connected { tool_count: 3 }),
+        proxied_oauth_server("linear", McpServerStatus::NeedsOAuth),
+    ]));
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+
+    let mut terminal = make_terminal();
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+
+    assert!(viewport.contains("Direct"), "should show Direct header:\n{viewport}");
+    assert!(viewport.contains("Proxied"), "should show Proxied header:\n{viewport}");
+    assert!(viewport.contains("github"), "should show github:\n{viewport}");
+    assert!(viewport.contains("math"), "should show math:\n{viewport}");
+    assert!(viewport.contains("linear"), "should show linear:\n{viewport}");
+}
+
+#[test]
+fn server_status_pane_only_direct_renders_no_headers() {
+    let (mut app, _command_rx) = make_app();
+
+    app.on_acp_event(mcp_notification(vec![
+        server_status_entry("github", McpServerStatus::Connected { tool_count: 5 }),
+        server_status_entry("slack", McpServerStatus::Failed { error: "err".to_string() }),
+    ]));
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+
+    let mut terminal = make_terminal();
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+
+    assert!(!viewport.contains("Direct"), "should not show Direct header when all direct:\n{viewport}");
+    assert!(!viewport.contains("Proxied"), "should not show Proxied header when no proxied:\n{viewport}");
+}
+
+#[test]
+fn server_status_pane_only_proxied_shows_proxied_header() {
+    let (mut app, _command_rx) = make_app();
+
+    app.on_acp_event(mcp_notification(vec![
+        proxied_server_entry("math", McpServerStatus::Connected { tool_count: 3 }),
+        proxied_oauth_server("linear", McpServerStatus::NeedsOAuth),
+    ]));
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+
+    let mut terminal = make_terminal();
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+
+    assert!(!viewport.contains("Direct"), "should not show Direct header when all proxied:\n{viewport}");
+    assert!(viewport.contains("Proxied"), "should show Proxied header:\n{viewport}");
+}
+
+#[test]
+fn server_status_navigation_skips_headers_and_spacers() {
+    let (mut app, mut command_rx) = make_app();
+
+    app.on_acp_event(mcp_notification(vec![
+        server_status_entry("github", McpServerStatus::Connected { tool_count: 5 }),
+        proxied_server_entry("math", McpServerStatus::Connected { tool_count: 3 }),
+        proxied_oauth_server("linear", McpServerStatus::NeedsOAuth),
+    ]));
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+
+    // First server: github (Direct section, row index 1)
+    app.on_key(key(KeyCode::Enter));
+    assert!(command_rx.try_recv().is_err(), "github is not OAuth, should be noop");
+
+    // Move down once: should land on math (Proxied section, row index 4 - skipping Direct header)
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+    assert!(command_rx.try_recv().is_err(), "math is not OAuth, should be noop");
+
+    // Move down once: should land on linear (Proxied section, row index 5)
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+    let cmd = command_rx.try_recv().unwrap();
+    match cmd {
+        PromptCommand::AuthenticateMcpServer { server_name, .. } => assert_eq!(server_name, "linear"),
+        other => panic!("expected AuthenticateMcpServer, got: {other:?}"),
+    }
+
+    // Move up: should go back to math, not land on Proxied header or Spacer
+    app.on_key(key(KeyCode::Up));
+    app.on_key(key(KeyCode::Enter));
+    assert!(command_rx.try_recv().is_err(), "math is not OAuth after wrap-up");
+
+    // Move up again: should land back on github
+    app.on_key(key(KeyCode::Up));
+    app.on_key(key(KeyCode::Enter));
+    assert!(command_rx.try_recv().is_err(), "github is not OAuth after wrap-up");
+}
+
+#[test]
+fn proxied_oauth_server_sends_original_server_name() {
+    let (mut app, mut command_rx) = make_app();
+
+    app.on_acp_event(mcp_notification(vec![proxied_oauth_server("linear", McpServerStatus::NeedsOAuth)]));
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+    app.on_key(key(KeyCode::Enter));
+
+    let cmd = command_rx.try_recv().unwrap();
+    match cmd {
+        PromptCommand::AuthenticateMcpServer { server_name, .. } => assert_eq!(server_name, "linear"),
+        other => panic!("expected AuthenticateMcpServer, got: {other:?}"),
+    }
+}
+
+#[test]
+fn connection_closed_cancels_settings_elicitation() {
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    LocalSet::new().block_on(&runtime, async {
+        let (mut app, _command_rx) = make_app();
+
+        type_text(&mut app, "/settings");
+        app.on_key(key(KeyCode::Tab));
+        assert!(app.has_modal());
+
+        let (cx, mut peer) = test_connection().await;
+        let (responder, response_rx) = peer.fake_elicitation(&cx).await;
+        app.on_acp_event(AcpEvent::ElicitationRequest {
+            params: ElicitationParams {
+                server_name: "test".to_string(),
+                request: CreateElicitationRequestParams::UrlElicitationParams {
+                    meta: None,
+                    message: "auth".to_string(),
+                    url: "https://example.com".to_string(),
+                    elicitation_id: "el-conn-closed".to_string(),
+                },
+            },
+            responder,
+        });
+
+        app.on_acp_event(AcpEvent::ConnectionClosed);
+
+        let response = response_rx.await.unwrap();
+        assert_eq!(response.action, ElicitationAction::Cancel);
+    });
+}
+
+#[test]
+fn new_session_created_cancels_settings_elicitation() {
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    LocalSet::new().block_on(&runtime, async {
+        let (mut app, _command_rx) = make_app();
+
+        type_text(&mut app, "/settings");
+        app.on_key(key(KeyCode::Tab));
+        assert!(app.has_modal());
+
+        let (cx, mut peer) = test_connection().await;
+        let (responder, response_rx) = peer.fake_elicitation(&cx).await;
+        app.on_acp_event(AcpEvent::ElicitationRequest {
+            params: ElicitationParams {
+                server_name: "test".to_string(),
+                request: CreateElicitationRequestParams::UrlElicitationParams {
+                    meta: None,
+                    message: "auth".to_string(),
+                    url: "https://example.com".to_string(),
+                    elicitation_id: "el-new-session".to_string(),
+                },
+            },
+            responder,
+        });
+
+        app.on_acp_event(AcpEvent::NewSessionCreated { session_id: SessionId::new("new"), config_options: vec![] });
+
+        let response = response_rx.await.unwrap();
+        assert_eq!(response.action, ElicitationAction::Cancel);
+    });
+}
+
+#[test]
+fn server_status_update_entries_preserves_selection_across_group_boundaries() {
+    let (mut app, mut command_rx) = make_app();
+
+    app.on_acp_event(mcp_notification(vec![
+        server_status_entry("github", McpServerStatus::Connected { tool_count: 5 }),
+        proxied_oauth_server("linear", McpServerStatus::NeedsOAuth),
+    ]));
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+
+    // Navigate to linear (Proxied section, after header + spacer)
+    app.on_key(key(KeyCode::Down));
+
+    // Send update that flips the grouping - github becomes proxied too, linear stays OAuth
+    app.on_acp_event(mcp_notification(vec![
+        proxied_oauth_server("linear", McpServerStatus::NeedsOAuth),
+        proxied_server_entry("github", McpServerStatus::Connected { tool_count: 5 }),
+    ]));
+
+    app.on_key(key(KeyCode::Enter));
+    let cmd = command_rx.try_recv().unwrap();
+    match cmd {
+        PromptCommand::AuthenticateMcpServer { server_name, .. } => assert_eq!(server_name, "linear"),
+        other => panic!("expected AuthenticateMcpServer for linear, got: {other:?}"),
+    }
+}
+
+fn make_app_with_prompt_capabilities(
+    prompt_capabilities: acp::PromptCapabilities,
+) -> (App, UnboundedReceiver<PromptCommand>) {
+    let (prompt_handle, command_rx) = AcpPromptHandle::recording();
+    let app = App::new(AppConfig {
+        session_id: SessionId::new("test-session"),
+        agent_name: "aether".to_string(),
+        prompt_capabilities,
+        session_capabilities: acp::SessionCapabilities::new(),
+        config_options: Vec::new(),
+        auth_methods: Vec::new(),
+        workspace_status: WorkspaceStatus::new("~/code/demo", Some("main".to_string())),
+        prompt_handle,
+        working_dir: std::path::PathBuf::from("."),
+        settings: UiSettings::default(),
+    });
+    (app, command_rx)
+}
+
+fn make_app_with_caps_and_config(
+    prompt_capabilities: acp::PromptCapabilities,
+    config_options: Vec<acp::SessionConfigOption>,
+) -> (App, UnboundedReceiver<PromptCommand>) {
+    let (prompt_handle, command_rx) = AcpPromptHandle::recording();
+    let app = App::new(AppConfig {
+        session_id: SessionId::new("test-session"),
+        agent_name: "aether".to_string(),
+        prompt_capabilities,
+        session_capabilities: acp::SessionCapabilities::new(),
+        config_options,
+        auth_methods: Vec::new(),
+        workspace_status: WorkspaceStatus::new("~/code/demo", Some("main".to_string())),
+        prompt_handle,
+        working_dir: std::path::PathBuf::from("."),
+        settings: UiSettings::default(),
+    });
+    (app, command_rx)
+}
+
+fn make_failable_app_with_caps(
+    prompt_capabilities: acp::PromptCapabilities,
+) -> (App, Arc<AtomicBool>, UnboundedReceiver<PromptCommand>) {
+    let (prompt_handle, fail_signal, command_rx) = AcpPromptHandle::failable();
+    let app = App::new(AppConfig {
+        session_id: SessionId::new("test-session"),
+        agent_name: "aether".to_string(),
+        prompt_capabilities,
+        session_capabilities: acp::SessionCapabilities::new(),
+        config_options: vec![],
+        auth_methods: vec![],
+        workspace_status: WorkspaceStatus::new("~/code/demo", Some("main".to_string())),
+        prompt_handle,
+        working_dir: std::path::PathBuf::from("."),
+        settings: UiSettings::default(),
+    });
+    (app, fail_signal, command_rx)
+}
+
+fn media_caps() -> acp::PromptCapabilities {
+    acp::PromptCapabilities::new().image(true).audio(true)
+}
+
+fn model_select_option(
+    value: &str,
+    name: &str,
+    supports_image: bool,
+    supports_audio: bool,
+) -> acp::SessionConfigSelectOption {
+    acp::SessionConfigSelectOption::new(value.to_string(), name.to_string())
+        .meta(SelectOptionMeta { reasoning_levels: vec![], supports_image, supports_audio }.into_meta())
+}
+
+fn create_temp_file(dir: &TempDir, name: &str, content: &[u8]) -> std::path::PathBuf {
+    let p = dir.path().join(name);
+    std::fs::write(&p, content).unwrap();
+    p
+}
+
+fn image_model_config(current: &str, options: Vec<acp::SessionConfigSelectOption>) -> acp::SessionConfigOption {
+    acp::SessionConfigOption::select(
+        ConfigOptionId::Model.as_str().to_string(),
+        "Model".to_string(),
+        current.to_string(),
+        options,
+    )
+    .category(acp::SessionConfigOptionCategory::Model)
+}
+
+fn grouped_model_config(current: &str, groups: Vec<acp::SessionConfigSelectGroup>) -> acp::SessionConfigOption {
+    let mut option = acp::SessionConfigOption::select(
+        ConfigOptionId::Model.as_str().to_string(),
+        "Model".to_string(),
+        current.to_string(),
+        Vec::<acp::SessionConfigSelectOption>::new(),
+    )
+    .category(acp::SessionConfigOptionCategory::Model);
+    if let acp::SessionConfigKind::Select(select) = &mut option.kind {
+        select.options = acp::SessionConfigSelectOptions::Grouped(groups);
+    }
+    option
+}
+
+fn make_select_group(
+    id: &str,
+    name: &str,
+    options: Vec<acp::SessionConfigSelectOption>,
+) -> acp::SessionConfigSelectGroup {
+    acp::SessionConfigSelectGroup::new(acp::SessionConfigGroupId::new(id.to_string()), name.to_string(), options)
+}
+
+#[test]
+fn paste_image_path_adds_pending_media() {
+    let (mut app, _command_rx) = make_app();
+    let tmp = TempDir::new().unwrap();
+    let img = create_temp_file(&tmp, "photo.png", b"fake png");
+
+    app.on_paste(img.to_str().unwrap());
+
+    assert_eq!(app.composer().pending_media().len(), 1);
+    assert_eq!(app.composer().pending_media()[0].display_name, "photo.png");
+    assert!(app.composer().text().is_empty());
+}
+
+#[test]
+fn paste_audio_path_adds_pending_media() {
+    let (mut app, _command_rx) = make_app();
+    let tmp = TempDir::new().unwrap();
+    let audio = create_temp_file(&tmp, "note.wav", b"fake wav");
+
+    app.on_paste(audio.to_str().unwrap());
+
+    assert_eq!(app.composer().pending_media().len(), 1);
+    assert_eq!(app.composer().pending_media()[0].display_name, "note.wav");
+}
+
+#[test]
+fn paste_ordinary_text_inserts_as_text() {
+    let (mut app, _command_rx) = make_app();
+
+    app.on_paste("hello world");
+
+    assert!(app.composer().pending_media().is_empty());
+    assert_eq!(app.composer().text(), "hello world");
+}
+
+#[test]
+fn paste_non_media_file_falls_back_to_text() {
+    let (mut app, _command_rx) = make_app();
+    let tmp = TempDir::new().unwrap();
+    let txt = create_temp_file(&tmp, "readme.txt", b"hello");
+
+    app.on_paste(txt.to_str().unwrap());
+
+    assert!(app.composer().pending_media().is_empty());
+    assert!(!app.composer().text().is_empty());
+}
+
+#[test]
+fn paste_multiple_dropped_files_adds_all() {
+    let (mut app, _command_rx) = make_app();
+    let tmp = TempDir::new().unwrap();
+    let img = create_temp_file(&tmp, "a.png", b"img");
+    let audio = create_temp_file(&tmp, "b.wav", b"audio");
+    let input = format!("{}\n{}", img.display(), audio.display());
+
+    app.on_paste(&input);
+
+    assert_eq!(app.composer().pending_media().len(), 2);
+}
+
+#[test]
+fn duplicate_dropped_media_not_added_twice() {
+    let (mut app, _command_rx) = make_app();
+    let tmp = TempDir::new().unwrap();
+    let img = create_temp_file(&tmp, "photo.png", b"img");
+    let path_str = img.to_str().unwrap().to_string();
+
+    app.on_paste(&path_str);
+    app.on_paste(&path_str);
+
+    assert_eq!(app.composer().pending_media().len(), 1);
+}
+
+#[test]
+fn media_only_submit_sends_with_content_blocks() {
+    let (mut app, mut command_rx) = make_app_with_prompt_capabilities(media_caps());
+    let tmp = TempDir::new().unwrap();
+    let img = create_temp_file(&tmp, "photo.png", b"fake png data");
+
+    app.on_paste(img.to_str().unwrap());
+    app.on_key(key(KeyCode::Enter));
+
+    let cmd = command_rx.try_recv().unwrap();
+    match cmd {
+        PromptCommand::Prompt { text, content, .. } => {
+            assert!(text.is_empty(), "media-only send should have empty text");
+            assert!(content.is_some(), "media-only send should have content blocks");
+            assert!(!content.unwrap().is_empty());
+        }
+        other => panic!("expected Prompt command, got {other:?}"),
+    }
+}
+
+#[test]
+fn submit_with_text_and_media_merges_both() {
+    let (mut app, mut command_rx) = make_app_with_prompt_capabilities(media_caps());
+    let tmp = TempDir::new().unwrap();
+    let img = create_temp_file(&tmp, "photo.png", b"fake png data");
+
+    app.on_paste(img.to_str().unwrap());
+    type_text(&mut app, "describe this");
+    app.on_key(key(KeyCode::Enter));
+
+    let cmd = command_rx.try_recv().unwrap();
+    match cmd {
+        PromptCommand::Prompt { text, content, .. } => {
+            assert_eq!(text, "describe this");
+            assert!(content.is_some());
+        }
+        other => panic!("expected Prompt command, got {other:?}"),
+    }
+}
+
+#[test]
+fn submit_clears_pending_media() {
+    let (mut app, mut command_rx) = make_app_with_prompt_capabilities(media_caps());
+    let tmp = TempDir::new().unwrap();
+    let img = create_temp_file(&tmp, "photo.png", b"fake png");
+
+    app.on_paste(img.to_str().unwrap());
+    app.on_key(key(KeyCode::Enter));
+    command_rx.try_recv().unwrap();
+
+    assert!(app.composer().pending_media().is_empty());
+    assert!(app.composer().text().is_empty());
+}
+
+#[test]
+fn backspace_on_empty_composer_removes_last_dropped_media() {
+    let (mut app, _command_rx) = make_app();
+    let tmp = TempDir::new().unwrap();
+    let img1 = create_temp_file(&tmp, "a.png", b"a");
+    let img2 = create_temp_file(&tmp, "b.png", b"b");
+
+    app.on_paste(img1.to_str().unwrap());
+    app.on_paste(img2.to_str().unwrap());
+    assert_eq!(app.composer().pending_media().len(), 2);
+
+    app.on_key(key(KeyCode::Backspace));
+    assert_eq!(app.composer().pending_media().len(), 1);
+    assert_eq!(app.composer().pending_media()[0].display_name, "a.png");
+
+    app.on_key(key(KeyCode::Backspace));
+    assert!(app.composer().pending_media().is_empty());
+}
+
+#[test]
+fn backspace_does_not_remove_media_when_text_present() {
+    let (mut app, _command_rx) = make_app();
+    let tmp = TempDir::new().unwrap();
+    let img = create_temp_file(&tmp, "photo.png", b"img");
+
+    app.on_paste(img.to_str().unwrap());
+    type_text(&mut app, "x");
+    app.on_key(key(KeyCode::Backspace));
+
+    assert_eq!(app.composer().pending_media().len(), 1);
+    assert!(app.composer().text().is_empty());
+}
+
+#[test]
+fn attachment_chips_render_in_layout() {
+    let (mut app, _command_rx) = make_app();
+    let tmp = TempDir::new().unwrap();
+    let img = create_temp_file(&tmp, "photo.png", b"img");
+
+    app.on_paste(img.to_str().unwrap());
+
+    let layout = app.composer().layout(80, &Theme::default());
+    let text: String = layout
+        .lines
+        .iter()
+        .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("attached image: photo.png"));
+}
+
+#[test]
+fn agent_rejects_image_when_capability_missing() {
+    let caps = acp::PromptCapabilities::new().image(false).audio(true);
+    let (mut app, mut command_rx) = make_app_with_prompt_capabilities(caps);
+    let tmp = TempDir::new().unwrap();
+    let img = create_temp_file(&tmp, "photo.png", b"fake png data");
+
+    app.on_paste(img.to_str().unwrap());
+    app.on_key(key(KeyCode::Enter));
+
+    assert!(command_rx.try_recv().is_err(), "prompt should be blocked locally");
+    assert!(!app.waiting_for_response());
+
+    let messages: Vec<_> = app
+        .pending_items()
+        .iter()
+        .filter_map(|item| match item {
+            HistoryItem::User(text) => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(messages.iter().any(|msg| msg.contains("does not support image")));
+}
+
+#[test]
+fn agent_rejects_audio_when_capability_missing() {
+    let caps = acp::PromptCapabilities::new().image(true).audio(false);
+    let (mut app, mut command_rx) = make_app_with_prompt_capabilities(caps);
+    let tmp = TempDir::new().unwrap();
+    let audio = create_temp_file(&tmp, "note.wav", b"fake wav data");
+
+    app.on_paste(audio.to_str().unwrap());
+    app.on_key(key(KeyCode::Enter));
+
+    assert!(command_rx.try_recv().is_err(), "prompt should be blocked locally");
+    assert!(!app.waiting_for_response());
+}
+
+#[test]
+fn selected_model_rejects_image() {
+    let caps = acp::PromptCapabilities::new().image(true).audio(true);
+    let config = vec![image_model_config(
+        "gpt:no-vision",
+        vec![model_select_option("gpt:no-vision", "GPT No Vision", false, false)],
+    )];
+    let (mut app, mut command_rx) = make_app_with_caps_and_config(caps, config);
+    let tmp = TempDir::new().unwrap();
+    let img = create_temp_file(&tmp, "photo.png", b"fake png data");
+
+    app.on_paste(img.to_str().unwrap());
+    app.on_key(key(KeyCode::Enter));
+
+    assert!(command_rx.try_recv().is_err(), "prompt should be blocked locally");
+    let messages: Vec<_> = app
+        .pending_items()
+        .iter()
+        .filter_map(|item| match item {
+            HistoryItem::User(text) => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(messages.iter().any(|msg| msg.contains("model selection does not support image")));
+}
+
+#[test]
+fn missing_model_metadata_rejects_media() {
+    let caps = acp::PromptCapabilities::new().image(true).audio(true);
+    let config =
+        vec![image_model_config("unknown-model", vec![model_select_option("known-model", "Known", true, true)])];
+    let (mut app, mut command_rx) = make_app_with_caps_and_config(caps, config);
+    let tmp = TempDir::new().unwrap();
+    let img = create_temp_file(&tmp, "photo.png", b"fake png data");
+
+    app.on_paste(img.to_str().unwrap());
+    app.on_key(key(KeyCode::Enter));
+
+    assert!(command_rx.try_recv().is_err(), "prompt should be blocked locally");
+    let messages: Vec<_> = app
+        .pending_items()
+        .iter()
+        .filter_map(|item| match item {
+            HistoryItem::User(text) => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(messages.iter().any(|msg| msg.contains("missing prompt capability metadata")));
+}
+
+#[test]
+fn supported_media_sends_blocks() {
+    let caps = acp::PromptCapabilities::new().image(true).audio(true);
+    let config = vec![image_model_config(
+        "claude:vision",
+        vec![model_select_option("claude:vision", "Claude Vision", true, true)],
+    )];
+    let (mut app, mut command_rx) = make_app_with_caps_and_config(caps, config);
+    let tmp = TempDir::new().unwrap();
+    let img = create_temp_file(&tmp, "photo.png", b"fake png data");
+
+    app.on_paste(img.to_str().unwrap());
+    app.on_key(key(KeyCode::Enter));
+
+    let cmd = command_rx.try_recv().unwrap();
+    match cmd {
+        PromptCommand::Prompt { content, .. } => {
+            let blocks = content.expect("should have content blocks");
+            assert!(blocks.iter().any(|b| matches!(b, acp::ContentBlock::Image(_))));
+        }
+        other => panic!("expected Prompt command, got {other:?}"),
+    }
+}
+
+#[test]
+fn sync_prompt_failure_resets_busy_state() {
+    let (mut app, fail_signal, mut command_rx) = make_failable_app_with_caps(media_caps());
+    let tmp = TempDir::new().unwrap();
+    let img = create_temp_file(&tmp, "photo.png", b"fake png data");
+
+    app.on_paste(img.to_str().unwrap());
+    fail_signal.store(true, Ordering::Relaxed);
+    app.on_key(key(KeyCode::Enter));
+
+    assert!(!app.waiting_for_response(), "sync prompt failure should reset busy state");
+    assert!(command_rx.try_recv().is_err(), "no prompt should be sent");
+
+    let messages: Vec<_> = app
+        .pending_items()
+        .iter()
+        .filter_map(|item| match item {
+            HistoryItem::User(text) => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(messages.iter().any(|msg| msg.contains("Failed to send prompt")));
+}
+
+#[test]
+fn text_only_submit_unaffected_by_media_capability_check() {
+    let caps = acp::PromptCapabilities::new().image(false).audio(false);
+    let (mut app, mut command_rx) = make_app_with_prompt_capabilities(caps);
+
+    submit_prompt(&mut app, "hello");
+
+    let cmd = command_rx.try_recv().unwrap();
+    match cmd {
+        PromptCommand::Prompt { text, content, .. } => {
+            assert_eq!(text, "hello");
+            assert!(content.is_none());
+        }
+        other => panic!("expected Prompt command, got {other:?}"),
+    }
+}
+
+#[test]
+fn submit_is_blocked_when_composer_empty_without_media() {
+    let (mut app, mut command_rx) = make_app();
+
+    app.on_key(key(KeyCode::Enter));
+
+    assert!(command_rx.try_recv().is_err());
+}
+
+#[test]
+fn clear_command_also_clears_pending_media() {
+    let (mut app, mut command_rx) = make_app();
+    let tmp = TempDir::new().unwrap();
+    let img = create_temp_file(&tmp, "photo.png", b"img");
+
+    app.on_paste(img.to_str().unwrap());
+    type_text(&mut app, "/clear");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+
+    assert!(app.composer().pending_media().is_empty());
+    assert!(app.composer().text().is_empty());
+}
+
+#[test]
+fn paste_with_file_uri_parses_correctly() {
+    let (mut app, _command_rx) = make_app();
+    let tmp = TempDir::new().unwrap();
+    let img = create_temp_file(&tmp, "image.png", b"img");
+    let uri = format!("file://{}", img.display());
+
+    app.on_paste(&uri);
+
+    assert_eq!(app.composer().pending_media().len(), 1);
+    assert_eq!(app.composer().pending_media()[0].display_name, "image.png");
+}
+
+#[test]
+fn paste_with_percent_decoded_file_uri() {
+    let (mut app, _command_rx) = make_app();
+    let tmp = TempDir::new().unwrap();
+    let img = create_temp_file(&tmp, "my image.png", b"png");
+    let unencoded_path = img.to_str().unwrap();
+    let encoded_path = unencoded_path.replace(' ', "%20");
+    let uri = format!("file://{encoded_path}");
+
+    app.on_paste(&uri);
+
+    assert_eq!(app.composer().pending_media().len(), 1);
+    assert_eq!(app.composer().pending_media()[0].display_name, "my image.png");
+}
+
+#[test]
+fn selected_model_rejects_audio() {
+    let caps = acp::PromptCapabilities::new().image(true).audio(true);
+    let config = vec![image_model_config(
+        "gpt:no-audio",
+        vec![model_select_option("gpt:no-audio", "GPT No Audio", true, false)],
+    )];
+    let (mut app, mut command_rx) = make_app_with_caps_and_config(caps, config);
+    let tmp = TempDir::new().unwrap();
+    let audio = create_temp_file(&tmp, "note.wav", b"fake wav data");
+
+    app.on_paste(audio.to_str().unwrap());
+    app.on_key(key(KeyCode::Enter));
+
+    assert!(command_rx.try_recv().is_err(), "prompt should be blocked locally");
+    let messages: Vec<_> = app
+        .pending_items()
+        .iter()
+        .filter_map(|item| match item {
+            HistoryItem::User(text) => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(messages.iter().any(|msg| msg.contains("model selection does not support audio")));
+}
+
+#[test]
+fn selected_model_rejects_image_grouped() {
+    let caps = acp::PromptCapabilities::new().image(true).audio(true);
+    let groups = vec![make_select_group(
+        "g1",
+        "Group 1",
+        vec![model_select_option("grouped:no-vision", "No Vision", false, true)],
+    )];
+    let config = vec![grouped_model_config("grouped:no-vision", groups)];
+    let (mut app, mut command_rx) = make_app_with_caps_and_config(caps, config);
+    let tmp = TempDir::new().unwrap();
+    let img = create_temp_file(&tmp, "photo.png", b"fake png data");
+
+    app.on_paste(img.to_str().unwrap());
+    app.on_key(key(KeyCode::Enter));
+
+    assert!(command_rx.try_recv().is_err(), "prompt should be blocked locally");
+    let messages: Vec<_> = app
+        .pending_items()
+        .iter()
+        .filter_map(|item| match item {
+            HistoryItem::User(text) => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(messages.iter().any(|msg| msg.contains("model selection does not support image")));
+}
+
+#[test]
+fn selected_model_rejects_audio_grouped() {
+    let caps = acp::PromptCapabilities::new().image(true).audio(true);
+    let groups = vec![make_select_group(
+        "g1",
+        "Group 1",
+        vec![model_select_option("grouped:no-audio", "No Audio", true, false)],
+    )];
+    let config = vec![grouped_model_config("grouped:no-audio", groups)];
+    let (mut app, mut command_rx) = make_app_with_caps_and_config(caps, config);
+    let tmp = TempDir::new().unwrap();
+    let audio = create_temp_file(&tmp, "note.wav", b"fake wav data");
+
+    app.on_paste(audio.to_str().unwrap());
+    app.on_key(key(KeyCode::Enter));
+
+    assert!(command_rx.try_recv().is_err(), "prompt should be blocked locally");
+    let messages: Vec<_> = app
+        .pending_items()
+        .iter()
+        .filter_map(|item| match item {
+            HistoryItem::User(text) => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(messages.iter().any(|msg| msg.contains("model selection does not support audio")));
+}
+
+#[test]
+fn comma_separated_multi_model_rejects_image() {
+    let caps = acp::PromptCapabilities::new().image(true).audio(true);
+    let groups = vec![
+        make_select_group(
+            "g1",
+            "Vision Models",
+            vec![model_select_option("claude:sonnet", "Claude Sonnet", true, true)],
+        ),
+        make_select_group(
+            "g2",
+            "Text Models",
+            vec![model_select_option("gpt:text-only", "GPT Text Only", false, false)],
+        ),
+    ];
+    let config = vec![grouped_model_config("claude:sonnet,gpt:text-only", groups)];
+    let (mut app, mut command_rx) = make_app_with_caps_and_config(caps, config);
+    let tmp = TempDir::new().unwrap();
+    let img = create_temp_file(&tmp, "photo.png", b"fake png data");
+
+    app.on_paste(img.to_str().unwrap());
+    app.on_key(key(KeyCode::Enter));
+
+    assert!(command_rx.try_recv().is_err(), "prompt should be blocked — multi-select includes unsupported model");
+}
+
+#[test]
+fn comma_separated_multi_model_sends_when_all_support_media() {
+    let caps = acp::PromptCapabilities::new().image(true).audio(true);
+    let groups = vec![
+        make_select_group(
+            "g1",
+            "Vision Models",
+            vec![model_select_option("claude:sonnet", "Claude Sonnet", true, true)],
+        ),
+        make_select_group("g2", "Reasoning", vec![model_select_option("deepseek:r1", "DeepSeek R1", true, true)]),
+    ];
+    let config = vec![grouped_model_config("claude:sonnet,deepseek:r1", groups)];
+    let (mut app, mut command_rx) = make_app_with_caps_and_config(caps, config);
+    let tmp = TempDir::new().unwrap();
+    let img = create_temp_file(&tmp, "photo.png", b"fake png data");
+
+    app.on_paste(img.to_str().unwrap());
+    app.on_key(key(KeyCode::Enter));
+
+    let cmd = command_rx.try_recv().unwrap();
+    match cmd {
+        PromptCommand::Prompt { content, .. } => {
+            let blocks = content.expect("should have content blocks");
+            assert!(blocks.iter().any(|b| matches!(b, acp::ContentBlock::Image(_))));
+        }
+        other => panic!("expected Prompt command, got {other:?}"),
+    }
+}
+
+#[test]
+fn rejection_preserves_text_and_placeholders_in_transcript() {
+    let caps = acp::PromptCapabilities::new().image(false).audio(false);
+    let (mut app, mut command_rx) = make_app_with_prompt_capabilities(caps);
+    let tmp = TempDir::new().unwrap();
+    let img = create_temp_file(&tmp, "photo.png", b"fake png data");
+
+    app.on_paste(img.to_str().unwrap());
+    type_text(&mut app, "describe this image");
+    app.on_key(key(KeyCode::Enter));
+
+    assert!(command_rx.try_recv().is_err(), "prompt should be blocked locally");
+
+    let messages: Vec<_> = app
+        .pending_items()
+        .iter()
+        .filter_map(|item| match item {
+            HistoryItem::User(text) => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(messages.iter().any(|msg| msg == "describe this image"), "user text preserved in transcript");
+    assert!(messages.iter().any(|msg| msg.contains("image attachment")), "media placeholder preserved in transcript");
+    assert!(messages.iter().any(|msg| msg.contains("does not support image")), "error message shown");
+}
+
+#[test]
+fn sync_failure_preserves_text_and_placeholders_in_transcript() {
+    let caps = media_caps();
+    let (mut app, fail_signal, mut command_rx) = make_failable_app_with_caps(caps);
+    let tmp = TempDir::new().unwrap();
+    let img = create_temp_file(&tmp, "photo.png", b"fake png data");
+
+    app.on_paste(img.to_str().unwrap());
+    type_text(&mut app, "describe this");
+    fail_signal.store(true, Ordering::Relaxed);
+    app.on_key(key(KeyCode::Enter));
+
+    assert!(!app.waiting_for_response(), "sync failure should reset busy state");
+    assert!(command_rx.try_recv().is_err(), "no prompt should be sent");
+
+    let messages: Vec<_> = app
+        .pending_items()
+        .iter()
+        .filter_map(|item| match item {
+            HistoryItem::User(text) => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(messages.iter().any(|msg| msg == "describe this"), "user text preserved in transcript");
+    assert!(messages.iter().any(|msg| msg.contains("image attachment")), "media placeholder preserved in transcript");
+    assert!(messages.iter().any(|msg| msg.contains("Failed to send prompt")), "error message shown");
+}
+
+// ── Workspace move tests ──
+
+#[test]
+fn workspace_move_command_hidden_without_capability() {
+    let (mut app, _command_rx) = make_app();
+
+    app.on_key(key(KeyCode::Char('/')));
+    assert!(app.composer().has_overlay());
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("/clear"), "{viewport}");
+    assert!(!viewport.contains("/move"), "{viewport}");
+}
+
+#[test]
+fn workspace_move_command_visible_with_capability() {
+    let (mut app, _command_rx) = make_app_with_workspace_move();
+
+    app.on_key(key(KeyCode::Char('/')));
+    assert!(app.composer().has_overlay());
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("/move"), "{viewport}");
+}
+
+#[test]
+fn workspace_move_command_rejected_when_prompt_in_flight() {
+    let (mut app, mut command_rx) = make_app_with_workspace_move();
+
+    submit_prompt(&mut app, "hello");
+    let _ = command_rx.try_recv().unwrap();
+
+    type_text(&mut app, "/move");
+    app.on_key(key(KeyCode::Tab));
+
+    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Idle);
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.lines().any(|l| l.contains("Cannot move") && l.contains("workspace")), "{viewport}");
+    assert!(viewport.lines().any(|l| l.contains("prompt is running")), "{viewport}");
+}
+
+#[test]
+fn workspace_move_command_rejected_when_already_listing() {
+    let (mut app, mut command_rx) = make_app_with_workspace_move();
+
+    type_text(&mut app, "/move");
+    app.on_key(key(KeyCode::Tab));
+    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Listing);
+
+    let list_cmd = command_rx.try_recv().unwrap();
+    assert!(matches!(list_cmd, PromptCommand::ListWorkspaces(_)));
+
+    type_text(&mut app, "/move");
+    app.on_key(key(KeyCode::Tab));
+    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Listing);
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let collapsed = viewport.replace('\n', " ");
+    let words: Vec<&str> = collapsed.split_whitespace().collect();
+    let joined = words.join(" ");
+    assert!(joined.contains("another move is in progress"), "{viewport}");
+}
+
+#[test]
+fn workspace_list_synchronous_failure_resets_state() {
+    let (mut app, fail_signal, _command_rx) = make_failable_app_with_workspace_move();
+
+    fail_signal.store(true, Ordering::SeqCst);
+    type_text(&mut app, "/move");
+    app.on_key(key(KeyCode::Tab));
+
+    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Idle);
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let collapsed = viewport.replace('\n', " ");
+    let words: Vec<&str> = collapsed.split_whitespace().collect();
+    let joined = words.join(" ");
+    assert!(joined.contains("Failed to list workspaces"), "{viewport}");
+}
+
+#[test]
+fn workspace_list_failed_event_resets_state() {
+    let (mut app, mut command_rx) = make_app_with_workspace_move();
+
+    type_text(&mut app, "/move");
+    app.on_key(key(KeyCode::Tab));
+    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Listing);
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(workspace_list_failed("network error"));
+    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Idle);
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let collapsed = viewport.replace('\n', " ");
+    let words: Vec<&str> = collapsed.split_whitespace().collect();
+    let joined = words.join(" ");
+    assert!(joined.contains("Failed to list workspaces: network error"), "{viewport}");
+}
+
+#[test]
+fn workspace_picker_opens_with_existing_workspaces() {
+    let (mut app, mut command_rx) = make_app_with_workspace_move();
+
+    type_text(&mut app, "/move");
+    app.on_key(key(KeyCode::Tab));
+    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Listing);
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(workspaces_listed(vec![
+        workspace_entry("/home/user/code/current", true),
+        workspace_entry("/home/user/code/other", false),
+        workspace_entry("/tmp/sandbox", false),
+    ]));
+    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Picking);
+    assert!(app.has_modal());
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("/home/user/code/other"), "{viewport}");
+    assert!(viewport.contains("/tmp/sandbox"), "{viewport}");
+    assert!(!viewport.contains("/home/user/code/current"), "current workspace should be excluded:\n{viewport}");
+    assert!(viewport.contains("Create new workspace"), "{viewport}");
+}
+
+#[test]
+fn workspace_picker_shows_empty_state_when_no_workspaces() {
+    let (mut app, mut command_rx) = make_app_with_workspace_move();
+
+    type_text(&mut app, "/move");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(workspaces_listed(vec![workspace_entry("/home/user/code/current", true)]));
+    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Picking);
+    assert!(app.has_modal());
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(!viewport.contains("No other workspaces available"), "{viewport}");
+}
+
+#[test]
+fn workspace_picker_esc_closes_and_resets_state() {
+    let (mut app, mut command_rx) = make_app_with_workspace_move();
+
+    type_text(&mut app, "/move");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(workspaces_listed(vec![
+        workspace_entry("/home/user/code/current", true),
+        workspace_entry("/home/user/code/other", false),
+    ]));
+    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Picking);
+    assert!(app.has_modal());
+
+    app.on_key(key(KeyCode::Esc));
+    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Idle);
+    assert!(!app.has_modal());
+}
+
+#[test]
+fn workspace_picker_enter_selects_existing_workspace() {
+    let (mut app, mut command_rx) = make_app_with_workspace_move();
+
+    type_text(&mut app, "/move");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(workspaces_listed(vec![
+        workspace_entry("/home/user/code/current", true),
+        workspace_entry("/home/user/code/other", false),
+    ]));
+
+    app.on_key(key(KeyCode::Enter));
+    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Moving);
+    assert!(!app.has_modal());
+
+    let cmd = command_rx.try_recv().unwrap();
+    match cmd {
+        PromptCommand::MoveWorkspace(params) => {
+            assert_eq!(params.session_id, "test-session");
+            match params.target {
+                acp_utils::notifications::WorkspaceMoveTarget::Existing { path } => {
+                    assert_eq!(path, std::path::PathBuf::from("/home/user/code/other"));
+                }
+                other @ acp_utils::notifications::WorkspaceMoveTarget::New { .. } => {
+                    panic!("expected Existing, got {other:?}")
+                }
+            }
+        }
+        other => panic!("expected MoveWorkspace, got {other:?}"),
+    }
+}
+
+#[test]
+fn workspace_picker_enter_selects_create_new_and_shows_naming_mode() {
+    let (mut app, mut command_rx) = make_app_with_workspace_move();
+
+    type_text(&mut app, "/move");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(workspaces_listed(vec![workspace_entry("/home/user/code/current", true)]));
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("Create new workspace"), "{viewport}");
+
+    app.on_key(key(KeyCode::Enter));
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport2 = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport2.contains("New workspace"), "{viewport2}");
+}
+
+#[test]
+fn workspace_naming_new_esc_returns_to_list_mode() {
+    let (mut app, mut command_rx) = make_app_with_workspace_move();
+
+    type_text(&mut app, "/move");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(workspaces_listed(vec![workspace_entry("/home/user/code/current", true)]));
+
+    app.on_key(key(KeyCode::Enter));
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("New workspace"), "{viewport}");
+
+    app.on_key(key(KeyCode::Esc));
+    assert!(app.has_modal());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport2 = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport2.contains("Create new workspace"), "{viewport2}");
+}
+
+#[test]
+fn workspace_naming_new_enter_with_name_emits_move_target() {
+    let (mut app, mut command_rx) = make_app_with_workspace_move();
+
+    type_text(&mut app, "/move");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(workspaces_listed(vec![workspace_entry("/home/user/code/current", true)]));
+
+    app.on_key(key(KeyCode::Enter));
+    type_text(&mut app, "my-new-workspace");
+    app.on_key(key(KeyCode::Enter));
+
+    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Moving);
+    assert!(!app.has_modal());
+
+    let cmd = command_rx.try_recv().unwrap();
+    match cmd {
+        PromptCommand::MoveWorkspace(params) => {
+            assert_eq!(params.session_id, "test-session");
+            match params.target {
+                acp_utils::notifications::WorkspaceMoveTarget::New { name } => {
+                    assert_eq!(name, "my-new-workspace");
+                }
+                other @ acp_utils::notifications::WorkspaceMoveTarget::Existing { .. } => {
+                    panic!("expected New, got {other:?}")
+                }
+            }
+        }
+        other => panic!("expected MoveWorkspace, got {other:?}"),
+    }
+}
+
+#[test]
+fn workspace_picker_filtering_hides_non_matching() {
+    let (mut app, mut command_rx) = make_app_with_workspace_move();
+
+    type_text(&mut app, "/move");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(workspaces_listed(vec![
+        workspace_entry("/home/user/code/current", true),
+        workspace_entry("/home/user/code/project-a", false),
+        workspace_entry("/tmp/test", false),
+    ]));
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("project-a"), "{viewport}");
+    assert!(viewport.contains("/tmp/test"), "{viewport}");
+
+    // Use a query that only matches one entry
+    app.on_key(key(KeyCode::Char('j')));
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport2 = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport2.contains("project-a"), "{viewport2}");
+    assert!(!viewport2.contains("/tmp/test"), "{viewport2}");
+    assert!(!viewport2.contains("Create new"), "{viewport2}");
+}
+
+#[test]
+fn workspace_move_success_updates_cwd_and_reloads_session() {
+    let (mut app, mut command_rx) = make_app_with_workspace_move();
+
+    type_text(&mut app, "/move");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(workspaces_listed(vec![
+        workspace_entry("/home/user/code/current", true),
+        workspace_entry("/home/user/code/other", false),
+    ]));
+
+    app.on_key(key(KeyCode::Enter));
+    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Moving);
+
+    let cmd = command_rx.try_recv().unwrap();
+    assert!(matches!(cmd, PromptCommand::MoveWorkspace { .. }));
+
+    app.on_acp_event(workspace_moved("/home/user/code/other"));
+    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::LoadingSession);
+
+    let load_cmd = command_rx.try_recv().unwrap();
+    match load_cmd {
+        PromptCommand::LoadSession { session_id, cwd } => {
+            assert_eq!(session_id.0.as_ref(), "test-session");
+            assert_eq!(cwd, std::path::Path::new("/home/user/code/other"));
+        }
+        other => panic!("expected LoadSession, got {other:?}"),
+    }
+
+    app.on_acp_event(session_loaded("test-session", Vec::new()));
+    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Idle);
+}
+
+#[test]
+fn workspace_move_success_buffers_and_replays_session_updates() {
+    let (mut app, mut command_rx) = make_app_with_workspace_move();
+
+    type_text(&mut app, "/move");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(workspaces_listed(vec![
+        workspace_entry("/home/user/code/current", true),
+        workspace_entry("/home/user/code/other", false),
+    ]));
+
+    app.on_key(key(KeyCode::Enter));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(workspace_moved("/home/user/code/other"));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(session_update_for("test-session", user_message_chunk("buffered-message")));
+
+    app.on_acp_event(session_loaded("test-session", Vec::new()));
+    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Idle);
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.lines().any(|l| l.contains("buffered-message")), "{viewport}");
+    let collapsed = viewport.replace('\n', " ");
+    let words: Vec<&str> = collapsed.split_whitespace().collect();
+    let joined = words.join(" ");
+    assert!(joined.contains("Moved to /home/user/code/other"), "{viewport}");
+}
+
+#[test]
+fn workspace_move_load_session_failure_recovers() {
+    let (mut app, fail_signal, mut command_rx) = make_failable_app_with_workspace_move();
+
+    type_text(&mut app, "/move");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(workspaces_listed(vec![
+        workspace_entry("/home/user/code/current", true),
+        workspace_entry("/home/user/code/other", false),
+    ]));
+
+    app.on_key(key(KeyCode::Enter));
+    let _ = command_rx.try_recv().unwrap();
+
+    fail_signal.store(true, Ordering::SeqCst);
+    app.on_acp_event(workspace_moved("/home/user/code/other"));
+    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Idle);
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.lines().any(|l| l.contains("Failed to reload session")), "{viewport}");
+}
+
+#[test]
+fn workspace_move_failed_event_resets_state() {
+    let (mut app, mut command_rx) = make_app_with_workspace_move();
+
+    type_text(&mut app, "/move");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(workspaces_listed(vec![
+        workspace_entry("/home/user/code/current", true),
+        workspace_entry("/home/user/code/other", false),
+    ]));
+
+    app.on_key(key(KeyCode::Enter));
+    let _ = command_rx.try_recv().unwrap();
+    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Moving);
+
+    app.on_acp_event(workspace_move_failed("permission denied"));
+    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Idle);
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.lines().any(|l| l.contains("Workspace move failed")), "{viewport}");
+    assert!(viewport.lines().any(|l| l.contains("permission denied")), "{viewport}");
+}
+
+#[test]
+fn workspace_move_synchronous_error_resets_state() {
+    let (mut app, fail_signal, mut command_rx) = make_failable_app_with_workspace_move();
+
+    type_text(&mut app, "/move");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(workspaces_listed(vec![
+        workspace_entry("/home/user/code/current", true),
+        workspace_entry("/home/user/code/other", false),
+    ]));
+
+    fail_signal.store(true, Ordering::SeqCst);
+    app.on_key(key(KeyCode::Enter));
+    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Idle);
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let collapsed = viewport.replace('\n', " ");
+    let words: Vec<&str> = collapsed.split_whitespace().collect();
+    let joined = words.join(" ");
+    assert!(joined.contains("Failed to move workspace"), "{viewport}");
+}
+
+#[test]
+fn workspace_picker_renders_on_narrow_terminal() {
+    let (mut app, mut command_rx) = make_app_with_workspace_move();
+
+    type_text(&mut app, "/move");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(workspaces_listed(vec![
+        workspace_entry("/home/user/code/current", true),
+        workspace_entry("/home/user/code/project-a", false),
+    ]));
+
+    let mut terminal = make_terminal_with_width(40);
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("project-a"), "{viewport}");
+}
+
+#[test]
+fn workspace_move_picker_closes_when_connection_closes() {
+    let (mut app, mut command_rx) = make_app_with_workspace_move();
+
+    type_text(&mut app, "/move");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(workspaces_listed(vec![
+        workspace_entry("/home/user/code/current", true),
+        workspace_entry("/home/user/code/other", false),
+    ]));
+    assert!(app.has_modal());
+
+    app.on_acp_event(AcpEvent::ConnectionClosed);
+    assert!(!app.has_modal());
+    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Idle);
+}
+
+fn make_failable_app_with_workspace_move() -> (App, Arc<AtomicBool>, UnboundedReceiver<PromptCommand>) {
+    let session_capabilities = acp::SessionCapabilities::new().meta(Some(
+        AetherCapabilities { prompt_search: false, session_preview: false, workspace_move: true }.to_meta(),
+    ));
+    let (prompt_handle, fail_signal, command_rx) = AcpPromptHandle::failable();
+    let app = build_app_with_handle(
+        std::path::PathBuf::from("."),
+        session_capabilities,
+        Vec::new(),
+        Vec::new(),
+        prompt_handle,
+    );
+    (app, fail_signal, command_rx)
+}
+
+fn make_app_with_prompt_search() -> (App, UnboundedReceiver<PromptCommand>) {
+    let session_capabilities = acp::SessionCapabilities::new().meta(Some(
+        AetherCapabilities { prompt_search: true, session_preview: false, workspace_move: false }.to_meta(),
+    ));
+    make_app_with_metadata(std::path::PathBuf::from("."), session_capabilities, Vec::new(), Vec::new())
+}
+
+fn prompt_search_result(prompt: &str, start: usize, end: usize) -> acp_utils::notifications::PromptSearchResult {
+    prompt_search_result_with_cwd(prompt, start, end, std::path::PathBuf::from("/tmp/repo"))
+}
+
+fn prompt_search_result_with_cwd(
+    prompt: &str,
+    start: usize,
+    end: usize,
+    cwd: std::path::PathBuf,
+) -> acp_utils::notifications::PromptSearchResult {
+    acp_utils::notifications::PromptSearchResult {
+        session_id: "s1".to_string(),
+        cwd,
+        session_created_at: "2026-05-17T00:00:00Z".to_string(),
+        prompt: prompt.to_string(),
+        match_start: start,
+        match_end: end,
+    }
+}
+
+fn prompt_search_response(
+    query: &str,
+    results: Vec<acp_utils::notifications::PromptSearchResult>,
+) -> acp_utils::notifications::PromptSearchResponse {
+    prompt_search_response_gen(query, results, 1)
+}
+
+fn prompt_search_response_gen(
+    query: &str,
+    results: Vec<acp_utils::notifications::PromptSearchResult>,
+    generation: u64,
+) -> acp_utils::notifications::PromptSearchResponse {
+    acp_utils::notifications::PromptSearchResponse {
+        query: query.to_string(),
+        results,
+        truncated: false,
+        search_generation: generation,
+    }
+}
+
+#[test]
+fn ctrl_r_is_noop_when_prompt_search_capability_is_missing() {
+    let (mut app, _command_rx) = make_app();
+    type_text(&mut app, "draft");
+    app.on_key(ctrl('r'));
+    assert_eq!(app.composer().text(), "draft");
+}
+
+#[test]
+fn ctrl_r_opens_prompt_search_when_capability_is_enabled() {
+    let (mut app, _command_rx) = make_app_with_prompt_search();
+    type_text(&mut app, "draft");
+    app.on_key(ctrl('r'));
+    assert!(app.composer().has_prompt_search());
+    assert_eq!(app.composer().text(), "draft");
+}
+
+#[test]
+fn prompt_search_shows_loading_state_after_query() {
+    let (mut app, mut command_rx) = make_app_with_prompt_search();
+    app.on_key(ctrl('r'));
+    app.on_key(key(KeyCode::Char('h')));
+
+    let cmd = command_rx.try_recv().unwrap();
+    assert!(
+        matches!(&cmd, PromptCommand::SearchPrompts(params) if params.query == "h"),
+        "expected SearchPrompts with query 'h', got {cmd:?}"
+    );
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("history search: h"), "viewport:\n{viewport}");
+    assert!(viewport.contains("searching"), "viewport:\n{viewport}");
+}
+
+#[test]
+fn prompt_search_empty_query_renders_instruction() {
+    let (mut app, _command_rx) = make_app_with_prompt_search();
+    app.on_key(ctrl('r'));
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("history search:"), "viewport:\n{viewport}");
+    assert!(viewport.contains("type to search prompt history"), "viewport:\n{viewport}");
+}
+
+#[test]
+fn prompt_search_shows_results_after_response() {
+    let (mut app, mut command_rx) = make_app_with_prompt_search();
+    app.on_key(ctrl('r'));
+    app.on_key(key(KeyCode::Char('h')));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(AcpEvent::PromptSearchResults(prompt_search_response(
+        "h",
+        vec![prompt_search_result("hello world", 0, 1)],
+    )));
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("hello world"), "viewport:\n{viewport}");
+}
+
+#[test]
+fn prompt_search_no_results_shows_no_matches() {
+    let (mut app, mut command_rx) = make_app_with_prompt_search();
+    app.on_key(ctrl('r'));
+    type_text(&mut app, "zzz");
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(AcpEvent::PromptSearchResults(prompt_search_response_gen("zzz", vec![], 3)));
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("no matching prompts"), "viewport:\n{viewport}");
+}
+
+#[test]
+fn prompt_search_shows_error_on_failure() {
+    let (mut app, mut command_rx) = make_app_with_prompt_search();
+    app.on_key(ctrl('r'));
+    app.on_key(key(KeyCode::Char('h')));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(AcpEvent::PromptSearchFailed {
+        query: "h".to_string(),
+        search_generation: 1,
+        error: "connection refused".to_string(),
+    });
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("error: connection refused"), "viewport:\n{viewport}");
+}
+
+#[test]
+fn prompt_search_enter_confirms_and_inserts_result() {
+    let (mut app, mut command_rx) = make_app_with_prompt_search();
+    type_text(&mut app, "draft");
+    app.on_key(ctrl('r'));
+    app.on_key(key(KeyCode::Char('h')));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(AcpEvent::PromptSearchResults(prompt_search_response(
+        "h",
+        vec![prompt_search_result("hello world", 0, 5)],
+    )));
+
+    app.on_key(key(KeyCode::Enter));
+
+    assert!(!app.composer().has_prompt_search());
+    assert_eq!(app.composer().text(), "hello world");
+}
+
+#[test]
+fn prompt_search_enter_without_selection_restores_draft() {
+    let (mut app, mut command_rx) = make_app_with_prompt_search();
+    type_text(&mut app, "draft");
+    app.on_key(ctrl('r'));
+    type_text(&mut app, "zzz");
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(AcpEvent::PromptSearchResults(prompt_search_response_gen("zzz", vec![], 3)));
+
+    app.on_key(key(KeyCode::Enter));
+
+    assert!(!app.composer().has_prompt_search());
+    assert_eq!(app.composer().text(), "draft");
+}
+
+#[test]
+fn prompt_search_escape_restores_draft() {
+    let (mut app, mut command_rx) = make_app_with_prompt_search();
+    type_text(&mut app, "original draft");
+    app.on_key(ctrl('r'));
+    app.on_key(key(KeyCode::Char('h')));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(AcpEvent::PromptSearchResults(prompt_search_response(
+        "h",
+        vec![prompt_search_result("hello world", 0, 5)],
+    )));
+
+    app.on_key(key(KeyCode::Esc));
+
+    assert!(!app.composer().has_prompt_search());
+    assert_eq!(app.composer().text(), "original draft");
+}
+
+#[test]
+fn prompt_search_escape_restores_multiline_draft() {
+    let (mut app, _command_rx) = make_app_with_prompt_search();
+    app.on_key(key(KeyCode::Char('l')));
+    app.on_key(key(KeyCode::Char('i')));
+    app.on_key(key(KeyCode::Char('n')));
+    app.on_key(key(KeyCode::Char('e')));
+    app.on_key(key(KeyCode::Char('1')));
+    app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
+    app.on_key(key(KeyCode::Char('l')));
+    app.on_key(key(KeyCode::Char('i')));
+    app.on_key(key(KeyCode::Char('n')));
+    app.on_key(key(KeyCode::Char('e')));
+    app.on_key(key(KeyCode::Char('2')));
+
+    app.on_key(ctrl('r'));
+    app.on_key(key(KeyCode::Esc));
+
+    assert!(!app.composer().has_prompt_search());
+    assert_eq!(app.composer().text(), "line1\nline2");
+}
+
+#[test]
+fn prompt_search_up_and_down_change_selection() {
+    let (mut app, mut command_rx) = make_app_with_prompt_search();
+    app.on_key(ctrl('r'));
+    app.on_key(key(KeyCode::Char('h')));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(AcpEvent::PromptSearchResults(prompt_search_response(
+        "h",
+        vec![prompt_search_result("hello", 0, 1), prompt_search_result("hey", 0, 1)],
+    )));
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("hello"), "viewport:\n{viewport}");
+
+    app.on_key(key(KeyCode::Down));
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("hey"), "viewport:\n{viewport}");
+
+    app.on_key(key(KeyCode::Up));
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("hello"), "viewport:\n{viewport}");
+}
+
+#[test]
+fn prompt_search_stale_response_is_ignored() {
+    let (mut app, mut command_rx) = make_app_with_prompt_search();
+    app.on_key(ctrl('r'));
+    app.on_key(key(KeyCode::Char('h')));
+    app.on_key(key(KeyCode::Char('e')));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(AcpEvent::PromptSearchResults(prompt_search_response_gen(
+        "he",
+        vec![prompt_search_result("hello", 0, 2)],
+        2,
+    )));
+
+    app.on_acp_event(AcpEvent::PromptSearchResults(prompt_search_response_gen(
+        "h",
+        vec![prompt_search_result("STALE", 0, 1)],
+        1,
+    )));
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("hello"), "should show current result:\n{viewport}");
+    assert!(!viewport.contains("STALE"), "should not show stale result:\n{viewport}");
+}
+
+#[test]
+fn prompt_search_prefills_selected_result_with_cursor_at_match() {
+    let (mut app, mut command_rx) = make_app_with_prompt_search();
+    app.on_key(ctrl('r'));
+    app.on_key(key(KeyCode::Char('q')));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(AcpEvent::PromptSearchResults(prompt_search_response(
+        "q",
+        vec![prompt_search_result("the quick brown fox", 4, 9)],
+    )));
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("the quick brown fox"), "viewport:\n{viewport}");
+
+    let (row, col) = app.composer().cursor_position();
+    assert_eq!((row, col), (0, 9), "cursor should be at match end position 9");
+}
+
+#[test]
+fn prompt_search_paste_sanitizes_query() {
+    let (mut app, mut command_rx) = make_app_with_prompt_search();
+    app.on_key(ctrl('r'));
+
+    app.on_paste("hello\nworld");
+
+    let cmd = command_rx.try_recv().unwrap();
+    assert!(
+        matches!(&cmd, PromptCommand::SearchPrompts(params) if params.query == "helloworld"),
+        "expected sanitized query 'helloworld', got {cmd:?}"
+    );
+}
+
+#[test]
+fn prompt_search_backspace_to_empty_restores_draft_but_keeps_picker_open() {
+    let (mut app, mut command_rx) = make_app_with_prompt_search();
+    type_text(&mut app, "draft");
+    app.on_key(ctrl('r'));
+    app.on_key(key(KeyCode::Char('h')));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(AcpEvent::PromptSearchResults(prompt_search_response(
+        "h",
+        vec![prompt_search_result("hello", 0, 1)],
+    )));
+
+    app.on_key(key(KeyCode::Backspace));
+
+    assert!(app.composer().has_prompt_search());
+    assert_eq!(app.composer().text(), "draft");
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("type to search prompt history"), "viewport:\n{viewport}");
+}
+
+#[test]
+fn prompt_search_ctrl_r_does_not_steal_from_modal() {
+    let (mut app, _command_rx) = make_app_with_prompt_search();
+
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    LocalSet::new().block_on(&runtime, async {
+        let (cx, mut peer) = test_connection().await;
+        let (responder, _response_rx) = peer.fake_elicitation(&cx).await;
+        app.on_acp_event(AcpEvent::ElicitationRequest {
+            params: ElicitationParams {
+                server_name: "test".to_string(),
+                request: CreateElicitationRequestParams::FormElicitationParams {
+                    meta: None,
+                    message: String::new(),
+                    requested_schema: ElicitationSchema::builder().build().unwrap(),
+                },
+            },
+            responder,
+        });
+    });
+
+    assert!(app.has_modal());
+    app.on_key(ctrl('r'));
+    assert!(!app.composer().has_prompt_search());
+}
+
+#[test]
+fn prompt_search_ctrl_r_does_not_open_during_composer_overlay() {
+    let (mut app, _command_rx) = make_app_with_prompt_search();
+    app.on_key(key(KeyCode::Char('/')));
+    assert!(app.composer().has_overlay());
+
+    app.on_key(ctrl('r'));
+    assert!(!app.composer().has_prompt_search());
+    assert!(app.composer().has_overlay());
+}
+
+#[test]
+fn prompt_search_unicode_query_is_accepted() {
+    let (mut app, mut command_rx) = make_app_with_prompt_search();
+    app.on_key(ctrl('r'));
+    app.on_key(key(KeyCode::Char('ñ')));
+
+    let cmd = command_rx.try_recv().unwrap();
+    assert!(
+        matches!(&cmd, PromptCommand::SearchPrompts(params) if params.query == "ñ"),
+        "expected unicode query 'ñ', got {cmd:?}"
+    );
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("history search: ñ"), "viewport:\n{viewport}");
+}
+
+#[test]
+fn prompt_search_rows_truncate_prompt_and_show_cwd_basename() {
+    let (mut app, mut command_rx) = make_app_with_prompt_search();
+    app.on_key(ctrl('r'));
+    type_text(&mut app, "quick");
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(AcpEvent::PromptSearchResults(prompt_search_response_gen(
+        "quick",
+        vec![prompt_search_result_with_cwd(
+            "the quick brown fox jumps over the lazy dog",
+            4,
+            9,
+            std::path::PathBuf::from("/some/deeply/nested/project/repo-name"),
+        )],
+        5,
+    )));
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("..."), "should have ellipsis in truncated prompt:\n{viewport}");
+    assert!(viewport.contains("repo-name"), "should show cwd basename:\n{viewport}");
+}
+
+#[test]
+fn prompt_search_query_editing_triggers_multiple_searches() {
+    let (mut app, mut command_rx) = make_app_with_prompt_search();
+    app.on_key(ctrl('r'));
+    app.on_key(key(KeyCode::Char('a')));
+    app.on_key(key(KeyCode::Char('b')));
+
+    let cmd1 = command_rx.try_recv().unwrap();
+    let cmd2 = command_rx.try_recv().unwrap();
+    assert!(
+        matches!(&cmd1, PromptCommand::SearchPrompts(params) if params.query == "a"),
+        "first search should be for 'a', got {cmd1:?}"
+    );
+    assert!(
+        matches!(&cmd2, PromptCommand::SearchPrompts(params) if params.query == "ab"),
+        "second search should be for 'ab', got {cmd2:?}"
+    );
+}
+
+// ── Prompt search regression tests (review findings) ──
+
+#[test]
+fn prompt_search_enter_preserves_cursor_at_match_end() {
+    let (mut app, mut command_rx) = make_app_with_prompt_search();
+    type_text(&mut app, "draft");
+    app.on_key(ctrl('r'));
+    app.on_key(key(KeyCode::Char('q')));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(AcpEvent::PromptSearchResults(prompt_search_response(
+        "q",
+        vec![prompt_search_result("the quick brown fox", 4, 9)],
+    )));
+
+    app.on_key(key(KeyCode::Enter));
+
+    assert!(!app.composer().has_prompt_search());
+    assert_eq!(app.composer().text(), "the quick brown fox");
+    let (row, col) = app.composer().cursor_position();
+    assert_eq!((row, col), (0, 9), "cursor must be at match end (9), not end of prompt");
+}
+
+#[test]
+fn prompt_search_enter_preserves_cursor_after_manual_navigation() {
+    let (mut app, mut command_rx) = make_app_with_prompt_search();
+    app.on_key(ctrl('r'));
+    app.on_key(key(KeyCode::Char('h')));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(AcpEvent::PromptSearchResults(prompt_search_response(
+        "h",
+        vec![prompt_search_result("hello", 0, 1), prompt_search_result("hi there", 0, 1)],
+    )));
+
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+
+    assert!(!app.composer().has_prompt_search());
+    assert_eq!(app.composer().text(), "hi there");
+    let (row, col) = app.composer().cursor_position();
+    assert_eq!((row, col), (0, 1), "cursor must be at match end (1) for 'hi there'");
+}
+
+#[test]
+fn prompt_search_identical_repeated_query_uses_generation_not_just_string() {
+    let (mut app, mut command_rx) = make_app_with_prompt_search();
+    app.on_key(ctrl('r'));
+
+    // First search for "xy"
+    app.on_key(key(KeyCode::Char('x')));
+    app.on_key(key(KeyCode::Char('y')));
+    let _ = command_rx.try_recv().unwrap();
+    let _ = command_rx.try_recv().unwrap();
+
+    // Backspace twice to get empty query (draft restored)
+    app.on_key(key(KeyCode::Backspace));
+    app.on_key(key(KeyCode::Backspace));
+
+    // Type "xy" again — same query string but generation is now higher
+    app.on_key(key(KeyCode::Char('x')));
+    app.on_key(key(KeyCode::Char('y')));
+    let _ = command_rx.try_recv().unwrap();
+    let _ = command_rx.try_recv().unwrap();
+
+    // Stale response from first "xy" with generation=2 should be ignored
+    app.on_acp_event(AcpEvent::PromptSearchResults(prompt_search_response_gen(
+        "xy",
+        vec![prompt_search_result("STALE_FIRST", 0, 2)],
+        2,
+    )));
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(!viewport.contains("STALE_FIRST"), "stale response from first 'xy' must be ignored:\n{viewport}");
+    assert!(viewport.contains("searching"), "second 'xy' should still be loading:\n{viewport}");
+
+    // Fresh response from second "xy" with generation=5 should be accepted
+    // (gen: 0→x=1, xy=2, backspace=3, backspace(empty)=3, x=4, xy=5)
+    app.on_acp_event(AcpEvent::PromptSearchResults(prompt_search_response_gen(
+        "xy",
+        vec![prompt_search_result("FRESH_SECOND", 0, 2)],
+        5,
+    )));
+
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("FRESH_SECOND"), "fresh response from second 'xy' must be shown:\n{viewport}");
+}
+
+#[test]
+fn prompt_search_send_failure_is_visible_in_picker() {
+    let (mut app, fail_signal, mut command_rx) = make_failable_app_with_prompt_search();
+    app.on_key(ctrl('r'));
+
+    fail_signal.store(true, Ordering::Relaxed);
+    app.on_key(key(KeyCode::Char('h')));
+    assert!(command_rx.try_recv().is_err(), "send should have failed");
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("search failed"), "send failure must be visible in picker:\n{viewport}");
+
+    assert!(app.composer().has_prompt_search(), "picker must remain open");
+    assert!(!app.exit_requested(), "app must remain interactive");
+}
+
+#[test]
+fn prompt_search_stale_failure_is_accepted_for_current_query() {
+    let (mut app, mut command_rx) = make_app_with_prompt_search();
+    app.on_key(ctrl('r'));
+    app.on_key(key(KeyCode::Char('x')));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(AcpEvent::PromptSearchFailed {
+        query: "x".to_string(),
+        search_generation: 1,
+        error: "server error".to_string(),
+    });
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("server error"), "failure must be visible:\n{viewport}");
+
+    assert!(app.composer().has_prompt_search(), "picker must remain open after failure");
+}
+
+#[test]
+fn prompt_search_stale_failure_must_not_overwrite_newer_success() {
+    let (mut app, mut command_rx) = make_app_with_prompt_search();
+    app.on_key(ctrl('r'));
+    app.on_key(key(KeyCode::Char('x')));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_key(key(KeyCode::Char('y')));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(AcpEvent::PromptSearchResults(prompt_search_response_gen(
+        "xy",
+        vec![prompt_search_result("fresh result for xy", 0, 2)],
+        2,
+    )));
+
+    app.on_acp_event(AcpEvent::PromptSearchFailed {
+        query: "x".to_string(),
+        search_generation: 1,
+        error: "stale error".to_string(),
+    });
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("fresh result for xy"), "newer success results must survive stale failure:\n{viewport}");
+    assert!(!viewport.contains("stale error"), "stale failure must be ignored:\n{viewport}");
+}
+
+// ── Settings overlay integration tests ──
+
+#[test]
+fn settings_builtin_opens_overlay_and_clears_composer() {
+    let (mut app, mut command_rx) = make_app();
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+
+    // Composer should be cleared
+    assert!(app.composer().text().is_empty());
+    // Should not emit a Prompt
+    assert!(command_rx.try_recv().is_err());
+    // Overlay should be open (has_modal returns true)
+    assert!(app.has_modal());
+}
+
+#[test]
+fn settings_builtin_is_listed_in_command_picker() {
+    let (mut app, _command_rx) = make_app();
+
+    app.on_key(key(KeyCode::Char('/')));
+    assert!(app.composer().has_overlay());
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("/settings"), "built-in /settings should be in command picker:\n{viewport}");
+}
+
+#[test]
+fn settings_esc_closes_overlay() {
+    let (mut app, _command_rx) = make_app();
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    assert!(app.has_modal());
+
+    app.on_key(key(KeyCode::Esc));
+    assert!(!app.has_modal());
+}
+
+#[test]
+fn settings_overlay_renders_on_terminal() {
+    let (mut app, _command_rx) = make_app_with_metadata(
+        std::path::PathBuf::from("."),
+        acp::SessionCapabilities::new(),
+        vec![select_option("model", "gpt-4o"), select_option("mode", "code")],
+        Vec::new(),
+    );
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    assert!(app.has_modal());
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(
+        viewport.contains("model") || viewport.contains("gpt-4o"),
+        "settings overlay should show model entry:\n{viewport}"
+    );
+    assert!(
+        viewport.contains("mode") || viewport.contains("code"),
+        "settings overlay should show mode entry:\n{viewport}"
+    );
+}
+
+#[test]
+fn settings_over_renders_with_no_config_options() {
+    let (mut app, _command_rx) = make_app();
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    assert!(app.has_modal());
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(
+        viewport.contains("no settings options") || viewport.contains("Configuration"),
+        "empty settings should show placeholder:\n{viewport}"
+    );
+}
+
+#[test]
+fn settings_overlay_still_valid_after_scrollback() {
+    let (mut app, _command_rx) = make_app_with_metadata(
+        std::path::PathBuf::from("."),
+        acp::SessionCapabilities::new(),
+        vec![select_option("model", "gpt-4o"), select_option("mode", "code")],
+        Vec::new(),
+    );
+
+    // Fill transcript with content to push scrollback
+    for i in 0..30 {
+        app.on_acp_event(text_chunk(&format!("line {i}")));
+    }
+    app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+
+    // Now open settings
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    assert!(app.has_modal());
+
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("Configuration"), "settings overlay should render after scrollback:\n{viewport}");
+}
+
+#[test]
+fn settings_overlay_renders_at_narrow_width() {
+    let (mut app, _command_rx) = make_app_with_metadata(
+        std::path::PathBuf::from("."),
+        acp::SessionCapabilities::new(),
+        vec![select_option("model", "gpt-4o")],
+        Vec::new(),
+    );
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+
+    let mut terminal = make_terminal_with_width(30);
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(
+        viewport.contains("model") || viewport.contains("gpt-4o"),
+        "settings should render at 30 cols:\n{viewport}"
+    );
+}
+
+#[test]
+fn settings_overlay_renders_at_short_height() {
+    let (mut app, _command_rx) = make_app_with_metadata(
+        std::path::PathBuf::from("."),
+        acp::SessionCapabilities::new(),
+        vec![select_option("model", "gpt-4o"), select_option("mode", "code")],
+        Vec::new(),
+    );
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+
+    let mut terminal = make_terminal_with_width(40);
+    terminal.backend_mut().resize(40, 8);
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(
+        viewport.contains("model") || viewport.contains("too small"),
+        "settings should handle short terminal:\n{viewport}"
+    );
+}
+
+#[test]
+fn settings_selecting_option_emits_config_option() {
+    let (mut app, mut command_rx) = make_app_with_metadata(
+        std::path::PathBuf::from("."),
+        acp::SessionCapabilities::new(),
+        vec![acp::SessionConfigOption::select(
+            "model",
+            "Model",
+            "gpt-4o",
+            vec![
+                acp::SessionConfigSelectOption::new("gpt-4o", "GPT-4o"),
+                acp::SessionConfigSelectOption::new("claude", "Claude"),
+            ],
+        )],
+        Vec::new(),
+    );
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    assert!(app.has_modal());
+
+    // Down past the Theme entry, Enter to open picker, Down to second option, Enter to confirm
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+
+    // Should have emitted a set_config_option command
+    let cmd = command_rx.try_recv().expect("expected set_config_option");
+    match cmd {
+        PromptCommand::SetConfigOption { config_id, value, .. } => {
+            assert_eq!(config_id, "model");
+            assert_eq!(value, "claude");
+        }
+        other => panic!("expected SetConfigOption, got: {other:?}"),
+    }
+}
+
+#[test]
+fn settings_multi_select_opens_model_selector() {
+    let (mut app, _command_rx) = make_app_with_metadata(
+        std::path::PathBuf::from("."),
+        acp::SessionCapabilities::new(),
+        vec![{
+            let mut opt = acp::SessionConfigOption::select(
+                "model",
+                "Model",
+                "",
+                vec![
+                    acp::SessionConfigSelectOption::new("anthropic:opus", "Anthropic / Opus"),
+                    acp::SessionConfigSelectOption::new("anthropic:sonnet", "Anthropic / Sonnet"),
+                ],
+            );
+            let mut meta = serde_json::Map::new();
+            meta.insert("multi_select".to_string(), serde_json::Value::Bool(true));
+            opt = opt.meta(Some(meta));
+            opt
+        }],
+        Vec::new(),
+    );
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    assert!(app.has_modal());
+
+    // Down past the Theme entry, then Enter should open model selector since multi_select is true
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("Model search"), "should show model selector:\n{viewport}");
+}
+
+#[test]
+fn settings_multi_select_toggle_and_confirm() {
+    let (mut app, mut command_rx) = make_app_with_metadata(
+        std::path::PathBuf::from("."),
+        acp::SessionCapabilities::new(),
+        vec![{
+            let mut opt = acp::SessionConfigOption::select(
+                "model",
+                "Model",
+                "",
+                vec![
+                    acp::SessionConfigSelectOption::new("anthropic:opus", "Anthropic / Opus"),
+                    acp::SessionConfigSelectOption::new("anthropic:sonnet", "Anthropic / Sonnet"),
+                ],
+            );
+            let mut meta = serde_json::Map::new();
+            meta.insert("multi_select".to_string(), serde_json::Value::Bool(true));
+            opt = opt.meta(Some(meta));
+            opt
+        }],
+        Vec::new(),
+    );
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    app.on_key(key(KeyCode::Down)); // Skip Theme entry
+    app.on_key(key(KeyCode::Enter)); // Open model selector
+
+    app.on_key(key(KeyCode::Enter)); // Toggle first model
+    app.on_key(key(KeyCode::Esc)); // Confirm and close
+
+    let cmd = command_rx.try_recv().expect("expected set_config_option");
+    match cmd {
+        PromptCommand::SetConfigOption { config_id, value, .. } => {
+            assert_eq!(config_id, "model");
+            assert!(value.contains("anthropic:opus"), "value: {value}");
+        }
+        other => panic!("expected SetConfigOption, got: {other:?}"),
+    }
+}
+
+#[test]
+fn config_option_update_refreshes_settings_overlay() {
+    let (mut app, _command_rx) = make_app_with_metadata(
+        std::path::PathBuf::from("."),
+        acp::SessionCapabilities::new(),
+        vec![select_option("model", "gpt-4o")],
+        Vec::new(),
+    );
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    assert!(app.has_modal());
+
+    // Simulate config update from server
+    app.on_acp_event(session_update(acp::SessionUpdate::ConfigOptionUpdate(acp::ConfigOptionUpdate::new(vec![
+        select_option("model", "sonnet"),
+        select_option("mode", "code"),
+    ]))));
+
+    // Overlay should still be open with updated options
+    assert!(app.has_modal());
+    let options = app.config_options();
+    assert_eq!(options.len(), 2);
+}
+
+#[test]
+fn config_option_update_failed_shows_in_transcript() {
+    let (mut app, _command_rx) = make_app();
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    assert!(app.has_modal());
+
+    app.on_acp_event(AcpEvent::ConfigOptionUpdateFailed { error: "invalid model".to_string() });
+
+    // Overlay should still be open
+    assert!(app.has_modal());
+
+    // Error should be in transcript
+    let items = app.drain_finalized();
+    let has_error = items.iter().any(|item| matches!(item, HistoryItem::User(msg) if msg.contains("invalid model")));
+    assert!(has_error, "expected transcript error, got {items:?}");
+}
+
+#[test]
+fn connection_closed_clears_settings_overlay() {
+    let (mut app, _command_rx) = make_app();
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    assert!(app.has_modal());
+
+    app.on_acp_event(AcpEvent::ConnectionClosed);
+    assert!(!app.has_modal());
+    assert!(app.exit_requested());
+}
+
+#[test]
+fn new_session_clears_settings_overlay() {
+    let (mut app, mut command_rx) = make_app();
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    assert!(app.has_modal());
+
+    // New session created should close settings overlay
+    app.on_acp_event(new_session_created("new-id", Vec::new()));
+    assert!(!app.has_modal());
+
+    // Should have consumed the new session event
+    let _ = command_rx.try_recv().ok();
+}
+
+#[test]
+fn settings_composer_capture_prevents_normal_input() {
+    let (mut app, _command_rx) = make_app_with_metadata(
+        std::path::PathBuf::from("."),
+        acp::SessionCapabilities::new(),
+        vec![select_option("model", "gpt-4o")],
+        Vec::new(),
+    );
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    let composer_text_before = app.composer().text().to_string();
+
+    // Typing while settings overlay is open should not modify composer
+    for c in "hello".chars() {
+        app.on_key(key(KeyCode::Char(c)));
+    }
+    assert_eq!(app.composer().text(), composer_text_before);
+}
+
+#[test]
+fn settings_theme_entry_is_injected_first() {
+    let (mut app, _command_rx) = make_app_with_metadata(
+        std::path::PathBuf::from("."),
+        acp::SessionCapabilities::new(),
+        vec![select_option("model", "gpt-4o")],
+        Vec::new(),
+    );
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    assert!(app.has_modal());
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("Theme:"), "Theme entry should render first:\n{viewport}");
+}
+
+#[test]
+fn settings_theme_picker_opens_and_shows_default() {
+    let (mut app, _command_rx) = make_app_with_metadata(
+        std::path::PathBuf::from("."),
+        acp::SessionCapabilities::new(),
+        vec![select_option("model", "gpt-4o")],
+        Vec::new(),
+    );
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    app.on_key(key(KeyCode::Enter)); // Open Theme picker (first entry)
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("Default"), "Theme picker should show Default option:\n{viewport}");
+    assert!(viewport.contains("Theme"), "Theme picker should have Theme header:\n{viewport}");
+}
+
+#[test]
+fn settings_theme_selection_returns_to_menu() {
+    let (mut app, _command_rx) = make_app_with_metadata(
+        std::path::PathBuf::from("."),
+        acp::SessionCapabilities::new(),
+        vec![select_option("model", "gpt-4o")],
+        Vec::new(),
+    );
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    app.on_key(key(KeyCode::Enter)); // Open Theme picker
+    app.on_key(key(KeyCode::Enter)); // Confirm default
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("Theme: Default"), "Should return to menu with Default selected:\n{viewport}");
+}
+
+#[test]
+fn settings_theme_empty_file_list_shows_only_default() {
+    let (mut app, _command_rx) =
+        make_app_with_metadata(std::path::PathBuf::from("."), acp::SessionCapabilities::new(), Vec::new(), Vec::new());
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    app.on_key(key(KeyCode::Enter)); // Open Theme picker
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("Default"), "Should show Default theme option:\n{viewport}");
+}
+
+// ── Regression tests for review findings ──
+
+#[test]
+fn theme_entry_preserved_after_config_option_update() {
+    let (mut app, _command_rx) = make_app_with_metadata(
+        std::path::PathBuf::from("."),
+        acp::SessionCapabilities::new(),
+        vec![select_option("model", "gpt-4o")],
+        Vec::new(),
+    );
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    assert!(app.has_modal());
+
+    // ConfigOptionUpdate arrives — Theme entry must still be first
+    app.on_acp_event(session_update(acp::SessionUpdate::ConfigOptionUpdate(acp::ConfigOptionUpdate::new(vec![
+        select_option("model", "sonnet"),
+    ]))));
+    assert!(app.has_modal());
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("Theme:"), "Theme entry must survive ConfigOptionUpdate:\n{viewport}");
+}
+
+#[test]
+fn theme_selection_keeps_overlay_open_and_refreshes_display() {
+    let (mut app, _command_rx) = make_app_with_metadata(
+        std::path::PathBuf::from("."),
+        acp::SessionCapabilities::new(),
+        vec![select_option("model", "gpt-4o")],
+        Vec::new(),
+    );
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    app.on_key(key(KeyCode::Enter)); // Open Theme picker
+    app.on_key(key(KeyCode::Enter)); // Confirm default theme
+
+    // Overlay must stay open
+    assert!(app.has_modal(), "Overlay must stay open after theme selection");
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("Theme: Default"), "Theme should show Default after selection:\n{viewport}");
+}
+
+#[test]
+fn model_selector_provider_heading_does_not_skip_rows() {
+    let (mut app, _command_rx) = make_app_with_metadata(
+        std::path::PathBuf::from("."),
+        acp::SessionCapabilities::new(),
+        vec![{
+            let mut opt = acp::SessionConfigOption::select(
+                "model",
+                "Model",
+                "",
+                vec![
+                    acp::SessionConfigSelectOption::new("openai:gpt-4o", "OpenAI / GPT-4o"),
+                    acp::SessionConfigSelectOption::new("openai:gpt-3.5", "OpenAI / GPT-3.5"),
+                    acp::SessionConfigSelectOption::new("anthropic:opus", "Anthropic / Opus"),
+                    acp::SessionConfigSelectOption::new("anthropic:sonnet", "Anthropic / Sonnet"),
+                ],
+            );
+            let mut meta = serde_json::Map::new();
+            meta.insert("multi_select".to_string(), serde_json::Value::Bool(true));
+            opt = opt.meta(Some(meta));
+            opt
+        }],
+        Vec::new(),
+    );
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    app.on_key(key(KeyCode::Down)); // Skip Theme
+    app.on_key(key(KeyCode::Enter)); // Open model selector
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    // All four models must appear — headings should not consume model rows
+    assert!(viewport.contains("GPT-4o"), "GPT-4o should be visible:\n{viewport}");
+    assert!(viewport.contains("GPT-3.5"), "GPT-3.5 should be visible:\n{viewport}");
+    assert!(viewport.contains("Opus"), "Opus should be visible:\n{viewport}");
+    assert!(viewport.contains("Sonnet"), "Sonnet should be visible:\n{viewport}");
+}
+
+#[test]
+fn model_selector_focused_item_visible_with_provider_headings() {
+    let (mut app, _command_rx) = make_app_with_metadata(
+        std::path::PathBuf::from("."),
+        acp::SessionCapabilities::new(),
+        vec![{
+            let mut opt = acp::SessionConfigOption::select(
+                "model",
+                "Model",
+                "",
+                vec![
+                    acp::SessionConfigSelectOption::new("openai:gpt-4o", "OpenAI / GPT-4o"),
+                    acp::SessionConfigSelectOption::new("anthropic:opus", "Anthropic / Opus"),
+                    acp::SessionConfigSelectOption::new("anthropic:sonnet", "Anthropic / Sonnet"),
+                    acp::SessionConfigSelectOption::new("google:gemini", "Google / Gemini"),
+                    acp::SessionConfigSelectOption::new("google:palm", "Google / PaLM"),
+                ],
+            );
+            let mut meta = serde_json::Map::new();
+            meta.insert("multi_select".to_string(), serde_json::Value::Bool(true));
+            opt = opt.meta(Some(meta));
+            opt
+        }],
+        Vec::new(),
+    );
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    app.on_key(key(KeyCode::Down)); // Skip Theme
+    app.on_key(key(KeyCode::Enter)); // Open model selector
+
+    // Move down through all items — last item should be visible
+    for _ in 0..4 {
+        app.on_key(key(KeyCode::Down));
+    }
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("PaLM"), "Focused last item with headings should be visible:\n{viewport}");
+}
+
+// ── Composer framing ────────────────────────────────────────────
+
+#[test]
+fn composer_empty_renders_top_and_bottom_rules() {
+    let composer = Composer::new();
+    let layout = composer.layout(80, &Theme::default());
+
+    assert_eq!(layout.lines.len(), 3, "empty composer: top rule, prompt, bottom rule");
+    assert!(line_text(&layout.lines[0]).chars().all(|c| c == '─'), "top rule");
+    assert_eq!(line_text(&layout.lines[0]).chars().count(), 80, "top rule spans full width");
+    assert!(line_text(&layout.lines[2]).chars().all(|c| c == '─'), "bottom rule");
+}
+
+#[test]
+fn composer_single_line_renders_top_and_bottom_rules() {
+    let mut composer = Composer::new();
+    composer.insert_str("hello");
+    let layout = composer.layout(80, &Theme::default());
+
+    assert_eq!(layout.lines.len(), 3, "single line: top rule, prompt line, bottom rule");
+    assert!(line_text(&layout.lines[0]).chars().all(|c| c == '─'));
+    assert!(line_text(&layout.lines[1]).contains("> hello"));
+    assert!(line_text(&layout.lines[2]).chars().all(|c| c == '─'));
+}
+
+#[test]
+fn composer_wrapped_renders_top_and_bottom_rules() {
+    let mut composer = Composer::new();
+    composer.insert_str("abcdefghijkl");
+    let layout = composer.layout(8, &Theme::default());
+
+    assert_eq!(layout.lines.len(), 4, "wrapped: top rule, 2 content rows, bottom rule");
+    assert!(line_text(&layout.lines[0]).chars().all(|c| c == '─'));
+    assert!(line_text(layout.lines.last().unwrap()).chars().all(|c| c == '─'));
+}
+
+#[test]
+fn composer_hard_newline_renders_top_and_bottom_rules() {
+    let mut composer = Composer::new();
+    composer.insert_str("one\ntwo");
+    let layout = composer.layout(80, &Theme::default());
+
+    let line_texts: Vec<String> = layout.lines.iter().map(line_text).collect();
+    assert_eq!(line_texts, vec!["─".repeat(80), "> one".to_owned(), "  two".to_owned(), "─".repeat(80)]);
+}
+
+// ── Composer cursor ──────────────────────────────────────────────
+
+#[test]
+fn cursor_at_prompt_start() {
+    let composer = Composer::new();
+    let layout = composer.layout(80, &Theme::default());
+
+    assert_eq!(layout.cursor.x, 2);
+    assert_eq!(layout.cursor.y, 1, "cursor row is 1 (below top rule)");
+}
+
+#[test]
+fn cursor_after_text() {
+    let mut composer = Composer::new();
+    composer.insert_str("abc");
+    let layout = composer.layout(80, &Theme::default());
+
+    assert_eq!(layout.cursor.x, 5, "2 (prefix) + 3 (abc)");
+    assert_eq!(layout.cursor.y, 1);
+}
+
+#[test]
+fn cursor_after_unicode_and_wide_chars() {
+    let mut composer = Composer::new();
+    composer.insert_str("a🎉界");
+    let layout = composer.layout(80, &Theme::default());
+
+    assert_eq!(layout.cursor.x, 7, "2 (prefix) + 1 (a) + 2 (🎉) + 2 (界)");
+    assert_eq!(layout.cursor.y, 1);
+}
+
+#[test]
+fn cursor_after_whitespace_wrap() {
+    let mut composer = Composer::new();
+    composer.insert_str("hello world");
+    composer.move_left();
+    composer.move_left();
+    composer.move_left();
+    composer.move_left();
+    composer.move_left();
+    let layout = composer.layout(9, &Theme::default());
+
+    assert_eq!(layout.cursor.y, 1, "cursor on first wrapped line (byte 6 in chunk 'hello w')");
+    assert_eq!(layout.cursor.x, 8);
+}
+
+#[test]
+fn cursor_after_multiple_mentions() {
+    let mut composer = Composer::new();
+    composer.insert_str("@main.rs @lib.rs");
+    let layout = composer.layout(80, &Theme::default());
+
+    assert_eq!(layout.cursor.x, 18);
+    assert_eq!(layout.cursor.y, 1);
+}
+
+#[test]
+fn cursor_preserved_after_resize_reflow() {
+    let mut composer = Composer::new();
+    composer.insert_str("abcdefgh");
+    composer.move_left();
+    composer.move_left();
+
+    let wide = composer.layout(80, &Theme::default());
+    let narrow = composer.layout(6, &Theme::default());
+
+    assert_eq!(wide.lines.len(), 3, "wide: top rule, prompt, bottom rule");
+    assert_eq!(narrow.lines.len(), 4, "narrow: top rule, 2 content rows, bottom rule");
+    assert_eq!(wide.cursor.y, 1);
+    assert_eq!(narrow.cursor.y, 2);
+    assert_eq!(wide.cursor.x, 8);
+    assert_eq!(narrow.cursor.x, 4);
+}
+
+// ── Overlays and tiny terminals ──────────────────────────────────
+
+#[test]
+fn tiny_terminal_does_not_overwrite_status_line() {
+    let (mut app, _command_rx) = make_app();
+    let mut terminal = make_terminal();
+    type_text(&mut app, "hello");
+
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+
+    assert!(viewport.contains("aether"), "status line (agent name) still visible");
+    assert!(viewport.contains("> hello"), "composer still visible");
+}
+
+#[test]
+fn overlay_does_not_duplicate_border_rows() {
+    let mut composer = Composer::new();
+    composer.insert_char('/');
+    composer.open_command_picker(vec![CommandEntry {
+        name: "test".to_string(),
+        description: "A test command".to_string(),
+        has_input: false,
+        hint: None,
+        builtin: false,
+    }]);
+
+    let layout = composer.layout(80, &Theme::default());
+
+    // framing + overlay should not duplicate rules
+    assert!(line_text(&layout.lines[0]).chars().all(|c| c == '─'), "top rule present");
+    assert!(line_text(layout.lines.last().unwrap()).chars().all(|c| c == '─'), "bottom rule present");
+}
+
+// ── Paste sanitization ───────────────────────────────────────────
+
+#[test]
+fn paste_strips_control_characters() {
+    let mut composer = Composer::new();
+    composer.insert_paste("abc\x01def\x02ghi");
+    assert_eq!(composer.text(), "abcdefghi");
+}
+
+#[test]
+fn paste_preserves_newlines() {
+    let mut composer = Composer::new();
+    composer.insert_paste("line one\nline two");
+    assert_eq!(composer.text(), "line one\nline two");
+}
+
+#[test]
+fn paste_preserves_tabs() {
+    let mut composer = Composer::new();
+    composer.insert_paste("col1\tcol2");
+    assert_eq!(composer.text(), "col1\tcol2");
+}
+
+#[test]
+fn paste_preserves_unicode() {
+    let mut composer = Composer::new();
+    composer.insert_paste("héllo 🎉 wörld");
+    assert_eq!(composer.text(), "héllo 🎉 wörld");
+}
+
+#[test]
+fn paste_strips_carriage_return_and_other_c0_controls() {
+    let mut composer = Composer::new();
+    composer.insert_paste("abc\r\x08\x7fdef");
+    assert_eq!(composer.text(), "abcdef");
+}
+
+// ── Ctrl-A / Ctrl-E ──────────────────────────────────────────────
+
+#[test]
+fn ctrl_a_moves_to_line_start() {
+    let mut composer = Composer::new();
+    composer.insert_str("hello world");
+    composer.move_left();
+    composer.move_left();
+    composer.move_line_start();
+    assert_eq!(composer.cursor_position(), (0, 0));
+}
+
+#[test]
+fn ctrl_e_moves_to_line_end() {
+    let mut composer = Composer::new();
+    composer.insert_str("hello world");
+    composer.move_line_start();
+    composer.move_line_end();
+    assert_eq!(composer.cursor_position(), (0, 11));
+}
+
+#[test]
+fn ctrl_a_stays_within_logical_line_for_multiline() {
+    let mut composer = Composer::new();
+    composer.insert_str("first line\nsecond line");
+    // cursor at end of "second line"
+    composer.move_line_start();
+    assert_eq!(composer.cursor_position(), (1, 0), "cursor at start of second line");
+}
+
+#[test]
+fn ctrl_e_stays_within_logical_line_for_multiline() {
+    let mut composer = Composer::new();
+    composer.insert_str("first line\nsecond line");
+    composer.move_line_start();
+    composer.move_line_start();
+    composer.move_line_end();
+    assert_eq!(composer.cursor_position(), (1, 11), "cursor stays at end of second line");
+}
+
+#[test]
+fn app_routes_ctrl_a_to_move_line_start() {
+    let (mut app, _command_rx) = make_app();
+    type_text(&mut app, "hello");
+    app.on_key(key(KeyCode::Left));
+    app.on_key(key(KeyCode::Left));
+    app.on_key(ctrl('a'));
+    assert_eq!(app.composer().cursor_position(), (0, 0));
+}
+
+#[test]
+fn app_routes_ctrl_e_to_move_line_end() {
+    let (mut app, _command_rx) = make_app();
+    type_text(&mut app, "hello");
+    app.on_key(key(KeyCode::Home));
+    app.on_key(ctrl('e'));
+    assert_eq!(app.composer().cursor_position(), (0, 5));
+}
+
+// ── Hard newline overlay closure ─────────────────────────────────
+
+#[test]
+fn shift_enter_closes_command_overlay_and_inserts_newline() {
+    let (mut app, _command_rx) = make_app();
+    app.on_key(key(KeyCode::Char('/')));
+    assert!(app.composer().has_overlay(), "command overlay active");
+
+    app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+    assert!(!app.composer().has_overlay(), "overlay closed after Shift+Enter");
+    assert_eq!(app.composer().text(), "/\n");
+}
+
+#[test]
+fn ctrl_j_closes_file_overlay_and_inserts_newline() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut app, _command_rx) = make_app_in(directory.path().to_path_buf());
+    app.on_key(key(KeyCode::Char('@')));
+    assert!(app.composer().has_overlay(), "file overlay active");
+
+    app.on_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL));
+    assert!(!app.composer().has_overlay(), "overlay closed after Ctrl-J");
+    assert_eq!(app.composer().text(), "@\n");
+}
+
+#[test]
+fn alt_enter_closes_command_overlay_and_inserts_newline() {
+    let (mut app, _command_rx) = make_app();
+    app.on_key(key(KeyCode::Char('/')));
+    assert!(app.composer().has_overlay());
+
+    app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
+    assert!(!app.composer().has_overlay(), "overlay closed after Alt+Enter");
+    assert_eq!(app.composer().text(), "/\n");
+}
+
+#[test]
+fn clear_no_duplicate_generation_bump() {
+    let (mut app, mut command_rx) = make_app();
+
+    let gen_before_clear = app.transcript_generation();
+
+    type_text(&mut app, "/clear");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(new_session_created("new-session", vec![select_option("model", "sonnet")]));
+
+    assert_eq!(
+        app.transcript_generation(),
+        gen_before_clear.wrapping_add(1),
+        "transcript_generation should only increment once (in NewSessionCreated), not both in dispatch and event"
+    );
+}
+
+#[test]
+fn new_session_send_failure_shows_transcript_error() {
+    let (mut app, fail_signal, mut command_rx) = make_failable_app();
+
+    fail_signal.store(true, Ordering::Relaxed);
+    type_text(&mut app, "/clear");
+    app.on_key(key(KeyCode::Tab));
+    assert!(command_rx.try_recv().is_err(), "send should have failed");
+
+    let items = app.drain_finalized();
+    let has_error = items
+        .iter()
+        .any(|item| matches!(item, HistoryItem::User(msg) if msg.contains("new session") && msg.contains("fail")));
+    assert!(has_error, "expected visible transcript error for new_session failure, got {items:?}");
+
+    assert!(!app.exit_requested(), "app should remain interactive after new_session failure");
+}
+
+#[test]
+fn list_sessions_send_failure_shows_transcript_error() {
+    let (mut app, fail_signal, mut command_rx) = make_failable_app();
+
+    fail_signal.store(true, Ordering::Relaxed);
+    type_text(&mut app, "/resume");
+    app.on_key(key(KeyCode::Tab));
+    assert!(command_rx.try_recv().is_err(), "send should have failed");
+
+    let items = app.drain_finalized();
+    let has_error = items
+        .iter()
+        .any(|item| matches!(item, HistoryItem::User(msg) if msg.contains("list sessions") && msg.contains("fail")));
+    assert!(has_error, "expected visible transcript error for list_sessions failure, got {items:?}");
+
+    assert!(!app.exit_requested(), "app should remain interactive after list_sessions failure");
+}
+
+#[test]
+fn load_session_send_failure_cleans_up_buffer_and_shows_error() {
+    let (mut app, fail_signal, mut command_rx) = make_failable_app();
+
+    type_text(&mut app, "/resume");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(sessions_listed(vec![session_info("old", "/tmp/old", "Old Session", "2025-01-01T00:00:00Z")]));
+    assert!(app.has_session_picker());
+
+    fail_signal.store(true, Ordering::Relaxed);
+    app.on_key(key(KeyCode::Enter));
+    assert!(command_rx.try_recv().is_err(), "send should have failed");
+
+    let items = app.drain_finalized();
+    let has_error = items
+        .iter()
+        .any(|item| matches!(item, HistoryItem::User(msg) if msg.contains("load session") && msg.contains("fail")));
+    assert!(has_error, "expected visible transcript error for load_session failure, got {items:?}");
+
+    assert!(!app.exit_requested(), "app should remain interactive after load_session failure");
+}
+
+#[test]
+fn session_preview_loaded_for_selected_session() {
+    let (mut app, mut command_rx) = make_app_with_session_preview();
+
+    type_text(&mut app, "/resume");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(sessions_listed(vec![
+        session_info("sess-1", "/tmp/one", "Session One", "2025-01-01T00:00:00Z"),
+        session_info("sess-2", "/tmp/two", "Session Two", "2025-01-02T00:00:00Z"),
+    ]));
+
+    let preview_cmd = command_rx.try_recv().unwrap();
+    assert!(
+        matches!(&preview_cmd, PromptCommand::SessionPreview(params) if params.session_id == "sess-1"),
+        "expected preview for first session, got {preview_cmd:?}"
+    );
+}
+
+#[test]
+fn session_preview_updated_when_selection_changes() {
+    let (mut app, mut command_rx) = make_app_with_session_preview();
+
+    type_text(&mut app, "/resume");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(sessions_listed(vec![
+        session_info("sess-1", "/tmp/one", "Session One", "2025-01-01T00:00:00Z"),
+        session_info("sess-2", "/tmp/two", "Session Two", "2025-01-02T00:00:00Z"),
+    ]));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_key(key(KeyCode::Down));
+
+    let preview_cmd = command_rx.try_recv().unwrap();
+    assert!(
+        matches!(&preview_cmd, PromptCommand::SessionPreview(params) if params.session_id == "sess-2"),
+        "expected preview for second session after moving down, got {preview_cmd:?}"
+    );
+}
+
+#[test]
+fn stale_preview_does_not_replace_current() {
+    let (mut app, mut command_rx) = make_app_with_session_preview();
+
+    type_text(&mut app, "/resume");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(sessions_listed(vec![
+        session_info("sess-1", "/tmp/one", "Session One", "2025-01-01T00:00:00Z"),
+        session_info("sess-2", "/tmp/two", "Session Two", "2025-01-02T00:00:00Z"),
+    ]));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_key(key(KeyCode::Down));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(AcpEvent::SessionPreviewLoaded(session_preview_response("sess-1")));
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(!viewport.contains("hello"), "stale preview should not be shown:\n{viewport}");
+}
+
+#[test]
+fn session_preview_failure_shows_error() {
+    let (mut app, mut command_rx) = make_app_with_session_preview();
+
+    type_text(&mut app, "/resume");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(sessions_listed(vec![session_info("sess-1", "/tmp/one", "Session One", "2025-01-01T00:00:00Z")]));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(AcpEvent::SessionPreviewFailed {
+        session_id: "sess-1".to_string(),
+        error: "server unreachable".to_string(),
+    });
+
+    let mut terminal = make_terminal_with_width(100);
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("server unreachable"), "expected error in preview:\n{viewport}");
+}
+
+#[test]
+fn session_loading_buffer_queues_updates_then_replays() {
+    let (mut app, mut command_rx) = make_app();
+
+    type_text(&mut app, "/resume");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(sessions_listed(vec![session_info("loaded", "/tmp/loaded", "Loaded", "2025-01-01T00:00:00Z")]));
+    app.on_key(key(KeyCode::Enter));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(session_update_for("loaded", user_message_chunk("buffered message")));
+    app.on_acp_event(session_update_for(
+        "loaded",
+        acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(acp::TextContent::new(
+            "buffered agent",
+        )))),
+    ));
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(!viewport.contains("buffered message"), "buffered updates should not render yet:\n{viewport}");
+    assert!(!viewport.contains("buffered agent"), "buffered updates should not render yet:\n{viewport}");
+
+    app.on_acp_event(session_loaded("loaded", vec![select_option("model", "sonnet")]));
+
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("buffered message"), "buffered updates should be replayed:\n{viewport}");
+    assert!(viewport.contains("buffered agent"), "buffered updates should be replayed:\n{viewport}");
+}
+
+#[test]
+fn loaded_session_uses_server_config_values() {
+    let options = vec![select_option("model", "opus"), mode_option("plan", &["code", "plan", "ask"])];
+    let (mut app, mut command_rx) =
+        make_app_with_metadata(std::path::PathBuf::from("."), acp::SessionCapabilities::new(), options, Vec::new());
+
+    type_text(&mut app, "/resume");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(sessions_listed(vec![session_info("loaded", "/tmp/loaded", "Loaded", "2025-01-01T00:00:00Z")]));
+    app.on_key(key(KeyCode::Enter));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(session_loaded(
+        "loaded",
+        vec![select_option("model", "sonnet"), mode_option("code", &["code", "plan", "ask"])],
+    ));
+
+    let config = app.config_options();
+    let acp::SessionConfigKind::Select(model) = &config[0].kind else {
+        panic!("expected model");
+    };
+    assert_eq!(model.current_value.0.as_ref(), "sonnet");
+    let acp::SessionConfigKind::Select(mode) = &config[1].kind else {
+        panic!("expected mode");
+    };
+    assert_eq!(mode.current_value.0.as_ref(), "code");
+}
+
+#[test]
+fn connection_closed_cancels_session_picker() {
+    let (mut app, mut command_rx) = make_app();
+
+    type_text(&mut app, "/resume");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(sessions_listed(vec![session_info("old", "/tmp/old", "Old", "2025-01-01T00:00:00Z")]));
+    assert!(app.has_session_picker());
+
+    app.on_acp_event(AcpEvent::ConnectionClosed);
+    assert!(!app.has_session_picker());
+    assert!(app.exit_requested());
+}
+
+#[test]
+fn session_list_error_shows_in_transcript() {
+    let (mut app, _command_rx) = make_app();
+
+    type_text(&mut app, "/resume");
+    app.on_key(key(KeyCode::Tab));
+
+    app.on_acp_event(AcpEvent::ConfigOptionUpdateFailed { error: "list sessions failed".to_string() });
+
+    let items = app.drain_finalized();
+    let has_error =
+        items.iter().any(|item| matches!(item, HistoryItem::User(msg) if msg.contains("list sessions failed")));
+    assert!(has_error, "expected visible transcript error, got {items:?}");
+}
+
+#[test]
+fn builtin_clear_appears_in_command_picker() {
+    let (mut app, _command_rx) = make_app();
+
+    app.on_key(key(KeyCode::Char('/')));
+    assert!(app.composer().has_overlay());
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("/clear"), "built-in /clear should be in command picker:\n{viewport}");
+    assert!(viewport.contains("/resume"), "built-in /resume should be in command picker:\n{viewport}");
+}
+
+#[test]
+fn narrow_terminal_renders_session_picker_without_preview_pane() {
+    let (mut app, mut command_rx) = make_app_with_session_preview();
+
+    type_text(&mut app, "/resume");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(sessions_listed(vec![session_info("sess-1", "/tmp/one", "Session One", "2025-01-01T00:00:00Z")]));
+
+    let mut terminal = make_terminal_with_width(60);
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("Session One"), "narrow picker should show session list:\n{viewport}");
+    assert!(!viewport.contains("Session preview"), "narrow picker should hide preview pane:\n{viewport}");
+}
+
+#[test]
+fn new_modal_replaces_session_picker() {
+    let (mut app, mut command_rx) = make_app();
+
+    type_text(&mut app, "/resume");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(sessions_listed(vec![session_info("old", "/tmp/old", "Old", "2025-01-01T00:00:00Z")]));
+    assert!(app.has_session_picker());
+
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    LocalSet::new().block_on(&runtime, async {
+        let (cx, mut peer) = test_connection().await;
+        let (responder, _response_rx) = peer.fake_elicitation(&cx).await;
+        app.on_acp_event(AcpEvent::ElicitationRequest {
+            params: ElicitationParams {
+                server_name: "test".to_string(),
+                request: CreateElicitationRequestParams::FormElicitationParams {
+                    meta: None,
+                    message: String::new(),
+                    requested_schema: ElicitationSchema::builder().build().unwrap(),
+                },
+            },
+            responder,
+        });
+    });
+
+    assert!(!app.has_session_picker());
 }

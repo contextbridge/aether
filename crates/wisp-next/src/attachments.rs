@@ -2,8 +2,22 @@ use crate::composer::SelectedFileMention;
 use agent_client_protocol::schema as acp;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use url::Url;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptAttachment {
+    pub path: PathBuf,
+    pub display_name: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttachmentKind {
+    Text,
+    Image,
+    Audio,
+    Unsupported,
+}
 
 pub struct AttachmentOutcome {
     pub blocks: Vec<acp::ContentBlock>,
@@ -11,10 +25,35 @@ pub struct AttachmentOutcome {
     pub warnings: Vec<String>,
 }
 
+const IMAGE_MIME_TYPES: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp"];
+const AUDIO_MIME_TYPES: &[&str] = &["audio/wav", "audio/mpeg", "audio/mp3", "audio/ogg"];
+
+pub fn classify_attachment(path: &Path) -> AttachmentKind {
+    let mime = mime_guess::from_path(path).first_or_octet_stream().to_string();
+
+    if IMAGE_MIME_TYPES.contains(&mime.as_str()) {
+        AttachmentKind::Image
+    } else if AUDIO_MIME_TYPES.contains(&mime.as_str()) {
+        AttachmentKind::Audio
+    } else if mime.starts_with("text/") {
+        AttachmentKind::Text
+    } else {
+        AttachmentKind::Unsupported
+    }
+}
+
 pub fn build(mentions: &[SelectedFileMention]) -> AttachmentOutcome {
+    let attachments: Vec<PromptAttachment> = mentions
+        .iter()
+        .map(|m| PromptAttachment { path: m.path.clone(), display_name: m.display_name.clone() })
+        .collect();
+    build_attachments(&attachments)
+}
+
+pub fn build_attachments(attachments: &[PromptAttachment]) -> AttachmentOutcome {
     let mut outcome = AttachmentOutcome { blocks: Vec::new(), placeholders: Vec::new(), warnings: Vec::new() };
-    for mention in mentions {
-        match build_one(&mention.path, &mention.display_name) {
+    for attachment in attachments {
+        match build_one(&attachment.path, &attachment.display_name) {
             Ok((block, placeholder)) => {
                 outcome.blocks.push(block);
                 if let Some(placeholder) = placeholder {
@@ -58,4 +97,50 @@ fn build_one(path: &Path, display_name: &str) -> Result<(acp::ContentBlock, Opti
         ))),
         None,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_attachment_detects_images() {
+        assert_eq!(classify_attachment(Path::new("photo.png")), AttachmentKind::Image);
+        assert_eq!(classify_attachment(Path::new("photo.jpg")), AttachmentKind::Image);
+        assert_eq!(classify_attachment(Path::new("photo.gif")), AttachmentKind::Image);
+        assert_eq!(classify_attachment(Path::new("photo.webp")), AttachmentKind::Image);
+    }
+
+    #[test]
+    fn classify_attachment_detects_audio() {
+        assert_eq!(classify_attachment(Path::new("note.wav")), AttachmentKind::Audio);
+        assert_eq!(classify_attachment(Path::new("note.mp3")), AttachmentKind::Audio);
+        assert_eq!(classify_attachment(Path::new("note.ogg")), AttachmentKind::Audio);
+    }
+
+    #[test]
+    fn classify_attachment_detects_text() {
+        assert_eq!(classify_attachment(Path::new("readme.txt")), AttachmentKind::Text);
+    }
+
+    #[test]
+    fn classify_attachment_unknown_extension_is_unsupported() {
+        assert_eq!(classify_attachment(Path::new("data.xyz")), AttachmentKind::Unsupported);
+    }
+
+    #[test]
+    fn build_from_attachment_produces_image_block() {
+        use tempfile::TempDir;
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("test.png");
+        std::fs::write(&path, b"fake png data").unwrap();
+
+        let attachments = vec![PromptAttachment { path, display_name: "test.png".to_string() }];
+        let outcome = build_attachments(&attachments);
+
+        assert_eq!(outcome.blocks.len(), 1);
+        assert!(outcome.warnings.is_empty());
+        assert_eq!(outcome.placeholders, vec!["[image attachment: test.png]"]);
+        assert!(matches!(outcome.blocks[0], acp::ContentBlock::Image(_)));
+    }
 }

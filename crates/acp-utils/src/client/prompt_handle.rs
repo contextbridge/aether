@@ -1,5 +1,7 @@
 use agent_client_protocol::schema::{ContentBlock, SessionId};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::mpsc;
 
 use super::error::AcpClientError;
@@ -28,6 +30,7 @@ pub enum PromptCommand {
 #[derive(Clone)]
 pub struct AcpPromptHandle {
     pub(crate) cmd_tx: mpsc::UnboundedSender<PromptCommand>,
+    pub(crate) fail_signal: Option<Arc<AtomicBool>>,
 }
 
 impl AcpPromptHandle {
@@ -36,14 +39,24 @@ impl AcpPromptHandle {
     pub fn noop() -> Self {
         let (cmd_tx, rx) = mpsc::unbounded_channel();
         std::mem::forget(rx);
-        Self { cmd_tx }
+        Self { cmd_tx, fail_signal: None }
     }
 
     /// Create a handle paired with a receiver for inspecting sent commands.
     /// Useful for tests that need to verify which commands were dispatched.
     pub fn recording() -> (Self, mpsc::UnboundedReceiver<PromptCommand>) {
         let (cmd_tx, rx) = mpsc::unbounded_channel();
-        (Self { cmd_tx }, rx)
+        (Self { cmd_tx, fail_signal: None }, rx)
+    }
+
+    /// Create a handle whose sends fail when the returned signal is set to true.
+    /// Useful for testing error paths without needing a real transport failure.
+    /// Returns the handle, a failure flag, and a receiver for inspecting commands
+    /// sent while the flag is false.
+    pub fn failable() -> (Self, Arc<AtomicBool>, mpsc::UnboundedReceiver<PromptCommand>) {
+        let (cmd_tx, rx) = mpsc::unbounded_channel();
+        let fail = Arc::new(AtomicBool::new(false));
+        (Self { cmd_tx, fail_signal: Some(Arc::clone(&fail)) }, fail, rx)
     }
 
     pub fn prompt(
@@ -112,6 +125,9 @@ impl AcpPromptHandle {
     }
 
     fn send(&self, cmd: PromptCommand) -> Result<(), AcpClientError> {
+        if self.fail_signal.as_ref().is_some_and(|s| s.load(Ordering::Relaxed)) {
+            return Err(AcpClientError::AgentCrashed("failable handle set to fail".into()));
+        }
         self.cmd_tx.send(cmd).map_err(|_| AcpClientError::AgentCrashed("command channel closed".into()))
     }
 }
@@ -134,7 +150,7 @@ mod tests {
     #[test]
     fn test_prompt_sends_command() {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let handle = AcpPromptHandle { cmd_tx: tx };
+        let handle = AcpPromptHandle { cmd_tx: tx, fail_signal: None };
         let session_id = SessionId::new("sess-1");
 
         handle.prompt(&session_id, "hello", None).unwrap();
@@ -152,7 +168,7 @@ mod tests {
     #[test]
     fn test_cancel_sends_command() {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let handle = AcpPromptHandle { cmd_tx: tx };
+        let handle = AcpPromptHandle { cmd_tx: tx, fail_signal: None };
         let session_id = SessionId::new("sess-1");
 
         handle.cancel(&session_id).unwrap();
@@ -164,7 +180,7 @@ mod tests {
     #[test]
     fn test_set_config_option_sends_command() {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let handle = AcpPromptHandle { cmd_tx: tx };
+        let handle = AcpPromptHandle { cmd_tx: tx, fail_signal: None };
         let session_id = SessionId::new("sess-1");
 
         handle.set_config_option(&session_id, "model", "gpt-4o").unwrap();
@@ -183,7 +199,7 @@ mod tests {
     #[test]
     fn test_prompt_with_content_sends_blocks() {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let handle = AcpPromptHandle { cmd_tx: tx };
+        let handle = AcpPromptHandle { cmd_tx: tx, fail_signal: None };
         let session_id = SessionId::new("sess-1");
         let content = vec![ContentBlock::Text(TextContent::new("attached"))];
 
@@ -203,7 +219,7 @@ mod tests {
     #[test]
     fn test_list_sessions_sends_command() {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let handle = AcpPromptHandle { cmd_tx: tx };
+        let handle = AcpPromptHandle { cmd_tx: tx, fail_signal: None };
 
         handle.list_sessions().unwrap();
 
@@ -214,7 +230,7 @@ mod tests {
     #[test]
     fn test_load_session_sends_command() {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let handle = AcpPromptHandle { cmd_tx: tx };
+        let handle = AcpPromptHandle { cmd_tx: tx, fail_signal: None };
         let session_id = SessionId::new("sess-restore");
         let cwd = Path::new("/tmp/project");
 
@@ -233,7 +249,7 @@ mod tests {
     #[test]
     fn test_list_workspaces_sends_command() {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let handle = AcpPromptHandle { cmd_tx: tx };
+        let handle = AcpPromptHandle { cmd_tx: tx, fail_signal: None };
         handle.list_workspaces(&SessionId::new("sess-1")).unwrap();
 
         let cmd = rx.try_recv().unwrap();
@@ -246,7 +262,7 @@ mod tests {
     #[test]
     fn test_move_workspace_sends_command() {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let handle = AcpPromptHandle { cmd_tx: tx };
+        let handle = AcpPromptHandle { cmd_tx: tx, fail_signal: None };
         handle.move_workspace(&SessionId::new("sess-1"), WorkspaceMoveTarget::New { name: "ws".into() }).unwrap();
 
         let cmd = rx.try_recv().unwrap();
@@ -262,7 +278,7 @@ mod tests {
     #[test]
     fn test_new_session_sends_command() {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let handle = AcpPromptHandle { cmd_tx: tx };
+        let handle = AcpPromptHandle { cmd_tx: tx, fail_signal: None };
         let cwd = std::path::Path::new("/tmp/project");
 
         handle.new_session(cwd).unwrap();

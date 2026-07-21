@@ -3,22 +3,30 @@ pub mod attachments;
 pub mod cli;
 pub mod composer;
 pub mod diff;
+pub mod dropped_files;
 pub mod error;
 pub mod git_diff;
 pub mod keybindings;
 pub mod markdown;
 pub mod modal;
 pub mod picker;
+pub mod plan_tracker;
+pub mod plan_view;
 pub mod presentation;
+pub mod prompt_search;
 pub mod render;
 pub mod screen_router;
 pub mod screens;
 pub mod session;
+pub mod session_loading_buffer;
+pub mod session_picker;
 pub mod settings;
+pub mod settings_overlay;
 pub mod syntax;
 pub mod theme;
 pub mod tool_calls;
 pub mod transcript;
+pub mod workspace_picker;
 pub mod workspace_status;
 pub mod wrap;
 
@@ -54,10 +62,32 @@ pub async fn run_tui(agent_command: &str, settings: UiSettings) -> Result<(), Ap
 
 /// Run the TUI from an already-initialized ACP session.
 pub async fn run_with_session(session: Session) -> Result<(), AppError> {
-    let Session { session_id, agent_name, settings, event_rx, prompt_handle, working_dir, workspace_status, .. } =
-        session;
+    let Session {
+        session_id,
+        agent_name,
+        prompt_capabilities,
+        session_capabilities,
+        config_options,
+        auth_methods,
+        settings,
+        event_rx,
+        prompt_handle,
+        working_dir,
+        workspace_status,
+    } = session;
     let renderer = TranscriptRenderer::new(&settings);
-    let app = App::new(AppConfig { session_id, agent_name, workspace_status, prompt_handle, working_dir, settings });
+    let app = App::new(AppConfig {
+        session_id,
+        agent_name,
+        workspace_status,
+        prompt_capabilities,
+        session_capabilities,
+        config_options,
+        auth_methods,
+        prompt_handle,
+        working_dir,
+        settings,
+    });
     run_app(app, renderer, event_rx).await
 }
 
@@ -160,6 +190,10 @@ async fn event_loop(
             tokio::spawn(async move {
                 let _ = event_tx.send(effect.execute().await);
             });
+        }
+
+        if let Some(theme) = app.take_pending_theme() {
+            renderer.set_theme(theme);
         }
 
         if app.exit_requested() {

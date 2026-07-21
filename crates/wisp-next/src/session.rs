@@ -2,7 +2,10 @@ use crate::error::AppError;
 use crate::settings::UiSettings;
 use crate::workspace_status::WorkspaceStatus;
 use acp_utils::client::{AcpClientError, AcpEvent, AcpPromptHandle, TokioAcpAgent, spawn_acp_session};
-use agent_client_protocol::schema::{Implementation, InitializeRequest, NewSessionRequest, ProtocolVersion, SessionId};
+use agent_client_protocol::schema::{
+    AuthMethod, Implementation, InitializeRequest, NewSessionRequest, PromptCapabilities, ProtocolVersion,
+    SessionCapabilities, SessionConfigOption, SessionId,
+};
 use std::env::current_dir;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -12,6 +15,10 @@ pub struct Session {
     pub session_id: SessionId,
     pub agent_name: String,
     pub settings: UiSettings,
+    pub prompt_capabilities: PromptCapabilities,
+    pub session_capabilities: SessionCapabilities,
+    pub config_options: Vec<SessionConfigOption>,
+    pub auth_methods: Vec<AuthMethod>,
     pub event_rx: mpsc::UnboundedReceiver<AcpEvent>,
     pub prompt_handle: AcpPromptHandle,
     pub working_dir: PathBuf,
@@ -31,6 +38,10 @@ impl Session {
             session_id: acp_session.session_id,
             agent_name: acp_session.agent_name,
             settings,
+            prompt_capabilities: acp_session.prompt_capabilities,
+            session_capabilities: acp_session.session_capabilities,
+            config_options: acp_session.config_options,
+            auth_methods: acp_session.auth_methods,
             event_rx: acp_session.event_rx,
             prompt_handle: acp_session.prompt_handle,
             working_dir,
