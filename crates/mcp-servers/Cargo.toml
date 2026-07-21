@@ -111,7 +111,7 @@ tempfile = { workspace = true, optional = true }
 # subagents feature
 aether-auth = { path = "../aether-auth", optional = true, version = "0.1.8", features = ["keyring"] }
 aether-core = { package = "aether-agent-core", path = "../aether-core", optional = true, version = "0.6.24" }
-aether-project = { path = "../aether-project", optional = true, version = "0.5.24" }
+aether-project = { path = "../aether-project", optional = true, version = "0.5.25" }
 llm = { package = "aether-llm", path = "../llm", optional = true, version = "0.7.22" }
 
 [dev-dependencies]

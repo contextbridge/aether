@@ -17,8 +17,8 @@ workspace = true
 [dependencies]
 aether-cli = { package = "aether-agent-cli", path = "../aether-cli", version = "0.7.27" }
 aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.6.24" }
-aether-evals = { path = "../aether-evals", version = "0.2.15" }
-aether-project = { path = "../aether-project", version = "0.5.24" }
+aether-evals = { path = "../aether-evals", version = "0.2.16" }
+aether-project = { path = "../aether-project", version = "0.5.25" }
 schemars = { workspace = true }
 serde_json = { workspace = true }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.11" }
