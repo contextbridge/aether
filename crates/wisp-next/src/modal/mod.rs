@@ -8,7 +8,7 @@ use acp_utils::notifications::{
 use agent_client_protocol::Responder;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::Constraint;
 use ratatui::widgets::Clear;
 use serde_json::Value;
 use std::sync::Arc;
@@ -175,7 +175,7 @@ impl ElicitationModal {
     }
 
     pub fn render(&self, frame: &mut Frame, theme: &Theme) {
-        let area = centered_rect(frame.area(), 80, 80);
+        let area = frame.area().centered(Constraint::Percentage(80), Constraint::Percentage(80));
         frame.render_widget(Clear, area);
         match &self.kind {
             ModalKind::Form(form) => form.render(frame, area, theme),
@@ -204,15 +204,6 @@ impl Drop for ElicitationModal {
             let _ = responder.respond(ElicitationResponse { action: ElicitationAction::Cancel, content: None });
         }
     }
-}
-
-fn centered_rect(area: Rect, horizontal_percent: u16, vertical_percent: u16) -> Rect {
-    let [vertical] =
-        Layout::vertical([Constraint::Percentage(vertical_percent)]).flex(ratatui::layout::Flex::Center).areas(area);
-    let [horizontal] = Layout::horizontal([Constraint::Percentage(horizontal_percent)])
-        .flex(ratatui::layout::Flex::Center)
-        .areas(vertical);
-    horizontal
 }
 
 pub fn default_browser_opener() -> BrowserOpener {

@@ -28,6 +28,43 @@ fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
 
+#[test]
+fn source_presentation_cache_is_reused_and_explicitly_invalidated() {
+    let (mut screen, _rx) = make_screen("# Plan\n```rust\nfn main() {}\n```");
+    let theme = Theme::default();
+    let mut highlighter = SyntaxHighlighter::new();
+
+    assert!(!screen.source_presentation_is_cached());
+    render_screen_with_theme_generation(&mut screen, 80, 24, &theme, &mut highlighter, 0);
+    assert!(screen.source_presentation_is_cached());
+
+    render_screen_with_theme_generation(&mut screen, 50, 24, &theme, &mut highlighter, 0);
+    assert!(screen.source_presentation_is_cached());
+
+    screen.invalidate_source_presentation();
+    assert!(!screen.source_presentation_is_cached());
+    render_screen_with_theme_generation(&mut screen, 80, 24, &theme, &mut highlighter, 1);
+    assert!(screen.source_presentation_is_cached());
+}
+
+fn render_screen_with_theme_generation(
+    screen: &mut PlanReviewScreen,
+    width: u16,
+    height: u16,
+    theme: &Theme,
+    highlighter: &mut SyntaxHighlighter,
+    theme_generation: u64,
+) -> Buffer {
+    let backend = TestBackend::new(width, height);
+    let mut terminal = ratatui::Terminal::with_options(backend, TerminalOptions::default()).unwrap();
+    terminal
+        .draw(|frame| {
+            screen.render_with_theme_generation(frame, theme, highlighter, theme_generation);
+        })
+        .unwrap();
+    terminal.backend().buffer().clone()
+}
+
 fn render_screen(screen: &mut PlanReviewScreen, width: u16, height: u16) -> Buffer {
     let theme = Theme::default();
     let mut highlighter = SyntaxHighlighter::new();

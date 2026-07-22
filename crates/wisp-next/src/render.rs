@@ -170,7 +170,8 @@ fn draw_frame(frame: &mut Frame, app: &mut App, renderer: &mut TranscriptRendere
         &theme,
     );
     render_status_line(frame, app, status_area, &theme, &settings);
-    app.render_modal(frame, &theme, renderer.highlighter());
+    let theme_generation = renderer.theme_generation();
+    app.render_modal(frame, &theme, renderer.highlighter(), theme_generation);
 }
 
 impl TranscriptRenderer {

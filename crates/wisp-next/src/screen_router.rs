@@ -107,10 +107,18 @@ impl ScreenRouter {
         }
     }
 
-    pub fn render(&mut self, frame: &mut Frame, theme: &Theme, highlighter: &mut SyntaxHighlighter) {
+    pub fn render(
+        &mut self,
+        frame: &mut Frame,
+        theme: &Theme,
+        highlighter: &mut SyntaxHighlighter,
+        theme_generation: u64,
+    ) {
         match self.mode.as_mut() {
             Some(FullScreenMode::GitDiff(screen)) => screen.render(frame, theme, highlighter),
-            Some(FullScreenMode::PlanReview(screen)) => screen.render(frame, theme, highlighter),
+            Some(FullScreenMode::PlanReview(screen)) => {
+                screen.render_with_theme_generation(frame, theme, highlighter, theme_generation);
+            }
             None => {}
         }
     }

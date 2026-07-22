@@ -36,6 +36,7 @@ pub struct PlanReviewScreen {
     title: String,
     document: PlanDocument,
     source_lines: Vec<SourceMarkdownLine>,
+    source_presentation_theme_generation: Option<u64>,
     comments: Vec<ReviewComment>,
     plan_scroll: usize,
     plan_cursor_line: usize,
@@ -63,6 +64,7 @@ impl PlanReviewScreen {
             title: meta.title,
             document,
             source_lines: Vec::new(),
+            source_presentation_theme_generation: None,
             comments: Vec::new(),
             plan_scroll: 0,
             plan_cursor_line: 0,
@@ -82,8 +84,27 @@ impl PlanReviewScreen {
         self.source_line_count().saturating_sub(1)
     }
 
-    fn render_source_lines(&mut self, theme: &Theme, highlighter: &mut SyntaxHighlighter) {
+    pub fn invalidate_source_presentation(&mut self) {
+        self.source_lines.clear();
+        self.source_presentation_theme_generation = None;
+    }
+
+    pub fn source_presentation_is_cached(&self) -> bool {
+        self.source_presentation_theme_generation.is_some()
+    }
+
+    fn ensure_source_presentation(
+        &mut self,
+        theme: &Theme,
+        highlighter: &mut SyntaxHighlighter,
+        theme_generation: u64,
+    ) {
+        if self.source_presentation_theme_generation == Some(theme_generation) {
+            return;
+        }
+
         self.source_lines = render_markdown_source_lines(&self.document.markdown_text(), theme, highlighter);
+        self.source_presentation_theme_generation = Some(theme_generation);
         self.plan_cursor_line = self.plan_cursor_line.min(self.source_line_max_index());
     }
 
@@ -337,8 +358,24 @@ impl PlanReviewScreen {
 
     #[allow(clippy::cast_possible_truncation)]
     pub fn render(&mut self, frame: &mut Frame, theme: &Theme, highlighter: &mut SyntaxHighlighter) {
+        self.render_with_theme_generation(frame, theme, highlighter, 0);
+    }
+
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn render_with_theme_generation(
+        &mut self,
+        frame: &mut Frame,
+        theme: &Theme,
+        highlighter: &mut SyntaxHighlighter,
+        theme_generation: u64,
+    ) {
+        self.ensure_source_presentation(theme, highlighter, theme_generation);
+        self.render_cached(frame, theme);
+    }
+
+    #[allow(clippy::cast_possible_truncation)]
+    fn render_cached(&mut self, frame: &mut Frame, theme: &Theme) {
         self.last_area = frame.area();
-        self.render_source_lines(theme, highlighter);
 
         let area = frame.area();
         if area.height < 4 || area.width < 20 {
@@ -347,7 +384,7 @@ impl PlanReviewScreen {
             return;
         }
 
-        let [body_area, footer_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
+        let [body_area, footer_area] = area.layout(&Layout::vertical([Constraint::Min(0), Constraint::Length(1)]));
 
         let use_split = area.width >= MIN_SPLIT_WIDTH && !self.document.outline.is_empty();
 
@@ -604,8 +641,6 @@ impl PlanReviewScreen {
         add_hint(&mut spans, "Esc", "cancel", theme);
 
         let paragraph = Paragraph::new(Line::from(spans)).style(Style::new().bg(theme.sidebar_bg));
-        let clear = Paragraph::new("").style(Style::new().bg(theme.sidebar_bg));
-        frame.render_widget(clear, area);
         frame.render_widget(paragraph, area);
     }
 

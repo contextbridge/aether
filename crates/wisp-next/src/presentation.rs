@@ -15,6 +15,7 @@ pub struct TranscriptRenderer {
     highlighter: SyntaxHighlighter,
     committed_lines: Vec<Line<'static>>,
     transcript_generation: u64,
+    theme_generation: u64,
     pending_markdown_cache: HashMap<(u64, u16), Vec<Line<'static>>>,
     settings: ResolvedStatusLineSettings,
 }
@@ -26,6 +27,7 @@ impl TranscriptRenderer {
             highlighter: SyntaxHighlighter::new(),
             committed_lines: Vec::new(),
             transcript_generation: 0,
+            theme_generation: 0,
             pending_markdown_cache: HashMap::new(),
             settings: resolve_status_line_settings(settings),
         }
@@ -43,8 +45,13 @@ impl TranscriptRenderer {
         &mut self.highlighter
     }
 
+    pub fn theme_generation(&self) -> u64 {
+        self.theme_generation
+    }
+
     pub fn set_theme(&mut self, theme: Theme) {
         self.theme = theme;
+        self.theme_generation = self.theme_generation.wrapping_add(1);
         self.highlighter.clear();
         self.pending_markdown_cache.clear();
     }

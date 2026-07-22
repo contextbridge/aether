@@ -187,13 +187,14 @@ impl App {
         frame: &mut ratatui::Frame,
         theme: &crate::theme::Theme,
         highlighter: &mut crate::syntax::SyntaxHighlighter,
+        theme_generation: u64,
     ) {
         match self.active_surface() {
             ActiveSurface::PromptSearch | ActiveSurface::Overlay => {}
             ActiveSurface::Composer => self.surface_rect = None,
             ActiveSurface::Screen => {
                 self.surface_rect = Some(frame.area());
-                self.screen_router.render(frame, theme, highlighter);
+                self.screen_router.render(frame, theme, highlighter, theme_generation);
             }
             ActiveSurface::Settings => {
                 let area = frame.area();
