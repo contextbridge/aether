@@ -31,22 +31,6 @@ pub struct Theme {
     syntect: Arc<SyntectTheme>,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn derives_distinct_code_background() {
-        let theme = Theme::default();
-        assert_ne!(theme.code_bg, theme.background);
-    }
-
-    #[test]
-    fn darkens_bright_rgb_channels_without_saturation() {
-        assert_eq!(darken(Color::Rgb(200, 180, 100)), Color::Rgb(60, 54, 30));
-    }
-}
-
 impl Theme {
     pub fn load(settings: &UiSettings) -> Self {
         resolve_theme_file_path(settings).map_or_else(Self::default, |path| Self::load_from_path(&path))
@@ -149,5 +133,21 @@ fn blend(first: Color, second: Color, first_percent: u16) -> Color {
             Color::Rgb(mix(fr, sr), mix(fg, sg), mix(fb, sb))
         }
         (color, _) => color,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn derives_distinct_code_background() {
+        let theme = Theme::default();
+        assert_ne!(theme.code_bg, theme.background);
+    }
+
+    #[test]
+    fn darkens_bright_rgb_channels_without_saturation() {
+        assert_eq!(darken(Color::Rgb(200, 180, 100)), Color::Rgb(60, 54, 30));
     }
 }

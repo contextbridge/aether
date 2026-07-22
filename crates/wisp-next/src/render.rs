@@ -5,12 +5,13 @@ use crate::markdown::render_markdown;
 use crate::plan_view::render_plan_lines;
 use crate::presentation::TranscriptRenderer;
 use crate::progress_indicator::spinner_frame;
+use crate::session_config_view::SessionConfigView;
 use crate::settings::{ContextUsageDisplay, ResolvedStatusLineSettings, StatusLineSegmentConfig, StatusLineStyle};
 use crate::theme::Theme;
 use crate::tool_calls::{SUB_AGENT_VISIBLE_TOOL_LIMIT, ToolStatus};
-use crate::wrap::{truncate_text, wrap_line, wrap_text};
+use crate::wrap::{truncate_spans, truncate_to_width, wrap_line, wrap_text};
 use acp_utils::config_option_id::ConfigOptionId;
-use agent_client_protocol::schema::{self as acp, SessionConfigKind, SessionConfigOption, SessionConfigSelectOptions};
+use agent_client_protocol::schema::SessionConfigOption;
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
@@ -434,19 +435,45 @@ fn render_composer(
     }
 }
 
-fn status_line_height(_app: &App, _width: u16, _settings: &ResolvedStatusLineSettings, _theme: &Theme) -> u16 {
-    1
+fn status_line_height(app: &App, width: u16, settings: &ResolvedStatusLineSettings, theme: &Theme) -> u16 {
+    if width == 0 {
+        return 1;
+    }
+    let (left, right) = status_line_sections(app, settings, theme);
+    if right.width() == 0 || left.width() + 1 + right.width() <= usize::from(width) { 1 } else { 2 }
 }
 
 fn render_status_line(frame: &mut Frame, app: &App, area: Rect, theme: &Theme, settings: &ResolvedStatusLineSettings) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let (left, right) = status_line_sections(app, settings, theme);
+    let width = usize::from(area.width);
+
+    if right.width() == 0 || area.height == 1 && left.width() + 1 + right.width() > width {
+        frame.render_widget(Paragraph::new(Line::from(truncate_spans(&left.spans, width))), area);
+    } else if left.width() + 1 + right.width() <= width {
+        frame.render_widget(Paragraph::new(left).alignment(ratatui::layout::Alignment::Left), area);
+        frame.render_widget(Paragraph::new(right).alignment(ratatui::layout::Alignment::Right), area);
+    } else {
+        let [left_row, right_row] = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(area);
+        frame.render_widget(Paragraph::new(Line::from(truncate_spans(&left.spans, width))), left_row);
+        frame.render_widget(Paragraph::new(Line::from(truncate_spans(&right.spans, width))), right_row);
+    }
+}
+
+fn status_line_sections(
+    app: &App,
+    settings: &ResolvedStatusLineSettings,
+    theme: &Theme,
+) -> (Line<'static>, Line<'static>) {
     let left = Line::from(render_left_section(app, settings, theme));
     let right = if app.exit_confirmation_active() {
-        Line::from(vec![Span::styled("Ctrl-C again to exit", Style::new().fg(theme.warning))])
+        Line::from(Span::styled("Ctrl-C again to exit", Style::new().fg(theme.warning)))
     } else {
         Line::from(render_right_section(app, settings, theme))
     };
-    frame.render_widget(Paragraph::new(left).alignment(ratatui::layout::Alignment::Left), area);
-    frame.render_widget(Paragraph::new(right).alignment(ratatui::layout::Alignment::Right), area);
+    (left, right)
 }
 
 fn render_left_section(app: &App, settings: &ResolvedStatusLineSettings, theme: &Theme) -> Vec<Span<'static>> {
@@ -484,7 +511,10 @@ fn join_segments(
 fn render_segment(segment: &StatusLineSegmentConfig, app: &App, theme: &Theme) -> Vec<Span<'static>> {
     match segment {
         StatusLineSegmentConfig::Cwd { max_width } => {
-            let dir = truncate_text(&app.workspace_status().display_dir, *max_width);
+            let dir = max_width.map_or_else(
+                || app.workspace_status().display_dir.clone(),
+                |width| truncate_to_width(&app.workspace_status().display_dir, usize::from(width)),
+            );
             vec![Span::styled(dir, Style::new().fg(theme.text_secondary))]
         }
         StatusLineSegmentConfig::GitRef => {
@@ -506,7 +536,8 @@ fn render_segment(segment: &StatusLineSegmentConfig, app: &App, theme: &Theme) -
             let Some(model_summary) = extract_model_display(app.config_options()) else {
                 return Vec::new();
             };
-            let truncated = truncate_text(&model_summary, *max_width);
+            let truncated = max_width
+                .map_or_else(|| model_summary.clone(), |width| truncate_to_width(&model_summary, usize::from(width)));
             vec![Span::styled(truncated, Style::new().fg(theme.success))]
         }
         StatusLineSegmentConfig::Reasoning => {
@@ -627,82 +658,19 @@ fn filled_slots(effort: Option<ReasoningEffort>, levels: &[ReasoningEffort]) -> 
 }
 
 fn extract_reasoning_levels(config_options: &[SessionConfigOption]) -> Vec<ReasoningEffort> {
-    let Some(option) = config_options.iter().find(|o| o.id.0.as_ref() == ConfigOptionId::ReasoningEffort.as_str())
-    else {
-        return Vec::new();
-    };
-    let SessionConfigKind::Select(ref select) = option.kind else {
-        return Vec::new();
-    };
-    let SessionConfigSelectOptions::Ungrouped(ref options) = select.options else {
-        return Vec::new();
-    };
-    options.iter().filter_map(|o| o.value.0.as_ref().parse().ok()).collect()
+    SessionConfigView::new(config_options).reasoning_levels()
 }
 
 fn extract_reasoning_effort(config_options: &[SessionConfigOption]) -> Option<ReasoningEffort> {
-    let option =
-        config_options.iter().find(|option| option.id.0.as_ref() == ConfigOptionId::ReasoningEffort.as_str())?;
-    let SessionConfigKind::Select(ref select) = option.kind else {
-        return None;
-    };
-    ReasoningEffort::parse(&select.current_value.0).unwrap_or(None)
+    SessionConfigView::new(config_options).reasoning_effort()
 }
 
 fn extract_mode_display(config_options: &[SessionConfigOption]) -> Option<String> {
-    extract_select_display(config_options, ConfigOptionId::Mode)
+    SessionConfigView::new(config_options).current_display_name(ConfigOptionId::Mode)
 }
 
 fn extract_model_display(config_options: &[SessionConfigOption]) -> Option<String> {
-    let option = config_options.iter().find(|option| option.id.0.as_ref() == ConfigOptionId::Model.as_str())?;
-    let SessionConfigKind::Select(ref select) = option.kind else {
-        return None;
-    };
-    let options = match &select.options {
-        SessionConfigSelectOptions::Ungrouped(options) => options,
-        SessionConfigSelectOptions::Grouped(_) => {
-            return extract_select_display(config_options, ConfigOptionId::Model);
-        }
-        _ => return None,
-    };
-    let current = select.current_value.0.as_ref();
-    if current.contains(',') {
-        let names: Vec<&str> = current
-            .split(',')
-            .filter_map(|part| {
-                let trimmed = part.trim();
-                options.iter().find(|option| option.value.0.as_ref() == trimmed).map(|option| option.name.as_str())
-            })
-            .collect();
-        if names.is_empty() { None } else { Some(names.join(" + ")) }
-    } else {
-        extract_select_display(config_options, ConfigOptionId::Model)
-    }
-}
-
-fn extract_select_display(config_options: &[SessionConfigOption], id: ConfigOptionId) -> Option<String> {
-    let option = config_options.iter().find(|option| option.id.0.as_ref() == id.as_str())?;
-    let SessionConfigKind::Select(ref select) = option.kind else {
-        return None;
-    };
-    option_display_name(&select.options, &select.current_value)
-}
-
-fn option_display_name(
-    options: &SessionConfigSelectOptions,
-    current_value: &acp::SessionConfigValueId,
-) -> Option<String> {
-    match options {
-        SessionConfigSelectOptions::Ungrouped(options) => {
-            options.iter().find(|option| &option.value == current_value).map(|option| option.name.clone())
-        }
-        SessionConfigSelectOptions::Grouped(groups) => groups
-            .iter()
-            .flat_map(|group| group.options.iter())
-            .find(|option| &option.value == current_value)
-            .map(|option| option.name.clone()),
-        _ => None,
-    }
+    SessionConfigView::new(config_options).current_display_name(ConfigOptionId::Model)
 }
 
 fn format_arguments(arguments: &str) -> String {

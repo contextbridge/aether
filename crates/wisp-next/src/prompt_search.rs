@@ -2,7 +2,6 @@ use crate::edit_buffer::EditBuffer;
 use crate::selection::SelectionState;
 use crate::theme::Theme;
 use crate::workspace_status::home_relative_path;
-use crate::wrap::display_width;
 use acp_utils::notifications::{PromptSearchResponse, PromptSearchResult};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -11,7 +10,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, Paragraph, StatefulWidget, Widget};
 
 use std::path::Path;
-use unicode_width::UnicodeWidthChar;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PromptSearchMessage {
@@ -169,7 +168,7 @@ fn result_line(result: &PromptSearchResult, is_selected: bool, max_width: usize,
     let highlight_style =
         if is_selected { Style::new().fg(theme.warning).bg(theme.sidebar_bg) } else { Style::new().fg(theme.warning) };
     let cwd_display = abbreviate_cwd(&result.cwd, MAX_CWD_WIDTH);
-    let cwd_width = display_width(&cwd_display);
+    let cwd_width = cwd_display.width();
     let prompt_budget = if cwd_width > 0 && max_width >= cwd_width + CWD_GAP + MIN_PROMPT_WIDTH {
         max_width - cwd_width - CWD_GAP
     } else {
@@ -285,12 +284,12 @@ fn push_prompt_with_highlight(
 
 fn abbreviate_cwd(cwd: &Path, max_width: usize) -> String {
     let full = home_relative_path(cwd);
-    if display_width(&full) <= max_width {
+    if full.width() <= max_width {
         return full;
     }
     cwd.file_name()
         .map(|name| name.to_string_lossy().into_owned())
-        .filter(|name| display_width(name) <= max_width)
+        .filter(|name| name.width() <= max_width)
         .unwrap_or(full)
 }
 

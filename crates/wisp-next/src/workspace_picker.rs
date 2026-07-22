@@ -13,7 +13,6 @@ use std::path::{Path, PathBuf};
 
 pub struct WorkspacePicker {
     rows: FilterableList<WorkspaceRow>,
-    query: EditBuffer,
     parent_dir: Option<PathBuf>,
     mode: Mode,
 }
@@ -47,7 +46,6 @@ impl WorkspacePicker {
                 WorkspaceRow::Existing(entry) => home_relative_path(&entry.path),
                 WorkspaceRow::CreateNew => CREATE_NEW_LABEL.to_string(),
             }),
-            query: EditBuffer::default(),
             parent_dir,
             mode: Mode::List,
         }
@@ -88,14 +86,8 @@ impl WorkspacePicker {
                         return Some(self.confirm_row(row));
                     }
                 }
-                KeyCode::Char(c) => {
-                    self.query.insert_char(c);
-                    self.rows.set_query(self.query.text());
-                }
-                KeyCode::Backspace => {
-                    self.query.backspace();
-                    self.rows.set_query(self.query.text());
-                }
+                KeyCode::Char(c) => self.rows.push_query_char(c),
+                KeyCode::Backspace => self.rows.pop_query_char(),
                 _ => {}
             },
             Mode::NamingNew { name } => match key.code {
@@ -120,7 +112,7 @@ impl WorkspacePicker {
         Some(vec![])
     }
 
-    pub fn render(&self, area: Rect, buf: &mut Buffer, theme: &crate::theme::Theme) {
+    pub fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &crate::theme::Theme) {
         match &self.mode {
             Mode::List => self.render_list(area, buf, theme),
             Mode::NamingNew { name } => self.render_name_input(name, area, buf, theme),
@@ -139,10 +131,10 @@ impl WorkspacePicker {
         }
     }
 
-    fn render_list(&self, area: Rect, buf: &mut Buffer, theme: &crate::theme::Theme) {
+    fn render_list(&mut self, area: Rect, buf: &mut Buffer, theme: &crate::theme::Theme) {
         let title = format!(
             " Workspaces {} ",
-            if self.query.is_empty() { String::new() } else { format!("'{}'", self.query.text()) }
+            if self.rows.query().is_empty() { String::new() } else { format!("'{}'", self.rows.query()) }
         );
         let item_width = area.width.saturating_sub(2) as usize;
         self.rows.render(

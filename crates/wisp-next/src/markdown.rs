@@ -1,6 +1,6 @@
 use crate::syntax::SyntaxHighlighter;
 use crate::theme::Theme;
-use crate::wrap::wrap_lines;
+use crate::wrap::wrap_line;
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -50,7 +50,7 @@ impl<'a> MarkdownRenderer<'a> {
         while self.lines.last().is_some_and(line_is_empty) {
             self.lines.pop();
         }
-        wrap_lines(self.lines, self.width)
+        self.lines.into_iter().flat_map(|line| wrap_line(line, self.width)).collect()
     }
 
     fn on_event(&mut self, event: Event<'_>) {

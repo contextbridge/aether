@@ -23,6 +23,7 @@ pub mod screen_router;
 pub mod screens;
 pub mod selection;
 pub mod session;
+pub mod session_config_view;
 pub mod session_loading_buffer;
 pub mod session_picker;
 pub mod settings;

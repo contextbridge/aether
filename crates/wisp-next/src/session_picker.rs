@@ -1,4 +1,3 @@
-use crate::edit_buffer::EditBuffer;
 use crate::filterable_list::{FilterableList, FilterableListRender};
 use crate::wrap::truncate_to_width;
 use acp_utils::notifications::SessionPreviewResponse;
@@ -12,7 +11,6 @@ use std::collections::HashMap;
 
 pub struct SessionPicker {
     sessions: FilterableList<acp::SessionInfo>,
-    query: EditBuffer,
     preview_enabled: bool,
     previews: HashMap<String, PreviewState>,
 }
@@ -36,7 +34,6 @@ impl SessionPicker {
             sessions: FilterableList::new(sessions, |session| {
                 format!("{} {}", session.title.as_deref().unwrap_or(""), session.cwd.display())
             }),
-            query: EditBuffer::default(),
             preview_enabled,
             previews: HashMap::new(),
         }
@@ -108,21 +105,15 @@ impl SessionPicker {
                     }]);
                 }
             }
-            KeyCode::Char(c) => {
-                self.query.insert_char(c);
-                self.sessions.set_query(self.query.text());
-            }
-            KeyCode::Backspace => {
-                self.query.backspace();
-                self.sessions.set_query(self.query.text());
-            }
+            KeyCode::Char(c) => self.sessions.push_query_char(c),
+            KeyCode::Backspace => self.sessions.pop_query_char(),
             _ => {}
         }
 
         Some(messages)
     }
 
-    pub fn render(&self, area: Rect, buf: &mut Buffer, theme: &crate::theme::Theme) {
+    pub fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &crate::theme::Theme) {
         if !self.has_sessions() {
             let block =
                 ratatui::widgets::Block::bordered().title(" Sessions ").style(Style::new().fg(theme.text_primary));
@@ -159,10 +150,10 @@ impl SessionPicker {
         self.sessions.selected_index()
     }
 
-    fn render_list(&self, area: Rect, buf: &mut Buffer, theme: &crate::theme::Theme) {
+    fn render_list(&mut self, area: Rect, buf: &mut Buffer, theme: &crate::theme::Theme) {
         let title = format!(
             " Sessions {} ",
-            if self.query.is_empty() { String::new() } else { format!("'{}'", self.query.text()) }
+            if self.sessions.query().is_empty() { String::new() } else { format!("'{}'", self.sessions.query()) }
         );
         let item_width = area.width.saturating_sub(2) as usize;
         self.sessions.render(

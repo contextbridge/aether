@@ -1,0 +1,103 @@
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use futures::FutureExt;
+
+use crate::git_diff::{
+    DiffScope, FileStatus, GitDiffDocument, GitDiffError, commit, discard_file, stage_all, stage_files, unstage_all,
+    unstage_files,
+};
+
+pub enum GitDiffEffect {
+    Load { request_id: u64, working_dir: PathBuf, repo_root: Option<PathBuf>, scope: DiffScope },
+    StageFiles { request_id: u64, repo_root: PathBuf, paths: Vec<String> },
+    UnstageFiles { request_id: u64, repo_root: PathBuf, paths: Vec<String> },
+    StageAll { request_id: u64, repo_root: PathBuf },
+    UnstageAll { request_id: u64, repo_root: PathBuf },
+    Commit { request_id: u64, repo_root: PathBuf, message: String },
+    DiscardFile { request_id: u64, repo_root: PathBuf, path: String, status: FileStatus },
+    LoadFullFile { request_id: u64, repo_root: PathBuf, path: String },
+    SubmitReview { request_id: u64, prompt: String },
+}
+
+pub enum GitDiffEvent {
+    Loaded { request_id: u64, result: Result<GitDiffDocument, GitDiffError> },
+    ActionFinished { request_id: u64, result: Result<(), GitDiffError> },
+    FullFileLoaded { request_id: u64, path: String, result: Result<String, GitDiffError> },
+    SubmitReview { request_id: u64, prompt: String },
+}
+
+pub enum GitDiffOutcome {
+    None,
+    Close,
+    Effect(GitDiffEffect),
+    SubmitReview(GitDiffEffect),
+}
+impl GitDiffEffect {
+    pub async fn execute(self) -> GitDiffEvent {
+        let request_id = self.request_id();
+        let result = std::panic::AssertUnwindSafe(self.execute_inner()).catch_unwind().await;
+        match result {
+            Ok(event) => event,
+            Err(_panic) => GitDiffEvent::ActionFinished {
+                request_id,
+                result: Err(GitDiffError::CommandFailed { stderr: "Internal error".to_string() }),
+            },
+        }
+    }
+
+    fn request_id(&self) -> u64 {
+        match self {
+            Self::Load { request_id, .. }
+            | Self::StageFiles { request_id, .. }
+            | Self::UnstageFiles { request_id, .. }
+            | Self::StageAll { request_id, .. }
+            | Self::UnstageAll { request_id, .. }
+            | Self::Commit { request_id, .. }
+            | Self::DiscardFile { request_id, .. }
+            | Self::LoadFullFile { request_id, .. }
+            | Self::SubmitReview { request_id, .. } => *request_id,
+        }
+    }
+
+    async fn execute_inner(self) -> GitDiffEvent {
+        match self {
+            Self::Load { request_id, working_dir, repo_root, scope } => GitDiffEvent::Loaded {
+                request_id,
+                result: GitDiffDocument::load(&working_dir, repo_root.as_deref(), scope).await,
+            },
+            Self::StageFiles { request_id, repo_root, paths } => {
+                GitDiffEvent::ActionFinished { request_id, result: stage_files(&repo_root, &paths).await }
+            }
+            Self::UnstageFiles { request_id, repo_root, paths } => {
+                GitDiffEvent::ActionFinished { request_id, result: unstage_files(&repo_root, &paths).await }
+            }
+            Self::StageAll { request_id, repo_root } => {
+                GitDiffEvent::ActionFinished { request_id, result: stage_all(&repo_root).await }
+            }
+            Self::UnstageAll { request_id, repo_root } => {
+                GitDiffEvent::ActionFinished { request_id, result: unstage_all(&repo_root).await }
+            }
+            Self::Commit { request_id, repo_root, message } => {
+                GitDiffEvent::ActionFinished { request_id, result: commit(&repo_root, &message).await }
+            }
+            Self::DiscardFile { request_id, repo_root, path, status } => {
+                GitDiffEvent::ActionFinished { request_id, result: discard_file(&repo_root, &path, status).await }
+            }
+            Self::LoadFullFile { request_id, repo_root, path } => {
+                let full_path = repo_root.join(&path);
+                let result = tokio::fs::read_to_string(&full_path)
+                    .await
+                    .map_err(|error| GitDiffError::CommandFailed { stderr: format!("Cannot read {path}: {error}") });
+                GitDiffEvent::FullFileLoaded { request_id, path, result }
+            }
+            Self::SubmitReview { request_id, prompt } => GitDiffEvent::SubmitReview { request_id, prompt },
+        }
+    }
+}
+
+static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+
+pub(super) fn next_request_id() -> u64 {
+    NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
+}

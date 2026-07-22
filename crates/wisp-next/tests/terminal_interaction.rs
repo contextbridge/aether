@@ -559,6 +559,96 @@ mod event_routing {
     }
 
     #[test]
+    fn mouse_activation_uses_shared_settings_actions() {
+        use acp_utils::client::AcpEvent;
+        use acp_utils::notifications::{
+            McpNotification, McpServerAuthCapability, McpServerStatus, McpServerStatusEntry,
+        };
+        use agent_client_protocol::schema::{
+            AuthMethod, AuthMethodAgent, SessionConfigOption, SessionConfigSelectOption,
+        };
+
+        fn settings_app(
+            options: Vec<SessionConfigOption>,
+            servers: Vec<McpServerStatusEntry>,
+            methods: Vec<AuthMethod>,
+        ) -> (App, UnboundedReceiver<acp_utils::client::PromptCommand>) {
+            let (prompt_handle, command_rx) = acp_utils::client::AcpPromptHandle::recording();
+            let mut app = App::new(AppConfig {
+                session_id: agent_client_protocol::schema::SessionId::new("test"),
+                agent_name: "aether".to_string(),
+                prompt_capabilities: agent_client_protocol::schema::PromptCapabilities::new(),
+                session_capabilities: agent_client_protocol::schema::SessionCapabilities::new(),
+                config_options: options,
+                auth_methods: methods,
+                workspace_status: wisp_next::workspace_status::WorkspaceStatus::new("~/code", None),
+                prompt_handle,
+                working_dir: std::path::PathBuf::from("."),
+                settings: UiSettings::default(),
+            });
+            app.on_acp_event(AcpEvent::McpNotification(McpNotification::ServerStatus { servers }));
+            (app, command_rx)
+        }
+
+        fn open_settings(app: &mut App, terminal: &mut ratatui::Terminal<TestBackend>) {
+            type_text(app, "/settings");
+            app.on_key(key(KeyCode::Tab));
+            let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+            sync_terminal_with_renderer(terminal, app, &mut renderer).unwrap();
+        }
+
+        let options = vec![SessionConfigOption::select(
+            "model",
+            "Model",
+            "a",
+            vec![SessionConfigSelectOption::new("a", "Alpha"), SessionConfigSelectOption::new("b", "Beta")],
+        )];
+        let (mut app, mut commands) = settings_app(options, vec![], vec![]);
+        let mut terminal = make_terminal(80, 24);
+        open_settings(&mut app, &mut terminal);
+        let rect = app.surface_rect().unwrap();
+        app.on_terminal_event(click(rect.x + 2, rect.y + 2));
+        let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+        sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+        let rect = app.surface_rect().unwrap();
+        app.on_terminal_event(click(rect.x + 2, rect.y + 3));
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(acp_utils::client::PromptCommand::SetConfigOption { config_id, value, .. }) if config_id == "model" && value == "b"
+        ));
+
+        let server = McpServerStatusEntry::new("linear", McpServerStatus::NeedsOAuth)
+            .with_auth_capability(McpServerAuthCapability::OAuth);
+        let (mut app, mut commands) = settings_app(vec![], vec![server], vec![]);
+        let mut terminal = make_terminal(80, 24);
+        open_settings(&mut app, &mut terminal);
+        let rect = app.surface_rect().unwrap();
+        app.on_terminal_event(click(rect.x + 2, rect.y + 2));
+        let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+        sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+        let rect = app.surface_rect().unwrap();
+        app.on_terminal_event(click(rect.x + 2, rect.y + 1));
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(acp_utils::client::PromptCommand::AuthenticateMcpServer { server_name, .. }) if server_name == "linear"
+        ));
+
+        let methods = vec![AuthMethod::Agent(AuthMethodAgent::new("codex", "Codex"))];
+        let (mut app, mut commands) = settings_app(vec![], vec![], methods);
+        let mut terminal = make_terminal(80, 24);
+        open_settings(&mut app, &mut terminal);
+        let rect = app.surface_rect().unwrap();
+        app.on_terminal_event(click(rect.x + 2, rect.y + 3));
+        let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+        sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+        let rect = app.surface_rect().unwrap();
+        app.on_terminal_event(click(rect.x + 2, rect.y + 1));
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(acp_utils::client::PromptCommand::Authenticate { method_id }) if method_id == "codex"
+        ));
+    }
+    #[test]
     fn session_picker_scroll_changes_selection() {
         let (mut app, _rx) = make_app();
         let current = agent_client_protocol::schema::SessionId::new("test-session");

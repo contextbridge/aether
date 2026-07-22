@@ -2,10 +2,6 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-pub fn wrap_lines(lines: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
-    lines.into_iter().flat_map(|line| wrap_line(line, width)).collect()
-}
-
 pub fn wrap_line(line: Line<'static>, width: u16) -> Vec<Line<'static>> {
     let max_width = usize::from(width.max(1));
     let line_style = line.style;
@@ -57,10 +53,6 @@ pub fn wrap_line(line: Line<'static>, width: u16) -> Vec<Line<'static>> {
     output
 }
 
-pub fn display_width(text: &str) -> usize {
-    text.width()
-}
-
 pub fn byte_at_display_column(text: &str, column: usize) -> usize {
     let mut width = 0;
     let mut byte = 0;
@@ -73,10 +65,6 @@ pub fn byte_at_display_column(text: &str, column: usize) -> usize {
         byte = index + character.len_utf8();
     }
     byte
-}
-
-pub fn line_display_width(spans: &[Span<'_>]) -> usize {
-    spans.iter().map(Span::width).sum()
 }
 
 pub fn truncate_spans(spans: &[Span<'static>], max_width: usize) -> Vec<Span<'static>> {
@@ -137,10 +125,6 @@ pub fn truncate_to_width(text: &str, max_width: usize) -> String {
     }
     result.push('…');
     result
-}
-
-pub fn truncate_text(text: &str, max_width: Option<u16>) -> String {
-    max_width.map_or_else(|| text.to_string(), |width| truncate_to_width(text, usize::from(width)))
 }
 
 pub fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
@@ -264,17 +248,6 @@ mod tests {
     }
 
     #[test]
-    fn line_display_width_sums_span_widths() {
-        let spans = vec![Span::raw("hello"), Span::raw(" "), Span::raw("world")];
-        assert_eq!(line_display_width(&spans), 11);
-    }
-
-    #[test]
-    fn line_display_width_empty() {
-        assert_eq!(line_display_width(&[]), 0);
-    }
-
-    #[test]
     fn truncate_spans_no_truncation_needed() {
         let spans = vec![Span::raw("hi")];
         let result = truncate_spans(&spans, 10);
@@ -296,23 +269,6 @@ mod tests {
         let spans = vec![Span::raw("abc")];
         let result = truncate_spans(&spans, 0);
         assert!(result.is_empty());
-    }
-
-    #[test]
-    fn truncate_text_no_max_returns_full() {
-        assert_eq!(truncate_text("hello", None), "hello");
-    }
-
-    #[test]
-    fn truncate_text_fits_without_truncation() {
-        assert_eq!(truncate_text("hi", Some(10)), "hi");
-    }
-
-    #[test]
-    fn truncate_text_adds_ellipsis() {
-        let result = truncate_text("hello world", Some(7));
-        assert!(result.contains('…'));
-        assert!(result.width() <= 7);
     }
 
     #[test]
