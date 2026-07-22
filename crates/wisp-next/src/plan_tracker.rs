@@ -13,6 +13,7 @@ pub struct PlanTracker {
     cached_entries: Vec<acp::PlanEntry>,
     cached_version: u64,
     cached_tick: Instant,
+    cached_grace_period: Duration,
 }
 
 impl Default for PlanTracker {
@@ -26,6 +27,7 @@ impl Default for PlanTracker {
             cached_entries: Vec::new(),
             cached_version: 0,
             cached_tick: Instant::now(),
+            cached_grace_period: Duration::from_secs(3),
         }
     }
 }
@@ -65,17 +67,20 @@ impl PlanTracker {
     }
 
     pub fn has_completed_in_grace_period(&self) -> bool {
-        self.entries.iter().any(|entry| {
-            matches!(entry.status, acp::PlanEntryStatus::Completed)
-                && self.is_visible(entry, self.last_tick, self.grace_period)
-        })
+        self.visible_entries(self.last_tick, self.grace_period)
+            .iter()
+            .any(|entry| matches!(entry.status, acp::PlanEntryStatus::Completed))
     }
 
     pub fn cached_visible_entries(&mut self) -> &[acp::PlanEntry] {
-        if self.version != self.cached_version || self.last_tick != self.cached_tick {
+        if self.version != self.cached_version
+            || self.last_tick != self.cached_tick
+            || self.grace_period != self.cached_grace_period
+        {
             self.cached_entries = self.visible_entries(self.last_tick, self.grace_period);
             self.cached_version = self.version;
             self.cached_tick = self.last_tick;
+            self.cached_grace_period = self.grace_period;
         }
         &self.cached_entries
     }
@@ -409,6 +414,19 @@ mod tests {
         let cached = tracker.cached_visible_entries().to_vec();
         assert_eq!(cached.len(), 1);
         assert_eq!(cached[0].content, "Task A");
+    }
+
+    #[test]
+    fn cached_visible_entries_updates_on_grace_period_change() {
+        let mut tracker = PlanTracker::default();
+        let now = Instant::now();
+
+        tracker.replace(vec![entry("Task A", PlanEntryStatus::Completed)], now);
+        tracker.on_tick(now + Duration::from_secs(2));
+        assert_eq!(tracker.cached_visible_entries().len(), 1);
+
+        tracker.grace_period = Duration::from_secs(1);
+        assert!(tracker.cached_visible_entries().is_empty());
     }
 
     #[test]

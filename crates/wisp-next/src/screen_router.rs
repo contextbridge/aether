@@ -116,11 +116,10 @@ impl ScreenRouter {
     }
 
     pub fn close(&mut self) {
-        if let Some(FullScreenMode::GitDiff(screen)) = self.mode.as_mut() {
-            screen.cancel();
-        }
-        if let Some(FullScreenMode::PlanReview(screen)) = self.mode.as_mut() {
-            screen.cancel();
+        match self.mode.as_mut() {
+            Some(FullScreenMode::GitDiff(screen)) => screen.cancel(),
+            Some(FullScreenMode::PlanReview(screen)) => screen.cancel(),
+            None => {}
         }
         self.mode = None;
     }

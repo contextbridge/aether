@@ -18,10 +18,8 @@ struct MarkdownRenderer<'a> {
     theme: &'a Theme,
     highlighter: &'a mut SyntaxHighlighter,
     lines: Vec<Line<'static>>,
-    current: Vec<Span<'static>>,
-    styles: Vec<Style>,
+    inline: InlineMarkdownSpanBuilder<'a>,
     lists: Vec<Option<u64>>,
-    quote_depth: usize,
     code: String,
     code_language: String,
     width: u16,
@@ -34,10 +32,8 @@ impl<'a> MarkdownRenderer<'a> {
             theme,
             highlighter,
             lines: Vec::new(),
-            current: Vec::new(),
-            styles: Vec::new(),
+            inline: InlineMarkdownSpanBuilder::new(theme),
             lists: Vec::new(),
-            quote_depth: 0,
             code: String::new(),
             code_language: String::new(),
             width,
@@ -64,11 +60,8 @@ impl<'a> MarkdownRenderer<'a> {
             Event::Text(text) if self.in_code_block => self.code.push_str(&text),
             Event::Text(text) => self.push_text(text.into_string()),
             Event::Code(code) => {
-                self.push_quote_prefix();
-                self.current.push(Span::styled(
-                    code.into_string(),
-                    self.current_style().patch(Style::new().fg(self.theme.code_fg).bg(self.theme.code_bg)),
-                ));
+                self.inline.push_quote_prefix();
+                self.inline.push_code(code.into_string());
             }
             Event::SoftBreak => self.push_text(" ".to_string()),
             Event::HardBreak => self.flush_current(),
@@ -84,21 +77,12 @@ impl<'a> MarkdownRenderer<'a> {
 
     fn on_start(&mut self, tag: Tag<'_>) {
         match tag {
-            Tag::Heading { level, .. } => {
+            Tag::Heading { .. } | Tag::BlockQuote(_) => {
                 self.flush_current();
-                self.styles.push(Style::new().fg(self.theme.heading).add_modifier(Modifier::BOLD));
-                self.push_text(format!("{} ", "#".repeat(level as usize)));
+                self.inline.start(&tag);
             }
-            Tag::Strong => self.styles.push(Style::new().add_modifier(Modifier::BOLD)),
-            Tag::Emphasis => self.styles.push(Style::new().add_modifier(Modifier::ITALIC)),
-            Tag::Strikethrough => self.styles.push(Style::new().add_modifier(Modifier::CROSSED_OUT)),
-            Tag::Link { .. } => {
-                self.styles.push(Style::new().fg(self.theme.link).add_modifier(Modifier::UNDERLINED));
-            }
-            Tag::BlockQuote(_) => {
-                self.flush_current();
-                self.quote_depth += 1;
-                self.styles.push(Style::new().fg(self.theme.blockquote).add_modifier(Modifier::ITALIC));
+            Tag::Strong | Tag::Emphasis | Tag::Strikethrough | Tag::Link { .. } => {
+                self.inline.start(&tag);
             }
             Tag::List(start) => {
                 self.flush_current();
@@ -115,7 +99,7 @@ impl<'a> MarkdownRenderer<'a> {
                     }
                     _ => "• ".to_string(),
                 };
-                self.current.push(Span::styled(format!("{indent}{marker}"), Style::new().fg(self.theme.muted)));
+                self.inline.push_span(Span::styled(format!("{indent}{marker}"), Style::new().fg(self.theme.muted)));
             }
             Tag::CodeBlock(kind) => {
                 self.flush_current();
@@ -127,7 +111,7 @@ impl<'a> MarkdownRenderer<'a> {
                 };
             }
             Tag::Table(_) | Tag::TableHead | Tag::TableRow => self.flush_current(),
-            Tag::TableCell if !self.current.is_empty() => self.push_text(" | ".to_string()),
+            Tag::TableCell if !self.inline.is_empty() => self.push_text(" | ".to_string()),
             _ => {}
         }
     }
@@ -135,12 +119,12 @@ impl<'a> MarkdownRenderer<'a> {
     fn on_end(&mut self, tag: TagEnd) {
         match tag {
             TagEnd::Heading(_) => {
-                self.styles.pop();
+                self.inline.end(tag);
                 self.flush_current();
                 self.push_blank();
             }
             TagEnd::Strong | TagEnd::Emphasis | TagEnd::Strikethrough | TagEnd::Link => {
-                self.styles.pop();
+                self.inline.end(tag);
             }
             TagEnd::Paragraph => {
                 self.flush_current();
@@ -148,8 +132,7 @@ impl<'a> MarkdownRenderer<'a> {
             }
             TagEnd::BlockQuote(_) => {
                 self.flush_current();
-                self.styles.pop();
-                self.quote_depth = self.quote_depth.saturating_sub(1);
+                self.inline.end(tag);
                 self.push_blank();
             }
             TagEnd::Item | TagEnd::TableHead | TagEnd::TableRow => self.flush_current(),
@@ -176,24 +159,12 @@ impl<'a> MarkdownRenderer<'a> {
     }
 
     fn push_text(&mut self, text: String) {
-        self.push_quote_prefix();
-        let style = Style::new().fg(self.theme.text_primary).patch(self.current_style());
-        self.current.push(Span::styled(text, style));
-    }
-
-    fn push_quote_prefix(&mut self) {
-        if self.current.is_empty() && self.quote_depth > 0 {
-            self.current.push(Span::styled("  ".repeat(self.quote_depth), Style::new().fg(self.theme.blockquote)));
-        }
-    }
-
-    fn current_style(&self) -> Style {
-        self.styles.iter().copied().fold(Style::default(), Style::patch)
+        self.inline.push_text(text);
     }
 
     fn flush_current(&mut self) {
-        if !self.current.is_empty() {
-            self.lines.push(Line::from(std::mem::take(&mut self.current)));
+        if !self.inline.is_empty() {
+            self.lines.push(Line::from(self.inline.take_spans()));
         }
     }
 
@@ -204,6 +175,105 @@ impl<'a> MarkdownRenderer<'a> {
     }
 }
 
+pub(crate) struct InlineMarkdownSpanBuilder<'a> {
+    theme: &'a Theme,
+    spans: Vec<Span<'static>>,
+    styles: Vec<Style>,
+    quote_depth: usize,
+}
+
+impl<'a> InlineMarkdownSpanBuilder<'a> {
+    pub(crate) fn new(theme: &'a Theme) -> Self {
+        Self { theme, spans: Vec::new(), styles: Vec::new(), quote_depth: 0 }
+    }
+
+    pub(crate) fn start(&mut self, tag: &Tag<'_>) {
+        match tag {
+            Tag::Heading { level, .. } => {
+                let style = Style::new().fg(self.theme.heading).add_modifier(Modifier::BOLD);
+                self.styles.push(style);
+                self.spans.push(Span::styled(format!("{} ", "#".repeat(*level as usize)), style));
+            }
+            Tag::Strong => self.styles.push(Style::new().add_modifier(Modifier::BOLD)),
+            Tag::Emphasis => self.styles.push(Style::new().add_modifier(Modifier::ITALIC)),
+            Tag::Strikethrough => self.styles.push(Style::new().add_modifier(Modifier::CROSSED_OUT)),
+            Tag::Link { .. } => self.styles.push(Style::new().fg(self.theme.link).add_modifier(Modifier::UNDERLINED)),
+            Tag::BlockQuote(_) => {
+                self.quote_depth += 1;
+                self.styles.push(Style::new().fg(self.theme.blockquote).add_modifier(Modifier::ITALIC));
+            }
+            _ => self.styles.push(Style::default()),
+        }
+    }
+
+    pub(crate) fn end(&mut self, tag: TagEnd) {
+        self.styles.pop();
+        if matches!(tag, TagEnd::BlockQuote(_)) {
+            self.quote_depth = self.quote_depth.saturating_sub(1);
+        }
+    }
+
+    pub(crate) fn push_text(&mut self, text: String) {
+        self.push_quote_prefix();
+        self.spans.push(Span::styled(text, Style::new().fg(self.theme.text_primary).patch(self.current_style())));
+    }
+
+    pub(crate) fn push_code(&mut self, code: String) {
+        self.spans.push(Span::styled(
+            code,
+            self.current_style().patch(Style::new().fg(self.theme.code_fg).bg(self.theme.code_bg)),
+        ));
+    }
+
+    pub(crate) fn push_soft_break(&mut self) {
+        self.spans.push(Span::raw(" "));
+    }
+
+    pub(crate) fn push_quote_prefix(&mut self) {
+        if self.spans.is_empty() && self.quote_depth > 0 {
+            self.spans.push(Span::styled("  ".repeat(self.quote_depth), Style::new().fg(self.theme.blockquote)));
+        }
+    }
+
+    pub(crate) fn push_span(&mut self, span: Span<'static>) {
+        self.spans.push(span);
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.spans.is_empty()
+    }
+
+    pub(crate) fn take_spans(&mut self) -> Vec<Span<'static>> {
+        std::mem::take(&mut self.spans)
+    }
+
+    fn current_style(&self) -> Style {
+        self.styles.iter().copied().fold(Style::default(), Style::patch)
+    }
+}
+
 fn line_is_empty(line: &Line<'_>) -> bool {
     line.spans.iter().all(|span| span.content.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::render_markdown;
+    use crate::syntax::SyntaxHighlighter;
+    use crate::theme::Theme;
+    use ratatui::style::Modifier;
+
+    #[test]
+    fn renders_inline_markdown_with_nested_styles() {
+        let theme = Theme::default();
+        let mut highlighter = SyntaxHighlighter::new();
+        let lines = render_markdown("**bold and *italic*** with `code`", 80, &theme, &mut highlighter);
+
+        let spans = &lines[0].spans;
+        assert_eq!(spans.iter().map(|span| span.content.as_ref()).collect::<String>(), "bold and italic with code");
+        assert!(spans[0].style.add_modifier.contains(Modifier::BOLD));
+        assert!(spans[1].style.add_modifier.contains(Modifier::BOLD | Modifier::ITALIC));
+        assert_eq!(spans.last().unwrap().style.fg, Some(theme.code_fg));
+        assert_eq!(spans.last().unwrap().style.bg, Some(theme.code_bg));
+    }
 }

@@ -5,6 +5,8 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use similar::{DiffOp, TextDiff};
 
+pub const SPLIT_VIEW_MIN_WIDTH: u16 = 96;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiffKind {
     Context,
@@ -107,7 +109,7 @@ pub fn render_diff(
     highlighter: &mut SyntaxHighlighter,
 ) -> Vec<Line<'static>> {
     let has_removals = preview.rows.iter().any(|row| row.old.is_some() && row.kind != DiffKind::Context);
-    if width >= 80 && has_removals {
+    if width >= SPLIT_VIEW_MIN_WIDTH && has_removals {
         render_split_diff(preview, width, theme, highlighter)
     } else {
         render_unified_diff(preview, width, theme, highlighter)

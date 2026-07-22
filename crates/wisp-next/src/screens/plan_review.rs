@@ -36,7 +36,6 @@ pub struct PlanReviewScreen {
     title: String,
     document: PlanDocument,
     source_lines: Vec<SourceMarkdownLine>,
-    cached_line_count: usize,
     comments: Vec<ReviewComment>,
     plan_scroll: usize,
     plan_cursor_line: usize,
@@ -64,7 +63,6 @@ impl PlanReviewScreen {
             title: meta.title,
             document,
             source_lines: Vec::new(),
-            cached_line_count: 0,
             comments: Vec::new(),
             plan_scroll: 0,
             plan_cursor_line: 0,
@@ -84,13 +82,8 @@ impl PlanReviewScreen {
         self.source_line_count().saturating_sub(1)
     }
 
-    fn ensure_source_lines_rendered(&mut self, theme: &Theme, highlighter: &mut SyntaxHighlighter) {
-        let current_count = self.source_line_count();
-        if self.cached_line_count != current_count || self.source_lines.is_empty() {
-            self.source_lines = render_markdown_source_lines(&self.document.markdown_text(), theme, highlighter);
-            self.cached_line_count = current_count;
-        }
-        // Clamp plan_cursor_line in case document changed
+    fn render_source_lines(&mut self, theme: &Theme, highlighter: &mut SyntaxHighlighter) {
+        self.source_lines = render_markdown_source_lines(&self.document.markdown_text(), theme, highlighter);
         self.plan_cursor_line = self.plan_cursor_line.min(self.source_line_max_index());
     }
 
@@ -345,7 +338,7 @@ impl PlanReviewScreen {
     #[allow(clippy::cast_possible_truncation)]
     pub fn render(&mut self, frame: &mut Frame, theme: &Theme, highlighter: &mut SyntaxHighlighter) {
         self.last_area = frame.area();
-        self.ensure_source_lines_rendered(theme, highlighter);
+        self.render_source_lines(theme, highlighter);
 
         let area = frame.area();
         if area.height < 4 || area.width < 20 {
@@ -628,16 +621,7 @@ impl PlanReviewScreen {
 }
 
 fn digit_count(value: usize) -> usize {
-    if value == 0 {
-        return 1;
-    }
-    let mut count = 0;
-    let mut v = value;
-    while v > 0 {
-        v /= 10;
-        count += 1;
-    }
-    count
+    value.checked_ilog10().map_or(1, |digits| digits as usize + 1)
 }
 
 fn build_gutter(line_no: usize, width: usize, theme: &Theme) -> Line<'static> {

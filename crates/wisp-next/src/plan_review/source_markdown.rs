@@ -1,7 +1,8 @@
+use crate::markdown::InlineMarkdownSpanBuilder;
 use crate::syntax::SyntaxHighlighter;
 use crate::theme::Theme;
-use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
-use ratatui::style::{Modifier, Style};
+use pulldown_cmark::{Event, Options, Parser};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 pub struct SourceMarkdownLine {
@@ -76,60 +77,20 @@ fn render_single_markdown_line(raw: &str, theme: &Theme) -> Line<'static> {
     }
 
     let options = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES;
-    let parser = Parser::new_ext(raw, options);
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    let mut style_stack: Vec<Style> = Vec::new();
-    let mut quote_depth = 0usize;
+    let mut inline = InlineMarkdownSpanBuilder::new(theme);
 
-    for event in parser {
+    for event in Parser::new_ext(raw, options) {
         match event {
-            Event::Start(tag) => match tag {
-                Tag::Heading { level, .. } => {
-                    style_stack.push(Style::new().fg(theme.heading).add_modifier(Modifier::BOLD));
-                    spans.push(Span::styled(
-                        format!("{} ", "#".repeat(level as usize)),
-                        style_stack.last().copied().unwrap_or_default(),
-                    ));
-                }
-                Tag::Strong => style_stack.push(Style::new().add_modifier(Modifier::BOLD)),
-                Tag::Emphasis => style_stack.push(Style::new().add_modifier(Modifier::ITALIC)),
-                Tag::Strikethrough => style_stack.push(Style::new().add_modifier(Modifier::CROSSED_OUT)),
-                Tag::Link { .. } => {
-                    style_stack.push(Style::new().fg(theme.link).add_modifier(Modifier::UNDERLINED));
-                }
-                Tag::BlockQuote(_) => {
-                    quote_depth += 1;
-                    style_stack.push(Style::new().fg(theme.blockquote).add_modifier(Modifier::ITALIC));
-                }
-                _ => style_stack.push(Style::default()),
-            },
-            Event::End(tag) => {
-                style_stack.pop();
-                if let TagEnd::BlockQuote(_) = tag {
-                    quote_depth = quote_depth.saturating_sub(1);
-                }
-            }
-            Event::Text(text) => {
-                if quote_depth > 0 && spans.is_empty() {
-                    spans.push(Span::styled("  ".repeat(quote_depth), Style::new().fg(theme.blockquote)));
-                }
-                let style = Style::new().fg(theme.text_primary).patch(current_style(&style_stack));
-                spans.push(Span::styled(text.into_string(), style));
-            }
-            Event::Code(code) => {
-                let style = current_style(&style_stack).patch(Style::new().fg(theme.code_fg).bg(theme.code_bg));
-                spans.push(Span::styled(code.into_string(), style));
-            }
-            Event::SoftBreak => spans.push(Span::raw(" ")),
+            Event::Start(tag) => inline.start(&tag),
+            Event::End(tag) => inline.end(tag),
+            Event::Text(text) => inline.push_text(text.into_string()),
+            Event::Code(code) => inline.push_code(code.into_string()),
+            Event::SoftBreak => inline.push_soft_break(),
             _ => {}
         }
     }
 
-    if spans.is_empty() { Line::raw(raw.to_string()) } else { Line::from(spans) }
-}
-
-fn current_style(stack: &[Style]) -> Style {
-    stack.iter().copied().fold(Style::default(), Style::patch)
+    if inline.is_empty() { Line::raw(raw.to_string()) } else { Line::from(inline.take_spans()) }
 }
 
 fn is_table_source_line(raw: &str) -> bool {
@@ -162,6 +123,7 @@ mod tests {
     use super::*;
     use crate::syntax::SyntaxHighlighter;
     use crate::theme::Theme;
+    use ratatui::style::Modifier;
 
     #[test]
     fn renders_plain_text() {
@@ -205,11 +167,15 @@ mod tests {
     }
 
     #[test]
-    fn renders_bold_and_italic() {
+    fn renders_bold_and_italic_with_nested_styles() {
         let theme = Theme::default();
         let mut highlighter = SyntaxHighlighter::new();
-        let result = render_markdown_source_lines("**bold** and *italic*", &theme, &mut highlighter);
-        assert_eq!(result.len(), 1);
+        let result = render_markdown_source_lines("**bold and *italic***", &theme, &mut highlighter);
+
+        let spans = &result[0].line.spans;
+        assert_eq!(spans.iter().map(|span| span.content.as_ref()).collect::<String>(), "bold and italic");
+        assert!(spans[0].style.add_modifier.contains(Modifier::BOLD));
+        assert!(spans[1].style.add_modifier.contains(Modifier::BOLD | Modifier::ITALIC));
     }
 
     #[test]

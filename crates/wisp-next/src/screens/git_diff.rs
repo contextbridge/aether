@@ -12,6 +12,7 @@ use ratatui::widgets::{
     Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
 };
 
+use crate::diff::SPLIT_VIEW_MIN_WIDTH;
 use crate::edit_buffer::EditBuffer;
 use crate::git_diff::{
     CommentContext, DiffScope, FileDiff, FileStatus, GitDiffDocument, GitDiffError, PatchAnchor, PatchLine,
@@ -1084,7 +1085,7 @@ impl GitDiffScreen {
             self.render_full_file(&file, content_area.width, theme, highlighter)
         } else if file.binary {
             vec![Line::styled("Binary file", Style::new().fg(theme.muted))]
-        } else if area.width >= 96 {
+        } else if area.width >= SPLIT_VIEW_MIN_WIDTH {
             self.render_split_with_comments(&file, area.width, theme, highlighter, &mut draft_cursor)
         } else {
             self.render_unified_with_comments(&file, area.width, theme, highlighter, &mut draft_cursor)
