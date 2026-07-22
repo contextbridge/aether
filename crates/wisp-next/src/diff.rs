@@ -120,9 +120,9 @@ fn render_unified_diff(
     theme: &Theme,
     highlighter: &mut SyntaxHighlighter,
 ) -> Vec<Line<'static>> {
-    const MAX_LINES: usize = 20;
+    const MAX_ROWS: usize = 20;
     let mut lines = Vec::new();
-    for row in &preview.rows {
+    for row in preview.rows.iter().take(MAX_ROWS) {
         match row.kind {
             DiffKind::Context => {
                 if let Some(line) = &row.old {
@@ -182,10 +182,11 @@ fn render_unified_diff(
         }
     }
 
-    if lines.len() > MAX_LINES {
-        let remaining = lines.len() - MAX_LINES;
-        lines.truncate(MAX_LINES);
-        lines.push(Line::styled(format!("    … {remaining} more lines"), Style::new().fg(theme.muted)));
+    if preview.rows.len() > MAX_ROWS {
+        lines.push(Line::styled(
+            format!("    … {} more rows", preview.rows.len() - MAX_ROWS),
+            Style::new().fg(theme.muted),
+        ));
     }
     lines
 }

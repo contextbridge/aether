@@ -17,7 +17,6 @@ use crate::syntax::SyntaxHighlighter;
 use crate::theme::Theme;
 use crate::wrap::{truncate_to_width, wrap_line};
 
-#[allow(clippy::cast_possible_truncation)]
 const MIN_SPLIT_WIDTH: u16 = 60;
 const OUTLINE_FRACTION: u32 = 1;
 const OUTLINE_TOTAL: u32 = 4;
@@ -50,6 +49,15 @@ pub struct PlanReviewScreen {
 
 impl PlanReviewScreen {
     pub fn new(meta: PlanReviewElicitationMeta, responder: Responder<ElicitationResponse>) -> Self {
+        Self::new_with_response_handler(meta, move |response| {
+            let _ = responder.respond(response);
+        })
+    }
+
+    pub fn new_with_response_handler(
+        meta: PlanReviewElicitationMeta,
+        respond: impl FnOnce(ElicitationResponse) + Send + 'static,
+    ) -> Self {
         let document = PlanDocument::parse(&meta.plan_path, &meta.markdown);
         let outline_selection = SelectionState::new(document.outline.len());
         Self {
@@ -63,9 +71,7 @@ impl PlanReviewScreen {
             outline_selection,
             draft: None,
             focus: Focus::Plan,
-            respond: Some(Box::new(move |response| {
-                let _ = responder.respond(response);
-            })),
+            respond: Some(Box::new(respond)),
             last_area: Rect::new(0, 0, 120, 40),
         }
     }
@@ -571,11 +577,12 @@ impl PlanReviewScreen {
             })
             .collect::<Vec<_>>();
 
+        let visual_row_count = rendered.len();
         frame.render_widget(
             Paragraph::new(rendered).scroll((u16::try_from(visual_scroll).unwrap_or(u16::MAX), 0)),
             inner,
         );
-        let mut scrollbar_state = ScrollbarState::new(self.source_line_count()).position(self.plan_scroll);
+        let mut scrollbar_state = ScrollbarState::new(visual_row_count).position(visual_scroll);
         frame.render_stateful_widget(Scrollbar::new(ScrollbarOrientation::VerticalRight), inner, &mut scrollbar_state);
     }
 
@@ -611,26 +618,6 @@ impl PlanReviewScreen {
 
     pub fn cancel(&mut self) {
         self.respond(ElicitationAction::Cancel, None);
-    }
-
-    #[doc(hidden)]
-    pub fn from_parts(meta: PlanReviewElicitationMeta, respond: Box<dyn FnOnce(ElicitationResponse) + Send>) -> Self {
-        let document = PlanDocument::parse(&meta.plan_path, &meta.markdown);
-        let outline_selection = SelectionState::new(document.outline.len());
-        Self {
-            title: meta.title,
-            document,
-            source_lines: Vec::new(),
-            cached_line_count: 0,
-            comments: Vec::new(),
-            plan_scroll: 0,
-            plan_cursor_line: 0,
-            outline_selection,
-            draft: None,
-            focus: Focus::Plan,
-            respond: Some(respond),
-            last_area: Rect::new(0, 0, 120, 40),
-        }
     }
 
     fn respond(&mut self, action: ElicitationAction, content: Option<serde_json::Value>) {

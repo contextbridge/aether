@@ -11,7 +11,7 @@ use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use std::collections::HashSet;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SelectedFileMention {
@@ -56,10 +56,9 @@ impl Composer {
     }
 
     pub fn selected_mentions(&self) -> Vec<SelectedFileMention> {
-        let words: HashSet<&str> = self.buffer.text().split_whitespace().collect();
         self.mentions
             .iter()
-            .filter(|mention| words.contains(format!("@{}", mention.display_name).as_str()))
+            .filter(|mention| self.buffer.text().contains(&format!("@{}", mention.display_name)))
             .cloned()
             .collect()
     }
@@ -414,10 +413,6 @@ impl Composer {
         self.overlay_query().is_some_and(str::is_empty)
     }
 
-    pub fn lines(&self) -> impl Iterator<Item = &str> {
-        self.buffer.text().split('\n')
-    }
-
     pub fn line_count(&self) -> usize {
         self.buffer.text().split('\n').count()
     }
@@ -425,7 +420,7 @@ impl Composer {
     pub fn cursor_position(&self) -> (usize, usize) {
         let before = &self.buffer.text()[..self.buffer.cursor()];
         let row = before.matches('\n').count();
-        let column = before[self.buffer.line_start()..].chars().map(|character| character.width().unwrap_or(0)).sum();
+        let column = before[self.buffer.line_start()..].width();
         (row, column)
     }
 
@@ -450,7 +445,7 @@ impl Composer {
                     Span::styled(chunk.clone(), Style::new().fg(theme.text_primary)),
                 ]));
                 let chunk_end = byte_offset + chunk.len();
-                if cursor_byte >= byte_offset && cursor_byte <= chunk_end {
+                if cursor_byte >= byte_offset && (cursor_byte < chunk_end || chunk_end == text.len()) {
                     let column = text[byte_offset..cursor_byte].width();
                     cursor = Position::new(u16::try_from(2 + column).unwrap_or(u16::MAX), row);
                 }

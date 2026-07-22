@@ -165,9 +165,11 @@ impl<T> Picker<T> {
         if self.matches.is_empty() {
             lines.push(Line::styled(format!("  ({empty})"), Style::new().fg(theme.muted)));
         } else {
-            for (row, index) in self.matches.iter().take(max_rows).enumerate() {
+            let selected = self.selection.selected().unwrap_or_default();
+            let start = selected.saturating_sub(max_rows.saturating_sub(1));
+            for (row, index) in self.matches.iter().enumerate().skip(start).take(max_rows) {
                 let value = truncate_to_width(&label(&self.entries[*index]), width.saturating_sub(2));
-                let selected = self.selection.selected() == Some(row);
+                let selected = selected == row;
                 let style = if selected {
                     Style::new().fg(theme.text_primary).bg(theme.sidebar_bg)
                 } else {

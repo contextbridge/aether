@@ -6,6 +6,18 @@ pub struct KeyBinding {
     pub modifiers: KeyModifiers,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn requires_exact_modifier_match() {
+        let binding = KeyBinding::new(KeyCode::Enter, KeyModifiers::NONE);
+        assert!(!binding.matches(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT)));
+        assert!(binding.matches(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Keybindings {
     pub exit: KeyBinding,
@@ -25,7 +37,7 @@ impl KeyBinding {
     }
 
     pub fn matches(&self, event: KeyEvent) -> bool {
-        self.code == event.code && event.modifiers.contains(self.modifiers)
+        self.code == event.code && self.modifiers == event.modifiers
     }
 }
 

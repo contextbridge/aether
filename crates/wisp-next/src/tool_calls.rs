@@ -139,11 +139,6 @@ impl SubAgentTracker {
         }
     }
 
-    #[allow(dead_code)]
-    fn has_sub_agents(&self, tool_id: &str) -> bool {
-        self.agents.get(tool_id).is_some_and(|a| !a.is_empty())
-    }
-
     fn get(&self, tool_id: &str) -> Option<&[SubAgentState]> {
         self.agents.get(tool_id).map(std::vec::Vec::as_slice)
     }

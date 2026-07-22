@@ -1,6 +1,7 @@
 use crate::edit_buffer::EditBuffer;
 use crate::selection::SelectionState;
 use crate::theme::Theme;
+use crate::workspace_status::home_relative_path;
 use crate::wrap::display_width;
 use acp_utils::notifications::{PromptSearchResponse, PromptSearchResult};
 use ratatui::buffer::Buffer;
@@ -8,7 +9,8 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, Paragraph, StatefulWidget, Widget};
-use std::path::{Path, PathBuf};
+
+use std::path::Path;
 use unicode_width::UnicodeWidthChar;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -122,32 +124,6 @@ impl PromptSearchPicker {
         }
     }
 
-    pub fn lines(&self, width: u16, max_rows: usize, theme: &Theme) -> Vec<Line<'static>> {
-        let max_width = usize::from(width.max(1));
-        let mut lines =
-            vec![Line::styled(format!("history search: {}", self.query.text()), Style::new().fg(theme.info))];
-        if let Some(error) = &self.error {
-            lines.push(Line::styled(format!("  error: {error}"), Style::new().fg(theme.muted)));
-            return lines;
-        }
-        if self.query.text().trim().is_empty() {
-            lines.push(Line::styled("  type to search prompt history", Style::new().fg(theme.muted)));
-            return lines;
-        }
-        if self.loading && self.results.is_empty() {
-            lines.push(Line::styled("  searching…", Style::new().fg(theme.muted)));
-            return lines;
-        }
-        if self.results.is_empty() {
-            lines.push(Line::styled("  no matching prompts", Style::new().fg(theme.muted)));
-            return lines;
-        }
-        for (row, result) in self.results.iter().take(max_rows).enumerate() {
-            lines.push(result_line(result, self.selection.selected() == Some(row), max_width, theme));
-        }
-        lines
-    }
-
     pub fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
         if area.is_empty() {
             return;
@@ -227,8 +203,8 @@ fn result_line(result: &PromptSearchResult, is_selected: bool, max_width: usize,
 const MAX_CWD_WIDTH: usize = 32;
 const CWD_GAP: usize = 2;
 const MIN_PROMPT_WIDTH: usize = 16;
-const ELLIPSIS: &str = "...";
-const ELLIPSIS_WIDTH: usize = 3;
+const ELLIPSIS: &str = "…";
+const ELLIPSIS_WIDTH: usize = 1;
 
 fn push_prompt_with_highlight(
     spans: &mut Vec<Span<'static>>,
@@ -255,6 +231,9 @@ fn push_prompt_with_highlight(
         let in_hl = i >= highlight.start && i < highlight.end;
         let out_ch = if ch.is_whitespace() {
             if last_was_ws {
+                if in_hl && let Some((_, highlighted)) = visible.last_mut() {
+                    *highlighted = true;
+                }
                 continue;
             }
             last_was_ws = true;
@@ -313,23 +292,6 @@ fn abbreviate_cwd(cwd: &Path, max_width: usize) -> String {
         .map(|name| name.to_string_lossy().into_owned())
         .filter(|name| display_width(name) <= max_width)
         .unwrap_or(full)
-}
-
-fn home_relative_path(path: &Path) -> String {
-    let Some(home) = home_dir() else {
-        return path.display().to_string();
-    };
-    if path == home {
-        return "~".to_string();
-    }
-    path.strip_prefix(&home)
-        .ok()
-        .filter(|relative| !relative.as_os_str().is_empty())
-        .map_or_else(|| path.display().to_string(), |relative| format!("~/{}", relative.display()))
-}
-
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from)
 }
 
 pub fn cursor_at_match_end(prompt: &str, match_end: usize) -> usize {

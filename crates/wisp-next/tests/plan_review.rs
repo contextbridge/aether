@@ -21,7 +21,7 @@ fn make_screen(markdown: &str) -> (PlanReviewScreen, oneshot::Receiver<Elicitati
     let respond = Box::new(move |response: ElicitationResponse| {
         let _ = tx.send(response);
     });
-    (PlanReviewScreen::from_parts(meta, respond), rx)
+    (PlanReviewScreen::new_with_response_handler(meta, respond), rx)
 }
 
 fn key(code: KeyCode) -> KeyEvent {

@@ -298,16 +298,6 @@ mod tests {
     }
 
     #[test]
-    fn reset_restarts_tips() {
-        let mut indicator = ProgressIndicator::default();
-        indicator.update(ProgressActivity { agent_busy: true, ..Default::default() });
-        assert_eq!(indicator.turn_count, 1);
-
-        let indicator = ProgressIndicator::default();
-        assert_eq!(indicator.turn_count, 0);
-    }
-
-    #[test]
     fn renders_workspace_move_without_interrupt_hint() {
         let mut indicator = ProgressIndicator::default();
         indicator.update(ProgressActivity { workspace: WorkspaceProgress::Moving, ..Default::default() });

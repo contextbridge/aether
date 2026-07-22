@@ -6235,7 +6235,7 @@ fn prompt_search_rows_truncate_prompt_and_show_cwd_basename() {
     let mut renderer = TranscriptRenderer::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
-    assert!(viewport.contains("..."), "should have ellipsis in truncated prompt:\n{viewport}");
+    assert!(viewport.contains("…"), "should have ellipsis in truncated prompt:\n{viewport}");
     assert!(viewport.contains("repo-name"), "should show cwd basename:\n{viewport}");
 }
 

@@ -12,10 +12,6 @@ impl SelectionState {
         state
     }
 
-    pub fn set_offset(&mut self, offset: usize, len: usize) {
-        *self.list.offset_mut() = offset.min(len.saturating_sub(1));
-    }
-
     pub fn ensure_visible(&mut self, len: usize, visible_rows: usize) {
         self.clamp(len);
         let Some(selected) = self.selected() else {

@@ -12,7 +12,7 @@ use agent_client_protocol::Responder;
 use agent_client_protocol::schema::{AuthMethod, SessionConfigKind, SessionConfigOption, SessionConfigSelectOptions};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, StatefulWidget, Widget};
@@ -144,7 +144,6 @@ enum ProviderLoginStatus {
 struct PendingElicitation {
     server_name: String,
     elicitation_id: String,
-    #[allow(dead_code)]
     responder: Responder<ElicitationResponse>,
 }
 
@@ -251,7 +250,7 @@ impl SettingsOverlay {
                 vec![]
             }
             ActivePane::ModelSelector(selector) => {
-                if selector.click_row(row) {
+                if selector.click_row(row, usize::from(inner.height)) {
                     selector.toggle_focused();
                 }
                 vec![]
@@ -331,18 +330,15 @@ impl SettingsOverlay {
         let inner = block.inner(area);
         block.render(area, buffer);
 
-        let footer_text = self.footer_text();
-        let footer_area = Rect { y: area.bottom().saturating_sub(1), height: 1, ..area };
-        if footer_area.y > area.y {
-            Paragraph::new(Line::from(footer_text)).render(footer_area, buffer);
-        }
+        let [content_area, footer_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
+        Paragraph::new(Line::from(self.footer_text())).render(footer_area, buffer);
 
         match &self.active_pane {
-            ActivePane::Menu | ActivePane::Sentinel => self.menu.render(inner, buffer, theme),
-            ActivePane::Picker(picker) => picker.render(inner, buffer, theme),
-            ActivePane::ModelSelector(selector) => selector.render(inner, buffer, theme),
-            ActivePane::ServerStatus(pane) => pane.render(inner, buffer, theme),
-            ActivePane::ProviderLogin(pane) => pane.render(inner, buffer, theme),
+            ActivePane::Menu | ActivePane::Sentinel => self.menu.render(content_area, buffer, theme),
+            ActivePane::Picker(picker) => picker.render(content_area, buffer, theme),
+            ActivePane::ModelSelector(selector) => selector.render(content_area, buffer, theme),
+            ActivePane::ServerStatus(pane) => pane.render(content_area, buffer, theme),
+            ActivePane::ProviderLogin(pane) => pane.render(content_area, buffer, theme),
         }
     }
 
@@ -1243,7 +1239,7 @@ impl ModelSelector {
         self.ensure_enabled();
     }
 
-    fn click_row(&mut self, row: usize) -> bool {
+    fn click_row(&mut self, row: usize, viewport_height: usize) -> bool {
         if self.filtered.is_empty() {
             return false;
         }
@@ -1252,7 +1248,7 @@ impl ModelSelector {
             return false;
         }
         let item_row = row - header_rows;
-        let remaining_height = usize::from(u16::MAX).saturating_sub(header_rows);
+        let remaining_height = viewport_height.saturating_sub(header_rows);
         let list_idx = self.focused.selected().unwrap_or_default().saturating_sub(remaining_height.saturating_sub(1));
         let mut actual_row: usize = 0;
         let mut current_list_idx = list_idx;

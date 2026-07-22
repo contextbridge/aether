@@ -31,6 +31,22 @@ pub struct Theme {
     syntect: Arc<SyntectTheme>,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn derives_distinct_code_background() {
+        let theme = Theme::default();
+        assert_ne!(theme.code_bg, theme.background);
+    }
+
+    #[test]
+    fn darkens_bright_rgb_channels_without_saturation() {
+        assert_eq!(darken(Color::Rgb(200, 180, 100)), Color::Rgb(60, 54, 30));
+    }
+}
+
 impl Theme {
     pub fn load(settings: &UiSettings) -> Self {
         resolve_theme_file_path(settings).map_or_else(Self::default, |path| Self::load_from_path(&path))
@@ -66,7 +82,7 @@ impl Theme {
         let error = scope_color(&theme, "markup.deleted").or_else(|| scope_color(&theme, "invalid")).unwrap_or(accent);
         let info = scope_color(&theme, "entity.name.function").unwrap_or(accent);
         let inline_code_foreground = scope_color(&theme, "markup.inline.raw.string.markdown").unwrap_or(text_primary);
-        let inline_code_background = background;
+        let inline_code_background = blend(background, text_primary, 90);
         let diff_added_fg = scope_color(&theme, "markup.inserted.diff").unwrap_or(success);
         let diff_removed_fg = scope_color(&theme, "markup.deleted.diff").unwrap_or(error);
 
@@ -115,7 +131,10 @@ fn color_from_syntect(color: syntect::highlighting::Color) -> Color {
 
 fn darken(color: Color) -> Color {
     match color {
-        Color::Rgb(r, g, b) => Color::Rgb(r.saturating_mul(3) / 10, g.saturating_mul(3) / 10, b.saturating_mul(3) / 10),
+        Color::Rgb(r, g, b) => {
+            let darken_channel = |channel: u8| u8::try_from(u16::from(channel) * 3 / 10).unwrap_or(u8::MAX);
+            Color::Rgb(darken_channel(r), darken_channel(g), darken_channel(b))
+        }
         other => other,
     }
 }

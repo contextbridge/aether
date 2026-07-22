@@ -25,15 +25,12 @@ pub struct AttachmentOutcome {
     pub warnings: Vec<String>,
 }
 
-const IMAGE_MIME_TYPES: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp"];
-const AUDIO_MIME_TYPES: &[&str] = &["audio/wav", "audio/mpeg", "audio/mp3", "audio/ogg"];
-
 pub fn classify_attachment(path: &Path) -> AttachmentKind {
     let mime = mime_guess::from_path(path).first_or_octet_stream().to_string();
 
-    if IMAGE_MIME_TYPES.contains(&mime.as_str()) {
+    if mime.starts_with("image/") {
         AttachmentKind::Image
-    } else if AUDIO_MIME_TYPES.contains(&mime.as_str()) {
+    } else if mime.starts_with("audio/") {
         AttachmentKind::Audio
     } else if mime.starts_with("text/") {
         AttachmentKind::Text
@@ -108,7 +105,7 @@ mod tests {
         assert_eq!(classify_attachment(Path::new("photo.png")), AttachmentKind::Image);
         assert_eq!(classify_attachment(Path::new("photo.jpg")), AttachmentKind::Image);
         assert_eq!(classify_attachment(Path::new("photo.gif")), AttachmentKind::Image);
-        assert_eq!(classify_attachment(Path::new("photo.webp")), AttachmentKind::Image);
+        assert_eq!(classify_attachment(Path::new("photo.bmp")), AttachmentKind::Image);
     }
 
     #[test]

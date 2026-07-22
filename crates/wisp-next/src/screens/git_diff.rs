@@ -64,7 +64,6 @@ struct DraftState {
 #[derive(Debug, Clone, Copy, Default)]
 struct DiffScrollState {
     vertical: usize,
-    horizontal: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1095,8 +1094,7 @@ impl GitDiffScreen {
         scroll.vertical = scroll.vertical.min(lines.len().saturating_sub(1));
         let line_count = lines.len();
         let vertical = u16::try_from(scroll.vertical).unwrap_or(u16::MAX);
-        let horizontal = u16::try_from(scroll.horizontal).unwrap_or(u16::MAX);
-        frame.render_widget(Paragraph::new(Text::from(lines)).scroll((vertical, horizontal)), content_area);
+        frame.render_widget(Paragraph::new(Text::from(lines)).scroll((vertical, 0)), content_area);
         let mut scrollbar_state = ScrollbarState::new(line_count).position(scroll.vertical);
         frame.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalRight),
@@ -1278,24 +1276,6 @@ static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 fn next_request_id() -> u64 {
     NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
-}
-
-#[allow(dead_code)]
-fn render_unified_patch(
-    file: &FileDiff,
-    width: u16,
-    theme: &Theme,
-    highlighter: &mut SyntaxHighlighter,
-) -> Vec<Line<'static>> {
-    file.hunks
-        .iter()
-        .flat_map(|hunk| {
-            hunk.lines
-                .iter()
-                .map(|line| render_unified_line(line, file.language(), width, theme, highlighter))
-                .collect::<Vec<_>>()
-        })
-        .collect()
 }
 
 impl GitDiffScreen {
