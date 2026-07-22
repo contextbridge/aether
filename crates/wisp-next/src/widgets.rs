@@ -94,7 +94,8 @@ mod tests {
 
         let mut terminal = Terminal::new(TestBackend::new(6, 1)).unwrap();
         terminal.draw(|frame| frame.render_widget(widget, frame.area())).unwrap();
-        let rendered = terminal.backend().buffer().content.iter().map(|cell| cell.symbol()).collect::<String>();
+        let rendered =
+            terminal.backend().buffer().content.iter().map(ratatui::buffer::Cell::symbol).collect::<String>();
         assert!(rendered.contains("def"));
     }
 }

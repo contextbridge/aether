@@ -15,6 +15,7 @@ use crate::plan_review::{
 use crate::selection::SelectionState;
 use crate::syntax::SyntaxHighlighter;
 use crate::theme::Theme;
+use crate::wrap::{truncate_to_width, wrap_line};
 
 #[allow(clippy::cast_possible_truncation)]
 const MIN_SPLIT_WIDTH: u16 = 60;
@@ -393,7 +394,7 @@ impl PlanReviewScreen {
             let indent = "  ".repeat(section.level.saturating_sub(1) as usize);
             let prefix = format!("  {indent}");
             let available = inner_width.saturating_sub(prefix.len());
-            ListItem::new(format!("{prefix}{}", truncate_str(&section.title, available)))
+            ListItem::new(format!("{prefix}{}", truncate_to_width(&section.title, available)))
         });
         let highlight_style = if self.focus == Focus::Outline {
             Style::new().bg(theme.accent).fg(theme.background)
@@ -436,28 +437,24 @@ impl PlanReviewScreen {
             return;
         }
 
-        // Adjust scroll to keep cursor visible
         self.plan_cursor_line = self.plan_cursor_line.min(self.source_line_max_index());
         if self.plan_cursor_line < self.plan_scroll {
             self.plan_scroll = self.plan_cursor_line;
         }
-        // Scroll forward when cursor goes below viewport (approximate: each source line = 1 visual row)
-        // For more accuracy we'd need to track visual row count, but source-line scrolling is sufficient
-        let visible_source_lines = height;
-        if self.plan_cursor_line >= self.plan_scroll + visible_source_lines {
-            self.plan_scroll = self.plan_cursor_line.saturating_sub(visible_source_lines.saturating_sub(1));
+        if self.plan_cursor_line >= self.plan_scroll + height {
+            self.plan_scroll = self.plan_cursor_line.saturating_sub(height.saturating_sub(1));
         }
 
-        let plan_scroll = self.plan_scroll;
         let plan_cursor = self.plan_cursor_line;
         let comments = &self.comments;
         let draft = &self.draft;
 
-        // Build visual rows from source-line rendered markdown
         let mut visual_rows: Vec<Line<'static>> = Vec::new();
+        let mut source_visual_rows = Vec::with_capacity(self.source_line_count());
         let mut cursor_visual_row: Option<usize> = None;
 
-        for line_idx in plan_scroll..self.source_line_count() {
+        for line_idx in 0..self.source_line_count() {
+            source_visual_rows.push(visual_rows.len());
             let source_line_no = line_idx + 1;
             let is_cursor = line_idx == plan_cursor;
 
@@ -470,7 +467,7 @@ impl PlanReviewScreen {
             let head_line = build_gutter(source_line_no, gutter_width, theme);
             let tail_line = build_tail_gutter(gutter_width);
 
-            let wrapped = wrap_line_to_width(rendered_line, content_width as usize);
+            let wrapped = wrap_line(rendered_line.clone(), content_width);
 
             for (wrap_idx, wrapped_line) in wrapped.into_iter().enumerate() {
                 if wrap_idx == 0 {
@@ -487,11 +484,9 @@ impl PlanReviewScreen {
                 }
             }
 
-            // Insert submitted comment blocks after this source line
             let comments_for_line: Vec<&ReviewComment> =
                 comments.iter().filter(|c| c.line_no == source_line_no).collect();
             for comment in &comments_for_line {
-                // Header row
                 let mut header = Line::default();
                 header.push_span(Span::styled(" ".repeat(gutter_width), Style::new().fg(theme.muted)));
                 header.push_span(Span::styled(
@@ -508,7 +503,6 @@ impl PlanReviewScreen {
                 }
             }
 
-            // Insert draft comment after this source line
             if let Some(draft) = draft
                 && draft.line_no == source_line_no
             {
@@ -546,26 +540,41 @@ impl PlanReviewScreen {
             }
         }
 
-        // Render visible portion
-        let visible: Vec<Line<'static>> = visual_rows.into_iter().take(height).collect();
-        let mut rendered: Vec<Line<'static>> = Vec::with_capacity(visible.len());
-        for (i, line) in visible.into_iter().enumerate() {
-            let is_cursor = cursor_visual_row == Some(i);
-            if is_cursor && self.focus == Focus::Plan {
-                let mut styled = Line::default();
-                for span in line.spans {
-                    styled.push_span(Span::styled(
-                        span.content.to_string(),
-                        span.style.patch(Style::new().bg(theme.accent).fg(theme.background)),
-                    ));
-                }
-                rendered.push(styled);
-            } else {
-                rendered.push(line);
+        let mut visual_scroll = source_visual_rows.get(self.plan_scroll).copied().unwrap_or_default();
+        if let Some(cursor_row) = cursor_visual_row {
+            if cursor_row < visual_scroll {
+                visual_scroll = cursor_row;
+            } else if cursor_row >= visual_scroll + height {
+                visual_scroll = cursor_row.saturating_sub(height.saturating_sub(1));
             }
         }
 
-        frame.render_widget(Paragraph::new(rendered), inner);
+        let rendered = visual_rows
+            .into_iter()
+            .enumerate()
+            .map(|(row_index, line)| {
+                if cursor_visual_row == Some(row_index) && self.focus == Focus::Plan {
+                    Line::from(
+                        line.spans
+                            .into_iter()
+                            .map(|span| {
+                                Span::styled(
+                                    span.content,
+                                    span.style.patch(Style::new().bg(theme.accent).fg(theme.background)),
+                                )
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                } else {
+                    line
+                }
+            })
+            .collect::<Vec<_>>();
+
+        frame.render_widget(
+            Paragraph::new(rendered).scroll((u16::try_from(visual_scroll).unwrap_or(u16::MAX), 0)),
+            inner,
+        );
         let mut scrollbar_state = ScrollbarState::new(self.source_line_count()).position(self.plan_scroll);
         frame.render_stateful_widget(Scrollbar::new(ScrollbarOrientation::VerticalRight), inner, &mut scrollbar_state);
     }
@@ -662,63 +671,4 @@ fn add_hint(spans: &mut Vec<Span<'static>>, key: &str, desc: &str, theme: &Theme
     }
     spans.push(Span::styled(key.to_string(), Style::new().fg(theme.accent).add_modifier(Modifier::BOLD)));
     spans.push(Span::styled(format!(" {desc}"), Style::new().fg(theme.muted)));
-}
-
-fn truncate_str(s: &str, max_chars: usize) -> String {
-    if s.chars().count() <= max_chars {
-        s.to_string()
-    } else if max_chars <= 1 {
-        String::new()
-    } else {
-        let truncated: String = s.chars().take(max_chars.saturating_sub(1)).collect();
-        format!("{truncated}…")
-    }
-}
-
-fn wrap_line_to_width(line: &Line<'static>, width: usize) -> Vec<Line<'static>> {
-    if width == 0 {
-        return vec![Line::default()];
-    }
-
-    // Collect all text from spans
-    let spans: Vec<(String, Style)> = line.spans.iter().map(|s| (s.content.to_string(), s.style)).collect();
-
-    let full_text: String = spans.iter().map(|(text, _)| text.as_str()).collect();
-    if full_text.chars().count() <= width {
-        return vec![line.clone()];
-    }
-
-    // Build a flat character list with style associations
-    let mut chars: Vec<(char, Style)> = Vec::new();
-    for (text, style) in &spans {
-        for ch in text.chars() {
-            chars.push((ch, *style));
-        }
-    }
-
-    let mut result: Vec<Line<'static>> = Vec::new();
-    let mut pos = 0usize;
-    let total = chars.len();
-
-    while pos < total {
-        let end = (pos + width).min(total);
-        let chunk = &chars[pos..end];
-
-        let mut line_spans: Vec<Span<'static>> = Vec::new();
-        let mut i = 0usize;
-        while i < chunk.len() {
-            let style = chunk[i].1;
-            let mut text = String::new();
-            while i < chunk.len() && chunk[i].1 == style {
-                text.push(chunk[i].0);
-                i += 1;
-            }
-            line_spans.push(Span::styled(text, style));
-        }
-
-        result.push(Line::from(line_spans));
-        pos = end;
-    }
-
-    result
 }

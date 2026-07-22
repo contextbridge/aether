@@ -74,9 +74,9 @@ pub fn draw(frame: &mut Frame, app: &mut App, renderer: &mut TranscriptRenderer)
     let status_line_rows = status_line_height(app, frame.area().width, &settings, &theme);
     let composer_layout = app.composer().layout(frame.area().width, &theme);
     let overlay_lines = app.composer().overlay_lines(frame.area().width, 6, &theme);
-    let prompt_search_lines = app.composer().prompt_search_lines(frame.area().width, 12, &theme);
+    let prompt_search_height = app.composer().prompt_search_height(12);
     let requested_composer_height =
-        composer_layout.lines.len().saturating_add(overlay_lines.len()).saturating_add(prompt_search_lines.len());
+        composer_layout.lines.len().saturating_add(overlay_lines.len()).saturating_add(prompt_search_height);
     let composer_height = resolve_composer_height(requested_composer_height, frame.area().height, status_line_rows);
 
     let plan_lines = {
@@ -124,7 +124,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, renderer: &mut TranscriptRenderer)
     }
     frame.render_widget(Paragraph::new(Text::from(lines)), content_area);
 
-    render_composer(frame, &composer_layout, &overlay_lines, &prompt_search_lines, app, composer_area);
+    render_composer(frame, &composer_layout, &overlay_lines, prompt_search_height, app, composer_area, &theme);
     render_status_line(frame, app, status_area, &theme, &settings);
     app.render_modal(frame, &theme, renderer.highlighter());
 }
@@ -205,7 +205,7 @@ fn live_area_height(area: Rect, app: &mut App, renderer: &TranscriptRenderer) ->
     let status_line_rows = status_line_height(app, area.width, &settings, &theme);
     let composer_layout = app.composer().layout(area.width, &theme);
     let overlay_height = app.composer().overlay_lines(area.width, 6, &theme).len();
-    let prompt_search_height = app.composer().prompt_search_lines(area.width, 12, &theme).len();
+    let prompt_search_height = app.composer().prompt_search_height(12);
     let requested_composer_height =
         composer_layout.lines.len().saturating_add(overlay_height).saturating_add(prompt_search_height);
     let composer_height = resolve_composer_height(requested_composer_height, area.height, status_line_rows);
@@ -371,34 +371,40 @@ fn render_composer(
     frame: &mut Frame,
     layout: &crate::composer::ComposerLayout,
     overlay_lines: &[Line<'static>],
-    prompt_search_lines: &[Line<'static>],
+    prompt_search_height: usize,
     app: &mut App,
     area: Rect,
+    theme: &Theme,
 ) {
-    let mut lines: Vec<Line<'static>> = prompt_search_lines.to_vec();
-    lines.extend(layout.lines.clone());
-    lines.extend_from_slice(overlay_lines);
-    let skip = lines.len().saturating_sub(usize::from(area.height));
-    let visible: Vec<Line<'static>> = lines.into_iter().skip(skip).collect();
-    frame.render_widget(Paragraph::new(Text::from(visible)), area);
+    let search_height = u16::try_from(prompt_search_height).unwrap_or(area.height).min(area.height);
+    let [search_area, body_area] =
+        Layout::vertical([Constraint::Length(search_height), Constraint::Min(0)]).areas(area);
 
-    let cursor_offset_y = if skip < prompt_search_lines.len() { prompt_search_lines.len() - skip } else { 0 };
-    let x = area.x.saturating_add(layout.cursor.x);
-    let y = area.y.saturating_add(u16::try_from(layout.cursor.y as usize + cursor_offset_y).unwrap_or(u16::MAX));
-    if x < area.right() && y < area.bottom() {
+    if search_height > 0 {
+        app.composer_mut().render_prompt_search(search_area, frame.buffer_mut(), theme);
+    }
+
+    let mut lines = layout.lines.clone();
+    lines.extend_from_slice(overlay_lines);
+    let skip = lines.len().saturating_sub(usize::from(body_area.height));
+    let visible: Vec<Line<'static>> = lines.into_iter().skip(skip).collect();
+    frame.render_widget(Paragraph::new(Text::from(visible)), body_area);
+
+    let x = body_area.x.saturating_add(layout.cursor.x);
+    let cursor_row = layout.cursor.y as usize;
+    let y = body_area.y.saturating_add(u16::try_from(cursor_row.saturating_sub(skip)).unwrap_or(u16::MAX));
+    if cursor_row >= skip && x < body_area.right() && y < body_area.bottom() {
         frame.set_cursor_position(Position::new(x, y));
     }
 
-    if !prompt_search_lines.is_empty() {
-        let ps_height = u16::try_from(prompt_search_lines.len()).unwrap_or(area.height);
-        let ps_area = Rect { y: area.y, height: ps_height.min(area.height), ..area };
-        app.set_surface_rect(ps_area);
+    if search_height > 0 {
+        app.set_surface_rect(search_area);
     } else if !overlay_lines.is_empty() {
-        let overlay_height = u16::try_from(overlay_lines.len()).unwrap_or(area.height);
+        let overlay_height = u16::try_from(overlay_lines.len()).unwrap_or(body_area.height);
         let overlay_area = Rect {
-            y: area.y.saturating_add(u16::try_from(prompt_search_lines.len() + layout.lines.len()).unwrap_or(0)),
-            height: overlay_height.min(area.height),
-            ..area
+            y: body_area.y.saturating_add(u16::try_from(layout.lines.len().saturating_sub(skip)).unwrap_or(0)),
+            height: overlay_height.min(body_area.height),
+            ..body_area
         };
         app.set_surface_rect(overlay_area);
     } else if app.composer().has_prompt_search() || app.composer().has_overlay() {

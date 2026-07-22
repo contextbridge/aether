@@ -34,7 +34,7 @@ pub struct GitDiffScreen {
     drawer_selection: SelectionState,
     focus: Focus,
     collapsed: HashSet<String>,
-    scroll_offsets: HashMap<String, usize>,
+    scroll_offsets: HashMap<String, DiffScrollState>,
     request_id: u64,
     operation_in_flight: bool,
     bottom_bar: BottomBar,
@@ -59,6 +59,12 @@ enum PendingAction {
 struct DraftState {
     anchor: PatchAnchor,
     buffer: EditBuffer,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct DiffScrollState {
+    vertical: usize,
+    horizontal: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -720,10 +726,10 @@ impl GitDiffScreen {
         };
         let cursor_flat_index = self.cursor_line_index(file) as usize;
         let offset_key = if self.show_full_file { format!("full:{}", file.path) } else { file.path.clone() };
-        let offset = self.scroll_offsets.entry(offset_key).or_default();
-        *offset = (*offset).min(cursor_flat_index);
-        if cursor_flat_index >= *offset + 2 {
-            *offset = cursor_flat_index.saturating_sub(1);
+        let scroll = self.scroll_offsets.entry(offset_key).or_default();
+        scroll.vertical = scroll.vertical.min(cursor_flat_index);
+        if cursor_flat_index >= scroll.vertical + 2 {
+            scroll.vertical = cursor_flat_index.saturating_sub(1);
         }
     }
 
@@ -733,15 +739,15 @@ impl GitDiffScreen {
             return;
         };
         let offset_key = if self.show_full_file { format!("full:{}", file.path) } else { file.path.clone() };
-        let offset = self.scroll_offsets.entry(offset_key).or_default();
-        *offset = offset.saturating_add_signed(amount);
+        let scroll = self.scroll_offsets.entry(offset_key).or_default();
+        scroll.vertical = scroll.vertical.saturating_add_signed(amount);
         if file.hunks.is_empty() {
             return;
         }
         let total_lines = file.hunks.iter().map(|h| h.lines.len()).sum::<usize>();
-        *offset = (*offset).min(total_lines.saturating_sub(1));
+        scroll.vertical = scroll.vertical.min(total_lines.saturating_sub(1));
 
-        let mut remaining = *offset as isize;
+        let mut remaining = scroll.vertical as isize;
         for (hunk_idx, hunk) in file.hunks.iter().enumerate() {
             let hunk_len = hunk.lines.len() as isize;
             if remaining < hunk_len {
@@ -1085,12 +1091,13 @@ impl GitDiffScreen {
             self.render_unified_with_comments(&file, area.width, theme, highlighter, &mut draft_cursor)
         };
         let offset_key = if self.show_full_file { format!("full:{}", file.path) } else { file.path.clone() };
-        let offset = self.scroll_offsets.entry(offset_key).or_default();
-        *offset = (*offset).min(lines.len().saturating_sub(1));
+        let scroll = self.scroll_offsets.entry(offset_key).or_default();
+        scroll.vertical = scroll.vertical.min(lines.len().saturating_sub(1));
         let line_count = lines.len();
-        let visible = lines.into_iter().skip(*offset).take(usize::from(content_area.height)).collect::<Vec<_>>();
-        frame.render_widget(Paragraph::new(Text::from(visible)), content_area);
-        let mut scrollbar_state = ScrollbarState::new(line_count).position(*offset);
+        let vertical = u16::try_from(scroll.vertical).unwrap_or(u16::MAX);
+        let horizontal = u16::try_from(scroll.horizontal).unwrap_or(u16::MAX);
+        frame.render_widget(Paragraph::new(Text::from(lines)).scroll((vertical, horizontal)), content_area);
+        let mut scrollbar_state = ScrollbarState::new(line_count).position(scroll.vertical);
         frame.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalRight),
             content_area,
@@ -1098,10 +1105,10 @@ impl GitDiffScreen {
         );
 
         if let Some((draft_line, draft_col)) = draft_cursor
-            && draft_line >= *offset
-            && draft_line < *offset + usize::from(content_area.height)
+            && draft_line >= scroll.vertical
+            && draft_line < scroll.vertical + usize::from(content_area.height)
         {
-            let row = content_area.y + u16::try_from(draft_line - *offset).unwrap_or(u16::MAX);
+            let row = content_area.y + u16::try_from(draft_line - scroll.vertical).unwrap_or(u16::MAX);
             let col = (content_area.x + draft_col).min(content_area.right().saturating_sub(1));
             frame.set_cursor_position((col, row));
         }

@@ -3,9 +3,11 @@ use crate::edit_buffer::EditBuffer;
 use crate::picker::{CommandEntry, FileEntry, Overlay};
 use crate::prompt_search::{self, PromptSearchMessage, PromptSearchPicker};
 use crate::theme::Theme;
+use crate::wrap::wrap_text_char;
 use acp_utils::notifications::PromptSearchResponse;
 use crossterm::event::KeyCode;
-use ratatui::layout::Position;
+use ratatui::buffer::Buffer;
+use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use std::collections::HashSet;
@@ -322,13 +324,19 @@ impl Composer {
 
     pub fn prompt_search_select_row(&mut self, row: usize) {
         if let Some(state) = &mut self.prompt_search {
-            state.picker.select_row(row);
+            state.picker.select_row(row.saturating_sub(1));
             self.apply_selected_search_result();
         }
     }
 
-    pub fn prompt_search_lines(&self, width: u16, max_rows: usize, theme: &Theme) -> Vec<Line<'static>> {
-        self.prompt_search.as_ref().map_or_else(Vec::new, |state| state.picker.lines(width, max_rows, theme))
+    pub fn prompt_search_height(&self, max_rows: usize) -> usize {
+        self.prompt_search.as_ref().map_or(0, |state| state.picker.height(max_rows))
+    }
+
+    pub fn render_prompt_search(&mut self, area: Rect, buffer: &mut Buffer, theme: &Theme) {
+        if let Some(state) = &mut self.prompt_search {
+            state.picker.render(area, buffer, theme);
+        }
     }
 
     fn apply_selected_search_result(&mut self) {
@@ -434,7 +442,7 @@ impl Composer {
         let mut byte_offset = 0;
         for (logical_row, raw_line) in text.split('\n').enumerate() {
             let prefix = if logical_row == 0 { "> " } else { "  " };
-            let wrapped = wrap_composer_line(raw_line, content_width);
+            let wrapped = wrap_text_char(raw_line, content_width);
             for (wrapped_row, chunk) in wrapped.iter().enumerate() {
                 let row = u16::try_from(lines.len()).unwrap_or(u16::MAX);
                 lines.push(Line::from(vec![
@@ -497,21 +505,4 @@ impl Composer {
         self.history_index = None;
         self.history_draft = None;
     }
-}
-
-fn wrap_composer_line(line: &str, width: usize) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut current = String::new();
-    let mut current_width = 0;
-    for character in line.chars() {
-        let character_width = character.width().unwrap_or(0);
-        if current_width + character_width > width && !current.is_empty() {
-            lines.push(std::mem::take(&mut current));
-            current_width = 0;
-        }
-        current.push(character);
-        current_width += character_width;
-    }
-    lines.push(current);
-    lines
 }

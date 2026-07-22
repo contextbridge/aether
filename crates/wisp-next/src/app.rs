@@ -913,6 +913,10 @@ impl App {
         &self.composer
     }
 
+    pub fn composer_mut(&mut self) -> &mut Composer {
+        &mut self.composer
+    }
+
     pub fn prompt_capabilities(&self) -> &acp::PromptCapabilities {
         &self.prompt_capabilities
     }

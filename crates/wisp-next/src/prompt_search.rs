@@ -1,12 +1,13 @@
 use crate::edit_buffer::EditBuffer;
 use crate::selection::SelectionState;
 use crate::theme::Theme;
+use crate::wrap::display_width;
 use acp_utils::notifications::{PromptSearchResponse, PromptSearchResult};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Widget};
+use ratatui::widgets::{List, ListItem, Paragraph, StatefulWidget, Widget};
 use std::path::{Path, PathBuf};
 use unicode_width::UnicodeWidthChar;
 
@@ -113,6 +114,14 @@ impl PromptSearchPicker {
         PromptSearchMessage::QueryChanged(self.query.text().to_string())
     }
 
+    pub fn height(&self, max_rows: usize) -> usize {
+        1 + if self.error.is_some() || self.query.text().trim().is_empty() || self.results.is_empty() {
+            1
+        } else {
+            self.results.len().min(max_rows)
+        }
+    }
+
     pub fn lines(&self, width: u16, max_rows: usize, theme: &Theme) -> Vec<Line<'static>> {
         let max_width = usize::from(width.max(1));
         let mut lines =
@@ -134,54 +143,85 @@ impl PromptSearchPicker {
             return lines;
         }
         for (row, result) in self.results.iter().take(max_rows).enumerate() {
-            let is_selected = self.selection.selected() == Some(row);
-            let row_style = if is_selected {
-                Style::new().fg(theme.text_primary).bg(theme.sidebar_bg)
-            } else {
-                Style::new().fg(theme.text_secondary)
-            };
-            let highlight_style = if is_selected {
-                Style::new().fg(theme.warning).bg(theme.sidebar_bg)
-            } else {
-                Style::new().fg(theme.warning)
-            };
-            let cwd_display = abbreviate_cwd(&result.cwd, MAX_CWD_WIDTH);
-            let cwd_width = display_width(&cwd_display);
-            let prompt_budget = if cwd_width > 0 && max_width >= cwd_width + CWD_GAP + MIN_PROMPT_WIDTH {
-                max_width - cwd_width - CWD_GAP
-            } else {
-                max_width
-            };
-            let mut spans = Vec::new();
-            let prompt_width = push_prompt_with_highlight(
-                &mut spans,
-                &result.prompt,
-                result.match_start..result.match_end,
-                prompt_budget,
-                row_style,
-                highlight_style,
-            );
-            if prompt_budget < max_width {
-                let cwd_start = prompt_width + CWD_GAP;
-                let cwd_end = (cwd_start + cwd_width).min(max_width);
-                if cwd_start < max_width {
-                    spans.push(Span::styled(" ".repeat(cwd_start.min(max_width) - prompt_width), row_style));
-                    if cwd_end > cwd_start {
-                        spans.push(Span::styled(
-                            cwd_display,
-                            Style::new().fg(theme.muted).bg(if is_selected { theme.sidebar_bg } else { Color::Reset }),
-                        ));
-                    }
-                }
-            }
-            lines.push(Line::from(spans));
+            lines.push(result_line(result, self.selection.selected() == Some(row), max_width, theme));
         }
         lines
     }
 
-    pub fn render(&self, area: Rect, buf: &mut Buffer, theme: &Theme) {
-        Paragraph::new(self.lines(area.width, usize::from(area.height.saturating_sub(1)), theme)).render(area, buf);
+    pub fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
+        if area.is_empty() {
+            return;
+        }
+        let [header_area, results_area] = ratatui::layout::Layout::vertical([
+            ratatui::layout::Constraint::Length(1),
+            ratatui::layout::Constraint::Min(0),
+        ])
+        .areas(area);
+        Paragraph::new(Line::styled(format!("history search: {}", self.query.text()), Style::new().fg(theme.info)))
+            .render(header_area, buf);
+
+        let message = self.error.as_ref().map(|error| format!("  error: {error}")).or_else(|| {
+            if self.query.text().trim().is_empty() {
+                Some("  type to search prompt history".to_string())
+            } else if self.loading && self.results.is_empty() {
+                Some("  searching…".to_string())
+            } else if self.results.is_empty() {
+                Some("  no matching prompts".to_string())
+            } else {
+                None
+            }
+        });
+        if let Some(message) = message {
+            Paragraph::new(message).style(Style::new().fg(theme.muted)).render(results_area, buf);
+            return;
+        }
+
+        self.selection.ensure_visible(self.results.len(), usize::from(results_area.height));
+        let width = usize::from(results_area.width.max(1));
+        let items = self.results.iter().map(|result| ListItem::new(result_line(result, false, width, theme)));
+        let list = List::new(items).highlight_style(Style::new().fg(theme.text_primary).bg(theme.sidebar_bg));
+        StatefulWidget::render(list, results_area, buf, self.selection.list_state_mut());
     }
+}
+
+fn result_line(result: &PromptSearchResult, is_selected: bool, max_width: usize, theme: &Theme) -> Line<'static> {
+    let row_style = if is_selected {
+        Style::new().fg(theme.text_primary).bg(theme.sidebar_bg)
+    } else {
+        Style::new().fg(theme.text_secondary)
+    };
+    let highlight_style =
+        if is_selected { Style::new().fg(theme.warning).bg(theme.sidebar_bg) } else { Style::new().fg(theme.warning) };
+    let cwd_display = abbreviate_cwd(&result.cwd, MAX_CWD_WIDTH);
+    let cwd_width = display_width(&cwd_display);
+    let prompt_budget = if cwd_width > 0 && max_width >= cwd_width + CWD_GAP + MIN_PROMPT_WIDTH {
+        max_width - cwd_width - CWD_GAP
+    } else {
+        max_width
+    };
+    let mut spans = Vec::new();
+    let prompt_width = push_prompt_with_highlight(
+        &mut spans,
+        &result.prompt,
+        result.match_start..result.match_end,
+        prompt_budget,
+        row_style,
+        highlight_style,
+    );
+    if prompt_budget < max_width {
+        let cwd_start = prompt_width + CWD_GAP;
+        let cwd_end = (cwd_start + cwd_width).min(max_width);
+        if cwd_start < max_width {
+            spans.push(Span::styled(" ".repeat(cwd_start.min(max_width) - prompt_width), row_style));
+            if cwd_end > cwd_start {
+                spans.push(Span::styled(
+                    cwd_display,
+                    Style::new().fg(theme.muted).bg(if is_selected { theme.sidebar_bg } else { Color::Reset }),
+                ));
+            }
+        }
+    }
+    Line::from(spans)
 }
 
 const MAX_CWD_WIDTH: usize = 32;
@@ -262,10 +302,6 @@ fn push_prompt_with_highlight(
     } else {
         kept_width
     }
-}
-
-fn display_width(text: &str) -> usize {
-    unicode_width::UnicodeWidthStr::width(text)
 }
 
 fn abbreviate_cwd(cwd: &Path, max_width: usize) -> String {

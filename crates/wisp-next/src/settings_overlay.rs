@@ -2,6 +2,7 @@
 use crate::edit_buffer::EditBuffer;
 use crate::selection::SelectionState;
 use crate::theme::Theme;
+use crate::wrap::truncate_to_width;
 use acp_utils::config_meta::{ConfigOptionMeta, SelectOptionMeta};
 use acp_utils::config_option_id::{ConfigOptionId, THEME_CONFIG_ID};
 use acp_utils::notifications::{
@@ -14,9 +15,8 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, Paragraph, Widget};
+use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, StatefulWidget, Widget};
 use std::collections::HashSet;
-use unicode_width::UnicodeWidthStr;
 use utils::ReasoningEffort;
 
 const MIN_WIDTH: u16 = 6;
@@ -731,7 +731,7 @@ impl ServerStatusPane {
                         }
                     };
 
-                    buffer.set_string(area.x, y, truncate_str(&text, area.width as usize), style);
+                    buffer.set_string(area.x, y, truncate_to_width(&text, area.width as usize), style);
                     y += 1;
                 }
             }
@@ -811,38 +811,27 @@ impl ProviderLoginPane {
 
     fn render(&self, area: Rect, buffer: &mut Buffer, theme: &Theme) {
         if self.entries.is_empty() {
-            buffer.set_string(area.x, area.y, " (no providers need login)", Style::new().fg(theme.text_secondary));
+            Paragraph::new(" (no providers need login)")
+                .style(Style::new().fg(theme.text_secondary))
+                .render(area, buffer);
             return;
         }
 
-        for i in 0..self.entries.len() {
-            let y = area.y + i as u16;
-            if y >= area.bottom() {
-                break;
-            }
-            let entry = &self.entries[i];
-            let (indicator, detail) = match &entry.status {
-                ProviderLoginStatus::NeedsLogin => ("⚡", "needs login"),
-                ProviderLoginStatus::Authenticating => ("⏳", "authenticating..."),
-                ProviderLoginStatus::LoggedIn => ("✓", "logged in"),
+        let items = self.entries.iter().map(|entry| {
+            let (indicator, detail, style) = match &entry.status {
+                ProviderLoginStatus::NeedsLogin => ("⚡", "needs login", Style::new().fg(theme.warning)),
+                ProviderLoginStatus::Authenticating => ("⏳", "authenticating...", Style::new().fg(theme.warning)),
+                ProviderLoginStatus::LoggedIn => ("✓", "logged in", Style::new().fg(theme.success)),
             };
-
-            let text = format!(" {}  {} {}", entry.name, indicator, detail);
-            let selected = self.selection.selected() == Some(i);
-            let style = if entry.status == ProviderLoginStatus::LoggedIn {
-                if selected {
-                    Style::new().fg(theme.background).bg(theme.success)
-                } else {
-                    Style::new().fg(theme.success)
-                }
-            } else if selected {
-                Style::new().fg(theme.background).bg(theme.warning)
-            } else {
-                Style::new().fg(theme.warning)
-            };
-
-            buffer.set_string(area.x, y, truncate_str(&text, area.width as usize), style);
-        }
+            ListItem::new(truncate_to_width(
+                &format!(" {}  {} {detail}", entry.name, indicator),
+                usize::from(area.width),
+            ))
+            .style(style)
+        });
+        let list = List::new(items).highlight_style(Style::new().fg(theme.background).bg(theme.warning));
+        let mut state = *self.selection.list_state();
+        StatefulWidget::render(list, area, buffer, &mut state);
     }
 }
 
@@ -947,41 +936,29 @@ impl SettingsMenu {
     }
 
     fn render(&self, area: Rect, buffer: &mut Buffer, theme: &Theme) {
-        let visible = usize::from(area.height).min(self.entries.len());
-        let selected = self.selection.selected().unwrap_or_default();
-        let start = selected.saturating_sub(visible.saturating_sub(1));
+        if self.entries.is_empty() {
+            Paragraph::new(" (no settings options)").style(Style::new().fg(theme.text_secondary)).render(area, buffer);
+            return;
+        }
 
-        for i in 0..visible {
-            let idx = start + i;
-            let Some(entry) = self.entries.get(idx) else {
-                break;
-            };
-            let y = area.y + i as u16;
-            if y >= area.bottom() {
-                break;
-            }
-
+        let items = self.entries.iter().map(|entry| {
             let current_name = entry
                 .display_name
                 .as_deref()
-                .or_else(|| entry.values.get(entry.current_value_index).map(|v| v.name.as_str()))
+                .or_else(|| entry.values.get(entry.current_value_index).map(|value| value.name.as_str()))
                 .unwrap_or("?");
-
-            let text = format!("{}: {}", entry.title, current_name);
-            let style = if idx == selected {
-                Style::new().fg(theme.background).bg(theme.text_primary)
-            } else {
-                Style::new().fg(theme.text_primary)
-            };
-
-            let truncated = truncate_str(&text, usize::from(area.width).saturating_sub(2));
-            let line = format!(" {truncated}");
-            buffer.set_string(area.x, y, &line, style);
-        }
-
-        if self.entries.is_empty() {
-            buffer.set_string(area.x, area.y, " (no settings options)", Style::new().fg(theme.text_secondary));
-        }
+            ListItem::new(format!(
+                " {}",
+                truncate_to_width(
+                    &format!("{}: {current_name}", entry.title),
+                    usize::from(area.width).saturating_sub(2),
+                )
+            ))
+            .style(Style::new().fg(theme.text_primary))
+        });
+        let list = List::new(items).highlight_style(Style::new().fg(theme.background).bg(theme.text_primary));
+        let mut state = *self.selection.list_state();
+        StatefulWidget::render(list, area, buffer, &mut state);
     }
 
     fn upsert_mcp_servers_entry(&mut self, summary: &str) {
@@ -1121,40 +1098,42 @@ impl SettingsPicker {
     }
 
     fn render(&self, area: Rect, buffer: &mut Buffer, theme: &Theme) {
-        let header = format!(" {} search: {}", self.title, self.query.text());
-        buffer.set_string(
-            area.x,
-            area.y,
-            truncate_str(&header, area.width as usize),
-            Style::new().fg(theme.text_secondary),
-        );
+        let [header_area, list_area] = ratatui::layout::Layout::vertical([
+            ratatui::layout::Constraint::Length(1),
+            ratatui::layout::Constraint::Min(0),
+        ])
+        .areas(area);
+        Paragraph::new(truncate_to_width(
+            &format!(" {} search: {}", self.title, self.query.text()),
+            usize::from(header_area.width),
+        ))
+        .style(Style::new().fg(theme.text_secondary))
+        .render(header_area, buffer);
 
         if self.filtered.is_empty() {
-            buffer.set_string(area.x, area.y + 1, " (no matches found)", Style::new().fg(theme.text_secondary));
+            Paragraph::new(" (no matches found)")
+                .style(Style::new().fg(theme.text_secondary))
+                .render(list_area, buffer);
             return;
         }
 
-        let max_items = usize::from(area.height).saturating_sub(1);
-        let selected = self.selection.selected().unwrap_or_default();
-        let offset = selected.saturating_sub(max_items.saturating_sub(1));
-        for (row, &value_index) in self.filtered.iter().skip(offset).take(max_items).enumerate() {
-            let y = area.y + 1 + row as u16;
+        let items = self.filtered.iter().map(|&value_index| {
             let value = &self.values[value_index];
             let label = if value.name == value.value {
                 value.name.clone()
             } else {
                 format!("{} ({})", value.name, value.value)
             };
-            let index = offset + row;
-            let style = if index == selected {
-                Style::new().fg(theme.background).bg(theme.text_primary)
-            } else if value.is_disabled {
+            let style = if value.is_disabled {
                 Style::new().fg(theme.text_secondary)
             } else {
                 Style::new().fg(theme.text_primary)
             };
-            buffer.set_string(area.x, y, truncate_str(&label, area.width as usize), style);
-        }
+            ListItem::new(truncate_to_width(&label, usize::from(list_area.width))).style(style)
+        });
+        let list = List::new(items).highlight_style(Style::new().fg(theme.background).bg(theme.text_primary));
+        let mut state = *self.selection.list_state();
+        StatefulWidget::render(list, list_area, buffer, &mut state);
     }
 }
 
@@ -1320,7 +1299,7 @@ impl ModelSelector {
         buffer.set_string(
             area.x,
             area.y,
-            truncate_str(&header, area.width as usize),
+            truncate_to_width(&header, area.width as usize),
             Style::new().fg(theme.text_secondary),
         );
 
@@ -1340,7 +1319,7 @@ impl ModelSelector {
             buffer.set_string(
                 area.x,
                 area.y + line_offset,
-                truncate_str(&selected_text, area.width as usize),
+                truncate_to_width(&selected_text, area.width as usize),
                 Style::new().fg(theme.text_secondary),
             );
             line_offset += 2;
@@ -1382,7 +1361,7 @@ impl ModelSelector {
                 buffer.set_string(
                     area.x,
                     y,
-                    truncate_str(&heading, area.width as usize),
+                    truncate_to_width(&heading, area.width as usize),
                     Style::new().fg(theme.heading),
                 );
                 row += 1;
@@ -1478,7 +1457,12 @@ fn render_model_row(
     if v.is_disabled {
         let reason = v.description.as_deref().and_then(|d| d.strip_prefix("Unavailable: ")).unwrap_or("unavailable");
         let label = format!("    {model}  {reason}", model = model_label(&v.name));
-        buffer.set_string(area.x, y, truncate_str(&label, area.width as usize), Style::new().fg(theme.text_secondary));
+        buffer.set_string(
+            area.x,
+            y,
+            truncate_to_width(&label, area.width as usize),
+            Style::new().fg(theme.text_secondary),
+        );
         return;
     }
 
@@ -1505,7 +1489,7 @@ fn render_model_row(
         }
     }
 
-    buffer.set_string(area.x + 2, y, truncate_str(&label, area.width as usize - 2), style);
+    buffer.set_string(area.x + 2, y, truncate_to_width(&label, area.width as usize - 2), style);
 }
 
 fn process_config_changes(changes: Vec<SettingsChange>) -> Vec<SettingsOverlayMessage> {
@@ -1519,28 +1503,6 @@ fn process_config_changes(changes: Vec<SettingsChange>) -> Vec<SettingsOverlayMe
         }
     }
     messages
-}
-
-fn truncate_str(s: &str, max_width: usize) -> String {
-    if max_width == 0 {
-        return String::new();
-    }
-    let width = UnicodeWidthStr::width(s);
-    if width <= max_width {
-        return s.to_string();
-    }
-    let mut result = String::with_capacity(max_width);
-    let mut current_width = 0;
-    for c in s.chars() {
-        let cw = UnicodeWidthStr::width(c.to_string().as_str());
-        if current_width + cw > max_width.saturating_sub(2) {
-            result.push('…');
-            break;
-        }
-        result.push(c);
-        current_width += cw;
-    }
-    result
 }
 
 fn server_status_summary(statuses: &[McpServerStatusEntry]) -> String {
@@ -1946,12 +1908,12 @@ mod tests {
     }
 
     #[test]
-    fn truncate_str_handles_unicode() {
-        assert_eq!(truncate_str("hello", 3), "h…");
-        assert_eq!(truncate_str("a界b", 3), "a…");
-        assert_eq!(truncate_str("hello", 10), "hello");
-        assert_eq!(truncate_str("", 5), "");
-        assert_eq!(truncate_str("abc", 0), "");
+    fn truncate_to_width_handles_unicode() {
+        assert_eq!(truncate_to_width("hello", 3), "he…");
+        assert_eq!(truncate_to_width("a界b", 3), "a…");
+        assert_eq!(truncate_to_width("hello", 10), "hello");
+        assert_eq!(truncate_to_width("", 5), "");
+        assert_eq!(truncate_to_width("abc", 0), "");
     }
 
     #[test]

@@ -1,5 +1,6 @@
 use crate::edit_buffer::EditBuffer;
 use crate::selection::SelectionState;
+use crate::wrap::truncate_to_width;
 use acp_utils::notifications::SessionPreviewResponse;
 use agent_client_protocol::schema::{self as acp, SessionId};
 use ratatui::buffer::Buffer;
@@ -203,15 +204,12 @@ impl SessionPicker {
                 .cwd
                 .file_name()
                 .map_or_else(|| session.cwd.display().to_string(), |name| name.to_string_lossy().into_owned());
-            let display = format!("  {}  {}", truncate_str(title, 48), cwd);
-            ListItem::new(truncate_str(&display, inner.width as usize)).style(Style::new().fg(theme.text_secondary))
+            let display = format!("  {}  {}", truncate_to_width(title, 48), cwd);
+            ListItem::new(truncate_to_width(&display, inner.width as usize))
+                .style(Style::new().fg(theme.text_secondary))
         });
         let list = List::new(items).highlight_style(Style::new().fg(theme.text_primary).bg(theme.sidebar_bg));
-        let mut state = self.selection.list_state().clone();
-        let visible_rows = usize::from(inner.height);
-        if let Some(selected) = state.selected() {
-            *state.offset_mut() = selected.saturating_sub(visible_rows.saturating_sub(1));
-        }
+        let mut state = *self.selection.list_state();
         StatefulWidget::render(list, inner, buf, &mut state);
     }
 
@@ -287,14 +285,4 @@ impl SessionPicker {
 
         Paragraph::new(lines).render(inner, buf);
     }
-}
-
-fn truncate_str(value: &str, width: usize) -> String {
-    if value.chars().count() <= width {
-        return value.to_string();
-    }
-    if width == 0 {
-        return String::new();
-    }
-    value.chars().take(width.saturating_sub(1)).chain(std::iter::once('…')).collect()
 }

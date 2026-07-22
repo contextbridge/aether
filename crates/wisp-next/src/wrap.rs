@@ -57,6 +57,10 @@ pub fn wrap_line(line: Line<'static>, width: u16) -> Vec<Line<'static>> {
     output
 }
 
+pub fn display_width(text: &str) -> usize {
+    text.width()
+}
+
 pub fn byte_at_display_column(text: &str, column: usize) -> usize {
     let mut width = 0;
     let mut byte = 0;
@@ -113,25 +117,30 @@ pub fn truncate_spans(spans: &[Span<'static>], max_width: usize) -> Vec<Span<'st
     result
 }
 
-pub fn truncate_text(text: &str, max_width: Option<u16>) -> String {
-    let Some(max_width) = max_width.map(usize::from) else {
-        return text.to_string();
-    };
+pub fn truncate_to_width(text: &str, max_width: usize) -> String {
     if text.width() <= max_width {
         return text.to_string();
     }
+    if max_width == 0 {
+        return String::new();
+    }
+    let budget = max_width.saturating_sub(1);
     let mut result = String::new();
     let mut current_width = 0;
     for ch in text.chars() {
         let char_width = ch.width().unwrap_or(0);
-        if current_width + char_width > max_width.saturating_sub(1) {
-            result.push('…');
+        if current_width + char_width > budget {
             break;
         }
         result.push(ch);
         current_width += char_width;
     }
+    result.push('…');
     result
+}
+
+pub fn truncate_text(text: &str, max_width: Option<u16>) -> String {
+    max_width.map_or_else(|| text.to_string(), |width| truncate_to_width(text, usize::from(width)))
 }
 
 pub fn wrap_text(text: &str, max_width: usize) -> Vec<String> {

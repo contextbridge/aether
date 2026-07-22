@@ -1,8 +1,10 @@
 use crate::selection::SelectionState;
 use crate::theme::Theme;
+use crate::wrap::truncate_to_width;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use std::path::{Path, PathBuf};
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandEntry {
@@ -164,7 +166,7 @@ impl<T> Picker<T> {
             lines.push(Line::styled(format!("  ({empty})"), Style::new().fg(theme.muted)));
         } else {
             for (row, index) in self.matches.iter().take(max_rows).enumerate() {
-                let value = truncate(&label(&self.entries[*index]), width.saturating_sub(2));
+                let value = truncate_to_width(&label(&self.entries[*index]), width.saturating_sub(2));
                 let selected = self.selection.selected() == Some(row);
                 let style = if selected {
                     Style::new().fg(theme.text_primary).bg(theme.sidebar_bg)
@@ -172,7 +174,7 @@ impl<T> Picker<T> {
                     Style::new().fg(theme.text_secondary)
                 };
                 let text = format!("  {value}");
-                let padding = " ".repeat(width.saturating_sub(text.chars().count()));
+                let padding = " ".repeat(width.saturating_sub(text.width()));
                 lines.push(Line::from(vec![Span::styled(text, style), Span::styled(padding, style)]));
             }
         }
@@ -226,14 +228,4 @@ fn fuzzy_matches(value: &str, query: &str) -> bool {
         }
     }
     wanted.is_none()
-}
-
-fn truncate(value: &str, width: usize) -> String {
-    if value.chars().count() <= width {
-        return value.to_string();
-    }
-    if width == 0 {
-        return String::new();
-    }
-    value.chars().take(width.saturating_sub(1)).chain(std::iter::once('…')).collect()
 }

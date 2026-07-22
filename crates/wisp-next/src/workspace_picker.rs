@@ -2,6 +2,7 @@ use crate::edit_buffer::EditBuffer;
 use crate::selection::SelectionState;
 use crate::widgets::TextInput;
 use crate::workspace_status::home_relative_path;
+use crate::wrap::truncate_to_width;
 use acp_utils::notifications::{WorkspaceEntry, WorkspaceMoveTarget};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -193,14 +194,10 @@ impl WorkspacePicker {
                 }
                 WorkspaceRow::CreateNew => (format!("  {CREATE_NEW_LABEL}"), Style::new().fg(theme.info)),
             };
-            ListItem::new(truncate(&text, inner.width as usize)).style(style)
+            ListItem::new(truncate_to_width(&text, inner.width as usize)).style(style)
         });
         let list = List::new(items).highlight_style(Style::new().fg(theme.text_primary).bg(theme.sidebar_bg));
-        let mut state = self.selection.list_state().clone();
-        let visible_rows = usize::from(inner.height);
-        if let Some(selected) = state.selected() {
-            *state.offset_mut() = selected.saturating_sub(visible_rows.saturating_sub(1));
-        }
+        let mut state = *self.selection.list_state();
         StatefulWidget::render(list, inner, buf, &mut state);
     }
 
@@ -234,14 +231,4 @@ impl WorkspacePicker {
             .style(Style::new().fg(theme.text_primary).bg(theme.sidebar_bg))
             .render(input_area, buf);
     }
-}
-
-fn truncate(value: &str, width: usize) -> String {
-    if value.chars().count() <= width {
-        return value.to_string();
-    }
-    if width == 0 {
-        return String::new();
-    }
-    value.chars().take(width.saturating_sub(1)).chain(std::iter::once('…')).collect()
 }
