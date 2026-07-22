@@ -52,6 +52,32 @@ impl SessionPicker {
         self.previews.insert(session_id.to_string(), PreviewState::Error(error));
     }
 
+    pub fn select_row(&mut self, row: usize) {
+        let filtered = self.filtered_sessions();
+        if !filtered.is_empty() {
+            let idx = row.min(filtered.len().saturating_sub(1));
+            self.selected = filtered[idx];
+        }
+    }
+
+    pub fn scroll_up(&mut self) {
+        if !self.sessions.is_empty() {
+            self.selected = self.selected.checked_sub(1).unwrap_or(self.sessions.len() - 1);
+            if let Some(req) = self.preview_request_for(self.selected) {
+                let _ = req;
+            }
+        }
+    }
+
+    pub fn scroll_down(&mut self) {
+        if !self.sessions.is_empty() {
+            self.selected = (self.selected + 1) % self.sessions.len();
+            if let Some(req) = self.preview_request_for(self.selected) {
+                let _ = req;
+            }
+        }
+    }
+
     fn preview_request_for(&mut self, index: usize) -> Option<String> {
         if !self.preview_enabled || index >= self.sessions.len() {
             return None;

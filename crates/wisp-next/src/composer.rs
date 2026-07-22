@@ -338,6 +338,27 @@ impl Composer {
         self.prompt_search.as_ref().map(|state| state.picker.search_generation())
     }
 
+    pub fn prompt_search_move_up(&mut self) {
+        if let Some(state) = &mut self.prompt_search {
+            state.picker.move_up();
+            self.apply_selected_search_result();
+        }
+    }
+
+    pub fn prompt_search_move_down(&mut self) {
+        if let Some(state) = &mut self.prompt_search {
+            state.picker.move_down();
+            self.apply_selected_search_result();
+        }
+    }
+
+    pub fn prompt_search_select_row(&mut self, row: usize) {
+        if let Some(state) = &mut self.prompt_search {
+            state.picker.select_row(row);
+            self.apply_selected_search_result();
+        }
+    }
+
     pub fn prompt_search_lines(&self, width: u16, max_rows: usize, theme: &Theme) -> Vec<Line<'static>> {
         let Some(_state) = self.prompt_search.as_ref() else {
             return Vec::new();
@@ -394,6 +415,12 @@ impl Composer {
     pub fn overlay_move_down(&mut self) {
         if let Some(overlay) = &mut self.overlay {
             overlay.move_down();
+        }
+    }
+
+    pub fn overlay_select_row(&mut self, row: usize) {
+        if let Some(overlay) = &mut self.overlay {
+            overlay.select_row(row);
         }
     }
 

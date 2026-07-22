@@ -69,6 +69,13 @@ impl Overlay {
         }
     }
 
+    pub fn select_row(&mut self, row: usize) {
+        match self {
+            Self::Command(picker) => picker.select_row(row),
+            Self::File(picker) => picker.select_row(row),
+        }
+    }
+
     pub fn selected_command(&self) -> Option<CommandEntry> {
         match self {
             Self::Command(picker) => picker.selected().cloned(),
@@ -122,6 +129,12 @@ impl<T> Picker<T> {
     pub fn move_down(&mut self) {
         if !self.matches.is_empty() {
             self.selected = (self.selected + 1) % self.matches.len();
+        }
+    }
+
+    pub fn select_row(&mut self, row: usize) {
+        if !self.matches.is_empty() {
+            self.selected = row.min(self.matches.len().saturating_sub(1));
         }
     }
 

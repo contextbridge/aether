@@ -370,7 +370,7 @@ fn render_composer(
     layout: &crate::composer::ComposerLayout,
     overlay_lines: &[Line<'static>],
     prompt_search_lines: &[Line<'static>],
-    _app: &App,
+    app: &mut App,
     area: Rect,
 ) {
     let mut lines: Vec<Line<'static>> = prompt_search_lines.to_vec();
@@ -385,6 +385,22 @@ fn render_composer(
     let y = area.y.saturating_add(u16::try_from(layout.cursor.y as usize + cursor_offset_y).unwrap_or(u16::MAX));
     if x < area.right() && y < area.bottom() {
         frame.set_cursor_position(Position::new(x, y));
+    }
+
+    if !prompt_search_lines.is_empty() {
+        let ps_height = u16::try_from(prompt_search_lines.len()).unwrap_or(area.height);
+        let ps_area = Rect { y: area.y, height: ps_height.min(area.height), ..area };
+        app.set_surface_rect(ps_area);
+    } else if !overlay_lines.is_empty() {
+        let overlay_height = u16::try_from(overlay_lines.len()).unwrap_or(area.height);
+        let overlay_area = Rect {
+            y: area.y.saturating_add(u16::try_from(prompt_search_lines.len() + layout.lines.len()).unwrap_or(0)),
+            height: overlay_height.min(area.height),
+            ..area
+        };
+        app.set_surface_rect(overlay_area);
+    } else if app.composer().has_prompt_search() || app.composer().has_overlay() {
+        app.set_surface_rect(area);
     }
 }
 

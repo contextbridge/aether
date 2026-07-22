@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::Write;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -77,6 +78,103 @@ pub enum GitDiffError {
     CommandFailed { stderr: String },
     #[error("Failed to parse diff: {0}")]
     ParseError(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PatchAnchor {
+    pub file_index: usize,
+    pub hunk: usize,
+    pub line: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct CommentContext {
+    pub file_path: String,
+    pub line_text: String,
+    pub line_number: Option<usize>,
+    pub line_kind: PatchLineKind,
+}
+
+#[derive(Debug, Clone)]
+pub struct QueuedComment {
+    pub anchor: PatchAnchor,
+    pub body: String,
+    pub context: CommentContext,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ReviewQueue {
+    comments: Vec<QueuedComment>,
+}
+
+impl ReviewQueue {
+    pub fn is_empty(&self) -> bool {
+        self.comments.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.comments.len()
+    }
+
+    pub fn clear(&mut self) {
+        self.comments.clear();
+    }
+
+    pub fn push(&mut self, comment: QueuedComment) {
+        self.comments.push(comment);
+    }
+
+    pub fn pop(&mut self) -> Option<QueuedComment> {
+        self.comments.pop()
+    }
+
+    pub fn comments_for_file(&self, file_path: &str) -> impl Iterator<Item = &QueuedComment> {
+        self.comments.iter().filter(move |c| c.context.file_path == file_path)
+    }
+
+    pub fn comments(&self) -> &[QueuedComment] {
+        &self.comments
+    }
+
+    pub fn counts_for(&self, files: &[FileDiff]) -> Vec<usize> {
+        files.iter().map(|file| self.comments.iter().filter(|c| c.context.file_path == file.path).count()).collect()
+    }
+
+    pub fn format_prompt(&self) -> String {
+        let mut prompt = String::from("I'm reviewing the working tree diff. Here are my comments:\n");
+        let mut file_order: Vec<&str> = Vec::new();
+        let mut grouped: HashMap<&str, Vec<&QueuedComment>> = HashMap::new();
+
+        for comment in &self.comments {
+            let path = comment.context.file_path.as_str();
+            if !grouped.contains_key(path) {
+                file_order.push(path);
+            }
+            grouped.entry(path).or_default().push(comment);
+        }
+
+        for file_path in file_order {
+            let file_comments = grouped.get(file_path).expect("group exists for ordered path");
+            write!(prompt, "\n## `{file_path}`\n").unwrap();
+
+            for comment in file_comments {
+                let kind_label = match comment.context.line_kind {
+                    PatchLineKind::Added => "added",
+                    PatchLineKind::Removed => "removed",
+                    PatchLineKind::Context => "context",
+                    PatchLineKind::HunkHeader => "header",
+                    PatchLineKind::Meta => "meta",
+                };
+                let line_ref = match comment.context.line_number {
+                    Some(n) => format!("Line {n} ({kind_label})"),
+                    None => kind_label.to_string(),
+                };
+                write!(prompt, "\n**{line_ref}:** `{}`\n> {}\n", comment.context.line_text, comment.body).unwrap();
+            }
+        }
+
+        prompt
+    }
 }
 
 impl GitDiffDocument {

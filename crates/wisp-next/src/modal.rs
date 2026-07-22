@@ -150,6 +150,70 @@ impl ElicitationModal {
         let _ = self.respond(ElicitationAction::Cancel, None);
     }
 
+    pub fn needs_mouse_capture(&self) -> bool {
+        matches!(self.kind, ModalKind::Form(_))
+    }
+
+    pub fn on_mouse_scroll_up(&mut self, _local_y: u16) {
+        if let ModalKind::Form(form) = &mut self.kind {
+            if let Some(field) = form.fields.get_mut(form.selected)
+                && matches!(&field.kind, FormFieldKind::Multi { .. })
+            {
+                form.handle_multi_select_key(KeyEvent::new(KeyCode::Up, crossterm::event::KeyModifiers::NONE));
+            } else {
+                form.selected = form.selected.saturating_sub(1);
+            }
+        }
+    }
+
+    pub fn on_mouse_scroll_down(&mut self, _local_y: u16) {
+        if let ModalKind::Form(form) = &mut self.kind {
+            if let Some(field) = form.fields.get_mut(form.selected)
+                && matches!(&field.kind, FormFieldKind::Multi { .. })
+            {
+                form.handle_multi_select_key(KeyEvent::new(KeyCode::Down, crossterm::event::KeyModifiers::NONE));
+            } else {
+                form.selected = (form.selected + 1).min(form.fields.len().saturating_sub(1));
+            }
+        }
+    }
+
+    pub fn on_mouse_click(&mut self, local_y: u16) {
+        if let ModalKind::Form(form) = &mut self.kind {
+            if form.fields.is_empty() {
+                return;
+            }
+            if local_y < 3 {
+                return;
+            }
+            let field_y = local_y.saturating_sub(3);
+            let mut row = 0usize;
+            for (index, field) in form.fields.iter().enumerate() {
+                if row == field_y as usize {
+                    form.selected = index;
+                    if matches!(&field.kind, FormFieldKind::Boolean(_) | FormFieldKind::Single { .. }) {
+                        form.change_selection(1);
+                    } else if matches!(&field.kind, FormFieldKind::Multi { .. }) {
+                        form.handle_multi_select_key(KeyEvent::new(
+                            KeyCode::Char(' '),
+                            crossterm::event::KeyModifiers::NONE,
+                        ));
+                    }
+                    return;
+                }
+                row += 1;
+                if let FormFieldKind::Multi { options, .. } = &field.kind {
+                    row += options.len();
+                }
+                if let Some(ref desc) = field.description
+                    && !desc.is_empty()
+                {
+                    row += 1;
+                }
+            }
+        }
+    }
+
     pub fn render(&self, frame: &mut Frame, theme: &Theme) {
         let area = centered_rect(frame.area(), 80, 80);
         frame.render_widget(Clear, area);

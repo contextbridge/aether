@@ -88,6 +88,12 @@ impl PromptSearchPicker {
         }
     }
 
+    pub fn select_row(&mut self, row: usize) {
+        if !self.results.is_empty() {
+            self.selected = row.min(self.results.len().saturating_sub(1));
+        }
+    }
+
     pub fn push_char(&mut self, c: char) -> PromptSearchMessage {
         self.query.push(c);
         self.refresh_query_state();

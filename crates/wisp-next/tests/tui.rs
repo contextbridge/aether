@@ -394,7 +394,7 @@ fn completed_tool_diff_is_themed_and_rendered_once() {
 #[test]
 fn wide_diff_uses_side_by_side_layout() {
     let (mut app, _command_rx) = make_app();
-    let mut terminal = make_terminal_with_width(100);
+    let mut terminal = make_terminal_with_width(160);
     let mut renderer = TranscriptRenderer::new(&UiSettings::default());
     submit_prompt(&mut app, "edit file");
     app.on_acp_event(tool_call("edit-1", "Edit src/main.rs"));
@@ -409,7 +409,7 @@ fn wide_diff_uses_side_by_side_layout() {
 #[test]
 fn wide_diff_marks_truncated_panel_content() {
     let (mut app, _command_rx) = make_app();
-    let mut terminal = make_terminal_with_width(100);
+    let mut terminal = make_terminal_with_width(160);
     let mut renderer = TranscriptRenderer::new(&UiSettings::default());
     submit_prompt(&mut app, "edit file");
     app.on_acp_event(tool_call("edit-1", "Edit src/main.rs"));
@@ -1535,7 +1535,7 @@ async fn git_diff_cycles_scope_and_stages_selected_file() {
     std::fs::write(root.join("untracked.rs"), "fn scratch() {}\n").unwrap();
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(100);
+    let mut terminal = make_terminal_with_width(160);
     app.on_key(ctrl('g'));
     settle_screen_effects(&mut app).await;
 
@@ -1603,7 +1603,7 @@ async fn git_diff_commit_disabled_with_nothing_staged() {
     run_git(root, &["commit", "--quiet", "-m", "init"]);
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(100);
+    let mut terminal = make_terminal_with_width(160);
     app.on_key(ctrl('g'));
     settle_screen_effects(&mut app).await;
 
@@ -1657,7 +1657,7 @@ async fn git_diff_commit_empty_message_shows_error() {
     run_git(root, &["add", "-A"]);
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(100);
+    let mut terminal = make_terminal_with_width(160);
     app.on_key(ctrl('g'));
     settle_screen_effects(&mut app).await;
 
@@ -1684,7 +1684,7 @@ async fn git_diff_commit_esc_cancels() {
     run_git(root, &["add", "-A"]);
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(100);
+    let mut terminal = make_terminal_with_width(160);
     app.on_key(ctrl('g'));
     settle_screen_effects(&mut app).await;
 
@@ -1711,7 +1711,7 @@ async fn git_diff_discard_confirmation_cancelled() {
     std::fs::write(root.join("file.txt"), "changed\n").unwrap();
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(100);
+    let mut terminal = make_terminal_with_width(160);
     app.on_key(ctrl('g'));
     settle_screen_effects(&mut app).await;
 
@@ -1845,7 +1845,7 @@ async fn git_diff_full_file_shows_deleted_message() {
     std::fs::remove_file(root.join("file.txt")).unwrap();
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(100);
+    let mut terminal = make_terminal_with_width(160);
     app.on_key(ctrl('g'));
     settle_screen_effects(&mut app).await;
 
@@ -1951,7 +1951,7 @@ async fn git_diff_commit_failure_shows_error() {
     run_git(root, &["add", "-A"]);
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(100);
+    let mut terminal = make_terminal_with_width(160);
     app.on_key(ctrl('g'));
     settle_screen_effects(&mut app).await;
 
@@ -1985,7 +1985,7 @@ async fn git_diff_binary_file_shows_label() {
     std::fs::write(root.join("image.png"), b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01").unwrap();
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(100);
+    let mut terminal = make_terminal_with_width(160);
     app.on_key(ctrl('g'));
     settle_screen_effects(&mut app).await;
     sync_terminal(&mut terminal, &mut app).unwrap();
@@ -2005,7 +2005,7 @@ async fn git_diff_full_file_binary_shows_message() {
     std::fs::write(root.join("data.bin"), b"\x00\x01\x02\x03\x04").unwrap();
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(100);
+    let mut terminal = make_terminal_with_width(160);
     app.on_key(ctrl('g'));
     settle_screen_effects(&mut app).await;
 
@@ -2035,7 +2035,7 @@ async fn git_diff_full_file_load_error_exits_full_file_mode() {
     std::fs::write(root.join("source.rs"), "fn answer() -> u32 { 43 }\n").unwrap();
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(100);
+    let mut terminal = make_terminal_with_width(160);
     app.on_key(ctrl('g'));
     settle_screen_effects(&mut app).await;
 
@@ -2078,7 +2078,7 @@ async fn git_diff_commit_editor_unicode_cursor_and_render() {
     run_git(root, &["add", "-A"]);
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(100);
+    let mut terminal = make_terminal_with_width(160);
     app.on_key(ctrl('g'));
     settle_screen_effects(&mut app).await;
 
@@ -2094,6 +2094,658 @@ async fn git_diff_commit_editor_unicode_cursor_and_render() {
 
     app.on_key(key(KeyCode::Esc));
     settle_screen_effects(&mut app).await;
+}
+
+#[tokio::test]
+async fn git_diff_comment_draft_submit_cancel_undo() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::create_dir(root.join("src")).unwrap();
+    std::fs::write(root.join("src/lib.rs"), "fn old() {}\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("src/lib.rs"), "fn new() {}\nfn another() {}\nfn third() {}\n").unwrap();
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    let mut terminal = make_terminal_with_width(160);
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+
+    // Navigate into patch pane: move to file, then enter
+    app.on_key(key(KeyCode::Char('j')));
+    app.on_key(key(KeyCode::Enter));
+    settle_screen_effects(&mut app).await;
+
+    // Press 'c' to start draft on first line
+    app.on_key(key(KeyCode::Char('c')));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("Draft"), "draft should appear:\n{viewport}");
+
+    // Type a comment
+    type_text(&mut app, "this looks wrong");
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("this looks wrong"), "typed text should appear in draft:\n{viewport}");
+
+    // Submit the comment
+    app.on_key(key(KeyCode::Enter));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("Comment"), "submitted comment should appear:\n{viewport}");
+    assert!(viewport.contains("this looks wrong"), "submitted text should be visible:\n{viewport}");
+
+    // Undo the comment
+    app.on_key(key(KeyCode::Char('u')));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(!viewport.contains("this looks wrong"), "comment should be removed after undo:\n{viewport}");
+
+    // Esc cancels draft
+    app.on_key(key(KeyCode::Char('c')));
+    type_text(&mut app, "will cancel");
+    settle_screen_effects(&mut app).await;
+    app.on_key(key(KeyCode::Esc));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(!viewport.contains("will cancel"), "cancelled draft should not appear:\n{viewport}");
+}
+
+#[tokio::test]
+async fn git_diff_comment_counts_in_footer() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(root.join("lib.rs"), "fn old() {}\nfn two() {}\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("lib.rs"), "fn new() {}\nfn two() {}\n").unwrap();
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    let mut terminal = make_terminal_with_width(160);
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+    app.on_key(key(KeyCode::Enter)); // into patch
+    settle_screen_effects(&mut app).await;
+
+    // Add a comment
+    app.on_key(key(KeyCode::Char('c')));
+    type_text(&mut app, "feedback");
+    app.on_key(key(KeyCode::Enter));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.lines().any(|l| l.contains("1 comment")), "file header should show comment count:\n{viewport}");
+
+    // Footer should show total count - check the raw footer area
+    assert!(viewport.contains("(1 comment)"), "footer should show (1 comment):\n{viewport}");
+}
+
+#[tokio::test]
+async fn git_diff_comments_survive_file_switches() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(root.join("a.rs"), "fn a_old() {}\n").unwrap();
+    std::fs::write(root.join("b.rs"), "fn b_old() {}\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("a.rs"), "fn a_new() {}\n").unwrap();
+    std::fs::write(root.join("b.rs"), "fn b_new() {}\n").unwrap();
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    let mut terminal = make_terminal_with_width(160);
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+    app.on_key(key(KeyCode::Enter)); // into patch
+    settle_screen_effects(&mut app).await;
+
+    // Add comment on first file (a.rs)
+    app.on_key(key(KeyCode::Char('c')));
+    type_text(&mut app, "comment on A");
+    app.on_key(key(KeyCode::Enter));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("comment on A"), "comment on A should be visible:\n{viewport}");
+
+    // Switch to drawer and select second file
+    app.on_key(key(KeyCode::Char('h')));
+    app.on_key(key(KeyCode::Char('j')));
+    app.on_key(key(KeyCode::Enter));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(!viewport.contains("comment on A"), "comment on A should not appear on B:\n{viewport}");
+
+    // Switch back to first file
+    app.on_key(key(KeyCode::Char('h')));
+    app.on_key(key(KeyCode::Char('k')));
+    app.on_key(key(KeyCode::Enter));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("comment on A"), "comment on A should persist after switching back:\n{viewport}");
+}
+
+#[tokio::test]
+async fn git_diff_submit_review_emits_prompt() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(root.join("lib.rs"), "fn old() {}\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("lib.rs"), "fn new() {}\n").unwrap();
+
+    let (mut app, mut command_rx) = make_app_in(root.to_path_buf());
+    let mut terminal = make_terminal_with_width(160);
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+    app.on_key(key(KeyCode::Enter)); // into patch
+    settle_screen_effects(&mut app).await;
+
+    // Add a comment
+    app.on_key(key(KeyCode::Char('c')));
+    type_text(&mut app, "feedback text");
+    app.on_key(key(KeyCode::Enter));
+    settle_screen_effects(&mut app).await;
+
+    // Submit
+    app.on_key(key(KeyCode::Char('s')));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+
+    // Verify the prompt was sent
+    let cmd = command_rx.try_recv().unwrap();
+    match cmd {
+        PromptCommand::Prompt { text, content, .. } => {
+            assert!(text.contains("I'm reviewing the working tree diff"), "text should contain review prefix:\n{text}");
+            assert!(text.contains("## `lib.rs`"), "text should contain file header:\n{text}");
+            assert!(text.contains("feedback text"), "text should contain comment body:\n{text}");
+            assert!(content.is_none());
+        }
+        other => panic!("expected Prompt command, got {other:?}"),
+    }
+
+    // Screen should be closed after successful submit
+    assert!(!app.full_screen_active(), "screen should close after submit");
+}
+
+#[tokio::test]
+async fn git_diff_submit_no_comments_shows_error() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(root.join("lib.rs"), "fn old() {}\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("lib.rs"), "fn new() {}\n").unwrap();
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    let mut terminal = make_terminal_with_width(160);
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+    app.on_key(key(KeyCode::Enter)); // into patch
+    settle_screen_effects(&mut app).await;
+
+    // Press 's' with no comments
+    app.on_key(key(KeyCode::Char('s')));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("No comments to submit"), "should show error for no comments:\n{viewport}");
+}
+
+#[tokio::test]
+async fn git_diff_submit_send_failure_preserves_comments() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(root.join("lib.rs"), "fn old() {}\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("lib.rs"), "fn new() {}\n").unwrap();
+
+    let (mut app, fail_signal, _command_rx) = make_failable_app_in(root.to_path_buf());
+    let mut terminal = make_terminal_with_width(160);
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+    app.on_key(key(KeyCode::Enter)); // into patch
+    settle_screen_effects(&mut app).await;
+
+    // Add a comment
+    app.on_key(key(KeyCode::Char('c')));
+    type_text(&mut app, "feedback text");
+    app.on_key(key(KeyCode::Enter));
+    settle_screen_effects(&mut app).await;
+
+    // Enable send failure
+    fail_signal.store(true, Ordering::SeqCst);
+
+    // Try to submit
+    app.on_key(key(KeyCode::Char('s')));
+    settle_screen_effects(&mut app).await;
+
+    // The screen should still be active (failure retains state)
+    assert!(app.full_screen_active(), "screen should remain open after send failure");
+
+    // Comments should still be visible
+    app.on_key(key(KeyCode::Esc)); // close screen to check transcript
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("Failed to send review"), "should show send failure message in transcript:\n{viewport}");
+}
+
+fn make_failable_app_in(working_dir: std::path::PathBuf) -> (App, Arc<AtomicBool>, UnboundedReceiver<PromptCommand>) {
+    let (prompt_handle, fail_signal, command_rx) = AcpPromptHandle::failable();
+    let app =
+        build_app_with_handle(working_dir, acp::SessionCapabilities::new(), Vec::new(), Vec::new(), prompt_handle);
+    (app, fail_signal, command_rx)
+}
+
+#[tokio::test]
+async fn git_diff_comment_refresh_confirm_clears_cancel_preserves() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(root.join("lib.rs"), "fn old() {}\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("lib.rs"), "fn new() {}\n").unwrap();
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    let mut terminal = make_terminal_with_width(160);
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+    app.on_key(key(KeyCode::Enter));
+    settle_screen_effects(&mut app).await;
+
+    app.on_key(key(KeyCode::Char('c')));
+    type_text(&mut app, "keep me");
+    app.on_key(key(KeyCode::Enter));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("keep me"), "comment should appear before refresh:\n{viewport}");
+
+    // First 'r' — show confirmation
+    app.on_key(key(KeyCode::Char('r')));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("will clear"), "confirmation message should appear:\n{viewport}");
+    assert!(viewport.contains("keep me"), "comment should still appear during confirmation:\n{viewport}");
+
+    // Esc cancels
+    app.on_key(key(KeyCode::Esc));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("keep me"), "comment should survive cancel:\n{viewport}");
+    assert!(!viewport.contains("will clear"), "confirmation message should be gone:\n{viewport}");
+
+    // Confirm path: press r twice
+    app.on_key(key(KeyCode::Char('r')));
+    settle_screen_effects(&mut app).await;
+    app.on_key(key(KeyCode::Char('r')));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(!viewport.contains("keep me"), "comment should be cleared after confirmed refresh:\n{viewport}");
+    assert!(viewport.contains("Git Diff"), "screen should still show diff:\n{viewport}");
+}
+
+#[tokio::test]
+async fn git_diff_comment_scope_switch_confirm_clears_cancel_preserves() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(root.join("lib.rs"), "fn old() {}\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("lib.rs"), "fn new() {}\n").unwrap();
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    let mut terminal = make_terminal_with_width(160);
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+    app.on_key(key(KeyCode::Enter));
+    settle_screen_effects(&mut app).await;
+
+    app.on_key(key(KeyCode::Char('c')));
+    type_text(&mut app, "scope comment");
+    app.on_key(key(KeyCode::Enter));
+    settle_screen_effects(&mut app).await;
+
+    // First 't' — show confirmation
+    app.on_key(key(KeyCode::Char('t')));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("will clear"), "confirmation should appear:\n{viewport}");
+
+    // Esc cancels — comments preserved
+    app.on_key(key(KeyCode::Esc));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("scope comment"), "comment should survive cancel:\n{viewport}");
+
+    // Confirm path
+    app.on_key(key(KeyCode::Char('t')));
+    settle_screen_effects(&mut app).await;
+    app.on_key(key(KeyCode::Char('t')));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(!viewport.contains("scope comment"), "comment should be cleared after scope switch:\n{viewport}");
+    assert!(viewport.contains("Git Diff"), "screen should still show diff:\n{viewport}");
+}
+
+#[tokio::test]
+async fn git_diff_comment_stage_all_confirm_clears_cancel_preserves() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(root.join("lib.rs"), "fn old() {}\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("lib.rs"), "fn new() {}\n").unwrap();
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    let mut terminal = make_terminal_with_width(160);
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+    app.on_key(key(KeyCode::Enter));
+    settle_screen_effects(&mut app).await;
+
+    app.on_key(key(KeyCode::Char('c')));
+    type_text(&mut app, "stage me");
+    app.on_key(key(KeyCode::Enter));
+    settle_screen_effects(&mut app).await;
+
+    // First 'a' — show confirmation
+    app.on_key(key(KeyCode::Char('a')));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("will clear"), "confirmation should appear:\n{viewport}");
+
+    // Esc cancels
+    app.on_key(key(KeyCode::Esc));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("stage me"), "comment should survive cancel:\n{viewport}");
+
+    // Confirm path
+    app.on_key(key(KeyCode::Char('a')));
+    settle_screen_effects(&mut app).await;
+    app.on_key(key(KeyCode::Char('a')));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(!viewport.contains("stage me"), "comment should be cleared after stage-all:\n{viewport}");
+}
+
+#[tokio::test]
+async fn git_diff_comment_toggle_stage_confirm_clears_cancel_preserves() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::create_dir(root.join("src")).unwrap();
+    std::fs::write(root.join("src/lib.rs"), "fn old() {}\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("src/lib.rs"), "fn new() {}\n").unwrap();
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    let mut terminal = make_terminal_with_width(160);
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+    app.on_key(key(KeyCode::Enter));
+    settle_screen_effects(&mut app).await;
+
+    app.on_key(key(KeyCode::Char('c')));
+    type_text(&mut app, "space comment");
+    app.on_key(key(KeyCode::Enter));
+    settle_screen_effects(&mut app).await;
+
+    // First space — show confirmation
+    app.on_key(key(KeyCode::Char(' ')));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("will clear"), "confirmation should appear:\n{viewport}");
+
+    // Esc cancels
+    app.on_key(key(KeyCode::Esc));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("space comment"), "comment should survive cancel:\n{viewport}");
+
+    // Confirm path
+    app.on_key(key(KeyCode::Char(' ')));
+    settle_screen_effects(&mut app).await;
+    app.on_key(key(KeyCode::Char(' ')));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(!viewport.contains("space comment"), "comment should be cleared after stage:\n{viewport}");
+}
+
+#[tokio::test]
+async fn git_diff_comment_commit_cancel_preserves_comments() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(root.join("lib.rs"), "fn old() {}\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("lib.rs"), "fn changed() {}\n").unwrap();
+    run_git(root, &["add", "-A"]);
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    let mut terminal = make_terminal_with_width(160);
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+    app.on_key(key(KeyCode::Enter));
+    settle_screen_effects(&mut app).await;
+
+    app.on_key(key(KeyCode::Char('c')));
+    type_text(&mut app, "commit comment");
+    app.on_key(key(KeyCode::Enter));
+    settle_screen_effects(&mut app).await;
+
+    // First 'C' — show confirmation (even though nothing staged, confirm appears first)
+    app.on_key(key(KeyCode::Char('C')));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("will clear"), "confirmation should appear:\n{viewport}");
+
+    // Esc cancels — comments preserved
+    app.on_key(key(KeyCode::Esc));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("commit comment"), "comment should survive cancel:\n{viewport}");
+}
+
+#[tokio::test]
+async fn git_diff_comment_discard_cancel_preserves_comments() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(root.join("lib.rs"), "fn old() {}\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("lib.rs"), "fn changed() {}\n").unwrap();
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    let mut terminal = make_terminal_with_width(160);
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+    app.on_key(key(KeyCode::Enter));
+    settle_screen_effects(&mut app).await;
+
+    app.on_key(key(KeyCode::Char('c')));
+    type_text(&mut app, "discard comment");
+    app.on_key(key(KeyCode::Enter));
+    settle_screen_effects(&mut app).await;
+
+    // First 'd' — show confirmation
+    app.on_key(key(KeyCode::Char('d')));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("will clear"), "confirmation should appear:\n{viewport}");
+
+    // Esc cancels — comments preserved
+    app.on_key(key(KeyCode::Esc));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("discard comment"), "comment should survive cancel:\n{viewport}");
+
+    // Confirm path — should enter discard confirmation
+    app.on_key(key(KeyCode::Char('d')));
+    settle_screen_effects(&mut app).await;
+    app.on_key(key(KeyCode::Char('d')));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("Discard changes"), "discard confirmation should appear:\n{viewport}");
+}
+
+#[tokio::test]
+async fn git_diff_comment_unstage_all_confirm_clears_cancel_preserves() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(root.join("lib.rs"), "fn old() {}\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("lib.rs"), "fn changed() {}\n").unwrap();
+    run_git(root, &["add", "-A"]);
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    let mut terminal = make_terminal_with_width(160);
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+    // Switch to staged scope to see the staged file
+    app.on_key(key(KeyCode::Char('t')));
+    settle_screen_effects(&mut app).await;
+    app.on_key(key(KeyCode::Char('t')));
+    settle_screen_effects(&mut app).await;
+    app.on_key(key(KeyCode::Enter));
+    settle_screen_effects(&mut app).await;
+
+    app.on_key(key(KeyCode::Char('c')));
+    type_text(&mut app, "unstage me");
+    app.on_key(key(KeyCode::Enter));
+    settle_screen_effects(&mut app).await;
+
+    // First 'A' — show confirmation
+    app.on_key(key(KeyCode::Char('A')));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("will clear"), "confirmation should appear:\n{viewport}");
+
+    // Esc cancels
+    app.on_key(key(KeyCode::Esc));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("unstage me"), "comment should survive cancel:\n{viewport}");
+
+    // Confirm path
+    app.on_key(key(KeyCode::Char('A')));
+    settle_screen_effects(&mut app).await;
+    app.on_key(key(KeyCode::Char('A')));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(!viewport.contains("unstage me"), "comment should be cleared after unstage-all:\n{viewport}");
+}
+
+#[tokio::test]
+async fn git_diff_draft_cursor_with_unicode() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(root.join("lib.rs"), "fn old() {}\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("lib.rs"), "fn new() {}\n").unwrap();
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    let mut terminal = make_terminal_with_width(160);
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+    app.on_key(key(KeyCode::Enter));
+    settle_screen_effects(&mut app).await;
+
+    // Start draft and type unicode text
+    app.on_key(key(KeyCode::Char('c')));
+    type_text(&mut app, "héllo wörld");
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("héllo wörld"), "unicode text should appear in draft:\n{viewport}");
+
+    // Move cursor left and type more
+    app.on_key(key(KeyCode::Left));
+    app.on_key(key(KeyCode::Left));
+    app.on_key(key(KeyCode::Left));
+    app.on_key(key(KeyCode::Left));
+    app.on_key(key(KeyCode::Left));
+    app.on_key(key(KeyCode::Left));
+    type_text(&mut app, "★");
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("héllo★ wörld"), "unicode insertion should work:\n{viewport}");
 }
 
 #[test]
@@ -6806,7 +7458,7 @@ fn session_preview_failure_shows_error() {
         error: "server unreachable".to_string(),
     });
 
-    let mut terminal = make_terminal_with_width(100);
+    let mut terminal = make_terminal_with_width(160);
     let mut renderer = TranscriptRenderer::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));

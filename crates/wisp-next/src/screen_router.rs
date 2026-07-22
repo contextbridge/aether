@@ -52,6 +52,30 @@ impl ScreenRouter {
         self.mode = Some(FullScreenMode::PlanReview(PlanReviewScreen::new(meta, responder)));
     }
 
+    pub fn on_mouse_scroll_up(&mut self, local_y: u16, local_x: u16) {
+        match self.mode.as_mut() {
+            Some(FullScreenMode::GitDiff(screen)) => screen.on_mouse_scroll_up(local_y, local_x),
+            Some(FullScreenMode::PlanReview(screen)) => screen.on_mouse_scroll_up(local_y, local_x),
+            None => {}
+        }
+    }
+
+    pub fn on_mouse_scroll_down(&mut self, local_y: u16, local_x: u16) {
+        match self.mode.as_mut() {
+            Some(FullScreenMode::GitDiff(screen)) => screen.on_mouse_scroll_down(local_y, local_x),
+            Some(FullScreenMode::PlanReview(screen)) => screen.on_mouse_scroll_down(local_y, local_x),
+            None => {}
+        }
+    }
+
+    pub fn on_mouse_click(&mut self, local_y: u16, local_x: u16) {
+        match self.mode.as_mut() {
+            Some(FullScreenMode::GitDiff(screen)) => screen.on_mouse_click(local_y, local_x),
+            Some(FullScreenMode::PlanReview(screen)) => screen.on_mouse_click(local_y, local_x),
+            None => {}
+        }
+    }
+
     pub fn on_key(&mut self, key: KeyEvent) -> Option<ScreenEffect> {
         let mode = self.mode.as_mut()?;
         match mode {
@@ -61,7 +85,9 @@ impl ScreenRouter {
                     self.mode = None;
                     None
                 }
-                GitDiffOutcome::Effect(effect) => Some(ScreenEffect::GitDiff(effect)),
+                GitDiffOutcome::Effect(effect) | GitDiffOutcome::SubmitReview(effect) => {
+                    Some(ScreenEffect::GitDiff(effect))
+                }
             },
             FullScreenMode::PlanReview(screen) => {
                 if screen.on_key(key) {

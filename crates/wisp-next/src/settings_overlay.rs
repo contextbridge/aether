@@ -168,6 +168,114 @@ impl SettingsOverlay {
         self.menu.entries.splice(0..0, entries);
     }
 
+    pub fn on_mouse_scroll_up(&mut self, _local_y: u16) {
+        match &mut self.active_pane {
+            ActivePane::Menu => self.menu.move_up(),
+            ActivePane::Picker(picker) => picker.move_up(),
+            ActivePane::ModelSelector(selector) => selector.move_up(),
+            ActivePane::ServerStatus(pane) => pane.move_up(),
+            ActivePane::ProviderLogin(pane) => pane.move_up(),
+            ActivePane::Sentinel => {}
+        }
+    }
+
+    pub fn on_mouse_scroll_down(&mut self, _local_y: u16) {
+        match &mut self.active_pane {
+            ActivePane::Menu => self.menu.move_down(),
+            ActivePane::Picker(picker) => picker.move_down(),
+            ActivePane::ModelSelector(selector) => selector.move_down(),
+            ActivePane::ServerStatus(pane) => pane.move_down(),
+            ActivePane::ProviderLogin(pane) => pane.move_down(),
+            ActivePane::Sentinel => {}
+        }
+    }
+
+    pub fn on_mouse_click(&mut self, local_y: u16, rect: Rect) -> Vec<SettingsOverlayMessage> {
+        if rect.width < MIN_WIDTH || rect.height < MIN_HEIGHT {
+            return vec![];
+        }
+        let inner = Block::new().borders(Borders::ALL).title(" Configuration ").inner(rect);
+        let row = local_y.saturating_sub(inner.y.saturating_sub(rect.y)) as usize;
+        if local_y < inner.y || local_y >= inner.bottom() {
+            return vec![];
+        }
+        match &mut self.active_pane {
+            ActivePane::Menu => {
+                let entry_kind = self.menu.click_row(row);
+                match entry_kind {
+                    Some(SettingsMenuEntryKind::McpServers) => {
+                        self.active_pane =
+                            ActivePane::ServerStatus(ServerStatusPane::new(self.server_statuses.clone()));
+                    }
+                    Some(SettingsMenuEntryKind::ProviderLogins) => {
+                        let entries = build_provider_login_entries(&self.auth_methods);
+                        self.active_pane = ActivePane::ProviderLogin(ProviderLoginPane::new(entries));
+                    }
+                    Some(_) => {
+                        if let Some(entry) = self.menu.selected_entry() {
+                            let is_multi = entry.multi_select;
+                            if is_multi {
+                                let selector = ModelSelector::new(
+                                    entry.config_id.clone(),
+                                    entry.values.clone(),
+                                    &entry.current_raw_value,
+                                    self.current_reasoning_effort.as_deref(),
+                                );
+                                self.active_pane = ActivePane::ModelSelector(selector);
+                            } else if let Some(picker) = SettingsPicker::from_entry(entry) {
+                                self.active_pane = ActivePane::Picker(picker);
+                            }
+                        }
+                    }
+                    None => {}
+                }
+                vec![]
+            }
+            ActivePane::Picker(picker) => {
+                if picker.click_row(row)
+                    && let Some(change) = picker.confirm_selection()
+                {
+                    self.menu.apply_change(&change);
+                    self.active_pane = ActivePane::Menu;
+                    if change.config_id == THEME_CONFIG_ID {
+                        return vec![SettingsOverlayMessage::SetTheme(change.new_value)];
+                    }
+                    return vec![SettingsOverlayMessage::SetConfigOption {
+                        config_id: change.config_id,
+                        value: change.new_value,
+                    }];
+                }
+                self.active_pane = ActivePane::Menu;
+                vec![]
+            }
+            ActivePane::ModelSelector(selector) => {
+                if selector.click_row(row) {
+                    selector.toggle_focused();
+                }
+                vec![]
+            }
+            ActivePane::ServerStatus(pane) => {
+                if pane.click_row(row)
+                    && let Some(entry) = pane.selected_entry()
+                    && entry.can_authenticate()
+                {
+                    return vec![SettingsOverlayMessage::AuthenticateServer(entry.name.clone())];
+                }
+                vec![]
+            }
+            ActivePane::ProviderLogin(pane) => {
+                if pane.click_row(row)
+                    && let Some(entry) = pane.selected_entry()
+                    && entry.status != ProviderLoginStatus::Authenticating
+                {
+                    return vec![SettingsOverlayMessage::AuthenticateProvider(entry.method_id.clone())];
+                }
+                vec![]
+            }
+            ActivePane::Sentinel => vec![],
+        }
+    }
+
     pub fn on_key(&mut self, key: KeyEvent) -> Vec<SettingsOverlayMessage> {
         if let ActivePane::Menu = self.active_pane {
             self.handle_menu_key(key)
@@ -274,31 +382,33 @@ impl SettingsOverlay {
             KeyCode::Up => self.menu.move_up(),
             KeyCode::Down => self.menu.move_down(),
             KeyCode::Enter => {
-                if let Some(entry) = self.menu.selected_entry() {
-                    match entry.entry_kind {
-                        SettingsMenuEntryKind::McpServers => {
-                            self.active_pane =
-                                ActivePane::ServerStatus(ServerStatusPane::new(self.server_statuses.clone()));
-                        }
-                        SettingsMenuEntryKind::ProviderLogins => {
-                            let entries = build_provider_login_entries(&self.auth_methods);
-                            self.active_pane = ActivePane::ProviderLogin(ProviderLoginPane::new(entries));
-                        }
-                        _ if entry.multi_select => {
-                            let selector = ModelSelector::new(
-                                entry.config_id.clone(),
-                                entry.values.clone(),
-                                &entry.current_raw_value,
-                                self.current_reasoning_effort.as_deref(),
-                            );
-                            self.active_pane = ActivePane::ModelSelector(selector);
-                        }
-                        _ => {
-                            if let Some(picker) = SettingsPicker::from_entry(entry) {
+                let entry_kind = self.menu.selected_entry().map(|e| e.entry_kind);
+                match entry_kind {
+                    Some(SettingsMenuEntryKind::McpServers) => {
+                        self.active_pane =
+                            ActivePane::ServerStatus(ServerStatusPane::new(self.server_statuses.clone()));
+                    }
+                    Some(SettingsMenuEntryKind::ProviderLogins) => {
+                        let entries = build_provider_login_entries(&self.auth_methods);
+                        self.active_pane = ActivePane::ProviderLogin(ProviderLoginPane::new(entries));
+                    }
+                    Some(_) => {
+                        if let Some(entry) = self.menu.selected_entry() {
+                            let is_multi = entry.multi_select;
+                            if is_multi {
+                                let selector = ModelSelector::new(
+                                    entry.config_id.clone(),
+                                    entry.values.clone(),
+                                    &entry.current_raw_value,
+                                    self.current_reasoning_effort.as_deref(),
+                                );
+                                self.active_pane = ActivePane::ModelSelector(selector);
+                            } else if let Some(picker) = SettingsPicker::from_entry(entry) {
                                 self.active_pane = ActivePane::Picker(picker);
                             }
                         }
                     }
+                    None => {}
                 }
             }
             _ => {}
@@ -536,6 +646,21 @@ impl ServerStatusPane {
         }
     }
 
+    fn click_row(&mut self, row: usize) -> bool {
+        if self.rows.is_empty() {
+            return false;
+        }
+        if row >= self.rows.len() {
+            return false;
+        }
+        if matches!(&self.rows[row], ServerStatusRow::Server { .. }) {
+            self.selected = row;
+            true
+        } else {
+            false
+        }
+    }
+
     fn update_entries(&mut self, entries: Vec<McpServerStatusEntry>) {
         let selected_name = self.selected_entry().map(|e| e.name.clone());
         self.rows = build_rows(entries);
@@ -654,6 +779,17 @@ impl ProviderLoginPane {
 
     fn selected_entry(&self) -> Option<&ProviderLoginEntry> {
         self.entries.get(self.selected)
+    }
+
+    fn click_row(&mut self, row: usize) -> bool {
+        if self.entries.is_empty() {
+            return false;
+        }
+        if row >= self.entries.len() {
+            return false;
+        }
+        self.selected = row;
+        true
     }
 
     fn set_authenticating(&mut self, method_id: &str) {
@@ -821,6 +957,18 @@ impl SettingsMenu {
         }
     }
 
+    fn click_row(&mut self, row: usize) -> Option<SettingsMenuEntryKind> {
+        let visible = self.entries.len().min(self.entries.len());
+        let start = if self.selected >= visible { self.selected - visible + 1 } else { 0 };
+        let idx = start + row;
+        if idx < self.entries.len() {
+            self.selected = idx;
+            Some(self.entries[idx].entry_kind)
+        } else {
+            None
+        }
+    }
+
     fn render(&self, area: Rect, buffer: &mut Buffer, theme: &Theme) {
         let visible = usize::from(area.height).min(self.entries.len());
         let start = if self.selected >= visible { self.selected - visible + 1 } else { 0 };
@@ -971,6 +1119,26 @@ impl SettingsPicker {
                 break;
             }
             self.selected -= 1;
+        }
+    }
+
+    fn click_row(&mut self, row: usize) -> bool {
+        let list_start = 1usize;
+        if row < list_start {
+            return false;
+        }
+        let item_row = row - list_start;
+        if self.filtered.is_empty() {
+            return false;
+        }
+        let max_items = usize::from(u16::MAX).saturating_sub(list_start);
+        let offset = if self.selected >= max_items { self.selected - max_items + 1 } else { 0 };
+        let idx = offset + item_row;
+        if idx < self.filtered.len() {
+            self.selected = idx;
+            true
+        } else {
+            false
         }
     }
 
@@ -1138,6 +1306,42 @@ impl ModelSelector {
             .collect();
         self.focused = self.focused.min(self.filtered.len().saturating_sub(1));
         self.ensure_enabled();
+    }
+
+    fn click_row(&mut self, row: usize) -> bool {
+        if self.filtered.is_empty() {
+            return false;
+        }
+        let header_rows = if self.selected_models.is_empty() { 2usize } else { 3usize };
+        if row < header_rows {
+            return false;
+        }
+        let item_row = row - header_rows;
+        let remaining_height = usize::from(u16::MAX).saturating_sub(header_rows);
+        let list_idx = self.focused.saturating_sub(remaining_height.saturating_sub(1));
+        let mut actual_row: usize = 0;
+        let mut current_list_idx = list_idx;
+        let mut last_provider: Option<&str> = None;
+        while actual_row < item_row && current_list_idx < self.filtered.len() {
+            let value_idx = self.filtered[current_list_idx];
+            let v = &self.all_items[value_idx];
+            let provider = provider_key(&v.value);
+            if last_provider != Some(provider) {
+                last_provider = Some(provider);
+                actual_row += 1;
+                if actual_row > item_row {
+                    break;
+                }
+            }
+            actual_row += 1;
+            current_list_idx += 1;
+        }
+        if current_list_idx < self.filtered.len() {
+            self.focused = current_list_idx;
+            true
+        } else {
+            false
+        }
     }
 
     fn confirm(&self) -> Vec<SettingsChange> {

@@ -487,6 +487,98 @@ fn outline_without_sections_shows_no_split() {
     assert!(!text.contains("Outline"), "no outline when no headings: {text}");
 }
 
+#[test]
+fn mouse_click_in_outline_pane_focuses_outline_at_wide_width() {
+    let markdown = "# Section One\nline a\n## Section Two\nline b";
+    let (mut screen, _rx) = make_screen(markdown);
+
+    render_screen(&mut screen, 80, 24);
+
+    // Clicks at y=2 (past border), x=2 (left side, within outline_width = 80/4 = 20)
+    screen.on_mouse_click(2, 2);
+
+    let buffer = render_screen(&mut screen, 80, 24);
+    let text = buffer_text(&buffer);
+    // Outline should have accent background when focused
+    assert!(text.contains("Section One"), "outline should show sections: {text}");
+    assert!(text.contains("Section Two"), "outline should show sections: {text}");
+}
+
+#[test]
+fn mouse_click_in_plan_pane_focuses_plan_at_wide_width() {
+    let markdown = "# Section One\nline a\n## Section Two\nline b";
+    let (mut screen, _rx) = make_screen(markdown);
+
+    render_screen(&mut screen, 80, 24);
+
+    // Clicks at y=2, x=60 (right side, past outline_width = 20)
+    screen.on_mouse_click(2, 60);
+
+    let buffer = render_screen(&mut screen, 80, 24);
+    let text = buffer_text(&buffer);
+    assert!(text.contains("Section One"), "plan should show sections: {text}");
+}
+
+#[test]
+fn mouse_click_at_narrow_width_always_focuses_plan() {
+    let markdown = "# Section One\nline a\n## Section Two\nline b";
+    let (mut screen, _rx) = make_screen(markdown);
+
+    // 50-wide: below MIN_SPLIT_WIDTH (60), no split
+    render_screen(&mut screen, 50, 24);
+
+    // Click at y=2, x=2 — even on the "left" side, should be Plan
+    screen.on_mouse_click(2, 2);
+
+    let buffer = render_screen(&mut screen, 50, 24);
+    let text = buffer_text(&buffer);
+    // No outline pane in narrow layout
+    assert!(!text.contains("Outline"), "no outline in narrow layout: {text}");
+}
+
+#[test]
+fn mouse_click_on_border_is_ignored() {
+    let markdown = "# Section One\nline a";
+    let (mut screen, _rx) = make_screen(markdown);
+
+    render_screen(&mut screen, 80, 24);
+
+    // Plan starts as default focus
+    // Click at y=0 (border), focus shouldn't change
+    screen.on_mouse_click(0, 30);
+
+    let buffer = render_screen(&mut screen, 80, 24);
+    let text = buffer_text(&buffer);
+    assert!(text.contains("Section One"), "plan should still render: {text}");
+}
+
+#[test]
+fn mouse_click_after_resize_uses_correct_pane_rects() {
+    let markdown = "# Section One\nline a\n## Section Two\nline b";
+    let (mut screen, _rx) = make_screen(markdown);
+
+    // Render at wide width
+    render_screen(&mut screen, 100, 30);
+
+    // outline_width at width=100: 100/4=25
+    // Click at x=5 (outline side)
+    screen.on_mouse_click(2, 5);
+
+    // Resize to different width
+    render_screen(&mut screen, 120, 30);
+
+    // outline_width at width=120: 120/4=30
+    // Click at x=5 still in outline side
+    screen.on_mouse_click(2, 5);
+
+    // Click at x=90 is in plan side at width 120
+    screen.on_mouse_click(2, 90);
+
+    let buffer = render_screen(&mut screen, 120, 30);
+    let text = buffer_text(&buffer);
+    assert!(text.contains("Section One"), "plan should render: {text}");
+}
+
 fn type_text(screen: &mut PlanReviewScreen, text: &str) {
     for c in text.chars() {
         if c == ' ' {

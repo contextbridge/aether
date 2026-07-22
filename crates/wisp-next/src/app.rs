@@ -9,12 +9,14 @@ use crate::plan_tracker::PlanTracker;
 use crate::progress_indicator::{ProgressActivity, ProgressIndicator, WorkspaceProgress};
 use crate::prompt_search::PromptSearchMessage;
 use crate::screen_router::{ScreenEffect, ScreenEvent, ScreenRouter};
+use crate::screens::git_diff::GitDiffEvent;
 use crate::session_loading_buffer::SessionLoadingBuffer;
 use crate::session_picker::{SessionPicker, SessionPickerMessage};
 use crate::settings::{ContextUsageDisplay, UiSettings, resolve_content_padding};
 use crate::settings_overlay::{
     SettingsMenuEntry, SettingsMenuEntryKind, SettingsMenuValue, SettingsOverlay, SettingsOverlayMessage,
 };
+use crate::terminal_effects::{TerminalEffect, TerminalEffects};
 use crate::tool_calls::{ToolCallEntry, ToolCallLog, ToolStatus};
 use crate::transcript::{SegmentContent, Transcript};
 use crate::workspace_picker::{WorkspacePicker, WorkspacePickerMessage};
@@ -26,7 +28,8 @@ use acp_utils::notifications::AetherCapabilities;
 use acp_utils::notifications::McpNotification;
 use acp_utils::notifications::McpServerStatusEntry;
 use agent_client_protocol::schema::{self as acp, SessionConfigOptionCategory, SessionId};
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::layout::Rect;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use utils::ReasoningEffort;
@@ -72,6 +75,10 @@ pub struct App {
     ui_settings: UiSettings,
     pending_theme: Option<crate::theme::Theme>,
     plan_tracker: PlanTracker,
+    terminal_effects: TerminalEffects,
+    mouse_capture_state: MouseCaptureState,
+    last_terminal_size: (u16, u16),
+    surface_rect: Option<Rect>,
 }
 
 pub struct AppConfig {
@@ -138,6 +145,12 @@ impl HistoryItem {
             HistoryItem::Tool { .. } => HistoryKind::Tool,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseCaptureState {
+    Disabled,
+    Enabled,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -243,6 +256,10 @@ impl App {
             ui_settings: config.settings,
             pending_theme: None,
             plan_tracker: PlanTracker::default(),
+            terminal_effects: TerminalEffects::default(),
+            mouse_capture_state: MouseCaptureState::Disabled,
+            last_terminal_size: (0, 0),
+            surface_rect: None,
         }
     }
 
@@ -359,6 +376,10 @@ impl App {
                 }
                 self.session_loading_buffer.clear();
                 self.screen_router.close();
+                self.mouse_capture_state = MouseCaptureState::Disabled;
+                self.surface_rect = None;
+                self.terminal_effects.clear();
+                self.terminal_effects.push(TerminalEffect::DisableMouseCapture);
                 self.exit_requested = true;
             }
             AcpEvent::ConfigOptionUpdateFailed { error } => {
@@ -679,23 +700,49 @@ impl App {
         theme: &crate::theme::Theme,
         highlighter: &mut crate::syntax::SyntaxHighlighter,
     ) {
+        if self.composer.has_prompt_search() || self.composer.has_overlay() {
+            return;
+        }
+        self.surface_rect = None;
         if self.screen_router.is_active() {
+            self.surface_rect = Some(frame.area());
             self.screen_router.render(frame, theme, highlighter);
         } else if let Some(overlay) = &self.settings_overlay {
             let area = frame.area();
+            self.surface_rect = Some(area);
             overlay.render(area, frame.buffer_mut(), theme);
         } else if let Some(picker) = &self.session_picker {
             let area = frame.area();
+            self.surface_rect = Some(area);
             picker.render(area, frame.buffer_mut(), theme);
         } else if let Some(picker) = &self.workspace_picker {
             let area = frame.area();
+            self.surface_rect = Some(area);
             picker.render(area, frame.buffer_mut(), theme);
         } else if let Some(modal) = &self.modal {
+            self.surface_rect = Some(frame.area());
             modal.render(frame, theme);
         }
     }
 
     pub fn on_screen_event(&mut self, event: ScreenEvent) {
+        if let ScreenEvent::GitDiff(GitDiffEvent::SubmitReview { request_id: _, prompt }) = &event {
+            if self.prompt_in_flight {
+                return;
+            }
+            let prompt = prompt.clone();
+            self.prompt_in_flight = true;
+            self.transcript.push_user_message(&format!("[wisp-next] Submitted review of working tree diff.\n{prompt}"));
+            if let Err(e) = self.prompt_handle.prompt(&self.session_id, &prompt, None) {
+                tracing::error!("failed to send review prompt: {e}");
+                self.prompt_in_flight = false;
+                self.transcript.push_user_message(&format!("[wisp-next] Failed to send review: {e}"));
+            } else {
+                self.screen_router.close();
+            }
+            self.screen_router.on_event(event);
+            return;
+        }
         if let Some(effect) = self.screen_router.on_event(event) {
             self.pending_screen_effects.push_back(effect);
         }
@@ -703,6 +750,79 @@ impl App {
 
     pub fn take_screen_effect(&mut self) -> Option<ScreenEffect> {
         self.pending_screen_effects.pop_front()
+    }
+
+    pub fn take_terminal_effect(&mut self) -> Option<TerminalEffect> {
+        self.terminal_effects.pop()
+    }
+
+    pub fn push_terminal_effect(&mut self, effect: TerminalEffect) {
+        self.terminal_effects.push(effect);
+    }
+
+    pub fn count_pending_terminal_effects(&self) -> usize {
+        self.terminal_effects.queue_len()
+    }
+
+    pub fn needs_mouse_capture(&self) -> bool {
+        self.has_mouse_capturing_surface()
+    }
+
+    fn has_mouse_capturing_surface(&self) -> bool {
+        if self.screen_router.is_active() {
+            return true;
+        }
+        if self.settings_overlay.is_some() {
+            return true;
+        }
+        if self.session_picker.is_some() {
+            return true;
+        }
+        if self.workspace_picker.is_some() {
+            return true;
+        }
+        if let Some(modal) = &self.modal
+            && modal.needs_mouse_capture()
+        {
+            return true;
+        }
+        if self.composer.has_prompt_search() {
+            return true;
+        }
+        if self.composer.has_overlay() {
+            return true;
+        }
+        false
+    }
+
+    pub fn mouse_capture_state(&self) -> MouseCaptureState {
+        self.mouse_capture_state
+    }
+
+    pub fn terminal_size(&self) -> (u16, u16) {
+        self.last_terminal_size
+    }
+
+    pub fn surface_rect(&self) -> Option<Rect> {
+        self.surface_rect
+    }
+
+    pub fn set_surface_rect(&mut self, rect: Rect) {
+        self.surface_rect = Some(rect);
+    }
+
+    pub fn clear_surface_rect(&mut self) {
+        self.surface_rect = None;
+    }
+
+    pub fn on_terminal_event(&mut self, event: Event) {
+        match event {
+            Event::Key(key) => self.on_key(key),
+            Event::Paste(text) => self.on_paste(&text),
+            Event::Resize(width, height) => self.on_resize(width, height),
+            Event::Mouse(mouse) => self.on_mouse(mouse),
+            _ => {}
+        }
     }
 
     pub fn exit_requested(&self) -> bool {
@@ -1031,10 +1151,120 @@ impl App {
     }
 
     fn finish_prompt(&mut self, terminal_status: &ToolStatus) {
+        let was_in_flight = self.prompt_in_flight;
         self.prompt_in_flight = false;
         self.compaction_active = false;
         self.tool_calls.finalize_running(terminal_status);
         self.transcript.close_thought_block();
+        if was_in_flight && matches!(terminal_status, ToolStatus::Success) {
+            self.terminal_effects.push(TerminalEffect::Bell);
+        }
+    }
+
+    fn on_resize(&mut self, width: u16, height: u16) {
+        self.last_terminal_size = (width, height);
+        self.surface_rect = None;
+    }
+
+    fn on_mouse(&mut self, event: crossterm::event::MouseEvent) {
+        use crossterm::event::MouseEventKind;
+        let Some(rect) = self.surface_rect else {
+            return;
+        };
+        let col = event.column;
+        let row = event.row;
+        if col < rect.x || col >= rect.right() || row < rect.y || row >= rect.bottom() {
+            return;
+        }
+        let local_x = col.saturating_sub(rect.x);
+        let local_y = row.saturating_sub(rect.y);
+        match event.kind {
+            MouseEventKind::ScrollUp => self.surface_scroll_up(local_y, local_x),
+            MouseEventKind::ScrollDown => self.surface_scroll_down(local_y, local_x),
+            MouseEventKind::Down(_) => self.surface_click(local_y, local_x),
+            _ => {}
+        }
+    }
+
+    fn surface_scroll_up(&mut self, local_y: u16, local_x: u16) {
+        if self.screen_router.is_active() {
+            self.screen_router.on_mouse_scroll_up(local_y, local_x);
+            return;
+        }
+        if let Some(overlay) = &mut self.settings_overlay {
+            overlay.on_mouse_scroll_up(local_y);
+            return;
+        }
+        if let Some(picker) = &mut self.session_picker {
+            picker.scroll_up();
+            return;
+        }
+        if let Some(picker) = &mut self.workspace_picker {
+            picker.scroll_up();
+            return;
+        }
+        if let Some(modal) = &mut self.modal {
+            modal.on_mouse_scroll_up(local_y);
+            return;
+        }
+        if self.composer.has_prompt_search() {
+            self.composer.prompt_search_move_up();
+        } else if self.composer.has_overlay() {
+            self.composer.overlay_move_up();
+        }
+    }
+
+    fn surface_scroll_down(&mut self, local_y: u16, local_x: u16) {
+        if self.screen_router.is_active() {
+            self.screen_router.on_mouse_scroll_down(local_y, local_x);
+            return;
+        }
+        if let Some(overlay) = &mut self.settings_overlay {
+            overlay.on_mouse_scroll_down(local_y);
+            return;
+        }
+        if let Some(picker) = &mut self.session_picker {
+            picker.scroll_down();
+            return;
+        }
+        if let Some(picker) = &mut self.workspace_picker {
+            picker.scroll_down();
+            return;
+        }
+        if let Some(modal) = &mut self.modal {
+            modal.on_mouse_scroll_down(local_y);
+            return;
+        }
+        if self.composer.has_prompt_search() {
+            self.composer.prompt_search_move_down();
+        } else if self.composer.has_overlay() {
+            self.composer.overlay_move_down();
+        }
+    }
+
+    fn surface_click(&mut self, local_y: u16, local_x: u16) {
+        if self.screen_router.is_active() {
+            self.screen_router.on_mouse_click(local_y, local_x);
+            return;
+        }
+        if let Some(overlay) = &mut self.settings_overlay {
+            let messages = overlay.on_mouse_click(local_y, self.surface_rect.unwrap_or_default());
+            for msg in messages {
+                self.handle_settings_message(msg);
+            }
+            return;
+        }
+        if let Some(picker) = &mut self.session_picker {
+            picker.select_row(local_y.saturating_sub(1) as usize);
+        } else if let Some(picker) = &mut self.workspace_picker {
+            picker.select_row(local_y.saturating_sub(1) as usize);
+        } else if let Some(modal) = &mut self.modal {
+            modal.on_mouse_click(local_y);
+        } else if self.composer.has_prompt_search() {
+            self.composer.prompt_search_select_row(local_y as usize);
+        } else if self.composer.has_overlay() {
+            self.composer.overlay_select_row(local_y as usize);
+        }
     }
 
     fn media_support_error(&self, blocks: &[acp::ContentBlock]) -> Option<String> {

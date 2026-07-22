@@ -25,6 +25,7 @@ pub mod session_picker;
 pub mod settings;
 pub mod settings_overlay;
 pub mod syntax;
+pub mod terminal_effects;
 pub mod theme;
 pub mod tool_calls;
 pub mod transcript;
@@ -35,8 +36,8 @@ pub mod wrap;
 use acp_utils::client::AcpEvent;
 use app::{App, AppConfig};
 use crossterm::event::{
-    DisableBracketedPaste, EnableBracketedPaste, Event, EventStream, KeyboardEnhancementFlags,
-    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, EventStream,
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::{execute, terminal::size};
 use error::AppError;
@@ -47,8 +48,9 @@ use session::Session;
 use settings::UiSettings;
 use std::fs::create_dir_all;
 use std::future::pending;
-use std::io;
+use std::io::{self, Write};
 use std::time::{Duration, Instant};
+use terminal_effects::TerminalEffect;
 use tokio::select;
 use tokio::sync::mpsc;
 use tokio::time::{MissedTickBehavior, interval};
@@ -127,10 +129,11 @@ async fn run_app(
     let keyboard_enhancement_enabled = execute!(stdout, PushKeyboardEnhancementFlags(flags)).is_ok();
 
     let result = match execute!(stdout, EnableBracketedPaste) {
-        Ok(()) => event_loop(&mut terminal, &mut app, &mut renderer, &mut event_rx).await,
+        Ok(()) => event_loop(&mut terminal, &mut app, &mut renderer, &mut event_rx, &mut stdout).await,
         Err(e) => Err(AppError::Io(e)),
     };
 
+    let _ = execute!(stdout, DisableMouseCapture);
     let _ = execute!(stdout, DisableBracketedPaste);
     if keyboard_enhancement_enabled {
         let _ = execute!(stdout, PopKeyboardEnhancementFlags);
@@ -144,6 +147,7 @@ async fn event_loop(
     app: &mut App,
     renderer: &mut TranscriptRenderer,
     event_rx: &mut mpsc::UnboundedReceiver<AcpEvent>,
+    stdout: &mut impl Write,
 ) -> Result<(), AppError> {
     let mut terminal_events = EventStream::new();
     let (screen_event_tx, mut screen_event_rx) = mpsc::unbounded_channel();
@@ -152,6 +156,7 @@ async fn event_loop(
         tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
         tick
     };
+    let mut capture_enabled = false;
 
     render::sync_terminal(terminal, app, renderer)?;
     loop {
@@ -165,7 +170,7 @@ async fn event_loop(
         select! {
             terminal_event = terminal_events.next() => {
                 match terminal_event {
-                    Some(Ok(event)) => on_terminal_event(app, event),
+                    Some(Ok(event)) => app.on_terminal_event(event),
                     Some(Err(e)) => return Err(AppError::Io(e)),
                     None => return Ok(()),
                 }
@@ -187,6 +192,8 @@ async fn event_loop(
             () = tick_fut => app.on_tick(Instant::now()),
         }
 
+        process_terminal_effects(app, stdout, &mut capture_enabled);
+
         while let Some(effect) = app.take_screen_effect() {
             let event_tx = screen_event_tx.clone();
             tokio::spawn(async move {
@@ -199,17 +206,37 @@ async fn event_loop(
         }
 
         if app.exit_requested() {
+            process_terminal_effects(app, stdout, &mut capture_enabled);
             return Ok(());
         }
         render::sync_terminal(terminal, app, renderer)?;
     }
 }
 
-fn on_terminal_event(app: &mut App, event: Event) {
-    match event {
-        Event::Key(key) => app.on_key(key),
-        Event::Paste(text) => app.on_paste(&text),
-        _ => {}
+fn process_terminal_effects(app: &mut App, stdout: &mut impl Write, capture_enabled: &mut bool) {
+    while let Some(effect) = app.take_terminal_effect() {
+        match effect {
+            TerminalEffect::Bell => {
+                let _ = execute!(stdout, crossterm::style::Print("\x07"));
+            }
+            TerminalEffect::EnableMouseCapture => {
+                let _ = execute!(stdout, EnableMouseCapture);
+                *capture_enabled = true;
+            }
+            TerminalEffect::DisableMouseCapture => {
+                let _ = execute!(stdout, DisableMouseCapture);
+                *capture_enabled = false;
+            }
+        }
+    }
+
+    let needs_capture = app.needs_mouse_capture();
+    if needs_capture && !*capture_enabled {
+        let _ = execute!(stdout, EnableMouseCapture);
+        *capture_enabled = true;
+    } else if !needs_capture && *capture_enabled {
+        let _ = execute!(stdout, DisableMouseCapture);
+        *capture_enabled = false;
     }
 }
 

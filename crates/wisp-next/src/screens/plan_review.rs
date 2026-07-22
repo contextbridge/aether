@@ -44,6 +44,7 @@ pub struct PlanReviewScreen {
     draft: Option<DraftComment>,
     focus: Focus,
     respond: Option<Box<dyn FnOnce(ElicitationResponse) + Send>>,
+    last_area: Rect,
 }
 
 impl PlanReviewScreen {
@@ -64,6 +65,7 @@ impl PlanReviewScreen {
             respond: Some(Box::new(move |response| {
                 let _ = responder.respond(response);
             })),
+            last_area: Rect::new(0, 0, 120, 40),
         }
     }
 
@@ -83,6 +85,53 @@ impl PlanReviewScreen {
         }
         // Clamp plan_cursor_line in case document changed
         self.plan_cursor_line = self.plan_cursor_line.min(self.source_line_max_index());
+    }
+
+    pub fn on_mouse_scroll_up(&mut self, _local_y: u16, _local_x: u16) {
+        if self.focus == Focus::Plan {
+            self.plan_scroll = self.plan_scroll.saturating_sub(3);
+            self.plan_cursor_line = self.plan_cursor_line.saturating_sub(3);
+        } else {
+            self.outline_scroll = self.outline_scroll.saturating_sub(1);
+            self.outline_cursor = self.outline_cursor.saturating_sub(1);
+        }
+    }
+
+    pub fn on_mouse_scroll_down(&mut self, _local_y: u16, _local_x: u16) {
+        if self.focus == Focus::Plan {
+            self.plan_scroll = self.plan_scroll.saturating_add(3).min(self.source_line_max_index());
+            self.plan_cursor_line = self.plan_cursor_line.saturating_add(3).min(self.source_line_max_index());
+        } else {
+            let sections = &self.document.outline;
+            self.outline_scroll = (self.outline_scroll + 1).min(sections.len().saturating_sub(1));
+            self.outline_cursor = (self.outline_cursor + 1).min(sections.len().saturating_sub(1));
+        }
+    }
+
+    pub fn on_mouse_click(&mut self, local_y: u16, local_x: u16) {
+        if local_y < 1 {
+            return;
+        }
+        let body_y = local_y.saturating_sub(1);
+        let area = self.last_area;
+        let use_split = area.width >= MIN_SPLIT_WIDTH && !self.document.outline.is_empty();
+        if use_split {
+            let outline_width = u16::try_from(u32::from(area.width) * OUTLINE_FRACTION / OUTLINE_TOTAL).unwrap_or(0);
+            if local_x < outline_width {
+                self.focus = Focus::Outline;
+                let sections = &self.document.outline;
+                if !sections.is_empty() {
+                    let target = (self.outline_scroll + body_y as usize).min(sections.len().saturating_sub(1));
+                    self.outline_cursor = target;
+                }
+            } else {
+                self.focus = Focus::Plan;
+                self.plan_cursor_line = self.plan_scroll + body_y as usize;
+            }
+        } else {
+            self.focus = Focus::Plan;
+            self.plan_cursor_line = self.plan_scroll + body_y as usize;
+        }
     }
 
     pub fn on_key(&mut self, key: KeyEvent) -> bool {
@@ -288,6 +337,7 @@ impl PlanReviewScreen {
 
     #[allow(clippy::cast_possible_truncation)]
     pub fn render(&mut self, frame: &mut Frame, theme: &Theme, highlighter: &mut SyntaxHighlighter) {
+        self.last_area = frame.area();
         self.ensure_source_lines_rendered(theme, highlighter);
 
         let area = frame.area();
@@ -588,6 +638,7 @@ impl PlanReviewScreen {
             draft: None,
             focus: Focus::Plan,
             respond: Some(respond),
+            last_area: Rect::new(0, 0, 120, 40),
         }
     }
 

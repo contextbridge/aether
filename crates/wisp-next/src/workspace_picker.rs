@@ -46,6 +46,34 @@ impl WorkspacePicker {
         self.rows.iter().any(|r| matches!(r, WorkspaceRow::Existing(_)))
     }
 
+    pub fn select_row(&mut self, row: usize) {
+        if matches!(self.mode, Mode::List) {
+            let filtered = self.filtered();
+            if !filtered.is_empty() {
+                let idx = row.min(filtered.len().saturating_sub(1));
+                self.selected = idx;
+            }
+        }
+    }
+
+    pub fn scroll_up(&mut self) {
+        if matches!(self.mode, Mode::List) {
+            let filtered = self.filtered();
+            if !filtered.is_empty() {
+                self.selected = self.selected.checked_sub(1).unwrap_or(filtered.len() - 1);
+            }
+        }
+    }
+
+    pub fn scroll_down(&mut self) {
+        if matches!(self.mode, Mode::List) {
+            let filtered = self.filtered();
+            if !filtered.is_empty() {
+                self.selected = (self.selected + 1) % filtered.len();
+            }
+        }
+    }
+
     pub fn on_key(&mut self, key: crossterm::event::KeyEvent) -> Option<Vec<WorkspacePickerMessage>> {
         use crossterm::event::KeyCode;
 
