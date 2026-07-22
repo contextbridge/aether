@@ -6,6 +6,7 @@ pub mod diff;
 pub mod dropped_files;
 pub mod edit_buffer;
 pub mod error;
+pub mod filterable_list;
 pub mod git_diff;
 pub mod keybindings;
 pub mod markdown;
