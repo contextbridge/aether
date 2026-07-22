@@ -4,10 +4,11 @@ use crate::diff::render_diff;
 use crate::markdown::render_markdown;
 use crate::plan_view::render_plan_lines;
 use crate::presentation::TranscriptRenderer;
+use crate::progress_indicator::spinner_frame;
 use crate::settings::{ContextUsageDisplay, ResolvedStatusLineSettings, StatusLineSegmentConfig, StatusLineStyle};
 use crate::theme::Theme;
 use crate::tool_calls::{SUB_AGENT_VISIBLE_TOOL_LIMIT, ToolStatus};
-use crate::wrap::wrap_line;
+use crate::wrap::{line_display_width, truncate_spans, truncate_text, wrap_line, wrap_text};
 use acp_utils::config_option_id::ConfigOptionId;
 use agent_client_protocol::schema::{self as acp, SessionConfigKind, SessionConfigOption, SessionConfigSelectOptions};
 use ratatui::Frame;
@@ -112,15 +113,16 @@ pub fn draw(frame: &mut Frame, app: &mut App, renderer: &mut TranscriptRenderer)
         lines.drain(..lines.len() - available);
     }
     let content_height = u16::try_from(lines.len()).unwrap_or(live_area.height).min(live_area.height);
-    let content_area =
-        Rect { y: live_area.bottom().saturating_sub(content_height), height: content_height, ..live_area };
-    frame.render_widget(Paragraph::new(Text::from(lines)), content_area);
-
+    let [_, plan_area, content_area] = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(plan_height_used),
+        Constraint::Length(content_height),
+    ])
+    .areas(live_area);
     if plan_height_used > 0 {
-        let plan_area =
-            Rect { y: content_area.y.saturating_sub(plan_height_used), height: plan_height_used, ..live_area };
         frame.render_widget(Paragraph::new(Text::from(visible_plan_lines)), plan_area);
     }
+    frame.render_widget(Paragraph::new(Text::from(lines)), content_area);
 
     render_composer(frame, &composer_layout, &overlay_lines, &prompt_search_lines, app, composer_area);
     render_status_line(frame, app, status_area, &theme, &settings);
@@ -564,69 +566,6 @@ fn semantic_color(style: StatusLineStyle, theme: &Theme) -> ratatui::style::Colo
     }
 }
 
-fn line_display_width(spans: &[Span<'_>]) -> usize {
-    spans.iter().map(Span::width).sum()
-}
-
-fn truncate_spans(spans: &[Span<'static>], max_width: usize) -> Vec<Span<'static>> {
-    let display_width: usize = spans.iter().map(Span::width).sum();
-    if display_width <= max_width {
-        return spans.to_vec();
-    }
-    let ellipsis = "…";
-    let ellipsis_width = 1;
-    if max_width < ellipsis_width {
-        return Vec::new();
-    }
-    let budget = max_width - ellipsis_width;
-    let mut result: Vec<Span<'static>> = Vec::new();
-    let mut remaining = budget;
-    for span in spans {
-        if remaining == 0 {
-            break;
-        }
-        let text = &span.content;
-        let style = span.style;
-        let mut byte_end = 0;
-        let mut col = 0;
-        for (i, ch) in text.char_indices() {
-            let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-            if col + cw > remaining {
-                break;
-            }
-            col += cw;
-            byte_end = i + ch.len_utf8();
-        }
-        if byte_end > 0 {
-            result.push(Span::styled(text[..byte_end].to_string(), style));
-        }
-        remaining -= col;
-    }
-    result.push(Span::raw(ellipsis));
-    result
-}
-
-fn truncate_text(text: &str, max_width: Option<u16>) -> String {
-    let Some(max_width) = max_width.map(usize::from) else {
-        return text.to_string();
-    };
-    if text.width() <= max_width {
-        return text.to_string();
-    }
-    let mut result = String::new();
-    let mut current_width = 0;
-    for ch in text.chars() {
-        let char_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-        if current_width + char_width > max_width.saturating_sub(1) {
-            result.push('…');
-            break;
-        }
-        result.push(ch);
-        current_width += char_width;
-    }
-    result
-}
-
 fn slot_bar(filled: usize, total: usize) -> String {
     let slots: String = (0..total).map(|i| if i < filled { '■' } else { '·' }).collect();
     format!("[{slots}]")
@@ -780,12 +719,6 @@ fn option_display_name(
     }
 }
 
-const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-
-fn spinner_frame(tick: usize) -> &'static str {
-    SPINNER_FRAMES[tick % SPINNER_FRAMES.len()]
-}
-
 fn format_arguments(arguments: &str) -> String {
     let mut formatted = format!(" {arguments}");
     let char_count = formatted.chars().count();
@@ -796,42 +729,4 @@ fn format_arguments(arguments: &str) -> String {
         formatted.push_str(ellipsis);
     }
     formatted
-}
-
-fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
-    let mut lines = Vec::new();
-    for raw_line in text.split('\n') {
-        if raw_line.width() <= max_width {
-            lines.push(raw_line.to_string());
-            continue;
-        }
-        let mut current = String::new();
-        for word in raw_line.split(' ') {
-            let needed = if current.is_empty() { word.width() } else { current.width() + 1 + word.width() };
-            if needed <= max_width {
-                if !current.is_empty() {
-                    current.push(' ');
-                }
-                current.push_str(word);
-            } else {
-                if !current.is_empty() {
-                    lines.push(std::mem::take(&mut current));
-                }
-                current = break_long_word(word, max_width, &mut lines);
-            }
-        }
-        lines.push(current);
-    }
-    lines
-}
-
-fn break_long_word(word: &str, max_width: usize, lines: &mut Vec<String>) -> String {
-    let mut current = String::new();
-    for character in word.chars() {
-        if current.width() + unicode_width::UnicodeWidthChar::width(character).unwrap_or(0) > max_width {
-            lines.push(std::mem::take(&mut current));
-        }
-        current.push(character);
-    }
-    current
 }

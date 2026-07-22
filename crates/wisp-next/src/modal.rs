@@ -15,6 +15,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use serde_json::{Map, Value};
 use std::sync::Arc;
 
+use crate::edit_buffer::EditBuffer;
 use crate::theme::Theme;
 
 pub type BrowserOpener = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
@@ -49,8 +50,8 @@ struct FormField {
 }
 
 enum FormFieldKind {
-    Text(String),
-    Number(String),
+    Text(EditBuffer),
+    Number(EditBuffer),
     Boolean(bool),
     Single { options: Vec<SelectOption>, selected: usize },
     Multi { options: Vec<SelectOption>, selected: Vec<bool>, cursor: usize },
@@ -292,7 +293,7 @@ impl FormModal {
                 if let Some(field) = self.fields.get_mut(self.selected) {
                     match &mut field.kind {
                         FormFieldKind::Text(value) | FormFieldKind::Number(value) => {
-                            value.pop();
+                            value.backspace();
                         }
                         _ => {}
                     }
@@ -302,7 +303,7 @@ impl FormModal {
             KeyCode::Char(character) if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
                 if let Some(field) = self.fields.get_mut(self.selected) {
                     match &mut field.kind {
-                        FormFieldKind::Text(value) | FormFieldKind::Number(value) => value.push(character),
+                        FormFieldKind::Text(value) | FormFieldKind::Number(value) => value.insert_char(character),
                         _ => {}
                     }
                 }
@@ -428,19 +429,19 @@ impl FormField {
                 let label = i.title.as_deref().unwrap_or(name).to_string();
                 let description = i.description.as_deref().map(str::to_string);
                 let default_str = i.default.map(|d| d.to_string()).unwrap_or_default();
-                (label, description, FormFieldKind::Number(default_str))
+                (label, description, FormFieldKind::Number(default_str.into()))
             }
             PrimitiveSchema::Number(n) => {
                 let label = n.title.as_deref().unwrap_or(name).to_string();
                 let description = n.description.as_deref().map(str::to_string);
                 let default_str = n.default.map(|d| d.to_string()).unwrap_or_default();
-                (label, description, FormFieldKind::Number(default_str))
+                (label, description, FormFieldKind::Number(default_str.into()))
             }
             PrimitiveSchema::String(s) => {
                 let label = s.title.as_deref().unwrap_or(name).to_string();
                 let description = s.description.as_deref().map(str::to_string);
                 let default_str = s.default.clone().unwrap_or_default();
-                (label, description, FormFieldKind::Text(default_str))
+                (label, description, FormFieldKind::Text(default_str.into()))
             }
             PrimitiveSchema::Enum(e) => {
                 let (label, description) = extract_enum_metadata(e, name);
@@ -458,14 +459,14 @@ impl FormField {
                 if self.required && value.is_empty() {
                     Err(missing())
                 } else {
-                    Ok(if value.is_empty() { Value::Null } else { Value::String(value.clone()) })
+                    Ok(if value.is_empty() { Value::Null } else { Value::String(value.text().to_string()) })
                 }
             }
             FormFieldKind::Number(value) => {
                 if value.is_empty() {
                     return if self.required { Err(missing()) } else { Ok(Value::Null) };
                 }
-                serde_json::from_str(value).map_err(|_| format!("{} must be a number", self.label))
+                serde_json::from_str(value.text()).map_err(|_| format!("{} must be a number", self.label))
             }
             FormFieldKind::Boolean(value) => Ok(Value::Bool(*value)),
             FormFieldKind::Single { options, selected } => {
@@ -489,7 +490,7 @@ impl FormField {
 
     fn display_value(&self) -> String {
         match &self.kind {
-            FormFieldKind::Text(value) | FormFieldKind::Number(value) => value.clone(),
+            FormFieldKind::Text(value) | FormFieldKind::Number(value) => value.text().to_string(),
             FormFieldKind::Boolean(value) => if *value { "[x]" } else { "[ ]" }.to_string(),
             FormFieldKind::Single { options, selected } => {
                 options.get(*selected).map(|o| o.title.clone()).unwrap_or_default()
@@ -1029,7 +1030,7 @@ mod tests {
             label: "X".into(),
             description: None,
             required: false,
-            kind: FormFieldKind::Text(String::new()),
+            kind: FormFieldKind::Text(String::new().into()),
         };
         assert_eq!(empty.value().unwrap(), Value::Null);
     }
@@ -1041,7 +1042,7 @@ mod tests {
             label: "Name".into(),
             description: None,
             required: true,
-            kind: FormFieldKind::Text(String::new()),
+            kind: FormFieldKind::Text(String::new().into()),
         };
         assert!(field.value().is_err());
     }

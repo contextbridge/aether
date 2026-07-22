@@ -8,16 +8,21 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{
+    Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+};
 
+use crate::edit_buffer::EditBuffer;
 use crate::git_diff::{
     CommentContext, DiffScope, FileDiff, FileStatus, GitDiffDocument, GitDiffError, PatchAnchor, PatchLine,
     PatchLineKind, QueuedComment, ReviewQueue, StageState, commit, discard_file, stage_all, stage_files, unstage_all,
     unstage_files,
 };
+use crate::selection::SelectionState;
 use crate::syntax::SyntaxHighlighter;
 use crate::theme::Theme;
-use crate::wrap::wrap_line;
+use crate::widgets::TextInput;
+use crate::wrap::{fit_line, text_position_in_wrap, wrap_text_char};
 
 pub struct GitDiffScreen {
     working_dir: PathBuf,
@@ -26,7 +31,7 @@ pub struct GitDiffScreen {
     state: GitDiffLoadState,
     selected_file: usize,
     selected_path: Option<String>,
-    selected_drawer_row: usize,
+    drawer_selection: SelectionState,
     focus: Focus,
     collapsed: HashSet<String>,
     scroll_offsets: HashMap<String, usize>,
@@ -53,8 +58,7 @@ enum PendingAction {
 
 struct DraftState {
     anchor: PatchAnchor,
-    text: String,
-    byte_cursor: usize,
+    buffer: EditBuffer,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -109,7 +113,7 @@ enum DrawerEntry {
 
 enum BottomBar {
     Help,
-    CommitEditor { message: String, cursor: usize },
+    CommitEditor { buffer: EditBuffer },
     DiscardConfirmation { path: String, status: FileStatus },
     Error(String),
 }
@@ -123,7 +127,7 @@ impl GitDiffScreen {
             state: GitDiffLoadState::Loading,
             selected_file: 0,
             selected_path: None,
-            selected_drawer_row: 0,
+            drawer_selection: SelectionState::default(),
             focus: Focus::Drawer,
             collapsed: HashSet::new(),
             scroll_offsets: HashMap::new(),
@@ -188,11 +192,10 @@ impl GitDiffScreen {
                 self.focus = Focus::Drawer;
                 let entries = self.drawer_entries();
                 if !entries.is_empty() {
-                    let sel = self.selected_drawer_row.min(entries.len().saturating_sub(1));
-                    let start = sel.saturating_sub(usize::from(body_y));
-                    let target = (start + usize::from(body_y)).min(entries.len().saturating_sub(1));
-                    self.selected_drawer_row = target;
-                    if let Some(DrawerEntry::File { index, .. }) = entries.get(target) {
+                    self.drawer_selection.select_row(usize::from(body_y), entries.len());
+                    if let Some(DrawerEntry::File { index, .. }) =
+                        self.drawer_selection.selected().and_then(|selected| entries.get(selected))
+                    {
                         self.selected_file = *index;
                     }
                 }
@@ -484,7 +487,7 @@ impl GitDiffScreen {
             return GitDiffOutcome::None;
         };
         let entries = self.drawer_entries();
-        let Some(entry) = entries.get(self.selected_drawer_row) else {
+        let Some(entry) = self.drawer_selection.selected().and_then(|selected| entries.get(selected)) else {
             return GitDiffOutcome::None;
         };
         let files = self.files_for_entry(entry);
@@ -511,7 +514,7 @@ impl GitDiffScreen {
             self.bottom_bar = BottomBar::Error("Nothing staged to commit".to_string());
             return GitDiffOutcome::None;
         }
-        self.bottom_bar = BottomBar::CommitEditor { message: String::new(), cursor: 0 };
+        self.bottom_bar = BottomBar::CommitEditor { buffer: EditBuffer::default() };
         GitDiffOutcome::None
     }
 
@@ -522,11 +525,11 @@ impl GitDiffScreen {
         }
         match key.code {
             KeyCode::Enter => {
-                let BottomBar::CommitEditor { message, .. } = std::mem::replace(&mut self.bottom_bar, BottomBar::Help)
+                let BottomBar::CommitEditor { mut buffer } = std::mem::replace(&mut self.bottom_bar, BottomBar::Help)
                 else {
                     return GitDiffOutcome::None;
                 };
-                let trimmed = message.trim().to_string();
+                let trimmed = buffer.take().trim().to_string();
                 if trimmed.is_empty() {
                     self.bottom_bar = BottomBar::Error("Commit message cannot be empty".to_string());
                     return GitDiffOutcome::None;
@@ -543,57 +546,44 @@ impl GitDiffScreen {
                 })
             }
             KeyCode::Char(c) => {
-                if let BottomBar::CommitEditor { message, cursor } = &mut self.bottom_bar {
-                    let pos = (*cursor).min(message.len());
-                    message.insert(pos, c);
-                    *cursor = pos + c.len_utf8();
+                if let BottomBar::CommitEditor { buffer } = &mut self.bottom_bar {
+                    buffer.insert_char(c);
                 }
                 GitDiffOutcome::None
             }
             KeyCode::Backspace => {
-                if let BottomBar::CommitEditor { message, cursor } = &mut self.bottom_bar
-                    && *cursor > 0
-                {
-                    let prev = message.floor_char_boundary(*cursor - 1);
-                    message.remove(prev);
-                    *cursor = prev;
+                if let BottomBar::CommitEditor { buffer } = &mut self.bottom_bar {
+                    buffer.backspace();
                 }
                 GitDiffOutcome::None
             }
             KeyCode::Delete => {
-                if let BottomBar::CommitEditor { message, cursor } = &mut self.bottom_bar
-                    && *cursor < message.len()
-                {
-                    let end = message.ceil_char_boundary(*cursor + 1);
-                    message.drain(*cursor..end);
+                if let BottomBar::CommitEditor { buffer } = &mut self.bottom_bar {
+                    buffer.delete();
                 }
                 GitDiffOutcome::None
             }
             KeyCode::Left => {
-                if let BottomBar::CommitEditor { message, cursor } = &mut self.bottom_bar
-                    && *cursor > 0
-                {
-                    *cursor = message.floor_char_boundary(*cursor - 1);
+                if let BottomBar::CommitEditor { buffer } = &mut self.bottom_bar {
+                    buffer.move_left();
                 }
                 GitDiffOutcome::None
             }
             KeyCode::Right => {
-                if let BottomBar::CommitEditor { message, cursor } = &mut self.bottom_bar
-                    && *cursor < message.len()
-                {
-                    *cursor = message.ceil_char_boundary(*cursor + 1);
+                if let BottomBar::CommitEditor { buffer } = &mut self.bottom_bar {
+                    buffer.move_right();
                 }
                 GitDiffOutcome::None
             }
             KeyCode::Home => {
-                if let BottomBar::CommitEditor { cursor, .. } = &mut self.bottom_bar {
-                    *cursor = 0;
+                if let BottomBar::CommitEditor { buffer } = &mut self.bottom_bar {
+                    buffer.set_cursor(0);
                 }
                 GitDiffOutcome::None
             }
             KeyCode::End => {
-                if let BottomBar::CommitEditor { message, cursor } = &mut self.bottom_bar {
-                    *cursor = message.len();
+                if let BottomBar::CommitEditor { buffer } = &mut self.bottom_bar {
+                    buffer.move_to_end();
                 }
                 GitDiffOutcome::None
             }
@@ -678,8 +668,10 @@ impl GitDiffScreen {
         if entries.is_empty() {
             return;
         }
-        self.selected_drawer_row = self.selected_drawer_row.saturating_add_signed(amount).min(entries.len() - 1);
-        if let Some(DrawerEntry::File { index, .. }) = entries.get(self.selected_drawer_row) {
+        let current = self.drawer_selection.selected().unwrap_or_default();
+        let selected = current.saturating_add_signed(amount).min(entries.len() - 1);
+        self.drawer_selection.select(Some(selected), entries.len());
+        if let Some(DrawerEntry::File { index, .. }) = entries.get(selected) {
             self.selected_file = *index;
         }
     }
@@ -772,7 +764,7 @@ impl GitDiffScreen {
         }
         let anchor =
             PatchAnchor { file_index: self.selected_file, hunk: self.patch_cursor.hunk, line: self.patch_cursor.line };
-        self.draft = Some(DraftState { anchor, text: String::new(), byte_cursor: 0 });
+        self.draft = Some(DraftState { anchor, buffer: EditBuffer::default() });
         GitDiffOutcome::None
     }
 
@@ -786,8 +778,8 @@ impl GitDiffScreen {
                 GitDiffOutcome::None
             }
             KeyCode::Enter => {
-                let draft = self.draft.take().expect("draft exists");
-                let text = draft.text;
+                let mut draft = self.draft.take().expect("draft exists");
+                let text = draft.buffer.take();
                 if text.trim().is_empty() {
                     return GitDiffOutcome::None;
                 }
@@ -814,44 +806,31 @@ impl GitDiffScreen {
                 GitDiffOutcome::None
             }
             KeyCode::Char(c) => {
-                let pos = draft.byte_cursor.min(draft.text.len());
-                draft.text.insert(pos, c);
-                draft.byte_cursor = pos + c.len_utf8();
+                draft.buffer.insert_char(c);
                 GitDiffOutcome::None
             }
             KeyCode::Backspace => {
-                if draft.byte_cursor > 0 {
-                    let prev = draft.text.floor_char_boundary(draft.byte_cursor - 1);
-                    draft.text.remove(prev);
-                    draft.byte_cursor = prev;
-                }
+                draft.buffer.backspace();
                 GitDiffOutcome::None
             }
             KeyCode::Delete => {
-                if draft.byte_cursor < draft.text.len() {
-                    let end = draft.text.ceil_char_boundary(draft.byte_cursor + 1);
-                    draft.text.drain(draft.byte_cursor..end);
-                }
+                draft.buffer.delete();
                 GitDiffOutcome::None
             }
             KeyCode::Left => {
-                if draft.byte_cursor > 0 {
-                    draft.byte_cursor = draft.text.floor_char_boundary(draft.byte_cursor - 1);
-                }
+                draft.buffer.move_left();
                 GitDiffOutcome::None
             }
             KeyCode::Right => {
-                if draft.byte_cursor < draft.text.len() {
-                    draft.byte_cursor = draft.text.ceil_char_boundary(draft.byte_cursor + 1);
-                }
+                draft.buffer.move_right();
                 GitDiffOutcome::None
             }
             KeyCode::Home => {
-                draft.byte_cursor = 0;
+                draft.buffer.set_cursor(0);
                 GitDiffOutcome::None
             }
             KeyCode::End => {
-                draft.byte_cursor = draft.text.len();
+                draft.buffer.move_to_end();
                 GitDiffOutcome::None
             }
             _ => GitDiffOutcome::None,
@@ -916,7 +895,9 @@ impl GitDiffScreen {
 
     fn collapse_selected(&mut self) {
         let entries = self.drawer_entries();
-        if let Some(DrawerEntry::Directory { path, .. }) = entries.get(self.selected_drawer_row) {
+        if let Some(DrawerEntry::Directory { path, .. }) =
+            self.drawer_selection.selected().and_then(|selected| entries.get(selected))
+        {
             self.collapsed.insert(path.clone());
             self.sync_drawer_selection();
         }
@@ -924,7 +905,7 @@ impl GitDiffScreen {
 
     fn expand_or_open_selected(&mut self) -> bool {
         let entries = self.drawer_entries();
-        match entries.get(self.selected_drawer_row) {
+        match self.drawer_selection.selected().and_then(|selected| entries.get(selected)) {
             Some(DrawerEntry::Directory { path, .. }) => {
                 self.collapsed.remove(path);
                 true
@@ -940,10 +921,11 @@ impl GitDiffScreen {
 
     fn sync_drawer_selection(&mut self) {
         let entries = self.drawer_entries();
-        self.selected_drawer_row = entries
+        let selected = entries
             .iter()
             .position(|entry| matches!(entry, DrawerEntry::File { index, .. } if *index == self.selected_file))
             .unwrap_or(0);
+        self.drawer_selection.select(Some(selected), entries.len());
     }
 
     fn selected_file(&self) -> Option<&FileDiff> {
@@ -1012,25 +994,20 @@ impl GitDiffScreen {
         }
     }
 
-    fn render_drawer(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    fn render_drawer(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let entries = self.drawer_entries();
-        let selected = self.selected_drawer_row.min(entries.len().saturating_sub(1));
-        let visible = usize::from(area.height);
-        let start = selected.saturating_sub(visible.saturating_sub(1));
-        let lines = entries
-            .iter()
-            .enumerate()
-            .skip(start)
-            .take(visible)
-            .map(|(row, entry)| self.drawer_line(entry, row == selected, usize::from(area.width), theme))
-            .collect::<Vec<_>>();
-        frame.render_widget(Paragraph::new(Text::from(lines)), area);
+        self.drawer_selection.ensure_visible(entries.len(), usize::from(area.height));
+        let items = entries.iter().map(|entry| ListItem::new(self.drawer_line(entry, usize::from(area.width), theme)));
+        let list = List::new(items)
+            .highlight_style(Style::new().fg(theme.background).bg(theme.accent).add_modifier(Modifier::BOLD));
+        frame.render_stateful_widget(list, area, self.drawer_selection.list_state_mut());
+
+        let mut scrollbar_state = ScrollbarState::new(entries.len()).position(self.drawer_selection.offset());
+        frame.render_stateful_widget(Scrollbar::new(ScrollbarOrientation::VerticalRight), area, &mut scrollbar_state);
     }
 
-    fn drawer_line(&self, entry: &DrawerEntry, selected: bool, width: usize, theme: &Theme) -> Line<'static> {
-        let selection = selected && self.focus == Focus::Drawer;
-        let selected_style = Style::new().fg(theme.background).bg(theme.accent).add_modifier(Modifier::BOLD);
-        let mut line = match entry {
+    fn drawer_line(&self, entry: &DrawerEntry, width: usize, theme: &Theme) -> Line<'static> {
+        let line = match entry {
             DrawerEntry::Directory { path, depth } => {
                 let name = path.rsplit('/').next().unwrap_or(path);
                 let marker = if self.collapsed.contains(path) { "▸" } else { "▾" };
@@ -1060,10 +1037,7 @@ impl GitDiffScreen {
                 ])
             }
         };
-        if selection {
-            line = line.style(selected_style);
-        }
-        fit_line(line, width, if selection { selected_style } else { Style::new().fg(theme.text_primary) })
+        fit_line(line, width, Style::new().fg(theme.text_primary))
     }
 
     fn render_patch(&mut self, frame: &mut Frame, area: Rect, theme: &Theme, highlighter: &mut SyntaxHighlighter) {
@@ -1113,8 +1087,15 @@ impl GitDiffScreen {
         let offset_key = if self.show_full_file { format!("full:{}", file.path) } else { file.path.clone() };
         let offset = self.scroll_offsets.entry(offset_key).or_default();
         *offset = (*offset).min(lines.len().saturating_sub(1));
+        let line_count = lines.len();
         let visible = lines.into_iter().skip(*offset).take(usize::from(content_area.height)).collect::<Vec<_>>();
         frame.render_widget(Paragraph::new(Text::from(visible)), content_area);
+        let mut scrollbar_state = ScrollbarState::new(line_count).position(*offset);
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight),
+            content_area,
+            &mut scrollbar_state,
+        );
 
         if let Some((draft_line, draft_col)) = draft_cursor
             && draft_line >= *offset
@@ -1167,29 +1148,14 @@ impl GitDiffScreen {
 
     fn render_footer(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         match &self.bottom_bar {
-            BottomBar::CommitEditor { message, cursor } => {
-                let prefix = "commit › ";
-                let prefix_width: u16 = u16::try_from(prefix.len()).unwrap_or(u16::MAX);
-                let avail = area.width.saturating_sub(prefix_width).max(1) as usize;
-                let displayed = if message.len() <= avail {
-                    message.clone()
-                } else {
-                    message[message.len().saturating_sub(avail)..].to_string()
-                };
-                let scroll_start = message.len().saturating_sub(avail);
-                let cursor_col: u16 = if *cursor <= scroll_start {
-                    prefix_width
-                } else {
-                    let offset = (*cursor - scroll_start).min(displayed.len());
-                    let chars_before = displayed[..offset].chars().count();
-                    u16::try_from(prefix_width as usize + chars_before).unwrap_or(u16::MAX)
-                };
-                let line = Line::from(vec![
-                    Span::styled(prefix.to_string(), Style::new().fg(theme.accent).add_modifier(Modifier::BOLD)),
-                    Span::styled(displayed, Style::new().fg(theme.text_primary)),
-                ]);
-                frame.render_widget(Paragraph::new(line), area);
-                frame.set_cursor_position(((area.x + cursor_col).min(area.right().saturating_sub(1)), area.y));
+            BottomBar::CommitEditor { buffer } => {
+                let input = TextInput::new(buffer)
+                    .prefix("commit › ")
+                    .prefix_style(Style::new().fg(theme.accent).add_modifier(Modifier::BOLD))
+                    .style(Style::new().fg(theme.text_primary));
+                let cursor = input.cursor_position(area);
+                frame.render_widget(input, area);
+                frame.set_cursor_position((cursor.x.min(area.right().saturating_sub(1)), cursor.y));
             }
             BottomBar::DiscardConfirmation { path, status } => {
                 let status_label = format!("({})", status.label());
@@ -1711,39 +1677,13 @@ fn add_cursor_indicator(line: Line<'static>, theme: &Theme) -> Line<'static> {
     Line::from(line.spans).style(Style::new().bg(theme.accent).fg(theme.background))
 }
 
-fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
-    if max_width == 0 || text.is_empty() {
-        return vec![String::new()];
-    }
-    let mut lines = Vec::new();
-    let mut current = String::new();
-    let mut current_width = 0usize;
-    for ch in text.chars() {
-        let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-        if current_width + ch_width > max_width && !current.is_empty() {
-            lines.push(current);
-            current = String::new();
-            current_width = 0;
-        }
-        current.push(ch);
-        current_width += ch_width;
-    }
-    if !current.is_empty() {
-        lines.push(current);
-    }
-    if lines.is_empty() {
-        lines.push(String::new());
-    }
-    lines
-}
-
 fn render_submitted_comment(body: &str, width: u16, theme: &Theme) -> Vec<Line<'static>> {
     let border_style = Style::new().fg(theme.info);
     let body_style = Style::new().fg(theme.text_primary);
     let inner_width = usize::from(width).saturating_sub(4).max(10);
     let body_width = inner_width.saturating_sub(3);
 
-    let body_lines = wrap_text(body, body_width);
+    let body_lines = wrap_text_char(body, body_width);
 
     let mut lines = Vec::new();
     let top = fit_line(Line::from(vec![Span::styled("┌─ Comment ─", border_style)]), usize::from(width), border_style);
@@ -1770,13 +1710,13 @@ fn render_draft_comment(draft: &DraftState, width: u16, theme: &Theme) -> (Vec<L
 
     let body_lines: Vec<String>;
     let cursor: Option<(usize, u16)>;
-    if draft.text.is_empty() {
+    if draft.buffer.is_empty() {
         body_lines = vec!["█".to_string()];
         cursor = Some((1, 3));
     } else {
-        let display = draft.text.as_str();
-        body_lines = wrap_text(display, body_width);
-        let text_before = &draft.text[..draft.byte_cursor];
+        let display = draft.buffer.text();
+        body_lines = wrap_text_char(display, body_width);
+        let text_before = &display[..draft.buffer.cursor()];
         let (cursor_line, cursor_col) = text_position_in_wrap(text_before, body_width);
         cursor = Some((1 + cursor_line, 3u16 + cursor_col));
     }
@@ -1796,35 +1736,6 @@ fn render_draft_comment(draft: &DraftState, width: u16, theme: &Theme) -> (Vec<L
     let bottom = fit_line(Line::from(vec![Span::styled("└", border_style)]), usize::from(width), border_style);
     lines.push(bottom);
     (lines, cursor)
-}
-
-fn text_position_in_wrap(prefix: &str, max_width: usize) -> (usize, u16) {
-    let mut line = 0usize;
-    let mut current_width = 0usize;
-    for ch in prefix.chars() {
-        let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-        if current_width + ch_width > max_width && current_width > 0 {
-            line += 1;
-            current_width = 0;
-        }
-        current_width += ch_width;
-    }
-    (line, u16::try_from(current_width).unwrap_or(u16::MAX))
-}
-
-fn fit_line(mut line: Line<'static>, width: usize, fill_style: Style) -> Line<'static> {
-    if width == 0 {
-        return Line::default();
-    }
-    if line.width() > width {
-        let content_width = width.saturating_sub(1).max(1);
-        line = wrap_line(line, u16::try_from(content_width).unwrap_or(u16::MAX)).into_iter().next().unwrap_or_default();
-        line.spans.push(Span::styled("…", fill_style));
-    }
-    if line.width() < width {
-        line.spans.push(Span::styled(" ".repeat(width - line.width()), fill_style));
-    }
-    line
 }
 
 fn file_status_color(status: FileStatus, theme: &Theme) -> ratatui::style::Color {

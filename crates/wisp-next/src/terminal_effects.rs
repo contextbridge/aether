@@ -4,8 +4,6 @@ use std::collections::VecDeque;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminalEffect {
     Bell,
-    EnableMouseCapture,
-    DisableMouseCapture,
 }
 
 /// Testable queue of terminal effects that decouples App state from real stdout.
@@ -44,12 +42,10 @@ mod tests {
     fn queue_preserves_fifo_order() {
         let mut effects = TerminalEffects::default();
         effects.push(TerminalEffect::Bell);
-        effects.push(TerminalEffect::EnableMouseCapture);
-        effects.push(TerminalEffect::DisableMouseCapture);
+        effects.push(TerminalEffect::Bell);
 
         assert_eq!(effects.pop(), Some(TerminalEffect::Bell));
-        assert_eq!(effects.pop(), Some(TerminalEffect::EnableMouseCapture));
-        assert_eq!(effects.pop(), Some(TerminalEffect::DisableMouseCapture));
+        assert_eq!(effects.pop(), Some(TerminalEffect::Bell));
         assert_eq!(effects.pop(), None);
     }
 

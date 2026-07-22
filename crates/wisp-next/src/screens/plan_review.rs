@@ -2,15 +2,17 @@ use acp_utils::notifications::{ElicitationAction, ElicitationResponse};
 use agent_client_protocol::Responder;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::Frame;
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use utils::plan_review::{PlanReviewDecision, PlanReviewElicitationMeta};
 
+use crate::edit_buffer::EditBuffer;
 use crate::plan_review::{
     PlanDocument, ReviewComment, SourceMarkdownLine, compile_feedback, render_markdown_source_lines,
 };
+use crate::selection::SelectionState;
 use crate::syntax::SyntaxHighlighter;
 use crate::theme::Theme;
 
@@ -27,8 +29,7 @@ enum Focus {
 
 struct DraftComment {
     line_no: usize,
-    text: String,
-    cursor: usize,
+    buffer: EditBuffer,
 }
 
 pub struct PlanReviewScreen {
@@ -39,8 +40,7 @@ pub struct PlanReviewScreen {
     comments: Vec<ReviewComment>,
     plan_scroll: usize,
     plan_cursor_line: usize,
-    outline_cursor: usize,
-    outline_scroll: usize,
+    outline_selection: SelectionState,
     draft: Option<DraftComment>,
     focus: Focus,
     respond: Option<Box<dyn FnOnce(ElicitationResponse) + Send>>,
@@ -50,6 +50,7 @@ pub struct PlanReviewScreen {
 impl PlanReviewScreen {
     pub fn new(meta: PlanReviewElicitationMeta, responder: Responder<ElicitationResponse>) -> Self {
         let document = PlanDocument::parse(&meta.plan_path, &meta.markdown);
+        let outline_selection = SelectionState::new(document.outline.len());
         Self {
             title: meta.title,
             document,
@@ -58,8 +59,7 @@ impl PlanReviewScreen {
             comments: Vec::new(),
             plan_scroll: 0,
             plan_cursor_line: 0,
-            outline_cursor: 0,
-            outline_scroll: 0,
+            outline_selection,
             draft: None,
             focus: Focus::Plan,
             respond: Some(Box::new(move |response| {
@@ -92,8 +92,8 @@ impl PlanReviewScreen {
             self.plan_scroll = self.plan_scroll.saturating_sub(3);
             self.plan_cursor_line = self.plan_cursor_line.saturating_sub(3);
         } else {
-            self.outline_scroll = self.outline_scroll.saturating_sub(1);
-            self.outline_cursor = self.outline_cursor.saturating_sub(1);
+            let selected = self.outline_selection.selected().unwrap_or_default().saturating_sub(1);
+            self.outline_selection.select(Some(selected), self.document.outline.len());
         }
     }
 
@@ -102,9 +102,9 @@ impl PlanReviewScreen {
             self.plan_scroll = self.plan_scroll.saturating_add(3).min(self.source_line_max_index());
             self.plan_cursor_line = self.plan_cursor_line.saturating_add(3).min(self.source_line_max_index());
         } else {
-            let sections = &self.document.outline;
-            self.outline_scroll = (self.outline_scroll + 1).min(sections.len().saturating_sub(1));
-            self.outline_cursor = (self.outline_cursor + 1).min(sections.len().saturating_sub(1));
+            let len = self.document.outline.len();
+            let selected = self.outline_selection.selected().unwrap_or_default().saturating_add(1);
+            self.outline_selection.select(Some(selected.min(len.saturating_sub(1))), len);
         }
     }
 
@@ -121,8 +121,7 @@ impl PlanReviewScreen {
                 self.focus = Focus::Outline;
                 let sections = &self.document.outline;
                 if !sections.is_empty() {
-                    let target = (self.outline_scroll + body_y as usize).min(sections.len().saturating_sub(1));
-                    self.outline_cursor = target;
+                    self.outline_selection.select_row(body_y as usize, sections.len());
                 }
             } else {
                 self.focus = Focus::Plan;
@@ -170,7 +169,7 @@ impl PlanReviewScreen {
             }
             KeyCode::Char('c') => {
                 let line_no = self.plan_cursor_line + 1;
-                self.draft = Some(DraftComment { line_no, text: String::new(), cursor: 0 });
+                self.draft = Some(DraftComment { line_no, buffer: EditBuffer::default() });
                 false
             }
             KeyCode::Char('u') => {
@@ -214,7 +213,8 @@ impl PlanReviewScreen {
     }
 
     fn handle_outline_key(&mut self, key: KeyEvent) -> bool {
-        let max = self.document.outline.len().saturating_sub(1);
+        let len = self.document.outline.len();
+        let max = len.saturating_sub(1);
         match key.code {
             KeyCode::Esc => {
                 self.respond(ElicitationAction::Cancel, None);
@@ -237,23 +237,27 @@ impl PlanReviewScreen {
                 false
             }
             KeyCode::Char('j') | KeyCode::Down => {
-                self.outline_cursor = self.outline_cursor.saturating_add(1).min(max);
+                let selected = self.outline_selection.selected().unwrap_or_default().saturating_add(1).min(max);
+                self.outline_selection.select(Some(selected), len);
                 false
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                self.outline_cursor = self.outline_cursor.saturating_sub(1);
+                let selected = self.outline_selection.selected().unwrap_or_default().saturating_sub(1);
+                self.outline_selection.select(Some(selected), len);
                 false
             }
             KeyCode::Char('g') => {
-                self.outline_cursor = 0;
+                self.outline_selection.select_first(len);
                 false
             }
             KeyCode::Char('G') => {
-                self.outline_cursor = max;
+                self.outline_selection.select(Some(max), len);
                 false
             }
             KeyCode::Enter => {
-                if let Some(section) = self.document.outline.get(self.outline_cursor) {
+                if let Some(section) =
+                    self.outline_selection.selected().and_then(|selected| self.document.outline.get(selected))
+                {
                     self.plan_cursor_line = section.first_line_no.saturating_sub(1).min(self.source_line_max_index());
                     self.focus = Focus::Plan;
                 }
@@ -277,7 +281,7 @@ impl PlanReviewScreen {
                 false
             }
             KeyCode::Enter => {
-                let text = std::mem::take(&mut draft.text);
+                let text = draft.buffer.take();
                 let line_no = draft.line_no;
                 self.draft = None;
                 if !text.trim().is_empty() {
@@ -286,32 +290,28 @@ impl PlanReviewScreen {
                 false
             }
             KeyCode::Backspace => {
-                if draft.cursor > 0 {
-                    draft.text.remove(draft.cursor - 1);
-                    draft.cursor -= 1;
-                }
+                draft.buffer.backspace();
                 false
             }
             KeyCode::Left => {
-                draft.cursor = draft.cursor.saturating_sub(1);
+                draft.buffer.move_left();
                 false
             }
             KeyCode::Right => {
-                draft.cursor = draft.cursor.min(draft.text.len());
+                draft.buffer.move_right();
                 false
             }
             KeyCode::Home => {
-                draft.cursor = 0;
+                draft.buffer.set_cursor(0);
                 false
             }
             KeyCode::End => {
-                draft.cursor = draft.text.len();
+                draft.buffer.move_to_end();
                 false
             }
             KeyCode::Char(c) => {
                 if !c.is_control() || c == ' ' {
-                    draft.text.insert(draft.cursor, c);
-                    draft.cursor += 1;
+                    draft.buffer.insert_char(c);
                 }
                 false
             }
@@ -347,17 +347,16 @@ impl PlanReviewScreen {
             return;
         }
 
-        let footer_height = 1;
-        let body_area = Rect::new(area.x, area.y, area.width, area.height.saturating_sub(footer_height));
-        let footer_area = Rect::new(area.x, area.y + body_area.height, area.width, footer_height);
+        let [body_area, footer_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
 
         let use_split = area.width >= MIN_SPLIT_WIDTH && !self.document.outline.is_empty();
 
         if use_split {
-            let outline_width = (u32::from(area.width) * OUTLINE_FRACTION / OUTLINE_TOTAL) as u16;
-            let plan_width = area.width.saturating_sub(outline_width);
-            let outline_area = Rect::new(body_area.x, body_area.y, outline_width, body_area.height);
-            let plan_area = Rect::new(body_area.x + outline_width, body_area.y, plan_width, body_area.height);
+            let [outline_area, plan_area] = Layout::horizontal([
+                Constraint::Ratio(OUTLINE_FRACTION, OUTLINE_TOTAL),
+                Constraint::Ratio(OUTLINE_TOTAL - OUTLINE_FRACTION, OUTLINE_TOTAL),
+            ])
+            .areas(body_area);
 
             self.render_outline(frame, outline_area, theme);
             self.render_plan(frame, plan_area, theme);
@@ -384,50 +383,29 @@ impl PlanReviewScreen {
         frame.render_widget(block, area);
 
         let height = inner.height as usize;
+        if height == 0 || self.document.outline.is_empty() {
+            return;
+        }
+        self.outline_selection.ensure_visible(self.document.outline.len(), height);
+
         let inner_width = inner.width.saturating_sub(1) as usize;
-        if height == 0 {
-            return;
-        }
+        let items = self.document.outline.iter().map(|section| {
+            let indent = "  ".repeat(section.level.saturating_sub(1) as usize);
+            let prefix = format!("  {indent}");
+            let available = inner_width.saturating_sub(prefix.len());
+            ListItem::new(format!("{prefix}{}", truncate_str(&section.title, available)))
+        });
+        let highlight_style = if self.focus == Focus::Outline {
+            Style::new().bg(theme.accent).fg(theme.background)
+        } else {
+            Style::new().fg(theme.accent)
+        };
+        let list = List::new(items).highlight_symbol("> ").highlight_style(highlight_style);
+        frame.render_stateful_widget(list, inner, self.outline_selection.list_state_mut());
 
-        let sections = &self.document.outline;
-        if sections.is_empty() {
-            return;
-        }
-
-        // Clamp and adjust scroll
-        self.outline_cursor = self.outline_cursor.min(sections.len().saturating_sub(1));
-        if self.outline_cursor < self.outline_scroll {
-            self.outline_scroll = self.outline_cursor;
-        } else if self.outline_cursor >= self.outline_scroll + height {
-            self.outline_scroll = self.outline_cursor.saturating_sub(height.saturating_sub(1));
-        }
-
-        let mut lines: Vec<Line<'static>> = Vec::with_capacity(height);
-        for row in 0..height {
-            let section_index = self.outline_scroll + row;
-            if let Some(section) = sections.get(section_index) {
-                let selected = section_index == self.outline_cursor;
-                let marker = if selected { "> " } else { "  " };
-                let style = if selected && self.focus == Focus::Outline {
-                    Style::new().bg(theme.accent).fg(theme.background)
-                } else if selected {
-                    Style::new().fg(theme.accent)
-                } else {
-                    Style::default()
-                };
-                let indent = "  ".repeat(section.level.saturating_sub(1) as usize);
-                let prefix = format!("{marker}{indent}");
-                let available = inner_width.saturating_sub(prefix.len());
-                let title = truncate_str(&section.title, available);
-                let mut line = Line::default();
-                line.push_span(Span::styled(format!("{prefix}{title}"), style));
-                lines.push(line);
-            } else {
-                lines.push(Line::default());
-            }
-        }
-
-        frame.render_widget(Paragraph::new(lines), inner);
+        let mut scrollbar_state =
+            ScrollbarState::new(self.document.outline.len()).position(self.outline_selection.offset());
+        frame.render_stateful_widget(Scrollbar::new(ScrollbarOrientation::VerticalRight), inner, &mut scrollbar_state);
     }
 
     #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
@@ -544,15 +522,17 @@ impl PlanReviewScreen {
 
                 let mut input_row = Line::default();
                 input_row.push_span(Span::styled(" ".repeat(gutter_width), Style::new().fg(theme.muted)));
-                if draft.text.is_empty() {
+                if draft.buffer.is_empty() {
                     input_row.push_span(Span::styled("│ ", Style::new().fg(theme.muted)));
                     input_row
                         .push_span(Span::styled("│", Style::new().fg(theme.accent).add_modifier(Modifier::SLOW_BLINK)));
                 } else {
-                    let before = &draft.text[..draft.cursor.min(draft.text.len())];
-                    let cursor_char =
-                        if draft.cursor < draft.text.len() { &draft.text[draft.cursor..=draft.cursor] } else { " " };
-                    let after = &draft.text[(draft.cursor + 1).min(draft.text.len())..];
+                    let text = draft.buffer.text();
+                    let cursor = draft.buffer.cursor();
+                    let before = &text[..cursor];
+                    let next_len = text[cursor..].chars().next().map_or(0, char::len_utf8);
+                    let cursor_char = if next_len == 0 { " " } else { &text[cursor..cursor + next_len] };
+                    let after = &text[cursor + next_len..];
 
                     input_row.push_span(Span::styled("│ ", Style::new().fg(theme.muted)));
                     input_row.push_span(Span::styled(before.to_string(), Style::new().fg(theme.text_primary)));
@@ -586,6 +566,8 @@ impl PlanReviewScreen {
         }
 
         frame.render_widget(Paragraph::new(rendered), inner);
+        let mut scrollbar_state = ScrollbarState::new(self.source_line_count()).position(self.plan_scroll);
+        frame.render_stateful_widget(Scrollbar::new(ScrollbarOrientation::VerticalRight), inner, &mut scrollbar_state);
     }
 
     fn render_footer(&self, frame: &mut Frame, area: Rect, theme: &Theme, has_outline: bool) {
@@ -625,6 +607,7 @@ impl PlanReviewScreen {
     #[doc(hidden)]
     pub fn from_parts(meta: PlanReviewElicitationMeta, respond: Box<dyn FnOnce(ElicitationResponse) + Send>) -> Self {
         let document = PlanDocument::parse(&meta.plan_path, &meta.markdown);
+        let outline_selection = SelectionState::new(document.outline.len());
         Self {
             title: meta.title,
             document,
@@ -633,8 +616,7 @@ impl PlanReviewScreen {
             comments: Vec::new(),
             plan_scroll: 0,
             plan_cursor_line: 0,
-            outline_cursor: 0,
-            outline_scroll: 0,
+            outline_selection,
             draft: None,
             focus: Focus::Plan,
             respond: Some(respond),

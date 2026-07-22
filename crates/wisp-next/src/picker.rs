@@ -1,3 +1,4 @@
+use crate::selection::SelectionState;
 use crate::theme::Theme;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -29,7 +30,7 @@ pub struct Picker<T> {
     entries: Vec<T>,
     matches: Vec<usize>,
     query: String,
-    selected: usize,
+    selection: SelectionState,
 }
 
 impl Overlay {
@@ -105,7 +106,8 @@ impl Overlay {
 
 impl<T> Picker<T> {
     pub fn new(entries: Vec<T>, search_text: impl Fn(&T) -> String) -> Self {
-        let mut picker = Self { entries, matches: Vec::new(), query: String::new(), selected: 0 };
+        let mut picker =
+            Self { entries, matches: Vec::new(), query: String::new(), selection: SelectionState::default() };
         picker.rebuild(search_text);
         picker
     }
@@ -116,30 +118,26 @@ impl<T> Picker<T> {
 
     pub fn set_query(&mut self, query: String, search_text: impl Fn(&T) -> String) {
         self.query = query;
-        self.selected = 0;
         self.rebuild(search_text);
     }
 
     pub fn move_up(&mut self) {
-        if !self.matches.is_empty() {
-            self.selected = self.selected.checked_sub(1).unwrap_or(self.matches.len() - 1);
-        }
+        self.selection.previous(self.matches.len());
     }
 
     pub fn move_down(&mut self) {
-        if !self.matches.is_empty() {
-            self.selected = (self.selected + 1) % self.matches.len();
-        }
+        self.selection.next(self.matches.len());
     }
 
     pub fn select_row(&mut self, row: usize) {
-        if !self.matches.is_empty() {
-            self.selected = row.min(self.matches.len().saturating_sub(1));
-        }
+        self.selection.select_row(row, self.matches.len());
     }
 
     pub fn selected(&self) -> Option<&T> {
-        self.matches.get(self.selected).and_then(|index| self.entries.get(*index))
+        self.selection
+            .selected()
+            .and_then(|selected| self.matches.get(selected))
+            .and_then(|index| self.entries.get(*index))
     }
 
     fn rebuild(&mut self, search_text: impl Fn(&T) -> String) {
@@ -149,7 +147,7 @@ impl<T> Picker<T> {
             .enumerate()
             .filter_map(|(index, entry)| fuzzy_matches(&search_text(entry), &self.query).then_some(index))
             .collect();
-        self.selected = 0;
+        self.selection.select_first(self.matches.len());
     }
 
     fn lines(
@@ -167,7 +165,7 @@ impl<T> Picker<T> {
         } else {
             for (row, index) in self.matches.iter().take(max_rows).enumerate() {
                 let value = truncate(&label(&self.entries[*index]), width.saturating_sub(2));
-                let selected = row == self.selected;
+                let selected = self.selection.selected() == Some(row);
                 let style = if selected {
                     Style::new().fg(theme.text_primary).bg(theme.sidebar_bg)
                 } else {

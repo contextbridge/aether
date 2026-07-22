@@ -1,16 +1,18 @@
+use crate::edit_buffer::EditBuffer;
+use crate::selection::SelectionState;
 use acp_utils::notifications::SessionPreviewResponse;
 use agent_client_protocol::schema::{self as acp, SessionId};
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Widget};
+use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, StatefulWidget, Widget};
 use std::collections::HashMap;
 
 pub struct SessionPicker {
     sessions: Vec<acp::SessionInfo>,
-    selected: usize,
-    query: String,
+    selection: SelectionState,
+    query: EditBuffer,
     preview_enabled: bool,
     previews: HashMap<String, PreviewState>,
 }
@@ -30,7 +32,8 @@ pub enum SessionPickerMessage {
 
 impl SessionPicker {
     pub fn new(sessions: Vec<acp::SessionInfo>, preview_enabled: bool) -> Self {
-        Self { sessions, selected: 0, query: String::new(), preview_enabled, previews: HashMap::new() }
+        let selection = SelectionState::new(sessions.len());
+        Self { sessions, selection, query: EditBuffer::default(), preview_enabled, previews: HashMap::new() }
     }
 
     pub fn has_sessions(&self) -> bool {
@@ -41,7 +44,8 @@ impl SessionPicker {
         if !self.preview_enabled || self.sessions.is_empty() {
             return None;
         }
-        Some(self.sessions[self.selected].session_id.0.to_string())
+        let selected = self.selected_session_index()?;
+        Some(self.sessions[selected].session_id.0.to_string())
     }
 
     pub fn on_preview_loaded(&mut self, preview: SessionPreviewResponse) {
@@ -53,28 +57,22 @@ impl SessionPicker {
     }
 
     pub fn select_row(&mut self, row: usize) {
-        let filtered = self.filtered_sessions();
-        if !filtered.is_empty() {
-            let idx = row.min(filtered.len().saturating_sub(1));
-            self.selected = filtered[idx];
-        }
+        self.selection.select_row(row, self.filtered_sessions().len());
     }
 
     pub fn scroll_up(&mut self) {
-        if !self.sessions.is_empty() {
-            self.selected = self.selected.checked_sub(1).unwrap_or(self.sessions.len() - 1);
-            if let Some(req) = self.preview_request_for(self.selected) {
-                let _ = req;
-            }
+        let len = self.filtered_sessions().len();
+        self.selection.previous(len);
+        if let Some(index) = self.selected_session_index() {
+            let _ = self.preview_request_for(index);
         }
     }
 
     pub fn scroll_down(&mut self) {
-        if !self.sessions.is_empty() {
-            self.selected = (self.selected + 1) % self.sessions.len();
-            if let Some(req) = self.preview_request_for(self.selected) {
-                let _ = req;
-            }
+        let len = self.filtered_sessions().len();
+        self.selection.next(len);
+        if let Some(index) = self.selected_session_index() {
+            let _ = self.preview_request_for(index);
         }
     }
 
@@ -96,24 +94,21 @@ impl SessionPicker {
 
         match key.code {
             KeyCode::Esc => return Some(vec![SessionPickerMessage::Close]),
-            KeyCode::Up => {
-                if !self.sessions.is_empty() {
-                    self.selected = self.selected.checked_sub(1).unwrap_or(self.sessions.len() - 1);
-                    if let Some(req) = self.preview_request_for(self.selected) {
-                        messages.push(SessionPickerMessage::RequestPreview { session_id: req });
-                    }
+            KeyCode::Up | KeyCode::Down => {
+                let len = self.filtered_sessions().len();
+                if key.code == KeyCode::Up {
+                    self.selection.previous(len);
+                } else {
+                    self.selection.next(len);
                 }
-            }
-            KeyCode::Down => {
-                if !self.sessions.is_empty() {
-                    self.selected = (self.selected + 1) % self.sessions.len();
-                    if let Some(req) = self.preview_request_for(self.selected) {
-                        messages.push(SessionPickerMessage::RequestPreview { session_id: req });
-                    }
+                if let Some(index) = self.selected_session_index()
+                    && let Some(req) = self.preview_request_for(index)
+                {
+                    messages.push(SessionPickerMessage::RequestPreview { session_id: req });
                 }
             }
             KeyCode::Enter => {
-                if let Some(session) = self.sessions.get(self.selected) {
+                if let Some(session) = self.selected_session_index().and_then(|index| self.sessions.get(index)) {
                     return Some(vec![SessionPickerMessage::LoadSession {
                         session_id: SessionId::new(session.session_id.0.to_string()),
                         cwd: session.cwd.clone(),
@@ -121,11 +116,12 @@ impl SessionPicker {
                 }
             }
             KeyCode::Char(c) => {
-                self.query.push(c);
+                self.query.insert_char(c);
+                self.selection.select_first(self.filtered_sessions().len());
             }
             KeyCode::Backspace => {
-                self.query.pop();
-                self.selected = 0;
+                self.query.backspace();
+                self.selection.select_first(self.filtered_sessions().len());
             }
             _ => {}
         }
@@ -137,7 +133,7 @@ impl SessionPicker {
         if self.query.is_empty() {
             return (0..self.sessions.len()).collect();
         }
-        let q = self.query.to_ascii_lowercase();
+        let q = self.query.text().to_ascii_lowercase();
         self.sessions
             .iter()
             .enumerate()
@@ -153,6 +149,11 @@ impl SessionPicker {
             .collect()
     }
 
+    fn selected_session_index(&self) -> Option<usize> {
+        let selected = self.selection.selected()?;
+        self.filtered_sessions().get(selected).copied()
+    }
+
     pub fn render(&self, area: Rect, buf: &mut Buffer, theme: &crate::theme::Theme) {
         if !self.has_sessions() {
             let block =
@@ -166,9 +167,8 @@ impl SessionPicker {
         let is_wide = area.width >= 96;
 
         if is_wide {
-            let list_width = area.width / 2;
-            let list_area = Rect::new(area.x, area.y, list_width, area.height);
-            let preview_area = Rect::new(area.x + list_width, area.y, area.width - list_width, area.height);
+            let [list_area, preview_area] =
+                Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(area);
             self.render_list(list_area, buf, theme);
             self.render_preview(preview_area, buf, theme);
         } else {
@@ -181,7 +181,7 @@ impl SessionPicker {
             .borders(Borders::ALL)
             .title(format!(
                 " Sessions {} ",
-                if self.query.is_empty() { String::new() } else { format!("'{}'", self.query) }
+                if self.query.is_empty() { String::new() } else { format!("'{}'", self.query.text()) }
             ))
             .style(Style::new().fg(theme.text_primary));
         let inner = block.inner(area);
@@ -193,36 +193,26 @@ impl SessionPicker {
             return;
         }
 
-        let mut lines: Vec<Line> = Vec::new();
-        let max_title_width = 48usize;
-
-        for &idx in &filtered {
-            let session = &self.sessions[idx];
+        let items = filtered.into_iter().map(|index| {
+            let session = &self.sessions[index];
             let title = session
                 .title
                 .as_deref()
-                .unwrap_or_else(|| session.cwd.file_name().map_or("?", |n| n.to_str().unwrap_or("?")));
+                .unwrap_or_else(|| session.cwd.file_name().map_or("?", |name| name.to_str().unwrap_or("?")));
             let cwd = session
                 .cwd
                 .file_name()
-                .map_or_else(|| session.cwd.display().to_string(), |n| n.to_string_lossy().into_owned());
-
-            let display = format!("{}  {}", truncate_str(title, max_title_width), cwd);
-            let is_selected = idx == self.selected;
-
-            let style = if is_selected {
-                Style::new().fg(theme.text_primary).bg(theme.sidebar_bg)
-            } else {
-                Style::new().fg(theme.text_secondary)
-            };
-
-            lines.push(Line::from(vec![
-                Span::styled("  ", style),
-                Span::styled(truncate_str(&display, inner.width as usize), style),
-            ]));
+                .map_or_else(|| session.cwd.display().to_string(), |name| name.to_string_lossy().into_owned());
+            let display = format!("  {}  {}", truncate_str(title, 48), cwd);
+            ListItem::new(truncate_str(&display, inner.width as usize)).style(Style::new().fg(theme.text_secondary))
+        });
+        let list = List::new(items).highlight_style(Style::new().fg(theme.text_primary).bg(theme.sidebar_bg));
+        let mut state = self.selection.list_state().clone();
+        let visible_rows = usize::from(inner.height);
+        if let Some(selected) = state.selected() {
+            *state.offset_mut() = selected.saturating_sub(visible_rows.saturating_sub(1));
         }
-
-        Paragraph::new(lines).render(inner, buf);
+        StatefulWidget::render(list, inner, buf, &mut state);
     }
 
     fn render_preview(&self, area: Rect, buf: &mut Buffer, theme: &crate::theme::Theme) {
@@ -231,7 +221,9 @@ impl SessionPicker {
         let inner = block.inner(area);
         block.render(area, buf);
 
-        let session = &self.sessions[self.selected];
+        let Some(session) = self.selected_session_index().and_then(|index| self.sessions.get(index)) else {
+            return;
+        };
         let id = session.session_id.0.to_string();
 
         let mut lines: Vec<Line> = Vec::new();

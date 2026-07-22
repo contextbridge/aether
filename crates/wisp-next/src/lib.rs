@@ -4,6 +4,7 @@ pub mod cli;
 pub mod composer;
 pub mod diff;
 pub mod dropped_files;
+pub mod edit_buffer;
 pub mod error;
 pub mod git_diff;
 pub mod keybindings;
@@ -19,6 +20,7 @@ pub mod prompt_search;
 pub mod render;
 pub mod screen_router;
 pub mod screens;
+pub mod selection;
 pub mod session;
 pub mod session_loading_buffer;
 pub mod session_picker;
@@ -29,6 +31,7 @@ pub mod terminal_effects;
 pub mod theme;
 pub mod tool_calls;
 pub mod transcript;
+pub mod widgets;
 pub mod workspace_picker;
 pub mod workspace_status;
 pub mod wrap;
@@ -218,14 +221,6 @@ fn process_terminal_effects(app: &mut App, stdout: &mut impl Write, capture_enab
         match effect {
             TerminalEffect::Bell => {
                 let _ = execute!(stdout, crossterm::style::Print("\x07"));
-            }
-            TerminalEffect::EnableMouseCapture => {
-                let _ = execute!(stdout, EnableMouseCapture);
-                *capture_enabled = true;
-            }
-            TerminalEffect::DisableMouseCapture => {
-                let _ = execute!(stdout, DisableMouseCapture);
-                *capture_enabled = false;
             }
         }
     }

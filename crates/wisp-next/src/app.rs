@@ -34,6 +34,18 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use utils::ReasoningEffort;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActiveSurface {
+    Screen,
+    Settings,
+    SessionPicker,
+    WorkspacePicker,
+    Modal,
+    PromptSearch,
+    Overlay,
+    Composer,
+}
+
 /// Root UI state: reduces terminal input and ACP events into the transcript,
 /// tool-call log, and composer that the renderer draws each frame.
 pub struct App {
@@ -76,7 +88,6 @@ pub struct App {
     pending_theme: Option<crate::theme::Theme>,
     plan_tracker: PlanTracker,
     terminal_effects: TerminalEffects,
-    mouse_capture_state: MouseCaptureState,
     last_terminal_size: (u16, u16),
     surface_rect: Option<Rect>,
 }
@@ -145,12 +156,6 @@ impl HistoryItem {
             HistoryItem::Tool { .. } => HistoryKind::Tool,
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MouseCaptureState {
-    Disabled,
-    Enabled,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -257,7 +262,6 @@ impl App {
             pending_theme: None,
             plan_tracker: PlanTracker::default(),
             terminal_effects: TerminalEffects::default(),
-            mouse_capture_state: MouseCaptureState::Disabled,
             last_terminal_size: (0, 0),
             surface_rect: None,
         }
@@ -376,10 +380,8 @@ impl App {
                 }
                 self.session_loading_buffer.clear();
                 self.screen_router.close();
-                self.mouse_capture_state = MouseCaptureState::Disabled;
                 self.surface_rect = None;
                 self.terminal_effects.clear();
-                self.terminal_effects.push(TerminalEffect::DisableMouseCapture);
                 self.exit_requested = true;
             }
             AcpEvent::ConfigOptionUpdateFailed { error } => {
@@ -490,58 +492,56 @@ impl App {
                 break 'event;
             }
 
-            if self.screen_router.is_active() {
-                if let Some(effect) = self.screen_router.on_key(key) {
-                    self.pending_screen_effects.push_back(effect);
-                }
-                break 'event;
-            }
-
-            if let Some(overlay) = self.settings_overlay.as_mut() {
-                let messages = overlay.on_key(key);
-                for msg in messages {
-                    self.handle_settings_message(msg);
-                }
-                break 'event;
-            }
-
-            if let Some(picker) = &mut self.session_picker {
-                if let Some(messages) = picker.on_key(key) {
-                    for msg in messages {
-                        self.handle_session_picker_message(msg);
+            match self.active_surface() {
+                ActiveSurface::Screen => {
+                    if let Some(effect) = self.screen_router.on_key(key) {
+                        self.pending_screen_effects.push_back(effect);
                     }
+                    break 'event;
                 }
-                break 'event;
-            }
-
-            if let Some(picker) = &mut self.workspace_picker {
-                let messages = picker.on_key(key).unwrap_or_default();
-                for msg in messages {
-                    self.handle_workspace_picker_message(msg);
-                }
-                break 'event;
-            }
-
-            if let Some(modal) = self.modal.as_mut() {
-                if matches!(modal.on_key(key), ModalOutcome::Close) {
-                    self.modal = None;
-                }
-                break 'event;
-            }
-
-            if self.composer.has_prompt_search() {
-                if let Some(msg) = self.composer.prompt_search_on_key(key) {
-                    match msg {
-                        PromptSearchMessage::QueryChanged(query) if !query.trim().is_empty() => {
-                            self.send_prompt_search_query(query);
-                        }
-                        PromptSearchMessage::QueryChanged(_) => {
-                            self.composer.restore_prompt_search_draft();
-                        }
-                        _ => {}
+                ActiveSurface::Settings => {
+                    let messages =
+                        self.settings_overlay.as_mut().map(|overlay| overlay.on_key(key)).unwrap_or_default();
+                    for message in messages {
+                        self.handle_settings_message(message);
                     }
+                    break 'event;
                 }
-                break 'event;
+                ActiveSurface::SessionPicker => {
+                    let messages =
+                        self.session_picker.as_mut().and_then(|picker| picker.on_key(key)).unwrap_or_default();
+                    for message in messages {
+                        self.handle_session_picker_message(message);
+                    }
+                    break 'event;
+                }
+                ActiveSurface::WorkspacePicker => {
+                    let messages =
+                        self.workspace_picker.as_mut().and_then(|picker| picker.on_key(key)).unwrap_or_default();
+                    for message in messages {
+                        self.handle_workspace_picker_message(message);
+                    }
+                    break 'event;
+                }
+                ActiveSurface::Modal => {
+                    if self.modal.as_mut().is_some_and(|modal| matches!(modal.on_key(key), ModalOutcome::Close)) {
+                        self.modal = None;
+                    }
+                    break 'event;
+                }
+                ActiveSurface::PromptSearch => {
+                    if let Some(msg) = self.composer.prompt_search_on_key(key) {
+                        match msg {
+                            PromptSearchMessage::QueryChanged(query) if !query.trim().is_empty() => {
+                                self.send_prompt_search_query(query);
+                            }
+                            PromptSearchMessage::QueryChanged(_) => self.composer.restore_prompt_search_draft(),
+                            _ => {}
+                        }
+                    }
+                    break 'event;
+                }
+                ActiveSurface::Overlay | ActiveSurface::Composer => {}
             }
 
             if self.keybindings.open_prompt_search.matches(key)
@@ -565,7 +565,7 @@ impl App {
                 break 'event;
             }
 
-            if self.composer.has_overlay() {
+            if self.active_surface() == ActiveSurface::Overlay {
                 self.on_overlay_key(key);
                 break 'event;
             }
@@ -630,7 +630,7 @@ impl App {
     }
 
     pub fn on_paste(&mut self, text: &str) {
-        if self.composer.has_prompt_search() {
+        if self.active_surface() == ActiveSurface::PromptSearch {
             if let Some(msg) = self.composer.prompt_search_on_paste(text) {
                 match msg {
                     PromptSearchMessage::QueryChanged(query) if !query.trim().is_empty() => {
@@ -694,34 +694,66 @@ impl App {
         self.screen_router.is_active()
     }
 
+    pub fn active_surface(&self) -> ActiveSurface {
+        if self.screen_router.is_active() {
+            ActiveSurface::Screen
+        } else if self.settings_overlay.is_some() {
+            ActiveSurface::Settings
+        } else if self.session_picker.is_some() {
+            ActiveSurface::SessionPicker
+        } else if self.workspace_picker.is_some() {
+            ActiveSurface::WorkspacePicker
+        } else if self.modal.is_some() {
+            ActiveSurface::Modal
+        } else if self.composer.has_prompt_search() {
+            ActiveSurface::PromptSearch
+        } else if self.composer.has_overlay() {
+            ActiveSurface::Overlay
+        } else {
+            ActiveSurface::Composer
+        }
+    }
+
     pub fn render_modal(
         &mut self,
         frame: &mut ratatui::Frame,
         theme: &crate::theme::Theme,
         highlighter: &mut crate::syntax::SyntaxHighlighter,
     ) {
-        if self.composer.has_prompt_search() || self.composer.has_overlay() {
-            return;
-        }
-        self.surface_rect = None;
-        if self.screen_router.is_active() {
-            self.surface_rect = Some(frame.area());
-            self.screen_router.render(frame, theme, highlighter);
-        } else if let Some(overlay) = &self.settings_overlay {
-            let area = frame.area();
-            self.surface_rect = Some(area);
-            overlay.render(area, frame.buffer_mut(), theme);
-        } else if let Some(picker) = &self.session_picker {
-            let area = frame.area();
-            self.surface_rect = Some(area);
-            picker.render(area, frame.buffer_mut(), theme);
-        } else if let Some(picker) = &self.workspace_picker {
-            let area = frame.area();
-            self.surface_rect = Some(area);
-            picker.render(area, frame.buffer_mut(), theme);
-        } else if let Some(modal) = &self.modal {
-            self.surface_rect = Some(frame.area());
-            modal.render(frame, theme);
+        match self.active_surface() {
+            ActiveSurface::PromptSearch | ActiveSurface::Overlay => {}
+            ActiveSurface::Composer => self.surface_rect = None,
+            ActiveSurface::Screen => {
+                self.surface_rect = Some(frame.area());
+                self.screen_router.render(frame, theme, highlighter);
+            }
+            ActiveSurface::Settings => {
+                let area = frame.area();
+                self.surface_rect = Some(area);
+                if let Some(overlay) = &self.settings_overlay {
+                    overlay.render(area, frame.buffer_mut(), theme);
+                }
+            }
+            ActiveSurface::SessionPicker => {
+                let area = frame.area();
+                self.surface_rect = Some(area);
+                if let Some(picker) = &self.session_picker {
+                    picker.render(area, frame.buffer_mut(), theme);
+                }
+            }
+            ActiveSurface::WorkspacePicker => {
+                let area = frame.area();
+                self.surface_rect = Some(area);
+                if let Some(picker) = &self.workspace_picker {
+                    picker.render(area, frame.buffer_mut(), theme);
+                }
+            }
+            ActiveSurface::Modal => {
+                self.surface_rect = Some(frame.area());
+                if let Some(modal) = &self.modal {
+                    modal.render(frame, theme);
+                }
+            }
         }
     }
 
@@ -769,34 +801,16 @@ impl App {
     }
 
     fn has_mouse_capturing_surface(&self) -> bool {
-        if self.screen_router.is_active() {
-            return true;
+        match self.active_surface() {
+            ActiveSurface::Composer => false,
+            ActiveSurface::Modal => self.modal.as_ref().is_some_and(ElicitationModal::needs_mouse_capture),
+            ActiveSurface::Screen
+            | ActiveSurface::Settings
+            | ActiveSurface::SessionPicker
+            | ActiveSurface::WorkspacePicker
+            | ActiveSurface::PromptSearch
+            | ActiveSurface::Overlay => true,
         }
-        if self.settings_overlay.is_some() {
-            return true;
-        }
-        if self.session_picker.is_some() {
-            return true;
-        }
-        if self.workspace_picker.is_some() {
-            return true;
-        }
-        if let Some(modal) = &self.modal
-            && modal.needs_mouse_capture()
-        {
-            return true;
-        }
-        if self.composer.has_prompt_search() {
-            return true;
-        }
-        if self.composer.has_overlay() {
-            return true;
-        }
-        false
-    }
-
-    pub fn mouse_capture_state(&self) -> MouseCaptureState {
-        self.mouse_capture_state
     }
 
     pub fn terminal_size(&self) -> (u16, u16) {
@@ -1187,83 +1201,94 @@ impl App {
     }
 
     fn surface_scroll_up(&mut self, local_y: u16, local_x: u16) {
-        if self.screen_router.is_active() {
-            self.screen_router.on_mouse_scroll_up(local_y, local_x);
-            return;
-        }
-        if let Some(overlay) = &mut self.settings_overlay {
-            overlay.on_mouse_scroll_up(local_y);
-            return;
-        }
-        if let Some(picker) = &mut self.session_picker {
-            picker.scroll_up();
-            return;
-        }
-        if let Some(picker) = &mut self.workspace_picker {
-            picker.scroll_up();
-            return;
-        }
-        if let Some(modal) = &mut self.modal {
-            modal.on_mouse_scroll_up(local_y);
-            return;
-        }
-        if self.composer.has_prompt_search() {
-            self.composer.prompt_search_move_up();
-        } else if self.composer.has_overlay() {
-            self.composer.overlay_move_up();
+        match self.active_surface() {
+            ActiveSurface::Screen => self.screen_router.on_mouse_scroll_up(local_y, local_x),
+            ActiveSurface::Settings => {
+                if let Some(overlay) = &mut self.settings_overlay {
+                    overlay.on_mouse_scroll_up(local_y);
+                }
+            }
+            ActiveSurface::SessionPicker => {
+                if let Some(picker) = &mut self.session_picker {
+                    picker.scroll_up();
+                }
+            }
+            ActiveSurface::WorkspacePicker => {
+                if let Some(picker) = &mut self.workspace_picker {
+                    picker.scroll_up();
+                }
+            }
+            ActiveSurface::Modal => {
+                if let Some(modal) = &mut self.modal {
+                    modal.on_mouse_scroll_up(local_y);
+                }
+            }
+            ActiveSurface::PromptSearch => self.composer.prompt_search_move_up(),
+            ActiveSurface::Overlay => self.composer.overlay_move_up(),
+            ActiveSurface::Composer => {}
         }
     }
 
     fn surface_scroll_down(&mut self, local_y: u16, local_x: u16) {
-        if self.screen_router.is_active() {
-            self.screen_router.on_mouse_scroll_down(local_y, local_x);
-            return;
-        }
-        if let Some(overlay) = &mut self.settings_overlay {
-            overlay.on_mouse_scroll_down(local_y);
-            return;
-        }
-        if let Some(picker) = &mut self.session_picker {
-            picker.scroll_down();
-            return;
-        }
-        if let Some(picker) = &mut self.workspace_picker {
-            picker.scroll_down();
-            return;
-        }
-        if let Some(modal) = &mut self.modal {
-            modal.on_mouse_scroll_down(local_y);
-            return;
-        }
-        if self.composer.has_prompt_search() {
-            self.composer.prompt_search_move_down();
-        } else if self.composer.has_overlay() {
-            self.composer.overlay_move_down();
+        match self.active_surface() {
+            ActiveSurface::Screen => self.screen_router.on_mouse_scroll_down(local_y, local_x),
+            ActiveSurface::Settings => {
+                if let Some(overlay) = &mut self.settings_overlay {
+                    overlay.on_mouse_scroll_down(local_y);
+                }
+            }
+            ActiveSurface::SessionPicker => {
+                if let Some(picker) = &mut self.session_picker {
+                    picker.scroll_down();
+                }
+            }
+            ActiveSurface::WorkspacePicker => {
+                if let Some(picker) = &mut self.workspace_picker {
+                    picker.scroll_down();
+                }
+            }
+            ActiveSurface::Modal => {
+                if let Some(modal) = &mut self.modal {
+                    modal.on_mouse_scroll_down(local_y);
+                }
+            }
+            ActiveSurface::PromptSearch => self.composer.prompt_search_move_down(),
+            ActiveSurface::Overlay => self.composer.overlay_move_down(),
+            ActiveSurface::Composer => {}
         }
     }
 
     fn surface_click(&mut self, local_y: u16, local_x: u16) {
-        if self.screen_router.is_active() {
-            self.screen_router.on_mouse_click(local_y, local_x);
-            return;
-        }
-        if let Some(overlay) = &mut self.settings_overlay {
-            let messages = overlay.on_mouse_click(local_y, self.surface_rect.unwrap_or_default());
-            for msg in messages {
-                self.handle_settings_message(msg);
+        match self.active_surface() {
+            ActiveSurface::Screen => self.screen_router.on_mouse_click(local_y, local_x),
+            ActiveSurface::Settings => {
+                let messages = self
+                    .settings_overlay
+                    .as_mut()
+                    .map(|overlay| overlay.on_mouse_click(local_y, self.surface_rect.unwrap_or_default()))
+                    .unwrap_or_default();
+                for message in messages {
+                    self.handle_settings_message(message);
+                }
             }
-            return;
-        }
-        if let Some(picker) = &mut self.session_picker {
-            picker.select_row(local_y.saturating_sub(1) as usize);
-        } else if let Some(picker) = &mut self.workspace_picker {
-            picker.select_row(local_y.saturating_sub(1) as usize);
-        } else if let Some(modal) = &mut self.modal {
-            modal.on_mouse_click(local_y);
-        } else if self.composer.has_prompt_search() {
-            self.composer.prompt_search_select_row(local_y as usize);
-        } else if self.composer.has_overlay() {
-            self.composer.overlay_select_row(local_y as usize);
+            ActiveSurface::SessionPicker => {
+                if let Some(picker) = &mut self.session_picker {
+                    picker.select_row(local_y.saturating_sub(1) as usize);
+                }
+            }
+            ActiveSurface::WorkspacePicker => {
+                if let Some(picker) = &mut self.workspace_picker {
+                    picker.select_row(local_y.saturating_sub(1) as usize);
+                }
+            }
+            ActiveSurface::Modal => {
+                if let Some(modal) = &mut self.modal {
+                    modal.on_mouse_click(local_y);
+                }
+            }
+            ActiveSurface::PromptSearch => self.composer.prompt_search_select_row(local_y as usize),
+            ActiveSurface::Overlay => self.composer.overlay_select_row(local_y as usize),
+            ActiveSurface::Composer => {}
         }
     }
 

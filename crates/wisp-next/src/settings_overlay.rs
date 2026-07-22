@@ -1,4 +1,6 @@
 #![allow(clippy::cast_possible_truncation)]
+use crate::edit_buffer::EditBuffer;
+use crate::selection::SelectionState;
 use crate::theme::Theme;
 use acp_utils::config_meta::{ConfigOptionMeta, SelectOptionMeta};
 use acp_utils::config_option_id::{ConfigOptionId, THEME_CONFIG_ID};
@@ -84,7 +86,7 @@ pub enum SettingsOverlayMessage {
 
 struct SettingsMenu {
     entries: Vec<SettingsMenuEntry>,
-    selected: usize,
+    selection: SelectionState,
 }
 
 struct SettingsPicker {
@@ -92,8 +94,8 @@ struct SettingsPicker {
     title: String,
     values: Vec<SettingsMenuValue>,
     current_value: String,
-    query: String,
-    selected: usize,
+    query: EditBuffer,
+    selection: SelectionState,
     filtered: Vec<usize>,
 }
 
@@ -102,8 +104,8 @@ struct ModelSelector {
     all_items: Vec<SettingsMenuValue>,
     selected_models: HashSet<String>,
     original_models: HashSet<String>,
-    query: String,
-    focused: usize,
+    query: EditBuffer,
+    focused: SelectionState,
     filtered: Vec<usize>,
     reasoning_effort: Option<ReasoningEffort>,
     original_reasoning_effort: Option<ReasoningEffort>,
@@ -111,7 +113,7 @@ struct ModelSelector {
 
 struct ServerStatusPane {
     rows: Vec<ServerStatusRow>,
-    selected: usize,
+    selection: SelectionState,
 }
 
 #[derive(Clone)]
@@ -123,7 +125,7 @@ enum ServerStatusRow {
 
 struct ProviderLoginPane {
     entries: Vec<ProviderLoginEntry>,
-    selected: usize,
+    selection: SelectionState,
 }
 
 struct ProviderLoginEntry {
@@ -609,70 +611,65 @@ impl PendingElicitation {
 impl ServerStatusPane {
     fn new(entries: Vec<McpServerStatusEntry>) -> Self {
         let rows = build_rows(entries);
-        let selected = rows.iter().position(|r| matches!(r, ServerStatusRow::Server { .. })).unwrap_or(0);
-        Self { rows, selected }
+        let selected = rows.iter().position(|row| matches!(row, ServerStatusRow::Server { .. }));
+        let mut selection = SelectionState::default();
+        selection.select(selected, rows.len());
+        Self { rows, selection }
     }
 
     fn move_up(&mut self) {
-        if self.rows.is_empty() {
-            return;
-        }
-        let start = self.selected;
-        loop {
-            self.selected = self.selected.checked_sub(1).unwrap_or(self.rows.len() - 1);
-            if matches!(self.rows[self.selected], ServerStatusRow::Server { .. }) || self.selected == start {
-                break;
-            }
-        }
+        self.move_selection(-1);
     }
 
     fn move_down(&mut self) {
-        if self.rows.is_empty() {
-            return;
-        }
-        let start = self.selected;
-        loop {
-            self.selected = (self.selected + 1) % self.rows.len();
-            if matches!(self.rows[self.selected], ServerStatusRow::Server { .. }) || self.selected == start {
-                break;
-            }
-        }
+        self.move_selection(1);
     }
 
     fn selected_entry(&self) -> Option<&McpServerStatusEntry> {
-        match self.rows.get(self.selected)? {
+        match self.selection.selected().and_then(|selected| self.rows.get(selected))? {
             ServerStatusRow::Server { entry, .. } => Some(entry),
             _ => None,
         }
     }
 
     fn click_row(&mut self, row: usize) -> bool {
-        if self.rows.is_empty() {
+        if !matches!(self.rows.get(row), Some(ServerStatusRow::Server { .. })) {
             return false;
         }
-        if row >= self.rows.len() {
-            return false;
-        }
-        if matches!(&self.rows[row], ServerStatusRow::Server { .. }) {
-            self.selected = row;
-            true
-        } else {
-            false
-        }
+        self.selection.select(Some(row), self.rows.len());
+        true
     }
 
     fn update_entries(&mut self, entries: Vec<McpServerStatusEntry>) {
-        let selected_name = self.selected_entry().map(|e| e.name.clone());
+        let selected_name = self.selected_entry().map(|entry| entry.name.clone());
         self.rows = build_rows(entries);
-        self.selected = 0;
-        if let Some(name) = selected_name
-            && let Some(idx) =
-                self.rows.iter().position(|r| matches!(r, ServerStatusRow::Server { entry, .. } if entry.name == name))
-        {
-            self.selected = idx;
+        let selected = selected_name
+            .and_then(|name| {
+                self.rows
+                    .iter()
+                    .position(|row| matches!(row, ServerStatusRow::Server { entry, .. } if entry.name == name))
+            })
+            .or_else(|| self.rows.iter().position(|row| matches!(row, ServerStatusRow::Server { .. })));
+        self.selection.select(selected, self.rows.len());
+    }
+
+    fn move_selection(&mut self, direction: isize) {
+        if self.rows.is_empty() {
+            return;
         }
-        if !matches!(self.rows.get(self.selected), Some(ServerStatusRow::Server { .. })) {
-            self.selected = self.rows.iter().position(|r| matches!(r, ServerStatusRow::Server { .. })).unwrap_or(0);
+        let start = self.selection.selected().unwrap_or_default();
+        let mut selected = start;
+        loop {
+            selected = selected.saturating_add_signed(direction);
+            if direction < 0 && selected == 0 && start == 0 {
+                selected = self.rows.len() - 1;
+            } else if direction > 0 && selected >= self.rows.len() {
+                selected = 0;
+            }
+            if matches!(self.rows[selected], ServerStatusRow::Server { .. }) || selected == start {
+                self.selection.select(Some(selected), self.rows.len());
+                break;
+            }
         }
     }
 
@@ -709,23 +706,24 @@ impl ServerStatusPane {
 
                     let prefix = if *indented { "  " } else { "" };
                     let text = format!(" {prefix}{}  {indicator} {detail}", entry.name);
+                    let selected = self.selection.selected() == Some(i);
                     let style = match &entry.status {
                         McpServerStatus::Connected { .. } | McpServerStatus::Connecting => {
-                            if i == self.selected {
+                            if selected {
                                 Style::new().fg(theme.background).bg(theme.text_primary)
                             } else {
                                 Style::new().fg(theme.text_primary)
                             }
                         }
                         McpServerStatus::Failed { .. } => {
-                            if i == self.selected {
+                            if selected {
                                 Style::new().fg(theme.background).bg(theme.error)
                             } else {
                                 Style::new().fg(theme.error)
                             }
                         }
                         McpServerStatus::Authenticating | McpServerStatus::NeedsOAuth => {
-                            if i == self.selected {
+                            if selected {
                                 Style::new().fg(theme.background).bg(theme.warning)
                             } else {
                                 Style::new().fg(theme.warning)
@@ -761,34 +759,27 @@ fn build_rows(entries: Vec<McpServerStatusEntry>) -> Vec<ServerStatusRow> {
 
 impl ProviderLoginPane {
     fn new(entries: Vec<ProviderLoginEntry>) -> Self {
-        let selected = 0;
-        Self { entries, selected }
+        let selection = SelectionState::new(entries.len());
+        Self { entries, selection }
     }
 
     fn move_up(&mut self) {
-        if !self.entries.is_empty() {
-            self.selected = self.selected.checked_sub(1).unwrap_or(self.entries.len() - 1);
-        }
+        self.selection.previous(self.entries.len());
     }
 
     fn move_down(&mut self) {
-        if !self.entries.is_empty() {
-            self.selected = (self.selected + 1) % self.entries.len();
-        }
+        self.selection.next(self.entries.len());
     }
 
     fn selected_entry(&self) -> Option<&ProviderLoginEntry> {
-        self.entries.get(self.selected)
+        self.selection.selected().and_then(|selected| self.entries.get(selected))
     }
 
     fn click_row(&mut self, row: usize) -> bool {
-        if self.entries.is_empty() {
-            return false;
-        }
         if row >= self.entries.len() {
             return false;
         }
-        self.selected = row;
+        self.selection.select(Some(row), self.entries.len());
         true
     }
 
@@ -813,12 +804,9 @@ impl ProviderLoginPane {
     fn replace_entries(&mut self, entries: Vec<ProviderLoginEntry>) {
         let selected_method_id = self.selected_entry().map(|e| e.method_id.clone());
         self.entries = entries;
-        self.selected = 0;
-        if let Some(method_id) = selected_method_id
-            && let Some(idx) = self.entries.iter().position(|e| e.method_id == method_id)
-        {
-            self.selected = idx;
-        }
+        let selected =
+            selected_method_id.and_then(|method_id| self.entries.iter().position(|e| e.method_id == method_id));
+        self.selection.select(selected.or(Some(0)), self.entries.len());
     }
 
     fn render(&self, area: Rect, buffer: &mut Buffer, theme: &Theme) {
@@ -840,13 +828,14 @@ impl ProviderLoginPane {
             };
 
             let text = format!(" {}  {} {}", entry.name, indicator, detail);
+            let selected = self.selection.selected() == Some(i);
             let style = if entry.status == ProviderLoginStatus::LoggedIn {
-                if i == self.selected {
+                if selected {
                     Style::new().fg(theme.background).bg(theme.success)
                 } else {
                     Style::new().fg(theme.success)
                 }
-            } else if i == self.selected {
+            } else if selected {
                 Style::new().fg(theme.background).bg(theme.warning)
             } else {
                 Style::new().fg(theme.warning)
@@ -919,23 +908,20 @@ impl SettingsMenu {
             })
             .collect();
 
-        Self { entries, selected: 0 }
+        let selection = SelectionState::new(entries.len());
+        Self { entries, selection }
     }
 
     fn move_up(&mut self) {
-        if !self.entries.is_empty() {
-            self.selected = self.selected.checked_sub(1).unwrap_or(self.entries.len() - 1);
-        }
+        self.selection.previous(self.entries.len());
     }
 
     fn move_down(&mut self) {
-        if !self.entries.is_empty() {
-            self.selected = (self.selected + 1) % self.entries.len();
-        }
+        self.selection.next(self.entries.len());
     }
 
     fn selected_entry(&self) -> Option<&SettingsMenuEntry> {
-        self.entries.get(self.selected)
+        self.selection.selected().and_then(|selected| self.entries.get(selected))
     }
 
     fn update_options(&mut self, options: &[SessionConfigOption]) {
@@ -943,9 +929,7 @@ impl SettingsMenu {
             self.entries.iter().filter(|e| !matches!(e.entry_kind, SettingsMenuEntryKind::Select)).cloned().collect();
         *self = Self::from_config_options(options);
         self.entries.splice(0..0, local_entries);
-        if self.selected >= self.entries.len() {
-            self.selected = self.entries.len().saturating_sub(1);
-        }
+        self.selection.clamp(self.entries.len());
     }
 
     fn apply_change(&mut self, change: &SettingsChange) {
@@ -958,20 +942,14 @@ impl SettingsMenu {
     }
 
     fn click_row(&mut self, row: usize) -> Option<SettingsMenuEntryKind> {
-        let visible = self.entries.len().min(self.entries.len());
-        let start = if self.selected >= visible { self.selected - visible + 1 } else { 0 };
-        let idx = start + row;
-        if idx < self.entries.len() {
-            self.selected = idx;
-            Some(self.entries[idx].entry_kind)
-        } else {
-            None
-        }
+        self.selection.select_row(row, self.entries.len());
+        self.selected_entry().map(|entry| entry.entry_kind)
     }
 
     fn render(&self, area: Rect, buffer: &mut Buffer, theme: &Theme) {
         let visible = usize::from(area.height).min(self.entries.len());
-        let start = if self.selected >= visible { self.selected - visible + 1 } else { 0 };
+        let selected = self.selection.selected().unwrap_or_default();
+        let start = selected.saturating_sub(visible.saturating_sub(1));
 
         for i in 0..visible {
             let idx = start + i;
@@ -990,7 +968,7 @@ impl SettingsMenu {
                 .unwrap_or("?");
 
             let text = format!("{}: {}", entry.title, current_name);
-            let style = if idx == self.selected {
+            let style = if idx == selected {
                 Style::new().fg(theme.background).bg(theme.text_primary)
             } else {
                 Style::new().fg(theme.text_primary)
@@ -1064,87 +1042,78 @@ impl SettingsPicker {
         let current_value = entry.values.get(entry.current_value_index)?.value.clone();
         let values = entry.values.clone();
         let filtered: Vec<usize> = (0..values.len()).collect();
-        let selected = values.iter().position(|v| v.value == current_value).unwrap_or(0);
+        let selected = values.iter().position(|value| value.value == current_value);
+        let mut selection = SelectionState::default();
+        selection.select(selected, filtered.len());
 
         Some(Self {
             config_id: entry.config_id.clone(),
             title: entry.title.clone(),
             values,
             current_value,
-            query: String::new(),
-            selected,
+            query: EditBuffer::default(),
+            selection,
             filtered,
         })
     }
 
     fn move_up(&mut self) {
-        if !self.filtered.is_empty() {
-            self.selected = self.selected.checked_sub(1).unwrap_or(self.filtered.len() - 1);
-            self.ensure_selectable();
-        }
+        self.selection.previous(self.filtered.len());
+        self.ensure_selectable();
     }
 
     fn move_down(&mut self) {
-        if !self.filtered.is_empty() {
-            self.selected = (self.selected + 1) % self.filtered.len();
-            self.ensure_selectable();
-        }
+        self.selection.next(self.filtered.len());
+        self.ensure_selectable();
     }
 
-    fn push_query_char(&mut self, c: char) {
-        self.query.push(c);
+    fn push_query_char(&mut self, character: char) {
+        self.query.insert_char(character);
         self.refilter();
     }
 
     fn pop_query_char(&mut self) {
-        self.query.pop();
+        self.query.backspace();
         self.refilter();
     }
 
     fn refilter(&mut self) {
-        let q = self.query.to_lowercase();
+        let query = self.query.text().to_lowercase();
         self.filtered = (0..self.values.len())
-            .filter(|&i| {
-                let v = &self.values[i];
-                v.name.to_lowercase().contains(&q) || v.value.to_lowercase().contains(&q)
+            .filter(|&index| {
+                let value = &self.values[index];
+                value.name.to_lowercase().contains(&query) || value.value.to_lowercase().contains(&query)
             })
             .collect();
-        self.selected = self.selected.min(self.filtered.len().saturating_sub(1));
+        self.selection.clamp(self.filtered.len());
         self.ensure_selectable();
     }
 
     fn ensure_selectable(&mut self) {
-        while self.filtered.get(self.selected).is_some_and(|&i| self.values[i].is_disabled) {
-            if self.selected == 0 {
+        let mut selected = self.selection.selected().unwrap_or_default();
+        while self.filtered.get(selected).is_some_and(|&index| self.values[index].is_disabled) {
+            if selected == 0 {
                 break;
             }
-            self.selected -= 1;
+            selected -= 1;
         }
+        self.selection.select(Some(selected), self.filtered.len());
     }
 
     fn click_row(&mut self, row: usize) -> bool {
-        let list_start = 1usize;
-        if row < list_start {
+        let Some(item_row) = row.checked_sub(1) else {
+            return false;
+        };
+        if item_row >= self.filtered.len() {
             return false;
         }
-        let item_row = row - list_start;
-        if self.filtered.is_empty() {
-            return false;
-        }
-        let max_items = usize::from(u16::MAX).saturating_sub(list_start);
-        let offset = if self.selected >= max_items { self.selected - max_items + 1 } else { 0 };
-        let idx = offset + item_row;
-        if idx < self.filtered.len() {
-            self.selected = idx;
-            true
-        } else {
-            false
-        }
+        self.selection.select(Some(item_row), self.filtered.len());
+        true
     }
 
     fn confirm_selection(&self) -> Option<SettingsChange> {
-        let value_idx = *self.filtered.get(self.selected)?;
-        let selected = &self.values[value_idx];
+        let value_index = *self.filtered.get(self.selection.selected()?)?;
+        let selected = &self.values[value_index];
         if selected.is_disabled || selected.value == self.current_value {
             return None;
         }
@@ -1152,7 +1121,7 @@ impl SettingsPicker {
     }
 
     fn render(&self, area: Rect, buffer: &mut Buffer, theme: &Theme) {
-        let header = format!(" {} search: {}", self.title, self.query);
+        let header = format!(" {} search: {}", self.title, self.query.text());
         buffer.set_string(
             area.x,
             area.y,
@@ -1165,31 +1134,25 @@ impl SettingsPicker {
             return;
         }
 
-        let list_start = 1usize;
-        let max_items = usize::from(area.height).saturating_sub(list_start);
-        let offset = if self.selected >= max_items { self.selected - max_items + 1 } else { 0 };
-
-        for i in 0..max_items {
-            let idx = offset + i;
-            let Some(&value_idx) = self.filtered.get(idx) else {
-                break;
+        let max_items = usize::from(area.height).saturating_sub(1);
+        let selected = self.selection.selected().unwrap_or_default();
+        let offset = selected.saturating_sub(max_items.saturating_sub(1));
+        for (row, &value_index) in self.filtered.iter().skip(offset).take(max_items).enumerate() {
+            let y = area.y + 1 + row as u16;
+            let value = &self.values[value_index];
+            let label = if value.name == value.value {
+                value.name.clone()
+            } else {
+                format!("{} ({})", value.name, value.value)
             };
-            let y = area.y + list_start as u16 + i as u16;
-            if y >= area.bottom() {
-                break;
-            }
-
-            let v = &self.values[value_idx];
-            let label = if v.name == v.value { v.name.clone() } else { format!("{} ({})", v.name, v.value) };
-
-            let style = if idx == self.selected {
+            let index = offset + row;
+            let style = if index == selected {
                 Style::new().fg(theme.background).bg(theme.text_primary)
-            } else if v.is_disabled {
+            } else if value.is_disabled {
                 Style::new().fg(theme.text_secondary)
             } else {
                 Style::new().fg(theme.text_primary)
             };
-
             buffer.set_string(area.x, y, truncate_str(&label, area.width as usize), style);
         }
     }
@@ -1210,18 +1173,19 @@ impl ModelSelector {
         let original_reasoning_effort = reasoning;
 
         let filtered: Vec<usize> = (0..items.len()).collect();
-        let focused = items
+        let selected = items
             .iter()
-            .position(|v| !v.is_disabled && selected_models.contains(&v.value))
-            .or_else(|| items.iter().position(|v| !v.is_disabled))
-            .unwrap_or(0);
+            .position(|value| !value.is_disabled && selected_models.contains(&value.value))
+            .or_else(|| items.iter().position(|value| !value.is_disabled));
+        let mut focused = SelectionState::default();
+        focused.select(selected, filtered.len());
 
         Self {
             config_id,
             all_items: items,
             selected_models,
             original_models,
-            query: String::new(),
+            query: EditBuffer::default(),
             focused,
             filtered,
             reasoning_effort: reasoning,
@@ -1230,33 +1194,25 @@ impl ModelSelector {
     }
 
     fn move_up(&mut self) {
-        if !self.filtered.is_empty() {
-            self.focused = self.focused.checked_sub(1).unwrap_or(self.filtered.len() - 1);
-            self.ensure_enabled();
-        }
+        self.focused.previous(self.filtered.len());
+        self.ensure_enabled();
     }
 
     fn move_down(&mut self) {
-        if !self.filtered.is_empty() {
-            self.focused = (self.focused + 1) % self.filtered.len();
-            self.ensure_enabled();
-        }
+        self.focused.next(self.filtered.len());
+        self.ensure_enabled();
     }
 
     fn ensure_enabled(&mut self) {
-        if self.filtered.get(self.focused).is_some_and(|&i| self.all_items[i].is_disabled) {
-            // find first non-disabled
-            for (offset, &i) in self.filtered.iter().enumerate() {
-                if !self.all_items[i].is_disabled {
-                    self.focused = offset;
-                    return;
-                }
-            }
+        let selected = self.focused.selected().unwrap_or_default();
+        if self.filtered.get(selected).is_some_and(|&index| self.all_items[index].is_disabled) {
+            let enabled = self.filtered.iter().position(|&index| !self.all_items[index].is_disabled);
+            self.focused.select(enabled, self.filtered.len());
         }
     }
 
     fn toggle_focused(&mut self) {
-        if let Some(&value_idx) = self.filtered.get(self.focused) {
+        if let Some(&value_idx) = self.focused.selected().and_then(|selected| self.filtered.get(selected)) {
             let v = &self.all_items[value_idx];
             if !v.is_disabled && !self.selected_models.remove(&v.value) {
                 self.selected_models.insert(v.value.clone());
@@ -1265,7 +1221,7 @@ impl ModelSelector {
     }
 
     fn cycle_reasoning(&mut self) {
-        if let Some(&value_idx) = self.filtered.get(self.focused) {
+        if let Some(&value_idx) = self.focused.selected().and_then(|selected| self.filtered.get(selected)) {
             let v = &self.all_items[value_idx];
             if !v.is_disabled && !v.meta.reasoning_levels.is_empty() {
                 self.reasoning_effort = ReasoningEffort::cycle_within(self.reasoning_effort, &v.meta.reasoning_levels);
@@ -1275,7 +1231,7 @@ impl ModelSelector {
 
     fn clamp_reasoning_to_focused(&mut self) {
         if let Some(effort) = self.reasoning_effort
-            && let Some(&value_idx) = self.filtered.get(self.focused)
+            && let Some(&value_idx) = self.focused.selected().and_then(|selected| self.filtered.get(selected))
         {
             let v = &self.all_items[value_idx];
             if v.meta.reasoning_levels.is_empty() {
@@ -1287,24 +1243,24 @@ impl ModelSelector {
     }
 
     fn push_query_char(&mut self, c: char) {
-        self.query.push(c);
+        self.query.insert_char(c);
         self.refilter();
     }
 
     fn pop_query_char(&mut self) {
-        self.query.pop();
+        self.query.backspace();
         self.refilter();
     }
 
     fn refilter(&mut self) {
-        let q = self.query.to_lowercase();
+        let q = self.query.text().to_lowercase();
         self.filtered = (0..self.all_items.len())
             .filter(|&i| {
                 let v = &self.all_items[i];
                 v.name.to_lowercase().contains(&q) || v.value.to_lowercase().contains(&q)
             })
             .collect();
-        self.focused = self.focused.min(self.filtered.len().saturating_sub(1));
+        self.focused.clamp(self.filtered.len());
         self.ensure_enabled();
     }
 
@@ -1318,7 +1274,7 @@ impl ModelSelector {
         }
         let item_row = row - header_rows;
         let remaining_height = usize::from(u16::MAX).saturating_sub(header_rows);
-        let list_idx = self.focused.saturating_sub(remaining_height.saturating_sub(1));
+        let list_idx = self.focused.selected().unwrap_or_default().saturating_sub(remaining_height.saturating_sub(1));
         let mut actual_row: usize = 0;
         let mut current_list_idx = list_idx;
         let mut last_provider: Option<&str> = None;
@@ -1337,7 +1293,7 @@ impl ModelSelector {
             current_list_idx += 1;
         }
         if current_list_idx < self.filtered.len() {
-            self.focused = current_list_idx;
+            self.focused.select(Some(current_list_idx), self.filtered.len());
             true
         } else {
             false
@@ -1360,7 +1316,7 @@ impl ModelSelector {
     }
 
     fn render(&self, area: Rect, buffer: &mut Buffer, theme: &Theme) {
-        let header = format!(" Model search: {}", self.query);
+        let header = format!(" Model search: {}", self.query.text());
         buffer.set_string(
             area.x,
             area.y,
@@ -1407,7 +1363,8 @@ impl ModelSelector {
 
         let mut last_provider: Option<&str> = None;
         let mut row = 0usize;
-        let mut list_idx = self.focused.saturating_sub(remaining_height.saturating_sub(1));
+        let mut list_idx =
+            self.focused.selected().unwrap_or_default().saturating_sub(remaining_height.saturating_sub(1));
 
         while row < remaining_height && list_idx < self.filtered.len() {
             let value_idx = self.filtered[list_idx];
@@ -1528,7 +1485,7 @@ fn render_model_row(
     let check = if selector.selected_models.contains(&v.value) { "[x] " } else { "[ ] " };
     let model = model_label(&v.name);
 
-    let is_focused = list_idx == selector.focused;
+    let is_focused = selector.focused.selected() == Some(list_idx);
     let style = if is_focused {
         Style::new().fg(theme.background).bg(theme.text_primary)
     } else {
@@ -1689,13 +1646,13 @@ mod tests {
             sel("c", "C", "v1", &[("v1", "V1")]),
         ];
         let mut overlay = SettingsOverlay::new(&opts, vec![], vec![]);
-        assert_eq!(overlay.menu.selected, 0);
+        assert_eq!(overlay.menu.selection.selected(), Some(0));
 
         overlay.on_key(KeyEvent::new(KeyCode::Up, crossterm::event::KeyModifiers::NONE));
-        assert_eq!(overlay.menu.selected, 2);
+        assert_eq!(overlay.menu.selection.selected(), Some(2));
 
         overlay.on_key(KeyEvent::new(KeyCode::Down, crossterm::event::KeyModifiers::NONE));
-        assert_eq!(overlay.menu.selected, 0);
+        assert_eq!(overlay.menu.selection.selected(), Some(0));
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use crate::attachments::{AttachmentKind, PromptAttachment, classify_attachment};
+use crate::edit_buffer::EditBuffer;
 use crate::picker::{CommandEntry, FileEntry, Overlay};
 use crate::prompt_search::{self, PromptSearchMessage, PromptSearchPicker};
 use crate::theme::Theme;
@@ -18,8 +19,7 @@ pub struct SelectedFileMention {
 
 #[derive(Debug, Default)]
 pub struct Composer {
-    text: String,
-    cursor: usize,
+    buffer: EditBuffer,
     overlay: Option<Overlay>,
     mentions: Vec<SelectedFileMention>,
     pending_media: Vec<PromptAttachment>,
@@ -46,15 +46,15 @@ impl Composer {
     }
 
     pub fn text(&self) -> &str {
-        &self.text
+        self.buffer.text()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.text.is_empty() && self.pending_media.is_empty()
+        self.buffer.is_empty() && self.pending_media.is_empty()
     }
 
     pub fn selected_mentions(&self) -> Vec<SelectedFileMention> {
-        let words: HashSet<&str> = self.text.split_whitespace().collect();
+        let words: HashSet<&str> = self.buffer.text().split_whitespace().collect();
         self.mentions
             .iter()
             .filter(|mention| words.contains(format!("@{}", mention.display_name).as_str()))
@@ -63,7 +63,7 @@ impl Composer {
     }
 
     pub fn take_submission(&mut self) -> (String, Vec<PromptAttachment>) {
-        let text = std::mem::take(&mut self.text);
+        let text = self.buffer.take();
         let pending_media = std::mem::take(&mut self.pending_media);
         if !text.trim().is_empty() {
             self.history.push(text.clone());
@@ -71,7 +71,6 @@ impl Composer {
                 self.history.remove(0);
             }
         }
-        self.cursor = 0;
         self.overlay = None;
         self.mentions.clear();
         self.reset_history_navigation();
@@ -79,9 +78,8 @@ impl Composer {
     }
 
     pub fn clear(&mut self) {
-        self.text.clear();
+        self.buffer.clear();
         self.pending_media.clear();
-        self.cursor = 0;
         self.overlay = None;
         self.mentions.clear();
         self.reset_history_navigation();
@@ -118,21 +116,18 @@ impl Composer {
 
     pub fn insert_char(&mut self, character: char) {
         self.reset_history_navigation();
-        self.text.insert(self.cursor, character);
-        self.cursor += character.len_utf8();
+        self.buffer.insert_char(character);
     }
 
     pub fn insert_str(&mut self, text: &str) {
         self.reset_history_navigation();
-        self.text.insert_str(self.cursor, text);
-        self.cursor += text.len();
+        self.buffer.insert_str(text);
     }
 
     pub fn insert_paste(&mut self, text: &str) {
         self.reset_history_navigation();
         let filtered: String = text.chars().filter(|c| !c.is_control() || *c == '\n' || *c == '\t').collect();
-        self.text.insert_str(self.cursor, &filtered);
-        self.cursor += filtered.len();
+        self.buffer.insert_str(&filtered);
     }
 
     pub fn insert_newline(&mut self) {
@@ -142,65 +137,40 @@ impl Composer {
 
     pub fn backspace(&mut self) {
         self.reset_history_navigation();
-        if self.text.is_empty() && !self.pending_media.is_empty() {
+        if self.buffer.is_empty() && !self.pending_media.is_empty() {
             self.pending_media.pop();
             return;
         }
-        if let Some(character) = self.text[..self.cursor].chars().next_back() {
-            self.cursor -= character.len_utf8();
-            self.text.remove(self.cursor);
-        }
+        self.buffer.backspace();
     }
 
     pub fn delete(&mut self) {
         self.reset_history_navigation();
-        if self.cursor < self.text.len() {
-            self.text.remove(self.cursor);
-        }
+        self.buffer.delete();
     }
 
     pub fn move_left(&mut self) {
-        if let Some(character) = self.text[..self.cursor].chars().next_back() {
-            self.cursor -= character.len_utf8();
-        }
+        self.buffer.move_left();
     }
 
     pub fn move_right(&mut self) {
-        if let Some(character) = self.text[self.cursor..].chars().next() {
-            self.cursor += character.len_utf8();
-        }
+        self.buffer.move_right();
     }
 
     pub fn move_line_start(&mut self) {
-        self.cursor = self.line_start();
+        self.buffer.move_line_start();
     }
 
     pub fn move_line_end(&mut self) {
-        self.cursor = self.text[self.cursor..].find('\n').map_or(self.text.len(), |offset| self.cursor + offset);
+        self.buffer.move_line_end();
     }
 
     pub fn move_up(&mut self) -> bool {
-        let current_start = self.line_start();
-        if current_start == 0 {
-            return false;
-        }
-        let target_end = current_start - 1;
-        let target_start = self.text[..target_end].rfind('\n').map_or(0, |index| index + 1);
-        let column = self.text[current_start..self.cursor].width();
-        self.cursor = target_start + byte_at_display_column(&self.text[target_start..target_end], column);
-        true
+        self.buffer.move_up()
     }
 
     pub fn move_down(&mut self) -> bool {
-        let current_end = self.text[self.cursor..].find('\n').map_or(self.text.len(), |offset| self.cursor + offset);
-        if current_end == self.text.len() {
-            return false;
-        }
-        let target_start = current_end + 1;
-        let target_end = self.text[target_start..].find('\n').map_or(self.text.len(), |offset| target_start + offset);
-        let column = self.text[self.line_start()..self.cursor].width();
-        self.cursor = target_start + byte_at_display_column(&self.text[target_start..target_end], column);
-        true
+        self.buffer.move_down()
     }
 
     pub fn recall_previous(&mut self) -> bool {
@@ -211,13 +181,13 @@ impl Composer {
             Some(0) => return false,
             Some(index) => index - 1,
             None => {
-                self.history_draft = Some(self.text.clone());
+                self.history_draft = Some(self.buffer.text().to_string());
                 self.history.len() - 1
             }
         };
         self.history_index = Some(index);
         self.set_text(self.history[index].clone());
-        self.cursor = 0;
+        self.buffer.set_cursor(0);
         true
     }
 
@@ -233,7 +203,7 @@ impl Composer {
             self.set_text(draft);
             self.history_index = None;
         }
-        self.cursor = self.text.len();
+        self.buffer.move_to_end();
         true
     }
 
@@ -254,7 +224,7 @@ impl Composer {
     }
 
     pub fn open_prompt_search(&mut self) {
-        let draft = self.text.clone();
+        let draft = self.buffer.text().to_string();
         self.prompt_search = Some(PromptSearchState { picker: PromptSearchPicker::new(), draft });
     }
 
@@ -263,8 +233,7 @@ impl Composer {
             return;
         };
         if !confirmed {
-            self.text = state.draft;
-            self.cursor = self.cursor.min(self.text.len());
+            self.buffer.set_text(state.draft);
         }
     }
 
@@ -325,8 +294,7 @@ impl Composer {
 
     pub fn restore_prompt_search_draft(&mut self) {
         if let Some(state) = &self.prompt_search {
-            self.text = state.draft.clone();
-            self.cursor = self.cursor.min(self.text.len());
+            self.buffer.set_text(state.draft.clone());
         }
     }
 
@@ -360,31 +328,7 @@ impl Composer {
     }
 
     pub fn prompt_search_lines(&self, width: u16, max_rows: usize, theme: &Theme) -> Vec<Line<'static>> {
-        let Some(_state) = self.prompt_search.as_ref() else {
-            return Vec::new();
-        };
-        let height = u16::try_from(max_rows).unwrap_or(u16::MAX).saturating_add(1);
-        let mut buf = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, width, height));
-        if let Some(state) = &self.prompt_search {
-            state.picker.render(ratatui::layout::Rect::new(0, 0, width, height), &mut buf, theme);
-        }
-        let mut lines = Vec::new();
-        for y in 0..=max_rows {
-            let mut line_spans = Vec::new();
-            for x in 0..width {
-                if let Some(cell) = buf.cell((x, u16::try_from(y).unwrap_or(u16::MAX))) {
-                    line_spans.push(Span::styled(cell.symbol().to_string(), cell.style()));
-                } else {
-                    line_spans.push(Span::raw(" "));
-                }
-            }
-            let text: String = line_spans.iter().map(|s| s.content.as_ref()).collect();
-            if text.trim().is_empty() {
-                break;
-            }
-            lines.push(Line::from(line_spans));
-        }
-        lines
+        self.prompt_search.as_ref().map_or_else(Vec::new, |state| state.picker.lines(width, max_rows, theme))
     }
 
     fn apply_selected_search_result(&mut self) {
@@ -393,8 +337,8 @@ impl Composer {
         };
         if let Some(result) = state.picker.selected_result() {
             let cursor = prompt_search::cursor_at_match_end(&result.prompt, result.match_end);
-            self.text = result.prompt.clone();
-            self.cursor = cursor;
+            self.buffer.set_text(result.prompt.clone());
+            self.buffer.set_cursor(cursor);
         }
     }
 
@@ -452,7 +396,7 @@ impl Composer {
         };
         let query = self
             .active_token(trigger)
-            .map_or_else(String::new, |range| self.text[range.start + 1..range.end].to_string());
+            .map_or_else(String::new, |range| self.buffer.text()[range.start + 1..range.end].to_string());
         if let Some(overlay) = &mut self.overlay {
             overlay.set_query(query);
         }
@@ -463,17 +407,17 @@ impl Composer {
     }
 
     pub fn lines(&self) -> impl Iterator<Item = &str> {
-        self.text.split('\n')
+        self.buffer.text().split('\n')
     }
 
     pub fn line_count(&self) -> usize {
-        self.text.split('\n').count()
+        self.buffer.text().split('\n').count()
     }
 
     pub fn cursor_position(&self) -> (usize, usize) {
-        let before = &self.text[..self.cursor];
+        let before = &self.buffer.text()[..self.buffer.cursor()];
         let row = before.matches('\n').count();
-        let column = before[self.line_start()..].chars().map(|character| character.width().unwrap_or(0)).sum();
+        let column = before[self.buffer.line_start()..].chars().map(|character| character.width().unwrap_or(0)).sum();
         (row, column)
     }
 
@@ -485,8 +429,10 @@ impl Composer {
 
         lines.push(Line::styled("─".repeat(full_width), Style::new().fg(theme.muted)));
 
+        let text = self.buffer.text();
+        let cursor_byte = self.buffer.cursor();
         let mut byte_offset = 0;
-        for (logical_row, raw_line) in self.text.split('\n').enumerate() {
+        for (logical_row, raw_line) in text.split('\n').enumerate() {
             let prefix = if logical_row == 0 { "> " } else { "  " };
             let wrapped = wrap_composer_line(raw_line, content_width);
             for (wrapped_row, chunk) in wrapped.iter().enumerate() {
@@ -496,8 +442,8 @@ impl Composer {
                     Span::styled(chunk.clone(), Style::new().fg(theme.text_primary)),
                 ]));
                 let chunk_end = byte_offset + chunk.len();
-                if self.cursor >= byte_offset && self.cursor <= chunk_end {
-                    let column = self.text[byte_offset..self.cursor].width();
+                if cursor_byte >= byte_offset && cursor_byte <= chunk_end {
+                    let column = text[byte_offset..cursor_byte].width();
                     cursor = Position::new(u16::try_from(2 + column).unwrap_or(u16::MAX), row);
                 }
                 byte_offset = chunk_end;
@@ -526,25 +472,23 @@ impl Composer {
     }
 
     fn active_token(&self, trigger: char) -> Option<std::ops::Range<usize>> {
-        let before_cursor = &self.text[..self.cursor];
+        let before_cursor = &self.buffer.text()[..self.buffer.cursor()];
         let start = before_cursor.rfind(trigger)?;
         let before_trigger = &before_cursor[..start];
         (trigger == '/' && start == 0
             || trigger == '@' && (before_trigger.is_empty() || before_trigger.ends_with(char::is_whitespace)))
-        .then_some(start..self.cursor)
+        .then_some(start..self.buffer.cursor())
     }
 
     fn replace_token(&mut self, trigger: char, replacement: &str) {
         let Some(range) = self.active_token(trigger) else {
             return;
         };
-        self.text.replace_range(range.clone(), replacement);
-        self.cursor = range.start + replacement.len();
+        self.buffer.replace_range(range, replacement);
     }
 
     fn set_text(&mut self, text: String) {
-        self.text = text;
-        self.cursor = self.cursor.min(self.text.len());
+        self.buffer.set_text(text);
         self.mentions.clear();
         self.overlay = None;
     }
@@ -553,22 +497,6 @@ impl Composer {
         self.history_index = None;
         self.history_draft = None;
     }
-
-    fn line_start(&self) -> usize {
-        self.text[..self.cursor].rfind('\n').map_or(0, |index| index + 1)
-    }
-}
-
-fn byte_at_display_column(text: &str, column: usize) -> usize {
-    let mut width = 0;
-    for (index, character) in text.char_indices() {
-        let next_width = width + character.width().unwrap_or(0);
-        if next_width > column {
-            return index;
-        }
-        width = next_width;
-    }
-    text.len()
 }
 
 fn wrap_composer_line(line: &str, width: usize) -> Vec<String> {

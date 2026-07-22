@@ -1,16 +1,19 @@
+use crate::edit_buffer::EditBuffer;
+use crate::selection::SelectionState;
+use crate::widgets::TextInput;
 use crate::workspace_status::home_relative_path;
 use acp_utils::notifications::{WorkspaceEntry, WorkspaceMoveTarget};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Widget};
+use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, StatefulWidget, Widget};
 use std::path::{Path, PathBuf};
 
 pub struct WorkspacePicker {
     rows: Vec<WorkspaceRow>,
-    selected: usize,
-    query: String,
+    selection: SelectionState,
+    query: EditBuffer,
     parent_dir: Option<PathBuf>,
     mode: Mode,
 }
@@ -22,7 +25,7 @@ pub enum WorkspacePickerMessage {
 
 enum Mode {
     List,
-    NamingNew { name: String },
+    NamingNew { name: EditBuffer },
 }
 
 #[derive(Clone)]
@@ -39,7 +42,8 @@ impl WorkspacePicker {
         let mut rows: Vec<WorkspaceRow> =
             workspaces.into_iter().filter(|w| !w.is_current).map(WorkspaceRow::Existing).collect();
         rows.push(WorkspaceRow::CreateNew);
-        Self { rows, selected: 0, query: String::new(), parent_dir, mode: Mode::List }
+        let selection = SelectionState::new(rows.len());
+        Self { rows, selection, query: EditBuffer::default(), parent_dir, mode: Mode::List }
     }
 
     pub fn has_workspaces(&self) -> bool {
@@ -48,29 +52,22 @@ impl WorkspacePicker {
 
     pub fn select_row(&mut self, row: usize) {
         if matches!(self.mode, Mode::List) {
-            let filtered = self.filtered();
-            if !filtered.is_empty() {
-                let idx = row.min(filtered.len().saturating_sub(1));
-                self.selected = idx;
-            }
+            let len = self.filtered().len();
+            self.selection.select_row(row, len);
         }
     }
 
     pub fn scroll_up(&mut self) {
         if matches!(self.mode, Mode::List) {
-            let filtered = self.filtered();
-            if !filtered.is_empty() {
-                self.selected = self.selected.checked_sub(1).unwrap_or(filtered.len() - 1);
-            }
+            let len = self.filtered().len();
+            self.selection.previous(len);
         }
     }
 
     pub fn scroll_down(&mut self) {
         if matches!(self.mode, Mode::List) {
-            let filtered = self.filtered();
-            if !filtered.is_empty() {
-                self.selected = (self.selected + 1) % filtered.len();
-            }
+            let len = self.filtered().len();
+            self.selection.next(len);
         }
     }
 
@@ -82,28 +79,25 @@ impl WorkspacePicker {
                 let filtered = self.filtered();
                 match key.code {
                     KeyCode::Esc => return Some(vec![WorkspacePickerMessage::Close]),
-                    KeyCode::Up => {
-                        if !filtered.is_empty() {
-                            self.selected = self.selected.checked_sub(1).unwrap_or(filtered.len() - 1);
-                        }
-                    }
-                    KeyCode::Down => {
-                        if !filtered.is_empty() {
-                            self.selected = (self.selected + 1) % filtered.len();
-                        }
-                    }
+                    KeyCode::Up => self.selection.previous(filtered.len()),
+                    KeyCode::Down => self.selection.next(filtered.len()),
                     KeyCode::Enter | KeyCode::Tab => {
-                        if let Some(row) = filtered.get(self.selected).and_then(|&i| self.rows.get(i)) {
+                        if let Some(row) = self
+                            .selection
+                            .selected()
+                            .and_then(|selected| filtered.get(selected))
+                            .and_then(|&index| self.rows.get(index))
+                        {
                             return Some(self.confirm_row(row.clone()));
                         }
                     }
                     KeyCode::Char(c) => {
-                        self.query.push(c);
-                        self.selected = 0;
+                        self.query.insert_char(c);
+                        self.selection.select_first(self.filtered().len());
                     }
                     KeyCode::Backspace => {
-                        self.query.pop();
-                        self.selected = 0;
+                        self.query.backspace();
+                        self.selection.select_first(self.filtered().len());
                     }
                     _ => {}
                 }
@@ -115,7 +109,7 @@ impl WorkspacePicker {
                     Some(vec![])
                 }
                 KeyCode::Enter => {
-                    let trimmed = name.trim();
+                    let trimmed = name.text().trim();
                     if trimmed.is_empty() {
                         Some(vec![])
                     } else {
@@ -125,11 +119,11 @@ impl WorkspacePicker {
                     }
                 }
                 KeyCode::Char(c) => {
-                    name.push(c);
+                    name.insert_char(c);
                     Some(vec![])
                 }
                 KeyCode::Backspace => {
-                    name.pop();
+                    name.backspace();
                     Some(vec![])
                 }
                 _ => Some(vec![]),
@@ -143,7 +137,7 @@ impl WorkspacePicker {
                 vec![WorkspacePickerMessage::Move { target: WorkspaceMoveTarget::Existing { path: entry.path } }]
             }
             WorkspaceRow::CreateNew => {
-                self.mode = Mode::NamingNew { name: String::new() };
+                self.mode = Mode::NamingNew { name: EditBuffer::default() };
                 vec![]
             }
         }
@@ -153,7 +147,7 @@ impl WorkspacePicker {
         if self.query.is_empty() {
             return (0..self.rows.len()).collect();
         }
-        let q = self.query.to_ascii_lowercase();
+        let q = self.query.text().to_ascii_lowercase();
         self.rows
             .iter()
             .enumerate()
@@ -179,48 +173,38 @@ impl WorkspacePicker {
             .borders(Borders::ALL)
             .title(format!(
                 " Workspaces {} ",
-                if self.query.is_empty() { String::new() } else { format!("'{}'", self.query) }
+                if self.query.is_empty() { String::new() } else { format!("'{}'", self.query.text()) }
             ))
             .style(Style::new().fg(theme.text_primary));
         let inner = block.inner(area);
         block.render(area, buf);
 
         let filtered = self.filtered();
-        let max_rows = inner.height as usize;
-        let mut lines: Vec<Line> = Vec::with_capacity(max_rows);
-
         if filtered.is_empty() {
-            lines.push(Line::styled("  (no matching workspaces)", Style::new().fg(theme.muted)));
-        } else {
-            for (row_idx, &item_idx) in filtered.iter().take(max_rows).enumerate() {
-                let row = &self.rows[item_idx];
-                let (text, is_create) = match row {
-                    WorkspaceRow::Existing(entry) => (format!("  {}", home_relative_path(&entry.path)), false),
-                    WorkspaceRow::CreateNew => (format!("  {CREATE_NEW_LABEL}"), true),
-                };
-                let is_selected = row_idx == self.selected;
-                let style = if is_selected && !is_create {
-                    Style::new().fg(theme.text_primary).bg(theme.sidebar_bg)
-                } else if is_selected && is_create {
-                    Style::new().fg(theme.info).bg(theme.sidebar_bg)
-                } else if is_create {
-                    Style::new().fg(theme.info)
-                } else {
-                    Style::new().fg(theme.text_secondary)
-                };
-                let truncated = truncate(&text, inner.width as usize);
-                lines.push(Line::from(vec![Span::styled(truncated, style)]));
-            }
+            Paragraph::new("  (no matching workspaces)").style(Style::new().fg(theme.muted)).render(inner, buf);
+            return;
         }
 
-        while lines.len() < max_rows {
-            lines.push(Line::from(""));
+        let items = filtered.into_iter().map(|item_index| {
+            let row = &self.rows[item_index];
+            let (text, style) = match row {
+                WorkspaceRow::Existing(entry) => {
+                    (format!("  {}", home_relative_path(&entry.path)), Style::new().fg(theme.text_secondary))
+                }
+                WorkspaceRow::CreateNew => (format!("  {CREATE_NEW_LABEL}"), Style::new().fg(theme.info)),
+            };
+            ListItem::new(truncate(&text, inner.width as usize)).style(style)
+        });
+        let list = List::new(items).highlight_style(Style::new().fg(theme.text_primary).bg(theme.sidebar_bg));
+        let mut state = self.selection.list_state().clone();
+        let visible_rows = usize::from(inner.height);
+        if let Some(selected) = state.selected() {
+            *state.offset_mut() = selected.saturating_sub(visible_rows.saturating_sub(1));
         }
-
-        Paragraph::new(lines).render(inner, buf);
+        StatefulWidget::render(list, inner, buf, &mut state);
     }
 
-    fn render_name_input(&self, name: &str, area: Rect, buf: &mut Buffer, theme: &crate::theme::Theme) {
+    fn render_name_input(&self, name: &EditBuffer, area: Rect, buf: &mut Buffer, theme: &crate::theme::Theme) {
         let block =
             Block::default().borders(Borders::ALL).title(" New workspace ").style(Style::new().fg(theme.text_primary));
         let inner = block.inner(area);
@@ -229,11 +213,6 @@ impl WorkspacePicker {
         let max_rows = inner.height as usize;
         let mut lines: Vec<Line> = Vec::with_capacity(max_rows);
 
-        let display = if name.is_empty() { " " } else { name };
-        lines.push(Line::from(vec![Span::styled(
-            format!("  Name: {display}"),
-            Style::new().fg(theme.text_primary).bg(theme.sidebar_bg),
-        )]));
         lines.push(Line::from(""));
 
         if let Some(parent) = &self.parent_dir {
@@ -248,6 +227,12 @@ impl WorkspacePicker {
         }
 
         Paragraph::new(lines).render(inner, buf);
+        let input_area = Rect::new(inner.x, inner.y, inner.width, 1);
+        TextInput::new(name)
+            .prefix("  Name: ")
+            .prefix_style(Style::new().fg(theme.text_primary).bg(theme.sidebar_bg))
+            .style(Style::new().fg(theme.text_primary).bg(theme.sidebar_bg))
+            .render(input_area, buf);
     }
 }
 

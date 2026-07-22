@@ -1,9 +1,12 @@
+use crate::edit_buffer::EditBuffer;
+use crate::selection::SelectionState;
 use crate::theme::Theme;
 use acp_utils::notifications::{PromptSearchResponse, PromptSearchResult};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
+use ratatui::widgets::{Paragraph, Widget};
 use std::path::{Path, PathBuf};
 use unicode_width::UnicodeWidthChar;
 
@@ -17,9 +20,9 @@ pub enum PromptSearchMessage {
 
 #[derive(Debug, Default)]
 pub struct PromptSearchPicker {
-    query: String,
+    query: EditBuffer,
     results: Vec<PromptSearchResult>,
-    selected: usize,
+    selection: SelectionState,
     loading: bool,
     error: Option<String>,
     search_generation: u64,
@@ -31,11 +34,11 @@ impl PromptSearchPicker {
     }
 
     pub fn query(&self) -> &str {
-        &self.query
+        self.query.text()
     }
 
     pub fn selected_result(&self) -> Option<&PromptSearchResult> {
-        self.results.get(self.selected)
+        self.selection.selected().and_then(|selected| self.results.get(selected))
     }
 
     pub fn search_generation(&self) -> u64 {
@@ -43,11 +46,11 @@ impl PromptSearchPicker {
     }
 
     pub fn on_results(&mut self, response: PromptSearchResponse) -> bool {
-        if response.query != self.query || response.search_generation != self.search_generation {
+        if response.query != self.query.text() || response.search_generation != self.search_generation {
             return false;
         }
         self.results = response.results;
-        self.selected = 0;
+        self.selection.select_first(self.results.len());
         self.loading = false;
         self.error = None;
         true
@@ -58,7 +61,7 @@ impl PromptSearchPicker {
             return false;
         }
         self.results.clear();
-        self.selected = 0;
+        self.selection.select_first(self.results.len());
         self.loading = false;
         self.error = Some(error);
         true
@@ -66,9 +69,9 @@ impl PromptSearchPicker {
 
     fn refresh_query_state(&mut self) {
         self.error = None;
-        if self.query.trim().is_empty() {
+        if self.query.text().trim().is_empty() {
             self.results.clear();
-            self.selected = 0;
+            self.selection.select_first(self.results.len());
             self.loading = false;
         } else {
             self.search_generation = self.search_generation.wrapping_add(1);
@@ -77,78 +80,61 @@ impl PromptSearchPicker {
     }
 
     pub fn move_up(&mut self) {
-        if !self.results.is_empty() {
-            self.selected = self.selected.checked_sub(1).unwrap_or(self.results.len() - 1);
-        }
+        self.selection.previous(self.results.len());
     }
 
     pub fn move_down(&mut self) {
-        if !self.results.is_empty() {
-            self.selected = (self.selected + 1) % self.results.len();
-        }
+        self.selection.next(self.results.len());
     }
 
     pub fn select_row(&mut self, row: usize) {
-        if !self.results.is_empty() {
-            self.selected = row.min(self.results.len().saturating_sub(1));
-        }
+        self.selection.select_row(row, self.results.len());
     }
 
     pub fn push_char(&mut self, c: char) -> PromptSearchMessage {
-        self.query.push(c);
+        self.query.insert_char(c);
         self.refresh_query_state();
-        PromptSearchMessage::QueryChanged(self.query.clone())
+        PromptSearchMessage::QueryChanged(self.query.text().to_string())
     }
 
     pub fn push_str(&mut self, text: &str) -> PromptSearchMessage {
         let sanitized: String = text.chars().filter(|c| !c.is_control()).collect();
         if sanitized.is_empty() {
-            return PromptSearchMessage::QueryChanged(self.query.clone());
+            return PromptSearchMessage::QueryChanged(self.query.text().to_string());
         }
-        self.query.push_str(&sanitized);
+        self.query.insert_str(&sanitized);
         self.refresh_query_state();
-        PromptSearchMessage::QueryChanged(self.query.clone())
+        PromptSearchMessage::QueryChanged(self.query.text().to_string())
     }
 
     pub fn backspace(&mut self) -> PromptSearchMessage {
-        self.query.pop();
+        self.query.backspace();
         self.refresh_query_state();
-        PromptSearchMessage::QueryChanged(self.query.clone())
+        PromptSearchMessage::QueryChanged(self.query.text().to_string())
     }
 
-    pub fn render(&self, area: Rect, buf: &mut Buffer, theme: &Theme) {
-        let max_width = area.width.max(1) as usize;
-        let mut y = area.y;
-
-        let header = format!("history search: {}", self.query);
-        let header_style = Style::new().fg(theme.info);
-        render_line(buf, area.x, y, max_width, &header, header_style);
-        y += 1;
-
-        if let Some(err) = &self.error {
-            let text = format!("  error: {err}");
-            render_line(buf, area.x, y, max_width, &text, Style::new().fg(theme.muted));
-            return;
+    pub fn lines(&self, width: u16, max_rows: usize, theme: &Theme) -> Vec<Line<'static>> {
+        let max_width = usize::from(width.max(1));
+        let mut lines =
+            vec![Line::styled(format!("history search: {}", self.query.text()), Style::new().fg(theme.info))];
+        if let Some(error) = &self.error {
+            lines.push(Line::styled(format!("  error: {error}"), Style::new().fg(theme.muted)));
+            return lines;
         }
-
-        if self.query.trim().is_empty() {
-            render_line(buf, area.x, y, max_width, "  type to search prompt history", Style::new().fg(theme.muted));
-            return;
+        if self.query.text().trim().is_empty() {
+            lines.push(Line::styled("  type to search prompt history", Style::new().fg(theme.muted)));
+            return lines;
         }
-
         if self.loading && self.results.is_empty() {
-            render_line(buf, area.x, y, max_width, "  searching…", Style::new().fg(theme.muted));
-            return;
+            lines.push(Line::styled("  searching…", Style::new().fg(theme.muted)));
+            return lines;
         }
-
         if self.results.is_empty() {
-            render_line(buf, area.x, y, max_width, "  no matching prompts", Style::new().fg(theme.muted));
-            return;
+            lines.push(Line::styled("  no matching prompts", Style::new().fg(theme.muted)));
+            return lines;
         }
-
-        let visible_rows = area.height.saturating_sub(1) as usize;
-        for (row, result) in self.results.iter().take(visible_rows).enumerate() {
-            let is_selected = row == self.selected;
+        for (row, result) in self.results.iter().take(max_rows).enumerate() {
+            let is_selected = self.selection.selected() == Some(row);
             let row_style = if is_selected {
                 Style::new().fg(theme.text_primary).bg(theme.sidebar_bg)
             } else {
@@ -159,7 +145,6 @@ impl PromptSearchPicker {
             } else {
                 Style::new().fg(theme.warning)
             };
-
             let cwd_display = abbreviate_cwd(&result.cwd, MAX_CWD_WIDTH);
             let cwd_width = display_width(&cwd_display);
             let prompt_budget = if cwd_width > 0 && max_width >= cwd_width + CWD_GAP + MIN_PROMPT_WIDTH {
@@ -167,8 +152,7 @@ impl PromptSearchPicker {
             } else {
                 max_width
             };
-
-            let mut spans: Vec<Span> = Vec::new();
+            let mut spans = Vec::new();
             let prompt_width = push_prompt_with_highlight(
                 &mut spans,
                 &result.prompt,
@@ -177,14 +161,11 @@ impl PromptSearchPicker {
                 row_style,
                 highlight_style,
             );
-
             if prompt_budget < max_width {
                 let cwd_start = prompt_width + CWD_GAP;
                 let cwd_end = (cwd_start + cwd_width).min(max_width);
                 if cwd_start < max_width {
-                    for _ in prompt_width..cwd_start.min(max_width) {
-                        spans.push(Span::styled(" ", row_style));
-                    }
+                    spans.push(Span::styled(" ".repeat(cwd_start.min(max_width) - prompt_width), row_style));
                     if cwd_end > cwd_start {
                         spans.push(Span::styled(
                             cwd_display,
@@ -193,11 +174,13 @@ impl PromptSearchPicker {
                     }
                 }
             }
-
-            let line = Line::from(spans);
-            buf.set_line(area.x, y, &line, u16::try_from(max_width).unwrap_or(u16::MAX));
-            y += 1;
+            lines.push(Line::from(spans));
         }
+        lines
+    }
+
+    pub fn render(&self, area: Rect, buf: &mut Buffer, theme: &Theme) {
+        Paragraph::new(self.lines(area.width, usize::from(area.height.saturating_sub(1)), theme)).render(area, buf);
     }
 }
 
@@ -206,11 +189,6 @@ const CWD_GAP: usize = 2;
 const MIN_PROMPT_WIDTH: usize = 16;
 const ELLIPSIS: &str = "...";
 const ELLIPSIS_WIDTH: usize = 3;
-
-fn render_line(buf: &mut Buffer, x: u16, y: u16, max_width: usize, text: &str, style: Style) {
-    let line = Line::styled(text, style);
-    buf.set_line(x, y, &line, u16::try_from(max_width).unwrap_or(u16::MAX));
-}
 
 fn push_prompt_with_highlight(
     spans: &mut Vec<Span<'static>>,

@@ -228,11 +228,11 @@ mod terminal_effects {
     fn push_and_pop_in_fifo_order() {
         let mut effects = TerminalEffects::default();
         effects.push(TerminalEffect::Bell);
-        effects.push(TerminalEffect::EnableMouseCapture);
+        effects.push(TerminalEffect::Bell);
 
         assert!(!effects.is_empty());
         assert_eq!(effects.pop(), Some(TerminalEffect::Bell));
-        assert_eq!(effects.pop(), Some(TerminalEffect::EnableMouseCapture));
+        assert_eq!(effects.pop(), Some(TerminalEffect::Bell));
         assert!(effects.is_empty());
     }
 
@@ -240,7 +240,7 @@ mod terminal_effects {
     fn clear_drains_all_effects() {
         let mut effects = TerminalEffects::default();
         effects.push(TerminalEffect::Bell);
-        effects.push(TerminalEffect::DisableMouseCapture);
+        effects.push(TerminalEffect::Bell);
         effects.clear();
         assert!(effects.is_empty());
     }
@@ -259,7 +259,6 @@ mod mouse_capture {
     fn no_capture_when_no_fullscreen_or_modal() {
         let (app, _rx) = make_app();
         assert!(!app.needs_mouse_capture());
-        assert_ne!(app.mouse_capture_state(), wisp_next::app::MouseCaptureState::Enabled);
     }
 
     #[test]
@@ -386,7 +385,7 @@ mod bell {
         super::submit_prompt(&mut app, "hello");
         app.on_acp_event(AcpEvent::ConnectionClosed);
 
-        assert!(app.take_terminal_effect().is_some_and(|e| e != TerminalEffect::Bell));
+        assert!(app.take_terminal_effect().is_none());
     }
 
     #[test]
