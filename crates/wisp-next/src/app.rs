@@ -16,8 +16,7 @@ use crate::settings::{ContextUsageDisplay, UiSettings, resolve_content_padding};
 use crate::settings_overlay::{
     SettingsMenuEntry, SettingsMenuEntryKind, SettingsMenuValue, SettingsOverlay, SettingsOverlayMessage,
 };
-use crate::terminal_effects::{TerminalEffect, TerminalEffects};
-use crate::tool_calls::{ToolCallEntry, ToolCallLog, ToolStatus};
+use crate::tool_calls::{ToolCallLog, ToolStatus};
 use crate::transcript::{SegmentContent, Transcript};
 use crate::workspace_picker::{WorkspacePicker, WorkspacePickerMessage};
 use crate::workspace_status::WorkspaceStatus;
@@ -76,6 +75,7 @@ pub struct App {
     ctrl_c_armed_at: Option<Instant>,
     exit_requested: bool,
     spinner_tick: usize,
+    submitted_prompt_count: usize,
     compaction_active: bool,
     progress_indicator: ProgressIndicator,
     last_drained_kind: Option<HistoryKind>,
@@ -87,7 +87,7 @@ pub struct App {
     ui_settings: UiSettings,
     pending_theme: Option<crate::theme::Theme>,
     plan_tracker: PlanTracker,
-    terminal_effects: TerminalEffects,
+    pending_bell: Option<()>,
     last_terminal_size: (u16, u16),
     surface_rect: Option<Rect>,
 }
@@ -250,6 +250,7 @@ impl App {
             ctrl_c_armed_at: None,
             exit_requested: false,
             spinner_tick: 0,
+            submitted_prompt_count: 0,
             compaction_active: false,
             progress_indicator: ProgressIndicator::default(),
             last_drained_kind: None,
@@ -261,7 +262,7 @@ impl App {
             ui_settings: config.settings,
             pending_theme: None,
             plan_tracker: PlanTracker::default(),
-            terminal_effects: TerminalEffects::default(),
+            pending_bell: None,
             last_terminal_size: (0, 0),
             surface_rect: None,
         }
@@ -305,6 +306,7 @@ impl App {
                 self.tool_calls.clear();
                 self.plan_tracker.clear();
                 self.prompt_in_flight = false;
+                self.submitted_prompt_count = 0;
                 self.compaction_active = false;
                 self.context_usage = None;
                 self.last_drained_kind = None;
@@ -381,7 +383,7 @@ impl App {
                 self.session_loading_buffer.clear();
                 self.screen_router.close();
                 self.surface_rect = None;
-                self.terminal_effects.clear();
+                self.pending_bell = None;
                 self.exit_requested = true;
             }
             AcpEvent::ConfigOptionUpdateFailed { error } => {
@@ -425,6 +427,7 @@ impl App {
                 self.tool_calls.clear();
                 self.plan_tracker.clear();
                 self.prompt_in_flight = false;
+                self.submitted_prompt_count = 0;
                 self.compaction_active = false;
                 self.context_usage = None;
                 self.last_drained_kind = None;
@@ -657,11 +660,10 @@ impl App {
         {
             self.ctrl_c_armed_at = None;
         }
-        if self.prompt_in_flight || self.tool_calls.any_running() {
+        self.refresh_progress();
+        if self.progress_indicator.is_active() {
             self.spinner_tick = self.spinner_tick.wrapping_add(1);
         }
-        self.refresh_progress();
-        self.progress_indicator.on_tick();
         self.plan_tracker.on_tick(now);
     }
 
@@ -784,16 +786,8 @@ impl App {
         self.pending_screen_effects.pop_front()
     }
 
-    pub fn take_terminal_effect(&mut self) -> Option<TerminalEffect> {
-        self.terminal_effects.pop()
-    }
-
-    pub fn push_terminal_effect(&mut self, effect: TerminalEffect) {
-        self.terminal_effects.push(effect);
-    }
-
-    pub fn count_pending_terminal_effects(&self) -> usize {
-        self.terminal_effects.queue_len()
+    pub fn take_bell(&mut self) -> bool {
+        self.pending_bell.take().is_some()
     }
 
     pub fn needs_mouse_capture(&self) -> bool {
@@ -847,31 +841,17 @@ impl App {
     /// for one-time handoff to the terminal presenter.
     pub fn drain_finalized(&mut self) -> Vec<HistoryItem> {
         let drained = self.transcript.drain_finalized_prefix(&self.tool_calls, self.prompt_in_flight);
-        let items: Vec<HistoryItem> = drained
-            .into_iter()
-            .map(|segment| match segment {
-                SegmentContent::ToolCall(id) => {
-                    let sub_agents = build_sub_agent_history_items(&self.tool_calls, &id);
-                    let entry = self.tool_calls.remove(&id).unwrap_or(ToolCallEntry {
-                        title: id.clone(),
-                        status: ToolStatus::Success,
-                        diff: None,
-                        id: id.clone(),
-                        raw_input: String::new(),
-                        display_value: None,
-                    });
-                    HistoryItem::Tool {
-                        title: entry.title,
-                        status: entry.status,
-                        diff: entry.diff,
-                        raw_input: entry.raw_input,
-                        display_value: entry.display_value,
-                        sub_agents,
-                    }
-                }
-                other => resolve_plain_segment(other),
-            })
-            .collect();
+        let mut items = Vec::with_capacity(drained.len());
+        for segment in drained {
+            let tool_id = match &segment {
+                SegmentContent::ToolCall(id) => Some(id.clone()),
+                _ => None,
+            };
+            items.push(resolve_history_segment(&segment, &self.tool_calls));
+            if let Some(id) = tool_id {
+                self.tool_calls.remove(&id);
+            }
+        }
 
         if let Some(last) = items.last() {
             self.last_drained_kind = Some(last.kind());
@@ -881,24 +861,7 @@ impl App {
 
     /// Segments still owned by the live viewport (streaming tail, running tools).
     pub fn pending_items(&self) -> Vec<HistoryItem> {
-        self.transcript
-            .pending()
-            .iter()
-            .map(|segment| match segment {
-                SegmentContent::ToolCall(id) => {
-                    let entry = self.tool_calls.entry(id);
-                    HistoryItem::Tool {
-                        title: entry.map_or_else(|| id.clone(), |e| e.title.clone()),
-                        status: entry.map_or(ToolStatus::Success, |e| e.status.clone()),
-                        diff: entry.and_then(|value| value.diff.clone()),
-                        raw_input: entry.map_or(String::new(), |e| e.raw_input.clone()),
-                        display_value: entry.and_then(|e| e.display_value.clone()),
-                        sub_agents: build_sub_agent_history_items(&self.tool_calls, id),
-                    }
-                }
-                other => resolve_plain_segment(other.clone()),
-            })
-            .collect()
+        self.transcript.pending().iter().map(|segment| resolve_history_segment(segment, &self.tool_calls)).collect()
     }
 
     pub fn last_drained_kind(&self) -> Option<HistoryKind> {
@@ -1026,11 +989,10 @@ impl App {
             WorkspaceMoveState::LoadingSession => WorkspaceProgress::LoadingSession,
             _ => WorkspaceProgress::None,
         };
-        self.progress_indicator.update(ProgressActivity {
-            agent_busy: self.is_agent_busy(),
-            workspace,
-            compaction_active: self.compaction_active,
-        });
+        self.progress_indicator.update(
+            ProgressActivity { agent_busy: self.is_agent_busy(), workspace, compaction_active: self.compaction_active },
+            self.submitted_prompt_count,
+        );
     }
 
     fn on_overlay_key(&mut self, key: KeyEvent) {
@@ -1160,6 +1122,7 @@ impl App {
         }
 
         self.prompt_in_flight = true;
+        self.submitted_prompt_count = self.submitted_prompt_count.saturating_add(1);
         let content = (!outcome.blocks.is_empty()).then_some(outcome.blocks);
         if let Err(e) = self.prompt_handle.prompt(&self.session_id, &text, content) {
             tracing::error!("failed to send prompt: {e}");
@@ -1175,7 +1138,7 @@ impl App {
         self.tool_calls.finalize_running(terminal_status);
         self.transcript.close_thought_block();
         if was_in_flight && matches!(terminal_status, ToolStatus::Success) {
-            self.terminal_effects.push(TerminalEffect::Bell);
+            self.pending_bell = Some(());
         }
     }
 
@@ -1556,19 +1519,22 @@ fn build_sub_agent_history_items(tool_calls: &ToolCallLog, tool_id: &str) -> Vec
         .collect()
 }
 
-fn resolve_plain_segment(segment: SegmentContent) -> HistoryItem {
+fn resolve_history_segment(segment: &SegmentContent, tool_calls: &ToolCallLog) -> HistoryItem {
     match segment {
-        SegmentContent::UserMessage(text) => HistoryItem::User(text),
-        SegmentContent::Text(text) => HistoryItem::Text(text),
-        SegmentContent::Thought(text) => HistoryItem::Thought(text),
-        SegmentContent::ToolCall(id) => HistoryItem::Tool {
-            title: id,
-            status: ToolStatus::Success,
-            diff: None,
-            raw_input: String::new(),
-            display_value: None,
-            sub_agents: Vec::new(),
-        },
+        SegmentContent::UserMessage(text) => HistoryItem::User(text.clone()),
+        SegmentContent::Text(text) => HistoryItem::Text(text.clone()),
+        SegmentContent::Thought(text) => HistoryItem::Thought(text.clone()),
+        SegmentContent::ToolCall(id) => {
+            let entry = tool_calls.entry(id);
+            HistoryItem::Tool {
+                title: entry.map_or_else(|| id.clone(), |value| value.title.clone()),
+                status: entry.map_or(ToolStatus::Success, |value| value.status.clone()),
+                diff: entry.and_then(|value| value.diff.clone()),
+                raw_input: entry.map_or_else(String::new, |value| value.raw_input.clone()),
+                display_value: entry.and_then(|value| value.display_value.clone()),
+                sub_agents: build_sub_agent_history_items(tool_calls, id),
+            }
+        }
     }
 }
 

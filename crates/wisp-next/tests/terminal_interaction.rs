@@ -7,7 +7,6 @@ use wisp_next::app::{App, AppConfig};
 use wisp_next::presentation::TranscriptRenderer;
 use wisp_next::render::sync_terminal as sync_terminal_with_renderer;
 use wisp_next::settings::UiSettings;
-use wisp_next::terminal_effects::{TerminalEffect, TerminalEffects};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -212,41 +211,6 @@ mod picker_click {
 }
 
 // ---------------------------------------------------------------------------
-// Terminal Effects Tests
-// ---------------------------------------------------------------------------
-
-mod terminal_effects {
-    use super::*;
-
-    #[test]
-    fn queue_is_empty_by_default() {
-        let effects = TerminalEffects::default();
-        assert!(effects.is_empty());
-    }
-
-    #[test]
-    fn push_and_pop_in_fifo_order() {
-        let mut effects = TerminalEffects::default();
-        effects.push(TerminalEffect::Bell);
-        effects.push(TerminalEffect::Bell);
-
-        assert!(!effects.is_empty());
-        assert_eq!(effects.pop(), Some(TerminalEffect::Bell));
-        assert_eq!(effects.pop(), Some(TerminalEffect::Bell));
-        assert!(effects.is_empty());
-    }
-
-    #[test]
-    fn clear_drains_all_effects() {
-        let mut effects = TerminalEffects::default();
-        effects.push(TerminalEffect::Bell);
-        effects.push(TerminalEffect::Bell);
-        effects.clear();
-        assert!(effects.is_empty());
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Mouse capture tests
 // ---------------------------------------------------------------------------
 
@@ -355,7 +319,7 @@ mod bell {
 
         app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
 
-        assert!(app.take_terminal_effect().is_some_and(|e| e == TerminalEffect::Bell));
+        assert!(app.take_bell());
     }
 
     #[test]
@@ -365,7 +329,7 @@ mod bell {
         super::submit_prompt(&mut app, "hello");
         app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::Cancelled));
 
-        assert!(app.take_terminal_effect().is_none());
+        assert!(!app.take_bell());
     }
 
     #[test]
@@ -375,7 +339,7 @@ mod bell {
         super::submit_prompt(&mut app, "hello");
         app.on_acp_event(AcpEvent::PromptError(agent_client_protocol::Error::internal_error()));
 
-        assert!(app.take_terminal_effect().is_none());
+        assert!(!app.take_bell());
     }
 
     #[test]
@@ -385,7 +349,7 @@ mod bell {
         super::submit_prompt(&mut app, "hello");
         app.on_acp_event(AcpEvent::ConnectionClosed);
 
-        assert!(app.take_terminal_effect().is_none());
+        assert!(!app.take_bell());
     }
 
     #[test]
@@ -395,7 +359,7 @@ mod bell {
         // No prompt in flight — PromptDone is unsolicited
         app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
 
-        assert!(app.take_terminal_effect().is_none());
+        assert!(!app.take_bell());
     }
 
     #[test]
@@ -405,13 +369,8 @@ mod bell {
         super::submit_prompt(&mut app, "first");
         app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
 
-        let mut bell_count = 0;
-        while let Some(effect) = app.take_terminal_effect() {
-            if effect == TerminalEffect::Bell {
-                bell_count += 1;
-            }
-        }
-        assert_eq!(bell_count, 1, "expected exactly one bell");
+        assert!(app.take_bell());
+        assert!(!app.take_bell());
     }
 }
 
@@ -515,10 +474,9 @@ mod event_routing {
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
         // Scroll events should be consumed internally
-        let effects_before = app.count_pending_terminal_effects();
+        let bell_before = app.take_bell();
         app.on_terminal_event(scroll_down(40, 5));
-        let effects_after = app.count_pending_terminal_effects();
-        assert_eq!(effects_before, effects_after);
+        assert_eq!(bell_before, app.take_bell());
     }
 
     #[test]
@@ -561,7 +519,7 @@ mod event_routing {
         assert!(app.surface_rect().is_some());
 
         app.on_terminal_event(scroll_down(40, 5));
-        assert!(app.take_terminal_effect().is_none());
+        assert!(!app.take_bell());
     }
 
     #[test]
@@ -597,7 +555,7 @@ mod event_routing {
         let rect = app.surface_rect().unwrap();
         let click_y = rect.y + 2;
         app.on_terminal_event(click(rect.x + 2, click_y));
-        assert!(app.take_terminal_effect().is_none());
+        assert!(!app.take_bell());
     }
 
     #[test]
@@ -621,7 +579,7 @@ mod event_routing {
         // Scroll down
         let rect = app.surface_rect().unwrap();
         app.on_terminal_event(scroll_down(rect.x + 2, rect.y + 2));
-        assert!(app.take_terminal_effect().is_none());
+        assert!(!app.take_bell());
         assert!(app.has_session_picker());
     }
 
@@ -665,7 +623,7 @@ mod event_routing {
         // Scroll should be consumed internally
         app.on_terminal_event(scroll_down(rect.x + 2, rect.y + 1));
         app.on_terminal_event(scroll_up(rect.x + 2, rect.y + 1));
-        assert!(app.take_terminal_effect().is_none());
+        assert!(!app.take_bell());
     }
 
     #[test]
@@ -684,7 +642,7 @@ mod event_routing {
             app.on_terminal_event(scroll_down(rect.x + 2, rect.y + rect.height.saturating_sub(1)));
             app.on_terminal_event(click(rect.x + 2, rect.y + rect.height.saturating_sub(1)));
         }
-        assert!(app.take_terminal_effect().is_none());
+        assert!(!app.take_bell());
     }
 
     #[test]
@@ -709,7 +667,7 @@ mod event_routing {
         app.on_terminal_event(scroll_down(rect.x + 2, rect.y + 2));
         app.on_terminal_event(scroll_up(rect.x + 2, rect.y + 2));
         app.on_terminal_event(click(rect.x + 2, rect.y + 2));
-        assert!(app.take_terminal_effect().is_none());
+        assert!(!app.take_bell());
     }
 
     #[test]
@@ -750,7 +708,7 @@ mod event_routing {
 
             let rect = app.surface_rect().unwrap();
             app.on_terminal_event(scroll_down(rect.x + 2, rect.y + 3));
-            assert!(app.take_terminal_effect().is_none());
+            assert!(!app.take_bell());
         });
     }
 }

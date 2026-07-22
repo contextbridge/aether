@@ -28,7 +28,6 @@ pub mod session_picker;
 pub mod settings;
 pub mod settings_overlay;
 pub mod syntax;
-pub mod terminal_effects;
 pub mod theme;
 pub mod tool_calls;
 pub mod transcript;
@@ -54,7 +53,6 @@ use std::fs::create_dir_all;
 use std::future::pending;
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
-use terminal_effects::TerminalEffect;
 use tokio::select;
 use tokio::sync::mpsc;
 use tokio::time::{MissedTickBehavior, interval};
@@ -196,7 +194,7 @@ async fn event_loop(
             () = tick_fut => app.on_tick(Instant::now()),
         }
 
-        process_terminal_effects(app, stdout, &mut capture_enabled);
+        process_terminal_state(app, stdout, &mut capture_enabled);
 
         while let Some(effect) = app.take_screen_effect() {
             let event_tx = screen_event_tx.clone();
@@ -210,20 +208,16 @@ async fn event_loop(
         }
 
         if app.exit_requested() {
-            process_terminal_effects(app, stdout, &mut capture_enabled);
+            process_terminal_state(app, stdout, &mut capture_enabled);
             return Ok(());
         }
         render::sync_terminal(terminal, app, renderer)?;
     }
 }
 
-fn process_terminal_effects(app: &mut App, stdout: &mut impl Write, capture_enabled: &mut bool) {
-    while let Some(effect) = app.take_terminal_effect() {
-        match effect {
-            TerminalEffect::Bell => {
-                let _ = execute!(stdout, crossterm::style::Print("\x07"));
-            }
-        }
+fn process_terminal_state(app: &mut App, stdout: &mut impl Write, capture_enabled: &mut bool) {
+    if app.take_bell() {
+        let _ = execute!(stdout, crossterm::style::Print("\x07"));
     }
 
     let needs_capture = app.needs_mouse_capture();

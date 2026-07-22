@@ -8,7 +8,7 @@ use crate::progress_indicator::spinner_frame;
 use crate::settings::{ContextUsageDisplay, ResolvedStatusLineSettings, StatusLineSegmentConfig, StatusLineStyle};
 use crate::theme::Theme;
 use crate::tool_calls::{SUB_AGENT_VISIBLE_TOOL_LIMIT, ToolStatus};
-use crate::wrap::{line_display_width, truncate_spans, truncate_text, wrap_line, wrap_text};
+use crate::wrap::{truncate_text, wrap_line, wrap_text};
 use acp_utils::config_option_id::ConfigOptionId;
 use agent_client_protocol::schema::{self as acp, SessionConfigKind, SessionConfigOption, SessionConfigSelectOptions};
 use ratatui::Frame;
@@ -41,8 +41,9 @@ pub fn sync_terminal<B: Backend>(
         renderer.append_committed_lines(lines);
     }
 
-    let pending_line_count = if full_screen_active { 0 } else { live_history_lines(app, renderer, area.width).len() };
-    let visible_history_lines = usize::from(live_area_height(area, app, renderer));
+    let layout = FrameLayout::new(area, app, renderer);
+    let pending_line_count = if full_screen_active { 0 } else { layout.live_lines.len() };
+    let visible_history_lines = usize::from(layout.live_history_height);
     let committed_to_keep = visible_history_lines.saturating_sub(pending_line_count);
     let overflow = if can_insert_history && !full_screen_active {
         renderer.take_committed_overflow(committed_to_keep)
@@ -50,7 +51,7 @@ pub fn sync_terminal<B: Backend>(
         Vec::new()
     };
 
-    terminal.draw(|frame| draw(frame, app, renderer))?;
+    terminal.draw(|frame| draw_frame(frame, app, renderer, &layout))?;
 
     if overflow.is_empty() {
         return Ok(());
@@ -64,67 +65,109 @@ pub fn sync_terminal<B: Backend>(
         })?;
     }
 
-    terminal.draw(|frame| draw(frame, app, renderer))?;
+    terminal.draw(|frame| draw_frame(frame, app, renderer, &layout))?;
     Ok(())
 }
 
 pub fn draw(frame: &mut Frame, app: &mut App, renderer: &mut TranscriptRenderer) {
+    let layout = FrameLayout::new(frame.area(), app, renderer);
+    draw_frame(frame, app, renderer, &layout);
+}
+
+struct FrameLayout {
+    composer_layout: crate::composer::ComposerLayout,
+    overlay_lines: Vec<Line<'static>>,
+    prompt_search_height: usize,
+    composer_height: u16,
+    status_line_rows: u16,
+    plan_lines: Vec<Line<'static>>,
+    plan_height: u16,
+    progress_lines: Vec<Line<'static>>,
+    live_lines: Vec<Line<'static>>,
+    live_history_height: u16,
+}
+
+impl FrameLayout {
+    fn new(area: Rect, app: &mut App, renderer: &mut TranscriptRenderer) -> Self {
+        let theme = renderer.theme().clone();
+        let settings = renderer.settings().clone();
+        let status_line_rows = status_line_height(app, area.width, &settings, &theme);
+        let composer_layout = app.composer().layout(area.width, &theme);
+        let overlay_lines = app.composer().overlay_lines(area.width, 6, &theme);
+        let prompt_search_height = app.composer().prompt_search_height(12);
+        let requested_composer_height =
+            composer_layout.lines.len().saturating_add(overlay_lines.len()).saturating_add(prompt_search_height);
+        let composer_height = resolve_composer_height(requested_composer_height, area.height, status_line_rows);
+        let remaining = area.height.saturating_sub(composer_height).saturating_sub(status_line_rows);
+        let padding = app.content_padding();
+        let plan_lines = render_plan_lines(app.plan_entries(), &theme, padding);
+        let plan_height = u16::try_from(plan_lines.len()).unwrap_or(u16::MAX).min(remaining.div_ceil(3));
+        let progress_lines = app.progress_indicator().render(
+            theme.info,
+            theme.warning,
+            theme.text_secondary,
+            theme.muted,
+            app.spinner_tick(),
+            app.content_padding(),
+        );
+        let live_lines =
+            if app.full_screen_active() { Vec::new() } else { live_history_lines(app, renderer, area.width) };
+        let live_history_height = remaining
+            .saturating_sub(plan_height)
+            .saturating_sub(u16::try_from(progress_lines.len()).unwrap_or(u16::MAX));
+        Self {
+            composer_layout,
+            overlay_lines,
+            prompt_search_height,
+            composer_height,
+            status_line_rows,
+            plan_lines,
+            plan_height,
+            progress_lines,
+            live_lines,
+            live_history_height,
+        }
+    }
+}
+
+fn draw_frame(frame: &mut Frame, app: &mut App, renderer: &mut TranscriptRenderer, layout: &FrameLayout) {
     let theme = renderer.theme().clone();
     let settings = renderer.settings().clone();
-    let status_line_rows = status_line_height(app, frame.area().width, &settings, &theme);
-    let composer_layout = app.composer().layout(frame.area().width, &theme);
-    let overlay_lines = app.composer().overlay_lines(frame.area().width, 6, &theme);
-    let prompt_search_height = app.composer().prompt_search_height(12);
-    let requested_composer_height =
-        composer_layout.lines.len().saturating_add(overlay_lines.len()).saturating_add(prompt_search_height);
-    let composer_height = resolve_composer_height(requested_composer_height, frame.area().height, status_line_rows);
-
-    let plan_lines = {
-        let padding = app.content_padding();
-        render_plan_lines(app.plan_entries(), &theme, padding)
-    };
-    let plan_height = u16::try_from(plan_lines.len()).unwrap_or(0);
-    let remaining = frame.area().height.saturating_sub(composer_height).saturating_sub(status_line_rows);
-    let clipped_plan_height = plan_height.min(remaining.div_ceil(3));
-
     let [live_area, composer_area, status_area] = Layout::vertical([
         Constraint::Min(0),
-        Constraint::Length(composer_height),
-        Constraint::Length(status_line_rows),
+        Constraint::Length(layout.composer_height),
+        Constraint::Length(layout.status_line_rows),
     ])
     .areas(frame.area());
 
-    let visible_plan_lines: Vec<Line<'static>> = plan_lines.into_iter().take(clipped_plan_height as usize).collect();
-    let plan_height_used = u16::try_from(visible_plan_lines.len()).unwrap_or(0);
-
-    let progress_lines = app.progress_indicator().render(
-        theme.info,
-        theme.warning,
-        theme.text_secondary,
-        theme.muted,
-        app.content_padding(),
-    );
-
-    let mut lines = progress_lines;
-    lines.extend(renderer.committed_lines().to_vec());
-    lines.extend(live_history_lines(app, renderer, live_area.width));
-    let available = live_area.height.saturating_sub(plan_height_used) as usize;
+    let mut lines = layout.progress_lines.clone();
+    lines.extend(renderer.committed_lines().iter().cloned());
+    lines.extend(layout.live_lines.iter().cloned());
+    let available = live_area.height.saturating_sub(layout.plan_height) as usize;
     if lines.len() > available {
         lines.drain(..lines.len() - available);
     }
     let content_height = u16::try_from(lines.len()).unwrap_or(live_area.height).min(live_area.height);
     let [_, plan_area, content_area] = Layout::vertical([
         Constraint::Min(0),
-        Constraint::Length(plan_height_used),
+        Constraint::Length(layout.plan_height),
         Constraint::Length(content_height),
     ])
     .areas(live_area);
-    if plan_height_used > 0 {
-        frame.render_widget(Paragraph::new(Text::from(visible_plan_lines)), plan_area);
+    if layout.plan_height > 0 {
+        frame.render_widget(Paragraph::new(Text::from(layout.plan_lines.clone())), plan_area);
     }
     frame.render_widget(Paragraph::new(Text::from(lines)), content_area);
 
-    render_composer(frame, &composer_layout, &overlay_lines, prompt_search_height, app, composer_area, &theme);
+    render_composer(
+        frame,
+        &layout.composer_layout,
+        &layout.overlay_lines,
+        layout.prompt_search_height,
+        app,
+        composer_area,
+        &theme,
+    );
     render_status_line(frame, app, status_area, &theme, &settings);
     app.render_modal(frame, &theme, renderer.highlighter());
 }
@@ -151,7 +194,7 @@ impl TranscriptRenderer {
         lines
     }
 
-    fn item_lines(
+    pub(crate) fn item_lines(
         &mut self,
         item: &HistoryItem,
         width: u16,
@@ -199,29 +242,8 @@ fn resolve_composer_height(requested_height: usize, area_height: u16, status_lin
     u16::try_from(requested_height).unwrap_or(u16::MAX).max(1).min(area_height.saturating_sub(status_line_rows))
 }
 
-fn live_area_height(area: Rect, app: &mut App, renderer: &TranscriptRenderer) -> u16 {
-    let theme = renderer.theme().clone();
-    let settings = renderer.settings().clone();
-    let status_line_rows = status_line_height(app, area.width, &settings, &theme);
-    let composer_layout = app.composer().layout(area.width, &theme);
-    let overlay_height = app.composer().overlay_lines(area.width, 6, &theme).len();
-    let prompt_search_height = app.composer().prompt_search_height(12);
-    let requested_composer_height =
-        composer_layout.lines.len().saturating_add(overlay_height).saturating_add(prompt_search_height);
-    let composer_height = resolve_composer_height(requested_composer_height, area.height, status_line_rows);
-    let remaining = area.height.saturating_sub(composer_height).saturating_sub(status_line_rows);
-    let plan_lines = {
-        let padding = app.content_padding();
-        render_plan_lines(app.plan_entries(), &theme, padding)
-    };
-    let plan_height = u16::try_from(plan_lines.len()).unwrap_or(0);
-    let clipped_plan = plan_height.min(remaining.div_ceil(3));
-    let progress_height = u16::try_from(app.progress_indicator().line_count()).unwrap_or(0);
-    remaining.saturating_sub(clipped_plan).saturating_sub(progress_height)
-}
-
 fn live_history_lines(app: &App, renderer: &mut TranscriptRenderer, width: u16) -> Vec<Line<'static>> {
-    renderer.history_lines(
+    renderer.pending_history_lines(
         &app.pending_items(),
         app.last_drained_kind(),
         width,
@@ -283,7 +305,7 @@ fn tool_lines(
     vec![Line::from(spans)]
 }
 
-fn indent_lines(lines: Vec<Line<'static>>, padding: usize) -> Vec<Line<'static>> {
+pub(crate) fn indent_lines(lines: Vec<Line<'static>>, padding: usize) -> Vec<Line<'static>> {
     let prefix = " ".repeat(padding);
     lines
         .into_iter()
@@ -412,61 +434,19 @@ fn render_composer(
     }
 }
 
-fn status_line_height(app: &App, width: u16, settings: &ResolvedStatusLineSettings, theme: &Theme) -> u16 {
-    let width = width as usize;
-    if width == 0 {
-        return 1;
-    }
-    let left = render_left_section(app, settings, theme);
-    let left_width = line_display_width(&left);
-    let right = if app.exit_confirmation_active() {
-        vec![Span::styled("Ctrl-C again to exit", Style::new().fg(theme.warning))]
-    } else {
-        render_right_section(app, settings, theme)
-    };
-    let right_width = line_display_width(&right);
-
-    if right.is_empty() {
-        return 1;
-    }
-    if left_width + 1 + right_width <= width {
-        return 1;
-    }
-    2
+fn status_line_height(_app: &App, _width: u16, _settings: &ResolvedStatusLineSettings, _theme: &Theme) -> u16 {
+    1
 }
 
 fn render_status_line(frame: &mut Frame, app: &App, area: Rect, theme: &Theme, settings: &ResolvedStatusLineSettings) {
-    let width = area.width as usize;
-    if width == 0 {
-        return;
-    }
-
-    let left = render_left_section(app, settings, theme);
-    let left_width = line_display_width(&left);
-
+    let left = Line::from(render_left_section(app, settings, theme));
     let right = if app.exit_confirmation_active() {
-        vec![Span::styled("Ctrl-C again to exit", Style::new().fg(theme.warning))]
+        Line::from(vec![Span::styled("Ctrl-C again to exit", Style::new().fg(theme.warning))])
     } else {
-        render_right_section(app, settings, theme)
+        Line::from(render_right_section(app, settings, theme))
     };
-    let right_width = line_display_width(&right);
-
-    if right.is_empty() {
-        let truncated = truncate_spans(&left, width);
-        frame.render_widget(Paragraph::new(Line::from(truncated)), area);
-    } else if left_width + 1 + right_width <= width {
-        let mut spans = left.clone();
-        let padding = width.saturating_sub(left_width + right_width);
-        spans.push(Span::raw(" ".repeat(padding)));
-        spans.extend(right);
-        frame.render_widget(Paragraph::new(Line::from(spans)), area);
-    } else {
-        let [left_row, right_row] = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(area);
-        let truncated_left = truncate_spans(&left, width);
-        frame.render_widget(Paragraph::new(Line::from(truncated_left)), left_row);
-        let right_spans = truncate_spans(&right, width);
-        frame.render_widget(Paragraph::new(Line::from(right_spans)), right_row);
-    }
+    frame.render_widget(Paragraph::new(left).alignment(ratatui::layout::Alignment::Left), area);
+    frame.render_widget(Paragraph::new(right).alignment(ratatui::layout::Alignment::Right), area);
 }
 
 fn render_left_section(app: &App, settings: &ResolvedStatusLineSettings, theme: &Theme) -> Vec<Span<'static>> {

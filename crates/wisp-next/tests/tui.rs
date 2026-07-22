@@ -3333,7 +3333,7 @@ fn sub_agent_multiple_sub_agents_per_parent() {
 
 mod progress_indicator_tests {
     use super::*;
-    use wisp_next::progress_indicator::BRAILLE_FRAMES;
+    use wisp_next::progress_indicator::SPINNER_FRAMES;
 
     #[test]
     fn idle_renders_no_progress_indicator() {
@@ -3341,8 +3341,8 @@ mod progress_indicator_tests {
         let mut terminal = make_terminal();
         sync_terminal(&mut terminal, &mut app).unwrap();
         let full = buffer_text(terminal.backend().buffer());
-        let has_braille = BRAILLE_FRAMES.iter().any(|&ch| full.contains(ch));
-        assert!(!has_braille, "buffer should not contain braille spinner when idle:\n{full}");
+        let has_spinner = SPINNER_FRAMES.iter().any(|frame| full.contains(frame));
+        assert!(!has_spinner, "buffer should not contain spinner when idle:\n{full}");
         assert!(!full.contains("Working..."), "{full}");
         assert!(!full.contains("esc to interrupt"), "{full}");
     }
@@ -3361,8 +3361,8 @@ mod progress_indicator_tests {
         let mut terminal = make_terminal_with_dimensions(120, 30);
         sync_terminal(&mut terminal, &mut app).unwrap();
         let full = buffer_text(terminal.backend().buffer());
-        let has_braille = BRAILLE_FRAMES.iter().any(|&ch| full.contains(ch));
-        assert!(has_braille, "full buffer should contain braille spinner during prompt:\n{full}");
+        let has_spinner = SPINNER_FRAMES.iter().any(|frame| full.contains(frame));
+        assert!(has_spinner, "full buffer should contain spinner during prompt:\n{full}");
         assert!(full.contains("esc to interrupt"), "full buffer should show esc hint:\n{full}");
     }
 
@@ -3599,8 +3599,8 @@ mod progress_indicator_tests {
         sync_terminal(&mut terminal, &mut app).unwrap();
 
         let scrollback = buffer_text(&history_buffer(&mut terminal));
-        let has_braille = BRAILLE_FRAMES.iter().any(|&ch| scrollback.contains(ch));
-        assert!(!has_braille, "scrollback should not contain progress braille:\n{scrollback}");
+        let has_spinner = SPINNER_FRAMES.iter().any(|frame| scrollback.contains(frame));
+        assert!(!has_spinner, "scrollback should not contain progress spinner:\n{scrollback}");
         assert!(!scrollback.contains("esc to interrupt"), "scrollback should not contain esc hint:\n{scrollback}");
         assert!(!scrollback.contains("Working..."), "scrollback should not contain Working:\n{scrollback}");
     }
@@ -3661,7 +3661,8 @@ mod progress_indicator_tests {
         sync_terminal(&mut terminal, &mut app).unwrap();
 
         let full = buffer_text(terminal.backend().buffer());
-        let spinner_lines: Vec<_> = full.lines().filter(|l| BRAILLE_FRAMES.iter().any(|&ch| l.contains(ch))).collect();
+        let spinner_lines: Vec<_> =
+            full.lines().filter(|line| SPINNER_FRAMES.iter().any(|frame| line.contains(frame))).collect();
         assert!(!spinner_lines.is_empty(), "should have spinner lines:\n{full}");
         for line in spinner_lines {
             assert!(line.starts_with("  "), "spinner line should start with padding spaces, got: '{line}'");
