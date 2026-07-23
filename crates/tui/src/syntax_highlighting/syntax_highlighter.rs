@@ -55,14 +55,18 @@ fn render_highlighted_lines(code: &str, lang: &str, theme: &Theme) -> Vec<Line> 
     let mut lines = Vec::new();
 
     for source_line in code.lines() {
-        let Ok(ranges) = h.highlight_line(source_line, &SYNTAX_SET) else {
+        let line_with_ending = format!("{source_line}\n");
+        let Ok(ranges) = h.highlight_line(&line_with_ending, &SYNTAX_SET) else {
             lines.push(Line::with_style(source_line, Style::fg(theme.code_fg())));
             continue;
         };
 
         let mut line = Line::default();
         for (syntect_style, text) in ranges {
-            line.push_span(Span::with_style(text, syntect_to_wisp_style(syntect_style)));
+            let text = text.strip_suffix('\n').unwrap_or(text);
+            if !text.is_empty() {
+                line.push_span(Span::with_style(text, syntect_to_wisp_style(syntect_style)));
+            }
         }
         lines.push(line);
     }

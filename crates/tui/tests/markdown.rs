@@ -55,6 +55,16 @@ fn row_inner_display_widths(row: &str) -> Vec<usize> {
 }
 
 #[test]
+fn fenced_code_preserves_syntax_state_across_lines() {
+    let terminal = render("```python\n# Documentation\nif condition:\n    pass\n```");
+    let row = find_row(&terminal, "if condition").expect("rendered Python conditional");
+    let keyword = terminal.style_of_text(row, "if").expect("if keyword style").fg;
+    let identifier = terminal.style_of_text(row, "condition").expect("condition identifier style").fg;
+
+    assert_ne!(keyword, identifier);
+}
+
+#[test]
 fn source_line_renderer_preserves_every_source_line() {
     let md = "# Title\n\nfirst\nsecond\n```rust\nlet x = 1;\n```";
     let result = render_markdown_source_lines(md, &ctx());

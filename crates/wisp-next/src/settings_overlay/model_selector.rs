@@ -6,7 +6,9 @@ use acp_utils::config_option_id::ConfigOptionId;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
-use ratatui::widgets::{Cell, Paragraph, Row, StatefulWidget, Table, TableState, Widget};
+use ratatui::widgets::{
+    Cell, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, StatefulWidget, Table, TableState, Widget,
+};
 use std::collections::HashSet;
 use utils::ReasoningEffort;
 
@@ -67,16 +69,20 @@ impl ModelSelector {
     }
 
     pub(super) fn move_selection(&mut self, direction: isize) {
-        let len = self.filtered.len();
-        if len == 0 {
-            self.table_state.select(None);
+        let Some(selected) = self.table_state.selected() else {
+            self.ensure_enabled();
             return;
+        };
+        let next = if direction < 0 {
+            (0..selected).rev().find(|&index| self.is_enabled(index))
+        } else {
+            (selected.saturating_add(1)..self.filtered.len()).find(|&index| self.is_enabled(index))
+        };
+        if let Some(next) = next {
+            self.table_state.select(Some(next));
         }
-        let selected = self.table_state.selected().unwrap_or_default();
-        let next = if direction < 0 { selected.checked_sub(1).unwrap_or(len - 1) } else { (selected + 1) % len };
-        self.table_state.select(Some(next));
-        self.ensure_enabled();
     }
+
     pub(super) fn ensure_enabled(&mut self) {
         let selected = self.table_state.selected().unwrap_or_default();
         if self.filtered.get(selected).is_some_and(|&index| self.all_items[index].is_disabled) {
@@ -212,6 +218,17 @@ impl ModelSelector {
         .header(Row::new(["", "Model", "Capabilities", "Status"]).style(Style::new().fg(theme.heading)))
         .row_highlight_style(Style::new().fg(theme.background).bg(theme.text_primary));
         StatefulWidget::render(table, table_area, buffer, &mut self.table_state);
+        let mut scrollbar_state = ScrollbarState::new(self.filtered.len()).position(self.table_state.offset());
+        StatefulWidget::render(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight),
+            table_area,
+            buffer,
+            &mut scrollbar_state,
+        );
+    }
+
+    fn is_enabled(&self, filtered_index: usize) -> bool {
+        self.filtered.get(filtered_index).is_some_and(|&item_index| !self.all_items[item_index].is_disabled)
     }
 }
 

@@ -246,13 +246,13 @@ fn markdown_styles_stream_live_and_finalize_once() {
 }
 
 #[test]
-fn fenced_code_is_syntax_highlighted_with_code_background() {
+fn fenced_code_info_string_is_syntax_highlighted_with_token_colors() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
     let mut renderer = TranscriptRenderer::new(&UiSettings::default());
     let code_background = renderer.theme().code_bg;
     submit_prompt(&mut app, "show code");
-    app.on_acp_event(text_chunk("```rust\nfn highlighted() {}\n```"));
+    app.on_acp_event(text_chunk("```rust title=\"example.rs\"\nfn highlighted() {}\n```"));
     app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
 
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
@@ -260,6 +260,75 @@ fn fenced_code_is_syntax_highlighted_with_code_background() {
     let conversation = conversation_buffer(&mut terminal);
     assert!(buffer_text(&conversation).contains("fn highlighted()"));
     assert!(has_cell(&conversation, "f", |cell| cell.bg == code_background));
+    let keyword_color = conversation
+        .content
+        .iter()
+        .find(|cell| cell.symbol() == "f" && cell.bg == code_background)
+        .map(|cell| cell.fg)
+        .expect("rendered Rust keyword");
+    let identifier_color = conversation
+        .content
+        .iter()
+        .find(|cell| cell.symbol() == "h" && cell.bg == code_background)
+        .map(|cell| cell.fg)
+        .expect("rendered Rust identifier");
+    assert_ne!(keyword_color, identifier_color, "Rust keywords and identifiers should use distinct colors");
+}
+
+#[test]
+fn fenced_code_streamed_across_chunks_is_syntax_highlighted() {
+    let (mut app, _command_rx) = make_app();
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let code_background = renderer.theme().code_bg;
+    submit_prompt(&mut app, "show code");
+    app.on_acp_event(text_chunk("Example:\n"));
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    app.on_acp_event(text_chunk("```rust\n"));
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    app.on_acp_event(text_chunk("fn highlighted() {}\n"));
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+
+    assert!(has_cell(&viewport_buffer(&mut terminal), "f", |cell| cell.bg == code_background));
+
+    app.on_acp_event(text_chunk("```\n"));
+    app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+
+    let conversation = conversation_buffer(&mut terminal);
+    let row = row_containing(&conversation, "fn highlighted()").expect("rendered code line");
+    let cells = (conversation.area.left()..conversation.area.right())
+        .filter_map(|x| conversation.cell((x, row)))
+        .collect::<Vec<_>>();
+    let keyword = cells.iter().find(|cell| cell.symbol() == "f").expect("fn keyword");
+    let identifier = cells.iter().find(|cell| cell.symbol() == "h").expect("highlighted identifier");
+    assert_eq!(keyword.bg, code_background);
+    assert_eq!(identifier.bg, code_background);
+    assert_ne!(keyword.fg, identifier.fg, "streamed fences must keep syntax highlighting");
+}
+
+#[test]
+fn fenced_code_line_comment_does_not_consume_following_code() {
+    let (mut app, _command_rx) = make_app();
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let code_background = renderer.theme().code_bg;
+    submit_prompt(&mut app, "show documented code");
+    app.on_acp_event(text_chunk("```python\n# Documentation\nif condition:\n    pass\n```"));
+    app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+
+    let conversation = conversation_buffer(&mut terminal);
+    let row = row_containing(&conversation, "if condition").expect("Python conditional after line comment");
+    let cells = (conversation.area.left()..conversation.area.right())
+        .filter_map(|x| conversation.cell((x, row)))
+        .collect::<Vec<_>>();
+    let keyword_color = cells.iter().find(|cell| cell.symbol() == "i").expect("if keyword").fg;
+    let identifier_color = cells.iter().find(|cell| cell.symbol() == "c").expect("condition identifier").fg;
+    assert_ne!(keyword_color, identifier_color, "line comments must not disable highlighting on following lines");
+    assert!(cells.iter().all(|cell| cell.bg == code_background || cell.symbol() == " "));
 }
 
 #[test]

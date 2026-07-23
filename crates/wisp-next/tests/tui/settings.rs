@@ -767,6 +767,45 @@ fn settings_over_renders_with_no_config_options() {
 }
 
 #[test]
+fn settings_overlay_render_clears_covered_buffer_cells() {
+    let options = vec![select_option("model", "gpt-4o")];
+    let mut overlay = wisp_next::settings_overlay::SettingsOverlay::new(&options, Vec::new(), Vec::new());
+    let area = ratatui::layout::Rect::new(0, 0, 40, 15);
+    let mut buffer = Buffer::filled(area, Cell::new("X"));
+
+    overlay.render(area, &mut buffer, &Theme::default());
+
+    assert!(!buffer_text(&buffer).contains('X'), "overlay must clear every covered cell");
+}
+
+#[test]
+fn settings_overlay_clears_conversation_content_behind_it() {
+    let (mut app, _command_rx) = make_app_with_metadata(
+        std::path::PathBuf::from("."),
+        acp::SessionCapabilities::new(),
+        vec![select_option("model", "gpt-4o")],
+        Vec::new(),
+    );
+    submit_prompt(&mut app, "CHAT_CONTENT_MUST_NOT_SHOW_THROUGH_SETTINGS");
+    app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("Configuration"), "settings overlay should render:\n{viewport}");
+    assert!(
+        !viewport.contains("CHAT_CONTENT_MUST_NOT_SHOW_THROUGH_SETTINGS"),
+        "conversation content must be cleared behind settings:\n{viewport}"
+    );
+}
+
+#[test]
 fn settings_overlay_still_valid_after_scrollback() {
     let (mut app, _command_rx) = make_app_with_metadata(
         std::path::PathBuf::from("."),
@@ -1220,6 +1259,48 @@ fn model_selector_provider_heading_does_not_skip_rows() {
     assert!(viewport.contains("GPT-3.5"), "GPT-3.5 should be visible:\n{viewport}");
     assert!(viewport.contains("Opus"), "Opus should be visible:\n{viewport}");
     assert!(viewport.contains("Sonnet"), "Sonnet should be visible:\n{viewport}");
+}
+
+#[test]
+fn model_selector_skips_disabled_models_and_scrolls_to_the_end() {
+    let options: Vec<_> = (0..15)
+        .map(|index| {
+            let option = acp::SessionConfigSelectOption::new(
+                format!("provider:model-{index:02}"),
+                format!("Provider / Model {index:02}"),
+            );
+            if index == 5 { option.description("Unavailable: missing credentials") } else { option }
+        })
+        .collect();
+    let mut model_option = acp::SessionConfigOption::select("model", "Model", "", options);
+    let mut meta = serde_json::Map::new();
+    meta.insert("multi_select".to_string(), serde_json::Value::Bool(true));
+    model_option = model_option.meta(Some(meta));
+    let (mut app, _command_rx) = make_app_with_metadata(
+        std::path::PathBuf::from("."),
+        acp::SessionCapabilities::new(),
+        vec![model_option],
+        Vec::new(),
+    );
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+    for _ in 0..13 {
+        app.on_key(key(KeyCode::Down));
+    }
+
+    let mut terminal = make_terminal();
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("Model 14"), "last enabled model should be focused and visible:\n{viewport}");
+
+    app.on_key(key(KeyCode::Down));
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("Model 14"), "selection should remain at the end of the list:\n{viewport}");
 }
 
 #[test]

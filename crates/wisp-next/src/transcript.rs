@@ -49,8 +49,8 @@ impl Transcript {
         let SegmentContent::Text(text) = self.segments.last_mut().expect("text segment was just appended") else {
             unreachable!();
         };
-        if let Some(last_newline) = text.rfind('\n') {
-            let trailing = text.split_off(last_newline + 1);
+        if let Some(finalized_end) = last_finalizable_offset(text) {
+            let trailing = text.split_off(finalized_end);
             self.segments.push(SegmentContent::Text(trailing));
         }
     }
@@ -93,8 +93,9 @@ impl Transcript {
     ///
     /// A segment is final when it is a user message, a completed tool call, or
     /// streamed text/thought content that is no longer the trailing segment of
-    /// an in-flight prompt. Text segments are split after completed lines so
-    /// finalized content can move independently of the trailing streaming line.
+    /// an in-flight prompt. Text segments are split after completed lines
+    /// outside fenced code blocks so finalized content can move independently
+    /// of the trailing streaming line.
     pub fn drain_finalized_prefix(&mut self, tool_calls: &ToolCallLog, prompt_in_flight: bool) -> Vec<SegmentContent> {
         let final_len = self
             .segments
@@ -111,6 +112,46 @@ impl Transcript {
 
         self.segments.drain(..final_len).collect()
     }
+}
+
+/// Byte offset just past the last completed line that leaves no code fence
+/// open. Segments must never split inside a fenced block: each segment is
+/// rendered as an independent markdown document, so a fence split across
+/// segments would lose its language context and syntax highlighting.
+fn last_finalizable_offset(text: &str) -> Option<usize> {
+    let mut open_fence: Option<(char, usize)> = None;
+    let mut finalizable = None;
+    let mut offset = 0;
+    for line in text.split_inclusive('\n') {
+        offset += line.len();
+        if !line.ends_with('\n') {
+            break;
+        }
+        match open_fence {
+            None => match fence_delimiter(line) {
+                Some((fence_char, length, _)) => open_fence = Some((fence_char, length)),
+                None => finalizable = Some(offset),
+            },
+            Some((fence_char, length)) => {
+                if let Some((close_char, close_length, rest)) = fence_delimiter(line)
+                    && close_char == fence_char
+                    && close_length >= length
+                    && rest.trim().is_empty()
+                {
+                    open_fence = None;
+                    finalizable = Some(offset);
+                }
+            }
+        }
+    }
+    finalizable
+}
+
+fn fence_delimiter(line: &str) -> Option<(char, usize, &str)> {
+    let trimmed = line.trim_start();
+    let fence_char = trimmed.chars().next().filter(|&c| c == '`' || c == '~')?;
+    let length = trimmed.chars().take_while(|&c| c == fence_char).count();
+    (length >= 3).then(|| (fence_char, length, &trimmed[length..]))
 }
 
 #[cfg(test)]
@@ -131,6 +172,37 @@ mod tests {
         transcript.append_text_chunk("lo");
 
         assert_eq!(transcript.pending(), [SegmentContent::Text("Hello".to_string())]);
+    }
+
+    #[test]
+    fn text_chunks_keep_code_fences_in_one_segment() {
+        let mut transcript = Transcript::new();
+        transcript.append_text_chunk("Here you go:\n");
+        transcript.append_text_chunk("```rust\n");
+        transcript.append_text_chunk("fn main() {}\n");
+        transcript.append_text_chunk("```\n");
+
+        assert_eq!(
+            transcript.pending(),
+            [
+                SegmentContent::Text("Here you go:\n".to_string()),
+                SegmentContent::Text("```rust\nfn main() {}\n```\n".to_string()),
+                SegmentContent::Text(String::new()),
+            ]
+        );
+    }
+
+    #[test]
+    fn text_chunks_keep_embedded_fences_inside_longer_fences() {
+        let mut transcript = Transcript::new();
+        transcript.append_text_chunk("````markdown\n");
+        transcript.append_text_chunk("```rust\n");
+        transcript.append_text_chunk("````\n");
+
+        assert_eq!(
+            transcript.pending(),
+            [SegmentContent::Text("````markdown\n```rust\n````\n".to_string()), SegmentContent::Text(String::new()),]
+        );
     }
 
     #[test]

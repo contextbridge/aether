@@ -248,7 +248,7 @@ pub fn default_clipboard_writer() -> ClipboardWriter {
             cmd_clipboard("wl-copy", &[], text)
                 .or_else(|_| cmd_clipboard("xclip", &["-selection", "clipboard"], text))
                 .or_else(|_| cmd_clipboard("xsel", &["--clipboard", "--input"], text))
-                .or_else(|_| Err("No clipboard tool found (wl-copy, xclip, or xsel)".to_string()))
+                .map_err(|_| "No clipboard tool found (wl-copy, xclip, or xsel)".to_string())
         }
         #[cfg(target_os = "windows")]
         {

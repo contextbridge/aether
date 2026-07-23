@@ -29,7 +29,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, Paragraph, Widget};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget};
 
 const MIN_WIDTH: u16 = 6;
 const MIN_HEIGHT: u16 = 3;
@@ -253,6 +253,7 @@ impl SettingsOverlay {
     }
 
     pub fn render(&mut self, area: Rect, buffer: &mut Buffer, theme: &Theme) {
+        Clear.render(area, buffer);
         if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
             Paragraph::new(Line::styled("(terminal too small)", Style::new().fg(theme.text_secondary)))
                 .render(area, buffer);
@@ -261,6 +262,7 @@ impl SettingsOverlay {
         let block = Block::new()
             .borders(Borders::ALL)
             .title(" Configuration ")
+            .style(Style::new().bg(theme.background))
             .border_style(Style::new().fg(theme.text_secondary));
         let inner = block.inner(area);
         block.render(area, buffer);

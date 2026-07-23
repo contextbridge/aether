@@ -98,24 +98,24 @@ fn tab_cycles_reasoning_effort_through_advertised_levels() {
 }
 
 #[test]
-fn backtab_cycles_mode_option_and_wraps() {
+fn shift_backtab_cycles_mode_option_and_wraps() {
     let options = vec![mode_option("code", &["code", "plan", "ask"])];
     let (mut app, mut command_rx) =
         make_app_with_metadata(std::path::PathBuf::from("."), acp::SessionCapabilities::new(), options, Vec::new());
 
-    app.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
+    app.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
     let cmd = command_rx.try_recv().unwrap();
     assert!(
         matches!(cmd, PromptCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "mode" && value == "plan")
     );
 
-    app.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
+    app.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
     let cmd = command_rx.try_recv().unwrap();
     assert!(
         matches!(cmd, PromptCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "mode" && value == "ask")
     );
 
-    app.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
+    app.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
     let cmd = command_rx.try_recv().unwrap();
     assert!(
         matches!(cmd, PromptCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "mode" && value == "code")
@@ -127,7 +127,7 @@ fn tab_and_backtab_noop_without_cycleable_options() {
     let (mut app, mut command_rx) = make_app();
 
     app.on_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-    app.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
+    app.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
 
     assert!(command_rx.try_recv().is_err());
 }

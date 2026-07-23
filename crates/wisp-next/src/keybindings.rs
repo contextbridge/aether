@@ -51,7 +51,7 @@ impl Default for Keybindings {
             open_file_picker: KeyBinding::new(KeyCode::Char('@'), KeyModifiers::NONE),
             toggle_git_diff: KeyBinding::new(KeyCode::Char('g'), KeyModifiers::CONTROL),
             cycle_reasoning: KeyBinding::new(KeyCode::Tab, KeyModifiers::NONE),
-            cycle_mode: KeyBinding::new(KeyCode::BackTab, KeyModifiers::NONE),
+            cycle_mode: KeyBinding::new(KeyCode::BackTab, KeyModifiers::SHIFT),
             open_prompt_search: KeyBinding::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
         }
     }

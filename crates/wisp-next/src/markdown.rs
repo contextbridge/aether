@@ -106,7 +106,7 @@ impl<'a> MarkdownRenderer<'a> {
                 self.in_code_block = true;
                 self.code.clear();
                 self.code_language = match kind {
-                    CodeBlockKind::Fenced(language) => language.split(',').next().unwrap_or_default().to_string(),
+                    CodeBlockKind::Fenced(language) => language.to_string(),
                     CodeBlockKind::Indented => String::new(),
                 };
             }

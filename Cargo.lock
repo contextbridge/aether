@@ -80,6 +80,7 @@ dependencies = [
  "aether-tui",
  "aether-utils",
  "aether-wisp",
+ "aether-wisp-next",
  "agent-client-protocol",
  "async-trait",
  "clap",

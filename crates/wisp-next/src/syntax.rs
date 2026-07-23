@@ -44,14 +44,20 @@ impl SyntaxHighlighter {
         };
         let mut highlighter = HighlightLines::new(syntax, theme.syntect());
         code.split('\n')
-            .map(|source_line| match highlighter.highlight_line(source_line, &self.syntax_set) {
-                Ok(ranges) => Line::from(
-                    ranges
-                        .into_iter()
-                        .map(|(style, text)| Span::styled(text.to_string(), style_from_syntect(style)))
-                        .collect::<Vec<_>>(),
-                ),
-                Err(_) => Line::styled(source_line.to_string(), Style::new().fg(theme.code_fg)),
+            .map(|source_line| {
+                let line_with_ending = format!("{source_line}\n");
+                match highlighter.highlight_line(&line_with_ending, &self.syntax_set) {
+                    Ok(ranges) => Line::from(
+                        ranges
+                            .into_iter()
+                            .filter_map(|(style, text)| {
+                                let text = text.strip_suffix('\n').unwrap_or(text);
+                                (!text.is_empty()).then(|| Span::styled(text.to_string(), style_from_syntect(style)))
+                            })
+                            .collect::<Vec<_>>(),
+                    ),
+                    Err(_) => Line::styled(source_line.to_string(), Style::new().fg(theme.code_fg)),
+                }
             })
             .collect()
     }
@@ -66,7 +72,12 @@ impl Default for SyntaxHighlighter {
 const MAX_CACHE_ENTRIES: usize = 128;
 
 fn find_syntax<'a>(syntax_set: &'a SyntaxSet, hint: &str) -> Option<&'a SyntaxReference> {
-    let normalized = match hint.to_ascii_lowercase().as_str() {
+    let language = hint
+        .split(|character: char| character.is_whitespace() || character == ',')
+        .find(|part| !part.is_empty())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let normalized = match language.as_str() {
         "typescript" => "ts",
         "typescriptreact" => "tsx",
         "javascript" | "jsx" => "js",
@@ -80,7 +91,7 @@ fn find_syntax<'a>(syntax_set: &'a SyntaxSet, hint: &str) -> Option<&'a SyntaxRe
         "shell" | "bash" | "zsh" => "sh",
         "yml" => "yaml",
         "markdown" => "md",
-        _ => hint,
+        language => language,
     };
     if normalized.is_empty() {
         return None;
