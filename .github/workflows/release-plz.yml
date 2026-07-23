@@ -32,7 +32,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev
       - uses: Swatinem/rust-cache@v2
       - name: Run release-plz
-        uses: release-plz/action@v0.5.130
+        uses: release-plz/action@v0.5.131
         with:
           command: release
         env:
@@ -67,7 +67,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev
       - uses: Swatinem/rust-cache@v2
       - name: Run release-plz
-        uses: release-plz/action@v0.5.130
+        uses: release-plz/action@v0.5.131
         with:
           command: release-pr
         env:
