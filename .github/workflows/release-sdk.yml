@@ -26,7 +26,7 @@ jobs:
       - uses: jdx/mise-action@v4
 
       - name: Setup npm registry
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version-file: .tool-versions
           registry-url: "https://registry.npmjs.org"
