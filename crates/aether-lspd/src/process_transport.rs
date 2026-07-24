@@ -11,6 +11,10 @@ use lsp_types::{
     WorkspaceClientCapabilities, WorkspaceFolder,
 };
 use lsp_types::{DocumentSymbolClientCapabilities, DynamicRegistrationClientCapabilities};
+#[cfg(unix)]
+use nix::sys::signal::{Signal, kill};
+#[cfg(unix)]
+use nix::unistd::Pid;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::io::ErrorKind;
@@ -25,6 +29,7 @@ const INITIALIZE_REQUEST_ID: i64 = 1;
 #[derive(Clone)]
 pub(crate) struct ProcessTransport {
     command_tx: mpsc::Sender<TransportCommand>,
+    process_id: Option<i32>,
 }
 
 pub(crate) enum TransportEvent {
@@ -33,10 +38,20 @@ pub(crate) enum TransportEvent {
     Closed,
 }
 
+/// Failure of a raw LSP request, typed so callers can react to a dead
+/// transport (replace the server) without inspecting server-defined codes.
+pub(crate) enum TransportError {
+    /// The language server answered with an error response; forwarded verbatim.
+    Lsp(LspErrorResponse),
+    /// The language server process exited or its transport shut down before
+    /// responding.
+    Closed,
+}
+
 struct TransportRequest {
     method: String,
     params: Value,
-    response_tx: oneshot::Sender<Result<Value, LspErrorResponse>>,
+    response_tx: oneshot::Sender<Result<Value, TransportError>>,
 }
 
 enum TransportCommand {
@@ -54,7 +69,7 @@ struct ProcessTransportActor {
     watcher: FileWatcherHandle,
     watcher_rx: mpsc::Receiver<FileWatcherBatch>,
     next_id: i64,
-    pending: HashMap<i64, oneshot::Sender<Result<Value, LspErrorResponse>>>,
+    pending: HashMap<i64, oneshot::Sender<Result<Value, TransportError>>>,
 }
 
 impl ProcessTransport {
@@ -77,6 +92,7 @@ impl ProcessTransport {
             process.stdin.take().ok_or_else(|| DaemonError::LspSpawnFailed("Failed to capture stdin".into()))?;
         let stdout =
             process.stdout.take().ok_or_else(|| DaemonError::LspSpawnFailed("Failed to capture stdout".into()))?;
+        let process_id = process.id().and_then(|id| i32::try_from(id).ok());
 
         let (command_tx, command_rx) = mpsc::channel(100);
         let (event_tx, event_rx) = mpsc::channel(100);
@@ -96,18 +112,15 @@ impl ProcessTransport {
         };
         tokio::spawn(actor.run(root_path.to_path_buf()));
 
-        Ok((Self { command_tx }, event_rx))
+        Ok((Self { command_tx, process_id }, event_rx))
     }
 
-    pub(crate) async fn request_raw(&self, method: &str, params: Value) -> Result<Value, LspErrorResponse> {
+    pub(crate) async fn request_raw(&self, method: &str, params: Value) -> Result<Value, TransportError> {
         let (response_tx, response_rx) = oneshot::channel();
         let request = TransportRequest { method: method.to_string(), params, response_tx };
-        self.command_tx
-            .send(TransportCommand::Request(request))
-            .await
-            .map_err(|_| LspErrorResponse { code: -1, message: "LSP transport closed".into() })?;
+        self.command_tx.send(TransportCommand::Request(request)).await.map_err(|_| TransportError::Closed)?;
 
-        response_rx.await.map_err(|_| LspErrorResponse { code: -1, message: "Response channel closed".into() })?
+        response_rx.await.map_err(|_| TransportError::Closed)?
     }
 
     pub(crate) async fn send_notification(&self, notification: LspNotification) {
@@ -116,6 +129,19 @@ impl ProcessTransport {
 
     pub(crate) async fn shutdown(&self) {
         let _ = self.command_tx.send(TransportCommand::Shutdown).await;
+    }
+
+    /// Forcibly terminate the language server process, bypassing the actor.
+    ///
+    /// Used when the server stops responding: the actor may be blocked on the
+    /// server's pipes, so a cooperative `Shutdown` command would never be
+    /// processed. Killing the process closes its pipes, which unblocks the
+    /// actor and fails all pending requests.
+    pub(crate) fn kill_process(&self) {
+        #[cfg(unix)]
+        if let Some(pid) = self.process_id {
+            let _ = kill(Pid::from_raw(pid), Signal::SIGKILL);
+        }
     }
 }
 
@@ -166,7 +192,8 @@ impl ProcessTransportActor {
                 if let Err(err) = self.send_request(id, &request.method, request.params).await
                     && let Some(tx) = self.pending.remove(&id)
                 {
-                    let _ = tx.send(Err(LspErrorResponse { code: -1, message: err.to_string() }));
+                    tracing::warn!(%err, "Failed to write LSP request");
+                    let _ = tx.send(Err(TransportError::Closed));
                 }
                 true
             }
@@ -287,7 +314,7 @@ impl ProcessTransportActor {
                             .unwrap_or(-1);
                         let message =
                             error.get("message").and_then(Value::as_str).unwrap_or("Unknown error").to_string();
-                        Err(LspErrorResponse { code, message })
+                        Err(TransportError::Lsp(LspErrorResponse { code, message }))
                     } else {
                         Ok(message.get("result").cloned().unwrap_or(Value::Null))
                     };
@@ -352,7 +379,7 @@ impl ProcessTransportActor {
 
     fn cleanup_pending(&mut self) {
         for (_, tx) in self.pending.drain() {
-            let _ = tx.send(Err(LspErrorResponse { code: -1, message: "LSP transport closed".into() }));
+            let _ = tx.send(Err(TransportError::Closed));
         }
     }
 }

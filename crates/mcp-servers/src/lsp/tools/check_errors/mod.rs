@@ -4,6 +4,7 @@
 #![allow(clippy::mutable_key_type)]
 
 use crate::lsp::diagnostics::{DiagnosticCounts, FormattedDiagnostic, count_by_severity};
+use crate::lsp::error::LspError;
 use crate::lsp::registry::LspRegistry;
 use lsp_types::Diagnostic;
 use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename};
@@ -22,17 +23,19 @@ pub struct LspDiagnosticsRequest {
 }
 
 impl LspDiagnosticsRequest {
-    fn validate(&self) -> Result<(), String> {
+    fn validate(&self) -> Result<(), LspError> {
         if let Some(file_path) = &self.file_path {
             if file_path.trim().is_empty() {
-                return Err("filePath cannot be empty".to_string());
+                return Err(LspError::InvalidPath("filePath cannot be empty".to_string()));
             }
             let path = Path::new(file_path);
             if !path.is_absolute() {
-                return Err(format!("filePath must be an absolute path, got: {file_path}"));
+                return Err(LspError::InvalidPath(format!("filePath must be an absolute path, got: {file_path}")));
             }
             if !path.is_file() {
-                return Err(format!("filePath must point to an existing file, got: {file_path}"));
+                return Err(LspError::InvalidPath(format!(
+                    "filePath must point to an existing file, got: {file_path}"
+                )));
             }
         }
         Ok(())
@@ -73,11 +76,10 @@ pub enum Scope {
 pub async fn execute_lsp_diagnostics(
     request: LspDiagnosticsRequest,
     registry: &LspRegistry,
-) -> Result<LspDiagnosticsOutput, String> {
+) -> Result<LspDiagnosticsOutput, LspError> {
     request.validate()?;
 
-    let diagnostics_cache =
-        registry.collect_diagnostics(request.file_path.as_deref()).await.map_err(|error| error.to_string())?;
+    let diagnostics_cache = registry.collect_diagnostics(request.file_path.as_deref()).await?;
     let mut output = build_output(&request, registry.root_path(), &diagnostics_cache);
 
     let detail = if output.summary.errors == 0 && output.summary.warnings == 0 {
@@ -262,7 +264,7 @@ mod tests {
 
         for (path, expected_msg) in cases {
             let input = file_request(path);
-            let err = input.validate().unwrap_err();
+            let err = input.validate().unwrap_err().to_string();
             assert!(err.contains(expected_msg), "path={path:?}: expected {expected_msg:?}, got {err:?}");
         }
     }

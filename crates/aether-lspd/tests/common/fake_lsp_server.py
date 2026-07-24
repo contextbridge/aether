@@ -1,7 +1,15 @@
 import json
+import argparse
 import sys
 
 docs = {}
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--wedge-on", action="append", default=[])
+parser.add_argument("--crash-on", action="append", default=[])
+cli_args = parser.parse_args()
+wedge_methods = set(cli_args.wedge_on)
+crash_methods = set(cli_args.crash_on)
 
 
 def write_message(msg):
@@ -111,6 +119,12 @@ while True:
 
     method = message.get("method")
     params = message.get("params", {})
+
+    if method in crash_methods:
+        sys.exit(1)
+
+    if method in wedge_methods:
+        continue
 
     if method == "initialize":
         write_message(

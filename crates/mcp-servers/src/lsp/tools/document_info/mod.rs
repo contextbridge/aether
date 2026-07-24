@@ -11,6 +11,7 @@ use std::path::Path;
 use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename};
 
 use crate::lsp::common::{LocationResult, path_to_uri};
+use crate::lsp::error::LspError;
 use crate::lsp::registry::LspRegistry;
 use aether_lspd::symbol_kind_to_string;
 
@@ -62,10 +63,10 @@ pub struct LspDocumentOutput {
 pub async fn execute_lsp_document(
     input: LspDocumentInput,
     registry: &LspRegistry,
-) -> Result<LspDocumentOutput, String> {
-    let uri = path_to_uri(Path::new(&input.file_path)).map_err(|e| e.to_string())?;
-    let client = registry.get_or_spawn(Path::new(&input.file_path)).await.map_err(|e| e.to_string())?;
-    let response = client.document_symbol(uri).await.map_err(|e| e.to_string())?;
+) -> Result<LspDocumentOutput, LspError> {
+    let uri = path_to_uri(Path::new(&input.file_path))?;
+    let client = registry.get_or_spawn(Path::new(&input.file_path)).await?;
+    let response = client.document_symbol(uri).await?;
 
     let symbols = convert_document_symbols(&input.file_path, response);
     let total_count = symbols.len();
