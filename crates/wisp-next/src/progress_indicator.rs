@@ -1,4 +1,5 @@
-use ratatui::style::{Color, Modifier, Style};
+use crate::theme::Theme;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 pub const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -107,30 +108,22 @@ impl ProgressIndicator {
         *self = Self::default();
     }
 
-    pub fn render(
-        &self,
-        info_color: Color,
-        warning_color: Color,
-        secondary_color: Color,
-        muted_color: Color,
-        tick: usize,
-        padding: usize,
-    ) -> Vec<Line<'static>> {
+    pub fn lines(&self, theme: &Theme, tick: usize, padding: usize) -> Vec<Line<'static>> {
         if !self.is_active() {
             return Vec::new();
         }
 
         let spinner_color =
-            if matches!(self.display, ProgressDisplay::Compacting { .. }) { warning_color } else { info_color };
+            if matches!(self.display, ProgressDisplay::Compacting { .. }) { theme.warning } else { theme.info };
         let mut spans = vec![
             Span::styled(" ".repeat(padding), Style::default()),
             Span::styled(spinner_frame(tick).to_string(), Style::new().fg(spinner_color)),
-            Span::styled(format!(" {}", self.current_message()), Style::new().fg(secondary_color)),
+            Span::styled(format!(" {}", self.current_message()), Style::new().fg(theme.text_secondary)),
         ];
         if self.display.is_interruptible() {
             spans.push(Span::styled(
                 "  (esc to interrupt)".to_string(),
-                Style::new().fg(muted_color).add_modifier(Modifier::ITALIC),
+                Style::new().fg(theme.muted).add_modifier(Modifier::ITALIC),
             ));
         }
         vec![Line::default(), Line::from(spans), Line::default()]
@@ -160,7 +153,8 @@ mod tests {
             ProgressActivity { agent_busy: true, workspace: WorkspaceProgress::Moving, compaction_active: true },
             1,
         );
-        let text = indicator.render(Color::Cyan, Color::Yellow, Color::Gray, Color::DarkGray, 0, 0);
+        let theme = Theme::default();
+        let text = indicator.lines(&theme, 0, 0);
         assert!(text[1].to_string().contains("Moving workspace..."));
         assert!(indicator.is_interruptible());
     }
@@ -169,8 +163,9 @@ mod tests {
     fn tick_selects_the_shared_spinner_frame() {
         let mut indicator = ProgressIndicator::default();
         indicator.update(ProgressActivity { agent_busy: true, ..Default::default() }, 1);
-        let first = indicator.render(Color::Cyan, Color::Yellow, Color::Gray, Color::DarkGray, 0, 0);
-        let second = indicator.render(Color::Cyan, Color::Yellow, Color::Gray, Color::DarkGray, 1, 0);
+        let theme = Theme::default();
+        let first = indicator.lines(&theme, 0, 0);
+        let second = indicator.lines(&theme, 1, 0);
         assert_ne!(first[1].to_string(), second[1].to_string());
     }
 }

@@ -1,7 +1,8 @@
 use super::config::{cycle_quick_option, cycle_reasoning_option, update_config_option_value};
 use super::{
-    ActiveSurface, App, Duration, ElicitationModal, Event, GitDiffEvent, Instant, KeyCode, KeyEvent, KeyEventKind,
-    KeyModifiers, ModalOutcome, PromptSearchMessage, Rect, ScreenEffect, ScreenEvent, parse_dropped_file_paths,
+    ActiveSurface, App, Duration, Event, ExitState, GitDiffEvent, Instant, KeyCode, KeyEvent, KeyEventKind,
+    KeyModifiers, ModalOutcome, OverlayLayer, PromptSearchMessage, Rect, ScreenEffect, ScreenEvent,
+    parse_dropped_file_paths,
 };
 
 pub(super) const CTRL_C_CONFIRM_WINDOW: Duration = Duration::from_secs(1);
@@ -15,11 +16,11 @@ impl App {
 
         'event: {
             if self.keybindings.exit.matches(key) {
-                if self.ctrl_c_armed_at.is_some() {
-                    self.exit_requested = true;
+                if self.exit_state.is_confirming() {
+                    self.exit_state = ExitState::Exiting;
                 } else {
                     self.composer.clear();
-                    self.ctrl_c_armed_at = Some(Instant::now());
+                    self.exit_state = ExitState::Confirming(Instant::now());
                 }
                 break 'event;
             }
@@ -32,32 +33,43 @@ impl App {
                     break 'event;
                 }
                 ActiveSurface::Settings => {
-                    let messages =
-                        self.settings_overlay.as_mut().map(|overlay| overlay.on_key(key)).unwrap_or_default();
+                    let messages = if let OverlayLayer::Settings(overlay) = &mut self.overlay {
+                        overlay.on_key(key)
+                    } else {
+                        Vec::new()
+                    };
                     for message in messages {
                         self.handle_settings_message(message);
                     }
                     break 'event;
                 }
                 ActiveSurface::SessionPicker => {
-                    let messages =
-                        self.session_picker.as_mut().and_then(|picker| picker.on_key(key)).unwrap_or_default();
+                    let messages = if let OverlayLayer::SessionPicker(picker) = &mut self.overlay {
+                        picker.on_key(key).unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    };
                     for message in messages {
                         self.handle_session_picker_message(message);
                     }
                     break 'event;
                 }
                 ActiveSurface::WorkspacePicker => {
-                    let messages =
-                        self.workspace_picker.as_mut().and_then(|picker| picker.on_key(key)).unwrap_or_default();
+                    let messages = if let OverlayLayer::WorkspacePicker(picker) = &mut self.overlay {
+                        picker.on_key(key).unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    };
                     for message in messages {
                         self.handle_workspace_picker_message(message);
                     }
                     break 'event;
                 }
                 ActiveSurface::Modal => {
-                    if self.modal.as_mut().is_some_and(|modal| matches!(modal.on_key(key), ModalOutcome::Close)) {
-                        self.modal = None;
+                    if let OverlayLayer::Elicitation(modal) = &mut self.overlay
+                        && matches!(modal.on_key(key), ModalOutcome::Close)
+                    {
+                        self.overlay = OverlayLayer::None;
                     }
                     break 'event;
                 }
@@ -199,27 +211,27 @@ impl App {
             ActiveSurface::Settings => {
                 let area = frame.area();
                 self.surface_rect = Some(area);
-                if let Some(overlay) = &mut self.settings_overlay {
+                if let OverlayLayer::Settings(overlay) = &mut self.overlay {
                     overlay.render(area, frame.buffer_mut(), theme);
                 }
             }
             ActiveSurface::SessionPicker => {
                 let area = frame.area();
                 self.surface_rect = Some(area);
-                if let Some(picker) = &mut self.session_picker {
+                if let OverlayLayer::SessionPicker(picker) = &mut self.overlay {
                     picker.render(area, frame.buffer_mut(), theme);
                 }
             }
             ActiveSurface::WorkspacePicker => {
                 let area = frame.area();
                 self.surface_rect = Some(area);
-                if let Some(picker) = &mut self.workspace_picker {
+                if let OverlayLayer::WorkspacePicker(picker) = &mut self.overlay {
                     picker.render(area, frame.buffer_mut(), theme);
                 }
             }
             ActiveSurface::Modal => {
                 self.surface_rect = Some(frame.area());
-                if let Some(modal) = &self.modal {
+                if let OverlayLayer::Elicitation(modal) = &self.overlay {
                     modal.render(frame, theme);
                 }
             }
@@ -264,7 +276,13 @@ impl App {
     fn has_mouse_capturing_surface(&self) -> bool {
         match self.active_surface() {
             ActiveSurface::Composer => false,
-            ActiveSurface::Modal => self.modal.as_ref().is_some_and(ElicitationModal::needs_mouse_capture),
+            ActiveSurface::Modal => {
+                if let OverlayLayer::Elicitation(modal) = &self.overlay {
+                    modal.needs_mouse_capture()
+                } else {
+                    false
+                }
+            }
             ActiveSurface::Screen
             | ActiveSurface::Settings
             | ActiveSurface::SessionPicker
@@ -362,94 +380,71 @@ impl App {
     }
 
     fn surface_scroll_up(&mut self, local_y: u16, local_x: u16) {
-        match self.active_surface() {
-            ActiveSurface::Screen => self.screen_router.on_mouse_scroll_up(local_y, local_x),
-            ActiveSurface::Settings => {
-                if let Some(overlay) = &mut self.settings_overlay {
-                    overlay.on_mouse_scroll_up(local_y);
+        match &mut self.overlay {
+            OverlayLayer::Settings(o) => o.on_mouse_scroll_up(local_y),
+            OverlayLayer::SessionPicker(p) => p.scroll_up(),
+            OverlayLayer::WorkspacePicker(p) => p.scroll_up(),
+            OverlayLayer::Elicitation(m) => m.on_mouse_scroll_up(local_y),
+            OverlayLayer::None => {
+                if self.screen_router.is_active() {
+                    self.screen_router.on_mouse_scroll_up(local_y, local_x);
+                } else if self.composer.has_prompt_search() {
+                    self.composer.prompt_search_move_up();
+                } else if self.composer.has_overlay() {
+                    self.composer.overlay_move_up();
                 }
             }
-            ActiveSurface::SessionPicker => {
-                if let Some(picker) = &mut self.session_picker {
-                    picker.scroll_up();
-                }
-            }
-            ActiveSurface::WorkspacePicker => {
-                if let Some(picker) = &mut self.workspace_picker {
-                    picker.scroll_up();
-                }
-            }
-            ActiveSurface::Modal => {
-                if let Some(modal) = &mut self.modal {
-                    modal.on_mouse_scroll_up(local_y);
-                }
-            }
-            ActiveSurface::PromptSearch => self.composer.prompt_search_move_up(),
-            ActiveSurface::Overlay => self.composer.overlay_move_up(),
-            ActiveSurface::Composer => {}
         }
     }
 
     fn surface_scroll_down(&mut self, local_y: u16, local_x: u16) {
-        match self.active_surface() {
-            ActiveSurface::Screen => self.screen_router.on_mouse_scroll_down(local_y, local_x),
-            ActiveSurface::Settings => {
-                if let Some(overlay) = &mut self.settings_overlay {
-                    overlay.on_mouse_scroll_down(local_y);
+        match &mut self.overlay {
+            OverlayLayer::Settings(o) => o.on_mouse_scroll_down(local_y),
+            OverlayLayer::SessionPicker(p) => p.scroll_down(),
+            OverlayLayer::WorkspacePicker(p) => p.scroll_down(),
+            OverlayLayer::Elicitation(m) => m.on_mouse_scroll_down(local_y),
+            OverlayLayer::None => {
+                if self.screen_router.is_active() {
+                    self.screen_router.on_mouse_scroll_down(local_y, local_x);
+                } else if self.composer.has_prompt_search() {
+                    self.composer.prompt_search_move_down();
+                } else if self.composer.has_overlay() {
+                    self.composer.overlay_move_down();
                 }
             }
-            ActiveSurface::SessionPicker => {
-                if let Some(picker) = &mut self.session_picker {
-                    picker.scroll_down();
-                }
-            }
-            ActiveSurface::WorkspacePicker => {
-                if let Some(picker) = &mut self.workspace_picker {
-                    picker.scroll_down();
-                }
-            }
-            ActiveSurface::Modal => {
-                if let Some(modal) = &mut self.modal {
-                    modal.on_mouse_scroll_down(local_y);
-                }
-            }
-            ActiveSurface::PromptSearch => self.composer.prompt_search_move_down(),
-            ActiveSurface::Overlay => self.composer.overlay_move_down(),
-            ActiveSurface::Composer => {}
         }
     }
 
     fn surface_click(&mut self, local_y: u16, local_x: u16) {
-        match self.active_surface() {
-            ActiveSurface::Screen => self.screen_router.on_mouse_click(local_y, local_x),
-            ActiveSurface::Settings => {
-                let messages = self
-                    .settings_overlay
-                    .as_mut()
-                    .map(|overlay| overlay.on_mouse_click(local_y, self.surface_rect.unwrap_or_default()))
-                    .unwrap_or_default();
-                for message in messages {
-                    self.handle_settings_message(message);
-                }
+        let settings_messages = match &mut self.overlay {
+            OverlayLayer::Settings(o) => Some(o.on_mouse_click(local_y, self.surface_rect.unwrap_or_default())),
+            OverlayLayer::SessionPicker(p) => {
+                p.select_row(local_y.saturating_sub(1) as usize);
+                None
             }
-            ActiveSurface::SessionPicker => {
-                if let Some(picker) = &mut self.session_picker {
-                    picker.select_row(local_y.saturating_sub(1) as usize);
-                }
+            OverlayLayer::WorkspacePicker(p) => {
+                p.select_row(local_y.saturating_sub(1) as usize);
+                None
             }
-            ActiveSurface::WorkspacePicker => {
-                if let Some(picker) = &mut self.workspace_picker {
-                    picker.select_row(local_y.saturating_sub(1) as usize);
-                }
+            OverlayLayer::Elicitation(m) => {
+                m.on_mouse_click(local_y);
+                None
             }
-            ActiveSurface::Modal => {
-                if let Some(modal) = &mut self.modal {
-                    modal.on_mouse_click(local_y);
+            OverlayLayer::None => {
+                if self.screen_router.is_active() {
+                    self.screen_router.on_mouse_click(local_y, local_x);
+                } else if self.composer.has_prompt_search() {
+                    self.composer.prompt_search_select_row(local_y as usize);
+                } else if self.composer.has_overlay() {
+                    self.composer.overlay_select_row(local_y as usize);
                 }
+                None
             }
-            ActiveSurface::PromptSearch => self.composer.prompt_search_select_row(local_y as usize),
-            ActiveSurface::Overlay => self.composer.overlay_select_row(local_y as usize),
-            ActiveSurface::Composer => {}
+        };
+        if let Some(messages) = settings_messages {
+            for message in messages {
+                self.handle_settings_message(message);
+            }
         }
     }
 }

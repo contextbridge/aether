@@ -1,9 +1,15 @@
+use crate::theme::Theme;
+use crate::wrap::truncate_to_width;
+use nucleo::pattern::{CaseMatching, Normalization, Pattern};
+use nucleo::{Config, Matcher, Utf32Str};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{
     Block, List, ListItem, ListState, Scrollbar, ScrollbarOrientation, ScrollbarState, StatefulWidget, Widget,
 };
+use unicode_width::UnicodeWidthStr;
 
 pub struct FilterableListRender<'a> {
     pub title: String,
@@ -13,9 +19,10 @@ pub struct FilterableListRender<'a> {
     pub highlight_style: Style,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FilterableList<T> {
     entries: Vec<T>,
-    normalized_match_keys: Vec<String>,
+    match_keys: Vec<String>,
     query: String,
     filtered_indices: Vec<usize>,
     state: ListState,
@@ -23,10 +30,10 @@ pub struct FilterableList<T> {
 
 impl<T> FilterableList<T> {
     pub fn new(entries: Vec<T>, match_key: impl Fn(&T) -> String) -> Self {
-        let normalized_match_keys = entries.iter().map(|entry| match_key(entry).to_lowercase()).collect();
+        let match_keys = entries.iter().map(&match_key).collect();
         let filtered_indices = (0..entries.len()).collect();
         let state = ListState::default().with_selected((!entries.is_empty()).then_some(0));
-        Self { entries, normalized_match_keys, query: String::new(), filtered_indices, state }
+        Self { entries, match_keys, query: String::new(), filtered_indices, state }
     }
 
     pub fn entries(&self) -> &[T] {
@@ -89,13 +96,7 @@ impl<T> FilterableList<T> {
         if self.query.is_empty() {
             self.filtered_indices = (0..self.entries.len()).collect();
         } else {
-            let query = self.query.to_lowercase();
-            self.filtered_indices = self
-                .normalized_match_keys
-                .iter()
-                .enumerate()
-                .filter_map(|(index, key)| key.contains(&query).then_some(index))
-                .collect();
+            self.filtered_indices = fuzzy_filter(&self.query, &self.match_keys);
         }
         self.select_first();
     }
@@ -162,6 +163,39 @@ impl<T> FilterableList<T> {
         StatefulWidget::render(Scrollbar::new(ScrollbarOrientation::VerticalRight), inner, buf, &mut scrollbar_state);
     }
 
+    /// Renders the filtered entries as styled lines for inline overlays (e.g.
+    /// command/file pickers shown above the composer).
+    pub fn inline_lines(
+        &self,
+        width: u16,
+        max_rows: usize,
+        theme: &Theme,
+        empty_message: &str,
+        label: impl Fn(&T) -> String,
+    ) -> Vec<Line<'static>> {
+        let width = usize::from(width.max(1));
+        let mut lines = vec![Line::styled("─".repeat(width), Style::new().fg(theme.muted))];
+        if self.filtered_indices.is_empty() {
+            lines.push(Line::styled(format!("  ({empty_message})"), Style::new().fg(theme.muted)));
+        } else {
+            let selected = self.state.selected().unwrap_or_default();
+            let start = selected.saturating_sub(max_rows.saturating_sub(1));
+            for (row, &index) in self.filtered_indices.iter().enumerate().skip(start).take(max_rows) {
+                let value = truncate_to_width(&label(&self.entries[index]), width.saturating_sub(2));
+                let is_selected = row == selected;
+                let style = if is_selected {
+                    Style::new().fg(theme.text_primary).bg(theme.sidebar_bg)
+                } else {
+                    Style::new().fg(theme.text_secondary)
+                };
+                let text = format!("  {value}");
+                let padding = " ".repeat(width.saturating_sub(text.width()));
+                lines.push(Line::from(vec![Span::styled(text, style), Span::styled(padding, style)]));
+            }
+        }
+        lines
+    }
+
     fn select_first(&mut self) {
         self.state.select((!self.filtered_indices.is_empty()).then_some(0));
         if self.filtered_indices.is_empty() {
@@ -174,5 +208,51 @@ impl<T> FilterableList<T> {
         if self.filtered_indices.is_empty() {
             *self.state.offset_mut() = 0;
         }
+    }
+}
+
+/// Fuzzy-filters `haystacks` against `query` using nucleo, returning matching
+/// indices sorted by match quality (best first).
+fn fuzzy_filter(query: &str, haystacks: &[String]) -> Vec<usize> {
+    let mut matcher = Matcher::new(Config::DEFAULT);
+    let pattern = Pattern::parse(query, CaseMatching::Smart, Normalization::Smart);
+    let mut buf = Vec::new();
+    let mut scored: Vec<(u32, usize)> = haystacks
+        .iter()
+        .enumerate()
+        .filter_map(|(index, haystack)| {
+            let utf32 = Utf32Str::new(haystack, &mut buf);
+            pattern.score(utf32, &mut matcher).map(|score| (score, index))
+        })
+        .collect();
+    scored.sort_by_key(|&(score, _)| std::cmp::Reverse(score));
+    scored.into_iter().map(|(_, index)| index).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fuzzy_filter_ranks_by_match_quality() {
+        let haystacks = vec!["alphabet".to_string(), "alpha".to_string(), "gamma".to_string()];
+        let result = fuzzy_filter("alp", &haystacks);
+        assert!(result.contains(&0));
+        assert!(result.contains(&1));
+        assert!(!result.contains(&2));
+    }
+
+    #[test]
+    fn fuzzy_filter_empty_query_returns_all() {
+        let haystacks = vec!["a".to_string(), "b".to_string()];
+        let result = fuzzy_filter("", &haystacks);
+        assert_eq!(result, vec![0, 1]);
+    }
+
+    #[test]
+    fn fuzzy_filter_case_insensitive() {
+        let haystacks = vec!["Alpha".to_string(), "beta".to_string()];
+        let result = fuzzy_filter("alp", &haystacks);
+        assert_eq!(result, vec![0]);
     }
 }

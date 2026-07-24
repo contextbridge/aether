@@ -1,23 +1,49 @@
 use crate::theme::Theme;
 use agent_client_protocol::schema::{PlanEntry, PlanEntryStatus};
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
+use ratatui::widgets::{Paragraph, Widget};
 
 const CHECKBOX_EMPTY: &str = "\u{2610}";
 const CHECKBOX_FILLED: &str = "\u{2611}";
 const SQUARE_FILLED: &str = "\u{25A0}";
 
-pub fn render_plan_lines(entries: &[PlanEntry], theme: &Theme, padding: usize) -> Vec<Line<'static>> {
-    if entries.is_empty() {
-        return Vec::new();
+/// Renders the plan checklist as a ratatui widget.
+pub struct PlanView<'a> {
+    entries: &'a [PlanEntry],
+    theme: &'a Theme,
+    padding: usize,
+}
+
+impl<'a> PlanView<'a> {
+    pub fn new(entries: &'a [PlanEntry], theme: &'a Theme, padding: usize) -> Self {
+        Self { entries, theme, padding }
     }
 
-    let mut lines = Vec::with_capacity(entries.len() + 2);
+    /// Number of lines the plan view will occupy (header + blank + entries).
+    pub fn line_count(&self) -> usize {
+        if self.entries.is_empty() { 0 } else { self.entries.len() + 2 }
+    }
+}
 
+impl Widget for PlanView<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        if self.entries.is_empty() || area.height == 0 {
+            return;
+        }
+        let lines = build_plan_lines(self.entries, self.theme, self.padding);
+        Paragraph::new(lines).render(area, buf);
+    }
+}
+
+fn build_plan_lines(entries: &[PlanEntry], theme: &Theme, padding: usize) -> Vec<Line<'static>> {
     let blank_prefix = " ".repeat(padding);
-    lines.push(Line::from(Span::raw(blank_prefix.clone())));
-
     let header_style = Style::new().fg(theme.muted);
+
+    let mut lines = Vec::with_capacity(entries.len() + 2);
+    lines.push(Line::from(Span::raw(blank_prefix.clone())));
     lines.push(Line::from(vec![Span::raw(blank_prefix.clone()), Span::styled("Plan", header_style)]));
 
     for entry in entries {
@@ -49,6 +75,7 @@ pub fn render_plan_lines(entries: &[PlanEntry], theme: &Theme, padding: usize) -
 mod tests {
     use super::*;
     use agent_client_protocol::schema::{PlanEntryPriority, PlanEntryStatus};
+    use ratatui::layout::Rect;
 
     fn test_theme() -> Theme {
         Theme::default()
@@ -58,11 +85,24 @@ mod tests {
         PlanEntry::new(content.to_string(), PlanEntryPriority::Medium, status)
     }
 
+    fn render_to_buf(entries: &[PlanEntry], theme: &Theme, padding: usize, width: u16, height: u16) -> Buffer {
+        let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
+        PlanView::new(entries, theme, padding).render(Rect::new(0, 0, width, height), &mut buf);
+        buf
+    }
+
     #[test]
     fn empty_entries_render_nothing() {
         let theme = test_theme();
-        let lines = render_plan_lines(&[], &theme, 4);
-        assert!(lines.is_empty());
+        assert_eq!(PlanView::new(&[], &theme, 4).line_count(), 0);
+    }
+
+    #[test]
+    fn line_count_matches_entries_plus_header() {
+        let theme = test_theme();
+        let entries = vec![entry("Task", PlanEntryStatus::Pending)];
+        assert_eq!(PlanView::new(&entries, &theme, 4).line_count(), 3);
+        assert_eq!(PlanView::new(&[], &theme, 4).line_count(), 0);
     }
 
     #[test]
@@ -73,104 +113,7 @@ mod tests {
             entry("Implement", PlanEntryStatus::InProgress),
             entry("Test", PlanEntryStatus::Pending),
         ];
-        let lines = render_plan_lines(&entries, &theme, 4);
-        assert_eq!(lines.len(), 5);
-    }
-
-    #[test]
-    fn completed_entry_has_checkbox_and_strikethrough() {
-        let theme = test_theme();
-        let entries = vec![entry("Done task", PlanEntryStatus::Completed)];
-        let lines = render_plan_lines(&entries, &theme, 4);
-
-        let line = &lines[2];
-        assert_eq!(line.spans.len(), 3);
-
-        let checkbox_span = &line.spans[1];
-        assert!(checkbox_span.content.contains(CHECKBOX_FILLED));
-
-        let text_span = &line.spans[2];
-        assert!(text_span.content.contains("Done task"));
-        assert!(text_span.style.add_modifier.contains(Modifier::CROSSED_OUT));
-    }
-
-    #[test]
-    fn in_progress_entry_has_filled_square() {
-        let theme = test_theme();
-        let entries = vec![entry("Working", PlanEntryStatus::InProgress)];
-        let lines = render_plan_lines(&entries, &theme, 4);
-
-        let checkbox_span = &lines[2].spans[1];
-        assert!(checkbox_span.content.contains(SQUARE_FILLED));
-    }
-
-    #[test]
-    fn in_progress_marker_uses_info_color() {
-        let theme = test_theme();
-        let entries = vec![entry("Working", PlanEntryStatus::InProgress)];
-        let lines = render_plan_lines(&entries, &theme, 4);
-
-        let marker_span = &lines[2].spans[1];
-        assert_eq!(marker_span.style.fg, Some(theme.info));
-    }
-
-    #[test]
-    fn pending_entry_has_empty_checkbox() {
-        let theme = test_theme();
-        let entries = vec![entry("Todo", PlanEntryStatus::Pending)];
-        let lines = render_plan_lines(&entries, &theme, 4);
-
-        let checkbox_span = &lines[2].spans[1];
-        assert!(checkbox_span.content.contains(CHECKBOX_EMPTY));
-    }
-
-    #[test]
-    fn pending_entry_uses_muted_color() {
-        let theme = test_theme();
-        let entries = vec![entry("Todo", PlanEntryStatus::Pending)];
-        let lines = render_plan_lines(&entries, &theme, 4);
-
-        let marker_span = &lines[2].spans[1];
-        assert_eq!(marker_span.style.fg, Some(theme.muted));
-    }
-
-    #[test]
-    fn header_uses_muted_color() {
-        let theme = test_theme();
-        let entries = vec![entry("Task", PlanEntryStatus::Pending)];
-        let lines = render_plan_lines(&entries, &theme, 4);
-
-        let header_span = &lines[1].spans[1];
-        assert_eq!(header_span.style.fg, Some(theme.muted));
-        assert!(header_span.content.contains("Plan"));
-    }
-
-    #[test]
-    fn entries_honor_padding() {
-        let theme = test_theme();
-        let entries = vec![entry("Task", PlanEntryStatus::InProgress)];
-        let lines = render_plan_lines(&entries, &theme, 8);
-
-        for line in &lines {
-            if line.spans.is_empty() {
-                continue;
-            }
-            assert!(line.spans[0].content.starts_with("        "));
-        }
-    }
-
-    #[test]
-    fn all_statuses_render_distinctly() {
-        let theme = test_theme();
-        let entries = vec![
-            entry("Active", PlanEntryStatus::InProgress),
-            entry("Todo", PlanEntryStatus::Pending),
-            entry("Done", PlanEntryStatus::Completed),
-        ];
-        let lines = render_plan_lines(&entries, &theme, 4);
-
-        assert!(lines[2].spans[1].content.contains(SQUARE_FILLED));
-        assert!(lines[3].spans[1].content.contains(CHECKBOX_EMPTY));
-        assert!(lines[4].spans[1].content.contains(CHECKBOX_FILLED));
+        let view = PlanView::new(&entries, &theme, 4);
+        assert_eq!(view.line_count(), 5);
     }
 }

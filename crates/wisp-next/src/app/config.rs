@@ -1,6 +1,6 @@
 use super::{
-    App, ConfigOptionId, ReasoningEffort, SessionConfigOptionCategory, SessionConfigView, SettingsMenuEntry,
-    SettingsMenuEntryKind, SettingsMenuValue, UiSettings, acp,
+    App, ConfigOptionId, OverlayLayer, ReasoningEffort, SessionConfigOptionCategory, SessionConfigView,
+    SettingsMenuEntry, SettingsMenuEntryKind, SettingsMenuValue, UiSettings, acp,
 };
 pub(super) fn is_cycleable_mode_option(option: &acp::SessionConfigOption) -> bool {
     matches!(option.kind, acp::SessionConfigKind::Select(_))
@@ -83,7 +83,7 @@ impl App {
         let theme =
             if value.is_empty() { crate::theme::Theme::default() } else { crate::settings::load_theme_file(value) };
         self.pending_theme = Some(theme);
-        if let Some(overlay) = &mut self.settings_overlay {
+        if let OverlayLayer::Settings(overlay) = &mut self.overlay {
             overlay.apply_change(&crate::settings_overlay::SettingsChange {
                 config_id: acp_utils::config_option_id::THEME_CONFIG_ID.to_string(),
                 new_value: value.to_string(),

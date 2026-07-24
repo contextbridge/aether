@@ -54,6 +54,39 @@ pub enum ActiveSurface {
     Composer,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ExitState {
+    #[default]
+    Idle,
+    Confirming(Instant),
+    Exiting,
+}
+
+impl ExitState {
+    fn is_confirming(&self) -> bool {
+        matches!(self, ExitState::Confirming(_))
+    }
+}
+
+/// The modal layer sitting above the main transcript/composer viewport.
+/// Only one overlay can be active at a time.
+#[allow(clippy::large_enum_variant)]
+#[derive(Default)]
+enum OverlayLayer {
+    #[default]
+    None,
+    Settings(SettingsOverlay),
+    SessionPicker(SessionPicker),
+    WorkspacePicker(WorkspacePicker),
+    Elicitation(ElicitationModal),
+}
+
+impl OverlayLayer {
+    fn is_active(&self) -> bool {
+        !matches!(self, OverlayLayer::None)
+    }
+}
+
 /// Root UI state: reduces terminal input and ACP events into the transcript,
 /// tool-call log, and composer that the renderer draws each frame.
 pub struct App {
@@ -71,8 +104,7 @@ pub struct App {
     working_dir: PathBuf,
     available_commands: Vec<CommandEntry>,
     session_loading_buffer: SessionLoadingBuffer,
-    session_picker: Option<SessionPicker>,
-    workspace_picker: Option<WorkspacePicker>,
+    overlay: OverlayLayer,
     workspace_move_state: WorkspaceMoveState,
     transcript: Transcript,
     tool_calls: ToolCallLog,
@@ -81,18 +113,15 @@ pub struct App {
     context_usage: Option<ContextUsageDisplay>,
     unhealthy_server_count: usize,
     server_statuses: Vec<McpServerStatusEntry>,
-    ctrl_c_armed_at: Option<Instant>,
-    exit_requested: bool,
+    exit_state: ExitState,
     spinner_tick: usize,
     submitted_prompt_count: usize,
     compaction_active: bool,
     progress_indicator: ProgressIndicator,
     last_drained_kind: Option<HistoryKind>,
     transcript_generation: u64,
-    modal: Option<ElicitationModal>,
     screen_router: ScreenRouter,
     pending_screen_effects: std::collections::VecDeque<ScreenEffect>,
-    settings_overlay: Option<SettingsOverlay>,
     ui_settings: UiSettings,
     pending_theme: Option<crate::theme::Theme>,
     plan_tracker: PlanTracker,
@@ -202,8 +231,7 @@ impl App {
             working_dir: config.working_dir,
             available_commands: initial_commands,
             session_loading_buffer: SessionLoadingBuffer::new(),
-            session_picker: None,
-            workspace_picker: None,
+            overlay: OverlayLayer::None,
             workspace_move_state: WorkspaceMoveState::Idle,
             transcript: Transcript::new(),
             tool_calls: ToolCallLog::new(),
@@ -212,18 +240,15 @@ impl App {
             context_usage: None,
             unhealthy_server_count: 0,
             server_statuses: Vec::new(),
-            ctrl_c_armed_at: None,
-            exit_requested: false,
+            exit_state: ExitState::Idle,
             spinner_tick: 0,
             submitted_prompt_count: 0,
             compaction_active: false,
             progress_indicator: ProgressIndicator::default(),
             last_drained_kind: None,
             transcript_generation: 0,
-            modal: None,
             screen_router: ScreenRouter::new(),
             pending_screen_effects: std::collections::VecDeque::new(),
-            settings_overlay: None,
             ui_settings: config.settings,
             pending_theme: None,
             plan_tracker: PlanTracker::default(),
@@ -234,10 +259,10 @@ impl App {
     }
 
     pub fn on_tick(&mut self, now: Instant) {
-        if let Some(armed_at) = self.ctrl_c_armed_at
+        if let ExitState::Confirming(armed_at) = self.exit_state
             && now.duration_since(armed_at) > CTRL_C_CONFIRM_WINDOW
         {
-            self.ctrl_c_armed_at = None;
+            self.exit_state = ExitState::Idle;
         }
         self.refresh_progress();
         if self.progress_indicator.is_active() {
@@ -252,19 +277,16 @@ impl App {
             || !self.workspace_move_state.is_idle()
             || self.compaction_active
             || self.progress_indicator.is_active()
-            || self.ctrl_c_armed_at.is_some()
+            || self.exit_state.is_confirming()
             || self.plan_tracker.has_completed_in_grace_period()
     }
 
     pub fn has_modal(&self) -> bool {
-        self.modal.is_some()
-            || self.session_picker.is_some()
-            || self.workspace_picker.is_some()
-            || self.settings_overlay.is_some()
+        self.overlay.is_active()
     }
 
     pub fn has_session_picker(&self) -> bool {
-        self.session_picker.is_some()
+        matches!(self.overlay, OverlayLayer::SessionPicker(_))
     }
 
     pub fn workspace_move_state(&self) -> WorkspaceMoveState {
@@ -278,25 +300,27 @@ impl App {
     pub fn active_surface(&self) -> ActiveSurface {
         if self.screen_router.is_active() {
             ActiveSurface::Screen
-        } else if self.settings_overlay.is_some() {
-            ActiveSurface::Settings
-        } else if self.session_picker.is_some() {
-            ActiveSurface::SessionPicker
-        } else if self.workspace_picker.is_some() {
-            ActiveSurface::WorkspacePicker
-        } else if self.modal.is_some() {
-            ActiveSurface::Modal
-        } else if self.composer.has_prompt_search() {
-            ActiveSurface::PromptSearch
-        } else if self.composer.has_overlay() {
-            ActiveSurface::Overlay
         } else {
-            ActiveSurface::Composer
+            match &self.overlay {
+                OverlayLayer::Settings(_) => ActiveSurface::Settings,
+                OverlayLayer::SessionPicker(_) => ActiveSurface::SessionPicker,
+                OverlayLayer::WorkspacePicker(_) => ActiveSurface::WorkspacePicker,
+                OverlayLayer::Elicitation(_) => ActiveSurface::Modal,
+                OverlayLayer::None => {
+                    if self.composer.has_prompt_search() {
+                        ActiveSurface::PromptSearch
+                    } else if self.composer.has_overlay() {
+                        ActiveSurface::Overlay
+                    } else {
+                        ActiveSurface::Composer
+                    }
+                }
+            }
         }
     }
 
     pub fn exit_requested(&self) -> bool {
-        self.exit_requested
+        self.exit_state == ExitState::Exiting
     }
 
     /// Remove transcript segments that can never mutate again and resolve them
@@ -426,7 +450,7 @@ impl App {
     }
 
     pub fn exit_confirmation_active(&self) -> bool {
-        self.ctrl_c_armed_at.is_some()
+        self.exit_state.is_confirming()
     }
 
     pub fn spinner_tick(&self) -> usize {

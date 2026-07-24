@@ -2,7 +2,7 @@ use crate::INLINE_SCROLLBACK_RESERVE;
 use crate::app::{App, HistoryItem, HistoryKind, SubAgentHistoryItem};
 use crate::diff::render_diff;
 use crate::markdown::render_markdown;
-use crate::plan_view::render_plan_lines;
+use crate::plan_view::PlanView;
 use crate::presentation::TranscriptRenderer;
 use crate::progress_indicator::spinner_frame;
 use crate::session_config_view::SessionConfigView;
@@ -81,7 +81,6 @@ struct FrameLayout {
     prompt_search_height: usize,
     composer_height: u16,
     status_line_rows: u16,
-    plan_lines: Vec<Line<'static>>,
     plan_height: u16,
     progress_lines: Vec<Line<'static>>,
     live_lines: Vec<Line<'static>>,
@@ -101,16 +100,10 @@ impl FrameLayout {
         let composer_height = resolve_composer_height(requested_composer_height, area.height, status_line_rows);
         let remaining = area.height.saturating_sub(composer_height).saturating_sub(status_line_rows);
         let padding = app.content_padding();
-        let plan_lines = render_plan_lines(app.plan_entries(), &theme, padding);
-        let plan_height = u16::try_from(plan_lines.len()).unwrap_or(u16::MAX).min(remaining.div_ceil(3));
-        let progress_lines = app.progress_indicator().render(
-            theme.info,
-            theme.warning,
-            theme.text_secondary,
-            theme.muted,
-            app.spinner_tick(),
-            app.content_padding(),
-        );
+        let plan_height = u16::try_from(PlanView::new(app.plan_entries(), &theme, padding).line_count())
+            .unwrap_or(u16::MAX)
+            .min(remaining.div_ceil(3));
+        let progress_lines = app.progress_indicator().lines(&theme, app.spinner_tick(), padding);
         let live_lines =
             if app.full_screen_active() { Vec::new() } else { live_history_lines(app, renderer, area.width) };
         let live_history_height = remaining
@@ -122,7 +115,6 @@ impl FrameLayout {
             prompt_search_height,
             composer_height,
             status_line_rows,
-            plan_lines,
             plan_height,
             progress_lines,
             live_lines,
@@ -156,7 +148,8 @@ fn draw_frame(frame: &mut Frame, app: &mut App, renderer: &mut TranscriptRendere
     ])
     .areas(live_area);
     if layout.plan_height > 0 {
-        frame.render_widget(Paragraph::new(Text::from(layout.plan_lines.clone())), plan_area);
+        let padding = app.content_padding();
+        frame.render_widget(PlanView::new(app.plan_entries(), &theme, padding), plan_area);
     }
     frame.render_widget(Paragraph::new(Text::from(lines)), content_area);
 
