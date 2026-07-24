@@ -450,8 +450,9 @@ fn markdown_renders_lists_strikethrough_and_tables() {
 
     assert!(text.contains("• first"), "{text}");
     assert!(text.contains("• second"), "{text}");
-    assert!(text.contains("Name | Value"), "{text}");
-    assert!(text.contains("alpha | beta"), "{text}");
+    assert!(text.contains("| Name  | Value |"), "{text}");
+    assert!(text.contains("|-------|-------|"), "{text}");
+    assert!(text.contains("| alpha | beta  |"), "{text}");
     assert!(
         lines.iter().flat_map(|line| &line.spans).any(|span| {
             span.content.contains("removed") && span.style.add_modifier.contains(Modifier::CROSSED_OUT)

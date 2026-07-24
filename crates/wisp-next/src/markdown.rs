@@ -24,6 +24,8 @@ struct MarkdownRenderer<'a> {
     code_language: String,
     width: u16,
     in_code_block: bool,
+    table_rows: Vec<Vec<Vec<Span<'static>>>>,
+    in_table: bool,
 }
 
 impl<'a> MarkdownRenderer<'a> {
@@ -38,6 +40,8 @@ impl<'a> MarkdownRenderer<'a> {
             code_language: String::new(),
             width,
             in_code_block: false,
+            table_rows: Vec::new(),
+            in_table: false,
         }
     }
 
@@ -110,8 +114,14 @@ impl<'a> MarkdownRenderer<'a> {
                     CodeBlockKind::Indented => String::new(),
                 };
             }
-            Tag::Table(_) | Tag::TableHead | Tag::TableRow => self.flush_current(),
-            Tag::TableCell if !self.inline.is_empty() => self.push_text(" | ".to_string()),
+            Tag::Table(_) => {
+                self.flush_current();
+                self.in_table = true;
+                self.table_rows.clear();
+            }
+            Tag::TableHead | Tag::TableRow => {
+                self.table_rows.push(Vec::new());
+            }
             _ => {}
         }
     }
@@ -135,13 +145,25 @@ impl<'a> MarkdownRenderer<'a> {
                 self.inline.end(tag);
                 self.push_blank();
             }
-            TagEnd::Item | TagEnd::TableHead | TagEnd::TableRow => self.flush_current(),
+            TagEnd::Item => self.flush_current(),
+            TagEnd::TableCell => {
+                if self.in_table {
+                    let cell_spans = self.inline.take_spans();
+                    if let Some(row) = self.table_rows.last_mut() {
+                        row.push(cell_spans);
+                    }
+                }
+            }
             TagEnd::List(_) => {
                 self.lists.pop();
                 self.push_blank();
             }
             TagEnd::CodeBlock => self.finish_code_block(),
-            TagEnd::Table => self.push_blank(),
+            TagEnd::Table => {
+                self.in_table = false;
+                self.render_table();
+                self.push_blank();
+            }
             _ => {}
         }
     }
@@ -171,6 +193,28 @@ impl<'a> MarkdownRenderer<'a> {
     fn push_blank(&mut self) {
         if !self.lines.is_empty() && !self.lines.last().is_some_and(line_is_empty) {
             self.lines.push(Line::default());
+        }
+    }
+
+    fn render_table(&mut self) {
+        let num_columns = self.table_rows.iter().map(Vec::len).max().unwrap_or(0);
+        if num_columns == 0 {
+            self.table_rows.clear();
+            return;
+        }
+
+        let column_widths = compute_column_widths(&self.table_rows, num_columns);
+        let border_style = Style::new().fg(self.theme.muted);
+        let header_style = Style::new().fg(self.theme.heading).add_modifier(Modifier::BOLD);
+        let body_style = Style::new().fg(self.theme.text_primary);
+
+        for (row_index, row) in self.table_rows.drain(..).enumerate() {
+            let row_style = if row_index == 0 { header_style } else { body_style };
+            self.lines.push(render_table_row(&row, &column_widths, row_style, border_style));
+            if row_index == 0 {
+                let dashes = column_widths.iter().map(|&w| "-".repeat(w + 2)).collect::<Vec<_>>().join("|");
+                self.lines.push(Line::styled(format!("|{dashes}|"), border_style));
+            }
         }
     }
 }
@@ -256,6 +300,45 @@ fn line_is_empty(line: &Line<'_>) -> bool {
     line.spans.iter().all(|span| span.content.is_empty())
 }
 
+fn compute_column_widths(rows: &[Vec<Vec<Span<'static>>>], num_columns: usize) -> Vec<usize> {
+    let mut widths = vec![0usize; num_columns];
+    for row in rows {
+        for (col, cell) in row.iter().enumerate() {
+            let cell_width: usize = cell.iter().map(Span::width).sum();
+            widths[col] = widths[col].max(cell_width);
+        }
+    }
+    widths
+}
+
+fn render_table_row(
+    row: &[Vec<Span<'static>>],
+    column_widths: &[usize],
+    row_style: Style,
+    border_style: Style,
+) -> Line<'static> {
+    let mut spans = vec![Span::styled("| ", border_style)];
+    for (col, &col_width) in column_widths.iter().enumerate() {
+        if col > 0 {
+            spans.push(Span::styled(" | ", border_style));
+        }
+        if let Some(cell) = row.get(col) {
+            let cell_width: usize = cell.iter().map(Span::width).sum();
+            for span in cell {
+                spans.push(Span::styled(span.content.clone(), span.style.patch(row_style)));
+            }
+            let padding = col_width.saturating_sub(cell_width);
+            if padding > 0 {
+                spans.push(Span::styled(" ".repeat(padding), row_style));
+            }
+        } else {
+            spans.push(Span::styled(" ".repeat(col_width), row_style));
+        }
+    }
+    spans.push(Span::styled(" |", border_style));
+    Line::from(spans)
+}
+
 #[cfg(test)]
 mod tests {
     use super::render_markdown;
@@ -275,5 +358,60 @@ mod tests {
         assert!(spans[1].style.add_modifier.contains(Modifier::BOLD | Modifier::ITALIC));
         assert_eq!(spans.last().unwrap().style.fg, Some(theme.code_fg));
         assert_eq!(spans.last().unwrap().style.bg, Some(theme.code_bg));
+    }
+
+    #[test]
+    fn renders_table_with_aligned_columns_and_separator() {
+        let theme = Theme::default();
+        let mut highlighter = SyntaxHighlighter::new();
+        let source = "\
+| Name | Age |
+|------|-----|
+| Alice | 30 |
+| Bob | 25 |
+";
+        let lines = render_markdown(source, 80, &theme, &mut highlighter);
+
+        let table_lines: Vec<_> = lines.iter().filter(|line| line.width() > 0).collect();
+        assert!(table_lines.len() >= 4, "expected header + separator + 2 rows, got {} lines", table_lines.len());
+
+        let header: String = table_lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(header.contains("Name"));
+        assert!(header.contains("Age"));
+
+        let separator: String = table_lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            separator.chars().all(|c| c == '|' || c == '-'),
+            "separator should only contain | and -, got: {separator}"
+        );
+
+        let row1: String = table_lines[2].spans.iter().map(|s| s.content.as_ref()).collect();
+        let row2: String = table_lines[3].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(row1.contains("Alice"));
+        assert!(row2.contains("Bob"));
+
+        let widths: Vec<usize> = table_lines.iter().map(|l| l.width()).collect();
+        assert!(widths.iter().all(|&w| w == widths[0]), "columns misaligned, widths: {widths:?}");
+    }
+
+    #[test]
+    fn table_preserves_inline_code_styling() {
+        let theme = Theme::default();
+        let mut highlighter = SyntaxHighlighter::new();
+        let source = "\
+| Type | Example |
+|------|---------|
+| text | `code` |
+";
+        let lines = render_markdown(source, 80, &theme, &mut highlighter);
+
+        let table_lines: Vec<_> = lines.iter().filter(|line| line.width() > 0).collect();
+        assert!(table_lines.len() >= 3, "expected header + separator + 1 row");
+
+        let body: String = table_lines[2].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(body.contains("code"));
+
+        let has_code_style = table_lines[2].spans.iter().any(|s| s.style.fg == Some(theme.code_fg));
+        assert!(has_code_style, "code span should retain code_fg color");
     }
 }
