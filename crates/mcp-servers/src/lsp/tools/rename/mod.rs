@@ -6,6 +6,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::lsp::common::uri_to_path;
+use crate::lsp::error::LspError;
 use crate::lsp::registry::LspRegistry;
 
 /// Input for the `lsp_rename` tool
@@ -84,15 +85,11 @@ pub struct LspRenameOutput {
 }
 
 /// Execute the rename operation
-pub async fn execute_lsp_rename(input: LspRenameInput, registry: &LspRegistry) -> Result<LspRenameOutput, String> {
-    let resolved =
-        registry.resolve_symbol(&input.file_path, &input.symbol, input.line).await.map_err(|e| e.to_string())?;
+pub async fn execute_lsp_rename(input: LspRenameInput, registry: &LspRegistry) -> Result<LspRenameOutput, LspError> {
+    let resolved = registry.resolve_symbol(&input.file_path, &input.symbol, input.line).await?;
 
-    let workspace_edit = resolved
-        .client
-        .rename(resolved.uri, resolved.line, resolved.column, input.new_name.clone())
-        .await
-        .map_err(|e| format!("Rename failed: {e}"))?;
+    let workspace_edit =
+        resolved.client.rename(resolved.uri, resolved.line, resolved.column, input.new_name.clone()).await?;
 
     let Some(edit) = workspace_edit else {
         return Ok(rename_failure(&input, "No changes returned from LSP server".to_string()));
@@ -100,11 +97,11 @@ pub async fn execute_lsp_rename(input: LspRenameInput, registry: &LspRegistry) -
 
     let raw_changes = match collect_workspace_text_edits(&edit) {
         Ok(changes) => changes,
-        Err(error) => return Ok(rename_failure(&input, error)),
+        Err(error) => return Ok(rename_failure(&input, error.to_string())),
     };
     let changes = convert_lsp_file_edits(&raw_changes);
 
-    apply_workspace_text_edits(&raw_changes).await.map_err(|e| format!("Failed to apply rename edits: {e}"))?;
+    apply_workspace_text_edits(&raw_changes).await?;
     let total_edits: usize = changes.iter().map(|f| f.edits.len()).sum();
     let files_affected = changes.len();
 
@@ -132,7 +129,7 @@ fn rename_failure(input: &LspRenameInput, error: String) -> LspRenameOutput {
 }
 
 /// Convert LSP `WorkspaceEdit` to grouped raw text edits.
-fn collect_workspace_text_edits(edit: &WorkspaceEdit) -> Result<Vec<LspFileEdit>, String> {
+fn collect_workspace_text_edits(edit: &WorkspaceEdit) -> Result<Vec<LspFileEdit>, LspError> {
     let mut result = if let Some(doc_changes) = &edit.document_changes {
         collect_document_changes(doc_changes)?
     } else if let Some(changes) = &edit.changes {
@@ -149,7 +146,7 @@ fn collect_workspace_text_edits(edit: &WorkspaceEdit) -> Result<Vec<LspFileEdit>
     Ok(result)
 }
 
-fn collect_document_changes(doc_changes: &DocumentChanges) -> Result<Vec<LspFileEdit>, String> {
+fn collect_document_changes(doc_changes: &DocumentChanges) -> Result<Vec<LspFileEdit>, LspError> {
     match doc_changes {
         DocumentChanges::Edits(edits) => Ok(edits
             .iter()
@@ -167,19 +164,19 @@ fn collect_document_changes(doc_changes: &DocumentChanges) -> Result<Vec<LspFile
     }
 }
 
-fn collect_document_change_operation(op: &DocumentChangeOperation) -> Result<Option<LspFileEdit>, String> {
+fn collect_document_change_operation(op: &DocumentChangeOperation) -> Result<Option<LspFileEdit>, LspError> {
     match op {
         DocumentChangeOperation::Edit(doc_edit) => {
             Ok(collect_text_document_edit(&doc_edit.text_document.uri, &doc_edit.edits))
         }
         DocumentChangeOperation::Op(ResourceOp::Create(_)) => {
-            Err("Rename returned unsupported workspace operation: create".to_string())
+            Err(LspError::InvalidEdit("Rename returned unsupported workspace operation: create".to_string()))
         }
         DocumentChangeOperation::Op(ResourceOp::Rename(_)) => {
-            Err("Rename returned unsupported workspace operation: rename".to_string())
+            Err(LspError::InvalidEdit("Rename returned unsupported workspace operation: rename".to_string()))
         }
         DocumentChangeOperation::Op(ResourceOp::Delete(_)) => {
-            Err("Rename returned unsupported workspace operation: delete".to_string())
+            Err(LspError::InvalidEdit("Rename returned unsupported workspace operation: delete".to_string()))
         }
     }
 }
@@ -209,20 +206,16 @@ fn convert_lsp_file_edits(edits: &[LspFileEdit]) -> Vec<FileEdit> {
         .collect()
 }
 
-async fn apply_workspace_text_edits(changes: &[LspFileEdit]) -> Result<(), String> {
+async fn apply_workspace_text_edits(changes: &[LspFileEdit]) -> Result<(), LspError> {
     for file_edit in changes {
-        let content = tokio::fs::read_to_string(&file_edit.file_path)
-            .await
-            .map_err(|e| format!("Failed to read {}: {e}", file_edit.file_path))?;
+        let content = tokio::fs::read_to_string(&file_edit.file_path).await?;
         let updated = apply_file_text_edits(&content, &file_edit.edits)?;
-        tokio::fs::write(&file_edit.file_path, updated)
-            .await
-            .map_err(|e| format!("Failed to write {}: {e}", file_edit.file_path))?;
+        tokio::fs::write(&file_edit.file_path, updated).await?;
     }
     Ok(())
 }
 
-fn apply_file_text_edits(content: &str, edits: &[lsp_types::TextEdit]) -> Result<String, String> {
+fn apply_file_text_edits(content: &str, edits: &[lsp_types::TextEdit]) -> Result<String, LspError> {
     let mut edits = edits.to_vec();
     edits.sort_by(|a, b| {
         b.range
@@ -239,7 +232,7 @@ fn apply_file_text_edits(content: &str, edits: &[lsp_types::TextEdit]) -> Result
         let start = lsp_position_to_byte_offset(&result, edit.range.start)?;
         let end = lsp_position_to_byte_offset(&result, edit.range.end)?;
         if start > end || end > result.len() {
-            return Err("Invalid edit range produced by LSP rename".to_string());
+            return Err(LspError::InvalidEdit("Invalid edit range produced by LSP rename".to_string()));
         }
         result.replace_range(start..end, &edit.new_text);
     }
@@ -247,17 +240,21 @@ fn apply_file_text_edits(content: &str, edits: &[lsp_types::TextEdit]) -> Result
     Ok(result)
 }
 
-fn lsp_position_to_byte_offset(content: &str, position: lsp_types::Position) -> Result<usize, String> {
-    let target_line = usize::try_from(position.line).map_err(|_| format!("Line {} out of range", position.line))?;
-    let target_character =
-        usize::try_from(position.character).map_err(|_| format!("Character {} out of range", position.character))?;
+fn lsp_position_to_byte_offset(content: &str, position: lsp_types::Position) -> Result<usize, LspError> {
+    let target_line = usize::try_from(position.line)
+        .map_err(|_| LspError::InvalidPosition(format!("Line {} out of range", position.line)))?;
+    let target_character = usize::try_from(position.character)
+        .map_err(|_| LspError::InvalidPosition(format!("Character {} out of range", position.character)))?;
 
     let mut line_start = 0usize;
     let mut current_line = 0usize;
 
     while current_line < target_line {
         let Some(relative_newline) = content[line_start..].find('\n') else {
-            return Err(format!("Line {} not found while applying rename", position.line + 1));
+            return Err(LspError::InvalidPosition(format!(
+                "Line {} not found while applying rename",
+                position.line + 1
+            )));
         };
         line_start += relative_newline + 1;
         current_line += 1;
@@ -273,18 +270,22 @@ fn lsp_position_to_byte_offset(content: &str, position: lsp_types::Position) -> 
         }
         utf16_units += ch.len_utf16();
         if utf16_units > target_character {
-            return Err(format!(
+            return Err(LspError::InvalidPosition(format!(
                 "Character {} splits a UTF-16 code unit sequence on line {}",
                 position.character,
                 position.line + 1
-            ));
+            )));
         }
     }
 
     if utf16_units == target_character {
         Ok(line_end)
     } else {
-        Err(format!("Character {} out of bounds on line {}", position.character, position.line + 1))
+        Err(LspError::InvalidPosition(format!(
+            "Character {} out of bounds on line {}",
+            position.character,
+            position.line + 1
+        )))
     }
 }
 
@@ -443,7 +444,7 @@ mod tests {
             change_annotations: None,
         };
 
-        let err = collect_workspace_text_edits(&edit).unwrap_err();
+        let err = collect_workspace_text_edits(&edit).unwrap_err().to_string();
         assert!(err.contains("unsupported workspace operation"));
         assert!(err.contains("create"));
     }

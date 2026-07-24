@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename};
 
 use crate::lsp::common::{LocationResult, uri_to_path};
+use crate::lsp::error::LspError;
 use crate::lsp::registry::{LspRegistry, ResolvedSymbol};
 
 use super::call_hierarchy::CallSiteResult;
@@ -148,30 +149,19 @@ impl LspSymbolOutput {
 }
 
 /// Execute the `lsp_symbol` operation
-pub async fn execute_lsp_symbol(input: LspSymbolInput, registry: &LspRegistry) -> Result<LspSymbolOutput, String> {
-    let resolved = registry
-        .resolve_symbol(&input.file_path, &input.symbol, input.line)
-        .await
-        .map_err(|error| error.to_string())?;
+pub async fn execute_lsp_symbol(input: LspSymbolInput, registry: &LspRegistry) -> Result<LspSymbolOutput, LspError> {
+    let resolved = registry.resolve_symbol(&input.file_path, &input.symbol, input.line).await?;
     let source_file_path = input.file_path.clone();
     let mut output = match input.operation {
         SymbolLookupOperation::Definition => {
-            let response = resolved
-                .client
-                .goto_definition(resolved.uri, resolved.line, resolved.column)
-                .await
-                .map_err(|e| e.to_string())?;
+            let response = resolved.client.goto_definition(resolved.uri, resolved.line, resolved.column).await?;
             let locations = definition_response_to_locations(response);
             let mut output = LspSymbolOutput::with_locations("definition", locations, input.limit);
             enrich_locations_with_context(&mut output, input.context_lines).await;
             output
         }
         SymbolLookupOperation::Implementation => {
-            let response = resolved
-                .client
-                .goto_implementation(resolved.uri, resolved.line, resolved.column)
-                .await
-                .map_err(|e| e.to_string())?;
+            let response = resolved.client.goto_implementation(resolved.uri, resolved.line, resolved.column).await?;
             let locations = definition_response_to_locations(response);
             let mut output = LspSymbolOutput::with_locations("implementation", locations, input.limit);
             enrich_locations_with_context(&mut output, input.context_lines).await;
@@ -181,16 +171,14 @@ pub async fn execute_lsp_symbol(input: LspSymbolInput, registry: &LspRegistry) -
             let lsp_locations = resolved
                 .client
                 .find_references(resolved.uri, resolved.line, resolved.column, input.include_declaration)
-                .await
-                .map_err(|e| e.to_string())?;
+                .await?;
             let locations: Vec<LocationResult> = lsp_locations.iter().map(LocationResult::from_location).collect();
             let mut output = LspSymbolOutput::with_locations("references", locations, input.limit);
             enrich_locations_with_context(&mut output, input.context_lines).await;
             output
         }
         SymbolLookupOperation::Hover => {
-            let hover =
-                resolved.client.hover(resolved.uri, resolved.line, resolved.column).await.map_err(|e| e.to_string())?;
+            let hover = resolved.client.hover(resolved.uri, resolved.line, resolved.column).await?;
             LspSymbolOutput {
                 operation: "hover".to_string(),
                 hover_contents: hover.map(|h| format_hover_contents(&h)),
@@ -239,12 +227,8 @@ async fn execute_one_step_call_hierarchy(
     context_lines: Option<u32>,
     call_scope: CallScope,
     limit: Option<usize>,
-) -> Result<LspSymbolOutput, String> {
-    let items = resolved
-        .client
-        .prepare_call_hierarchy(resolved.uri, resolved.line, resolved.column)
-        .await
-        .map_err(|e| e.to_string())?;
+) -> Result<LspSymbolOutput, LspError> {
+    let items = resolved.client.prepare_call_hierarchy(resolved.uri, resolved.line, resolved.column).await?;
 
     let Some(item) = items.into_iter().next() else {
         return Ok(LspSymbolOutput {
@@ -258,15 +242,15 @@ async fn execute_one_step_call_hierarchy(
     // For incoming/outgoing calls, we need a client for the item's file.
     // The item may be in a different file than the original request.
     let item_file_path = uri_to_path(&item.uri);
-    let item_client = registry.get_or_spawn(Path::new(&item_file_path)).await.map_err(|e| e.to_string())?;
+    let item_client = registry.get_or_spawn(Path::new(&item_file_path)).await?;
 
     let calls = match direction {
         CallDirection::Incoming => {
-            let incoming = item_client.incoming_calls(item).await.map_err(|e| e.to_string())?;
+            let incoming = item_client.incoming_calls(item).await?;
             super::call_hierarchy::convert_incoming_calls(incoming, registry.root_path())
         }
         CallDirection::Outgoing => {
-            let outgoing = item_client.outgoing_calls(item).await.map_err(|e| e.to_string())?;
+            let outgoing = item_client.outgoing_calls(item).await?;
             super::call_hierarchy::convert_outgoing_calls(source_file_path, registry.root_path(), outgoing)
         }
     };

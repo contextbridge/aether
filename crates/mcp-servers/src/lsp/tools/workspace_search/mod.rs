@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
 
 use crate::lsp::common::{LocationResult, enrich_locations, for_each_document_symbol, path_to_uri, uri_to_path};
+use crate::lsp::error::LspError;
 use crate::lsp::registry::LspRegistry;
 use crate::search::find_files_containing;
 use aether_lspd::{LanguageId, LspClient, get_config_for_language, metadata_for, symbol_kind_to_string};
@@ -115,14 +116,14 @@ pub struct LspWorkspaceSearchOutput {
 pub async fn execute_lsp_workspace_search(
     input: LspWorkspaceSearchInput,
     registry: &LspRegistry,
-) -> Result<LspWorkspaceSearchOutput, String> {
+) -> Result<LspWorkspaceSearchOutput, LspError> {
     if input.query.trim().is_empty() {
-        return Err("query cannot be empty".to_string());
+        return Err(LspError::InvalidQuery("query cannot be empty".to_string()));
     }
     let language = LanguageId::from(input.language);
-    let client = registry.get_or_spawn_for_language(language).await.map_err(|error| error.to_string())?;
+    let client = registry.get_or_spawn_for_language(language).await?;
     let server_extensions = server_extensions(language);
-    let symbols = client.workspace_symbol(input.query.clone()).await.map_err(|error| error.to_string())?;
+    let symbols = client.workspace_symbol(input.query.clone()).await?;
     let mut all_results: Vec<_> = symbols
         .into_iter()
         .filter(|symbol| is_server_language_path(&uri_to_path(&symbol.location.uri), &server_extensions))
@@ -190,8 +191,10 @@ async fn document_symbol_fallback(
     root: &Path,
     client: &Arc<LspClient>,
     extensions: &[&'static str],
-) -> Result<Vec<WorkspaceSymbolResult>, String> {
-    let candidates = find_files_containing(root.to_path_buf(), query.to_string(), extensions.to_vec(), 100).await?;
+) -> Result<Vec<WorkspaceSymbolResult>, LspError> {
+    let candidates = find_files_containing(root.to_path_buf(), query.to_string(), extensions.to_vec(), 100)
+        .await
+        .map_err(LspError::Search)?;
     let mut results = Vec::new();
     for path in candidates {
         let path_text = path.to_string_lossy().to_string();

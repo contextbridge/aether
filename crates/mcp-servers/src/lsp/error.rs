@@ -1,6 +1,6 @@
 //! LSP-specific error types
 
-use aether_lspd::ClientError;
+use aether_lspd::{ClientError, UriError};
 use thiserror::Error;
 
 #[doc = include_str!("../docs/lsp_error.md")]
@@ -34,8 +34,26 @@ pub enum LspError {
     #[error("Invalid source position: {0}")]
     InvalidPosition(String),
 
+    /// The requested query was empty or otherwise invalid.
+    #[error("Invalid query: {0}")]
+    InvalidQuery(String),
+
+    /// An LSP edit produced an invalid or unsupported change.
+    #[error("Invalid edit: {0}")]
+    InvalidEdit(String),
+
+    /// A backing file search failed.
+    #[error("Search error: {0}")]
+    Search(String),
+
     #[error("Transport error: {0}")]
     Transport(String),
+}
+
+impl From<UriError> for LspError {
+    fn from(error: UriError) -> Self {
+        Self::InvalidPath(error.to_string())
+    }
 }
 
 /// Result type alias for LSP operations
