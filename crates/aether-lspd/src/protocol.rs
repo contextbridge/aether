@@ -90,6 +90,18 @@ pub fn extract_document_uri(method: &str, params: &Value) -> Option<Uri> {
 /// Maximum message size (16 MB)
 pub const MAX_MESSAGE_SIZE: u32 = 16 * 1024 * 1024;
 
+/// Error code for a request that exceeded the daemon's per-request timeout.
+/// The daemon kills and replaces the language server when this fires.
+///
+/// Daemon-synthesized codes live outside the ranges reserved by JSON-RPC
+/// (-32000..=-32768) and LSP (-32800..=-32899), so they can never collide with
+/// a code forwarded verbatim from a real language server.
+pub const LSP_REQUEST_TIMED_OUT: i32 = -33001;
+
+/// Error code for a request that failed because the language server process
+/// exited or its transport shut down before responding.
+pub const LSP_TRANSPORT_CLOSED: i32 = -33002;
+
 /// Read a length-prefixed frame from an async reader
 pub(crate) async fn read_frame<R, T>(reader: &mut R) -> io::Result<Option<T>>
 where

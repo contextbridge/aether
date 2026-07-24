@@ -28,7 +28,7 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 
 pub use client::{ClientError, ClientResult, LspClient};
-pub use daemon::{LspDaemon, run_daemon};
+pub use daemon::LspDaemon;
 pub use error::{DaemonError, DaemonResult};
 
 #[derive(Debug, thiserror::Error)]
@@ -49,7 +49,8 @@ pub use lsp_utils::symbol_kind_to_string;
 pub use socket_path::{ensure_socket_dir, lockfile_path, log_file_path, socket_path};
 
 pub use protocol::{
-    DaemonRequest, DaemonResponse, InitializeRequest, LspErrorResponse, MAX_MESSAGE_SIZE, ProtocolError,
+    DaemonRequest, DaemonResponse, InitializeRequest, LSP_REQUEST_TIMED_OUT, LSP_TRANSPORT_CLOSED, LspErrorResponse,
+    MAX_MESSAGE_SIZE, ProtocolError,
 };
 pub use uri::{UriError, path_to_uri, uri_to_path};
 
@@ -63,6 +64,14 @@ pub struct LspdArgs {
     #[arg(long, default_value = "300")]
     pub idle_timeout: u64,
 
+    /// Per-request LSP timeout in seconds. When a language server exceeds it,
+    /// the server is killed and replaced on the next request. The env var
+    /// matters because the daemon is usually auto-spawned with fixed arguments,
+    /// so the environment is the only configuration channel available to
+    /// whoever launches the client.
+    #[arg(long, env = "AETHER_LSPD_REQUEST_TIMEOUT", default_value = "120", value_parser = clap::value_parser!(u64).range(1..))]
+    pub request_timeout: u64,
+
     /// Log level (trace, debug, info, warn, error)
     #[arg(long, default_value = "info")]
     pub log_level: String,
@@ -74,6 +83,7 @@ pub struct LspdArgs {
 
 pub fn run_lspd(args: LspdArgs) -> Result<(), LspdRunError> {
     let idle_timeout = if args.idle_timeout == 0 { None } else { Some(Duration::from_secs(args.idle_timeout)) };
+    let request_timeout = Duration::from_secs(args.request_timeout);
 
     let runtime = tokio::runtime::Runtime::new().map_err(LspdRunError::RuntimeCreate)?;
 
@@ -101,6 +111,6 @@ pub fn run_lspd(args: LspdArgs) -> Result<(), LspdRunError> {
         }
 
         tracing::info!("Starting LSP daemon on socket: {:?}", args.socket);
-        run_daemon(args.socket, idle_timeout).await.map_err(LspdRunError::Daemon)
+        LspDaemon::new(args.socket, idle_timeout, request_timeout).run().await.map_err(LspdRunError::Daemon)
     })
 }

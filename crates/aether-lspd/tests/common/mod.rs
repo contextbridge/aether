@@ -13,14 +13,23 @@ static FAKE_SERVER_ENV: Once = Once::new();
 
 #[allow(dead_code)]
 pub fn use_fake_rust_server() {
+    use_fake_rust_server_with_args(&[]);
+}
+
+/// Point the daemon at the fake Python LSP server for this test binary.
+///
+/// The configuration is process-wide and applied exactly once: the first
+/// caller's `extra_args` win and later calls with different args are silently
+/// ignored. Don't mix differently-configured fake servers in one test binary.
+#[allow(dead_code)]
+pub fn use_fake_rust_server_with_args(extra_args: &[&str]) {
     FAKE_SERVER_ENV.call_once(|| {
         let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("common").join("fake_lsp_server.py");
+        let mut args = vec![script.to_string_lossy().to_string()];
+        args.extend(extra_args.iter().map(ToString::to_string));
         unsafe {
             std::env::set_var("AETHER_LSPD_SERVER_COMMAND_RUST_ANALYZER", "python3");
-            std::env::set_var(
-                "AETHER_LSPD_SERVER_ARGS_RUST_ANALYZER",
-                serde_json::to_string(&vec![script.to_string_lossy().to_string()]).unwrap(),
-            );
+            std::env::set_var("AETHER_LSPD_SERVER_ARGS_RUST_ANALYZER", serde_json::to_string(&args).unwrap());
         }
     });
 }

@@ -23,9 +23,9 @@ pub struct LspDaemon {
 }
 
 impl LspDaemon {
-    /// Create a daemon with socket and idle-timeout settings.
-    pub fn new(socket_path: PathBuf, idle_timeout: Option<Duration>) -> Self {
-        Self { socket_path, idle_timeout, workspace_registry: WorkspaceRegistry::new() }
+    /// Create a daemon with socket, idle-timeout, and per-request timeout settings.
+    pub fn new(socket_path: PathBuf, idle_timeout: Option<Duration>, request_timeout: Duration) -> Self {
+        Self { socket_path, idle_timeout, workspace_registry: WorkspaceRegistry::new(request_timeout) }
     }
 
     /// Run the daemon until shutdown.
@@ -104,11 +104,6 @@ impl LspDaemon {
             }
         }
     }
-}
-
-/// Compatibility wrapper for the previous daemon entrypoint.
-pub async fn run_daemon(socket_path: PathBuf, idle_timeout: Option<Duration>) -> DaemonResult<()> {
-    LspDaemon::new(socket_path, idle_timeout).run().await
 }
 
 /// Wait until idle timeout is reached
