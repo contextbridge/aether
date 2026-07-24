@@ -1,10 +1,11 @@
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Rect, Size};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{
     Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
 };
+use tui_scrollview::{ScrollbarVisibility, ScrollView};
 
 use crate::diff::SPLIT_VIEW_MIN_WIDTH;
 use crate::git_diff::{FileDiff, FileStatus, PatchAnchor, PatchLine, PatchLineKind, StageState};
@@ -14,7 +15,9 @@ use crate::widgets::TextInput;
 use crate::wrap::{fit_line, text_position_in_wrap, wrap_text_char};
 
 use super::GitDiffScreen;
-use super::state::{BottomBar, DraftState, DrawerEntry, Focus, GitDiffLoadState};
+use super::state::{BottomBar, CursorRow, DiffView, DraftState, DrawerEntry, Focus, GitDiffLoadState};
+
+type BuildResult = (Vec<Line<'static>>, Vec<CursorRow>, Option<(usize, u16)>);
 
 impl GitDiffScreen {
     pub fn render(&mut self, frame: &mut Frame, theme: &Theme, highlighter: &mut SyntaxHighlighter) {
@@ -76,13 +79,15 @@ impl GitDiffScreen {
     fn render_drawer(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let entries = self.drawer_entries();
         self.drawer_selection.ensure_visible(entries.len(), usize::from(area.height));
-        let items = entries.iter().map(|entry| ListItem::new(self.drawer_line(entry, usize::from(area.width), theme)));
+        let [list_area, track_area] =
+            Layout::horizontal([Constraint::Min(0), Constraint::Length(1)]).areas(area);
+        let items = entries.iter().map(|entry| ListItem::new(self.drawer_line(entry, usize::from(list_area.width), theme)));
         let list = List::new(items)
             .highlight_style(Style::new().fg(theme.background).bg(theme.accent).add_modifier(Modifier::BOLD));
-        frame.render_stateful_widget(list, area, self.drawer_selection.list_state_mut());
+        frame.render_stateful_widget(list, list_area, self.drawer_selection.list_state_mut());
 
         let mut scrollbar_state = ScrollbarState::new(entries.len()).position(self.drawer_selection.offset());
-        frame.render_stateful_widget(Scrollbar::new(ScrollbarOrientation::VerticalRight), area, &mut scrollbar_state);
+        frame.render_stateful_widget(Scrollbar::new(ScrollbarOrientation::VerticalRight), track_area, &mut scrollbar_state);
     }
 
     fn drawer_line(&self, entry: &DrawerEntry, width: usize, theme: &Theme) -> Line<'static> {
@@ -152,77 +157,180 @@ impl GitDiffScreen {
         };
         let [header_area, content_area] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
         frame.render_widget(Paragraph::new(header), header_area);
+        self.last_patch_height = content_area.height;
 
-        let mut draft_cursor = None;
-        let lines = if self.show_full_file {
-            self.render_full_file(&file, content_area.width, theme, highlighter)
-        } else if file.binary {
-            vec![Line::styled("Binary file", Style::new().fg(theme.muted))]
-        } else if area.width >= SPLIT_VIEW_MIN_WIDTH {
-            self.render_split_with_comments(&file, area.width, theme, highlighter, &mut draft_cursor)
-        } else {
-            self.render_unified_with_comments(&file, area.width, theme, highlighter, &mut draft_cursor)
-        };
-        let offset_key = if self.show_full_file { format!("full:{}", file.path) } else { file.path.clone() };
-        let scroll = self.scroll_offsets.entry(offset_key).or_default();
-        scroll.vertical = scroll.vertical.min(lines.len().saturating_sub(1));
-        let line_count = lines.len();
-        let vertical = u16::try_from(scroll.vertical).unwrap_or(u16::MAX);
-        frame.render_widget(Paragraph::new(Text::from(lines)).scroll((vertical, 0)), content_area);
-        let mut scrollbar_state = ScrollbarState::new(line_count).position(scroll.vertical);
-        frame.render_stateful_widget(
-            Scrollbar::new(ScrollbarOrientation::VerticalRight),
-            content_area,
-            &mut scrollbar_state,
-        );
-
-        if let Some((draft_line, draft_col)) = draft_cursor
-            && draft_line >= scroll.vertical
-            && draft_line < scroll.vertical + usize::from(content_area.height)
+        if self.show_full_file
+            && (file.status == FileStatus::Deleted
+                || file.binary
+                || self.full_file_content.is_none())
         {
-            let row = content_area.y + u16::try_from(draft_line - scroll.vertical).unwrap_or(u16::MAX);
-            let col = (content_area.x + draft_col).min(content_area.right().saturating_sub(1));
-            frame.set_cursor_position((col, row));
+            let message = if file.status == FileStatus::Deleted {
+                "File has been deleted"
+            } else if file.binary {
+                "Binary file — cannot display contents"
+            } else {
+                "Loading file…"
+            };
+            frame.render_widget(Paragraph::new(Line::styled(message, Style::new().fg(theme.muted))), content_area);
+            return;
+        }
+        if !self.show_full_file && file.binary {
+            frame.render_widget(Paragraph::new(Line::styled("Binary file", Style::new().fg(theme.muted))), content_area);
+            return;
+        }
+
+        self.ensure_diff_view(&file, content_area.width, theme, highlighter);
+
+        if let Some(view) = self.diff_view.as_ref() {
+            frame.render_stateful_widget(&view.scroll_view, content_area, &mut self.patch_scroll_state);
+        }
+
+        self.overlay_cursor_indicator(frame, content_area, theme);
+
+        if let Some(view) = &self.diff_view
+            && let Some((draft_row, draft_col)) = view.draft_cursor
+        {
+            let offset = self.patch_scroll_state.offset().y as usize;
+            if draft_row >= offset && draft_row < offset + usize::from(content_area.height) {
+                let row = content_area.y + u16::try_from(draft_row - offset).unwrap_or(u16::MAX);
+                let col = (content_area.x + draft_col).min(content_area.right().saturating_sub(1));
+                frame.set_cursor_position((col, row));
+            }
         }
     }
 
-    fn render_full_file(
+    fn ensure_diff_view(
+        &mut self,
+        file: &FileDiff,
+        content_width: u16,
+        theme: &Theme,
+        highlighter: &mut SyntaxHighlighter,
+    ) {
+        let split = content_width >= SPLIT_VIEW_MIN_WIDTH && !self.show_full_file;
+        let draft_sig = self
+            .draft
+            .as_ref()
+            .map(|d| (d.anchor.hunk, d.anchor.line, d.buffer.text().len(), d.buffer.cursor()));
+
+        let needs_rebuild = match &self.diff_view {
+            None => true,
+            Some(view) => {
+                view.file_path != file.path
+                    || view.content_width != content_width
+                    || view.split != split
+                    || view.full_file != self.show_full_file
+                    || view.document_revision != self.document_revision
+                    || view.comments_revision != self.comments_revision
+                    || view.draft_signature != draft_sig
+            }
+        };
+
+        if needs_rebuild {
+            self.diff_view = Some(self.build_diff_view(file, content_width, split, theme, highlighter));
+        }
+    }
+
+    fn build_diff_view(
+        &self,
+        file: &FileDiff,
+        content_width: u16,
+        split: bool,
+        theme: &Theme,
+        highlighter: &mut SyntaxHighlighter,
+    ) -> DiffView {
+        let (lines, cursor_rows, draft_cursor) = if self.show_full_file {
+            self.build_full_file_lines(file, content_width, theme, highlighter)
+        } else if split {
+            self.build_split_lines(file, content_width, theme, highlighter)
+        } else {
+            self.build_unified_lines(file, content_width, theme, highlighter)
+        };
+
+        let line_count = lines.len();
+        let content_height = u16::try_from(line_count.max(1)).unwrap_or(u16::MAX);
+        let mut scroll_view =
+            ScrollView::new(Size::new(content_width, content_height)).vertical_scrollbar_visibility(ScrollbarVisibility::Automatic);
+        scroll_view.render_widget(
+            Paragraph::new(Text::from(lines)),
+            Rect::new(0, 0, content_width, content_height),
+        );
+
+        let draft_sig = self
+            .draft
+            .as_ref()
+            .map(|d| (d.anchor.hunk, d.anchor.line, d.buffer.text().len(), d.buffer.cursor()));
+
+        DiffView {
+            scroll_view,
+            cursor_rows,
+            draft_cursor,
+            file_path: file.path.clone(),
+            content_width,
+            split,
+            full_file: self.show_full_file,
+            document_revision: self.document_revision,
+            comments_revision: self.comments_revision,
+            draft_signature: draft_sig,
+        }
+    }
+
+    fn overlay_cursor_indicator(&self, frame: &mut Frame, content_area: Rect, theme: &Theme) {
+        if self.focus != Focus::Patch || self.draft.is_some() {
+            return;
+        }
+        let Some(view) = &self.diff_view else { return; };
+        let cursor_row = view
+            .cursor_rows
+            .iter()
+            .find_map(|(h, l, row)| (*h == self.patch_cursor.hunk && *l == self.patch_cursor.line).then_some(*row));
+        let Some(cursor_row) = cursor_row else { return; };
+        let offset = self.patch_scroll_state.offset().y as usize;
+        let viewport = usize::from(content_area.height);
+        if cursor_row < offset || cursor_row >= offset + viewport {
+            return;
+        }
+        let y = content_area.y + u16::try_from(cursor_row - offset).unwrap_or(u16::MAX);
+        let end_x = content_area.right().saturating_sub(1);
+        let buf = frame.buffer_mut();
+        for x in content_area.x..=end_x {
+            if let Some(cell) = buf.cell_mut((x, y)) {
+                cell.set_bg(theme.accent);
+                cell.set_fg(theme.background);
+            }
+        }
+    }
+
+    fn build_full_file_lines(
         &self,
         file: &FileDiff,
         width: u16,
         theme: &Theme,
         highlighter: &mut SyntaxHighlighter,
-    ) -> Vec<Line<'static>> {
-        if file.status == FileStatus::Deleted {
-            return vec![Line::styled("File has been deleted", Style::new().fg(theme.muted))];
+    ) -> BuildResult {
+        let Some(content) = &self.full_file_content else {
+            return (
+                vec![Line::styled("Loading file…", Style::new().fg(theme.muted))],
+                Vec::new(),
+                None,
+            );
+        };
+        let language = file.language();
+        let background = theme.background;
+        let mut lines = Vec::new();
+        let mut cursor_rows = Vec::new();
+        for (index, text) in content.lines().enumerate() {
+            let line_no = format!("{:>4} ", index + 1);
+            let style = Style::new().fg(theme.text_secondary).bg(background);
+            let mut spans = vec![Span::styled(line_no, style)];
+            spans.extend(highlighted_spans(text, language, background, theme, highlighter));
+            cursor_rows.push((0, index, lines.len()));
+            lines.push(fit_line(
+                Line::from(spans).style(Style::new().bg(background)),
+                usize::from(width),
+                Style::new().fg(theme.text_secondary).bg(background),
+            ));
         }
-        if file.binary {
-            return vec![Line::styled("Binary file — cannot display contents", Style::new().fg(theme.muted))];
-        }
-        match &self.full_file_content {
-            None => {
-                vec![Line::styled("Loading file…", Style::new().fg(theme.muted))]
-            }
-            Some(content) => {
-                let language = file.language();
-                let background = theme.background;
-                content
-                    .lines()
-                    .enumerate()
-                    .map(|(index, text)| {
-                        let line_no = format!("{:>4} ", index + 1);
-                        let style = Style::new().fg(theme.text_secondary).bg(background);
-                        let mut spans = vec![Span::styled(line_no, style)];
-                        spans.extend(highlighted_spans(text, language, background, theme, highlighter));
-                        fit_line(
-                            Line::from(spans).style(Style::new().bg(background)),
-                            usize::from(width),
-                            Style::new().fg(theme.text_secondary).bg(background),
-                        )
-                    })
-                    .collect()
-            }
-        }
+        (lines, cursor_rows, None)
     }
 
     fn render_footer(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
@@ -277,56 +385,50 @@ impl GitDiffScreen {
 }
 
 impl GitDiffScreen {
-    fn render_unified_with_comments(
+    fn build_unified_lines(
         &self,
         file: &FileDiff,
         width: u16,
         theme: &Theme,
         highlighter: &mut SyntaxHighlighter,
-        draft_cursor: &mut Option<(usize, u16)>,
-    ) -> Vec<Line<'static>> {
+    ) -> BuildResult {
         let mut lines = Vec::new();
+        let mut cursor_rows = Vec::new();
+        let mut draft_cursor = None;
         for (hunk_idx, hunk) in file.hunks.iter().enumerate() {
             for (line_idx, patch_line) in hunk.lines.iter().enumerate() {
                 let anchor = PatchAnchor { file_index: self.selected_file, hunk: hunk_idx, line: line_idx };
                 let rendered = render_unified_line(patch_line, file.language(), width, theme, highlighter);
-                let is_cursor = self.focus == Focus::Patch
-                    && self.patch_cursor.hunk == hunk_idx
-                    && self.patch_cursor.line == line_idx
-                    && self.draft.is_none();
-                if is_cursor {
-                    let cursor_line = add_cursor_indicator(rendered, theme);
-                    lines.push(cursor_line);
-                } else {
-                    lines.push(rendered);
-                }
+                cursor_rows.push((hunk_idx, line_idx, lines.len()));
+                lines.push(rendered);
                 lines.extend(self.render_comments_for_anchor(anchor, width, theme));
                 if let Some(draft) = &self.draft
                     && draft.anchor == anchor
                 {
                     let (draft_lines, cursor) = render_draft_comment(draft, width, theme);
                     if let Some((line, col)) = cursor {
-                        *draft_cursor = Some((lines.len() + line, col));
+                        draft_cursor = Some((lines.len() + line, col));
                     }
                     lines.extend(draft_lines);
                 }
             }
         }
-        lines
+        (lines, cursor_rows, draft_cursor)
     }
 
     #[allow(clippy::too_many_lines)]
-    fn render_split_with_comments(
+    fn build_split_lines(
         &self,
         file: &FileDiff,
         width: u16,
         theme: &Theme,
         highlighter: &mut SyntaxHighlighter,
-        draft_cursor: &mut Option<(usize, u16)>,
-    ) -> Vec<Line<'static>> {
+    ) -> BuildResult {
         let left_width = width.saturating_sub(1) / 2;
         let right_width = width.saturating_sub(left_width + 1);
         let mut lines = Vec::new();
+        let mut cursor_rows = Vec::new();
+        let mut draft_cursor = None;
         for (hunk_idx, hunk) in file.hunks.iter().enumerate() {
             let mut index = 0;
             while index < hunk.lines.len() {
@@ -338,22 +440,15 @@ impl GitDiffScreen {
                         usize::from(width),
                         Style::new().fg(theme.info),
                     );
-                    let is_cursor = self.focus == Focus::Patch
-                        && self.draft.is_none()
-                        && self.patch_cursor.hunk == hunk_idx
-                        && self.patch_cursor.line == index;
-                    if is_cursor {
-                        lines.push(add_cursor_indicator(row, theme));
-                    } else {
-                        lines.push(row);
-                    }
+                    cursor_rows.push((hunk_idx, index, lines.len()));
+                    lines.push(row);
                     lines.extend(self.render_comments_for_anchor(anchor, width, theme));
                     if let Some(draft) = &self.draft
                         && draft.anchor == anchor
                     {
                         let (draft_lines, cursor) = render_draft_comment(draft, width, theme);
                         if let Some((line, col)) = cursor {
-                            *draft_cursor = Some((lines.len() + line, col));
+                            draft_cursor = Some((lines.len() + line, col));
                         }
                         lines.extend(draft_lines);
                     }
@@ -383,15 +478,8 @@ impl GitDiffScreen {
                             theme,
                             highlighter,
                         );
-                        let is_cursor = self.focus == Focus::Patch
-                            && self.draft.is_none()
-                            && self.patch_cursor.hunk == hunk_idx
-                            && self.patch_cursor.line == block_last_line_idx;
-                        if is_cursor {
-                            lines.push(add_cursor_indicator(row, theme));
-                        } else {
-                            lines.push(row);
-                        }
+                        cursor_rows.push((hunk_idx, block_last_line_idx, lines.len()));
+                        lines.push(row);
                     }
                     let final_anchor =
                         PatchAnchor { file_index: self.selected_file, hunk: hunk_idx, line: block_last_line_idx };
@@ -403,7 +491,7 @@ impl GitDiffScreen {
                     {
                         let (draft_lines, cursor) = render_draft_comment(draft, width, theme);
                         if let Some((line, col)) = cursor {
-                            *draft_cursor = Some((lines.len() + line, col));
+                            draft_cursor = Some((lines.len() + line, col));
                         }
                         lines.extend(draft_lines);
                     }
@@ -420,15 +508,8 @@ impl GitDiffScreen {
                         theme,
                         highlighter,
                     );
-                    let is_cursor = self.focus == Focus::Patch
-                        && self.draft.is_none()
-                        && self.patch_cursor.hunk == hunk_idx
-                        && self.patch_cursor.line == index;
-                    if is_cursor {
-                        lines.push(add_cursor_indicator(row, theme));
-                    } else {
-                        lines.push(row);
-                    }
+                    cursor_rows.push((hunk_idx, index, lines.len()));
+                    lines.push(row);
                 } else if line.kind == PatchLineKind::Context {
                     let row = render_split_row(
                         Some(line),
@@ -439,15 +520,8 @@ impl GitDiffScreen {
                         theme,
                         highlighter,
                     );
-                    let is_cursor = self.focus == Focus::Patch
-                        && self.draft.is_none()
-                        && self.patch_cursor.hunk == hunk_idx
-                        && self.patch_cursor.line == index;
-                    if is_cursor {
-                        lines.push(add_cursor_indicator(row, theme));
-                    } else {
-                        lines.push(row);
-                    }
+                    cursor_rows.push((hunk_idx, index, lines.len()));
+                    lines.push(row);
                 } else {
                     lines.push(fit_line(
                         Line::styled(line.text.clone(), Style::new().fg(theme.muted)),
@@ -461,14 +535,14 @@ impl GitDiffScreen {
                 {
                     let (draft_lines, cursor) = render_draft_comment(draft, width, theme);
                     if let Some((line, col)) = cursor {
-                        *draft_cursor = Some((lines.len() + line, col));
+                        draft_cursor = Some((lines.len() + line, col));
                     }
                     lines.extend(draft_lines);
                 }
                 index += 1;
             }
         }
-        lines
+        (lines, cursor_rows, draft_cursor)
     }
 
     fn render_comments_for_anchor(&self, anchor: PatchAnchor, width: u16, theme: &Theme) -> Vec<Line<'static>> {
@@ -576,10 +650,6 @@ fn highlighted_spans(
             span
         })
         .collect()
-}
-
-fn add_cursor_indicator(line: Line<'static>, theme: &Theme) -> Line<'static> {
-    Line::from(line.spans).style(Style::new().bg(theme.accent).fg(theme.background))
 }
 
 fn render_submitted_comment(body: &str, width: u16, theme: &Theme) -> Vec<Line<'static>> {

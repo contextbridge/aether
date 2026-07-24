@@ -19,8 +19,12 @@ impl SyntaxHighlighter {
 
     pub fn highlight(&mut self, code: &str, language: &str, theme: &Theme) -> Vec<Line<'static>> {
         let key = (language.to_string(), code.to_string());
-        if let Some(lines) = self.cache.get(&key) {
-            return lines.clone();
+        if self.cache.contains_key(&key) {
+            if let Some(pos) = self.insertion_order.iter().position(|entry| entry == &key) {
+                self.insertion_order.remove(pos);
+                self.insertion_order.push_back(key.clone());
+            }
+            return self.cache.get(&key).expect("checked above").clone();
         }
         let lines = self.render(code, language, theme);
         if self.cache.len() == MAX_CACHE_ENTRIES
@@ -69,7 +73,7 @@ impl Default for SyntaxHighlighter {
     }
 }
 
-const MAX_CACHE_ENTRIES: usize = 128;
+const MAX_CACHE_ENTRIES: usize = 512;
 
 fn find_syntax<'a>(syntax_set: &'a SyntaxSet, hint: &str) -> Option<&'a SyntaxReference> {
     let language = hint

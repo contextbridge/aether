@@ -379,6 +379,7 @@ impl GitDiffScreen {
                         line_kind: patch_line.kind,
                     },
                 });
+                self.comments_revision = self.comments_revision.wrapping_add(1);
                 GitDiffOutcome::None
             }
             KeyCode::Char(c) => {

@@ -1,13 +1,16 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::PathBuf;
 
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
+use tui_scrollview::{ScrollView, ScrollViewState};
 
 use crate::edit_buffer::EditBuffer;
 use crate::git_diff::{DiffScope, FileDiff, FileStatus, GitDiffDocument, PatchAnchor, ReviewQueue, StageState};
 use crate::selection::SelectionState;
 
 use super::effects::{GitDiffEffect, GitDiffOutcome, next_request_id};
+
+pub(super) type CursorRow = (usize, usize, usize);
 
 pub struct GitDiffScreen {
     pub(super) working_dir: PathBuf,
@@ -19,7 +22,11 @@ pub struct GitDiffScreen {
     pub(super) drawer_selection: SelectionState,
     pub(super) focus: Focus,
     pub(super) collapsed: HashSet<String>,
-    pub(super) scroll_offsets: HashMap<String, DiffScrollState>,
+    pub(super) patch_scroll_state: ScrollViewState,
+    pub(super) last_patch_height: u16,
+    pub(super) diff_view: Option<DiffView>,
+    pub(super) document_revision: usize,
+    pub(super) comments_revision: usize,
     pub(super) request_id: u64,
     pub(super) operation_in_flight: bool,
     pub(super) bottom_bar: BottomBar,
@@ -30,6 +37,19 @@ pub struct GitDiffScreen {
     pub(super) patch_cursor: PatchCursor,
     pub(super) pending_action: Option<PendingAction>,
     pub(super) last_area: Rect,
+}
+
+pub(super) struct DiffView {
+    pub(super) scroll_view: ScrollView,
+    pub(super) cursor_rows: Vec<CursorRow>,
+    pub(super) draft_cursor: Option<(usize, u16)>,
+    pub(super) file_path: String,
+    pub(super) content_width: u16,
+    pub(super) split: bool,
+    pub(super) full_file: bool,
+    pub(super) document_revision: usize,
+    pub(super) comments_revision: usize,
+    pub(super) draft_signature: Option<(usize, usize, usize, usize)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,11 +64,6 @@ pub(super) enum PendingAction {
 pub(super) struct DraftState {
     pub(super) anchor: PatchAnchor,
     pub(super) buffer: EditBuffer,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub(super) struct DiffScrollState {
-    pub(super) vertical: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -94,7 +109,11 @@ impl GitDiffScreen {
             drawer_selection: SelectionState::default(),
             focus: Focus::Drawer,
             collapsed: HashSet::new(),
-            scroll_offsets: HashMap::new(),
+            patch_scroll_state: ScrollViewState::new(),
+            last_patch_height: 0,
+            diff_view: None,
+            document_revision: 0,
+            comments_revision: 0,
             request_id: 0,
             operation_in_flight: false,
             bottom_bar: BottomBar::Help,
@@ -121,6 +140,7 @@ impl GitDiffScreen {
         }
         self.pending_action = None;
         self.review_queue.clear();
+        self.comments_revision = self.comments_revision.wrapping_add(1);
         self.request_id = next_request_id();
         self.operation_in_flight = true;
         self.state = GitDiffLoadState::Loading;
@@ -141,6 +161,9 @@ impl GitDiffScreen {
             .unwrap_or(0)
             .min(document.files.len().saturating_sub(1));
         self.patch_cursor = PatchCursor::default();
+        self.document_revision = self.document_revision.wrapping_add(1);
+        self.comments_revision = self.comments_revision.wrapping_add(1);
+        self.diff_view = None;
         self.state = GitDiffLoadState::Ready(document);
         self.sync_drawer_selection();
     }
@@ -291,42 +314,40 @@ impl GitDiffScreen {
         count
     }
 
-    #[allow(clippy::cast_sign_loss)]
     pub(super) fn sync_scroll_to_cursor(&mut self) {
-        let Some(file) = self.selected_file() else {
-            return;
-        };
-        let cursor_flat_index = self.cursor_line_index(file) as usize;
-        let offset_key = if self.show_full_file { format!("full:{}", file.path) } else { file.path.clone() };
-        let scroll = self.scroll_offsets.entry(offset_key).or_default();
-        scroll.vertical = scroll.vertical.min(cursor_flat_index);
-        if cursor_flat_index >= scroll.vertical + 2 {
-            scroll.vertical = cursor_flat_index.saturating_sub(1);
+        let Some(view) = &self.diff_view else { return; };
+        let cursor_row = view
+            .cursor_rows
+            .iter()
+            .find_map(|(h, l, row)| (*h == self.patch_cursor.hunk && *l == self.patch_cursor.line).then_some(*row));
+        let Some(cursor_row) = cursor_row else { return; };
+        let offset = usize::from(self.patch_scroll_state.offset().y);
+        let viewport = usize::from(self.last_patch_height);
+        if cursor_row < offset {
+            self.patch_scroll_state.set_offset(Position::new(0, u16::try_from(cursor_row).unwrap_or(u16::MAX)));
+        } else if viewport > 0 && cursor_row >= offset + viewport {
+            let new_offset = cursor_row.saturating_sub(viewport.saturating_sub(1));
+            self.patch_scroll_state.set_offset(Position::new(0, u16::try_from(new_offset).unwrap_or(u16::MAX)));
         }
     }
 
-    #[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
+    #[allow(clippy::cast_possible_wrap)]
     pub(super) fn move_patch_scroll(&mut self, amount: isize) {
-        let Some(file) = self.selected_file().cloned() else {
-            return;
-        };
-        let offset_key = if self.show_full_file { format!("full:{}", file.path) } else { file.path.clone() };
-        let scroll = self.scroll_offsets.entry(offset_key).or_default();
-        scroll.vertical = scroll.vertical.saturating_add_signed(amount);
-        if file.hunks.is_empty() {
-            return;
-        }
-        let total_lines = file.hunks.iter().map(|h| h.lines.len()).sum::<usize>();
-        scroll.vertical = scroll.vertical.min(total_lines.saturating_sub(1));
+        let current = self.patch_scroll_state.offset().y as isize;
+        let new_offset = current.saturating_add(amount).max(0);
+        self.patch_scroll_state.set_offset(Position::new(0, u16::try_from(new_offset).unwrap_or(u16::MAX)));
+        self.sync_cursor_to_scroll();
+    }
 
-        let mut remaining = scroll.vertical as isize;
-        for (hunk_idx, hunk) in file.hunks.iter().enumerate() {
-            let hunk_len = hunk.lines.len() as isize;
-            if remaining < hunk_len {
-                self.patch_cursor = PatchCursor { hunk: hunk_idx, line: remaining as usize };
-                break;
-            }
-            remaining -= hunk_len;
+    pub(super) fn sync_cursor_to_scroll(&mut self) {
+        let Some(view) = &self.diff_view else { return; };
+        let offset = usize::from(self.patch_scroll_state.offset().y);
+        let idx = match view.cursor_rows.binary_search_by_key(&offset, |&(_, _, row)| row) {
+            Ok(idx) => idx,
+            Err(idx) => idx.saturating_sub(1),
+        };
+        if let Some(&(hunk, line, _)) = view.cursor_rows.get(idx) {
+            self.patch_cursor = PatchCursor { hunk, line };
         }
     }
 
@@ -347,6 +368,7 @@ impl GitDiffScreen {
     }
     pub(super) fn undo_last_comment(&mut self) -> GitDiffOutcome {
         self.review_queue.pop();
+        self.comments_revision = self.comments_revision.wrapping_add(1);
         GitDiffOutcome::None
     }
 

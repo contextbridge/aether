@@ -28,6 +28,7 @@ acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["
 agent-client-protocol = { workspace = true }
 ratatui = { workspace = true }
 ratatui-textarea = { workspace = true }
+tui-scrollview = { workspace = true }
 crossterm = { workspace = true }
 futures = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "process", "time"] }
