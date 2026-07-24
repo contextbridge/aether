@@ -171,7 +171,7 @@ impl LspRegistry {
         line_hint: Option<u32>,
     ) -> Result<ResolvedSymbol, LspError> {
         let content = tokio::fs::read_to_string(file_path).await?;
-        let uri = path_to_uri(Path::new(file_path)).map_err(|error| LspError::InvalidPath(error.to_string()))?;
+        let uri = path_to_uri(Path::new(file_path))?;
         let client = self.get_or_spawn(Path::new(file_path)).await?;
 
         let hinted =
@@ -251,7 +251,7 @@ impl LspRegistry {
     async fn collect_file_diagnostics(&self, file_path: &str) -> Result<HashMap<Uri, Vec<Diagnostic>>, LspError> {
         let resolved_path = self.resolve_path(file_path);
         let client = self.get_or_spawn(&resolved_path).await?;
-        let uri = path_to_uri(&resolved_path).map_err(|error| LspError::InvalidPath(error.to_string()))?;
+        let uri = path_to_uri(&resolved_path)?;
         let params_list = client.get_diagnostics(Some(uri)).await?;
         let mut result: HashMap<Uri, Vec<Diagnostic>> = HashMap::new();
         merge_diagnostics(&mut result, params_list);

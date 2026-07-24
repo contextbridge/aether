@@ -692,7 +692,7 @@ When using tools that take file paths, always use absolute paths from:
         let Parameters(input) = request;
         notify_preview(&context, ToolDisplayMeta::new("LSP symbol", &input.symbol)).await;
         let lsp = self.lsp.as_ref().ok_or("LSP not configured")?;
-        execute_lsp_symbol(input, lsp.as_ref()).await.map(Json)
+        execute_lsp_symbol(input, lsp.as_ref()).await.map(Json).map_err(|e| e.to_string())
     }
 
     #[doc = include_str!("../lsp/tools/workspace_search/description.md")]
@@ -705,7 +705,7 @@ When using tools that take file paths, always use absolute paths from:
         let Parameters(input) = request;
         notify_preview(&context, ToolDisplayMeta::new("LSP search", format!("'{}'", input.query))).await;
         let lsp = self.lsp.as_ref().ok_or("LSP not configured")?;
-        execute_lsp_workspace_search(input, lsp.as_ref()).await.map(Json)
+        execute_lsp_workspace_search(input, lsp.as_ref()).await.map(Json).map_err(|e| e.to_string())
     }
 
     #[doc = include_str!("../lsp/tools/document_info/description.md")]
@@ -718,7 +718,7 @@ When using tools that take file paths, always use absolute paths from:
         let Parameters(input) = request;
         notify_preview(&context, ToolDisplayMeta::new("LSP document", basename(&input.file_path))).await;
         let lsp = self.lsp.as_ref().ok_or("LSP not configured")?;
-        execute_lsp_document(input, lsp.as_ref()).await.map(Json)
+        execute_lsp_document(input, lsp.as_ref()).await.map(Json).map_err(|e| e.to_string())
     }
 
     #[doc = include_str!("../lsp/tools/check_errors/description.md")]
@@ -732,7 +732,7 @@ When using tools that take file paths, always use absolute paths from:
         let preview_value = request.file_path.as_ref().map_or_else(|| "workspace".to_string(), |path| basename(path));
         notify_preview(&context, ToolDisplayMeta::new("LSP errors", preview_value)).await;
         let lsp = self.lsp.as_ref().ok_or("LSP not configured")?;
-        execute_lsp_diagnostics(request, lsp.as_ref()).await.map(Json)
+        execute_lsp_diagnostics(request, lsp.as_ref()).await.map(Json).map_err(|e| e.to_string())
     }
 
     #[doc = include_str!("../lsp/tools/rename/description.md")]
@@ -750,7 +750,7 @@ When using tools that take file paths, always use absolute paths from:
         let Parameters(input) = request;
         notify_preview(&context, ToolDisplayMeta::new("LSP rename", &input.symbol)).await;
         let lsp = self.lsp.as_ref().ok_or("LSP not configured")?;
-        execute_lsp_rename(input, lsp.as_ref()).await.map(Json)
+        execute_lsp_rename(input, lsp.as_ref()).await.map(Json).map_err(|e| e.to_string())
     }
 }
 
