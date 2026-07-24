@@ -27,7 +27,7 @@ jobs:
           owner: contextbridge
           repositories: aether
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
