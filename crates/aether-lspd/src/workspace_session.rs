@@ -1,7 +1,7 @@
 use crate::diagnostics_store::DiagnosticsStore;
 use crate::document_lifecycle::{AcquireAction, DocumentLifecycle, ReleaseAction};
 use crate::language_catalog::LanguageId;
-use crate::process_transport::{ProcessTransport, TransportEvent};
+use crate::process_transport::{ProcessTransport, TransportError, TransportEvent};
 use crate::protocol::LspNotification;
 use crate::refresh_queue::RefreshQueue;
 use ignore::WalkBuilder;
@@ -17,6 +17,7 @@ use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -28,6 +29,7 @@ pub(crate) struct WorkspaceSession {
     documents: DocumentLifecycle,
     diagnostics: DiagnosticsStore,
     refresh: RefreshQueue,
+    alive: Arc<AtomicBool>,
 }
 
 impl WorkspaceSession {
@@ -41,8 +43,9 @@ impl WorkspaceSession {
         let documents = DocumentLifecycle::new();
         let diagnostics = DiagnosticsStore::new();
         let refresh = RefreshQueue::new();
+        let alive = Arc::new(AtomicBool::new(true));
 
-        let session = Self { transport, documents, diagnostics, refresh };
+        let session = Self { transport, documents, diagnostics, refresh, alive: Arc::clone(&alive) };
         let supported_extensions = Arc::new(supported_extensions);
 
         tokio::spawn(run_session_events(
@@ -52,6 +55,7 @@ impl WorkspaceSession {
             session.refresh.clone(),
             Arc::clone(&supported_extensions),
             event_rx,
+            alive,
         ));
 
         tokio::spawn(run_background_refresh_worker(
@@ -70,7 +74,7 @@ impl WorkspaceSession {
         Ok(session)
     }
 
-    pub(crate) async fn request_raw(&self, method: &str, params: Value) -> Result<Value, crate::LspErrorResponse> {
+    pub(crate) async fn request_raw(&self, method: &str, params: Value) -> Result<Value, TransportError> {
         self.transport.request_raw(method, params).await
     }
 
@@ -94,6 +98,24 @@ impl WorkspaceSession {
     pub(crate) async fn shutdown(&self) {
         self.refresh.shutdown().await;
         self.transport.shutdown().await;
+    }
+
+    /// Whether the language server behind this session is still usable.
+    pub(crate) fn is_alive(&self) -> bool {
+        self.alive.load(Ordering::SeqCst)
+    }
+
+    /// Mark this session dead so the registry replaces it on the next request.
+    pub(crate) fn mark_dead(&self) {
+        self.alive.store(false, Ordering::SeqCst);
+    }
+
+    /// Declare the language server wedged: mark the session dead and kill the
+    /// server process so blocked pipes unwind and pending requests fail.
+    pub(crate) fn declare_wedged(&self) {
+        if self.alive.swap(false, Ordering::SeqCst) {
+            self.transport.kill_process();
+        }
     }
 
     async fn sync_documents_for_diagnostics(&self, uri: Option<&Uri>) {
@@ -226,6 +248,7 @@ async fn run_session_events(
     refresh: RefreshQueue,
     supported_extensions: Arc<HashSet<String>>,
     mut event_rx: mpsc::Receiver<TransportEvent>,
+    alive: Arc<AtomicBool>,
 ) {
     while let Some(event) = event_rx.recv().await {
         match event {
@@ -260,6 +283,9 @@ async fn run_session_events(
             TransportEvent::Closed => break,
         }
     }
+
+    alive.store(false, Ordering::SeqCst);
+    refresh.shutdown().await;
 }
 
 fn filter_supported_uris(uris: Vec<Uri>, supported_extensions: &HashSet<String>) -> Vec<Uri> {
