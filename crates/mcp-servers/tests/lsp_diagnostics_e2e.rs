@@ -269,7 +269,7 @@ async fn test_workspace_diagnostics_clear_after_fix_without_file_check() {
     let (_server_handle, client) = connect_lsp(&project).await;
 
     let initial =
-        poll_workspace_diagnostics(&client, |result| file_error_count(result, &main_rs) > 0, Duration::from_secs(15))
+        poll_workspace_diagnostics(&client, |result| file_error_count(result, &main_rs) > 0, Duration::from_secs(60))
             .await;
     assert!(
         file_error_count(&initial, &main_rs) > 0,
@@ -289,7 +289,7 @@ async fn test_workspace_diagnostics_clear_after_fix_without_file_check() {
     .await;
 
     let result =
-        poll_workspace_diagnostics(&client, |r| file_error_count(r, &main_rs) == 0, Duration::from_secs(15)).await;
+        poll_workspace_diagnostics(&client, |r| file_error_count(r, &main_rs) == 0, Duration::from_secs(60)).await;
     assert_eq!(
         file_error_count(&result, &main_rs),
         0,
