@@ -4,18 +4,19 @@ use crate::diff::DiffPreview;
 use crate::dropped_files::parse_dropped_file_paths;
 use crate::keybindings::Keybindings;
 use crate::modal::ElicitationModal;
-use crate::overlay::{Overlay, OverlayMessage};
 use crate::picker::CommandEntry;
 use crate::plan_tracker::PlanTracker;
 use crate::progress_indicator::{ProgressActivity, ProgressIndicator, WorkspaceProgress};
-use crate::prompt_search::PromptSearchMessage;
-use crate::screens::{Screen, ScreenEffect, ScreenEvent};
+use crate::screens::{ScreenEffect, ScreenEvent};
 use crate::selection::Direction;
 use crate::session_config_view::SessionConfigView;
 use crate::session_loading_buffer::SessionLoadingBuffer;
 use crate::session_picker::SessionPicker;
-use crate::settings::{ContextUsageDisplay, UiSettings, resolve_content_padding};
+use crate::settings::{
+    ContextUsageDisplay, ResolvedStatusLineSettings, UiSettings, resolve_content_padding, resolve_status_line_settings,
+};
 use crate::settings_overlay::{SettingsMenuEntry, SettingsMenuEntryKind, SettingsMenuValue, SettingsOverlay};
+use crate::surface::{Surface, SurfaceMessage};
 use crate::tool_calls::{ToolCallLog, ToolStatus};
 use crate::transcript::{SegmentContent, Transcript};
 use crate::workspace_picker::WorkspacePicker;
@@ -35,24 +36,11 @@ use utils::ReasoningEffort;
 #[path = "app/acp.rs"]
 mod acp_reducer;
 mod config;
+mod input;
 mod session;
 mod submission;
-mod surface;
+use input::CTRL_C_CONFIRM_WINDOW;
 use session::builtin_commands;
-use surface::CTRL_C_CONFIRM_WINDOW;
-
-/// Which layer currently owns keyboard input.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ActiveSurface {
-    Screen,
-    Settings,
-    SessionPicker,
-    WorkspacePicker,
-    Modal,
-    PromptSearch,
-    Overlay,
-    Composer,
-}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ExitState {
@@ -68,35 +56,64 @@ impl ExitState {
     }
 }
 
-/// The modal layer sitting above the main transcript/composer viewport.
-/// Only one overlay can be active at a time.
+/// The layer above the conversation that owns input. At most one is open.
+///
+/// Input and rendering go through [`Layer::active`], so only the ACP updates
+/// that need a concrete type match on the variants. Full-screen views are
+/// type-erased because nothing is ever routed to one by type.
 #[allow(clippy::large_enum_variant)]
 #[derive(Default)]
-enum OverlayLayer {
+enum Layer {
     #[default]
     None,
     Settings(SettingsOverlay),
     SessionPicker(SessionPicker),
     WorkspacePicker(WorkspacePicker),
     Elicitation(ElicitationModal),
+    Screen(Box<dyn Surface>),
 }
 
-impl OverlayLayer {
-    fn is_active(&self) -> bool {
-        !matches!(self, OverlayLayer::None)
+impl Layer {
+    /// Whether an overlay is open. Full-screen views are excluded: they replace
+    /// the conversation rather than sitting above it.
+    fn is_overlay(&self) -> bool {
+        !matches!(self, Layer::None | Layer::Screen(_))
     }
 
-    /// The open overlay as a trait object. Input and rendering go through this,
-    /// so only ACP updates that need a concrete type match on the variants.
-    fn active(&mut self) -> Option<&mut dyn Overlay> {
+    fn active(&mut self) -> Option<&mut dyn Surface> {
         match self {
-            OverlayLayer::None => None,
-            OverlayLayer::Settings(overlay) => Some(overlay),
-            OverlayLayer::SessionPicker(picker) => Some(picker),
-            OverlayLayer::WorkspacePicker(picker) => Some(picker),
-            OverlayLayer::Elicitation(modal) => Some(modal),
+            Layer::None => None,
+            Layer::Settings(overlay) => Some(overlay),
+            Layer::SessionPicker(picker) => Some(picker),
+            Layer::WorkspacePicker(picker) => Some(picker),
+            Layer::Elicitation(modal) => Some(modal),
+            Layer::Screen(screen) => Some(screen.as_mut()),
         }
     }
+
+    fn active_ref(&self) -> Option<&dyn Surface> {
+        match self {
+            Layer::None => None,
+            Layer::Settings(overlay) => Some(overlay),
+            Layer::SessionPicker(picker) => Some(picker),
+            Layer::WorkspacePicker(picker) => Some(picker),
+            Layer::Elicitation(modal) => Some(modal),
+            Layer::Screen(screen) => Some(screen.as_ref()),
+        }
+    }
+}
+
+/// Everything that belongs to the conversation turn in progress.
+///
+/// Grouping these means [`App::reset_turn_state`] cannot forget one and leave a
+/// stale indicator on screen when the conversation is swapped out.
+#[derive(Default)]
+struct TurnState {
+    prompt_in_flight: bool,
+    compaction_active: bool,
+    context_usage: Option<ContextUsageDisplay>,
+    submitted_prompt_count: usize,
+    spinner_tick: usize,
 }
 
 /// Root UI state: reduces terminal input and ACP events into the transcript,
@@ -113,23 +130,19 @@ pub struct App {
     keybindings: Keybindings,
     workspace_status: WorkspaceStatus,
     content_padding: usize,
+    status_line: ResolvedStatusLineSettings,
     working_dir: PathBuf,
     available_commands: Vec<CommandEntry>,
     session_loading_buffer: SessionLoadingBuffer,
-    overlay: OverlayLayer,
-    screen: Option<Box<dyn Screen>>,
+    layer: Layer,
     workspace_move_state: WorkspaceMoveState,
     transcript: Transcript,
     tool_calls: ToolCallLog,
     composer: Composer,
-    prompt_in_flight: bool,
-    context_usage: Option<ContextUsageDisplay>,
+    turn: TurnState,
     unhealthy_server_count: usize,
     server_statuses: Vec<McpServerStatusEntry>,
     exit_state: ExitState,
-    spinner_tick: usize,
-    submitted_prompt_count: usize,
-    compaction_active: bool,
     progress_indicator: ProgressIndicator,
     last_drained_kind: Option<HistoryKind>,
     transcript_generation: u64,
@@ -226,6 +239,7 @@ impl WorkspaceMoveState {
 impl App {
     pub fn new(config: AppConfig) -> Self {
         let content_padding = resolve_content_padding(&config.settings);
+        let status_line = resolve_status_line_settings(&config.settings);
         let capabilities = AetherCapabilities::from_meta(config.session_capabilities.meta.as_ref());
         let initial_commands = builtin_commands(&capabilities);
         Self {
@@ -240,23 +254,19 @@ impl App {
             keybindings: Keybindings::default(),
             workspace_status: config.workspace_status,
             content_padding,
+            status_line,
             working_dir: config.working_dir,
             available_commands: initial_commands,
             session_loading_buffer: SessionLoadingBuffer::new(),
-            overlay: OverlayLayer::None,
-            screen: None,
+            layer: Layer::None,
             workspace_move_state: WorkspaceMoveState::Idle,
             transcript: Transcript::new(),
             tool_calls: ToolCallLog::new(),
             composer: Composer::new(),
-            prompt_in_flight: false,
-            context_usage: None,
+            turn: TurnState::default(),
             unhealthy_server_count: 0,
             server_statuses: Vec::new(),
             exit_state: ExitState::Idle,
-            spinner_tick: 0,
-            submitted_prompt_count: 0,
-            compaction_active: false,
             progress_indicator: ProgressIndicator::default(),
             last_drained_kind: None,
             transcript_generation: 0,
@@ -278,27 +288,27 @@ impl App {
         }
         self.refresh_progress();
         if self.progress_indicator.is_active() {
-            self.spinner_tick = self.spinner_tick.wrapping_add(1);
+            self.turn.spinner_tick = self.turn.spinner_tick.wrapping_add(1);
         }
         self.plan_tracker.on_tick(now);
     }
 
     pub fn wants_tick(&self) -> bool {
-        self.prompt_in_flight
+        self.turn.prompt_in_flight
             || self.tool_calls.any_running()
             || !self.workspace_move_state.is_idle()
-            || self.compaction_active
+            || self.turn.compaction_active
             || self.progress_indicator.is_active()
             || self.exit_state.is_confirming()
             || self.plan_tracker.has_completed_in_grace_period()
     }
 
     pub fn has_modal(&self) -> bool {
-        self.overlay.is_active()
+        self.layer.is_overlay()
     }
 
     pub fn has_session_picker(&self) -> bool {
-        matches!(self.overlay, OverlayLayer::SessionPicker(_))
+        matches!(self.layer, Layer::SessionPicker(_))
     }
 
     pub fn workspace_move_state(&self) -> WorkspaceMoveState {
@@ -306,28 +316,7 @@ impl App {
     }
 
     pub fn full_screen_active(&self) -> bool {
-        self.screen.is_some()
-    }
-
-    pub fn active_surface(&self) -> ActiveSurface {
-        if self.screen.is_some() {
-            return ActiveSurface::Screen;
-        }
-        match &self.overlay {
-            OverlayLayer::Settings(_) => ActiveSurface::Settings,
-            OverlayLayer::SessionPicker(_) => ActiveSurface::SessionPicker,
-            OverlayLayer::WorkspacePicker(_) => ActiveSurface::WorkspacePicker,
-            OverlayLayer::Elicitation(_) => ActiveSurface::Modal,
-            OverlayLayer::None => {
-                if self.composer.has_prompt_search() {
-                    ActiveSurface::PromptSearch
-                } else if self.composer.has_overlay() {
-                    ActiveSurface::Overlay
-                } else {
-                    ActiveSurface::Composer
-                }
-            }
-        }
+        self.layer.active_ref().is_some_and(Surface::is_fullscreen)
     }
 
     pub fn exit_requested(&self) -> bool {
@@ -337,7 +326,7 @@ impl App {
     /// Remove transcript segments that can never mutate again and resolve them
     /// for one-time handoff to the terminal presenter.
     pub fn drain_finalized(&mut self) -> Vec<HistoryItem> {
-        let drained = self.transcript.drain_finalized_prefix(&self.tool_calls, self.prompt_in_flight);
+        let drained = self.transcript.drain_finalized_prefix(&self.tool_calls, self.turn.prompt_in_flight);
         let mut items = Vec::with_capacity(drained.len());
         for segment in drained {
             let tool_id = match &segment {
@@ -409,6 +398,10 @@ impl App {
         self.content_padding
     }
 
+    pub fn status_line_settings(&self) -> &ResolvedStatusLineSettings {
+        &self.status_line
+    }
+
     pub fn workspace_status(&self) -> &WorkspaceStatus {
         &self.workspace_status
     }
@@ -418,11 +411,11 @@ impl App {
     }
 
     pub fn context_usage(&self) -> Option<ContextUsageDisplay> {
-        self.context_usage
+        self.turn.context_usage
     }
 
     pub fn context_percent(&self) -> Option<u8> {
-        self.context_usage.map(|usage| {
+        self.turn.context_usage.map(|usage| {
             let percent = u64::from(usage.used_tokens) * 100 / u64::from(usage.limit_tokens).max(1);
             u8::try_from(percent).unwrap_or(100).min(100)
         })
@@ -438,16 +431,16 @@ impl App {
 
     /// A prompt is outstanding, so the agent owes us a reply.
     pub fn waiting_for_response(&self) -> bool {
-        self.prompt_in_flight
+        self.turn.prompt_in_flight
     }
 
     /// Either the prompt or one of its tool calls is still running.
     pub fn is_agent_busy(&self) -> bool {
-        self.prompt_in_flight || self.tool_calls.any_running()
+        self.turn.prompt_in_flight || self.tool_calls.any_running()
     }
 
     pub fn compaction_active(&self) -> bool {
-        self.compaction_active
+        self.turn.compaction_active
     }
 
     pub fn progress_indicator(&self) -> &ProgressIndicator {
@@ -459,7 +452,7 @@ impl App {
     }
 
     pub fn spinner_tick(&self) -> usize {
-        self.spinner_tick
+        self.turn.spinner_tick
     }
 
     pub fn plan_entries(&self) -> Vec<acp::PlanEntry> {
@@ -494,10 +487,10 @@ impl App {
     fn reset_turn_state(&mut self) {
         self.plan_tracker.clear();
         self.progress_indicator.reset();
-        self.prompt_in_flight = false;
-        self.submitted_prompt_count = 0;
-        self.compaction_active = false;
-        self.context_usage = None;
+        // The spinner phase is cosmetic and survives, so a swap does not make
+        // the indicator visibly jump.
+        let spinner_tick = self.turn.spinner_tick;
+        self.turn = TurnState { spinner_tick, ..TurnState::default() };
     }
 
     fn refresh_progress(&mut self) {
@@ -507,8 +500,12 @@ impl App {
             _ => WorkspaceProgress::None,
         };
         self.progress_indicator.update(
-            ProgressActivity { agent_busy: self.is_agent_busy(), workspace, compaction_active: self.compaction_active },
-            self.submitted_prompt_count,
+            ProgressActivity {
+                agent_busy: self.is_agent_busy(),
+                workspace,
+                compaction_active: self.turn.compaction_active,
+            },
+            self.turn.submitted_prompt_count,
         );
     }
 }

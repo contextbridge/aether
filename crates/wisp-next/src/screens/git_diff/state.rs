@@ -1,14 +1,16 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use ratatui::layout::{Position, Rect};
+use ratatui::layout::Position;
 use tui_scrollview::{ScrollView, ScrollViewState};
 
 use crate::edit_buffer::EditBuffer;
 use crate::git_diff::{DiffScope, FileDiff, FileStatus, GitDiffDocument, PatchAnchor, ReviewQueue, StageState};
 use crate::selection::SelectionState;
 
-use crate::screens::ScreenOutcome;
+use crate::surface::SurfaceMessage;
+
+use super::effect;
 
 use super::effects::{GitDiffEffect, next_request_id};
 
@@ -46,7 +48,6 @@ pub struct GitDiffScreen {
     pub(super) draft: Option<DraftState>,
     pub(super) patch_cursor: PatchCursor,
     pub(super) pending_action: Option<PendingAction>,
-    pub(super) last_area: Rect,
 }
 
 pub(super) struct DiffView {
@@ -134,7 +135,6 @@ impl GitDiffScreen {
             draft: None,
             patch_cursor: PatchCursor::default(),
             pending_action: None,
-            last_area: Rect::new(0, 0, 120, 40),
         };
         let effect = screen.begin_load();
         (screen, effect)
@@ -174,73 +174,72 @@ impl GitDiffScreen {
         self.state = GitDiffLoadState::Ready(document);
         self.sync_drawer_selection();
     }
-    pub(super) fn stage_all(&mut self) -> ScreenOutcome {
+    pub(super) fn stage_all(&mut self) -> Vec<SurfaceMessage> {
         let Some(repo_root) = self.repo_root.clone() else {
-            return ScreenOutcome::None;
+            return Vec::new();
         };
         self.request_id = next_request_id();
         self.operation_in_flight = true;
-        ScreenOutcome::Effect(GitDiffEffect::StageAll { request_id: self.request_id, repo_root })
+        effect(GitDiffEffect::StageAll { request_id: self.request_id, repo_root })
     }
 
-    pub(super) fn unstage_all(&mut self) -> ScreenOutcome {
+    pub(super) fn unstage_all(&mut self) -> Vec<SurfaceMessage> {
         let Some(repo_root) = self.repo_root.clone() else {
-            return ScreenOutcome::None;
+            return Vec::new();
         };
         self.request_id = next_request_id();
         self.operation_in_flight = true;
-        ScreenOutcome::Effect(GitDiffEffect::UnstageAll { request_id: self.request_id, repo_root })
+        effect(GitDiffEffect::UnstageAll { request_id: self.request_id, repo_root })
     }
 
-    pub(super) fn toggle_stage(&mut self) -> ScreenOutcome {
+    pub(super) fn toggle_stage(&mut self) -> Vec<SurfaceMessage> {
         let Some(repo_root) = self.repo_root.clone() else {
-            return ScreenOutcome::None;
+            return Vec::new();
         };
         let entries = self.drawer_entries();
         let Some(entry) = self.drawer_selection.selected().and_then(|selected| entries.get(selected)) else {
-            return ScreenOutcome::None;
+            return Vec::new();
         };
         let files = self.files_for_entry(entry);
         if files.is_empty() {
-            return ScreenOutcome::None;
+            return Vec::new();
         }
         let all_staged = files.iter().all(|file| file.staged == StageState::Staged);
         let paths = files.iter().map(|file| file.path.clone()).collect();
         self.request_id = next_request_id();
         self.operation_in_flight = true;
-        let effect = if all_staged {
+        effect(if all_staged {
             GitDiffEffect::UnstageFiles { request_id: self.request_id, repo_root, paths }
         } else {
             GitDiffEffect::StageFiles { request_id: self.request_id, repo_root, paths }
-        };
-        ScreenOutcome::Effect(effect)
+        })
     }
 
-    pub(super) fn begin_commit(&mut self) -> ScreenOutcome {
+    pub(super) fn begin_commit(&mut self) -> Vec<SurfaceMessage> {
         if self.operation_in_flight {
-            return ScreenOutcome::None;
+            return Vec::new();
         }
         if !self.any_staged() {
             self.bottom_bar = BottomBar::Error("Nothing staged to commit".to_string());
-            return ScreenOutcome::None;
+            return Vec::new();
         }
         self.bottom_bar = BottomBar::CommitEditor { buffer: EditBuffer::default() };
-        ScreenOutcome::None
+        Vec::new()
     }
-    pub(super) fn begin_discard(&mut self) -> ScreenOutcome {
+    pub(super) fn begin_discard(&mut self) -> Vec<SurfaceMessage> {
         if self.operation_in_flight {
-            return ScreenOutcome::None;
+            return Vec::new();
         }
         let Some(file) = self.selected_file().cloned() else {
-            return ScreenOutcome::None;
+            return Vec::new();
         };
         self.bottom_bar = BottomBar::DiscardConfirmation { path: file.path.clone(), status: file.status };
-        ScreenOutcome::None
+        Vec::new()
     }
 
-    pub(super) fn toggle_full_file(&mut self) -> ScreenOutcome {
+    pub(super) fn toggle_full_file(&mut self) -> Vec<SurfaceMessage> {
         if self.operation_in_flight {
-            return ScreenOutcome::None;
+            return Vec::new();
         }
         self.show_full_file = !self.show_full_file;
         if !self.show_full_file {
@@ -251,14 +250,14 @@ impl GitDiffScreen {
             let repo_root = self.repo_root.clone();
             let (Some(path), Some(repo_root)) = (path, repo_root) else {
                 self.show_full_file = false;
-                return ScreenOutcome::None;
+                return Vec::new();
             };
             let request_id = next_request_id();
             self.request_id = request_id;
             self.operation_in_flight = true;
-            ScreenOutcome::Effect(GitDiffEffect::LoadFullFile { request_id, repo_root, path })
+            effect(GitDiffEffect::LoadFullFile { request_id, repo_root, path })
         } else {
-            ScreenOutcome::None
+            Vec::new()
         }
     }
 
@@ -388,40 +387,37 @@ impl GitDiffScreen {
         }
     }
 
-    pub(super) fn begin_draft(&mut self) -> ScreenOutcome {
+    pub(super) fn begin_draft(&mut self) -> Vec<SurfaceMessage> {
         let Some(file) = self.selected_file() else {
-            return ScreenOutcome::None;
+            return Vec::new();
         };
         let Some(hunk) = file.hunks.get(self.patch_cursor.hunk) else {
-            return ScreenOutcome::None;
+            return Vec::new();
         };
         if hunk.lines.get(self.patch_cursor.line).is_none() {
-            return ScreenOutcome::None;
+            return Vec::new();
         }
         let anchor =
             PatchAnchor { file_index: self.selected_file, hunk: self.patch_cursor.hunk, line: self.patch_cursor.line };
         self.draft = Some(DraftState { anchor, buffer: EditBuffer::default() });
-        ScreenOutcome::None
+        Vec::new()
     }
-    pub(super) fn undo_last_comment(&mut self) -> ScreenOutcome {
+    pub(super) fn undo_last_comment(&mut self) -> Vec<SurfaceMessage> {
         self.review_queue.pop();
         self.comments_revision = self.comments_revision.wrapping_add(1);
-        ScreenOutcome::None
+        Vec::new()
     }
 
-    pub(super) fn submit_review(&mut self) -> ScreenOutcome {
+    pub(super) fn submit_review(&mut self) -> Vec<SurfaceMessage> {
         if self.review_queue.is_empty() {
             self.bottom_bar = BottomBar::Error("No comments to submit".to_string());
-            return ScreenOutcome::None;
+            return Vec::new();
         }
         if self.operation_in_flight {
             self.bottom_bar = BottomBar::Error("Already submitting".to_string());
-            return ScreenOutcome::None;
+            return Vec::new();
         }
-        let prompt = self.review_queue.format_prompt();
-        self.request_id = next_request_id();
-        self.operation_in_flight = true;
-        ScreenOutcome::Effect(GitDiffEffect::SubmitReview { request_id: self.request_id, prompt })
+        vec![SurfaceMessage::SubmitReview(self.review_queue.format_prompt())]
     }
     pub(super) fn collapse_selected(&mut self) {
         let entries = self.drawer_entries();

@@ -1,8 +1,8 @@
 use super::config::extract_config_selections;
 use super::session::merge_builtins;
 use super::{
-    AcpEvent, App, CommandEntry, ContextUsageDisplay, ElicitationModal, ExitState, Instant, McpNotification,
-    OverlayLayer, SessionId, SessionPicker, SettingsOverlay, ToolStatus, WorkspaceMoveState, WorkspacePicker, acp,
+    AcpEvent, App, CommandEntry, ContextUsageDisplay, ElicitationModal, ExitState, Instant, Layer, McpNotification,
+    SessionId, SessionPicker, SettingsOverlay, ToolStatus, WorkspaceMoveState, WorkspacePicker, acp,
 };
 use crate::screens::plan_review::PlanReviewScreen;
 
@@ -32,11 +32,11 @@ impl App {
                 self.notify(&format!("Prompt failed: {error}"));
             }
             AcpEvent::ContextUsage(params) => {
-                self.context_usage =
+                self.turn.context_usage =
                     params.usage.context_limit.map(|limit| ContextUsageDisplay::new(params.usage.input_tokens, limit));
             }
             AcpEvent::ContextCompaction(params) => {
-                self.compaction_active = params.active;
+                self.turn.compaction_active = params.active;
             }
             AcpEvent::ContextCleared(_) => {
                 self.reset_conversation();
@@ -50,11 +50,11 @@ impl App {
                 }
                 // The settings overlay answers its own elicitations in place so
                 // an OAuth prompt does not tear down the pane that started it.
-                if let OverlayLayer::Settings(overlay) = &mut self.overlay {
+                if let Layer::Settings(overlay) = &mut self.layer {
                     overlay.on_elicitation_request(params, responder);
                     return;
                 }
-                self.overlay = OverlayLayer::Elicitation(ElicitationModal::new(params, responder));
+                self.open_layer(Layer::Elicitation(ElicitationModal::new(params, responder)));
             }
             AcpEvent::McpNotification(notification) => self.on_mcp_notification(&notification),
             AcpEvent::AuthMethodsUpdated(params) => {
@@ -95,7 +95,7 @@ impl App {
                 }
             }
             AcpEvent::WorkspacesListed(response) => {
-                self.overlay = OverlayLayer::WorkspacePicker(WorkspacePicker::new(response.workspaces));
+                self.open_layer(Layer::WorkspacePicker(WorkspacePicker::new(response.workspaces)));
                 self.workspace_move_state = WorkspaceMoveState::Picking;
             }
             AcpEvent::WorkspaceMoved(response) => self.on_workspace_moved(response.new_cwd),
@@ -123,13 +123,13 @@ impl App {
     /// Runs `apply` when the settings overlay is open. Agent pushes that only
     /// affect what it displays are dropped when it is not.
     fn with_settings(&mut self, apply: impl FnOnce(&mut SettingsOverlay)) {
-        if let OverlayLayer::Settings(overlay) = &mut self.overlay {
+        if let Layer::Settings(overlay) = &mut self.layer {
             apply(overlay);
         }
     }
 
     fn with_session_picker(&mut self, apply: impl FnOnce(&mut SessionPicker)) {
-        if let OverlayLayer::SessionPicker(picker) = &mut self.overlay {
+        if let Layer::SessionPicker(picker) = &mut self.layer {
             apply(picker);
         }
     }
@@ -141,7 +141,7 @@ impl App {
         if let Some(id) = picker.initial_preview_request() {
             let _ = self.prompt_handle.session_preview(&SessionId::new(id));
         }
-        self.overlay = OverlayLayer::SessionPicker(picker);
+        self.open_layer(Layer::SessionPicker(picker));
     }
 
     /// A requested session has arrived: replay the updates that were buffered
@@ -156,14 +156,14 @@ impl App {
         for update in updates {
             self.on_session_update(&update);
         }
-        self.close_overlay();
+        self.close_layer();
         self.workspace_move_state = WorkspaceMoveState::Idle;
     }
 
     fn on_new_session(&mut self, session_id: SessionId, config_options: Vec<acp::SessionConfigOption>) {
         self.session_loading_buffer.clear();
         self.close_elicitation_owner();
-        self.close_overlay();
+        self.close_layer();
         let previous_selections = extract_config_selections(&self.config_options);
         self.session_id = session_id;
         self.config_options = config_options;
@@ -185,10 +185,10 @@ impl App {
             let servers = servers.clone();
             self.with_settings(|overlay| overlay.update_server_statuses(servers));
         }
-        if let OverlayLayer::Elicitation(modal) = &mut self.overlay
+        if let Layer::Elicitation(modal) = &mut self.layer
             && modal.on_notification(notification)
         {
-            self.close_overlay();
+            self.close_layer();
         }
         if let McpNotification::UrlElicitationComplete(params) = notification {
             self.with_settings(|overlay| overlay.on_url_elicitation_complete(params));
@@ -199,8 +199,8 @@ impl App {
     /// every surface, and ask the event loop to exit.
     fn on_connection_closed(&mut self) {
         self.close_elicitation_owner();
-        self.close_overlay();
-        self.close_screen();
+        self.close_layer();
+        self.close_layer();
         self.workspace_move_state = WorkspaceMoveState::Idle;
         self.session_loading_buffer.clear();
         self.surface_rect = None;
@@ -211,12 +211,12 @@ impl App {
     /// Answers any elicitation the current overlay is holding, leaving the
     /// settings overlay itself open so its pane survives.
     fn close_elicitation_owner(&mut self) {
-        match &mut self.overlay {
-            OverlayLayer::Elicitation(modal) => {
+        match &mut self.layer {
+            Layer::Elicitation(modal) => {
                 modal.cancel();
-                self.overlay = OverlayLayer::None;
+                self.layer = Layer::None;
             }
-            OverlayLayer::Settings(overlay) => overlay.cancel_pending_elicitation(),
+            Layer::Settings(overlay) => overlay.cancel_pending_elicitation(),
             _ => {}
         }
     }
@@ -284,9 +284,9 @@ impl App {
     }
 
     fn finish_prompt(&mut self, terminal_status: &ToolStatus) {
-        let was_in_flight = self.prompt_in_flight;
-        self.prompt_in_flight = false;
-        self.compaction_active = false;
+        let was_in_flight = self.turn.prompt_in_flight;
+        self.turn.prompt_in_flight = false;
+        self.turn.compaction_active = false;
         self.tool_calls.finalize_running(terminal_status);
         self.transcript.close_thought_block();
         if was_in_flight && matches!(terminal_status, ToolStatus::Success) {

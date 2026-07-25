@@ -4,7 +4,7 @@ fn make_app_with_prompt_search() -> (App, UnboundedReceiver<PromptCommand>) {
     let session_capabilities = acp::SessionCapabilities::new().meta(Some(
         AetherCapabilities { prompt_search: true, session_preview: false, workspace_move: false }.to_meta(),
     ));
-    make_app_with_metadata(std::path::PathBuf::from("."), session_capabilities, Vec::new(), Vec::new())
+    AppBuilder::new().session_capabilities(session_capabilities).build()
 }
 
 fn prompt_search_result(prompt: &str, start: usize, end: usize) -> acp_utils::notifications::PromptSearchResult {
@@ -77,7 +77,7 @@ fn prompt_search_shows_loading_state_after_query() {
     );
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("history search: h"), "viewport:\n{viewport}");
@@ -90,7 +90,7 @@ fn prompt_search_empty_query_renders_instruction() {
     app.on_key(ctrl('r'));
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("history search:"), "viewport:\n{viewport}");
@@ -110,7 +110,7 @@ fn prompt_search_shows_results_after_response() {
     )));
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("hello world"), "viewport:\n{viewport}");
@@ -126,7 +126,7 @@ fn prompt_search_no_results_shows_no_matches() {
     app.on_acp_event(AcpEvent::PromptSearchResults(prompt_search_response_gen("zzz", vec![], 3)));
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("no matching prompts"), "viewport:\n{viewport}");
@@ -146,7 +146,7 @@ fn prompt_search_shows_error_on_failure() {
     });
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("error: connection refused"), "viewport:\n{viewport}");
@@ -241,7 +241,7 @@ fn prompt_search_up_and_down_change_selection() {
     )));
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("hello"), "viewport:\n{viewport}");
@@ -278,7 +278,7 @@ fn prompt_search_stale_response_is_ignored() {
     )));
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("hello"), "should show current result:\n{viewport}");
@@ -298,7 +298,7 @@ fn prompt_search_prefills_selected_result_with_cursor_at_match() {
     )));
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("the quick brown fox"), "viewport:\n{viewport}");
@@ -340,7 +340,7 @@ fn prompt_search_backspace_to_empty_restores_draft_but_keeps_picker_open() {
     assert_eq!(app.composer().text(), "draft");
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("type to search prompt history"), "viewport:\n{viewport}");
@@ -396,7 +396,7 @@ fn prompt_search_unicode_query_is_accepted() {
     );
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("history search: ñ"), "viewport:\n{viewport}");
@@ -421,7 +421,7 @@ fn prompt_search_rows_truncate_prompt_and_show_cwd_basename() {
     )));
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("…"), "should have ellipsis in truncated prompt:\n{viewport}");
@@ -520,7 +520,7 @@ fn prompt_search_identical_repeated_query_uses_generation_not_just_string() {
     )));
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(!viewport.contains("STALE_FIRST"), "stale response from first 'xy' must be ignored:\n{viewport}");
@@ -541,7 +541,7 @@ fn prompt_search_identical_repeated_query_uses_generation_not_just_string() {
 
 #[test]
 fn prompt_search_send_failure_is_visible_in_picker() {
-    let (mut app, fail_signal, mut command_rx) = make_failable_app_with_prompt_search();
+    let (mut app, fail_signal, mut command_rx) = AppBuilder::new().prompt_search().build_failable();
     app.on_key(ctrl('r'));
 
     fail_signal.store(true, Ordering::Relaxed);
@@ -549,7 +549,7 @@ fn prompt_search_send_failure_is_visible_in_picker() {
     assert!(command_rx.try_recv().is_err(), "send should have failed");
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("search failed"), "send failure must be visible in picker:\n{viewport}");
@@ -572,7 +572,7 @@ fn prompt_search_stale_failure_is_accepted_for_current_query() {
     });
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("server error"), "failure must be visible:\n{viewport}");
@@ -603,7 +603,7 @@ fn prompt_search_stale_failure_must_not_overwrite_newer_success() {
     });
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("fresh result for xy"), "newer success results must survive stale failure:\n{viewport}");

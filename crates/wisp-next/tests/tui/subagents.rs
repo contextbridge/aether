@@ -106,7 +106,7 @@ fn sub_agent_renders_tree_guides_in_viewport() {
     app.on_acp_event(sub_agent_tool_call("parent-1", "task-a", "explorer", "c2", "read", r#"{"path":"src/main.rs"}"#));
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
 
@@ -184,7 +184,7 @@ fn sub_agent_multiple_sub_agents_per_parent() {
     app.on_acp_event(sub_agent_tool_call("parent-1", "task-b", "builder", "c2", "write", "{}"));
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
 

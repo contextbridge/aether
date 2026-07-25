@@ -13,15 +13,15 @@ use crate::edit_buffer::{EditBuffer, apply_edit_key};
 use crate::selection::Direction;
 use crate::theme::Theme;
 
-/// Rows drawn above the first field: the "Request from …" header and message.
-const HEADER_ROWS: u16 = 3;
-
 pub(super) struct FormModal {
     server_name: String,
     message: String,
     pub(super) fields: Vec<FormField>,
     pub(super) selected: usize,
     validation_error: Option<String>,
+    /// Terminal row the first field was last drawn on, so a click lands on the
+    /// field the user actually pointed at wherever the modal was centred.
+    first_field_row: u16,
 }
 
 pub(super) struct FormField {
@@ -56,7 +56,7 @@ impl FormModal {
         let required: Vec<&str> = schema.required.as_deref().unwrap_or(&[]).iter().map(String::as_str).collect();
         let fields =
             schema.properties.iter().map(|(name, prop)| FormField::from_primitive(name, prop, &required)).collect();
-        Self { server_name, message, fields, selected: 0, validation_error: None }
+        Self { server_name, message, fields, selected: 0, validation_error: None, first_field_row: 0 }
     }
 
     pub(super) fn on_key(&mut self, key: KeyEvent) -> FormAction {
@@ -97,10 +97,10 @@ impl FormModal {
         };
     }
 
-    /// Focuses the field drawn at `row` and activates it, so a click both
-    /// selects and toggles in one gesture.
+    /// Focuses the field drawn at terminal `row` and activates it, so a click
+    /// both selects and toggles in one gesture.
     pub(super) fn click(&mut self, row: u16) {
-        let Some(field_row) = row.checked_sub(HEADER_ROWS).map(usize::from) else {
+        let Some(field_row) = row.checked_sub(self.first_field_row).map(usize::from) else {
             return;
         };
         let mut current = 0usize;
@@ -177,7 +177,7 @@ impl FormModal {
         FormAction::Accept(Value::Object(content))
     }
 
-    pub(super) fn render(&self, area: Rect, buf: &mut Buffer, theme: &Theme) {
+    pub(super) fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
         let mut lines = vec![Line::styled(
             format!("Request from {}", self.server_name),
             Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
@@ -185,6 +185,9 @@ impl FormModal {
         if !self.message.is_empty() {
             lines.push(Line::raw(self.message.clone()));
         }
+        let block = Block::bordered().title(" Elicitation ").border_style(Style::new().fg(theme.accent));
+        self.first_field_row = block.inner(area).y.saturating_add(rows(lines.len()));
+
         for (index, field) in self.fields.iter().enumerate() {
             let marker = if index == self.selected { "›" } else { " " };
             let required = if field.required { " *" } else { "" };
@@ -223,9 +226,12 @@ impl FormModal {
         } else {
             lines.push(Line::styled("Enter submit · Esc cancel", Style::new().fg(theme.muted)));
         }
-        let block = Block::bordered().title(" Elicitation ").border_style(Style::new().fg(theme.accent));
         Paragraph::new(Text::from(lines)).block(block).wrap(Wrap { trim: false }).render(area, buf);
     }
+}
+
+fn rows(count: usize) -> u16 {
+    u16::try_from(count).unwrap_or(u16::MAX)
 }
 
 impl FormField {

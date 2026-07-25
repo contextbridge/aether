@@ -9,9 +9,10 @@ use self::model_selector::ModelSelector;
 use self::picker::SettingsPicker;
 use self::provider_login::{ProviderLoginEntry, ProviderLoginPane, ProviderLoginStatus, build_provider_login_entries};
 use self::server_status::ServerStatusPane;
-use crate::overlay::{Overlay, OverlayMessage};
+use crate::render_context::RenderContext;
 use crate::selection::Direction;
 use crate::session_config_view::SessionConfigView;
+use crate::surface::{ListFilter, Surface, SurfaceMessage};
 use crate::theme::Theme;
 use acp_utils::config_meta::SelectOptionMeta;
 use acp_utils::notifications::{
@@ -21,7 +22,7 @@ use agent_client_protocol::Responder;
 use agent_client_protocol::schema::{AuthMethod, SessionConfigOption};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Clear, Paragraph, Widget};
@@ -87,9 +88,12 @@ pub(crate) struct LiveSettingsData {
 /// overlay drives them all through this trait instead of matching on which is
 /// open.
 pub(crate) trait SettingsPane {
-    fn on_key(&mut self, key: KeyEvent) -> PaneOutcome;
+    /// Handles the keys unique to this pane, returning `None` to fall back to
+    /// the shared navigation and filter keys in [`SettingsPane::on_key`].
+    fn on_pane_key(&mut self, key: KeyEvent) -> Option<PaneOutcome>;
 
-    fn click(&mut self, row: usize, height: usize) -> PaneOutcome;
+    /// Selects whatever is drawn at terminal row `row`, if anything is.
+    fn click(&mut self, row: u16) -> PaneOutcome;
 
     fn scroll(&mut self, direction: Direction);
 
@@ -97,6 +101,12 @@ pub(crate) trait SettingsPane {
 
     /// Key hints for the overlay footer while this pane has focus.
     fn footer(&self) -> String;
+
+    /// The query this pane filters its list by, when it has one. Supplying it
+    /// is what makes typing and backspace filter.
+    fn filter(&mut self) -> Option<&mut dyn ListFilter> {
+        None
+    }
 
     /// Changes to commit when the pane closes; panes that apply edits
     /// immediately return nothing.
@@ -108,6 +118,30 @@ pub(crate) trait SettingsPane {
     fn refresh(&mut self, live: &LiveSettingsData) {
         let _ = live;
     }
+
+    /// Routes a keystroke: pane-specific keys first, then the navigation and
+    /// filter keys every pane shares.
+    fn on_key(&mut self, key: KeyEvent) -> PaneOutcome {
+        if let Some(outcome) = self.on_pane_key(key) {
+            return outcome;
+        }
+        match key.code {
+            KeyCode::Up => self.scroll(Direction::Backward),
+            KeyCode::Down => self.scroll(Direction::Forward),
+            KeyCode::Backspace => {
+                if let Some(filter) = self.filter() {
+                    filter.pop_query_char();
+                }
+            }
+            KeyCode::Char(character) if !character.is_control() => {
+                if let Some(filter) = self.filter() {
+                    filter.push_query_char(character);
+                }
+            }
+            _ => {}
+        }
+        PaneOutcome::default()
+    }
 }
 
 /// What a pane produced from one interaction.
@@ -116,13 +150,13 @@ pub(crate) struct PaneOutcome {
     /// Config edits to apply to the menu and forward to the agent.
     pub(crate) changes: Vec<SettingsChange>,
     /// Messages that are not config edits, such as authentication requests.
-    pub(crate) messages: Vec<OverlayMessage>,
+    pub(crate) messages: Vec<SurfaceMessage>,
     /// Return focus to the menu.
     pub(crate) back: bool,
 }
 
 impl PaneOutcome {
-    pub(crate) fn message(message: Option<OverlayMessage>) -> Self {
+    pub(crate) fn message(message: Option<SurfaceMessage>) -> Self {
         Self { messages: message.into_iter().collect(), ..Self::default() }
     }
 }
@@ -232,9 +266,9 @@ impl SettingsOverlay {
         }
     }
 
-    fn on_menu_key(&mut self, key: KeyEvent) -> Vec<OverlayMessage> {
+    fn on_menu_key(&mut self, key: KeyEvent) -> Vec<SurfaceMessage> {
         match key.code {
-            KeyCode::Esc => return vec![OverlayMessage::Close],
+            KeyCode::Esc => return vec![SurfaceMessage::Close],
             KeyCode::Up => self.menu.move_up(),
             KeyCode::Down => self.menu.move_down(),
             KeyCode::Enter => self.pane = self.open_selected_pane(),
@@ -262,7 +296,7 @@ impl SettingsOverlay {
 
     /// Applies a pane's result: config edits update the menu immediately so the
     /// UI never lags the agent round-trip, and become outbound messages.
-    fn apply(&mut self, outcome: PaneOutcome) -> Vec<OverlayMessage> {
+    fn apply(&mut self, outcome: PaneOutcome) -> Vec<SurfaceMessage> {
         if outcome.back {
             self.pane = None;
         }
@@ -273,27 +307,24 @@ impl SettingsOverlay {
         }
         messages
     }
-
-    /// Inner area of the overlay's border, which mouse rows are measured from.
-    fn inner_area(area: Rect) -> Rect {
-        Block::bordered().inner(area)
-    }
 }
 
-impl Overlay for SettingsOverlay {
-    fn on_key(&mut self, key: KeyEvent) -> Vec<OverlayMessage> {
+impl Surface for SettingsOverlay {
+    /// The overlay owns every key: the menu and its panes have their own
+    /// keymaps, so nothing falls through to the shared list navigation.
+    fn on_surface_key(&mut self, key: KeyEvent) -> Option<Vec<SurfaceMessage>> {
         let Some(pane) = self.pane.as_mut() else {
-            return self.on_menu_key(key);
+            return Some(self.on_menu_key(key));
         };
         let outcome = if key.code == KeyCode::Esc {
             PaneOutcome { changes: pane.take_changes(), back: true, ..PaneOutcome::default() }
         } else {
             pane.on_key(key)
         };
-        self.apply(outcome)
+        Some(self.apply(outcome))
     }
 
-    fn scroll(&mut self, direction: Direction) -> Vec<OverlayMessage> {
+    fn scroll(&mut self, direction: Direction) -> Vec<SurfaceMessage> {
         match self.pane.as_mut() {
             Some(pane) => pane.scroll(direction),
             None => self.menu.step(direction),
@@ -301,30 +332,24 @@ impl Overlay for SettingsOverlay {
         Vec::new()
     }
 
-    fn click(&mut self, row: u16, area: Rect) -> Vec<OverlayMessage> {
-        if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
-            return Vec::new();
-        }
-        let inner = Self::inner_area(area);
-        if row < inner.y || row >= inner.bottom() {
-            return Vec::new();
-        }
-        let local_row = usize::from(row - inner.y);
+    fn click(&mut self, row: u16, _column: u16) -> Vec<SurfaceMessage> {
         let Some(pane) = self.pane.as_mut() else {
-            self.menu.click_row(local_row);
-            self.pane = self.open_selected_pane();
+            if self.menu.click_at(row) {
+                self.pane = self.open_selected_pane();
+            }
             return Vec::new();
         };
-        let outcome = pane.click(local_row, usize::from(inner.height));
+        let outcome = pane.click(row);
         self.apply(outcome)
     }
 
-    fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
+    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
+        let theme = cx.theme;
         Clear.render(area, buf);
         if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
             Paragraph::new(Line::styled("(terminal too small)", Style::new().fg(theme.text_secondary)))
                 .render(area, buf);
-            return;
+            return None;
         }
         let block = Block::bordered()
             .title(" Configuration ")
@@ -339,6 +364,7 @@ impl Overlay for SettingsOverlay {
             Some(pane) => pane.render(content_area, buf, theme),
             None => self.menu.render(content_area, buf, theme),
         }
+        None
     }
 }
 
@@ -374,11 +400,11 @@ fn reasoning_effort_of(options: &[SessionConfigOption]) -> Option<String> {
     SessionConfigView::new(options).reasoning_effort().map(|effort| effort.as_str().to_string())
 }
 
-fn message_for_change(change: &SettingsChange) -> OverlayMessage {
+fn message_for_change(change: &SettingsChange) -> SurfaceMessage {
     if change.config_id == acp_utils::config_option_id::THEME_CONFIG_ID {
-        OverlayMessage::SetTheme(change.new_value.clone())
+        SurfaceMessage::SetTheme(change.new_value.clone())
     } else {
-        OverlayMessage::SetConfigOption { config_id: change.config_id.clone(), value: change.new_value.clone() }
+        SurfaceMessage::SetConfigOption { config_id: change.config_id.clone(), value: change.new_value.clone() }
     }
 }
 

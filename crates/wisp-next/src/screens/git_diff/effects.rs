@@ -8,6 +8,7 @@ use crate::git_diff::{
     unstage_files,
 };
 
+#[derive(Debug)]
 pub enum GitDiffEffect {
     Load { request_id: u64, working_dir: PathBuf, repo_root: Option<PathBuf>, scope: DiffScope },
     StageFiles { request_id: u64, repo_root: PathBuf, paths: Vec<String> },
@@ -17,14 +18,12 @@ pub enum GitDiffEffect {
     Commit { request_id: u64, repo_root: PathBuf, message: String },
     DiscardFile { request_id: u64, repo_root: PathBuf, path: String, status: FileStatus },
     LoadFullFile { request_id: u64, repo_root: PathBuf, path: String },
-    SubmitReview { request_id: u64, prompt: String },
 }
 
 pub enum GitDiffEvent {
     Loaded { request_id: u64, result: Result<GitDiffDocument, GitDiffError> },
     ActionFinished { request_id: u64, result: Result<(), GitDiffError> },
     FullFileLoaded { request_id: u64, path: String, result: Result<String, GitDiffError> },
-    SubmitReview { request_id: u64, prompt: String },
 }
 
 impl GitDiffEvent {
@@ -33,8 +32,7 @@ impl GitDiffEvent {
         match self {
             Self::Loaded { request_id, .. }
             | Self::ActionFinished { request_id, .. }
-            | Self::FullFileLoaded { request_id, .. }
-            | Self::SubmitReview { request_id, .. } => *request_id,
+            | Self::FullFileLoaded { request_id, .. } => *request_id,
         }
     }
 }
@@ -62,8 +60,7 @@ impl GitDiffEffect {
             | Self::UnstageAll { request_id, .. }
             | Self::Commit { request_id, .. }
             | Self::DiscardFile { request_id, .. }
-            | Self::LoadFullFile { request_id, .. }
-            | Self::SubmitReview { request_id, .. } => *request_id,
+            | Self::LoadFullFile { request_id, .. } => *request_id,
         }
     }
 
@@ -98,7 +95,6 @@ impl GitDiffEffect {
                     .map_err(|error| GitDiffError::CommandFailed { stderr: format!("Cannot read {path}: {error}") });
                 GitDiffEvent::FullFileLoaded { request_id, path, result }
             }
-            Self::SubmitReview { request_id, prompt } => GitDiffEvent::SubmitReview { request_id, prompt },
         }
     }
 }

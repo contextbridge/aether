@@ -1,11 +1,111 @@
 use crate::syntax::SyntaxHighlighter;
 use crate::theme::Theme;
-use crate::wrap::wrap_line;
-use ratatui::style::Style;
+use crate::wrap::{fit_line, wrap_line};
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use similar::{DiffOp, TextDiff};
 
 pub const SPLIT_VIEW_MIN_WIDTH: u16 = 96;
+
+/// The column a split view puts between its two halves.
+const SPLIT_SEPARATOR: &str = "│";
+
+/// How a diff row is tinted. Both the inline previews in the transcript and the
+/// full git-diff screen render through this, so a line looks the same wherever
+/// it is shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiffTone {
+    Context,
+    Added,
+    Removed,
+}
+
+/// A diff line rendered but not yet fitted to the viewport: callers wrap it or
+/// truncate it, using `fill` for the padding and ellipsis they add.
+pub struct DiffLine {
+    pub line: Line<'static>,
+    pub fill: Style,
+}
+
+impl DiffTone {
+    pub fn colors(self, theme: &Theme) -> (Color, Color) {
+        match self {
+            Self::Context => (theme.text_secondary, theme.background),
+            Self::Added => (theme.diff_added_fg, theme.diff_added_bg),
+            Self::Removed => (theme.diff_removed_fg, theme.diff_removed_bg),
+        }
+    }
+}
+
+/// Renders `gutter` (line numbers and any change marker) followed by the
+/// syntax-highlighted source, tinted for `tone`.
+pub fn diff_line(
+    gutter: &str,
+    text: &str,
+    language: &str,
+    tone: DiffTone,
+    theme: &Theme,
+    highlighter: &mut SyntaxHighlighter,
+) -> DiffLine {
+    let (foreground, background) = tone.colors(theme);
+    let fill = Style::new().fg(foreground).bg(background);
+    let mut spans = vec![Span::styled(gutter.to_string(), fill)];
+    spans.extend(highlighted_spans(text, language, background, theme, highlighter));
+    DiffLine { line: Line::from(spans).style(Style::new().bg(background)), fill }
+}
+
+/// One half of a split diff, occupying exactly `width` columns. An absent line
+/// renders as an empty, still-tinted gap so the two sides stay aligned.
+pub fn split_side(
+    number: Option<usize>,
+    text: Option<&str>,
+    language: &str,
+    tone: DiffTone,
+    width: u16,
+    theme: &Theme,
+    highlighter: &mut SyntaxHighlighter,
+) -> Line<'static> {
+    let gutter = number.map_or_else(|| "     ".to_string(), |number| format!("{number:>4} "));
+    let rendered = diff_line(&gutter, text.unwrap_or_default(), language, tone, theme, highlighter);
+    fit_line(rendered.line, usize::from(width), rendered.fill)
+}
+
+/// Column widths for the two halves of a split view `width` columns wide.
+pub fn split_widths(width: u16) -> (u16, u16) {
+    let left = width.saturating_sub(1) / 2;
+    (left, width.saturating_sub(left + 1))
+}
+
+/// Joins two rendered halves with the separator column between them.
+pub fn join_split(left: Line<'static>, right: Line<'static>, theme: &Theme) -> Line<'static> {
+    let mut spans = left.spans;
+    spans.push(Span::styled(SPLIT_SEPARATOR, Style::new().fg(theme.muted).bg(theme.background)));
+    spans.extend(right.spans);
+    Line::from(spans)
+}
+
+/// Syntax-highlighted spans for one source line, re-tinted to sit on
+/// `background` so the highlighting does not punch holes in a diff row.
+pub fn highlighted_spans(
+    source: &str,
+    language: &str,
+    background: Color,
+    theme: &Theme,
+    highlighter: &mut SyntaxHighlighter,
+) -> Vec<Span<'static>> {
+    highlighter
+        .highlight(source, language, theme)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| Line::raw(source.to_string()))
+        .spans
+        .into_iter()
+        .map(|mut span| {
+            span.style = span.style.patch(Style::new().bg(background));
+            span
+        })
+        .collect()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiffKind {
@@ -102,6 +202,36 @@ impl NumberedLine {
     }
 }
 
+impl DiffRow {
+    /// The sides a unified view draws for this row, with the tone and marker
+    /// each is drawn in. A changed row draws both, removal first.
+    fn unified_sides(&self) -> Vec<(Option<&NumberedLine>, DiffTone, char)> {
+        match self.kind {
+            DiffKind::Context => vec![(self.old.as_ref(), DiffTone::Context, ' ')],
+            DiffKind::Removed => vec![(self.old.as_ref(), DiffTone::Removed, '-')],
+            DiffKind::Added => vec![(self.new.as_ref(), DiffTone::Added, '+')],
+            DiffKind::Changed => {
+                vec![(self.old.as_ref(), DiffTone::Removed, '-'), (self.new.as_ref(), DiffTone::Added, '+')]
+            }
+        }
+    }
+
+    /// Tones for the left and right halves of a split view. A side with no line
+    /// still carries the change tone, so the gap it leaves reads as part of the
+    /// change rather than as context.
+    fn split_tones(&self) -> (DiffTone, DiffTone) {
+        let left = match self.kind {
+            DiffKind::Removed | DiffKind::Changed => DiffTone::Removed,
+            _ => DiffTone::Context,
+        };
+        let right = match self.kind {
+            DiffKind::Added | DiffKind::Changed => DiffTone::Added,
+            _ => DiffTone::Context,
+        };
+        (left, right)
+    }
+}
+
 pub fn render_diff(
     preview: &DiffPreview,
     width: u16,
@@ -116,80 +246,27 @@ pub fn render_diff(
     }
 }
 
+/// Most rows an inline preview shows before collapsing the rest into a count.
+const MAX_PREVIEW_ROWS: usize = 20;
+
 fn render_unified_diff(
     preview: &DiffPreview,
     width: u16,
     theme: &Theme,
     highlighter: &mut SyntaxHighlighter,
 ) -> Vec<Line<'static>> {
-    const MAX_ROWS: usize = 20;
     let mut lines = Vec::new();
-    for row in preview.rows.iter().take(MAX_ROWS) {
-        match row.kind {
-            DiffKind::Context => {
-                if let Some(line) = &row.old {
-                    lines.extend(render_diff_line(line, " ", None, preview, width, theme, highlighter));
-                }
-            }
-            DiffKind::Removed => {
-                if let Some(line) = &row.old {
-                    lines.extend(render_diff_line(
-                        line,
-                        "-",
-                        Some((theme.diff_removed_fg, theme.diff_removed_bg)),
-                        preview,
-                        width,
-                        theme,
-                        highlighter,
-                    ));
-                }
-            }
-            DiffKind::Added => {
-                if let Some(line) = &row.new {
-                    lines.extend(render_diff_line(
-                        line,
-                        "+",
-                        Some((theme.diff_added_fg, theme.diff_added_bg)),
-                        preview,
-                        width,
-                        theme,
-                        highlighter,
-                    ));
-                }
-            }
-            DiffKind::Changed => {
-                if let Some(line) = &row.old {
-                    lines.extend(render_diff_line(
-                        line,
-                        "-",
-                        Some((theme.diff_removed_fg, theme.diff_removed_bg)),
-                        preview,
-                        width,
-                        theme,
-                        highlighter,
-                    ));
-                }
-                if let Some(line) = &row.new {
-                    lines.extend(render_diff_line(
-                        line,
-                        "+",
-                        Some((theme.diff_added_fg, theme.diff_added_bg)),
-                        preview,
-                        width,
-                        theme,
-                        highlighter,
-                    ));
-                }
-            }
+    for row in preview.rows.iter().take(MAX_PREVIEW_ROWS) {
+        for (side, tone, marker) in row.unified_sides() {
+            let Some(side) = side else {
+                continue;
+            };
+            let gutter = format!("{:>4} {marker} ", side.number);
+            let rendered = diff_line(&gutter, &side.text, &preview.language, tone, theme, highlighter);
+            lines.extend(wrap_line(rendered.line, width));
         }
     }
-
-    if preview.rows.len() > MAX_ROWS {
-        lines.push(Line::styled(
-            format!("    … {} more rows", preview.rows.len() - MAX_ROWS),
-            Style::new().fg(theme.muted),
-        ));
-    }
+    lines.extend(truncation_notice(preview, theme));
     lines
 }
 
@@ -199,104 +276,41 @@ fn render_split_diff(
     theme: &Theme,
     highlighter: &mut SyntaxHighlighter,
 ) -> Vec<Line<'static>> {
-    const MAX_ROWS: usize = 20;
-    let left_width = width.saturating_sub(1) / 2;
-    let right_width = width.saturating_sub(1 + left_width);
-    let mut lines = Vec::new();
-
-    for row in preview.rows.iter().take(MAX_ROWS) {
-        let left_colors = matches!(row.kind, DiffKind::Removed | DiffKind::Changed)
-            .then_some((theme.diff_removed_fg, theme.diff_removed_bg));
-        let right_colors = matches!(row.kind, DiffKind::Added | DiffKind::Changed)
-            .then_some((theme.diff_added_fg, theme.diff_added_bg));
-        let left = render_split_panel(row.old.as_ref(), left_width, left_colors, preview, theme, highlighter);
-        let right = render_split_panel(row.new.as_ref(), right_width, right_colors, preview, theme, highlighter);
-        let mut spans = left.spans;
-        spans.push(Span::styled(" ", Style::new().bg(theme.background)));
-        spans.extend(right.spans);
-        lines.push(Line::from(spans));
-    }
-
-    if preview.rows.len() > MAX_ROWS {
-        lines.push(Line::styled(
-            format!("    … {} more rows", preview.rows.len() - MAX_ROWS),
-            Style::new().fg(theme.muted),
-        ));
-    }
+    let (left_width, right_width) = split_widths(width);
+    let mut lines: Vec<Line<'static>> = preview
+        .rows
+        .iter()
+        .take(MAX_PREVIEW_ROWS)
+        .map(|row| {
+            let (left_tone, right_tone) = row.split_tones();
+            let left = split_side(
+                row.old.as_ref().map(|old| old.number),
+                row.old.as_ref().map(|old| old.text.as_str()),
+                &preview.language,
+                left_tone,
+                left_width,
+                theme,
+                highlighter,
+            );
+            let right = split_side(
+                row.new.as_ref().map(|new| new.number),
+                row.new.as_ref().map(|new| new.text.as_str()),
+                &preview.language,
+                right_tone,
+                right_width,
+                theme,
+                highlighter,
+            );
+            join_split(left, right, theme)
+        })
+        .collect();
+    lines.extend(truncation_notice(preview, theme));
     lines
 }
 
-fn render_split_panel(
-    numbered: Option<&NumberedLine>,
-    width: u16,
-    colors: Option<(ratatui::style::Color, ratatui::style::Color)>,
-    preview: &DiffPreview,
-    theme: &Theme,
-    highlighter: &mut SyntaxHighlighter,
-) -> Line<'static> {
-    let (foreground, background) = colors.unwrap_or((theme.text_secondary, theme.background));
-    let mut line = if let Some(numbered) = numbered {
-        let mut spans =
-            vec![Span::styled(format!("{:>4} ", numbered.number), Style::new().fg(foreground).bg(background))];
-        if let Some(highlighted) = highlighter.highlight(&numbered.text, &preview.language, theme).first() {
-            spans.extend(highlighted.spans.iter().cloned().map(|mut span| {
-                span.style = span.style.patch(Style::new().bg(background));
-                span
-            }));
-        }
-        let source = Line::from(spans).style(Style::new().bg(background));
-        let wrapped = wrap_line(source.clone(), width);
-        if wrapped.len() > 1 {
-            truncate_line(source, width, Style::new().fg(foreground).bg(background))
-        } else {
-            wrapped.into_iter().next().unwrap_or_default()
-        }
-    } else {
-        Line::default()
-    };
-
-    let current_width = line.width();
-    if current_width < usize::from(width) {
-        line.spans.push(Span::styled(" ".repeat(usize::from(width) - current_width), Style::new().bg(background)));
-    }
-    line
-}
-
-fn truncate_line(line: Line<'static>, width: u16, indicator_style: Style) -> Line<'static> {
-    if width <= 1 {
-        return Line::styled("…", indicator_style);
-    }
-
-    let content_width = width - 1;
-    let mut line = wrap_line(line, content_width).into_iter().next().unwrap_or_default();
-    let padding = usize::from(content_width).saturating_sub(line.width());
-    if padding > 0 {
-        line.spans.push(Span::styled(" ".repeat(padding), indicator_style));
-    }
-    line.spans.push(Span::styled("…", indicator_style));
-    line
-}
-
-fn render_diff_line(
-    numbered: &NumberedLine,
-    marker: &str,
-    colors: Option<(ratatui::style::Color, ratatui::style::Color)>,
-    preview: &DiffPreview,
-    width: u16,
-    theme: &Theme,
-    highlighter: &mut SyntaxHighlighter,
-) -> Vec<Line<'static>> {
-    let (foreground, background) = colors.unwrap_or((theme.text_secondary, theme.background));
-    let mut spans =
-        vec![Span::styled(format!("{:>4} {marker} ", numbered.number), Style::new().fg(foreground).bg(background))];
-    let syntax_lines = highlighter.highlight(&numbered.text, &preview.language, theme);
-    if let Some(line) = syntax_lines.first() {
-        spans.extend(line.spans.iter().cloned().map(|mut span| {
-            span.style = span.style.patch(Style::new().bg(background));
-            span
-        }));
-    }
-    wrap_line(Line::from(spans).style(Style::new().bg(background)), width)
+fn truncation_notice(preview: &DiffPreview, theme: &Theme) -> Option<Line<'static>> {
+    let hidden = preview.rows.len().checked_sub(MAX_PREVIEW_ROWS)?;
+    (hidden > 0).then(|| Line::styled(format!("    … {hidden} more rows"), Style::new().fg(theme.muted)))
 }
 
 fn line_at<'a>(lines: &[&'a str], index: usize) -> &'a str {

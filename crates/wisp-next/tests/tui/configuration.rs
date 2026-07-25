@@ -69,8 +69,7 @@ fn elicitation_request_is_accepted_interactively() {
 #[test]
 fn tab_cycles_reasoning_effort_through_advertised_levels() {
     let options = vec![reasoning_option("low", &["low", "medium", "high"])];
-    let (mut app, mut command_rx) =
-        make_app_with_metadata(std::path::PathBuf::from("."), acp::SessionCapabilities::new(), options, Vec::new());
+    let (mut app, mut command_rx) = AppBuilder::new().config_options(options).build();
 
     app.on_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     let cmd = command_rx.try_recv().unwrap();
@@ -100,8 +99,7 @@ fn tab_cycles_reasoning_effort_through_advertised_levels() {
 #[test]
 fn shift_backtab_cycles_mode_option_and_wraps() {
     let options = vec![mode_option("code", &["code", "plan", "ask"])];
-    let (mut app, mut command_rx) =
-        make_app_with_metadata(std::path::PathBuf::from("."), acp::SessionCapabilities::new(), options, Vec::new());
+    let (mut app, mut command_rx) = AppBuilder::new().config_options(options).build();
 
     app.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
     let cmd = command_rx.try_recv().unwrap();
@@ -123,6 +121,25 @@ fn shift_backtab_cycles_mode_option_and_wraps() {
 }
 
 #[test]
+fn shift_backtab_cycles_grouped_mode_options() {
+    let options = vec![grouped_mode_option("code", &[("built-in", &["code", "plan"]), ("custom", &["review"])])];
+    let (mut app, mut command_rx) = AppBuilder::new().config_options(options).build();
+
+    app.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
+    let cmd = command_rx.try_recv().unwrap();
+    assert!(
+        matches!(cmd, PromptCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "mode" && value == "plan")
+    );
+
+    app.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
+    let cmd = command_rx.try_recv().unwrap();
+    assert!(
+        matches!(cmd, PromptCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "mode" && value == "review"),
+        "cycling must cross group boundaries, not stop at the first group"
+    );
+}
+
+#[test]
 fn tab_and_backtab_noop_without_cycleable_options() {
     let (mut app, mut command_rx) = make_app();
 
@@ -135,8 +152,7 @@ fn tab_and_backtab_noop_without_cycleable_options() {
 #[test]
 fn command_picker_consumes_tab_without_changing_config() {
     let options = vec![reasoning_option("low", &["low", "medium", "high"])];
-    let (mut app, _command_rx) =
-        make_app_with_metadata(std::path::PathBuf::from("."), acp::SessionCapabilities::new(), options, Vec::new());
+    let (mut app, _command_rx) = AppBuilder::new().config_options(options).build();
 
     app.on_key(key(KeyCode::Char('/')));
     assert!(app.composer().has_overlay());
@@ -149,8 +165,7 @@ fn command_picker_consumes_tab_without_changing_config() {
 #[test]
 fn failed_config_update_shows_error_and_does_not_corrupt_state() {
     let options = vec![reasoning_option("low", &["low", "medium", "high"])];
-    let (mut app, mut command_rx) =
-        make_app_with_metadata(std::path::PathBuf::from("."), acp::SessionCapabilities::new(), options, Vec::new());
+    let (mut app, mut command_rx) = AppBuilder::new().config_options(options).build();
 
     app.on_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     let _ = command_rx.try_recv().unwrap();

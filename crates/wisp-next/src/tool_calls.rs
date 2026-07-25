@@ -353,15 +353,6 @@ mod tests {
         }
     }
 
-    fn make_sub_agent_progress(
-        parent_tool_id: &str,
-        task_id: &str,
-        agent_name: &str,
-        event: SubAgentEvent,
-    ) -> SubAgentProgressParams {
-        sub_agent_event(parent_tool_id, task_id, agent_name, event)
-    }
-
     fn status_update(id: &str, status: acp::ToolCallStatus) -> acp::ToolCallUpdate {
         acp::ToolCallUpdate::new(id.to_string(), acp::ToolCallUpdateFields::new().status(status))
     }
@@ -751,8 +742,8 @@ mod tests {
     fn sub_agent_multiple_task_ids_same_name() {
         let mut log = ToolCallLog::new();
         log.on_tool_call(&acp::ToolCall::new("parent-1".to_string(), "spawn_subagent"));
-        log.on_sub_agent_progress(&make_sub_agent_progress("parent-1", "task-a", "explorer", SubAgentEvent::Done));
-        log.on_sub_agent_progress(&make_sub_agent_progress("parent-1", "task-b", "explorer", SubAgentEvent::Done));
+        log.on_sub_agent_progress(&sub_agent_event("parent-1", "task-a", "explorer", SubAgentEvent::Done));
+        log.on_sub_agent_progress(&sub_agent_event("parent-1", "task-b", "explorer", SubAgentEvent::Done));
 
         let agents = log.sub_agent_states("parent-1").unwrap();
         assert_eq!(agents.len(), 2);

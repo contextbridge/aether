@@ -1,5 +1,5 @@
 use super::support::*;
-use wisp_next::overlay::Overlay;
+use wisp_next::surface::Surface;
 
 fn server_status_entry(name: &str, status: McpServerStatus) -> McpServerStatusEntry {
     McpServerStatusEntry::new(name, status)
@@ -94,12 +94,7 @@ fn settings_overlay_shows_mcp_servers_entry() {
 
 #[test]
 fn settings_overlay_shows_provider_logins_when_auth_methods_present() {
-    let (mut app, _command_rx) = make_app_with_metadata(
-        std::path::PathBuf::from("."),
-        acp::SessionCapabilities::new(),
-        Vec::new(),
-        vec![auth_method("codex", "Codex", None)],
-    );
+    let (mut app, _command_rx) = AppBuilder::new().auth_methods(vec![auth_method("codex", "Codex", None)]).build();
 
     type_text(&mut app, "/settings");
     app.on_key(key(KeyCode::Tab));
@@ -209,12 +204,7 @@ fn selecting_non_oauth_server_is_noop() {
 
 #[test]
 fn provider_login_emits_authenticate() {
-    let (mut app, mut command_rx) = make_app_with_metadata(
-        std::path::PathBuf::from("."),
-        acp::SessionCapabilities::new(),
-        Vec::new(),
-        vec![auth_method("codex", "Codex", None)],
-    );
+    let (mut app, mut command_rx) = AppBuilder::new().auth_methods(vec![auth_method("codex", "Codex", None)]).build();
 
     type_text(&mut app, "/settings");
     app.on_key(key(KeyCode::Tab));
@@ -233,12 +223,8 @@ fn provider_login_emits_authenticate() {
 
 #[test]
 fn authenticate_complete_updates_correct_entry() {
-    let (mut app, _command_rx) = make_app_with_metadata(
-        std::path::PathBuf::from("."),
-        acp::SessionCapabilities::new(),
-        Vec::new(),
-        vec![auth_method("a", "A", None), auth_method("b", "B", None)],
-    );
+    let (mut app, _command_rx) =
+        AppBuilder::new().auth_methods(vec![auth_method("a", "A", None), auth_method("b", "B", None)]).build();
 
     // Open provider logins and start auth for "a"
     type_text(&mut app, "/settings");
@@ -259,12 +245,7 @@ fn authenticate_complete_updates_correct_entry() {
 
 #[test]
 fn authenticate_failed_resets_to_needs_login() {
-    let (mut app, _command_rx) = make_app_with_metadata(
-        std::path::PathBuf::from("."),
-        acp::SessionCapabilities::new(),
-        Vec::new(),
-        vec![auth_method("x", "X", None)],
-    );
+    let (mut app, _command_rx) = AppBuilder::new().auth_methods(vec![auth_method("x", "X", None)]).build();
 
     type_text(&mut app, "/settings");
     app.on_key(key(KeyCode::Tab));
@@ -283,12 +264,7 @@ fn authenticate_failed_resets_to_needs_login() {
 
 #[test]
 fn auth_methods_updated_replaces_provider_entries() {
-    let (mut app, _command_rx) = make_app_with_metadata(
-        std::path::PathBuf::from("."),
-        acp::SessionCapabilities::new(),
-        Vec::new(),
-        vec![auth_method("old", "Old", None)],
-    );
+    let (mut app, _command_rx) = AppBuilder::new().auth_methods(vec![auth_method("old", "Old", None)]).build();
 
     // Open provider logins
     type_text(&mut app, "/settings");
@@ -364,12 +340,12 @@ fn server_status_updated_while_pane_open_refreshes() {
 
 #[test]
 fn provider_login_pane_shows_all_statuses() {
-    let (mut app, _command_rx) = make_app_with_metadata(
-        std::path::PathBuf::from("."),
-        acp::SessionCapabilities::new(),
-        Vec::new(),
-        vec![auth_method("needs", "NeedsLogin", None), auth_method("authd", "Authed", Some("authenticated"))],
-    );
+    let (mut app, _command_rx) = AppBuilder::new()
+        .auth_methods(vec![
+            auth_method("needs", "NeedsLogin", None),
+            auth_method("authd", "Authed", Some("authenticated")),
+        ])
+        .build();
 
     type_text(&mut app, "/settings");
     app.on_key(key(KeyCode::Tab));
@@ -407,12 +383,7 @@ fn esc_from_server_status_returns_to_menu() {
 
 #[test]
 fn esc_from_provider_login_returns_to_menu() {
-    let (mut app, _command_rx) = make_app_with_metadata(
-        std::path::PathBuf::from("."),
-        acp::SessionCapabilities::new(),
-        Vec::new(),
-        vec![auth_method("x", "X", None)],
-    );
+    let (mut app, _command_rx) = AppBuilder::new().auth_methods(vec![auth_method("x", "X", None)]).build();
 
     type_text(&mut app, "/settings");
     app.on_key(key(KeyCode::Tab));
@@ -704,7 +675,7 @@ fn settings_builtin_is_listed_in_command_picker() {
     assert!(app.composer().has_overlay());
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("/settings"), "built-in /settings should be in command picker:\n{viewport}");
@@ -724,19 +695,15 @@ fn settings_esc_closes_overlay() {
 
 #[test]
 fn settings_overlay_renders_on_terminal() {
-    let (mut app, _command_rx) = make_app_with_metadata(
-        std::path::PathBuf::from("."),
-        acp::SessionCapabilities::new(),
-        vec![select_option("model", "gpt-4o"), select_option("mode", "code")],
-        Vec::new(),
-    );
+    let (mut app, _command_rx) =
+        AppBuilder::new().config_options(vec![select_option("model", "gpt-4o"), select_option("mode", "code")]).build();
 
     type_text(&mut app, "/settings");
     app.on_key(key(KeyCode::Tab));
     assert!(app.has_modal());
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(
@@ -758,7 +725,7 @@ fn settings_over_renders_with_no_config_options() {
     assert!(app.has_modal());
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(
@@ -773,25 +740,24 @@ fn settings_overlay_render_clears_covered_buffer_cells() {
     let mut overlay = wisp_next::settings_overlay::SettingsOverlay::new(&options, Vec::new(), &[]);
     let area = ratatui::layout::Rect::new(0, 0, 40, 15);
     let mut buffer = Buffer::filled(area, Cell::new("X"));
+    let theme = Theme::default();
+    let mut highlighter = wisp_next::syntax::SyntaxHighlighter::new();
+    let mut cx =
+        wisp_next::render_context::RenderContext { theme: &theme, highlighter: &mut highlighter, theme_generation: 0 };
 
-    overlay.render(area, &mut buffer, &Theme::default());
+    overlay.render(area, &mut buffer, &mut cx);
 
     assert!(!buffer_text(&buffer).contains('X'), "overlay must clear every covered cell");
 }
 
 #[test]
 fn settings_overlay_clears_conversation_content_behind_it() {
-    let (mut app, _command_rx) = make_app_with_metadata(
-        std::path::PathBuf::from("."),
-        acp::SessionCapabilities::new(),
-        vec![select_option("model", "gpt-4o")],
-        Vec::new(),
-    );
+    let (mut app, _command_rx) = AppBuilder::new().config_options(vec![select_option("model", "gpt-4o")]).build();
     submit_prompt(&mut app, "CHAT_CONTENT_MUST_NOT_SHOW_THROUGH_SETTINGS");
     app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
     type_text(&mut app, "/settings");
@@ -808,12 +774,8 @@ fn settings_overlay_clears_conversation_content_behind_it() {
 
 #[test]
 fn settings_overlay_still_valid_after_scrollback() {
-    let (mut app, _command_rx) = make_app_with_metadata(
-        std::path::PathBuf::from("."),
-        acp::SessionCapabilities::new(),
-        vec![select_option("model", "gpt-4o"), select_option("mode", "code")],
-        Vec::new(),
-    );
+    let (mut app, _command_rx) =
+        AppBuilder::new().config_options(vec![select_option("model", "gpt-4o"), select_option("mode", "code")]).build();
 
     // Fill transcript with content to push scrollback
     for i in 0..30 {
@@ -822,7 +784,7 @@ fn settings_overlay_still_valid_after_scrollback() {
     app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
@@ -838,18 +800,13 @@ fn settings_overlay_still_valid_after_scrollback() {
 
 #[test]
 fn settings_overlay_renders_at_narrow_width() {
-    let (mut app, _command_rx) = make_app_with_metadata(
-        std::path::PathBuf::from("."),
-        acp::SessionCapabilities::new(),
-        vec![select_option("model", "gpt-4o")],
-        Vec::new(),
-    );
+    let (mut app, _command_rx) = AppBuilder::new().config_options(vec![select_option("model", "gpt-4o")]).build();
 
     type_text(&mut app, "/settings");
     app.on_key(key(KeyCode::Tab));
 
     let mut terminal = make_terminal_with_width(30);
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(
@@ -860,19 +817,15 @@ fn settings_overlay_renders_at_narrow_width() {
 
 #[test]
 fn settings_overlay_renders_at_short_height() {
-    let (mut app, _command_rx) = make_app_with_metadata(
-        std::path::PathBuf::from("."),
-        acp::SessionCapabilities::new(),
-        vec![select_option("model", "gpt-4o"), select_option("mode", "code")],
-        Vec::new(),
-    );
+    let (mut app, _command_rx) =
+        AppBuilder::new().config_options(vec![select_option("model", "gpt-4o"), select_option("mode", "code")]).build();
 
     type_text(&mut app, "/settings");
     app.on_key(key(KeyCode::Tab));
 
     let mut terminal = make_terminal_with_width(40);
     terminal.backend_mut().resize(40, 8);
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(
@@ -883,10 +836,8 @@ fn settings_overlay_renders_at_short_height() {
 
 #[test]
 fn settings_selecting_option_emits_config_option() {
-    let (mut app, mut command_rx) = make_app_with_metadata(
-        std::path::PathBuf::from("."),
-        acp::SessionCapabilities::new(),
-        vec![acp::SessionConfigOption::select(
+    let (mut app, mut command_rx) = AppBuilder::new()
+        .config_options(vec![acp::SessionConfigOption::select(
             "model",
             "Model",
             "gpt-4o",
@@ -894,9 +845,8 @@ fn settings_selecting_option_emits_config_option() {
                 acp::SessionConfigSelectOption::new("gpt-4o", "GPT-4o"),
                 acp::SessionConfigSelectOption::new("claude", "Claude"),
             ],
-        )],
-        Vec::new(),
-    );
+        )])
+        .build();
 
     type_text(&mut app, "/settings");
     app.on_key(key(KeyCode::Tab));
@@ -921,10 +871,8 @@ fn settings_selecting_option_emits_config_option() {
 
 #[test]
 fn settings_multi_select_opens_model_selector() {
-    let (mut app, _command_rx) = make_app_with_metadata(
-        std::path::PathBuf::from("."),
-        acp::SessionCapabilities::new(),
-        vec![{
+    let (mut app, _command_rx) = AppBuilder::new()
+        .config_options(vec![{
             let mut opt = acp::SessionConfigOption::select(
                 "model",
                 "Model",
@@ -938,9 +886,8 @@ fn settings_multi_select_opens_model_selector() {
             meta.insert("multi_select".to_string(), serde_json::Value::Bool(true));
             opt = opt.meta(Some(meta));
             opt
-        }],
-        Vec::new(),
-    );
+        }])
+        .build();
 
     type_text(&mut app, "/settings");
     app.on_key(key(KeyCode::Tab));
@@ -951,7 +898,7 @@ fn settings_multi_select_opens_model_selector() {
     app.on_key(key(KeyCode::Enter));
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("Model search"), "should show model selector:\n{viewport}");
@@ -959,10 +906,8 @@ fn settings_multi_select_opens_model_selector() {
 
 #[test]
 fn settings_multi_select_toggle_and_confirm() {
-    let (mut app, mut command_rx) = make_app_with_metadata(
-        std::path::PathBuf::from("."),
-        acp::SessionCapabilities::new(),
-        vec![{
+    let (mut app, mut command_rx) = AppBuilder::new()
+        .config_options(vec![{
             let mut opt = acp::SessionConfigOption::select(
                 "model",
                 "Model",
@@ -976,9 +921,8 @@ fn settings_multi_select_toggle_and_confirm() {
             meta.insert("multi_select".to_string(), serde_json::Value::Bool(true));
             opt = opt.meta(Some(meta));
             opt
-        }],
-        Vec::new(),
-    );
+        }])
+        .build();
 
     type_text(&mut app, "/settings");
     app.on_key(key(KeyCode::Tab));
@@ -1000,12 +944,7 @@ fn settings_multi_select_toggle_and_confirm() {
 
 #[test]
 fn config_option_update_refreshes_settings_overlay() {
-    let (mut app, _command_rx) = make_app_with_metadata(
-        std::path::PathBuf::from("."),
-        acp::SessionCapabilities::new(),
-        vec![select_option("model", "gpt-4o")],
-        Vec::new(),
-    );
+    let (mut app, _command_rx) = AppBuilder::new().config_options(vec![select_option("model", "gpt-4o")]).build();
 
     type_text(&mut app, "/settings");
     app.on_key(key(KeyCode::Tab));
@@ -1073,12 +1012,7 @@ fn new_session_clears_settings_overlay() {
 
 #[test]
 fn settings_composer_capture_prevents_normal_input() {
-    let (mut app, _command_rx) = make_app_with_metadata(
-        std::path::PathBuf::from("."),
-        acp::SessionCapabilities::new(),
-        vec![select_option("model", "gpt-4o")],
-        Vec::new(),
-    );
+    let (mut app, _command_rx) = AppBuilder::new().config_options(vec![select_option("model", "gpt-4o")]).build();
 
     type_text(&mut app, "/settings");
     app.on_key(key(KeyCode::Tab));
@@ -1093,19 +1027,14 @@ fn settings_composer_capture_prevents_normal_input() {
 
 #[test]
 fn settings_theme_entry_is_injected_first() {
-    let (mut app, _command_rx) = make_app_with_metadata(
-        std::path::PathBuf::from("."),
-        acp::SessionCapabilities::new(),
-        vec![select_option("model", "gpt-4o")],
-        Vec::new(),
-    );
+    let (mut app, _command_rx) = AppBuilder::new().config_options(vec![select_option("model", "gpt-4o")]).build();
 
     type_text(&mut app, "/settings");
     app.on_key(key(KeyCode::Tab));
     assert!(app.has_modal());
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("Theme:"), "Theme entry should render first:\n{viewport}");
@@ -1113,19 +1042,14 @@ fn settings_theme_entry_is_injected_first() {
 
 #[test]
 fn settings_theme_picker_opens_and_shows_default() {
-    let (mut app, _command_rx) = make_app_with_metadata(
-        std::path::PathBuf::from("."),
-        acp::SessionCapabilities::new(),
-        vec![select_option("model", "gpt-4o")],
-        Vec::new(),
-    );
+    let (mut app, _command_rx) = AppBuilder::new().config_options(vec![select_option("model", "gpt-4o")]).build();
 
     type_text(&mut app, "/settings");
     app.on_key(key(KeyCode::Tab));
     app.on_key(key(KeyCode::Enter)); // Open Theme picker (first entry)
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("Default"), "Theme picker should show Default option:\n{viewport}");
@@ -1134,12 +1058,7 @@ fn settings_theme_picker_opens_and_shows_default() {
 
 #[test]
 fn settings_theme_selection_returns_to_menu() {
-    let (mut app, _command_rx) = make_app_with_metadata(
-        std::path::PathBuf::from("."),
-        acp::SessionCapabilities::new(),
-        vec![select_option("model", "gpt-4o")],
-        Vec::new(),
-    );
+    let (mut app, _command_rx) = AppBuilder::new().config_options(vec![select_option("model", "gpt-4o")]).build();
 
     type_text(&mut app, "/settings");
     app.on_key(key(KeyCode::Tab));
@@ -1147,7 +1066,7 @@ fn settings_theme_selection_returns_to_menu() {
     app.on_key(key(KeyCode::Enter)); // Confirm default
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("Theme: Default"), "Should return to menu with Default selected:\n{viewport}");
@@ -1155,15 +1074,14 @@ fn settings_theme_selection_returns_to_menu() {
 
 #[test]
 fn settings_theme_empty_file_list_shows_only_default() {
-    let (mut app, _command_rx) =
-        make_app_with_metadata(std::path::PathBuf::from("."), acp::SessionCapabilities::new(), Vec::new(), Vec::new());
+    let (mut app, _command_rx) = AppBuilder::new().build();
 
     type_text(&mut app, "/settings");
     app.on_key(key(KeyCode::Tab));
     app.on_key(key(KeyCode::Enter)); // Open Theme picker
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("Default"), "Should show Default theme option:\n{viewport}");
@@ -1173,12 +1091,7 @@ fn settings_theme_empty_file_list_shows_only_default() {
 
 #[test]
 fn theme_entry_preserved_after_config_option_update() {
-    let (mut app, _command_rx) = make_app_with_metadata(
-        std::path::PathBuf::from("."),
-        acp::SessionCapabilities::new(),
-        vec![select_option("model", "gpt-4o")],
-        Vec::new(),
-    );
+    let (mut app, _command_rx) = AppBuilder::new().config_options(vec![select_option("model", "gpt-4o")]).build();
 
     type_text(&mut app, "/settings");
     app.on_key(key(KeyCode::Tab));
@@ -1191,7 +1104,7 @@ fn theme_entry_preserved_after_config_option_update() {
     assert!(app.has_modal());
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("Theme:"), "Theme entry must survive ConfigOptionUpdate:\n{viewport}");
@@ -1199,12 +1112,7 @@ fn theme_entry_preserved_after_config_option_update() {
 
 #[test]
 fn theme_selection_keeps_overlay_open_and_refreshes_display() {
-    let (mut app, _command_rx) = make_app_with_metadata(
-        std::path::PathBuf::from("."),
-        acp::SessionCapabilities::new(),
-        vec![select_option("model", "gpt-4o")],
-        Vec::new(),
-    );
+    let (mut app, _command_rx) = AppBuilder::new().config_options(vec![select_option("model", "gpt-4o")]).build();
 
     type_text(&mut app, "/settings");
     app.on_key(key(KeyCode::Tab));
@@ -1215,7 +1123,7 @@ fn theme_selection_keeps_overlay_open_and_refreshes_display() {
     assert!(app.has_modal(), "Overlay must stay open after theme selection");
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("Theme: Default"), "Theme should show Default after selection:\n{viewport}");
@@ -1223,10 +1131,8 @@ fn theme_selection_keeps_overlay_open_and_refreshes_display() {
 
 #[test]
 fn model_selector_provider_heading_does_not_skip_rows() {
-    let (mut app, _command_rx) = make_app_with_metadata(
-        std::path::PathBuf::from("."),
-        acp::SessionCapabilities::new(),
-        vec![{
+    let (mut app, _command_rx) = AppBuilder::new()
+        .config_options(vec![{
             let mut opt = acp::SessionConfigOption::select(
                 "model",
                 "Model",
@@ -1242,9 +1148,8 @@ fn model_selector_provider_heading_does_not_skip_rows() {
             meta.insert("multi_select".to_string(), serde_json::Value::Bool(true));
             opt = opt.meta(Some(meta));
             opt
-        }],
-        Vec::new(),
-    );
+        }])
+        .build();
 
     type_text(&mut app, "/settings");
     app.on_key(key(KeyCode::Tab));
@@ -1252,7 +1157,7 @@ fn model_selector_provider_heading_does_not_skip_rows() {
     app.on_key(key(KeyCode::Enter)); // Open model selector
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     // All four models must appear — headings should not consume model rows
@@ -1277,12 +1182,7 @@ fn model_selector_skips_disabled_models_and_scrolls_to_the_end() {
     let mut meta = serde_json::Map::new();
     meta.insert("multi_select".to_string(), serde_json::Value::Bool(true));
     model_option = model_option.meta(Some(meta));
-    let (mut app, _command_rx) = make_app_with_metadata(
-        std::path::PathBuf::from("."),
-        acp::SessionCapabilities::new(),
-        vec![model_option],
-        Vec::new(),
-    );
+    let (mut app, _command_rx) = AppBuilder::new().config_options(vec![model_option]).build();
 
     type_text(&mut app, "/settings");
     app.on_key(key(KeyCode::Tab));
@@ -1293,7 +1193,7 @@ fn model_selector_skips_disabled_models_and_scrolls_to_the_end() {
     }
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("Model 14"), "last enabled model should be focused and visible:\n{viewport}");
@@ -1306,10 +1206,8 @@ fn model_selector_skips_disabled_models_and_scrolls_to_the_end() {
 
 #[test]
 fn model_selector_focused_item_visible_with_provider_headings() {
-    let (mut app, _command_rx) = make_app_with_metadata(
-        std::path::PathBuf::from("."),
-        acp::SessionCapabilities::new(),
-        vec![{
+    let (mut app, _command_rx) = AppBuilder::new()
+        .config_options(vec![{
             let mut opt = acp::SessionConfigOption::select(
                 "model",
                 "Model",
@@ -1326,9 +1224,8 @@ fn model_selector_focused_item_visible_with_provider_headings() {
             meta.insert("multi_select".to_string(), serde_json::Value::Bool(true));
             opt = opt.meta(Some(meta));
             opt
-        }],
-        Vec::new(),
-    );
+        }])
+        .build();
 
     type_text(&mut app, "/settings");
     app.on_key(key(KeyCode::Tab));
@@ -1341,7 +1238,7 @@ fn model_selector_focused_item_visible_with_provider_headings() {
     }
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("PaLM"), "Focused last item with headings should be visible:\n{viewport}");

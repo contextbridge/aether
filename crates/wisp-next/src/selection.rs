@@ -1,3 +1,4 @@
+use ratatui::layout::Rect;
 use ratatui::widgets::ListState;
 
 /// Cursor and scroll offset for a list of `len` items.
@@ -5,9 +6,13 @@ use ratatui::widgets::ListState;
 /// `len` is supplied per call rather than stored, so one state can outlive the
 /// collection it indexes: filters, reloads, and live updates all change `len`
 /// without invalidating the selection.
+///
+/// Scrolling the selection into view is [`List`](ratatui::widgets::List)'s job:
+/// it rewrites `offset` during rendering so the selected row is always drawn.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SelectionState {
     list: ListState,
+    rows_area: Rect,
 }
 
 impl SelectionState {
@@ -15,18 +20,6 @@ impl SelectionState {
         let mut state = Self::default();
         state.select_first(len);
         state
-    }
-
-    pub fn ensure_visible(&mut self, len: usize, visible_rows: usize) {
-        self.clamp(len);
-        let Some(selected) = self.selected() else {
-            return;
-        };
-        if selected < self.offset() {
-            *self.list.offset_mut() = selected;
-        } else if visible_rows > 0 && selected >= self.offset().saturating_add(visible_rows) {
-            *self.list.offset_mut() = selected + 1 - visible_rows;
-        }
     }
 
     pub fn selected(&self) -> Option<usize> {
@@ -49,6 +42,28 @@ impl SelectionState {
 
     pub fn select_row(&mut self, visible_row: usize, len: usize) {
         self.select(self.offset().checked_add(visible_row), len);
+    }
+
+    /// Records where the rows were drawn, so clicks can be mapped back to an
+    /// index without every caller re-deriving the headers and borders above
+    /// them. Called from rendering.
+    pub fn set_rows_area(&mut self, area: Rect) {
+        self.rows_area = area;
+    }
+
+    /// Where the rows were last drawn, for hit-testing a click against a pane.
+    pub fn rows_area(&self) -> Rect {
+        self.rows_area
+    }
+
+    /// Selects the row drawn at terminal `row`, reporting whether one was hit.
+    /// Rows outside the last drawn area leave the selection alone.
+    pub fn select_at(&mut self, row: u16, len: usize) -> bool {
+        if row < self.rows_area.y || row >= self.rows_area.bottom() {
+            return false;
+        }
+        self.select_row(usize::from(row - self.rows_area.y), len);
+        self.selected().is_some()
     }
 
     pub fn previous(&mut self, len: usize) {
@@ -135,17 +150,6 @@ mod tests {
         assert_eq!(state.selected(), Some(0));
         state.clamp(0);
         assert_eq!(state.selected(), None);
-    }
-
-    #[test]
-    fn keeps_selection_inside_visible_window() {
-        let mut state = SelectionState::new(10);
-        state.select(Some(7), 10);
-        state.ensure_visible(10, 3);
-        assert_eq!(state.offset(), 5);
-        state.select(Some(2), 10);
-        state.ensure_visible(10, 3);
-        assert_eq!(state.offset(), 2);
     }
 
     #[test]

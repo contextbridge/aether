@@ -28,78 +28,105 @@ pub(crate) use tokio::task::LocalSet;
 pub(crate) use wisp_next::app::{App, AppConfig, HistoryItem};
 pub(crate) use wisp_next::composer::Composer;
 pub(crate) use wisp_next::picker::CommandEntry;
-pub(crate) use wisp_next::presentation::TranscriptRenderer;
+pub(crate) use wisp_next::presentation::Presenter;
 pub(crate) use wisp_next::render::sync_terminal as sync_terminal_with_renderer;
 pub(crate) use wisp_next::screens::git_diff::GitDiffEvent;
 pub(crate) use wisp_next::settings::UiSettings;
 pub(crate) use wisp_next::theme::Theme;
 pub(crate) use wisp_next::{inline_viewport_height, workspace_status::WorkspaceStatus};
 
+/// Builds an `App` wired to a recording (or failable) prompt handle.
+///
+/// Defaults match the plain `make_app()` case; each method turns on exactly the
+/// one thing a test cares about.
+#[derive(Default)]
+pub(crate) struct AppBuilder {
+    working_dir: Option<std::path::PathBuf>,
+    capabilities: AetherCapabilities,
+    config_options: Vec<acp::SessionConfigOption>,
+    auth_methods: Vec<acp::AuthMethod>,
+    session_capabilities: Option<acp::SessionCapabilities>,
+}
+
+impl AppBuilder {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn working_dir(mut self, working_dir: impl Into<std::path::PathBuf>) -> Self {
+        self.working_dir = Some(working_dir.into());
+        self
+    }
+
+    pub(crate) fn config_options(mut self, options: Vec<acp::SessionConfigOption>) -> Self {
+        self.config_options = options;
+        self
+    }
+
+    pub(crate) fn auth_methods(mut self, methods: Vec<acp::AuthMethod>) -> Self {
+        self.auth_methods = methods;
+        self
+    }
+
+    /// Overrides the capabilities wholesale, for tests that care about metadata
+    /// the individual toggles do not cover.
+    pub(crate) fn session_capabilities(mut self, capabilities: acp::SessionCapabilities) -> Self {
+        self.session_capabilities = Some(capabilities);
+        self
+    }
+
+    pub(crate) fn prompt_search(mut self) -> Self {
+        self.capabilities.prompt_search = true;
+        self
+    }
+
+    pub(crate) fn session_preview(mut self) -> Self {
+        self.capabilities.session_preview = true;
+        self
+    }
+
+    pub(crate) fn workspace_move(mut self) -> Self {
+        self.capabilities.workspace_move = true;
+        self
+    }
+
+    /// Builds against a handle that records every command it is given.
+    pub(crate) fn build(self) -> (App, UnboundedReceiver<PromptCommand>) {
+        let (prompt_handle, command_rx) = AcpPromptHandle::recording();
+        (self.build_with(prompt_handle), command_rx)
+    }
+
+    /// Builds against a handle whose commands fail once the returned flag is set.
+    pub(crate) fn build_failable(self) -> (App, Arc<AtomicBool>, UnboundedReceiver<PromptCommand>) {
+        let (prompt_handle, fail_signal, command_rx) = AcpPromptHandle::failable();
+        (self.build_with(prompt_handle), fail_signal, command_rx)
+    }
+
+    fn build_with(self, prompt_handle: AcpPromptHandle) -> App {
+        let session_capabilities = self
+            .session_capabilities
+            .unwrap_or_else(|| acp::SessionCapabilities::new().meta(Some(self.capabilities.to_meta())));
+        App::new(AppConfig {
+            session_id: SessionId::new("test-session"),
+            agent_name: "aether".to_string(),
+            prompt_capabilities: acp::PromptCapabilities::new(),
+            session_capabilities,
+            config_options: self.config_options,
+            auth_methods: self.auth_methods,
+            workspace_status: WorkspaceStatus::new("~/code/demo", Some("main".to_string())),
+            prompt_handle,
+            working_dir: self.working_dir.unwrap_or_else(|| std::path::PathBuf::from(".")),
+            settings: UiSettings::default(),
+        })
+    }
+}
+
 pub(crate) fn make_app() -> (App, UnboundedReceiver<PromptCommand>) {
-    make_app_in(std::path::PathBuf::from("."))
+    AppBuilder::new().build()
 }
 
 pub(crate) fn make_app_in(working_dir: std::path::PathBuf) -> (App, UnboundedReceiver<PromptCommand>) {
-    make_app_with_metadata(working_dir, acp::SessionCapabilities::new(), Vec::new(), Vec::new())
-}
-
-pub(crate) fn make_app_with_metadata(
-    working_dir: std::path::PathBuf,
-    session_capabilities: acp::SessionCapabilities,
-    config_options: Vec<acp::SessionConfigOption>,
-    auth_methods: Vec<acp::AuthMethod>,
-) -> (App, UnboundedReceiver<PromptCommand>) {
-    let (prompt_handle, command_rx) = AcpPromptHandle::recording();
-    let app = build_app_with_handle(working_dir, session_capabilities, config_options, auth_methods, prompt_handle);
-    (app, command_rx)
-}
-
-pub(crate) fn make_failable_app() -> (App, Arc<AtomicBool>, UnboundedReceiver<PromptCommand>) {
-    let (prompt_handle, fail_signal, command_rx) = AcpPromptHandle::failable();
-    let app = build_app_with_handle(
-        std::path::PathBuf::from("."),
-        acp::SessionCapabilities::new(),
-        Vec::new(),
-        Vec::new(),
-        prompt_handle,
-    );
-    (app, fail_signal, command_rx)
-}
-
-pub(crate) fn make_failable_app_with_prompt_search() -> (App, Arc<AtomicBool>, UnboundedReceiver<PromptCommand>) {
-    let session_capabilities = acp::SessionCapabilities::new().meta(Some(
-        AetherCapabilities { prompt_search: true, session_preview: false, workspace_move: false }.to_meta(),
-    ));
-    let (prompt_handle, fail_signal, command_rx) = AcpPromptHandle::failable();
-    let app = build_app_with_handle(
-        std::path::PathBuf::from("."),
-        session_capabilities,
-        Vec::new(),
-        Vec::new(),
-        prompt_handle,
-    );
-    (app, fail_signal, command_rx)
-}
-
-pub(crate) fn build_app_with_handle(
-    working_dir: std::path::PathBuf,
-    session_capabilities: acp::SessionCapabilities,
-    config_options: Vec<acp::SessionConfigOption>,
-    auth_methods: Vec<acp::AuthMethod>,
-    prompt_handle: AcpPromptHandle,
-) -> App {
-    App::new(AppConfig {
-        session_id: SessionId::new("test-session"),
-        agent_name: "aether".to_string(),
-        prompt_capabilities: acp::PromptCapabilities::new(),
-        session_capabilities,
-        config_options,
-        auth_methods,
-        workspace_status: WorkspaceStatus::new("~/code/demo", Some("main".to_string())),
-        prompt_handle,
-        working_dir,
-        settings: UiSettings::default(),
-    })
+    AppBuilder::new().working_dir(working_dir).build()
 }
 
 pub(crate) fn select_option(id: &str, current_value: &str) -> acp::SessionConfigOption {
@@ -118,10 +145,24 @@ pub(crate) fn reasoning_option(current: &str, levels: &[&str]) -> acp::SessionCo
 }
 
 pub(crate) fn mode_option(current: &str, modes: &[&str]) -> acp::SessionConfigOption {
-    let options: Vec<acp::SessionConfigSelectOption> =
-        modes.iter().map(|&mode| acp::SessionConfigSelectOption::new(mode.to_string(), mode.to_string())).collect();
-    acp::SessionConfigOption::select("mode", "Mode", current.to_string(), options)
+    acp::SessionConfigOption::select("mode", "Mode", current.to_string(), select_options(modes))
         .category(acp::SessionConfigOptionCategory::Mode)
+}
+
+/// A mode option whose values arrive under group headers rather than as a flat list.
+pub(crate) fn grouped_mode_option(current: &str, groups: &[(&str, &[&str])]) -> acp::SessionConfigOption {
+    let groups: Vec<acp::SessionConfigSelectGroup> = groups
+        .iter()
+        .map(|(name, modes)| {
+            acp::SessionConfigSelectGroup::new((*name).to_string(), (*name).to_string(), select_options(modes))
+        })
+        .collect();
+    acp::SessionConfigOption::select("mode", "Mode", current.to_string(), groups)
+        .category(acp::SessionConfigOptionCategory::Mode)
+}
+
+fn select_options(values: &[&str]) -> Vec<acp::SessionConfigSelectOption> {
+    values.iter().map(|&value| acp::SessionConfigSelectOption::new(value.to_string(), value.to_string())).collect()
 }
 
 pub(crate) fn make_terminal() -> Terminal<TestBackend> {
@@ -153,7 +194,7 @@ pub(crate) fn sync_terminal(
     terminal: &mut Terminal<TestBackend>,
     app: &mut App,
 ) -> Result<(), std::convert::Infallible> {
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(terminal, app, &mut renderer)
 }
 
@@ -366,17 +407,11 @@ pub(crate) fn user_message_chunk(text: &str) -> acp::SessionUpdate {
 }
 
 pub(crate) fn make_app_with_session_preview() -> (App, UnboundedReceiver<PromptCommand>) {
-    let session_capabilities = acp::SessionCapabilities::new().meta(Some(
-        AetherCapabilities { prompt_search: false, session_preview: true, workspace_move: false }.to_meta(),
-    ));
-    make_app_with_metadata(std::path::PathBuf::from("."), session_capabilities, Vec::new(), Vec::new())
+    AppBuilder::new().session_preview().build()
 }
 
 pub(crate) fn make_app_with_workspace_move() -> (App, UnboundedReceiver<PromptCommand>) {
-    let session_capabilities = acp::SessionCapabilities::new().meta(Some(
-        AetherCapabilities { prompt_search: false, session_preview: false, workspace_move: true }.to_meta(),
-    ));
-    make_app_with_metadata(std::path::PathBuf::from("."), session_capabilities, Vec::new(), Vec::new())
+    AppBuilder::new().workspace_move().build()
 }
 
 pub(crate) fn workspace_entry(path: &str, is_current: bool) -> WorkspaceEntry {
@@ -400,16 +435,5 @@ pub(crate) fn workspace_move_failed(error: &str) -> AcpEvent {
 }
 
 pub(crate) fn make_failable_app_with_workspace_move() -> (App, Arc<AtomicBool>, UnboundedReceiver<PromptCommand>) {
-    let session_capabilities = acp::SessionCapabilities::new().meta(Some(
-        AetherCapabilities { prompt_search: false, session_preview: false, workspace_move: true }.to_meta(),
-    ));
-    let (prompt_handle, fail_signal, command_rx) = AcpPromptHandle::failable();
-    let app = build_app_with_handle(
-        std::path::PathBuf::from("."),
-        session_capabilities,
-        Vec::new(),
-        Vec::new(),
-        prompt_handle,
-    );
-    (app, fail_signal, command_rx)
+    AppBuilder::new().workspace_move().build_failable()
 }

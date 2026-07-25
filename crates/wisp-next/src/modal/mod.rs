@@ -1,6 +1,7 @@
 mod form;
 mod url;
 
+use crate::render_context::RenderContext;
 use acp_utils::notifications::{
     CreateElicitationRequestParams, ElicitationAction, ElicitationParams, ElicitationResponse, McpNotification,
     UrlElicitationCompleteParams,
@@ -8,16 +9,15 @@ use acp_utils::notifications::{
 use agent_client_protocol::Responder;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Constraint, Rect};
+use ratatui::layout::{Constraint, Position, Rect};
 use ratatui::widgets::{Clear, Widget};
 use serde_json::Value;
 use std::sync::Arc;
 
 use self::form::{FormAction, FormModal};
 use self::url::UrlModal;
-use crate::overlay::{Overlay, OverlayMessage};
 use crate::selection::Direction;
-use crate::theme::Theme;
+use crate::surface::{Surface, SurfaceMessage};
 
 pub type BrowserOpener = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
 pub type ClipboardWriter = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
@@ -72,7 +72,7 @@ impl ElicitationModal {
         self.respond(ElicitationAction::Cancel, None);
     }
 
-    fn on_url_key(&mut self, key: KeyEvent) -> Vec<OverlayMessage> {
+    fn on_url_key(&mut self, key: KeyEvent) -> Vec<SurfaceMessage> {
         let ModalKind::Url(url) = &mut self.kind else {
             return Vec::new();
         };
@@ -80,7 +80,7 @@ impl ElicitationModal {
         match key.code {
             KeyCode::Esc => {
                 self.respond(ElicitationAction::Cancel, None);
-                return vec![OverlayMessage::Close];
+                return vec![SurfaceMessage::Close];
             }
             KeyCode::Enter => {
                 if let Err(error) = (self.browser_opener)(&url.url) {
@@ -112,35 +112,37 @@ impl ElicitationModal {
     }
 }
 
-impl Overlay for ElicitationModal {
-    fn on_key(&mut self, key: KeyEvent) -> Vec<OverlayMessage> {
+impl Surface for ElicitationModal {
+    /// A modal answers a request, so it owns every key: nothing falls through
+    /// to the shared list navigation.
+    fn on_surface_key(&mut self, key: KeyEvent) -> Option<Vec<SurfaceMessage>> {
         if !matches!(key.kind, crossterm::event::KeyEventKind::Press | crossterm::event::KeyEventKind::Repeat) {
-            return Vec::new();
+            return Some(Vec::new());
         }
         let ModalKind::Form(form) = &mut self.kind else {
-            return self.on_url_key(key);
+            return Some(self.on_url_key(key));
         };
-        match form.on_key(key) {
+        Some(match form.on_key(key) {
             FormAction::None => Vec::new(),
             FormAction::Cancel => {
                 self.respond(ElicitationAction::Cancel, None);
-                vec![OverlayMessage::Close]
+                vec![SurfaceMessage::Close]
             }
             FormAction::Accept(content) => {
                 self.respond(ElicitationAction::Accept, Some(content));
-                vec![OverlayMessage::Close]
+                vec![SurfaceMessage::Close]
             }
-        }
+        })
     }
 
-    fn scroll(&mut self, direction: Direction) -> Vec<OverlayMessage> {
+    fn scroll(&mut self, direction: Direction) -> Vec<SurfaceMessage> {
         if let ModalKind::Form(form) = &mut self.kind {
             form.scroll(direction);
         }
         Vec::new()
     }
 
-    fn click(&mut self, row: u16, _area: Rect) -> Vec<OverlayMessage> {
+    fn click(&mut self, row: u16, _column: u16) -> Vec<SurfaceMessage> {
         if let ModalKind::Form(form) = &mut self.kind {
             form.click(row);
         }
@@ -151,13 +153,14 @@ impl Overlay for ElicitationModal {
         matches!(self.kind, ModalKind::Form(_))
     }
 
-    fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
+    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
         let area = area.centered(Constraint::Percentage(80), Constraint::Percentage(80));
         Clear.render(area, buf);
-        match &self.kind {
-            ModalKind::Form(form) => form.render(area, buf, theme),
-            ModalKind::Url(url) => url.render(area, buf, theme),
+        match &mut self.kind {
+            ModalKind::Form(form) => form.render(area, buf, cx.theme),
+            ModalKind::Url(url) => url.render(area, buf, cx.theme),
         }
+        None
     }
 }
 
@@ -263,8 +266,8 @@ mod tests {
     }
 
     /// Whether the modal asked to be dismissed.
-    fn closes(messages: &[OverlayMessage]) -> bool {
-        messages.iter().any(|message| matches!(message, OverlayMessage::Close))
+    fn closes(messages: &[SurfaceMessage]) -> bool {
+        messages.iter().any(|message| matches!(message, SurfaceMessage::Close))
     }
 
     fn noop_handlers() -> (BrowserOpener, ClipboardWriter) {

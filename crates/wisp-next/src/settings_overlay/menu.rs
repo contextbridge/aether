@@ -1,10 +1,11 @@
 use super::{SettingsChange, SettingsMenuEntry, SettingsMenuEntryKind, SettingsMenuValue};
 use crate::selection::{Direction, SelectionState};
+use crate::session_config_view::{as_select, select_values};
 use crate::theme::Theme;
 use crate::wrap::truncate_to_width;
 use acp_utils::config_meta::{ConfigOptionMeta, SelectOptionMeta};
 use acp_utils::config_option_id::ConfigOptionId;
-use agent_client_protocol::schema::{SessionConfigKind, SessionConfigOption, SessionConfigSelectOptions};
+use agent_client_protocol::schema::SessionConfigOption;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -21,18 +22,8 @@ impl SettingsMenu {
             .iter()
             .filter(|opt| opt.id.0.as_ref() != ConfigOptionId::ReasoningEffort.as_str())
             .filter_map(|opt| {
-                let SessionConfigKind::Select(ref select) = opt.kind else {
-                    return None;
-                };
-
-                let flat_options = match &select.options {
-                    SessionConfigSelectOptions::Ungrouped(opts) => opts.clone(),
-                    SessionConfigSelectOptions::Grouped(groups) => {
-                        groups.iter().flat_map(|g| g.options.clone()).collect()
-                    }
-                    _ => return None,
-                };
-
+                let select = as_select(opt)?;
+                let flat_options = select_values(select);
                 if flat_options.is_empty() {
                     return None;
                 }
@@ -44,9 +35,9 @@ impl SettingsMenu {
                     .into_iter()
                     .map(|o| SettingsMenuValue {
                         value: o.value.0.to_string(),
-                        name: o.name,
+                        name: o.name.clone(),
                         is_disabled: o.description.as_deref().is_some_and(|d| d.starts_with("Unavailable:")),
-                        description: o.description,
+                        description: o.description.clone(),
                         meta: SelectOptionMeta::from_meta(o.meta.as_ref()),
                     })
                     .collect();
@@ -114,8 +105,9 @@ impl SettingsMenu {
         }
     }
 
-    pub(super) fn click_row(&mut self, row: usize) {
-        self.selection.select_row(row, self.entries.len());
+    /// Selects the entry drawn at terminal `row`, reporting whether one was hit.
+    pub(super) fn click_at(&mut self, row: u16) -> bool {
+        self.selection.select_at(row, self.entries.len())
     }
 
     pub(super) fn render(&mut self, area: Rect, buffer: &mut Buffer, theme: &Theme) {
@@ -142,6 +134,7 @@ impl SettingsMenu {
         let list = List::new(items)
             .highlight_style(Style::new().fg(theme.background).bg(theme.text_primary))
             .scroll_padding(1);
+        self.selection.set_rows_area(area);
         StatefulWidget::render(list, area, buffer, self.selection.list_state_mut());
     }
 

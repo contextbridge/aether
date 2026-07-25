@@ -1,6 +1,7 @@
 use super::{PaneOutcome, SettingsChange, SettingsMenuValue, SettingsPane};
 use crate::filterable_list::FilterableList;
 use crate::selection::Direction;
+use crate::surface::ListFilter;
 use crate::theme::Theme;
 use crate::wrap::truncate_to_width;
 use acp_utils::config_option_id::ConfigOptionId;
@@ -116,23 +117,22 @@ impl ModelSelector {
 }
 
 impl SettingsPane for ModelSelector {
-    fn on_key(&mut self, key: KeyEvent) -> PaneOutcome {
+    fn on_pane_key(&mut self, key: KeyEvent) -> Option<PaneOutcome> {
         match key.code {
-            KeyCode::Up => self.scroll(Direction::Backward),
-            KeyCode::Down => self.scroll(Direction::Forward),
             KeyCode::Tab => self.cycle_reasoning(Direction::Forward),
             KeyCode::BackTab => self.cycle_reasoning(Direction::Backward),
             KeyCode::Enter | KeyCode::Char(' ') => self.toggle_focused(),
-            KeyCode::Backspace => self.items.pop_query_char(),
-            KeyCode::Char(character) if !character.is_control() => self.items.push_query_char(character),
-            _ => {}
+            _ => return None,
         }
-        PaneOutcome::default()
+        Some(PaneOutcome::default())
     }
 
-    fn click(&mut self, row: usize, _height: usize) -> PaneOutcome {
-        if let Some(item_row) = row.checked_sub(usize::from(HEADER_ROWS)) {
-            self.items.select_row(item_row);
+    fn filter(&mut self) -> Option<&mut dyn ListFilter> {
+        Some(&mut self.items)
+    }
+
+    fn click(&mut self, row: u16) -> PaneOutcome {
+        if self.items.select_at(row) {
             self.toggle_focused();
         }
         PaneOutcome::default()

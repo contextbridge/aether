@@ -18,7 +18,7 @@ fn clear_is_builtin_and_issues_new_session_command() {
 fn clear_creates_new_session_and_resets_state() {
     let (mut app, mut command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
 
     submit_prompt(&mut app, "old message");
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
@@ -41,8 +41,7 @@ fn clear_creates_new_session_and_resets_state() {
 #[test]
 fn clear_restores_compatible_config_selections() {
     let options = vec![select_option("model", "opus"), mode_option("code", &["code", "plan", "ask"])];
-    let (mut app, mut command_rx) =
-        make_app_with_metadata(std::path::PathBuf::from("."), acp::SessionCapabilities::new(), options, Vec::new());
+    let (mut app, mut command_rx) = AppBuilder::new().config_options(options).build();
 
     type_text(&mut app, "/clear");
     app.on_key(key(KeyCode::Tab));
@@ -121,7 +120,7 @@ fn empty_session_list_shows_no_sessions() {
 
     assert!(app.has_session_picker());
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("No previous sessions"), "expected empty state:\n{viewport}");
@@ -146,7 +145,7 @@ fn esc_closes_session_picker() {
 
 #[test]
 fn new_session_send_failure_shows_transcript_error() {
-    let (mut app, fail_signal, mut command_rx) = make_failable_app();
+    let (mut app, fail_signal, mut command_rx) = AppBuilder::new().build_failable();
 
     fail_signal.store(true, Ordering::Relaxed);
     type_text(&mut app, "/clear");
@@ -164,7 +163,7 @@ fn new_session_send_failure_shows_transcript_error() {
 
 #[test]
 fn list_sessions_send_failure_shows_transcript_error() {
-    let (mut app, fail_signal, mut command_rx) = make_failable_app();
+    let (mut app, fail_signal, mut command_rx) = AppBuilder::new().build_failable();
 
     fail_signal.store(true, Ordering::Relaxed);
     type_text(&mut app, "/resume");
@@ -182,7 +181,7 @@ fn list_sessions_send_failure_shows_transcript_error() {
 
 #[test]
 fn load_session_send_failure_cleans_up_buffer_and_shows_error() {
-    let (mut app, fail_signal, mut command_rx) = make_failable_app();
+    let (mut app, fail_signal, mut command_rx) = AppBuilder::new().build_failable();
 
     type_text(&mut app, "/resume");
     app.on_key(key(KeyCode::Tab));
@@ -267,7 +266,7 @@ fn stale_preview_does_not_replace_current() {
     app.on_acp_event(AcpEvent::SessionPreviewLoaded(session_preview_response("sess-1")));
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(!viewport.contains("hello"), "stale preview should not be shown:\n{viewport}");
@@ -290,7 +289,7 @@ fn session_preview_failure_shows_error() {
     });
 
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("server unreachable"), "expected error in preview:\n{viewport}");
@@ -317,7 +316,7 @@ fn session_loading_buffer_queues_updates_then_replays() {
     ));
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(!viewport.contains("buffered message"), "buffered updates should not render yet:\n{viewport}");
@@ -334,8 +333,7 @@ fn session_loading_buffer_queues_updates_then_replays() {
 #[test]
 fn loaded_session_uses_server_config_values() {
     let options = vec![select_option("model", "opus"), mode_option("plan", &["code", "plan", "ask"])];
-    let (mut app, mut command_rx) =
-        make_app_with_metadata(std::path::PathBuf::from("."), acp::SessionCapabilities::new(), options, Vec::new());
+    let (mut app, mut command_rx) = AppBuilder::new().config_options(options).build();
 
     type_text(&mut app, "/resume");
     app.on_key(key(KeyCode::Tab));
@@ -400,7 +398,7 @@ fn builtin_clear_appears_in_command_picker() {
     assert!(app.composer().has_overlay());
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("/clear"), "built-in /clear should be in command picker:\n{viewport}");
@@ -418,7 +416,7 @@ fn narrow_terminal_renders_session_picker_without_preview_pane() {
     app.on_acp_event(sessions_listed(vec![session_info("sess-1", "/tmp/one", "Session One", "2025-01-01T00:00:00Z")]));
 
     let mut terminal = make_terminal_with_width(60);
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("Session One"), "narrow picker should show session list:\n{viewport}");

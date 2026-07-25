@@ -7,7 +7,7 @@ use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use std::time::{Duration, Instant};
 use wisp_next::app::{App, AppConfig};
-use wisp_next::presentation::TranscriptRenderer;
+use wisp_next::presentation::Presenter;
 use wisp_next::render::sync_terminal;
 use wisp_next::settings::{StatusLineSegmentConfig, StatusLineSettings, StatusLineStyle, UiSettings};
 use wisp_next::workspace_status::WorkspaceStatus;
@@ -67,7 +67,7 @@ fn buffer_text(buffer: &Buffer) -> String {
 
 fn sync(app: &mut App, terminal: &mut ratatui::Terminal<TestBackend>) {
     let ui_settings = app.ui_settings().clone();
-    let mut renderer = TranscriptRenderer::new(&ui_settings);
+    let mut renderer = Presenter::new(&ui_settings);
     sync_terminal(terminal, app, &mut renderer).unwrap();
 }
 

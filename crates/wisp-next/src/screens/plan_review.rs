@@ -3,21 +3,23 @@ use agent_client_protocol::Responder;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
+
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{
-    Block, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, StatefulWidget, Widget,
-};
+use ratatui::widgets::{Block, List, ListItem, Paragraph, StatefulWidget, Widget};
 use utils::plan_review::{PlanReviewDecision, PlanReviewElicitationMeta};
 
 use crate::edit_buffer::{EditBuffer, apply_edit_key};
 use crate::plan_review::{
     PlanDocument, ReviewComment, SourceMarkdownLine, compile_feedback, render_markdown_source_lines,
 };
-use crate::screens::{MouseAction, RenderContext, Screen, ScreenOutcome};
+use crate::render_context::RenderContext;
+use crate::screens::MouseAction;
 use crate::selection::{Direction, SelectionState};
+use crate::surface::{Surface, SurfaceMessage};
 use crate::syntax::SyntaxHighlighter;
 use crate::theme::Theme;
+use crate::widgets::{block_cursor_spans, render_vertical_scrollbar};
 use crate::wrap::{truncate_to_width, wrap_line};
 
 const MIN_SPLIT_WIDTH: u16 = 60;
@@ -47,7 +49,8 @@ pub struct PlanReviewScreen {
     draft: Option<DraftComment>,
     focus: Focus,
     respond: Option<Box<dyn FnOnce(ElicitationResponse) + Send>>,
-    last_area: Rect,
+    /// Where the plan's rows were last drawn, for hit-testing clicks.
+    plan_rows_area: Rect,
 }
 
 impl PlanReviewScreen {
@@ -75,7 +78,7 @@ impl PlanReviewScreen {
             draft: None,
             focus: Focus::Plan,
             respond: Some(Box::new(respond)),
-            last_area: Rect::new(0, 0, 120, 40),
+            plan_rows_area: Rect::ZERO,
         }
     }
 
@@ -124,31 +127,29 @@ impl PlanReviewScreen {
         }
     }
 
+    /// Focuses whichever pane was clicked and moves its cursor to the clicked
+    /// row, hit-testing against the areas the last render recorded.
     fn click(&mut self, row: u16, column: u16) {
-        let Some(body_row) = row.checked_sub(1).map(usize::from) else {
-            return;
-        };
-        let area = self.last_area;
-        let outline_width = u16::try_from(u32::from(area.width) * OUTLINE_FRACTION / OUTLINE_TOTAL).unwrap_or(0);
-        if self.uses_split(area) && column < outline_width {
+        let position = Position::new(column, row);
+        if self.outline_selection.rows_area().contains(position) {
             self.focus = Focus::Outline;
-            let sections = self.document.outline.len();
-            if sections > 0 {
-                self.outline_selection.select_row(body_row, sections);
-            }
-        } else {
+            self.outline_selection.select_at(row, self.document.outline.len());
+            return;
+        }
+        if self.plan_rows_area.contains(position) {
             self.focus = Focus::Plan;
-            self.plan_cursor_line = (self.plan_scroll + body_row).min(self.source_line_max_index());
+            let offset = usize::from(row - self.plan_rows_area.y);
+            self.plan_cursor_line = (self.plan_scroll + offset).min(self.source_line_max_index());
         }
     }
 
-    fn handle_key(&mut self, key: KeyEvent) -> ScreenOutcome {
+    fn handle_key(&mut self, key: KeyEvent) -> Vec<SurfaceMessage> {
         if self.respond.is_none() {
-            return ScreenOutcome::Close;
+            return vec![SurfaceMessage::Close];
         }
         if self.draft.is_some() {
             self.handle_draft_key(key);
-            return ScreenOutcome::None;
+            return Vec::new();
         }
         if let Some(outcome) = self.decision_key(key) {
             return outcome;
@@ -157,11 +158,11 @@ impl PlanReviewScreen {
             Focus::Plan => self.handle_plan_key(key),
             Focus::Outline => self.handle_outline_key(key),
         }
-        ScreenOutcome::None
+        Vec::new()
     }
 
     /// Keys that end the review, available from either pane.
-    fn decision_key(&mut self, key: KeyEvent) -> Option<ScreenOutcome> {
+    fn decision_key(&mut self, key: KeyEvent) -> Option<Vec<SurfaceMessage>> {
         match key.code {
             KeyCode::Esc => self.respond(ElicitationAction::Cancel, None),
             KeyCode::Char('a') => {
@@ -176,11 +177,11 @@ impl PlanReviewScreen {
             }
             KeyCode::Char('u') => {
                 self.comments.pop();
-                return Some(ScreenOutcome::None);
+                return Some(Vec::new());
             }
             _ => return None,
         }
-        Some(ScreenOutcome::Close)
+        Some(vec![SurfaceMessage::Close])
     }
 
     fn handle_plan_key(&mut self, key: KeyEvent) {
@@ -261,7 +262,6 @@ impl PlanReviewScreen {
 
     #[allow(clippy::cast_possible_truncation)]
     fn render_screen(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
-        self.last_area = area;
         if area.height < 4 || area.width < 20 {
             Paragraph::new("Plan review view is too small").style(Style::new().fg(theme.error)).render(area, buf);
             return;
@@ -280,6 +280,8 @@ impl PlanReviewScreen {
             self.render_outline(outline_area, buf, theme);
             self.render_plan(plan_area, buf, theme);
         } else {
+            // No outline at this width, so no rows for a click to land on.
+            self.outline_selection.set_rows_area(Rect::ZERO);
             self.render_plan(body_area, buf, theme);
         }
 
@@ -305,11 +307,9 @@ impl PlanReviewScreen {
         let inner = block.inner(area);
         block.render(area, buf);
 
-        let height = inner.height as usize;
-        if height == 0 || self.document.outline.is_empty() {
+        if inner.height == 0 || self.document.outline.is_empty() {
             return;
         }
-        self.outline_selection.ensure_visible(self.document.outline.len(), height);
 
         let inner_width = inner.width.saturating_sub(1) as usize;
         let items = self.document.outline.iter().map(|section| {
@@ -324,11 +324,10 @@ impl PlanReviewScreen {
             Style::new().fg(theme.accent)
         };
         let list = List::new(items).highlight_symbol("> ").highlight_style(highlight_style);
+        self.outline_selection.set_rows_area(inner);
         StatefulWidget::render(list, inner, buf, self.outline_selection.list_state_mut());
 
-        let mut scrollbar_state =
-            ScrollbarState::new(self.document.outline.len()).position(self.outline_selection.offset());
-        StatefulWidget::render(Scrollbar::new(ScrollbarOrientation::VerticalRight), inner, buf, &mut scrollbar_state);
+        render_vertical_scrollbar(inner, buf, self.document.outline.len(), self.outline_selection.offset());
     }
 
     #[allow(clippy::cast_possible_truncation)]
@@ -339,6 +338,7 @@ impl PlanReviewScreen {
 
         let inner = block.inner(area);
         block.render(area, buf);
+        self.plan_rows_area = inner;
 
         let height = inner.height as usize;
         if height == 0 {
@@ -378,8 +378,7 @@ impl PlanReviewScreen {
             .collect();
 
         Paragraph::new(rows).scroll((u16::try_from(scroll).unwrap_or(u16::MAX), 0)).render(inner, buf);
-        let mut scrollbar_state = ScrollbarState::new(row_count).position(scroll);
-        StatefulWidget::render(Scrollbar::new(ScrollbarOrientation::VerticalRight), inner, buf, &mut scrollbar_state);
+        render_vertical_scrollbar(inner, buf, row_count, scroll);
     }
 
     /// Scrolls just enough to bring the cursor line back into view.
@@ -482,17 +481,24 @@ impl PlanReviewScreen {
     }
 }
 
-impl Screen for PlanReviewScreen {
-    fn on_key(&mut self, key: KeyEvent) -> ScreenOutcome {
-        self.handle_key(key)
+impl Surface for PlanReviewScreen {
+    /// The screen owns every key, so nothing falls through to the shared list
+    /// navigation.
+    fn on_surface_key(&mut self, key: KeyEvent) -> Option<Vec<SurfaceMessage>> {
+        Some(self.handle_key(key))
     }
 
-    fn on_mouse(&mut self, action: MouseAction, row: u16, column: u16) {
+    fn is_fullscreen(&self) -> bool {
+        true
+    }
+
+    fn on_mouse(&mut self, action: MouseAction, row: u16, column: u16) -> Vec<SurfaceMessage> {
         match action {
             MouseAction::ScrollUp => self.scroll(-1),
             MouseAction::ScrollDown => self.scroll(1),
             MouseAction::Click => self.click(row, column),
         }
+        Vec::new()
     }
 
     fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
@@ -530,13 +536,11 @@ fn draft_row(buffer: &EditBuffer, gutter_width: usize, theme: &Theme) -> Line<'s
         return row;
     }
 
-    let text = buffer.text();
-    let cursor = buffer.cursor();
-    let cursor_len = text[cursor..].chars().next().map_or(0, char::len_utf8);
-    let under_cursor = if cursor_len == 0 { " " } else { &text[cursor..cursor + cursor_len] };
-    row.push_span(Span::styled(text[..cursor].to_string(), Style::new().fg(theme.text_primary)));
-    row.push_span(Span::styled(under_cursor.to_string(), Style::new().fg(theme.background).bg(theme.accent)));
-    row.push_span(Span::styled(text[cursor + cursor_len..].to_string(), Style::new().fg(theme.text_primary)));
+    row.spans.extend(block_cursor_spans(
+        buffer,
+        Style::new().fg(theme.text_primary),
+        Style::new().fg(theme.background).bg(theme.accent),
+    ));
     row
 }
 

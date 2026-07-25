@@ -1,13 +1,13 @@
 use crate::selection::{Direction, SelectionState};
+use crate::surface::ListFilter;
 use crate::theme::Theme;
+use crate::widgets::render_vertical_scrollbar;
 use nucleo::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo::{Config, Matcher, Utf32Str};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
-use ratatui::widgets::{
-    Block, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, StatefulWidget, Widget,
-};
+use ratatui::widgets::{Block, List, ListItem, Paragraph, StatefulWidget, Widget};
 
 /// A list of `T` with a fuzzy-match filter and a persistent selection.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -59,14 +59,6 @@ impl<T> FilterableList<T> {
         self.selected_index().map(|index| &self.entries[index])
     }
 
-    /// Mutate the first entry matching `find`, whether or not it passes the
-    /// current filter. Used for out-of-band status updates.
-    pub fn update_first(&mut self, find: impl Fn(&T) -> bool, apply: impl FnOnce(&mut T)) {
-        if let Some(entry) = self.entries.iter_mut().find(|entry| find(entry)) {
-            apply(entry);
-        }
-    }
-
     pub fn push_query_char(&mut self, character: char) {
         self.query.push(character);
         self.refilter();
@@ -87,9 +79,11 @@ impl<T> FilterableList<T> {
         self.refilter();
     }
 
-    pub fn select_row(&mut self, row: usize) {
-        self.selection.select_row(row, self.filtered_len());
+    /// Selects the entry drawn at terminal `row`, reporting whether one was hit.
+    pub fn select_at(&mut self, row: u16) -> bool {
+        let hit = self.selection.select_at(row, self.filtered_len());
         self.clear_offset_when_empty();
+        hit
     }
 
     pub fn select_previous(&mut self) {
@@ -152,6 +146,16 @@ impl<T> FilterableList<T> {
     }
 }
 
+impl<T> ListFilter for FilterableList<T> {
+    fn push_query_char(&mut self, character: char) {
+        FilterableList::push_query_char(self, character);
+    }
+
+    fn pop_query_char(&mut self) {
+        FilterableList::pop_query_char(self);
+    }
+}
+
 /// A [`FilterableList`] rendered as a ratatui widget.
 pub struct FilterableListView<'a, T, F> {
     list: &'a mut FilterableList<T>,
@@ -206,11 +210,11 @@ where
             list.filtered_indices.iter().map(|&index| item(&list.entries[index])).collect();
         let highlight = highlight.unwrap_or_else(|| Style::new().fg(theme.text_primary).bg(theme.sidebar_bg));
         let widget = List::new(rows).highlight_style(highlight).scroll_padding(1);
+        list.selection.set_rows_area(inner);
         StatefulWidget::render(widget, inner, buf, list.selection.list_state_mut());
 
         if scrollbar {
-            let mut state = ScrollbarState::new(list.filtered_indices.len()).position(list.selection.offset());
-            StatefulWidget::render(Scrollbar::new(ScrollbarOrientation::VerticalRight), inner, buf, &mut state);
+            render_vertical_scrollbar(inner, buf, list.filtered_indices.len(), list.selection.offset());
         }
     }
 }

@@ -12,13 +12,11 @@ use ratatui::widgets::{List, ListItem, Paragraph, StatefulWidget, Widget};
 use std::path::Path;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PromptSearchMessage {
-    Cancel,
-    Confirm,
-    QueryChanged(String),
-    SelectionChanged,
-}
+const MAX_CWD_WIDTH: usize = 32;
+const CWD_GAP: usize = 2;
+const MIN_PROMPT_WIDTH: usize = 16;
+const ELLIPSIS: &str = "…";
+const ELLIPSIS_WIDTH: usize = 1;
 
 #[derive(Debug, Default)]
 pub struct PromptSearchPicker {
@@ -89,30 +87,33 @@ impl PromptSearchPicker {
         self.selection.next(self.results.len());
     }
 
-    pub fn select_row(&mut self, row: usize) {
-        self.selection.select_row(row, self.results.len());
+    /// Selects the result drawn at terminal `row`, if one is there.
+    pub fn select_at(&mut self, row: u16) {
+        self.selection.select_at(row, self.results.len());
     }
 
-    pub fn push_char(&mut self, c: char) -> PromptSearchMessage {
+    /// Appends `c` to the query, returning the query it produced.
+    pub fn push_char(&mut self, c: char) -> String {
         self.query.insert_char(c);
         self.refresh_query_state();
-        PromptSearchMessage::QueryChanged(self.query.text().to_string())
+        self.query.text().to_string()
     }
 
-    pub fn push_str(&mut self, text: &str) -> PromptSearchMessage {
+    /// Appends the printable part of `text` to the query, returning the query it
+    /// produced. Pastes that are entirely control characters leave it unchanged.
+    pub fn push_str(&mut self, text: &str) -> String {
         let sanitized: String = text.chars().filter(|c| !c.is_control()).collect();
-        if sanitized.is_empty() {
-            return PromptSearchMessage::QueryChanged(self.query.text().to_string());
+        if !sanitized.is_empty() {
+            self.query.insert_str(&sanitized);
+            self.refresh_query_state();
         }
-        self.query.insert_str(&sanitized);
-        self.refresh_query_state();
-        PromptSearchMessage::QueryChanged(self.query.text().to_string())
+        self.query.text().to_string()
     }
 
-    pub fn backspace(&mut self) -> PromptSearchMessage {
+    pub fn backspace(&mut self) -> String {
         self.query.backspace();
         self.refresh_query_state();
-        PromptSearchMessage::QueryChanged(self.query.text().to_string())
+        self.query.text().to_string()
     }
 
     pub fn height(&self, max_rows: usize) -> usize {
@@ -151,10 +152,10 @@ impl PromptSearchPicker {
             return;
         }
 
-        self.selection.ensure_visible(self.results.len(), usize::from(results_area.height));
         let width = usize::from(results_area.width.max(1));
         let items = self.results.iter().map(|result| ListItem::new(result_line(result, false, width, theme)));
         let list = List::new(items).highlight_style(Style::new().fg(theme.text_primary).bg(theme.sidebar_bg));
+        self.selection.set_rows_area(results_area);
         StatefulWidget::render(list, results_area, buf, self.selection.list_state_mut());
     }
 }
@@ -198,12 +199,6 @@ fn result_line(result: &PromptSearchResult, is_selected: bool, max_width: usize,
     }
     Line::from(spans)
 }
-
-const MAX_CWD_WIDTH: usize = 32;
-const CWD_GAP: usize = 2;
-const MIN_PROMPT_WIDTH: usize = 16;
-const ELLIPSIS: &str = "…";
-const ELLIPSIS_WIDTH: usize = 1;
 
 fn push_prompt_with_highlight(
     spans: &mut Vec<Span<'static>>,

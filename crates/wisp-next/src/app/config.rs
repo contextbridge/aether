@@ -1,7 +1,8 @@
 use super::{
-    App, ConfigOptionId, OverlayLayer, ReasoningEffort, SessionConfigOptionCategory, SessionConfigView,
-    SettingsMenuEntry, SettingsMenuEntryKind, SettingsMenuValue, UiSettings, acp,
+    App, ConfigOptionId, Layer, ReasoningEffort, SessionConfigOptionCategory, SessionConfigView, SettingsMenuEntry,
+    SettingsMenuEntryKind, SettingsMenuValue, UiSettings, acp,
 };
+use crate::session_config_view::{as_select, select_values};
 pub(super) fn is_cycleable_mode_option(option: &acp::SessionConfigOption) -> bool {
     matches!(option.kind, acp::SessionConfigKind::Select(_))
         && option.category == Some(SessionConfigOptionCategory::Mode)
@@ -9,22 +10,15 @@ pub(super) fn is_cycleable_mode_option(option: &acp::SessionConfigOption) -> boo
 
 pub(super) fn cycle_quick_option(config_options: &[acp::SessionConfigOption]) -> Option<(String, String)> {
     let option = config_options.iter().find(|option| is_cycleable_mode_option(option))?;
-
-    let acp::SessionConfigKind::Select(ref select) = option.kind else {
-        return None;
-    };
-
-    let acp::SessionConfigSelectOptions::Ungrouped(ref options) = select.options else {
-        return None;
-    };
-
-    if options.is_empty() {
+    let select = as_select(option)?;
+    let values = select_values(select);
+    if values.is_empty() {
         return None;
     }
 
-    let current_index = options.iter().position(|entry| entry.value == select.current_value).unwrap_or(0);
-    let next_index = (current_index + 1) % options.len();
-    options.get(next_index).map(|next| (option.id.0.to_string(), next.value.0.to_string()))
+    let current_index = values.iter().position(|entry| entry.value == select.current_value).unwrap_or(0);
+    let next_index = (current_index + 1) % values.len();
+    values.get(next_index).map(|next| (option.id.0.to_string(), next.value.0.to_string()))
 }
 
 pub(super) fn cycle_reasoning_option(config_options: &[acp::SessionConfigOption]) -> Option<(String, String)> {
@@ -50,13 +44,7 @@ pub(super) fn update_config_option_value(options: &mut [acp::SessionConfigOption
 pub(super) fn extract_config_selections(config_options: &[acp::SessionConfigOption]) -> Vec<(String, String)> {
     config_options
         .iter()
-        .filter_map(|option| {
-            if let acp::SessionConfigKind::Select(ref select) = option.kind {
-                Some((option.id.0.to_string(), select.current_value.0.to_string()))
-            } else {
-                None
-            }
-        })
+        .filter_map(|option| Some((option.id.0.to_string(), as_select(option)?.current_value.0.to_string())))
         .collect()
 }
 
@@ -77,7 +65,7 @@ impl App {
         } else {
             crate::settings::load_theme_file(value)
         });
-        if let OverlayLayer::Settings(overlay) = &mut self.overlay {
+        if let Layer::Settings(overlay) = &mut self.layer {
             overlay.apply_change(&crate::settings_overlay::SettingsChange {
                 config_id: acp_utils::config_option_id::THEME_CONFIG_ID.to_string(),
                 new_value: value.to_string(),

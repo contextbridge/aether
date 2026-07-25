@@ -1,6 +1,7 @@
 use super::{PaneOutcome, SettingsChange, SettingsMenuEntry, SettingsMenuValue, SettingsPane};
 use crate::filterable_list::FilterableList;
 use crate::selection::Direction;
+use crate::surface::ListFilter;
 use crate::theme::Theme;
 use crate::wrap::truncate_to_width;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -70,25 +71,16 @@ impl SettingsPicker {
 }
 
 impl SettingsPane for SettingsPicker {
-    fn on_key(&mut self, key: KeyEvent) -> PaneOutcome {
-        match key.code {
-            KeyCode::Up => self.scroll(Direction::Backward),
-            KeyCode::Down => self.scroll(Direction::Forward),
-            KeyCode::Enter => return self.confirm(),
-            KeyCode::Backspace => self.values.pop_query_char(),
-            KeyCode::Char(character) if !character.is_control() => self.values.push_query_char(character),
-            _ => {}
-        }
-        PaneOutcome::default()
+    fn on_pane_key(&mut self, key: KeyEvent) -> Option<PaneOutcome> {
+        (key.code == KeyCode::Enter).then(|| self.confirm())
     }
 
-    fn click(&mut self, row: usize, _height: usize) -> PaneOutcome {
-        // Row 0 is the search header.
-        let Some(item_row) = row.checked_sub(1) else {
-            return PaneOutcome::default();
-        };
-        self.values.select_row(item_row);
-        if self.values.selected_entry().is_none() {
+    fn filter(&mut self) -> Option<&mut dyn ListFilter> {
+        Some(&mut self.values)
+    }
+
+    fn click(&mut self, row: u16) -> PaneOutcome {
+        if !self.values.select_at(row) {
             return PaneOutcome::default();
         }
         self.confirm()

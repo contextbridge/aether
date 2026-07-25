@@ -2,19 +2,19 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect, Size};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{
-    Block, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, StatefulWidget, Widget,
-};
+use ratatui::widgets::{Block, Clear, List, ListItem, Paragraph, StatefulWidget, Widget};
 use std::collections::HashSet;
 use tui_scrollview::{ScrollView, ScrollbarVisibility};
 
-use crate::diff::SPLIT_VIEW_MIN_WIDTH;
+use crate::diff::{DiffTone, SPLIT_VIEW_MIN_WIDTH, diff_line, join_split, split_side, split_widths};
 use crate::git_diff::{FileDiff, FileStatus, PatchAnchor, PatchLine, PatchLineKind, StageState};
-use crate::screens::{RenderContext, Screen};
+use crate::render_context::RenderContext;
+use crate::screens::MouseAction;
+use crate::surface::{Surface, SurfaceMessage};
 use crate::syntax::SyntaxHighlighter;
 use crate::theme::Theme;
-use crate::widgets::TextInput;
-use crate::wrap::{fit_line, text_position_in_wrap, wrap_text_char};
+use crate::widgets::{TextInput, render_vertical_scrollbar, wrapped_with_cursor};
+use crate::wrap::{fit_line, wrap_text_char};
 
 use super::GitDiffScreen;
 use super::state::{BottomBar, CursorRow, DiffView, DraftState, DrawerEntry, Focus, GitDiffLoadState};
@@ -32,7 +32,6 @@ impl GitDiffScreen {
         cx: &mut RenderContext<'_>,
     ) -> Option<Position> {
         let theme = cx.theme;
-        self.last_area = area;
         Clear.render(area, buf);
         let block = Block::bordered()
             .title(format!(" Git Diff · {} ", self.scope.label()))
@@ -62,6 +61,8 @@ impl GitDiffScreen {
 
     fn render_document(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
         if area.width < DRAWER_MIN_WIDTH {
+            // No drawer at this width, so no rows for a click to land on.
+            self.drawer_selection.set_rows_area(Rect::ZERO);
             return self.render_patch(area, buf, cx);
         }
         let [drawer, separator, patch] = Layout::horizontal([
@@ -77,21 +78,15 @@ impl GitDiffScreen {
 
     fn render_drawer(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
         let entries = self.drawer_entries();
-        self.drawer_selection.ensure_visible(entries.len(), usize::from(area.height));
         let [list_area, track_area] = Layout::horizontal([Constraint::Min(0), Constraint::Length(1)]).areas(area);
         let items =
             entries.iter().map(|entry| ListItem::new(self.drawer_line(entry, usize::from(list_area.width), theme)));
         let list = List::new(items)
             .highlight_style(Style::new().fg(theme.background).bg(theme.accent).add_modifier(Modifier::BOLD));
+        self.drawer_selection.set_rows_area(list_area);
         StatefulWidget::render(list, list_area, buf, self.drawer_selection.list_state_mut());
 
-        let mut scrollbar_state = ScrollbarState::new(entries.len()).position(self.drawer_selection.offset());
-        StatefulWidget::render(
-            Scrollbar::new(ScrollbarOrientation::VerticalRight),
-            track_area,
-            buf,
-            &mut scrollbar_state,
-        );
+        render_vertical_scrollbar(track_area, buf, entries.len(), self.drawer_selection.offset());
     }
 
     fn drawer_line(&self, entry: &DrawerEntry, width: usize, theme: &Theme) -> Line<'static> {
@@ -308,16 +303,11 @@ impl GitDiffScreen {
         let mut lines = Vec::new();
         let mut cursor_rows = Vec::new();
         for (index, text) in content.lines().enumerate() {
-            let (foreground, background) = if added_lines.contains(&(index + 1)) {
-                (theme.diff_added_fg, theme.diff_added_bg)
-            } else {
-                (theme.text_secondary, theme.background)
-            };
-            let style = Style::new().fg(foreground).bg(background);
-            let mut spans = vec![Span::styled(format!("{:>4} ", index + 1), style)];
-            spans.extend(highlighted_spans(text, language, background, theme, highlighter));
+            let line_no = index + 1;
+            let tone = if added_lines.contains(&line_no) { DiffTone::Added } else { DiffTone::Context };
+            let rendered = diff_line(&format!("{line_no:>4} "), text, language, tone, theme, highlighter);
             cursor_rows.push((0, index, lines.len()));
-            lines.push(fit_line(Line::from(spans).style(Style::new().bg(background)), usize::from(width), style));
+            lines.push(fit_line(rendered.line, usize::from(width), rendered.fill));
         }
         (lines, cursor_rows, None)
     }
@@ -349,8 +339,7 @@ impl GitDiffScreen {
         theme: &Theme,
         highlighter: &mut SyntaxHighlighter,
     ) -> BuildResult {
-        let left_width = width.saturating_sub(1) / 2;
-        let right_width = width.saturating_sub(left_width + 1);
+        let (left_width, right_width) = split_widths(width);
         let mut lines = Vec::new();
         let mut cursor_rows = Vec::new();
         let mut draft_cursor = None;
@@ -505,17 +494,24 @@ impl GitDiffScreen {
     }
 }
 
-impl Screen for GitDiffScreen {
-    fn on_key(&mut self, key: crossterm::event::KeyEvent) -> crate::screens::ScreenOutcome {
-        self.handle_key(key)
+impl Surface for GitDiffScreen {
+    /// The screen owns every key, so nothing falls through to the shared list
+    /// navigation.
+    fn on_surface_key(&mut self, key: crossterm::event::KeyEvent) -> Option<Vec<SurfaceMessage>> {
+        Some(self.handle_key(key))
     }
 
-    fn on_event(&mut self, event: crate::screens::ScreenEvent) -> Option<crate::screens::ScreenEffect> {
+    fn is_fullscreen(&self) -> bool {
+        true
+    }
+
+    fn on_event(&mut self, event: crate::screens::ScreenEvent) -> Vec<SurfaceMessage> {
         self.handle_event(event)
     }
 
-    fn on_mouse(&mut self, action: crate::screens::MouseAction, row: u16, column: u16) {
+    fn on_mouse(&mut self, action: MouseAction, row: u16, column: u16) -> Vec<SurfaceMessage> {
         self.handle_mouse(action, row, column);
+        Vec::new()
     }
 
     fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
@@ -553,17 +549,14 @@ fn render_unified_line(
         PatchLineKind::Meta => return styled_full_width(&line.text, width, theme.muted),
         _ => {}
     }
-    let (marker, foreground, background) = match line.kind {
-        PatchLineKind::Added => ('+', theme.diff_added_fg, theme.diff_added_bg),
-        PatchLineKind::Removed => ('-', theme.diff_removed_fg, theme.diff_removed_bg),
-        _ => (' ', theme.text_secondary, theme.background),
+    let marker = match line.kind {
+        PatchLineKind::Added => '+',
+        PatchLineKind::Removed => '-',
+        _ => ' ',
     };
-    let old = line.old_line_no.map_or_else(|| "    ".to_string(), |number| format!("{number:>4}"));
-    let new = line.new_line_no.map_or_else(|| "    ".to_string(), |number| format!("{number:>4}"));
-    let style = Style::new().fg(foreground).bg(background);
-    let mut spans = vec![Span::styled(format!("{old} {new} {marker} "), style)];
-    spans.extend(highlighted_spans(&line.text, language, background, theme, highlighter));
-    fit_line(Line::from(spans).style(Style::new().bg(background)), usize::from(width), style)
+    let gutter = format!("{} {} {marker} ", line_number(line.old_line_no), line_number(line.new_line_no));
+    let rendered = diff_line(&gutter, &line.text, language, tone_of(line.kind), theme, highlighter);
+    fit_line(rendered.line, usize::from(width), rendered.fill)
 }
 
 fn render_split_row(
@@ -575,58 +568,32 @@ fn render_split_row(
     theme: &Theme,
     highlighter: &mut SyntaxHighlighter,
 ) -> Line<'static> {
-    let mut spans = render_split_side(old, true, language, left_width, theme, highlighter).spans;
-    spans.push(Span::styled("│", Style::new().fg(theme.muted).bg(theme.background)));
-    spans.extend(render_split_side(new, false, language, right_width, theme, highlighter).spans);
-    Line::from(spans)
+    let side = |line: Option<&PatchLine>, number: fn(&PatchLine) -> Option<usize>, width, highlighter: &mut _| {
+        split_side(
+            line.and_then(number),
+            line.map(|line| line.text.as_str()),
+            language,
+            line.map_or(DiffTone::Context, |line| tone_of(line.kind)),
+            width,
+            theme,
+            highlighter,
+        )
+    };
+    let left = side(old, |line| line.old_line_no, left_width, highlighter);
+    let right = side(new, |line| line.new_line_no, right_width, highlighter);
+    join_split(left, right, theme)
 }
 
-fn render_split_side(
-    line: Option<&PatchLine>,
-    old_side: bool,
-    language: &str,
-    width: u16,
-    theme: &Theme,
-    highlighter: &mut SyntaxHighlighter,
-) -> Line<'static> {
-    let (foreground, background) = match line.map(|line| line.kind) {
-        Some(PatchLineKind::Removed) => (theme.diff_removed_fg, theme.diff_removed_bg),
-        Some(PatchLineKind::Added) => (theme.diff_added_fg, theme.diff_added_bg),
-        _ => (theme.text_secondary, theme.background),
-    };
-    let style = Style::new().fg(foreground).bg(background);
-    let mut spans = match line {
-        Some(line) => {
-            let number = if old_side { line.old_line_no } else { line.new_line_no };
-            vec![Span::styled(number.map_or_else(|| "     ".to_string(), |number| format!("{number:>4} ")), style)]
-        }
-        None => vec![Span::styled("     ", style)],
-    };
-    if let Some(line) = line {
-        spans.extend(highlighted_spans(&line.text, language, background, theme, highlighter));
+fn tone_of(kind: PatchLineKind) -> DiffTone {
+    match kind {
+        PatchLineKind::Added => DiffTone::Added,
+        PatchLineKind::Removed => DiffTone::Removed,
+        _ => DiffTone::Context,
     }
-    fit_line(Line::from(spans).style(Style::new().bg(background)), usize::from(width), style)
 }
 
-fn highlighted_spans(
-    source: &str,
-    language: &str,
-    background: ratatui::style::Color,
-    theme: &Theme,
-    highlighter: &mut SyntaxHighlighter,
-) -> Vec<Span<'static>> {
-    highlighter
-        .highlight(source, language, theme)
-        .into_iter()
-        .next()
-        .unwrap_or_else(|| Line::raw(source.to_string()))
-        .spans
-        .into_iter()
-        .map(|mut span| {
-            span.style = span.style.patch(Style::new().bg(background));
-            span
-        })
-        .collect()
+fn line_number(number: Option<usize>) -> String {
+    number.map_or_else(|| "    ".to_string(), |number| format!("{number:>4}"))
 }
 
 /// A patch line paired with its index into the owning hunk's `lines` vector, used to
@@ -712,14 +679,14 @@ fn comment_box(
     lines
 }
 
-/// Wrapped draft text plus the cursor's (row, column) within the rendered box.
+/// Wrapped draft text plus the cursor's (row, column) within the rendered box,
+/// offset past the box's title row and its `│ > ` quote marker.
 fn draft_body(draft: &DraftState, body_width: usize) -> (Vec<String>, (usize, u16)) {
     if draft.buffer.is_empty() {
         return (vec!["█".to_string()], (1, 3));
     }
-    let text = draft.buffer.text();
-    let (row, column) = text_position_in_wrap(&text[..draft.buffer.cursor()], body_width);
-    (wrap_text_char(text, body_width), (1 + row, 3 + column))
+    let (lines, (row, column)) = wrapped_with_cursor(&draft.buffer, body_width);
+    (lines, (1 + row, 3 + column))
 }
 
 fn file_status_color(status: FileStatus, theme: &Theme) -> ratatui::style::Color {

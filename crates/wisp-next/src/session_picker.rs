@@ -1,12 +1,13 @@
 use crate::filterable_list::FilterableList;
-use crate::overlay::{Overlay, OverlayMessage};
+use crate::render_context::RenderContext;
 use crate::selection::Direction;
+use crate::surface::{ListFilter, Surface, SurfaceMessage};
 use crate::wrap::truncate_to_width;
 use acp_utils::notifications::SessionPreviewResponse;
 use agent_client_protocol::schema::{self as acp, SessionId};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, ListItem, Paragraph, Widget};
@@ -59,7 +60,7 @@ impl SessionPicker {
 
     /// Marks the selected session's preview as in-flight and returns the request
     /// for it, or nothing when it is already loading or cached.
-    fn preview_request(&mut self) -> Vec<OverlayMessage> {
+    fn preview_request(&mut self) -> Vec<SurfaceMessage> {
         if !self.preview_enabled {
             return Vec::new();
         }
@@ -70,7 +71,7 @@ impl SessionPicker {
             return Vec::new();
         }
         self.previews.insert(session_id.clone(), PreviewState::Loading);
-        vec![OverlayMessage::RequestSessionPreview { session_id }]
+        vec![SurfaceMessage::RequestSessionPreview { session_id }]
     }
 
     fn render_list(&mut self, area: Rect, buf: &mut Buffer, theme: &crate::theme::Theme) {
@@ -154,50 +155,48 @@ impl SessionPicker {
     }
 }
 
-impl Overlay for SessionPicker {
-    fn on_key(&mut self, key: KeyEvent) -> Vec<OverlayMessage> {
-        match key.code {
-            KeyCode::Esc => vec![OverlayMessage::Close],
-            KeyCode::Up => self.scroll(Direction::Backward),
-            KeyCode::Down => self.scroll(Direction::Forward),
-            KeyCode::Enter => self
-                .sessions
+impl Surface for SessionPicker {
+    fn on_surface_key(&mut self, key: KeyEvent) -> Option<Vec<SurfaceMessage>> {
+        (key.code == KeyCode::Enter).then(|| {
+            self.sessions
                 .selected_entry()
-                .map(|session| OverlayMessage::LoadSession {
+                .map(|session| SurfaceMessage::LoadSession {
                     session_id: SessionId::new(session.session_id.0.to_string()),
                     cwd: session.cwd.clone(),
                 })
                 .into_iter()
-                .collect(),
-            KeyCode::Char(character) => {
-                self.sessions.push_query_char(character);
-                self.preview_request()
-            }
-            KeyCode::Backspace => {
-                self.sessions.pop_query_char();
-                self.preview_request()
-            }
-            _ => Vec::new(),
-        }
+                .collect()
+        })
     }
 
-    fn scroll(&mut self, direction: Direction) -> Vec<OverlayMessage> {
+    fn filter(&mut self) -> Option<&mut dyn ListFilter> {
+        Some(&mut self.sessions)
+    }
+
+    fn on_filter_changed(&mut self) -> Vec<SurfaceMessage> {
+        self.preview_request()
+    }
+
+    fn scroll(&mut self, direction: Direction) -> Vec<SurfaceMessage> {
         self.sessions.step(direction, |_| true);
         self.preview_request()
     }
 
-    fn click(&mut self, row: u16, _area: Rect) -> Vec<OverlayMessage> {
-        self.sessions.select_row(usize::from(row.saturating_sub(1)));
+    fn click(&mut self, row: u16, _column: u16) -> Vec<SurfaceMessage> {
+        if !self.sessions.select_at(row) {
+            return Vec::new();
+        }
         self.preview_request()
     }
 
-    fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &crate::theme::Theme) {
+    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
+        let theme = cx.theme;
         if !self.has_sessions() {
             let block = Block::bordered().title(" Sessions ").style(Style::new().fg(theme.text_primary));
             let inner = block.inner(area);
             block.render(area, buf);
             Paragraph::new("  No previous sessions found.").style(Style::new().fg(theme.muted)).render(inner, buf);
-            return;
+            return None;
         }
 
         if area.width >= PREVIEW_MIN_WIDTH {
@@ -208,5 +207,6 @@ impl Overlay for SessionPicker {
         } else {
             self.render_list(area, buf, theme);
         }
+        None
     }
 }

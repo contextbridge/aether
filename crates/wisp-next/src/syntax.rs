@@ -6,6 +6,8 @@ use syntect::easy::HighlightLines;
 use syntect::highlighting::FontStyle;
 use syntect::parsing::{SyntaxReference, SyntaxSet};
 
+const MAX_CACHE_ENTRIES: usize = 512;
+
 pub struct SyntaxHighlighter {
     syntax_set: SyntaxSet,
     cache: HashMap<(String, String), Vec<Line<'static>>>,
@@ -72,8 +74,6 @@ impl Default for SyntaxHighlighter {
         Self::new()
     }
 }
-
-const MAX_CACHE_ENTRIES: usize = 512;
 
 fn find_syntax<'a>(syntax_set: &'a SyntaxSet, hint: &str) -> Option<&'a SyntaxReference> {
     let language = hint

@@ -1,7 +1,7 @@
 use super::{LiveSettingsData, PaneOutcome, SettingsPane, summarize};
 use crate::filterable_list::FilterableList;
-use crate::overlay::OverlayMessage;
 use crate::selection::Direction;
+use crate::surface::SurfaceMessage;
 use crate::theme::Theme;
 use crate::wrap::truncate_to_width;
 use agent_client_protocol::schema::AuthMethod;
@@ -41,25 +41,18 @@ impl ProviderLoginPane {
             self.entries
                 .selected_entry()
                 .filter(|entry| entry.status != ProviderLoginStatus::Authenticating)
-                .map(|entry| OverlayMessage::AuthenticateProvider(entry.method_id.clone())),
+                .map(|entry| SurfaceMessage::AuthenticateProvider(entry.method_id.clone())),
         )
     }
 }
 
 impl SettingsPane for ProviderLoginPane {
-    fn on_key(&mut self, key: KeyEvent) -> PaneOutcome {
-        match key.code {
-            KeyCode::Up => self.scroll(Direction::Backward),
-            KeyCode::Down => self.scroll(Direction::Forward),
-            KeyCode::Enter => return self.authenticate(),
-            _ => {}
-        }
-        PaneOutcome::default()
+    fn on_pane_key(&mut self, key: KeyEvent) -> Option<PaneOutcome> {
+        (key.code == KeyCode::Enter).then(|| self.authenticate())
     }
 
-    fn click(&mut self, row: usize, _height: usize) -> PaneOutcome {
-        self.entries.select_row(row);
-        if self.entries.selected_entry().is_none() {
+    fn click(&mut self, row: u16) -> PaneOutcome {
+        if !self.entries.select_at(row) {
             return PaneOutcome::default();
         }
         self.authenticate()

@@ -60,10 +60,6 @@ impl EditBuffer {
         self.cursor += text.len();
     }
 
-    pub fn insert_newline(&mut self) {
-        self.insert_char('\n');
-    }
-
     pub fn backspace(&mut self) -> bool {
         let Some(previous) = self.previous_boundary() else {
             return false;

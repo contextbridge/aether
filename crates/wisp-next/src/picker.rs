@@ -65,8 +65,9 @@ impl CompletionOverlay {
         self.entries.select_next();
     }
 
-    pub fn select_row(&mut self, row: usize) {
-        self.entries.select_row(row);
+    /// Selects the entry drawn at terminal `row`, if one is there.
+    pub fn select_at(&mut self, row: u16) {
+        self.entries.select_at(row);
     }
 
     pub fn selected_command(&self) -> Option<CommandEntry> {

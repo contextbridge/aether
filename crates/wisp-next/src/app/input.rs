@@ -1,11 +1,11 @@
 use super::config::{cycle_quick_option, cycle_reasoning_option, update_config_option_value};
 use super::{
-    ActiveSurface, App, Direction, Duration, Event, ExitState, Instant, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
-    OverlayLayer, PromptSearchMessage, Rect, ScreenEffect, ScreenEvent, parse_dropped_file_paths,
+    App, Direction, Duration, Event, ExitState, Instant, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, Layer, Rect,
+    ScreenEffect, ScreenEvent, Surface, parse_dropped_file_paths,
 };
-use crate::overlay::Overlay;
+use crate::render_context::RenderContext;
+use crate::screens::MouseAction;
 use crate::screens::git_diff::GitDiffScreen;
-use crate::screens::{MouseAction, RenderContext, Screen, ScreenOutcome};
 use crossterm::event::{MouseEvent, MouseEventKind};
 use ratatui::Frame;
 
@@ -45,43 +45,28 @@ impl App {
             return;
         }
 
-        if let Some(screen) = self.screen.as_mut() {
-            match screen.on_key(key) {
-                ScreenOutcome::None => {}
-                ScreenOutcome::Close => self.close_screen(),
-                ScreenOutcome::Effect(effect) => self.pending_screen_effects.push_back(effect),
-            }
-            return;
-        }
-
-        if let Some(overlay) = self.overlay.active() {
-            let messages = overlay.on_key(key);
-            self.handle_overlay_messages(messages);
+        if let Some(surface) = self.layer.active() {
+            let messages = surface.on_key(key);
+            self.handle_surface_messages(messages);
             return;
         }
 
         if self.composer.has_prompt_search() {
-            self.on_prompt_search_key(key);
+            let query = self.composer.prompt_search_on_key(key);
+            self.apply_prompt_search_query(query);
             return;
         }
 
         self.on_composer_key(key);
     }
 
-    fn on_prompt_search_key(&mut self, key: KeyEvent) {
-        let message = self.composer.prompt_search_on_key(key);
-        self.apply_prompt_search_message(message);
-    }
-
     /// A new query goes to the agent; an emptied one restores the draft the
     /// search replaced.
-    fn apply_prompt_search_message(&mut self, message: Option<PromptSearchMessage>) {
-        match message {
-            Some(PromptSearchMessage::QueryChanged(query)) if !query.trim().is_empty() => {
-                self.send_prompt_search_query(query);
-            }
-            Some(PromptSearchMessage::QueryChanged(_)) => self.composer.restore_prompt_search_draft(),
-            _ => {}
+    fn apply_prompt_search_query(&mut self, query: Option<String>) {
+        match query {
+            Some(query) if !query.trim().is_empty() => self.send_prompt_search_query(query),
+            Some(_) => self.composer.restore_prompt_search_draft(),
+            None => {}
         }
     }
 
@@ -127,7 +112,7 @@ impl App {
         }
 
         if self.keybindings.cancel.matches(key) {
-            if self.prompt_in_flight {
+            if self.turn.prompt_in_flight {
                 let _ = self.prompt_handle.cancel(&self.session_id);
             }
             return;
@@ -217,8 +202,8 @@ impl App {
 
     pub fn on_paste(&mut self, text: &str) {
         if self.composer.has_prompt_search() {
-            let message = self.composer.prompt_search_on_paste(text);
-            self.apply_prompt_search_message(message);
+            let query = self.composer.prompt_search_on_paste(text);
+            self.apply_prompt_search_query(query);
             return;
         }
         let added = parse_dropped_file_paths(text).is_some_and(|paths| self.composer.add_dropped_media(paths));
@@ -228,21 +213,16 @@ impl App {
         self.composer.refresh_overlay_query();
     }
 
-    /// Draws the full-screen view or overlay on top of the transcript, and
-    /// records the area mouse events are measured against.
+    /// Draws the open surface over the conversation, and records the area mouse
+    /// events are measured against.
     pub fn render_active_surface(&mut self, frame: &mut Frame, cx: &mut RenderContext<'_>) {
         let area = frame.area();
-        if let Some(screen) = self.screen.as_mut() {
+        if let Some(surface) = self.layer.active() {
+            let cursor = surface.render(area, frame.buffer_mut(), cx);
             self.surface_rect = Some(area);
-            if let Some(cursor) = screen.render(area, frame.buffer_mut(), cx) {
+            if let Some(cursor) = cursor {
                 frame.set_cursor_position(cursor);
             }
-            return;
-        }
-        let theme = cx.theme;
-        if let Some(overlay) = self.overlay.active() {
-            overlay.render(area, frame.buffer_mut(), theme);
-            self.surface_rect = Some(area);
             return;
         }
         // The composer's own surfaces set `surface_rect` while they render.
@@ -252,12 +232,11 @@ impl App {
     }
 
     pub fn on_screen_event(&mut self, event: ScreenEvent) {
-        if let ScreenEvent::SubmitReview { prompt, .. } = &event {
-            self.submit_review(prompt);
-        }
-        if let Some(effect) = self.screen.as_mut().and_then(|screen| screen.on_event(event)) {
-            self.pending_screen_effects.push_back(effect);
-        }
+        let Some(surface) = self.layer.active() else {
+            return;
+        };
+        let messages = surface.on_event(event);
+        self.handle_surface_messages(messages);
     }
 
     pub fn take_screen_effect(&mut self) -> Option<ScreenEffect> {
@@ -268,15 +247,12 @@ impl App {
         self.pending_bell.take().is_some()
     }
 
-    /// Only the composer works without mouse reporting; every other surface has
-    /// scrollable or clickable content.
+    /// Only the bare composer works without mouse reporting; every other
+    /// surface has scrollable or clickable content.
     pub fn needs_mouse_capture(&self) -> bool {
-        match self.active_surface() {
-            ActiveSurface::Composer => false,
-            ActiveSurface::Modal => {
-                matches!(&self.overlay, OverlayLayer::Elicitation(modal) if modal.needs_mouse_capture())
-            }
-            _ => true,
+        match self.layer.active_ref() {
+            Some(surface) => surface.needs_mouse_capture(),
+            None => self.composer.has_prompt_search() || self.composer.has_overlay(),
         }
     }
 
@@ -292,15 +268,8 @@ impl App {
         self.surface_rect = Some(rect);
     }
 
-    pub(super) fn open_screen(&mut self, screen: Box<dyn Screen>) {
-        self.close_screen();
-        self.screen = Some(screen);
-    }
-
-    pub(super) fn close_screen(&mut self) {
-        if let Some(mut screen) = self.screen.take() {
-            screen.cancel();
-        }
+    pub(super) fn open_screen(&mut self, screen: Box<dyn Surface>) {
+        self.open_layer(Layer::Screen(screen));
     }
 
     fn open_git_diff(&mut self) {
@@ -309,6 +278,11 @@ impl App {
         self.pending_screen_effects.push_back(effect);
     }
 
+    /// Routes a mouse event to the surface under the pointer.
+    ///
+    /// Rows and columns stay in terminal coordinates the whole way down: each
+    /// surface records the area it drew its rows into, so none of them has to
+    /// re-derive how many borders and headers sit above the first row.
     fn on_mouse(&mut self, event: MouseEvent) {
         let Some(rect) = self.surface_rect else {
             return;
@@ -322,23 +296,13 @@ impl App {
             MouseEventKind::Down(_) => MouseAction::Click,
             _ => return,
         };
-        let row = event.row - rect.y;
-        let column = event.column - rect.x;
 
-        if let Some(screen) = self.screen.as_mut() {
-            screen.on_mouse(action, row, column);
+        if let Some(surface) = self.layer.active() {
+            let messages = surface.on_mouse(action, event.row, event.column);
+            self.handle_surface_messages(messages);
             return;
         }
-        if let Some(overlay) = self.overlay.active() {
-            let messages = match action {
-                MouseAction::ScrollUp => overlay.scroll(Direction::Backward),
-                MouseAction::ScrollDown => overlay.scroll(Direction::Forward),
-                MouseAction::Click => overlay.click(row, rect),
-            };
-            self.handle_overlay_messages(messages);
-            return;
-        }
-        self.composer_mouse(action, row);
+        self.composer_mouse(action, event.row);
     }
 
     fn composer_mouse(&mut self, action: MouseAction, row: u16) {
@@ -346,15 +310,13 @@ impl App {
             self.composer.navigate_prompt_search(|picker| match action {
                 MouseAction::ScrollUp => picker.move_up(),
                 MouseAction::ScrollDown => picker.move_down(),
-                // Row 0 is the search header.
-                MouseAction::Click => picker.select_row(usize::from(row.saturating_sub(1))),
+                MouseAction::Click => picker.select_at(row),
             });
         } else if let Some(overlay) = self.composer.completion() {
             match action {
                 MouseAction::ScrollUp => overlay.move_up(),
                 MouseAction::ScrollDown => overlay.move_down(),
-                // Row 0 is the rule separating the list from the composer.
-                MouseAction::Click => overlay.select_row(usize::from(row.saturating_sub(1))),
+                MouseAction::Click => overlay.select_at(row),
             }
         }
     }

@@ -45,7 +45,7 @@ async fn git_diff_empty_repo_without_commits_shows_untracked_files() {
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
 
     app.on_key(ctrl('g'));
     settle_screen_effects(&mut app).await;
@@ -70,7 +70,7 @@ async fn git_diff_split_view_aligns_moved_identical_line() {
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
 
     app.on_key(ctrl('g'));
     settle_screen_effects(&mut app).await;
@@ -98,7 +98,7 @@ async fn git_diff_renders_file_drawer_and_highlighted_patch() {
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     let removed_background = renderer.theme().diff_removed_bg;
     let added_background = renderer.theme().diff_added_bg;
 
@@ -417,7 +417,7 @@ async fn git_diff_full_file_toggle_shows_content() {
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     app.on_key(ctrl('g'));
     settle_screen_effects(&mut app).await;
 
@@ -465,7 +465,7 @@ extra
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(120);
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     let added_background = renderer.theme().diff_added_bg;
 
     app.on_key(ctrl('g'));
@@ -757,7 +757,7 @@ async fn git_diff_comment_draft_submit_cancel_undo() {
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
 
     app.on_key(ctrl('g'));
     settle_screen_effects(&mut app).await;
@@ -820,7 +820,7 @@ async fn git_diff_comment_counts_in_footer() {
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
 
     app.on_key(ctrl('g'));
     settle_screen_effects(&mut app).await;
@@ -854,7 +854,7 @@ async fn git_diff_comments_survive_file_switches() {
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
 
     app.on_key(ctrl('g'));
     settle_screen_effects(&mut app).await;
@@ -905,7 +905,7 @@ async fn git_diff_diff_view_cache_reuses_rendered_patch_across_switches() {
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
 
     app.on_key(ctrl('g'));
     settle_screen_effects(&mut app).await;
@@ -948,7 +948,7 @@ async fn git_diff_submit_review_emits_prompt() {
 
     let (mut app, mut command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
 
     app.on_key(ctrl('g'));
     settle_screen_effects(&mut app).await;
@@ -994,7 +994,7 @@ async fn git_diff_submit_no_comments_shows_error() {
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
 
     app.on_key(ctrl('g'));
     settle_screen_effects(&mut app).await;
@@ -1022,7 +1022,7 @@ async fn git_diff_submit_send_failure_preserves_comments() {
 
     let (mut app, fail_signal, _command_rx) = make_failable_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
 
     app.on_key(ctrl('g'));
     settle_screen_effects(&mut app).await;
@@ -1054,10 +1054,7 @@ async fn git_diff_submit_send_failure_preserves_comments() {
 }
 
 fn make_failable_app_in(working_dir: std::path::PathBuf) -> (App, Arc<AtomicBool>, UnboundedReceiver<PromptCommand>) {
-    let (prompt_handle, fail_signal, command_rx) = AcpPromptHandle::failable();
-    let app =
-        build_app_with_handle(working_dir, acp::SessionCapabilities::new(), Vec::new(), Vec::new(), prompt_handle);
-    (app, fail_signal, command_rx)
+    AppBuilder::new().working_dir(working_dir).build_failable()
 }
 
 #[tokio::test]
@@ -1072,7 +1069,7 @@ async fn git_diff_comment_refresh_confirm_clears_cancel_preserves() {
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
 
     app.on_key(ctrl('g'));
     settle_screen_effects(&mut app).await;
@@ -1126,7 +1123,7 @@ async fn git_diff_comment_scope_switch_confirm_clears_cancel_preserves() {
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
 
     app.on_key(ctrl('g'));
     settle_screen_effects(&mut app).await;
@@ -1175,7 +1172,7 @@ async fn git_diff_comment_stage_all_confirm_clears_cancel_preserves() {
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
 
     app.on_key(ctrl('g'));
     settle_screen_effects(&mut app).await;
@@ -1224,7 +1221,7 @@ async fn git_diff_comment_toggle_stage_confirm_clears_cancel_preserves() {
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
 
     app.on_key(ctrl('g'));
     settle_screen_effects(&mut app).await;
@@ -1273,7 +1270,7 @@ async fn git_diff_comment_commit_cancel_preserves_comments() {
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
 
     app.on_key(ctrl('g'));
     settle_screen_effects(&mut app).await;
@@ -1312,7 +1309,7 @@ async fn git_diff_comment_discard_cancel_preserves_comments() {
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
 
     app.on_key(ctrl('g'));
     settle_screen_effects(&mut app).await;
@@ -1361,7 +1358,7 @@ async fn git_diff_comment_unstage_all_confirm_clears_cancel_preserves() {
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
 
     app.on_key(ctrl('g'));
     settle_screen_effects(&mut app).await;
@@ -1414,7 +1411,7 @@ async fn git_diff_draft_cursor_with_unicode() {
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
 
     app.on_key(ctrl('g'));
     settle_screen_effects(&mut app).await;

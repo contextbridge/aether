@@ -4,7 +4,7 @@ use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use tokio::sync::mpsc::UnboundedReceiver;
 use wisp_next::app::{App, AppConfig};
-use wisp_next::presentation::TranscriptRenderer;
+use wisp_next::presentation::Presenter;
 use wisp_next::render::sync_terminal as sync_terminal_with_renderer;
 use wisp_next::settings::UiSettings;
 
@@ -81,7 +81,7 @@ mod picker_click {
         assert!(app.has_session_picker());
 
         let mut terminal = make_terminal(80, 24);
-        let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+        let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
         assert!(app.surface_rect().is_some());
 
@@ -103,7 +103,7 @@ mod picker_click {
         assert!(app.has_session_picker());
 
         let mut terminal = make_terminal(80, 24);
-        let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+        let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
         let rect = app.surface_rect().unwrap();
@@ -134,7 +134,7 @@ mod picker_click {
         app.on_key(key(KeyCode::Char('a')));
 
         let mut terminal = make_terminal(80, 24);
-        let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+        let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
         let rect = app.surface_rect().unwrap();
@@ -156,7 +156,7 @@ mod picker_click {
         app.on_acp_event(AcpEvent::WorkspacesListed(WorkspaceListResponse { workspaces }));
 
         let mut terminal = make_terminal(80, 24);
-        let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+        let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
         assert!(app.surface_rect().is_some());
 
@@ -174,7 +174,7 @@ mod picker_click {
         app.on_acp_event(AcpEvent::WorkspacesListed(WorkspaceListResponse { workspaces }));
 
         let mut terminal = make_terminal(80, 24);
-        let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+        let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
         let rect = app.surface_rect().unwrap();
@@ -201,7 +201,7 @@ mod picker_click {
         app.on_key(key(KeyCode::Char('a')));
 
         let mut terminal = make_terminal(80, 24);
-        let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+        let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
         let rect = app.surface_rect().unwrap();
@@ -405,7 +405,7 @@ mod resize {
     fn resize_no_duplicate_history() {
         let (mut app, _rx) = make_app();
         let mut terminal = make_terminal(80, 20);
-        let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+        let mut renderer = Presenter::new(&UiSettings::default());
 
         super::submit_prompt(&mut app, "before resize");
 
@@ -470,7 +470,7 @@ mod event_routing {
         app.on_key(key(KeyCode::Enter));
 
         let mut terminal = make_terminal(80, 24);
-        let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+        let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
         // Scroll events should be consumed internally
@@ -514,7 +514,7 @@ mod event_routing {
         app.on_key(key(KeyCode::Tab));
 
         let mut terminal = make_terminal(80, 24);
-        let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+        let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
         assert!(app.surface_rect().is_some());
 
@@ -549,7 +549,7 @@ mod event_routing {
         app.on_key(key(KeyCode::Tab));
 
         let mut terminal = make_terminal(80, 24);
-        let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+        let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
         let rect = app.surface_rect().unwrap();
@@ -593,7 +593,7 @@ mod event_routing {
         fn open_settings(app: &mut App, terminal: &mut ratatui::Terminal<TestBackend>) {
             type_text(app, "/settings");
             app.on_key(key(KeyCode::Tab));
-            let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+            let mut renderer = Presenter::new(&UiSettings::default());
             sync_terminal_with_renderer(terminal, app, &mut renderer).unwrap();
         }
 
@@ -608,7 +608,7 @@ mod event_routing {
         open_settings(&mut app, &mut terminal);
         let rect = app.surface_rect().unwrap();
         app.on_terminal_event(click(rect.x + 2, rect.y + 2));
-        let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+        let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
         let rect = app.surface_rect().unwrap();
         app.on_terminal_event(click(rect.x + 2, rect.y + 3));
@@ -624,7 +624,7 @@ mod event_routing {
         open_settings(&mut app, &mut terminal);
         let rect = app.surface_rect().unwrap();
         app.on_terminal_event(click(rect.x + 2, rect.y + 2));
-        let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+        let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
         let rect = app.surface_rect().unwrap();
         app.on_terminal_event(click(rect.x + 2, rect.y + 1));
@@ -639,7 +639,7 @@ mod event_routing {
         open_settings(&mut app, &mut terminal);
         let rect = app.surface_rect().unwrap();
         app.on_terminal_event(click(rect.x + 2, rect.y + 3));
-        let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+        let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
         let rect = app.surface_rect().unwrap();
         app.on_terminal_event(click(rect.x + 2, rect.y + 1));
@@ -662,7 +662,7 @@ mod event_routing {
         assert!(app.has_session_picker());
 
         let mut terminal = make_terminal(80, 24);
-        let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+        let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
         assert!(app.surface_rect().is_some());
 
@@ -706,7 +706,7 @@ mod event_routing {
         assert!(app.needs_mouse_capture());
 
         let mut terminal = make_terminal(80, 24);
-        let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+        let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
         let rect = app.surface_rect().unwrap();
@@ -724,7 +724,7 @@ mod event_routing {
         assert!(app.needs_mouse_capture());
 
         let mut terminal = make_terminal(80, 24);
-        let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+        let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
         let rect = app.surface_rect();
@@ -750,7 +750,7 @@ mod event_routing {
         assert!(matches!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Picking));
 
         let mut terminal = make_terminal(80, 24);
-        let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+        let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
         let rect = app.surface_rect().unwrap();
@@ -793,7 +793,7 @@ mod event_routing {
             assert!(app.needs_mouse_capture());
 
             let mut terminal = make_terminal(80, 24);
-            let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+            let mut renderer = Presenter::new(&UiSettings::default());
             sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
             let rect = app.surface_rect().unwrap();
@@ -801,6 +801,69 @@ mod event_routing {
             assert!(!app.take_bell());
         });
     }
+
+    /// The form is drawn centred inside the viewport, so its first field sits an
+    /// arbitrary number of rows down. A click has to hit the field under the
+    /// pointer rather than one counted from the top of the screen.
+    #[test]
+    fn form_modal_click_toggles_the_field_under_the_pointer() {
+        use acp_utils::notifications::{CreateElicitationRequestParams, ElicitationParams};
+        use acp_utils::testing::test_connection;
+
+        let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        let local = tokio::task::LocalSet::new();
+        local.block_on(&rt, async {
+            let (mut app, _rx) = make_app();
+            let (cx, mut peer) = test_connection().await;
+            let (responder, _response_rx) = peer.fake_elicitation(&cx).await;
+
+            let schema = acp_utils::ElicitationSchema::builder()
+                .optional_bool("alpha", false)
+                .optional_bool("bravo", false)
+                .build()
+                .unwrap();
+
+            app.on_acp_event(AcpEvent::ElicitationRequest {
+                params: ElicitationParams {
+                    server_name: "test".into(),
+                    request: CreateElicitationRequestParams::FormElicitationParams {
+                        meta: None,
+                        message: "Pick one".into(),
+                        requested_schema: schema,
+                    },
+                },
+                responder,
+            });
+
+            let mut terminal = make_terminal(80, 24);
+            let mut presenter = Presenter::new(&UiSettings::default());
+            sync_terminal_with_renderer(&mut terminal, &mut app, &mut presenter).unwrap();
+
+            let rows = screen_rows(&terminal);
+            let bravo_row = rows.iter().position(|row| row.contains("bravo")).expect("field should be on screen");
+            app.on_terminal_event(click(20, u16::try_from(bravo_row).unwrap()));
+            sync_terminal_with_renderer(&mut terminal, &mut app, &mut presenter).unwrap();
+
+            let rows = screen_rows(&terminal);
+            let row_with = |needle: &str| rows.iter().find(|row| row.contains(needle)).unwrap().clone();
+            let alpha = row_with("alpha");
+            let bravo = row_with("bravo");
+            assert!(bravo.contains("[x]"), "the clicked field should be checked, got {bravo:?}");
+            assert!(alpha.contains("[ ]"), "the field above it should be untouched, got {alpha:?}");
+        });
+    }
+}
+
+/// The screen's rows as text, indexed by terminal row.
+fn screen_rows(terminal: &ratatui::Terminal<TestBackend>) -> Vec<String> {
+    let buffer = terminal.backend().buffer();
+    (buffer.area.top()..buffer.area.bottom())
+        .map(|y| {
+            (buffer.area.left()..buffer.area.right())
+                .map(|x| buffer.cell((x, y)).map_or(" ", ratatui::buffer::Cell::symbol))
+                .collect()
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -810,8 +873,10 @@ mod event_routing {
 mod screen_mouse {
     use super::*;
     use wisp_next::git_diff::{FileDiff, FileStatus, GitDiffDocument, StageState};
+    use wisp_next::render_context::RenderContext;
+    use wisp_next::screens::MouseAction;
     use wisp_next::screens::git_diff::{GitDiffEvent, GitDiffScreen};
-    use wisp_next::screens::{MouseAction, RenderContext, Screen};
+    use wisp_next::surface::Surface;
     use wisp_next::syntax::SyntaxHighlighter;
     use wisp_next::theme::Theme;
 
@@ -1008,7 +1073,7 @@ mod surface_rects {
         assert!(app.has_modal(), "settings overlay should be open after /settings+Tab");
 
         let mut terminal = make_terminal(80, 24);
-        let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+        let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
         assert!(app.surface_rect().is_some(), "surface rect should be set after render");
@@ -1027,7 +1092,7 @@ mod surface_rects {
         std::mem::drop(current);
 
         let mut terminal = make_terminal(80, 24);
-        let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+        let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
         assert!(app.surface_rect().is_some());
@@ -1062,7 +1127,7 @@ mod surface_rects {
         app.on_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
 
         let mut terminal = make_terminal(80, 24);
-        let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+        let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
         assert!(app.surface_rect().is_some());

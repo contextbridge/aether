@@ -11,7 +11,6 @@ pub mod git_diff;
 pub mod keybindings;
 pub mod markdown;
 pub mod modal;
-pub mod overlay;
 pub mod picker;
 pub mod plan_review;
 pub mod plan_tracker;
@@ -20,6 +19,7 @@ pub mod presentation;
 pub mod progress_indicator;
 pub mod prompt_search;
 pub mod render;
+pub mod render_context;
 pub mod screens;
 pub mod selection;
 pub mod session;
@@ -29,6 +29,7 @@ pub mod session_picker;
 pub mod settings;
 pub mod settings_overlay;
 pub mod status_line;
+pub mod surface;
 pub mod syntax;
 pub mod theme;
 pub mod tool_calls;
@@ -47,7 +48,7 @@ use crossterm::event::{
 use crossterm::{execute, terminal::size};
 use error::AppError;
 use futures::StreamExt;
-use presentation::TranscriptRenderer;
+use presentation::Presenter;
 use ratatui::{DefaultTerminal, TerminalOptions, Viewport};
 use session::Session;
 use settings::UiSettings;
@@ -83,7 +84,7 @@ pub async fn run_with_session(session: Session) -> Result<(), AppError> {
         working_dir,
         workspace_status,
     } = session;
-    let renderer = TranscriptRenderer::new(&settings);
+    let presenter = Presenter::new(&settings);
     let app = App::new(AppConfig {
         session_id,
         agent_name,
@@ -96,7 +97,7 @@ pub async fn run_with_session(session: Session) -> Result<(), AppError> {
         working_dir,
         settings,
     });
-    run_app(app, renderer, event_rx).await
+    run_app(app, presenter, event_rx).await
 }
 
 pub fn setup_logging(log_dir: Option<&str>) {
@@ -120,7 +121,7 @@ const MAX_ACP_EVENTS_PER_FRAME: usize = 1_000;
 
 async fn run_app(
     mut app: App,
-    mut renderer: TranscriptRenderer,
+    mut presenter: Presenter,
     mut event_rx: mpsc::UnboundedReceiver<AcpEvent>,
 ) -> Result<(), AppError> {
     let (_, terminal_height) = size()?;
@@ -133,7 +134,7 @@ async fn run_app(
     let keyboard_enhancement_enabled = execute!(stdout, PushKeyboardEnhancementFlags(flags)).is_ok();
 
     let result = match execute!(stdout, EnableBracketedPaste) {
-        Ok(()) => event_loop(&mut terminal, &mut app, &mut renderer, &mut event_rx, &mut stdout).await,
+        Ok(()) => event_loop(&mut terminal, &mut app, &mut presenter, &mut event_rx, &mut stdout).await,
         Err(e) => Err(AppError::Io(e)),
     };
 
@@ -149,7 +150,7 @@ async fn run_app(
 async fn event_loop(
     terminal: &mut DefaultTerminal,
     app: &mut App,
-    renderer: &mut TranscriptRenderer,
+    presenter: &mut Presenter,
     event_rx: &mut mpsc::UnboundedReceiver<AcpEvent>,
     stdout: &mut impl Write,
 ) -> Result<(), AppError> {
@@ -162,7 +163,7 @@ async fn event_loop(
     };
     let mut capture_enabled = false;
 
-    render::sync_terminal(terminal, app, renderer)?;
+    render::sync_terminal(terminal, app, presenter)?;
     loop {
         let tick_fut = async {
             if !app.wants_tick() {
@@ -206,14 +207,14 @@ async fn event_loop(
         }
 
         if let Some(theme) = app.take_pending_theme() {
-            renderer.set_theme(theme);
+            presenter.set_theme(theme);
         }
 
         if app.exit_requested() {
             process_terminal_state(app, stdout, &mut capture_enabled);
             return Ok(());
         }
-        render::sync_terminal(terminal, app, renderer)?;
+        render::sync_terminal(terminal, app, presenter)?;
     }
 }
 

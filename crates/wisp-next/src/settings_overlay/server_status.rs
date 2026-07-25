@@ -1,6 +1,6 @@
 use super::{LiveSettingsData, PaneOutcome, SettingsPane, summarize};
-use crate::overlay::OverlayMessage;
 use crate::selection::{Direction, SelectionState};
+use crate::surface::SurfaceMessage;
 use crate::theme::Theme;
 use acp_utils::notifications::{McpServerStatus, McpServerStatusEntry};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -40,7 +40,7 @@ impl ServerStatusPane {
         PaneOutcome::message(
             self.selected_entry()
                 .filter(|entry| entry.can_authenticate())
-                .map(|entry| OverlayMessage::AuthenticateServer(entry.name.clone())),
+                .map(|entry| SurfaceMessage::AuthenticateServer(entry.name.clone())),
         )
     }
 
@@ -59,21 +59,21 @@ impl ServerStatusPane {
 }
 
 impl SettingsPane for ServerStatusPane {
-    fn on_key(&mut self, key: KeyEvent) -> PaneOutcome {
-        match key.code {
-            KeyCode::Up => self.scroll(Direction::Backward),
-            KeyCode::Down => self.scroll(Direction::Forward),
-            KeyCode::Enter => return self.authenticate(),
-            _ => {}
-        }
-        PaneOutcome::default()
+    fn on_pane_key(&mut self, key: KeyEvent) -> Option<PaneOutcome> {
+        (key.code == KeyCode::Enter).then(|| self.authenticate())
     }
 
-    fn click(&mut self, row: usize, _height: usize) -> PaneOutcome {
-        if !self.rows.get(row).is_some_and(is_server) {
+    /// Headers and spacers are not selectable, so a click on one is ignored
+    /// rather than moving focus to a row that cannot be authenticated.
+    fn click(&mut self, row: u16) -> PaneOutcome {
+        let restore = self.selection.selected();
+        if !self.selection.select_at(row, self.rows.len()) {
             return PaneOutcome::default();
         }
-        self.selection.select(Some(row), self.rows.len());
+        if !self.selection.selected().and_then(|index| self.rows.get(index)).is_some_and(is_server) {
+            self.selection.select(restore, self.rows.len());
+            return PaneOutcome::default();
+        }
         self.authenticate()
     }
 
@@ -95,7 +95,6 @@ impl SettingsPane for ServerStatusPane {
             return;
         }
 
-        self.selection.ensure_visible(self.rows.len(), usize::from(area.height));
         let items = self.rows.iter().map(|row| match row {
             ServerStatusRow::Header(label) => ListItem::new(label.clone()).style(Style::new().fg(theme.heading)),
             ServerStatusRow::Spacer => ListItem::new(""),
@@ -115,6 +114,7 @@ impl SettingsPane for ServerStatusPane {
         let list = List::new(items)
             .highlight_style(Style::new().fg(theme.background).bg(theme.text_primary))
             .scroll_padding(1);
+        self.selection.set_rows_area(area);
         StatefulWidget::render(list, area, buf, self.selection.list_state_mut());
     }
 

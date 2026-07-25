@@ -1,14 +1,13 @@
+mod view;
+
 use crate::attachments::{AttachmentKind, PromptAttachment, classify_attachment};
 use crate::edit_buffer::EditBuffer;
 use crate::picker::{CommandEntry, CompletionOverlay, FileEntry};
-use crate::prompt_search::{self, PromptSearchMessage, PromptSearchPicker};
-use crate::theme::Theme;
-use crate::wrap::wrap_text_char;
+use crate::prompt_search::{self, PromptSearchPicker};
 use acp_utils::notifications::PromptSearchResponse;
 use crossterm::event::KeyCode;
 use ratatui::layout::Position;
-use ratatui::style::Style;
-use ratatui::text::{Line, Span};
+use ratatui::text::Line;
 use std::collections::HashSet;
 use unicode_width::UnicodeWidthStr;
 
@@ -24,10 +23,65 @@ pub struct Composer {
     overlay: Option<CompletionOverlay>,
     mentions: Vec<SelectedFileMention>,
     pending_media: Vec<PromptAttachment>,
-    history: Vec<String>,
-    history_index: Option<usize>,
-    history_draft: Option<String>,
+    history: PromptHistory,
     prompt_search: Option<PromptSearchState>,
+}
+
+/// The prompts submitted this session, and where recall has walked back to.
+///
+/// Navigation stashes the draft it replaced, so stepping past the newest entry
+/// puts the user back where they started.
+#[derive(Debug, Default)]
+struct PromptHistory {
+    entries: Vec<String>,
+    index: Option<usize>,
+    draft: Option<String>,
+}
+
+/// Prompts kept for recall. Older ones are dropped rather than growing forever.
+const MAX_HISTORY_ENTRIES: usize = 500;
+
+impl PromptHistory {
+    fn push(&mut self, prompt: &str) {
+        if prompt.trim().is_empty() {
+            return;
+        }
+        self.entries.push(prompt.to_string());
+        if self.entries.len() > MAX_HISTORY_ENTRIES {
+            self.entries.remove(0);
+        }
+    }
+
+    /// The previous prompt, stashing `draft` the first time recall starts.
+    fn previous(&mut self, draft: &str) -> Option<&str> {
+        let index = match self.index {
+            Some(0) => return None,
+            Some(index) => index - 1,
+            None => {
+                self.draft = Some(draft.to_string());
+                self.entries.len().checked_sub(1)?
+            }
+        };
+        self.index = Some(index);
+        self.entries.get(index).map(String::as_str)
+    }
+
+    /// The next prompt, or the stashed draft once recall walks past the newest.
+    fn next(&mut self) -> Option<String> {
+        let index = self.index?;
+        if index + 1 < self.entries.len() {
+            self.index = Some(index + 1);
+            return self.entries.get(index + 1).cloned();
+        }
+        self.index = None;
+        Some(self.draft.take().unwrap_or_default())
+    }
+
+    /// Ends navigation, so the recalled prompt becomes the user's own draft.
+    fn reset(&mut self) {
+        self.index = None;
+        self.draft = None;
+    }
 }
 
 #[derive(Debug)]
@@ -72,15 +126,10 @@ impl Composer {
     pub fn take_submission(&mut self) -> (String, Vec<PromptAttachment>) {
         let text = self.buffer.take();
         let pending_media = std::mem::take(&mut self.pending_media);
-        if !text.trim().is_empty() {
-            self.history.push(text.clone());
-            if self.history.len() > 500 {
-                self.history.remove(0);
-            }
-        }
+        self.history.push(&text);
         self.overlay = None;
         self.mentions.clear();
-        self.reset_history_navigation();
+        self.history.reset();
         (text, pending_media)
     }
 
@@ -89,7 +138,7 @@ impl Composer {
         self.pending_media.clear();
         self.overlay = None;
         self.mentions.clear();
-        self.reset_history_navigation();
+        self.history.reset();
     }
 
     pub fn add_dropped_media(&mut self, paths: Vec<std::path::PathBuf>) -> bool {
@@ -131,23 +180,23 @@ impl Composer {
         let before = self.buffer.text().len();
         let handled = crate::edit_buffer::apply_edit_key(&mut self.buffer, key);
         if self.buffer.text().len() != before {
-            self.reset_history_navigation();
+            self.history.reset();
         }
         handled
     }
 
     pub fn insert_char(&mut self, character: char) {
-        self.reset_history_navigation();
+        self.history.reset();
         self.buffer.insert_char(character);
     }
 
     pub fn insert_str(&mut self, text: &str) {
-        self.reset_history_navigation();
+        self.history.reset();
         self.buffer.insert_str(text);
     }
 
     pub fn insert_paste(&mut self, text: &str) {
-        self.reset_history_navigation();
+        self.history.reset();
         let filtered: String = text.chars().filter(|c| !c.is_control() || *c == '\n' || *c == '\t').collect();
         self.buffer.insert_str(&filtered);
     }
@@ -158,7 +207,7 @@ impl Composer {
     }
 
     pub fn backspace(&mut self) {
-        self.reset_history_navigation();
+        self.history.reset();
         if self.buffer.is_empty() && !self.pending_media.is_empty() {
             self.pending_media.pop();
             return;
@@ -166,17 +215,8 @@ impl Composer {
         self.buffer.backspace();
     }
 
-    pub fn delete(&mut self) {
-        self.reset_history_navigation();
-        self.buffer.delete();
-    }
-
     pub fn move_left(&mut self) {
         self.buffer.move_left();
-    }
-
-    pub fn move_right(&mut self) {
-        self.buffer.move_right();
     }
 
     pub fn move_line_start(&mut self) {
@@ -196,35 +236,19 @@ impl Composer {
     }
 
     pub fn recall_previous(&mut self) -> bool {
-        if self.history.is_empty() {
+        let Some(prompt) = self.history.previous(self.buffer.text()).map(str::to_string) else {
             return false;
-        }
-        let index = match self.history_index {
-            Some(0) => return false,
-            Some(index) => index - 1,
-            None => {
-                self.history_draft = Some(self.buffer.text().to_string());
-                self.history.len() - 1
-            }
         };
-        self.history_index = Some(index);
-        self.set_text(self.history[index].clone());
+        self.set_text(prompt);
         self.buffer.set_cursor(0);
         true
     }
 
     pub fn recall_next(&mut self) -> bool {
-        let Some(index) = self.history_index else {
+        let Some(prompt) = self.history.next() else {
             return false;
         };
-        if index + 1 < self.history.len() {
-            self.history_index = Some(index + 1);
-            self.set_text(self.history[index + 1].clone());
-        } else {
-            let draft = self.history_draft.take().unwrap_or_default();
-            self.set_text(draft);
-            self.history_index = None;
-        }
+        self.set_text(prompt);
         self.buffer.move_to_end();
         true
     }
@@ -287,7 +311,9 @@ impl Composer {
         }
     }
 
-    pub fn prompt_search_on_key(&mut self, key: crossterm::event::KeyEvent) -> Option<PromptSearchMessage> {
+    /// Applies a keystroke to the open history search, returning the query to
+    /// re-run when the keystroke changed it.
+    pub fn prompt_search_on_key(&mut self, key: crossterm::event::KeyEvent) -> Option<String> {
         let state = self.prompt_search.as_mut()?;
         match key.code {
             KeyCode::Esc => {
@@ -302,12 +328,12 @@ impl Composer {
             KeyCode::Down => {
                 state.picker.move_down();
                 self.apply_selected_search_result();
-                Some(PromptSearchMessage::SelectionChanged)
+                None
             }
             KeyCode::Up => {
                 state.picker.move_up();
                 self.apply_selected_search_result();
-                Some(PromptSearchMessage::SelectionChanged)
+                None
             }
             KeyCode::Backspace => Some(state.picker.backspace()),
             KeyCode::Char(c)
@@ -321,7 +347,7 @@ impl Composer {
         }
     }
 
-    pub fn prompt_search_on_paste(&mut self, text: &str) -> Option<PromptSearchMessage> {
+    pub fn prompt_search_on_paste(&mut self, text: &str) -> Option<String> {
         let state = self.prompt_search.as_mut()?;
         Some(state.picker.push_str(text))
     }
@@ -391,63 +417,16 @@ impl Composer {
         self.buffer.text().split('\n').count()
     }
 
+    /// The cursor's byte offset into [`Composer::text`].
+    pub(crate) fn cursor_byte(&self) -> usize {
+        self.buffer.cursor()
+    }
+
     pub fn cursor_position(&self) -> (usize, usize) {
         let before = &self.buffer.text()[..self.buffer.cursor()];
         let row = before.matches('\n').count();
         let column = before[self.buffer.line_start()..].width();
         (row, column)
-    }
-
-    pub fn layout(&self, width: u16, theme: &Theme) -> ComposerLayout {
-        let content_width = usize::from(width.saturating_sub(2).max(1));
-        let full_width = usize::from(width);
-        let mut lines = Vec::new();
-        let mut cursor = Position::new(2, 0);
-
-        lines.push(Line::styled("─".repeat(full_width), Style::new().fg(theme.muted)));
-
-        let text = self.buffer.text();
-        let cursor_byte = self.buffer.cursor();
-        let mention_ranges = mention_byte_ranges(text);
-        let mut byte_offset = 0;
-        for (logical_row, raw_line) in text.split('\n').enumerate() {
-            let prefix = if logical_row == 0 { "> " } else { "  " };
-            let wrapped = wrap_text_char(raw_line, content_width);
-            for (wrapped_row, chunk) in wrapped.iter().enumerate() {
-                let row = u16::try_from(lines.len()).unwrap_or(u16::MAX);
-                let chunk_start = byte_offset;
-                let mut spans =
-                    vec![Span::styled(if wrapped_row == 0 { prefix } else { "  " }, Style::new().fg(theme.accent))];
-                spans.extend(styled_input_chunk(chunk, chunk_start, &mention_ranges, theme));
-                lines.push(Line::from(spans));
-                let chunk_end = byte_offset + chunk.len();
-                if cursor_byte >= byte_offset && (cursor_byte < chunk_end || chunk_end == text.len()) {
-                    let column = text[byte_offset..cursor_byte].width();
-                    cursor = Position::new(u16::try_from(2 + column).unwrap_or(u16::MAX), row);
-                }
-                byte_offset = chunk_end;
-            }
-            if logical_row + 1 < self.line_count() {
-                byte_offset += 1;
-            }
-        }
-
-        for attachment in &self.pending_media {
-            let kind = classify_attachment(&attachment.path);
-            let label = match kind {
-                AttachmentKind::Image => "image",
-                AttachmentKind::Audio => "audio",
-                _ => "file",
-            };
-            lines.push(Line::styled(
-                format!("  attached {label}: {}", attachment.display_name),
-                Style::new().fg(theme.info),
-            ));
-        }
-
-        lines.push(Line::styled("─".repeat(full_width), Style::new().fg(theme.muted)));
-
-        ComposerLayout { lines, cursor }
     }
 
     fn active_token(&self, trigger: char) -> Option<std::ops::Range<usize>> {
@@ -471,53 +450,4 @@ impl Composer {
         self.mentions.clear();
         self.overlay = None;
     }
-
-    fn reset_history_navigation(&mut self) {
-        self.history_index = None;
-        self.history_draft = None;
-    }
-}
-
-/// Byte ranges of `@mention` tokens (an `@` followed by non-whitespace) within the whole
-/// composer text. Newlines count as whitespace, so mentions never span lines.
-fn mention_byte_ranges(input: &str) -> Vec<std::ops::Range<usize>> {
-    input
-        .match_indices('@')
-        .filter_map(|(at_pos, _)| {
-            let end = input[at_pos..].find(char::is_whitespace).map_or(input.len(), |offset| at_pos + offset);
-            (end > at_pos).then_some(at_pos..end)
-        })
-        .collect()
-}
-
-/// Split a wrapped input chunk into styled spans, colouring any `@mention` bytes that overlap
-/// the chunk (identified by their absolute byte offset in the full composer text) in the info
-/// colour and everything else in the primary text colour.
-fn styled_input_chunk(
-    chunk: &str,
-    chunk_start: usize,
-    mention_ranges: &[std::ops::Range<usize>],
-    theme: &Theme,
-) -> Vec<Span<'static>> {
-    let in_mention_at = |relative: usize| mention_ranges.iter().any(|range| range.contains(&(chunk_start + relative)));
-
-    if mention_ranges.is_empty() || !chunk.contains('@') {
-        return vec![Span::styled(chunk.to_string(), Style::new().fg(theme.text_primary))];
-    }
-
-    let mut spans = Vec::new();
-    let mut run_start = 0;
-    let mut current_info = in_mention_at(0);
-    for (relative, _) in chunk.char_indices().skip(1) {
-        let is_info = in_mention_at(relative);
-        if is_info != current_info {
-            let color = if current_info { theme.info } else { theme.text_primary };
-            spans.push(Span::styled(chunk[run_start..relative].to_string(), Style::new().fg(color)));
-            run_start = relative;
-            current_info = is_info;
-        }
-    }
-    let color = if current_info { theme.info } else { theme.text_primary };
-    spans.push(Span::styled(chunk[run_start..].to_string(), Style::new().fg(color)));
-    spans
 }

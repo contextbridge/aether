@@ -37,21 +37,37 @@ fn clearing_or_emptying_a_filter_keeps_selection_valid() {
 }
 
 #[test]
-fn persists_native_list_offset_for_mouse_row_selection() {
+fn maps_a_click_to_the_row_drawn_under_it() {
+    let area = Rect::new(0, 0, 20, 4);
     let mut list = FilterableList::new((0..10).map(|index| format!("item {index}")).collect(), Clone::clone);
-    let mut buffer = Buffer::empty(Rect::new(0, 0, 20, 4));
+    let mut buffer = Buffer::empty(area);
 
     for _ in 0..7 {
         list.select_next();
     }
     list.view(&Theme::default(), "empty", |entry| ListItem::new(entry.clone()))
         .bordered("items")
-        .render(Rect::new(0, 0, 20, 4), &mut buffer);
+        .render(area, &mut buffer);
 
     let offset = list.offset();
-    assert!(offset > 0);
-    list.select_row(0);
+    assert!(offset > 0, "the selection should have scrolled the list");
+    // Row 0 is the block's top border; the first entry is drawn on row 1.
+    assert!(list.select_at(1));
     assert_eq!(list.selected_entry().map(String::as_str), Some(format!("item {offset}").as_str()));
+}
+
+#[test]
+fn ignores_clicks_outside_the_rows_it_drew() {
+    let area = Rect::new(0, 0, 20, 4);
+    let mut list = FilterableList::new(vec!["only".to_string()], Clone::clone);
+    let mut buffer = Buffer::empty(area);
+    list.view(&Theme::default(), "empty", |entry| ListItem::new(entry.clone()))
+        .bordered("items")
+        .render(area, &mut buffer);
+
+    assert!(!list.select_at(0), "the top border is not a row");
+    assert!(!list.select_at(3), "the bottom border is not a row");
+    assert!(list.select_at(1));
 }
 
 #[test]

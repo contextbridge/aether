@@ -16,7 +16,7 @@ fn multi_select(id: &str, name: &str, current: &str, values: &[(&str, &str)]) ->
     sel(id, name, current, values).meta(ConfigOptionMeta { multi_select: true }.into_meta())
 }
 
-fn press(overlay: &mut SettingsOverlay, code: KeyCode) -> Vec<OverlayMessage> {
+fn press(overlay: &mut SettingsOverlay, code: KeyCode) -> Vec<SurfaceMessage> {
     overlay.on_key(KeyEvent::new(code, KeyModifiers::NONE))
 }
 
@@ -132,7 +132,7 @@ fn esc_closes_overlay_from_menu() {
     let opts = vec![sel("model", "Model", "a", &[("a", "A")])];
     let mut overlay = SettingsOverlay::new(&opts, vec![], &[]);
     let messages = press(&mut overlay, KeyCode::Esc);
-    assert!(matches!(messages.as_slice(), [OverlayMessage::Close]));
+    assert!(matches!(messages.as_slice(), [SurfaceMessage::Close]));
 }
 
 #[test]
@@ -171,7 +171,7 @@ fn picker_confirm_returns_set_config_option() {
     press(&mut overlay, KeyCode::Down);
     let messages = press(&mut overlay, KeyCode::Enter);
     match messages.as_slice() {
-        [OverlayMessage::SetConfigOption { config_id, value }] => {
+        [SurfaceMessage::SetConfigOption { config_id, value }] => {
             assert_eq!(config_id, "model");
             assert_eq!(value, "b");
         }
@@ -212,7 +212,7 @@ fn picker_query_filters_by_name() {
 
     let messages = press(&mut overlay, KeyCode::Enter);
     match messages.as_slice() {
-        [OverlayMessage::SetConfigOption { value, .. }] => assert_eq!(value, "openrouter:gemini"),
+        [SurfaceMessage::SetConfigOption { value, .. }] => assert_eq!(value, "openrouter:gemini"),
         other => panic!("expected the only match to be confirmed, got: {other:?}"),
     }
 }
@@ -236,7 +236,7 @@ fn model_selector_toggles_and_commits_on_close() {
 
     let messages = press(&mut overlay, KeyCode::Esc);
     match messages.as_slice() {
-        [OverlayMessage::SetConfigOption { config_id, value }] => {
+        [SurfaceMessage::SetConfigOption { config_id, value }] => {
             assert_eq!(config_id, "model");
             assert!(value.contains("anthropic:opus"), "value: {value}");
         }
@@ -297,7 +297,7 @@ fn model_selector_query_filters_before_toggling() {
     press(&mut overlay, KeyCode::Enter);
 
     match press(&mut overlay, KeyCode::Esc).as_slice() {
-        [OverlayMessage::SetConfigOption { value, .. }] => assert_eq!(value, "openai:gpt-4o"),
+        [SurfaceMessage::SetConfigOption { value, .. }] => assert_eq!(value, "openai:gpt-4o"),
         other => panic!("expected only the filtered model to be selected, got: {other:?}"),
     }
 }
@@ -365,7 +365,9 @@ fn small_terminal_renders_placeholder() {
     let mut overlay = SettingsOverlay::new(&opts, vec![], &[]);
     let area = Rect::new(0, 0, 5, 2);
     let mut buffer = Buffer::empty(area);
-    overlay.render(area, &mut buffer, &Theme::default());
+    let theme = Theme::default();
+    let mut highlighter = crate::syntax::SyntaxHighlighter::new();
+    overlay.render(area, &mut buffer, &mut render_context(&theme, &mut highlighter));
     let text: String = buffer.content.iter().map(ratatui::buffer::Cell::symbol).collect();
     assert!(text.contains("term"), "text: {text}");
 }
@@ -425,4 +427,12 @@ async fn dropping_overlay_cancels_pending_elicitation() {
             assert_eq!(response.action, ElicitationAction::Cancel);
         })
         .await;
+}
+
+/// Rendering services for a surface under test.
+fn render_context<'a>(
+    theme: &'a Theme,
+    highlighter: &'a mut crate::syntax::SyntaxHighlighter,
+) -> crate::render_context::RenderContext<'a> {
+    crate::render_context::RenderContext { theme, highlighter, theme_generation: 0 }
 }

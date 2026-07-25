@@ -6,7 +6,8 @@ use crate::app::{HistoryItem, HistoryKind, SubAgentHistoryItem};
 use crate::diff::render_diff;
 use crate::markdown::render_markdown;
 use crate::progress_indicator::spinner_frame;
-use crate::settings::{ResolvedStatusLineSettings, UiSettings, resolve_status_line_settings};
+use crate::render_context::RenderContext;
+use crate::settings::UiSettings;
 use crate::syntax::SyntaxHighlighter;
 use crate::theme::Theme;
 use crate::tool_calls::{SUB_AGENT_VISIBLE_TOOL_LIMIT, ToolStatus};
@@ -15,30 +16,32 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
-/// Turns transcript items into styled lines, and owns the scrollback those
-/// lines accumulate into.
-pub struct TranscriptRenderer {
+const MAX_TOOL_ARG_WIDTH: usize = 200;
+
+/// Owns everything the draw pass needs but the terminal itself: the theme, the
+/// syntax highlighter, and the transcript scrollback those two produce.
+///
+/// Methods destructure `self` rather than taking `&self.theme` through `&mut
+/// self`, so the theme is borrowed alongside the highlighter instead of cloned
+/// once per item per frame.
+pub struct Presenter {
     theme: Theme,
     highlighter: SyntaxHighlighter,
+    theme_generation: u64,
     committed_lines: Vec<Line<'static>>,
     transcript_generation: u64,
-    theme_generation: u64,
-    /// Markdown for the streaming tail, keyed by content hash and width, so a
-    /// growing message is not re-parsed from scratch every frame.
-    pending_markdown_cache: HashMap<(u64, u16), Vec<Line<'static>>>,
-    settings: ResolvedStatusLineSettings,
+    pending_markdown_cache: PendingMarkdownCache,
 }
 
-impl TranscriptRenderer {
+impl Presenter {
     pub fn new(settings: &UiSettings) -> Self {
         Self {
             theme: Theme::load(settings),
             highlighter: SyntaxHighlighter::new(),
+            theme_generation: 0,
             committed_lines: Vec::new(),
             transcript_generation: 0,
-            theme_generation: 0,
-            pending_markdown_cache: HashMap::new(),
-            settings: resolve_status_line_settings(settings),
+            pending_markdown_cache: PendingMarkdownCache::default(),
         }
     }
 
@@ -46,23 +49,20 @@ impl TranscriptRenderer {
         &self.theme
     }
 
-    pub fn settings(&self) -> &ResolvedStatusLineSettings {
-        &self.settings
-    }
-
-    pub fn highlighter(&mut self) -> &mut SyntaxHighlighter {
-        &mut self.highlighter
-    }
-
-    pub fn theme_generation(&self) -> u64 {
-        self.theme_generation
-    }
-
     pub fn set_theme(&mut self, theme: Theme) {
         self.theme = theme;
         self.theme_generation = self.theme_generation.wrapping_add(1);
         self.highlighter.clear();
         self.pending_markdown_cache.clear();
+    }
+
+    /// The rendering services a full-screen surface or overlay draws with.
+    pub fn context(&mut self) -> RenderContext<'_> {
+        RenderContext {
+            theme: &self.theme,
+            highlighter: &mut self.highlighter,
+            theme_generation: self.theme_generation,
+        }
     }
 
     /// Renders items that have left the live viewport for good.
@@ -86,7 +86,9 @@ impl TranscriptRenderer {
         padding: usize,
         spinner_tick: usize,
     ) -> Vec<Line<'static>> {
-        self.render_items(items, previous_kind, width, padding, spinner_tick, true)
+        let lines = self.render_items(items, previous_kind, width, padding, spinner_tick, true);
+        self.pending_markdown_cache.end_frame();
+        lines
     }
 
     pub(crate) fn sync_transcript_generation(&mut self, generation: u64) {
@@ -140,17 +142,13 @@ impl TranscriptRenderer {
     }
 
     fn cached_markdown(&mut self, text: &str, width: u16, padding: usize) -> Vec<Line<'static>> {
+        let Self { theme, highlighter, pending_markdown_cache, .. } = self;
         let content_width = content_width(width, padding);
         let mut hasher = DefaultHasher::new();
         text.hash(&mut hasher);
-        let key = (hasher.finish(), content_width);
-        let theme = self.theme.clone();
-        self.pending_markdown_cache
-            .entry(key)
-            .or_insert_with(|| {
-                indent_lines(render_markdown(text, content_width, &theme, &mut self.highlighter), padding)
-            })
-            .clone()
+        pending_markdown_cache.get_or_insert_with((hasher.finish(), content_width), || {
+            indent_lines(render_markdown(text, content_width, theme, highlighter), padding)
+        })
     }
 
     fn item_lines(
@@ -160,13 +158,11 @@ impl TranscriptRenderer {
         padding: usize,
         spinner_tick: usize,
     ) -> Vec<Line<'static>> {
+        let Self { theme, highlighter, .. } = self;
         let content_width = content_width(width, padding);
-        let theme = self.theme.clone();
         match item {
-            HistoryItem::User(text) => user_block_lines(text, width, padding, &theme),
-            HistoryItem::Text(text) => {
-                indent_lines(render_markdown(text, content_width, &theme, &mut self.highlighter), padding)
-            }
+            HistoryItem::User(text) => user_block_lines(text, width, padding, theme),
+            HistoryItem::Text(text) => indent_lines(render_markdown(text, content_width, theme, highlighter), padding),
             HistoryItem::Thought(text) => indent_lines(
                 wrap_line(
                     Line::styled(
@@ -179,16 +175,16 @@ impl TranscriptRenderer {
             ),
             HistoryItem::Tool { title, status, diff, raw_input, display_value, sub_agents } => {
                 let mut lines =
-                    vec![tool_line(title, raw_input, display_value.as_deref(), status, spinner_tick, padding, &theme)];
+                    vec![tool_line(title, raw_input, display_value.as_deref(), status, spinner_tick, padding, theme)];
                 if matches!(status, ToolStatus::Success)
                     && let Some(preview) = diff
                 {
-                    let rendered = render_diff(preview, content_width, &theme, &mut self.highlighter);
+                    let rendered = render_diff(preview, content_width, theme, highlighter);
                     lines.extend(indent_lines(rendered, padding));
                 }
                 if !sub_agents.is_empty() {
                     lines.push(Line::default());
-                    lines.extend(sub_agent_tree_lines(sub_agents, spinner_tick, padding, &theme));
+                    lines.extend(sub_agent_tree_lines(sub_agents, spinner_tick, padding, theme));
                 }
                 lines
             }
@@ -205,6 +201,39 @@ pub(crate) fn indent_lines(lines: Vec<Line<'static>>, padding: usize) -> Vec<Lin
             line
         })
         .collect()
+}
+
+/// Rendered markdown for the streaming tail, keyed by content hash and width.
+///
+/// Each frame's entries are collected separately and become the whole cache
+/// when the frame ends, so a message that grows by one chunk per frame reuses
+/// its previous render without accumulating an entry per intermediate prefix.
+#[derive(Default)]
+struct PendingMarkdownCache {
+    current: HashMap<(u64, u16), Vec<Line<'static>>>,
+    frame: HashMap<(u64, u16), Vec<Line<'static>>>,
+}
+
+impl PendingMarkdownCache {
+    fn get_or_insert_with(
+        &mut self,
+        key: (u64, u16),
+        build: impl FnOnce() -> Vec<Line<'static>>,
+    ) -> Vec<Line<'static>> {
+        let lines = self.frame.remove(&key).or_else(|| self.current.remove(&key)).unwrap_or_else(build);
+        self.frame.insert(key, lines.clone());
+        lines
+    }
+
+    /// Drops every entry the frame that just rendered did not use.
+    fn end_frame(&mut self) {
+        self.current = std::mem::take(&mut self.frame);
+    }
+
+    fn clear(&mut self) {
+        self.current.clear();
+        self.frame.clear();
+    }
 }
 
 fn content_width(width: u16, padding: usize) -> u16 {
@@ -246,8 +275,6 @@ fn tool_detail(display_value: Option<&str>, raw_input: &str, status: &ToolStatus
         None => format!(" {}", truncate_to_width(raw_input, MAX_TOOL_ARG_WIDTH)),
     }
 }
-
-const MAX_TOOL_ARG_WIDTH: usize = 200;
 
 fn tool_line(
     title: &str,
@@ -317,4 +344,48 @@ fn sub_agent_tree_lines(
     }
 
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PendingMarkdownCache;
+    use ratatui::text::Line;
+
+    fn render(cache: &mut PendingMarkdownCache, key: u64, text: &str) -> Vec<Line<'static>> {
+        cache.get_or_insert_with((key, 80), || vec![Line::raw(text.to_string())])
+    }
+
+    #[test]
+    fn holds_only_what_the_last_frame_rendered() {
+        let mut cache = PendingMarkdownCache::default();
+        // A streaming message hashes differently after every chunk, so an
+        // unpruned cache would keep one render per intermediate prefix.
+        for (key, text) in [(1, "a"), (2, "ab"), (3, "abc")] {
+            render(&mut cache, key, text);
+            cache.end_frame();
+        }
+
+        assert_eq!(cache.current.len(), 1);
+    }
+
+    #[test]
+    fn reuses_the_previous_frames_render() {
+        let mut cache = PendingMarkdownCache::default();
+        render(&mut cache, 1, "built once");
+        cache.end_frame();
+
+        let reused = cache.get_or_insert_with((1, 80), || panic!("cached render must not be rebuilt"));
+
+        assert_eq!(reused, vec![Line::raw("built once")]);
+    }
+
+    #[test]
+    fn keeps_every_segment_a_single_frame_rendered() {
+        let mut cache = PendingMarkdownCache::default();
+        render(&mut cache, 1, "first");
+        render(&mut cache, 2, "second");
+        cache.end_frame();
+
+        assert_eq!(cache.current.len(), 2);
+    }
 }

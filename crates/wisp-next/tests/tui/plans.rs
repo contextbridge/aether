@@ -12,7 +12,7 @@ fn plan_update(entries: Vec<acp::PlanEntry>) -> AcpEvent {
 fn plan_renders_in_viewport() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal_tall();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
 
     app.on_acp_event(plan_update(vec![
         plan_entry("Research", acp::PlanEntryStatus::InProgress),
@@ -33,7 +33,7 @@ fn plan_renders_in_viewport() {
 fn plan_ordering_in_viewport() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal_tall();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
 
     app.on_acp_event(plan_update(vec![
         plan_entry("Completed task", acp::PlanEntryStatus::Completed),
@@ -56,7 +56,7 @@ fn plan_ordering_in_viewport() {
 fn plan_grace_period_hides_completed() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
 
     let now = Instant::now();
 
@@ -95,7 +95,7 @@ fn plan_grace_period_timestamp_preserved_across_repeated_updates() {
 fn plan_coexists_with_streaming_transcript() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
 
     app.on_acp_event(plan_update(vec![plan_entry("Research", acp::PlanEntryStatus::InProgress)]));
 
@@ -114,7 +114,7 @@ fn plan_coexists_with_streaming_transcript() {
 fn plan_coexists_with_tool_calls() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
 
     app.on_acp_event(plan_update(vec![plan_entry("Edit files", acp::PlanEntryStatus::InProgress)]));
 
@@ -133,7 +133,7 @@ fn plan_short_terminal_clips_plan() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal_with_width(40);
     terminal.backend_mut().resize(40, 8);
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
 
     app.on_acp_event(plan_update(vec![
         plan_entry("Plan item one", acp::PlanEntryStatus::Pending),
@@ -157,7 +157,7 @@ fn plan_short_terminal_clips_plan() {
 fn plan_not_in_scrollback() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
 
     app.on_acp_event(plan_update(vec![plan_entry("A plan task", acp::PlanEntryStatus::InProgress)]));
 
@@ -175,7 +175,7 @@ fn plan_not_in_scrollback() {
 fn plan_cleared_on_context_cleared() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
 
     app.on_acp_event(plan_update(vec![plan_entry("Task", acp::PlanEntryStatus::Pending)]));
     assert!(app.has_plan());
@@ -192,7 +192,7 @@ fn plan_cleared_on_context_cleared() {
 fn plan_cleared_on_new_session() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
 
     app.on_acp_event(plan_update(vec![plan_entry("Task", acp::PlanEntryStatus::Pending)]));
     assert!(app.has_plan());
@@ -209,7 +209,7 @@ fn plan_cleared_on_new_session() {
 fn plan_cleared_on_session_loaded() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
 
     app.on_acp_event(plan_update(vec![plan_entry("Task", acp::PlanEntryStatus::Pending)]));
     assert!(app.has_plan());

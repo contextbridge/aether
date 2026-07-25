@@ -1,7 +1,7 @@
 use super::config::{build_theme_entries, update_config_option_value};
 use super::{
-    AetherCapabilities, App, CommandEntry, OverlayLayer, OverlayMessage, SessionId, SettingsOverlay,
-    WorkspaceMoveState, WorkspaceStatus, acp,
+    AetherCapabilities, App, CommandEntry, Layer, SessionId, SettingsOverlay, SurfaceMessage, WorkspaceMoveState,
+    WorkspaceStatus, acp,
 };
 use crate::settings_overlay::SettingsChange;
 
@@ -59,11 +59,11 @@ impl App {
         let mut overlay = SettingsOverlay::new(&self.config_options, self.server_statuses.clone(), &self.auth_methods);
         overlay.add_local_entries(build_theme_entries(&self.ui_settings));
         overlay.add_status_entries();
-        self.overlay = OverlayLayer::Settings(overlay);
+        self.open_layer(Layer::Settings(overlay));
     }
 
     fn begin_workspace_move(&mut self) {
-        if self.prompt_in_flight || !self.workspace_move_state.is_idle() {
+        if self.turn.prompt_in_flight || !self.workspace_move_state.is_idle() {
             self.notify("Cannot move workspace while a prompt is running or another move is in progress");
             return;
         }
@@ -73,21 +73,23 @@ impl App {
         }
     }
 
-    pub(super) fn handle_overlay_messages(&mut self, messages: Vec<OverlayMessage>) {
+    pub(super) fn handle_surface_messages(&mut self, messages: Vec<SurfaceMessage>) {
         for message in messages {
-            self.handle_overlay_message(message);
+            self.handle_surface_message(message);
         }
     }
 
-    fn handle_overlay_message(&mut self, message: OverlayMessage) {
+    fn handle_surface_message(&mut self, message: SurfaceMessage) {
         match message {
-            OverlayMessage::Close => self.close_overlay(),
-            OverlayMessage::LoadSession { session_id, cwd } => self.load_session(&session_id, &cwd),
-            OverlayMessage::RequestSessionPreview { session_id } => {
+            SurfaceMessage::Close => self.close_layer(),
+            SurfaceMessage::Effect(effect) => self.pending_screen_effects.push_back(effect),
+            SurfaceMessage::SubmitReview(prompt) => self.submit_review(&prompt),
+            SurfaceMessage::LoadSession { session_id, cwd } => self.load_session(&session_id, &cwd),
+            SurfaceMessage::RequestSessionPreview { session_id } => {
                 let _ = self.prompt_handle.session_preview(&SessionId::new(session_id));
             }
-            OverlayMessage::MoveWorkspace { target } => {
-                self.close_overlay();
+            SurfaceMessage::MoveWorkspace { target } => {
+                self.close_layer();
                 self.workspace_move_state = WorkspaceMoveState::Moving;
                 if self
                     .report_if_err("move workspace", self.prompt_handle.move_workspace(&self.session_id, target))
@@ -96,17 +98,17 @@ impl App {
                     self.workspace_move_state = WorkspaceMoveState::Idle;
                 }
             }
-            OverlayMessage::SetConfigOption { config_id, value } => {
+            SurfaceMessage::SetConfigOption { config_id, value } => {
                 if self.prompt_handle.set_config_option(&self.session_id, &config_id, &value).is_ok() {
                     self.apply_settings_change(&SettingsChange { config_id, new_value: value });
                 }
             }
-            OverlayMessage::SetTheme(value) => self.apply_theme_change(&value),
-            OverlayMessage::AuthenticateServer(name) => {
+            SurfaceMessage::SetTheme(value) => self.apply_theme_change(&value),
+            SurfaceMessage::AuthenticateServer(name) => {
                 let _ = self.prompt_handle.authenticate_mcp_server(&self.session_id, &name);
             }
-            OverlayMessage::AuthenticateProvider(method_id) => {
-                if let OverlayLayer::Settings(overlay) = &mut self.overlay {
+            SurfaceMessage::AuthenticateProvider(method_id) => {
+                if let Layer::Settings(overlay) = &mut self.layer {
                     overlay.on_authenticate_started(&method_id);
                 }
                 let _ = self.prompt_handle.authenticate(&method_id);
@@ -114,17 +116,26 @@ impl App {
         }
     }
 
-    /// Dismisses the overlay. Dropping it releases anything it was holding, such
-    /// as an unanswered elicitation.
-    pub(super) fn close_overlay(&mut self) {
-        self.overlay = OverlayLayer::None;
+    /// Opens `layer`, closing whatever was already open.
+    pub(super) fn open_layer(&mut self, layer: Layer) {
+        self.close_layer();
+        self.layer = layer;
+    }
+
+    /// Dismisses the open surface. It is cancelled first so it can release
+    /// anything it was holding, such as an unanswered elicitation.
+    pub(super) fn close_layer(&mut self) {
+        if let Some(surface) = self.layer.active() {
+            surface.cancel();
+        }
+        self.layer = Layer::None;
         if self.workspace_move_state == WorkspaceMoveState::Picking {
             self.workspace_move_state = WorkspaceMoveState::Idle;
         }
     }
 
     pub(super) fn apply_settings_change(&mut self, change: &SettingsChange) {
-        if let OverlayLayer::Settings(overlay) = &mut self.overlay {
+        if let Layer::Settings(overlay) = &mut self.layer {
             overlay.apply_change(change);
         }
         update_config_option_value(&mut self.config_options, &change.config_id, &change.new_value);
@@ -137,13 +148,13 @@ impl App {
             self.notify(&format!("Failed to load session: {error}"));
             return;
         }
-        self.close_overlay();
+        self.close_layer();
         self.reset_conversation();
     }
 
     pub(super) fn on_workspace_moved(&mut self, new_cwd: std::path::PathBuf) {
         self.workspace_status = WorkspaceStatus::resolve(&new_cwd);
-        self.close_screen();
+        self.close_layer();
         self.reset_conversation();
         self.notify(&format!("Moved to {}", crate::workspace_status::home_relative_path(&new_cwd)));
         self.workspace_move_state = WorkspaceMoveState::LoadingSession;
@@ -158,16 +169,16 @@ impl App {
 
     /// Sends the review the git-diff screen assembled as a normal prompt.
     pub(super) fn submit_review(&mut self, prompt: &str) {
-        if self.prompt_in_flight {
+        if self.turn.prompt_in_flight {
             return;
         }
-        self.prompt_in_flight = true;
+        self.turn.prompt_in_flight = true;
         self.transcript.push_user_message(&format!("[wisp-next] Submitted review of working tree diff.\n{prompt}"));
         match self.prompt_handle.prompt(&self.session_id, prompt, None) {
-            Ok(()) => self.close_screen(),
+            Ok(()) => self.close_layer(),
             Err(error) => {
                 tracing::error!("failed to send review prompt: {error}");
-                self.prompt_in_flight = false;
+                self.turn.prompt_in_flight = false;
                 self.notify(&format!("Failed to send review: {error}"));
             }
         }

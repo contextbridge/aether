@@ -7,8 +7,10 @@ use std::path::PathBuf;
 use tokio::sync::oneshot;
 use utils::plan_review::PlanReviewElicitationMeta;
 use wisp_next::plan_review::{PlanDocument, ReviewComment, compile_feedback};
+use wisp_next::render_context::RenderContext;
+use wisp_next::screens::MouseAction;
 use wisp_next::screens::plan_review::PlanReviewScreen;
-use wisp_next::screens::{MouseAction, RenderContext, Screen, ScreenOutcome};
+use wisp_next::surface::{Surface, SurfaceMessage};
 use wisp_next::syntax::SyntaxHighlighter;
 use wisp_next::theme::Theme;
 
@@ -31,7 +33,7 @@ fn key(code: KeyCode) -> KeyEvent {
 
 /// Sends a key and reports whether it ended the review.
 fn closes(screen: &mut PlanReviewScreen, key: KeyEvent) -> bool {
-    matches!(screen.on_key(key), ScreenOutcome::Close)
+    screen.on_key(key).iter().any(|message| matches!(message, SurfaceMessage::Close))
 }
 
 #[test]

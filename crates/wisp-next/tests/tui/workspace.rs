@@ -8,7 +8,7 @@ fn workspace_move_command_hidden_without_capability() {
     assert!(app.composer().has_overlay());
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("/clear"), "{viewport}");
@@ -23,7 +23,7 @@ fn workspace_move_command_visible_with_capability() {
     assert!(app.composer().has_overlay());
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("/move"), "{viewport}");
@@ -41,7 +41,7 @@ fn workspace_move_command_rejected_when_prompt_in_flight() {
 
     assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Idle);
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.lines().any(|l| l.contains("Cannot move") && l.contains("workspace")), "{viewport}");
@@ -64,7 +64,7 @@ fn workspace_move_command_rejected_when_already_listing() {
     assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Listing);
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     let collapsed = viewport.replace('\n', " ");
@@ -83,7 +83,7 @@ fn workspace_list_synchronous_failure_resets_state() {
 
     assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Idle);
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     let collapsed = viewport.replace('\n', " ");
@@ -105,7 +105,7 @@ fn workspace_list_failed_event_resets_state() {
     assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Idle);
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     let collapsed = viewport.replace('\n', " ");
@@ -132,7 +132,7 @@ fn workspace_picker_opens_with_existing_workspaces() {
     assert!(app.has_modal());
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("/home/user/code/other"), "{viewport}");
@@ -154,7 +154,7 @@ fn workspace_picker_shows_empty_state_when_no_workspaces() {
     assert!(app.has_modal());
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(!viewport.contains("No other workspaces available"), "{viewport}");
@@ -225,7 +225,7 @@ fn workspace_picker_enter_selects_create_new_and_shows_naming_mode() {
     app.on_acp_event(workspaces_listed(vec![workspace_entry("/home/user/code/current", true)]));
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("Create new workspace"), "{viewport}");
@@ -248,7 +248,7 @@ fn workspace_naming_new_esc_returns_to_list_mode() {
 
     app.on_key(key(KeyCode::Enter));
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("New workspace"), "{viewport}");
@@ -309,7 +309,7 @@ fn workspace_picker_filtering_hides_non_matching() {
     ]));
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("project-a"), "{viewport}");
@@ -384,7 +384,7 @@ fn workspace_move_success_buffers_and_replays_session_updates() {
     assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Idle);
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.lines().any(|l| l.contains("buffered-message")), "{viewport}");
@@ -415,7 +415,7 @@ fn workspace_move_load_session_failure_recovers() {
     assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Idle);
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.lines().any(|l| l.contains("Failed to reload session")), "{viewport}");
@@ -442,7 +442,7 @@ fn workspace_move_failed_event_resets_state() {
     assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Idle);
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.lines().any(|l| l.contains("Workspace move failed")), "{viewport}");
@@ -467,7 +467,7 @@ fn workspace_move_synchronous_error_resets_state() {
     assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Idle);
 
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     let collapsed = viewport.replace('\n', " ");
@@ -490,7 +490,7 @@ fn workspace_picker_renders_on_narrow_terminal() {
     ]));
 
     let mut terminal = make_terminal_with_width(40);
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("project-a"), "{viewport}");

@@ -3,7 +3,7 @@ use crate::prompt_search::PromptSearchPicker;
 
 impl App {
     pub(super) fn submit(&mut self) {
-        if self.composer.is_empty() || self.prompt_in_flight {
+        if self.composer.is_empty() || self.turn.prompt_in_flight {
             return;
         }
 
@@ -27,12 +27,12 @@ impl App {
             return;
         }
 
-        self.prompt_in_flight = true;
-        self.submitted_prompt_count = self.submitted_prompt_count.saturating_add(1);
+        self.turn.prompt_in_flight = true;
+        self.turn.submitted_prompt_count = self.turn.submitted_prompt_count.saturating_add(1);
         let content = (!outcome.blocks.is_empty()).then_some(outcome.blocks);
         if let Err(error) = self.prompt_handle.prompt(&self.session_id, &text, content) {
             tracing::error!("failed to send prompt: {error}");
-            self.prompt_in_flight = false;
+            self.turn.prompt_in_flight = false;
             self.notify(&format!("Failed to send prompt: {error}"));
         }
     }

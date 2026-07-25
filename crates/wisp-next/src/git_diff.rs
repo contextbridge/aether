@@ -136,10 +136,6 @@ impl ReviewQueue {
         &self.comments
     }
 
-    pub fn counts_for(&self, files: &[FileDiff]) -> Vec<usize> {
-        files.iter().map(|file| self.comments.iter().filter(|c| c.context.file_path == file.path).count()).collect()
-    }
-
     pub fn format_prompt(&self) -> String {
         let mut prompt = String::from("I'm reviewing the working tree diff. Here are my comments:\n");
         let mut file_order: Vec<&str> = Vec::new();

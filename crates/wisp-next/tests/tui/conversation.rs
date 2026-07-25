@@ -105,7 +105,7 @@ fn context_usage_is_reported_as_percent() {
 fn context_clear_discards_conversation_retained_in_the_live_viewport() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     submit_prompt(&mut app, "old retained message");
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     assert!(buffer_text(&viewport_buffer(&mut terminal)).contains("old retained message"));
@@ -122,7 +122,7 @@ fn context_clear_discards_conversation_retained_in_the_live_viewport() {
 fn fitting_user_message_remains_in_the_live_viewport() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
 
     submit_prompt(&mut app, "hello viewport");
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
@@ -135,7 +135,7 @@ fn fitting_user_message_remains_in_the_live_viewport() {
 fn completed_stream_lines_remain_live_until_they_overflow() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     submit_prompt(&mut app, "hi");
 
     let mut completed = String::new();
@@ -157,7 +157,7 @@ fn completed_stream_lines_remain_live_until_they_overflow() {
 fn completed_streaming_text_remains_adjacent_to_the_composer_once() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     submit_prompt(&mut app, "hi");
 
     app.on_acp_event(text_chunk("streamed "));
@@ -180,7 +180,7 @@ fn completed_streaming_text_remains_adjacent_to_the_composer_once() {
 fn running_tool_holds_later_content_out_of_committed_history() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     submit_prompt(&mut app, "run a tool");
 
     app.on_acp_event(tool_call("tool-1", "Reading main.rs"));
@@ -417,7 +417,7 @@ fn truncation_boundary_exactly_200_bytes_no_ellipsis() {
 fn truncation_preserved_in_scrollback() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal_with_dimensions(250, 15);
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     submit_prompt(&mut app, "run tool");
     let long = "x".repeat(300);
     app.on_acp_event(tool_call_with_raw("tool-1", "Long arg", serde_json::Value::String(long)));
@@ -435,7 +435,7 @@ fn truncation_preserved_in_scrollback() {
 fn tool_arguments_preserved_in_scrollback_exactly_once() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     let raw = serde_json::json!({"path": "/src/main.rs"});
     submit_prompt(&mut app, "run tool");
     app.on_acp_event(tool_call_with_raw("tool-1", "Read file", raw));
@@ -477,7 +477,7 @@ fn diff_not_rendered_while_tool_is_running() {
 fn diff_not_rendered_after_failed_status() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     submit_prompt(&mut app, "run tool");
     app.on_acp_event(tool_call("tool-1", "Edit file"));
 

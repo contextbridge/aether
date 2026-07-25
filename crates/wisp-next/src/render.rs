@@ -1,8 +1,7 @@
 use crate::INLINE_SCROLLBACK_RESERVE;
 use crate::app::App;
 use crate::plan_view::PlanView;
-use crate::presentation::TranscriptRenderer;
-use crate::screens::RenderContext;
+use crate::presentation::Presenter;
 use crate::status_line::{StatusLine, status_line_height};
 use crate::theme::Theme;
 use agent_client_protocol::schema::PlanEntry;
@@ -14,17 +13,21 @@ use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::text::{Line, Text};
 use ratatui::widgets::{Paragraph, Widget};
 
+/// Most rows the completion list and history search may claim.
+const COMPLETION_MAX_ROWS: usize = 6;
+const PROMPT_SEARCH_MAX_ROWS: usize = 12;
+
 /// Draws one frame, moving any scrollback that no longer fits into the
 /// terminal's own history above the inline viewport.
 pub fn sync_terminal<B: Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
-    renderer: &mut TranscriptRenderer,
+    presenter: &mut Presenter,
 ) -> Result<(), B::Error> {
     terminal.autoresize()?;
     let terminal_height = terminal.size()?.height;
     let area = terminal.get_frame().area();
-    renderer.sync_transcript_generation(app.transcript_generation());
+    presenter.sync_transcript_generation(app.transcript_generation());
     let can_insert_history = terminal_height.saturating_sub(area.height) >= INLINE_SCROLLBACK_RESERVE;
     let commits_history = can_insert_history && !app.full_screen_active();
 
@@ -32,15 +35,15 @@ pub fn sync_terminal<B: Backend>(
         let previous_kind = app.last_drained_kind();
         let committed = app.drain_finalized();
         let lines =
-            renderer.history_lines(&committed, previous_kind, area.width, app.content_padding(), app.spinner_tick());
-        renderer.append_committed_lines(lines);
+            presenter.history_lines(&committed, previous_kind, area.width, app.content_padding(), app.spinner_tick());
+        presenter.append_committed_lines(lines);
     }
 
-    let layout = FrameLayout::new(area, app, renderer);
+    let layout = FrameLayout::new(area, app, presenter);
     let overflow =
-        if commits_history { renderer.take_committed_overflow(layout.committed_capacity()) } else { Vec::new() };
+        if commits_history { presenter.take_committed_overflow(layout.committed_capacity()) } else { Vec::new() };
 
-    terminal.draw(|frame| draw_frame(frame, app, renderer, &layout))?;
+    terminal.draw(|frame| draw_frame(frame, app, presenter, &layout))?;
 
     if overflow.is_empty() {
         return Ok(());
@@ -54,7 +57,7 @@ pub fn sync_terminal<B: Backend>(
         })?;
     }
 
-    terminal.draw(|frame| draw_frame(frame, app, renderer, &layout))?;
+    terminal.draw(|frame| draw_frame(frame, app, presenter, &layout))?;
     Ok(())
 }
 
@@ -73,16 +76,10 @@ struct FrameLayout {
     transcript_height: u16,
 }
 
-/// Most rows the completion list and history search may claim.
-const COMPLETION_MAX_ROWS: usize = 6;
-const PROMPT_SEARCH_MAX_ROWS: usize = 12;
-
 impl FrameLayout {
-    fn new(area: Rect, app: &mut App, renderer: &mut TranscriptRenderer) -> Self {
-        let theme = renderer.theme().clone();
-        let settings = renderer.settings().clone();
-        let status_line_rows = status_line_height(app, area.width, &settings, &theme);
-        let composer_layout = app.composer().layout(area.width, &theme);
+    fn new(area: Rect, app: &mut App, presenter: &mut Presenter) -> Self {
+        let status_line_rows = status_line_height(app, area.width, app.status_line_settings(), presenter.theme());
+        let composer_layout = app.composer().layout(area.width, presenter.theme());
         let completion_rows = rows(app.composer().completion_ref().map_or(0, |o| o.row_count(COMPLETION_MAX_ROWS)));
         let prompt_search_rows =
             rows(app.composer().prompt_search_ref().map_or(0, |p| p.height(PROMPT_SEARCH_MAX_ROWS)));
@@ -95,10 +92,11 @@ impl FrameLayout {
         let plan_entries = app.plan_entries();
         // The plan never takes more than a third of what is left, so a long plan
         // cannot squeeze out the conversation.
-        let plan_height = rows(PlanView::new(&plan_entries, &theme, padding).line_count()).min(remaining.div_ceil(3));
-        let progress_lines = app.progress_indicator().lines(&theme, app.spinner_tick(), padding);
+        let plan_height =
+            rows(PlanView::new(&plan_entries, presenter.theme(), padding).line_count()).min(remaining.div_ceil(3));
+        let progress_lines = app.progress_indicator().lines(presenter.theme(), app.spinner_tick(), padding);
         let live_lines =
-            if app.full_screen_active() { Vec::new() } else { live_history_lines(app, renderer, area.width) };
+            if app.full_screen_active() { Vec::new() } else { live_history_lines(app, presenter, area.width) };
 
         Self {
             composer_layout,
@@ -123,9 +121,7 @@ impl FrameLayout {
     }
 }
 
-fn draw_frame(frame: &mut Frame, app: &mut App, renderer: &mut TranscriptRenderer, layout: &FrameLayout) {
-    let theme = renderer.theme().clone();
-    let settings = renderer.settings().clone();
+fn draw_frame(frame: &mut Frame, app: &mut App, presenter: &mut Presenter, layout: &FrameLayout) {
     let [live_area, composer_area, status_area] = Layout::vertical([
         Constraint::Min(0),
         Constraint::Length(layout.composer_height),
@@ -142,19 +138,17 @@ fn draw_frame(frame: &mut Frame, app: &mut App, renderer: &mut TranscriptRendere
     .areas(live_area);
 
     if layout.plan_height > 0 {
-        PlanView::new(&layout.plan_entries, &theme, app.content_padding()).render(plan_area, buf);
+        PlanView::new(&layout.plan_entries, presenter.theme(), app.content_padding()).render(plan_area, buf);
     }
-    draw_transcript(layout, renderer.committed_lines(), transcript_area, buf);
+    draw_transcript(layout, presenter.committed_lines(), transcript_area, buf);
 
-    let cursor = render_composer(layout, app, composer_area, buf, &theme);
-    StatusLine::new(app, &settings, &theme).render(status_area, buf);
+    let cursor = render_composer(layout, app, composer_area, buf, presenter.theme());
+    StatusLine::new(app, app.status_line_settings(), presenter.theme()).render(status_area, buf);
 
     if let Some(cursor) = cursor {
         frame.set_cursor_position(cursor);
     }
-    let theme_generation = renderer.theme_generation();
-    let mut cx = RenderContext { theme: &theme, highlighter: renderer.highlighter(), theme_generation };
-    app.render_active_surface(frame, &mut cx);
+    app.render_active_surface(frame, &mut presenter.context());
 }
 
 /// Stacks committed scrollback, the streaming tail, and the progress indicator
@@ -195,8 +189,8 @@ fn rows(count: usize) -> u16 {
     u16::try_from(count).unwrap_or(u16::MAX)
 }
 
-fn live_history_lines(app: &App, renderer: &mut TranscriptRenderer, width: u16) -> Vec<Line<'static>> {
-    renderer.pending_history_lines(
+fn live_history_lines(app: &App, presenter: &mut Presenter, width: u16) -> Vec<Line<'static>> {
+    presenter.pending_history_lines(
         &app.pending_items(),
         app.last_drained_kind(),
         width,

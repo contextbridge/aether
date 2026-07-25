@@ -1,12 +1,14 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::layout::Position;
 
 use super::GitDiffScreen;
 use crate::edit_buffer::apply_edit_key;
 use crate::git_diff::{CommentContext, QueuedComment};
-use crate::screens::{MouseAction, ScreenEffect, ScreenEvent, ScreenOutcome};
+use crate::screens::{MouseAction, ScreenEvent};
+use crate::surface::SurfaceMessage;
 
+use super::effect;
 use super::effects::{GitDiffEffect, next_request_id};
-use super::rendering::{DRAWER_MIN_WIDTH, drawer_width};
 use super::state::{BottomBar, DrawerEntry, Focus, GitDiffLoadState, PatchCursor, PendingAction};
 
 impl GitDiffScreen {
@@ -31,27 +33,22 @@ impl GitDiffScreen {
         }
     }
 
+    /// A click inside the file drawer focuses and selects a row; anywhere else
+    /// in the body focuses the patch.
     fn click(&mut self, row: u16, column: u16) {
         if self.draft.is_some() || !matches!(self.state, GitDiffLoadState::Ready(_)) {
             return;
         }
-        let Some(body_row) = row.checked_sub(1) else {
-            return;
-        };
-        let area = self.last_area;
-        let drawer = area.width >= DRAWER_MIN_WIDTH;
-        let body_x = area.x.saturating_add(1);
-        if !drawer || column < body_x || column >= body_x + drawer_width(area.width) {
+        if !self.drawer_selection.rows_area().contains(Position::new(column, row)) {
             self.focus = Focus::Patch;
             return;
         }
 
         self.focus = Focus::Drawer;
         let entries = self.drawer_entries();
-        if entries.is_empty() {
+        if !self.drawer_selection.select_at(row, entries.len()) {
             return;
         }
-        self.drawer_selection.select_row(usize::from(body_row), entries.len());
         if let Some(DrawerEntry::File { index, .. }) =
             self.drawer_selection.selected().and_then(|selected| entries.get(selected))
         {
@@ -59,7 +56,7 @@ impl GitDiffScreen {
         }
     }
 
-    pub(super) fn handle_key(&mut self, key: KeyEvent) -> ScreenOutcome {
+    pub(super) fn handle_key(&mut self, key: KeyEvent) -> Vec<SurfaceMessage> {
         if is_dismiss_key(key) {
             return self.dismiss();
         }
@@ -70,7 +67,7 @@ impl GitDiffScreen {
             self.bottom_bar = BottomBar::Help;
             if !is_confirm_key(key, action) {
                 self.pending_action = None;
-                return ScreenOutcome::None;
+                return Vec::new();
             }
         }
 
@@ -79,7 +76,7 @@ impl GitDiffScreen {
             BottomBar::DiscardConfirmation { .. } => return self.on_discard_confirm_key(key),
             BottomBar::Error(_) => {
                 self.bottom_bar = BottomBar::Help;
-                return ScreenOutcome::None;
+                return Vec::new();
             }
             BottomBar::Help => {}
         }
@@ -89,16 +86,16 @@ impl GitDiffScreen {
         }
 
         if self.operation_in_flight {
-            return ScreenOutcome::None;
+            return Vec::new();
         }
 
         self.on_browse_key(key)
     }
 
-    pub(super) fn handle_event(&mut self, event: ScreenEvent) -> Option<ScreenEffect> {
+    pub(super) fn handle_event(&mut self, event: ScreenEvent) -> Vec<SurfaceMessage> {
         // Ignore results for superseded requests.
         if event.request_id() != self.request_id {
-            return None;
+            return Vec::new();
         }
         self.operation_in_flight = false;
         match event {
@@ -107,17 +104,17 @@ impl GitDiffScreen {
                     Ok(document) => self.apply_document(document),
                     Err(error) => self.state = GitDiffLoadState::Error(error.to_string()),
                 }
-                None
+                Vec::new()
             }
             ScreenEvent::ActionFinished { result, .. } => match result {
                 Ok(()) => {
                     self.show_full_file = false;
                     self.full_file_content = None;
-                    Some(self.begin_load())
+                    effect(self.begin_load())
                 }
                 Err(error) => {
                     self.bottom_bar = BottomBar::Error(error.to_string());
-                    None
+                    Vec::new()
                 }
             },
             ScreenEvent::FullFileLoaded { result, .. } => {
@@ -129,35 +126,34 @@ impl GitDiffScreen {
                         self.bottom_bar = BottomBar::Error(error.to_string());
                     }
                 }
-                None
+                Vec::new()
             }
-            ScreenEvent::SubmitReview { .. } => None,
         }
     }
 
     /// Esc and Ctrl-G back out one level: a confirmation, then a bottom-bar
     /// mode, then the screen itself.
-    fn dismiss(&mut self) -> ScreenOutcome {
+    fn dismiss(&mut self) -> Vec<SurfaceMessage> {
         if self.pending_action.take().is_some() {
             self.bottom_bar = BottomBar::Help;
-            return ScreenOutcome::None;
+            return Vec::new();
         }
         match std::mem::replace(&mut self.bottom_bar, BottomBar::Help) {
-            BottomBar::CommitEditor { .. } | BottomBar::DiscardConfirmation { .. } => ScreenOutcome::None,
-            BottomBar::Error(_) | BottomBar::Help => ScreenOutcome::Close,
+            BottomBar::CommitEditor { .. } | BottomBar::DiscardConfirmation { .. } => Vec::new(),
+            BottomBar::Error(_) | BottomBar::Help => vec![SurfaceMessage::Close],
         }
     }
 
-    fn on_browse_key(&mut self, key: KeyEvent) -> ScreenOutcome {
+    fn on_browse_key(&mut self, key: KeyEvent) -> Vec<SurfaceMessage> {
         match key.code {
             KeyCode::Char('t') | KeyCode::Tab => self.guarded(PendingAction::ScopeSwitch, |screen| {
                 screen.scope = screen.scope.next();
                 screen.reset_file_view();
-                ScreenOutcome::Effect(screen.begin_load())
+                effect(screen.begin_load())
             }),
             KeyCode::Char('r') => self.guarded(PendingAction::Reload, |screen| {
                 screen.reset_file_view();
-                ScreenOutcome::Effect(screen.begin_load())
+                effect(screen.begin_load())
             }),
             KeyCode::Char('a') => self.guarded(PendingAction::Stage, GitDiffScreen::stage_all),
             KeyCode::Char('A') => self.guarded(PendingAction::Stage, GitDiffScreen::unstage_all),
@@ -174,39 +170,43 @@ impl GitDiffScreen {
                 } else {
                     self.collapse_selected();
                 }
-                ScreenOutcome::None
+                Vec::new()
             }
             KeyCode::Right | KeyCode::Char('l') | KeyCode::Enter => {
                 if self.focus == Focus::Drawer && !self.expand_or_open_selected() {
                     self.focus = Focus::Patch;
                 }
-                ScreenOutcome::None
+                Vec::new()
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 self.move_vertical(-1);
-                ScreenOutcome::None
+                Vec::new()
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 self.move_vertical(1);
-                ScreenOutcome::None
+                Vec::new()
             }
             KeyCode::PageUp => {
                 self.move_patch_scroll(-10);
-                ScreenOutcome::None
+                Vec::new()
             }
             KeyCode::PageDown => {
                 self.move_patch_scroll(10);
-                ScreenOutcome::None
+                Vec::new()
             }
-            _ => ScreenOutcome::None,
+            _ => Vec::new(),
         }
     }
 
     /// Runs `action` unless queued review comments would be lost, in which case
     /// it arms a confirmation instead.
-    fn guarded(&mut self, action: PendingAction, run: impl FnOnce(&mut Self) -> ScreenOutcome) -> ScreenOutcome {
+    fn guarded(
+        &mut self,
+        action: PendingAction,
+        run: impl FnOnce(&mut Self) -> Vec<SurfaceMessage>,
+    ) -> Vec<SurfaceMessage> {
         if self.needs_comment_confirmation(action) {
-            return ScreenOutcome::None;
+            return Vec::new();
         }
         run(self)
     }
@@ -217,59 +217,54 @@ impl GitDiffScreen {
         self.patch_cursor = PatchCursor::default();
     }
 
-    fn on_commit_editor_key(&mut self, key: KeyEvent) -> ScreenOutcome {
+    fn on_commit_editor_key(&mut self, key: KeyEvent) -> Vec<SurfaceMessage> {
         if key.code != KeyCode::Enter {
             if let BottomBar::CommitEditor { buffer } = &mut self.bottom_bar {
                 apply_edit_key(buffer, key);
             }
-            return ScreenOutcome::None;
+            return Vec::new();
         }
 
         let BottomBar::CommitEditor { mut buffer } = std::mem::replace(&mut self.bottom_bar, BottomBar::Help) else {
-            return ScreenOutcome::None;
+            return Vec::new();
         };
         let message = buffer.take().trim().to_string();
         if message.is_empty() {
             self.bottom_bar = BottomBar::Error("Commit message cannot be empty".to_string());
-            return ScreenOutcome::None;
+            return Vec::new();
         }
         let Some(repo_root) = self.repo_root.clone() else {
-            return ScreenOutcome::None;
+            return Vec::new();
         };
         self.request_id = next_request_id();
         self.operation_in_flight = true;
-        ScreenOutcome::Effect(GitDiffEffect::Commit { request_id: self.request_id, repo_root, message })
+        effect(GitDiffEffect::Commit { request_id: self.request_id, repo_root, message })
     }
 
-    fn on_discard_confirm_key(&mut self, key: KeyEvent) -> ScreenOutcome {
+    fn on_discard_confirm_key(&mut self, key: KeyEvent) -> Vec<SurfaceMessage> {
         match key.code {
             KeyCode::Char('y' | 'Y') => {
                 let BottomBar::DiscardConfirmation { path, status } =
                     std::mem::replace(&mut self.bottom_bar, BottomBar::Help)
                 else {
-                    return ScreenOutcome::None;
+                    return Vec::new();
                 };
                 let Some(repo_root) = self.repo_root.clone() else {
-                    return ScreenOutcome::None;
+                    return Vec::new();
                 };
                 self.request_id = next_request_id();
                 self.operation_in_flight = true;
-                ScreenOutcome::Effect(GitDiffEffect::DiscardFile {
-                    request_id: self.request_id,
-                    repo_root,
-                    path,
-                    status,
-                })
+                effect(GitDiffEffect::DiscardFile { request_id: self.request_id, repo_root, path, status })
             }
             KeyCode::Char('n' | 'N') | KeyCode::Esc => {
                 self.bottom_bar = BottomBar::Help;
-                ScreenOutcome::None
+                Vec::new()
             }
-            _ => ScreenOutcome::None,
+            _ => Vec::new(),
         }
     }
 
-    fn on_draft_key(&mut self, key: KeyEvent) -> ScreenOutcome {
+    fn on_draft_key(&mut self, key: KeyEvent) -> Vec<SurfaceMessage> {
         match key.code {
             KeyCode::Esc => self.draft = None,
             KeyCode::Enter => self.commit_draft(),
@@ -279,7 +274,7 @@ impl GitDiffScreen {
                 }
             }
         }
-        ScreenOutcome::None
+        Vec::new()
     }
 
     /// Files the draft as a review comment against the patch line it is anchored

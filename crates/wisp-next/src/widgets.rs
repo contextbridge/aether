@@ -1,11 +1,50 @@
 use crate::edit_buffer::EditBuffer;
-use crate::wrap::fit_prefix;
+use crate::wrap::{fit_prefix, text_position_in_wrap, wrap_text_char};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Widget};
+use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, StatefulWidget, Widget};
 use unicode_width::UnicodeWidthStr;
+
+/// Draws the vertical scrollbar for `content_rows` of content scrolled to
+/// `offset`, sized against the rows `area` can actually show.
+///
+/// The track length is the number of reachable scroll positions rather than the
+/// row count, so the thumb reaches the bottom exactly when the last row is
+/// visible.
+pub fn render_vertical_scrollbar(area: Rect, buf: &mut Buffer, content_rows: usize, offset: usize) {
+    let scrollable = content_rows.saturating_sub(usize::from(area.height));
+    let mut state = ScrollbarState::new(scrollable).position(offset);
+    StatefulWidget::render(Scrollbar::new(ScrollbarOrientation::VerticalRight), area, buf, &mut state);
+}
+
+/// Wraps `buffer`'s text to `width` columns, with the cursor's row and column
+/// within the wrapped result.
+///
+/// For inputs embedded in scrolled content, where the terminal cursor has to be
+/// placed by the caller rather than by the widget.
+pub fn wrapped_with_cursor(buffer: &EditBuffer, width: usize) -> (Vec<String>, (usize, u16)) {
+    (wrap_text_char(buffer.text(), width), text_position_in_wrap(&buffer.text()[..buffer.cursor()], width))
+}
+
+/// Draws `buffer` with a block cursor painted into the text.
+///
+/// Used where the terminal cursor is not available because the input is one row
+/// of a larger rendered document rather than the focused widget.
+pub fn block_cursor_spans(buffer: &EditBuffer, text_style: Style, cursor_style: Style) -> Vec<Span<'static>> {
+    let text = buffer.text();
+    let cursor = buffer.cursor();
+    let cursor_len = text[cursor..].chars().next().map_or(0, char::len_utf8);
+    // Past the end of the text there is no character to invert, so a space
+    // stands in for one.
+    let under_cursor = if cursor_len == 0 { " " } else { &text[cursor..cursor + cursor_len] };
+    vec![
+        Span::styled(text[..cursor].to_string(), text_style),
+        Span::styled(under_cursor.to_string(), cursor_style),
+        Span::styled(text[cursor + cursor_len..].to_string(), text_style),
+    ]
+}
 
 #[derive(Clone, Copy)]
 pub struct TextInput<'a> {

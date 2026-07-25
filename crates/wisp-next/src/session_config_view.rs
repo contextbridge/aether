@@ -1,7 +1,7 @@
 use acp_utils::config_meta::SelectOptionMeta;
 use acp_utils::config_option_id::ConfigOptionId;
 use agent_client_protocol::schema::{
-    SessionConfigKind, SessionConfigOption, SessionConfigSelect, SessionConfigSelectOption,
+    SessionConfigKind, SessionConfigOption, SessionConfigSelect, SessionConfigSelectOption, SessionConfigSelectOptions,
 };
 use utils::ReasoningEffort;
 
@@ -10,29 +10,37 @@ pub struct SessionConfigView<'a> {
     options: &'a [SessionConfigOption],
 }
 
+/// The select payload behind `option`, or nothing when it is another kind.
+pub fn as_select(option: &SessionConfigOption) -> Option<&SessionConfigSelect> {
+    match &option.kind {
+        SessionConfigKind::Select(select) => Some(select),
+        _ => None,
+    }
+}
+
+/// Every value `select` offers, in display order, with groups flattened away.
+///
+/// Callers that only present or cycle values never need the grouping, and
+/// flattening in one place keeps grouped options from being silently skipped.
+pub fn select_values(select: &SessionConfigSelect) -> Vec<&SessionConfigSelectOption> {
+    match &select.options {
+        SessionConfigSelectOptions::Ungrouped(options) => options.iter().collect(),
+        SessionConfigSelectOptions::Grouped(groups) => groups.iter().flat_map(|group| group.options.iter()).collect(),
+        _ => Vec::new(),
+    }
+}
+
 impl<'a> SessionConfigView<'a> {
     pub fn new(options: &'a [SessionConfigOption]) -> Self {
         Self { options }
     }
 
     pub fn select(&self, id: ConfigOptionId) -> Option<&'a SessionConfigSelect> {
-        self.options.iter().find(|option| option.id.0.as_ref() == id.as_str()).and_then(|option| match &option.kind {
-            SessionConfigKind::Select(select) => Some(select),
-            _ => None,
-        })
+        self.options.iter().find(|option| option.id.0.as_ref() == id.as_str()).and_then(as_select)
     }
 
     pub fn flattened_options(&self, id: ConfigOptionId) -> Vec<&'a SessionConfigSelectOption> {
-        let Some(select) = self.select(id) else {
-            return Vec::new();
-        };
-        match &select.options {
-            agent_client_protocol::schema::SessionConfigSelectOptions::Ungrouped(options) => options.iter().collect(),
-            agent_client_protocol::schema::SessionConfigSelectOptions::Grouped(groups) => {
-                groups.iter().flat_map(|group| group.options.iter()).collect()
-            }
-            _ => Vec::new(),
-        }
+        self.select(id).map(select_values).unwrap_or_default()
     }
 
     pub fn current_values(&self, id: ConfigOptionId) -> Vec<&'a str> {

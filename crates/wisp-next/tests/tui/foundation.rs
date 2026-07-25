@@ -5,8 +5,7 @@ use wisp_next::picker::CompletionOverlay;
 fn app_exposes_initial_config_option_selections() {
     let options =
         vec![select_option("model", "opus"), select_option("mode", "plan"), select_option("reasoning", "high")];
-    let (app, _command_rx) =
-        make_app_with_metadata(std::path::PathBuf::from("."), acp::SessionCapabilities::new(), options, Vec::new());
+    let (app, _command_rx) = AppBuilder::new().config_options(options).build();
 
     let selections: Vec<_> = app
         .config_options()
@@ -27,12 +26,7 @@ fn app_exposes_initial_config_option_selections() {
 
 #[test]
 fn config_option_update_replaces_current_selections() {
-    let (mut app, _command_rx) = make_app_with_metadata(
-        std::path::PathBuf::from("."),
-        acp::SessionCapabilities::new(),
-        vec![select_option("model", "opus")],
-        Vec::new(),
-    );
+    let (mut app, _command_rx) = AppBuilder::new().config_options(vec![select_option("model", "opus")]).build();
 
     app.on_acp_event(session_update(acp::SessionUpdate::ConfigOptionUpdate(acp::ConfigOptionUpdate::new(vec![
         select_option("model", "sonnet"),
@@ -49,8 +43,7 @@ fn config_option_update_replaces_current_selections() {
 #[test]
 fn auth_methods_update_replaces_current_auth_methods() {
     let initial = vec![acp::AuthMethod::Agent(acp::AuthMethodAgent::new("initial", "Initial"))];
-    let (mut app, _command_rx) =
-        make_app_with_metadata(std::path::PathBuf::from("."), acp::SessionCapabilities::new(), Vec::new(), initial);
+    let (mut app, _command_rx) = AppBuilder::new().auth_methods(initial).build();
     let updated = vec![acp::AuthMethod::Agent(acp::AuthMethodAgent::new("updated", "Updated"))];
 
     app.on_acp_event(AcpEvent::AuthMethodsUpdated(AuthMethodsUpdatedParams { auth_methods: updated }));
@@ -63,8 +56,7 @@ fn auth_methods_update_replaces_current_auth_methods() {
 fn session_capability_metadata_enables_only_advertised_features() {
     let session_capabilities = acp::SessionCapabilities::new()
         .meta(Some(AetherCapabilities { prompt_search: true, session_preview: false, workspace_move: true }.to_meta()));
-    let (app, _command_rx) =
-        make_app_with_metadata(std::path::PathBuf::from("."), session_capabilities, Vec::new(), Vec::new());
+    let (app, _command_rx) = AppBuilder::new().session_capabilities(session_capabilities).build();
 
     assert!(app.supports_prompt_search());
     assert!(!app.supports_session_preview());
@@ -177,7 +169,7 @@ fn file_picker_renders_in_the_live_viewport_not_scrollback() {
     std::fs::write(directory.path().join("context.txt"), "attached context").unwrap();
     let (mut app, _command_rx) = make_app_in(directory.path().to_path_buf());
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
 
     app.on_key(key(KeyCode::Char('@')));
     app.on_key(key(KeyCode::Char('c')));
@@ -222,7 +214,7 @@ fn composer_edits_unicode_without_splitting_graphemes() {
 fn markdown_styles_stream_live_and_finalize_once() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     let heading = renderer.theme().heading;
     submit_prompt(&mut app, "render markdown");
     app.on_acp_event(text_chunk("# Heading\n\n**boldword** and *italicword*"));
@@ -248,7 +240,7 @@ fn markdown_styles_stream_live_and_finalize_once() {
 fn fenced_code_info_string_is_syntax_highlighted_with_token_colors() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     let code_background = renderer.theme().code_bg;
     submit_prompt(&mut app, "show code");
     app.on_acp_event(text_chunk("```rust title=\"example.rs\"\nfn highlighted() {}\n```"));
@@ -278,7 +270,7 @@ fn fenced_code_info_string_is_syntax_highlighted_with_token_colors() {
 fn fenced_code_streamed_across_chunks_is_syntax_highlighted() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     let code_background = renderer.theme().code_bg;
     submit_prompt(&mut app, "show code");
     app.on_acp_event(text_chunk("Example:\n"));
@@ -311,7 +303,7 @@ fn fenced_code_streamed_across_chunks_is_syntax_highlighted() {
 fn fenced_code_line_comment_does_not_consume_following_code() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     let code_background = renderer.theme().code_bg;
     submit_prompt(&mut app, "show documented code");
     app.on_acp_event(text_chunk("```python\n# Documentation\nif condition:\n    pass\n```"));
@@ -334,7 +326,7 @@ fn fenced_code_line_comment_does_not_consume_following_code() {
 fn completed_tool_diff_is_themed_and_rendered_once() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     let removed_background = renderer.theme().diff_removed_bg;
     let added_background = renderer.theme().diff_added_bg;
     submit_prompt(&mut app, "edit file");
@@ -356,7 +348,7 @@ fn completed_tool_diff_is_themed_and_rendered_once() {
 fn wide_diff_uses_side_by_side_layout() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     submit_prompt(&mut app, "edit file");
     app.on_acp_event(tool_call("edit-1", "Edit src/main.rs"));
     app.on_acp_event(tool_completed_with_diff("edit-1"));
@@ -371,7 +363,7 @@ fn wide_diff_uses_side_by_side_layout() {
 fn wide_diff_marks_truncated_panel_content() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     submit_prompt(&mut app, "edit file");
     app.on_acp_event(tool_call("edit-1", "Edit src/main.rs"));
     app.on_acp_event(tool_completed_with_diff_contents(
@@ -388,7 +380,7 @@ fn wide_diff_marks_truncated_panel_content() {
 
 #[test]
 fn markdown_blockquote_prefixes_inline_code_first_content() {
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
 
     let lines = renderer.history_lines(&[HistoryItem::Text("> `quoted`".to_string())], None, 40, 0, 0);
 
@@ -397,7 +389,7 @@ fn markdown_blockquote_prefixes_inline_code_first_content() {
 
 #[test]
 fn markdown_horizontal_rule_uses_available_width() {
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
 
     let lines = renderer.history_lines(&[HistoryItem::Text("---".to_string())], None, 20, 0, 0);
 
@@ -406,7 +398,7 @@ fn markdown_horizontal_rule_uses_available_width() {
 
 #[test]
 fn transcript_wrapping_expands_tabs() {
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
 
     let lines = renderer.history_lines(&[HistoryItem::Text("a\tb".to_string())], None, 4, 0, 0);
 
@@ -415,7 +407,7 @@ fn transcript_wrapping_expands_tabs() {
 
 #[test]
 fn transcript_wrapping_never_exceeds_a_one_column_allocation() {
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
 
     let lines = renderer.history_lines(&[HistoryItem::Text("界".to_string())], None, 1, 0, 0);
 
@@ -427,7 +419,7 @@ fn transcript_wrapping_never_exceeds_a_one_column_allocation() {
 fn trailing_newline_does_not_add_an_empty_user_content_row() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     let user_background = renderer.theme().sidebar_bg;
     type_text(&mut app, "hello");
     app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
@@ -441,7 +433,7 @@ fn trailing_newline_does_not_add_an_empty_user_content_row() {
 
 #[test]
 fn markdown_renders_lists_strikethrough_and_tables() {
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     let markdown = "- first\n- second\n\n~~removed~~\n\n| Name | Value |\n| --- | --- |\n| alpha | beta |";
 
     let lines = renderer.history_lines(&[HistoryItem::Text(markdown.to_string())], None, 40, 0, 0);
@@ -484,7 +476,7 @@ fn theme_loads_semantic_colors_from_tmtheme_file() {
 fn large_markdown_history_preserves_order_across_scrollback_and_viewport() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     let mut markdown = String::new();
     for index in 0..40 {
         writeln!(markdown, "paragraph-{index}\n").unwrap();
@@ -533,7 +525,7 @@ fn one_row_inline_viewport_draws_without_panicking() {
         TerminalOptions { viewport: Viewport::Inline(inline_viewport_height(terminal_height)) },
     )
     .unwrap();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
 
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
@@ -547,7 +539,7 @@ fn live_viewport_is_drawn_before_history_is_inserted() {
     let mut terminal =
         Terminal::with_options(backend, TerminalOptions { viewport: Viewport::Inline(inline_viewport_height(15)) })
             .unwrap();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     terminal.backend_mut().events.clear();
 
@@ -574,7 +566,7 @@ fn status_line_is_never_inserted_into_scrollback() {
         TerminalOptions { viewport: Viewport::Inline(inline_viewport_height(15)) },
     )
     .unwrap();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
     submit_prompt(&mut app, "hello");
@@ -595,7 +587,7 @@ fn history_waits_until_resized_viewport_has_scrollback_room() {
         TerminalOptions { viewport: Viewport::Inline(inline_viewport_height(terminal_height)) },
     )
     .unwrap();
-    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
     terminal.backend_mut().resize(40, 10);
