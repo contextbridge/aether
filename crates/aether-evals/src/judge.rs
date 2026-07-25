@@ -687,7 +687,7 @@ mod tests {
 
     #[tokio::test]
     async fn judge_run_returns_stream_error_on_llm_failure() {
-        let judge_llm = FakeLlmProvider::from_results(vec![vec![Err(LlmError::Other("boom".to_string()))]]);
+        let judge_llm = FakeLlmProvider::from_results(vec![vec![Err(LlmError::ApiError("boom".to_string()))]]);
         let judge = judge().task("prompt").criteria(default_criteria()).build().unwrap();
 
         let error = judge.run(&judge_llm).await.unwrap_err();
