@@ -1,4 +1,5 @@
-use super::{SettingsChange, SettingsMenuEntry, SettingsMenuEntryKind, SettingsMenuValue};
+use super::{PaneKind, SettingsChange, SettingsMenuEntry, SettingsMenuValue};
+use crate::list_view::ListView;
 use crate::selection::{Direction, SelectionState};
 use crate::session_config_view::{as_select, select_values};
 use crate::theme::Theme;
@@ -9,163 +10,170 @@ use agent_client_protocol::schema::SessionConfigOption;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
-use ratatui::widgets::{List, ListItem, Paragraph, StatefulWidget, Widget};
+use ratatui::widgets::{ListItem, Widget};
 
 pub(super) struct SettingsMenu {
-    pub(super) entries: Vec<SettingsMenuEntry>,
+    pub(super) rows: Vec<MenuRow>,
     pub(super) selection: SelectionState,
+}
+
+/// One row of the settings menu.
+#[derive(Clone)]
+pub(super) enum MenuRow {
+    /// A config option, opening a picker over its values.
+    Select(SettingsMenuEntry),
+    /// A row that opens a pane rather than picking a value. Its "value" is just
+    /// the summary line shown beside the title.
+    Pane { kind: PaneKind, summary: String },
+}
+
+impl MenuRow {
+    /// The `title: value` line drawn for this row.
+    fn label(&self) -> String {
+        match self {
+            Self::Select(entry) => {
+                let current = entry
+                    .display_name
+                    .as_deref()
+                    .or_else(|| entry.values.get(entry.current_value_index).map(|value| value.name.as_str()))
+                    .unwrap_or("?");
+                format!("{}: {current}", entry.title)
+            }
+            Self::Pane { kind, summary } => format!("{}: {summary}", kind.title()),
+        }
+    }
+
+    /// Whether this row came from the agent's config schema, and so is replaced
+    /// wholesale when that schema is pushed again.
+    fn is_agent_select(&self) -> bool {
+        matches!(self, Self::Select(entry) if !entry.local)
+    }
 }
 
 impl SettingsMenu {
     pub(super) fn from_config_options(options: &[SessionConfigOption]) -> Self {
-        let entries: Vec<SettingsMenuEntry> = options
+        let rows: Vec<MenuRow> = options
             .iter()
-            .filter(|opt| opt.id.0.as_ref() != ConfigOptionId::ReasoningEffort.as_str())
-            .filter_map(|opt| {
-                let select = as_select(opt)?;
-                let flat_options = select_values(select);
-                if flat_options.is_empty() {
-                    return None;
-                }
-
-                let current_value_index =
-                    flat_options.iter().position(|o| o.value == select.current_value).unwrap_or(0);
-
-                let values: Vec<SettingsMenuValue> = flat_options
-                    .into_iter()
-                    .map(|o| SettingsMenuValue {
-                        value: o.value.0.to_string(),
-                        name: o.name.clone(),
-                        is_disabled: o.description.as_deref().is_some_and(|d| d.starts_with("Unavailable:")),
-                        description: o.description.clone(),
-                        meta: SelectOptionMeta::from_meta(o.meta.as_ref()),
-                    })
-                    .collect();
-
-                let multi_select = ConfigOptionMeta::from_meta(opt.meta.as_ref()).multi_select;
-
-                let display_name = if multi_select && select.current_value.0.contains(',') {
-                    let parts: Vec<&str> = select.current_value.0.split(',').map(str::trim).collect();
-                    let names: Vec<&str> = parts
-                        .iter()
-                        .filter_map(|val| values.iter().find(|v| v.value == *val).map(|v| v.name.as_str()))
-                        .collect();
-                    if names.is_empty() { Some(format!("{} models", parts.len())) } else { Some(names.join(", ")) }
-                } else {
-                    None
-                };
-
-                Some(SettingsMenuEntry {
-                    config_id: opt.id.0.to_string(),
-                    title: opt.name.clone(),
-                    values,
-                    current_value_index,
-                    current_raw_value: select.current_value.0.to_string(),
-                    entry_kind: SettingsMenuEntryKind::Select,
-                    multi_select,
-                    display_name,
-                })
-            })
+            .filter(|option| option.id.0.as_ref() != ConfigOptionId::ReasoningEffort.as_str())
+            .filter_map(|option| menu_entry(option).map(MenuRow::Select))
             .collect();
-
-        let selection = SelectionState::new(entries.len());
-        Self { entries, selection }
-    }
-
-    pub(super) fn move_up(&mut self) {
-        self.step(Direction::Backward);
-    }
-
-    pub(super) fn move_down(&mut self) {
-        self.step(Direction::Forward);
+        let selection = SelectionState::new(rows.len());
+        Self { rows, selection }
     }
 
     pub(super) fn step(&mut self, direction: Direction) {
-        self.selection.step(self.entries.len(), direction, |_| true);
+        self.selection.step(self.rows.len(), direction, |_| true);
     }
 
-    pub(super) fn selected_entry(&self) -> Option<&SettingsMenuEntry> {
-        self.selection.selected().and_then(|selected| self.entries.get(selected))
+    pub(super) fn selected_row(&self) -> Option<&MenuRow> {
+        self.selection.selected().and_then(|selected| self.rows.get(selected))
     }
 
+    /// Adds rows that are not part of the agent's schema, above the ones that are.
+    pub(super) fn add_local_entries(&mut self, entries: Vec<SettingsMenuEntry>) {
+        self.rows.splice(0..0, entries.into_iter().map(MenuRow::Select));
+        self.selection.clamp(self.rows.len());
+    }
+
+    /// Replaces the agent-provided rows, keeping local and pane rows.
     pub(super) fn update_options(&mut self, options: &[SessionConfigOption]) {
-        let local_entries: Vec<SettingsMenuEntry> =
-            self.entries.iter().filter(|e| !matches!(e.entry_kind, SettingsMenuEntryKind::Select)).cloned().collect();
+        let preserved: Vec<MenuRow> = self.rows.iter().filter(|row| !row.is_agent_select()).cloned().collect();
         *self = Self::from_config_options(options);
-        self.entries.splice(0..0, local_entries);
-        self.selection.clamp(self.entries.len());
+        self.rows.splice(0..0, preserved);
+        self.selection.clamp(self.rows.len());
     }
 
     pub(super) fn apply_change(&mut self, change: &SettingsChange) {
-        if let Some(entry) = self.entries.iter_mut().find(|entry| entry.config_id == change.config_id) {
+        let entry = self.rows.iter_mut().find_map(|row| match row {
+            MenuRow::Select(entry) if entry.config_id == change.config_id => Some(entry),
+            _ => None,
+        });
+        if let Some(entry) = entry {
             entry.current_raw_value.clone_from(&change.new_value);
-            if let Some(index) = entry.values.iter().position(|v| v.value == change.new_value) {
+            if let Some(index) = entry.values.iter().position(|value| value.value == change.new_value) {
                 entry.current_value_index = index;
             }
         }
     }
 
-    /// Selects the entry drawn at terminal `row`, reporting whether one was hit.
+    /// Selects the row drawn at terminal `row`, reporting whether one was hit.
     pub(super) fn click_at(&mut self, row: u16) -> bool {
-        self.selection.select_at(row, self.entries.len())
+        self.selection.select_at(row, self.rows.len())
     }
 
     pub(super) fn render(&mut self, area: Rect, buffer: &mut Buffer, theme: &Theme) {
-        if self.entries.is_empty() {
-            Paragraph::new(" (no settings options)").style(Style::new().fg(theme.text_secondary)).render(area, buffer);
-            return;
-        }
-
-        let items = self.entries.iter().map(|entry| {
-            let current_name = entry
-                .display_name
-                .as_deref()
-                .or_else(|| entry.values.get(entry.current_value_index).map(|value| value.name.as_str()))
-                .unwrap_or("?");
-            ListItem::new(format!(
-                " {}",
-                truncate_to_width(
-                    &format!("{}: {current_name}", entry.title),
-                    usize::from(area.width).saturating_sub(2),
-                )
-            ))
-            .style(Style::new().fg(theme.text_primary))
-        });
-        let list = List::new(items)
+        let width = usize::from(area.width).saturating_sub(2);
+        let rows: Vec<ListItem<'static>> = self
+            .rows
+            .iter()
+            .map(|row| {
+                ListItem::new(format!(" {}", truncate_to_width(&row.label(), width)))
+                    .style(Style::new().fg(theme.text_primary))
+            })
+            .collect();
+        ListView::new(rows, &mut self.selection, theme)
+            .empty_message(" (no settings options)")
             .highlight_style(Style::new().fg(theme.background).bg(theme.text_primary))
-            .scroll_padding(1);
-        self.selection.set_rows_area(area);
-        StatefulWidget::render(list, area, buffer, self.selection.list_state_mut());
+            .render(area, buffer);
     }
 
-    /// Adds or refreshes a row that opens a pane instead of picking a value.
-    /// Its "current value" is just the summary line shown in the menu.
-    pub(super) fn upsert_pane_entry(&mut self, kind: SettingsMenuEntryKind, summary: &str) {
-        let (config_id, title) = match kind {
-            SettingsMenuEntryKind::McpServers => ("_mcp_servers", "MCP Servers"),
-            SettingsMenuEntryKind::ProviderLogins => ("_provider_logins", "Provider Logins"),
-            SettingsMenuEntryKind::Select | SettingsMenuEntryKind::Theme => return,
-        };
-        let entry = SettingsMenuEntry {
-            config_id: config_id.to_string(),
-            title: title.to_string(),
-            values: vec![SettingsMenuValue {
-                value: summary.to_string(),
-                name: summary.to_string(),
-                description: None,
-                is_disabled: false,
-                meta: SelectOptionMeta::default(),
-            }],
-            current_value_index: 0,
-            current_raw_value: summary.to_string(),
-            entry_kind: kind,
-            multi_select: false,
-            display_name: None,
-        };
-
-        match self.entries.iter().position(|existing| existing.entry_kind == kind) {
-            Some(index) => self.entries[index] = entry,
-            None => self.entries.push(entry),
+    /// Adds or refreshes the row that opens `kind`'s pane.
+    pub(super) fn upsert_pane_row(&mut self, kind: PaneKind, summary: &str) {
+        let row = MenuRow::Pane { kind, summary: summary.to_string() };
+        let existing =
+            self.rows.iter().position(|row| matches!(row, MenuRow::Pane { kind: existing, .. } if *existing == kind));
+        match existing {
+            Some(index) => self.rows[index] = row,
+            None => self.rows.push(row),
         }
+        self.selection.clamp(self.rows.len());
     }
+}
+
+/// The menu entry for one select-kind config option, or nothing when it offers
+/// no values to pick between.
+fn menu_entry(option: &SessionConfigOption) -> Option<SettingsMenuEntry> {
+    let select = as_select(option)?;
+    let flat_options = select_values(select);
+    if flat_options.is_empty() {
+        return None;
+    }
+
+    let current_value_index = flat_options.iter().position(|value| value.value == select.current_value).unwrap_or(0);
+    let values: Vec<SettingsMenuValue> = flat_options
+        .into_iter()
+        .map(|value| SettingsMenuValue {
+            value: value.value.0.to_string(),
+            name: value.name.clone(),
+            is_disabled: value.description.as_deref().is_some_and(|text| text.starts_with("Unavailable:")),
+            description: value.description.clone(),
+            meta: SelectOptionMeta::from_meta(value.meta.as_ref()),
+        })
+        .collect();
+    let multi_select = ConfigOptionMeta::from_meta(option.meta.as_ref()).multi_select;
+
+    Some(SettingsMenuEntry {
+        config_id: option.id.0.to_string(),
+        title: option.name.clone(),
+        current_value_index,
+        current_raw_value: select.current_value.0.to_string(),
+        display_name: multi_select.then(|| combined_display_name(&select.current_value.0, &values)).flatten(),
+        values,
+        multi_select,
+        local: false,
+    })
+}
+
+/// The label for a multi-select whose value names several options at once,
+/// falling back to a count when none of them are known.
+fn combined_display_name(current: &str, values: &[SettingsMenuValue]) -> Option<String> {
+    if !current.contains(',') {
+        return None;
+    }
+    let parts: Vec<&str> = current.split(',').map(str::trim).collect();
+    let names: Vec<&str> = parts
+        .iter()
+        .filter_map(|part| values.iter().find(|value| value.value == *part).map(|value| value.name.as_str()))
+        .collect();
+    Some(if names.is_empty() { format!("{} models", parts.len()) } else { names.join(", ") })
 }

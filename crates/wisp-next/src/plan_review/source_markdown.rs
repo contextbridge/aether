@@ -6,7 +6,6 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 pub struct SourceMarkdownLine {
-    pub source_line_no: usize,
     pub line: Line<'static>,
 }
 
@@ -22,10 +21,7 @@ pub fn render_markdown_source_lines(
     while index < raw_lines.len() {
         let raw = raw_lines[index];
         if let Some(fence) = FenceDelimiter::parse(raw) {
-            rendered.push(SourceMarkdownLine {
-                source_line_no: index + 1,
-                line: Line::styled(raw.to_string(), Style::new().fg(theme.muted)),
-            });
+            rendered.push(SourceMarkdownLine { line: Line::styled(raw.to_string(), Style::new().fg(theme.muted)) });
             index += 1;
 
             let code_start = index;
@@ -36,7 +32,7 @@ pub fn render_markdown_source_lines(
             let code_text: String = raw_lines[code_start..code_end].join("\n");
             if !code_text.is_empty() {
                 let highlighted_lines = highlighter.highlight(&code_text, &fence.lang, theme);
-                for (offset, line) in highlighted_lines.into_iter().enumerate() {
+                for line in highlighted_lines {
                     let styled_line = Line::from(
                         line.spans
                             .into_iter()
@@ -45,20 +41,18 @@ pub fn render_markdown_source_lines(
                             })
                             .collect::<Vec<_>>(),
                     );
-                    rendered.push(SourceMarkdownLine { source_line_no: code_start + offset + 1, line: styled_line });
+                    rendered.push(SourceMarkdownLine { line: styled_line });
                 }
             }
 
             if index < raw_lines.len() {
                 rendered.push(SourceMarkdownLine {
-                    source_line_no: index + 1,
                     line: Line::styled(raw_lines[index].to_string(), Style::new().fg(theme.muted)),
                 });
                 index += 1;
             }
         } else {
-            rendered
-                .push(SourceMarkdownLine { source_line_no: index + 1, line: render_single_markdown_line(raw, theme) });
+            rendered.push(SourceMarkdownLine { line: render_single_markdown_line(raw, theme) });
             index += 1;
         }
     }
@@ -131,7 +125,6 @@ mod tests {
         let mut highlighter = SyntaxHighlighter::new();
         let result = render_markdown_source_lines("hello world", &theme, &mut highlighter);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].source_line_no, 1);
         assert!(!result[0].line.spans.is_empty());
     }
 
@@ -141,9 +134,6 @@ mod tests {
         let mut highlighter = SyntaxHighlighter::new();
         let result = render_markdown_source_lines("line1\nline2\nline3", &theme, &mut highlighter);
         assert_eq!(result.len(), 3);
-        assert_eq!(result[0].source_line_no, 1);
-        assert_eq!(result[1].source_line_no, 2);
-        assert_eq!(result[2].source_line_no, 3);
     }
 
     #[test]
@@ -152,7 +142,6 @@ mod tests {
         let mut highlighter = SyntaxHighlighter::new();
         let result = render_markdown_source_lines("text\n\nmore", &theme, &mut highlighter);
         assert_eq!(result.len(), 3);
-        assert_eq!(result[1].source_line_no, 2);
         assert!(result[1].line.spans.iter().all(|s| s.content.is_empty()));
     }
 
@@ -192,9 +181,6 @@ mod tests {
         let mut highlighter = SyntaxHighlighter::new();
         let result = render_markdown_source_lines("```rust\nfn main() {}\n```", &theme, &mut highlighter);
         assert_eq!(result.len(), 3);
-        assert_eq!(result[0].source_line_no, 1);
-        assert_eq!(result[1].source_line_no, 2);
-        assert_eq!(result[2].source_line_no, 3);
     }
 
     #[test]

@@ -6,6 +6,7 @@ use ratatui::buffer::Buffer;
 use std::path::PathBuf;
 use tokio::sync::oneshot;
 use utils::plan_review::PlanReviewElicitationMeta;
+use wisp_next::elicitation::ElicitationResponder;
 use wisp_next::plan_review::{PlanDocument, ReviewComment, compile_feedback};
 use wisp_next::render_context::RenderContext;
 use wisp_next::screens::MouseAction;
@@ -21,10 +22,10 @@ fn make_meta(markdown: &str) -> PlanReviewElicitationMeta {
 fn make_screen(markdown: &str) -> (PlanReviewScreen, oneshot::Receiver<ElicitationResponse>) {
     let meta = make_meta(markdown);
     let (tx, rx) = oneshot::channel();
-    let respond = Box::new(move |response: ElicitationResponse| {
+    let responder = ElicitationResponder::from_fn(move |response: ElicitationResponse| {
         let _ = tx.send(response);
     });
-    (PlanReviewScreen::new_with_response_handler(meta, respond), rx)
+    (PlanReviewScreen::new(meta, responder), rx)
 }
 
 fn key(code: KeyCode) -> KeyEvent {
@@ -34,44 +35,6 @@ fn key(code: KeyCode) -> KeyEvent {
 /// Sends a key and reports whether it ended the review.
 fn closes(screen: &mut PlanReviewScreen, key: KeyEvent) -> bool {
     screen.on_key(key).iter().any(|message| matches!(message, SurfaceMessage::Close))
-}
-
-#[test]
-fn source_presentation_cache_is_reused_and_explicitly_invalidated() {
-    let (mut screen, _rx) = make_screen("# Plan\n```rust\nfn main() {}\n```");
-    let theme = Theme::default();
-    let mut highlighter = SyntaxHighlighter::new();
-
-    assert!(!screen.source_presentation_is_cached());
-    render_screen_with_theme_generation(&mut screen, 80, 24, &theme, &mut highlighter, 0);
-    assert!(screen.source_presentation_is_cached());
-
-    render_screen_with_theme_generation(&mut screen, 50, 24, &theme, &mut highlighter, 0);
-    assert!(screen.source_presentation_is_cached());
-
-    screen.invalidate_source_presentation();
-    assert!(!screen.source_presentation_is_cached());
-    render_screen_with_theme_generation(&mut screen, 80, 24, &theme, &mut highlighter, 1);
-    assert!(screen.source_presentation_is_cached());
-}
-
-fn render_screen_with_theme_generation(
-    screen: &mut PlanReviewScreen,
-    width: u16,
-    height: u16,
-    theme: &Theme,
-    highlighter: &mut SyntaxHighlighter,
-    theme_generation: u64,
-) -> Buffer {
-    let backend = TestBackend::new(width, height);
-    let mut terminal = ratatui::Terminal::with_options(backend, TerminalOptions::default()).unwrap();
-    terminal
-        .draw(|frame| {
-            let mut cx = RenderContext { theme, highlighter, theme_generation };
-            screen.render(frame.area(), frame.buffer_mut(), &mut cx);
-        })
-        .unwrap();
-    terminal.backend().buffer().clone()
 }
 
 fn render_screen(screen: &mut PlanReviewScreen, width: u16, height: u16) -> Buffer {

@@ -4,16 +4,16 @@ mod picker;
 mod provider_login;
 mod server_status;
 
-use self::menu::SettingsMenu;
+use self::menu::{MenuRow, SettingsMenu};
 use self::model_selector::ModelSelector;
 use self::picker::SettingsPicker;
 use self::provider_login::{ProviderLoginEntry, ProviderLoginPane, ProviderLoginStatus, build_provider_login_entries};
 use self::server_status::ServerStatusPane;
+use crate::elicitation::ElicitationResponder;
 use crate::render_context::RenderContext;
 use crate::selection::Direction;
 use crate::session_config_view::SessionConfigView;
-use crate::surface::{ListFilter, Surface, SurfaceMessage};
-use crate::theme::Theme;
+use crate::surface::{Surface, SurfaceMessage};
 use acp_utils::config_meta::SelectOptionMeta;
 use acp_utils::notifications::{
     ElicitationParams, ElicitationResponse, McpServerStatusEntry, UrlElicitationCompleteParams,
@@ -52,17 +52,27 @@ pub struct SettingsMenuEntry {
     pub values: Vec<SettingsMenuValue>,
     pub current_value_index: usize,
     pub current_raw_value: String,
-    pub entry_kind: SettingsMenuEntryKind,
     pub multi_select: bool,
     pub display_name: Option<String>,
+    /// Client-side rather than part of the agent's schema, so it survives a
+    /// config-options push that replaces every agent-provided row.
+    pub local: bool,
 }
 
+/// A settings screen that is not a config option.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SettingsMenuEntryKind {
-    Select,
-    Theme,
+pub enum PaneKind {
     McpServers,
     ProviderLogins,
+}
+
+impl PaneKind {
+    pub(crate) fn title(self) -> &'static str {
+        match self {
+            Self::McpServers => "MCP Servers",
+            Self::ProviderLogins => "Provider Logins",
+        }
+    }
 }
 
 /// The settings overlay: a menu of options, each of which opens a pane.
@@ -84,80 +94,22 @@ pub(crate) struct LiveSettingsData {
 
 /// One screen inside the settings overlay.
 ///
-/// Every pane navigates, renders, and reports the same three things, so the
-/// overlay drives them all through this trait instead of matching on which is
-/// open.
-pub(crate) trait SettingsPane {
-    /// Handles the keys unique to this pane, returning `None` to fall back to
-    /// the shared navigation and filter keys in [`SettingsPane::on_key`].
-    fn on_pane_key(&mut self, key: KeyEvent) -> Option<PaneOutcome>;
-
-    /// Selects whatever is drawn at terminal row `row`, if anything is.
-    fn click(&mut self, row: u16) -> PaneOutcome;
-
-    fn scroll(&mut self, direction: Direction);
-
-    fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme);
-
+/// Panes are ordinary [`Surface`]s — they get the same key routing, filtering,
+/// and mouse handling as every other layer — plus the two things only a settings
+/// pane has: footer hints, and agent-pushed data that can change underneath it.
+pub(crate) trait SettingsPane: Surface {
     /// Key hints for the overlay footer while this pane has focus.
     fn footer(&self) -> String;
-
-    /// The query this pane filters its list by, when it has one. Supplying it
-    /// is what makes typing and backspace filter.
-    fn filter(&mut self) -> Option<&mut dyn ListFilter> {
-        None
-    }
-
-    /// Changes to commit when the pane closes; panes that apply edits
-    /// immediately return nothing.
-    fn take_changes(&mut self) -> Vec<SettingsChange> {
-        Vec::new()
-    }
 
     /// Re-reads agent-pushed data after it changes underneath the pane.
     fn refresh(&mut self, live: &LiveSettingsData) {
         let _ = live;
     }
 
-    /// Routes a keystroke: pane-specific keys first, then the navigation and
-    /// filter keys every pane shares.
-    fn on_key(&mut self, key: KeyEvent) -> PaneOutcome {
-        if let Some(outcome) = self.on_pane_key(key) {
-            return outcome;
-        }
-        match key.code {
-            KeyCode::Up => self.scroll(Direction::Backward),
-            KeyCode::Down => self.scroll(Direction::Forward),
-            KeyCode::Backspace => {
-                if let Some(filter) = self.filter() {
-                    filter.pop_query_char();
-                }
-            }
-            KeyCode::Char(character) if !character.is_control() => {
-                if let Some(filter) = self.filter() {
-                    filter.push_query_char(character);
-                }
-            }
-            _ => {}
-        }
-        PaneOutcome::default()
-    }
-}
-
-/// What a pane produced from one interaction.
-#[derive(Default)]
-pub(crate) struct PaneOutcome {
-    /// Config edits to apply to the menu and forward to the agent.
-    pub(crate) changes: Vec<SettingsChange>,
-    /// Messages that are not config edits, such as authentication requests.
-    pub(crate) messages: Vec<SurfaceMessage>,
-    /// Return focus to the menu.
-    pub(crate) back: bool,
-}
-
-impl PaneOutcome {
-    pub(crate) fn message(message: Option<SurfaceMessage>) -> Self {
-        Self { messages: message.into_iter().collect(), ..Self::default() }
+    /// Edits to commit when the pane closes; panes that apply edits immediately
+    /// return nothing.
+    fn take_changes(&mut self) -> Vec<SurfaceMessage> {
+        Vec::new()
     }
 }
 
@@ -177,14 +129,14 @@ impl SettingsOverlay {
     }
 
     pub fn add_local_entries(&mut self, entries: Vec<SettingsMenuEntry>) {
-        self.menu.entries.splice(0..0, entries);
+        self.menu.add_local_entries(entries);
     }
 
     /// Adds the rows that open panes rather than pick a config value.
     pub fn add_status_entries(&mut self) {
-        self.menu.upsert_pane_entry(SettingsMenuEntryKind::McpServers, &self.live.server_summary());
+        self.menu.upsert_pane_row(PaneKind::McpServers, &self.live.server_summary());
         if !self.live.providers.is_empty() {
-            self.menu.upsert_pane_entry(SettingsMenuEntryKind::ProviderLogins, &self.live.provider_summary());
+            self.menu.upsert_pane_row(PaneKind::ProviderLogins, &self.live.provider_summary());
         }
     }
 
@@ -199,13 +151,13 @@ impl SettingsOverlay {
 
     pub fn update_server_statuses(&mut self, statuses: Vec<McpServerStatusEntry>) {
         self.live.servers = statuses;
-        self.menu.upsert_pane_entry(SettingsMenuEntryKind::McpServers, &self.live.server_summary());
+        self.menu.upsert_pane_row(PaneKind::McpServers, &self.live.server_summary());
         self.refresh_pane();
     }
 
     pub fn update_auth_methods(&mut self, methods: &[AuthMethod]) {
         self.live.providers = build_provider_login_entries(methods);
-        self.menu.upsert_pane_entry(SettingsMenuEntryKind::ProviderLogins, &self.live.provider_summary());
+        self.menu.upsert_pane_row(PaneKind::ProviderLogins, &self.live.provider_summary());
         self.refresh_pane();
     }
 
@@ -229,8 +181,11 @@ impl SettingsOverlay {
             } => elicitation_id.clone(),
             acp_utils::notifications::CreateElicitationRequestParams::FormElicitationParams { .. } => String::new(),
         };
-        self.pending_elicitation =
-            Some(PendingElicitation { server_name: params.server_name, elicitation_id, responder });
+        self.pending_elicitation = Some(PendingElicitation {
+            server_name: params.server_name,
+            elicitation_id,
+            _responder: ElicitationResponder::new(responder),
+        });
     }
 
     pub fn on_url_elicitation_complete(&mut self, params: &UrlElicitationCompleteParams) {
@@ -240,12 +195,7 @@ impl SettingsOverlay {
     }
 
     pub fn cancel_pending_elicitation(&mut self) {
-        if let Some(pending) = self.pending_elicitation.take() {
-            let _ = pending.responder.respond(ElicitationResponse {
-                action: acp_utils::notifications::ElicitationAction::Cancel,
-                content: None,
-            });
-        }
+        self.pending_elicitation = None;
     }
 
     /// Key hints for the current focus, shown in the overlay footer.
@@ -269,8 +219,8 @@ impl SettingsOverlay {
     fn on_menu_key(&mut self, key: KeyEvent) -> Vec<SurfaceMessage> {
         match key.code {
             KeyCode::Esc => return vec![SurfaceMessage::Close],
-            KeyCode::Up => self.menu.move_up(),
-            KeyCode::Down => self.menu.move_down(),
+            KeyCode::Up => self.menu.step(Direction::Backward),
+            KeyCode::Down => self.menu.step(Direction::Forward),
             KeyCode::Enter => self.pane = self.open_selected_pane(),
             _ => {}
         }
@@ -278,34 +228,42 @@ impl SettingsOverlay {
     }
 
     fn open_selected_pane(&self) -> Option<Box<dyn SettingsPane>> {
-        let entry = self.menu.selected_entry()?;
-        match entry.entry_kind {
-            SettingsMenuEntryKind::McpServers => Some(Box::new(ServerStatusPane::new(self.live.servers.clone()))),
-            SettingsMenuEntryKind::ProviderLogins => {
+        match self.menu.selected_row()? {
+            MenuRow::Pane { kind: PaneKind::McpServers, .. } => {
+                Some(Box::new(ServerStatusPane::new(self.live.servers.clone())))
+            }
+            MenuRow::Pane { kind: PaneKind::ProviderLogins, .. } => {
                 Some(Box::new(ProviderLoginPane::new(self.live.providers.clone())))
             }
-            _ if entry.multi_select => Some(Box::new(ModelSelector::new(
+            MenuRow::Select(entry) if entry.multi_select => Some(Box::new(ModelSelector::new(
                 entry.config_id.clone(),
                 entry.values.clone(),
                 &entry.current_raw_value,
                 self.current_reasoning_effort.as_deref(),
             ))),
-            _ => SettingsPicker::from_entry(entry).map(|picker| Box::new(picker) as Box<dyn SettingsPane>),
+            MenuRow::Select(entry) => {
+                SettingsPicker::from_entry(entry).map(|picker| Box::new(picker) as Box<dyn SettingsPane>)
+            }
         }
     }
 
-    /// Applies a pane's result: config edits update the menu immediately so the
-    /// UI never lags the agent round-trip, and become outbound messages.
-    fn apply(&mut self, outcome: PaneOutcome) -> Vec<SurfaceMessage> {
-        if outcome.back {
-            self.pane = None;
-        }
-        let mut messages = outcome.messages;
-        for change in &outcome.changes {
-            self.menu.apply_change(change);
-            messages.push(message_for_change(change));
-        }
+    /// Handles the messages a pane produced: [`SurfaceMessage::Back`] returns
+    /// focus to the menu, and config edits are mirrored into the menu on the way
+    /// past so the UI never lags the agent round-trip.
+    fn apply(&mut self, messages: Vec<SurfaceMessage>) -> Vec<SurfaceMessage> {
         messages
+            .into_iter()
+            .filter(|message| {
+                if matches!(message, SurfaceMessage::Back) {
+                    self.pane = None;
+                    return false;
+                }
+                if let Some(change) = config_edit(message) {
+                    self.menu.apply_change(&change);
+                }
+                true
+            })
+            .collect()
     }
 }
 
@@ -316,31 +274,36 @@ impl Surface for SettingsOverlay {
         let Some(pane) = self.pane.as_mut() else {
             return Some(self.on_menu_key(key));
         };
-        let outcome = if key.code == KeyCode::Esc {
-            PaneOutcome { changes: pane.take_changes(), back: true, ..PaneOutcome::default() }
+        // Esc leaves the pane rather than the overlay, committing whatever the
+        // pane batched up while it was open.
+        let messages = if key.code == KeyCode::Esc {
+            let mut messages = pane.take_changes();
+            messages.push(SurfaceMessage::Back);
+            messages
         } else {
             pane.on_key(key)
         };
-        Some(self.apply(outcome))
+        Some(self.apply(messages))
     }
 
     fn scroll(&mut self, direction: Direction) -> Vec<SurfaceMessage> {
-        match self.pane.as_mut() {
-            Some(pane) => pane.scroll(direction),
-            None => self.menu.step(direction),
-        }
-        Vec::new()
+        let Some(pane) = self.pane.as_mut() else {
+            self.menu.step(direction);
+            return Vec::new();
+        };
+        let messages = pane.scroll(direction);
+        self.apply(messages)
     }
 
-    fn click(&mut self, row: u16, _column: u16) -> Vec<SurfaceMessage> {
+    fn click(&mut self, row: u16, column: u16) -> Vec<SurfaceMessage> {
         let Some(pane) = self.pane.as_mut() else {
             if self.menu.click_at(row) {
                 self.pane = self.open_selected_pane();
             }
             return Vec::new();
         };
-        let outcome = pane.click(row);
-        self.apply(outcome)
+        let messages = pane.click(row, column);
+        self.apply(messages)
     }
 
     fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
@@ -360,17 +323,11 @@ impl Surface for SettingsOverlay {
 
         let [content_area, footer_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
         Paragraph::new(Line::from(self.footer_text())).render(footer_area, buf);
-        match self.pane.as_mut() {
-            Some(pane) => pane.render(content_area, buf, theme),
-            None => self.menu.render(content_area, buf, theme),
-        }
-        None
-    }
-}
-
-impl Drop for SettingsOverlay {
-    fn drop(&mut self) {
-        self.cancel_pending_elicitation();
+        let Some(pane) = self.pane.as_mut() else {
+            self.menu.render(content_area, buf, theme);
+            return None;
+        };
+        pane.render(content_area, buf, cx)
     }
 }
 
@@ -384,10 +341,12 @@ impl LiveSettingsData {
     }
 }
 
+/// An elicitation the overlay answers in place. Holding the responder is what
+/// keeps it outstanding; dropping this cancels it.
 struct PendingElicitation {
     server_name: String,
     elicitation_id: String,
-    responder: Responder<ElicitationResponse>,
+    _responder: ElicitationResponder,
 }
 
 impl PendingElicitation {
@@ -400,11 +359,28 @@ fn reasoning_effort_of(options: &[SessionConfigOption]) -> Option<String> {
     SessionConfigView::new(options).reasoning_effort().map(|effort| effort.as_str().to_string())
 }
 
-fn message_for_change(change: &SettingsChange) -> SurfaceMessage {
+/// The outbound message for a config edit. Theme is a client-side setting, so it
+/// takes a different route than an agent config option.
+pub(crate) fn message_for_change(change: &SettingsChange) -> SurfaceMessage {
     if change.config_id == acp_utils::config_option_id::THEME_CONFIG_ID {
         SurfaceMessage::SetTheme(change.new_value.clone())
     } else {
         SurfaceMessage::SetConfigOption { config_id: change.config_id.clone(), value: change.new_value.clone() }
+    }
+}
+
+/// The config edit `message` carries, when it is one — the inverse of
+/// [`message_for_change`], so the overlay can mirror edits into its own menu.
+fn config_edit(message: &SurfaceMessage) -> Option<SettingsChange> {
+    match message {
+        SurfaceMessage::SetTheme(value) => Some(SettingsChange {
+            config_id: acp_utils::config_option_id::THEME_CONFIG_ID.to_string(),
+            new_value: value.clone(),
+        }),
+        SurfaceMessage::SetConfigOption { config_id, value } => {
+            Some(SettingsChange { config_id: config_id.clone(), new_value: value.clone() })
+        }
+        _ => None,
     }
 }
 
@@ -415,6 +391,3 @@ pub(crate) fn summarize(buckets: &[(usize, &str)], empty: &str) -> String {
         buckets.iter().filter(|(count, _)| *count > 0).map(|(count, label)| format!("{count} {label}")).collect();
     if parts.is_empty() { empty.to_string() } else { parts.join(", ") }
 }
-
-#[cfg(test)]
-mod tests;

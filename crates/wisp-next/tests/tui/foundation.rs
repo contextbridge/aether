@@ -131,7 +131,7 @@ fn file_picker_filters_and_inserts_a_mention() {
 
     let mut composer = Composer::new();
     composer.insert_char('@');
-    composer.open_file_picker(directory.path());
+    open_file_picker(&mut composer, directory.path());
     composer.insert_str("main");
     composer.refresh_overlay_query();
 
@@ -151,6 +151,7 @@ fn selected_file_is_sent_as_an_acp_resource_attachment() {
     let (mut app, mut command_rx) = make_app_in(directory.path().to_path_buf());
 
     app.on_key(key(KeyCode::Char('@')));
+    settle_effects(&mut app);
     app.on_key(key(KeyCode::Char('c')));
     app.on_key(key(KeyCode::Enter));
     assert_eq!(app.composer().text(), "@context.txt ");
@@ -172,6 +173,7 @@ fn file_picker_renders_in_the_live_viewport_not_scrollback() {
     let mut renderer = Presenter::new(&UiSettings::default());
 
     app.on_key(key(KeyCode::Char('@')));
+    settle_effects(&mut app);
     app.on_key(key(KeyCode::Char('c')));
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 

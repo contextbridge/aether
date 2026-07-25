@@ -2,12 +2,12 @@ use crate::attachments::PromptAttachment;
 use crate::composer::Composer;
 use crate::diff::DiffPreview;
 use crate::dropped_files::parse_dropped_file_paths;
+use crate::effects::{Effect, EffectResult};
 use crate::keybindings::Keybindings;
 use crate::modal::ElicitationModal;
 use crate::picker::CommandEntry;
 use crate::plan_tracker::PlanTracker;
 use crate::progress_indicator::{ProgressActivity, ProgressIndicator, WorkspaceProgress};
-use crate::screens::{ScreenEffect, ScreenEvent};
 use crate::selection::Direction;
 use crate::session_config_view::SessionConfigView;
 use crate::session_loading_buffer::SessionLoadingBuffer;
@@ -15,7 +15,7 @@ use crate::session_picker::SessionPicker;
 use crate::settings::{
     ContextUsageDisplay, ResolvedStatusLineSettings, UiSettings, resolve_content_padding, resolve_status_line_settings,
 };
-use crate::settings_overlay::{SettingsMenuEntry, SettingsMenuEntryKind, SettingsMenuValue, SettingsOverlay};
+use crate::settings_overlay::{SettingsMenuEntry, SettingsMenuValue, SettingsOverlay};
 use crate::surface::{Surface, SurfaceMessage};
 use crate::tool_calls::{ToolCallLog, ToolStatus};
 use crate::transcript::{SegmentContent, Transcript};
@@ -29,6 +29,7 @@ use acp_utils::notifications::McpServerStatusEntry;
 use agent_client_protocol::schema::{self as acp, SessionConfigOptionCategory, SessionId};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::Rect;
+use std::any::Any;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use utils::ReasoningEffort;
@@ -53,53 +54,6 @@ pub enum ExitState {
 impl ExitState {
     fn is_confirming(&self) -> bool {
         matches!(self, ExitState::Confirming(_))
-    }
-}
-
-/// The layer above the conversation that owns input. At most one is open.
-///
-/// Input and rendering go through [`Layer::active`], so only the ACP updates
-/// that need a concrete type match on the variants. Full-screen views are
-/// type-erased because nothing is ever routed to one by type.
-#[allow(clippy::large_enum_variant)]
-#[derive(Default)]
-enum Layer {
-    #[default]
-    None,
-    Settings(SettingsOverlay),
-    SessionPicker(SessionPicker),
-    WorkspacePicker(WorkspacePicker),
-    Elicitation(ElicitationModal),
-    Screen(Box<dyn Surface>),
-}
-
-impl Layer {
-    /// Whether an overlay is open. Full-screen views are excluded: they replace
-    /// the conversation rather than sitting above it.
-    fn is_overlay(&self) -> bool {
-        !matches!(self, Layer::None | Layer::Screen(_))
-    }
-
-    fn active(&mut self) -> Option<&mut dyn Surface> {
-        match self {
-            Layer::None => None,
-            Layer::Settings(overlay) => Some(overlay),
-            Layer::SessionPicker(picker) => Some(picker),
-            Layer::WorkspacePicker(picker) => Some(picker),
-            Layer::Elicitation(modal) => Some(modal),
-            Layer::Screen(screen) => Some(screen.as_mut()),
-        }
-    }
-
-    fn active_ref(&self) -> Option<&dyn Surface> {
-        match self {
-            Layer::None => None,
-            Layer::Settings(overlay) => Some(overlay),
-            Layer::SessionPicker(picker) => Some(picker),
-            Layer::WorkspacePicker(picker) => Some(picker),
-            Layer::Elicitation(modal) => Some(modal),
-            Layer::Screen(screen) => Some(screen.as_ref()),
-        }
     }
 }
 
@@ -134,7 +88,10 @@ pub struct App {
     working_dir: PathBuf,
     available_commands: Vec<CommandEntry>,
     session_loading_buffer: SessionLoadingBuffer,
-    layer: Layer,
+    /// The layer above the conversation that owns input while it is open. At
+    /// most one, and every kind of surface is stored the same way — the few ACP
+    /// updates that need a concrete one reach for it with [`App::layer_as`].
+    layer: Option<Box<dyn Surface>>,
     workspace_move_state: WorkspaceMoveState,
     transcript: Transcript,
     tool_calls: ToolCallLog,
@@ -146,7 +103,7 @@ pub struct App {
     progress_indicator: ProgressIndicator,
     last_drained_kind: Option<HistoryKind>,
     transcript_generation: u64,
-    pending_screen_effects: std::collections::VecDeque<ScreenEffect>,
+    pending_effects: std::collections::VecDeque<Effect>,
     ui_settings: UiSettings,
     pending_theme: Option<crate::theme::Theme>,
     plan_tracker: PlanTracker,
@@ -258,7 +215,7 @@ impl App {
             working_dir: config.working_dir,
             available_commands: initial_commands,
             session_loading_buffer: SessionLoadingBuffer::new(),
-            layer: Layer::None,
+            layer: None,
             workspace_move_state: WorkspaceMoveState::Idle,
             transcript: Transcript::new(),
             tool_calls: ToolCallLog::new(),
@@ -270,7 +227,7 @@ impl App {
             progress_indicator: ProgressIndicator::default(),
             last_drained_kind: None,
             transcript_generation: 0,
-            pending_screen_effects: std::collections::VecDeque::new(),
+            pending_effects: std::collections::VecDeque::new(),
             ui_settings: config.settings,
             pending_theme: None,
             plan_tracker: PlanTracker::default(),
@@ -303,12 +260,14 @@ impl App {
             || self.plan_tracker.has_completed_in_grace_period()
     }
 
+    /// Whether an overlay is open. Full-screen views are excluded: they replace
+    /// the conversation rather than sitting above it.
     pub fn has_modal(&self) -> bool {
-        self.layer.is_overlay()
+        self.active_surface().is_some_and(|surface| !surface.is_fullscreen())
     }
 
     pub fn has_session_picker(&self) -> bool {
-        matches!(self.layer, Layer::SessionPicker(_))
+        self.active_surface().is_some_and(|surface| (surface as &dyn Any).is::<SessionPicker>())
     }
 
     pub fn workspace_move_state(&self) -> WorkspaceMoveState {
@@ -316,7 +275,17 @@ impl App {
     }
 
     pub fn full_screen_active(&self) -> bool {
-        self.layer.active_ref().is_some_and(Surface::is_fullscreen)
+        self.active_surface().is_some_and(Surface::is_fullscreen)
+    }
+
+    fn active_surface(&self) -> Option<&dyn Surface> {
+        self.layer.as_deref()
+    }
+
+    /// The open surface, when it is a `T`. Lets an ACP update reach the one
+    /// surface that cares about it without the app tracking what is open.
+    fn layer_as<T: Surface>(&mut self) -> Option<&mut T> {
+        (self.layer.as_deref_mut()? as &mut dyn Any).downcast_mut::<T>()
     }
 
     pub fn exit_requested(&self) -> bool {
@@ -520,14 +489,13 @@ fn build_sub_agent_history_items(tool_calls: &ToolCallLog, tool_id: &str) -> Vec
             agent_name: agent.agent_name.clone(),
             done: agent.done,
             tools: agent
-                .tool_order
+                .tool_calls
                 .iter()
-                .filter_map(|tool_id| agent.tool_calls.get(tool_id))
-                .map(|tc| SubAgentToolHistoryItem {
-                    name: tc.name.clone(),
-                    arguments: tc.arguments.clone(),
-                    display_value: tc.display_value.clone(),
-                    status: tc.status.clone(),
+                .map(|call| SubAgentToolHistoryItem {
+                    name: call.name.clone(),
+                    arguments: call.arguments.clone(),
+                    display_value: call.display_value.clone(),
+                    status: call.status.clone(),
                 })
                 .collect(),
         })

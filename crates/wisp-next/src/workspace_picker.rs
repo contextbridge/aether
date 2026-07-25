@@ -51,10 +51,6 @@ impl WorkspacePicker {
         }
     }
 
-    pub fn has_workspaces(&self) -> bool {
-        self.rows.entries().iter().any(|row| matches!(row, WorkspaceRow::Existing(_)))
-    }
-
     /// Acts on the focused row: existing workspaces move immediately, while
     /// "create new" switches to the name prompt.
     fn confirm_row(&mut self) -> Vec<SurfaceMessage> {

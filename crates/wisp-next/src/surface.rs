@@ -1,19 +1,23 @@
+use crate::effects::{Effect, EffectResult};
 use crate::render_context::RenderContext;
-use crate::screens::{MouseAction, ScreenEffect, ScreenEvent};
+use crate::screens::MouseAction;
 use crate::selection::Direction;
 use acp_utils::notifications::WorkspaceMoveTarget;
 use agent_client_protocol::schema::SessionId;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
+use std::any::Any;
 use std::path::PathBuf;
 
 /// A layer drawn over the conversation that owns all input while it is open:
 /// a picker, a modal, or a full-screen view.
 ///
 /// Exactly one is active at a time, so `App` routes keys, mouse events, and
-/// rendering through this trait without re-matching on which one it is.
-pub trait Surface {
+/// rendering through this trait without re-matching on which one it is. The
+/// `Any` bound is what lets the handful of ACP updates that need a concrete
+/// surface find it, without the app tracking which kind is open.
+pub trait Surface: Any {
     /// Handles the keys unique to this surface, returning `None` to fall back to
     /// the shared navigation and filter keys in [`Surface::on_key`].
     fn on_surface_key(&mut self, key: KeyEvent) -> Option<Vec<SurfaceMessage>>;
@@ -53,7 +57,7 @@ pub trait Surface {
     }
 
     /// The result of a [`SurfaceMessage::Effect`] this surface asked for.
-    fn on_event(&mut self, event: ScreenEvent) -> Vec<SurfaceMessage> {
+    fn on_event(&mut self, event: EffectResult) -> Vec<SurfaceMessage> {
         let _ = event;
         Vec::new()
     }
@@ -105,6 +109,9 @@ pub enum SurfaceMessage {
     /// Dismiss the surface. Teardown (cancelling a pending elicitation, leaving
     /// workspace-move state) is the app's job, not the surface's.
     Close,
+    /// Return to the surface that opened this one. Handled by that surface, so
+    /// it never reaches the app.
+    Back,
     LoadSession {
         session_id: SessionId,
         cwd: PathBuf,
@@ -124,7 +131,7 @@ pub enum SurfaceMessage {
     AuthenticateProvider(String),
     /// Work to run off the UI thread. Its result comes back to the surface
     /// through [`Surface::on_event`].
-    Effect(ScreenEffect),
+    Effect(Effect),
     /// Send `prompt` to the agent as an ordinary turn and close the surface.
     SubmitReview(String),
 }

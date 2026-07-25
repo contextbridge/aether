@@ -1,15 +1,16 @@
-use acp_utils::notifications::{ElicitationAction, ElicitationResponse};
-use agent_client_protocol::Responder;
+use acp_utils::notifications::ElicitationAction;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, List, ListItem, Paragraph, StatefulWidget, Widget};
+use ratatui::widgets::{Block, ListItem, Paragraph, Widget};
 use utils::plan_review::{PlanReviewDecision, PlanReviewElicitationMeta};
 
 use crate::edit_buffer::{EditBuffer, apply_edit_key};
+use crate::elicitation::ElicitationResponder;
+use crate::list_view::ListView;
 use crate::plan_review::{
     PlanDocument, ReviewComment, SourceMarkdownLine, compile_feedback, render_markdown_source_lines,
 };
@@ -23,6 +24,10 @@ use crate::widgets::{block_cursor_spans, render_vertical_scrollbar};
 use crate::wrap::{truncate_to_width, wrap_line};
 
 const MIN_SPLIT_WIDTH: u16 = 60;
+/// Lines a mouse wheel notch moves the focused pane.
+const MOUSE_SCROLL_LINES: usize = 3;
+/// Columns the `" │ "` between the line number and the text occupies.
+const GUTTER_SEPARATOR_WIDTH: usize = 3;
 const OUTLINE_FRACTION: u32 = 1;
 const OUTLINE_TOTAL: u32 = 4;
 
@@ -48,22 +53,14 @@ pub struct PlanReviewScreen {
     outline_selection: SelectionState,
     draft: Option<DraftComment>,
     focus: Focus,
-    respond: Option<Box<dyn FnOnce(ElicitationResponse) + Send>>,
+    responder: ElicitationResponder,
     /// Where the plan's rows were last drawn, for hit-testing clicks.
     plan_rows_area: Rect,
 }
 
 impl PlanReviewScreen {
-    pub fn new(meta: PlanReviewElicitationMeta, responder: Responder<ElicitationResponse>) -> Self {
-        Self::new_with_response_handler(meta, move |response| {
-            let _ = responder.respond(response);
-        })
-    }
-
-    pub fn new_with_response_handler(
-        meta: PlanReviewElicitationMeta,
-        respond: impl FnOnce(ElicitationResponse) + Send + 'static,
-    ) -> Self {
+    pub fn new(meta: PlanReviewElicitationMeta, responder: impl Into<ElicitationResponder>) -> Self {
+        let responder = responder.into();
         let document = PlanDocument::parse(&meta.plan_path, &meta.markdown);
         let outline_selection = SelectionState::new(document.outline.len());
         Self {
@@ -77,7 +74,7 @@ impl PlanReviewScreen {
             outline_selection,
             draft: None,
             focus: Focus::Plan,
-            respond: Some(Box::new(respond)),
+            responder,
             plan_rows_area: Rect::ZERO,
         }
     }
@@ -88,15 +85,6 @@ impl PlanReviewScreen {
 
     fn source_line_max_index(&self) -> usize {
         self.source_line_count().saturating_sub(1)
-    }
-
-    pub fn invalidate_source_presentation(&mut self) {
-        self.source_lines.clear();
-        self.source_presentation_theme_generation = None;
-    }
-
-    pub fn source_presentation_is_cached(&self) -> bool {
-        self.source_presentation_theme_generation.is_some()
     }
 
     fn ensure_source_presentation(
@@ -114,17 +102,23 @@ impl PlanReviewScreen {
         self.plan_cursor_line = self.plan_cursor_line.min(self.source_line_max_index());
     }
 
-    fn scroll(&mut self, direction: i32) {
-        let step = 3 * direction;
-        if self.focus == Focus::Plan {
-            self.plan_scroll = offset_by(self.plan_scroll, step, self.source_line_max_index());
-            self.plan_cursor_line = offset_by(self.plan_cursor_line, step, self.source_line_max_index());
-        } else {
-            let len = self.document.outline.len();
-            let selected =
-                offset_by(self.outline_selection.selected().unwrap_or_default(), direction, len.saturating_sub(1));
-            self.outline_selection.select(Some(selected), len);
+    fn scroll(&mut self, direction: Direction) {
+        if self.focus != Focus::Plan {
+            self.move_outline(direction);
+            return;
         }
+        let max = self.source_line_max_index();
+        self.plan_scroll = step(self.plan_scroll, direction, MOUSE_SCROLL_LINES, max);
+        self.plan_cursor_line = step(self.plan_cursor_line, direction, MOUSE_SCROLL_LINES, max);
+    }
+
+    fn move_cursor(&mut self, direction: Direction) {
+        self.plan_cursor_line = step(self.plan_cursor_line, direction, 1, self.source_line_max_index());
+    }
+
+    /// Moves the outline selection, stopping at either end.
+    fn move_outline(&mut self, direction: Direction) {
+        self.outline_selection.step_clamped(self.document.outline.len(), direction, |_| true);
     }
 
     /// Focuses whichever pane was clicked and moves its cursor to the clicked
@@ -144,7 +138,7 @@ impl PlanReviewScreen {
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Vec<SurfaceMessage> {
-        if self.respond.is_none() {
+        if self.responder.is_answered() {
             return vec![SurfaceMessage::Close];
         }
         if self.draft.is_some() {
@@ -164,13 +158,14 @@ impl PlanReviewScreen {
     /// Keys that end the review, available from either pane.
     fn decision_key(&mut self, key: KeyEvent) -> Option<Vec<SurfaceMessage>> {
         match key.code {
-            KeyCode::Esc => self.respond(ElicitationAction::Cancel, None),
+            KeyCode::Esc => self.responder.cancel(),
             KeyCode::Char('a') => {
-                self.respond(ElicitationAction::Accept, Some(PlanReviewDecision::Approve.response_content(None)));
+                self.responder
+                    .respond(ElicitationAction::Accept, Some(PlanReviewDecision::Approve.response_content(None)));
             }
             KeyCode::Char('r') => {
                 let feedback = compile_feedback(&self.document, &self.comments);
-                self.respond(
+                self.responder.respond(
                     ElicitationAction::Accept,
                     Some(PlanReviewDecision::Deny.response_content(Some(&feedback))),
                 );
@@ -190,8 +185,8 @@ impl PlanReviewScreen {
             KeyCode::Char('c') => {
                 self.draft = Some(DraftComment { line_no: self.plan_cursor_line + 1, buffer: EditBuffer::default() });
             }
-            KeyCode::Char('j') | KeyCode::Down => self.plan_cursor_line = (self.plan_cursor_line + 1).min(max),
-            KeyCode::Char('k') | KeyCode::Up => self.plan_cursor_line = self.plan_cursor_line.saturating_sub(1),
+            KeyCode::Char('j') | KeyCode::Down => self.move_cursor(Direction::Forward),
+            KeyCode::Char('k') | KeyCode::Up => self.move_cursor(Direction::Backward),
             KeyCode::Char('g') => self.plan_cursor_line = 0,
             KeyCode::Char('G') => self.plan_cursor_line = max,
             KeyCode::Char('n') => self.jump_heading(Direction::Forward),
@@ -203,18 +198,11 @@ impl PlanReviewScreen {
 
     fn handle_outline_key(&mut self, key: KeyEvent) {
         let len = self.document.outline.len();
-        let max = len.saturating_sub(1);
         match key.code {
-            KeyCode::Char('j') | KeyCode::Down => {
-                let selected = self.outline_selection.selected().unwrap_or_default().saturating_add(1).min(max);
-                self.outline_selection.select(Some(selected), len);
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                let selected = self.outline_selection.selected().unwrap_or_default().saturating_sub(1);
-                self.outline_selection.select(Some(selected), len);
-            }
+            KeyCode::Char('j') | KeyCode::Down => self.move_outline(Direction::Forward),
+            KeyCode::Char('k') | KeyCode::Up => self.move_outline(Direction::Backward),
             KeyCode::Char('g') => self.outline_selection.select_first(len),
-            KeyCode::Char('G') => self.outline_selection.select(Some(max), len),
+            KeyCode::Char('G') => self.outline_selection.select(Some(len.saturating_sub(1)), len),
             KeyCode::Enter => {
                 if let Some(section) =
                     self.outline_selection.selected().and_then(|selected| self.document.outline.get(selected))
@@ -260,7 +248,6 @@ impl PlanReviewScreen {
         }
     }
 
-    #[allow(clippy::cast_possible_truncation)]
     fn render_screen(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
         if area.height < 4 || area.width < 20 {
             Paragraph::new("Plan review view is too small").style(Style::new().fg(theme.error)).render(area, buf);
@@ -304,33 +291,30 @@ impl PlanReviewScreen {
             .border_style(Style::new().fg(if self.focus == Focus::Outline { theme.accent } else { theme.muted }))
             .title(Line::styled(" Outline ", title_style));
 
-        let inner = block.inner(area);
-        block.render(area, buf);
-
-        if inner.height == 0 || self.document.outline.is_empty() {
-            return;
-        }
-
-        let inner_width = inner.width.saturating_sub(1) as usize;
-        let items = self.document.outline.iter().map(|section| {
-            let indent = "  ".repeat(section.level.saturating_sub(1) as usize);
-            let prefix = format!("  {indent}");
-            let available = inner_width.saturating_sub(prefix.len());
-            ListItem::new(format!("{prefix}{}", truncate_to_width(&section.title, available)))
-        });
+        let inner_width = usize::from(block.inner(area).width.saturating_sub(1));
+        let rows = self
+            .document
+            .outline
+            .iter()
+            .map(|section| {
+                let prefix = format!("  {}", "  ".repeat(usize::from(section.level.saturating_sub(1))));
+                let available = inner_width.saturating_sub(prefix.len());
+                ListItem::new(format!("{prefix}{}", truncate_to_width(&section.title, available)))
+            })
+            .collect();
         let highlight_style = if self.focus == Focus::Outline {
             Style::new().bg(theme.accent).fg(theme.background)
         } else {
             Style::new().fg(theme.accent)
         };
-        let list = List::new(items).highlight_symbol("> ").highlight_style(highlight_style);
-        self.outline_selection.set_rows_area(inner);
-        StatefulWidget::render(list, inner, buf, self.outline_selection.list_state_mut());
-
-        render_vertical_scrollbar(inner, buf, self.document.outline.len(), self.outline_selection.offset());
+        ListView::new(rows, &mut self.outline_selection, theme)
+            .block(block)
+            .scrollbar()
+            .highlight_symbol("> ")
+            .highlight_style(highlight_style)
+            .render(area, buf);
     }
 
-    #[allow(clippy::cast_possible_truncation)]
     fn render_plan(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
         let block = Block::bordered()
             .border_style(Style::new().fg(if self.focus == Focus::Plan { theme.accent } else { theme.muted }))
@@ -340,7 +324,7 @@ impl PlanReviewScreen {
         block.render(area, buf);
         self.plan_rows_area = inner;
 
-        let height = inner.height as usize;
+        let height = usize::from(inner.height);
         if height == 0 {
             return;
         }
@@ -349,8 +333,8 @@ impl PlanReviewScreen {
             return;
         }
 
-        let gutter_width = digit_count(self.source_line_count().max(1)) + 3;
-        let content_width = inner.width.saturating_sub(gutter_width as u16);
+        let gutter_width = digit_count(self.source_line_count().max(1)) + GUTTER_SEPARATOR_WIDTH;
+        let content_width = inner.width.saturating_sub(u16::try_from(gutter_width).unwrap_or(u16::MAX));
         if content_width == 0 {
             return;
         }
@@ -473,12 +457,6 @@ impl PlanReviewScreen {
 
         Paragraph::new(Line::from(spans)).style(Style::new().bg(theme.sidebar_bg)).render(area, buf);
     }
-
-    fn respond(&mut self, action: ElicitationAction, content: Option<serde_json::Value>) {
-        if let Some(respond) = self.respond.take() {
-            respond(ElicitationResponse { action, content });
-        }
-    }
 }
 
 impl Surface for PlanReviewScreen {
@@ -494,8 +472,8 @@ impl Surface for PlanReviewScreen {
 
     fn on_mouse(&mut self, action: MouseAction, row: u16, column: u16) -> Vec<SurfaceMessage> {
         match action {
-            MouseAction::ScrollUp => self.scroll(-1),
-            MouseAction::ScrollDown => self.scroll(1),
+            MouseAction::ScrollUp => self.scroll(Direction::Backward),
+            MouseAction::ScrollDown => self.scroll(Direction::Forward),
             MouseAction::Click => self.click(row, column),
         }
         Vec::new()
@@ -508,13 +486,16 @@ impl Surface for PlanReviewScreen {
     }
 
     fn cancel(&mut self) {
-        self.respond(ElicitationAction::Cancel, None);
+        self.responder.cancel();
     }
 }
 
-/// Shifts `value` by `delta` rows, saturating at zero and `max`.
-fn offset_by(value: usize, delta: i32, max: usize) -> usize {
-    value.saturating_add_signed(delta as isize).min(max)
+/// Shifts `value` by `amount` rows in `direction`, stopping at zero and `max`.
+fn step(value: usize, direction: Direction, amount: usize, max: usize) -> usize {
+    match direction {
+        Direction::Backward => value.saturating_sub(amount),
+        Direction::Forward => value.saturating_add(amount).min(max),
+    }
 }
 
 /// A line drawn beside the gutter rather than in it: comments and drafts.
@@ -557,11 +538,11 @@ fn highlight_row(line: Line<'static>, theme: &Theme) -> Line<'static> {
 }
 
 fn digit_count(value: usize) -> usize {
-    value.checked_ilog10().map_or(1, |digits| digits as usize + 1)
+    value.checked_ilog10().map_or(0, |digits| usize::try_from(digits).unwrap_or(0)) + 1
 }
 
 fn build_gutter(line_no: usize, width: usize, theme: &Theme) -> Line<'static> {
-    let num_width = width.saturating_sub(3);
+    let num_width = width.saturating_sub(GUTTER_SEPARATOR_WIDTH);
     let mut line = Line::default();
     line.push_span(Span::styled(format!("{line_no:>num_width$}"), Style::new().fg(theme.text_secondary)));
     line.push_span(Span::styled(" │ ", Style::new().fg(theme.muted)));

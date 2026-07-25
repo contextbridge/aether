@@ -32,6 +32,8 @@ pub struct CompletionOverlay {
     trigger: char,
     entries: FilterableList<CompletionEntry>,
     empty_message: &'static str,
+    /// The file-index request this overlay is waiting on, if any.
+    pending_index: Option<u64>,
 }
 
 impl CompletionOverlay {
@@ -39,8 +41,26 @@ impl CompletionOverlay {
         Self::new('/', entries.into_iter().map(CompletionEntry::Command).collect(), "no matching commands")
     }
 
-    pub fn file(root: &Path) -> Self {
-        Self::new('@', index_files(root).into_iter().map(CompletionEntry::File).collect(), "no matching files")
+    /// An empty file list, waiting on the walk of the working tree. Entries
+    /// arrive later via [`CompletionOverlay::set_files`].
+    pub fn file(request_id: u64) -> Self {
+        let mut overlay = Self::new('@', Vec::new(), "indexing files…");
+        overlay.pending_index = Some(request_id);
+        overlay
+    }
+
+    /// Fills in the results of the walk this overlay is waiting on, ignoring
+    /// anything that arrives for a request it did not make.
+    pub fn set_files(&mut self, request_id: u64, files: Vec<FileEntry>) {
+        if self.pending_index != Some(request_id) {
+            return;
+        }
+        self.pending_index = None;
+        self.empty_message = "no matching files";
+        let query = self.entries.query().to_string();
+        self.entries =
+            FilterableList::new(files.into_iter().map(CompletionEntry::File).collect(), CompletionEntry::match_key);
+        self.entries.set_query(query);
     }
 
     /// The character that opened this overlay, and the one whose token the
@@ -105,7 +125,12 @@ impl CompletionOverlay {
     }
 
     fn new(trigger: char, entries: Vec<CompletionEntry>, empty_message: &'static str) -> Self {
-        Self { trigger, entries: FilterableList::new(entries, CompletionEntry::match_key), empty_message }
+        Self {
+            trigger,
+            entries: FilterableList::new(entries, CompletionEntry::match_key),
+            empty_message,
+            pending_index: None,
+        }
     }
 }
 
@@ -130,7 +155,9 @@ impl CompletionEntry {
 
 const MAX_INDEXED_FILES: usize = 50_000;
 
-fn index_files(root: &Path) -> Vec<FileEntry> {
+/// Walks `root` for every file the `@` picker can offer. Blocking: run it off
+/// the event loop.
+pub fn index_files(root: &Path) -> Vec<FileEntry> {
     let mut entries = Vec::new();
     for entry in ignore::WalkBuilder::new(root)
         .git_ignore(true)

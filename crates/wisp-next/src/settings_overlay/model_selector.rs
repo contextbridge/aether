@@ -1,13 +1,14 @@
-use super::{PaneOutcome, SettingsChange, SettingsMenuValue, SettingsPane};
+use super::{SettingsChange, SettingsMenuValue, SettingsPane, message_for_change};
 use crate::filterable_list::FilterableList;
+use crate::render_context::RenderContext;
 use crate::selection::Direction;
-use crate::surface::ListFilter;
+use crate::surface::{ListFilter, Surface, SurfaceMessage};
 use crate::theme::Theme;
 use crate::wrap::truncate_to_width;
 use acp_utils::config_option_id::ConfigOptionId;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::Style;
 use ratatui::widgets::{ListItem, Paragraph, Widget};
 use std::collections::BTreeSet;
@@ -116,37 +117,45 @@ impl ModelSelector {
     }
 }
 
-impl SettingsPane for ModelSelector {
-    fn on_pane_key(&mut self, key: KeyEvent) -> Option<PaneOutcome> {
+impl Surface for ModelSelector {
+    fn on_surface_key(&mut self, key: KeyEvent) -> Option<Vec<SurfaceMessage>> {
         match key.code {
             KeyCode::Tab => self.cycle_reasoning(Direction::Forward),
             KeyCode::BackTab => self.cycle_reasoning(Direction::Backward),
             KeyCode::Enter | KeyCode::Char(' ') => self.toggle_focused(),
             _ => return None,
         }
-        Some(PaneOutcome::default())
+        Some(Vec::new())
     }
 
     fn filter(&mut self) -> Option<&mut dyn ListFilter> {
         Some(&mut self.items)
     }
 
-    fn click(&mut self, row: u16) -> PaneOutcome {
+    fn click(&mut self, row: u16, _column: u16) -> Vec<SurfaceMessage> {
         if self.items.select_at(row) {
             self.toggle_focused();
         }
-        PaneOutcome::default()
+        Vec::new()
     }
 
     /// Scanning a long model list stops at either end rather than wrapping.
-    fn scroll(&mut self, direction: Direction) {
+    fn scroll(&mut self, direction: Direction) -> Vec<SurfaceMessage> {
         self.items.step_clamped(direction, |value| !value.is_disabled);
         self.clamp_reasoning_to_focused();
+        Vec::new()
     }
 
+    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
+        self.render_pane(area, buf, cx.theme);
+        None
+    }
+}
+
+impl ModelSelector {
     /// Model changes are batched and committed when the pane closes, so
     /// toggling several models costs one round-trip instead of one each.
-    fn take_changes(&mut self) -> Vec<SettingsChange> {
+    fn pending_changes(&self) -> Vec<SettingsChange> {
         let mut changes = Vec::new();
         if !self.selected_models.is_empty() && self.selected_models != self.original_models {
             changes.push(SettingsChange {
@@ -163,7 +172,7 @@ impl SettingsPane for ModelSelector {
         changes
     }
 
-    fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
+    fn render_pane(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
         let [header_area, list_area] =
             Layout::vertical([Constraint::Length(HEADER_ROWS), Constraint::Min(0)]).areas(area);
         let name_width = name_column_width(list_area.width);
@@ -209,6 +218,12 @@ impl SettingsPane for ModelSelector {
             .highlight_style(Style::new().fg(theme.background).bg(theme.text_primary))
             .scrollbar()
             .render(list_area, buf);
+    }
+}
+
+impl SettingsPane for ModelSelector {
+    fn take_changes(&mut self) -> Vec<SurfaceMessage> {
+        self.pending_changes().iter().map(message_for_change).collect()
     }
 
     fn footer(&self) -> String {

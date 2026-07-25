@@ -315,7 +315,7 @@ fn composer_highlights_at_mentions_in_info_color() {
     let mut composer = Composer::new();
     composer.insert_str("fix ");
     composer.insert_char('@');
-    composer.open_file_picker(root);
+    open_file_picker(&mut composer, root);
     composer.accept_file();
     // buffer is now "fix @lib.rs "
 
@@ -342,7 +342,7 @@ fn selected_mentions_match_whole_tokens_not_substrings() {
 
     let mut composer = Composer::new();
     composer.insert_char('@');
-    composer.open_file_picker(root);
+    open_file_picker(&mut composer, root);
     composer.accept_file();
     assert_eq!(composer.text(), "@foo.rs ");
 
@@ -367,7 +367,7 @@ fn selected_matches_mention_with_exact_token() {
 
     let mut composer = Composer::new();
     composer.insert_char('@');
-    composer.open_file_picker(root);
+    open_file_picker(&mut composer, root);
     composer.accept_file();
 
     let mentions = composer.selected_mentions();

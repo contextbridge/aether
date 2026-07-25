@@ -1,8 +1,11 @@
 use super::{
-    App, ConfigOptionId, Layer, ReasoningEffort, SessionConfigOptionCategory, SessionConfigView, SettingsMenuEntry,
-    SettingsMenuEntryKind, SettingsMenuValue, UiSettings, acp,
+    App, ConfigOptionId, ReasoningEffort, SessionConfigOptionCategory, SessionConfigView, SettingsMenuEntry,
+    SettingsMenuValue, UiSettings, acp,
 };
-use crate::session_config_view::{as_select, select_values};
+use crate::{
+    session_config_view::{as_select, select_values},
+    settings_overlay::SettingsOverlay,
+};
 pub(super) fn is_cycleable_mode_option(option: &acp::SessionConfigOption) -> bool {
     matches!(option.kind, acp::SessionConfigKind::Select(_))
         && option.category == Some(SessionConfigOptionCategory::Mode)
@@ -65,7 +68,7 @@ impl App {
         } else {
             crate::settings::load_theme_file(value)
         });
-        if let Layer::Settings(overlay) = &mut self.layer {
+        if let Some(overlay) = self.layer_as::<SettingsOverlay>() {
             overlay.apply_change(&crate::settings_overlay::SettingsChange {
                 config_id: acp_utils::config_option_id::THEME_CONFIG_ID.to_string(),
                 new_value: value.to_string(),
@@ -110,7 +113,7 @@ pub(super) fn build_theme_entries(settings: &UiSettings) -> Vec<SettingsMenuEntr
         values,
         current_value_index,
         current_raw_value: current_file.to_string(),
-        entry_kind: SettingsMenuEntryKind::Theme,
+        local: true,
         multi_select: false,
         display_name: None,
     }]

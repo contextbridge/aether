@@ -1,13 +1,13 @@
+use crate::list_view::ListView;
 use crate::selection::{Direction, SelectionState};
 use crate::surface::ListFilter;
 use crate::theme::Theme;
-use crate::widgets::render_vertical_scrollbar;
 use nucleo::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo::{Config, Matcher, Utf32Str};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
-use ratatui::widgets::{Block, List, ListItem, Paragraph, StatefulWidget, Widget};
+use ratatui::widgets::{Block, ListItem, Widget};
 
 /// A list of `T` with a fuzzy-match filter and a persistent selection.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -47,6 +47,7 @@ impl<T> FilterableList<T> {
         self.filtered_indices.len()
     }
 
+    /// The first entry currently scrolled into view.
     pub fn offset(&self) -> usize {
         self.selection.offset()
     }
@@ -126,7 +127,16 @@ impl<T> FilterableList<T> {
     where
         F: FnMut(&T) -> ListItem<'static>,
     {
-        FilterableListView { list: self, theme, empty_message, item, block: None, scrollbar: false, highlight: None }
+        FilterableListView {
+            list: self,
+            theme,
+            empty_message,
+            item,
+            block: None,
+            border_title: None,
+            scrollbar: false,
+            highlight: None,
+        }
     }
 
     fn refilter(&mut self) {
@@ -156,13 +166,15 @@ impl<T> ListFilter for FilterableList<T> {
     }
 }
 
-/// A [`FilterableList`] rendered as a ratatui widget.
+/// A [`FilterableList`] rendered as a ratatui widget: the matching entries as
+/// rows, drawn with the shared [`ListView`] chrome.
 pub struct FilterableListView<'a, T, F> {
     list: &'a mut FilterableList<T>,
     theme: &'a Theme,
     empty_message: &'a str,
     item: F,
     block: Option<Block<'static>>,
+    border_title: Option<String>,
     scrollbar: bool,
     highlight: Option<Style>,
 }
@@ -174,9 +186,9 @@ impl<T, F> FilterableListView<'_, T, F> {
     }
 
     /// Wraps the list in a titled border, the standard full-pane picker chrome.
-    pub fn bordered(self, title: impl Into<String>) -> Self {
-        let style = Style::new().fg(self.theme.text_primary);
-        self.block(Block::bordered().title(title.into()).style(style)).scrollbar()
+    pub fn bordered(mut self, title: impl Into<String>) -> Self {
+        self.border_title = Some(title.into());
+        self
     }
 
     pub fn scrollbar(mut self) -> Self {
@@ -195,27 +207,24 @@ where
     F: FnMut(&T) -> ListItem<'static>,
 {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let Self { list, theme, empty_message, mut item, block, scrollbar, highlight } = self;
-        let inner = block.as_ref().map_or(area, |block| block.inner(area));
+        let Self { list, theme, empty_message, mut item, block, border_title, scrollbar, highlight } = self;
+        let FilterableList { entries, filtered_indices, selection, .. } = list;
+
+        let rows: Vec<ListItem<'static>> = filtered_indices.iter().map(|&index| item(&entries[index])).collect();
+        let mut view = ListView::new(rows, selection, theme).empty_message(empty_message);
+        if let Some(title) = border_title {
+            view = view.bordered(title);
+        }
         if let Some(block) = block {
-            block.render(area, buf);
+            view = view.block(block);
         }
-
-        if list.filtered_indices.is_empty() {
-            Paragraph::new(empty_message).style(Style::new().fg(theme.muted)).render(inner, buf);
-            return;
-        }
-
-        let rows: Vec<ListItem<'static>> =
-            list.filtered_indices.iter().map(|&index| item(&list.entries[index])).collect();
-        let highlight = highlight.unwrap_or_else(|| Style::new().fg(theme.text_primary).bg(theme.sidebar_bg));
-        let widget = List::new(rows).highlight_style(highlight).scroll_padding(1);
-        list.selection.set_rows_area(inner);
-        StatefulWidget::render(widget, inner, buf, list.selection.list_state_mut());
-
         if scrollbar {
-            render_vertical_scrollbar(inner, buf, list.filtered_indices.len(), list.selection.offset());
+            view = view.scrollbar();
         }
+        if let Some(highlight) = highlight {
+            view = view.highlight_style(highlight);
+        }
+        view.render(area, buf);
     }
 }
 

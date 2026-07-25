@@ -4,6 +4,7 @@ use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use tokio::sync::mpsc::UnboundedReceiver;
 use wisp_next::app::{App, AppConfig};
+use wisp_next::effects::EffectResult;
 use wisp_next::presentation::Presenter;
 use wisp_next::render::sync_terminal as sync_terminal_with_renderer;
 use wisp_next::settings::UiSettings;
@@ -941,7 +942,10 @@ mod screen_mouse {
 
     fn open_screen() -> GitDiffScreen {
         let (mut screen, effect) = GitDiffScreen::new(std::path::PathBuf::from("/tmp/repo"));
-        screen.on_event(GitDiffEvent::Loaded { request_id: effect.request_id(), result: Ok(make_test_document()) });
+        screen.on_event(EffectResult::GitDiff(GitDiffEvent::Loaded {
+            request_id: effect.request_id(),
+            result: Ok(make_test_document()),
+        }));
         screen
     }
 

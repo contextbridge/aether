@@ -12,14 +12,16 @@ use ratatui::widgets::{Paragraph, Widget};
 use utils::ReasoningEffort;
 
 /// The bottom status bar: workspace on the left, session state on the right.
-pub struct StatusLine<'a> {
+///
+/// Built once per frame and rendered by reference, so measuring its height does
+/// not mean rendering every segment a second time.
+pub struct StatusLine {
     left: Line<'static>,
     right: Line<'static>,
-    _marker: std::marker::PhantomData<&'a ()>,
 }
 
-impl<'a> StatusLine<'a> {
-    pub fn new(app: &'a App, settings: &ResolvedStatusLineSettings, theme: &Theme) -> Self {
+impl StatusLine {
+    pub fn new(app: &App, settings: &ResolvedStatusLineSettings, theme: &Theme) -> Self {
         let left =
             Line::from(with_padding(app.content_padding(), render_segments(app, &settings.left, settings, theme)));
         let right = if app.exit_confirmation_active() {
@@ -27,7 +29,16 @@ impl<'a> StatusLine<'a> {
         } else {
             Line::from(render_segments(app, &settings.right, settings, theme))
         };
-        Self { left, right, _marker: std::marker::PhantomData }
+        Self { left, right }
+    }
+
+    /// Rows this status line needs: one when both halves fit side by side, two
+    /// when they must stack.
+    pub fn height(&self, width: u16) -> u16 {
+        if width == 0 {
+            return 1;
+        }
+        if self.fits_on_one_row(usize::from(width)) { 1 } else { 2 }
     }
 
     /// Whether both halves fit on one row.
@@ -36,16 +47,7 @@ impl<'a> StatusLine<'a> {
     }
 }
 
-/// Rows the status line needs: one when both halves fit side by side, two when
-/// they must stack.
-pub fn status_line_height(app: &App, width: u16, settings: &ResolvedStatusLineSettings, theme: &Theme) -> u16 {
-    if width == 0 {
-        return 1;
-    }
-    if StatusLine::new(app, settings, theme).fits_on_one_row(usize::from(width)) { 1 } else { 2 }
-}
-
-impl Widget for StatusLine<'_> {
+impl Widget for &StatusLine {
     fn render(self, area: Rect, buf: &mut Buffer) {
         if area.width == 0 || area.height == 0 {
             return;
@@ -56,8 +58,8 @@ impl Widget for StatusLine<'_> {
             if self.right.width() == 0 {
                 Paragraph::new(Line::from(truncate_spans(&self.left.spans, width))).render(area, buf);
             } else {
-                Paragraph::new(self.left).alignment(Alignment::Left).render(area, buf);
-                Paragraph::new(self.right).alignment(Alignment::Right).render(area, buf);
+                Paragraph::new(self.left.clone()).alignment(Alignment::Left).render(area, buf);
+                Paragraph::new(self.right.clone()).alignment(Alignment::Right).render(area, buf);
             }
             return;
         }
@@ -87,9 +89,10 @@ fn render_segments(
     settings: &ResolvedStatusLineSettings,
     theme: &Theme,
 ) -> Vec<Span<'static>> {
+    let config = SessionConfigView::new(app.config_options());
     let mut spans: Vec<Span<'static>> = Vec::new();
     for segment in segments {
-        let segment_spans = render_segment(segment, app, theme);
+        let segment_spans = render_segment(segment, app, &config, theme);
         if segment_spans.is_empty() {
             continue;
         }
@@ -101,8 +104,12 @@ fn render_segments(
     spans
 }
 
-fn render_segment(segment: &StatusLineSegmentConfig, app: &App, theme: &Theme) -> Vec<Span<'static>> {
-    let config = SessionConfigView::new(app.config_options());
+fn render_segment(
+    segment: &StatusLineSegmentConfig,
+    app: &App,
+    config: &SessionConfigView<'_>,
+    theme: &Theme,
+) -> Vec<Span<'static>> {
     match segment {
         StatusLineSegmentConfig::Cwd { max_width } => {
             vec![styled(clamp(&app.workspace_status().display_dir, *max_width), theme.text_secondary)]

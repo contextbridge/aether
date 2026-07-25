@@ -100,15 +100,12 @@ impl ProgressIndicator {
         self.display.is_interruptible()
     }
 
-    pub fn line_count(&self) -> usize {
-        if self.is_active() { 3 } else { 0 }
-    }
-
     pub fn reset(&mut self) {
         *self = Self::default();
     }
 
-    pub fn lines(&self, theme: &Theme, tick: usize, padding: usize) -> Vec<Line<'static>> {
+    /// The indicator's rows, to be drawn into an already-indented area.
+    pub fn lines(&self, theme: &Theme, tick: usize) -> Vec<Line<'static>> {
         if !self.is_active() {
             return Vec::new();
         }
@@ -116,7 +113,6 @@ impl ProgressIndicator {
         let spinner_color =
             if matches!(self.display, ProgressDisplay::Compacting { .. }) { theme.warning } else { theme.info };
         let mut spans = vec![
-            Span::styled(" ".repeat(padding), Style::default()),
             Span::styled(spinner_frame(tick).to_string(), Style::new().fg(spinner_color)),
             Span::styled(format!(" {}", self.current_message()), Style::new().fg(theme.text_secondary)),
         ];
@@ -156,7 +152,7 @@ mod tests {
             1,
         );
         let theme = Theme::default();
-        let text = indicator.lines(&theme, 0, 0);
+        let text = indicator.lines(&theme, 0);
         assert!(text[1].to_string().contains("Moving workspace..."));
         assert!(indicator.is_interruptible());
     }
@@ -166,8 +162,8 @@ mod tests {
         let mut indicator = ProgressIndicator::default();
         indicator.update(ProgressActivity { agent_busy: true, ..Default::default() }, 1);
         let theme = Theme::default();
-        let first = indicator.lines(&theme, 0, 0);
-        let second = indicator.lines(&theme, 1, 0);
+        let first = indicator.lines(&theme, 0);
+        let second = indicator.lines(&theme, 1);
         assert_ne!(first[1].to_string(), second[1].to_string());
     }
 }

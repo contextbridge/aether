@@ -1,7 +1,7 @@
 use super::config::{cycle_quick_option, cycle_reasoning_option, update_config_option_value};
 use super::{
-    App, Direction, Duration, Event, ExitState, Instant, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, Layer, Rect,
-    ScreenEffect, ScreenEvent, Surface, parse_dropped_file_paths,
+    App, Direction, Duration, Effect, EffectResult, Event, ExitState, Instant, KeyCode, KeyEvent, KeyEventKind,
+    KeyModifiers, Rect, parse_dropped_file_paths,
 };
 use crate::render_context::RenderContext;
 use crate::screens::MouseAction;
@@ -45,7 +45,7 @@ impl App {
             return;
         }
 
-        if let Some(surface) = self.layer.active() {
+        if let Some(surface) = self.layer.as_deref_mut() {
             let messages = surface.on_key(key);
             self.handle_surface_messages(messages);
             return;
@@ -124,7 +124,8 @@ impl App {
                 if self.keybindings.open_command_picker.matches(key) && self.composer.text() == "/" {
                     self.composer.open_command_picker(self.available_commands.clone());
                 } else if self.keybindings.open_file_picker.matches(key) {
-                    self.composer.open_file_picker(&self.working_dir);
+                    let effect = self.composer.open_file_picker(&self.working_dir);
+                    self.pending_effects.push_back(effect);
                 }
             }
             // Up/Down fall through to prompt history once the cursor is on the
@@ -217,7 +218,7 @@ impl App {
     /// events are measured against.
     pub fn render_active_surface(&mut self, frame: &mut Frame, cx: &mut RenderContext<'_>) {
         let area = frame.area();
-        if let Some(surface) = self.layer.active() {
+        if let Some(surface) = self.layer.as_deref_mut() {
             let cursor = surface.render(area, frame.buffer_mut(), cx);
             self.surface_rect = Some(area);
             if let Some(cursor) = cursor {
@@ -231,16 +232,22 @@ impl App {
         }
     }
 
-    pub fn on_screen_event(&mut self, event: ScreenEvent) {
-        let Some(surface) = self.layer.active() else {
+    /// Routes an effect result: file-index results belong to the composer, and
+    /// everything else to whichever surface asked for the work.
+    pub fn on_effect_result(&mut self, result: EffectResult) {
+        if let EffectResult::FilesIndexed { request_id, files } = result {
+            self.composer.on_files_indexed(request_id, files);
+            return;
+        }
+        let Some(surface) = self.layer.as_deref_mut() else {
             return;
         };
-        let messages = surface.on_event(event);
+        let messages = surface.on_event(result);
         self.handle_surface_messages(messages);
     }
 
-    pub fn take_screen_effect(&mut self) -> Option<ScreenEffect> {
-        self.pending_screen_effects.pop_front()
+    pub fn take_effect(&mut self) -> Option<Effect> {
+        self.pending_effects.pop_front()
     }
 
     pub fn take_bell(&mut self) -> bool {
@@ -250,7 +257,7 @@ impl App {
     /// Only the bare composer works without mouse reporting; every other
     /// surface has scrollable or clickable content.
     pub fn needs_mouse_capture(&self) -> bool {
-        match self.layer.active_ref() {
+        match self.layer.as_deref() {
             Some(surface) => surface.needs_mouse_capture(),
             None => self.composer.has_prompt_search() || self.composer.has_overlay(),
         }
@@ -268,14 +275,10 @@ impl App {
         self.surface_rect = Some(rect);
     }
 
-    pub(super) fn open_screen(&mut self, screen: Box<dyn Surface>) {
-        self.open_layer(Layer::Screen(screen));
-    }
-
     fn open_git_diff(&mut self) {
         let (screen, effect) = GitDiffScreen::new(self.working_dir.clone());
-        self.open_screen(Box::new(screen));
-        self.pending_screen_effects.push_back(effect);
+        self.open_layer(Box::new(screen));
+        self.pending_effects.push_back(effect.into());
     }
 
     /// Routes a mouse event to the surface under the pointer.
@@ -297,7 +300,7 @@ impl App {
             _ => return,
         };
 
-        if let Some(surface) = self.layer.active() {
+        if let Some(surface) = self.layer.as_deref_mut() {
             let messages = surface.on_mouse(action, event.row, event.column);
             self.handle_surface_messages(messages);
             return;

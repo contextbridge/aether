@@ -1,6 +1,6 @@
 use super::config::{build_theme_entries, update_config_option_value};
 use super::{
-    AetherCapabilities, App, CommandEntry, Layer, SessionId, SettingsOverlay, SurfaceMessage, WorkspaceMoveState,
+    AetherCapabilities, App, CommandEntry, SessionId, SettingsOverlay, Surface, SurfaceMessage, WorkspaceMoveState,
     WorkspaceStatus, acp,
 };
 use crate::settings_overlay::SettingsChange;
@@ -59,7 +59,7 @@ impl App {
         let mut overlay = SettingsOverlay::new(&self.config_options, self.server_statuses.clone(), &self.auth_methods);
         overlay.add_local_entries(build_theme_entries(&self.ui_settings));
         overlay.add_status_entries();
-        self.open_layer(Layer::Settings(overlay));
+        self.open_layer(Box::new(overlay));
     }
 
     fn begin_workspace_move(&mut self) {
@@ -81,8 +81,10 @@ impl App {
 
     fn handle_surface_message(&mut self, message: SurfaceMessage) {
         match message {
-            SurfaceMessage::Close => self.close_layer(),
-            SurfaceMessage::Effect(effect) => self.pending_screen_effects.push_back(effect),
+            // `Back` is handled by whichever surface opened the one that sent
+            // it, so it never reaches here.
+            SurfaceMessage::Back | SurfaceMessage::Close => self.close_layer(),
+            SurfaceMessage::Effect(effect) => self.pending_effects.push_back(effect),
             SurfaceMessage::SubmitReview(prompt) => self.submit_review(&prompt),
             SurfaceMessage::LoadSession { session_id, cwd } => self.load_session(&session_id, &cwd),
             SurfaceMessage::RequestSessionPreview { session_id } => {
@@ -108,7 +110,7 @@ impl App {
                 let _ = self.prompt_handle.authenticate_mcp_server(&self.session_id, &name);
             }
             SurfaceMessage::AuthenticateProvider(method_id) => {
-                if let Layer::Settings(overlay) = &mut self.layer {
+                if let Some(overlay) = self.layer_as::<SettingsOverlay>() {
                     overlay.on_authenticate_started(&method_id);
                 }
                 let _ = self.prompt_handle.authenticate(&method_id);
@@ -116,26 +118,26 @@ impl App {
         }
     }
 
-    /// Opens `layer`, closing whatever was already open.
-    pub(super) fn open_layer(&mut self, layer: Layer) {
+    /// Opens `surface`, closing whatever was already open.
+    pub(super) fn open_layer(&mut self, surface: Box<dyn Surface>) {
         self.close_layer();
-        self.layer = layer;
+        self.layer = Some(surface);
     }
 
     /// Dismisses the open surface. It is cancelled first so it can release
     /// anything it was holding, such as an unanswered elicitation.
     pub(super) fn close_layer(&mut self) {
-        if let Some(surface) = self.layer.active() {
+        if let Some(surface) = self.layer.as_deref_mut() {
             surface.cancel();
         }
-        self.layer = Layer::None;
+        self.layer = None;
         if self.workspace_move_state == WorkspaceMoveState::Picking {
             self.workspace_move_state = WorkspaceMoveState::Idle;
         }
     }
 
     pub(super) fn apply_settings_change(&mut self, change: &SettingsChange) {
-        if let Layer::Settings(overlay) = &mut self.layer {
+        if let Some(overlay) = self.layer_as::<SettingsOverlay>() {
             overlay.apply_change(change);
         }
         update_config_option_value(&mut self.config_options, &change.config_id, &change.new_value);

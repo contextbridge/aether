@@ -1,8 +1,8 @@
 use super::config::extract_config_selections;
 use super::session::merge_builtins;
 use super::{
-    AcpEvent, App, CommandEntry, ContextUsageDisplay, ElicitationModal, ExitState, Instant, Layer, McpNotification,
-    SessionId, SessionPicker, SettingsOverlay, ToolStatus, WorkspaceMoveState, WorkspacePicker, acp,
+    AcpEvent, App, CommandEntry, ContextUsageDisplay, ElicitationModal, ExitState, Instant, McpNotification, SessionId,
+    SessionPicker, SettingsOverlay, ToolStatus, WorkspaceMoveState, WorkspacePicker, acp,
 };
 use crate::screens::plan_review::PlanReviewScreen;
 
@@ -45,16 +45,16 @@ impl App {
             AcpEvent::ElicitationRequest { params, responder } => {
                 self.close_elicitation_owner();
                 if let Some(meta) = plan_review_meta(&params) {
-                    self.open_screen(Box::new(PlanReviewScreen::new(meta, responder)));
+                    self.open_layer(Box::new(PlanReviewScreen::new(meta, responder)));
                     return;
                 }
                 // The settings overlay answers its own elicitations in place so
                 // an OAuth prompt does not tear down the pane that started it.
-                if let Layer::Settings(overlay) = &mut self.layer {
+                if let Some(overlay) = self.layer_as::<SettingsOverlay>() {
                     overlay.on_elicitation_request(params, responder);
                     return;
                 }
-                self.open_layer(Layer::Elicitation(ElicitationModal::new(params, responder)));
+                self.open_layer(Box::new(ElicitationModal::new(params, responder)));
             }
             AcpEvent::McpNotification(notification) => self.on_mcp_notification(&notification),
             AcpEvent::AuthMethodsUpdated(params) => {
@@ -95,7 +95,7 @@ impl App {
                 }
             }
             AcpEvent::WorkspacesListed(response) => {
-                self.open_layer(Layer::WorkspacePicker(WorkspacePicker::new(response.workspaces)));
+                self.open_layer(Box::new(WorkspacePicker::new(response.workspaces)));
                 self.workspace_move_state = WorkspaceMoveState::Picking;
             }
             AcpEvent::WorkspaceMoved(response) => self.on_workspace_moved(response.new_cwd),
@@ -123,13 +123,13 @@ impl App {
     /// Runs `apply` when the settings overlay is open. Agent pushes that only
     /// affect what it displays are dropped when it is not.
     fn with_settings(&mut self, apply: impl FnOnce(&mut SettingsOverlay)) {
-        if let Layer::Settings(overlay) = &mut self.layer {
+        if let Some(overlay) = self.layer_as::<SettingsOverlay>() {
             apply(overlay);
         }
     }
 
     fn with_session_picker(&mut self, apply: impl FnOnce(&mut SessionPicker)) {
-        if let Layer::SessionPicker(picker) = &mut self.layer {
+        if let Some(picker) = self.layer_as::<SessionPicker>() {
             apply(picker);
         }
     }
@@ -141,7 +141,7 @@ impl App {
         if let Some(id) = picker.initial_preview_request() {
             let _ = self.prompt_handle.session_preview(&SessionId::new(id));
         }
-        self.open_layer(Layer::SessionPicker(picker));
+        self.open_layer(Box::new(picker));
     }
 
     /// A requested session has arrived: replay the updates that were buffered
@@ -185,9 +185,8 @@ impl App {
             let servers = servers.clone();
             self.with_settings(|overlay| overlay.update_server_statuses(servers));
         }
-        if let Layer::Elicitation(modal) = &mut self.layer
-            && modal.on_notification(notification)
-        {
+        let completed = self.layer_as::<ElicitationModal>().is_some_and(|modal| modal.on_notification(notification));
+        if completed {
             self.close_layer();
         }
         if let McpNotification::UrlElicitationComplete(params) = notification {
@@ -200,7 +199,6 @@ impl App {
     fn on_connection_closed(&mut self) {
         self.close_elicitation_owner();
         self.close_layer();
-        self.close_layer();
         self.workspace_move_state = WorkspaceMoveState::Idle;
         self.session_loading_buffer.clear();
         self.surface_rect = None;
@@ -211,13 +209,10 @@ impl App {
     /// Answers any elicitation the current overlay is holding, leaving the
     /// settings overlay itself open so its pane survives.
     fn close_elicitation_owner(&mut self) {
-        match &mut self.layer {
-            Layer::Elicitation(modal) => {
-                modal.cancel();
-                self.layer = Layer::None;
-            }
-            Layer::Settings(overlay) => overlay.cancel_pending_elicitation(),
-            _ => {}
+        if let Some(overlay) = self.layer_as::<SettingsOverlay>() {
+            overlay.cancel_pending_elicitation();
+        } else if self.layer_as::<ElicitationModal>().is_some() {
+            self.close_layer();
         }
     }
 

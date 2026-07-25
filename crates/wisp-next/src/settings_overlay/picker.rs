@@ -1,12 +1,13 @@
-use super::{PaneOutcome, SettingsChange, SettingsMenuEntry, SettingsMenuValue, SettingsPane};
+use super::{SettingsChange, SettingsMenuEntry, SettingsMenuValue, SettingsPane, message_for_change};
 use crate::filterable_list::FilterableList;
+use crate::render_context::RenderContext;
 use crate::selection::Direction;
-use crate::surface::ListFilter;
+use crate::surface::{ListFilter, Surface, SurfaceMessage};
 use crate::theme::Theme;
 use crate::wrap::truncate_to_width;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::Style;
 use ratatui::widgets::{ListItem, Paragraph, Widget};
 
@@ -29,17 +30,13 @@ impl SettingsPicker {
 
     /// Confirms the focused value, returning to the menu. Yields no change when
     /// the value is disabled or already current.
-    fn confirm(&self) -> PaneOutcome {
-        let change =
-            self.values.selected_entry().filter(|value| !value.is_disabled && value.value != self.current_value);
-        PaneOutcome {
-            changes: change
-                .map(|value| SettingsChange { config_id: self.config_id.clone(), new_value: value.value.clone() })
-                .into_iter()
-                .collect(),
-            back: true,
-            ..PaneOutcome::default()
-        }
+    fn confirm(&self) -> Vec<SurfaceMessage> {
+        let change = self
+            .values
+            .selected_entry()
+            .filter(|value| !value.is_disabled && value.value != self.current_value)
+            .map(|value| SettingsChange { config_id: self.config_id.clone(), new_value: value.value.clone() });
+        change.iter().map(message_for_change).chain([SurfaceMessage::Back]).collect()
     }
 
     fn render_pane(&mut self, area: Rect, buffer: &mut Buffer, theme: &Theme) {
@@ -70,8 +67,8 @@ impl SettingsPicker {
     }
 }
 
-impl SettingsPane for SettingsPicker {
-    fn on_pane_key(&mut self, key: KeyEvent) -> Option<PaneOutcome> {
+impl Surface for SettingsPicker {
+    fn on_surface_key(&mut self, key: KeyEvent) -> Option<Vec<SurfaceMessage>> {
         (key.code == KeyCode::Enter).then(|| self.confirm())
     }
 
@@ -79,21 +76,22 @@ impl SettingsPane for SettingsPicker {
         Some(&mut self.values)
     }
 
-    fn click(&mut self, row: u16) -> PaneOutcome {
-        if !self.values.select_at(row) {
-            return PaneOutcome::default();
-        }
-        self.confirm()
+    fn click(&mut self, row: u16, _column: u16) -> Vec<SurfaceMessage> {
+        if self.values.select_at(row) { self.confirm() } else { Vec::new() }
     }
 
-    fn scroll(&mut self, direction: Direction) {
+    fn scroll(&mut self, direction: Direction) -> Vec<SurfaceMessage> {
         self.values.step(direction, |value| !value.is_disabled);
+        Vec::new()
     }
 
-    fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
-        self.render_pane(area, buf, theme);
+    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
+        self.render_pane(area, buf, cx.theme);
+        None
     }
+}
 
+impl SettingsPane for SettingsPicker {
     fn footer(&self) -> String {
         "[Enter] Confirm  [Esc] Back".to_string()
     }

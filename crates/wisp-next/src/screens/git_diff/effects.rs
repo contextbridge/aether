@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use futures::FutureExt;
 
@@ -97,10 +96,4 @@ impl GitDiffEffect {
             }
         }
     }
-}
-
-static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
-
-pub(super) fn next_request_id() -> u64 {
-    NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
 }

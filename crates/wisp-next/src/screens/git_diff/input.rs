@@ -4,30 +4,36 @@ use ratatui::layout::Position;
 use super::GitDiffScreen;
 use crate::edit_buffer::apply_edit_key;
 use crate::git_diff::{CommentContext, QueuedComment};
-use crate::screens::{MouseAction, ScreenEvent};
+use crate::screens::MouseAction;
+use crate::screens::git_diff::GitDiffEvent;
 use crate::surface::SurfaceMessage;
 
 use super::effect;
-use super::effects::{GitDiffEffect, next_request_id};
+use super::effects::GitDiffEffect;
 use super::state::{BottomBar, DrawerEntry, Focus, GitDiffLoadState, PatchCursor, PendingAction};
+use crate::selection::Direction;
+
+/// Lines a mouse wheel notch and a page key move the patch pane.
+const MOUSE_SCROLL_LINES: usize = 3;
+const PAGE_SCROLL_LINES: usize = 10;
 
 impl GitDiffScreen {
     pub(super) fn handle_mouse(&mut self, action: MouseAction, row: u16, column: u16) {
-        if self.operation_in_flight {
+        if self.request.in_flight {
             return;
         }
         match action {
-            MouseAction::ScrollUp => self.scroll_focused(-1),
-            MouseAction::ScrollDown => self.scroll_focused(1),
+            MouseAction::ScrollUp => self.scroll_focused(Direction::Backward),
+            MouseAction::ScrollDown => self.scroll_focused(Direction::Forward),
             MouseAction::Click => self.click(row, column),
         }
     }
 
     /// Scrolls whichever pane has focus: the patch by a few lines, the file
     /// drawer by one entry.
-    fn scroll_focused(&mut self, direction: isize) {
+    fn scroll_focused(&mut self, direction: Direction) {
         if self.focus == Focus::Patch {
-            self.move_patch_scroll(direction * 3);
+            self.move_patch_scroll(direction, MOUSE_SCROLL_LINES);
         } else {
             self.move_vertical(direction);
         }
@@ -36,7 +42,7 @@ impl GitDiffScreen {
     /// A click inside the file drawer focuses and selects a row; anywhere else
     /// in the body focuses the patch.
     fn click(&mut self, row: u16, column: u16) {
-        if self.draft.is_some() || !matches!(self.state, GitDiffLoadState::Ready(_)) {
+        if self.review.draft.is_some() || !matches!(self.state, GitDiffLoadState::Ready(_)) {
             return;
         }
         if !self.drawer_selection.rows_area().contains(Position::new(column, row)) {
@@ -63,10 +69,10 @@ impl GitDiffScreen {
 
         // A destructive action that would drop queued comments asks for the same
         // key twice; anything else cancels the confirmation.
-        if let Some(action) = self.pending_action {
+        if let Some(action) = self.request.pending {
             self.bottom_bar = BottomBar::Help;
             if !is_confirm_key(key, action) {
-                self.pending_action = None;
+                self.request.pending = None;
                 return Vec::new();
             }
         }
@@ -81,32 +87,32 @@ impl GitDiffScreen {
             BottomBar::Help => {}
         }
 
-        if self.draft.is_some() {
+        if self.review.draft.is_some() {
             return self.on_draft_key(key);
         }
 
-        if self.operation_in_flight {
+        if self.request.in_flight {
             return Vec::new();
         }
 
         self.on_browse_key(key)
     }
 
-    pub(super) fn handle_event(&mut self, event: ScreenEvent) -> Vec<SurfaceMessage> {
+    pub(super) fn handle_event(&mut self, event: GitDiffEvent) -> Vec<SurfaceMessage> {
         // Ignore results for superseded requests.
-        if event.request_id() != self.request_id {
+        if event.request_id() != self.request.id {
             return Vec::new();
         }
-        self.operation_in_flight = false;
+        self.request.in_flight = false;
         match event {
-            ScreenEvent::Loaded { result, .. } => {
+            GitDiffEvent::Loaded { result, .. } => {
                 match result {
                     Ok(document) => self.apply_document(document),
                     Err(error) => self.state = GitDiffLoadState::Error(error.to_string()),
                 }
                 Vec::new()
             }
-            ScreenEvent::ActionFinished { result, .. } => match result {
+            GitDiffEvent::ActionFinished { result, .. } => match result {
                 Ok(()) => {
                     self.show_full_file = false;
                     self.full_file_content = None;
@@ -117,7 +123,7 @@ impl GitDiffScreen {
                     Vec::new()
                 }
             },
-            ScreenEvent::FullFileLoaded { result, .. } => {
+            GitDiffEvent::FullFileLoaded { result, .. } => {
                 match result {
                     Ok(content) => self.full_file_content = Some(content),
                     Err(error) => {
@@ -134,7 +140,7 @@ impl GitDiffScreen {
     /// Esc and Ctrl-G back out one level: a confirmation, then a bottom-bar
     /// mode, then the screen itself.
     fn dismiss(&mut self) -> Vec<SurfaceMessage> {
-        if self.pending_action.take().is_some() {
+        if self.request.pending.take().is_some() {
             self.bottom_bar = BottomBar::Help;
             return Vec::new();
         }
@@ -179,19 +185,19 @@ impl GitDiffScreen {
                 Vec::new()
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                self.move_vertical(-1);
+                self.move_vertical(Direction::Backward);
                 Vec::new()
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                self.move_vertical(1);
+                self.move_vertical(Direction::Forward);
                 Vec::new()
             }
             KeyCode::PageUp => {
-                self.move_patch_scroll(-10);
+                self.move_patch_scroll(Direction::Backward, PAGE_SCROLL_LINES);
                 Vec::new()
             }
             KeyCode::PageDown => {
-                self.move_patch_scroll(10);
+                self.move_patch_scroll(Direction::Forward, PAGE_SCROLL_LINES);
                 Vec::new()
             }
             _ => Vec::new(),
@@ -214,7 +220,7 @@ impl GitDiffScreen {
     fn reset_file_view(&mut self) {
         self.show_full_file = false;
         self.full_file_content = None;
-        self.patch_cursor = PatchCursor::default();
+        self.patch.cursor = PatchCursor::default();
     }
 
     fn on_commit_editor_key(&mut self, key: KeyEvent) -> Vec<SurfaceMessage> {
@@ -233,12 +239,7 @@ impl GitDiffScreen {
             self.bottom_bar = BottomBar::Error("Commit message cannot be empty".to_string());
             return Vec::new();
         }
-        let Some(repo_root) = self.repo_root.clone() else {
-            return Vec::new();
-        };
-        self.request_id = next_request_id();
-        self.operation_in_flight = true;
-        effect(GitDiffEffect::Commit { request_id: self.request_id, repo_root, message })
+        self.repo_operation(|request_id, repo_root| GitDiffEffect::Commit { request_id, repo_root, message })
     }
 
     fn on_discard_confirm_key(&mut self, key: KeyEvent) -> Vec<SurfaceMessage> {
@@ -249,12 +250,12 @@ impl GitDiffScreen {
                 else {
                     return Vec::new();
                 };
-                let Some(repo_root) = self.repo_root.clone() else {
-                    return Vec::new();
-                };
-                self.request_id = next_request_id();
-                self.operation_in_flight = true;
-                effect(GitDiffEffect::DiscardFile { request_id: self.request_id, repo_root, path, status })
+                self.repo_operation(|request_id, repo_root| GitDiffEffect::DiscardFile {
+                    request_id,
+                    repo_root,
+                    path,
+                    status,
+                })
             }
             KeyCode::Char('n' | 'N') | KeyCode::Esc => {
                 self.bottom_bar = BottomBar::Help;
@@ -266,10 +267,10 @@ impl GitDiffScreen {
 
     fn on_draft_key(&mut self, key: KeyEvent) -> Vec<SurfaceMessage> {
         match key.code {
-            KeyCode::Esc => self.draft = None,
+            KeyCode::Esc => self.review.draft = None,
             KeyCode::Enter => self.commit_draft(),
             _ => {
-                if let Some(draft) = self.draft.as_mut() {
+                if let Some(draft) = self.review.draft.as_mut() {
                     apply_edit_key(&mut draft.buffer, key);
                 }
             }
@@ -280,7 +281,7 @@ impl GitDiffScreen {
     /// Files the draft as a review comment against the patch line it is anchored
     /// to, discarding it when the anchor no longer resolves.
     fn commit_draft(&mut self) {
-        let Some(mut draft) = self.draft.take() else {
+        let Some(mut draft) = self.review.draft.take() else {
             return;
         };
         let body = draft.buffer.take();
@@ -294,7 +295,7 @@ impl GitDiffScreen {
         else {
             return;
         };
-        self.review_queue.push(QueuedComment {
+        self.review.queue.push(QueuedComment {
             anchor: draft.anchor,
             body,
             context: CommentContext {
@@ -304,14 +305,14 @@ impl GitDiffScreen {
                 line_kind: patch_line.kind,
             },
         });
-        self.comments_revision = self.comments_revision.wrapping_add(1);
+        self.bump_comments_revision();
     }
 
     fn needs_comment_confirmation(&mut self, action: PendingAction) -> bool {
-        if self.review_queue.is_empty() || self.pending_action == Some(action) {
+        if self.review.queue.is_empty() || self.request.pending == Some(action) {
             return false;
         }
-        let count = self.review_queue.len();
+        let count = self.review.queue.len();
         let (what, key) = match action {
             PendingAction::Reload => ("Reloading", "r"),
             PendingAction::ScopeSwitch => ("Switching scope", "t"),
@@ -319,7 +320,7 @@ impl GitDiffScreen {
             PendingAction::Commit => ("Committing", "C"),
             PendingAction::Discard => ("Discarding", "d"),
         };
-        self.pending_action = Some(action);
+        self.request.pending = Some(action);
         self.bottom_bar = BottomBar::Error(format!(
             "{what} will clear {count} review comment{}. Press {key} again to confirm or Esc to cancel.",
             if count == 1 { "" } else { "s" }

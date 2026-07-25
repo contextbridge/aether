@@ -1245,3 +1245,305 @@ fn model_selector_focused_item_visible_with_provider_headings() {
 }
 
 // ── Composer framing ────────────────────────────────────────────
+
+/// Opens the settings overlay with `options` and returns what the menu draws.
+fn settings_menu_text(options: Vec<acp::SessionConfigOption>) -> String {
+    let (mut app, _command_rx) = AppBuilder::new().config_options(options).build();
+    open_settings(&mut app);
+    overlay_text(&mut app)
+}
+
+fn open_settings(app: &mut App) {
+    type_text(app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+}
+
+fn overlay_text(app: &mut App) -> String {
+    let mut terminal = make_terminal_with_dimensions(80, 24);
+    sync_terminal(&mut terminal, app).unwrap();
+    buffer_text(&viewport_buffer(&mut terminal))
+}
+
+fn multi_select_option(id: &str, name: &str, current: &str, values: &[(&str, &str)]) -> acp::SessionConfigOption {
+    let mut meta = serde_json::Map::new();
+    meta.insert("multi_select".to_string(), serde_json::Value::Bool(true));
+    select_with_values(id, name, current, values).meta(Some(meta))
+}
+
+fn select_with_values(id: &str, name: &str, current: &str, values: &[(&str, &str)]) -> acp::SessionConfigOption {
+    let options: Vec<acp::SessionConfigSelectOption> = values
+        .iter()
+        .map(|(value, label)| acp::SessionConfigSelectOption::new((*value).to_string(), (*label).to_string()))
+        .collect();
+    acp::SessionConfigOption::select(id.to_string(), name.to_string(), current.to_string(), options)
+}
+
+#[test]
+fn settings_menu_lists_each_option_with_its_current_value() {
+    let text = settings_menu_text(vec![
+        select_with_values("model", "Model", "claude", &[("gpt-4o", "GPT-4o"), ("claude", "Claude")]),
+        select_with_values("mode", "Mode", "code", &[("code", "Code"), ("chat", "Chat")]),
+    ]);
+
+    assert!(text.contains("Model: Claude"), "menu should show the current model:\n{text}");
+    assert!(text.contains("Mode: Code"), "menu should show the current mode:\n{text}");
+}
+
+#[test]
+fn settings_menu_hides_reasoning_effort() {
+    // Reasoning effort is edited from inside the model selector, not as its own row.
+    let text = settings_menu_text(vec![
+        select_with_values("model", "Model", "gpt-4o", &[("gpt-4o", "GPT-4o")]),
+        select_with_values("reasoning_effort", "Reasoning", "high", &[("low", "Low"), ("high", "High")]),
+    ]);
+
+    assert!(text.contains("Model"), "menu should still show model:\n{text}");
+    assert!(!text.contains("Reasoning"), "reasoning effort should not be its own row:\n{text}");
+}
+
+#[test]
+fn settings_menu_hides_options_with_no_values() {
+    let text = settings_menu_text(vec![
+        select_with_values("model", "Model", "gpt-4o", &[("gpt-4o", "GPT-4o")]),
+        select_with_values("empty", "Empty", "", &[]),
+    ]);
+
+    assert!(text.contains("Model"), "menu should show model:\n{text}");
+    assert!(!text.contains("Empty"), "an option offering nothing to pick should be hidden:\n{text}");
+}
+
+#[test]
+fn settings_menu_shows_every_selected_model_for_a_multi_select() {
+    let text = settings_menu_text(vec![multi_select_option(
+        "model",
+        "Model",
+        "anthropic:opus,anthropic:sonnet",
+        &[("anthropic:opus", "Opus"), ("anthropic:sonnet", "Sonnet")],
+    )]);
+
+    assert!(text.contains("Opus, Sonnet"), "menu should name both selected models:\n{text}");
+}
+
+#[test]
+fn settings_menu_selection_wraps() {
+    let (mut app, _command_rx) =
+        AppBuilder::new().config_options(vec![select_with_values("model", "Model", "a", &[("a", "A")])]).build();
+    open_settings(&mut app);
+
+    // Rows run Theme, Model, MCP Servers. Up from the first wraps to the last,
+    // so Enter opens the server pane rather than the theme picker.
+    app.on_key(key(KeyCode::Up));
+    app.on_key(key(KeyCode::Enter));
+
+    let text = overlay_text(&mut app);
+    assert!(text.contains("no MCP servers configured"), "Up from the first row should wrap to the last:\n{text}");
+}
+
+#[test]
+fn settings_overlay_renders_placeholder_when_the_terminal_is_tiny() {
+    let (mut app, _command_rx) =
+        AppBuilder::new().config_options(vec![select_with_values("model", "Model", "a", &[("a", "A")])]).build();
+    open_settings(&mut app);
+
+    let mut terminal = make_terminal_with_dimensions(5, 4);
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    let text = buffer_text(&viewport_buffer(&mut terminal));
+
+    assert!(text.contains("term"), "should explain why nothing is drawn:\n{text}");
+}
+
+// ── Picker ──
+
+#[test]
+fn settings_picker_filters_by_typed_query() {
+    let (mut app, _command_rx) = AppBuilder::new()
+        .config_options(vec![select_with_values(
+            "model",
+            "Model",
+            "gpt-4o",
+            &[("gpt-4o", "GPT-4o"), ("claude", "Claude"), ("gemini", "Gemini")],
+        )])
+        .build();
+    open_settings(&mut app);
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+
+    type_text(&mut app, "clau");
+
+    let text = overlay_text(&mut app);
+    assert!(text.contains("Claude"), "the match should stay:\n{text}");
+    assert!(!text.contains("Gemini"), "non-matches should be filtered out:\n{text}");
+}
+
+#[test]
+fn settings_picker_shows_unavailable_options_with_their_reason() {
+    let unavailable = acp::SessionConfigSelectOption::new("claude", "Claude").description("Unavailable: no API key");
+    let option = acp::SessionConfigOption::select(
+        "model",
+        "Model",
+        "gpt-4o",
+        vec![acp::SessionConfigSelectOption::new("gpt-4o", "GPT-4o"), unavailable],
+    );
+    let (mut app, mut command_rx) = AppBuilder::new().config_options(vec![option]).build();
+    open_settings(&mut app);
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+
+    let text = overlay_text(&mut app);
+    assert!(text.contains("Claude"), "an unavailable option is still listed:\n{text}");
+
+    // Down skips it, so confirming cannot select it.
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+    assert!(command_rx.try_recv().is_err(), "an unavailable option must not be selectable");
+}
+
+#[test]
+fn settings_picker_esc_returns_to_the_menu_without_changing_anything() {
+    let (mut app, mut command_rx) = AppBuilder::new()
+        .config_options(vec![select_with_values("model", "Model", "a", &[("a", "A"), ("b", "B")])])
+        .build();
+    open_settings(&mut app);
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+    app.on_key(key(KeyCode::Down));
+
+    app.on_key(key(KeyCode::Esc));
+
+    assert!(command_rx.try_recv().is_err(), "backing out must not commit the focused value");
+    assert!(app.has_modal(), "Esc should leave the pane, not the overlay");
+    let text = overlay_text(&mut app);
+    assert!(text.contains("Model: A"), "the menu should still show the unchanged value:\n{text}");
+}
+
+#[test]
+fn settings_picker_confirming_the_current_value_sends_nothing() {
+    let (mut app, mut command_rx) = AppBuilder::new()
+        .config_options(vec![select_with_values("model", "Model", "a", &[("a", "A"), ("b", "B")])])
+        .build();
+    open_settings(&mut app);
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+
+    app.on_key(key(KeyCode::Enter));
+
+    assert!(command_rx.try_recv().is_err(), "re-picking the current value is not a change");
+}
+
+#[test]
+fn settings_picker_confirm_updates_the_menu_immediately() {
+    let (mut app, _command_rx) = AppBuilder::new()
+        .config_options(vec![select_with_values("model", "Model", "a", &[("a", "A"), ("b", "B")])])
+        .build();
+    open_settings(&mut app);
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+
+    let text = overlay_text(&mut app);
+    assert!(text.contains("Model: B"), "the menu should not wait for the agent round-trip:\n{text}");
+}
+
+// ── Model selector ──
+
+#[test]
+fn model_selector_shows_capability_tags_and_provider_stripped_names() {
+    let with_image = acp::SessionConfigSelectOption::new("anthropic:opus", "Anthropic / Opus").meta(Some({
+        let mut meta = serde_json::Map::new();
+        meta.insert("supports_image".to_string(), serde_json::Value::Bool(true));
+        meta
+    }));
+    let mut option = acp::SessionConfigOption::select("model", "Model", "", vec![with_image]);
+    let mut meta = serde_json::Map::new();
+    meta.insert("multi_select".to_string(), serde_json::Value::Bool(true));
+    option = option.meta(Some(meta));
+
+    let (mut app, _command_rx) = AppBuilder::new().config_options(vec![option]).build();
+    open_settings(&mut app);
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+
+    let text = overlay_text(&mut app);
+    assert!(text.contains("Opus"), "should list the model:\n{text}");
+    assert!(!text.contains("Anthropic / Opus"), "the provider prefix is redundant per row:\n{text}");
+    assert!(text.contains("img"), "should tag image support:\n{text}");
+}
+
+#[test]
+fn model_selector_toggling_twice_leaves_nothing_to_commit() {
+    let (mut app, mut command_rx) = AppBuilder::new()
+        .config_options(vec![multi_select_option("model", "Model", "", &[("anthropic:opus", "Opus")])])
+        .build();
+    open_settings(&mut app);
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+
+    app.on_key(key(KeyCode::Enter));
+    app.on_key(key(KeyCode::Enter));
+    app.on_key(key(KeyCode::Esc));
+
+    assert!(command_rx.try_recv().is_err(), "toggling back to the original selection is not a change");
+}
+
+#[test]
+fn model_selector_preselects_the_current_value() {
+    let (mut app, mut command_rx) = AppBuilder::new()
+        .config_options(vec![multi_select_option(
+            "model",
+            "Model",
+            "anthropic:opus,anthropic:sonnet",
+            &[("anthropic:opus", "Opus"), ("anthropic:sonnet", "Sonnet")],
+        )])
+        .build();
+    open_settings(&mut app);
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+
+    app.on_key(key(KeyCode::Esc));
+
+    assert!(command_rx.try_recv().is_err(), "closing without edits changes nothing");
+}
+
+#[test]
+fn model_selector_toggles_only_what_the_query_left_visible() {
+    let (mut app, mut command_rx) = AppBuilder::new()
+        .config_options(vec![multi_select_option(
+            "model",
+            "Model",
+            "",
+            &[("anthropic:opus", "Opus"), ("openai:gpt-4o", "GPT-4o"), ("google:gemini", "Gemini")],
+        )])
+        .build();
+    open_settings(&mut app);
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+
+    type_text(&mut app, "gpt");
+    app.on_key(key(KeyCode::Enter));
+    app.on_key(key(KeyCode::Esc));
+
+    match command_rx.try_recv().expect("expected the filtered model to be committed") {
+        PromptCommand::SetConfigOption { value, .. } => assert_eq!(value, "openai:gpt-4o"),
+        other => panic!("expected SetConfigOption, got: {other:?}"),
+    }
+}
+
+// ── Config updates ──
+
+#[test]
+fn config_option_update_keeps_every_option_and_the_theme_row() {
+    let (mut app, _command_rx) =
+        AppBuilder::new().config_options(vec![select_with_values("model", "Model", "a", &[("a", "A")])]).build();
+    open_settings(&mut app);
+
+    app.on_acp_event(session_update(acp::SessionUpdate::ConfigOptionUpdate(acp::ConfigOptionUpdate::new(vec![
+        select_with_values("model", "Model", "b", &[("a", "A"), ("b", "B")]),
+        select_with_values("mode", "Mode", "code", &[("code", "Code")]),
+    ]))));
+
+    let text = overlay_text(&mut app);
+    assert!(text.contains("Theme"), "the client-side theme row must survive an agent push:\n{text}");
+    assert!(text.contains("Model: B"), "the updated value should show:\n{text}");
+    assert!(text.contains("Mode: Code"), "a newly-arrived option should show:\n{text}");
+}

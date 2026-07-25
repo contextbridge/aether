@@ -27,7 +27,9 @@ pub(crate) use tokio::sync::mpsc::UnboundedReceiver;
 pub(crate) use tokio::task::LocalSet;
 pub(crate) use wisp_next::app::{App, AppConfig, HistoryItem};
 pub(crate) use wisp_next::composer::Composer;
+pub(crate) use wisp_next::effects::{Effect, EffectResult};
 pub(crate) use wisp_next::picker::CommandEntry;
+pub(crate) use wisp_next::picker::index_files;
 pub(crate) use wisp_next::presentation::Presenter;
 pub(crate) use wisp_next::render::sync_terminal as sync_terminal_with_renderer;
 pub(crate) use wisp_next::screens::git_diff::GitDiffEvent;
@@ -190,12 +192,53 @@ pub(crate) fn make_terminal_with_dimensions(width: u16, height: u16) -> Terminal
     .unwrap()
 }
 
+/// Draws one frame with a throwaway presenter.
+///
+/// Only correct for a test that draws once: the presenter owns the committed
+/// scrollback, so a fresh one per frame silently drops whatever earlier frames
+/// committed. Tests that draw repeatedly use [`TestUi`].
 pub(crate) fn sync_terminal(
     terminal: &mut Terminal<TestBackend>,
     app: &mut App,
 ) -> Result<(), std::convert::Infallible> {
     let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(terminal, app, &mut renderer)
+}
+
+/// A terminal and the presenter that owns its scrollback, for tests that draw
+/// more than one frame.
+pub(crate) struct TestUi {
+    pub(crate) terminal: Terminal<TestBackend>,
+    presenter: Presenter,
+}
+
+impl TestUi {
+    pub(crate) fn new(terminal: Terminal<TestBackend>) -> Self {
+        Self { terminal, presenter: Presenter::new(&UiSettings::default()) }
+    }
+
+    pub(crate) fn draw(&mut self, app: &mut App) {
+        sync_terminal_with_renderer(&mut self.terminal, app, &mut self.presenter).unwrap();
+    }
+}
+
+/// Opens the `@` picker on `composer` and delivers the file index, the way the
+/// event loop does once the walk completes.
+pub(crate) fn open_file_picker(composer: &mut Composer, root: &std::path::Path) {
+    let Effect::IndexFiles { request_id, root } = composer.open_file_picker(root) else {
+        panic!("opening the file picker should ask for a file index");
+    };
+    composer.on_files_indexed(request_id, index_files(&root));
+}
+
+/// Runs whatever work the app has queued and feeds the results back, so a test
+/// sees the state the event loop would have produced.
+pub(crate) fn settle_effects(app: &mut App) {
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    while let Some(effect) = app.take_effect() {
+        let result = runtime.block_on(effect.execute());
+        app.on_effect_result(result);
+    }
 }
 
 pub(crate) fn key(code: KeyCode) -> KeyEvent {

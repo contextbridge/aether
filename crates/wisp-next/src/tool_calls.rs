@@ -16,6 +16,7 @@ pub const SUB_AGENT_VISIBLE_TOOL_LIMIT: usize = 3;
 /// A tracked tool call within a sub-agent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubAgentToolCall {
+    pub id: String,
     pub name: String,
     pub arguments: String,
     pub raw_input: String,
@@ -24,8 +25,9 @@ pub struct SubAgentToolCall {
 }
 
 impl SubAgentToolCall {
-    fn new_running(name: &str, arguments: String) -> Self {
+    fn new_running(id: &str, name: &str, arguments: String) -> Self {
         Self {
+            id: id.to_string(),
             name: name.to_string(),
             raw_input: arguments.clone(),
             arguments,
@@ -52,19 +54,32 @@ impl SubAgentToolCall {
     }
 }
 
-/// Per-sub-agent state: tracks its tool calls in order.
+/// Per-sub-agent state: tracks its tool calls in arrival order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubAgentState {
     pub task_id: String,
     pub agent_name: String,
     pub done: bool,
-    pub tool_order: Vec<String>,
-    pub tool_calls: HashMap<String, SubAgentToolCall>,
+    pub tool_calls: Vec<SubAgentToolCall>,
 }
 
 impl SubAgentState {
     fn is_active_for_render(&self) -> bool {
-        !self.done || self.tool_calls.values().any(|tc| matches!(tc.status, ToolStatus::Running))
+        !self.done || self.tool_calls.iter().any(|call| matches!(call.status, ToolStatus::Running))
+    }
+
+    fn tool_call_mut(&mut self, id: &str) -> Option<&mut SubAgentToolCall> {
+        self.tool_calls.iter_mut().find(|call| call.id == id)
+    }
+
+    /// The call with `id`, appending a running placeholder when it is the first
+    /// event seen for it.
+    fn upsert(&mut self, id: &str, name: &str, arguments: String) -> &mut SubAgentToolCall {
+        let index = self.tool_calls.iter().position(|call| call.id == id).unwrap_or_else(|| {
+            self.tool_calls.push(SubAgentToolCall::new_running(id, name, arguments));
+            self.tool_calls.len() - 1
+        });
+        &mut self.tool_calls[index]
     }
 }
 
@@ -80,61 +95,44 @@ struct SubAgentTracker {
 impl SubAgentTracker {
     fn on_progress(&mut self, notification: &SubAgentProgressParams) {
         let agents = self.agents.entry(notification.parent_tool_id.clone()).or_default();
-
-        let agent = if let Some(a) = agents.iter_mut().find(|a| a.task_id == notification.task_id) {
-            a
-        } else {
+        let index = agents.iter().position(|agent| agent.task_id == notification.task_id).unwrap_or_else(|| {
             agents.push(SubAgentState {
                 task_id: notification.task_id.clone(),
                 agent_name: notification.agent_name.clone(),
                 done: false,
-                tool_order: Vec::new(),
-                tool_calls: HashMap::new(),
+                tool_calls: Vec::new(),
             });
-            agents.last_mut().unwrap()
-        };
+            agents.len() - 1
+        });
+        let agent = &mut agents[index];
 
         match &notification.event {
             SubAgentEvent::ToolCall { request } => {
-                let tc = upsert_sub_agent_tool_call(
-                    &mut agent.tool_order,
-                    &mut agent.tool_calls,
-                    &request.id,
-                    &request.name,
-                    request.arguments.clone(),
-                );
-                tc.update_name(&request.name);
-                tc.arguments.clone_from(&request.arguments);
-                tc.raw_input.clone_from(&request.arguments);
-                tc.status = ToolStatus::Running;
+                let call = agent.upsert(&request.id, &request.name, request.arguments.clone());
+                call.update_name(&request.name);
+                call.arguments.clone_from(&request.arguments);
+                call.raw_input.clone_from(&request.arguments);
+                call.status = ToolStatus::Running;
             }
             SubAgentEvent::ToolCallUpdate { update } => {
-                let tc = upsert_sub_agent_tool_call(
-                    &mut agent.tool_order,
-                    &mut agent.tool_calls,
-                    &update.id,
-                    "tool",
-                    String::new(),
-                );
-                tc.append_arguments(&update.chunk);
-                tc.status = ToolStatus::Running;
+                let call = agent.upsert(&update.id, "tool", String::new());
+                call.append_arguments(&update.chunk);
+                call.status = ToolStatus::Running;
             }
             SubAgentEvent::ToolResult { result } => {
-                if let Some(tc) = agent.tool_calls.get_mut(&result.id) {
-                    tc.status = ToolStatus::Success;
+                if let Some(call) = agent.tool_call_mut(&result.id) {
+                    call.status = ToolStatus::Success;
                     if let Some(result_meta) = &result.result_meta {
-                        tc.apply_result_meta(result_meta);
+                        call.apply_result_meta(result_meta);
                     }
                 }
             }
             SubAgentEvent::ToolError { error } => {
-                if let Some(tc) = agent.tool_calls.get_mut(&error.id) {
-                    tc.status = ToolStatus::Error("failed".to_string());
+                if let Some(call) = agent.tool_call_mut(&error.id) {
+                    call.status = ToolStatus::Error("failed".to_string());
                 }
             }
-            SubAgentEvent::Done => {
-                agent.done = true;
-            }
+            SubAgentEvent::Done => agent.done = true,
             SubAgentEvent::Other => {}
         }
     }
@@ -152,13 +150,11 @@ impl SubAgentTracker {
     }
 
     fn finalize_running(&mut self, terminal_status: &ToolStatus) {
-        for agents in self.agents.values_mut() {
-            for agent in agents {
-                agent.done = true;
-                for tool_call in agent.tool_calls.values_mut() {
-                    if matches!(tool_call.status, ToolStatus::Running) {
-                        tool_call.status = terminal_status.clone();
-                    }
+        for agent in self.agents.values_mut().flatten() {
+            agent.done = true;
+            for call in &mut agent.tool_calls {
+                if matches!(call.status, ToolStatus::Running) {
+                    call.status = terminal_status.clone();
                 }
             }
         }
@@ -171,19 +167,6 @@ impl SubAgentTracker {
     fn clear(&mut self) {
         self.agents.clear();
     }
-}
-
-fn upsert_sub_agent_tool_call<'a>(
-    tool_order: &mut Vec<String>,
-    tool_calls: &'a mut HashMap<String, SubAgentToolCall>,
-    id: &str,
-    default_name: &str,
-    default_arguments: String,
-) -> &'a mut SubAgentToolCall {
-    if !tool_calls.contains_key(id) {
-        tool_order.push(id.to_string());
-    }
-    tool_calls.entry(id.to_string()).or_insert_with(|| SubAgentToolCall::new_running(default_name, default_arguments))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -210,18 +193,19 @@ impl ToolCallLog {
 
     pub fn on_tool_call(&mut self, tool_call: &acp::ToolCall) {
         let id = tool_call.tool_call_id.0.to_string();
+        let raw_input = tool_call.raw_input.as_ref().map_or(String::new(), raw_input_fragment);
 
         if let Some(entry) = self.entry_mut(&id) {
             update_title(&mut entry.title, &tool_call.title);
             entry.status = ToolStatus::Running;
-            entry.raw_input = tool_call.raw_input.as_ref().map_or(String::new(), raw_input_fragment);
+            entry.raw_input = raw_input;
         } else {
             self.entries.push(ToolCallEntry {
                 id,
                 title: tool_call.title.clone(),
                 status: ToolStatus::Running,
                 diff: None,
-                raw_input: tool_call.raw_input.as_ref().map_or(String::new(), raw_input_fragment),
+                raw_input,
                 display_value: None,
             });
         }
@@ -586,7 +570,7 @@ mod tests {
         assert_eq!(agents[0].task_id, "task-abc");
         assert_eq!(agents[0].agent_name, "explorer");
         assert!(!agents[0].done);
-        assert_eq!(agents[0].tool_order, vec!["c1"]);
+        assert_eq!(agents[0].tool_calls[0].id, "c1");
     }
 
     #[test]
@@ -615,7 +599,7 @@ mod tests {
         ));
 
         let agents = log.sub_agent_states("parent-1").unwrap();
-        let tc = agents[0].tool_calls.get("c1").unwrap();
+        let tc = &agents[0].tool_calls[0];
         assert_eq!(tc.arguments, r#"{"pattern":"test"}"#);
     }
 
@@ -647,7 +631,7 @@ mod tests {
         ));
 
         let agents = log.sub_agent_states("parent-1").unwrap();
-        let tc = agents[0].tool_calls.get("c1").unwrap();
+        let tc = &agents[0].tool_calls[0];
         assert_eq!(tc.name, "grep", "late ToolCall must overwrite the streaming placeholder name");
         assert_eq!(tc.arguments, r#"{"pattern":"test"}"#);
     }
@@ -682,7 +666,7 @@ mod tests {
         ));
 
         let agents = log.sub_agent_states("parent-1").unwrap();
-        let tc = agents[0].tool_calls.get("c1").unwrap();
+        let tc = &agents[0].tool_calls[0];
         assert_eq!(tc.status, ToolStatus::Success);
         assert_eq!(tc.display_value.as_deref(), Some("'test' in 3 files"));
     }
@@ -713,7 +697,7 @@ mod tests {
         ));
 
         let agents = log.sub_agent_states("parent-1").unwrap();
-        let tc = agents[0].tool_calls.get("c1").unwrap();
+        let tc = &agents[0].tool_calls[0];
         assert_eq!(tc.status, ToolStatus::Error("failed".to_string()));
     }
 
@@ -735,7 +719,7 @@ mod tests {
 
         let agents = log.sub_agent_states("parent-1").unwrap();
         assert!(!agents[0].done);
-        assert!(agents[0].tool_order.is_empty());
+        assert!(agents[0].tool_calls.is_empty());
     }
 
     #[test]
@@ -844,7 +828,7 @@ mod tests {
 
         let agents = log.sub_agent_states("parent-1").unwrap();
         assert!(agents[0].done);
-        let tc = agents[0].tool_calls.get("c1").unwrap();
+        let tc = &agents[0].tool_calls[0];
         assert_eq!(tc.status, ToolStatus::Error("cancelled".to_string()));
     }
 
@@ -975,10 +959,8 @@ mod tests {
         ));
 
         let agents = log.sub_agent_states("parent-1").unwrap();
-        assert_eq!(agents[0].tool_order, vec!["c1", "c2", "c3"]);
-        assert_eq!(agents[0].tool_calls["c1"].name, "first");
-        assert_eq!(agents[0].tool_calls["c2"].name, "second");
-        assert_eq!(agents[0].tool_calls["c3"].name, "third");
+        let names: Vec<_> = agents[0].tool_calls.iter().map(|call| (call.id.as_str(), call.name.as_str())).collect();
+        assert_eq!(names, vec![("c1", "first"), ("c2", "second"), ("c3", "third")]);
     }
 
     #[test]
@@ -1011,7 +993,7 @@ mod tests {
         ));
 
         let agents = log.sub_agent_states("parent-1").unwrap();
-        let tc = agents[0].tool_calls.get("c1").unwrap();
+        let tc = &agents[0].tool_calls[0];
         assert_eq!(tc.name, "Read file");
         assert_eq!(tc.display_value.as_deref(), Some("src/main.rs, 42 lines"));
         assert_eq!(tc.raw_input, r#"{"filePath":"/src/main.rs"}"#);

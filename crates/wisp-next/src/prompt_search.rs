@@ -1,22 +1,23 @@
 use crate::edit_buffer::EditBuffer;
+use crate::list_view::ListView;
 use crate::selection::SelectionState;
 use crate::theme::Theme;
 use crate::workspace_status::home_relative_path;
+use crate::wrap::truncate_spans;
 use acp_utils::notifications::{PromptSearchResponse, PromptSearchResult};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{List, ListItem, Paragraph, StatefulWidget, Widget};
+use ratatui::widgets::{ListItem, Paragraph, Widget};
 
+use std::ops::Range;
 use std::path::Path;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 
 const MAX_CWD_WIDTH: usize = 32;
 const CWD_GAP: usize = 2;
 const MIN_PROMPT_WIDTH: usize = 16;
-const ELLIPSIS: &str = "…";
-const ELLIPSIS_WIDTH: usize = 1;
 
 #[derive(Debug, Default)]
 pub struct PromptSearchPicker {
@@ -153,128 +154,64 @@ impl PromptSearchPicker {
         }
 
         let width = usize::from(results_area.width.max(1));
-        let items = self.results.iter().map(|result| ListItem::new(result_line(result, false, width, theme)));
-        let list = List::new(items).highlight_style(Style::new().fg(theme.text_primary).bg(theme.sidebar_bg));
-        self.selection.set_rows_area(results_area);
-        StatefulWidget::render(list, results_area, buf, self.selection.list_state_mut());
+        let rows = self.results.iter().map(|result| ListItem::new(result_line(result, width, theme))).collect();
+        ListView::new(rows, &mut self.selection, theme).render(results_area, buf);
     }
 }
 
-fn result_line(result: &PromptSearchResult, is_selected: bool, max_width: usize, theme: &Theme) -> Line<'static> {
-    let row_style = if is_selected {
-        Style::new().fg(theme.text_primary).bg(theme.sidebar_bg)
-    } else {
-        Style::new().fg(theme.text_secondary)
-    };
-    let highlight_style =
-        if is_selected { Style::new().fg(theme.warning).bg(theme.sidebar_bg) } else { Style::new().fg(theme.warning) };
+/// One result row: the prompt with its matched span highlighted, and the
+/// originating directory pushed to the right when there is room for it.
+fn result_line(result: &PromptSearchResult, max_width: usize, theme: &Theme) -> Line<'static> {
     let cwd_display = abbreviate_cwd(&result.cwd, MAX_CWD_WIDTH);
     let cwd_width = cwd_display.width();
-    let prompt_budget = if cwd_width > 0 && max_width >= cwd_width + CWD_GAP + MIN_PROMPT_WIDTH {
-        max_width - cwd_width - CWD_GAP
-    } else {
-        max_width
-    };
-    let mut spans = Vec::new();
-    let prompt_width = push_prompt_with_highlight(
-        &mut spans,
+    let shows_cwd = cwd_width > 0 && max_width >= cwd_width + CWD_GAP + MIN_PROMPT_WIDTH;
+    let prompt_budget = if shows_cwd { max_width - cwd_width - CWD_GAP } else { max_width };
+
+    let prompt = prompt_spans(
         &result.prompt,
         result.match_start..result.match_end,
-        prompt_budget,
-        row_style,
-        highlight_style,
+        Style::new().fg(theme.text_secondary),
+        Style::new().fg(theme.warning),
     );
-    if prompt_budget < max_width {
-        let cwd_start = prompt_width + CWD_GAP;
-        let cwd_end = (cwd_start + cwd_width).min(max_width);
-        if cwd_start < max_width {
-            spans.push(Span::styled(" ".repeat(cwd_start.min(max_width) - prompt_width), row_style));
-            if cwd_end > cwd_start {
-                spans.push(Span::styled(
-                    cwd_display,
-                    Style::new().fg(theme.muted).bg(if is_selected { theme.sidebar_bg } else { Color::Reset }),
-                ));
-            }
-        }
+    let mut spans = truncate_spans(&prompt, prompt_budget);
+    if shows_cwd {
+        let used: usize = spans.iter().map(Span::width).sum();
+        spans.push(Span::raw(" ".repeat(prompt_budget + CWD_GAP - used)));
+        spans.push(Span::styled(cwd_display, Style::new().fg(theme.muted)));
     }
     Line::from(spans)
 }
 
-fn push_prompt_with_highlight(
-    spans: &mut Vec<Span<'static>>,
-    prompt: &str,
-    highlight: std::ops::Range<usize>,
-    max_width: usize,
-    base_style: Style,
-    highlight_style: Style,
-) -> usize {
-    if max_width == 0 {
-        return 0;
-    }
-    let use_ellipsis = max_width >= ELLIPSIS_WIDTH;
-    let budget = if use_ellipsis { max_width - ELLIPSIS_WIDTH } else { max_width };
-
-    let mut visible: Vec<(char, bool)> = Vec::new();
-    let mut visible_width = 0usize;
-    let mut budget_width = 0usize;
-    let mut fit_end = 0usize;
-    let mut last_was_ws = false;
-    let mut overflowed = false;
-
-    for (i, ch) in prompt.char_indices() {
-        let in_hl = i >= highlight.start && i < highlight.end;
-        let out_ch = if ch.is_whitespace() {
-            if last_was_ws {
-                if in_hl && let Some((_, highlighted)) = visible.last_mut() {
-                    *highlighted = true;
-                }
-                continue;
+/// The prompt as alternating matched/unmatched runs.
+///
+/// Runs of whitespace collapse to a single space so a multi-line prompt reads as
+/// one row; the space counts as matched when any character it stands in for did.
+fn prompt_spans(prompt: &str, matched: Range<usize>, base: Style, highlight: Style) -> Vec<Span<'static>> {
+    let mut characters: Vec<(char, bool)> = Vec::new();
+    let mut last_was_whitespace = false;
+    for (index, character) in prompt.char_indices() {
+        let in_match = matched.contains(&index);
+        if !character.is_whitespace() {
+            last_was_whitespace = false;
+            characters.push((character, in_match));
+            continue;
+        }
+        match characters.last_mut() {
+            Some((_, previous)) if last_was_whitespace => *previous = *previous || in_match,
+            _ => {
+                last_was_whitespace = true;
+                characters.push((' ', in_match));
             }
-            last_was_ws = true;
-            ' '
-        } else {
-            last_was_ws = false;
-            ch
-        };
-
-        let cw = UnicodeWidthChar::width(out_ch).unwrap_or(0);
-        if visible_width + cw > max_width {
-            overflowed = true;
-            break;
-        }
-        visible_width += cw;
-        visible.push((out_ch, in_hl));
-        if visible_width <= budget {
-            fit_end = visible.len();
-            budget_width = visible_width;
         }
     }
 
-    let (kept, kept_width) = if overflowed && use_ellipsis {
-        visible.truncate(fit_end);
-        (&visible[..], budget_width)
-    } else {
-        (&visible[..], visible_width)
-    };
-
-    let mut i = 0;
-    while i < kept.len() {
-        let in_hl = kept[i].1;
-        let mut j = i + 1;
-        while j < kept.len() && kept[j].1 == in_hl {
-            j += 1;
-        }
-        let run: String = kept[i..j].iter().map(|(c, _)| *c).collect();
-        spans.push(Span::styled(run, if in_hl { highlight_style } else { base_style }));
-        i = j;
-    }
-
-    if overflowed && use_ellipsis {
-        spans.push(Span::styled(ELLIPSIS, base_style));
-        kept_width + ELLIPSIS_WIDTH
-    } else {
-        kept_width
-    }
+    characters
+        .chunk_by(|left, right| left.1 == right.1)
+        .map(|run| {
+            let style = if run[0].1 { highlight } else { base };
+            Span::styled(run.iter().map(|(character, _)| *character).collect::<String>(), style)
+        })
+        .collect()
 }
 
 fn abbreviate_cwd(cwd: &Path, max_width: usize) -> String {

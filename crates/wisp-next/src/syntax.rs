@@ -1,17 +1,27 @@
 use crate::theme::Theme;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, VecDeque};
+use std::hash::{Hash, Hasher};
 use syntect::easy::HighlightLines;
 use syntect::highlighting::FontStyle;
 use syntect::parsing::{SyntaxReference, SyntaxSet};
 
 const MAX_CACHE_ENTRIES: usize = 512;
 
+/// Hash of the `(language, code)` pair a cache entry was built from. Hashing
+/// rather than owning the strings means a lookup costs nothing: the hot path
+/// runs once per source line per rendered patch.
+type CacheKey = (u64, u64);
+
 pub struct SyntaxHighlighter {
     syntax_set: SyntaxSet,
-    cache: HashMap<(String, String), Vec<Line<'static>>>,
-    insertion_order: VecDeque<(String, String)>,
+    cache: HashMap<CacheKey, Vec<Line<'static>>>,
+    /// Insertion order, for evicting the oldest entry when the cache is full.
+    /// Entries are not promoted on a hit — callers that re-render the same lines
+    /// every frame cache the finished result themselves.
+    insertion_order: VecDeque<CacheKey>,
 }
 
 impl SyntaxHighlighter {
@@ -20,21 +30,17 @@ impl SyntaxHighlighter {
     }
 
     pub fn highlight(&mut self, code: &str, language: &str, theme: &Theme) -> Vec<Line<'static>> {
-        let key = (language.to_string(), code.to_string());
-        if self.cache.contains_key(&key) {
-            if let Some(pos) = self.insertion_order.iter().position(|entry| entry == &key) {
-                self.insertion_order.remove(pos);
-                self.insertion_order.push_back(key.clone());
-            }
-            return self.cache.get(&key).expect("checked above").clone();
+        let key = cache_key(code, language);
+        if let Some(lines) = self.cache.get(&key) {
+            return lines.clone();
         }
         let lines = self.render(code, language, theme);
-        if self.cache.len() == MAX_CACHE_ENTRIES
+        if self.cache.len() >= MAX_CACHE_ENTRIES
             && let Some(oldest) = self.insertion_order.pop_front()
         {
             self.cache.remove(&oldest);
         }
-        self.insertion_order.push_back(key.clone());
+        self.insertion_order.push_back(key);
         self.cache.insert(key, lines.clone());
         lines
     }
@@ -73,6 +79,16 @@ impl Default for SyntaxHighlighter {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn cache_key(code: &str, language: &str) -> CacheKey {
+    (hash_of(code), hash_of(language))
+}
+
+fn hash_of(value: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn find_syntax<'a>(syntax_set: &'a SyntaxSet, hint: &str) -> Option<&'a SyntaxReference> {

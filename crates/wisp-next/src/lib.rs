@@ -5,16 +5,20 @@ pub mod composer;
 pub mod diff;
 pub mod dropped_files;
 pub mod edit_buffer;
+pub mod effects;
+pub mod elicitation;
 pub mod error;
 pub mod filterable_list;
 pub mod git_diff;
 pub mod keybindings;
+pub mod list_view;
 pub mod markdown;
 pub mod modal;
 pub mod picker;
 pub mod plan_review;
 pub mod plan_tracker;
 pub mod plan_view;
+pub mod platform;
 pub mod presentation;
 pub mod progress_indicator;
 pub mod prompt_search;
@@ -155,7 +159,7 @@ async fn event_loop(
     stdout: &mut impl Write,
 ) -> Result<(), AppError> {
     let mut terminal_events = EventStream::new();
-    let (screen_event_tx, mut screen_event_rx) = mpsc::unbounded_channel();
+    let (effect_result_tx, mut effect_result_rx) = mpsc::unbounded_channel();
     let mut tick_interval = {
         let mut tick = interval(Duration::from_millis(100));
         tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -188,9 +192,9 @@ async fn event_loop(
                 }
             }
 
-            screen_event = screen_event_rx.recv() => {
-                if let Some(event) = screen_event {
-                    app.on_screen_event(event);
+            effect_result = effect_result_rx.recv() => {
+                if let Some(result) = effect_result {
+                    app.on_effect_result(result);
                 }
             }
 
@@ -199,8 +203,8 @@ async fn event_loop(
 
         process_terminal_state(app, stdout, &mut capture_enabled);
 
-        while let Some(effect) = app.take_screen_effect() {
-            let event_tx = screen_event_tx.clone();
+        while let Some(effect) = app.take_effect() {
+            let event_tx = effect_result_tx.clone();
             tokio::spawn(async move {
                 let _ = event_tx.send(effect.execute().await);
             });

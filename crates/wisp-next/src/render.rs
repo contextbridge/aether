@@ -2,14 +2,14 @@ use crate::INLINE_SCROLLBACK_RESERVE;
 use crate::app::App;
 use crate::plan_view::PlanView;
 use crate::presentation::Presenter;
-use crate::status_line::{StatusLine, status_line_height};
+use crate::status_line::StatusLine;
 use crate::theme::Theme;
 use agent_client_protocol::schema::PlanEntry;
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Constraint, Layout, Position, Rect};
+use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
 use ratatui::text::{Line, Text};
 use ratatui::widgets::{Paragraph, Widget};
 
@@ -67,18 +67,22 @@ struct FrameLayout {
     completion_rows: u16,
     prompt_search_rows: u16,
     composer_height: u16,
+    status_line: StatusLine,
     status_line_rows: u16,
     plan_entries: Vec<PlanEntry>,
     plan_height: u16,
     progress_lines: Vec<Line<'static>>,
     live_lines: Vec<Line<'static>>,
+    /// Columns of blank gutter each side of the conversation content.
+    content_padding: u16,
     /// Rows the transcript gets once the plan, composer, and status line are placed.
     transcript_height: u16,
 }
 
 impl FrameLayout {
     fn new(area: Rect, app: &mut App, presenter: &mut Presenter) -> Self {
-        let status_line_rows = status_line_height(app, area.width, app.status_line_settings(), presenter.theme());
+        let status_line = StatusLine::new(app, app.status_line_settings(), presenter.theme());
+        let status_line_rows = status_line.height(area.width);
         let composer_layout = app.composer().layout(area.width, presenter.theme());
         let completion_rows = rows(app.composer().completion_ref().map_or(0, |o| o.row_count(COMPLETION_MAX_ROWS)));
         let prompt_search_rows =
@@ -88,13 +92,11 @@ impl FrameLayout {
         let composer_height = requested_composer_height.max(1).min(area.height.saturating_sub(status_line_rows));
 
         let remaining = area.height.saturating_sub(composer_height).saturating_sub(status_line_rows);
-        let padding = app.content_padding();
         let plan_entries = app.plan_entries();
         // The plan never takes more than a third of what is left, so a long plan
         // cannot squeeze out the conversation.
-        let plan_height =
-            rows(PlanView::new(&plan_entries, presenter.theme(), padding).line_count()).min(remaining.div_ceil(3));
-        let progress_lines = app.progress_indicator().lines(presenter.theme(), app.spinner_tick(), padding);
+        let plan_height = rows(PlanView::new(&plan_entries, presenter.theme()).line_count()).min(remaining.div_ceil(3));
+        let progress_lines = app.progress_indicator().lines(presenter.theme(), app.spinner_tick());
         let live_lines =
             if app.full_screen_active() { Vec::new() } else { live_history_lines(app, presenter, area.width) };
 
@@ -103,13 +105,20 @@ impl FrameLayout {
             completion_rows,
             prompt_search_rows,
             composer_height,
+            status_line,
             status_line_rows,
             plan_entries,
             plan_height,
             progress_lines,
             live_lines,
+            content_padding: rows(app.content_padding()),
             transcript_height: remaining.saturating_sub(plan_height),
         }
+    }
+
+    /// `area` inset by the content gutter, for the widgets that draw inside it.
+    fn indent(&self, area: Rect) -> Rect {
+        area.inner(Margin::new(self.content_padding, 0))
     }
 
     /// Committed scrollback rows that still fit on screen; anything older is
@@ -138,12 +147,12 @@ fn draw_frame(frame: &mut Frame, app: &mut App, presenter: &mut Presenter, layou
     .areas(live_area);
 
     if layout.plan_height > 0 {
-        PlanView::new(&layout.plan_entries, presenter.theme(), app.content_padding()).render(plan_area, buf);
+        PlanView::new(&layout.plan_entries, presenter.theme()).render(layout.indent(plan_area), buf);
     }
     draw_transcript(layout, presenter.committed_lines(), transcript_area, buf);
 
     let cursor = render_composer(layout, app, composer_area, buf, presenter.theme());
-    StatusLine::new(app, app.status_line_settings(), presenter.theme()).render(status_area, buf);
+    layout.status_line.render(status_area, buf);
 
     if let Some(cursor) = cursor {
         frame.set_cursor_position(cursor);
@@ -167,7 +176,7 @@ fn draw_transcript(layout: &FrameLayout, committed: &[Line<'static>], area: Rect
     .areas(area);
     render_lines(committed, committed_area, buf);
     render_lines(live, live_area, buf);
-    render_lines(progress, progress_area, buf);
+    render_lines(progress, layout.indent(progress_area), buf);
 }
 
 /// The last `remaining` lines of `lines`, decrementing `remaining` by how many

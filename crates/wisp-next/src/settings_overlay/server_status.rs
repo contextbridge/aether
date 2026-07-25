@@ -1,13 +1,14 @@
-use super::{LiveSettingsData, PaneOutcome, SettingsPane, summarize};
+use super::{LiveSettingsData, SettingsPane, summarize};
+use crate::list_view::ListView;
+use crate::render_context::RenderContext;
 use crate::selection::{Direction, SelectionState};
-use crate::surface::SurfaceMessage;
-use crate::theme::Theme;
+use crate::surface::{Surface, SurfaceMessage};
 use acp_utils::notifications::{McpServerStatus, McpServerStatusEntry};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
-use ratatui::widgets::{List, ListItem, Paragraph, StatefulWidget, Widget};
+use ratatui::widgets::{ListItem, Widget};
 
 /// Read-only view of MCP server health, with authentication for OAuth servers.
 pub(super) struct ServerStatusPane {
@@ -36,12 +37,12 @@ impl ServerStatusPane {
         }
     }
 
-    fn authenticate(&self) -> PaneOutcome {
-        PaneOutcome::message(
-            self.selected_entry()
-                .filter(|entry| entry.can_authenticate())
-                .map(|entry| SurfaceMessage::AuthenticateServer(entry.name.clone())),
-        )
+    fn authenticate(&self) -> Vec<SurfaceMessage> {
+        self.selected_entry()
+            .filter(|entry| entry.can_authenticate())
+            .map(|entry| SurfaceMessage::AuthenticateServer(entry.name.clone()))
+            .into_iter()
+            .collect()
     }
 
     /// Rebuilds the row list, keeping focus on `keep` (or the first server).
@@ -58,44 +59,34 @@ impl ServerStatusPane {
     }
 }
 
-impl SettingsPane for ServerStatusPane {
-    fn on_pane_key(&mut self, key: KeyEvent) -> Option<PaneOutcome> {
+impl Surface for ServerStatusPane {
+    fn on_surface_key(&mut self, key: KeyEvent) -> Option<Vec<SurfaceMessage>> {
         (key.code == KeyCode::Enter).then(|| self.authenticate())
     }
 
     /// Headers and spacers are not selectable, so a click on one is ignored
     /// rather than moving focus to a row that cannot be authenticated.
-    fn click(&mut self, row: u16) -> PaneOutcome {
+    fn click(&mut self, row: u16, _column: u16) -> Vec<SurfaceMessage> {
         let restore = self.selection.selected();
         if !self.selection.select_at(row, self.rows.len()) {
-            return PaneOutcome::default();
+            return Vec::new();
         }
         if !self.selection.selected().and_then(|index| self.rows.get(index)).is_some_and(is_server) {
             self.selection.select(restore, self.rows.len());
-            return PaneOutcome::default();
+            return Vec::new();
         }
         self.authenticate()
     }
 
-    fn scroll(&mut self, direction: Direction) {
+    fn scroll(&mut self, direction: Direction) -> Vec<SurfaceMessage> {
         let rows = &self.rows;
         self.selection.step(rows.len(), direction, |index| is_server(&rows[index]));
+        Vec::new()
     }
 
-    fn refresh(&mut self, live: &LiveSettingsData) {
-        let keep = self.selected_entry().map(|entry| entry.name.clone());
-        self.set_rows(live.servers.clone(), keep.as_deref());
-    }
-
-    fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
-        if self.rows.is_empty() {
-            Paragraph::new(" (no MCP servers configured)")
-                .style(Style::new().fg(theme.text_secondary))
-                .render(area, buf);
-            return;
-        }
-
-        let items = self.rows.iter().map(|row| match row {
+    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
+        let theme = cx.theme;
+        let rows = self.rows.iter().map(|row| match row {
             ServerStatusRow::Header(label) => ListItem::new(label.clone()).style(Style::new().fg(theme.heading)),
             ServerStatusRow::Spacer => ListItem::new(""),
             ServerStatusRow::Server { entry, indented } => {
@@ -111,11 +102,18 @@ impl SettingsPane for ServerStatusPane {
                 ListItem::new(format!(" {prefix}{}  {indicator} {detail}", entry.name)).style(style)
             }
         });
-        let list = List::new(items)
+        ListView::new(rows.collect(), &mut self.selection, theme)
+            .empty_message(" (no MCP servers configured)")
             .highlight_style(Style::new().fg(theme.background).bg(theme.text_primary))
-            .scroll_padding(1);
-        self.selection.set_rows_area(area);
-        StatefulWidget::render(list, area, buf, self.selection.list_state_mut());
+            .render(area, buf);
+        None
+    }
+}
+
+impl SettingsPane for ServerStatusPane {
+    fn refresh(&mut self, live: &LiveSettingsData) {
+        let keep = self.selected_entry().map(|entry| entry.name.clone());
+        self.set_rows(live.servers.clone(), keep.as_deref());
     }
 
     fn footer(&self) -> String {

@@ -1,6 +1,7 @@
 mod form;
 mod url;
 
+use crate::elicitation::ElicitationResponder;
 use crate::render_context::RenderContext;
 use acp_utils::notifications::{
     CreateElicitationRequestParams, ElicitationAction, ElicitationParams, ElicitationResponse, McpNotification,
@@ -11,20 +12,16 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Position, Rect};
 use ratatui::widgets::{Clear, Widget};
-use serde_json::Value;
-use std::sync::Arc;
 
 use self::form::{FormAction, FormModal};
 use self::url::UrlModal;
+use crate::platform::{BrowserOpener, ClipboardWriter, default_browser_opener, default_clipboard_writer};
 use crate::selection::Direction;
 use crate::surface::{Surface, SurfaceMessage};
 
-pub type BrowserOpener = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
-pub type ClipboardWriter = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
-
 pub struct ElicitationModal {
     kind: ModalKind,
-    responder: Option<Responder<ElicitationResponse>>,
+    responder: ElicitationResponder,
     browser_opener: BrowserOpener,
     clipboard_writer: ClipboardWriter,
 }
@@ -53,7 +50,7 @@ impl ElicitationModal {
                 ModalKind::Url(UrlModal::new(params.server_name, elicitation_id, message, url))
             }
         };
-        Self { kind, responder: Some(responder), browser_opener, clipboard_writer }
+        Self { kind, responder: ElicitationResponder::new(responder), browser_opener, clipboard_writer }
     }
 
     /// Handles a completion notification, reporting whether it closed the modal.
@@ -64,12 +61,8 @@ impl ElicitationModal {
         if !self.matches_url_completion(params) {
             return false;
         }
-        self.respond(ElicitationAction::Accept, None);
+        self.responder.respond(ElicitationAction::Accept, None);
         true
-    }
-
-    pub fn cancel(&mut self) {
-        self.respond(ElicitationAction::Cancel, None);
     }
 
     fn on_url_key(&mut self, key: KeyEvent) -> Vec<SurfaceMessage> {
@@ -79,7 +72,7 @@ impl ElicitationModal {
         let plain_key = key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT;
         match key.code {
             KeyCode::Esc => {
-                self.respond(ElicitationAction::Cancel, None);
+                self.responder.cancel();
                 return vec![SurfaceMessage::Close];
             }
             KeyCode::Enter => {
@@ -104,12 +97,6 @@ impl ElicitationModal {
             ModalKind::Url(url) if url.server_name == params.server_name && url.elicitation_id == params.elicitation_id
         )
     }
-
-    fn respond(&mut self, action: ElicitationAction, content: Option<Value>) {
-        if let Some(responder) = self.responder.take() {
-            let _ = responder.respond(ElicitationResponse { action, content });
-        }
-    }
 }
 
 impl Surface for ElicitationModal {
@@ -125,11 +112,11 @@ impl Surface for ElicitationModal {
         Some(match form.on_key(key) {
             FormAction::None => Vec::new(),
             FormAction::Cancel => {
-                self.respond(ElicitationAction::Cancel, None);
+                self.responder.cancel();
                 vec![SurfaceMessage::Close]
             }
             FormAction::Accept(content) => {
-                self.respond(ElicitationAction::Accept, Some(content));
+                self.responder.respond(ElicitationAction::Accept, Some(content));
                 vec![SurfaceMessage::Close]
             }
         })
@@ -153,6 +140,11 @@ impl Surface for ElicitationModal {
         matches!(self.kind, ModalKind::Form(_))
     }
 
+    /// Dismissing the modal answers the request it was asking about.
+    fn cancel(&mut self) {
+        self.responder.cancel();
+    }
+
     fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
         let area = area.centered(Constraint::Percentage(80), Constraint::Percentage(80));
         Clear.render(area, buf);
@@ -164,90 +156,13 @@ impl Surface for ElicitationModal {
     }
 }
 
-impl Drop for ElicitationModal {
-    fn drop(&mut self) {
-        if let Some(responder) = self.responder.take() {
-            let _ = responder.respond(ElicitationResponse { action: ElicitationAction::Cancel, content: None });
-        }
-    }
-}
-
-pub fn default_browser_opener() -> BrowserOpener {
-    Arc::new(|url: &str| -> Result<(), String> {
-        #[cfg(target_os = "macos")]
-        {
-            let status = std::process::Command::new("open")
-                .arg(url)
-                .status()
-                .map_err(|e| format!("Failed to spawn 'open': {e}"))?;
-            status.success().then_some(()).ok_or_else(|| format!("'open' exited with status {status}"))
-        }
-        #[cfg(target_os = "linux")]
-        {
-            let status = std::process::Command::new("xdg-open")
-                .arg(url)
-                .status()
-                .map_err(|e| format!("Failed to spawn 'xdg-open': {e}"))?;
-            status.success().then_some(()).ok_or_else(|| format!("'xdg-open' exited with status {status}"))
-        }
-        #[cfg(target_os = "windows")]
-        {
-            let status = std::process::Command::new("cmd")
-                .args(["/C", "start", url])
-                .status()
-                .map_err(|e| format!("Failed to spawn 'start': {e}"))?;
-            status.success().then_some(()).ok_or_else(|| format!("'start' exited with status {status}"))
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-        Err("Unsupported platform for opening URLs".to_string())
-    })
-}
-
-pub fn default_clipboard_writer() -> ClipboardWriter {
-    Arc::new(|text: &str| -> Result<(), String> {
-        #[cfg(target_os = "macos")]
-        {
-            cmd_clipboard("pbcopy", &[], text)
-        }
-        #[cfg(target_os = "linux")]
-        {
-            cmd_clipboard("wl-copy", &[], text)
-                .or_else(|_| cmd_clipboard("xclip", &["-selection", "clipboard"], text))
-                .or_else(|_| cmd_clipboard("xsel", &["--clipboard", "--input"], text))
-                .map_err(|_| "No clipboard tool found (wl-copy, xclip, or xsel)".to_string())
-        }
-        #[cfg(target_os = "windows")]
-        {
-            cmd_clipboard("clip", &[], text)
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-        Err("Unsupported platform for copying URLs".to_string())
-    })
-}
-
-fn cmd_clipboard(command: &str, args: &[&str], text: &str) -> Result<(), String> {
-    use std::io::Write;
-    let mut child = std::process::Command::new(command)
-        .args(args)
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to spawn '{command}': {e}"))?;
-    child
-        .stdin
-        .as_mut()
-        .ok_or_else(|| format!("'{command}' has no stdin"))?
-        .write_all(text.as_bytes())
-        .map_err(|e| format!("Failed to write to '{command}': {e}"))?;
-    let status = child.wait().map_err(|e| format!("Failed to wait for '{command}': {e}"))?;
-    status.success().then_some(()).ok_or_else(|| format!("'{command}' exited with status {status}"))
-}
-
 #[cfg(test)]
 #[allow(clippy::absolute_paths, clippy::similar_names)]
 mod tests {
     use super::*;
     use acp_utils::testing::test_connection;
     use acp_utils::{ElicitationSchema, EnumSchema};
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use tokio::task::LocalSet;
 

@@ -2,6 +2,7 @@ mod view;
 
 use crate::attachments::{AttachmentKind, PromptAttachment, classify_attachment};
 use crate::edit_buffer::EditBuffer;
+use crate::effects::{self, Effect};
 use crate::picker::{CommandEntry, CompletionOverlay, FileEntry};
 use crate::prompt_search::{self, PromptSearchPicker};
 use acp_utils::notifications::PromptSearchResponse;
@@ -20,11 +21,23 @@ pub struct SelectedFileMention {
 #[derive(Debug, Default)]
 pub struct Composer {
     buffer: EditBuffer,
-    overlay: Option<CompletionOverlay>,
+    overlay: Option<Overlay>,
     mentions: Vec<SelectedFileMention>,
     pending_media: Vec<PromptAttachment>,
     history: PromptHistory,
-    prompt_search: Option<PromptSearchState>,
+}
+
+/// The inline surface open around the composer's text.
+///
+/// At most one, because they compete for the same keys: making that an enum
+/// rather than two `Option` fields means the pair can never both be open.
+#[derive(Debug)]
+enum Overlay {
+    /// The `/` command or `@` file list, drawn below the text.
+    Completion(CompletionOverlay),
+    /// Prompt-history search, drawn above the text. It carries the draft it
+    /// replaced, so backing out restores what the user was writing.
+    PromptSearch { picker: PromptSearchPicker, draft: String },
 }
 
 /// The prompts submitted this session, and where recall has walked back to.
@@ -82,12 +95,6 @@ impl PromptHistory {
         self.index = None;
         self.draft = None;
     }
-}
-
-#[derive(Debug)]
-struct PromptSearchState {
-    picker: PromptSearchPicker,
-    draft: String,
 }
 
 pub struct ComposerLayout {
@@ -254,128 +261,154 @@ impl Composer {
     }
 
     pub fn open_command_picker(&mut self, commands: Vec<CommandEntry>) {
-        self.overlay = Some(CompletionOverlay::command(commands));
+        self.overlay = Some(Overlay::Completion(CompletionOverlay::command(commands)));
     }
 
-    pub fn open_file_picker(&mut self, root: &std::path::Path) {
-        self.overlay = Some(CompletionOverlay::file(root));
+    /// Opens the `@` picker and asks for the file index it will show. The walk
+    /// runs off the event loop, so opening the picker never stalls the keystroke
+    /// that triggered it.
+    pub fn open_file_picker(&mut self, root: &std::path::Path) -> Effect {
+        let request_id = effects::next_request_id();
+        self.overlay = Some(Overlay::Completion(CompletionOverlay::file(request_id)));
+        Effect::IndexFiles { request_id, root: root.to_path_buf() }
     }
 
+    pub fn on_files_indexed(&mut self, request_id: u64, files: Vec<FileEntry>) {
+        if let Some(overlay) = self.completion() {
+            overlay.set_files(request_id, files);
+        }
+    }
+
+    /// Whether the completion list is open.
     pub fn has_overlay(&self) -> bool {
-        self.overlay.is_some()
+        self.completion_ref().is_some()
     }
 
     /// The open completion list, for navigation and rendering.
     pub fn completion(&mut self) -> Option<&mut CompletionOverlay> {
-        self.overlay.as_mut()
+        match self.overlay.as_mut()? {
+            Overlay::Completion(overlay) => Some(overlay),
+            Overlay::PromptSearch { .. } => None,
+        }
     }
 
     pub fn completion_ref(&self) -> Option<&CompletionOverlay> {
-        self.overlay.as_ref()
+        match self.overlay.as_ref()? {
+            Overlay::Completion(overlay) => Some(overlay),
+            Overlay::PromptSearch { .. } => None,
+        }
     }
 
     /// The open prompt-history picker, for queries and rendering.
     pub fn prompt_search(&mut self) -> Option<&mut PromptSearchPicker> {
-        self.prompt_search.as_mut().map(|state| &mut state.picker)
+        match self.overlay.as_mut()? {
+            Overlay::PromptSearch { picker, .. } => Some(picker),
+            Overlay::Completion(_) => None,
+        }
     }
 
     pub fn prompt_search_ref(&self) -> Option<&PromptSearchPicker> {
-        self.prompt_search.as_ref().map(|state| &state.picker)
+        match self.overlay.as_ref()? {
+            Overlay::PromptSearch { picker, .. } => Some(picker),
+            Overlay::Completion(_) => None,
+        }
     }
 
     /// Moves through history results and mirrors the newly selected prompt into
     /// the composer, so browsing previews each candidate in place.
     pub fn navigate_prompt_search(&mut self, navigate: impl FnOnce(&mut PromptSearchPicker)) {
-        let Some(state) = self.prompt_search.as_mut() else {
+        let Some(picker) = self.prompt_search() else {
             return;
         };
-        navigate(&mut state.picker);
+        navigate(picker);
         self.apply_selected_search_result();
     }
 
     pub fn has_prompt_search(&self) -> bool {
-        self.prompt_search.is_some()
+        self.prompt_search_ref().is_some()
     }
 
     pub fn open_prompt_search(&mut self) {
         let draft = self.buffer.text().to_string();
-        self.prompt_search = Some(PromptSearchState { picker: PromptSearchPicker::new(), draft });
+        self.overlay = Some(Overlay::PromptSearch { picker: PromptSearchPicker::new(), draft });
     }
 
+    /// Closes the search, restoring the draft it replaced unless the user
+    /// confirmed one of the results.
     pub fn close_prompt_search(&mut self, confirmed: bool) {
-        let Some(state) = self.prompt_search.take() else {
+        let Some(Overlay::PromptSearch { draft, .. }) = self.overlay.take() else {
             return;
         };
         if !confirmed {
-            self.buffer.set_text(state.draft);
+            self.buffer.set_text(draft);
         }
     }
 
     /// Applies a keystroke to the open history search, returning the query to
     /// re-run when the keystroke changed it.
     pub fn prompt_search_on_key(&mut self, key: crossterm::event::KeyEvent) -> Option<String> {
-        let state = self.prompt_search.as_mut()?;
+        let picker = self.prompt_search()?;
         match key.code {
             KeyCode::Esc => {
                 self.close_prompt_search(false);
                 None
             }
             KeyCode::Enter => {
-                let confirmed = state.picker.selected_result().is_some();
+                let confirmed = picker.selected_result().is_some();
                 self.close_prompt_search(confirmed);
                 None
             }
             KeyCode::Down => {
-                state.picker.move_down();
+                picker.move_down();
                 self.apply_selected_search_result();
                 None
             }
             KeyCode::Up => {
-                state.picker.move_up();
+                picker.move_up();
                 self.apply_selected_search_result();
                 None
             }
-            KeyCode::Backspace => Some(state.picker.backspace()),
+            KeyCode::Backspace => Some(picker.backspace()),
             KeyCode::Char(c)
                 if !key
                     .modifiers
                     .intersects(crossterm::event::KeyModifiers::CONTROL | crossterm::event::KeyModifiers::ALT) =>
             {
-                Some(state.picker.push_char(c))
+                Some(picker.push_char(c))
             }
             _ => None,
         }
     }
 
     pub fn prompt_search_on_paste(&mut self, text: &str) -> Option<String> {
-        let state = self.prompt_search.as_mut()?;
-        Some(state.picker.push_str(text))
+        Some(self.prompt_search()?.push_str(text))
     }
 
     pub fn prompt_search_on_results(&mut self, response: PromptSearchResponse) {
-        let Some(state) = self.prompt_search.as_mut() else {
+        let Some(picker) = self.prompt_search() else {
             return;
         };
-        if state.picker.on_results(response) {
+        if picker.on_results(response) {
             self.apply_selected_search_result();
         }
     }
 
+    /// Puts back the draft the search replaced, for a query that no longer
+    /// selects anything.
     pub fn restore_prompt_search_draft(&mut self) {
-        if let Some(state) = &self.prompt_search {
-            self.buffer.set_text(state.draft.clone());
+        if let Some(Overlay::PromptSearch { draft, .. }) = &self.overlay {
+            self.buffer.set_text(draft.clone());
         }
     }
 
     fn apply_selected_search_result(&mut self) {
-        let Some(state) = self.prompt_search.as_ref() else {
+        let Some(result) = self.prompt_search_ref().and_then(PromptSearchPicker::selected_result) else {
             return;
         };
-        if let Some(result) = state.picker.selected_result() {
-            let cursor = prompt_search::cursor_at_match_end(&result.prompt, result.match_end);
-            self.buffer.set_text(result.prompt.clone());
-            self.buffer.set_cursor(cursor);
-        }
+        let prompt = result.prompt.clone();
+        let cursor = prompt_search::cursor_at_match_end(&prompt, result.match_end);
+        self.buffer.set_text(prompt);
+        self.buffer.set_cursor(cursor);
     }
 
     pub fn close_overlay(&mut self) {
@@ -383,14 +416,14 @@ impl Composer {
     }
 
     pub fn accept_command(&mut self) -> Option<CommandEntry> {
-        let command = self.overlay.as_ref()?.selected_command()?;
+        let command = self.completion_ref()?.selected_command()?;
         self.replace_token('/', &format!("/{}", command.name));
         self.overlay = None;
         Some(command)
     }
 
     pub fn accept_file(&mut self) -> Option<FileEntry> {
-        let file = self.overlay.as_ref()?.selected_file()?;
+        let file = self.completion_ref()?.selected_file()?;
         self.replace_token('@', &format!("@{} ", file.display_name));
         self.mentions.push(SelectedFileMention { path: file.path.clone(), display_name: file.display_name.clone() });
         self.overlay = None;
@@ -398,19 +431,19 @@ impl Composer {
     }
 
     pub fn refresh_overlay_query(&mut self) {
-        let Some(trigger) = self.overlay.as_ref().map(CompletionOverlay::trigger) else {
+        let Some(trigger) = self.completion_ref().map(CompletionOverlay::trigger) else {
             return;
         };
         let query = self
             .active_token(trigger)
             .map_or_else(String::new, |range| self.buffer.text()[range.start + 1..range.end].to_string());
-        if let Some(overlay) = &mut self.overlay {
+        if let Some(overlay) = self.completion() {
             overlay.set_query(query);
         }
     }
 
     pub fn active_token_is_empty(&self) -> bool {
-        self.overlay.as_ref().is_some_and(|overlay| overlay.query().is_empty())
+        self.completion_ref().is_some_and(|overlay| overlay.query().is_empty())
     }
 
     pub fn line_count(&self) -> usize {

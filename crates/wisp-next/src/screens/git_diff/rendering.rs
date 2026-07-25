@@ -2,12 +2,13 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect, Size};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Clear, List, ListItem, Paragraph, StatefulWidget, Widget};
+use ratatui::widgets::{Block, Clear, ListItem, Paragraph, StatefulWidget, Widget};
 use std::collections::HashSet;
 use tui_scrollview::{ScrollView, ScrollbarVisibility};
 
 use crate::diff::{DiffTone, SPLIT_VIEW_MIN_WIDTH, diff_line, join_split, split_side, split_widths};
 use crate::git_diff::{FileDiff, FileStatus, PatchAnchor, PatchLine, PatchLineKind, StageState};
+use crate::list_view::ListView;
 use crate::render_context::RenderContext;
 use crate::screens::MouseAction;
 use crate::surface::{Surface, SurfaceMessage};
@@ -17,8 +18,10 @@ use crate::widgets::{TextInput, render_vertical_scrollbar, wrapped_with_cursor};
 use crate::wrap::{fit_line, wrap_text_char};
 
 use super::GitDiffScreen;
-use super::state::{BottomBar, CursorRow, DiffView, DraftState, DrawerEntry, Focus, GitDiffLoadState};
+use super::state::{BottomBar, CursorRow, DiffView, DiffViewKey, DraftState, DrawerEntry, Focus, GitDiffLoadState};
 
+/// A built patch: its rows, the patch line each row maps back to, and where the
+/// draft's text cursor landed.
 type BuildResult = (Vec<Line<'static>>, Vec<CursorRow>, Option<(usize, u16)>);
 
 /// Below this width the file drawer is hidden and the patch gets the full area.
@@ -77,16 +80,20 @@ impl GitDiffScreen {
     }
 
     fn render_drawer(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
-        let entries = self.drawer_entries();
+        // The drawer reserves its own scrollbar column rather than letting the
+        // track overlap the file names, so it draws that half itself.
         let [list_area, track_area] = Layout::horizontal([Constraint::Min(0), Constraint::Length(1)]).areas(area);
-        let items =
-            entries.iter().map(|entry| ListItem::new(self.drawer_line(entry, usize::from(list_area.width), theme)));
-        let list = List::new(items)
-            .highlight_style(Style::new().fg(theme.background).bg(theme.accent).add_modifier(Modifier::BOLD));
-        self.drawer_selection.set_rows_area(list_area);
-        StatefulWidget::render(list, list_area, buf, self.drawer_selection.list_state_mut());
+        let rows: Vec<ListItem<'static>> = self
+            .drawer_entries()
+            .iter()
+            .map(|entry| ListItem::new(self.drawer_line(entry, usize::from(list_area.width), theme)))
+            .collect();
+        let row_count = rows.len();
 
-        render_vertical_scrollbar(track_area, buf, entries.len(), self.drawer_selection.offset());
+        ListView::new(rows, &mut self.drawer_selection, theme)
+            .highlight_style(Style::new().fg(theme.background).bg(theme.accent).add_modifier(Modifier::BOLD))
+            .render(list_area, buf);
+        render_vertical_scrollbar(track_area, buf, row_count, self.drawer_selection.offset());
     }
 
     fn drawer_line(&self, entry: &DrawerEntry, width: usize, theme: &Theme) -> Line<'static> {
@@ -128,7 +135,7 @@ impl GitDiffScreen {
         let file = self.selected_file().cloned()?;
         let [header_area, content_area] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
         Paragraph::new(self.patch_header(&file, theme)).render(header_area, buf);
-        self.last_patch_height = content_area.height;
+        self.patch.height = content_area.height;
 
         if let Some(message) = self.patch_placeholder(&file) {
             notice(message, theme.muted).render(content_area, buf);
@@ -137,8 +144,8 @@ impl GitDiffScreen {
 
         self.ensure_diff_view(&file, content_area.width, theme, cx.highlighter);
 
-        let view = self.diff_view.as_ref()?;
-        StatefulWidget::render(&view.scroll_view, content_area, buf, &mut self.patch_scroll_state);
+        let view = self.patch.view.as_ref()?;
+        StatefulWidget::render(&view.scroll_view, content_area, buf, &mut self.patch.scroll);
         self.overlay_cursor_indicator(content_area, buf, theme);
         self.draft_cursor_position(content_area)
     }
@@ -154,7 +161,7 @@ impl GitDiffScreen {
             Span::styled(format!("  +{} -{}", file.additions(), file.deletions()), Style::new().fg(theme.muted)),
         ];
 
-        let comments = self.review_queue.comments_for_file(&file.path).count();
+        let comments = self.review.queue.comments_for_file(&file.path).count();
         if self.show_full_file {
             spans.push(Span::styled("  [full file]", Style::new().fg(theme.info)));
         } else if comments > 0 {
@@ -181,8 +188,8 @@ impl GitDiffScreen {
     }
 
     fn draft_cursor_position(&self, content_area: Rect) -> Option<Position> {
-        let (draft_row, draft_col) = self.diff_view.as_ref()?.draft_cursor?;
-        let offset = usize::from(self.patch_scroll_state.offset().y);
+        let (draft_row, draft_col) = self.patch.view.as_ref()?.draft_cursor?;
+        let offset = usize::from(self.patch.scroll.offset().y);
         if draft_row < offset || draft_row >= offset + usize::from(content_area.height) {
             return None;
         }
@@ -191,6 +198,8 @@ impl GitDiffScreen {
         Some(Position::new(column, row))
     }
 
+    /// Makes `self.patch.view` a render of `file` at the current width, reusing
+    /// the active view or a cached one when nothing that affects it has changed.
     fn ensure_diff_view(
         &mut self,
         file: &FileDiff,
@@ -198,77 +207,62 @@ impl GitDiffScreen {
         theme: &Theme,
         highlighter: &mut SyntaxHighlighter,
     ) {
-        let split = content_width >= SPLIT_VIEW_MIN_WIDTH && !self.show_full_file;
-        let draft_sig = self.draft_signature();
-
-        let signature_matches = |view: &DiffView| {
-            view.file_path == file.path
-                && view.content_width == content_width
-                && view.split == split
-                && view.full_file == self.show_full_file
-                && view.document_revision == self.document_revision
-                && view.comments_revision == self.comments_revision
-                && view.draft_signature == draft_sig
+        let key = DiffViewKey {
+            file_path: file.path.clone(),
+            content_width,
+            split: content_width >= SPLIT_VIEW_MIN_WIDTH && !self.show_full_file,
+            full_file: self.show_full_file,
+            document_revision: self.document_revision,
+            comments_revision: self.review.revision,
+            draft: self.draft_key(),
         };
 
-        if self.diff_view.as_ref().is_some_and(signature_matches) {
+        if self.patch.view.as_ref().is_some_and(|view| view.key == key) {
             return;
         }
 
-        // Reuse a cached, matching snapshot for this file if one is available (these always
-        // carry draft_signature == None, so they only match when there is no active draft).
-        // Remove the hit before parking the active view so cache indices are not shifted.
-        let cache_hit =
-            self.diff_view_cache.iter().position(signature_matches).map(|pos| self.diff_view_cache.remove(pos));
+        // Cached views are always draft-free, so this only hits when the user is
+        // browsing rather than typing. Remove the hit before parking the active
+        // view, so parking cannot shift the index out from under the removal.
+        let cached =
+            self.patch.cache.iter().position(|view| view.key == key).map(|position| self.patch.cache.remove(position));
 
         self.park_active_diff_view();
-        self.diff_view =
-            Some(cache_hit.unwrap_or_else(|| self.build_diff_view(file, content_width, split, theme, highlighter)));
+        self.patch.view = Some(cached.unwrap_or_else(|| self.build_diff_view(file, &key, theme, highlighter)));
     }
 
     fn build_diff_view(
         &self,
         file: &FileDiff,
-        content_width: u16,
-        split: bool,
+        key: &DiffViewKey,
         theme: &Theme,
         highlighter: &mut SyntaxHighlighter,
     ) -> DiffView {
-        let (lines, cursor_rows, draft_cursor) = if self.show_full_file {
-            self.build_full_file_lines(file, content_width, theme, highlighter)
-        } else if split {
-            self.build_split_lines(file, content_width, theme, highlighter)
+        let width = key.content_width;
+        let (lines, cursor_rows, draft_cursor) = if key.full_file {
+            self.build_full_file_lines(file, width, theme, highlighter)
+        } else if key.split {
+            self.build_split_lines(file, width, theme, highlighter)
         } else {
-            self.build_unified_lines(file, content_width, theme, highlighter)
+            self.build_unified_lines(file, width, theme, highlighter)
         };
 
         let content_height = u16::try_from(lines.len().max(1)).unwrap_or(u16::MAX);
-        let mut scroll_view = ScrollView::new(Size::new(content_width, content_height))
+        let mut scroll_view = ScrollView::new(Size::new(width, content_height))
             .vertical_scrollbar_visibility(ScrollbarVisibility::Automatic);
-        scroll_view.render_widget(Paragraph::new(Text::from(lines)), Rect::new(0, 0, content_width, content_height));
+        scroll_view.render_widget(Paragraph::new(Text::from(lines)), Rect::new(0, 0, width, content_height));
 
-        DiffView {
-            scroll_view,
-            cursor_rows,
-            draft_cursor,
-            file_path: file.path.clone(),
-            content_width,
-            split,
-            full_file: self.show_full_file,
-            document_revision: self.document_revision,
-            comments_revision: self.comments_revision,
-            draft_signature: self.draft_signature(),
-        }
+        DiffView { scroll_view, cursor_rows, draft_cursor, key: key.clone() }
     }
 
     fn overlay_cursor_indicator(&self, content_area: Rect, buf: &mut Buffer, theme: &Theme) {
-        if self.focus != Focus::Patch || self.draft.is_some() {
+        if self.focus != Focus::Patch || self.review.draft.is_some() {
             return;
         }
-        let Some(cursor_row) = self.diff_view.as_ref().and_then(|view| self.cursor_row_in(view)) else {
+        let Some(cursor_row) = self.patch.view.as_ref().and_then(|view| self.cursor_row_in(view)) else {
             return;
         };
-        let offset = usize::from(self.patch_scroll_state.offset().y);
+        let offset = usize::from(self.patch.scroll.offset().y);
         if cursor_row < offset || cursor_row >= offset + usize::from(content_area.height) {
             return;
         }
@@ -306,7 +300,7 @@ impl GitDiffScreen {
             let line_no = index + 1;
             let tone = if added_lines.contains(&line_no) { DiffTone::Added } else { DiffTone::Context };
             let rendered = diff_line(&format!("{line_no:>4} "), text, language, tone, theme, highlighter);
-            cursor_rows.push((0, index, lines.len()));
+            cursor_rows.push(CursorRow { hunk: 0, line: index, row: lines.len() });
             lines.push(fit_line(rendered.line, usize::from(width), rendered.fill));
         }
         (lines, cursor_rows, None)
@@ -324,7 +318,7 @@ impl GitDiffScreen {
         let mut draft_cursor = None;
         for (hunk_idx, hunk) in file.hunks.iter().enumerate() {
             for (line_idx, patch_line) in hunk.lines.iter().enumerate() {
-                cursor_rows.push((hunk_idx, line_idx, lines.len()));
+                cursor_rows.push(CursorRow { hunk: hunk_idx, line: line_idx, row: lines.len() });
                 lines.push(render_unified_line(patch_line, file.language(), width, theme, highlighter));
                 self.push_annotations(&mut lines, self.anchor(hunk_idx, line_idx), width, theme, &mut draft_cursor);
             }
@@ -369,7 +363,7 @@ impl GitDiffScreen {
                         // Anchor comments on the added side when present, falling back to
                         // the removed side, so each line keeps its own comment slot.
                         let anchor_line = right.or(left).map_or(removed_start, |side| side.idx);
-                        cursor_rows.push((hunk_idx, anchor_line, lines.len()));
+                        cursor_rows.push(CursorRow { hunk: hunk_idx, line: anchor_line, row: lines.len() });
                         lines.push(render_split_row(
                             left.map(|side| side.line),
                             right.map(|side| side.line),
@@ -392,12 +386,12 @@ impl GitDiffScreen {
 
                 match line.kind {
                     PatchLineKind::HunkHeader => {
-                        cursor_rows.push((hunk_idx, index, lines.len()));
+                        cursor_rows.push(CursorRow { hunk: hunk_idx, line: index, row: lines.len() });
                         lines.push(styled_full_width(&line.text, width, theme.info));
                     }
                     PatchLineKind::Added | PatchLineKind::Context => {
                         let old = (line.kind == PatchLineKind::Context).then_some(line);
-                        cursor_rows.push((hunk_idx, index, lines.len()));
+                        cursor_rows.push(CursorRow { hunk: hunk_idx, line: index, row: lines.len() });
                         lines.push(render_split_row(
                             old,
                             Some(line),
@@ -429,7 +423,7 @@ impl GitDiffScreen {
         theme: &Theme,
         draft_cursor: &mut Option<(usize, u16)>,
     ) {
-        for comment in self.review_queue.comments().iter().filter(|comment| comment.anchor == anchor) {
+        for comment in self.review.queue.comments().iter().filter(|comment| comment.anchor == anchor) {
             lines.extend(comment_box(
                 "┌─ Comment ─",
                 &wrap_text_char(&comment.body, comment_body_width(width)),
@@ -439,7 +433,7 @@ impl GitDiffScreen {
             ));
         }
 
-        let Some(draft) = self.draft.as_ref().filter(|draft| draft.anchor == anchor) else {
+        let Some(draft) = self.review.draft.as_ref().filter(|draft| draft.anchor == anchor) else {
             return;
         };
         let (body, cursor) = draft_body(draft, comment_body_width(width));
@@ -480,7 +474,7 @@ impl GitDiffScreen {
                 None
             }
             BottomBar::Help => {
-                let queued = self.review_queue.len();
+                let queued = self.review.queue.len();
                 let count = if queued > 0 { format!(" ({})", plural(queued, "comment")) } else { String::new() };
                 let keys = if self.focus == Focus::Drawer {
                     "j/k move · h/l pane · space stage · a/A all · t scope · C commit · d discard · o full file · r refresh"
@@ -505,8 +499,11 @@ impl Surface for GitDiffScreen {
         true
     }
 
-    fn on_event(&mut self, event: crate::screens::ScreenEvent) -> Vec<SurfaceMessage> {
-        self.handle_event(event)
+    fn on_event(&mut self, event: crate::effects::EffectResult) -> Vec<SurfaceMessage> {
+        match event {
+            crate::effects::EffectResult::GitDiff(event) => self.handle_event(event),
+            crate::effects::EffectResult::FilesIndexed { .. } => Vec::new(),
+        }
     }
 
     fn on_mouse(&mut self, action: MouseAction, row: u16, column: u16) -> Vec<SurfaceMessage> {

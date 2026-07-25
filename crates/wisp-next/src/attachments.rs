@@ -1,4 +1,3 @@
-use crate::composer::SelectedFileMention;
 use agent_client_protocol::schema as acp;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -37,14 +36,6 @@ pub fn classify_attachment(path: &Path) -> AttachmentKind {
     } else {
         AttachmentKind::Unsupported
     }
-}
-
-pub fn build(mentions: &[SelectedFileMention]) -> AttachmentOutcome {
-    let attachments: Vec<PromptAttachment> = mentions
-        .iter()
-        .map(|m| PromptAttachment { path: m.path.clone(), display_name: m.display_name.clone() })
-        .collect();
-    build_attachments(&attachments)
 }
 
 pub fn build_attachments(attachments: &[PromptAttachment]) -> AttachmentOutcome {

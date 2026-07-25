@@ -1,13 +1,13 @@
-use super::{LiveSettingsData, PaneOutcome, SettingsPane, summarize};
+use super::{LiveSettingsData, SettingsPane, summarize};
 use crate::filterable_list::FilterableList;
+use crate::render_context::RenderContext;
 use crate::selection::Direction;
-use crate::surface::SurfaceMessage;
-use crate::theme::Theme;
+use crate::surface::{Surface, SurfaceMessage};
 use crate::wrap::truncate_to_width;
 use agent_client_protocol::schema::AuthMethod;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
 use ratatui::widgets::{ListItem, Widget};
 
@@ -36,43 +36,32 @@ impl ProviderLoginPane {
     }
 
     /// Starts login for the focused provider, unless one is already running.
-    fn authenticate(&self) -> PaneOutcome {
-        PaneOutcome::message(
-            self.entries
-                .selected_entry()
-                .filter(|entry| entry.status != ProviderLoginStatus::Authenticating)
-                .map(|entry| SurfaceMessage::AuthenticateProvider(entry.method_id.clone())),
-        )
+    fn authenticate(&self) -> Vec<SurfaceMessage> {
+        self.entries
+            .selected_entry()
+            .filter(|entry| entry.status != ProviderLoginStatus::Authenticating)
+            .map(|entry| SurfaceMessage::AuthenticateProvider(entry.method_id.clone()))
+            .into_iter()
+            .collect()
     }
 }
 
-impl SettingsPane for ProviderLoginPane {
-    fn on_pane_key(&mut self, key: KeyEvent) -> Option<PaneOutcome> {
+impl Surface for ProviderLoginPane {
+    fn on_surface_key(&mut self, key: KeyEvent) -> Option<Vec<SurfaceMessage>> {
         (key.code == KeyCode::Enter).then(|| self.authenticate())
     }
 
-    fn click(&mut self, row: u16) -> PaneOutcome {
-        if !self.entries.select_at(row) {
-            return PaneOutcome::default();
-        }
-        self.authenticate()
+    fn click(&mut self, row: u16, _column: u16) -> Vec<SurfaceMessage> {
+        if self.entries.select_at(row) { self.authenticate() } else { Vec::new() }
     }
 
-    fn scroll(&mut self, direction: Direction) {
+    fn scroll(&mut self, direction: Direction) -> Vec<SurfaceMessage> {
         self.entries.step(direction, |_| true);
+        Vec::new()
     }
 
-    fn refresh(&mut self, live: &LiveSettingsData) {
-        let keep = self.entries.selected_entry().map(|entry| entry.method_id.clone());
-        self.entries = list_of(live.providers.clone());
-        if let Some(method_id) = keep
-            && let Some(index) = self.entries.entries().iter().position(|entry| entry.method_id == method_id)
-        {
-            self.entries.select_index(index);
-        }
-    }
-
-    fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
+    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
+        let theme = cx.theme;
         self.entries
             .view(theme, " (no providers need login)", |entry| {
                 let (indicator, detail, style) = match entry.status {
@@ -88,6 +77,19 @@ impl SettingsPane for ProviderLoginPane {
             })
             .highlight_style(Style::new().fg(theme.background).bg(theme.warning))
             .render(area, buf);
+        None
+    }
+}
+
+impl SettingsPane for ProviderLoginPane {
+    fn refresh(&mut self, live: &LiveSettingsData) {
+        let keep = self.entries.selected_entry().map(|entry| entry.method_id.clone());
+        self.entries = list_of(live.providers.clone());
+        if let Some(method_id) = keep
+            && let Some(index) = self.entries.entries().iter().position(|entry| entry.method_id == method_id)
+        {
+            self.entries.select_index(index);
+        }
     }
 
     fn footer(&self) -> String {

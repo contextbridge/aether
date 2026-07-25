@@ -1,8 +1,8 @@
 use super::support::*;
 
 async fn settle_screen_effects(app: &mut App) {
-    while let Some(effect) = app.take_screen_effect() {
-        app.on_screen_event(effect.execute().await);
+    while let Some(effect) = app.take_effect() {
+        app.on_effect_result(effect.execute().await);
     }
 }
 
@@ -23,15 +23,15 @@ fn init_git_repo(dir: &std::path::Path) {
 fn ctrl_g_opens_and_esc_closes_git_diff() {
     let directory = tempfile::tempdir().unwrap();
     let (mut app, _command_rx) = make_app_in(directory.path().to_path_buf());
-    let mut terminal = make_terminal();
+    let mut ui = TestUi::new(make_terminal());
 
     app.on_key(ctrl('g'));
-    sync_terminal(&mut terminal, &mut app).unwrap();
-    assert!(buffer_text(terminal.backend().buffer()).contains("Git Diff"));
+    ui.draw(&mut app);
+    assert!(buffer_text(ui.terminal.backend().buffer()).contains("Git Diff"));
 
     app.on_key(key(KeyCode::Esc));
-    sync_terminal(&mut terminal, &mut app).unwrap();
-    assert!(!buffer_text(terminal.backend().buffer()).contains("Git diff"));
+    ui.draw(&mut app);
+    assert!(!buffer_text(ui.terminal.backend().buffer()).contains("Git diff"));
 }
 
 #[tokio::test]
@@ -546,7 +546,7 @@ async fn git_diff_stale_event_rejected() {
     settle_screen_effects(&mut app).await;
 
     let stale_event = GitDiffEvent::ActionFinished { request_id: 0, result: Ok(()) };
-    app.on_screen_event(stale_event);
+    app.on_effect_result(EffectResult::GitDiff(stale_event));
     settle_screen_effects(&mut app).await;
 
     app.on_key(key(KeyCode::Esc));
