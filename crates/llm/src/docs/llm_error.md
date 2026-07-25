@@ -21,8 +21,14 @@ Errors that can occur when interacting with LLM providers.
 ## Content
 - **`UnsupportedContent`** -- The message contained only content types this provider doesn't support (e.g. sending audio to a text-only model).
 
-## Other
-- **`Other`** -- Catch-all for cases that don't fit the above categories.
+## Model parsing
+- **`UnknownProvider`** -- Provider name is not registered with the model parser.
+- **`EmptyModelSpec`** -- The model spec did not yield any usable provider.
+- **`DuplicateProvider`** -- A single-model-only config field was reused across multiple models of the same provider within one alloy spec (e.g. bedrock `inferenceProfileArn` or openai-compatible `requestModel`).
+- **`InvalidModelSpec`** -- A `provider:model` identity could not be parsed.
+- **`MissingProviderUrl`** -- Provider endpoint URL has not been configured.
+- **`ProviderRequest`** -- A provider request body could not be constructed (e.g. an SDK builder rejected the input or contained malformed data).
+- **`InvalidArgument`** -- An upstream client library rejected an argument as invalid.
 
 # `From` implementations
 

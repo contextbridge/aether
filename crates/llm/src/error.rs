@@ -93,9 +93,27 @@ pub enum LlmError {
     /// Provider endpoint URL has not been configured.
     #[error("Provider '{provider}' requires a URL configured via providers.{provider}.url")]
     MissingProviderUrl { provider: String },
-    /// Generic error for other cases
-    #[error("{0}")]
-    Other(String),
+    /// Provider name is not registered with the model parser.
+    #[error("Unknown provider: {provider}")]
+    UnknownProvider { provider: String },
+    /// The model spec did not yield any usable provider.
+    #[error("No models provided")]
+    EmptyModelSpec,
+    /// A single-model-only config field was reused across multiple models of the
+    /// same provider within one alloy spec (e.g. bedrock `inferenceProfileArn`
+    /// or openai-compatible `requestModel`).
+    #[error("providers.{provider}.{field} cannot be used with multiple {provider} models in one alloy spec")]
+    DuplicateProvider { provider: String, field: String },
+    /// A `provider:model` identity could not be parsed.
+    #[error("Invalid model spec: {0}")]
+    InvalidModelSpec(String),
+    /// A provider request body could not be constructed (e.g. an SDK builder
+    /// rejected the input or contained malformed data).
+    #[error("Failed to build provider request: {0}")]
+    ProviderRequest(String),
+    /// An upstream client library rejected an argument as invalid.
+    #[error("Invalid argument: {0}")]
+    InvalidArgument(String),
 }
 
 impl LlmError {
@@ -157,7 +175,7 @@ impl From<async_openai::error::OpenAIError> for LlmError {
             OpenAIError::ApiError(api_err) => LlmError::ApiError(api_err.to_string()),
             OpenAIError::JSONDeserialize(e, _) => LlmError::JsonParsing(e.to_string()),
             OpenAIError::FileSaveError(s) | OpenAIError::FileReadError(s) => LlmError::IoError(s),
-            OpenAIError::InvalidArgument(s) => LlmError::Other(s),
+            OpenAIError::InvalidArgument(s) => LlmError::InvalidArgument(s),
         }
     }
 }
@@ -195,7 +213,15 @@ mod tests {
         assert!(!LlmError::OAuthError("x".into()).is_retryable());
         assert!(!LlmError::UnsupportedContent("x".into()).is_retryable());
         assert!(!LlmError::MissingProviderUrl { provider: "azure-foundry".into() }.is_retryable());
-        assert!(!LlmError::Other("x".into()).is_retryable());
+        assert!(!LlmError::UnknownProvider { provider: "foo".into() }.is_retryable());
+        assert!(!LlmError::EmptyModelSpec.is_retryable());
+        assert!(
+            !LlmError::DuplicateProvider { provider: "bedrock".into(), field: "inferenceProfileArn".into() }
+                .is_retryable()
+        );
+        assert!(!LlmError::InvalidModelSpec("x".into()).is_retryable());
+        assert!(!LlmError::ProviderRequest("x".into()).is_retryable());
+        assert!(!LlmError::InvalidArgument("x".into()).is_retryable());
         assert!(!LlmError::ContextOverflow(ContextOverflowError::new("p", None, None, None, "m")).is_retryable());
     }
 }

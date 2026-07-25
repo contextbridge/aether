@@ -12,7 +12,7 @@ use std::{collections::HashMap, fmt::Display, result};
 use crate::{ChatMessage, ContentBlock, LlmError, Result, ToolCallError, ToolCallResult, ToolDefinition};
 
 fn bedrock_err(e: impl Display) -> LlmError {
-    LlmError::Other(e.to_string())
+    LlmError::ProviderRequest(e.to_string())
 }
 
 pub fn map_messages(
@@ -117,8 +117,9 @@ fn build_user_content_blocks(parts: &[ContentBlock]) -> Result<Message> {
                 builder = builder.content(BedrockContentBlock::Text(text.clone()));
             }
             ContentBlock::Image { data, mime_type } => {
-                let bytes =
-                    BASE64.decode(data).map_err(|e| LlmError::Other(format!("Invalid base64 image data: {e}")))?;
+                let bytes = BASE64
+                    .decode(data)
+                    .map_err(|e| LlmError::ProviderRequest(format!("Invalid base64 image data: {e}")))?;
                 let format = mime_to_image_format(mime_type);
                 builder = builder.content(BedrockContentBlock::Image(
                     ImageBlock::builder()

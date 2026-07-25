@@ -116,7 +116,7 @@ impl ModelProviderParser {
     /// Create a provider from a typed `LlmModel`
     pub async fn create_provider(&self, model: &LlmModel) -> Result<Box<dyn StreamingModelProvider>> {
         let key = model.provider();
-        let factory = self.factories.get(key).ok_or_else(|| LlmError::Other(format!("Unknown provider: {key}")))?;
+        let factory = self.factories.get(key).ok_or_else(|| LlmError::UnknownProvider { provider: key.to_string() })?;
         factory(&model.model_id(), self.provider_connections.config_for(key)).await
     }
 
@@ -133,7 +133,7 @@ impl ModelProviderParser {
     pub async fn parse(&self, models_str: &str) -> Result<(Box<dyn StreamingModelProvider>, LlmModel)> {
         let provider_model_pairs: Vec<&str> = models_str.split(',').map(str::trim).collect();
         if provider_model_pairs.is_empty() {
-            return Err(LlmError::Other("No models provided".to_string()));
+            return Err(LlmError::EmptyModelSpec);
         }
 
         let bedrock_has_inference_profile_arn =
@@ -148,10 +148,10 @@ impl ModelProviderParser {
 
             if provider_name == "bedrock" && bedrock_has_inference_profile_arn {
                 if seen_bedrock {
-                    return Err(LlmError::Other(
-                        "providers.bedrock.inferenceProfileArn cannot be used with multiple bedrock models in one alloy spec"
-                            .to_string(),
-                    ));
+                    return Err(LlmError::DuplicateProvider {
+                        provider: "bedrock".to_string(),
+                        field: "inferenceProfileArn".to_string(),
+                    });
                 }
                 seen_bedrock = true;
             }
@@ -159,28 +159,29 @@ impl ModelProviderParser {
             if self.provider_connections.config_for(provider_name).request_model.is_some()
                 && !seen_request_model_providers.insert(provider_name)
             {
-                return Err(LlmError::Other(format!(
-                    "providers.{provider_name}.requestModel cannot be used with multiple {provider_name} models in one alloy spec"
-                )));
+                return Err(LlmError::DuplicateProvider {
+                    provider: provider_name.to_string(),
+                    field: "requestModel".to_string(),
+                });
             }
 
             let factory = self
                 .factories
                 .get(provider_name)
-                .ok_or_else(|| LlmError::Other(format!("Unknown provider: {provider_name}")))?;
+                .ok_or_else(|| LlmError::UnknownProvider { provider: provider_name.to_string() })?;
 
             let connection = self.provider_connections.config_for(provider_name);
             providers.push(factory(model, connection).await?);
 
             if first_identity.is_none() {
-                first_identity = Some(pair.parse::<LlmModel>().map_err(LlmError::Other)?);
+                first_identity = Some(pair.parse::<LlmModel>().map_err(LlmError::InvalidModelSpec)?);
             }
         }
 
-        let identity = first_identity.ok_or_else(|| LlmError::Other("No providers parsed".to_string()))?;
+        let identity = first_identity.ok_or(LlmError::EmptyModelSpec)?;
 
         let provider: Box<dyn StreamingModelProvider> = if providers.len() == 1 {
-            providers.into_iter().next().ok_or_else(|| LlmError::Other("No providers available".to_string()))?
+            providers.into_iter().next().ok_or(LlmError::EmptyModelSpec)?
         } else {
             Box::new(AlloyedModelProvider::new(providers))
         };
