@@ -67,9 +67,12 @@ impl PlanTracker {
     }
 
     pub fn has_completed_in_grace_period(&self) -> bool {
-        self.visible_entries(self.last_tick, self.grace_period)
-            .iter()
-            .any(|entry| matches!(entry.status, acp::PlanEntryStatus::Completed))
+        // Short-circuit over the entries directly instead of allocating a sorted Vec, since this
+        // runs every tick and only needs to know whether any visible entry is completed.
+        self.entries.iter().any(|entry| {
+            matches!(entry.status, acp::PlanEntryStatus::Completed)
+                && self.is_visible(entry, self.last_tick, self.grace_period)
+        })
     }
 
     pub fn cached_visible_entries(&mut self) -> &[acp::PlanEntry] {
@@ -82,6 +85,11 @@ impl PlanTracker {
             self.cached_tick = self.last_tick;
             self.cached_grace_period = self.grace_period;
         }
+        &self.cached_entries
+    }
+
+    /// Borrow the most recently cached visible entries without forcing a refresh.
+    pub fn cached_entries(&self) -> &[acp::PlanEntry] {
         &self.cached_entries
     }
 

@@ -634,6 +634,39 @@ mod tests {
     }
 
     #[test]
+    fn sub_agent_tool_call_corrects_placeholder_when_update_arrived_first() {
+        // If a streaming update arrives before the canonical ToolCall request, the entry is
+        // created with a placeholder name. The later ToolCall must correct it.
+        let mut log = ToolCallLog::new();
+        log.on_tool_call(&acp::ToolCall::new("parent-1".to_string(), "spawn_subagent"));
+        log.on_sub_agent_progress(&sub_agent_event(
+            "parent-1",
+            "task-1",
+            "explorer",
+            SubAgentEvent::ToolCallUpdate {
+                update: SubAgentToolCallUpdate { id: "c1".to_string(), chunk: r#"{"pat"#.to_string() },
+            },
+        ));
+        log.on_sub_agent_progress(&sub_agent_event(
+            "parent-1",
+            "task-1",
+            "explorer",
+            SubAgentEvent::ToolCall {
+                request: SubAgentToolRequest {
+                    id: "c1".to_string(),
+                    name: "grep".to_string(),
+                    arguments: r#"{"pattern":"test"}"#.to_string(),
+                },
+            },
+        ));
+
+        let agents = log.sub_agent_states("parent-1").unwrap();
+        let tc = agents[0].tool_calls.get("c1").unwrap();
+        assert_eq!(tc.name, "grep", "late ToolCall must overwrite the streaming placeholder name");
+        assert_eq!(tc.arguments, r#"{"pattern":"test"}"#);
+    }
+
+    #[test]
     fn sub_agent_tool_result_applies_metadata() {
         let mut log = ToolCallLog::new();
         log.on_tool_call(&acp::ToolCall::new("parent-1".to_string(), "spawn_subagent"));

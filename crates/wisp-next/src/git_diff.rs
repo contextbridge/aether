@@ -187,18 +187,19 @@ impl GitDiffDocument {
             Some(root) => root.to_path_buf(),
             None => resolve_repo_root(working_dir).await?,
         };
-        let diff_args = match scope {
-            DiffScope::Unstaged => &["diff", "--no-ext-diff", "--find-renames"][..],
-            DiffScope::Staged => &["diff", "--cached", "--no-ext-diff", "--find-renames"][..],
-            DiffScope::Both => &["diff", "--no-ext-diff", "--find-renames", "HEAD"][..],
-        };
-        let diff_output = match git(&repo_root, diff_args).await {
-            Ok(output) => output,
-            Err(GitDiffError::CommandFailed { stderr }) if scope == DiffScope::Both && stderr.contains("HEAD") => {
-                git(&repo_root, &["diff", "--no-ext-diff", "--find-renames", EMPTY_TREE]).await?
+        let diff_args: Vec<&str> = match scope {
+            DiffScope::Unstaged => vec!["diff", "--no-ext-diff", "--find-renames"],
+            DiffScope::Staged => vec!["diff", "--cached", "--no-ext-diff", "--find-renames"],
+            DiffScope::Both => {
+                let mut args = vec!["diff", "--no-ext-diff", "--find-renames"];
+                // A repository with no commits yet has no resolvable HEAD. Probe its existence
+                // via exit code rather than matching localized git error text in stderr.
+                let head_ref = if head_exists(&repo_root).await { "HEAD" } else { EMPTY_TREE };
+                args.push(head_ref);
+                args
             }
-            Err(error) => return Err(error),
         };
+        let diff_output = git(&repo_root, &diff_args).await?;
         let mut files = if diff_output.trim().is_empty() { Vec::new() } else { parse_unified_diff(&diff_output)? };
 
         if scope.includes_untracked() {
@@ -364,14 +365,35 @@ async fn resolve_repo_root(working_dir: &Path) -> Result<PathBuf, GitDiffError> 
         .map_err(|error| GitDiffError::CommandFailed { stderr: error.to_string() })?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if stderr.contains("not a git repository") {
+        // Distinguish "not a git repository" from other failures via a locale-independent
+        // probe: `git rev-parse --is-inside-work-tree` only succeeds inside a work tree.
+        let inside_work_tree = tokio::process::Command::new("git")
+            .args(["rev-parse", "--is-inside-work-tree"])
+            .current_dir(working_dir)
+            .output()
+            .await
+            .is_ok_and(|result| result.status.success());
+        if !inside_work_tree {
             return Err(GitDiffError::NotARepository);
         }
-        return Err(GitDiffError::CommandFailed { stderr: stderr.into_owned() });
+        return Err(GitDiffError::CommandFailed { stderr: String::from_utf8_lossy(&output.stderr).into_owned() });
     }
 
     Ok(PathBuf::from(String::from_utf8_lossy(&output.stdout).trim().to_string()))
+}
+
+async fn head_exists(repo_root: &Path) -> bool {
+    // `git rev-parse --verify HEAD` exits non-zero when HEAD is unborn (no commits yet).
+    // The exit code is locale-independent, unlike git's translated stderr messages.
+    let Ok(output) = tokio::process::Command::new("git")
+        .args(["rev-parse", "--verify", "--quiet", "HEAD"])
+        .current_dir(repo_root)
+        .output()
+        .await
+    else {
+        return false;
+    };
+    output.status.success()
 }
 
 async fn git(repo_root: &Path, args: &[&str]) -> Result<String, GitDiffError> {

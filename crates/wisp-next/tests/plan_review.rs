@@ -72,7 +72,7 @@ fn render_screen(screen: &mut PlanReviewScreen, width: u16, height: u16) -> Buff
     let mut terminal = ratatui::Terminal::with_options(backend, TerminalOptions::default()).unwrap();
     terminal
         .draw(|frame| {
-            screen.render(frame, &theme, &mut highlighter);
+            screen.render_with_theme_generation(frame, &theme, &mut highlighter, 0);
         })
         .unwrap();
     terminal.backend().buffer().clone()

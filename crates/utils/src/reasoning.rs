@@ -41,6 +41,23 @@ impl ReasoningEffort {
         }
     }
 
+    /// Cycles backwards through only the given `levels`, wrapping to `None` after the first.
+    /// Returns `None` when `levels` is empty.
+    pub fn cycle_within_back(current: Option<Self>, levels: &[Self]) -> Option<Self> {
+        if levels.is_empty() {
+            return None;
+        }
+        match current {
+            None => Some(*levels.last().expect("levels is non-empty")),
+            Some(effort) => levels
+                .iter()
+                .position(|&l| l == effort)
+                .and_then(|i| i.checked_sub(1))
+                .and_then(|i| levels.get(i))
+                .copied(),
+        }
+    }
+
     /// Returns `self` if it's in `levels`, otherwise the highest level ≤ self.
     /// Falls back to the first element of `levels`. Panics if `levels` is empty.
     pub fn clamp_to(self, levels: &[Self]) -> Self {
@@ -186,6 +203,22 @@ mod tests {
         use ReasoningEffort::*;
         // Current is Xhigh but levels only have Low/Medium/High
         assert_eq!(ReasoningEffort::cycle_within(Some(Xhigh), &[Low, Medium, High]), None);
+    }
+
+    #[test]
+    fn cycle_within_back_three_levels() {
+        use ReasoningEffort::*;
+        let levels = &[Low, Medium, High];
+        assert_eq!(ReasoningEffort::cycle_within_back(None, levels), Some(High));
+        assert_eq!(ReasoningEffort::cycle_within_back(Some(High), levels), Some(Medium));
+        assert_eq!(ReasoningEffort::cycle_within_back(Some(Medium), levels), Some(Low));
+        assert_eq!(ReasoningEffort::cycle_within_back(Some(Low), levels), None);
+    }
+
+    #[test]
+    fn cycle_within_back_empty_returns_none() {
+        assert_eq!(ReasoningEffort::cycle_within_back(None, &[]), None);
+        assert_eq!(ReasoningEffort::cycle_within_back(Some(ReasoningEffort::Low), &[]), None);
     }
 
     #[test]

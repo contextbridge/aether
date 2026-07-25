@@ -103,19 +103,19 @@ fn shift_backtab_cycles_mode_option_and_wraps() {
     let (mut app, mut command_rx) =
         make_app_with_metadata(std::path::PathBuf::from("."), acp::SessionCapabilities::new(), options, Vec::new());
 
-    app.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+    app.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
     let cmd = command_rx.try_recv().unwrap();
     assert!(
         matches!(cmd, PromptCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "mode" && value == "plan")
     );
 
-    app.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+    app.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
     let cmd = command_rx.try_recv().unwrap();
     assert!(
         matches!(cmd, PromptCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "mode" && value == "ask")
     );
 
-    app.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+    app.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
     let cmd = command_rx.try_recv().unwrap();
     assert!(
         matches!(cmd, PromptCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "mode" && value == "code")

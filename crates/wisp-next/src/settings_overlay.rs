@@ -375,11 +375,8 @@ impl SettingsOverlay {
     }
 
     fn apply_transition(&mut self, transition: PaneTransition) {
-        if matches!(transition, PaneTransition::Stay) {
-            return;
-        }
         self.active_pane = match transition {
-            PaneTransition::Stay => unreachable!(),
+            PaneTransition::Stay => return,
             PaneTransition::Menu | PaneTransition::Close => ActivePane::Menu,
             PaneTransition::Picker(picker) => ActivePane::Picker(picker),
             PaneTransition::ModelSelector(selector) => ActivePane::ModelSelector(selector),
@@ -463,6 +460,7 @@ impl SettingsOverlay {
                 selector.clamp_reasoning_to_focused();
             }
             KeyCode::Tab => selector.cycle_reasoning(),
+            KeyCode::BackTab => selector.cycle_reasoning_back(),
             KeyCode::Enter | KeyCode::Char(' ') => selector.toggle_focused(),
             KeyCode::Backspace => selector.pop_query_char(),
             KeyCode::Char(c) if !c.is_control() => selector.push_query_char(c),

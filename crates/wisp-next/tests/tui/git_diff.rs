@@ -35,6 +35,55 @@ fn ctrl_g_opens_and_esc_closes_git_diff() {
 }
 
 #[tokio::test]
+async fn git_diff_empty_repo_without_commits_shows_untracked_files() {
+    // A repository with no commits has no resolvable HEAD. The diff must fall back to the
+    // empty-tree object rather than surfacing a localized git error.
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(root.join("README.md"), "hello world\n").unwrap();
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    let mut terminal = make_terminal_with_width(160);
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("README.md"), "untracked file should appear in empty repo:\n{viewport}");
+    assert!(viewport.contains("hello world"), "untracked file content should render:\n{viewport}");
+}
+
+#[tokio::test]
+async fn git_diff_split_view_aligns_moved_identical_line() {
+    // An identical line moved within a changed block must land on the same split row
+    // (both sides), rather than being misaligned against unrelated neighbours.
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(root.join("moved.rs"), "let before = old();\nshared_call();\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("moved.rs"), "shared_call();\nlet after = new();\n").unwrap();
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    let mut terminal = make_terminal_with_width(160);
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(
+        viewport.lines().any(|line| line.matches("shared_call").count() == 2),
+        "moved identical line should be aligned onto the same split row:\n{viewport}"
+    );
+}
+
+#[tokio::test]
 async fn git_diff_renders_file_drawer_and_highlighted_patch() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
@@ -387,6 +436,50 @@ async fn git_diff_full_file_toggle_shows_content() {
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(!viewport.contains("[full file]"), "{viewport}");
     assert!(viewport.contains("fn old()"), "{viewport}");
+}
+
+#[tokio::test]
+async fn git_diff_full_file_highlights_added_lines() {
+    // In full-file mode, lines reported as added by the diff should carry the added background
+    // so they stand out from unchanged context.
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(
+        root.join("file.txt"),
+        "keep
+old
+",
+    )
+    .unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(
+        root.join("file.txt"),
+        "keep
+new
+extra
+",
+    )
+    .unwrap();
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    let mut terminal = make_terminal_with_width(120);
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+    let added_background = renderer.theme().diff_added_bg;
+
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+    app.on_key(key(KeyCode::Enter));
+    app.on_key(key(KeyCode::Char('o')));
+    settle_screen_effects(&mut app).await;
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+
+    let buffer = terminal.backend().buffer();
+    assert!(
+        rows_with_background(buffer, added_background) >= 2,
+        "added lines (new, extra) should be highlighted with the added background"
+    );
 }
 
 #[tokio::test]
@@ -794,6 +887,53 @@ async fn git_diff_comments_survive_file_switches() {
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("comment on A"), "comment on A should persist after switching back:\n{viewport}");
+}
+
+#[tokio::test]
+async fn git_diff_diff_view_cache_reuses_rendered_patch_across_switches() {
+    // Switching A -> B -> A must redisplay A's comment from the cached rendered view,
+    // proving the multi-file diff view cache serves the correct (comment-bearing) snapshot.
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(root.join("a.rs"), "fn a_old() {}\n").unwrap();
+    std::fs::write(root.join("b.rs"), "fn b_old() {}\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("a.rs"), "fn a_new() {}\n").unwrap();
+    std::fs::write(root.join("b.rs"), "fn b_new() {}\n").unwrap();
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    let mut terminal = make_terminal_with_width(160);
+    let mut renderer = TranscriptRenderer::new(&UiSettings::default());
+
+    app.on_key(ctrl('g'));
+    settle_screen_effects(&mut app).await;
+    app.on_key(key(KeyCode::Enter));
+    settle_screen_effects(&mut app).await;
+    app.on_key(key(KeyCode::Char('c')));
+    type_text(&mut app, "comment on A");
+    app.on_key(key(KeyCode::Enter));
+    settle_screen_effects(&mut app).await;
+
+    // A -> B -> A -> B -> A: exercise the cache hit path repeatedly.
+    for _ in 0..2 {
+        app.on_key(key(KeyCode::Char('h')));
+        app.on_key(key(KeyCode::Char('j')));
+        app.on_key(key(KeyCode::Enter));
+        settle_screen_effects(&mut app).await;
+        sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+        let viewport = buffer_text(&viewport_buffer(&mut terminal));
+        assert!(!viewport.contains("comment on A"), "comment on A must not leak onto B");
+
+        app.on_key(key(KeyCode::Char('h')));
+        app.on_key(key(KeyCode::Char('k')));
+        app.on_key(key(KeyCode::Enter));
+        settle_screen_effects(&mut app).await;
+        sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+        let viewport = buffer_text(&viewport_buffer(&mut terminal));
+        assert!(viewport.contains("comment on A"), "comment on A must survive round-trip via cache");
+    }
 }
 
 #[tokio::test]

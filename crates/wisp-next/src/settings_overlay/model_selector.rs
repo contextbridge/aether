@@ -109,6 +109,16 @@ impl ModelSelector {
         }
     }
 
+    pub(super) fn cycle_reasoning_back(&mut self) {
+        if let Some(&value_idx) = self.table_state.selected().and_then(|selected| self.filtered.get(selected)) {
+            let v = &self.all_items[value_idx];
+            if !v.is_disabled && !v.meta.reasoning_levels.is_empty() {
+                self.reasoning_effort =
+                    ReasoningEffort::cycle_within_back(self.reasoning_effort, &v.meta.reasoning_levels);
+            }
+        }
+    }
+
     pub(super) fn clamp_reasoning_to_focused(&mut self) {
         if let Some(effort) = self.reasoning_effort
             && let Some(&value_idx) = self.table_state.selected().and_then(|selected| self.filtered.get(selected))

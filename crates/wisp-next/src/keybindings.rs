@@ -16,6 +16,15 @@ mod tests {
         assert!(!binding.matches(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT)));
         assert!(binding.matches(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
     }
+
+    #[test]
+    fn cycle_mode_matches_shift_tab_reported_with_no_modifiers() {
+        // Terminals deliver Shift+Tab as the BackTab keycode with no modifiers, so the
+        // default binding must use NONE rather than SHIFT to actually match.
+        let kb = Keybindings::default();
+        assert!(kb.cycle_mode.matches(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE)));
+        assert!(!kb.cycle_mode.matches(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)));
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -51,7 +60,7 @@ impl Default for Keybindings {
             open_file_picker: KeyBinding::new(KeyCode::Char('@'), KeyModifiers::NONE),
             toggle_git_diff: KeyBinding::new(KeyCode::Char('g'), KeyModifiers::CONTROL),
             cycle_reasoning: KeyBinding::new(KeyCode::Tab, KeyModifiers::NONE),
-            cycle_mode: KeyBinding::new(KeyCode::BackTab, KeyModifiers::SHIFT),
+            cycle_mode: KeyBinding::new(KeyCode::BackTab, KeyModifiers::NONE),
             open_prompt_search: KeyBinding::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
         }
     }

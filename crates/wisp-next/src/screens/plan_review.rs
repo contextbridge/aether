@@ -357,11 +357,6 @@ impl PlanReviewScreen {
     }
 
     #[allow(clippy::cast_possible_truncation)]
-    pub fn render(&mut self, frame: &mut Frame, theme: &Theme, highlighter: &mut SyntaxHighlighter) {
-        self.render_with_theme_generation(frame, theme, highlighter, 0);
-    }
-
-    #[allow(clippy::cast_possible_truncation)]
     pub fn render_with_theme_generation(
         &mut self,
         frame: &mut Frame,

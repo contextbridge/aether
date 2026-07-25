@@ -46,10 +46,9 @@ impl Transcript {
             self.segments.push(SegmentContent::Text(chunk.to_string()));
         }
 
-        let SegmentContent::Text(text) = self.segments.last_mut().expect("text segment was just appended") else {
-            unreachable!();
-        };
-        if let Some(finalized_end) = last_finalizable_offset(text) {
+        if let Some(SegmentContent::Text(text)) = self.segments.last_mut()
+            && let Some(finalized_end) = last_finalizable_offset(text)
+        {
             let trailing = text.split_off(finalized_end);
             self.segments.push(SegmentContent::Text(trailing));
         }

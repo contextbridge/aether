@@ -302,3 +302,75 @@ fn clear_no_duplicate_generation_bump() {
         "transcript_generation should only increment once (in NewSessionCreated), not both in dispatch and event"
     );
 }
+
+// ── File mention selection ───────────────────────────────────────
+
+#[test]
+fn composer_highlights_at_mentions_in_info_color() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::write(root.join("lib.rs"), "old\n").unwrap();
+
+    let theme = Theme::default();
+    let mut composer = Composer::new();
+    composer.insert_str("fix ");
+    composer.insert_char('@');
+    composer.open_file_picker(root);
+    composer.accept_file();
+    // buffer is now "fix @lib.rs "
+
+    let layout = composer.layout(80, &theme);
+    let prompt_line = &layout.lines[1];
+    let mention_span = prompt_line
+        .spans
+        .iter()
+        .find(|span| span.content.contains("@lib.rs"))
+        .expect("a span containing the mention should exist");
+    assert_eq!(mention_span.style.fg, Some(theme.info), "@mention should be highlighted in the info colour");
+
+    let plain_span = prompt_line.spans.iter().find(|span| span.content.contains("fix")).expect("plain text span");
+    assert_eq!(plain_span.style.fg, Some(theme.text_primary), "non-mention text stays primary");
+}
+
+#[test]
+fn selected_mentions_match_whole_tokens_not_substrings() {
+    // A mention whose display name is a prefix of another token must not be treated as
+    // active. Previously `@foo.rs` would also match the text `@foo.rsx` via `contains`.
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::write(root.join("foo.rs"), "old\n").unwrap();
+
+    let mut composer = Composer::new();
+    composer.insert_char('@');
+    composer.open_file_picker(root);
+    composer.accept_file();
+    assert_eq!(composer.text(), "@foo.rs ");
+
+    // Extend the accepted token into a different name: `@foo.rsx`.
+    composer.move_line_end();
+    composer.backspace();
+    composer.insert_char('x');
+    assert_eq!(composer.text(), "@foo.rsx");
+
+    assert!(
+        composer.selected_mentions().is_empty(),
+        "prefix mention should not be selected for a longer token: {:?}",
+        composer.selected_mentions()
+    );
+}
+
+#[test]
+fn selected_matches_mention_with_exact_token() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::write(root.join("lib.rs"), "old\n").unwrap();
+
+    let mut composer = Composer::new();
+    composer.insert_char('@');
+    composer.open_file_picker(root);
+    composer.accept_file();
+
+    let mentions = composer.selected_mentions();
+    assert_eq!(mentions.len(), 1, "exact mention token should be selected");
+    assert_eq!(mentions[0].display_name, "lib.rs");
+}

@@ -133,9 +133,9 @@ fn draw_frame(frame: &mut Frame, app: &mut App, renderer: &mut TranscriptRendere
     ])
     .areas(frame.area());
 
-    let mut lines = layout.progress_lines.clone();
-    lines.extend(renderer.committed_lines().iter().cloned());
+    let mut lines = renderer.committed_lines().iter().cloned().collect::<Vec<_>>();
     lines.extend(layout.live_lines.iter().cloned());
+    lines.extend(layout.progress_lines.iter().cloned());
     let available = live_area.height.saturating_sub(layout.plan_height) as usize;
     if lines.len() > available {
         lines.drain(..lines.len() - available);

@@ -56,9 +56,16 @@ impl Composer {
     }
 
     pub fn selected_mentions(&self) -> Vec<SelectedFileMention> {
+        // Match whole whitespace-delimited tokens so that `@foo` does not also match the
+        // longer mention `@foobar`. The insertion path always writes `@<display> `, so a
+        // complete token comparison is the correct granularity.
+        let tokens: HashSet<&str> = self.buffer.text().split_whitespace().collect();
         self.mentions
             .iter()
-            .filter(|mention| self.buffer.text().contains(&format!("@{}", mention.display_name)))
+            .filter(|mention| {
+                let needle = format!("@{}", mention.display_name);
+                tokens.contains(needle.as_str())
+            })
             .cloned()
             .collect()
     }
@@ -434,16 +441,18 @@ impl Composer {
 
         let text = self.buffer.text();
         let cursor_byte = self.buffer.cursor();
+        let mention_ranges = mention_byte_ranges(text);
         let mut byte_offset = 0;
         for (logical_row, raw_line) in text.split('\n').enumerate() {
             let prefix = if logical_row == 0 { "> " } else { "  " };
             let wrapped = wrap_text_char(raw_line, content_width);
             for (wrapped_row, chunk) in wrapped.iter().enumerate() {
                 let row = u16::try_from(lines.len()).unwrap_or(u16::MAX);
-                lines.push(Line::from(vec![
-                    Span::styled(if wrapped_row == 0 { prefix } else { "  " }, Style::new().fg(theme.accent)),
-                    Span::styled(chunk.clone(), Style::new().fg(theme.text_primary)),
-                ]));
+                let chunk_start = byte_offset;
+                let mut spans =
+                    vec![Span::styled(if wrapped_row == 0 { prefix } else { "  " }, Style::new().fg(theme.accent))];
+                spans.extend(styled_input_chunk(chunk, chunk_start, &mention_ranges, theme));
+                lines.push(Line::from(spans));
                 let chunk_end = byte_offset + chunk.len();
                 if cursor_byte >= byte_offset && (cursor_byte < chunk_end || chunk_end == text.len()) {
                     let column = text[byte_offset..cursor_byte].width();
@@ -500,4 +509,48 @@ impl Composer {
         self.history_index = None;
         self.history_draft = None;
     }
+}
+
+/// Byte ranges of `@mention` tokens (an `@` followed by non-whitespace) within the whole
+/// composer text. Newlines count as whitespace, so mentions never span lines.
+fn mention_byte_ranges(input: &str) -> Vec<std::ops::Range<usize>> {
+    input
+        .match_indices('@')
+        .filter_map(|(at_pos, _)| {
+            let end = input[at_pos..].find(char::is_whitespace).map_or(input.len(), |offset| at_pos + offset);
+            (end > at_pos).then_some(at_pos..end)
+        })
+        .collect()
+}
+
+/// Split a wrapped input chunk into styled spans, colouring any `@mention` bytes that overlap
+/// the chunk (identified by their absolute byte offset in the full composer text) in the info
+/// colour and everything else in the primary text colour.
+fn styled_input_chunk(
+    chunk: &str,
+    chunk_start: usize,
+    mention_ranges: &[std::ops::Range<usize>],
+    theme: &Theme,
+) -> Vec<Span<'static>> {
+    let in_mention_at = |relative: usize| mention_ranges.iter().any(|range| range.contains(&(chunk_start + relative)));
+
+    if mention_ranges.is_empty() || !chunk.contains('@') {
+        return vec![Span::styled(chunk.to_string(), Style::new().fg(theme.text_primary))];
+    }
+
+    let mut spans = Vec::new();
+    let mut run_start = 0;
+    let mut current_info = in_mention_at(0);
+    for (relative, _) in chunk.char_indices().skip(1) {
+        let is_info = in_mention_at(relative);
+        if is_info != current_info {
+            let color = if current_info { theme.info } else { theme.text_primary };
+            spans.push(Span::styled(chunk[run_start..relative].to_string(), Style::new().fg(color)));
+            run_start = relative;
+            current_info = is_info;
+        }
+    }
+    let color = if current_info { theme.info } else { theme.text_primary };
+    spans.push(Span::styled(chunk[run_start..].to_string(), Style::new().fg(color)));
+    spans
 }

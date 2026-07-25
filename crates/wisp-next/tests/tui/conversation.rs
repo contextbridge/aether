@@ -501,7 +501,7 @@ fn diff_not_rendered_after_failed_status() {
 }
 
 #[test]
-fn short_streaming_message_renders_directly_above_composer() {
+fn short_streaming_message_renders_above_progress_indicator_and_composer() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
     submit_prompt(&mut app, "prompt");
@@ -512,9 +512,33 @@ fn short_streaming_message_renders_directly_above_composer() {
     let viewport = viewport_buffer(&mut terminal);
     let prompt_row = row_containing(&viewport, "prompt").unwrap();
     let message_row = row_containing(&viewport, "short answer").unwrap();
+    let spinner_row = row_containing(&viewport, "⠋").unwrap();
     let composer_row = row_containing(&viewport, "> ").unwrap();
     assert!(prompt_row < message_row);
-    assert_eq!(message_row + 2, composer_row);
+    assert!(
+        message_row < spinner_row && spinner_row < composer_row,
+        "progress indicator must sit between the message and the composer \
+         (message {message_row}, spinner {spinner_row}, composer {composer_row})"
+    );
+}
+
+#[test]
+fn progress_indicator_renders_below_streaming_message() {
+    let (mut app, _command_rx) = make_app();
+    let mut terminal = make_terminal_with_width(80);
+    submit_prompt(&mut app, "prompt");
+    app.on_acp_event(text_chunk("streamed answer"));
+
+    sync_terminal(&mut terminal, &mut app).unwrap();
+
+    let viewport = viewport_buffer(&mut terminal);
+    let message_row = row_containing(&viewport, "streamed answer").expect("streamed message should be visible");
+    let spinner_row = row_containing(&viewport, "⠋").expect("progress spinner should be visible");
+    assert!(
+        message_row < spinner_row,
+        "progress indicator must render below the streaming message \
+         (message row {message_row}, spinner row {spinner_row})"
+    );
 }
 
 #[test]

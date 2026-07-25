@@ -12,6 +12,10 @@ use super::effects::{GitDiffEffect, GitDiffOutcome, next_request_id};
 
 pub(super) type CursorRow = (usize, usize, usize);
 
+/// Maximum number of recently-rendered file patches kept for instant re-display when the
+/// user browses between files.
+pub(super) const DIFF_VIEW_CACHE_LIMIT: usize = 8;
+
 pub struct GitDiffScreen {
     pub(super) working_dir: PathBuf,
     pub(super) repo_root: Option<PathBuf>,
@@ -25,6 +29,10 @@ pub struct GitDiffScreen {
     pub(super) patch_scroll_state: ScrollViewState,
     pub(super) last_patch_height: u16,
     pub(super) diff_view: Option<DiffView>,
+    /// Bounded MRU cache of fully-rendered, stable (draft-free) diff views for files other
+    /// than the one currently selected, so switching files does not re-run syntax
+    /// highlighting for recently-visited patches.
+    pub(super) diff_view_cache: Vec<DiffView>,
     pub(super) document_revision: usize,
     pub(super) comments_revision: usize,
     pub(super) request_id: u64,
@@ -112,6 +120,7 @@ impl GitDiffScreen {
             patch_scroll_state: ScrollViewState::new(),
             last_patch_height: 0,
             diff_view: None,
+            diff_view_cache: Vec::new(),
             document_revision: 0,
             comments_revision: 0,
             request_id: 0,
@@ -164,6 +173,7 @@ impl GitDiffScreen {
         self.document_revision = self.document_revision.wrapping_add(1);
         self.comments_revision = self.comments_revision.wrapping_add(1);
         self.diff_view = None;
+        self.diff_view_cache.clear();
         self.state = GitDiffLoadState::Ready(document);
         self.sync_drawer_selection();
     }
@@ -314,13 +324,30 @@ impl GitDiffScreen {
         count
     }
 
+    /// Moves the currently-active diff view into the MRU cache (when it is a stable,
+    /// draft-free snapshot) so it can be reused if the user switches back to its file.
+    pub(super) fn park_active_diff_view(&mut self) {
+        if let Some(view) = self.diff_view.take()
+            && view.draft_signature.is_none()
+        {
+            self.diff_view_cache.insert(0, view);
+            if self.diff_view_cache.len() > DIFF_VIEW_CACHE_LIMIT {
+                self.diff_view_cache.pop();
+            }
+        }
+    }
+
     pub(super) fn sync_scroll_to_cursor(&mut self) {
-        let Some(view) = &self.diff_view else { return; };
+        let Some(view) = &self.diff_view else {
+            return;
+        };
         let cursor_row = view
             .cursor_rows
             .iter()
             .find_map(|(h, l, row)| (*h == self.patch_cursor.hunk && *l == self.patch_cursor.line).then_some(*row));
-        let Some(cursor_row) = cursor_row else { return; };
+        let Some(cursor_row) = cursor_row else {
+            return;
+        };
         let offset = usize::from(self.patch_scroll_state.offset().y);
         let viewport = usize::from(self.last_patch_height);
         if cursor_row < offset {
@@ -340,7 +367,9 @@ impl GitDiffScreen {
     }
 
     pub(super) fn sync_cursor_to_scroll(&mut self) {
-        let Some(view) = &self.diff_view else { return; };
+        let Some(view) = &self.diff_view else {
+            return;
+        };
         let offset = usize::from(self.patch_scroll_state.offset().y);
         let idx = match view.cursor_rows.binary_search_by_key(&offset, |&(_, _, row)| row) {
             Ok(idx) => idx,
