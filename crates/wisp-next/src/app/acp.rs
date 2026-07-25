@@ -2,18 +2,16 @@ use super::config::extract_config_selections;
 use super::session::merge_builtins;
 use super::{
     AcpEvent, App, CommandEntry, ContextUsageDisplay, ElicitationModal, ExitState, Instant, McpNotification,
-    ModalOutcome, OverlayLayer, SessionId, SessionPicker, ToolStatus, WorkspaceMoveState, WorkspacePicker, acp,
-    render_user_content_block,
+    OverlayLayer, SessionId, SessionPicker, SettingsOverlay, ToolStatus, WorkspaceMoveState, WorkspacePicker, acp,
 };
+use crate::screens::plan_review::PlanReviewScreen;
 
 impl App {
-    #[allow(clippy::too_many_lines)]
     pub fn on_acp_event(&mut self, event: AcpEvent) {
         self.on_acp_event_inner(event);
         self.refresh_progress();
     }
 
-    #[allow(clippy::too_many_lines)]
     fn on_acp_event_inner(&mut self, event: AcpEvent) {
         match event {
             AcpEvent::SessionUpdate { session_id, update } => {
@@ -31,7 +29,7 @@ impl App {
             AcpEvent::PromptError(error) => {
                 tracing::error!("Prompt error: {error}");
                 self.finish_prompt(&ToolStatus::Error(format!("failed: {error}")));
-                self.transcript.push_user_message(&format!("[wisp-next] Prompt failed: {error}"));
+                self.notify(&format!("Prompt failed: {error}"));
             }
             AcpEvent::ContextUsage(params) => {
                 self.context_usage =
@@ -41,168 +39,71 @@ impl App {
                 self.compaction_active = params.active;
             }
             AcpEvent::ContextCleared(_) => {
-                self.transcript.clear();
-                self.tool_calls.clear();
-                self.plan_tracker.clear();
-                self.prompt_in_flight = false;
-                self.submitted_prompt_count = 0;
-                self.compaction_active = false;
-                self.context_usage = None;
-                self.last_drained_kind = None;
-                self.progress_indicator.reset();
-                self.transcript_generation = self.transcript_generation.wrapping_add(1);
-                self.transcript.push_user_message("[wisp-next] Context cleared");
+                self.reset_conversation();
+                self.notify("Context cleared");
             }
             AcpEvent::ElicitationRequest { params, responder } => {
-                match std::mem::take(&mut self.overlay) {
-                    OverlayLayer::Elicitation(mut modal) => modal.cancel(),
-                    OverlayLayer::Settings(o) => self.overlay = OverlayLayer::Settings(o),
-                    _ => {}
-                }
+                self.close_elicitation_owner();
                 if let Some(meta) = plan_review_meta(&params) {
-                    self.screen_router.open_plan_review(meta, responder);
+                    self.open_screen(Box::new(PlanReviewScreen::new(meta, responder)));
                     return;
                 }
+                // The settings overlay answers its own elicitations in place so
+                // an OAuth prompt does not tear down the pane that started it.
                 if let OverlayLayer::Settings(overlay) = &mut self.overlay {
                     overlay.on_elicitation_request(params, responder);
                     return;
                 }
                 self.overlay = OverlayLayer::Elicitation(ElicitationModal::new(params, responder));
             }
-            AcpEvent::McpNotification(notification) => {
-                if let McpNotification::ServerStatus { ref servers } = notification {
-                    self.server_statuses.clone_from(servers);
-                    self.unhealthy_server_count = servers
-                        .iter()
-                        .filter(|s| !matches!(s.status, acp_utils::notifications::McpServerStatus::Connected { .. }))
-                        .count();
-                    if let OverlayLayer::Settings(overlay) = &mut self.overlay {
-                        overlay.update_server_statuses(servers.clone());
-                    }
-                }
-                if let OverlayLayer::Elicitation(modal) = &mut self.overlay
-                    && matches!(modal.on_notification(&notification), ModalOutcome::Close)
-                {
-                    self.overlay = OverlayLayer::None;
-                }
-                if let McpNotification::UrlElicitationComplete(ref params) = notification
-                    && let OverlayLayer::Settings(overlay) = &mut self.overlay
-                {
-                    overlay.on_url_elicitation_complete(params);
-                }
-            }
+            AcpEvent::McpNotification(notification) => self.on_mcp_notification(&notification),
             AcpEvent::AuthMethodsUpdated(params) => {
                 self.auth_methods.clone_from(&params.auth_methods);
-                if let OverlayLayer::Settings(overlay) = &mut self.overlay {
-                    overlay.update_auth_methods(params.auth_methods);
-                }
+                self.with_settings(|overlay| overlay.update_auth_methods(&params.auth_methods));
             }
             AcpEvent::AuthenticateComplete { method_id } => {
-                if let OverlayLayer::Settings(overlay) = &mut self.overlay {
-                    overlay.on_authenticate_complete(&method_id);
-                }
+                self.with_settings(|overlay| overlay.on_authenticate_complete(&method_id));
             }
             AcpEvent::AuthenticateFailed { method_id, error } => {
                 tracing::warn!("Provider authentication failed for {method_id}: {error}");
-                if let OverlayLayer::Settings(overlay) = &mut self.overlay {
-                    overlay.on_authenticate_failed(&method_id);
-                }
+                self.with_settings(|overlay| overlay.on_authenticate_failed(&method_id));
             }
-            AcpEvent::ConnectionClosed => {
-                match std::mem::take(&mut self.overlay) {
-                    OverlayLayer::Elicitation(mut modal) => modal.cancel(),
-                    OverlayLayer::Settings(mut overlay) => overlay.cancel_pending_elicitation(),
-                    _ => {}
-                }
-                self.workspace_move_state = WorkspaceMoveState::Idle;
-                self.session_loading_buffer.clear();
-                self.screen_router.close();
-                self.surface_rect = None;
-                self.pending_bell = None;
-                self.exit_state = ExitState::Exiting;
-            }
+            AcpEvent::ConnectionClosed => self.on_connection_closed(),
             AcpEvent::ConfigOptionUpdateFailed { error } => {
                 tracing::warn!("set_session_config_option failed: {error}");
-                self.transcript.push_user_message(&format!("[wisp-next] Failed to update setting: {error}"));
+                self.notify(&format!("Failed to update setting: {error}"));
             }
-            AcpEvent::SessionsListed { sessions } => {
-                let current_id = self.session_id.clone();
-                let filtered: Vec<_> = sessions.into_iter().filter(|s| s.session_id != current_id).collect();
-                let preview_enabled = self.capabilities.session_preview;
-                let picker = SessionPicker::new(filtered, preview_enabled);
-                if let Some(id) = picker.initial_preview_request() {
-                    let _ = self.prompt_handle.session_preview(&SessionId::new(id));
-                }
-                self.overlay = OverlayLayer::SessionPicker(picker);
-            }
+            AcpEvent::SessionsListed { sessions } => self.open_session_picker(sessions),
             AcpEvent::SessionLoaded { session_id, config_options } => {
-                let updates = self.session_loading_buffer.take(&session_id);
-                self.session_id = session_id.clone();
-                self.config_options = config_options;
-                self.plan_tracker.clear();
-                self.compaction_active = false;
-                self.progress_indicator.reset();
-                for update in updates {
-                    self.on_session_update(&update);
-                }
-                self.transcript_generation = self.transcript_generation.wrapping_add(1);
-                self.overlay = OverlayLayer::None;
-                self.workspace_move_state = WorkspaceMoveState::Idle;
+                self.on_session_loaded(session_id, config_options);
             }
             AcpEvent::NewSessionCreated { session_id, config_options } => {
-                self.session_loading_buffer.clear();
-                match std::mem::take(&mut self.overlay) {
-                    OverlayLayer::Settings(mut overlay) => overlay.cancel_pending_elicitation(),
-                    OverlayLayer::Elicitation(mut modal) => modal.cancel(),
-                    _ => {}
-                }
-                let previous_selections = extract_config_selections(&self.config_options);
-                self.session_id = session_id;
-                self.config_options = config_options;
-                self.transcript.clear();
-                self.tool_calls.clear();
-                self.plan_tracker.clear();
-                self.prompt_in_flight = false;
-                self.submitted_prompt_count = 0;
-                self.compaction_active = false;
-                self.context_usage = None;
-                self.last_drained_kind = None;
-                self.progress_indicator.reset();
-                self.transcript_generation = self.transcript_generation.wrapping_add(1);
-                self.transcript.push_user_message("[wisp-next] New session created");
-                self.restore_config_selections(&previous_selections);
+                self.on_new_session(session_id, config_options);
             }
             AcpEvent::SessionPreviewLoaded(preview) => {
-                if let OverlayLayer::SessionPicker(picker) = &mut self.overlay {
-                    picker.on_preview_loaded(preview);
-                }
+                self.with_session_picker(|picker| picker.on_preview_loaded(preview));
             }
             AcpEvent::SessionPreviewFailed { session_id, error } => {
-                if let OverlayLayer::SessionPicker(picker) = &mut self.overlay {
-                    picker.on_preview_failed(&session_id, error);
-                }
+                self.with_session_picker(|picker| picker.on_preview_failed(&session_id, error));
             }
             AcpEvent::PromptSearchResults(response) => {
                 self.composer.prompt_search_on_results(response);
             }
             AcpEvent::PromptSearchFailed { query: _, search_generation, error } => {
-                self.composer.prompt_search_on_failed(search_generation, error);
+                if let Some(picker) = self.composer.prompt_search() {
+                    picker.on_failed(search_generation, error);
+                }
             }
             AcpEvent::WorkspacesListed(response) => {
-                let picker = WorkspacePicker::new(response.workspaces);
-                self.overlay = OverlayLayer::WorkspacePicker(picker);
+                self.overlay = OverlayLayer::WorkspacePicker(WorkspacePicker::new(response.workspaces));
                 self.workspace_move_state = WorkspaceMoveState::Picking;
             }
+            AcpEvent::WorkspaceMoved(response) => self.on_workspace_moved(response.new_cwd),
             AcpEvent::WorkspaceListFailed { error } => {
-                self.transcript.push_user_message(&format!("[wisp-next] Failed to list workspaces: {error}"));
-                self.workspace_move_state = WorkspaceMoveState::Idle;
-            }
-            AcpEvent::WorkspaceMoved(response) => {
-                self.on_workspace_moved(response.new_cwd);
+                self.abandon_workspace_move(&format!("Failed to list workspaces: {error}"));
             }
             AcpEvent::WorkspaceMoveFailed { error } => {
-                self.transcript.push_user_message(&format!("[wisp-next] Workspace move failed: {error}"));
-                self.workspace_move_state = WorkspaceMoveState::Idle;
+                self.abandon_workspace_move(&format!("Workspace move failed: {error}"));
             }
             AcpEvent::SubAgentProgress(progress) => {
                 self.tool_calls.on_sub_agent_progress(&progress);
@@ -212,6 +113,114 @@ impl App {
             }
         }
     }
+
+    /// Reports why a workspace move could not proceed and leaves move mode.
+    fn abandon_workspace_move(&mut self, message: &str) {
+        self.notify(message);
+        self.workspace_move_state = WorkspaceMoveState::Idle;
+    }
+
+    /// Runs `apply` when the settings overlay is open. Agent pushes that only
+    /// affect what it displays are dropped when it is not.
+    fn with_settings(&mut self, apply: impl FnOnce(&mut SettingsOverlay)) {
+        if let OverlayLayer::Settings(overlay) = &mut self.overlay {
+            apply(overlay);
+        }
+    }
+
+    fn with_session_picker(&mut self, apply: impl FnOnce(&mut SessionPicker)) {
+        if let OverlayLayer::SessionPicker(picker) = &mut self.overlay {
+            apply(picker);
+        }
+    }
+
+    fn open_session_picker(&mut self, sessions: Vec<acp::SessionInfo>) {
+        let current_id = self.session_id.clone();
+        let others = sessions.into_iter().filter(|session| session.session_id != current_id).collect();
+        let picker = SessionPicker::new(others, self.capabilities.session_preview);
+        if let Some(id) = picker.initial_preview_request() {
+            let _ = self.prompt_handle.session_preview(&SessionId::new(id));
+        }
+        self.overlay = OverlayLayer::SessionPicker(picker);
+    }
+
+    /// A requested session has arrived: replay the updates that were buffered
+    /// while it loaded. The transcript was cleared when the load was requested,
+    /// so only per-turn state is reset here.
+    fn on_session_loaded(&mut self, session_id: SessionId, config_options: Vec<acp::SessionConfigOption>) {
+        let updates = self.session_loading_buffer.take(&session_id);
+        self.session_id = session_id;
+        self.config_options = config_options;
+        self.reset_turn_state();
+        self.transcript_generation = self.transcript_generation.wrapping_add(1);
+        for update in updates {
+            self.on_session_update(&update);
+        }
+        self.close_overlay();
+        self.workspace_move_state = WorkspaceMoveState::Idle;
+    }
+
+    fn on_new_session(&mut self, session_id: SessionId, config_options: Vec<acp::SessionConfigOption>) {
+        self.session_loading_buffer.clear();
+        self.close_elicitation_owner();
+        self.close_overlay();
+        let previous_selections = extract_config_selections(&self.config_options);
+        self.session_id = session_id;
+        self.config_options = config_options;
+        self.reset_conversation();
+        self.notify("New session created");
+        self.restore_config_selections(&previous_selections);
+    }
+
+    /// Server notifications feed three places: the status summary in the status
+    /// line, the settings overlay's server pane, and whichever elicitation modal
+    /// the notification may be completing.
+    fn on_mcp_notification(&mut self, notification: &McpNotification) {
+        if let McpNotification::ServerStatus { servers } = notification {
+            self.server_statuses.clone_from(servers);
+            self.unhealthy_server_count = servers
+                .iter()
+                .filter(|server| !matches!(server.status, acp_utils::notifications::McpServerStatus::Connected { .. }))
+                .count();
+            let servers = servers.clone();
+            self.with_settings(|overlay| overlay.update_server_statuses(servers));
+        }
+        if let OverlayLayer::Elicitation(modal) = &mut self.overlay
+            && modal.on_notification(notification)
+        {
+            self.close_overlay();
+        }
+        if let McpNotification::UrlElicitationComplete(params) = notification {
+            self.with_settings(|overlay| overlay.on_url_elicitation_complete(params));
+        }
+    }
+
+    /// The agent is gone: answer anything it is still waiting on, tear down
+    /// every surface, and ask the event loop to exit.
+    fn on_connection_closed(&mut self) {
+        self.close_elicitation_owner();
+        self.close_overlay();
+        self.close_screen();
+        self.workspace_move_state = WorkspaceMoveState::Idle;
+        self.session_loading_buffer.clear();
+        self.surface_rect = None;
+        self.pending_bell = None;
+        self.exit_state = ExitState::Exiting;
+    }
+
+    /// Answers any elicitation the current overlay is holding, leaving the
+    /// settings overlay itself open so its pane survives.
+    fn close_elicitation_owner(&mut self) {
+        match &mut self.overlay {
+            OverlayLayer::Elicitation(modal) => {
+                modal.cancel();
+                self.overlay = OverlayLayer::None;
+            }
+            OverlayLayer::Settings(overlay) => overlay.cancel_pending_elicitation(),
+            _ => {}
+        }
+    }
+
     fn on_session_update(&mut self, update: &acp::SessionUpdate) {
         match update {
             acp::SessionUpdate::UserMessageChunk(chunk) => {
@@ -261,9 +270,8 @@ impl App {
             acp::SessionUpdate::ConfigOptionUpdate(update) => {
                 self.config_options.clone_from(&update.config_options);
                 self.transcript.close_thought_block();
-                if let OverlayLayer::Settings(overlay) = &mut self.overlay {
-                    overlay.update_config_options(&self.config_options);
-                }
+                let options = self.config_options.clone();
+                self.with_settings(|overlay| overlay.update_config_options(&options));
             }
             acp::SessionUpdate::Plan(plan) => {
                 self.plan_tracker.replace(plan.entries.clone(), Instant::now());
@@ -274,6 +282,7 @@ impl App {
             }
         }
     }
+
     fn finish_prompt(&mut self, terminal_status: &ToolStatus) {
         let was_in_flight = self.prompt_in_flight;
         self.prompt_in_flight = false;
@@ -283,6 +292,15 @@ impl App {
         if was_in_flight && matches!(terminal_status, ToolStatus::Success) {
             self.pending_bell = Some(());
         }
+    }
+}
+
+fn render_user_content_block(block: &acp::ContentBlock) -> Option<String> {
+    match block {
+        acp::ContentBlock::Text(text) => Some(text.text.clone()),
+        acp::ContentBlock::Image(_) => Some("[image attachment]".to_string()),
+        acp::ContentBlock::Audio(_) => Some("[audio attachment]".to_string()),
+        _ => None,
     }
 }
 

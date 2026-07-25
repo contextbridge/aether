@@ -7,14 +7,16 @@ use acp_utils::notifications::{
 };
 use agent_client_protocol::Responder;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::Frame;
-use ratatui::layout::Constraint;
-use ratatui::widgets::Clear;
+use ratatui::buffer::Buffer;
+use ratatui::layout::{Constraint, Rect};
+use ratatui::widgets::{Clear, Widget};
 use serde_json::Value;
 use std::sync::Arc;
 
-use self::form::{FormAction, FormFieldKind, FormModal};
+use self::form::{FormAction, FormModal};
 use self::url::UrlModal;
+use crate::overlay::{Overlay, OverlayMessage};
+use crate::selection::Direction;
 use crate::theme::Theme;
 
 pub type BrowserOpener = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
@@ -30,11 +32,6 @@ pub struct ElicitationModal {
 enum ModalKind {
     Form(FormModal),
     Url(UrlModal),
-}
-
-pub enum ModalOutcome {
-    None,
-    Close,
 }
 
 impl ElicitationModal {
@@ -59,128 +56,46 @@ impl ElicitationModal {
         Self { kind, responder: Some(responder), browser_opener, clipboard_writer }
     }
 
-    pub fn on_key(&mut self, key: KeyEvent) -> ModalOutcome {
-        if !matches!(key.kind, crossterm::event::KeyEventKind::Press | crossterm::event::KeyEventKind::Repeat) {
-            return ModalOutcome::None;
-        }
-        match &mut self.kind {
-            ModalKind::Form(form) => match form.on_key(key) {
-                FormAction::None => ModalOutcome::None,
-                FormAction::Cancel => self.respond(ElicitationAction::Cancel, None),
-                FormAction::Accept(content) => self.respond(ElicitationAction::Accept, Some(content)),
-            },
-            ModalKind::Url(url) => {
-                let plain_key = key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT;
-                match key.code {
-                    KeyCode::Esc => self.respond(ElicitationAction::Cancel, None),
-                    KeyCode::Enter => {
-                        match (self.browser_opener)(&url.url) {
-                            Ok(()) => {}
-                            Err(e) => {
-                                url.launch_error = Some(format!("Failed to open browser: {e}"));
-                            }
-                        }
-                        ModalOutcome::None
-                    }
-                    KeyCode::Char('c' | 'C') if plain_key => {
-                        url.copy_message = Some(match (self.clipboard_writer)(&url.url) {
-                            Ok(()) => "Copied URL to clipboard.".to_string(),
-                            Err(e) => format!("Failed to copy URL: {e}"),
-                        });
-                        ModalOutcome::None
-                    }
-                    _ => ModalOutcome::None,
-                }
-            }
-        }
-    }
-
-    pub fn on_notification(&mut self, notification: &McpNotification) -> ModalOutcome {
+    /// Handles a completion notification, reporting whether it closed the modal.
+    pub fn on_notification(&mut self, notification: &McpNotification) -> bool {
         let McpNotification::UrlElicitationComplete(params) = notification else {
-            return ModalOutcome::None;
+            return false;
         };
-        if self.matches_url_completion(params) {
-            self.respond(ElicitationAction::Accept, None)
-        } else {
-            ModalOutcome::None
+        if !self.matches_url_completion(params) {
+            return false;
         }
+        self.respond(ElicitationAction::Accept, None);
+        true
     }
 
     pub fn cancel(&mut self) {
-        let _ = self.respond(ElicitationAction::Cancel, None);
+        self.respond(ElicitationAction::Cancel, None);
     }
 
-    pub fn needs_mouse_capture(&self) -> bool {
-        matches!(self.kind, ModalKind::Form(_))
-    }
-
-    pub fn on_mouse_scroll_up(&mut self, _local_y: u16) {
-        if let ModalKind::Form(form) = &mut self.kind {
-            if let Some(field) = form.fields.get_mut(form.selected)
-                && matches!(&field.kind, FormFieldKind::Multi { .. })
-            {
-                form.handle_multi_select_key(KeyEvent::new(KeyCode::Up, crossterm::event::KeyModifiers::NONE));
-            } else {
-                form.selected = form.selected.saturating_sub(1);
+    fn on_url_key(&mut self, key: KeyEvent) -> Vec<OverlayMessage> {
+        let ModalKind::Url(url) = &mut self.kind else {
+            return Vec::new();
+        };
+        let plain_key = key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT;
+        match key.code {
+            KeyCode::Esc => {
+                self.respond(ElicitationAction::Cancel, None);
+                return vec![OverlayMessage::Close];
             }
-        }
-    }
-
-    pub fn on_mouse_scroll_down(&mut self, _local_y: u16) {
-        if let ModalKind::Form(form) = &mut self.kind {
-            if let Some(field) = form.fields.get_mut(form.selected)
-                && matches!(&field.kind, FormFieldKind::Multi { .. })
-            {
-                form.handle_multi_select_key(KeyEvent::new(KeyCode::Down, crossterm::event::KeyModifiers::NONE));
-            } else {
-                form.selected = (form.selected + 1).min(form.fields.len().saturating_sub(1));
-            }
-        }
-    }
-
-    pub fn on_mouse_click(&mut self, local_y: u16) {
-        if let ModalKind::Form(form) = &mut self.kind {
-            if form.fields.is_empty() {
-                return;
-            }
-            if local_y < 3 {
-                return;
-            }
-            let field_y = local_y.saturating_sub(3);
-            let mut row = 0usize;
-            for (index, field) in form.fields.iter().enumerate() {
-                if row == field_y as usize {
-                    form.selected = index;
-                    if matches!(&field.kind, FormFieldKind::Boolean(_) | FormFieldKind::Single { .. }) {
-                        form.change_selection(1);
-                    } else if matches!(&field.kind, FormFieldKind::Multi { .. }) {
-                        form.handle_multi_select_key(KeyEvent::new(
-                            KeyCode::Char(' '),
-                            crossterm::event::KeyModifiers::NONE,
-                        ));
-                    }
-                    return;
-                }
-                row += 1;
-                if let FormFieldKind::Multi { options, .. } = &field.kind {
-                    row += options.len();
-                }
-                if let Some(ref desc) = field.description
-                    && !desc.is_empty()
-                {
-                    row += 1;
+            KeyCode::Enter => {
+                if let Err(error) = (self.browser_opener)(&url.url) {
+                    url.launch_error = Some(format!("Failed to open browser: {error}"));
                 }
             }
+            KeyCode::Char('c' | 'C') if plain_key => {
+                url.copy_message = Some(match (self.clipboard_writer)(&url.url) {
+                    Ok(()) => "Copied URL to clipboard.".to_string(),
+                    Err(error) => format!("Failed to copy URL: {error}"),
+                });
+            }
+            _ => {}
         }
-    }
-
-    pub fn render(&self, frame: &mut Frame, theme: &Theme) {
-        let area = frame.area().centered(Constraint::Percentage(80), Constraint::Percentage(80));
-        frame.render_widget(Clear, area);
-        match &self.kind {
-            ModalKind::Form(form) => form.render(frame, area, theme),
-            ModalKind::Url(url) => url.render(frame, area, theme),
-        }
+        Vec::new()
     }
 
     fn matches_url_completion(&self, params: &UrlElicitationCompleteParams) -> bool {
@@ -190,11 +105,59 @@ impl ElicitationModal {
         )
     }
 
-    fn respond(&mut self, action: ElicitationAction, content: Option<Value>) -> ModalOutcome {
+    fn respond(&mut self, action: ElicitationAction, content: Option<Value>) {
         if let Some(responder) = self.responder.take() {
             let _ = responder.respond(ElicitationResponse { action, content });
         }
-        ModalOutcome::Close
+    }
+}
+
+impl Overlay for ElicitationModal {
+    fn on_key(&mut self, key: KeyEvent) -> Vec<OverlayMessage> {
+        if !matches!(key.kind, crossterm::event::KeyEventKind::Press | crossterm::event::KeyEventKind::Repeat) {
+            return Vec::new();
+        }
+        let ModalKind::Form(form) = &mut self.kind else {
+            return self.on_url_key(key);
+        };
+        match form.on_key(key) {
+            FormAction::None => Vec::new(),
+            FormAction::Cancel => {
+                self.respond(ElicitationAction::Cancel, None);
+                vec![OverlayMessage::Close]
+            }
+            FormAction::Accept(content) => {
+                self.respond(ElicitationAction::Accept, Some(content));
+                vec![OverlayMessage::Close]
+            }
+        }
+    }
+
+    fn scroll(&mut self, direction: Direction) -> Vec<OverlayMessage> {
+        if let ModalKind::Form(form) = &mut self.kind {
+            form.scroll(direction);
+        }
+        Vec::new()
+    }
+
+    fn click(&mut self, row: u16, _area: Rect) -> Vec<OverlayMessage> {
+        if let ModalKind::Form(form) = &mut self.kind {
+            form.click(row);
+        }
+        Vec::new()
+    }
+
+    fn needs_mouse_capture(&self) -> bool {
+        matches!(self.kind, ModalKind::Form(_))
+    }
+
+    fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
+        let area = area.centered(Constraint::Percentage(80), Constraint::Percentage(80));
+        Clear.render(area, buf);
+        match &self.kind {
+            ModalKind::Form(form) => form.render(area, buf, theme),
+            ModalKind::Url(url) => url.render(area, buf, theme),
+        }
     }
 }
 
@@ -299,6 +262,11 @@ mod tests {
             .unwrap()
     }
 
+    /// Whether the modal asked to be dismissed.
+    fn closes(messages: &[OverlayMessage]) -> bool {
+        messages.iter().any(|message| matches!(message, OverlayMessage::Close))
+    }
+
     fn noop_handlers() -> (BrowserOpener, ClipboardWriter) {
         (Arc::new(|_| Ok(())), Arc::new(|_| Ok(())))
     }
@@ -369,7 +337,7 @@ mod tests {
             .run_until(async {
                 let schema = permission_like_schema();
                 let (mut modal, rx) = make_modal_for_schema(schema).await;
-                assert!(matches!(modal.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)), ModalOutcome::Close));
+                assert!(closes(&modal.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))));
                 let response = rx.await.unwrap();
                 assert_eq!(response.action, ElicitationAction::Accept);
                 assert_eq!(response.content.unwrap()["decision"], "deny");
@@ -384,7 +352,7 @@ mod tests {
             .run_until(async {
                 let schema = ElicitationSchema::builder().build().unwrap();
                 let (mut modal, rx) = make_modal_for_schema(schema).await;
-                assert!(matches!(modal.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)), ModalOutcome::Close));
+                assert!(closes(&modal.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))));
                 let response = rx.await.unwrap();
                 assert_eq!(response.action, ElicitationAction::Cancel);
             })
@@ -422,7 +390,7 @@ mod tests {
                 let mut modal =
                     make_url_modal_with_handlers("https://github.com/login", url_opener, noop_handlers().1).await;
                 let outcome = modal.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-                assert!(matches!(outcome, ModalOutcome::None));
+                assert!(!closes(&outcome));
             })
             .await;
     }
@@ -500,7 +468,7 @@ mod tests {
                         server_name: "github".into(),
                         elicitation_id: "el-1".into(),
                     }));
-                assert!(matches!(matched, ModalOutcome::Close));
+                assert!(matched);
             })
             .await;
     }
@@ -515,7 +483,7 @@ mod tests {
                         server_name: "other".into(),
                         elicitation_id: "el-1".into(),
                     }));
-                assert!(matches!(matched, ModalOutcome::None));
+                assert!(!matched);
             })
             .await;
     }
@@ -530,7 +498,7 @@ mod tests {
                         server_name: "github".into(),
                         elicitation_id: "el-other".into(),
                     }));
-                assert!(matches!(matched, ModalOutcome::None));
+                assert!(!matched);
             })
             .await;
     }
@@ -546,7 +514,7 @@ mod tests {
                         server_name: "test".into(),
                         elicitation_id: "ignored".into(),
                     }));
-                assert!(matches!(matched, ModalOutcome::None));
+                assert!(!matched);
             })
             .await;
     }
@@ -558,7 +526,7 @@ mod tests {
         LocalSet::new()
             .run_until(async {
                 let (mut modal, rx) = make_url_modal("https://github.com/login").await;
-                assert!(matches!(modal.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)), ModalOutcome::Close));
+                assert!(closes(&modal.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))));
                 let response = rx.await.unwrap();
                 assert_eq!(response.action, ElicitationAction::Cancel);
             })

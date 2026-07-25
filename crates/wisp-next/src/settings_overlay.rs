@@ -1,4 +1,3 @@
-#![allow(clippy::cast_possible_truncation)]
 mod menu;
 mod model_selector;
 mod picker;
@@ -7,29 +6,25 @@ mod server_status;
 
 use self::menu::SettingsMenu;
 use self::model_selector::ModelSelector;
-#[cfg(test)]
-use self::model_selector::{capability_tags, model_label, provider_key, provider_label, reasoning_bar};
 use self::picker::SettingsPicker;
-use self::provider_login::{ProviderLoginPane, build_provider_login_entries, provider_login_summary};
-use self::server_status::{ServerStatusPane, server_status_summary};
+use self::provider_login::{ProviderLoginEntry, ProviderLoginPane, ProviderLoginStatus, build_provider_login_entries};
+use self::server_status::ServerStatusPane;
+use crate::overlay::{Overlay, OverlayMessage};
+use crate::selection::Direction;
 use crate::session_config_view::SessionConfigView;
 use crate::theme::Theme;
-#[cfg(test)]
-use crate::wrap::truncate_to_width;
 use acp_utils::config_meta::SelectOptionMeta;
 use acp_utils::notifications::{
     ElicitationParams, ElicitationResponse, McpServerStatusEntry, UrlElicitationCompleteParams,
 };
 use agent_client_protocol::Responder;
 use agent_client_protocol::schema::{AuthMethod, SessionConfigOption};
-#[cfg(test)]
-use agent_client_protocol::schema::{SessionConfigKind, SessionConfigSelectOptions};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget};
+use ratatui::widgets::{Block, Clear, Paragraph, Widget};
 
 const MIN_WIDTH: u16 = 6;
 const MIN_HEIGHT: u16 = 3;
@@ -69,63 +64,80 @@ pub enum SettingsMenuEntryKind {
     ProviderLogins,
 }
 
+/// The settings overlay: a menu of options, each of which opens a pane.
 pub struct SettingsOverlay {
-    active_pane: ActivePane,
     menu: SettingsMenu,
+    /// The pane drawn over the menu. `None` means the menu itself has focus.
+    pane: Option<Box<dyn SettingsPane>>,
     current_reasoning_effort: Option<String>,
-    server_statuses: Vec<McpServerStatusEntry>,
-    auth_methods: Vec<AuthMethod>,
+    live: LiveSettingsData,
     pending_elicitation: Option<PendingElicitation>,
 }
 
-#[derive(Debug)]
-pub enum SettingsOverlayMessage {
-    Close,
-    SetConfigOption { config_id: String, value: String },
-    SetTheme(String),
-    AuthenticateServer(String),
-    AuthenticateProvider(String),
+/// Agent-pushed state that panes display. The overlay owns it so a pane opened
+/// later sees current data, and an open pane can be refreshed in place.
+pub(crate) struct LiveSettingsData {
+    pub(crate) servers: Vec<McpServerStatusEntry>,
+    pub(crate) providers: Vec<ProviderLoginEntry>,
 }
 
-enum ActivePane {
-    Menu,
-    Picker(SettingsPicker),
-    ModelSelector(ModelSelector),
-    ServerStatus(ServerStatusPane),
-    ProviderLogin(ProviderLoginPane),
+/// One screen inside the settings overlay.
+///
+/// Every pane navigates, renders, and reports the same three things, so the
+/// overlay drives them all through this trait instead of matching on which is
+/// open.
+pub(crate) trait SettingsPane {
+    fn on_key(&mut self, key: KeyEvent) -> PaneOutcome;
+
+    fn click(&mut self, row: usize, height: usize) -> PaneOutcome;
+
+    fn scroll(&mut self, direction: Direction);
+
+    fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme);
+
+    /// Key hints for the overlay footer while this pane has focus.
+    fn footer(&self) -> String;
+
+    /// Changes to commit when the pane closes; panes that apply edits
+    /// immediately return nothing.
+    fn take_changes(&mut self) -> Vec<SettingsChange> {
+        Vec::new()
+    }
+
+    /// Re-reads agent-pushed data after it changes underneath the pane.
+    fn refresh(&mut self, live: &LiveSettingsData) {
+        let _ = live;
+    }
 }
 
-enum PaneTransition {
-    Stay,
-    Menu,
-    Picker(SettingsPicker),
-    ModelSelector(ModelSelector),
-    ServerStatus(ServerStatusPane),
-    ProviderLogin(ProviderLoginPane),
-    Close,
+/// What a pane produced from one interaction.
+#[derive(Default)]
+pub(crate) struct PaneOutcome {
+    /// Config edits to apply to the menu and forward to the agent.
+    pub(crate) changes: Vec<SettingsChange>,
+    /// Messages that are not config edits, such as authentication requests.
+    pub(crate) messages: Vec<OverlayMessage>,
+    /// Return focus to the menu.
+    pub(crate) back: bool,
 }
 
-struct PaneActivation {
-    transition: PaneTransition,
-    change: Option<SettingsChange>,
-    message: Option<SettingsOverlayMessage>,
+impl PaneOutcome {
+    pub(crate) fn message(message: Option<OverlayMessage>) -> Self {
+        Self { messages: message.into_iter().collect(), ..Self::default() }
+    }
 }
 
 impl SettingsOverlay {
     pub fn new(
         config_options: &[SessionConfigOption],
         server_statuses: Vec<McpServerStatusEntry>,
-        auth_methods: Vec<AuthMethod>,
+        auth_methods: &[AuthMethod],
     ) -> Self {
-        let menu = SettingsMenu::from_config_options(config_options);
-        let reasoning =
-            SessionConfigView::new(config_options).reasoning_effort().map(|effort| effort.as_str().to_string());
         Self {
-            active_pane: ActivePane::Menu,
-            menu,
-            current_reasoning_effort: reasoning,
-            server_statuses,
-            auth_methods,
+            menu: SettingsMenu::from_config_options(config_options),
+            pane: None,
+            current_reasoning_effort: reasoning_effort_of(config_options),
+            live: LiveSettingsData { servers: server_statuses, providers: build_provider_login_entries(auth_methods) },
             pending_elicitation: None,
         }
     }
@@ -134,156 +146,16 @@ impl SettingsOverlay {
         self.menu.entries.splice(0..0, entries);
     }
 
-    pub fn on_mouse_scroll_up(&mut self, _local_y: u16) {
-        match &mut self.active_pane {
-            ActivePane::Menu => self.menu.move_up(),
-            ActivePane::Picker(picker) => picker.move_up(),
-            ActivePane::ModelSelector(selector) => selector.move_up(),
-            ActivePane::ServerStatus(pane) => pane.move_up(),
-            ActivePane::ProviderLogin(pane) => pane.move_up(),
+    /// Adds the rows that open panes rather than pick a config value.
+    pub fn add_status_entries(&mut self) {
+        self.menu.upsert_pane_entry(SettingsMenuEntryKind::McpServers, &self.live.server_summary());
+        if !self.live.providers.is_empty() {
+            self.menu.upsert_pane_entry(SettingsMenuEntryKind::ProviderLogins, &self.live.provider_summary());
         }
-    }
-
-    pub fn on_mouse_scroll_down(&mut self, _local_y: u16) {
-        match &mut self.active_pane {
-            ActivePane::Menu => self.menu.move_down(),
-            ActivePane::Picker(picker) => picker.move_down(),
-            ActivePane::ModelSelector(selector) => selector.move_down(),
-            ActivePane::ServerStatus(pane) => pane.move_down(),
-            ActivePane::ProviderLogin(pane) => pane.move_down(),
-        }
-    }
-
-    pub fn on_mouse_click(&mut self, local_y: u16, rect: Rect) -> Vec<SettingsOverlayMessage> {
-        if rect.width < MIN_WIDTH || rect.height < MIN_HEIGHT {
-            return vec![];
-        }
-        let inner = Block::new().borders(Borders::ALL).title(" Configuration ").inner(rect);
-        let row = local_y.saturating_sub(inner.y.saturating_sub(rect.y)) as usize;
-        if local_y < inner.y || local_y >= inner.bottom() {
-            return vec![];
-        }
-        let activation = match &mut self.active_pane {
-            ActivePane::Menu => {
-                self.menu.click_row(row);
-                self.menu_activation()
-            }
-            ActivePane::Picker(picker) => {
-                if picker.click_row(row) {
-                    picker_activation(picker)
-                } else {
-                    PaneActivation::stay()
-                }
-            }
-            ActivePane::ModelSelector(selector) => {
-                if selector.click_row(row, usize::from(inner.height)) {
-                    selector.toggle_focused();
-                }
-                PaneActivation::stay()
-            }
-            ActivePane::ServerStatus(pane) => {
-                if pane.click_row(row) {
-                    server_authentication_activation(pane)
-                } else {
-                    PaneActivation::stay()
-                }
-            }
-            ActivePane::ProviderLogin(pane) => {
-                if pane.click_row(row) {
-                    provider_authentication_activation(pane)
-                } else {
-                    PaneActivation::stay()
-                }
-            }
-        };
-        self.apply_activation(activation)
-    }
-
-    pub fn on_key(&mut self, key: KeyEvent) -> Vec<SettingsOverlayMessage> {
-        let previous = std::mem::replace(&mut self.active_pane, ActivePane::Menu);
-        let (transition, messages) = match previous {
-            ActivePane::Menu => {
-                let messages = self.handle_menu_key(key);
-                let transition = if messages.iter().any(|message| matches!(message, SettingsOverlayMessage::Close)) {
-                    PaneTransition::Close
-                } else {
-                    self.take_transition(PaneTransition::Menu)
-                };
-                (transition, messages)
-            }
-            ActivePane::Picker(mut picker) => {
-                let messages = self.handle_picker_key(&mut picker, key);
-                let transition = if matches!(key.code, KeyCode::Esc | KeyCode::Enter) {
-                    PaneTransition::Menu
-                } else {
-                    self.take_transition(PaneTransition::Picker(picker))
-                };
-                (transition, messages)
-            }
-            ActivePane::ModelSelector(mut selector) => {
-                let messages = self.handle_model_selector_key(&mut selector, key);
-                let transition = if key.code == KeyCode::Esc {
-                    PaneTransition::Menu
-                } else {
-                    self.take_transition(PaneTransition::ModelSelector(selector))
-                };
-                (transition, messages)
-            }
-            ActivePane::ServerStatus(mut pane) => {
-                let messages = self.handle_server_status_key(&mut pane, key);
-                let transition = if key.code == KeyCode::Esc {
-                    PaneTransition::Menu
-                } else {
-                    self.take_transition(PaneTransition::ServerStatus(pane))
-                };
-                (transition, messages)
-            }
-            ActivePane::ProviderLogin(mut pane) => {
-                let messages = self.handle_provider_login_key(&mut pane, key);
-                let transition = if key.code == KeyCode::Esc {
-                    PaneTransition::Menu
-                } else {
-                    self.take_transition(PaneTransition::ProviderLogin(pane))
-                };
-                (transition, messages)
-            }
-        };
-        self.apply_transition(transition);
-        messages
-    }
-
-    pub fn render(&mut self, area: Rect, buffer: &mut Buffer, theme: &Theme) {
-        Clear.render(area, buffer);
-        if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
-            Paragraph::new(Line::styled("(terminal too small)", Style::new().fg(theme.text_secondary)))
-                .render(area, buffer);
-            return;
-        }
-        let block = Block::new()
-            .borders(Borders::ALL)
-            .title(" Configuration ")
-            .style(Style::new().bg(theme.background))
-            .border_style(Style::new().fg(theme.text_secondary));
-        let inner = block.inner(area);
-        block.render(area, buffer);
-        let [content_area, footer_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
-        Paragraph::new(Line::from(self.footer_text())).render(footer_area, buffer);
-        match &mut self.active_pane {
-            ActivePane::Menu => self.menu.render(content_area, buffer, theme),
-            ActivePane::Picker(picker) => picker.render(content_area, buffer, theme),
-            ActivePane::ModelSelector(selector) => selector.render(content_area, buffer, theme),
-            ActivePane::ServerStatus(pane) => pane.render(content_area, buffer, theme),
-            ActivePane::ProviderLogin(pane) => pane.render(content_area, buffer, theme),
-        }
-    }
-
-    pub fn wants_key_capture(&self) -> bool {
-        !matches!(self.active_pane, ActivePane::Menu)
     }
 
     pub fn update_config_options(&mut self, options: &[SessionConfigOption]) {
-        self.current_reasoning_effort =
-            SessionConfigView::new(options).reasoning_effort().map(|effort| effort.as_str().to_string());
+        self.current_reasoning_effort = reasoning_effort_of(options);
         self.menu.update_options(options);
     }
 
@@ -292,38 +164,27 @@ impl SettingsOverlay {
     }
 
     pub fn update_server_statuses(&mut self, statuses: Vec<McpServerStatusEntry>) {
-        self.server_statuses = statuses;
-        self.menu.upsert_mcp_servers_entry(&server_status_summary(&self.server_statuses));
-        if let ActivePane::ServerStatus(pane) = &mut self.active_pane {
-            pane.update_entries(self.server_statuses.clone());
-        }
+        self.live.servers = statuses;
+        self.menu.upsert_pane_entry(SettingsMenuEntryKind::McpServers, &self.live.server_summary());
+        self.refresh_pane();
     }
 
-    pub fn update_auth_methods(&mut self, methods: Vec<AuthMethod>) {
-        self.auth_methods = methods;
-        let entries = build_provider_login_entries(&self.auth_methods);
-        self.menu.upsert_provider_logins_entry(&provider_login_summary(&entries));
-        if let ActivePane::ProviderLogin(pane) = &mut self.active_pane {
-            pane.replace_entries(entries);
-        }
+    pub fn update_auth_methods(&mut self, methods: &[AuthMethod]) {
+        self.live.providers = build_provider_login_entries(methods);
+        self.menu.upsert_pane_entry(SettingsMenuEntryKind::ProviderLogins, &self.live.provider_summary());
+        self.refresh_pane();
     }
 
     pub fn on_authenticate_started(&mut self, method_id: &str) {
-        if let ActivePane::ProviderLogin(pane) = &mut self.active_pane {
-            pane.set_authenticating(method_id);
-        }
+        self.set_provider_status(method_id, ProviderLoginStatus::Authenticating);
     }
 
     pub fn on_authenticate_complete(&mut self, method_id: &str) {
-        if let ActivePane::ProviderLogin(pane) = &mut self.active_pane {
-            pane.set_logged_in(method_id);
-        }
+        self.set_provider_status(method_id, ProviderLoginStatus::LoggedIn);
     }
 
     pub fn on_authenticate_failed(&mut self, method_id: &str) {
-        if let ActivePane::ProviderLogin(pane) = &mut self.active_pane {
-            pane.reset_to_needs_login(method_id);
-        }
+        self.set_provider_status(method_id, ProviderLoginStatus::NeedsLogin);
     }
 
     pub fn on_elicitation_request(&mut self, params: ElicitationParams, responder: Responder<ElicitationResponse>) {
@@ -353,146 +214,131 @@ impl SettingsOverlay {
         }
     }
 
-    pub fn add_mcp_servers_entry(&mut self) {
-        self.menu.upsert_mcp_servers_entry(&server_status_summary(&self.server_statuses));
+    /// Key hints for the current focus, shown in the overlay footer.
+    pub fn footer_text(&self) -> String {
+        self.pane.as_ref().map_or_else(|| "[Enter] Select  [Esc] Close".to_string(), |pane| pane.footer())
     }
 
-    pub fn add_provider_logins_entry(&mut self) {
-        if !self.auth_methods.is_empty() {
-            let entries = build_provider_login_entries(&self.auth_methods);
-            self.menu.upsert_provider_logins_entry(&provider_login_summary(&entries));
+    fn set_provider_status(&mut self, method_id: &str, status: ProviderLoginStatus) {
+        if let Some(entry) = self.live.providers.iter_mut().find(|entry| entry.method_id == method_id) {
+            entry.status = status;
+        }
+        self.refresh_pane();
+    }
+
+    fn refresh_pane(&mut self) {
+        if let Some(pane) = self.pane.as_mut() {
+            pane.refresh(&self.live);
         }
     }
 
-    fn take_transition(&mut self, fallback: PaneTransition) -> PaneTransition {
-        match std::mem::replace(&mut self.active_pane, ActivePane::Menu) {
-            ActivePane::Menu => fallback,
-            ActivePane::Picker(picker) => PaneTransition::Picker(picker),
-            ActivePane::ModelSelector(selector) => PaneTransition::ModelSelector(selector),
-            ActivePane::ServerStatus(pane) => PaneTransition::ServerStatus(pane),
-            ActivePane::ProviderLogin(pane) => PaneTransition::ProviderLogin(pane),
-        }
-    }
-
-    fn apply_transition(&mut self, transition: PaneTransition) {
-        self.active_pane = match transition {
-            PaneTransition::Stay => return,
-            PaneTransition::Menu | PaneTransition::Close => ActivePane::Menu,
-            PaneTransition::Picker(picker) => ActivePane::Picker(picker),
-            PaneTransition::ModelSelector(selector) => ActivePane::ModelSelector(selector),
-            PaneTransition::ServerStatus(pane) => ActivePane::ServerStatus(pane),
-            PaneTransition::ProviderLogin(pane) => ActivePane::ProviderLogin(pane),
-        };
-    }
-
-    fn footer_text(&self) -> String {
-        match &self.active_pane {
-            ActivePane::ModelSelector(selector) => {
-                format!("[Space/Enter] Toggle  [Tab] Effort: {}  [Esc] Done", selector.reasoning_label())
-            }
-            ActivePane::Picker(_) => "[Enter] Confirm  [Esc] Back".to_string(),
-            ActivePane::ServerStatus(_) => "[Enter] Authenticate OAuth servers  [Esc] Back".to_string(),
-            ActivePane::ProviderLogin(_) => "[Enter] Authenticate  [Esc] Back".to_string(),
-            ActivePane::Menu => "[Enter] Select  [Esc] Close".to_string(),
-        }
-    }
-
-    fn apply_activation(&mut self, activation: PaneActivation) -> Vec<SettingsOverlayMessage> {
-        if let Some(change) = activation.change {
-            self.menu.apply_change(&change);
-        }
-        self.apply_transition(activation.transition);
-        activation.message.into_iter().collect()
-    }
-
-    fn menu_activation(&self) -> PaneActivation {
-        let Some(entry) = self.menu.selected_entry() else { return PaneActivation::stay() };
-        match entry.entry_kind {
-            SettingsMenuEntryKind::McpServers => PaneActivation::server_status(self.server_statuses.clone()),
-            SettingsMenuEntryKind::ProviderLogins => {
-                PaneActivation::provider_login(build_provider_login_entries(&self.auth_methods))
-            }
-            _ if entry.multi_select => PaneActivation::model_selector(entry, self.current_reasoning_effort.as_deref()),
-            _ => SettingsPicker::from_entry(entry).map_or_else(PaneActivation::stay, PaneActivation::picker),
-        }
-    }
-
-    fn handle_menu_key(&mut self, key: KeyEvent) -> Vec<SettingsOverlayMessage> {
+    fn on_menu_key(&mut self, key: KeyEvent) -> Vec<OverlayMessage> {
         match key.code {
-            KeyCode::Esc => return vec![SettingsOverlayMessage::Close],
+            KeyCode::Esc => return vec![OverlayMessage::Close],
             KeyCode::Up => self.menu.move_up(),
             KeyCode::Down => self.menu.move_down(),
-            KeyCode::Enter => self.apply_transition(self.menu_activation().transition),
+            KeyCode::Enter => self.pane = self.open_selected_pane(),
             _ => {}
         }
-        vec![]
+        Vec::new()
     }
 
-    fn handle_picker_key(&mut self, picker: &mut SettingsPicker, key: KeyEvent) -> Vec<SettingsOverlayMessage> {
-        match key.code {
-            KeyCode::Esc => self.active_pane = ActivePane::Menu,
-            KeyCode::Up => picker.move_up(),
-            KeyCode::Down => picker.move_down(),
-            KeyCode::Enter => return self.apply_activation(picker_activation(picker)),
-            KeyCode::Backspace => picker.pop_query_char(),
-            KeyCode::Char(c) if !c.is_control() => picker.push_query_char(c),
-            _ => {}
-        }
-        vec![]
-    }
-
-    fn handle_model_selector_key(
-        &mut self,
-        selector: &mut ModelSelector,
-        key: KeyEvent,
-    ) -> Vec<SettingsOverlayMessage> {
-        match key.code {
-            KeyCode::Esc => {
-                self.active_pane = ActivePane::Menu;
-                return process_config_changes(&selector.confirm());
+    fn open_selected_pane(&self) -> Option<Box<dyn SettingsPane>> {
+        let entry = self.menu.selected_entry()?;
+        match entry.entry_kind {
+            SettingsMenuEntryKind::McpServers => Some(Box::new(ServerStatusPane::new(self.live.servers.clone()))),
+            SettingsMenuEntryKind::ProviderLogins => {
+                Some(Box::new(ProviderLoginPane::new(self.live.providers.clone())))
             }
-            KeyCode::Up => {
-                selector.move_up();
-                selector.clamp_reasoning_to_focused();
-            }
-            KeyCode::Down => {
-                selector.move_down();
-                selector.clamp_reasoning_to_focused();
-            }
-            KeyCode::Tab => selector.cycle_reasoning(),
-            KeyCode::BackTab => selector.cycle_reasoning_back(),
-            KeyCode::Enter | KeyCode::Char(' ') => selector.toggle_focused(),
-            KeyCode::Backspace => selector.pop_query_char(),
-            KeyCode::Char(c) if !c.is_control() => selector.push_query_char(c),
-            _ => {}
+            _ if entry.multi_select => Some(Box::new(ModelSelector::new(
+                entry.config_id.clone(),
+                entry.values.clone(),
+                &entry.current_raw_value,
+                self.current_reasoning_effort.as_deref(),
+            ))),
+            _ => SettingsPicker::from_entry(entry).map(|picker| Box::new(picker) as Box<dyn SettingsPane>),
         }
-        vec![]
     }
 
-    fn handle_server_status_key(&mut self, pane: &mut ServerStatusPane, key: KeyEvent) -> Vec<SettingsOverlayMessage> {
-        match key.code {
-            KeyCode::Esc => self.active_pane = ActivePane::Menu,
-            KeyCode::Up => pane.move_up(),
-            KeyCode::Down => pane.move_down(),
-            KeyCode::Enter => return self.apply_activation(server_authentication_activation(pane)),
-            _ => {}
+    /// Applies a pane's result: config edits update the menu immediately so the
+    /// UI never lags the agent round-trip, and become outbound messages.
+    fn apply(&mut self, outcome: PaneOutcome) -> Vec<OverlayMessage> {
+        if outcome.back {
+            self.pane = None;
         }
-        vec![]
+        let mut messages = outcome.messages;
+        for change in &outcome.changes {
+            self.menu.apply_change(change);
+            messages.push(message_for_change(change));
+        }
+        messages
     }
 
-    fn handle_provider_login_key(
-        &mut self,
-        pane: &mut ProviderLoginPane,
-        key: KeyEvent,
-    ) -> Vec<SettingsOverlayMessage> {
-        match key.code {
-            KeyCode::Esc => self.active_pane = ActivePane::Menu,
-            KeyCode::Up => pane.move_up(),
-            KeyCode::Down => pane.move_down(),
-            KeyCode::Enter => return self.apply_activation(provider_authentication_activation(pane)),
-            _ => {}
+    /// Inner area of the overlay's border, which mouse rows are measured from.
+    fn inner_area(area: Rect) -> Rect {
+        Block::bordered().inner(area)
+    }
+}
+
+impl Overlay for SettingsOverlay {
+    fn on_key(&mut self, key: KeyEvent) -> Vec<OverlayMessage> {
+        let Some(pane) = self.pane.as_mut() else {
+            return self.on_menu_key(key);
+        };
+        let outcome = if key.code == KeyCode::Esc {
+            PaneOutcome { changes: pane.take_changes(), back: true, ..PaneOutcome::default() }
+        } else {
+            pane.on_key(key)
+        };
+        self.apply(outcome)
+    }
+
+    fn scroll(&mut self, direction: Direction) -> Vec<OverlayMessage> {
+        match self.pane.as_mut() {
+            Some(pane) => pane.scroll(direction),
+            None => self.menu.step(direction),
         }
-        vec![]
+        Vec::new()
+    }
+
+    fn click(&mut self, row: u16, area: Rect) -> Vec<OverlayMessage> {
+        if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
+            return Vec::new();
+        }
+        let inner = Self::inner_area(area);
+        if row < inner.y || row >= inner.bottom() {
+            return Vec::new();
+        }
+        let local_row = usize::from(row - inner.y);
+        let Some(pane) = self.pane.as_mut() else {
+            self.menu.click_row(local_row);
+            self.pane = self.open_selected_pane();
+            return Vec::new();
+        };
+        let outcome = pane.click(local_row, usize::from(inner.height));
+        self.apply(outcome)
+    }
+
+    fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
+        Clear.render(area, buf);
+        if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
+            Paragraph::new(Line::styled("(terminal too small)", Style::new().fg(theme.text_secondary)))
+                .render(area, buf);
+            return;
+        }
+        let block = Block::bordered()
+            .title(" Configuration ")
+            .style(Style::new().bg(theme.background))
+            .border_style(Style::new().fg(theme.text_secondary));
+        let inner = block.inner(area);
+        block.render(area, buf);
+
+        let [content_area, footer_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
+        Paragraph::new(Line::from(self.footer_text())).render(footer_area, buf);
+        match self.pane.as_mut() {
+            Some(pane) => pane.render(content_area, buf, theme),
+            None => self.menu.render(content_area, buf, theme),
+        }
     }
 }
 
@@ -502,30 +348,13 @@ impl Drop for SettingsOverlay {
     }
 }
 
-impl PaneActivation {
-    fn stay() -> Self {
-        Self { transition: PaneTransition::Stay, change: None, message: None }
+impl LiveSettingsData {
+    fn server_summary(&self) -> String {
+        server_status::summary(&self.servers)
     }
-    fn picker(picker: SettingsPicker) -> Self {
-        Self { transition: PaneTransition::Picker(picker), change: None, message: None }
-    }
-    fn model_selector(entry: &SettingsMenuEntry, effort: Option<&str>) -> Self {
-        Self {
-            transition: PaneTransition::ModelSelector(ModelSelector::new(
-                entry.config_id.clone(),
-                entry.values.clone(),
-                &entry.current_raw_value,
-                effort,
-            )),
-            change: None,
-            message: None,
-        }
-    }
-    fn server_status(entries: Vec<McpServerStatusEntry>) -> Self {
-        Self { transition: PaneTransition::ServerStatus(ServerStatusPane::new(entries)), change: None, message: None }
-    }
-    fn provider_login(entries: Vec<provider_login::ProviderLoginEntry>) -> Self {
-        Self { transition: PaneTransition::ProviderLogin(ProviderLoginPane::new(entries)), change: None, message: None }
+
+    fn provider_summary(&self) -> String {
+        provider_login::summary(&self.providers)
     }
 }
 
@@ -534,32 +363,31 @@ struct PendingElicitation {
     elicitation_id: String,
     responder: Responder<ElicitationResponse>,
 }
+
 impl PendingElicitation {
     fn matches(&self, params: &UrlElicitationCompleteParams) -> bool {
         self.server_name == params.server_name && self.elicitation_id == params.elicitation_id
     }
 }
 
-fn picker_activation(picker: &SettingsPicker) -> PaneActivation {
-    let change = picker.confirm_selection();
-    let message = change.as_ref().map(message_for_change);
-    PaneActivation { transition: PaneTransition::Menu, change, message }
+fn reasoning_effort_of(options: &[SessionConfigOption]) -> Option<String> {
+    SessionConfigView::new(options).reasoning_effort().map(|effort| effort.as_str().to_string())
 }
-fn server_authentication_activation(pane: &ServerStatusPane) -> PaneActivation {
-    PaneActivation { transition: PaneTransition::Stay, change: None, message: pane.authentication_message() }
-}
-fn provider_authentication_activation(pane: &ProviderLoginPane) -> PaneActivation {
-    PaneActivation { transition: PaneTransition::Stay, change: None, message: pane.authentication_message() }
-}
-fn message_for_change(change: &SettingsChange) -> SettingsOverlayMessage {
+
+fn message_for_change(change: &SettingsChange) -> OverlayMessage {
     if change.config_id == acp_utils::config_option_id::THEME_CONFIG_ID {
-        SettingsOverlayMessage::SetTheme(change.new_value.clone())
+        OverlayMessage::SetTheme(change.new_value.clone())
     } else {
-        SettingsOverlayMessage::SetConfigOption { config_id: change.config_id.clone(), value: change.new_value.clone() }
+        OverlayMessage::SetConfigOption { config_id: change.config_id.clone(), value: change.new_value.clone() }
     }
 }
-fn process_config_changes(changes: &[SettingsChange]) -> Vec<SettingsOverlayMessage> {
-    changes.iter().map(message_for_change).collect()
+
+/// Joins the non-zero `(count, label)` buckets into "2 connected, 1 failed",
+/// falling back to `empty` when every bucket is zero.
+pub(crate) fn summarize(buckets: &[(usize, &str)], empty: &str) -> String {
+    let parts: Vec<String> =
+        buckets.iter().filter(|(count, _)| *count > 0).map(|(count, label)| format!("{count} {label}")).collect();
+    if parts.is_empty() { empty.to_string() } else { parts.join(", ") }
 }
 
 #[cfg(test)]

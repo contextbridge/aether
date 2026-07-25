@@ -310,11 +310,6 @@ impl ToolCallLog {
         self.sub_agents.on_progress(notification);
     }
 
-    /// Returns true if any sub-agent of the given parent tool is still running.
-    pub fn has_sub_agent_running(&self, tool_id: &str) -> bool {
-        self.sub_agents.has_any_running_for_parent(tool_id)
-    }
-
     /// Returns the sub-agent states for a parent tool call, if any.
     pub fn sub_agent_states(&self, tool_id: &str) -> Option<&[SubAgentState]> {
         self.sub_agents.get(tool_id)
@@ -594,7 +589,7 @@ mod tests {
             },
         ));
 
-        assert!(log.has_sub_agent_running("parent-1"));
+        assert!(log.is_running("parent-1"));
         let agents = log.sub_agent_states("parent-1").unwrap();
         assert_eq!(agents.len(), 1);
         assert_eq!(agents[0].task_id, "task-abc");

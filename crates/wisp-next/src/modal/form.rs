@@ -1,16 +1,20 @@
 use acp_utils::{
     ConstTitle, ElicitationSchema, EnumSchema, MultiSelectEnumSchema, PrimitiveSchema, SingleSelectEnumSchema,
 };
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::Frame;
+use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, Paragraph, Widget, Wrap};
 use serde_json::{Map, Value};
 
-use crate::edit_buffer::EditBuffer;
+use crate::edit_buffer::{EditBuffer, apply_edit_key};
+use crate::selection::Direction;
 use crate::theme::Theme;
+
+/// Rows drawn above the first field: the "Request from …" header and message.
+const HEADER_ROWS: u16 = 3;
 
 pub(super) struct FormModal {
     server_name: String,
@@ -56,89 +60,104 @@ impl FormModal {
     }
 
     pub(super) fn on_key(&mut self, key: KeyEvent) -> FormAction {
-        // If inside a multi-select's options, handle navigation within that field
-        if let Some(field) = self.fields.get_mut(self.selected)
-            && matches!(&field.kind, FormFieldKind::Multi { .. })
-            && self.handle_multi_select_key(key)
-        {
+        // Inside a multi-select, arrows and space move within its options rather
+        // than between fields.
+        if self.multi_select_key(key) {
             return FormAction::None;
         }
 
         match key.code {
-            KeyCode::Esc => FormAction::Cancel,
-            KeyCode::Up | KeyCode::BackTab => {
-                self.selected = self.selected.saturating_sub(1);
-                FormAction::None
-            }
-            KeyCode::Down | KeyCode::Tab => {
-                self.selected = (self.selected + 1).min(self.fields.len().saturating_sub(1));
-                FormAction::None
-            }
-            KeyCode::Enter => self.submit(),
-            KeyCode::Left => {
-                self.change_selection(-1);
-                FormAction::None
-            }
-            KeyCode::Right | KeyCode::Char(' ') => {
-                self.change_selection(1);
-                FormAction::None
-            }
-            KeyCode::Backspace => {
-                if let Some(field) = self.fields.get_mut(self.selected) {
-                    match &mut field.kind {
-                        FormFieldKind::Text(value) | FormFieldKind::Number(value) => {
-                            value.backspace();
-                        }
-                        _ => {}
-                    }
+            KeyCode::Esc => return FormAction::Cancel,
+            KeyCode::Enter => return self.submit(),
+            KeyCode::Up | KeyCode::BackTab => self.scroll(Direction::Backward),
+            KeyCode::Down | KeyCode::Tab => self.scroll(Direction::Forward),
+            KeyCode::Left => self.cycle_focused(Direction::Backward),
+            KeyCode::Right | KeyCode::Char(' ') => self.cycle_focused(Direction::Forward),
+            _ => {
+                if let Some(FormFieldKind::Text(value) | FormFieldKind::Number(value)) = self.focused_kind() {
+                    apply_edit_key(value, key);
                 }
-                FormAction::None
             }
-            KeyCode::Char(character) if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
-                if let Some(field) = self.fields.get_mut(self.selected) {
-                    match &mut field.kind {
-                        FormFieldKind::Text(value) | FormFieldKind::Number(value) => value.insert_char(character),
-                        _ => {}
+        }
+        FormAction::None
+    }
+
+    /// Moves between fields, or within the focused multi-select's options.
+    pub(super) fn scroll(&mut self, direction: Direction) {
+        if let Some(FormFieldKind::Multi { options, cursor, .. }) = self.focused_kind() {
+            *cursor = match direction {
+                Direction::Backward => cursor.saturating_sub(1),
+                Direction::Forward => (*cursor + 1).min(options.len().saturating_sub(1)),
+            };
+            return;
+        }
+        self.selected = match direction {
+            Direction::Backward => self.selected.saturating_sub(1),
+            Direction::Forward => (self.selected + 1).min(self.fields.len().saturating_sub(1)),
+        };
+    }
+
+    /// Focuses the field drawn at `row` and activates it, so a click both
+    /// selects and toggles in one gesture.
+    pub(super) fn click(&mut self, row: u16) {
+        let Some(field_row) = row.checked_sub(HEADER_ROWS).map(usize::from) else {
+            return;
+        };
+        let mut current = 0usize;
+        for index in 0..self.fields.len() {
+            if current == field_row {
+                self.selected = index;
+                match self.focused_kind() {
+                    Some(FormFieldKind::Boolean(_) | FormFieldKind::Single { .. }) => {
+                        self.cycle_focused(Direction::Forward);
                     }
+                    Some(FormFieldKind::Multi { .. }) => self.toggle_multi_select(),
+                    _ => {}
                 }
-                FormAction::None
+                return;
             }
-            _ => FormAction::None,
+            current += self.fields[index].rendered_rows();
         }
     }
 
-    pub(super) fn handle_multi_select_key(&mut self, key: KeyEvent) -> bool {
-        let Some(field) = self.fields.get_mut(self.selected) else { return false };
-        let FormFieldKind::Multi { options, selected, cursor } = &mut field.kind else { return false };
-
+    fn multi_select_key(&mut self, key: KeyEvent) -> bool {
+        if !matches!(self.focused_kind(), Some(FormFieldKind::Multi { .. })) {
+            return false;
+        }
         match key.code {
-            KeyCode::Up => {
-                *cursor = cursor.saturating_sub(1);
-                true
-            }
-            KeyCode::Down => {
-                *cursor = (*cursor + 1).min(options.len().saturating_sub(1));
-                true
-            }
-            KeyCode::Char(' ') => {
-                if let Some(sel) = selected.get_mut(*cursor) {
-                    *sel = !*sel;
-                }
-                true
-            }
-            _ => false,
+            KeyCode::Up => self.scroll(Direction::Backward),
+            KeyCode::Down => self.scroll(Direction::Forward),
+            KeyCode::Char(' ') => self.toggle_multi_select(),
+            _ => return false,
+        }
+        true
+    }
+
+    fn toggle_multi_select(&mut self) {
+        if let Some(FormFieldKind::Multi { selected, cursor, .. }) = self.focused_kind()
+            && let Some(flag) = selected.get_mut(*cursor)
+        {
+            *flag = !*flag;
         }
     }
 
-    pub(super) fn change_selection(&mut self, direction: isize) {
-        let Some(field) = self.fields.get_mut(self.selected) else { return };
-        match &mut field.kind {
-            FormFieldKind::Boolean(value) => *value = !*value,
-            FormFieldKind::Single { options, selected } if !options.is_empty() => {
-                *selected = selected.saturating_add_signed(direction).min(options.len() - 1);
+    /// Advances a boolean or single-select field to its next value.
+    fn cycle_focused(&mut self, direction: Direction) {
+        let step = match direction {
+            Direction::Backward => -1,
+            Direction::Forward => 1,
+        };
+        match self.focused_kind() {
+            Some(FormFieldKind::Boolean(value)) => *value = !*value,
+            Some(FormFieldKind::Single { options, selected }) if !options.is_empty() => {
+                *selected = selected.saturating_add_signed(step).min(options.len() - 1);
             }
             _ => {}
         }
+    }
+
+    fn focused_kind(&mut self) -> Option<&mut FormFieldKind> {
+        self.fields.get_mut(self.selected).map(|field| &mut field.kind)
     }
 
     fn submit(&mut self) -> FormAction {
@@ -158,7 +177,7 @@ impl FormModal {
         FormAction::Accept(Value::Object(content))
     }
 
-    pub(super) fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    pub(super) fn render(&self, area: Rect, buf: &mut Buffer, theme: &Theme) {
         let mut lines = vec![Line::styled(
             format!("Request from {}", self.server_name),
             Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
@@ -204,9 +223,8 @@ impl FormModal {
         } else {
             lines.push(Line::styled("Enter submit · Esc cancel", Style::new().fg(theme.muted)));
         }
-        let block =
-            Block::default().borders(Borders::ALL).title(" Elicitation ").border_style(Style::new().fg(theme.accent));
-        frame.render_widget(Paragraph::new(Text::from(lines)).block(block).wrap(Wrap { trim: false }), area);
+        let block = Block::bordered().title(" Elicitation ").border_style(Style::new().fg(theme.accent));
+        Paragraph::new(Text::from(lines)).block(block).wrap(Wrap { trim: false }).render(area, buf);
     }
 }
 
@@ -280,6 +298,16 @@ impl FormField {
                     .collect(),
             )),
         }
+    }
+
+    /// Lines this field occupies, so click targets line up with what is drawn.
+    fn rendered_rows(&self) -> usize {
+        let options = match &self.kind {
+            FormFieldKind::Multi { options, .. } => options.len(),
+            _ => 0,
+        };
+        let description = usize::from(self.description.as_ref().is_some_and(|text| !text.is_empty()));
+        1 + options + description
     }
 
     fn display_value(&self) -> String {
@@ -373,6 +401,7 @@ fn options_from_const_titles(items: &[ConstTitle]) -> Vec<SelectOption> {
 #[allow(clippy::absolute_paths, clippy::similar_names)]
 mod tests {
     use super::*;
+    use crossterm::event::KeyModifiers;
 
     fn permission_like_schema() -> ElicitationSchema {
         ElicitationSchema::builder()
@@ -447,7 +476,7 @@ mod tests {
         match &form.fields[0].kind {
             FormFieldKind::Number(value) => {
                 let parsed: f64 = value.parse().unwrap();
-                assert!((parsed - 2.5).abs() < 0.001, "expected ~2.5, got {value}");
+                assert!((parsed - 2.5).abs() < 0.001, "expected ~2.5, got {}", value.text());
             }
             _ => panic!("expected Number"),
         }

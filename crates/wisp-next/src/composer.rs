@@ -1,13 +1,12 @@
 use crate::attachments::{AttachmentKind, PromptAttachment, classify_attachment};
 use crate::edit_buffer::EditBuffer;
-use crate::picker::{CommandEntry, FileEntry, Overlay};
+use crate::picker::{CommandEntry, CompletionOverlay, FileEntry};
 use crate::prompt_search::{self, PromptSearchMessage, PromptSearchPicker};
 use crate::theme::Theme;
 use crate::wrap::wrap_text_char;
 use acp_utils::notifications::PromptSearchResponse;
 use crossterm::event::KeyCode;
-use ratatui::buffer::Buffer;
-use ratatui::layout::{Position, Rect};
+use ratatui::layout::Position;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use std::collections::HashSet;
@@ -22,7 +21,7 @@ pub struct SelectedFileMention {
 #[derive(Debug, Default)]
 pub struct Composer {
     buffer: EditBuffer,
-    overlay: Option<Overlay>,
+    overlay: Option<CompletionOverlay>,
     mentions: Vec<SelectedFileMention>,
     pending_media: Vec<PromptAttachment>,
     history: Vec<String>,
@@ -122,6 +121,21 @@ impl Composer {
         &self.pending_media
     }
 
+    /// Applies one shared editing keystroke. Anything that changes the text also
+    /// ends history navigation, so the recalled prompt becomes the user's draft.
+    pub fn apply_edit_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        if key.code == KeyCode::Backspace {
+            self.backspace();
+            return true;
+        }
+        let before = self.buffer.text().len();
+        let handled = crate::edit_buffer::apply_edit_key(&mut self.buffer, key);
+        if self.buffer.text().len() != before {
+            self.reset_history_navigation();
+        }
+        handled
+    }
+
     pub fn insert_char(&mut self, character: char) {
         self.reset_history_navigation();
         self.buffer.insert_char(character);
@@ -216,15 +230,43 @@ impl Composer {
     }
 
     pub fn open_command_picker(&mut self, commands: Vec<CommandEntry>) {
-        self.overlay = Some(Overlay::command(commands));
+        self.overlay = Some(CompletionOverlay::command(commands));
     }
 
     pub fn open_file_picker(&mut self, root: &std::path::Path) {
-        self.overlay = Some(Overlay::file(root));
+        self.overlay = Some(CompletionOverlay::file(root));
     }
 
     pub fn has_overlay(&self) -> bool {
         self.overlay.is_some()
+    }
+
+    /// The open completion list, for navigation and rendering.
+    pub fn completion(&mut self) -> Option<&mut CompletionOverlay> {
+        self.overlay.as_mut()
+    }
+
+    pub fn completion_ref(&self) -> Option<&CompletionOverlay> {
+        self.overlay.as_ref()
+    }
+
+    /// The open prompt-history picker, for queries and rendering.
+    pub fn prompt_search(&mut self) -> Option<&mut PromptSearchPicker> {
+        self.prompt_search.as_mut().map(|state| &mut state.picker)
+    }
+
+    pub fn prompt_search_ref(&self) -> Option<&PromptSearchPicker> {
+        self.prompt_search.as_ref().map(|state| &state.picker)
+    }
+
+    /// Moves through history results and mirrors the newly selected prompt into
+    /// the composer, so browsing previews each candidate in place.
+    pub fn navigate_prompt_search(&mut self, navigate: impl FnOnce(&mut PromptSearchPicker)) {
+        let Some(state) = self.prompt_search.as_mut() else {
+            return;
+        };
+        navigate(&mut state.picker);
+        self.apply_selected_search_result();
     }
 
     pub fn has_prompt_search(&self) -> bool {
@@ -293,55 +335,9 @@ impl Composer {
         }
     }
 
-    pub fn prompt_search_on_failed(&mut self, search_generation: u64, error: String) {
-        let Some(state) = self.prompt_search.as_mut() else {
-            return;
-        };
-        let _ = state.picker.on_failed(search_generation, error);
-    }
-
     pub fn restore_prompt_search_draft(&mut self) {
         if let Some(state) = &self.prompt_search {
             self.buffer.set_text(state.draft.clone());
-        }
-    }
-
-    pub fn prompt_search_query(&self) -> Option<&str> {
-        self.prompt_search.as_ref().map(|state| state.picker.query())
-    }
-
-    pub fn prompt_search_generation(&self) -> Option<u64> {
-        self.prompt_search.as_ref().map(|state| state.picker.search_generation())
-    }
-
-    pub fn prompt_search_move_up(&mut self) {
-        if let Some(state) = &mut self.prompt_search {
-            state.picker.move_up();
-            self.apply_selected_search_result();
-        }
-    }
-
-    pub fn prompt_search_move_down(&mut self) {
-        if let Some(state) = &mut self.prompt_search {
-            state.picker.move_down();
-            self.apply_selected_search_result();
-        }
-    }
-
-    pub fn prompt_search_select_row(&mut self, row: usize) {
-        if let Some(state) = &mut self.prompt_search {
-            state.picker.select_row(row.saturating_sub(1));
-            self.apply_selected_search_result();
-        }
-    }
-
-    pub fn prompt_search_height(&self, max_rows: usize) -> usize {
-        self.prompt_search.as_ref().map_or(0, |state| state.picker.height(max_rows))
-    }
-
-    pub fn render_prompt_search(&mut self, area: Rect, buffer: &mut Buffer, theme: &Theme) {
-        if let Some(state) = &mut self.prompt_search {
-            state.picker.render(area, buffer, theme);
         }
     }
 
@@ -353,32 +349,6 @@ impl Composer {
             let cursor = prompt_search::cursor_at_match_end(&result.prompt, result.match_end);
             self.buffer.set_text(result.prompt.clone());
             self.buffer.set_cursor(cursor);
-        }
-    }
-
-    pub fn overlay_lines(&self, width: u16, max_rows: usize, theme: &Theme) -> Vec<Line<'static>> {
-        self.overlay.as_ref().map_or_else(Vec::new, |overlay| overlay.lines(width, max_rows, theme))
-    }
-
-    pub fn overlay_query(&self) -> Option<&str> {
-        self.overlay.as_ref().map(Overlay::query)
-    }
-
-    pub fn overlay_move_up(&mut self) {
-        if let Some(overlay) = &mut self.overlay {
-            overlay.move_up();
-        }
-    }
-
-    pub fn overlay_move_down(&mut self) {
-        if let Some(overlay) = &mut self.overlay {
-            overlay.move_down();
-        }
-    }
-
-    pub fn overlay_select_row(&mut self, row: usize) {
-        if let Some(overlay) = &mut self.overlay {
-            overlay.select_row(row);
         }
     }
 
@@ -402,10 +372,7 @@ impl Composer {
     }
 
     pub fn refresh_overlay_query(&mut self) {
-        let Some(trigger) = self.overlay.as_ref().map(|overlay| match overlay {
-            Overlay::Command(_) => '/',
-            Overlay::File(_) => '@',
-        }) else {
+        let Some(trigger) = self.overlay.as_ref().map(CompletionOverlay::trigger) else {
             return;
         };
         let query = self
@@ -417,7 +384,7 @@ impl Composer {
     }
 
     pub fn active_token_is_empty(&self) -> bool {
-        self.overlay_query().is_some_and(str::is_empty)
+        self.overlay.as_ref().is_some_and(|overlay| overlay.query().is_empty())
     }
 
     pub fn line_count(&self) -> usize {

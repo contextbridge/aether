@@ -27,12 +27,18 @@ pub enum GitDiffEvent {
     SubmitReview { request_id: u64, prompt: String },
 }
 
-pub enum GitDiffOutcome {
-    None,
-    Close,
-    Effect(GitDiffEffect),
-    SubmitReview(GitDiffEffect),
+impl GitDiffEvent {
+    /// The request this result belongs to, so superseded results can be dropped.
+    pub fn request_id(&self) -> u64 {
+        match self {
+            Self::Loaded { request_id, .. }
+            | Self::ActionFinished { request_id, .. }
+            | Self::FullFileLoaded { request_id, .. }
+            | Self::SubmitReview { request_id, .. } => *request_id,
+        }
+    }
 }
+
 impl GitDiffEffect {
     pub async fn execute(self) -> GitDiffEvent {
         let request_id = self.request_id();
@@ -46,7 +52,8 @@ impl GitDiffEffect {
         }
     }
 
-    fn request_id(&self) -> u64 {
+    /// The request this effect will report back under.
+    pub fn request_id(&self) -> u64 {
         match self {
             Self::Load { request_id, .. }
             | Self::StageFiles { request_id, .. }

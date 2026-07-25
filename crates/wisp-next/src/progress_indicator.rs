@@ -10,7 +10,7 @@ pub fn spinner_frame(tick: usize) -> &'static str {
 
 const MESSAGES: &[&str] = &[
     "Tip: Hit Tab to adjust reasoning level (off → low → medium → high)",
-    "Tip: Hit Shift+Tab to cycle through agents defined in your settings.json file",
+    "Tip: Hit Shift+Tab to cycle through modes",
     "Tip: Press @ to attach files to your prompt",
     "Tip: Type / to open the command picker",
     "Tip: Use /resume to pick up a previous session",
@@ -134,9 +134,11 @@ impl ProgressIndicator {
             ProgressDisplay::MovingWorkspace { .. } => "Moving workspace...",
             ProgressDisplay::LoadingSession { .. } => "Loading session in new workspace...",
             ProgressDisplay::Compacting { .. } => "Compacting context...",
-            ProgressDisplay::AgentWorking => {
-                self.turn_count.checked_sub(1).and_then(|i| MESSAGES.get(i)).copied().unwrap_or("Working...")
-            }
+            // Tips cycle so they keep rotating past the length of the list.
+            ProgressDisplay::AgentWorking => match self.turn_count.checked_sub(1) {
+                Some(turn) => MESSAGES[turn % MESSAGES.len()],
+                None => "Working...",
+            },
             ProgressDisplay::Idle => "",
         }
     }

@@ -1,47 +1,34 @@
+use crate::selection::{Direction, SelectionState};
 use crate::theme::Theme;
-use crate::wrap::truncate_to_width;
 use nucleo::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo::{Config, Matcher, Utf32Str};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
-use ratatui::text::{Line, Span};
 use ratatui::widgets::{
-    Block, List, ListItem, ListState, Scrollbar, ScrollbarOrientation, ScrollbarState, StatefulWidget, Widget,
+    Block, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, StatefulWidget, Widget,
 };
-use unicode_width::UnicodeWidthStr;
 
-pub struct FilterableListRender<'a> {
-    pub title: String,
-    pub empty_message: &'a str,
-    pub border_style: Style,
-    pub empty_style: Style,
-    pub highlight_style: Style,
-}
-
+/// A list of `T` with a fuzzy-match filter and a persistent selection.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FilterableList<T> {
     entries: Vec<T>,
     match_keys: Vec<String>,
     query: String,
     filtered_indices: Vec<usize>,
-    state: ListState,
+    selection: SelectionState,
 }
 
 impl<T> FilterableList<T> {
     pub fn new(entries: Vec<T>, match_key: impl Fn(&T) -> String) -> Self {
         let match_keys = entries.iter().map(&match_key).collect();
         let filtered_indices = (0..entries.len()).collect();
-        let state = ListState::default().with_selected((!entries.is_empty()).then_some(0));
-        Self { entries, match_keys, query: String::new(), filtered_indices, state }
+        let selection = SelectionState::new(entries.len());
+        Self { entries, match_keys, query: String::new(), filtered_indices, selection }
     }
 
     pub fn entries(&self) -> &[T] {
         &self.entries
-    }
-
-    pub fn entries_mut(&mut self) -> &mut [T] {
-        &mut self.entries
     }
 
     pub fn filtered_entries(&self) -> impl Iterator<Item = (usize, &T)> {
@@ -61,15 +48,23 @@ impl<T> FilterableList<T> {
     }
 
     pub fn offset(&self) -> usize {
-        self.state.offset()
+        self.selection.offset()
     }
 
     pub fn selected_index(&self) -> Option<usize> {
-        self.state.selected().and_then(|selected| self.filtered_indices.get(selected)).copied()
+        self.selection.selected().and_then(|selected| self.filtered_indices.get(selected)).copied()
     }
 
     pub fn selected_entry(&self) -> Option<&T> {
         self.selected_index().map(|index| &self.entries[index])
+    }
+
+    /// Mutate the first entry matching `find`, whether or not it passes the
+    /// current filter. Used for out-of-band status updates.
+    pub fn update_first(&mut self, find: impl Fn(&T) -> bool, apply: impl FnOnce(&mut T)) {
+        if let Some(entry) = self.entries.iter_mut().find(|entry| find(entry)) {
+            apply(entry);
+        }
     }
 
     pub fn push_query_char(&mut self, character: char) {
@@ -92,121 +87,130 @@ impl<T> FilterableList<T> {
         self.refilter();
     }
 
+    pub fn select_row(&mut self, row: usize) {
+        self.selection.select_row(row, self.filtered_len());
+        self.clear_offset_when_empty();
+    }
+
+    pub fn select_previous(&mut self) {
+        self.step(Direction::Backward, |_| true);
+    }
+
+    pub fn select_next(&mut self) {
+        self.step(Direction::Forward, |_| true);
+    }
+
+    /// Wrapping move to the nearest filtered entry in `direction` satisfying
+    /// `selectable`, so disabled rows are never focused.
+    pub fn step(&mut self, direction: Direction, selectable: impl Fn(&T) -> bool) {
+        let Self { entries, filtered_indices, selection, .. } = self;
+        selection.step(filtered_indices.len(), direction, |row| selectable(&entries[filtered_indices[row]]));
+    }
+
+    /// Block title for a picker pane, showing the active query when there is one.
+    pub fn search_title(&self, label: &str) -> String {
+        if self.query.is_empty() { format!(" {label} ") } else { format!(" {label} '{}' ", self.query) }
+    }
+
+    /// Like [`Self::step`], but stops at the ends instead of wrapping.
+    pub fn step_clamped(&mut self, direction: Direction, selectable: impl Fn(&T) -> bool) {
+        let Self { entries, filtered_indices, selection, .. } = self;
+        selection.step_clamped(filtered_indices.len(), direction, |row| selectable(&entries[filtered_indices[row]]));
+    }
+
+    pub fn select_index(&mut self, index: usize) {
+        self.selection.select(
+            self.filtered_indices.iter().position(|&filtered_index| filtered_index == index),
+            self.filtered_len(),
+        );
+    }
+
+    /// Renders the filtered entries as a ratatui [`List`], rows produced by
+    /// `item`. Decorate with [`FilterableListView::block`] and
+    /// [`FilterableListView::scrollbar`].
+    pub fn view<'a, F>(&'a mut self, theme: &'a Theme, empty_message: &'a str, item: F) -> FilterableListView<'a, T, F>
+    where
+        F: FnMut(&T) -> ListItem<'static>,
+    {
+        FilterableListView { list: self, theme, empty_message, item, block: None, scrollbar: false, highlight: None }
+    }
+
     fn refilter(&mut self) {
         if self.query.is_empty() {
             self.filtered_indices = (0..self.entries.len()).collect();
         } else {
             self.filtered_indices = fuzzy_filter(&self.query, &self.match_keys);
         }
-        self.select_first();
+        self.selection.select_first(self.filtered_len());
+        self.clear_offset_when_empty();
     }
 
-    pub fn select_row(&mut self, row: usize) {
-        self.select(self.state.offset().checked_add(row));
+    fn clear_offset_when_empty(&mut self) {
+        if self.filtered_indices.is_empty() {
+            *self.selection.list_state_mut().offset_mut() = 0;
+        }
+    }
+}
+
+/// A [`FilterableList`] rendered as a ratatui widget.
+pub struct FilterableListView<'a, T, F> {
+    list: &'a mut FilterableList<T>,
+    theme: &'a Theme,
+    empty_message: &'a str,
+    item: F,
+    block: Option<Block<'static>>,
+    scrollbar: bool,
+    highlight: Option<Style>,
+}
+
+impl<T, F> FilterableListView<'_, T, F> {
+    pub fn block(mut self, block: Block<'static>) -> Self {
+        self.block = Some(block);
+        self
     }
 
-    pub fn select_previous(&mut self) {
-        let len = self.filtered_len();
-        if len == 0 {
-            self.state.select(None);
+    /// Wraps the list in a titled border, the standard full-pane picker chrome.
+    pub fn bordered(self, title: impl Into<String>) -> Self {
+        let style = Style::new().fg(self.theme.text_primary);
+        self.block(Block::bordered().title(title.into()).style(style)).scrollbar()
+    }
+
+    pub fn scrollbar(mut self) -> Self {
+        self.scrollbar = true;
+        self
+    }
+
+    pub fn highlight_style(mut self, style: Style) -> Self {
+        self.highlight = Some(style);
+        self
+    }
+}
+
+impl<T, F> Widget for FilterableListView<'_, T, F>
+where
+    F: FnMut(&T) -> ListItem<'static>,
+{
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let Self { list, theme, empty_message, mut item, block, scrollbar, highlight } = self;
+        let inner = block.as_ref().map_or(area, |block| block.inner(area));
+        if let Some(block) = block {
+            block.render(area, buf);
+        }
+
+        if list.filtered_indices.is_empty() {
+            Paragraph::new(empty_message).style(Style::new().fg(theme.muted)).render(inner, buf);
             return;
         }
-        let selected = self.state.selected().unwrap_or_default();
-        self.state.select(Some(selected.checked_sub(1).unwrap_or(len - 1)));
-    }
 
-    pub fn select_next(&mut self) {
-        let len = self.filtered_len();
-        if len == 0 {
-            self.state.select(None);
-            return;
-        }
-        self.state.select(Some((self.state.selected().unwrap_or_default() + 1) % len));
-    }
+        let rows: Vec<ListItem<'static>> =
+            list.filtered_indices.iter().map(|&index| item(&list.entries[index])).collect();
+        let highlight = highlight.unwrap_or_else(|| Style::new().fg(theme.text_primary).bg(theme.sidebar_bg));
+        let widget = List::new(rows).highlight_style(highlight).scroll_padding(1);
+        StatefulWidget::render(widget, inner, buf, list.selection.list_state_mut());
 
-    pub fn select_index(&mut self, index: usize) {
-        self.state.select(self.filtered_indices.iter().position(|&filtered_index| filtered_index == index));
-    }
-
-    pub fn render_items(
-        &mut self,
-        area: Rect,
-        buf: &mut Buffer,
-        empty_message: &str,
-        empty_style: Style,
-        highlight_style: Style,
-        mut item: impl FnMut(&T, usize) -> ListItem<'static>,
-    ) {
-        if self.filtered_indices.is_empty() {
-            ratatui::widgets::Paragraph::new(empty_message).style(empty_style).render(area, buf);
-            return;
-        }
-
-        let items = self.filtered_entries().map(|(index, entry)| item(entry, index));
-        let list = List::new(items).highlight_style(highlight_style).scroll_padding(1);
-        StatefulWidget::render(list, area, buf, &mut self.state);
-    }
-
-    pub fn render(
-        &mut self,
-        area: Rect,
-        buf: &mut Buffer,
-        config: FilterableListRender<'_>,
-        item: impl FnMut(&T, usize) -> ListItem<'static>,
-    ) {
-        let block = Block::bordered().title(config.title).style(config.border_style);
-        let inner = block.inner(area);
-        block.render(area, buf);
-
-        self.render_items(inner, buf, config.empty_message, config.empty_style, config.highlight_style, item);
-        let mut scrollbar_state = ScrollbarState::new(self.filtered_len()).position(self.state.offset());
-        StatefulWidget::render(Scrollbar::new(ScrollbarOrientation::VerticalRight), inner, buf, &mut scrollbar_state);
-    }
-
-    /// Renders the filtered entries as styled lines for inline overlays (e.g.
-    /// command/file pickers shown above the composer).
-    pub fn inline_lines(
-        &self,
-        width: u16,
-        max_rows: usize,
-        theme: &Theme,
-        empty_message: &str,
-        label: impl Fn(&T) -> String,
-    ) -> Vec<Line<'static>> {
-        let width = usize::from(width.max(1));
-        let mut lines = vec![Line::styled("─".repeat(width), Style::new().fg(theme.muted))];
-        if self.filtered_indices.is_empty() {
-            lines.push(Line::styled(format!("  ({empty_message})"), Style::new().fg(theme.muted)));
-        } else {
-            let selected = self.state.selected().unwrap_or_default();
-            let start = selected.saturating_sub(max_rows.saturating_sub(1));
-            for (row, &index) in self.filtered_indices.iter().enumerate().skip(start).take(max_rows) {
-                let value = truncate_to_width(&label(&self.entries[index]), width.saturating_sub(2));
-                let is_selected = row == selected;
-                let style = if is_selected {
-                    Style::new().fg(theme.text_primary).bg(theme.sidebar_bg)
-                } else {
-                    Style::new().fg(theme.text_secondary)
-                };
-                let text = format!("  {value}");
-                let padding = " ".repeat(width.saturating_sub(text.width()));
-                lines.push(Line::from(vec![Span::styled(text, style), Span::styled(padding, style)]));
-            }
-        }
-        lines
-    }
-
-    fn select_first(&mut self) {
-        self.state.select((!self.filtered_indices.is_empty()).then_some(0));
-        if self.filtered_indices.is_empty() {
-            *self.state.offset_mut() = 0;
-        }
-    }
-
-    fn select(&mut self, selected: Option<usize>) {
-        self.state.select(selected.filter(|index| *index < self.filtered_len()));
-        if self.filtered_indices.is_empty() {
-            *self.state.offset_mut() = 0;
+        if scrollbar {
+            let mut state = ScrollbarState::new(list.filtered_indices.len()).position(list.selection.offset());
+            StatefulWidget::render(Scrollbar::new(ScrollbarOrientation::VerticalRight), inner, buf, &mut state);
         }
     }
 }

@@ -27,22 +27,13 @@ pub(super) fn cycle_quick_option(config_options: &[acp::SessionConfigOption]) ->
     options.get(next_index).map(|next| (option.id.0.to_string(), next.value.0.to_string()))
 }
 
-pub(super) fn extract_reasoning_levels(config_options: &[acp::SessionConfigOption]) -> Vec<ReasoningEffort> {
-    SessionConfigView::new(config_options).reasoning_levels()
-}
-
-pub(super) fn extract_reasoning_effort(config_options: &[acp::SessionConfigOption]) -> Option<ReasoningEffort> {
-    SessionConfigView::new(config_options).reasoning_effort()
-}
-
 pub(super) fn cycle_reasoning_option(config_options: &[acp::SessionConfigOption]) -> Option<(String, String)> {
-    let levels = extract_reasoning_levels(config_options);
+    let view = SessionConfigView::new(config_options);
+    let levels = view.reasoning_levels();
     if levels.is_empty() {
         return None;
     }
-
-    let current = extract_reasoning_effort(config_options);
-    let next = ReasoningEffort::cycle_within(current, &levels);
+    let next = ReasoningEffort::cycle_within(view.reasoning_effort(), &levels);
     Some((ConfigOptionId::ReasoningEffort.as_str().to_string(), ReasoningEffort::config_str(next).to_string()))
 }
 
@@ -74,15 +65,18 @@ impl App {
         self.pending_theme.take()
     }
 
+    /// Themes are a client-side setting: persist the choice, hand the loaded
+    /// theme to the renderer, and mirror it back into the settings menu.
     pub(super) fn apply_theme_change(&mut self, value: &str) {
-        let file = if value.is_empty() { None } else { Some(value.to_string()) };
-        self.ui_settings.theme.file = file;
-        if let Err(e) = crate::settings::save_settings(&self.ui_settings) {
-            tracing::warn!("Failed to save theme settings: {e}");
+        self.ui_settings.theme.file = (!value.is_empty()).then(|| value.to_string());
+        if let Err(error) = crate::settings::save_settings(&self.ui_settings) {
+            tracing::warn!("Failed to save theme settings: {error}");
         }
-        let theme =
-            if value.is_empty() { crate::theme::Theme::default() } else { crate::settings::load_theme_file(value) };
-        self.pending_theme = Some(theme);
+        self.pending_theme = Some(if value.is_empty() {
+            crate::theme::Theme::default()
+        } else {
+            crate::settings::load_theme_file(value)
+        });
         if let OverlayLayer::Settings(overlay) = &mut self.overlay {
             overlay.apply_change(&crate::settings_overlay::SettingsChange {
                 config_id: acp_utils::config_option_id::THEME_CONFIG_ID.to_string(),

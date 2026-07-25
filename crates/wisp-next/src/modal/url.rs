@@ -1,8 +1,8 @@
-use ratatui::Frame;
+use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Text};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, Paragraph, Widget, Wrap};
 
 use crate::theme::Theme;
 
@@ -50,7 +50,7 @@ impl UrlModal {
         Self { server_name, elicitation_id, message, url, host, warnings, launch_error: None, copy_message: None }
     }
 
-    pub(super) fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    pub(super) fn render(&self, area: Rect, buf: &mut Buffer, theme: &Theme) {
         let mut lines = vec![
             Line::styled(
                 format!("Request from {}", self.server_name),
@@ -81,11 +81,8 @@ impl UrlModal {
         }
 
         lines.push(Line::styled("Enter open browser · c copy URL · Esc cancel", Style::new().fg(theme.muted)));
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(" URL authorization ")
-            .border_style(Style::new().fg(theme.accent));
-        frame.render_widget(Paragraph::new(Text::from(lines)).block(block).wrap(Wrap { trim: false }), area);
+        let block = Block::bordered().title(" URL authorization ").border_style(Style::new().fg(theme.accent));
+        Paragraph::new(Text::from(lines)).block(block).wrap(Wrap { trim: false }).render(area, buf);
     }
 }
 

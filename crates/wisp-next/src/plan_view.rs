@@ -75,7 +75,6 @@ fn build_plan_lines(entries: &[PlanEntry], theme: &Theme, padding: usize) -> Vec
 mod tests {
     use super::*;
     use agent_client_protocol::schema::{PlanEntryPriority, PlanEntryStatus};
-    use ratatui::layout::Rect;
 
     fn test_theme() -> Theme {
         Theme::default()
@@ -83,12 +82,6 @@ mod tests {
 
     fn entry(content: &str, status: PlanEntryStatus) -> PlanEntry {
         PlanEntry::new(content.to_string(), PlanEntryPriority::Medium, status)
-    }
-
-    fn render_to_buf(entries: &[PlanEntry], theme: &Theme, padding: usize, width: u16, height: u16) -> Buffer {
-        let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
-        PlanView::new(entries, theme, padding).render(Rect::new(0, 0, width, height), &mut buf);
-        buf
     }
 
     #[test]

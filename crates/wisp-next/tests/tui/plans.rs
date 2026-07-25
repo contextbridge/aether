@@ -87,7 +87,7 @@ fn plan_grace_period_timestamp_preserved_across_repeated_updates() {
     assert!(app.has_plan(), "still visible at original completion time");
 
     app.plan_tracker_mut().on_tick(now + Duration::from_secs(10));
-    let entries = app.plan_entries().to_vec();
+    let entries = app.plan_entries();
     assert!(entries.is_empty(), "hidden when original timestamp exceeds grace");
 }
 

@@ -810,7 +810,8 @@ mod event_routing {
 mod screen_mouse {
     use super::*;
     use wisp_next::git_diff::{FileDiff, FileStatus, GitDiffDocument, StageState};
-    use wisp_next::screens::git_diff::GitDiffScreen;
+    use wisp_next::screens::git_diff::{GitDiffEvent, GitDiffScreen};
+    use wisp_next::screens::{MouseAction, RenderContext, Screen};
     use wisp_next::syntax::SyntaxHighlighter;
     use wisp_next::theme::Theme;
 
@@ -866,22 +867,22 @@ mod screen_mouse {
         let mut terminal = ratatui::Terminal::with_options(backend, TerminalOptions::default()).unwrap();
         terminal
             .draw(|frame| {
-                screen.render(frame, &theme, &mut highlighter);
+                let mut cx = RenderContext { theme: &theme, highlighter: &mut highlighter, theme_generation: 0 };
+                screen.render(frame.area(), frame.buffer_mut(), &mut cx);
             })
             .unwrap();
         terminal.backend().buffer().clone()
     }
 
-    fn load_document(screen: &mut GitDiffScreen, document: GitDiffDocument) {
-        use wisp_next::screens::git_diff::GitDiffEvent;
-        let request_id = screen.current_request_id();
-        screen.on_event(GitDiffEvent::Loaded { request_id, result: Ok(document) });
+    fn open_screen() -> GitDiffScreen {
+        let (mut screen, effect) = GitDiffScreen::new(std::path::PathBuf::from("/tmp/repo"));
+        screen.on_event(GitDiffEvent::Loaded { request_id: effect.request_id(), result: Ok(make_test_document()) });
+        screen
     }
 
     #[test]
     fn git_diff_click_left_side_selects_drawer() {
-        let (mut screen, _effect) = GitDiffScreen::new(std::path::PathBuf::from("/tmp/repo"));
-        load_document(&mut screen, make_test_document());
+        let mut screen = open_screen();
 
         // Render at wide width (120)
         let _buffer = render_git_diff(&mut screen, 120, 40);
@@ -889,7 +890,7 @@ mod screen_mouse {
         // drawer_width = (120/3).clamp(24,36) = 36
         // body starts at x=1 (after border)
         // Click at x=20 (left side, well within drawer)
-        screen.on_mouse_click(3, 20);
+        screen.on_mouse(MouseAction::Click, 3, 20);
 
         // With focus on Drawer, footer shows "h/l pane"
         let buffer = render_git_diff(&mut screen, 120, 40);
@@ -899,14 +900,13 @@ mod screen_mouse {
 
     #[test]
     fn git_diff_click_right_side_selects_patch() {
-        let (mut screen, _effect) = GitDiffScreen::new(std::path::PathBuf::from("/tmp/repo"));
-        load_document(&mut screen, make_test_document());
+        let mut screen = open_screen();
 
         let _buffer = render_git_diff(&mut screen, 120, 40);
 
         // drawer_width = 36, body_x = 1. Drawer spans x=1..37. Patch spans x=38..
         // Click at x=60 (right side, patch area)
-        screen.on_mouse_click(3, 60);
+        screen.on_mouse(MouseAction::Click, 3, 60);
 
         // Focus should now be Patch. Footer shows "c comment" for Patch focus.
         let buffer = render_git_diff(&mut screen, 120, 40);
@@ -917,14 +917,13 @@ mod screen_mouse {
 
     #[test]
     fn git_diff_click_narrow_layout_always_patch() {
-        let (mut screen, _effect) = GitDiffScreen::new(std::path::PathBuf::from("/tmp/repo"));
-        load_document(&mut screen, make_test_document());
+        let mut screen = open_screen();
 
         // Render at narrow width (< 72)
         let _buffer = render_git_diff(&mut screen, 60, 40);
 
         // Even clicking on the left side should focus Patch
-        screen.on_mouse_click(3, 2);
+        screen.on_mouse(MouseAction::Click, 3, 2);
 
         // Footer shows "c comment" for Patch focus
         let buffer = render_git_diff(&mut screen, 60, 40);
@@ -934,13 +933,12 @@ mod screen_mouse {
 
     #[test]
     fn git_diff_click_on_border_is_ignored() {
-        let (mut screen, _effect) = GitDiffScreen::new(std::path::PathBuf::from("/tmp/repo"));
-        load_document(&mut screen, make_test_document());
+        let mut screen = open_screen();
 
         let _buffer = render_git_diff(&mut screen, 120, 40);
 
         // Click at y=0 (top border) — should be ignored
-        screen.on_mouse_click(0, 40);
+        screen.on_mouse(MouseAction::Click, 0, 40);
 
         let buffer = render_git_diff(&mut screen, 120, 40);
         let text = buffer_text(&buffer);
@@ -949,20 +947,19 @@ mod screen_mouse {
 
     #[test]
     fn git_diff_click_after_resize_uses_new_pane_rects() {
-        let (mut screen, _effect) = GitDiffScreen::new(std::path::PathBuf::from("/tmp/repo"));
-        load_document(&mut screen, make_test_document());
+        let mut screen = open_screen();
 
         // Render at width 120: drawer_width = 36, drawer x=1..37
         render_git_diff(&mut screen, 120, 40);
 
         // Click at x=50 (patch area at width 120)
-        screen.on_mouse_click(3, 50);
+        screen.on_mouse(MouseAction::Click, 3, 50);
 
         // Resize to width 200: drawer_width = 36, drawer x=1..37
         render_git_diff(&mut screen, 200, 40);
 
         // Click at x=50 should still be in patch area
-        screen.on_mouse_click(3, 50);
+        screen.on_mouse(MouseAction::Click, 3, 50);
 
         // Footer shows "c comment" for Patch focus
         let buffer = render_git_diff(&mut screen, 200, 40);

@@ -30,7 +30,6 @@ pub(crate) use wisp_next::composer::Composer;
 pub(crate) use wisp_next::picker::CommandEntry;
 pub(crate) use wisp_next::presentation::TranscriptRenderer;
 pub(crate) use wisp_next::render::sync_terminal as sync_terminal_with_renderer;
-pub(crate) use wisp_next::screen_router::ScreenEvent;
 pub(crate) use wisp_next::screens::git_diff::GitDiffEvent;
 pub(crate) use wisp_next::settings::UiSettings;
 pub(crate) use wisp_next::theme::Theme;
@@ -297,6 +296,18 @@ pub(crate) fn has_cell(buffer: &Buffer, symbol: &str, predicate: impl Fn(&Cell) 
         }
     }
     false
+}
+
+/// Renders the composer's completion list and reports whether `needle` shows up.
+pub(crate) fn completion_contains(composer: &mut Composer, needle: &str) -> bool {
+    use ratatui::widgets::Widget;
+    let theme = Theme::default();
+    let area = ratatui::layout::Rect::new(0, 0, 80, 8);
+    let mut buffer = Buffer::empty(area);
+    if let Some(overlay) = composer.completion() {
+        overlay.view(&theme, area.width).render(area, &mut buffer);
+    }
+    buffer_text(&buffer).contains(needle)
 }
 
 pub(crate) fn line_text(line: &ratatui::text::Line<'_>) -> String {

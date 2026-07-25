@@ -1,6 +1,8 @@
-use crate::filterable_list::FilterableList;
+use crate::filterable_list::{FilterableList, FilterableListView};
 use crate::theme::Theme;
-use ratatui::text::Line;
+use crate::wrap::truncate_to_width;
+use ratatui::style::Style;
+use ratatui::widgets::{Block, Borders, ListItem};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,78 +21,108 @@ pub struct FileEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Overlay {
-    Command(FilterableList<CommandEntry>),
-    File(FilterableList<FileEntry>),
+pub enum CompletionEntry {
+    Command(CommandEntry),
+    File(FileEntry),
 }
 
-impl Overlay {
+/// The inline completion list the composer shows after a `/` or `@` trigger.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompletionOverlay {
+    trigger: char,
+    entries: FilterableList<CompletionEntry>,
+    empty_message: &'static str,
+}
+
+impl CompletionOverlay {
     pub fn command(entries: Vec<CommandEntry>) -> Self {
-        Self::Command(FilterableList::new(entries, command_search_text))
+        Self::new('/', entries.into_iter().map(CompletionEntry::Command).collect(), "no matching commands")
     }
 
     pub fn file(root: &Path) -> Self {
-        Self::File(FilterableList::new(index_files(root), |entry| entry.display_name.clone()))
+        Self::new('@', index_files(root).into_iter().map(CompletionEntry::File).collect(), "no matching files")
+    }
+
+    /// The character that opened this overlay, and the one whose token the
+    /// composer replaces on accept.
+    pub fn trigger(&self) -> char {
+        self.trigger
     }
 
     pub fn query(&self) -> &str {
-        match self {
-            Self::Command(list) => list.query(),
-            Self::File(list) => list.query(),
-        }
+        self.entries.query()
     }
 
     pub fn set_query(&mut self, query: String) {
-        match self {
-            Self::Command(list) => list.set_query(query),
-            Self::File(list) => list.set_query(query),
-        }
+        self.entries.set_query(query);
     }
 
     pub fn move_up(&mut self) {
-        match self {
-            Self::Command(list) => list.select_previous(),
-            Self::File(list) => list.select_previous(),
-        }
+        self.entries.select_previous();
     }
 
     pub fn move_down(&mut self) {
-        match self {
-            Self::Command(list) => list.select_next(),
-            Self::File(list) => list.select_next(),
-        }
+        self.entries.select_next();
     }
 
     pub fn select_row(&mut self, row: usize) {
-        match self {
-            Self::Command(list) => list.select_row(row),
-            Self::File(list) => list.select_row(row),
-        }
+        self.entries.select_row(row);
     }
 
     pub fn selected_command(&self) -> Option<CommandEntry> {
-        match self {
-            Self::Command(list) => list.selected_entry().cloned(),
-            Self::File(_) => None,
+        match self.entries.selected_entry()? {
+            CompletionEntry::Command(command) => Some(command.clone()),
+            CompletionEntry::File(_) => None,
         }
     }
 
     pub fn selected_file(&self) -> Option<FileEntry> {
-        match self {
-            Self::File(list) => list.selected_entry().cloned(),
-            Self::Command(_) => None,
+        match self.entries.selected_entry()? {
+            CompletionEntry::File(file) => Some(file.clone()),
+            CompletionEntry::Command(_) => None,
         }
     }
 
-    pub fn lines(&self, width: u16, max_rows: usize, theme: &Theme) -> Vec<Line<'static>> {
+    /// Rows the overlay occupies above the composer: a rule plus either the
+    /// visible matches or the single "no matches" placeholder.
+    pub fn row_count(&self, max_rows: usize) -> usize {
+        1 + self.entries.filtered_len().clamp(1, max_rows.max(1))
+    }
+
+    pub fn view<'a>(
+        &'a mut self,
+        theme: &'a Theme,
+        width: u16,
+    ) -> FilterableListView<'a, CompletionEntry, impl FnMut(&CompletionEntry) -> ListItem<'static> + 'a> {
+        let content_width = usize::from(width).saturating_sub(2);
+        self.entries
+            .view(theme, self.empty_message, move |entry| {
+                ListItem::new(format!("  {}", truncate_to_width(&entry.label(), content_width)))
+                    .style(Style::new().fg(theme.text_secondary))
+            })
+            .block(Block::new().borders(Borders::TOP).border_style(Style::new().fg(theme.muted)))
+    }
+
+    fn new(trigger: char, entries: Vec<CompletionEntry>, empty_message: &'static str) -> Self {
+        Self { trigger, entries: FilterableList::new(entries, CompletionEntry::match_key), empty_message }
+    }
+}
+
+impl CompletionEntry {
+    fn label(&self) -> String {
         match self {
-            Self::Command(list) => list.inline_lines(width, max_rows, theme, "no matching commands", |entry| {
-                let hint = entry.hint.as_deref().map_or_else(String::new, |hint| format!("  [{hint}]"));
-                format!("/{:<16}  {}{hint}", entry.name, entry.description)
-            }),
-            Self::File(list) => {
-                list.inline_lines(width, max_rows, theme, "no matching files", |entry| entry.display_name.clone())
+            Self::Command(command) => {
+                let hint = command.hint.as_deref().map_or_else(String::new, |hint| format!("  [{hint}]"));
+                format!("/{:<16}  {}{hint}", command.name, command.description)
             }
+            Self::File(file) => file.display_name.clone(),
+        }
+    }
+
+    fn match_key(&self) -> String {
+        match self {
+            Self::Command(command) => format!("{} {}", command.name, command.description),
+            Self::File(file) => file.display_name.clone(),
         }
     }
 }
@@ -120,10 +152,6 @@ fn index_files(root: &Path) -> Vec<FileEntry> {
     }
     entries.sort_by(|left, right| left.display_name.cmp(&right.display_name));
     entries
-}
-
-fn command_search_text(entry: &CommandEntry) -> String {
-    format!("{} {}", entry.name, entry.description)
 }
 
 fn excluded(path: &Path) -> bool {

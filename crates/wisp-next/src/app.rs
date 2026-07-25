@@ -3,23 +3,22 @@ use crate::composer::Composer;
 use crate::diff::DiffPreview;
 use crate::dropped_files::parse_dropped_file_paths;
 use crate::keybindings::Keybindings;
-use crate::modal::{ElicitationModal, ModalOutcome};
+use crate::modal::ElicitationModal;
+use crate::overlay::{Overlay, OverlayMessage};
 use crate::picker::CommandEntry;
 use crate::plan_tracker::PlanTracker;
 use crate::progress_indicator::{ProgressActivity, ProgressIndicator, WorkspaceProgress};
 use crate::prompt_search::PromptSearchMessage;
-use crate::screen_router::{ScreenEffect, ScreenEvent, ScreenRouter};
-use crate::screens::git_diff::GitDiffEvent;
+use crate::screens::{Screen, ScreenEffect, ScreenEvent};
+use crate::selection::Direction;
 use crate::session_config_view::SessionConfigView;
 use crate::session_loading_buffer::SessionLoadingBuffer;
-use crate::session_picker::{SessionPicker, SessionPickerMessage};
+use crate::session_picker::SessionPicker;
 use crate::settings::{ContextUsageDisplay, UiSettings, resolve_content_padding};
-use crate::settings_overlay::{
-    SettingsMenuEntry, SettingsMenuEntryKind, SettingsMenuValue, SettingsOverlay, SettingsOverlayMessage,
-};
+use crate::settings_overlay::{SettingsMenuEntry, SettingsMenuEntryKind, SettingsMenuValue, SettingsOverlay};
 use crate::tool_calls::{ToolCallLog, ToolStatus};
 use crate::transcript::{SegmentContent, Transcript};
-use crate::workspace_picker::{WorkspacePicker, WorkspacePickerMessage};
+use crate::workspace_picker::WorkspacePicker;
 use crate::workspace_status::WorkspaceStatus;
 use acp_utils::client::{AcpEvent, AcpPromptHandle};
 use acp_utils::config_option_id::ConfigOptionId;
@@ -42,6 +41,7 @@ mod surface;
 use session::builtin_commands;
 use surface::CTRL_C_CONFIRM_WINDOW;
 
+/// Which layer currently owns keyboard input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActiveSurface {
     Screen,
@@ -85,6 +85,18 @@ impl OverlayLayer {
     fn is_active(&self) -> bool {
         !matches!(self, OverlayLayer::None)
     }
+
+    /// The open overlay as a trait object. Input and rendering go through this,
+    /// so only ACP updates that need a concrete type match on the variants.
+    fn active(&mut self) -> Option<&mut dyn Overlay> {
+        match self {
+            OverlayLayer::None => None,
+            OverlayLayer::Settings(overlay) => Some(overlay),
+            OverlayLayer::SessionPicker(picker) => Some(picker),
+            OverlayLayer::WorkspacePicker(picker) => Some(picker),
+            OverlayLayer::Elicitation(modal) => Some(modal),
+        }
+    }
 }
 
 /// Root UI state: reduces terminal input and ACP events into the transcript,
@@ -105,6 +117,7 @@ pub struct App {
     available_commands: Vec<CommandEntry>,
     session_loading_buffer: SessionLoadingBuffer,
     overlay: OverlayLayer,
+    screen: Option<Box<dyn Screen>>,
     workspace_move_state: WorkspaceMoveState,
     transcript: Transcript,
     tool_calls: ToolCallLog,
@@ -120,7 +133,6 @@ pub struct App {
     progress_indicator: ProgressIndicator,
     last_drained_kind: Option<HistoryKind>,
     transcript_generation: u64,
-    screen_router: ScreenRouter,
     pending_screen_effects: std::collections::VecDeque<ScreenEffect>,
     ui_settings: UiSettings,
     pending_theme: Option<crate::theme::Theme>,
@@ -232,6 +244,7 @@ impl App {
             available_commands: initial_commands,
             session_loading_buffer: SessionLoadingBuffer::new(),
             overlay: OverlayLayer::None,
+            screen: None,
             workspace_move_state: WorkspaceMoveState::Idle,
             transcript: Transcript::new(),
             tool_calls: ToolCallLog::new(),
@@ -247,7 +260,6 @@ impl App {
             progress_indicator: ProgressIndicator::default(),
             last_drained_kind: None,
             transcript_generation: 0,
-            screen_router: ScreenRouter::new(),
             pending_screen_effects: std::collections::VecDeque::new(),
             ui_settings: config.settings,
             pending_theme: None,
@@ -294,26 +306,25 @@ impl App {
     }
 
     pub fn full_screen_active(&self) -> bool {
-        self.screen_router.is_active()
+        self.screen.is_some()
     }
 
     pub fn active_surface(&self) -> ActiveSurface {
-        if self.screen_router.is_active() {
-            ActiveSurface::Screen
-        } else {
-            match &self.overlay {
-                OverlayLayer::Settings(_) => ActiveSurface::Settings,
-                OverlayLayer::SessionPicker(_) => ActiveSurface::SessionPicker,
-                OverlayLayer::WorkspacePicker(_) => ActiveSurface::WorkspacePicker,
-                OverlayLayer::Elicitation(_) => ActiveSurface::Modal,
-                OverlayLayer::None => {
-                    if self.composer.has_prompt_search() {
-                        ActiveSurface::PromptSearch
-                    } else if self.composer.has_overlay() {
-                        ActiveSurface::Overlay
-                    } else {
-                        ActiveSurface::Composer
-                    }
+        if self.screen.is_some() {
+            return ActiveSurface::Screen;
+        }
+        match &self.overlay {
+            OverlayLayer::Settings(_) => ActiveSurface::Settings,
+            OverlayLayer::SessionPicker(_) => ActiveSurface::SessionPicker,
+            OverlayLayer::WorkspacePicker(_) => ActiveSurface::WorkspacePicker,
+            OverlayLayer::Elicitation(_) => ActiveSurface::Modal,
+            OverlayLayer::None => {
+                if self.composer.has_prompt_search() {
+                    ActiveSurface::PromptSearch
+                } else if self.composer.has_overlay() {
+                    ActiveSurface::Overlay
+                } else {
+                    ActiveSurface::Composer
                 }
             }
         }
@@ -398,10 +409,6 @@ impl App {
         self.content_padding
     }
 
-    pub fn workspace_label(&self) -> String {
-        self.workspace_status.label()
-    }
-
     pub fn workspace_status(&self) -> &WorkspaceStatus {
         &self.workspace_status
     }
@@ -425,18 +432,16 @@ impl App {
         self.unhealthy_server_count
     }
 
-    pub fn waiting_for_response(&self) -> bool {
-        self.prompt_in_flight
-    }
-
     pub fn ui_settings(&self) -> &UiSettings {
         &self.ui_settings
     }
 
-    pub fn busy(&self) -> bool {
+    /// A prompt is outstanding, so the agent owes us a reply.
+    pub fn waiting_for_response(&self) -> bool {
         self.prompt_in_flight
     }
 
+    /// Either the prompt or one of its tool calls is still running.
     pub fn is_agent_busy(&self) -> bool {
         self.prompt_in_flight || self.tool_calls.any_running()
     }
@@ -457,8 +462,8 @@ impl App {
         self.spinner_tick
     }
 
-    pub fn plan_entries(&mut self) -> &[acp::PlanEntry] {
-        self.plan_tracker.cached_visible_entries()
+    pub fn plan_entries(&self) -> Vec<acp::PlanEntry> {
+        self.plan_tracker.current_entries()
     }
 
     pub fn has_plan(&self) -> bool {
@@ -467,6 +472,32 @@ impl App {
 
     pub fn plan_tracker_mut(&mut self) -> &mut PlanTracker {
         &mut self.plan_tracker
+    }
+
+    /// Drops everything tied to the current conversation.
+    ///
+    /// Every path that swaps conversations — clearing context, creating a
+    /// session, loading one, moving workspace — goes through this, so none of
+    /// them can forget a field and leave stale state on screen.
+    fn reset_conversation(&mut self) {
+        self.reset_turn_state();
+        self.transcript.clear();
+        self.tool_calls.clear();
+        self.last_drained_kind = None;
+        self.transcript_generation = self.transcript_generation.wrapping_add(1);
+    }
+
+    /// Clears the per-turn indicators that must not survive into a different
+    /// conversation. Used on its own when a load lands, because the transcript
+    /// was already cleared when that load was requested — and may since have
+    /// gained notices the user still needs to see.
+    fn reset_turn_state(&mut self) {
+        self.plan_tracker.clear();
+        self.progress_indicator.reset();
+        self.prompt_in_flight = false;
+        self.submitted_prompt_count = 0;
+        self.compaction_active = false;
+        self.context_usage = None;
     }
 
     fn refresh_progress(&mut self) {
@@ -522,14 +553,5 @@ fn resolve_history_segment(segment: &SegmentContent, tool_calls: &ToolCallLog) -
                 sub_agents: build_sub_agent_history_items(tool_calls, id),
             }
         }
-    }
-}
-
-fn render_user_content_block(block: &acp::ContentBlock) -> Option<String> {
-    match block {
-        acp::ContentBlock::Text(text) => Some(text.text.clone()),
-        acp::ContentBlock::Image(_) => Some("[image attachment]".to_string()),
-        acp::ContentBlock::Audio(_) => Some("[audio attachment]".to_string()),
-        _ => None,
     }
 }

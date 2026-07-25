@@ -1,31 +1,32 @@
-use crate::filterable_list::{FilterableList, FilterableListRender};
+use crate::filterable_list::FilterableList;
+use crate::overlay::{Overlay, OverlayMessage};
+use crate::selection::Direction;
 use crate::wrap::truncate_to_width;
 use acp_utils::notifications::SessionPreviewResponse;
 use agent_client_protocol::schema::{self as acp, SessionId};
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{ListItem, Paragraph, Widget};
+use ratatui::widgets::{Block, ListItem, Paragraph, Widget};
 use std::collections::HashMap;
 
+/// Picker for resuming a previous session, with an optional preview pane.
 pub struct SessionPicker {
     sessions: FilterableList<acp::SessionInfo>,
     preview_enabled: bool,
     previews: HashMap<String, PreviewState>,
 }
 
+/// Below this width the preview pane is dropped and the list gets the full area.
+const PREVIEW_MIN_WIDTH: u16 = 96;
+
 #[derive(Clone)]
 enum PreviewState {
     Loading,
     Loaded(SessionPreviewResponse),
     Error(String),
-}
-
-pub enum SessionPickerMessage {
-    Close,
-    LoadSession { session_id: SessionId, cwd: std::path::PathBuf },
-    RequestPreview { session_id: String },
 }
 
 impl SessionPicker {
@@ -43,12 +44,9 @@ impl SessionPicker {
         !self.sessions.is_empty()
     }
 
+    /// Preview to fetch for the initially selected row, if previews are supported.
     pub fn initial_preview_request(&self) -> Option<String> {
-        if !self.preview_enabled || self.sessions.is_empty() {
-            return None;
-        }
-        let selected = self.selected_session_index()?;
-        Some(self.sessions.entries()[selected].session_id.0.to_string())
+        self.preview_enabled.then(|| self.sessions.selected_entry())?.map(|session| session.session_id.0.to_string())
     }
 
     pub fn on_preview_loaded(&mut self, preview: SessionPreviewResponse) {
@@ -59,114 +57,27 @@ impl SessionPicker {
         self.previews.insert(session_id.to_string(), PreviewState::Error(error));
     }
 
-    pub fn select_row(&mut self, row: usize) {
-        self.sessions.select_row(row);
-    }
-
-    pub fn scroll_up(&mut self) {
-        self.sessions.select_previous();
-        if let Some(index) = self.selected_session_index() {
-            let _ = self.preview_request_for(index);
-        }
-    }
-
-    pub fn scroll_down(&mut self) {
-        self.sessions.select_next();
-        if let Some(index) = self.selected_session_index() {
-            let _ = self.preview_request_for(index);
-        }
-    }
-
-    pub fn on_key(&mut self, key: crossterm::event::KeyEvent) -> Option<Vec<SessionPickerMessage>> {
-        use crossterm::event::KeyCode;
-        let mut messages = Vec::new();
-
-        match key.code {
-            KeyCode::Esc => return Some(vec![SessionPickerMessage::Close]),
-            KeyCode::Up | KeyCode::Down => {
-                if key.code == KeyCode::Up {
-                    self.sessions.select_previous();
-                } else {
-                    self.sessions.select_next();
-                }
-                if let Some(index) = self.selected_session_index()
-                    && let Some(req) = self.preview_request_for(index)
-                {
-                    messages.push(SessionPickerMessage::RequestPreview { session_id: req });
-                }
-            }
-            KeyCode::Enter => {
-                if let Some(session) =
-                    self.selected_session_index().and_then(|index| self.sessions.entries().get(index))
-                {
-                    return Some(vec![SessionPickerMessage::LoadSession {
-                        session_id: SessionId::new(session.session_id.0.to_string()),
-                        cwd: session.cwd.clone(),
-                    }]);
-                }
-            }
-            KeyCode::Char(c) => self.sessions.push_query_char(c),
-            KeyCode::Backspace => self.sessions.pop_query_char(),
-            _ => {}
-        }
-
-        Some(messages)
-    }
-
-    pub fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &crate::theme::Theme) {
-        if !self.has_sessions() {
-            let block =
-                ratatui::widgets::Block::bordered().title(" Sessions ").style(Style::new().fg(theme.text_primary));
-            let inner = block.inner(area);
-            block.render(area, buf);
-            Paragraph::new("  No previous sessions found.").style(Style::new().fg(theme.muted)).render(inner, buf);
-            return;
-        }
-
-        if area.width >= 96 {
-            let [list_area, preview_area] =
-                Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(area);
-            self.render_list(list_area, buf, theme);
-            self.render_preview(preview_area, buf, theme);
-        } else {
-            self.render_list(area, buf, theme);
-        }
-    }
-
-    fn preview_request_for(&mut self, index: usize) -> Option<String> {
-        let session = self.sessions.entries().get(index)?;
+    /// Marks the selected session's preview as in-flight and returns the request
+    /// for it, or nothing when it is already loading or cached.
+    fn preview_request(&mut self) -> Vec<OverlayMessage> {
         if !self.preview_enabled {
-            return None;
+            return Vec::new();
         }
-        let id = session.session_id.0.to_string();
-        if self.previews.contains_key(&id) {
-            return None;
+        let Some(session_id) = self.sessions.selected_entry().map(|session| session.session_id.0.to_string()) else {
+            return Vec::new();
+        };
+        if self.previews.contains_key(&session_id) {
+            return Vec::new();
         }
-        self.previews.insert(id.clone(), PreviewState::Loading);
-        Some(id)
-    }
-
-    fn selected_session_index(&self) -> Option<usize> {
-        self.sessions.selected_index()
+        self.previews.insert(session_id.clone(), PreviewState::Loading);
+        vec![OverlayMessage::RequestSessionPreview { session_id }]
     }
 
     fn render_list(&mut self, area: Rect, buf: &mut Buffer, theme: &crate::theme::Theme) {
-        let title = format!(
-            " Sessions {} ",
-            if self.sessions.query().is_empty() { String::new() } else { format!("'{}'", self.sessions.query()) }
-        );
-        let item_width = area.width.saturating_sub(2) as usize;
-        self.sessions.render(
-            area,
-            buf,
-            FilterableListRender {
-                title,
-                empty_message: "  (no matching sessions)",
-                border_style: Style::new().fg(theme.text_primary),
-                empty_style: Style::new().fg(theme.muted),
-                highlight_style: Style::new().fg(theme.text_primary).bg(theme.sidebar_bg),
-            },
-            |session, _| {
+        let title = self.sessions.search_title("Sessions");
+        let item_width = usize::from(area.width.saturating_sub(2));
+        self.sessions
+            .view(theme, "  (no matching sessions)", |session| {
                 let title = session
                     .title
                     .as_deref()
@@ -177,61 +88,52 @@ impl SessionPicker {
                     .map_or_else(|| session.cwd.display().to_string(), |name| name.to_string_lossy().into_owned());
                 let display = format!("  {}  {cwd}", truncate_to_width(title, 48));
                 ListItem::new(truncate_to_width(&display, item_width)).style(Style::new().fg(theme.text_secondary))
-            },
-        );
+            })
+            .bordered(title)
+            .render(area, buf);
     }
 
     fn render_preview(&self, area: Rect, buf: &mut Buffer, theme: &crate::theme::Theme) {
-        let block = ratatui::widgets::Block::bordered().title(" Preview ").style(Style::new().fg(theme.text_primary));
+        let block = Block::bordered().title(" Preview ").style(Style::new().fg(theme.text_primary));
         let inner = block.inner(area);
         block.render(area, buf);
 
-        let Some(session) = self.selected_session_index().and_then(|index| self.sessions.entries().get(index)) else {
+        let Some(session) = self.sessions.selected_entry() else {
             return;
         };
-        let id = session.session_id.0.to_string();
-        let mut lines: Vec<Line> = Vec::new();
+        let muted = Style::new().fg(theme.muted);
+        let mut lines = vec![
+            Line::styled(
+                format!(" Title: {}", session.title.as_deref().unwrap_or("(untitled)")),
+                Style::new().fg(theme.text_primary),
+            ),
+            Line::styled(format!(" Path: {}", session.cwd.display()), muted),
+        ];
 
-        lines.push(Line::from(vec![Span::styled(
-            format!(" Title: {}", session.title.as_deref().unwrap_or("(untitled)")),
-            Style::new().fg(theme.text_primary),
-        )]));
-        lines.push(Line::from(vec![Span::styled(
-            format!(" Path: {}", session.cwd.display()),
-            Style::new().fg(theme.muted),
-        )]));
-
-        if let Some(ts) = &session.updated_at {
-            lines.push(Line::from(vec![Span::styled(format!(" Updated: {ts}"), Style::new().fg(theme.muted))]));
+        if let Some(timestamp) = &session.updated_at {
+            lines.push(Line::styled(format!(" Updated: {timestamp}"), muted));
         }
 
-        match self.previews.get(&id) {
-            None if self.preview_enabled => {
-                lines.push(Line::from(vec![Span::styled(" Loading preview...", Style::new().fg(theme.muted))]));
-            }
+        match self.previews.get(session.session_id.0.as_ref()) {
+            None if self.preview_enabled => lines.push(Line::styled(" Loading preview...", muted)),
             None => {}
-            Some(PreviewState::Loading) => {
-                lines.push(Line::from(vec![Span::styled(" Loading...", Style::new().fg(theme.muted))]));
-            }
-            Some(PreviewState::Error(err)) => {
-                lines.push(Line::from(vec![Span::styled(format!(" Error: {err}"), Style::new().fg(theme.error))]));
+            Some(PreviewState::Loading) => lines.push(Line::styled(" Loading...", muted)),
+            Some(PreviewState::Error(error)) => {
+                lines.push(Line::styled(format!(" Error: {error}"), Style::new().fg(theme.error)));
             }
             Some(PreviewState::Loaded(preview)) => {
-                lines.push(Line::from(vec![Span::styled(
+                lines.push(Line::styled(
                     format!(
                         " Model: {}  Mode: {}",
                         preview.model,
                         preview.selected_mode.as_deref().unwrap_or("default")
                     ),
-                    Style::new().fg(theme.muted),
-                )]));
+                    muted,
+                ));
                 if preview.tool_call_count > 0 {
-                    lines.push(Line::from(vec![Span::styled(
-                        format!(" Tool calls: {}", preview.tool_call_count),
-                        Style::new().fg(theme.muted),
-                    )]));
+                    lines.push(Line::styled(format!(" Tool calls: {}", preview.tool_call_count), muted));
                 }
-                lines.push(Line::from(""));
+                lines.push(Line::raw(""));
                 for turn in &preview.transcript {
                     let role = match turn.role {
                         acp_utils::notifications::SessionPreviewRole::User => "user",
@@ -239,15 +141,72 @@ impl SessionPicker {
                     };
                     lines.push(Line::from(vec![
                         Span::styled(format!(" {role}: "), Style::new().fg(theme.accent)),
-                        Span::styled(&turn.text, Style::new().fg(theme.text_secondary)),
+                        Span::styled(turn.text.clone(), Style::new().fg(theme.text_secondary)),
                     ]));
                 }
                 if preview.truncated {
-                    lines.push(Line::from(vec![Span::styled(" ... preview truncated", Style::new().fg(theme.muted))]));
+                    lines.push(Line::styled(" ... preview truncated", muted));
                 }
             }
         }
 
         Paragraph::new(lines).render(inner, buf);
+    }
+}
+
+impl Overlay for SessionPicker {
+    fn on_key(&mut self, key: KeyEvent) -> Vec<OverlayMessage> {
+        match key.code {
+            KeyCode::Esc => vec![OverlayMessage::Close],
+            KeyCode::Up => self.scroll(Direction::Backward),
+            KeyCode::Down => self.scroll(Direction::Forward),
+            KeyCode::Enter => self
+                .sessions
+                .selected_entry()
+                .map(|session| OverlayMessage::LoadSession {
+                    session_id: SessionId::new(session.session_id.0.to_string()),
+                    cwd: session.cwd.clone(),
+                })
+                .into_iter()
+                .collect(),
+            KeyCode::Char(character) => {
+                self.sessions.push_query_char(character);
+                self.preview_request()
+            }
+            KeyCode::Backspace => {
+                self.sessions.pop_query_char();
+                self.preview_request()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn scroll(&mut self, direction: Direction) -> Vec<OverlayMessage> {
+        self.sessions.step(direction, |_| true);
+        self.preview_request()
+    }
+
+    fn click(&mut self, row: u16, _area: Rect) -> Vec<OverlayMessage> {
+        self.sessions.select_row(usize::from(row.saturating_sub(1)));
+        self.preview_request()
+    }
+
+    fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &crate::theme::Theme) {
+        if !self.has_sessions() {
+            let block = Block::bordered().title(" Sessions ").style(Style::new().fg(theme.text_primary));
+            let inner = block.inner(area);
+            block.render(area, buf);
+            Paragraph::new("  No previous sessions found.").style(Style::new().fg(theme.muted)).render(inner, buf);
+            return;
+        }
+
+        if area.width >= PREVIEW_MIN_WIDTH {
+            let [list_area, preview_area] =
+                Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(area);
+            self.render_list(list_area, buf, theme);
+            self.render_preview(preview_area, buf, theme);
+        } else {
+            self.render_list(area, buf, theme);
+        }
     }
 }

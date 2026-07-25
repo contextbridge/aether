@@ -1,4 +1,5 @@
 use super::{App, ConfigOptionId, PromptAttachment, SessionConfigView, acp};
+use crate::prompt_search::PromptSearchPicker;
 
 impl App {
     pub(super) fn submit(&mut self) {
@@ -18,21 +19,21 @@ impl App {
             self.transcript.push_user_message(placeholder);
         }
         for warning in &outcome.warnings {
-            self.transcript.push_user_message(&format!("[wisp-next] {warning}"));
+            self.notify(warning);
         }
 
         if let Some(message) = self.media_support_error(&outcome.blocks) {
-            self.transcript.push_user_message(&format!("[wisp-next] {message}"));
+            self.notify(&message);
             return;
         }
 
         self.prompt_in_flight = true;
         self.submitted_prompt_count = self.submitted_prompt_count.saturating_add(1);
         let content = (!outcome.blocks.is_empty()).then_some(outcome.blocks);
-        if let Err(e) = self.prompt_handle.prompt(&self.session_id, &text, content) {
-            tracing::error!("failed to send prompt: {e}");
+        if let Err(error) = self.prompt_handle.prompt(&self.session_id, &text, content) {
+            tracing::error!("failed to send prompt: {error}");
             self.prompt_in_flight = false;
-            self.transcript.push_user_message(&format!("[wisp-next] Failed to send prompt: {e}"));
+            self.notify(&format!("Failed to send prompt: {error}"));
         }
     }
     fn media_support_error(&self, blocks: &[acp::ContentBlock]) -> Option<String> {
@@ -72,12 +73,14 @@ impl App {
     }
 
     pub(super) fn send_prompt_search_query(&mut self, query: String) {
-        let Some(generation) = self.composer.prompt_search_generation() else {
+        let Some(generation) = self.composer.prompt_search_ref().map(PromptSearchPicker::search_generation) else {
             return;
         };
         let params = acp_utils::notifications::PromptSearchParams { query, limit: None, search_generation: generation };
-        if let Err(e) = self.prompt_handle.search_prompts(params) {
-            self.composer.prompt_search_on_failed(generation, format!("search failed: {e}"));
+        if let Err(error) = self.prompt_handle.search_prompts(params)
+            && let Some(picker) = self.composer.prompt_search()
+        {
+            picker.on_failed(generation, format!("search failed: {error}"));
         }
     }
 }

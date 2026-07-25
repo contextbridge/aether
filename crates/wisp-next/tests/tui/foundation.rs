@@ -1,4 +1,5 @@
 use super::support::*;
+use wisp_next::picker::CompletionOverlay;
 
 #[test]
 fn app_exposes_initial_config_option_selections() {
@@ -120,8 +121,8 @@ fn command_picker_filters_and_applies_selected_command() {
     composer.insert_str("sea");
     composer.refresh_overlay_query();
 
-    assert_eq!(composer.overlay_query(), Some("sea"));
-    assert!(composer.overlay_lines(80, 6, &Theme::default()).iter().any(|line| line_text(line).contains("/search")));
+    assert_eq!(composer.completion_ref().map(CompletionOverlay::query), Some("sea"));
+    assert!(completion_contains(&mut composer, "/search"));
 
     let selected = composer.accept_command().unwrap();
     assert_eq!(selected.name, "search");
@@ -142,10 +143,8 @@ fn file_picker_filters_and_inserts_a_mention() {
     composer.insert_str("main");
     composer.refresh_overlay_query();
 
-    assert_eq!(composer.overlay_query(), Some("main"));
-    assert!(
-        composer.overlay_lines(80, 6, &Theme::default()).iter().any(|line| line_text(line).contains("src/main.rs"))
-    );
+    assert_eq!(composer.completion_ref().map(CompletionOverlay::query), Some("main"));
+    assert!(completion_contains(&mut composer, "src/main.rs"));
 
     let selected = composer.accept_file().unwrap();
     assert_eq!(selected.display_name, "src/main.rs");

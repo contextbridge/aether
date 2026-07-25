@@ -1,18 +1,21 @@
 use acp_utils::notifications::{ElicitationAction, ElicitationResponse};
 use agent_client_protocol::Responder;
 use crossterm::event::{KeyCode, KeyEvent};
-use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::buffer::Buffer;
+use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
+use ratatui::widgets::{
+    Block, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, StatefulWidget, Widget,
+};
 use utils::plan_review::{PlanReviewDecision, PlanReviewElicitationMeta};
 
-use crate::edit_buffer::EditBuffer;
+use crate::edit_buffer::{EditBuffer, apply_edit_key};
 use crate::plan_review::{
     PlanDocument, ReviewComment, SourceMarkdownLine, compile_feedback, render_markdown_source_lines,
 };
-use crate::selection::SelectionState;
+use crate::screens::{MouseAction, RenderContext, Screen, ScreenOutcome};
+use crate::selection::{Direction, SelectionState};
 use crate::syntax::SyntaxHighlighter;
 use crate::theme::Theme;
 use crate::wrap::{truncate_to_width, wrap_line};
@@ -108,77 +111,61 @@ impl PlanReviewScreen {
         self.plan_cursor_line = self.plan_cursor_line.min(self.source_line_max_index());
     }
 
-    pub fn on_mouse_scroll_up(&mut self, _local_y: u16, _local_x: u16) {
+    fn scroll(&mut self, direction: i32) {
+        let step = 3 * direction;
         if self.focus == Focus::Plan {
-            self.plan_scroll = self.plan_scroll.saturating_sub(3);
-            self.plan_cursor_line = self.plan_cursor_line.saturating_sub(3);
-        } else {
-            let selected = self.outline_selection.selected().unwrap_or_default().saturating_sub(1);
-            self.outline_selection.select(Some(selected), self.document.outline.len());
-        }
-    }
-
-    pub fn on_mouse_scroll_down(&mut self, _local_y: u16, _local_x: u16) {
-        if self.focus == Focus::Plan {
-            self.plan_scroll = self.plan_scroll.saturating_add(3).min(self.source_line_max_index());
-            self.plan_cursor_line = self.plan_cursor_line.saturating_add(3).min(self.source_line_max_index());
+            self.plan_scroll = offset_by(self.plan_scroll, step, self.source_line_max_index());
+            self.plan_cursor_line = offset_by(self.plan_cursor_line, step, self.source_line_max_index());
         } else {
             let len = self.document.outline.len();
-            let selected = self.outline_selection.selected().unwrap_or_default().saturating_add(1);
-            self.outline_selection.select(Some(selected.min(len.saturating_sub(1))), len);
+            let selected =
+                offset_by(self.outline_selection.selected().unwrap_or_default(), direction, len.saturating_sub(1));
+            self.outline_selection.select(Some(selected), len);
         }
     }
 
-    pub fn on_mouse_click(&mut self, local_y: u16, local_x: u16) {
-        if local_y < 1 {
+    fn click(&mut self, row: u16, column: u16) {
+        let Some(body_row) = row.checked_sub(1).map(usize::from) else {
             return;
-        }
-        let body_y = local_y.saturating_sub(1);
+        };
         let area = self.last_area;
-        let use_split = area.width >= MIN_SPLIT_WIDTH && !self.document.outline.is_empty();
-        if use_split {
-            let outline_width = u16::try_from(u32::from(area.width) * OUTLINE_FRACTION / OUTLINE_TOTAL).unwrap_or(0);
-            if local_x < outline_width {
-                self.focus = Focus::Outline;
-                let sections = &self.document.outline;
-                if !sections.is_empty() {
-                    self.outline_selection.select_row(body_y as usize, sections.len());
-                }
-            } else {
-                self.focus = Focus::Plan;
-                self.plan_cursor_line = self.plan_scroll + body_y as usize;
+        let outline_width = u16::try_from(u32::from(area.width) * OUTLINE_FRACTION / OUTLINE_TOTAL).unwrap_or(0);
+        if self.uses_split(area) && column < outline_width {
+            self.focus = Focus::Outline;
+            let sections = self.document.outline.len();
+            if sections > 0 {
+                self.outline_selection.select_row(body_row, sections);
             }
         } else {
             self.focus = Focus::Plan;
-            self.plan_cursor_line = self.plan_scroll + body_y as usize;
+            self.plan_cursor_line = (self.plan_scroll + body_row).min(self.source_line_max_index());
         }
     }
 
-    pub fn on_key(&mut self, key: KeyEvent) -> bool {
+    fn handle_key(&mut self, key: KeyEvent) -> ScreenOutcome {
         if self.respond.is_none() {
-            return true;
+            return ScreenOutcome::Close;
         }
-
         if self.draft.is_some() {
-            return self.handle_draft_key(key);
+            self.handle_draft_key(key);
+            return ScreenOutcome::None;
         }
-
+        if let Some(outcome) = self.decision_key(key) {
+            return outcome;
+        }
         match self.focus {
             Focus::Plan => self.handle_plan_key(key),
             Focus::Outline => self.handle_outline_key(key),
         }
+        ScreenOutcome::None
     }
 
-    fn handle_plan_key(&mut self, key: KeyEvent) -> bool {
-        let max = self.source_line_max_index();
+    /// Keys that end the review, available from either pane.
+    fn decision_key(&mut self, key: KeyEvent) -> Option<ScreenOutcome> {
         match key.code {
-            KeyCode::Esc => {
-                self.respond(ElicitationAction::Cancel, None);
-                true
-            }
+            KeyCode::Esc => self.respond(ElicitationAction::Cancel, None),
             KeyCode::Char('a') => {
                 self.respond(ElicitationAction::Accept, Some(PlanReviewDecision::Approve.response_content(None)));
-                true
             }
             KeyCode::Char('r') => {
                 let feedback = compile_feedback(&self.document, &self.comments);
@@ -186,95 +173,47 @@ impl PlanReviewScreen {
                     ElicitationAction::Accept,
                     Some(PlanReviewDecision::Deny.response_content(Some(&feedback))),
                 );
-                true
-            }
-            KeyCode::Char('c') => {
-                let line_no = self.plan_cursor_line + 1;
-                self.draft = Some(DraftComment { line_no, buffer: EditBuffer::default() });
-                false
             }
             KeyCode::Char('u') => {
                 self.comments.pop();
-                false
+                return Some(ScreenOutcome::None);
             }
-            KeyCode::Char('j') | KeyCode::Down => {
-                if self.plan_cursor_line < max {
-                    self.plan_cursor_line += 1;
-                }
-                false
+            _ => return None,
+        }
+        Some(ScreenOutcome::Close)
+    }
+
+    fn handle_plan_key(&mut self, key: KeyEvent) {
+        let max = self.source_line_max_index();
+        match key.code {
+            KeyCode::Char('c') => {
+                self.draft = Some(DraftComment { line_no: self.plan_cursor_line + 1, buffer: EditBuffer::default() });
             }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.plan_cursor_line = self.plan_cursor_line.saturating_sub(1);
-                false
-            }
-            KeyCode::Char('g') => {
-                self.plan_cursor_line = 0;
-                false
-            }
-            KeyCode::Char('G') => {
-                self.plan_cursor_line = max;
-                false
-            }
-            KeyCode::Char('n') => {
-                self.jump_next_heading();
-                false
-            }
-            KeyCode::Char('p') => {
-                self.jump_prev_heading();
-                false
-            }
-            KeyCode::Char('h') | KeyCode::Left => {
-                if !self.document.outline.is_empty() {
-                    self.focus = Focus::Outline;
-                }
-                false
-            }
-            _ => false,
+            KeyCode::Char('j') | KeyCode::Down => self.plan_cursor_line = (self.plan_cursor_line + 1).min(max),
+            KeyCode::Char('k') | KeyCode::Up => self.plan_cursor_line = self.plan_cursor_line.saturating_sub(1),
+            KeyCode::Char('g') => self.plan_cursor_line = 0,
+            KeyCode::Char('G') => self.plan_cursor_line = max,
+            KeyCode::Char('n') => self.jump_heading(Direction::Forward),
+            KeyCode::Char('p') => self.jump_heading(Direction::Backward),
+            KeyCode::Char('h') | KeyCode::Left if !self.document.outline.is_empty() => self.focus = Focus::Outline,
+            _ => {}
         }
     }
 
-    fn handle_outline_key(&mut self, key: KeyEvent) -> bool {
+    fn handle_outline_key(&mut self, key: KeyEvent) {
         let len = self.document.outline.len();
         let max = len.saturating_sub(1);
         match key.code {
-            KeyCode::Esc => {
-                self.respond(ElicitationAction::Cancel, None);
-                true
-            }
-            KeyCode::Char('a') => {
-                self.respond(ElicitationAction::Accept, Some(PlanReviewDecision::Approve.response_content(None)));
-                true
-            }
-            KeyCode::Char('r') => {
-                let feedback = compile_feedback(&self.document, &self.comments);
-                self.respond(
-                    ElicitationAction::Accept,
-                    Some(PlanReviewDecision::Deny.response_content(Some(&feedback))),
-                );
-                true
-            }
-            KeyCode::Char('u') => {
-                self.comments.pop();
-                false
-            }
             KeyCode::Char('j') | KeyCode::Down => {
                 let selected = self.outline_selection.selected().unwrap_or_default().saturating_add(1).min(max);
                 self.outline_selection.select(Some(selected), len);
-                false
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 let selected = self.outline_selection.selected().unwrap_or_default().saturating_sub(1);
                 self.outline_selection.select(Some(selected), len);
-                false
             }
-            KeyCode::Char('g') => {
-                self.outline_selection.select_first(len);
-                false
-            }
-            KeyCode::Char('G') => {
-                self.outline_selection.select(Some(max), len);
-                false
-            }
+            KeyCode::Char('g') => self.outline_selection.select_first(len),
+            KeyCode::Char('G') => self.outline_selection.select(Some(max), len),
             KeyCode::Enter => {
                 if let Some(section) =
                     self.outline_selection.selected().and_then(|selected| self.document.outline.get(selected))
@@ -282,25 +221,18 @@ impl PlanReviewScreen {
                     self.plan_cursor_line = section.first_line_no.saturating_sub(1).min(self.source_line_max_index());
                     self.focus = Focus::Plan;
                 }
-                false
             }
-            KeyCode::Char('l') | KeyCode::Right => {
-                self.focus = Focus::Plan;
-                false
-            }
-            _ => false,
+            KeyCode::Char('l') | KeyCode::Right => self.focus = Focus::Plan,
+            _ => {}
         }
     }
 
-    fn handle_draft_key(&mut self, key: KeyEvent) -> bool {
+    fn handle_draft_key(&mut self, key: KeyEvent) {
         let Some(draft) = self.draft.as_mut() else {
-            return false;
+            return;
         };
         match key.code {
-            KeyCode::Esc => {
-                self.draft = None;
-                false
-            }
+            KeyCode::Esc => self.draft = None,
             KeyCode::Enter => {
                 let text = draft.buffer.take();
                 let line_no = draft.line_no;
@@ -308,80 +240,35 @@ impl PlanReviewScreen {
                 if !text.trim().is_empty() {
                     self.comments.push(ReviewComment::new(line_no, text));
                 }
-                false
             }
-            KeyCode::Backspace => {
-                draft.buffer.backspace();
-                false
+            _ => {
+                apply_edit_key(&mut draft.buffer, key);
             }
-            KeyCode::Left => {
-                draft.buffer.move_left();
-                false
-            }
-            KeyCode::Right => {
-                draft.buffer.move_right();
-                false
-            }
-            KeyCode::Home => {
-                draft.buffer.set_cursor(0);
-                false
-            }
-            KeyCode::End => {
-                draft.buffer.move_to_end();
-                false
-            }
-            KeyCode::Char(c) => {
-                if !c.is_control() || c == ' ' {
-                    draft.buffer.insert_char(c);
-                }
-                false
-            }
-            _ => false,
         }
     }
 
-    fn jump_next_heading(&mut self) {
-        let heading_lines: Vec<usize> =
-            self.document.outline.iter().map(|s| s.first_line_no.saturating_sub(1)).collect();
-        if let Some(&next) = heading_lines.iter().find(|&&ln| ln > self.plan_cursor_line) {
-            self.plan_cursor_line = next.min(self.source_line_max_index());
-        }
-    }
-
-    fn jump_prev_heading(&mut self) {
-        let heading_lines: Vec<usize> =
-            self.document.outline.iter().map(|s| s.first_line_no.saturating_sub(1)).collect();
-        if let Some(&prev) = heading_lines.iter().rev().find(|&&ln| ln < self.plan_cursor_line) {
-            self.plan_cursor_line = prev;
+    /// Moves the cursor to the next or previous section heading.
+    fn jump_heading(&mut self, direction: Direction) {
+        let headings = self.document.outline.iter().map(|section| section.first_line_no.saturating_sub(1));
+        let target = match direction {
+            Direction::Forward => headings.into_iter().find(|&line| line > self.plan_cursor_line),
+            Direction::Backward => headings.into_iter().rfind(|&line| line < self.plan_cursor_line),
+        };
+        if let Some(line) = target {
+            self.plan_cursor_line = line.min(self.source_line_max_index());
         }
     }
 
     #[allow(clippy::cast_possible_truncation)]
-    pub fn render_with_theme_generation(
-        &mut self,
-        frame: &mut Frame,
-        theme: &Theme,
-        highlighter: &mut SyntaxHighlighter,
-        theme_generation: u64,
-    ) {
-        self.ensure_source_presentation(theme, highlighter, theme_generation);
-        self.render_cached(frame, theme);
-    }
-
-    #[allow(clippy::cast_possible_truncation)]
-    fn render_cached(&mut self, frame: &mut Frame, theme: &Theme) {
-        self.last_area = frame.area();
-
-        let area = frame.area();
+    fn render_screen(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
+        self.last_area = area;
         if area.height < 4 || area.width < 20 {
-            let msg = Paragraph::new("Plan review view is too small").style(Style::new().fg(theme.error));
-            frame.render_widget(msg, area);
+            Paragraph::new("Plan review view is too small").style(Style::new().fg(theme.error)).render(area, buf);
             return;
         }
 
         let [body_area, footer_area] = area.layout(&Layout::vertical([Constraint::Min(0), Constraint::Length(1)]));
-
-        let use_split = area.width >= MIN_SPLIT_WIDTH && !self.document.outline.is_empty();
+        let use_split = self.uses_split(area);
 
         if use_split {
             let [outline_area, plan_area] = Layout::horizontal([
@@ -390,29 +277,33 @@ impl PlanReviewScreen {
             ])
             .areas(body_area);
 
-            self.render_outline(frame, outline_area, theme);
-            self.render_plan(frame, plan_area, theme);
+            self.render_outline(outline_area, buf, theme);
+            self.render_plan(plan_area, buf, theme);
         } else {
-            self.render_plan(frame, body_area, theme);
+            self.render_plan(body_area, buf, theme);
         }
 
-        self.render_footer(frame, footer_area, theme, use_split);
+        self.render_footer(footer_area, buf, theme, use_split);
     }
 
-    fn render_outline(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    /// The outline pane only earns its space on wide terminals with headings.
+    fn uses_split(&self, area: Rect) -> bool {
+        area.width >= MIN_SPLIT_WIDTH && !self.document.outline.is_empty()
+    }
+
+    fn render_outline(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
         let title_style = if self.focus == Focus::Outline {
             Style::new().fg(theme.accent).add_modifier(Modifier::BOLD)
         } else {
             Style::new().fg(theme.text_primary).add_modifier(Modifier::BOLD)
         };
 
-        let block = Block::default()
-            .borders(Borders::ALL)
+        let block = Block::bordered()
             .border_style(Style::new().fg(if self.focus == Focus::Outline { theme.accent } else { theme.muted }))
             .title(Line::styled(" Outline ", title_style));
 
         let inner = block.inner(area);
-        frame.render_widget(block, area);
+        block.render(area, buf);
 
         let height = inner.height as usize;
         if height == 0 || self.document.outline.is_empty() {
@@ -433,41 +324,66 @@ impl PlanReviewScreen {
             Style::new().fg(theme.accent)
         };
         let list = List::new(items).highlight_symbol("> ").highlight_style(highlight_style);
-        frame.render_stateful_widget(list, inner, self.outline_selection.list_state_mut());
+        StatefulWidget::render(list, inner, buf, self.outline_selection.list_state_mut());
 
         let mut scrollbar_state =
             ScrollbarState::new(self.document.outline.len()).position(self.outline_selection.offset());
-        frame.render_stateful_widget(Scrollbar::new(ScrollbarOrientation::VerticalRight), inner, &mut scrollbar_state);
+        StatefulWidget::render(Scrollbar::new(ScrollbarOrientation::VerticalRight), inner, buf, &mut scrollbar_state);
     }
 
-    #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
-    fn render_plan(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
-        let block = Block::default()
-            .borders(Borders::ALL)
+    #[allow(clippy::cast_possible_truncation)]
+    fn render_plan(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
+        let block = Block::bordered()
             .border_style(Style::new().fg(if self.focus == Focus::Plan { theme.accent } else { theme.muted }))
             .title(format!(" {} ", self.title));
 
         let inner = block.inner(area);
-        frame.render_widget(block, area);
+        block.render(area, buf);
 
         let height = inner.height as usize;
         if height == 0 {
             return;
         }
-
         if self.source_line_count() == 0 {
-            frame.render_widget(Paragraph::new("Plan is empty").style(Style::new().fg(theme.muted)), inner);
+            Paragraph::new("Plan is empty").style(Style::new().fg(theme.muted)).render(inner, buf);
             return;
         }
 
-        let max_line_no = self.source_line_count().max(1);
-        let gutter_width = digit_count(max_line_no) + 3;
-
+        let gutter_width = digit_count(self.source_line_count().max(1)) + 3;
         let content_width = inner.width.saturating_sub(gutter_width as u16);
         if content_width == 0 {
             return;
         }
 
+        self.keep_cursor_in_view(height);
+        let (rows, source_rows, cursor_row) = self.build_rows(gutter_width, content_width, theme);
+
+        // Comments and drafts push lines apart, so the scroll offset is tracked
+        // in rendered rows rather than source lines.
+        let mut scroll = source_rows.get(self.plan_scroll).copied().unwrap_or_default();
+        if let Some(cursor_row) = cursor_row {
+            if cursor_row < scroll {
+                scroll = cursor_row;
+            } else if cursor_row >= scroll + height {
+                scroll = cursor_row.saturating_sub(height.saturating_sub(1));
+            }
+        }
+
+        let row_count = rows.len();
+        let highlight = (self.focus == Focus::Plan).then_some(cursor_row).flatten();
+        let rows: Vec<Line<'static>> = rows
+            .into_iter()
+            .enumerate()
+            .map(|(index, line)| if Some(index) == highlight { highlight_row(line, theme) } else { line })
+            .collect();
+
+        Paragraph::new(rows).scroll((u16::try_from(scroll).unwrap_or(u16::MAX), 0)).render(inner, buf);
+        let mut scrollbar_state = ScrollbarState::new(row_count).position(scroll);
+        StatefulWidget::render(Scrollbar::new(ScrollbarOrientation::VerticalRight), inner, buf, &mut scrollbar_state);
+    }
+
+    /// Scrolls just enough to bring the cursor line back into view.
+    fn keep_cursor_in_view(&mut self, height: usize) {
         self.plan_cursor_line = self.plan_cursor_line.min(self.source_line_max_index());
         if self.plan_cursor_line < self.plan_scroll {
             self.plan_scroll = self.plan_cursor_line;
@@ -475,143 +391,64 @@ impl PlanReviewScreen {
         if self.plan_cursor_line >= self.plan_scroll + height {
             self.plan_scroll = self.plan_cursor_line.saturating_sub(height.saturating_sub(1));
         }
-
-        let plan_cursor = self.plan_cursor_line;
-        let comments = &self.comments;
-        let draft = &self.draft;
-
-        let mut visual_rows: Vec<Line<'static>> = Vec::new();
-        let mut source_visual_rows = Vec::with_capacity(self.source_line_count());
-        let mut cursor_visual_row: Option<usize> = None;
-
-        for line_idx in 0..self.source_line_count() {
-            source_visual_rows.push(visual_rows.len());
-            let source_line_no = line_idx + 1;
-            let is_cursor = line_idx == plan_cursor;
-
-            if line_idx >= self.source_lines.len() {
-                break;
-            }
-            let source = &self.source_lines[line_idx];
-            let rendered_line = &source.line;
-
-            let head_line = build_gutter(source_line_no, gutter_width, theme);
-            let tail_line = build_tail_gutter(gutter_width);
-
-            let wrapped = wrap_line(rendered_line.clone(), content_width);
-
-            for (wrap_idx, wrapped_line) in wrapped.into_iter().enumerate() {
-                if wrap_idx == 0 {
-                    let mut row = head_line.clone();
-                    row.spans.extend(wrapped_line.spans);
-                    if is_cursor {
-                        cursor_visual_row = Some(visual_rows.len());
-                    }
-                    visual_rows.push(row);
-                } else {
-                    let mut row = tail_line.clone();
-                    row.spans.extend(wrapped_line.spans);
-                    visual_rows.push(row);
-                }
-            }
-
-            let comments_for_line: Vec<&ReviewComment> =
-                comments.iter().filter(|c| c.line_no == source_line_no).collect();
-            for comment in &comments_for_line {
-                let mut header = Line::default();
-                header.push_span(Span::styled(" ".repeat(gutter_width), Style::new().fg(theme.muted)));
-                header.push_span(Span::styled(
-                    format!("┌ comment on line {source_line_no}"),
-                    Style::new().fg(theme.info).add_modifier(Modifier::ITALIC),
-                ));
-                visual_rows.push(header);
-
-                for body_line_text in comment.body.lines() {
-                    let mut row = Line::default();
-                    row.push_span(Span::styled(" ".repeat(gutter_width), Style::new().fg(theme.muted)));
-                    row.push_span(Span::styled(format!("│ {body_line_text}"), Style::new().fg(theme.text_secondary)));
-                    visual_rows.push(row);
-                }
-            }
-
-            if let Some(draft) = draft
-                && draft.line_no == source_line_no
-            {
-                let mut header = Line::default();
-                header.push_span(Span::styled(" ".repeat(gutter_width), Style::new().fg(theme.muted)));
-                header.push_span(Span::styled(
-                    "┌ [new comment]",
-                    Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
-                ));
-                visual_rows.push(header);
-
-                let mut input_row = Line::default();
-                input_row.push_span(Span::styled(" ".repeat(gutter_width), Style::new().fg(theme.muted)));
-                if draft.buffer.is_empty() {
-                    input_row.push_span(Span::styled("│ ", Style::new().fg(theme.muted)));
-                    input_row
-                        .push_span(Span::styled("│", Style::new().fg(theme.accent).add_modifier(Modifier::SLOW_BLINK)));
-                } else {
-                    let text = draft.buffer.text();
-                    let cursor = draft.buffer.cursor();
-                    let before = &text[..cursor];
-                    let next_len = text[cursor..].chars().next().map_or(0, char::len_utf8);
-                    let cursor_char = if next_len == 0 { " " } else { &text[cursor..cursor + next_len] };
-                    let after = &text[cursor + next_len..];
-
-                    input_row.push_span(Span::styled("│ ", Style::new().fg(theme.muted)));
-                    input_row.push_span(Span::styled(before.to_string(), Style::new().fg(theme.text_primary)));
-                    input_row.push_span(Span::styled(
-                        cursor_char.to_string(),
-                        Style::new().fg(theme.background).bg(theme.accent),
-                    ));
-                    input_row.push_span(Span::styled(after.to_string(), Style::new().fg(theme.text_primary)));
-                }
-                visual_rows.push(input_row);
-            }
-        }
-
-        let mut visual_scroll = source_visual_rows.get(self.plan_scroll).copied().unwrap_or_default();
-        if let Some(cursor_row) = cursor_visual_row {
-            if cursor_row < visual_scroll {
-                visual_scroll = cursor_row;
-            } else if cursor_row >= visual_scroll + height {
-                visual_scroll = cursor_row.saturating_sub(height.saturating_sub(1));
-            }
-        }
-
-        let rendered = visual_rows
-            .into_iter()
-            .enumerate()
-            .map(|(row_index, line)| {
-                if cursor_visual_row == Some(row_index) && self.focus == Focus::Plan {
-                    Line::from(
-                        line.spans
-                            .into_iter()
-                            .map(|span| {
-                                Span::styled(
-                                    span.content,
-                                    span.style.patch(Style::new().bg(theme.accent).fg(theme.background)),
-                                )
-                            })
-                            .collect::<Vec<_>>(),
-                    )
-                } else {
-                    line
-                }
-            })
-            .collect::<Vec<_>>();
-
-        let visual_row_count = rendered.len();
-        frame.render_widget(
-            Paragraph::new(rendered).scroll((u16::try_from(visual_scroll).unwrap_or(u16::MAX), 0)),
-            inner,
-        );
-        let mut scrollbar_state = ScrollbarState::new(visual_row_count).position(visual_scroll);
-        frame.render_stateful_widget(Scrollbar::new(ScrollbarOrientation::VerticalRight), inner, &mut scrollbar_state);
     }
 
-    fn render_footer(&self, frame: &mut Frame, area: Rect, theme: &Theme, has_outline: bool) {
+    /// Lays the plan out as rendered rows, returning them alongside the row each
+    /// source line starts on and the row holding the cursor.
+    fn build_rows(
+        &self,
+        gutter_width: usize,
+        content_width: u16,
+        theme: &Theme,
+    ) -> (Vec<Line<'static>>, Vec<usize>, Option<usize>) {
+        let mut rows: Vec<Line<'static>> = Vec::new();
+        let mut source_rows = Vec::with_capacity(self.source_line_count());
+        let mut cursor_row = None;
+
+        for (index, source) in self.source_lines.iter().enumerate().take(self.source_line_count()) {
+            source_rows.push(rows.len());
+            let line_no = index + 1;
+
+            for (wrap_index, wrapped) in wrap_line(source.line.clone(), content_width).into_iter().enumerate() {
+                let mut row = if wrap_index == 0 {
+                    if index == self.plan_cursor_line {
+                        cursor_row = Some(rows.len());
+                    }
+                    build_gutter(line_no, gutter_width, theme)
+                } else {
+                    build_tail_gutter(gutter_width)
+                };
+                row.spans.extend(wrapped.spans);
+                rows.push(row);
+            }
+
+            for comment in self.comments.iter().filter(|comment| comment.line_no == line_no) {
+                rows.push(annotation_row(
+                    gutter_width,
+                    &format!("┌ comment on line {line_no}"),
+                    Style::new().fg(theme.info).add_modifier(Modifier::ITALIC),
+                    theme,
+                ));
+                rows.extend(comment.body.lines().map(|text| {
+                    annotation_row(gutter_width, &format!("│ {text}"), Style::new().fg(theme.text_secondary), theme)
+                }));
+            }
+
+            if let Some(draft) = self.draft.as_ref().filter(|draft| draft.line_no == line_no) {
+                rows.push(annotation_row(
+                    gutter_width,
+                    "┌ [new comment]",
+                    Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
+                    theme,
+                ));
+                rows.push(draft_row(&draft.buffer, gutter_width, theme));
+            }
+        }
+
+        (rows, source_rows, cursor_row)
+    }
+
+    fn render_footer(&self, area: Rect, buf: &mut Buffer, theme: &Theme, has_outline: bool) {
         let plan_focused = self.focus == Focus::Plan;
         let mut spans: Vec<Span<'static>> = Vec::new();
 
@@ -635,12 +472,7 @@ impl PlanReviewScreen {
         add_hint(&mut spans, "r", "changes", theme);
         add_hint(&mut spans, "Esc", "cancel", theme);
 
-        let paragraph = Paragraph::new(Line::from(spans)).style(Style::new().bg(theme.sidebar_bg));
-        frame.render_widget(paragraph, area);
-    }
-
-    pub fn cancel(&mut self) {
-        self.respond(ElicitationAction::Cancel, None);
+        Paragraph::new(Line::from(spans)).style(Style::new().bg(theme.sidebar_bg)).render(area, buf);
     }
 
     fn respond(&mut self, action: ElicitationAction, content: Option<serde_json::Value>) {
@@ -648,6 +480,76 @@ impl PlanReviewScreen {
             respond(ElicitationResponse { action, content });
         }
     }
+}
+
+impl Screen for PlanReviewScreen {
+    fn on_key(&mut self, key: KeyEvent) -> ScreenOutcome {
+        self.handle_key(key)
+    }
+
+    fn on_mouse(&mut self, action: MouseAction, row: u16, column: u16) {
+        match action {
+            MouseAction::ScrollUp => self.scroll(-1),
+            MouseAction::ScrollDown => self.scroll(1),
+            MouseAction::Click => self.click(row, column),
+        }
+    }
+
+    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
+        self.ensure_source_presentation(cx.theme, cx.highlighter, cx.theme_generation);
+        self.render_screen(area, buf, cx.theme);
+        None
+    }
+
+    fn cancel(&mut self) {
+        self.respond(ElicitationAction::Cancel, None);
+    }
+}
+
+/// Shifts `value` by `delta` rows, saturating at zero and `max`.
+fn offset_by(value: usize, delta: i32, max: usize) -> usize {
+    value.saturating_add_signed(delta as isize).min(max)
+}
+
+/// A line drawn beside the gutter rather than in it: comments and drafts.
+fn annotation_row(gutter_width: usize, text: &str, style: Style, theme: &Theme) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(" ".repeat(gutter_width), Style::new().fg(theme.muted)),
+        Span::styled(text.to_string(), style),
+    ])
+}
+
+/// The draft comment being typed, with a block cursor at the insertion point.
+fn draft_row(buffer: &EditBuffer, gutter_width: usize, theme: &Theme) -> Line<'static> {
+    let mut row = Line::from(vec![
+        Span::styled(" ".repeat(gutter_width), Style::new().fg(theme.muted)),
+        Span::styled("│ ", Style::new().fg(theme.muted)),
+    ]);
+    if buffer.is_empty() {
+        row.push_span(Span::styled("│", Style::new().fg(theme.accent).add_modifier(Modifier::SLOW_BLINK)));
+        return row;
+    }
+
+    let text = buffer.text();
+    let cursor = buffer.cursor();
+    let cursor_len = text[cursor..].chars().next().map_or(0, char::len_utf8);
+    let under_cursor = if cursor_len == 0 { " " } else { &text[cursor..cursor + cursor_len] };
+    row.push_span(Span::styled(text[..cursor].to_string(), Style::new().fg(theme.text_primary)));
+    row.push_span(Span::styled(under_cursor.to_string(), Style::new().fg(theme.background).bg(theme.accent)));
+    row.push_span(Span::styled(text[cursor + cursor_len..].to_string(), Style::new().fg(theme.text_primary)));
+    row
+}
+
+/// Repaints a whole row in the cursor colours.
+fn highlight_row(line: Line<'static>, theme: &Theme) -> Line<'static> {
+    Line::from(
+        line.spans
+            .into_iter()
+            .map(|span| {
+                Span::styled(span.content, span.style.patch(Style::new().bg(theme.accent).fg(theme.background)))
+            })
+            .collect::<Vec<_>>(),
+    )
 }
 
 fn digit_count(value: usize) -> usize {

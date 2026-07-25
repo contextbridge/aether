@@ -1,5 +1,5 @@
 use super::{SettingsChange, SettingsMenuEntry, SettingsMenuEntryKind, SettingsMenuValue};
-use crate::selection::SelectionState;
+use crate::selection::{Direction, SelectionState};
 use crate::theme::Theme;
 use crate::wrap::truncate_to_width;
 use acp_utils::config_meta::{ConfigOptionMeta, SelectOptionMeta};
@@ -82,11 +82,15 @@ impl SettingsMenu {
     }
 
     pub(super) fn move_up(&mut self) {
-        self.selection.previous(self.entries.len());
+        self.step(Direction::Backward);
     }
 
     pub(super) fn move_down(&mut self) {
-        self.selection.next(self.entries.len());
+        self.step(Direction::Forward);
+    }
+
+    pub(super) fn step(&mut self, direction: Direction) {
+        self.selection.step(self.entries.len(), direction, |_| true);
     }
 
     pub(super) fn selected_entry(&self) -> Option<&SettingsMenuEntry> {
@@ -110,9 +114,8 @@ impl SettingsMenu {
         }
     }
 
-    pub(super) fn click_row(&mut self, row: usize) -> Option<SettingsMenuEntryKind> {
+    pub(super) fn click_row(&mut self, row: usize) {
         self.selection.select_row(row, self.entries.len());
-        self.selected_entry().map(|entry| entry.entry_kind)
     }
 
     pub(super) fn render(&mut self, area: Rect, buffer: &mut Buffer, theme: &Theme) {
@@ -142,10 +145,17 @@ impl SettingsMenu {
         StatefulWidget::render(list, area, buffer, self.selection.list_state_mut());
     }
 
-    pub(super) fn upsert_mcp_servers_entry(&mut self, summary: &str) {
+    /// Adds or refreshes a row that opens a pane instead of picking a value.
+    /// Its "current value" is just the summary line shown in the menu.
+    pub(super) fn upsert_pane_entry(&mut self, kind: SettingsMenuEntryKind, summary: &str) {
+        let (config_id, title) = match kind {
+            SettingsMenuEntryKind::McpServers => ("_mcp_servers", "MCP Servers"),
+            SettingsMenuEntryKind::ProviderLogins => ("_provider_logins", "Provider Logins"),
+            SettingsMenuEntryKind::Select | SettingsMenuEntryKind::Theme => return,
+        };
         let entry = SettingsMenuEntry {
-            config_id: "_mcp_servers".to_string(),
-            title: "MCP Servers".to_string(),
+            config_id: config_id.to_string(),
+            title: title.to_string(),
             values: vec![SettingsMenuValue {
                 value: summary.to_string(),
                 name: summary.to_string(),
@@ -155,42 +165,14 @@ impl SettingsMenu {
             }],
             current_value_index: 0,
             current_raw_value: summary.to_string(),
-            entry_kind: SettingsMenuEntryKind::McpServers,
+            entry_kind: kind,
             multi_select: false,
             display_name: None,
         };
 
-        if let Some(pos) = self.entries.iter().position(|e| matches!(e.entry_kind, SettingsMenuEntryKind::McpServers)) {
-            self.entries[pos] = entry;
-        } else {
-            self.entries.push(entry);
-        }
-    }
-
-    pub(super) fn upsert_provider_logins_entry(&mut self, summary: &str) {
-        let entry = SettingsMenuEntry {
-            config_id: "_provider_logins".to_string(),
-            title: "Provider Logins".to_string(),
-            values: vec![SettingsMenuValue {
-                value: summary.to_string(),
-                name: summary.to_string(),
-                description: None,
-                is_disabled: false,
-                meta: SelectOptionMeta::default(),
-            }],
-            current_value_index: 0,
-            current_raw_value: summary.to_string(),
-            entry_kind: SettingsMenuEntryKind::ProviderLogins,
-            multi_select: false,
-            display_name: None,
-        };
-
-        if let Some(pos) =
-            self.entries.iter().position(|e| matches!(e.entry_kind, SettingsMenuEntryKind::ProviderLogins))
-        {
-            self.entries[pos] = entry;
-        } else {
-            self.entries.push(entry);
+        match self.entries.iter().position(|existing| existing.entry_kind == kind) {
+            Some(index) => self.entries[index] = entry,
+            None => self.entries.push(entry),
         }
     }
 }

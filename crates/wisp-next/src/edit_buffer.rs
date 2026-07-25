@@ -1,34 +1,22 @@
-use ratatui_textarea::{CursorMove, TextArea};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-#[derive(Clone, Debug)]
+/// A text buffer addressed by byte cursor, shared by every text input in the UI
+/// (composer, commit message, review drafts, form fields).
+///
+/// The cursor is always held on a `char` boundary, so slicing `text()` at
+/// `cursor()` is infallible.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct EditBuffer {
-    textarea: Box<TextArea<'static>>,
     text: String,
+    cursor: usize,
 }
-
-impl Default for EditBuffer {
-    fn default() -> Self {
-        Self::new("")
-    }
-}
-
-impl PartialEq for EditBuffer {
-    fn eq(&self, other: &Self) -> bool {
-        self.text == other.text && self.cursor() == other.cursor()
-    }
-}
-
-impl Eq for EditBuffer {}
 
 impl EditBuffer {
+    /// Creates a buffer holding `text` with the cursor at the end.
     pub fn new(text: impl Into<String>) -> Self {
         let text = text.into();
-        let mut buffer = Self { textarea: Box::new(TextArea::from(text.lines())), text };
-        if buffer.text.ends_with('\n') {
-            buffer.textarea.insert_newline();
-        }
-        buffer.move_to_end();
-        buffer
+        let cursor = text.len();
+        Self { text, cursor }
     }
 
     pub fn text(&self) -> &str {
@@ -36,21 +24,18 @@ impl EditBuffer {
     }
 
     pub fn cursor(&self) -> usize {
-        let cursor = self.textarea.cursor();
-        self.text.split_inclusive('\n').take(cursor.0).map(str::len).sum::<usize>()
-            + self.textarea.lines()[cursor.0]
-                .char_indices()
-                .nth(cursor.1)
-                .map_or_else(|| self.textarea.lines()[cursor.0].len(), |(offset, _)| offset)
+        self.cursor
     }
 
     pub fn is_empty(&self) -> bool {
-        self.textarea.is_empty()
+        self.text.is_empty()
     }
 
+    /// Replaces the contents, keeping the cursor at the same byte offset where
+    /// the new text is long enough.
     pub fn set_text(&mut self, text: impl Into<String>) {
-        let cursor = self.cursor();
-        self.replace_text(text.into(), cursor);
+        self.text = text.into();
+        self.set_cursor(self.cursor);
     }
 
     pub fn set_cursor(&mut self, cursor: usize) {
@@ -58,119 +43,158 @@ impl EditBuffer {
         while !self.text.is_char_boundary(cursor) {
             cursor -= 1;
         }
-        let cursor = self.text[..cursor]
-            .char_indices()
-            .next_back()
-            .filter(|(offset, _)| *offset < cursor)
-            .map_or(cursor, |(offset, character)| offset + character.len_utf8());
-        let before = &self.text[..cursor];
-        let row = before.matches('\n').count();
-        let line_start = before.rfind('\n').map_or(0, |offset| offset + 1);
-        let column = self.text[line_start..cursor].chars().count();
-        self.textarea.move_cursor(CursorMove::Jump(
-            u16::try_from(row).unwrap_or(u16::MAX),
-            u16::try_from(column).unwrap_or(u16::MAX),
-        ));
+        self.cursor = cursor;
     }
 
     pub fn move_to_end(&mut self) {
-        self.textarea.move_cursor(CursorMove::Bottom);
-        self.textarea.move_cursor(CursorMove::End);
+        self.cursor = self.text.len();
     }
 
     pub fn insert_char(&mut self, character: char) {
-        self.textarea.insert_char(character);
-        self.sync_text();
+        self.text.insert(self.cursor, character);
+        self.cursor += character.len_utf8();
     }
 
     pub fn insert_str(&mut self, text: &str) {
-        self.textarea.insert_str(text);
-        self.sync_text();
+        self.text.insert_str(self.cursor, text);
+        self.cursor += text.len();
     }
 
     pub fn insert_newline(&mut self) {
-        self.textarea.insert_newline();
-        self.sync_text();
+        self.insert_char('\n');
     }
 
     pub fn backspace(&mut self) -> bool {
-        let changed = self.textarea.delete_char();
-        self.sync_text();
-        changed
+        let Some(previous) = self.previous_boundary() else {
+            return false;
+        };
+        self.text.replace_range(previous..self.cursor, "");
+        self.cursor = previous;
+        true
     }
 
     pub fn delete(&mut self) -> bool {
-        let changed = self.textarea.delete_str(1);
-        self.sync_text();
-        changed
+        let Some(next) = self.next_boundary() else {
+            return false;
+        };
+        self.text.replace_range(self.cursor..next, "");
+        true
     }
 
     pub fn move_left(&mut self) -> bool {
-        self.move_cursor(CursorMove::Back)
+        self.previous_boundary().is_some_and(|previous| {
+            self.cursor = previous;
+            true
+        })
     }
 
     pub fn move_right(&mut self) -> bool {
-        self.move_cursor(CursorMove::Forward)
+        self.next_boundary().is_some_and(|next| {
+            self.cursor = next;
+            true
+        })
     }
 
     pub fn move_line_start(&mut self) {
-        self.textarea.move_cursor(CursorMove::Head);
+        self.cursor = self.line_start();
     }
 
     pub fn move_line_end(&mut self) {
-        self.textarea.move_cursor(CursorMove::End);
+        self.cursor = self.line_end();
     }
 
     pub fn move_up(&mut self) -> bool {
-        self.move_cursor(CursorMove::Up)
+        let start = self.line_start();
+        if start == 0 {
+            return false;
+        }
+        let previous_start = self.text[..start - 1].rfind('\n').map_or(0, |index| index + 1);
+        self.cursor = self.column_offset(previous_start, start - 1);
+        true
     }
 
     pub fn move_down(&mut self) -> bool {
-        self.move_cursor(CursorMove::Down)
+        let end = self.line_end();
+        if end == self.text.len() {
+            return false;
+        }
+        let next_start = end + 1;
+        let next_end = self.text[next_start..].find('\n').map_or(self.text.len(), |index| next_start + index);
+        self.cursor = self.column_offset(next_start, next_end);
+        true
     }
 
     pub fn replace_range(&mut self, range: std::ops::Range<usize>, replacement: &str) {
-        let mut text = self.text.clone();
-        text.replace_range(range.clone(), replacement);
-        self.replace_text(text, range.start + replacement.len());
-    }
-
-    pub fn clear(&mut self) {
-        self.replace_text(String::new(), 0);
-    }
-
-    pub fn take(&mut self) -> String {
-        let text = std::mem::take(&mut self.text);
-        *self.textarea = TextArea::default();
-        text
-    }
-
-    pub fn line_start(&self) -> usize {
-        self.text[..self.cursor()].rfind('\n').map_or(0, |index| index + 1)
-    }
-
-    pub fn textarea(&self) -> &TextArea<'static> {
-        &self.textarea
-    }
-
-    fn move_cursor(&mut self, direction: CursorMove) -> bool {
-        let before = self.textarea.cursor();
-        self.textarea.move_cursor(direction);
-        self.textarea.cursor() != before
-    }
-
-    fn replace_text(&mut self, text: String, cursor: usize) {
-        *self.textarea = TextArea::from(text.lines());
-        self.text = text;
-        if self.text.ends_with('\n') {
-            self.textarea.insert_newline();
-        }
+        let cursor = range.start + replacement.len();
+        self.text.replace_range(range, replacement);
         self.set_cursor(cursor);
     }
 
-    fn sync_text(&mut self) {
-        self.text = self.textarea.lines().join("\n");
+    pub fn clear(&mut self) {
+        self.text.clear();
+        self.cursor = 0;
     }
+
+    /// Empties the buffer, returning what it held.
+    pub fn take(&mut self) -> String {
+        self.cursor = 0;
+        std::mem::take(&mut self.text)
+    }
+
+    pub fn line_start(&self) -> usize {
+        self.text[..self.cursor].rfind('\n').map_or(0, |index| index + 1)
+    }
+
+    fn line_end(&self) -> usize {
+        self.text[self.cursor..].find('\n').map_or(self.text.len(), |index| self.cursor + index)
+    }
+
+    /// Byte offset within `start..end` at the cursor's current character column,
+    /// clamped to the end of that range.
+    fn column_offset(&self, start: usize, end: usize) -> usize {
+        let column = self.text[self.line_start()..self.cursor].chars().count();
+        self.text[start..end].char_indices().nth(column).map_or(end, |(offset, _)| start + offset)
+    }
+
+    fn previous_boundary(&self) -> Option<usize> {
+        self.text[..self.cursor].chars().next_back().map(|character| self.cursor - character.len_utf8())
+    }
+
+    fn next_boundary(&self) -> Option<usize> {
+        self.text[self.cursor..].chars().next().map(|character| self.cursor + character.len_utf8())
+    }
+}
+
+/// Applies one editing keystroke to `buffer`, returning whether it was consumed.
+///
+/// This is the single key table shared by every text input: the composer, the
+/// git-diff commit editor and review drafts, plan-review comments, the new
+/// workspace name prompt, and elicitation form fields. Callers handle their own
+/// Enter/Esc (and any vertical motion) before delegating here.
+pub fn apply_edit_key(buffer: &mut EditBuffer, key: KeyEvent) -> bool {
+    match key.code {
+        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => buffer.move_line_start(),
+        KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => buffer.move_line_end(),
+        KeyCode::Char(character) if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+            buffer.insert_char(character);
+        }
+        KeyCode::Backspace => {
+            buffer.backspace();
+        }
+        KeyCode::Delete => {
+            buffer.delete();
+        }
+        KeyCode::Left => {
+            buffer.move_left();
+        }
+        KeyCode::Right => {
+            buffer.move_right();
+        }
+        KeyCode::Home => buffer.move_line_start(),
+        KeyCode::End => buffer.move_line_end(),
+        _ => return false,
+    }
+    true
 }
 
 impl From<String> for EditBuffer {
@@ -185,23 +209,11 @@ impl From<&str> for EditBuffer {
     }
 }
 
-impl AsRef<str> for EditBuffer {
-    fn as_ref(&self) -> &str {
-        self.text()
-    }
-}
-
 impl std::ops::Deref for EditBuffer {
     type Target = str;
 
     fn deref(&self) -> &Self::Target {
         self.text()
-    }
-}
-
-impl std::fmt::Display for EditBuffer {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.text())
     }
 }
 
@@ -213,15 +225,77 @@ impl PartialEq<str> for EditBuffer {
 
 #[cfg(test)]
 mod tests {
-    use super::EditBuffer;
+    use super::{EditBuffer, KeyCode, KeyEvent, KeyModifiers, apply_edit_key};
 
     #[test]
-    fn edits_graphemes_through_native_textarea() {
+    fn edit_keys_cover_the_shared_table_and_reject_the_rest() {
+        let mut buffer = EditBuffer::new("ab");
+        assert!(apply_edit_key(&mut buffer, KeyEvent::new(KeyCode::Home, KeyModifiers::NONE)));
+        assert_eq!(buffer.cursor(), 0);
+        assert!(apply_edit_key(&mut buffer, KeyEvent::new(KeyCode::Char('X'), KeyModifiers::NONE)));
+        assert_eq!(buffer.text(), "Xab");
+        assert!(apply_edit_key(&mut buffer, KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL)));
+        assert_eq!(buffer.cursor(), 3);
+
+        assert!(
+            !apply_edit_key(&mut buffer, KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL)),
+            "control chords that are not editing keys must not be typed into the buffer"
+        );
+        assert!(!apply_edit_key(&mut buffer, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
+        assert_eq!(buffer.text(), "Xab");
+    }
+
+    #[test]
+    fn edits_multi_byte_characters_on_char_boundaries() {
         let mut buffer = EditBuffer::new("a界");
         assert!(buffer.move_left());
         buffer.insert_char('🙂');
         assert_eq!(buffer.text(), "a🙂界");
         assert!(buffer.backspace());
         assert_eq!(buffer.text(), "a界");
+    }
+
+    #[test]
+    fn refuses_to_move_past_either_end() {
+        let mut buffer = EditBuffer::new("ab");
+        assert!(!buffer.move_right());
+        assert!(!buffer.delete());
+        buffer.set_cursor(0);
+        assert!(!buffer.move_left());
+        assert!(!buffer.backspace());
+    }
+
+    #[test]
+    fn vertical_motion_preserves_the_character_column() {
+        let mut buffer = EditBuffer::new("hello\n界\nworld");
+        buffer.set_cursor(0);
+        buffer.move_line_end();
+        assert_eq!(buffer.cursor(), 5);
+
+        assert!(buffer.move_down(), "onto the shorter middle line");
+        assert_eq!(&buffer.text()[..buffer.cursor()], "hello\n界", "clamps to the end of a shorter line");
+
+        assert!(buffer.move_down());
+        assert!(!buffer.move_down(), "already on the last line");
+
+        assert!(buffer.move_up());
+        assert!(buffer.move_up());
+        assert!(!buffer.move_up(), "already on the first line");
+    }
+
+    #[test]
+    fn take_empties_the_buffer_and_resets_the_cursor() {
+        let mut buffer = EditBuffer::new("draft");
+        assert_eq!(buffer.take(), "draft");
+        assert!(buffer.is_empty());
+        assert_eq!(buffer.cursor(), 0);
+    }
+
+    #[test]
+    fn replace_range_leaves_the_cursor_after_the_replacement() {
+        let mut buffer = EditBuffer::new("say @fo here");
+        buffer.replace_range(4..7, "@foo.rs ");
+        assert_eq!(buffer.text(), "say @foo.rs  here");
+        assert_eq!(buffer.cursor(), 12);
     }
 }

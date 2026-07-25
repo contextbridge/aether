@@ -1,6 +1,10 @@
+use super::model_selector::{capability_tags, model_label};
 use super::*;
 use acp_utils::config_meta::ConfigOptionMeta;
-use agent_client_protocol::schema::{SessionConfigOption, SessionConfigSelectOption};
+use agent_client_protocol::schema::{
+    SessionConfigKind, SessionConfigOption, SessionConfigSelectOption, SessionConfigSelectOptions,
+};
+use crossterm::event::KeyModifiers;
 
 fn sel(id: &str, name: &str, current: &str, values: &[(&str, &str)]) -> SessionConfigOption {
     let options: Vec<SessionConfigSelectOption> =
@@ -8,13 +12,34 @@ fn sel(id: &str, name: &str, current: &str, values: &[(&str, &str)]) -> SessionC
     SessionConfigOption::select(id.to_string(), name.to_string(), current.to_string(), options)
 }
 
+fn multi_select(id: &str, name: &str, current: &str, values: &[(&str, &str)]) -> SessionConfigOption {
+    sel(id, name, current, values).meta(ConfigOptionMeta { multi_select: true }.into_meta())
+}
+
+fn press(overlay: &mut SettingsOverlay, code: KeyCode) -> Vec<OverlayMessage> {
+    overlay.on_key(KeyEvent::new(code, KeyModifiers::NONE))
+}
+
+fn type_query(overlay: &mut SettingsOverlay, query: &str) {
+    for character in query.chars() {
+        press(overlay, KeyCode::Char(character));
+    }
+}
+
+/// The footer identifies which pane has focus, and is what the user sees.
+fn footer(overlay: &SettingsOverlay) -> String {
+    overlay.footer_text()
+}
+
+// ── Menu construction ──
+
 #[test]
 fn menu_builds_entries_from_config_options() {
     let opts = vec![
         sel("model", "Model", "gpt-4o", &[("gpt-4o", "GPT-4o"), ("claude", "Claude")]),
         sel("mode", "Mode", "code", &[("code", "Code"), ("chat", "Chat")]),
     ];
-    let overlay = SettingsOverlay::new(&opts, vec![], vec![]);
+    let overlay = SettingsOverlay::new(&opts, vec![], &[]);
     assert_eq!(overlay.menu.entries.len(), 2);
     assert_eq!(overlay.menu.entries[0].config_id, "model");
     assert_eq!(overlay.menu.entries[0].current_value_index, 0);
@@ -24,7 +49,7 @@ fn menu_builds_entries_from_config_options() {
 #[test]
 fn menu_finds_current_value() {
     let opts = vec![sel("model", "Model", "claude", &[("gpt-4o", "GPT-4o"), ("claude", "Claude"), ("llama", "Llama")])];
-    let overlay = SettingsOverlay::new(&opts, vec![], vec![]);
+    let overlay = SettingsOverlay::new(&opts, vec![], &[]);
     assert_eq!(overlay.menu.entries[0].current_value_index, 1);
 }
 
@@ -35,13 +60,13 @@ fn menu_navigation_wraps() {
         sel("b", "B", "v1", &[("v1", "V1")]),
         sel("c", "C", "v1", &[("v1", "V1")]),
     ];
-    let mut overlay = SettingsOverlay::new(&opts, vec![], vec![]);
+    let mut overlay = SettingsOverlay::new(&opts, vec![], &[]);
     assert_eq!(overlay.menu.selection.selected(), Some(0));
 
-    overlay.on_key(KeyEvent::new(KeyCode::Up, crossterm::event::KeyModifiers::NONE));
+    press(&mut overlay, KeyCode::Up);
     assert_eq!(overlay.menu.selection.selected(), Some(2));
 
-    overlay.on_key(KeyEvent::new(KeyCode::Down, crossterm::event::KeyModifiers::NONE));
+    press(&mut overlay, KeyCode::Down);
     assert_eq!(overlay.menu.selection.selected(), Some(0));
 }
 
@@ -49,7 +74,7 @@ fn menu_navigation_wraps() {
 fn menu_skips_empty_values() {
     let empty = SessionConfigOption::select("x", "X", "v", Vec::<SessionConfigSelectOption>::new());
     let opts = vec![empty, sel("model", "Model", "a", &[("a", "A")])];
-    let overlay = SettingsOverlay::new(&opts, vec![], vec![]);
+    let overlay = SettingsOverlay::new(&opts, vec![], &[]);
     assert_eq!(overlay.menu.entries.len(), 1);
     assert_eq!(overlay.menu.entries[0].config_id, "model");
 }
@@ -60,74 +85,93 @@ fn menu_excludes_reasoning_effort() {
         sel("model", "Model", "gpt-4o", &[("gpt-4o", "GPT-4o")]),
         sel("reasoning_effort", "Reasoning", "high", &[("none", "None"), ("low", "Low"), ("high", "High")]),
     ];
-    let overlay = SettingsOverlay::new(&opts, vec![], vec![]);
+    let overlay = SettingsOverlay::new(&opts, vec![], &[]);
     assert!(overlay.menu.entries.iter().any(|e| e.config_id == "model"));
     assert!(!overlay.menu.entries.iter().any(|e| e.config_id == "reasoning_effort"));
 }
 
 #[test]
 fn multi_select_detected_from_meta() {
-    let mut opt = sel("model", "Model", "a", &[("a", "A"), ("b", "B")]);
-    opt = opt.meta(ConfigOptionMeta { multi_select: true }.into_meta());
-    let overlay = SettingsOverlay::new(&[opt], vec![], vec![]);
+    let overlay = SettingsOverlay::new(&[multi_select("model", "Model", "a", &[("a", "A"), ("b", "B")])], vec![], &[]);
     assert!(overlay.menu.entries[0].multi_select);
 }
 
 #[test]
 fn multi_select_with_comma_shows_model_names() {
-    let mut opt = sel("model", "Model", "a,b", &[("a", "Alpha"), ("b", "Beta")]);
-    opt = opt.meta(ConfigOptionMeta { multi_select: true }.into_meta());
-    let overlay = SettingsOverlay::new(&[opt], vec![], vec![]);
+    let overlay =
+        SettingsOverlay::new(&[multi_select("model", "Model", "a,b", &[("a", "Alpha"), ("b", "Beta")])], vec![], &[]);
     let display = overlay.menu.entries[0].display_name.as_deref().unwrap();
     assert!(display.contains("Alpha"), "display: {display}");
     assert!(display.contains("Beta"), "display: {display}");
 }
 
 #[test]
+fn empty_config_options_creates_empty_menu() {
+    let overlay = SettingsOverlay::new(&[], vec![], &[]);
+    assert!(overlay.menu.entries.is_empty());
+}
+
+#[test]
+fn picker_disabled_option_flagged_from_description() {
+    let mut option = sel("model", "Model", "a", &[("a", "A")]);
+    if let SessionConfigKind::Select(ref mut select) = option.kind {
+        select.options = SessionConfigSelectOptions::Ungrouped(vec![
+            SessionConfigSelectOption::new("a", "A"),
+            SessionConfigSelectOption::new("b".to_string(), "B".to_string())
+                .description("Unavailable: need key".to_string()),
+        ]);
+    }
+    let overlay = SettingsOverlay::new(&[option], vec![], &[]);
+    assert!(overlay.menu.entries[0].values[1].is_disabled);
+}
+
+// ── Pane navigation ──
+
+#[test]
 fn esc_closes_overlay_from_menu() {
     let opts = vec![sel("model", "Model", "a", &[("a", "A")])];
-    let mut overlay = SettingsOverlay::new(&opts, vec![], vec![]);
-    let msgs = overlay.on_key(KeyEvent::new(KeyCode::Esc, crossterm::event::KeyModifiers::NONE));
-    assert!(matches!(msgs.as_slice(), [SettingsOverlayMessage::Close]));
+    let mut overlay = SettingsOverlay::new(&opts, vec![], &[]);
+    let messages = press(&mut overlay, KeyCode::Esc);
+    assert!(matches!(messages.as_slice(), [OverlayMessage::Close]));
 }
 
 #[test]
 fn enter_opens_picker_for_single_select() {
     let opts = vec![sel("model", "Model", "a", &[("a", "A"), ("b", "B")])];
-    let mut overlay = SettingsOverlay::new(&opts, vec![], vec![]);
-    overlay.on_key(KeyEvent::new(KeyCode::Enter, crossterm::event::KeyModifiers::NONE));
-    assert!(matches!(overlay.active_pane, ActivePane::Picker(_)));
+    let mut overlay = SettingsOverlay::new(&opts, vec![], &[]);
+    press(&mut overlay, KeyCode::Enter);
+    assert!(footer(&overlay).contains("Confirm"), "footer: {}", footer(&overlay));
 }
 
 #[test]
 fn enter_opens_model_selector_for_multi_select() {
-    let mut opt = sel("model", "Model", "a", &[("a", "A"), ("b", "B")]);
-    opt = opt.meta(ConfigOptionMeta { multi_select: true }.into_meta());
-    let mut overlay = SettingsOverlay::new(&[opt], vec![], vec![]);
-    overlay.on_key(KeyEvent::new(KeyCode::Enter, crossterm::event::KeyModifiers::NONE));
-    assert!(matches!(overlay.active_pane, ActivePane::ModelSelector(_)));
+    let mut overlay =
+        SettingsOverlay::new(&[multi_select("model", "Model", "a", &[("a", "A"), ("b", "B")])], vec![], &[]);
+    press(&mut overlay, KeyCode::Enter);
+    assert!(footer(&overlay).contains("Toggle"), "footer: {}", footer(&overlay));
 }
 
 #[test]
 fn picker_esc_returns_to_menu() {
     let opts = vec![sel("model", "Model", "a", &[("a", "A"), ("b", "B")])];
-    let mut overlay = SettingsOverlay::new(&opts, vec![], vec![]);
-    overlay.on_key(KeyEvent::new(KeyCode::Enter, crossterm::event::KeyModifiers::NONE));
-    assert!(matches!(overlay.active_pane, ActivePane::Picker(_)));
-    overlay.on_key(KeyEvent::new(KeyCode::Esc, crossterm::event::KeyModifiers::NONE));
-    assert!(matches!(overlay.active_pane, ActivePane::Menu));
+    let mut overlay = SettingsOverlay::new(&opts, vec![], &[]);
+    press(&mut overlay, KeyCode::Enter);
+    assert!(footer(&overlay).contains("Confirm"));
+    press(&mut overlay, KeyCode::Esc);
+    assert!(footer(&overlay).contains("Select"), "footer: {}", footer(&overlay));
 }
+
+// ── Picker ──
 
 #[test]
 fn picker_confirm_returns_set_config_option() {
     let opts = vec![sel("model", "Model", "a", &[("a", "A"), ("b", "B")])];
-    let mut overlay = SettingsOverlay::new(&opts, vec![], vec![]);
-    overlay.on_key(KeyEvent::new(KeyCode::Enter, crossterm::event::KeyModifiers::NONE));
-    // Navigate down to different value
-    overlay.on_key(KeyEvent::new(KeyCode::Down, crossterm::event::KeyModifiers::NONE));
-    let msgs = overlay.on_key(KeyEvent::new(KeyCode::Enter, crossterm::event::KeyModifiers::NONE));
-    match msgs.as_slice() {
-        [SettingsOverlayMessage::SetConfigOption { config_id, value }] => {
+    let mut overlay = SettingsOverlay::new(&opts, vec![], &[]);
+    press(&mut overlay, KeyCode::Enter);
+    press(&mut overlay, KeyCode::Down);
+    let messages = press(&mut overlay, KeyCode::Enter);
+    match messages.as_slice() {
+        [OverlayMessage::SetConfigOption { config_id, value }] => {
             assert_eq!(config_id, "model");
             assert_eq!(value, "b");
         }
@@ -138,10 +182,10 @@ fn picker_confirm_returns_set_config_option() {
 #[test]
 fn picker_confirm_applies_change_to_menu() {
     let opts = vec![sel("model", "Model", "a", &[("a", "A"), ("b", "B")])];
-    let mut overlay = SettingsOverlay::new(&opts, vec![], vec![]);
-    overlay.on_key(KeyEvent::new(KeyCode::Enter, crossterm::event::KeyModifiers::NONE));
-    overlay.on_key(KeyEvent::new(KeyCode::Down, crossterm::event::KeyModifiers::NONE));
-    overlay.on_key(KeyEvent::new(KeyCode::Enter, crossterm::event::KeyModifiers::NONE));
+    let mut overlay = SettingsOverlay::new(&opts, vec![], &[]);
+    press(&mut overlay, KeyCode::Enter);
+    press(&mut overlay, KeyCode::Down);
+    press(&mut overlay, KeyCode::Enter);
     assert_eq!(overlay.menu.entries[0].current_raw_value, "b");
     assert_eq!(overlay.menu.entries[0].current_value_index, 1);
 }
@@ -149,10 +193,9 @@ fn picker_confirm_applies_change_to_menu() {
 #[test]
 fn picker_confirm_no_change_returns_empty() {
     let opts = vec![sel("model", "Model", "a", &[("a", "A"), ("b", "B")])];
-    let mut overlay = SettingsOverlay::new(&opts, vec![], vec![]);
-    overlay.on_key(KeyEvent::new(KeyCode::Enter, crossterm::event::KeyModifiers::NONE));
-    let msgs = overlay.on_key(KeyEvent::new(KeyCode::Enter, crossterm::event::KeyModifiers::NONE));
-    assert!(msgs.is_empty());
+    let mut overlay = SettingsOverlay::new(&opts, vec![], &[]);
+    press(&mut overlay, KeyCode::Enter);
+    assert!(press(&mut overlay, KeyCode::Enter).is_empty());
 }
 
 #[test]
@@ -163,128 +206,135 @@ fn picker_query_filters_by_name() {
         "gpt",
         &[("openrouter:gpt-4o", "GPT-4o"), ("openrouter:claude", "Claude Sonnet"), ("openrouter:gemini", "Gemini Pro")],
     )];
-    let mut overlay = SettingsOverlay::new(&opts, vec![], vec![]);
-    overlay.on_key(KeyEvent::new(KeyCode::Enter, crossterm::event::KeyModifiers::NONE));
-    for c in "gem".chars() {
-        overlay.on_key(KeyEvent::new(KeyCode::Char(c), crossterm::event::KeyModifiers::NONE));
-    }
-    if let ActivePane::Picker(ref picker) = overlay.active_pane {
-        assert_eq!(picker.values.filtered_len(), 1);
-        assert!(picker.values.selected_entry().is_some_and(|value| value.name.contains("Gemini")));
-    } else {
-        panic!("expected picker");
+    let mut overlay = SettingsOverlay::new(&opts, vec![], &[]);
+    press(&mut overlay, KeyCode::Enter);
+    type_query(&mut overlay, "gem");
+
+    let messages = press(&mut overlay, KeyCode::Enter);
+    match messages.as_slice() {
+        [OverlayMessage::SetConfigOption { value, .. }] => assert_eq!(value, "openrouter:gemini"),
+        other => panic!("expected the only match to be confirmed, got: {other:?}"),
     }
 }
 
+// ── Model selector ──
+
 #[test]
-fn picker_disabled_option_not_selectable() {
-    let opt = SessionConfigOption::select(
-        "model",
-        "Model",
-        "a",
-        vec![SessionConfigSelectOption::new("a", "A"), SessionConfigSelectOption::new("b", "B")],
+fn model_selector_toggles_and_commits_on_close() {
+    let mut overlay = SettingsOverlay::new(
+        &[multi_select(
+            "model",
+            "Model",
+            "",
+            &[("anthropic:opus", "Anthropic / Opus"), ("anthropic:sonnet", "Anthropic / Sonnet")],
+        )],
+        vec![],
+        &[],
     );
-    let mut values = opt.clone();
-    // set b as disabled
-    if let SessionConfigKind::Select(ref mut select) = values.kind {
-        select.options = SessionConfigSelectOptions::Ungrouped(vec![
-            SessionConfigSelectOption::new("a", "A"),
-            SessionConfigSelectOption::new("b".to_string(), "B".to_string())
-                .description("Unavailable: need key".to_string()),
-        ]);
-    }
-    let overlay = SettingsOverlay::new(&[values], vec![], vec![]);
-    // Just check the entry has the disabled flag
-    assert!(overlay.menu.entries[0].values[1].is_disabled);
-}
+    press(&mut overlay, KeyCode::Enter);
+    press(&mut overlay, KeyCode::Enter);
 
-#[test]
-fn model_selector_enter_toggles() {
-    let mut opt = sel(
-        "model",
-        "Model",
-        "",
-        &[("anthropic:opus", "Anthropic / Opus"), ("anthropic:sonnet", "Anthropic / Sonnet")],
-    );
-    opt = opt.meta(ConfigOptionMeta { multi_select: true }.into_meta());
-    let mut overlay = SettingsOverlay::new(&[opt], vec![], vec![]);
-    overlay.on_key(KeyEvent::new(KeyCode::Enter, crossterm::event::KeyModifiers::NONE));
-    assert!(matches!(overlay.active_pane, ActivePane::ModelSelector(_)));
-
-    // Toggle first model
-    overlay.on_key(KeyEvent::new(KeyCode::Enter, crossterm::event::KeyModifiers::NONE));
-    if let ActivePane::ModelSelector(ref selector) = overlay.active_pane {
-        assert_eq!(selector.selected_models.len(), 1);
-    }
-
-    // Toggle again
-    overlay.on_key(KeyEvent::new(KeyCode::Enter, crossterm::event::KeyModifiers::NONE));
-    if let ActivePane::ModelSelector(ref selector) = overlay.active_pane {
-        assert!(selector.selected_models.is_empty());
-    }
-}
-
-#[test]
-fn model_selector_esc_returns_to_menu() {
-    let mut opt = sel("model", "Model", "", &[("a:m1", "A / M1")]);
-    opt = opt.meta(ConfigOptionMeta { multi_select: true }.into_meta());
-    let mut overlay = SettingsOverlay::new(&[opt], vec![], vec![]);
-    overlay.on_key(KeyEvent::new(KeyCode::Enter, crossterm::event::KeyModifiers::NONE));
-    let msgs = overlay.on_key(KeyEvent::new(KeyCode::Esc, crossterm::event::KeyModifiers::NONE));
-    assert!(matches!(overlay.active_pane, ActivePane::Menu));
-    assert!(msgs.is_empty());
-}
-
-#[test]
-fn model_selector_returns_changes_on_esc() {
-    let mut opt = sel(
-        "model",
-        "Model",
-        "",
-        &[("anthropic:opus", "Anthropic / Opus"), ("anthropic:sonnet", "Anthropic / Sonnet")],
-    );
-    opt = opt.meta(ConfigOptionMeta { multi_select: true }.into_meta());
-    let mut overlay = SettingsOverlay::new(&[opt], vec![], vec![]);
-    overlay.on_key(KeyEvent::new(KeyCode::Enter, crossterm::event::KeyModifiers::NONE));
-    overlay.on_key(KeyEvent::new(KeyCode::Enter, crossterm::event::KeyModifiers::NONE));
-
-    let msgs = overlay.on_key(KeyEvent::new(KeyCode::Esc, crossterm::event::KeyModifiers::NONE));
-    match msgs.as_slice() {
-        [SettingsOverlayMessage::SetConfigOption { config_id, value }] => {
+    let messages = press(&mut overlay, KeyCode::Esc);
+    match messages.as_slice() {
+        [OverlayMessage::SetConfigOption { config_id, value }] => {
             assert_eq!(config_id, "model");
-            assert!(value.contains("anthropic:opus"));
+            assert!(value.contains("anthropic:opus"), "value: {value}");
         }
         other => panic!("expected SetConfigOption, got: {other:?}"),
     }
 }
 
 #[test]
-fn model_selector_preselects_from_current_value() {
-    let mut opt = sel(
-        "model",
-        "Model",
-        "anthropic:opus,anthropic:sonnet",
-        &[("anthropic:opus", "Anthropic / Opus"), ("anthropic:sonnet", "Anthropic / Sonnet")],
+fn model_selector_toggling_twice_leaves_nothing_to_commit() {
+    let mut overlay = SettingsOverlay::new(
+        &[multi_select("model", "Model", "", &[("anthropic:opus", "Anthropic / Opus")])],
+        vec![],
+        &[],
     );
-    opt = opt.meta(ConfigOptionMeta { multi_select: true }.into_meta());
-    let mut overlay = SettingsOverlay::new(&[opt], vec![], vec![]);
-    overlay.on_key(KeyEvent::new(KeyCode::Enter, crossterm::event::KeyModifiers::NONE));
-    if let ActivePane::ModelSelector(ref selector) = overlay.active_pane {
-        assert_eq!(selector.selected_models.len(), 2);
+    press(&mut overlay, KeyCode::Enter);
+    press(&mut overlay, KeyCode::Enter);
+    press(&mut overlay, KeyCode::Enter);
+
+    assert!(press(&mut overlay, KeyCode::Esc).is_empty());
+    assert!(footer(&overlay).contains("Select"), "should be back on the menu");
+}
+
+#[test]
+fn model_selector_preselects_from_current_value() {
+    let mut overlay = SettingsOverlay::new(
+        &[multi_select(
+            "model",
+            "Model",
+            "anthropic:opus,anthropic:sonnet",
+            &[("anthropic:opus", "Anthropic / Opus"), ("anthropic:sonnet", "Anthropic / Sonnet")],
+        )],
+        vec![],
+        &[],
+    );
+    press(&mut overlay, KeyCode::Enter);
+    // Both are already selected, so closing without edits changes nothing.
+    assert!(press(&mut overlay, KeyCode::Esc).is_empty());
+}
+
+#[test]
+fn model_selector_query_filters_before_toggling() {
+    let mut overlay = SettingsOverlay::new(
+        &[multi_select(
+            "model",
+            "Model",
+            "",
+            &[
+                ("anthropic:opus", "Anthropic / Opus"),
+                ("openai:gpt-4o", "OpenAI / GPT-4o"),
+                ("google:gemini", "Google / Gemini"),
+            ],
+        )],
+        vec![],
+        &[],
+    );
+    press(&mut overlay, KeyCode::Enter);
+    type_query(&mut overlay, "gpt");
+    press(&mut overlay, KeyCode::Enter);
+
+    match press(&mut overlay, KeyCode::Esc).as_slice() {
+        [OverlayMessage::SetConfigOption { value, .. }] => assert_eq!(value, "openai:gpt-4o"),
+        other => panic!("expected only the filtered model to be selected, got: {other:?}"),
     }
 }
+
+// ── Config updates ──
 
 #[test]
 fn update_config_options_refreshes_menu() {
     let opts = vec![sel("model", "Model", "a", &[("a", "A"), ("b", "B")])];
-    let mut overlay = SettingsOverlay::new(&opts, vec![], vec![]);
-    overlay.on_key(KeyEvent::new(KeyCode::Down, crossterm::event::KeyModifiers::NONE));
-    overlay.on_key(KeyEvent::new(KeyCode::Down, crossterm::event::KeyModifiers::NONE));
+    let mut overlay = SettingsOverlay::new(&opts, vec![], &[]);
+    press(&mut overlay, KeyCode::Down);
+    press(&mut overlay, KeyCode::Down);
 
-    let new_opts = vec![sel("model", "Model", "b", &[("a", "A"), ("b", "B")])];
-    overlay.update_config_options(&new_opts);
+    overlay.update_config_options(&[sel("model", "Model", "b", &[("a", "A"), ("b", "B")])]);
     assert_eq!(overlay.menu.entries[0].current_value_index, 1);
     assert_eq!(overlay.menu.entries[0].current_raw_value, "b");
+}
+
+#[test]
+fn update_options_keeps_every_config_entry() {
+    let opts = vec![sel("model", "Model", "a", &[("a", "A")])];
+    let mut overlay = SettingsOverlay::new(&opts, vec![], &[]);
+    overlay.update_config_options(&[
+        sel("model", "Model", "b", &[("a", "A"), ("b", "B")]),
+        sel("mode", "Mode", "code", &[("code", "Code")]),
+    ]);
+    assert_eq!(overlay.menu.entries.len(), 2);
+    assert_eq!(overlay.menu.entries[0].current_raw_value, "b");
+}
+
+#[test]
+fn apply_change_updates_menu_entry() {
+    let opts = vec![sel("model", "Model", "a", &[("a", "A"), ("b", "B")])];
+    let mut overlay = SettingsOverlay::new(&opts, vec![], &[]);
+    overlay.apply_change(&SettingsChange { config_id: "model".to_string(), new_value: "b".to_string() });
+    assert_eq!(overlay.menu.entries[0].current_raw_value, "b");
+    assert_eq!(overlay.menu.entries[0].current_value_index, 1);
 }
 
 #[test]
@@ -293,7 +343,7 @@ fn reasoning_effort_extracted_from_options() {
         sel("model", "Model", "gpt-4o", &[("gpt-4o", "GPT-4o")]),
         sel("reasoning_effort", "Reasoning", "high", &[("none", "None"), ("low", "Low"), ("high", "High")]),
     ];
-    let overlay = SettingsOverlay::new(&opts, vec![], vec![]);
+    let overlay = SettingsOverlay::new(&opts, vec![], &[]);
     assert_eq!(overlay.current_reasoning_effort.as_deref(), Some("high"));
 }
 
@@ -303,70 +353,35 @@ fn reasoning_effort_none_filtered_out() {
         sel("model", "Model", "gpt-4o", &[("gpt-4o", "GPT-4o")]),
         sel("reasoning_effort", "Reasoning", "none", &[("none", "None"), ("low", "Low")]),
     ];
-    let overlay = SettingsOverlay::new(&opts, vec![], vec![]);
+    let overlay = SettingsOverlay::new(&opts, vec![], &[]);
     assert_eq!(overlay.current_reasoning_effort, None);
 }
 
-#[test]
-fn empty_config_options_creates_empty_menu() {
-    let overlay = SettingsOverlay::new(&[], vec![], vec![]);
-    assert!(overlay.menu.entries.is_empty());
-}
+// ── Rendering ──
 
 #[test]
 fn small_terminal_renders_placeholder() {
     let opts = vec![sel("model", "Model", "a", &[("a", "A")])];
-    let mut overlay = SettingsOverlay::new(&opts, vec![], vec![]);
-    let theme = Theme::default();
+    let mut overlay = SettingsOverlay::new(&opts, vec![], &[]);
     let area = Rect::new(0, 0, 5, 2);
     let mut buffer = Buffer::empty(area);
-    overlay.render(area, &mut buffer, &theme);
-    let mut text = String::new();
-    for y in 0..area.height {
-        for x in 0..area.width {
-            text.push(buffer.cell((x, y)).map_or(' ', |c| c.symbol().chars().next().unwrap_or(' ')));
-        }
-    }
+    overlay.render(area, &mut buffer, &Theme::default());
+    let text: String = buffer.content.iter().map(ratatui::buffer::Cell::symbol).collect();
     assert!(text.contains("term"), "text: {text}");
 }
 
-#[test]
-fn truncate_to_width_handles_unicode() {
-    assert_eq!(truncate_to_width("hello", 3), "he…");
-    assert_eq!(truncate_to_width("a界b", 3), "a…");
-    assert_eq!(truncate_to_width("hello", 10), "hello");
-    assert_eq!(truncate_to_width("", 5), "");
-    assert_eq!(truncate_to_width("abc", 0), "");
-}
+// ── Summaries and labels ──
 
 #[test]
-fn provider_label_handles_slash_format() {
-    assert_eq!(provider_label("Anthropic / Claude Sonnet", "anthropic"), "Anthropic");
-}
-
-#[test]
-fn provider_label_capitalizes_key() {
-    assert_eq!(provider_label("OpenRouter / GPT-4o", "openrouter"), "OpenRouter");
+fn summarize_joins_non_empty_buckets() {
+    assert_eq!(summarize(&[(2, "connected"), (0, "failed"), (1, "needs auth")], "none"), "2 connected, 1 needs auth");
+    assert_eq!(summarize(&[(0, "connected")], "none"), "none");
 }
 
 #[test]
 fn model_label_extracts_after_slash() {
     assert_eq!(model_label("Anthropic / Claude Sonnet"), "Claude Sonnet");
     assert_eq!(model_label("GPT-4o"), "GPT-4o");
-}
-
-#[test]
-fn reasoning_bar_shows_correct_indicators() {
-    use utils::ReasoningEffort::*;
-    let levels = &[Low, Medium, High];
-    let bar = reasoning_bar(Some(Medium), levels);
-    assert!(bar.contains("■"), "bar: {bar}");
-    assert!(bar.contains("·"), "bar: {bar}");
-    assert!(bar.contains("medium"), "bar: {bar}");
-
-    let bar_none = reasoning_bar(None, levels);
-    assert!(!bar_none.contains("■"), "bar_none: {bar_none}");
-    assert!(bar_none.contains("none"), "bar_none: {bar_none}");
 }
 
 #[test]
@@ -377,59 +392,7 @@ fn capability_tags_all_combinations() {
     assert_eq!(capability_tags(true, true), "img  audio");
 }
 
-#[test]
-fn provider_key_handles_unavailable_prefix() {
-    assert_eq!(provider_key("__unavailable:moonshot"), "moonshot");
-}
-
-#[test]
-fn update_options_with_mcp_and_theme_entries() {
-    // Theme and MCP entries are added by App, not the overlay itself
-    let opts = vec![sel("model", "Model", "a", &[("a", "A")])];
-    let mut overlay = SettingsOverlay::new(&opts, vec![], vec![]);
-    let new_opts =
-        vec![sel("model", "Model", "b", &[("a", "A"), ("b", "B")]), sel("mode", "Mode", "code", &[("code", "Code")])];
-    overlay.update_config_options(&new_opts);
-    assert_eq!(overlay.menu.entries.len(), 2);
-    assert_eq!(overlay.menu.entries[0].current_raw_value, "b");
-}
-
-#[test]
-fn apply_change_updates_menu_entry() {
-    let opts = vec![sel("model", "Model", "a", &[("a", "A"), ("b", "B")])];
-    let mut overlay = SettingsOverlay::new(&opts, vec![], vec![]);
-    overlay.apply_change(&SettingsChange { config_id: "model".to_string(), new_value: "b".to_string() });
-    assert_eq!(overlay.menu.entries[0].current_raw_value, "b");
-    assert_eq!(overlay.menu.entries[0].current_value_index, 1);
-}
-
-#[test]
-fn model_selector_query_filters() {
-    let mut opt = sel(
-        "model",
-        "Model",
-        "",
-        &[
-            ("anthropic:opus", "Anthropic / Opus"),
-            ("openai:gpt-4o", "OpenAI / GPT-4o"),
-            ("google:gemini", "Google / Gemini"),
-        ],
-    );
-    opt = opt.meta(ConfigOptionMeta { multi_select: true }.into_meta());
-    let mut overlay = SettingsOverlay::new(&[opt], vec![], vec![]);
-    overlay.on_key(KeyEvent::new(KeyCode::Enter, crossterm::event::KeyModifiers::NONE));
-
-    for c in "gpt".chars() {
-        overlay.on_key(KeyEvent::new(KeyCode::Char(c), crossterm::event::KeyModifiers::NONE));
-    }
-    if let ActivePane::ModelSelector(ref selector) = overlay.active_pane {
-        assert_eq!(selector.filtered.len(), 1);
-        let idx = selector.filtered[0];
-        assert!(selector.all_items[idx].name.contains("GPT"), "name: {}", selector.all_items[idx].name);
-    } else {
-        panic!("expected model selector");
-    }
-}
+// ── Elicitation lifetime ──
 
 #[tokio::test(flavor = "current_thread")]
 async fn dropping_overlay_cancels_pending_elicitation() {
@@ -439,7 +402,7 @@ async fn dropping_overlay_cancels_pending_elicitation() {
             use acp_utils::testing::test_connection;
 
             let opts = vec![sel("model", "Model", "a", &[("a", "A")])];
-            let mut overlay = SettingsOverlay::new(&opts, vec![], vec![]);
+            let mut overlay = SettingsOverlay::new(&opts, vec![], &[]);
 
             let (cx, mut peer) = test_connection().await;
             let (responder, response_rx) = peer.fake_elicitation(&cx).await;

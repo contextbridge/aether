@@ -8,6 +8,7 @@ use tokio::sync::oneshot;
 use utils::plan_review::PlanReviewElicitationMeta;
 use wisp_next::plan_review::{PlanDocument, ReviewComment, compile_feedback};
 use wisp_next::screens::plan_review::PlanReviewScreen;
+use wisp_next::screens::{MouseAction, RenderContext, Screen, ScreenOutcome};
 use wisp_next::syntax::SyntaxHighlighter;
 use wisp_next::theme::Theme;
 
@@ -26,6 +27,11 @@ fn make_screen(markdown: &str) -> (PlanReviewScreen, oneshot::Receiver<Elicitati
 
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
+}
+
+/// Sends a key and reports whether it ended the review.
+fn closes(screen: &mut PlanReviewScreen, key: KeyEvent) -> bool {
+    matches!(screen.on_key(key), ScreenOutcome::Close)
 }
 
 #[test]
@@ -59,7 +65,8 @@ fn render_screen_with_theme_generation(
     let mut terminal = ratatui::Terminal::with_options(backend, TerminalOptions::default()).unwrap();
     terminal
         .draw(|frame| {
-            screen.render_with_theme_generation(frame, theme, highlighter, theme_generation);
+            let mut cx = RenderContext { theme, highlighter, theme_generation };
+            screen.render(frame.area(), frame.buffer_mut(), &mut cx);
         })
         .unwrap();
     terminal.backend().buffer().clone()
@@ -72,7 +79,8 @@ fn render_screen(screen: &mut PlanReviewScreen, width: u16, height: u16) -> Buff
     let mut terminal = ratatui::Terminal::with_options(backend, TerminalOptions::default()).unwrap();
     terminal
         .draw(|frame| {
-            screen.render_with_theme_generation(frame, &theme, &mut highlighter, 0);
+            let mut cx = RenderContext { theme: &theme, highlighter: &mut highlighter, theme_generation: 0 };
+            screen.render(frame.area(), frame.buffer_mut(), &mut cx);
         })
         .unwrap();
     terminal.backend().buffer().clone()
@@ -131,11 +139,11 @@ fn source_line_cursor_moves_with_jk() {
     let (mut screen, _rx) = make_screen(markdown);
 
     // Initial position: line 0 (0-indexed)
-    assert!(!screen.on_key(key(KeyCode::Char('j')))); // → line 1
-    assert!(!screen.on_key(key(KeyCode::Char('j')))); // → line 2
-    assert!(!screen.on_key(key(KeyCode::Char('k')))); // → line 1
-    assert!(!screen.on_key(key(KeyCode::Char('k')))); // → line 0
-    assert!(!screen.on_key(key(KeyCode::Char('k')))); // → line 0 (clamped)
+    assert!(!closes(&mut screen, key(KeyCode::Char('j')))); // → line 1
+    assert!(!closes(&mut screen, key(KeyCode::Char('j')))); // → line 2
+    assert!(!closes(&mut screen, key(KeyCode::Char('k')))); // → line 1
+    assert!(!closes(&mut screen, key(KeyCode::Char('k')))); // → line 0
+    assert!(!closes(&mut screen, key(KeyCode::Char('k')))); // → line 0 (clamped)
 }
 
 #[test]
@@ -143,8 +151,8 @@ fn source_line_cursor_goes_to_top_and_bottom() {
     let markdown = "# Plan\na\nb\nc\nd";
     let (mut screen, _rx) = make_screen(markdown);
 
-    assert!(!screen.on_key(key(KeyCode::Char('G')))); // bottom
-    assert!(!screen.on_key(key(KeyCode::Char('g')))); // top
+    assert!(!closes(&mut screen, key(KeyCode::Char('G')))); // bottom
+    assert!(!closes(&mut screen, key(KeyCode::Char('g')))); // top
 }
 
 #[test]
@@ -153,10 +161,10 @@ fn n_and_p_jump_between_headings() {
     let (mut screen, _rx) = make_screen(markdown);
 
     // Start at line 0
-    assert!(!screen.on_key(key(KeyCode::Char('n')))); // jump to next heading (line 2)
-    assert!(!screen.on_key(key(KeyCode::Char('n')))); // jump to next heading (line 4)
-    assert!(!screen.on_key(key(KeyCode::Char('p')))); // jump to prev heading (line 2)
-    assert!(!screen.on_key(key(KeyCode::Char('p')))); // jump to prev heading (line 0)
+    assert!(!closes(&mut screen, key(KeyCode::Char('n')))); // jump to next heading (line 2)
+    assert!(!closes(&mut screen, key(KeyCode::Char('n')))); // jump to next heading (line 4)
+    assert!(!closes(&mut screen, key(KeyCode::Char('p')))); // jump to prev heading (line 2)
+    assert!(!closes(&mut screen, key(KeyCode::Char('p')))); // jump to prev heading (line 0)
 }
 
 // ============================================================================
@@ -169,12 +177,12 @@ fn comment_submit_at_first_line() {
     let (mut screen, mut rx) = make_screen(markdown);
 
     // Press 'c' to start comment, type text, press Enter to submit
-    assert!(!screen.on_key(key(KeyCode::Char('c')))); // start comment
+    assert!(!closes(&mut screen, key(KeyCode::Char('c')))); // start comment
     type_text(&mut screen, "needs work");
-    assert!(!screen.on_key(key(KeyCode::Enter))); // submit
+    assert!(!closes(&mut screen, key(KeyCode::Enter))); // submit
 
     // Request changes - should include the comment
-    assert!(screen.on_key(key(KeyCode::Char('r'))));
+    assert!(closes(&mut screen, key(KeyCode::Char('r'))));
     let response = rx.try_recv().expect("responder should have been called");
     let content = response.content.expect("content should be present");
     assert!(content["feedback"].as_str().unwrap().contains("needs work"));
@@ -186,16 +194,16 @@ fn comment_cancel_with_escape() {
     let (mut screen, mut rx) = make_screen(markdown);
 
     // Move to line 2
-    assert!(!screen.on_key(key(KeyCode::Char('j'))));
-    assert!(!screen.on_key(key(KeyCode::Char('j'))));
+    assert!(!closes(&mut screen, key(KeyCode::Char('j'))));
+    assert!(!closes(&mut screen, key(KeyCode::Char('j'))));
 
     // Start comment, type, cancel
-    assert!(!screen.on_key(key(KeyCode::Char('c'))));
+    assert!(!closes(&mut screen, key(KeyCode::Char('c'))));
     type_text(&mut screen, "should be discarded");
-    assert!(!screen.on_key(key(KeyCode::Esc))); // cancel draft
+    assert!(!closes(&mut screen, key(KeyCode::Esc))); // cancel draft
 
     // Submit request-changes — canceled draft must not leak
-    assert!(screen.on_key(key(KeyCode::Char('r'))));
+    assert!(closes(&mut screen, key(KeyCode::Char('r'))));
     let response = rx.try_recv().expect("responder should have been called");
     assert_eq!(response.action, ElicitationAction::Accept);
     let content = response.content.expect("content should be present");
@@ -210,21 +218,21 @@ fn comment_undo_removes_last_comment() {
     let (mut screen, _rx) = make_screen(markdown);
 
     // Add comment on line 1
-    assert!(!screen.on_key(key(KeyCode::Char('c'))));
+    assert!(!closes(&mut screen, key(KeyCode::Char('c'))));
     type_text(&mut screen, "first");
-    assert!(!screen.on_key(key(KeyCode::Enter)));
+    assert!(!closes(&mut screen, key(KeyCode::Enter)));
 
     // Add comment on line 2
-    assert!(!screen.on_key(key(KeyCode::Char('j'))));
-    assert!(!screen.on_key(key(KeyCode::Char('c'))));
+    assert!(!closes(&mut screen, key(KeyCode::Char('j'))));
+    assert!(!closes(&mut screen, key(KeyCode::Char('c'))));
     type_text(&mut screen, "second");
-    assert!(!screen.on_key(key(KeyCode::Enter)));
+    assert!(!closes(&mut screen, key(KeyCode::Enter)));
 
     // Undo last
-    assert!(!screen.on_key(key(KeyCode::Char('u'))));
+    assert!(!closes(&mut screen, key(KeyCode::Char('u'))));
 
     // Submit feedback: should only contain "first"
-    assert!(screen.on_key(key(KeyCode::Char('r'))));
+    assert!(closes(&mut screen, key(KeyCode::Char('r'))));
 }
 
 #[test]
@@ -233,10 +241,10 @@ fn comment_at_last_line() {
     let (mut screen, _rx) = make_screen(markdown);
 
     // Go to last line
-    assert!(!screen.on_key(key(KeyCode::Char('G'))));
-    assert!(!screen.on_key(key(KeyCode::Char('c'))));
+    assert!(!closes(&mut screen, key(KeyCode::Char('G'))));
+    assert!(!closes(&mut screen, key(KeyCode::Char('c'))));
     type_text(&mut screen, "last line comment");
-    assert!(!screen.on_key(key(KeyCode::Enter)));
+    assert!(!closes(&mut screen, key(KeyCode::Enter)));
 }
 
 #[test]
@@ -245,11 +253,11 @@ fn comment_at_middle_line() {
     let (mut screen, _rx) = make_screen(markdown);
 
     // Go to middle line (line 2, 0-indexed)
-    assert!(!screen.on_key(key(KeyCode::Char('j'))));
-    assert!(!screen.on_key(key(KeyCode::Char('j'))));
-    assert!(!screen.on_key(key(KeyCode::Char('c'))));
+    assert!(!closes(&mut screen, key(KeyCode::Char('j'))));
+    assert!(!closes(&mut screen, key(KeyCode::Char('j'))));
+    assert!(!closes(&mut screen, key(KeyCode::Char('c'))));
     type_text(&mut screen, "middle");
-    assert!(!screen.on_key(key(KeyCode::Enter)));
+    assert!(!closes(&mut screen, key(KeyCode::Enter)));
 }
 
 // ============================================================================
@@ -333,7 +341,7 @@ fn approve_sends_correct_payload() {
     let (mut screen, mut rx) = make_screen(markdown);
 
     // Approve
-    assert!(screen.on_key(key(KeyCode::Char('a'))));
+    assert!(closes(&mut screen, key(KeyCode::Char('a'))));
 
     let response = rx.try_recv().expect("responder should have been called");
     assert_eq!(response.action, ElicitationAction::Accept);
@@ -347,13 +355,13 @@ fn request_changes_sends_feedback_in_payload() {
     let (mut screen, mut rx) = make_screen(markdown);
 
     // Add a comment
-    assert!(!screen.on_key(key(KeyCode::Char('j')))); // move to line 1
-    assert!(!screen.on_key(key(KeyCode::Char('c'))));
+    assert!(!closes(&mut screen, key(KeyCode::Char('j')))); // move to line 1
+    assert!(!closes(&mut screen, key(KeyCode::Char('c'))));
     type_text(&mut screen, "this is wrong");
-    assert!(!screen.on_key(key(KeyCode::Enter)));
+    assert!(!closes(&mut screen, key(KeyCode::Enter)));
 
     // Request changes
-    assert!(screen.on_key(key(KeyCode::Char('r'))));
+    assert!(closes(&mut screen, key(KeyCode::Char('r'))));
 
     let response = rx.try_recv().expect("responder should have been called");
     assert_eq!(response.action, ElicitationAction::Accept);
@@ -367,7 +375,7 @@ fn cancel_sends_correct_payload() {
     let markdown = "# Plan\ntext";
     let (mut screen, mut rx) = make_screen(markdown);
 
-    assert!(screen.on_key(key(KeyCode::Esc)));
+    assert!(closes(&mut screen, key(KeyCode::Esc)));
 
     let response = rx.try_recv().expect("responder should have been called");
     assert_eq!(response.action, ElicitationAction::Cancel);
@@ -378,7 +386,7 @@ fn responder_is_called_exactly_once_on_approve() {
     let markdown = "# Plan\ntext";
     let (mut screen, mut rx) = make_screen(markdown);
 
-    assert!(screen.on_key(key(KeyCode::Char('a'))));
+    assert!(closes(&mut screen, key(KeyCode::Char('a'))));
     assert!(rx.try_recv().is_ok(), "responder should fire exactly once");
     assert!(rx.try_recv().is_err(), "responder should NOT fire twice");
 }
@@ -403,13 +411,13 @@ fn responder_is_called_exactly_once_on_request_changes() {
     let markdown = "# Plan\ntext";
     let (mut screen, mut rx) = make_screen(markdown);
 
-    assert!(screen.on_key(key(KeyCode::Char('r'))));
+    assert!(closes(&mut screen, key(KeyCode::Char('r'))));
     assert!(rx.try_recv().is_ok());
     assert!(rx.try_recv().is_err());
 
     // After responder fires, screen stays closed - all keys return true
-    assert!(screen.on_key(key(KeyCode::Char('j'))));
-    assert!(screen.on_key(key(KeyCode::Char('a'))));
+    assert!(closes(&mut screen, key(KeyCode::Char('j'))));
+    assert!(closes(&mut screen, key(KeyCode::Char('a'))));
     assert!(rx.try_recv().is_err());
 }
 
@@ -470,8 +478,8 @@ fn comment_editor_is_rendered_inline() {
     let (mut screen, _rx) = make_screen(markdown);
 
     // Start a comment on line 2 (0-indexed)
-    assert!(!screen.on_key(key(KeyCode::Char('j'))));
-    assert!(!screen.on_key(key(KeyCode::Char('c'))));
+    assert!(!closes(&mut screen, key(KeyCode::Char('j'))));
+    assert!(!closes(&mut screen, key(KeyCode::Char('c'))));
     type_text(&mut screen, "fix this");
 
     let buffer = render_screen(&mut screen, 80, 24);
@@ -486,9 +494,9 @@ fn submitted_comments_appear_inline() {
     let (mut screen, _rx) = make_screen(markdown);
 
     // Submit a comment
-    assert!(!screen.on_key(key(KeyCode::Char('c'))));
+    assert!(!closes(&mut screen, key(KeyCode::Char('c'))));
     type_text(&mut screen, "needs improvement");
-    assert!(!screen.on_key(key(KeyCode::Enter)));
+    assert!(!closes(&mut screen, key(KeyCode::Enter)));
 
     let buffer = render_screen(&mut screen, 80, 24);
     let text = buffer_text(&buffer);
@@ -503,7 +511,7 @@ fn focus_switches_between_outline_and_plan() {
 
     // Plan is focused by default
     // Switch to outline
-    assert!(!screen.on_key(key(KeyCode::Char('h'))));
+    assert!(!closes(&mut screen, key(KeyCode::Char('h'))));
 
     // In outline mode, Enter should jump
     let buffer = render_screen(&mut screen, 80, 24);
@@ -511,7 +519,7 @@ fn focus_switches_between_outline_and_plan() {
     assert!(text.contains("Overview"), "outline should show section");
 
     // Switch back to plan
-    assert!(!screen.on_key(key(KeyCode::Char('l'))));
+    assert!(!closes(&mut screen, key(KeyCode::Char('l'))));
 }
 
 #[test]
@@ -532,7 +540,7 @@ fn mouse_click_in_outline_pane_focuses_outline_at_wide_width() {
     render_screen(&mut screen, 80, 24);
 
     // Clicks at y=2 (past border), x=2 (left side, within outline_width = 80/4 = 20)
-    screen.on_mouse_click(2, 2);
+    screen.on_mouse(MouseAction::Click, 2, 2);
 
     let buffer = render_screen(&mut screen, 80, 24);
     let text = buffer_text(&buffer);
@@ -549,7 +557,7 @@ fn mouse_click_in_plan_pane_focuses_plan_at_wide_width() {
     render_screen(&mut screen, 80, 24);
 
     // Clicks at y=2, x=60 (right side, past outline_width = 20)
-    screen.on_mouse_click(2, 60);
+    screen.on_mouse(MouseAction::Click, 2, 60);
 
     let buffer = render_screen(&mut screen, 80, 24);
     let text = buffer_text(&buffer);
@@ -565,7 +573,7 @@ fn mouse_click_at_narrow_width_always_focuses_plan() {
     render_screen(&mut screen, 50, 24);
 
     // Click at y=2, x=2 — even on the "left" side, should be Plan
-    screen.on_mouse_click(2, 2);
+    screen.on_mouse(MouseAction::Click, 2, 2);
 
     let buffer = render_screen(&mut screen, 50, 24);
     let text = buffer_text(&buffer);
@@ -582,7 +590,7 @@ fn mouse_click_on_border_is_ignored() {
 
     // Plan starts as default focus
     // Click at y=0 (border), focus shouldn't change
-    screen.on_mouse_click(0, 30);
+    screen.on_mouse(MouseAction::Click, 0, 30);
 
     let buffer = render_screen(&mut screen, 80, 24);
     let text = buffer_text(&buffer);
@@ -599,17 +607,17 @@ fn mouse_click_after_resize_uses_correct_pane_rects() {
 
     // outline_width at width=100: 100/4=25
     // Click at x=5 (outline side)
-    screen.on_mouse_click(2, 5);
+    screen.on_mouse(MouseAction::Click, 2, 5);
 
     // Resize to different width
     render_screen(&mut screen, 120, 30);
 
     // outline_width at width=120: 120/4=30
     // Click at x=5 still in outline side
-    screen.on_mouse_click(2, 5);
+    screen.on_mouse(MouseAction::Click, 2, 5);
 
     // Click at x=90 is in plan side at width 120
-    screen.on_mouse_click(2, 90);
+    screen.on_mouse(MouseAction::Click, 2, 90);
 
     let buffer = render_screen(&mut screen, 120, 30);
     let text = buffer_text(&buffer);

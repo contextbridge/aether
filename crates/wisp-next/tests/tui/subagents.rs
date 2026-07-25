@@ -216,7 +216,7 @@ mod progress_indicator_tests {
         assert!(
             app.progress_indicator().is_active(),
             "progress indicator not active. prompt_in_flight={}, is_agent_busy={}",
-            app.busy(),
+            app.waiting_for_response(),
             app.is_agent_busy()
         );
         // Use a 120-char terminal to fit the full tip + esc hint on one line

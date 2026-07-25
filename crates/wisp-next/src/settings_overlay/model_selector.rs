@@ -1,29 +1,33 @@
-use super::{SettingsChange, SettingsMenuValue};
-use crate::edit_buffer::EditBuffer;
+use super::{PaneOutcome, SettingsChange, SettingsMenuValue, SettingsPane};
 use crate::filterable_list::FilterableList;
+use crate::selection::Direction;
 use crate::theme::Theme;
+use crate::wrap::truncate_to_width;
 use acp_utils::config_option_id::ConfigOptionId;
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
-use ratatui::widgets::{
-    Cell, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, StatefulWidget, Table, TableState, Widget,
-};
-use std::collections::HashSet;
+use ratatui::widgets::{ListItem, Paragraph, Widget};
+use std::collections::BTreeSet;
 use utils::ReasoningEffort;
 
+/// Multi-select pane for models, with a reasoning-effort control that follows
+/// whichever model is focused.
 pub(super) struct ModelSelector {
     config_id: String,
     items: FilterableList<SettingsMenuValue>,
-    pub(super) all_items: Vec<SettingsMenuValue>,
-    pub(super) selected_models: HashSet<String>,
-    original_models: HashSet<String>,
-    query: EditBuffer,
-    pub(super) filtered: Vec<usize>,
-    table_state: TableState,
+    selected_models: BTreeSet<String>,
+    original_models: BTreeSet<String>,
     reasoning_effort: Option<ReasoningEffort>,
     original_reasoning_effort: Option<ReasoningEffort>,
 }
+
+/// Header rows above the model list: search, current selection, column titles.
+const HEADER_ROWS: u16 = 3;
+const CHECKBOX_WIDTH: usize = 4;
+const CAPABILITY_WIDTH: usize = 11;
+const STATUS_WIDTH: usize = 18;
 
 impl ModelSelector {
     pub(super) fn new(
@@ -32,140 +36,123 @@ impl ModelSelector {
         current_selection: &str,
         current_reasoning_effort: Option<&str>,
     ) -> Self {
-        let selected_models: HashSet<String> =
-            current_selection.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        let selected_models: BTreeSet<String> = current_selection
+            .split(',')
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect();
+        let reasoning = current_reasoning_effort.and_then(|effort| effort.parse().ok());
 
-        let reasoning = current_reasoning_effort.and_then(|s| s.parse().ok());
-        let original_models = selected_models.clone();
-        let original_reasoning_effort = reasoning;
-
-        let filtered: Vec<usize> = (0..items.len()).collect();
-        let selected = items
+        let mut items = FilterableList::new(items, |value| format!("{} {}", value.name, value.value));
+        // Focus a model that is already chosen, else the first selectable one.
+        let initial = items
+            .entries()
             .iter()
             .position(|value| !value.is_disabled && selected_models.contains(&value.value))
-            .or_else(|| items.iter().position(|value| !value.is_disabled));
-        let table_state = TableState::default().with_selected(selected);
+            .or_else(|| items.entries().iter().position(|value| !value.is_disabled));
+        if let Some(index) = initial {
+            items.select_index(index);
+        }
 
         Self {
             config_id,
-            items: FilterableList::new(items.clone(), |value| format!("{} {}", value.name, value.value)),
-            all_items: items,
+            items,
+            original_models: selected_models.clone(),
             selected_models,
-            original_models,
-            query: EditBuffer::default(),
-            filtered,
-            table_state,
             reasoning_effort: reasoning,
-            original_reasoning_effort,
+            original_reasoning_effort: reasoning,
         }
     }
 
-    pub(super) fn move_up(&mut self) {
-        self.move_selection(-1);
-    }
-
-    pub(super) fn move_down(&mut self) {
-        self.move_selection(1);
-    }
-
-    pub(super) fn move_selection(&mut self, direction: isize) {
-        let Some(selected) = self.table_state.selected() else {
-            self.ensure_enabled();
+    fn toggle_focused(&mut self) {
+        let Some(value) = self.items.selected_entry().filter(|value| !value.is_disabled) else {
             return;
         };
-        let next = if direction < 0 {
-            (0..selected).rev().find(|&index| self.is_enabled(index))
-        } else {
-            (selected.saturating_add(1)..self.filtered.len()).find(|&index| self.is_enabled(index))
+        let value = value.value.clone();
+        if !self.selected_models.remove(&value) {
+            self.selected_models.insert(value);
+        }
+    }
+
+    fn cycle_reasoning(&mut self, direction: Direction) {
+        let Some(levels) = self.focused_reasoning_levels() else {
+            return;
         };
-        if let Some(next) = next {
-            self.table_state.select(Some(next));
-        }
-    }
-
-    pub(super) fn ensure_enabled(&mut self) {
-        let selected = self.table_state.selected().unwrap_or_default();
-        if self.filtered.get(selected).is_some_and(|&index| self.all_items[index].is_disabled) {
-            let enabled = self.filtered.iter().position(|&index| !self.all_items[index].is_disabled);
-            self.table_state.select(enabled);
-        }
-    }
-
-    pub(super) fn toggle_focused(&mut self) {
-        if let Some(&value_idx) = self.table_state.selected().and_then(|selected| self.filtered.get(selected)) {
-            let v = &self.all_items[value_idx];
-            if !v.is_disabled && !self.selected_models.remove(&v.value) {
-                self.selected_models.insert(v.value.clone());
-            }
-        }
-    }
-
-    pub(super) fn cycle_reasoning(&mut self) {
-        if let Some(&value_idx) = self.table_state.selected().and_then(|selected| self.filtered.get(selected)) {
-            let v = &self.all_items[value_idx];
-            if !v.is_disabled && !v.meta.reasoning_levels.is_empty() {
-                self.reasoning_effort = ReasoningEffort::cycle_within(self.reasoning_effort, &v.meta.reasoning_levels);
-            }
-        }
-    }
-
-    pub(super) fn cycle_reasoning_back(&mut self) {
-        if let Some(&value_idx) = self.table_state.selected().and_then(|selected| self.filtered.get(selected)) {
-            let v = &self.all_items[value_idx];
-            if !v.is_disabled && !v.meta.reasoning_levels.is_empty() {
-                self.reasoning_effort =
-                    ReasoningEffort::cycle_within_back(self.reasoning_effort, &v.meta.reasoning_levels);
-            }
-        }
-    }
-
-    pub(super) fn clamp_reasoning_to_focused(&mut self) {
-        if let Some(effort) = self.reasoning_effort
-            && let Some(&value_idx) = self.table_state.selected().and_then(|selected| self.filtered.get(selected))
-        {
-            let v = &self.all_items[value_idx];
-            if v.meta.reasoning_levels.is_empty() {
-                self.reasoning_effort = None;
-            } else {
-                self.reasoning_effort = Some(effort.clamp_to(&v.meta.reasoning_levels));
-            }
-        }
-    }
-
-    pub(super) fn push_query_char(&mut self, c: char) {
-        self.query.insert_char(c);
-        self.refilter();
-    }
-
-    pub(super) fn pop_query_char(&mut self) {
-        self.query.backspace();
-        self.refilter();
-    }
-
-    pub(super) fn refilter(&mut self) {
-        self.items.set_query(self.query.text());
-        self.filtered = self.items.filtered_entries().map(|(index, _)| index).collect();
-        self.table_state.select(self.table_state.selected().filter(|selected| *selected < self.filtered.len()));
-        self.ensure_enabled();
-    }
-
-    pub(super) fn click_row(&mut self, row: usize, _viewport_height: usize) -> bool {
-        let Some(item_row) = row.checked_sub(3) else {
-            return false;
+        self.reasoning_effort = match direction {
+            Direction::Forward => ReasoningEffort::cycle_within(self.reasoning_effort, &levels),
+            Direction::Backward => ReasoningEffort::cycle_within_back(self.reasoning_effort, &levels),
         };
-        let selected = self.table_state.offset().checked_add(item_row);
-        if selected.is_none_or(|selected| selected >= self.filtered.len()) {
-            return false;
-        }
-        self.table_state.select(selected);
-        true
     }
 
-    pub(super) fn confirm(&self) -> Vec<SettingsChange> {
+    /// Keeps the effort within what the focused model actually supports, so
+    /// moving between models never leaves an impossible setting showing.
+    fn clamp_reasoning_to_focused(&mut self) {
+        let Some(effort) = self.reasoning_effort else {
+            return;
+        };
+        self.reasoning_effort = self.focused_reasoning_levels().map(|levels| effort.clamp_to(&levels));
+    }
+
+    fn focused_reasoning_levels(&self) -> Option<Vec<ReasoningEffort>> {
+        self.items
+            .selected_entry()
+            .filter(|value| !value.is_disabled && !value.meta.reasoning_levels.is_empty())
+            .map(|value| value.meta.reasoning_levels.clone())
+    }
+
+    fn reasoning_label(&self) -> &'static str {
+        ReasoningEffort::config_str(self.reasoning_effort)
+    }
+
+    fn selected_names(&self) -> String {
+        self.items
+            .entries()
+            .iter()
+            .filter(|item| self.selected_models.contains(&item.value))
+            .map(|item| item.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+impl SettingsPane for ModelSelector {
+    fn on_key(&mut self, key: KeyEvent) -> PaneOutcome {
+        match key.code {
+            KeyCode::Up => self.scroll(Direction::Backward),
+            KeyCode::Down => self.scroll(Direction::Forward),
+            KeyCode::Tab => self.cycle_reasoning(Direction::Forward),
+            KeyCode::BackTab => self.cycle_reasoning(Direction::Backward),
+            KeyCode::Enter | KeyCode::Char(' ') => self.toggle_focused(),
+            KeyCode::Backspace => self.items.pop_query_char(),
+            KeyCode::Char(character) if !character.is_control() => self.items.push_query_char(character),
+            _ => {}
+        }
+        PaneOutcome::default()
+    }
+
+    fn click(&mut self, row: usize, _height: usize) -> PaneOutcome {
+        if let Some(item_row) = row.checked_sub(usize::from(HEADER_ROWS)) {
+            self.items.select_row(item_row);
+            self.toggle_focused();
+        }
+        PaneOutcome::default()
+    }
+
+    /// Scanning a long model list stops at either end rather than wrapping.
+    fn scroll(&mut self, direction: Direction) {
+        self.items.step_clamped(direction, |value| !value.is_disabled);
+        self.clamp_reasoning_to_focused();
+    }
+
+    /// Model changes are batched and committed when the pane closes, so
+    /// toggling several models costs one round-trip instead of one each.
+    fn take_changes(&mut self) -> Vec<SettingsChange> {
         let mut changes = Vec::new();
         if !self.selected_models.is_empty() && self.selected_models != self.original_models {
-            let joined = self.selected_models.iter().cloned().collect::<Vec<_>>().join(",");
-            changes.push(SettingsChange { config_id: self.config_id.clone(), new_value: joined });
+            changes.push(SettingsChange {
+                config_id: self.config_id.clone(),
+                new_value: self.selected_models.iter().cloned().collect::<Vec<_>>().join(","),
+            });
         }
         if self.reasoning_effort != self.original_reasoning_effort {
             changes.push(SettingsChange {
@@ -176,94 +163,65 @@ impl ModelSelector {
         changes
     }
 
-    pub(super) fn reasoning_label(&self) -> &'static str {
-        ReasoningEffort::config_str(self.reasoning_effort)
-    }
-
-    pub(super) fn render(&mut self, area: Rect, buffer: &mut Buffer, theme: &Theme) {
-        let [header_area, table_area] = Layout::vertical([Constraint::Length(2), Constraint::Min(0)]).areas(area);
-        let selected = self
-            .all_items
-            .iter()
-            .filter(|item| self.selected_models.contains(&item.value))
-            .map(|item| item.name.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-        Paragraph::new(format!(" Model search: {}\n Selected: {selected}", self.query.text()))
-            .style(Style::new().fg(theme.text_secondary))
-            .render(header_area, buffer);
-
-        let rows = self.filtered.iter().map(|&index| {
-            let value = &self.all_items[index];
-            let selected = self.selected_models.contains(&value.value);
-            let availability = if value.is_disabled {
-                value
-                    .description
-                    .as_deref()
-                    .and_then(|description| description.strip_prefix("Unavailable: "))
-                    .unwrap_or("unavailable")
-            } else if selected {
-                "selected"
-            } else {
-                ""
-            };
-            let capabilities = capability_tags(value.meta.supports_image, value.meta.supports_audio);
-            Row::new(vec![
-                Cell::from(if selected { "[x]" } else { "[ ]" }),
-                Cell::from(model_label(&value.name)),
-                Cell::from(capabilities),
-                Cell::from(availability),
-            ])
-            .style(if value.is_disabled {
-                Style::new().fg(theme.text_secondary)
-            } else {
-                Style::new().fg(theme.text_primary)
-            })
-        });
-        self.table_state.select(self.table_state.selected());
-        let table = Table::new(
-            rows,
-            [Constraint::Length(3), Constraint::Min(12), Constraint::Length(10), Constraint::Length(18)],
-        )
-        .header(Row::new(["", "Model", "Capabilities", "Status"]).style(Style::new().fg(theme.heading)))
-        .row_highlight_style(Style::new().fg(theme.background).bg(theme.text_primary));
-        StatefulWidget::render(table, table_area, buffer, &mut self.table_state);
-        let mut scrollbar_state = ScrollbarState::new(self.filtered.len()).position(self.table_state.offset());
-        StatefulWidget::render(
-            Scrollbar::new(ScrollbarOrientation::VerticalRight),
-            table_area,
-            buffer,
-            &mut scrollbar_state,
+    fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
+        let [header_area, list_area] =
+            Layout::vertical([Constraint::Length(HEADER_ROWS), Constraint::Min(0)]).areas(area);
+        let name_width = name_column_width(list_area.width);
+        let header = format!(
+            " Model search: {}\n Selected: {}\n {blank:CHECKBOX_WIDTH$}{model:name_width$}{capabilities:CAPABILITY_WIDTH$}Status",
+            self.items.query(),
+            self.selected_names(),
+            blank = "",
+            model = "Model",
+            capabilities = "Capabilities",
+            CHECKBOX_WIDTH = CHECKBOX_WIDTH,
+            CAPABILITY_WIDTH = CAPABILITY_WIDTH,
         );
+        Paragraph::new(header).style(Style::new().fg(theme.text_secondary)).render(header_area, buf);
+
+        let selected = &self.selected_models;
+        self.items
+            .view(theme, " (no matches found)", |value| {
+                let is_selected = selected.contains(&value.value);
+                let status = if value.is_disabled {
+                    value
+                        .description
+                        .as_deref()
+                        .and_then(|description| description.strip_prefix("Unavailable: "))
+                        .unwrap_or("unavailable")
+                } else if is_selected {
+                    "selected"
+                } else {
+                    ""
+                };
+                let checkbox = if is_selected { "[x] " } else { "[ ] " };
+                let label = truncate_to_width(model_label(&value.name), name_width.saturating_sub(1));
+                let capabilities = capability_tags(value.meta.supports_image, value.meta.supports_audio);
+                let status = truncate_to_width(status, STATUS_WIDTH);
+                ListItem::new(format!(" {checkbox}{label:name_width$}{capabilities:CAPABILITY_WIDTH$}{status}")).style(
+                    if value.is_disabled {
+                        Style::new().fg(theme.text_secondary)
+                    } else {
+                        Style::new().fg(theme.text_primary)
+                    },
+                )
+            })
+            .highlight_style(Style::new().fg(theme.background).bg(theme.text_primary))
+            .scrollbar()
+            .render(list_area, buf);
     }
 
-    fn is_enabled(&self, filtered_index: usize) -> bool {
-        self.filtered.get(filtered_index).is_some_and(|&item_index| !self.all_items[item_index].is_disabled)
+    fn footer(&self) -> String {
+        format!("[Space/Enter] Toggle  [Tab] Effort: {}  [Esc] Done", self.reasoning_label())
     }
 }
 
-#[cfg(test)]
-pub(super) fn provider_key(value: &str) -> &str {
-    if let Some(provider) = value.strip_prefix("__unavailable:") {
-        return provider;
-    }
-    value.split_once(':').map_or("Other", |(p, _)| p)
+/// Width left for the model name once the fixed columns are accounted for.
+fn name_column_width(total: u16) -> usize {
+    usize::from(total).saturating_sub(CHECKBOX_WIDTH + CAPABILITY_WIDTH + STATUS_WIDTH + 1).max(12)
 }
 
-#[cfg(test)]
-pub(super) fn provider_label(name: &str, key: &str) -> String {
-    if let Some((provider, _)) = name.split_once(" / ") {
-        return provider.to_string();
-    }
-    if key.is_empty() {
-        return "Other".to_string();
-    }
-    let mut chars = key.chars();
-    let first = chars.next().map(|c| c.to_uppercase().to_string()).unwrap_or_default();
-    let rest = chars.as_str().to_lowercase();
-    format!("{first}{rest}")
-}
-
+/// Strips the "Provider / " prefix so the provider is not repeated on every row.
 pub(super) fn model_label(name: &str) -> &str {
     name.split_once(" / ").map_or(name, |(_, model)| model)
 }
@@ -275,20 +233,4 @@ pub(super) fn capability_tags(supports_image: bool, supports_audio: bool) -> &'s
         (false, true) => "audio",
         (false, false) => "",
     }
-}
-
-#[cfg(test)]
-pub(super) fn reasoning_bar(effort: Option<ReasoningEffort>, levels: &[ReasoningEffort]) -> String {
-    let current_idx = effort.and_then(|e| levels.iter().position(|&l| l == e)).unwrap_or(usize::MAX);
-    let parts: Vec<String> = levels
-        .iter()
-        .enumerate()
-        .map(
-            |(i, _level)| {
-                if i <= current_idx && current_idx != usize::MAX { "■".to_string() } else { "·".to_string() }
-            },
-        )
-        .collect();
-    let name = ReasoningEffort::config_str(effort);
-    format!("{} [{}]", name, parts.join(""))
 }

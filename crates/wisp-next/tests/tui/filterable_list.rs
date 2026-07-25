@@ -1,8 +1,8 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
-use ratatui::widgets::ListItem;
-use wisp_next::filterable_list::{FilterableList, FilterableListRender};
+use ratatui::widgets::{ListItem, Widget};
+use wisp_next::filterable_list::FilterableList;
+use wisp_next::theme::Theme;
 
 #[test]
 fn filters_once_per_query_change_and_selects_from_cached_matches() {
@@ -44,18 +44,9 @@ fn persists_native_list_offset_for_mouse_row_selection() {
     for _ in 0..7 {
         list.select_next();
     }
-    list.render(
-        Rect::new(0, 0, 20, 4),
-        &mut buffer,
-        FilterableListRender {
-            title: "items".to_string(),
-            empty_message: "empty",
-            border_style: Style::default(),
-            empty_style: Style::default(),
-            highlight_style: Style::default(),
-        },
-        |entry, _| ListItem::new(entry.clone()),
-    );
+    list.view(&Theme::default(), "empty", |entry| ListItem::new(entry.clone()))
+        .bordered("items")
+        .render(Rect::new(0, 0, 20, 4), &mut buffer);
 
     let offset = list.offset();
     assert!(offset > 0);

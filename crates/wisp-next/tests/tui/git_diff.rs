@@ -546,7 +546,7 @@ async fn git_diff_stale_event_rejected() {
     settle_screen_effects(&mut app).await;
 
     let stale_event = GitDiffEvent::ActionFinished { request_id: 0, result: Ok(()) };
-    app.on_screen_event(ScreenEvent::GitDiff(stale_event));
+    app.on_screen_event(stale_event);
     settle_screen_effects(&mut app).await;
 
     app.on_key(key(KeyCode::Esc));

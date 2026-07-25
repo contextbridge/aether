@@ -15,10 +15,6 @@ impl<'a> SessionConfigView<'a> {
         Self { options }
     }
 
-    pub fn options(&self) -> &'a [SessionConfigOption] {
-        self.options
-    }
-
     pub fn select(&self, id: ConfigOptionId) -> Option<&'a SessionConfigSelect> {
         self.options.iter().find(|option| option.id.0.as_ref() == id.as_str()).and_then(|option| match &option.kind {
             SessionConfigKind::Select(select) => Some(select),

@@ -8,7 +8,9 @@ use crate::edit_buffer::EditBuffer;
 use crate::git_diff::{DiffScope, FileDiff, FileStatus, GitDiffDocument, PatchAnchor, ReviewQueue, StageState};
 use crate::selection::SelectionState;
 
-use super::effects::{GitDiffEffect, GitDiffOutcome, next_request_id};
+use crate::screens::ScreenOutcome;
+
+use super::effects::{GitDiffEffect, next_request_id};
 
 pub(super) type CursorRow = (usize, usize, usize);
 
@@ -137,11 +139,6 @@ impl GitDiffScreen {
         let effect = screen.begin_load();
         (screen, effect)
     }
-    pub fn cancel(&mut self) {}
-
-    pub fn current_request_id(&self) -> u64 {
-        self.request_id
-    }
 
     pub(super) fn begin_load(&mut self) -> GitDiffEffect {
         if let Some(path) = self.selected_file().map(|file| file.path.clone()) {
@@ -177,35 +174,35 @@ impl GitDiffScreen {
         self.state = GitDiffLoadState::Ready(document);
         self.sync_drawer_selection();
     }
-    pub(super) fn stage_all(&mut self) -> GitDiffOutcome {
+    pub(super) fn stage_all(&mut self) -> ScreenOutcome {
         let Some(repo_root) = self.repo_root.clone() else {
-            return GitDiffOutcome::None;
+            return ScreenOutcome::None;
         };
         self.request_id = next_request_id();
         self.operation_in_flight = true;
-        GitDiffOutcome::Effect(GitDiffEffect::StageAll { request_id: self.request_id, repo_root })
+        ScreenOutcome::Effect(GitDiffEffect::StageAll { request_id: self.request_id, repo_root })
     }
 
-    pub(super) fn unstage_all(&mut self) -> GitDiffOutcome {
+    pub(super) fn unstage_all(&mut self) -> ScreenOutcome {
         let Some(repo_root) = self.repo_root.clone() else {
-            return GitDiffOutcome::None;
+            return ScreenOutcome::None;
         };
         self.request_id = next_request_id();
         self.operation_in_flight = true;
-        GitDiffOutcome::Effect(GitDiffEffect::UnstageAll { request_id: self.request_id, repo_root })
+        ScreenOutcome::Effect(GitDiffEffect::UnstageAll { request_id: self.request_id, repo_root })
     }
 
-    pub(super) fn toggle_stage(&mut self) -> GitDiffOutcome {
+    pub(super) fn toggle_stage(&mut self) -> ScreenOutcome {
         let Some(repo_root) = self.repo_root.clone() else {
-            return GitDiffOutcome::None;
+            return ScreenOutcome::None;
         };
         let entries = self.drawer_entries();
         let Some(entry) = self.drawer_selection.selected().and_then(|selected| entries.get(selected)) else {
-            return GitDiffOutcome::None;
+            return ScreenOutcome::None;
         };
         let files = self.files_for_entry(entry);
         if files.is_empty() {
-            return GitDiffOutcome::None;
+            return ScreenOutcome::None;
         }
         let all_staged = files.iter().all(|file| file.staged == StageState::Staged);
         let paths = files.iter().map(|file| file.path.clone()).collect();
@@ -216,34 +213,34 @@ impl GitDiffScreen {
         } else {
             GitDiffEffect::StageFiles { request_id: self.request_id, repo_root, paths }
         };
-        GitDiffOutcome::Effect(effect)
+        ScreenOutcome::Effect(effect)
     }
 
-    pub(super) fn begin_commit(&mut self) -> GitDiffOutcome {
+    pub(super) fn begin_commit(&mut self) -> ScreenOutcome {
         if self.operation_in_flight {
-            return GitDiffOutcome::None;
+            return ScreenOutcome::None;
         }
         if !self.any_staged() {
             self.bottom_bar = BottomBar::Error("Nothing staged to commit".to_string());
-            return GitDiffOutcome::None;
+            return ScreenOutcome::None;
         }
         self.bottom_bar = BottomBar::CommitEditor { buffer: EditBuffer::default() };
-        GitDiffOutcome::None
+        ScreenOutcome::None
     }
-    pub(super) fn begin_discard(&mut self) -> GitDiffOutcome {
+    pub(super) fn begin_discard(&mut self) -> ScreenOutcome {
         if self.operation_in_flight {
-            return GitDiffOutcome::None;
+            return ScreenOutcome::None;
         }
         let Some(file) = self.selected_file().cloned() else {
-            return GitDiffOutcome::None;
+            return ScreenOutcome::None;
         };
         self.bottom_bar = BottomBar::DiscardConfirmation { path: file.path.clone(), status: file.status };
-        GitDiffOutcome::None
+        ScreenOutcome::None
     }
 
-    pub(super) fn toggle_full_file(&mut self) -> GitDiffOutcome {
+    pub(super) fn toggle_full_file(&mut self) -> ScreenOutcome {
         if self.operation_in_flight {
-            return GitDiffOutcome::None;
+            return ScreenOutcome::None;
         }
         self.show_full_file = !self.show_full_file;
         if !self.show_full_file {
@@ -254,14 +251,14 @@ impl GitDiffScreen {
             let repo_root = self.repo_root.clone();
             let (Some(path), Some(repo_root)) = (path, repo_root) else {
                 self.show_full_file = false;
-                return GitDiffOutcome::None;
+                return ScreenOutcome::None;
             };
             let request_id = next_request_id();
             self.request_id = request_id;
             self.operation_in_flight = true;
-            GitDiffOutcome::Effect(GitDiffEffect::LoadFullFile { request_id, repo_root, path })
+            ScreenOutcome::Effect(GitDiffEffect::LoadFullFile { request_id, repo_root, path })
         } else {
-            GitDiffOutcome::None
+            ScreenOutcome::None
         }
     }
 
@@ -337,15 +334,26 @@ impl GitDiffScreen {
         }
     }
 
+    /// Identity of the active draft: its anchor plus the text and cursor that
+    /// were rendered, so a cached view is reused only while all three match.
+    pub(super) fn draft_signature(&self) -> Option<(usize, usize, usize, usize)> {
+        self.draft
+            .as_ref()
+            .map(|draft| (draft.anchor.hunk, draft.anchor.line, draft.buffer.text().len(), draft.buffer.cursor()))
+    }
+
+    /// Row within `view` that the patch cursor currently occupies.
+    pub(super) fn cursor_row_in(&self, view: &DiffView) -> Option<usize> {
+        view.cursor_rows
+            .iter()
+            .find_map(|(h, l, row)| (*h == self.patch_cursor.hunk && *l == self.patch_cursor.line).then_some(*row))
+    }
+
     pub(super) fn sync_scroll_to_cursor(&mut self) {
         let Some(view) = &self.diff_view else {
             return;
         };
-        let cursor_row = view
-            .cursor_rows
-            .iter()
-            .find_map(|(h, l, row)| (*h == self.patch_cursor.hunk && *l == self.patch_cursor.line).then_some(*row));
-        let Some(cursor_row) = cursor_row else {
+        let Some(cursor_row) = self.cursor_row_in(view) else {
             return;
         };
         let offset = usize::from(self.patch_scroll_state.offset().y);
@@ -380,40 +388,40 @@ impl GitDiffScreen {
         }
     }
 
-    pub(super) fn begin_draft(&mut self) -> GitDiffOutcome {
+    pub(super) fn begin_draft(&mut self) -> ScreenOutcome {
         let Some(file) = self.selected_file() else {
-            return GitDiffOutcome::None;
+            return ScreenOutcome::None;
         };
         let Some(hunk) = file.hunks.get(self.patch_cursor.hunk) else {
-            return GitDiffOutcome::None;
+            return ScreenOutcome::None;
         };
         if hunk.lines.get(self.patch_cursor.line).is_none() {
-            return GitDiffOutcome::None;
+            return ScreenOutcome::None;
         }
         let anchor =
             PatchAnchor { file_index: self.selected_file, hunk: self.patch_cursor.hunk, line: self.patch_cursor.line };
         self.draft = Some(DraftState { anchor, buffer: EditBuffer::default() });
-        GitDiffOutcome::None
+        ScreenOutcome::None
     }
-    pub(super) fn undo_last_comment(&mut self) -> GitDiffOutcome {
+    pub(super) fn undo_last_comment(&mut self) -> ScreenOutcome {
         self.review_queue.pop();
         self.comments_revision = self.comments_revision.wrapping_add(1);
-        GitDiffOutcome::None
+        ScreenOutcome::None
     }
 
-    pub(super) fn submit_review(&mut self) -> GitDiffOutcome {
+    pub(super) fn submit_review(&mut self) -> ScreenOutcome {
         if self.review_queue.is_empty() {
             self.bottom_bar = BottomBar::Error("No comments to submit".to_string());
-            return GitDiffOutcome::None;
+            return ScreenOutcome::None;
         }
         if self.operation_in_flight {
             self.bottom_bar = BottomBar::Error("Already submitting".to_string());
-            return GitDiffOutcome::None;
+            return ScreenOutcome::None;
         }
         let prompt = self.review_queue.format_prompt();
         self.request_id = next_request_id();
         self.operation_in_flight = true;
-        GitDiffOutcome::SubmitReview(GitDiffEffect::SubmitReview { request_id: self.request_id, prompt })
+        ScreenOutcome::Effect(GitDiffEffect::SubmitReview { request_id: self.request_id, prompt })
     }
     pub(super) fn collapse_selected(&mut self) {
         let entries = self.drawer_entries();

@@ -1,3 +1,6 @@
+//! Every integration test for wisp-next lives in this one binary: separate
+//! test targets each relink the whole crate, which dominates the build.
+
 #[path = "tui/support.rs"]
 mod support;
 
@@ -9,19 +12,29 @@ mod composer;
 mod configuration;
 #[path = "tui/conversation.rs"]
 mod conversation;
+#[path = "tui/filterable_list.rs"]
+mod filterable_list;
 #[path = "tui/foundation.rs"]
 mod foundation;
 #[path = "tui/git_diff.rs"]
 mod git_diff;
+#[path = "tui/plan_review.rs"]
+mod plan_review;
 #[path = "tui/plans.rs"]
 mod plans;
 #[path = "tui/prompt_search.rs"]
 mod prompt_search;
+#[path = "tui/session_config_view.rs"]
+mod session_config_view;
 #[path = "tui/sessions.rs"]
 mod sessions;
 #[path = "tui/settings.rs"]
 mod settings;
+#[path = "tui/status_line.rs"]
+mod status_line;
 #[path = "tui/subagents.rs"]
 mod subagents;
+#[path = "tui/terminal_interaction.rs"]
+mod terminal_interaction;
 #[path = "tui/workspace.rs"]
 mod workspace;

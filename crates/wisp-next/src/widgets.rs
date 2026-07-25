@@ -1,11 +1,11 @@
 use crate::edit_buffer::EditBuffer;
-use crate::wrap::byte_at_display_column;
+use crate::wrap::fit_prefix;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Clone, Copy)]
 pub struct TextInput<'a> {
@@ -63,19 +63,10 @@ fn visible_window(buffer: &EditBuffer, width: usize) -> (String, usize) {
     let text = buffer.text();
     let cursor_column = text[..buffer.cursor()].width();
     let start_column = cursor_column.saturating_sub(width.saturating_sub(1));
-    let start = byte_at_display_column(text, start_column);
+    let (start, _) = fit_prefix(text, start_column);
     let cursor_width = text[start..buffer.cursor()].width();
-    let mut visible = String::new();
-    let mut visible_width = 0;
-    for character in text[start..].chars() {
-        let character_width = character.width().unwrap_or(0);
-        if visible_width + character_width > width {
-            break;
-        }
-        visible.push(character);
-        visible_width += character_width;
-    }
-    (visible, cursor_width.min(width.saturating_sub(1)))
+    let (visible_len, _) = fit_prefix(&text[start..], width);
+    (text[start..start + visible_len].to_string(), cursor_width.min(width.saturating_sub(1)))
 }
 
 #[cfg(test)]

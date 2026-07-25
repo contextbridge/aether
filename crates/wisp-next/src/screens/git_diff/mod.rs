@@ -3,5 +3,5 @@ mod input;
 mod rendering;
 mod state;
 
-pub use effects::{GitDiffEffect, GitDiffEvent, GitDiffOutcome};
+pub use effects::{GitDiffEffect, GitDiffEvent};
 pub use state::GitDiffScreen;
