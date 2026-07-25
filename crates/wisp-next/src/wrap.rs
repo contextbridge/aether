@@ -191,6 +191,12 @@ pub fn fit_line(mut line: Line<'static>, width: usize, fill_style: Style) -> Lin
     line
 }
 
+/// `count` as a row or column count, saturating rather than wrapping on the
+/// terminals nobody has.
+pub fn rows(count: usize) -> u16 {
+    u16::try_from(count).unwrap_or(u16::MAX)
+}
+
 const TAB_WIDTH: usize = 4;
 const ELLIPSIS: &str = "…";
 const ELLIPSIS_WIDTH: usize = 1;

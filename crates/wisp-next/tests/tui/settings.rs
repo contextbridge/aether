@@ -36,7 +36,7 @@ fn auth_methods_updated(methods: Vec<acp::AuthMethod>) -> AcpEvent {
 #[test]
 fn server_status_unhealthy_count_updates_status_line() {
     let (mut app, _command_rx) = make_app();
-    assert_eq!(app.unhealthy_server_count(), 0);
+    assert_eq!(app.status_line_model().unhealthy_servers, 0);
 
     app.on_acp_event(mcp_notification(vec![
         server_status_entry("github", McpServerStatus::Connected { tool_count: 5 }),
@@ -44,7 +44,7 @@ fn server_status_unhealthy_count_updates_status_line() {
         server_status_entry("slack", McpServerStatus::Failed { error: "timeout".to_string() }),
     ]));
 
-    assert_eq!(app.unhealthy_server_count(), 2);
+    assert_eq!(app.status_line_model().unhealthy_servers, 2);
 }
 
 #[test]
@@ -56,7 +56,7 @@ fn server_status_all_connected_gives_zero_unhealthy() {
         server_status_entry("b", McpServerStatus::Connected { tool_count: 2 }),
     ]));
 
-    assert_eq!(app.unhealthy_server_count(), 0);
+    assert_eq!(app.status_line_model().unhealthy_servers, 0);
 }
 
 #[test]
@@ -67,10 +67,10 @@ fn server_status_empty_clears_count() {
         "x",
         McpServerStatus::Failed { error: "e".to_string() },
     )]));
-    assert_eq!(app.unhealthy_server_count(), 1);
+    assert_eq!(app.status_line_model().unhealthy_servers, 1);
 
     app.on_acp_event(mcp_notification(vec![]));
-    assert_eq!(app.unhealthy_server_count(), 0);
+    assert_eq!(app.status_line_model().unhealthy_servers, 0);
 }
 
 #[test]
@@ -742,8 +742,11 @@ fn settings_overlay_render_clears_covered_buffer_cells() {
     let mut buffer = Buffer::filled(area, Cell::new("X"));
     let theme = Theme::default();
     let mut highlighter = wisp_next::syntax::SyntaxHighlighter::new();
-    let mut cx =
-        wisp_next::render_context::RenderContext { theme: &theme, highlighter: &mut highlighter, theme_generation: 0 };
+    let mut cx = wisp_next::render_context::RenderContext {
+        theme: &theme,
+        highlighter: &mut highlighter,
+        theme_generation: Generation::default(),
+    };
 
     overlay.render(area, &mut buffer, &mut cx);
 

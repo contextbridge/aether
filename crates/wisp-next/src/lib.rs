@@ -1,3 +1,4 @@
+pub mod annotation;
 pub mod app;
 pub mod attachments;
 pub mod cli;
@@ -9,6 +10,7 @@ pub mod effects;
 pub mod elicitation;
 pub mod error;
 pub mod filterable_list;
+pub mod generation;
 pub mod git_diff;
 pub mod keybindings;
 pub mod list_view;

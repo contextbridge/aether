@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use futures::FutureExt;
 
+use crate::generation::Generation;
 use crate::git_diff::{
     DiffScope, FileStatus, GitDiffDocument, GitDiffError, commit, discard_file, stage_all, stage_files, unstage_all,
     unstage_files,
@@ -9,25 +10,25 @@ use crate::git_diff::{
 
 #[derive(Debug)]
 pub enum GitDiffEffect {
-    Load { request_id: u64, working_dir: PathBuf, repo_root: Option<PathBuf>, scope: DiffScope },
-    StageFiles { request_id: u64, repo_root: PathBuf, paths: Vec<String> },
-    UnstageFiles { request_id: u64, repo_root: PathBuf, paths: Vec<String> },
-    StageAll { request_id: u64, repo_root: PathBuf },
-    UnstageAll { request_id: u64, repo_root: PathBuf },
-    Commit { request_id: u64, repo_root: PathBuf, message: String },
-    DiscardFile { request_id: u64, repo_root: PathBuf, path: String, status: FileStatus },
-    LoadFullFile { request_id: u64, repo_root: PathBuf, path: String },
+    Load { request_id: Generation, working_dir: PathBuf, repo_root: Option<PathBuf>, scope: DiffScope },
+    StageFiles { request_id: Generation, repo_root: PathBuf, paths: Vec<String> },
+    UnstageFiles { request_id: Generation, repo_root: PathBuf, paths: Vec<String> },
+    StageAll { request_id: Generation, repo_root: PathBuf },
+    UnstageAll { request_id: Generation, repo_root: PathBuf },
+    Commit { request_id: Generation, repo_root: PathBuf, message: String },
+    DiscardFile { request_id: Generation, repo_root: PathBuf, path: String, status: FileStatus },
+    LoadFullFile { request_id: Generation, repo_root: PathBuf, path: String },
 }
 
 pub enum GitDiffEvent {
-    Loaded { request_id: u64, result: Result<GitDiffDocument, GitDiffError> },
-    ActionFinished { request_id: u64, result: Result<(), GitDiffError> },
-    FullFileLoaded { request_id: u64, path: String, result: Result<String, GitDiffError> },
+    Loaded { request_id: Generation, result: Result<GitDiffDocument, GitDiffError> },
+    ActionFinished { request_id: Generation, result: Result<(), GitDiffError> },
+    FullFileLoaded { request_id: Generation, path: String, result: Result<String, GitDiffError> },
 }
 
 impl GitDiffEvent {
     /// The request this result belongs to, so superseded results can be dropped.
-    pub fn request_id(&self) -> u64 {
+    pub fn request_id(&self) -> Generation {
         match self {
             Self::Loaded { request_id, .. }
             | Self::ActionFinished { request_id, .. }
@@ -50,7 +51,7 @@ impl GitDiffEffect {
     }
 
     /// The request this effect will report back under.
-    pub fn request_id(&self) -> u64 {
+    pub fn request_id(&self) -> Generation {
         match self {
             Self::Load { request_id, .. }
             | Self::StageFiles { request_id, .. }

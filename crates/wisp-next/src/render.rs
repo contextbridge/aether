@@ -1,9 +1,10 @@
 use crate::INLINE_SCROLLBACK_RESERVE;
 use crate::app::App;
 use crate::plan_view::PlanView;
-use crate::presentation::Presenter;
+use crate::presentation::{Presenter, Segment};
 use crate::status_line::StatusLine;
 use crate::theme::Theme;
+use crate::wrap::rows;
 use agent_client_protocol::schema::PlanEntry;
 use ratatui::Frame;
 use ratatui::Terminal;
@@ -34,34 +35,36 @@ pub fn sync_terminal<B: Backend>(
     if commits_history {
         let previous_kind = app.last_drained_kind();
         let committed = app.drain_finalized();
-        let lines =
-            presenter.history_lines(&committed, previous_kind, area.width, app.content_padding(), app.spinner_tick());
-        presenter.append_committed_lines(lines);
+        let lines = presenter.lines(
+            Segment::Committed,
+            &committed,
+            previous_kind,
+            area.width,
+            app.content_padding(),
+            app.spinner_tick(),
+        );
+        presenter.scrollback_mut().append(lines);
     }
 
     let layout = FrameLayout::new(area, app, presenter);
-    let overflow =
-        if commits_history { presenter.take_committed_overflow(layout.committed_capacity()) } else { Vec::new() };
 
-    terminal.draw(|frame| draw_frame(frame, app, presenter, &layout))?;
-
-    if overflow.is_empty() {
-        return Ok(());
-    }
-
-    for chunk in overflow.chunks(usize::from(u16::MAX)) {
-        let chunk = chunk.to_vec();
-        let height = u16::try_from(chunk.len()).unwrap_or(u16::MAX);
-        terminal.insert_before(height, move |buffer| {
-            Paragraph::new(Text::from(chunk)).render(buffer.area, buffer);
-        })?;
+    // Scrollback leaves for the terminal's own history before the frame is
+    // painted, so the viewport is drawn once, already in its final position.
+    if commits_history {
+        let overflow = presenter.scrollback_mut().take_overflow(layout.committed_capacity());
+        for chunk in overflow.chunks(usize::from(u16::MAX)) {
+            let chunk = chunk.to_vec();
+            terminal.insert_before(rows(chunk.len()), move |buffer| {
+                Paragraph::new(Text::from(chunk)).render(buffer.area, buffer);
+            })?;
+        }
     }
 
     terminal.draw(|frame| draw_frame(frame, app, presenter, &layout))?;
     Ok(())
 }
 
-/// Everything measured once per frame and reused by both draw passes.
+/// Everything measured once per frame, before anything is drawn.
 struct FrameLayout {
     composer_layout: crate::composer::ComposerLayout,
     completion_rows: u16,
@@ -75,13 +78,14 @@ struct FrameLayout {
     live_lines: Vec<Line<'static>>,
     /// Columns of blank gutter each side of the conversation content.
     content_padding: u16,
-    /// Rows the transcript gets once the plan, composer, and status line are placed.
+    /// Rows the conversation gets once the plan, composer, and status line are
+    /// placed — what [`FrameLayout::split`]'s `Fill` resolves to.
     transcript_height: u16,
 }
 
 impl FrameLayout {
     fn new(area: Rect, app: &mut App, presenter: &mut Presenter) -> Self {
-        let status_line = StatusLine::new(app, app.status_line_settings(), presenter.theme());
+        let status_line = StatusLine::new(&app.status_line_model(), presenter.theme());
         let status_line_rows = status_line.height(area.width);
         let composer_layout = app.composer().layout(area.width, presenter.theme());
         let completion_rows = rows(app.composer().completion_ref().map_or(0, |o| o.row_count(COMPLETION_MAX_ROWS)));
@@ -116,6 +120,18 @@ impl FrameLayout {
         }
     }
 
+    /// Splits the frame into the four stacked bands it always has. The plan and
+    /// the conversation share whatever the composer and status line leave.
+    fn split(&self, area: Rect) -> [Rect; 4] {
+        Layout::vertical([
+            Constraint::Length(self.plan_height),
+            Constraint::Fill(1),
+            Constraint::Length(self.composer_height),
+            Constraint::Length(self.status_line_rows),
+        ])
+        .areas(area)
+    }
+
     /// `area` inset by the content gutter, for the widgets that draw inside it.
     fn indent(&self, area: Rect) -> Rect {
         area.inner(Margin::new(self.content_padding, 0))
@@ -131,33 +147,19 @@ impl FrameLayout {
 }
 
 fn draw_frame(frame: &mut Frame, app: &mut App, presenter: &mut Presenter, layout: &FrameLayout) {
-    let [live_area, composer_area, status_area] = Layout::vertical([
-        Constraint::Min(0),
-        Constraint::Length(layout.composer_height),
-        Constraint::Length(layout.status_line_rows),
-    ])
-    .areas(frame.area());
-
+    let [plan_area, transcript_area, composer_area, status_area] = layout.split(frame.area());
     let buf = frame.buffer_mut();
-    let [_, plan_area, transcript_area] = Layout::vertical([
-        Constraint::Min(0),
-        Constraint::Length(layout.plan_height),
-        Constraint::Length(layout.transcript_height.min(live_area.height)),
-    ])
-    .areas(live_area);
 
-    if layout.plan_height > 0 {
-        PlanView::new(&layout.plan_entries, presenter.theme()).render(layout.indent(plan_area), buf);
-    }
-    draw_transcript(layout, presenter.committed_lines(), transcript_area, buf);
+    PlanView::new(&layout.plan_entries, presenter.theme()).render(layout.indent(plan_area), buf);
+    draw_transcript(layout, presenter.scrollback().lines(), transcript_area, buf);
 
     let cursor = render_composer(layout, app, composer_area, buf, presenter.theme());
     layout.status_line.render(status_area, buf);
 
-    if let Some(cursor) = cursor {
+    let layer_cursor = app.render_layer(frame.area(), frame.buffer_mut(), &mut presenter.context());
+    if let Some(cursor) = layer_cursor.or(cursor) {
         frame.set_cursor_position(cursor);
     }
-    app.render_active_surface(frame, &mut presenter.context());
 }
 
 /// Stacks committed scrollback, the streaming tail, and the progress indicator
@@ -194,12 +196,9 @@ fn render_lines(lines: &[Line<'static>], area: Rect, buf: &mut Buffer) {
     }
 }
 
-fn rows(count: usize) -> u16 {
-    u16::try_from(count).unwrap_or(u16::MAX)
-}
-
 fn live_history_lines(app: &App, presenter: &mut Presenter, width: u16) -> Vec<Line<'static>> {
-    presenter.pending_history_lines(
+    presenter.lines(
+        Segment::Live,
         &app.pending_items(),
         app.last_drained_kind(),
         width,
@@ -219,22 +218,20 @@ fn render_composer(
 ) -> Option<Position> {
     let [search_area, body_area, completion_area] = Layout::vertical([
         Constraint::Length(layout.prompt_search_rows.min(area.height)),
-        Constraint::Min(0),
+        Constraint::Fill(1),
         Constraint::Length(layout.completion_rows),
     ])
     .areas(area);
 
-    if search_area.height > 0 {
-        if let Some(picker) = app.composer_mut().prompt_search() {
-            picker.render(search_area, buf, theme);
-        }
-        app.set_surface_rect(search_area);
+    if search_area.height > 0
+        && let Some(picker) = app.composer_mut().prompt_search()
+    {
+        picker.render(search_area, buf, theme);
     }
-    if completion_area.height > 0 {
-        if let Some(overlay) = app.composer_mut().completion() {
-            overlay.view(theme, completion_area.width).render(completion_area, buf);
-        }
-        app.set_surface_rect(completion_area);
+    if completion_area.height > 0
+        && let Some(overlay) = app.composer_mut().completion()
+    {
+        overlay.view(theme).render(completion_area, buf);
     }
 
     // Keep the cursor line visible when the composer is taller than its area.

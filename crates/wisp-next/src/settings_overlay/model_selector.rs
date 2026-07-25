@@ -10,7 +10,8 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::Style;
-use ratatui::widgets::{ListItem, Paragraph, Widget};
+use ratatui::text::Line;
+use ratatui::widgets::{Paragraph, Widget};
 use std::collections::BTreeSet;
 use utils::ReasoningEffort;
 
@@ -190,7 +191,7 @@ impl ModelSelector {
 
         let selected = &self.selected_models;
         self.items
-            .view(theme, " (no matches found)", |value| {
+            .view(theme, |value| {
                 let is_selected = selected.contains(&value.value);
                 let status = if value.is_disabled {
                     value
@@ -207,7 +208,8 @@ impl ModelSelector {
                 let label = truncate_to_width(model_label(&value.name), name_width.saturating_sub(1));
                 let capabilities = capability_tags(value.meta.supports_image, value.meta.supports_audio);
                 let status = truncate_to_width(status, STATUS_WIDTH);
-                ListItem::new(format!(" {checkbox}{label:name_width$}{capabilities:CAPABILITY_WIDTH$}{status}")).style(
+                Line::styled(
+                    format!(" {checkbox}{label:name_width$}{capabilities:CAPABILITY_WIDTH$}{status}"),
                     if value.is_disabled {
                         Style::new().fg(theme.text_secondary)
                     } else {
@@ -215,6 +217,7 @@ impl ModelSelector {
                     },
                 )
             })
+            .empty_message(" (no matches found)")
             .highlight_style(Style::new().fg(theme.background).bg(theme.text_primary))
             .scrollbar()
             .render(list_area, buf);

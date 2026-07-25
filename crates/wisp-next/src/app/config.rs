@@ -1,11 +1,10 @@
-use super::{
-    App, ConfigOptionId, ReasoningEffort, SessionConfigOptionCategory, SessionConfigView, SettingsMenuEntry,
-    SettingsMenuValue, UiSettings, acp,
-};
-use crate::{
-    session_config_view::{as_select, select_values},
-    settings_overlay::SettingsOverlay,
-};
+use super::App;
+use crate::session_config_view::{SessionConfigView, as_select, select_values};
+use crate::settings::UiSettings;
+use crate::settings_overlay::{SettingsMenuEntry, SettingsMenuValue};
+use acp_utils::config_option_id::ConfigOptionId;
+use agent_client_protocol::schema::{self as acp, SessionConfigOptionCategory};
+use utils::ReasoningEffort;
 pub(super) fn is_cycleable_mode_option(option: &acp::SessionConfigOption) -> bool {
     matches!(option.kind, acp::SessionConfigKind::Select(_))
         && option.category == Some(SessionConfigOptionCategory::Mode)
@@ -68,12 +67,10 @@ impl App {
         } else {
             crate::settings::load_theme_file(value)
         });
-        if let Some(overlay) = self.layer_as::<SettingsOverlay>() {
-            overlay.apply_change(&crate::settings_overlay::SettingsChange {
-                config_id: acp_utils::config_option_id::THEME_CONFIG_ID.to_string(),
-                new_value: value.to_string(),
-            });
-        }
+        self.apply_settings_change(&crate::settings_overlay::SettingsChange {
+            config_id: acp_utils::config_option_id::THEME_CONFIG_ID.to_string(),
+            new_value: value.to_string(),
+        });
     }
 }
 

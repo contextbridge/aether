@@ -298,7 +298,11 @@ fn clear_no_duplicate_generation_bump() {
 
     assert_eq!(
         app.transcript_generation(),
-        gen_before_clear.wrapping_add(1),
+        {
+            let mut bumped = gen_before_clear;
+            bumped.bump();
+            bumped
+        },
         "transcript_generation should only increment once (in NewSessionCreated), not both in dispatch and event"
     );
 }

@@ -25,12 +25,13 @@ pub(crate) use std::time::{Duration, Instant};
 pub(crate) use tempfile::TempDir;
 pub(crate) use tokio::sync::mpsc::UnboundedReceiver;
 pub(crate) use tokio::task::LocalSet;
-pub(crate) use wisp_next::app::{App, AppConfig, HistoryItem};
+pub(crate) use wisp_next::app::{App, AppConfig, HistoryItem, LayerKind};
 pub(crate) use wisp_next::composer::Composer;
-pub(crate) use wisp_next::effects::{Effect, EffectResult};
+pub(crate) use wisp_next::effects::{Effect, EffectResult, SurfaceEvent};
+pub(crate) use wisp_next::generation::Generation;
 pub(crate) use wisp_next::picker::CommandEntry;
 pub(crate) use wisp_next::picker::index_files;
-pub(crate) use wisp_next::presentation::Presenter;
+pub(crate) use wisp_next::presentation::{Presenter, Segment};
 pub(crate) use wisp_next::render::sync_terminal as sync_terminal_with_renderer;
 pub(crate) use wisp_next::screens::git_diff::GitDiffEvent;
 pub(crate) use wisp_next::settings::UiSettings;
@@ -241,6 +242,11 @@ pub(crate) fn settle_effects(app: &mut App) {
     }
 }
 
+/// Whether the session picker is the open layer.
+pub(crate) fn has_session_picker(app: &App) -> bool {
+    app.layer_kind() == Some(LayerKind::Sessions)
+}
+
 pub(crate) fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
@@ -389,7 +395,7 @@ pub(crate) fn completion_contains(composer: &mut Composer, needle: &str) -> bool
     let area = ratatui::layout::Rect::new(0, 0, 80, 8);
     let mut buffer = Buffer::empty(area);
     if let Some(overlay) = composer.completion() {
-        overlay.view(&theme, area.width).render(area, &mut buffer);
+        overlay.view(&theme).render(area, &mut buffer);
     }
     buffer_text(&buffer).contains(needle)
 }

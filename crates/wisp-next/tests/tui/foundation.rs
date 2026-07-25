@@ -384,7 +384,7 @@ fn wide_diff_marks_truncated_panel_content() {
 fn markdown_blockquote_prefixes_inline_code_first_content() {
     let mut renderer = Presenter::new(&UiSettings::default());
 
-    let lines = renderer.history_lines(&[HistoryItem::Text("> `quoted`".to_string())], None, 40, 0, 0);
+    let lines = renderer.lines(Segment::Committed, &[HistoryItem::Text("> `quoted`".to_string())], None, 40, 0, 0);
 
     assert_eq!(line_text(&lines[0]), "  quoted");
 }
@@ -393,7 +393,7 @@ fn markdown_blockquote_prefixes_inline_code_first_content() {
 fn markdown_horizontal_rule_uses_available_width() {
     let mut renderer = Presenter::new(&UiSettings::default());
 
-    let lines = renderer.history_lines(&[HistoryItem::Text("---".to_string())], None, 20, 0, 0);
+    let lines = renderer.lines(Segment::Committed, &[HistoryItem::Text("---".to_string())], None, 20, 0, 0);
 
     assert_eq!(line_text(&lines[0]), "─".repeat(20));
 }
@@ -402,7 +402,7 @@ fn markdown_horizontal_rule_uses_available_width() {
 fn transcript_wrapping_expands_tabs() {
     let mut renderer = Presenter::new(&UiSettings::default());
 
-    let lines = renderer.history_lines(&[HistoryItem::Text("a\tb".to_string())], None, 4, 0, 0);
+    let lines = renderer.lines(Segment::Committed, &[HistoryItem::Text("a\tb".to_string())], None, 4, 0, 0);
 
     assert_eq!(lines.iter().map(line_text).collect::<Vec<_>>(), ["a   ", "b"]);
 }
@@ -411,7 +411,7 @@ fn transcript_wrapping_expands_tabs() {
 fn transcript_wrapping_never_exceeds_a_one_column_allocation() {
     let mut renderer = Presenter::new(&UiSettings::default());
 
-    let lines = renderer.history_lines(&[HistoryItem::Text("界".to_string())], None, 1, 0, 0);
+    let lines = renderer.lines(Segment::Committed, &[HistoryItem::Text("界".to_string())], None, 1, 0, 0);
 
     assert!(lines.iter().all(|line| line.width() <= 1), "{lines:?}");
     assert_eq!(line_text(&lines[0]), "…");
@@ -438,7 +438,7 @@ fn markdown_renders_lists_strikethrough_and_tables() {
     let mut renderer = Presenter::new(&UiSettings::default());
     let markdown = "- first\n- second\n\n~~removed~~\n\n| Name | Value |\n| --- | --- |\n| alpha | beta |";
 
-    let lines = renderer.history_lines(&[HistoryItem::Text(markdown.to_string())], None, 40, 0, 0);
+    let lines = renderer.lines(Segment::Committed, &[HistoryItem::Text(markdown.to_string())], None, 40, 0, 0);
     let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
 
     assert!(text.contains("• first"), "{text}");
@@ -534,8 +534,12 @@ fn one_row_inline_viewport_draws_without_panicking() {
     assert_eq!(terminal.get_frame().area().height, 1);
 }
 
+/// Scrollback leaves for the terminal's own history before the viewport is
+/// repainted, so the frame is drawn exactly once, already in its final
+/// position. Drawing first would briefly show a viewport that no longer holds
+/// the drained lines above a history that does not hold them yet.
 #[test]
-fn live_viewport_is_drawn_before_history_is_inserted() {
+fn history_is_inserted_before_the_live_viewport_is_drawn() {
     let (mut app, _command_rx) = make_app();
     let backend = RecordingBackend::new(40, 15);
     let mut terminal =
@@ -557,7 +561,12 @@ fn live_viewport_is_drawn_before_history_is_inserted() {
     let events = &terminal.backend().events;
     let draw = events.iter().position(|event| *event == BackendEvent::ShowCursor).unwrap();
     let insert = events.iter().position(|event| matches!(event, BackendEvent::Scroll)).unwrap();
-    assert!(draw < insert, "expected viewport draw before history insertion: {events:?}");
+    assert!(insert < draw, "expected history insertion before viewport draw: {events:?}");
+    assert_eq!(
+        events.iter().filter(|event| **event == BackendEvent::ShowCursor).count(),
+        1,
+        "the frame should be drawn once, not once per side of the insertion: {events:?}"
+    );
 }
 
 #[test]

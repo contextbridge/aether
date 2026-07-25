@@ -5,11 +5,11 @@ use crate::selection::Direction;
 use crate::surface::{ListFilter, Surface, SurfaceMessage};
 use crate::theme::Theme;
 use crate::wrap::truncate_to_width;
-use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::Style;
-use ratatui::widgets::{ListItem, Paragraph, Widget};
+use ratatui::text::Line;
+use ratatui::widgets::{Paragraph, Widget};
 
 /// Single-select pane: a search box over one config option's values.
 pub(super) struct SettingsPicker {
@@ -28,17 +28,6 @@ impl SettingsPicker {
         Some(Self { config_id: entry.config_id.clone(), title: entry.title.clone(), current_value, values })
     }
 
-    /// Confirms the focused value, returning to the menu. Yields no change when
-    /// the value is disabled or already current.
-    fn confirm(&self) -> Vec<SurfaceMessage> {
-        let change = self
-            .values
-            .selected_entry()
-            .filter(|value| !value.is_disabled && value.value != self.current_value)
-            .map(|value| SettingsChange { config_id: self.config_id.clone(), new_value: value.value.clone() });
-        change.iter().map(message_for_change).chain([SurfaceMessage::Back]).collect()
-    }
-
     fn render_pane(&mut self, area: Rect, buffer: &mut Buffer, theme: &Theme) {
         let [header_area, list_area] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
         Paragraph::new(truncate_to_width(
@@ -49,7 +38,7 @@ impl SettingsPicker {
         .render(header_area, buffer);
 
         self.values
-            .view(theme, " (no matches found)", |value| {
+            .view(theme, |value| {
                 let label = if value.name == value.value {
                     value.name.clone()
                 } else {
@@ -60,16 +49,24 @@ impl SettingsPicker {
                 } else {
                     Style::new().fg(theme.text_primary)
                 };
-                ListItem::new(truncate_to_width(&label, usize::from(list_area.width))).style(style)
+                Line::styled(label, style)
             })
+            .empty_message(" (no matches found)")
             .highlight_style(Style::new().fg(theme.background).bg(theme.text_primary))
             .render(list_area, buffer);
     }
 }
 
 impl Surface for SettingsPicker {
-    fn on_surface_key(&mut self, key: KeyEvent) -> Option<Vec<SurfaceMessage>> {
-        (key.code == KeyCode::Enter).then(|| self.confirm())
+    /// Confirms the focused value, returning to the menu. Yields no change when
+    /// the value is disabled or already current.
+    fn activate(&mut self) -> Vec<SurfaceMessage> {
+        let change = self
+            .values
+            .selected_entry()
+            .filter(|value| !value.is_disabled && value.value != self.current_value)
+            .map(|value| SettingsChange { config_id: self.config_id.clone(), new_value: value.value.clone() });
+        change.iter().map(message_for_change).chain([SurfaceMessage::Back]).collect()
     }
 
     fn filter(&mut self) -> Option<&mut dyn ListFilter> {
@@ -77,7 +74,7 @@ impl Surface for SettingsPicker {
     }
 
     fn click(&mut self, row: u16, _column: u16) -> Vec<SurfaceMessage> {
-        if self.values.select_at(row) { self.confirm() } else { Vec::new() }
+        if self.values.select_at(row) { self.activate() } else { Vec::new() }
     }
 
     fn scroll(&mut self, direction: Direction) -> Vec<SurfaceMessage> {

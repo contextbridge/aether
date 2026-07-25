@@ -31,7 +31,9 @@ fn clear_creates_new_session_and_resets_state() {
     let old_generation = app.transcript_generation();
     app.on_acp_event(new_session_created("new-session", vec![select_option("model", "sonnet")]));
 
-    assert_eq!(app.transcript_generation(), old_generation.wrapping_add(1));
+    let mut bumped = old_generation;
+    bumped.bump();
+    assert_eq!(app.transcript_generation(), bumped);
     assert_eq!(app.pending_items().len(), 1);
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
@@ -86,7 +88,7 @@ fn session_list_excludes_active_session() {
         session_info("other-session", "/tmp/other", "Other", "2025-01-02T00:00:00Z"),
     ]));
 
-    assert!(app.has_session_picker());
+    assert!(has_session_picker(&app));
 }
 
 #[test]
@@ -118,7 +120,7 @@ fn empty_session_list_shows_no_sessions() {
 
     app.on_acp_event(sessions_listed(vec![]));
 
-    assert!(app.has_session_picker());
+    assert!(has_session_picker(&app));
     let mut terminal = make_terminal();
     let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
@@ -135,10 +137,10 @@ fn esc_closes_session_picker() {
     let _ = command_rx.try_recv().unwrap();
 
     app.on_acp_event(sessions_listed(vec![session_info("old", "/tmp/old", "Old", "2025-01-01T00:00:00Z")]));
-    assert!(app.has_session_picker());
+    assert!(has_session_picker(&app));
 
     app.on_key(key(KeyCode::Esc));
-    assert!(!app.has_session_picker());
+    assert!(!has_session_picker(&app));
 }
 
 // ── Sub-agent integration tests ──
@@ -188,7 +190,7 @@ fn load_session_send_failure_cleans_up_buffer_and_shows_error() {
     let _ = command_rx.try_recv().unwrap();
 
     app.on_acp_event(sessions_listed(vec![session_info("old", "/tmp/old", "Old Session", "2025-01-01T00:00:00Z")]));
-    assert!(app.has_session_picker());
+    assert!(has_session_picker(&app));
 
     fail_signal.store(true, Ordering::Relaxed);
     app.on_key(key(KeyCode::Enter));
@@ -368,10 +370,10 @@ fn connection_closed_cancels_session_picker() {
     let _ = command_rx.try_recv().unwrap();
 
     app.on_acp_event(sessions_listed(vec![session_info("old", "/tmp/old", "Old", "2025-01-01T00:00:00Z")]));
-    assert!(app.has_session_picker());
+    assert!(has_session_picker(&app));
 
     app.on_acp_event(AcpEvent::ConnectionClosed);
-    assert!(!app.has_session_picker());
+    assert!(!has_session_picker(&app));
     assert!(app.exit_requested());
 }
 
@@ -432,7 +434,7 @@ fn new_modal_replaces_session_picker() {
     let _ = command_rx.try_recv().unwrap();
 
     app.on_acp_event(sessions_listed(vec![session_info("old", "/tmp/old", "Old", "2025-01-01T00:00:00Z")]));
-    assert!(app.has_session_picker());
+    assert!(has_session_picker(&app));
 
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
     LocalSet::new().block_on(&runtime, async {
@@ -451,5 +453,5 @@ fn new_modal_replaces_session_picker() {
         });
     });
 
-    assert!(!app.has_session_picker());
+    assert!(!has_session_picker(&app));
 }

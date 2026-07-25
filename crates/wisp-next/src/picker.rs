@@ -1,8 +1,11 @@
-use crate::filterable_list::{FilterableList, FilterableListView};
+use crate::filterable_list::FilterableList;
+use crate::generation::Generation;
+use crate::list_view::ListView;
+use crate::selection::Direction;
 use crate::theme::Theme;
-use crate::wrap::truncate_to_width;
 use ratatui::style::Style;
-use ratatui::widgets::{Block, Borders, ListItem};
+use ratatui::text::Line;
+use ratatui::widgets::{Block, Borders};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,7 +36,7 @@ pub struct CompletionOverlay {
     entries: FilterableList<CompletionEntry>,
     empty_message: &'static str,
     /// The file-index request this overlay is waiting on, if any.
-    pending_index: Option<u64>,
+    pending_index: Option<Generation>,
 }
 
 impl CompletionOverlay {
@@ -43,7 +46,7 @@ impl CompletionOverlay {
 
     /// An empty file list, waiting on the walk of the working tree. Entries
     /// arrive later via [`CompletionOverlay::set_files`].
-    pub fn file(request_id: u64) -> Self {
+    pub fn file(request_id: Generation) -> Self {
         let mut overlay = Self::new('@', Vec::new(), "indexing files…");
         overlay.pending_index = Some(request_id);
         overlay
@@ -51,7 +54,7 @@ impl CompletionOverlay {
 
     /// Fills in the results of the walk this overlay is waiting on, ignoring
     /// anything that arrives for a request it did not make.
-    pub fn set_files(&mut self, request_id: u64, files: Vec<FileEntry>) {
+    pub fn set_files(&mut self, request_id: Generation, files: Vec<FileEntry>) {
         if self.pending_index != Some(request_id) {
             return;
         }
@@ -77,12 +80,8 @@ impl CompletionOverlay {
         self.entries.set_query(query);
     }
 
-    pub fn move_up(&mut self) {
-        self.entries.select_previous();
-    }
-
-    pub fn move_down(&mut self) {
-        self.entries.select_next();
+    pub fn step(&mut self, direction: Direction) {
+        self.entries.step(direction, |_| true);
     }
 
     /// Selects the entry drawn at terminal `row`, if one is there.
@@ -110,17 +109,11 @@ impl CompletionOverlay {
         1 + self.entries.filtered_len().clamp(1, max_rows.max(1))
     }
 
-    pub fn view<'a>(
-        &'a mut self,
-        theme: &'a Theme,
-        width: u16,
-    ) -> FilterableListView<'a, CompletionEntry, impl FnMut(&CompletionEntry) -> ListItem<'static> + 'a> {
-        let content_width = usize::from(width).saturating_sub(2);
+    pub fn view<'a>(&'a mut self, theme: &'a Theme) -> ListView<'a> {
+        let empty_message = self.empty_message;
         self.entries
-            .view(theme, self.empty_message, move |entry| {
-                ListItem::new(format!("  {}", truncate_to_width(&entry.label(), content_width)))
-                    .style(Style::new().fg(theme.text_secondary))
-            })
+            .view(theme, |entry| Line::styled(format!("  {}", entry.label()), Style::new().fg(theme.text_secondary)))
+            .empty_message(empty_message)
             .block(Block::new().borders(Borders::TOP).border_style(Style::new().fg(theme.muted)))
     }
 

@@ -3,14 +3,14 @@ use crate::list_view::ListView;
 use crate::selection::{Direction, SelectionState};
 use crate::session_config_view::{as_select, select_values};
 use crate::theme::Theme;
-use crate::wrap::truncate_to_width;
 use acp_utils::config_meta::{ConfigOptionMeta, SelectOptionMeta};
 use acp_utils::config_option_id::ConfigOptionId;
 use agent_client_protocol::schema::SessionConfigOption;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
-use ratatui::widgets::{ListItem, Widget};
+use ratatui::text::Line;
+use ratatui::widgets::Widget;
 
 pub(super) struct SettingsMenu {
     pub(super) rows: Vec<MenuRow>,
@@ -102,14 +102,10 @@ impl SettingsMenu {
     }
 
     pub(super) fn render(&mut self, area: Rect, buffer: &mut Buffer, theme: &Theme) {
-        let width = usize::from(area.width).saturating_sub(2);
-        let rows: Vec<ListItem<'static>> = self
+        let rows: Vec<Line<'static>> = self
             .rows
             .iter()
-            .map(|row| {
-                ListItem::new(format!(" {}", truncate_to_width(&row.label(), width)))
-                    .style(Style::new().fg(theme.text_primary))
-            })
+            .map(|row| Line::styled(format!(" {}", row.label()), Style::new().fg(theme.text_primary)))
             .collect();
         ListView::new(rows, &mut self.selection, theme)
             .empty_message(" (no settings options)")

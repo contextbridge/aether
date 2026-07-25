@@ -2,18 +2,20 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use ratatui::layout::Position;
+use ratatui::text::Line;
 use tui_scrollview::{ScrollView, ScrollViewState};
 
+use crate::annotation::Draft;
 use crate::edit_buffer::EditBuffer;
 use crate::git_diff::{DiffScope, FileDiff, FileStatus, GitDiffDocument, PatchAnchor, ReviewQueue, StageState};
-use crate::selection::{Direction, SelectionState};
+use crate::selection::{Direction, SelectionState, scroll_into_view};
 
 use crate::surface::SurfaceMessage;
 
 use super::effect;
 
 use super::effects::GitDiffEffect;
-use crate::effects::next_request_id;
+use crate::generation::Generation;
 
 pub struct GitDiffScreen {
     pub(super) working_dir: PathBuf,
@@ -25,8 +27,11 @@ pub struct GitDiffScreen {
     pub(super) drawer_selection: SelectionState,
     pub(super) focus: Focus,
     pub(super) collapsed: HashSet<String>,
+    /// The flattened file tree the drawer draws. Rebuilt only when the document
+    /// or the collapsed set changes, rather than on every key, click, and frame.
+    drawer_entries: Vec<DrawerEntry>,
     /// Bumped whenever a reload replaces the document, invalidating cached patches.
-    pub(super) document_revision: usize,
+    pub(super) document_revision: Generation,
     pub(super) bottom_bar: BottomBar,
     pub(super) show_full_file: bool,
     pub(super) full_file_content: Option<String>,
@@ -43,6 +48,8 @@ pub(super) struct PatchView {
     /// Rows the pane had on the last frame, for scrolling the cursor into view.
     pub(super) height: u16,
     pub(super) cursor: PatchCursor,
+    /// The syntax-highlighted patch, independent of anything drawn over it.
+    pub(super) rows: Option<PatchRows>,
     pub(super) view: Option<DiffView>,
     /// Bounded MRU cache of fully-rendered, stable (draft-free) diff views for files other
     /// than the one currently selected, so switching files does not re-run syntax
@@ -54,15 +61,15 @@ pub(super) struct PatchView {
 #[derive(Default)]
 pub(super) struct Review {
     pub(super) queue: ReviewQueue,
-    pub(super) draft: Option<DraftState>,
+    pub(super) draft: Option<Draft<PatchAnchor>>,
     /// Bumped on every change, invalidating any patch render that drew comments.
-    pub(super) revision: usize,
+    pub(super) revision: Generation,
 }
 
 /// The git operation in flight, if any.
 #[derive(Default)]
 pub(super) struct Request {
-    pub(super) id: u64,
+    pub(super) id: Generation,
     pub(super) in_flight: bool,
     /// A destructive action armed and waiting for its key to be pressed again.
     pub(super) pending: Option<PendingAction>,
@@ -81,17 +88,57 @@ pub(super) struct DiffView {
     pub(super) key: DiffViewKey,
 }
 
+/// The syntax-highlighted patch, one row per rendered line, before any review
+/// comment is woven in.
+pub(super) struct PatchRows {
+    pub(super) rows: Vec<PatchRow>,
+    pub(super) key: PatchKey,
+}
+
+/// One rendered row of a patch.
+pub(super) struct PatchRow {
+    pub(super) line: Line<'static>,
+    /// The patch line a comment on this row anchors to, when it has one.
+    pub(super) anchor: Option<PatchCursor>,
+    /// Whether the patch cursor can rest on this row.
+    pub(super) selectable: bool,
+}
+
+impl PatchRow {
+    /// A row the cursor can rest on and comments can hang from.
+    pub(super) fn at(line: Line<'static>, cursor: PatchCursor) -> Self {
+        Self { line, anchor: Some(cursor), selectable: true }
+    }
+
+    /// A row comments can hang from, but the cursor skips over.
+    pub(super) fn anchored(line: Line<'static>, cursor: PatchCursor) -> Self {
+        Self { line, anchor: Some(cursor), selectable: false }
+    }
+
+    /// A row that is neither, such as a placeholder while a file loads.
+    pub(super) fn inert(line: Line<'static>) -> Self {
+        Self { line, anchor: None, selectable: false }
+    }
+}
+
+/// Identity of the highlighted patch. Nothing a reviewer types is part of it,
+/// so typing never re-highlights the file.
+#[derive(Clone, PartialEq, Eq)]
+pub(super) struct PatchKey {
+    pub(super) file_path: String,
+    pub(super) content_width: u16,
+    pub(super) split: bool,
+    pub(super) full_file: bool,
+    pub(super) document_revision: Generation,
+}
+
 /// Identity of a rendered patch. A cached view is reused only while every part
 /// of this still holds — including the draft's text and cursor, so the box the
 /// user is typing into redraws on each keystroke.
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct DiffViewKey {
-    pub(super) file_path: String,
-    pub(super) content_width: u16,
-    pub(super) split: bool,
-    pub(super) full_file: bool,
-    pub(super) document_revision: usize,
-    pub(super) comments_revision: usize,
+    pub(super) patch: PatchKey,
+    pub(super) comments_revision: Generation,
     pub(super) draft: Option<DraftKey>,
 }
 
@@ -118,11 +165,6 @@ pub(super) enum PendingAction {
     Stage,
     Commit,
     Discard,
-}
-
-pub(super) struct DraftState {
-    pub(super) anchor: PatchAnchor,
-    pub(super) buffer: EditBuffer,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -168,7 +210,8 @@ impl GitDiffScreen {
             drawer_selection: SelectionState::default(),
             focus: Focus::Drawer,
             collapsed: HashSet::new(),
-            document_revision: 0,
+            drawer_entries: Vec::new(),
+            document_revision: Generation::default(),
             bottom_bar: BottomBar::Help,
             show_full_file: false,
             full_file_content: None,
@@ -205,12 +248,13 @@ impl GitDiffScreen {
             .unwrap_or(0)
             .min(document.files.len().saturating_sub(1));
         self.patch.cursor = PatchCursor::default();
-        self.document_revision = self.document_revision.wrapping_add(1);
+        self.document_revision.bump();
         self.bump_comments_revision();
+        self.patch.rows = None;
         self.patch.view = None;
         self.patch.cache.clear();
         self.state = GitDiffLoadState::Ready(document);
-        self.sync_drawer_selection();
+        self.rebuild_drawer();
     }
 
     pub(super) fn stage_all(&mut self) -> Vec<SurfaceMessage> {
@@ -222,11 +266,10 @@ impl GitDiffScreen {
     }
 
     pub(super) fn toggle_stage(&mut self) -> Vec<SurfaceMessage> {
-        let entries = self.drawer_entries();
-        let Some(entry) = self.drawer_selection.selected().and_then(|selected| entries.get(selected)) else {
+        let Some(entry) = self.selected_drawer_entry().cloned() else {
             return Vec::new();
         };
-        let files = self.files_for_entry(entry);
+        let files = self.files_for_entry(&entry);
         if files.is_empty() {
             return Vec::new();
         }
@@ -299,16 +342,23 @@ impl GitDiffScreen {
             self.move_patch_cursor(direction, 1);
             return;
         }
-        let entries = self.drawer_entries();
-        if entries.is_empty() {
+        if self.drawer_entries.is_empty() {
             return;
         }
-        self.drawer_selection.step_clamped(entries.len(), direction, |_| true);
-        if let Some(DrawerEntry::File { index, .. }) =
-            self.drawer_selection.selected().and_then(|selected| entries.get(selected))
-        {
+        self.drawer_selection.step_clamped(self.drawer_entries.len(), direction, |_| true);
+        self.follow_drawer_selection();
+    }
+
+    /// Points the patch pane at the file the drawer selection landed on, if it
+    /// landed on a file rather than a directory.
+    pub(super) fn follow_drawer_selection(&mut self) {
+        if let Some(DrawerEntry::File { index, .. }) = self.selected_drawer_entry() {
             self.selected_file = *index;
         }
+    }
+
+    pub(super) fn selected_drawer_entry(&self) -> Option<&DrawerEntry> {
+        self.drawer_selection.selected().and_then(|selected| self.drawer_entries.get(selected))
     }
 
     /// Moves the patch cursor `amount` patch lines, flattening hunk boundaries
@@ -369,12 +419,7 @@ impl GitDiffScreen {
             return;
         };
         let offset = usize::from(self.patch.scroll.offset().y);
-        let viewport = usize::from(self.patch.height);
-        if cursor_row < offset {
-            self.set_patch_offset(cursor_row);
-        } else if viewport > 0 && cursor_row >= offset + viewport {
-            self.set_patch_offset(cursor_row.saturating_sub(viewport.saturating_sub(1)));
-        }
+        self.set_patch_offset(scroll_into_view(offset, cursor_row, usize::from(self.patch.height)));
     }
 
     pub(super) fn move_patch_scroll(&mut self, direction: Direction, amount: usize) {
@@ -411,7 +456,7 @@ impl GitDiffScreen {
                 hunk: self.patch.cursor.hunk,
                 line: self.patch.cursor.line,
             };
-            self.review.draft = Some(DraftState { anchor, buffer: EditBuffer::default() });
+            self.review.draft = Some(Draft::new(anchor));
         }
         Vec::new()
     }
@@ -435,57 +480,64 @@ impl GitDiffScreen {
     }
 
     pub(super) fn bump_comments_revision(&mut self) {
-        self.review.revision = self.review.revision.wrapping_add(1);
+        self.review.revision.bump();
     }
 
     /// Claims the next request id and marks an operation in flight, so results
     /// for anything older are dropped.
-    pub(super) fn begin_request(&mut self) -> u64 {
-        self.request.id = next_request_id();
+    pub(super) fn begin_request(&mut self) -> Generation {
+        self.request.id = Generation::next();
         self.request.in_flight = true;
         self.request.id
     }
 
     pub(super) fn collapse_selected(&mut self) {
-        let entries = self.drawer_entries();
-        if let Some(DrawerEntry::Directory { path, .. }) =
-            self.drawer_selection.selected().and_then(|selected| entries.get(selected))
-        {
-            self.collapsed.insert(path.clone());
-            self.sync_drawer_selection();
+        if let Some(DrawerEntry::Directory { path, .. }) = self.selected_drawer_entry() {
+            let path = path.clone();
+            self.collapsed.insert(path);
+            self.rebuild_drawer();
         }
     }
 
+    /// Expands the selected directory, or points the patch pane at the selected
+    /// file. Reports whether it was a directory.
     pub(super) fn expand_or_open_selected(&mut self) -> bool {
-        let entries = self.drawer_entries();
-        match self.drawer_selection.selected().and_then(|selected| entries.get(selected)) {
+        match self.selected_drawer_entry() {
             Some(DrawerEntry::Directory { path, .. }) => {
-                self.collapsed.remove(path);
+                let path = path.clone();
+                self.collapsed.remove(&path);
+                self.rebuild_drawer();
                 true
             }
             Some(DrawerEntry::File { index, .. }) => {
                 self.selected_file = *index;
-                self.selected_path = self.file_at(*index).map(|file| file.path.clone());
+                self.selected_path = self.file_at(self.selected_file).map(|file| file.path.clone());
                 false
             }
             None => false,
         }
     }
 
-    pub(super) fn sync_drawer_selection(&mut self) {
-        let entries = self.drawer_entries();
-        let selected = entries
+    pub(super) fn drawer_entries(&self) -> &[DrawerEntry] {
+        &self.drawer_entries
+    }
+
+    /// Recomputes the file tree and puts the selection back on the current file.
+    fn rebuild_drawer(&mut self) {
+        self.drawer_entries = self.build_drawer_entries();
+        let selected = self
+            .drawer_entries
             .iter()
             .position(|entry| matches!(entry, DrawerEntry::File { index, .. } if *index == self.selected_file))
             .unwrap_or(0);
-        self.drawer_selection.select(Some(selected), entries.len());
+        self.drawer_selection.select(Some(selected), self.drawer_entries.len());
     }
 
     pub(super) fn selected_file(&self) -> Option<&FileDiff> {
         self.file_at(self.selected_file)
     }
 
-    pub(super) fn drawer_entries(&self) -> Vec<DrawerEntry> {
+    fn build_drawer_entries(&self) -> Vec<DrawerEntry> {
         let GitDiffLoadState::Ready(document) = &self.state else {
             return Vec::new();
         };
@@ -543,7 +595,10 @@ impl GitDiffScreen {
 
     /// Runs `build` against the repository root, doing nothing when the diff has
     /// not yet reported one.
-    pub(super) fn repo_operation(&mut self, build: impl FnOnce(u64, PathBuf) -> GitDiffEffect) -> Vec<SurfaceMessage> {
+    pub(super) fn repo_operation(
+        &mut self,
+        build: impl FnOnce(Generation, PathBuf) -> GitDiffEffect,
+    ) -> Vec<SurfaceMessage> {
         let Some(repo_root) = self.repo_root.clone() else {
             return Vec::new();
         };

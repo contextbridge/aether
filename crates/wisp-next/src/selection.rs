@@ -66,14 +66,6 @@ impl SelectionState {
         self.selected().is_some()
     }
 
-    pub fn previous(&mut self, len: usize) {
-        self.step(len, Direction::Backward, |_| true);
-    }
-
-    pub fn next(&mut self, len: usize) {
-        self.step(len, Direction::Forward, |_| true);
-    }
-
     /// Wrapping move to the nearest index in `direction` for which `selectable`
     /// holds. Leaves the selection untouched when no index qualifies, so panes
     /// whose rows are a mix of headers and entries never land on a header.
@@ -134,19 +126,55 @@ pub enum Direction {
     Forward,
 }
 
+/// `offset` moved the least it can to bring `row` inside a viewport `height`
+/// rows tall.
+///
+/// The panes that scroll a document rather than a [`List`](ratatui::widgets::List)
+/// keep their own offset, and all of them want this same nudge.
+pub fn scroll_into_view(offset: usize, row: usize, height: usize) -> usize {
+    if row < offset {
+        row
+    } else if height > 0 && row >= offset + height {
+        row + 1 - height
+    } else {
+        offset
+    }
+}
+
+/// Shifts `value` by `amount` rows in `direction`, stopping at zero and `max`.
+pub fn step_clamped(value: usize, direction: Direction, amount: usize, max: usize) -> usize {
+    match direction {
+        Direction::Backward => value.saturating_sub(amount),
+        Direction::Forward => value.saturating_add(amount).min(max),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Direction, SelectionState};
+    use super::{Direction, SelectionState, scroll_into_view};
+
+    #[test]
+    fn scroll_into_view_moves_the_least_it_can() {
+        assert_eq!(scroll_into_view(10, 12, 5), 10, "already visible");
+        assert_eq!(scroll_into_view(10, 4, 5), 4, "above the viewport");
+        assert_eq!(scroll_into_view(10, 20, 5), 16, "below the viewport");
+        assert_eq!(scroll_into_view(10, 14, 5), 10, "the last visible row stays put");
+        assert_eq!(scroll_into_view(3, 99, 0), 3, "a zero-height viewport shows nothing to scroll to");
+    }
+
+    fn step(state: &mut SelectionState, len: usize, direction: Direction) {
+        state.step(len, direction, |_| true);
+    }
 
     #[test]
     fn wraps_and_handles_empty_collections() {
         let mut state = SelectionState::new(3);
-        state.previous(3);
+        step(&mut state, 3, Direction::Backward);
         assert_eq!(state.selected(), Some(2));
-        state.next(3);
+        step(&mut state, 3, Direction::Forward);
         assert_eq!(state.selected(), Some(0));
         state.select(Some(2), 3);
-        state.next(3);
+        step(&mut state, 3, Direction::Forward);
         assert_eq!(state.selected(), Some(0));
         state.clamp(0);
         assert_eq!(state.selected(), None);

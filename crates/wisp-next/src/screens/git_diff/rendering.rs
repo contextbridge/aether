@@ -2,27 +2,27 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect, Size};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Clear, ListItem, Paragraph, StatefulWidget, Widget};
+use ratatui::widgets::{Block, Clear, Paragraph, StatefulWidget, Widget};
 use std::collections::HashSet;
 use tui_scrollview::{ScrollView, ScrollbarVisibility};
 
+use crate::annotation::Draft;
 use crate::diff::{DiffTone, SPLIT_VIEW_MIN_WIDTH, diff_line, join_split, split_side, split_widths};
+use crate::effects::SurfaceEvent;
 use crate::git_diff::{FileDiff, FileStatus, PatchAnchor, PatchLine, PatchLineKind, StageState};
 use crate::list_view::ListView;
 use crate::render_context::RenderContext;
-use crate::screens::MouseAction;
-use crate::surface::{Surface, SurfaceMessage};
+use crate::surface::{MouseAction, Surface, SurfaceMessage};
 use crate::syntax::SyntaxHighlighter;
 use crate::theme::Theme;
-use crate::widgets::{TextInput, render_vertical_scrollbar, wrapped_with_cursor};
-use crate::wrap::{fit_line, wrap_text_char};
+use crate::widgets::{TextInput, wrapped_with_cursor};
+use crate::wrap::{fit_line, rows as rows_u16, wrap_text_char};
 
 use super::GitDiffScreen;
-use super::state::{BottomBar, CursorRow, DiffView, DiffViewKey, DraftState, DrawerEntry, Focus, GitDiffLoadState};
-
-/// A built patch: its rows, the patch line each row maps back to, and where the
-/// draft's text cursor landed.
-type BuildResult = (Vec<Line<'static>>, Vec<CursorRow>, Option<(usize, u16)>);
+use super::state::{
+    BottomBar, CursorRow, DiffView, DiffViewKey, DrawerEntry, Focus, GitDiffLoadState, PatchCursor, PatchKey, PatchRow,
+    PatchRows,
+};
 
 /// Below this width the file drawer is hidden and the patch gets the full area.
 pub(super) const DRAWER_MIN_WIDTH: u16 = 72;
@@ -80,24 +80,16 @@ impl GitDiffScreen {
     }
 
     fn render_drawer(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
-        // The drawer reserves its own scrollbar column rather than letting the
-        // track overlap the file names, so it draws that half itself.
-        let [list_area, track_area] = Layout::horizontal([Constraint::Min(0), Constraint::Length(1)]).areas(area);
-        let rows: Vec<ListItem<'static>> = self
-            .drawer_entries()
-            .iter()
-            .map(|entry| ListItem::new(self.drawer_line(entry, usize::from(list_area.width), theme)))
-            .collect();
-        let row_count = rows.len();
-
+        let rows: Vec<Line<'static>> =
+            self.drawer_entries().iter().map(|entry| self.drawer_line(entry, theme)).collect();
         ListView::new(rows, &mut self.drawer_selection, theme)
             .highlight_style(Style::new().fg(theme.background).bg(theme.accent).add_modifier(Modifier::BOLD))
-            .render(list_area, buf);
-        render_vertical_scrollbar(track_area, buf, row_count, self.drawer_selection.offset());
+            .scrollbar()
+            .render(area, buf);
     }
 
-    fn drawer_line(&self, entry: &DrawerEntry, width: usize, theme: &Theme) -> Line<'static> {
-        let line = match entry {
+    fn drawer_line(&self, entry: &DrawerEntry, theme: &Theme) -> Line<'static> {
+        match entry {
             DrawerEntry::Directory { path, depth } => {
                 let name = path.rsplit('/').next().unwrap_or(path);
                 let marker = if self.collapsed.contains(path) { "▸" } else { "▾" };
@@ -126,8 +118,7 @@ impl GitDiffScreen {
                     Span::styled(format!(" +{} -{}", file.additions(), file.deletions()), Style::new().fg(theme.muted)),
                 ])
             }
-        };
-        fit_line(line, width, Style::new().fg(theme.text_primary))
+        }
     }
 
     fn render_patch(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
@@ -208,11 +199,13 @@ impl GitDiffScreen {
         highlighter: &mut SyntaxHighlighter,
     ) {
         let key = DiffViewKey {
-            file_path: file.path.clone(),
-            content_width,
-            split: content_width >= SPLIT_VIEW_MIN_WIDTH && !self.show_full_file,
-            full_file: self.show_full_file,
-            document_revision: self.document_revision,
+            patch: PatchKey {
+                file_path: file.path.clone(),
+                content_width,
+                split: content_width >= SPLIT_VIEW_MIN_WIDTH && !self.show_full_file,
+                full_file: self.show_full_file,
+                document_revision: self.document_revision,
+            },
             comments_revision: self.review.revision,
             draft: self.draft_key(),
         };
@@ -226,28 +219,69 @@ impl GitDiffScreen {
         // view, so parking cannot shift the index out from under the removal.
         let cached =
             self.patch.cache.iter().position(|view| view.key == key).map(|position| self.patch.cache.remove(position));
+        if let Some(view) = cached {
+            self.park_active_diff_view();
+            self.patch.view = Some(view);
+            return;
+        }
 
+        self.ensure_patch_rows(file, &key.patch, theme, highlighter);
         self.park_active_diff_view();
-        self.patch.view = Some(cached.unwrap_or_else(|| self.build_diff_view(file, &key, theme, highlighter)));
+        self.patch.view = Some(self.build_diff_view(&key, theme));
     }
 
-    fn build_diff_view(
-        &self,
+    /// Makes `self.patch.rows` the syntax-highlighted patch for `key`.
+    ///
+    /// This is the expensive half, and nothing a reviewer types changes it, so
+    /// it survives every keystroke of a draft.
+    fn ensure_patch_rows(
+        &mut self,
         file: &FileDiff,
-        key: &DiffViewKey,
+        key: &PatchKey,
         theme: &Theme,
         highlighter: &mut SyntaxHighlighter,
-    ) -> DiffView {
+    ) {
+        if self.patch.rows.as_ref().is_some_and(|rows| rows.key == *key) {
+            return;
+        }
         let width = key.content_width;
-        let (lines, cursor_rows, draft_cursor) = if key.full_file {
-            self.build_full_file_lines(file, width, theme, highlighter)
+        let rows = if key.full_file {
+            self.build_full_file_rows(file, width, theme, highlighter)
         } else if key.split {
-            self.build_split_lines(file, width, theme, highlighter)
+            build_split_rows(file, width, theme, highlighter)
         } else {
-            self.build_unified_lines(file, width, theme, highlighter)
+            build_unified_rows(file, width, theme, highlighter)
         };
+        self.patch.rows = Some(PatchRows { rows, key: key.clone() });
+    }
 
-        let content_height = u16::try_from(lines.len().max(1)).unwrap_or(u16::MAX);
+    /// Weaves the review comments into the cached patch rows and paints the
+    /// result into a scrollable buffer.
+    fn build_diff_view(&self, key: &DiffViewKey, theme: &Theme) -> DiffView {
+        let width = key.patch.content_width;
+        let empty = Vec::new();
+        let rows = self.patch.rows.as_ref().map_or(&empty, |cached| &cached.rows);
+
+        let mut lines: Vec<Line<'static>> = Vec::with_capacity(rows.len());
+        let mut cursor_rows = Vec::new();
+        let mut draft_cursor = None;
+        for row in rows {
+            if let Some(cursor) = row.anchor.filter(|_| row.selectable) {
+                cursor_rows.push(CursorRow { hunk: cursor.hunk, line: cursor.line, row: lines.len() });
+            }
+            lines.push(row.line.clone());
+            if let Some(cursor) = row.anchor {
+                self.push_annotations(
+                    &mut lines,
+                    self.anchor(cursor.hunk, cursor.line),
+                    width,
+                    theme,
+                    &mut draft_cursor,
+                );
+            }
+        }
+
+        let content_height = rows_u16(lines.len().max(1));
         let mut scroll_view = ScrollView::new(Size::new(width, content_height))
             .vertical_scrollbar_visibility(ScrollbarVisibility::Automatic);
         scroll_view.render_widget(Paragraph::new(Text::from(lines)), Rect::new(0, 0, width, content_height));
@@ -266,7 +300,7 @@ impl GitDiffScreen {
         if cursor_row < offset || cursor_row >= offset + usize::from(content_area.height) {
             return;
         }
-        let y = content_area.y + u16::try_from(cursor_row - offset).unwrap_or(u16::MAX);
+        let y = content_area.y + rows_u16(cursor_row - offset);
         for x in content_area.x..content_area.right() {
             if let Some(cell) = buf.cell_mut((x, y)) {
                 cell.set_bg(theme.accent);
@@ -275,15 +309,15 @@ impl GitDiffScreen {
         }
     }
 
-    fn build_full_file_lines(
+    fn build_full_file_rows(
         &self,
         file: &FileDiff,
         width: u16,
         theme: &Theme,
         highlighter: &mut SyntaxHighlighter,
-    ) -> BuildResult {
+    ) -> Vec<PatchRow> {
         let Some(content) = &self.full_file_content else {
-            return (vec![Line::styled("Loading file…", Style::new().fg(theme.muted))], Vec::new(), None);
+            return vec![PatchRow::inert(Line::styled("Loading file…", Style::new().fg(theme.muted)))];
         };
         let language = file.language();
         // Mark lines that the diff reports as added so the full-file view highlights them
@@ -294,123 +328,19 @@ impl GitDiffScreen {
             .flat_map(|hunk| hunk.lines.iter())
             .filter_map(|line| if line.kind == PatchLineKind::Added { line.new_line_no } else { None })
             .collect();
-        let mut lines = Vec::new();
-        let mut cursor_rows = Vec::new();
-        for (index, text) in content.lines().enumerate() {
-            let line_no = index + 1;
-            let tone = if added_lines.contains(&line_no) { DiffTone::Added } else { DiffTone::Context };
-            let rendered = diff_line(&format!("{line_no:>4} "), text, language, tone, theme, highlighter);
-            cursor_rows.push(CursorRow { hunk: 0, line: index, row: lines.len() });
-            lines.push(fit_line(rendered.line, usize::from(width), rendered.fill));
-        }
-        (lines, cursor_rows, None)
-    }
-
-    fn build_unified_lines(
-        &self,
-        file: &FileDiff,
-        width: u16,
-        theme: &Theme,
-        highlighter: &mut SyntaxHighlighter,
-    ) -> BuildResult {
-        let mut lines = Vec::new();
-        let mut cursor_rows = Vec::new();
-        let mut draft_cursor = None;
-        for (hunk_idx, hunk) in file.hunks.iter().enumerate() {
-            for (line_idx, patch_line) in hunk.lines.iter().enumerate() {
-                cursor_rows.push(CursorRow { hunk: hunk_idx, line: line_idx, row: lines.len() });
-                lines.push(render_unified_line(patch_line, file.language(), width, theme, highlighter));
-                self.push_annotations(&mut lines, self.anchor(hunk_idx, line_idx), width, theme, &mut draft_cursor);
-            }
-        }
-        (lines, cursor_rows, draft_cursor)
-    }
-
-    fn build_split_lines(
-        &self,
-        file: &FileDiff,
-        width: u16,
-        theme: &Theme,
-        highlighter: &mut SyntaxHighlighter,
-    ) -> BuildResult {
-        let (left_width, right_width) = split_widths(width);
-        let mut lines = Vec::new();
-        let mut cursor_rows = Vec::new();
-        let mut draft_cursor = None;
-
-        for (hunk_idx, hunk) in file.hunks.iter().enumerate() {
-            let mut index = 0;
-            while index < hunk.lines.len() {
-                let line = &hunk.lines[index];
-
-                // A removed run followed by an added run is one changed block, aligned
-                // side by side; everything else renders as a single row.
-                if line.kind == PatchLineKind::Removed {
-                    let removed_start = index;
-                    while index < hunk.lines.len() && hunk.lines[index].kind == PatchLineKind::Removed {
-                        index += 1;
-                    }
-                    let added_start = index;
-                    while index < hunk.lines.len() && hunk.lines[index].kind == PatchLineKind::Added {
-                        index += 1;
-                    }
-                    let removed: Vec<SplitSide> =
-                        (removed_start..added_start).map(|i| SplitSide { line: &hunk.lines[i], idx: i }).collect();
-                    let added: Vec<SplitSide> =
-                        (added_start..index).map(|i| SplitSide { line: &hunk.lines[i], idx: i }).collect();
-
-                    for (left, right) in pair_changed_block(&removed, &added) {
-                        // Anchor comments on the added side when present, falling back to
-                        // the removed side, so each line keeps its own comment slot.
-                        let anchor_line = right.or(left).map_or(removed_start, |side| side.idx);
-                        cursor_rows.push(CursorRow { hunk: hunk_idx, line: anchor_line, row: lines.len() });
-                        lines.push(render_split_row(
-                            left.map(|side| side.line),
-                            right.map(|side| side.line),
-                            file.language(),
-                            left_width,
-                            right_width,
-                            theme,
-                            highlighter,
-                        ));
-                        self.push_annotations(
-                            &mut lines,
-                            self.anchor(hunk_idx, anchor_line),
-                            width,
-                            theme,
-                            &mut draft_cursor,
-                        );
-                    }
-                    continue;
-                }
-
-                match line.kind {
-                    PatchLineKind::HunkHeader => {
-                        cursor_rows.push(CursorRow { hunk: hunk_idx, line: index, row: lines.len() });
-                        lines.push(styled_full_width(&line.text, width, theme.info));
-                    }
-                    PatchLineKind::Added | PatchLineKind::Context => {
-                        let old = (line.kind == PatchLineKind::Context).then_some(line);
-                        cursor_rows.push(CursorRow { hunk: hunk_idx, line: index, row: lines.len() });
-                        lines.push(render_split_row(
-                            old,
-                            Some(line),
-                            file.language(),
-                            left_width,
-                            right_width,
-                            theme,
-                            highlighter,
-                        ));
-                    }
-                    PatchLineKind::Meta | PatchLineKind::Removed => {
-                        lines.push(styled_full_width(&line.text, width, theme.muted));
-                    }
-                }
-                self.push_annotations(&mut lines, self.anchor(hunk_idx, index), width, theme, &mut draft_cursor);
-                index += 1;
-            }
-        }
-        (lines, cursor_rows, draft_cursor)
+        content
+            .lines()
+            .enumerate()
+            .map(|(index, text)| {
+                let line_no = index + 1;
+                let tone = if added_lines.contains(&line_no) { DiffTone::Added } else { DiffTone::Context };
+                let rendered = diff_line(&format!("{line_no:>4} "), text, language, tone, theme, highlighter);
+                PatchRow::at(
+                    fit_line(rendered.line, usize::from(width), rendered.fill),
+                    PatchCursor { hunk: 0, line: index },
+                )
+            })
+            .collect()
     }
 
     /// Appends the submitted comments and the in-progress draft anchored to the
@@ -495,15 +425,9 @@ impl Surface for GitDiffScreen {
         Some(self.handle_key(key))
     }
 
-    fn is_fullscreen(&self) -> bool {
-        true
-    }
-
-    fn on_event(&mut self, event: crate::effects::EffectResult) -> Vec<SurfaceMessage> {
-        match event {
-            crate::effects::EffectResult::GitDiff(event) => self.handle_event(event),
-            crate::effects::EffectResult::FilesIndexed { .. } => Vec::new(),
-        }
+    fn on_event(&mut self, event: SurfaceEvent) -> Vec<SurfaceMessage> {
+        let SurfaceEvent::GitDiff(event) = event;
+        self.handle_event(event)
     }
 
     fn on_mouse(&mut self, action: MouseAction, row: u16, column: u16) -> Vec<SurfaceMessage> {
@@ -516,6 +440,112 @@ impl Surface for GitDiffScreen {
     }
 }
 
+fn build_unified_rows(
+    file: &FileDiff,
+    width: u16,
+    theme: &Theme,
+    highlighter: &mut SyntaxHighlighter,
+) -> Vec<PatchRow> {
+    file.hunks
+        .iter()
+        .enumerate()
+        .flat_map(|(hunk, entry)| {
+            entry.lines.iter().enumerate().map(move |(line, patch_line)| (hunk, line, patch_line))
+        })
+        .map(|(hunk, line, patch_line)| {
+            PatchRow::at(
+                render_unified_line(patch_line, file.language(), width, theme, highlighter),
+                PatchCursor { hunk, line },
+            )
+        })
+        .collect()
+}
+
+fn build_split_rows(file: &FileDiff, width: u16, theme: &Theme, highlighter: &mut SyntaxHighlighter) -> Vec<PatchRow> {
+    let (left_width, right_width) = split_widths(width);
+    let mut rows = Vec::new();
+    for (hunk, entry) in file.hunks.iter().enumerate() {
+        for group in split_groups(&entry.lines) {
+            match group {
+                SplitGroup::Changed { removed, added } => {
+                    for (left, right) in pair_changed_block(&removed, &added) {
+                        // Anchor comments on the added side when present, falling back to
+                        // the removed side, so each line keeps its own comment slot.
+                        let line = right.or(left).map_or(0, |side| side.idx);
+                        let rendered = render_split_row(
+                            left.map(|side| side.line),
+                            right.map(|side| side.line),
+                            file.language(),
+                            left_width,
+                            right_width,
+                            theme,
+                            highlighter,
+                        );
+                        rows.push(PatchRow::at(rendered, PatchCursor { hunk, line }));
+                    }
+                }
+                SplitGroup::Single { line: patch_line, index } => {
+                    let cursor = PatchCursor { hunk, line: index };
+                    rows.push(match patch_line.kind {
+                        PatchLineKind::HunkHeader => {
+                            PatchRow::at(styled_full_width(&patch_line.text, width, theme.info), cursor)
+                        }
+                        PatchLineKind::Added | PatchLineKind::Context => {
+                            let old = (patch_line.kind == PatchLineKind::Context).then_some(patch_line);
+                            let rendered = render_split_row(
+                                old,
+                                Some(patch_line),
+                                file.language(),
+                                left_width,
+                                right_width,
+                                theme,
+                                highlighter,
+                            );
+                            PatchRow::at(rendered, cursor)
+                        }
+                        // A leftover removed line has no right-hand side to pair with, and a
+                        // meta line is not part of the file, so neither takes the cursor.
+                        PatchLineKind::Meta | PatchLineKind::Removed => {
+                            PatchRow::anchored(styled_full_width(&patch_line.text, width, theme.muted), cursor)
+                        }
+                    });
+                }
+            }
+        }
+    }
+    rows
+}
+
+/// Splits a hunk into the units a split view draws: a removed run followed by
+/// an added run is one changed block, and everything else stands alone.
+fn split_groups(lines: &[PatchLine]) -> Vec<SplitGroup<'_>> {
+    let mut groups = Vec::new();
+    let mut index = 0;
+    while index < lines.len() {
+        if lines[index].kind != PatchLineKind::Removed {
+            groups.push(SplitGroup::Single { line: &lines[index], index });
+            index += 1;
+            continue;
+        }
+        let sides =
+            |range: std::ops::Range<usize>| range.map(|idx| SplitSide { line: &lines[idx], idx }).collect::<Vec<_>>();
+        let removed_start = index;
+        index += lines[index..].iter().take_while(|line| line.kind == PatchLineKind::Removed).count();
+        let added_start = index;
+        index += lines[index..].iter().take_while(|line| line.kind == PatchLineKind::Added).count();
+        groups
+            .push(SplitGroup::Changed { removed: sides(removed_start..added_start), added: sides(added_start..index) });
+    }
+    groups
+}
+
+/// One unit of a split view: a standalone line, or a removed/added run drawn
+/// side by side.
+enum SplitGroup<'a> {
+    Single { line: &'a PatchLine, index: usize },
+    Changed { removed: Vec<SplitSide<'a>>, added: Vec<SplitSide<'a>> },
+}
+
 /// Drawer width for a body of `total` columns: a third, within sane bounds.
 pub(super) fn drawer_width(total: u16) -> u16 {
     (total / 3).clamp(24, 36)
@@ -525,7 +555,7 @@ fn notice(text: impl Into<String>, color: ratatui::style::Color) -> Paragraph<'s
     Paragraph::new(Line::styled(text.into(), Style::new().fg(color)))
 }
 
-fn plural(count: usize, noun: &str) -> String {
+pub(super) fn plural(count: usize, noun: &str) -> String {
     format!("{count} {noun}{}", if count == 1 { "" } else { "s" })
 }
 
@@ -678,7 +708,7 @@ fn comment_box(
 
 /// Wrapped draft text plus the cursor's (row, column) within the rendered box,
 /// offset past the box's title row and its `│ > ` quote marker.
-fn draft_body(draft: &DraftState, body_width: usize) -> (Vec<String>, (usize, u16)) {
+fn draft_body(draft: &Draft<PatchAnchor>, body_width: usize) -> (Vec<String>, (usize, u16)) {
     if draft.buffer.is_empty() {
         return (vec!["█".to_string()], (1, 3));
     }

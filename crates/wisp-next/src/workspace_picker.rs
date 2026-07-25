@@ -5,14 +5,13 @@ use crate::selection::Direction;
 use crate::surface::{ListFilter, Surface, SurfaceMessage};
 use crate::widgets::TextInput;
 use crate::workspace_status::home_relative_path;
-use crate::wrap::truncate_to_width;
 use acp_utils::notifications::{WorkspaceEntry, WorkspaceMoveTarget};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, ListItem, Paragraph, Widget};
+use ratatui::widgets::{Block, Paragraph, Widget};
 use std::path::{Path, PathBuf};
 
 /// Picker for moving the session to another workspace, or naming a new one.
@@ -51,21 +50,6 @@ impl WorkspacePicker {
         }
     }
 
-    /// Acts on the focused row: existing workspaces move immediately, while
-    /// "create new" switches to the name prompt.
-    fn confirm_row(&mut self) -> Vec<SurfaceMessage> {
-        match self.rows.selected_entry().cloned() {
-            Some(WorkspaceRow::Existing(entry)) => {
-                vec![SurfaceMessage::MoveWorkspace { target: WorkspaceMoveTarget::Existing { path: entry.path } }]
-            }
-            Some(WorkspaceRow::CreateNew) => {
-                self.mode = Mode::NamingNew { name: EditBuffer::default() };
-                Vec::new()
-            }
-            None => Vec::new(),
-        }
-    }
-
     fn on_naming_key(&mut self, key: KeyEvent) -> Vec<SurfaceMessage> {
         let Mode::NamingNew { name } = &mut self.mode else {
             return Vec::new();
@@ -91,18 +75,17 @@ impl WorkspacePicker {
 
     fn render_list(&mut self, area: Rect, buf: &mut Buffer, theme: &crate::theme::Theme) {
         let title = self.rows.search_title("Workspaces");
-        let item_width = usize::from(area.width.saturating_sub(2));
         self.rows
-            .view(theme, "  (no matching workspaces)", |row| {
-                let (text, style) = match row {
-                    WorkspaceRow::Existing(entry) => {
-                        (format!("  {}", home_relative_path(&entry.path)), Style::new().fg(theme.text_secondary))
-                    }
-                    WorkspaceRow::CreateNew => (format!("  {CREATE_NEW_LABEL}"), Style::new().fg(theme.info)),
-                };
-                ListItem::new(truncate_to_width(&text, item_width)).style(style)
+            .view(theme, |row| match row {
+                WorkspaceRow::Existing(entry) => Line::styled(
+                    format!("  {}", home_relative_path(&entry.path)),
+                    Style::new().fg(theme.text_secondary),
+                ),
+                WorkspaceRow::CreateNew => Line::styled(format!("  {CREATE_NEW_LABEL}"), Style::new().fg(theme.info)),
             })
+            .empty_message("  (no matching workspaces)")
             .bordered(title)
+            .scrollbar()
             .render(area, buf);
     }
 
@@ -129,13 +112,28 @@ impl WorkspacePicker {
 }
 
 impl Surface for WorkspacePicker {
+    /// Acts on the focused row: existing workspaces move immediately, while
+    /// "create new" switches to the name prompt.
+    fn activate(&mut self) -> Vec<SurfaceMessage> {
+        match self.rows.selected_entry().cloned() {
+            Some(WorkspaceRow::Existing(entry)) => {
+                vec![SurfaceMessage::MoveWorkspace { target: WorkspaceMoveTarget::Existing { path: entry.path } }]
+            }
+            Some(WorkspaceRow::CreateNew) => {
+                self.mode = Mode::NamingNew { name: EditBuffer::default() };
+                Vec::new()
+            }
+            None => Vec::new(),
+        }
+    }
+
     /// While naming a new workspace the prompt owns every key, so nothing falls
     /// through to the list's navigation and filter keys.
     fn on_surface_key(&mut self, key: KeyEvent) -> Option<Vec<SurfaceMessage>> {
         if matches!(self.mode, Mode::NamingNew { .. }) {
             return Some(self.on_naming_key(key));
         }
-        matches!(key.code, KeyCode::Enter | KeyCode::Tab).then(|| self.confirm_row())
+        matches!(key.code, KeyCode::Enter | KeyCode::Tab).then(|| self.activate())
     }
 
     fn filter(&mut self) -> Option<&mut dyn ListFilter> {

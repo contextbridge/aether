@@ -1,15 +1,32 @@
-use crate::app::App;
 use crate::session_config_view::SessionConfigView;
 use crate::settings::{ContextUsageDisplay, ResolvedStatusLineSettings, StatusLineSegmentConfig, StatusLineStyle};
 use crate::theme::Theme;
+use crate::workspace_status::WorkspaceStatus;
 use crate::wrap::{truncate_spans, truncate_to_width};
 use acp_utils::config_option_id::ConfigOptionId;
+use agent_client_protocol::schema::SessionConfigOption;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 use utils::ReasoningEffort;
+
+/// Everything the status line reads out of `App`, borrowed for one frame.
+///
+/// Gathering it in one place is what keeps `App` from having to expose a getter
+/// per segment.
+pub struct StatusLineModel<'a> {
+    pub settings: &'a ResolvedStatusLineSettings,
+    pub config_options: &'a [SessionConfigOption],
+    pub workspace: &'a WorkspaceStatus,
+    pub agent_name: &'a str,
+    pub content_padding: usize,
+    pub context_usage: Option<ContextUsageDisplay>,
+    pub unhealthy_servers: usize,
+    pub waiting_for_response: bool,
+    pub exit_confirmation: bool,
+}
 
 /// The bottom status bar: workspace on the left, session state on the right.
 ///
@@ -21,15 +38,16 @@ pub struct StatusLine {
 }
 
 impl StatusLine {
-    pub fn new(app: &App, settings: &ResolvedStatusLineSettings, theme: &Theme) -> Self {
-        let left =
-            Line::from(with_padding(app.content_padding(), render_segments(app, &settings.left, settings, theme)));
-        let right = if app.exit_confirmation_active() {
-            Line::from(Span::styled("Ctrl-C again to exit", Style::new().fg(theme.warning)))
+    pub fn new(model: &StatusLineModel<'_>, theme: &Theme) -> Self {
+        let settings = model.settings;
+        let mut left = render_segments(model, &settings.left, theme);
+        left.insert(0, Span::raw(" ".repeat(model.content_padding)));
+        let right = if model.exit_confirmation {
+            vec![Span::styled("Ctrl-C again to exit", Style::new().fg(theme.warning))]
         } else {
-            Line::from(render_segments(app, &settings.right, settings, theme))
+            render_segments(model, &settings.right, theme)
         };
-        Self { left, right }
+        Self { left: Line::from(left), right: Line::from(right) }
     }
 
     /// Rows this status line needs: one when both halves fit side by side, two
@@ -53,10 +71,11 @@ impl Widget for &StatusLine {
             return;
         }
         let width = usize::from(area.width);
+        let clipped = |line: &Line<'static>| Paragraph::new(Line::from(truncate_spans(&line.spans, width)));
 
         if self.fits_on_one_row(width) {
             if self.right.width() == 0 {
-                Paragraph::new(Line::from(truncate_spans(&self.left.spans, width))).render(area, buf);
+                clipped(&self.left).render(area, buf);
             } else {
                 Paragraph::new(self.left.clone()).alignment(Alignment::Left).render(area, buf);
                 Paragraph::new(self.right.clone()).alignment(Alignment::Right).render(area, buf);
@@ -64,40 +83,30 @@ impl Widget for &StatusLine {
             return;
         }
 
-        // Too wide for one row: stack, or truncate the left half if there is
+        // Too wide for one row: stack, or clip to the left half when there is
         // only one row to work with.
-        if area.height == 1 {
-            Paragraph::new(Line::from(truncate_spans(&self.left.spans, width))).render(area, buf);
-            return;
-        }
         let [left_row, right_row] = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(area);
-        Paragraph::new(Line::from(truncate_spans(&self.left.spans, width))).render(left_row, buf);
-        Paragraph::new(Line::from(truncate_spans(&self.right.spans, width))).render(right_row, buf);
+        clipped(&self.left).render(left_row, buf);
+        clipped(&self.right).render(right_row, buf);
     }
-}
-
-fn with_padding(padding: usize, mut spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
-    spans.insert(0, Span::raw(" ".repeat(padding)));
-    spans
 }
 
 /// Renders each configured segment, joining the non-empty ones with the
 /// separator so no separator ever dangles beside a hidden segment.
 fn render_segments(
-    app: &App,
+    model: &StatusLineModel<'_>,
     segments: &[StatusLineSegmentConfig],
-    settings: &ResolvedStatusLineSettings,
     theme: &Theme,
 ) -> Vec<Span<'static>> {
-    let config = SessionConfigView::new(app.config_options());
+    let config = SessionConfigView::new(model.config_options);
     let mut spans: Vec<Span<'static>> = Vec::new();
     for segment in segments {
-        let segment_spans = render_segment(segment, app, &config, theme);
+        let segment_spans = render_segment(segment, model, &config, theme);
         if segment_spans.is_empty() {
             continue;
         }
         if !spans.is_empty() {
-            spans.push(Span::styled(settings.separator.clone(), Style::new().fg(theme.text_secondary)));
+            spans.push(Span::styled(model.settings.separator.clone(), Style::new().fg(theme.text_secondary)));
         }
         spans.extend(segment_spans);
     }
@@ -106,21 +115,21 @@ fn render_segments(
 
 fn render_segment(
     segment: &StatusLineSegmentConfig,
-    app: &App,
+    model: &StatusLineModel<'_>,
     config: &SessionConfigView<'_>,
     theme: &Theme,
 ) -> Vec<Span<'static>> {
     match segment {
         StatusLineSegmentConfig::Cwd { max_width } => {
-            vec![styled(clamp(&app.workspace_status().display_dir, *max_width), theme.text_secondary)]
+            vec![styled(clamp(&model.workspace.display_dir, *max_width), theme.text_secondary)]
         }
-        StatusLineSegmentConfig::GitRef => app
-            .workspace_status()
+        StatusLineSegmentConfig::GitRef => model
+            .workspace
             .git_ref
             .as_deref()
             .map(|git_ref| vec![styled(git_ref.to_string(), theme.success)])
             .unwrap_or_default(),
-        StatusLineSegmentConfig::Agent => vec![styled(app.agent_name().to_string(), theme.info)],
+        StatusLineSegmentConfig::Agent => vec![styled(model.agent_name.to_string(), theme.info)],
         StatusLineSegmentConfig::Mode => config
             .current_display_name(ConfigOptionId::Mode)
             .map(|mode| vec![styled(mode, theme.text_secondary)])
@@ -137,15 +146,15 @@ fn render_segment(
             let effort = config.reasoning_effort();
             vec![styled(reasoning_bar(effort, &levels), reasoning_color(effort, &levels, theme))]
         }
-        StatusLineSegmentConfig::Context => app
-            .context_usage()
+        StatusLineSegmentConfig::Context => model
+            .context_usage
             .map(|usage| vec![styled(context_bar(usage), context_color(usage, theme))])
             .unwrap_or_default(),
         StatusLineSegmentConfig::ServerHealth => {
-            if app.waiting_for_response() || app.unhealthy_server_count() == 0 {
+            let count = model.unhealthy_servers;
+            if model.waiting_for_response || count == 0 {
                 return Vec::new();
             }
-            let count = app.unhealthy_server_count();
             let message =
                 if count == 1 { "1 server needs auth".to_string() } else { format!("{count} servers unhealthy") };
             vec![styled(message, theme.warning)]

@@ -1,13 +1,15 @@
 use super::config::{cycle_quick_option, cycle_reasoning_option, update_config_option_value};
-use super::{
-    App, Direction, Duration, Effect, EffectResult, Event, ExitState, Instant, KeyCode, KeyEvent, KeyEventKind,
-    KeyModifiers, Rect, parse_dropped_file_paths,
-};
+use super::{App, ExitState, Layer};
+use crate::dropped_files::parse_dropped_file_paths;
+use crate::effects::{Effect, EffectResult};
 use crate::render_context::RenderContext;
-use crate::screens::MouseAction;
 use crate::screens::git_diff::GitDiffScreen;
-use crossterm::event::{MouseEvent, MouseEventKind};
-use ratatui::Frame;
+use crate::selection::Direction;
+use crate::surface::{MouseAction, Surface};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent};
+use ratatui::buffer::Buffer;
+use ratatui::layout::{Position, Rect};
+use std::time::{Duration, Instant};
 
 pub(super) const CTRL_C_CONFIRM_WINDOW: Duration = Duration::from_secs(1);
 
@@ -16,10 +18,7 @@ impl App {
         match event {
             Event::Key(key) => self.on_key(key),
             Event::Paste(text) => self.on_paste(&text),
-            Event::Resize(width, height) => {
-                self.last_terminal_size = (width, height);
-                self.surface_rect = None;
-            }
+            Event::Resize(width, height) => self.last_terminal_size = (width, height),
             Event::Mouse(mouse) => self.on_mouse(mouse),
             _ => {}
         }
@@ -45,8 +44,8 @@ impl App {
             return;
         }
 
-        if let Some(surface) = self.layer.as_deref_mut() {
-            let messages = surface.on_key(key);
+        if let Some(layer) = self.layer.as_mut() {
+            let messages = layer.surface().on_key(key);
             self.handle_surface_messages(messages);
             return;
         }
@@ -178,10 +177,7 @@ impl App {
 
     fn move_completion(&mut self, direction: Direction) {
         if let Some(overlay) = self.composer.completion() {
-            match direction {
-                Direction::Backward => overlay.move_up(),
-                Direction::Forward => overlay.move_down(),
-            }
+            overlay.step(direction);
         }
     }
 
@@ -214,35 +210,26 @@ impl App {
         self.composer.refresh_overlay_query();
     }
 
-    /// Draws the open surface over the conversation, and records the area mouse
-    /// events are measured against.
-    pub fn render_active_surface(&mut self, frame: &mut Frame, cx: &mut RenderContext<'_>) {
-        let area = frame.area();
-        if let Some(surface) = self.layer.as_deref_mut() {
-            let cursor = surface.render(area, frame.buffer_mut(), cx);
-            self.surface_rect = Some(area);
-            if let Some(cursor) = cursor {
-                frame.set_cursor_position(cursor);
-            }
-            return;
-        }
-        // The composer's own surfaces set `surface_rect` while they render.
-        if !self.composer.has_prompt_search() && !self.composer.has_overlay() {
-            self.surface_rect = None;
-        }
+    /// Draws the open layer over the conversation, returning where it wants the
+    /// terminal cursor.
+    pub fn render_layer(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
+        self.layer.as_mut()?.surface().render(area, buf, cx)
     }
 
     /// Routes an effect result: file-index results belong to the composer, and
     /// everything else to whichever surface asked for the work.
     pub fn on_effect_result(&mut self, result: EffectResult) {
-        if let EffectResult::FilesIndexed { request_id, files } = result {
-            self.composer.on_files_indexed(request_id, files);
-            return;
-        }
-        let Some(surface) = self.layer.as_deref_mut() else {
+        let event = match result {
+            EffectResult::FilesIndexed { request_id, files } => {
+                self.composer.on_files_indexed(request_id, files);
+                return;
+            }
+            EffectResult::Surface(event) => event,
+        };
+        let Some(layer) = self.layer.as_mut() else {
             return;
         };
-        let messages = surface.on_event(result);
+        let messages = layer.surface().on_event(event);
         self.handle_surface_messages(messages);
     }
 
@@ -257,9 +244,10 @@ impl App {
     /// Only the bare composer works without mouse reporting; every other
     /// surface has scrollable or clickable content.
     pub fn needs_mouse_capture(&self) -> bool {
-        match self.layer.as_deref() {
-            Some(surface) => surface.needs_mouse_capture(),
-            None => self.composer.has_prompt_search() || self.composer.has_overlay(),
+        match self.layer.as_ref() {
+            Some(Layer::Elicitation(modal)) => modal.needs_mouse_capture(),
+            Some(_) => true,
+            None => self.composer.has_open_overlay(),
         }
     }
 
@@ -267,60 +255,27 @@ impl App {
         self.last_terminal_size
     }
 
-    pub fn surface_rect(&self) -> Option<Rect> {
-        self.surface_rect
-    }
-
-    pub fn set_surface_rect(&mut self, rect: Rect) {
-        self.surface_rect = Some(rect);
-    }
-
     fn open_git_diff(&mut self) {
         let (screen, effect) = GitDiffScreen::new(self.working_dir.clone());
-        self.open_layer(Box::new(screen));
+        self.open_layer(Layer::GitDiff(Box::new(screen)));
         self.pending_effects.push_back(effect.into());
     }
 
-    /// Routes a mouse event to the surface under the pointer.
+    /// Routes a mouse event to whatever owns input.
     ///
     /// Rows and columns stay in terminal coordinates the whole way down: each
-    /// surface records the area it drew its rows into, so none of them has to
-    /// re-derive how many borders and headers sit above the first row.
+    /// list records the area it drew its rows into, so none of them has to
+    /// re-derive how many borders and headers sit above the first row, and a
+    /// click that lands on nothing is simply ignored.
     fn on_mouse(&mut self, event: MouseEvent) {
-        let Some(rect) = self.surface_rect else {
+        let Some(action) = MouseAction::from_event(event.kind) else {
             return;
         };
-        if event.column < rect.x || event.column >= rect.right() || event.row < rect.y || event.row >= rect.bottom() {
-            return;
-        }
-        let action = match event.kind {
-            MouseEventKind::ScrollUp => MouseAction::ScrollUp,
-            MouseEventKind::ScrollDown => MouseAction::ScrollDown,
-            MouseEventKind::Down(_) => MouseAction::Click,
-            _ => return,
-        };
-
-        if let Some(surface) = self.layer.as_deref_mut() {
-            let messages = surface.on_mouse(action, event.row, event.column);
+        if let Some(layer) = self.layer.as_mut() {
+            let messages = layer.surface().on_mouse(action, event.row, event.column);
             self.handle_surface_messages(messages);
             return;
         }
-        self.composer_mouse(action, event.row);
-    }
-
-    fn composer_mouse(&mut self, action: MouseAction, row: u16) {
-        if self.composer.has_prompt_search() {
-            self.composer.navigate_prompt_search(|picker| match action {
-                MouseAction::ScrollUp => picker.move_up(),
-                MouseAction::ScrollDown => picker.move_down(),
-                MouseAction::Click => picker.select_at(row),
-            });
-        } else if let Some(overlay) = self.composer.completion() {
-            match action {
-                MouseAction::ScrollUp => overlay.move_up(),
-                MouseAction::ScrollDown => overlay.move_down(),
-                MouseAction::Click => overlay.select_at(row),
-            }
-        }
+        self.composer.on_overlay_mouse(action, event.row);
     }
 }

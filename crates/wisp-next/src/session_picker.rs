@@ -1,16 +1,15 @@
 use crate::filterable_list::FilterableList;
 use crate::render_context::RenderContext;
 use crate::selection::Direction;
-use crate::surface::{ListFilter, Surface, SurfaceMessage};
+use crate::surface::{ListFilter, Surface, SurfaceMessage, one};
 use crate::wrap::truncate_to_width;
 use acp_utils::notifications::SessionPreviewResponse;
 use agent_client_protocol::schema::{self as acp, SessionId};
-use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, ListItem, Paragraph, Widget};
+use ratatui::widgets::{Block, Paragraph, Widget};
 use std::collections::HashMap;
 
 /// Picker for resuming a previous session, with an optional preview pane.
@@ -76,10 +75,9 @@ impl SessionPicker {
 
     fn render_list(&mut self, area: Rect, buf: &mut Buffer, theme: &crate::theme::Theme) {
         let title = self.sessions.search_title("Sessions");
-        let item_width = usize::from(area.width.saturating_sub(2));
         self.sessions
-            .view(theme, "  (no matching sessions)", |session| {
-                let title = session
+            .view(theme, |session| {
+                let name = session
                     .title
                     .as_deref()
                     .unwrap_or_else(|| session.cwd.file_name().map_or("?", |name| name.to_str().unwrap_or("?")));
@@ -87,10 +85,11 @@ impl SessionPicker {
                     .cwd
                     .file_name()
                     .map_or_else(|| session.cwd.display().to_string(), |name| name.to_string_lossy().into_owned());
-                let display = format!("  {}  {cwd}", truncate_to_width(title, 48));
-                ListItem::new(truncate_to_width(&display, item_width)).style(Style::new().fg(theme.text_secondary))
+                Line::styled(format!("  {}  {cwd}", truncate_to_width(name, 48)), Style::new().fg(theme.text_secondary))
             })
+            .empty_message("  (no matching sessions)")
             .bordered(title)
+            .scrollbar()
             .render(area, buf);
     }
 
@@ -156,17 +155,11 @@ impl SessionPicker {
 }
 
 impl Surface for SessionPicker {
-    fn on_surface_key(&mut self, key: KeyEvent) -> Option<Vec<SurfaceMessage>> {
-        (key.code == KeyCode::Enter).then(|| {
-            self.sessions
-                .selected_entry()
-                .map(|session| SurfaceMessage::LoadSession {
-                    session_id: SessionId::new(session.session_id.0.to_string()),
-                    cwd: session.cwd.clone(),
-                })
-                .into_iter()
-                .collect()
-        })
+    fn activate(&mut self) -> Vec<SurfaceMessage> {
+        one(self.sessions.selected_entry().map(|session| SurfaceMessage::LoadSession {
+            session_id: SessionId::new(session.session_id.0.to_string()),
+            cwd: session.cwd.clone(),
+        }))
     }
 
     fn filter(&mut self) -> Option<&mut dyn ListFilter> {

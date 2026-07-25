@@ -7,10 +7,11 @@ use std::path::PathBuf;
 use tokio::sync::oneshot;
 use utils::plan_review::PlanReviewElicitationMeta;
 use wisp_next::elicitation::ElicitationResponder;
+use wisp_next::generation::Generation;
 use wisp_next::plan_review::{PlanDocument, ReviewComment, compile_feedback};
 use wisp_next::render_context::RenderContext;
-use wisp_next::screens::MouseAction;
 use wisp_next::screens::plan_review::PlanReviewScreen;
+use wisp_next::surface::MouseAction;
 use wisp_next::surface::{Surface, SurfaceMessage};
 use wisp_next::syntax::SyntaxHighlighter;
 use wisp_next::theme::Theme;
@@ -44,7 +45,8 @@ fn render_screen(screen: &mut PlanReviewScreen, width: u16, height: u16) -> Buff
     let mut terminal = ratatui::Terminal::with_options(backend, TerminalOptions::default()).unwrap();
     terminal
         .draw(|frame| {
-            let mut cx = RenderContext { theme: &theme, highlighter: &mut highlighter, theme_generation: 0 };
+            let mut cx =
+                RenderContext { theme: &theme, highlighter: &mut highlighter, theme_generation: Generation::default() };
             screen.render(frame.area(), frame.buffer_mut(), &mut cx);
         })
         .unwrap();

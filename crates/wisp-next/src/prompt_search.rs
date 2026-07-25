@@ -1,6 +1,7 @@
 use crate::edit_buffer::EditBuffer;
+use crate::generation::Generation;
 use crate::list_view::ListView;
-use crate::selection::SelectionState;
+use crate::selection::{Direction, SelectionState};
 use crate::theme::Theme;
 use crate::workspace_status::home_relative_path;
 use crate::wrap::truncate_spans;
@@ -9,7 +10,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{ListItem, Paragraph, Widget};
+use ratatui::widgets::{Paragraph, Widget};
 
 use std::ops::Range;
 use std::path::Path;
@@ -26,7 +27,7 @@ pub struct PromptSearchPicker {
     selection: SelectionState,
     loading: bool,
     error: Option<String>,
-    search_generation: u64,
+    search_generation: Generation,
 }
 
 impl PromptSearchPicker {
@@ -42,12 +43,13 @@ impl PromptSearchPicker {
         self.selection.selected().and_then(|selected| self.results.get(selected))
     }
 
-    pub fn search_generation(&self) -> u64 {
+    pub fn search_generation(&self) -> Generation {
         self.search_generation
     }
 
     pub fn on_results(&mut self, response: PromptSearchResponse) -> bool {
-        if response.query != self.query.text() || response.search_generation != self.search_generation {
+        if response.query != self.query.text() || Generation::from(response.search_generation) != self.search_generation
+        {
             return false;
         }
         self.results = response.results;
@@ -57,7 +59,7 @@ impl PromptSearchPicker {
         true
     }
 
-    pub fn on_failed(&mut self, search_generation: u64, error: String) -> bool {
+    pub fn on_failed(&mut self, search_generation: Generation, error: String) -> bool {
         if search_generation != self.search_generation {
             return false;
         }
@@ -75,17 +77,13 @@ impl PromptSearchPicker {
             self.selection.select_first(self.results.len());
             self.loading = false;
         } else {
-            self.search_generation = self.search_generation.wrapping_add(1);
+            self.search_generation.bump();
             self.loading = true;
         }
     }
 
-    pub fn move_up(&mut self) {
-        self.selection.previous(self.results.len());
-    }
-
-    pub fn move_down(&mut self) {
-        self.selection.next(self.results.len());
+    pub fn step(&mut self, direction: Direction) {
+        self.selection.step(self.results.len(), direction, |_| true);
     }
 
     /// Selects the result drawn at terminal `row`, if one is there.
@@ -154,7 +152,7 @@ impl PromptSearchPicker {
         }
 
         let width = usize::from(results_area.width.max(1));
-        let rows = self.results.iter().map(|result| ListItem::new(result_line(result, width, theme))).collect();
+        let rows = self.results.iter().map(|result| result_line(result, width, theme)).collect();
         ListView::new(rows, &mut self.selection, theme).render(results_area, buf);
     }
 }

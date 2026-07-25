@@ -1,7 +1,9 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::widgets::{ListItem, Widget};
+use ratatui::text::Line;
+use ratatui::widgets::Widget;
 use wisp_next::filterable_list::FilterableList;
+use wisp_next::selection::Direction;
 use wisp_next::theme::Theme;
 
 #[test]
@@ -13,7 +15,7 @@ fn filters_once_per_query_change_and_selects_from_cached_matches() {
     assert_eq!(list.filtered_entries().map(|(_, entry)| entry.as_str()).collect::<Vec<_>>(), ["alpha", "alphabet"]);
     assert_eq!(list.selected_entry().map(String::as_str), Some("alpha"));
 
-    list.select_next();
+    list.step(Direction::Forward, |_| true);
     assert_eq!(list.selected_entry().map(String::as_str), Some("alphabet"));
 
     list.set_query("alp");
@@ -43,9 +45,10 @@ fn maps_a_click_to_the_row_drawn_under_it() {
     let mut buffer = Buffer::empty(area);
 
     for _ in 0..7 {
-        list.select_next();
+        list.step(Direction::Forward, |_| true);
     }
-    list.view(&Theme::default(), "empty", |entry| ListItem::new(entry.clone()))
+    list.view(&Theme::default(), |entry| Line::raw(entry.clone()))
+        .empty_message("empty")
         .bordered("items")
         .render(area, &mut buffer);
 
@@ -61,7 +64,8 @@ fn ignores_clicks_outside_the_rows_it_drew() {
     let area = Rect::new(0, 0, 20, 4);
     let mut list = FilterableList::new(vec!["only".to_string()], Clone::clone);
     let mut buffer = Buffer::empty(area);
-    list.view(&Theme::default(), "empty", |entry| ListItem::new(entry.clone()))
+    list.view(&Theme::default(), |entry| Line::raw(entry.clone()))
+        .empty_message("empty")
         .bordered("items")
         .render(area, &mut buffer);
 

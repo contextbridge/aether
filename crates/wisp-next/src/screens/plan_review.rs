@@ -5,23 +5,24 @@ use ratatui::layout::{Constraint, Layout, Position, Rect};
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, ListItem, Paragraph, Widget};
+use ratatui::widgets::{Block, Paragraph, Widget};
 use utils::plan_review::{PlanReviewDecision, PlanReviewElicitationMeta};
 
-use crate::edit_buffer::{EditBuffer, apply_edit_key};
+use crate::annotation::{Draft, DraftOutcome};
+use crate::edit_buffer::EditBuffer;
 use crate::elicitation::ElicitationResponder;
+use crate::generation::Generation;
 use crate::list_view::ListView;
 use crate::plan_review::{
     PlanDocument, ReviewComment, SourceMarkdownLine, compile_feedback, render_markdown_source_lines,
 };
 use crate::render_context::RenderContext;
-use crate::screens::MouseAction;
-use crate::selection::{Direction, SelectionState};
-use crate::surface::{Surface, SurfaceMessage};
+use crate::selection::{Direction, SelectionState, scroll_into_view, step_clamped};
+use crate::surface::{MouseAction, Surface, SurfaceMessage};
 use crate::syntax::SyntaxHighlighter;
 use crate::theme::Theme;
 use crate::widgets::{block_cursor_spans, render_vertical_scrollbar};
-use crate::wrap::{truncate_to_width, wrap_line};
+use crate::wrap::{rows as rows_u16, wrap_line};
 
 const MIN_SPLIT_WIDTH: u16 = 60;
 /// Lines a mouse wheel notch moves the focused pane.
@@ -37,21 +38,16 @@ enum Focus {
     Plan,
 }
 
-struct DraftComment {
-    line_no: usize,
-    buffer: EditBuffer,
-}
-
 pub struct PlanReviewScreen {
     title: String,
     document: PlanDocument,
     source_lines: Vec<SourceMarkdownLine>,
-    source_presentation_theme_generation: Option<u64>,
+    source_presentation_theme_generation: Option<Generation>,
     comments: Vec<ReviewComment>,
     plan_scroll: usize,
     plan_cursor_line: usize,
     outline_selection: SelectionState,
-    draft: Option<DraftComment>,
+    draft: Option<Draft<usize>>,
     focus: Focus,
     responder: ElicitationResponder,
     /// Where the plan's rows were last drawn, for hit-testing clicks.
@@ -91,7 +87,7 @@ impl PlanReviewScreen {
         &mut self,
         theme: &Theme,
         highlighter: &mut SyntaxHighlighter,
-        theme_generation: u64,
+        theme_generation: Generation,
     ) {
         if self.source_presentation_theme_generation == Some(theme_generation) {
             return;
@@ -108,12 +104,12 @@ impl PlanReviewScreen {
             return;
         }
         let max = self.source_line_max_index();
-        self.plan_scroll = step(self.plan_scroll, direction, MOUSE_SCROLL_LINES, max);
-        self.plan_cursor_line = step(self.plan_cursor_line, direction, MOUSE_SCROLL_LINES, max);
+        self.plan_scroll = step_clamped(self.plan_scroll, direction, MOUSE_SCROLL_LINES, max);
+        self.plan_cursor_line = step_clamped(self.plan_cursor_line, direction, MOUSE_SCROLL_LINES, max);
     }
 
     fn move_cursor(&mut self, direction: Direction) {
-        self.plan_cursor_line = step(self.plan_cursor_line, direction, 1, self.source_line_max_index());
+        self.plan_cursor_line = step_clamped(self.plan_cursor_line, direction, 1, self.source_line_max_index());
     }
 
     /// Moves the outline selection, stopping at either end.
@@ -182,9 +178,7 @@ impl PlanReviewScreen {
     fn handle_plan_key(&mut self, key: KeyEvent) {
         let max = self.source_line_max_index();
         match key.code {
-            KeyCode::Char('c') => {
-                self.draft = Some(DraftComment { line_no: self.plan_cursor_line + 1, buffer: EditBuffer::default() });
-            }
+            KeyCode::Char('c') => self.draft = Some(Draft::new(self.plan_cursor_line + 1)),
             KeyCode::Char('j') | KeyCode::Down => self.move_cursor(Direction::Forward),
             KeyCode::Char('k') | KeyCode::Up => self.move_cursor(Direction::Backward),
             KeyCode::Char('g') => self.plan_cursor_line = 0,
@@ -220,20 +214,13 @@ impl PlanReviewScreen {
         let Some(draft) = self.draft.as_mut() else {
             return;
         };
-        match key.code {
-            KeyCode::Esc => self.draft = None,
-            KeyCode::Enter => {
-                let text = draft.buffer.take();
-                let line_no = draft.line_no;
-                self.draft = None;
-                if !text.trim().is_empty() {
-                    self.comments.push(ReviewComment::new(line_no, text));
-                }
-            }
-            _ => {
-                apply_edit_key(&mut draft.buffer, key);
-            }
+        let line_no = draft.anchor;
+        match draft.on_key(key) {
+            DraftOutcome::Continue => return,
+            DraftOutcome::Commit(body) => self.comments.push(ReviewComment::new(line_no, body)),
+            DraftOutcome::Discard => {}
         }
+        self.draft = None;
     }
 
     /// Moves the cursor to the next or previous section heading.
@@ -291,15 +278,13 @@ impl PlanReviewScreen {
             .border_style(Style::new().fg(if self.focus == Focus::Outline { theme.accent } else { theme.muted }))
             .title(Line::styled(" Outline ", title_style));
 
-        let inner_width = usize::from(block.inner(area).width.saturating_sub(1));
         let rows = self
             .document
             .outline
             .iter()
             .map(|section| {
-                let prefix = format!("  {}", "  ".repeat(usize::from(section.level.saturating_sub(1))));
-                let available = inner_width.saturating_sub(prefix.len());
-                ListItem::new(format!("{prefix}{}", truncate_to_width(&section.title, available)))
+                let indent = "  ".repeat(usize::from(section.level.saturating_sub(1)));
+                Line::raw(format!("  {indent}{}", section.title))
             })
             .collect();
         let highlight_style = if self.focus == Focus::Outline {
@@ -339,41 +324,24 @@ impl PlanReviewScreen {
             return;
         }
 
-        self.keep_cursor_in_view(height);
+        self.plan_cursor_line = self.plan_cursor_line.min(self.source_line_max_index());
+        self.plan_scroll = scroll_into_view(self.plan_scroll, self.plan_cursor_line, height);
         let (rows, source_rows, cursor_row) = self.build_rows(gutter_width, content_width, theme);
 
-        // Comments and drafts push lines apart, so the scroll offset is tracked
-        // in rendered rows rather than source lines.
-        let mut scroll = source_rows.get(self.plan_scroll).copied().unwrap_or_default();
-        if let Some(cursor_row) = cursor_row {
-            if cursor_row < scroll {
-                scroll = cursor_row;
-            } else if cursor_row >= scroll + height {
-                scroll = cursor_row.saturating_sub(height.saturating_sub(1));
+        // Comments and drafts push lines apart, so the scroll offset the rows
+        // are drawn at is tracked in rendered rows rather than source lines.
+        let source_scroll = source_rows.get(self.plan_scroll).copied().unwrap_or_default();
+        let scroll = cursor_row.map_or(source_scroll, |row| scroll_into_view(source_scroll, row, height));
+
+        let highlight = (self.focus == Focus::Plan).then_some(cursor_row).flatten();
+        for (offset, line) in rows.iter().skip(scroll).take(height).enumerate() {
+            let row = Rect { y: inner.y + rows_u16(offset), height: 1, ..inner };
+            match highlight {
+                Some(index) if index == scroll + offset => highlight_row(line.clone(), theme).render(row, buf),
+                _ => line.render(row, buf),
             }
         }
-
-        let row_count = rows.len();
-        let highlight = (self.focus == Focus::Plan).then_some(cursor_row).flatten();
-        let rows: Vec<Line<'static>> = rows
-            .into_iter()
-            .enumerate()
-            .map(|(index, line)| if Some(index) == highlight { highlight_row(line, theme) } else { line })
-            .collect();
-
-        Paragraph::new(rows).scroll((u16::try_from(scroll).unwrap_or(u16::MAX), 0)).render(inner, buf);
-        render_vertical_scrollbar(inner, buf, row_count, scroll);
-    }
-
-    /// Scrolls just enough to bring the cursor line back into view.
-    fn keep_cursor_in_view(&mut self, height: usize) {
-        self.plan_cursor_line = self.plan_cursor_line.min(self.source_line_max_index());
-        if self.plan_cursor_line < self.plan_scroll {
-            self.plan_scroll = self.plan_cursor_line;
-        }
-        if self.plan_cursor_line >= self.plan_scroll + height {
-            self.plan_scroll = self.plan_cursor_line.saturating_sub(height.saturating_sub(1));
-        }
+        render_vertical_scrollbar(inner, buf, rows.len(), scroll);
     }
 
     /// Lays the plan out as rendered rows, returning them alongside the row each
@@ -417,7 +385,7 @@ impl PlanReviewScreen {
                 }));
             }
 
-            if let Some(draft) = self.draft.as_ref().filter(|draft| draft.line_no == line_no) {
+            if let Some(draft) = self.draft.as_ref().filter(|draft| draft.anchor == line_no) {
                 rows.push(annotation_row(
                     gutter_width,
                     "┌ [new comment]",
@@ -466,10 +434,6 @@ impl Surface for PlanReviewScreen {
         Some(self.handle_key(key))
     }
 
-    fn is_fullscreen(&self) -> bool {
-        true
-    }
-
     fn on_mouse(&mut self, action: MouseAction, row: u16, column: u16) -> Vec<SurfaceMessage> {
         match action {
             MouseAction::ScrollUp => self.scroll(Direction::Backward),
@@ -487,14 +451,6 @@ impl Surface for PlanReviewScreen {
 
     fn cancel(&mut self) {
         self.responder.cancel();
-    }
-}
-
-/// Shifts `value` by `amount` rows in `direction`, stopping at zero and `max`.
-fn step(value: usize, direction: Direction, amount: usize, max: usize) -> usize {
-    match direction {
-        Direction::Backward => value.saturating_sub(amount),
-        Direction::Forward => value.saturating_add(amount).min(max),
     }
 }
 

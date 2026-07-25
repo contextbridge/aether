@@ -1,40 +1,33 @@
-use crate::attachments::PromptAttachment;
 use crate::composer::Composer;
 use crate::diff::DiffPreview;
-use crate::dropped_files::parse_dropped_file_paths;
-use crate::effects::{Effect, EffectResult};
+use crate::effects::Effect;
+use crate::generation::Generation;
 use crate::keybindings::Keybindings;
 use crate::modal::ElicitationModal;
 use crate::picker::CommandEntry;
 use crate::plan_tracker::PlanTracker;
 use crate::progress_indicator::{ProgressActivity, ProgressIndicator, WorkspaceProgress};
-use crate::selection::Direction;
-use crate::session_config_view::SessionConfigView;
+use crate::screens::git_diff::GitDiffScreen;
+use crate::screens::plan_review::PlanReviewScreen;
 use crate::session_loading_buffer::SessionLoadingBuffer;
 use crate::session_picker::SessionPicker;
 use crate::settings::{
     ContextUsageDisplay, ResolvedStatusLineSettings, UiSettings, resolve_content_padding, resolve_status_line_settings,
 };
-use crate::settings_overlay::{SettingsMenuEntry, SettingsMenuValue, SettingsOverlay};
-use crate::surface::{Surface, SurfaceMessage};
+use crate::settings_overlay::SettingsOverlay;
+use crate::status_line::StatusLineModel;
+use crate::surface::Surface;
 use crate::tool_calls::{ToolCallLog, ToolStatus};
 use crate::transcript::{SegmentContent, Transcript};
 use crate::workspace_picker::WorkspacePicker;
 use crate::workspace_status::WorkspaceStatus;
-use acp_utils::client::{AcpEvent, AcpPromptHandle};
-use acp_utils::config_option_id::ConfigOptionId;
-use acp_utils::notifications::AetherCapabilities;
-use acp_utils::notifications::McpNotification;
-use acp_utils::notifications::McpServerStatusEntry;
-use agent_client_protocol::schema::{self as acp, SessionConfigOptionCategory, SessionId};
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::layout::Rect;
-use std::any::Any;
+use acp_utils::client::AcpPromptHandle;
+use acp_utils::notifications::{AetherCapabilities, McpServerStatusEntry};
+use agent_client_protocol::schema::{self as acp, SessionId};
+use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
-use utils::ReasoningEffort;
+use std::time::Instant;
 
-#[path = "app/acp.rs"]
 mod acp_reducer;
 mod config;
 mod input;
@@ -54,6 +47,63 @@ pub enum ExitState {
 impl ExitState {
     fn is_confirming(&self) -> bool {
         matches!(self, ExitState::Confirming(_))
+    }
+}
+
+/// The layer above the conversation that owns input while it is open. At most
+/// one is open, and the set is closed, so the few ACP updates that need a
+/// concrete surface just match on it.
+pub enum Layer {
+    Settings(SettingsOverlay),
+    Sessions(SessionPicker),
+    Workspaces(WorkspacePicker),
+    Elicitation(ElicitationModal),
+    // Boxed: the two full-screen views are an order of magnitude larger than
+    // the overlays, and `App` holds one `Layer` for the whole session.
+    GitDiff(Box<GitDiffScreen>),
+    PlanReview(Box<PlanReviewScreen>),
+}
+
+/// Which layer is open, for the questions that do not need the layer itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayerKind {
+    Settings,
+    Sessions,
+    Workspaces,
+    Elicitation,
+    GitDiff,
+    PlanReview,
+}
+
+impl Layer {
+    pub fn kind(&self) -> LayerKind {
+        match self {
+            Self::Settings(_) => LayerKind::Settings,
+            Self::Sessions(_) => LayerKind::Sessions,
+            Self::Workspaces(_) => LayerKind::Workspaces,
+            Self::Elicitation(_) => LayerKind::Elicitation,
+            Self::GitDiff(_) => LayerKind::GitDiff,
+            Self::PlanReview(_) => LayerKind::PlanReview,
+        }
+    }
+
+    fn surface(&mut self) -> &mut dyn Surface {
+        match self {
+            Self::Settings(surface) => surface,
+            Self::Sessions(surface) => surface,
+            Self::Workspaces(surface) => surface,
+            Self::Elicitation(surface) => surface,
+            Self::GitDiff(surface) => surface.as_mut(),
+            Self::PlanReview(surface) => surface.as_mut(),
+        }
+    }
+}
+
+impl LayerKind {
+    /// Whether this layer replaces the conversation rather than drawing above
+    /// it, which also stops the transcript committing to terminal scrollback.
+    pub fn is_fullscreen(self) -> bool {
+        matches!(self, Self::GitDiff | Self::PlanReview)
     }
 }
 
@@ -88,10 +138,7 @@ pub struct App {
     working_dir: PathBuf,
     available_commands: Vec<CommandEntry>,
     session_loading_buffer: SessionLoadingBuffer,
-    /// The layer above the conversation that owns input while it is open. At
-    /// most one, and every kind of surface is stored the same way — the few ACP
-    /// updates that need a concrete one reach for it with [`App::layer_as`].
-    layer: Option<Box<dyn Surface>>,
+    layer: Option<Layer>,
     workspace_move_state: WorkspaceMoveState,
     transcript: Transcript,
     tool_calls: ToolCallLog,
@@ -102,14 +149,13 @@ pub struct App {
     exit_state: ExitState,
     progress_indicator: ProgressIndicator,
     last_drained_kind: Option<HistoryKind>,
-    transcript_generation: u64,
-    pending_effects: std::collections::VecDeque<Effect>,
+    transcript_generation: Generation,
+    pending_effects: VecDeque<Effect>,
     ui_settings: UiSettings,
     pending_theme: Option<crate::theme::Theme>,
     plan_tracker: PlanTracker,
     pending_bell: Option<()>,
     last_terminal_size: (u16, u16),
-    surface_rect: Option<Rect>,
 }
 
 pub struct AppConfig {
@@ -226,14 +272,13 @@ impl App {
             exit_state: ExitState::Idle,
             progress_indicator: ProgressIndicator::default(),
             last_drained_kind: None,
-            transcript_generation: 0,
-            pending_effects: std::collections::VecDeque::new(),
+            transcript_generation: Generation::default(),
+            pending_effects: VecDeque::new(),
             ui_settings: config.settings,
             pending_theme: None,
             plan_tracker: PlanTracker::default(),
             pending_bell: None,
             last_terminal_size: (0, 0),
-            surface_rect: None,
         }
     }
 
@@ -260,32 +305,37 @@ impl App {
             || self.plan_tracker.has_completed_in_grace_period()
     }
 
+    /// Which layer is open, if any.
+    pub fn layer_kind(&self) -> Option<LayerKind> {
+        self.layer.as_ref().map(Layer::kind)
+    }
+
+    /// Runs `apply` when the settings overlay is open. Agent pushes that only
+    /// affect what it displays are dropped when it is not.
+    fn with_settings(&mut self, apply: impl FnOnce(&mut SettingsOverlay)) {
+        if let Some(Layer::Settings(overlay)) = self.layer.as_mut() {
+            apply(overlay);
+        }
+    }
+
+    fn with_session_picker(&mut self, apply: impl FnOnce(&mut SessionPicker)) {
+        if let Some(Layer::Sessions(picker)) = self.layer.as_mut() {
+            apply(picker);
+        }
+    }
+
     /// Whether an overlay is open. Full-screen views are excluded: they replace
     /// the conversation rather than sitting above it.
     pub fn has_modal(&self) -> bool {
-        self.active_surface().is_some_and(|surface| !surface.is_fullscreen())
+        self.layer_kind().is_some_and(|kind| !kind.is_fullscreen())
     }
 
-    pub fn has_session_picker(&self) -> bool {
-        self.active_surface().is_some_and(|surface| (surface as &dyn Any).is::<SessionPicker>())
+    pub fn full_screen_active(&self) -> bool {
+        self.layer_kind().is_some_and(LayerKind::is_fullscreen)
     }
 
     pub fn workspace_move_state(&self) -> WorkspaceMoveState {
         self.workspace_move_state
-    }
-
-    pub fn full_screen_active(&self) -> bool {
-        self.active_surface().is_some_and(Surface::is_fullscreen)
-    }
-
-    fn active_surface(&self) -> Option<&dyn Surface> {
-        self.layer.as_deref()
-    }
-
-    /// The open surface, when it is a `T`. Lets an ACP update reach the one
-    /// surface that cares about it without the app tracking what is open.
-    fn layer_as<T: Surface>(&mut self) -> Option<&mut T> {
-        (self.layer.as_deref_mut()? as &mut dyn Any).downcast_mut::<T>()
     }
 
     pub fn exit_requested(&self) -> bool {
@@ -323,7 +373,7 @@ impl App {
         self.last_drained_kind
     }
 
-    pub fn transcript_generation(&self) -> u64 {
+    pub fn transcript_generation(&self) -> Generation {
         self.transcript_generation
     }
 
@@ -367,20 +417,19 @@ impl App {
         self.content_padding
     }
 
-    pub fn status_line_settings(&self) -> &ResolvedStatusLineSettings {
-        &self.status_line
-    }
-
-    pub fn workspace_status(&self) -> &WorkspaceStatus {
-        &self.workspace_status
-    }
-
-    pub fn agent_name(&self) -> &str {
-        &self.agent_name
-    }
-
-    pub fn context_usage(&self) -> Option<ContextUsageDisplay> {
-        self.turn.context_usage
+    /// Everything the status line reads, gathered for one frame.
+    pub fn status_line_model(&self) -> StatusLineModel<'_> {
+        StatusLineModel {
+            settings: &self.status_line,
+            config_options: &self.config_options,
+            workspace: &self.workspace_status,
+            agent_name: &self.agent_name,
+            content_padding: self.content_padding,
+            context_usage: self.turn.context_usage,
+            unhealthy_servers: self.unhealthy_server_count,
+            waiting_for_response: self.turn.prompt_in_flight,
+            exit_confirmation: self.exit_state.is_confirming(),
+        }
     }
 
     pub fn context_percent(&self) -> Option<u8> {
@@ -388,10 +437,6 @@ impl App {
             let percent = u64::from(usage.used_tokens) * 100 / u64::from(usage.limit_tokens).max(1);
             u8::try_from(percent).unwrap_or(100).min(100)
         })
-    }
-
-    pub fn unhealthy_server_count(&self) -> usize {
-        self.unhealthy_server_count
     }
 
     pub fn ui_settings(&self) -> &UiSettings {
@@ -446,7 +491,7 @@ impl App {
         self.transcript.clear();
         self.tool_calls.clear();
         self.last_drained_kind = None;
-        self.transcript_generation = self.transcript_generation.wrapping_add(1);
+        self.transcript_generation.bump();
     }
 
     /// Clears the per-turn indicators that must not survive into a different

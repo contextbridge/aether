@@ -2,14 +2,13 @@ use super::{LiveSettingsData, SettingsPane, summarize};
 use crate::filterable_list::FilterableList;
 use crate::render_context::RenderContext;
 use crate::selection::Direction;
-use crate::surface::{Surface, SurfaceMessage};
-use crate::wrap::truncate_to_width;
+use crate::surface::{Surface, SurfaceMessage, one};
 use agent_client_protocol::schema::AuthMethod;
-use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
-use ratatui::widgets::{ListItem, Widget};
+use ratatui::text::Line;
+use ratatui::widgets::Widget;
 
 /// Provider authentication status, with a login action per provider.
 pub(super) struct ProviderLoginPane {
@@ -34,25 +33,20 @@ impl ProviderLoginPane {
     pub(super) fn new(entries: Vec<ProviderLoginEntry>) -> Self {
         Self { entries: list_of(entries) }
     }
-
-    /// Starts login for the focused provider, unless one is already running.
-    fn authenticate(&self) -> Vec<SurfaceMessage> {
-        self.entries
-            .selected_entry()
-            .filter(|entry| entry.status != ProviderLoginStatus::Authenticating)
-            .map(|entry| SurfaceMessage::AuthenticateProvider(entry.method_id.clone()))
-            .into_iter()
-            .collect()
-    }
 }
 
 impl Surface for ProviderLoginPane {
-    fn on_surface_key(&mut self, key: KeyEvent) -> Option<Vec<SurfaceMessage>> {
-        (key.code == KeyCode::Enter).then(|| self.authenticate())
+    /// Starts login for the focused provider, unless one is already running.
+    fn activate(&mut self) -> Vec<SurfaceMessage> {
+        one(self
+            .entries
+            .selected_entry()
+            .filter(|entry| entry.status != ProviderLoginStatus::Authenticating)
+            .map(|entry| SurfaceMessage::AuthenticateProvider(entry.method_id.clone())))
     }
 
     fn click(&mut self, row: u16, _column: u16) -> Vec<SurfaceMessage> {
-        if self.entries.select_at(row) { self.authenticate() } else { Vec::new() }
+        if self.entries.select_at(row) { self.activate() } else { Vec::new() }
     }
 
     fn scroll(&mut self, direction: Direction) -> Vec<SurfaceMessage> {
@@ -63,18 +57,15 @@ impl Surface for ProviderLoginPane {
     fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
         let theme = cx.theme;
         self.entries
-            .view(theme, " (no providers need login)", |entry| {
+            .view(theme, |entry| {
                 let (indicator, detail, style) = match entry.status {
                     ProviderLoginStatus::NeedsLogin => ("⚡", "needs login", Style::new().fg(theme.warning)),
                     ProviderLoginStatus::Authenticating => ("⏳", "authenticating...", Style::new().fg(theme.warning)),
                     ProviderLoginStatus::LoggedIn => ("✓", "logged in", Style::new().fg(theme.success)),
                 };
-                ListItem::new(truncate_to_width(
-                    &format!(" {}  {indicator} {detail}", entry.name),
-                    usize::from(area.width),
-                ))
-                .style(style)
+                Line::styled(format!(" {}  {indicator} {detail}", entry.name), style)
             })
+            .empty_message(" (no providers need login)")
             .highlight_style(Style::new().fg(theme.background).bg(theme.warning))
             .render(area, buf);
         None

@@ -3,8 +3,8 @@ use ratatui::TerminalOptions;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use tokio::sync::mpsc::UnboundedReceiver;
-use wisp_next::app::{App, AppConfig};
-use wisp_next::effects::EffectResult;
+use wisp_next::app::{App, AppConfig, LayerKind};
+use wisp_next::effects::SurfaceEvent;
 use wisp_next::presentation::Presenter;
 use wisp_next::render::sync_terminal as sync_terminal_with_renderer;
 use wisp_next::settings::UiSettings;
@@ -43,6 +43,15 @@ fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
 
+fn has_session_picker(app: &App) -> bool {
+    app.layer_kind() == Some(LayerKind::Sessions)
+}
+
+/// The area a layer is drawn into: the whole inline viewport.
+fn layer_rect(terminal: &mut ratatui::Terminal<TestBackend>) -> ratatui::layout::Rect {
+    terminal.get_frame().area()
+}
+
 fn mouse_event(kind: MouseEventKind, column: u16, row: u16) -> crossterm::event::Event {
     crossterm::event::Event::Mouse(MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE })
 }
@@ -79,17 +88,15 @@ mod picker_click {
             SessionInfo::new(agent_client_protocol::schema::SessionId::new("s3"), "/tmp"),
         ];
         app.on_acp_event(AcpEvent::SessionsListed { sessions });
-        assert!(app.has_session_picker());
+        assert!(has_session_picker(&app));
 
         let mut terminal = make_terminal(80, 24);
         let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
-        assert!(app.surface_rect().is_some());
-
-        let rect = app.surface_rect().unwrap();
+        let rect = layer_rect(&mut terminal);
         // Click on the second content row (local_y=2 → row=1 after border offset)
         app.on_terminal_event(click(rect.x + 2, rect.y + 2));
-        assert!(app.has_session_picker(), "picker should remain open");
+        assert!(has_session_picker(&app), "picker should remain open");
     }
 
     #[test]
@@ -101,16 +108,16 @@ mod picker_click {
             SessionInfo::new(agent_client_protocol::schema::SessionId::new("s2"), "/tmp"),
         ];
         app.on_acp_event(AcpEvent::SessionsListed { sessions });
-        assert!(app.has_session_picker());
+        assert!(has_session_picker(&app));
 
         let mut terminal = make_terminal(80, 24);
         let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
-        let rect = app.surface_rect().unwrap();
+        let rect = layer_rect(&mut terminal);
         // Click far below content (local_y=20 → row=19 after offset, clamped to last item)
         app.on_terminal_event(click(rect.x + 2, rect.y + 20));
-        assert!(app.has_session_picker());
+        assert!(has_session_picker(&app));
     }
 
     #[test]
@@ -125,7 +132,7 @@ mod picker_click {
         session_c.title = Some("Alpha Config".to_string());
 
         app.on_acp_event(AcpEvent::SessionsListed { sessions: vec![session_a, session_b, session_c] });
-        assert!(app.has_session_picker());
+        assert!(has_session_picker(&app));
 
         // Type filter: "Alpha"
         app.on_key(key(KeyCode::Char('A')));
@@ -138,10 +145,10 @@ mod picker_click {
         let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
-        let rect = app.surface_rect().unwrap();
+        let rect = layer_rect(&mut terminal);
         // Click on first visible row
         app.on_terminal_event(click(rect.x + 2, rect.y + 2));
-        assert!(app.has_session_picker());
+        assert!(has_session_picker(&app));
     }
 
     #[test]
@@ -159,9 +166,7 @@ mod picker_click {
         let mut terminal = make_terminal(80, 24);
         let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
-        assert!(app.surface_rect().is_some());
-
-        let rect = app.surface_rect().unwrap();
+        let rect = layer_rect(&mut terminal);
         // Click on the first content row (local_y=1 → row=0 after border offset)
         app.on_terminal_event(click(rect.x + 2, rect.y + 1));
     }
@@ -178,7 +183,7 @@ mod picker_click {
         let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
-        let rect = app.surface_rect().unwrap();
+        let rect = layer_rect(&mut terminal);
         // Click far below content
         app.on_terminal_event(click(rect.x + 2, rect.y + 15));
     }
@@ -205,7 +210,7 @@ mod picker_click {
         let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
-        let rect = app.surface_rect().unwrap();
+        let rect = layer_rect(&mut terminal);
         // Click on first visible row
         app.on_terminal_event(click(rect.x + 2, rect.y + 2));
     }
@@ -234,7 +239,7 @@ mod mouse_capture {
         app.on_acp_event(AcpEvent::SessionsListed { sessions: vec![other] });
         std::mem::drop(current_id);
 
-        assert!(app.has_session_picker());
+        assert!(has_session_picker(&app));
         assert!(app.needs_mouse_capture());
 
         app.on_key(key(KeyCode::Esc));
@@ -436,13 +441,13 @@ mod event_routing {
         app.on_acp_event(AcpEvent::SessionsListed {
             sessions: vec![SessionInfo::new(agent_client_protocol::schema::SessionId::new("other"), "/tmp")],
         });
-        assert!(app.has_session_picker());
+        assert!(has_session_picker(&app));
 
         // Click at (0, 0) — outside the picker rect (no surface rect is set without render)
         app.on_terminal_event(click(0, 0));
 
         // The session picker should still be open and unchanged
-        assert!(app.has_session_picker());
+        assert!(has_session_picker(&app));
     }
 
     #[test]
@@ -517,7 +522,7 @@ mod event_routing {
         let mut terminal = make_terminal(80, 24);
         let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
-        assert!(app.surface_rect().is_some());
+        assert!(app.layer_kind().is_some());
 
         app.on_terminal_event(scroll_down(40, 5));
         assert!(!app.take_bell());
@@ -553,7 +558,7 @@ mod event_routing {
         let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
-        let rect = app.surface_rect().unwrap();
+        let rect = layer_rect(&mut terminal);
         let click_y = rect.y + 2;
         app.on_terminal_event(click(rect.x + 2, click_y));
         assert!(!app.take_bell());
@@ -607,11 +612,11 @@ mod event_routing {
         let (mut app, mut commands) = settings_app(options, vec![], vec![]);
         let mut terminal = make_terminal(80, 24);
         open_settings(&mut app, &mut terminal);
-        let rect = app.surface_rect().unwrap();
+        let rect = layer_rect(&mut terminal);
         app.on_terminal_event(click(rect.x + 2, rect.y + 2));
         let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
-        let rect = app.surface_rect().unwrap();
+        let rect = layer_rect(&mut terminal);
         app.on_terminal_event(click(rect.x + 2, rect.y + 3));
         assert!(matches!(
             commands.try_recv(),
@@ -623,11 +628,11 @@ mod event_routing {
         let (mut app, mut commands) = settings_app(vec![], vec![server], vec![]);
         let mut terminal = make_terminal(80, 24);
         open_settings(&mut app, &mut terminal);
-        let rect = app.surface_rect().unwrap();
+        let rect = layer_rect(&mut terminal);
         app.on_terminal_event(click(rect.x + 2, rect.y + 2));
         let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
-        let rect = app.surface_rect().unwrap();
+        let rect = layer_rect(&mut terminal);
         app.on_terminal_event(click(rect.x + 2, rect.y + 1));
         assert!(matches!(
             commands.try_recv(),
@@ -638,11 +643,11 @@ mod event_routing {
         let (mut app, mut commands) = settings_app(vec![], vec![], methods);
         let mut terminal = make_terminal(80, 24);
         open_settings(&mut app, &mut terminal);
-        let rect = app.surface_rect().unwrap();
+        let rect = layer_rect(&mut terminal);
         app.on_terminal_event(click(rect.x + 2, rect.y + 3));
         let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
-        let rect = app.surface_rect().unwrap();
+        let rect = layer_rect(&mut terminal);
         app.on_terminal_event(click(rect.x + 2, rect.y + 1));
         assert!(matches!(
             commands.try_recv(),
@@ -660,18 +665,18 @@ mod event_routing {
         ];
         app.on_acp_event(AcpEvent::SessionsListed { sessions });
         std::mem::drop(current);
-        assert!(app.has_session_picker());
+        assert!(has_session_picker(&app));
 
         let mut terminal = make_terminal(80, 24);
         let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
-        assert!(app.surface_rect().is_some());
+        assert!(app.layer_kind().is_some());
 
         // Scroll down
-        let rect = app.surface_rect().unwrap();
+        let rect = layer_rect(&mut terminal);
         app.on_terminal_event(scroll_down(rect.x + 2, rect.y + 2));
         assert!(!app.take_bell());
-        assert!(app.has_session_picker());
+        assert!(has_session_picker(&app));
     }
 
     #[test]
@@ -710,7 +715,7 @@ mod event_routing {
         let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
-        let rect = app.surface_rect().unwrap();
+        let rect = layer_rect(&mut terminal);
         // Scroll should be consumed internally
         app.on_terminal_event(scroll_down(rect.x + 2, rect.y + 1));
         app.on_terminal_event(scroll_up(rect.x + 2, rect.y + 1));
@@ -728,11 +733,9 @@ mod event_routing {
         let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
-        let rect = app.surface_rect();
-        if let Some(rect) = rect {
-            app.on_terminal_event(scroll_down(rect.x + 2, rect.y + rect.height.saturating_sub(1)));
-            app.on_terminal_event(click(rect.x + 2, rect.y + rect.height.saturating_sub(1)));
-        }
+        let rect = layer_rect(&mut terminal);
+        app.on_terminal_event(scroll_down(rect.x + 2, rect.y + rect.height.saturating_sub(1)));
+        app.on_terminal_event(click(rect.x + 2, rect.y + rect.height.saturating_sub(1)));
         assert!(!app.take_bell());
     }
 
@@ -754,7 +757,7 @@ mod event_routing {
         let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
-        let rect = app.surface_rect().unwrap();
+        let rect = layer_rect(&mut terminal);
         app.on_terminal_event(scroll_down(rect.x + 2, rect.y + 2));
         app.on_terminal_event(scroll_up(rect.x + 2, rect.y + 2));
         app.on_terminal_event(click(rect.x + 2, rect.y + 2));
@@ -797,7 +800,7 @@ mod event_routing {
             let mut renderer = Presenter::new(&UiSettings::default());
             sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
-            let rect = app.surface_rect().unwrap();
+            let rect = layer_rect(&mut terminal);
             app.on_terminal_event(scroll_down(rect.x + 2, rect.y + 3));
             assert!(!app.take_bell());
         });
@@ -873,10 +876,11 @@ fn screen_rows(terminal: &ratatui::Terminal<TestBackend>) -> Vec<String> {
 
 mod screen_mouse {
     use super::*;
+    use wisp_next::generation::Generation;
     use wisp_next::git_diff::{FileDiff, FileStatus, GitDiffDocument, StageState};
     use wisp_next::render_context::RenderContext;
-    use wisp_next::screens::MouseAction;
     use wisp_next::screens::git_diff::{GitDiffEvent, GitDiffScreen};
+    use wisp_next::surface::MouseAction;
     use wisp_next::surface::Surface;
     use wisp_next::syntax::SyntaxHighlighter;
     use wisp_next::theme::Theme;
@@ -933,7 +937,11 @@ mod screen_mouse {
         let mut terminal = ratatui::Terminal::with_options(backend, TerminalOptions::default()).unwrap();
         terminal
             .draw(|frame| {
-                let mut cx = RenderContext { theme: &theme, highlighter: &mut highlighter, theme_generation: 0 };
+                let mut cx = RenderContext {
+                    theme: &theme,
+                    highlighter: &mut highlighter,
+                    theme_generation: Generation::default(),
+                };
                 screen.render(frame.area(), frame.buffer_mut(), &mut cx);
             })
             .unwrap();
@@ -942,7 +950,7 @@ mod screen_mouse {
 
     fn open_screen() -> GitDiffScreen {
         let (mut screen, effect) = GitDiffScreen::new(std::path::PathBuf::from("/tmp/repo"));
-        screen.on_event(EffectResult::GitDiff(GitDiffEvent::Loaded {
+        screen.on_event(SurfaceEvent::GitDiff(GitDiffEvent::Loaded {
             request_id: effect.request_id(),
             result: Ok(make_test_document()),
         }));
@@ -1041,7 +1049,7 @@ mod screen_mouse {
 // Surface rect tracking tests
 // ---------------------------------------------------------------------------
 
-mod surface_rects {
+mod mouse_owning_surfaces {
     use super::*;
     use acp_utils::client::AcpEvent;
 
@@ -1080,7 +1088,7 @@ mod surface_rects {
         let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
-        assert!(app.surface_rect().is_some(), "surface rect should be set after render");
+        assert!(app.has_modal(), "the overlay should still be open after a render");
     }
 
     #[test]
@@ -1099,7 +1107,7 @@ mod surface_rects {
         let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
-        assert!(app.surface_rect().is_some());
+        assert!(app.layer_kind().is_some());
     }
 
     #[test]
@@ -1134,7 +1142,11 @@ mod surface_rects {
         let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
-        assert!(app.surface_rect().is_some());
+        // History search is a composer overlay rather than a layer, so it owns
+        // the mouse without anything being pushed above the conversation.
+        assert!(app.layer_kind().is_none());
+        assert!(app.composer().has_prompt_search());
+        assert!(app.needs_mouse_capture());
     }
 }
 

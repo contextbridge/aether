@@ -4,10 +4,7 @@ use crate::surface::ListFilter;
 use crate::theme::Theme;
 use nucleo::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo::{Config, Matcher, Utf32Str};
-use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
-use ratatui::style::Style;
-use ratatui::widgets::{Block, ListItem, Widget};
+use ratatui::text::Line;
 
 /// A list of `T` with a fuzzy-match filter and a persistent selection.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -87,14 +84,6 @@ impl<T> FilterableList<T> {
         hit
     }
 
-    pub fn select_previous(&mut self) {
-        self.step(Direction::Backward, |_| true);
-    }
-
-    pub fn select_next(&mut self) {
-        self.step(Direction::Forward, |_| true);
-    }
-
     /// Wrapping move to the nearest filtered entry in `direction` satisfying
     /// `selectable`, so disabled rows are never focused.
     pub fn step(&mut self, direction: Direction, selectable: impl Fn(&T) -> bool) {
@@ -120,23 +109,12 @@ impl<T> FilterableList<T> {
         );
     }
 
-    /// Renders the filtered entries as a ratatui [`List`], rows produced by
-    /// `item`. Decorate with [`FilterableListView::block`] and
-    /// [`FilterableListView::scrollbar`].
-    pub fn view<'a, F>(&'a mut self, theme: &'a Theme, empty_message: &'a str, item: F) -> FilterableListView<'a, T, F>
-    where
-        F: FnMut(&T) -> ListItem<'static>,
-    {
-        FilterableListView {
-            list: self,
-            theme,
-            empty_message,
-            item,
-            block: None,
-            border_title: None,
-            scrollbar: false,
-            highlight: None,
-        }
+    /// The matching entries as [`ListView`] rows, each built by `row`. Decorate
+    /// the result with the usual [`ListView`] chrome.
+    pub fn view<'a>(&'a mut self, theme: &'a Theme, row: impl FnMut(&T) -> Line<'static>) -> ListView<'a> {
+        let Self { entries, filtered_indices, selection, .. } = self;
+        let rows = filtered_indices.iter().map(|&index| &entries[index]).map(row).collect();
+        ListView::new(rows, selection, theme)
     }
 
     fn refilter(&mut self) {
@@ -163,68 +141,6 @@ impl<T> ListFilter for FilterableList<T> {
 
     fn pop_query_char(&mut self) {
         FilterableList::pop_query_char(self);
-    }
-}
-
-/// A [`FilterableList`] rendered as a ratatui widget: the matching entries as
-/// rows, drawn with the shared [`ListView`] chrome.
-pub struct FilterableListView<'a, T, F> {
-    list: &'a mut FilterableList<T>,
-    theme: &'a Theme,
-    empty_message: &'a str,
-    item: F,
-    block: Option<Block<'static>>,
-    border_title: Option<String>,
-    scrollbar: bool,
-    highlight: Option<Style>,
-}
-
-impl<T, F> FilterableListView<'_, T, F> {
-    pub fn block(mut self, block: Block<'static>) -> Self {
-        self.block = Some(block);
-        self
-    }
-
-    /// Wraps the list in a titled border, the standard full-pane picker chrome.
-    pub fn bordered(mut self, title: impl Into<String>) -> Self {
-        self.border_title = Some(title.into());
-        self
-    }
-
-    pub fn scrollbar(mut self) -> Self {
-        self.scrollbar = true;
-        self
-    }
-
-    pub fn highlight_style(mut self, style: Style) -> Self {
-        self.highlight = Some(style);
-        self
-    }
-}
-
-impl<T, F> Widget for FilterableListView<'_, T, F>
-where
-    F: FnMut(&T) -> ListItem<'static>,
-{
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        let Self { list, theme, empty_message, mut item, block, border_title, scrollbar, highlight } = self;
-        let FilterableList { entries, filtered_indices, selection, .. } = list;
-
-        let rows: Vec<ListItem<'static>> = filtered_indices.iter().map(|&index| item(&entries[index])).collect();
-        let mut view = ListView::new(rows, selection, theme).empty_message(empty_message);
-        if let Some(title) = border_title {
-            view = view.bordered(title);
-        }
-        if let Some(block) = block {
-            view = view.block(block);
-        }
-        if scrollbar {
-            view = view.scrollbar();
-        }
-        if let Some(highlight) = highlight {
-            view = view.highlight_style(highlight);
-        }
-        view.render(area, buf);
     }
 }
 

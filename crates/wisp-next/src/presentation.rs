@@ -4,6 +4,7 @@ use std::hash::{Hash, Hasher};
 
 use crate::app::{HistoryItem, HistoryKind, SubAgentHistoryItem};
 use crate::diff::render_diff;
+use crate::generation::Generation;
 use crate::markdown::render_markdown;
 use crate::progress_indicator::spinner_frame;
 use crate::render_context::RenderContext;
@@ -18,8 +19,17 @@ use unicode_width::UnicodeWidthStr;
 
 const MAX_TOOL_ARG_WIDTH: usize = 200;
 
-/// Owns everything the draw pass needs but the terminal itself: the theme, the
-/// syntax highlighter, and the transcript scrollback those two produce.
+/// Which half of the transcript is being rendered.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Segment {
+    /// Has left the live viewport for good.
+    Committed,
+    /// Still mutating, so its markdown is cached between frames.
+    Live,
+}
+
+/// Turns transcript items into styled lines, and owns the two things that takes:
+/// the theme and the syntax highlighter.
 ///
 /// Methods destructure `self` rather than taking `&self.theme` through `&mut
 /// self`, so the theme is borrowed alongside the highlighter instead of cloned
@@ -27,10 +37,44 @@ const MAX_TOOL_ARG_WIDTH: usize = 200;
 pub struct Presenter {
     theme: Theme,
     highlighter: SyntaxHighlighter,
-    theme_generation: u64,
-    committed_lines: Vec<Line<'static>>,
-    transcript_generation: u64,
+    theme_generation: Generation,
     pending_markdown_cache: PendingMarkdownCache,
+    scrollback: Scrollback,
+}
+
+/// The rendered lines that have left the live viewport. What still fits on
+/// screen is drawn; anything older is handed to the terminal's own history.
+#[derive(Default)]
+pub struct Scrollback {
+    lines: Vec<Line<'static>>,
+    generation: Generation,
+}
+
+impl Scrollback {
+    pub fn lines(&self) -> &[Line<'static>] {
+        &self.lines
+    }
+
+    pub fn append(&mut self, lines: Vec<Line<'static>>) {
+        self.lines.extend(lines);
+    }
+
+    /// Everything beyond the newest `visible` rows, for handing to the terminal.
+    pub fn take_overflow(&mut self, visible: usize) -> Vec<Line<'static>> {
+        let overflow = self.lines.len().saturating_sub(visible);
+        self.lines.drain(..overflow).collect()
+    }
+
+    /// Drops the scrollback when the conversation it belongs to is swapped out,
+    /// reporting whether that happened.
+    fn sync(&mut self, generation: Generation) -> bool {
+        if self.generation == generation {
+            return false;
+        }
+        self.lines.clear();
+        self.generation = generation;
+        true
+    }
 }
 
 impl Presenter {
@@ -38,11 +82,18 @@ impl Presenter {
         Self {
             theme: Theme::load(settings),
             highlighter: SyntaxHighlighter::new(),
-            theme_generation: 0,
-            committed_lines: Vec::new(),
-            transcript_generation: 0,
+            theme_generation: Generation::default(),
             pending_markdown_cache: PendingMarkdownCache::default(),
+            scrollback: Scrollback::default(),
         }
+    }
+
+    pub fn scrollback(&self) -> &Scrollback {
+        &self.scrollback
+    }
+
+    pub fn scrollback_mut(&mut self) -> &mut Scrollback {
+        &mut self.scrollback
     }
 
     pub fn theme(&self) -> &Theme {
@@ -51,7 +102,7 @@ impl Presenter {
 
     pub fn set_theme(&mut self, theme: Theme) {
         self.theme = theme;
-        self.theme_generation = self.theme_generation.wrapping_add(1);
+        self.theme_generation.bump();
         self.highlighter.clear();
         self.pending_markdown_cache.clear();
     }
@@ -65,63 +116,23 @@ impl Presenter {
         }
     }
 
-    /// Renders items that have left the live viewport for good.
-    pub fn history_lines(
-        &mut self,
-        items: &[HistoryItem],
-        previous_kind: Option<HistoryKind>,
-        width: u16,
-        padding: usize,
-        spinner_tick: usize,
-    ) -> Vec<Line<'static>> {
-        self.render_items(items, previous_kind, width, padding, spinner_tick, false)
-    }
-
-    /// Renders the still-mutating tail, caching markdown between frames.
-    pub(crate) fn pending_history_lines(
-        &mut self,
-        items: &[HistoryItem],
-        previous_kind: Option<HistoryKind>,
-        width: u16,
-        padding: usize,
-        spinner_tick: usize,
-    ) -> Vec<Line<'static>> {
-        let lines = self.render_items(items, previous_kind, width, padding, spinner_tick, true);
-        self.pending_markdown_cache.end_frame();
-        lines
-    }
-
-    pub(crate) fn sync_transcript_generation(&mut self, generation: u64) {
-        if self.transcript_generation != generation {
-            self.committed_lines.clear();
+    /// Drops everything cached for a conversation that has been swapped out.
+    pub fn sync_transcript_generation(&mut self, generation: Generation) {
+        if self.scrollback.sync(generation) {
             self.pending_markdown_cache.clear();
-            self.transcript_generation = generation;
         }
-    }
-
-    pub(crate) fn append_committed_lines(&mut self, lines: Vec<Line<'static>>) {
-        self.committed_lines.extend(lines);
-    }
-
-    pub(crate) fn committed_lines(&self) -> &[Line<'static>] {
-        &self.committed_lines
-    }
-
-    pub(crate) fn take_committed_overflow(&mut self, visible_lines: usize) -> Vec<Line<'static>> {
-        let overflow = self.committed_lines.len().saturating_sub(visible_lines);
-        self.committed_lines.drain(..overflow).collect()
     }
 
     /// Renders `items` back to back, inserting a blank line wherever the kind
     /// of content changes so speakers and tool calls stay visually separated.
-    fn render_items(
+    pub fn lines(
         &mut self,
+        segment: Segment,
         items: &[HistoryItem],
         previous_kind: Option<HistoryKind>,
         width: u16,
         padding: usize,
         spinner_tick: usize,
-        cache_markdown: bool,
     ) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
         let mut previous = previous_kind;
@@ -131,12 +142,17 @@ impl Presenter {
                 lines.push(Line::default());
             }
             match item {
-                HistoryItem::Text(text) if cache_markdown => {
+                // Only the live tail is worth caching: a committed segment is
+                // rendered once and never asked for again.
+                HistoryItem::Text(text) if segment == Segment::Live => {
                     lines.extend(self.cached_markdown(text, width, padding));
                 }
                 _ => lines.extend(self.item_lines(item, width, padding, spinner_tick)),
             }
             previous = Some(kind);
+        }
+        if segment == Segment::Live {
+            self.pending_markdown_cache.end_frame();
         }
         lines
     }

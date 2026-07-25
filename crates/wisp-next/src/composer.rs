@@ -2,9 +2,12 @@ mod view;
 
 use crate::attachments::{AttachmentKind, PromptAttachment, classify_attachment};
 use crate::edit_buffer::EditBuffer;
-use crate::effects::{self, Effect};
+use crate::effects::Effect;
+use crate::generation::Generation;
 use crate::picker::{CommandEntry, CompletionOverlay, FileEntry};
 use crate::prompt_search::{self, PromptSearchPicker};
+use crate::selection::Direction;
+use crate::surface::MouseAction;
 use acp_utils::notifications::PromptSearchResponse;
 use crossterm::event::KeyCode;
 use ratatui::layout::Position;
@@ -268,12 +271,12 @@ impl Composer {
     /// runs off the event loop, so opening the picker never stalls the keystroke
     /// that triggered it.
     pub fn open_file_picker(&mut self, root: &std::path::Path) -> Effect {
-        let request_id = effects::next_request_id();
+        let request_id = Generation::next();
         self.overlay = Some(Overlay::Completion(CompletionOverlay::file(request_id)));
         Effect::IndexFiles { request_id, root: root.to_path_buf() }
     }
 
-    pub fn on_files_indexed(&mut self, request_id: u64, files: Vec<FileEntry>) {
+    pub fn on_files_indexed(&mut self, request_id: Generation, files: Vec<FileEntry>) {
         if let Some(overlay) = self.completion() {
             overlay.set_files(request_id, files);
         }
@@ -314,14 +317,34 @@ impl Composer {
         }
     }
 
-    /// Moves through history results and mirrors the newly selected prompt into
-    /// the composer, so browsing previews each candidate in place.
-    pub fn navigate_prompt_search(&mut self, navigate: impl FnOnce(&mut PromptSearchPicker)) {
-        let Some(picker) = self.prompt_search() else {
-            return;
+    /// Whether any inline surface is open around the composer's text.
+    pub fn has_open_overlay(&self) -> bool {
+        self.overlay.is_some()
+    }
+
+    /// Routes a mouse event to whichever overlay is open. Browsing history
+    /// results previews each candidate in the composer, the way the arrow keys
+    /// do.
+    pub fn on_overlay_mouse(&mut self, action: MouseAction, row: u16) {
+        let direction = match action {
+            MouseAction::ScrollUp => Some(Direction::Backward),
+            MouseAction::ScrollDown => Some(Direction::Forward),
+            MouseAction::Click => None,
         };
-        navigate(picker);
-        self.apply_selected_search_result();
+        match self.overlay.as_mut() {
+            Some(Overlay::Completion(overlay)) => match direction {
+                Some(direction) => overlay.step(direction),
+                None => overlay.select_at(row),
+            },
+            Some(Overlay::PromptSearch { picker, .. }) => {
+                match direction {
+                    Some(direction) => picker.step(direction),
+                    None => picker.select_at(row),
+                }
+                self.apply_selected_search_result();
+            }
+            None => {}
+        }
     }
 
     pub fn has_prompt_search(&self) -> bool {
@@ -359,12 +382,12 @@ impl Composer {
                 None
             }
             KeyCode::Down => {
-                picker.move_down();
+                picker.step(Direction::Forward);
                 self.apply_selected_search_result();
                 None
             }
             KeyCode::Up => {
-                picker.move_up();
+                picker.step(Direction::Backward);
                 self.apply_selected_search_result();
                 None
             }

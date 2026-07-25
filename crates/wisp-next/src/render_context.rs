@@ -1,3 +1,4 @@
+use crate::generation::Generation;
 use crate::syntax::SyntaxHighlighter;
 use crate::theme::Theme;
 
@@ -8,5 +9,5 @@ use crate::theme::Theme;
 pub struct RenderContext<'a> {
     pub theme: &'a Theme,
     pub highlighter: &'a mut SyntaxHighlighter,
-    pub theme_generation: u64,
+    pub theme_generation: Generation,
 }

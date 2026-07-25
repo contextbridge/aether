@@ -12,6 +12,7 @@ use serde_json::{Map, Value};
 use crate::edit_buffer::{EditBuffer, apply_edit_key};
 use crate::selection::Direction;
 use crate::theme::Theme;
+use crate::wrap::rows;
 
 pub(super) struct FormModal {
     server_name: String,
@@ -228,10 +229,6 @@ impl FormModal {
         }
         Paragraph::new(Text::from(lines)).block(block).wrap(Wrap { trim: false }).render(area, buf);
     }
-}
-
-fn rows(count: usize) -> u16 {
-    u16::try_from(count).unwrap_or(u16::MAX)
 }
 
 impl FormField {

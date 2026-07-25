@@ -2,13 +2,13 @@ use super::{LiveSettingsData, SettingsPane, summarize};
 use crate::list_view::ListView;
 use crate::render_context::RenderContext;
 use crate::selection::{Direction, SelectionState};
-use crate::surface::{Surface, SurfaceMessage};
+use crate::surface::{Surface, SurfaceMessage, one};
 use acp_utils::notifications::{McpServerStatus, McpServerStatusEntry};
-use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
-use ratatui::widgets::{ListItem, Widget};
+use ratatui::text::Line;
+use ratatui::widgets::Widget;
 
 /// Read-only view of MCP server health, with authentication for OAuth servers.
 pub(super) struct ServerStatusPane {
@@ -37,14 +37,6 @@ impl ServerStatusPane {
         }
     }
 
-    fn authenticate(&self) -> Vec<SurfaceMessage> {
-        self.selected_entry()
-            .filter(|entry| entry.can_authenticate())
-            .map(|entry| SurfaceMessage::AuthenticateServer(entry.name.clone()))
-            .into_iter()
-            .collect()
-    }
-
     /// Rebuilds the row list, keeping focus on `keep` (or the first server).
     fn set_rows(&mut self, entries: Vec<McpServerStatusEntry>, keep: Option<&str>) {
         self.rows = build_rows(entries);
@@ -60,8 +52,11 @@ impl ServerStatusPane {
 }
 
 impl Surface for ServerStatusPane {
-    fn on_surface_key(&mut self, key: KeyEvent) -> Option<Vec<SurfaceMessage>> {
-        (key.code == KeyCode::Enter).then(|| self.authenticate())
+    fn activate(&mut self) -> Vec<SurfaceMessage> {
+        one(self
+            .selected_entry()
+            .filter(|entry| entry.can_authenticate())
+            .map(|entry| SurfaceMessage::AuthenticateServer(entry.name.clone())))
     }
 
     /// Headers and spacers are not selectable, so a click on one is ignored
@@ -75,7 +70,7 @@ impl Surface for ServerStatusPane {
             self.selection.select(restore, self.rows.len());
             return Vec::new();
         }
-        self.authenticate()
+        self.activate()
     }
 
     fn scroll(&mut self, direction: Direction) -> Vec<SurfaceMessage> {
@@ -87,8 +82,8 @@ impl Surface for ServerStatusPane {
     fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
         let theme = cx.theme;
         let rows = self.rows.iter().map(|row| match row {
-            ServerStatusRow::Header(label) => ListItem::new(label.clone()).style(Style::new().fg(theme.heading)),
-            ServerStatusRow::Spacer => ListItem::new(""),
+            ServerStatusRow::Header(label) => Line::styled(label.clone(), Style::new().fg(theme.heading)),
+            ServerStatusRow::Spacer => Line::default(),
             ServerStatusRow::Server { entry, indented } => {
                 let (indicator, detail) = server_status_detail(entry);
                 let prefix = if *indented { "  " } else { "" };
@@ -99,7 +94,7 @@ impl Surface for ServerStatusPane {
                     McpServerStatus::Failed { .. } => Style::new().fg(theme.error),
                     McpServerStatus::Authenticating | McpServerStatus::NeedsOAuth => Style::new().fg(theme.warning),
                 };
-                ListItem::new(format!(" {prefix}{}  {indicator} {detail}", entry.name)).style(style)
+                Line::styled(format!(" {prefix}{}  {indicator} {detail}", entry.name), style)
             }
         });
         ListView::new(rows.collect(), &mut self.selection, theme)

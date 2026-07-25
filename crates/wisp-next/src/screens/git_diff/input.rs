@@ -2,15 +2,17 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Position;
 
 use super::GitDiffScreen;
+use crate::annotation::DraftOutcome;
 use crate::edit_buffer::apply_edit_key;
-use crate::git_diff::{CommentContext, QueuedComment};
-use crate::screens::MouseAction;
+use crate::git_diff::{CommentContext, PatchAnchor, QueuedComment};
 use crate::screens::git_diff::GitDiffEvent;
+use crate::surface::MouseAction;
 use crate::surface::SurfaceMessage;
 
 use super::effect;
 use super::effects::GitDiffEffect;
-use super::state::{BottomBar, DrawerEntry, Focus, GitDiffLoadState, PatchCursor, PendingAction};
+use super::rendering::plural;
+use super::state::{BottomBar, Focus, GitDiffLoadState, PatchCursor, PendingAction};
 use crate::selection::Direction;
 
 /// Lines a mouse wheel notch and a page key move the patch pane.
@@ -51,14 +53,8 @@ impl GitDiffScreen {
         }
 
         self.focus = Focus::Drawer;
-        let entries = self.drawer_entries();
-        if !self.drawer_selection.select_at(row, entries.len()) {
-            return;
-        }
-        if let Some(DrawerEntry::File { index, .. }) =
-            self.drawer_selection.selected().and_then(|selected| entries.get(selected))
-        {
-            self.selected_file = *index;
+        if self.drawer_selection.select_at(row, self.drawer_entries().len()) {
+            self.follow_drawer_selection();
         }
     }
 
@@ -266,37 +262,30 @@ impl GitDiffScreen {
     }
 
     fn on_draft_key(&mut self, key: KeyEvent) -> Vec<SurfaceMessage> {
-        match key.code {
-            KeyCode::Esc => self.review.draft = None,
-            KeyCode::Enter => self.commit_draft(),
-            _ => {
-                if let Some(draft) = self.review.draft.as_mut() {
-                    apply_edit_key(&mut draft.buffer, key);
-                }
-            }
+        let Some(draft) = self.review.draft.as_mut() else {
+            return Vec::new();
+        };
+        let anchor = draft.anchor;
+        match draft.on_key(key) {
+            DraftOutcome::Continue => return Vec::new(),
+            DraftOutcome::Commit(body) => self.file_comment(anchor, body),
+            DraftOutcome::Discard => {}
         }
+        self.review.draft = None;
         Vec::new()
     }
 
-    /// Files the draft as a review comment against the patch line it is anchored
-    /// to, discarding it when the anchor no longer resolves.
-    fn commit_draft(&mut self) {
-        let Some(mut draft) = self.review.draft.take() else {
-            return;
-        };
-        let body = draft.buffer.take();
-        if body.trim().is_empty() {
-            return;
-        }
+    /// Files a review comment against the patch line `anchor` points at,
+    /// dropping it when the anchor no longer resolves.
+    fn file_comment(&mut self, anchor: PatchAnchor, body: String) {
         let Some(file) = self.selected_file() else {
             return;
         };
-        let Some(patch_line) = file.hunks.get(draft.anchor.hunk).and_then(|hunk| hunk.lines.get(draft.anchor.line))
-        else {
+        let Some(patch_line) = file.hunks.get(anchor.hunk).and_then(|hunk| hunk.lines.get(anchor.line)) else {
             return;
         };
         self.review.queue.push(QueuedComment {
-            anchor: draft.anchor,
+            anchor,
             body,
             context: CommentContext {
                 file_path: file.path.clone(),
@@ -313,19 +302,50 @@ impl GitDiffScreen {
             return false;
         }
         let count = self.review.queue.len();
-        let (what, key) = match action {
-            PendingAction::Reload => ("Reloading", "r"),
-            PendingAction::ScopeSwitch => ("Switching scope", "t"),
-            PendingAction::Stage => ("Staging/unstaging", "space/a/A"),
-            PendingAction::Commit => ("Committing", "C"),
-            PendingAction::Discard => ("Discarding", "d"),
-        };
         self.request.pending = Some(action);
         self.bottom_bar = BottomBar::Error(format!(
-            "{what} will clear {count} review comment{}. Press {key} again to confirm or Esc to cancel.",
-            if count == 1 { "" } else { "s" }
+            "{} will clear {}. Press {} again to confirm or Esc to cancel.",
+            action.gerund(),
+            plural(count, "review comment"),
+            action.key_hint(),
         ));
         true
+    }
+}
+
+impl PendingAction {
+    /// What arming this action is about to do, for the confirmation prompt.
+    fn gerund(self) -> &'static str {
+        match self {
+            Self::Reload => "Reloading",
+            Self::ScopeSwitch => "Switching scope",
+            Self::Stage => "Staging/unstaging",
+            Self::Commit => "Committing",
+            Self::Discard => "Discarding",
+        }
+    }
+
+    /// The keys that confirm this action. The first is the one the prompt names.
+    fn confirm_keys(self) -> &'static [KeyCode] {
+        match self {
+            Self::Reload => &[KeyCode::Char('r')],
+            Self::ScopeSwitch => &[KeyCode::Char('t'), KeyCode::Tab],
+            Self::Stage => &[KeyCode::Char(' '), KeyCode::Char('a'), KeyCode::Char('A')],
+            Self::Commit => &[KeyCode::Char('C')],
+            Self::Discard => &[KeyCode::Char('d')],
+        }
+    }
+
+    fn key_hint(self) -> String {
+        self.confirm_keys().iter().copied().map(key_label).collect::<Vec<_>>().join("/")
+    }
+}
+
+fn key_label(code: KeyCode) -> String {
+    match code {
+        KeyCode::Char(' ') => "space".to_string(),
+        KeyCode::Char(character) => character.to_string(),
+        other => format!("{other:?}").to_lowercase(),
     }
 }
 
@@ -334,12 +354,5 @@ fn is_dismiss_key(key: KeyEvent) -> bool {
 }
 
 fn is_confirm_key(key: KeyEvent, action: PendingAction) -> bool {
-    matches!(
-        (action, key.code),
-        (PendingAction::Reload, KeyCode::Char('r'))
-            | (PendingAction::ScopeSwitch, KeyCode::Char('t') | KeyCode::Tab)
-            | (PendingAction::Stage, KeyCode::Char('a' | 'A' | ' '))
-            | (PendingAction::Commit, KeyCode::Char('C'))
-            | (PendingAction::Discard, KeyCode::Char('d'))
-    )
+    action.confirm_keys().contains(&key.code)
 }

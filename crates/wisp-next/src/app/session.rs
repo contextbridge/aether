@@ -1,9 +1,11 @@
 use super::config::{build_theme_entries, update_config_option_value};
-use super::{
-    AetherCapabilities, App, CommandEntry, SessionId, SettingsOverlay, Surface, SurfaceMessage, WorkspaceMoveState,
-    WorkspaceStatus, acp,
-};
-use crate::settings_overlay::SettingsChange;
+use super::{App, Layer, WorkspaceMoveState};
+use crate::picker::CommandEntry;
+use crate::settings_overlay::{SettingsChange, SettingsOverlay};
+use crate::surface::SurfaceMessage;
+use crate::workspace_status::WorkspaceStatus;
+use acp_utils::notifications::AetherCapabilities;
+use agent_client_protocol::schema::{self as acp, SessionId};
 
 pub(super) fn builtin_commands(capabilities: &AetherCapabilities) -> Vec<CommandEntry> {
     let mut commands: Vec<CommandEntry> = [
@@ -59,7 +61,7 @@ impl App {
         let mut overlay = SettingsOverlay::new(&self.config_options, self.server_statuses.clone(), &self.auth_methods);
         overlay.add_local_entries(build_theme_entries(&self.ui_settings));
         overlay.add_status_entries();
-        self.open_layer(Box::new(overlay));
+        self.open_layer(Layer::Settings(overlay));
     }
 
     fn begin_workspace_move(&mut self) {
@@ -110,25 +112,23 @@ impl App {
                 let _ = self.prompt_handle.authenticate_mcp_server(&self.session_id, &name);
             }
             SurfaceMessage::AuthenticateProvider(method_id) => {
-                if let Some(overlay) = self.layer_as::<SettingsOverlay>() {
-                    overlay.on_authenticate_started(&method_id);
-                }
+                self.with_settings(|overlay| overlay.on_authenticate_started(&method_id));
                 let _ = self.prompt_handle.authenticate(&method_id);
             }
         }
     }
 
-    /// Opens `surface`, closing whatever was already open.
-    pub(super) fn open_layer(&mut self, surface: Box<dyn Surface>) {
+    /// Opens `layer`, closing whatever was already open.
+    pub(super) fn open_layer(&mut self, layer: Layer) {
         self.close_layer();
-        self.layer = Some(surface);
+        self.layer = Some(layer);
     }
 
-    /// Dismisses the open surface. It is cancelled first so it can release
-    /// anything it was holding, such as an unanswered elicitation.
+    /// Dismisses the open layer. Its surface is cancelled first so it can
+    /// release anything it was holding, such as an unanswered elicitation.
     pub(super) fn close_layer(&mut self) {
-        if let Some(surface) = self.layer.as_deref_mut() {
-            surface.cancel();
+        if let Some(layer) = self.layer.as_mut() {
+            layer.surface().cancel();
         }
         self.layer = None;
         if self.workspace_move_state == WorkspaceMoveState::Picking {
@@ -137,9 +137,7 @@ impl App {
     }
 
     pub(super) fn apply_settings_change(&mut self, change: &SettingsChange) {
-        if let Some(overlay) = self.layer_as::<SettingsOverlay>() {
-            overlay.apply_change(change);
-        }
+        self.with_settings(|overlay| overlay.apply_change(change));
         update_config_option_value(&mut self.config_options, &change.config_id, &change.new_value);
     }
 
