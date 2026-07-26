@@ -59,6 +59,7 @@ impl LspRegistry {
     ///
     /// LSP server configurations are managed by the daemon.
     pub fn new(root_path: PathBuf) -> Self {
+        let root_path = root_path.canonicalize().unwrap_or(root_path);
         let clients = LANGUAGE_METADATA
             .iter()
             .filter(|metadata| get_config_for_language(metadata.id).is_some())
@@ -326,5 +327,22 @@ mod tests {
         let registry = LspRegistry::new(PathBuf::from("/tmp"));
 
         assert!(registry.active_clients().await.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn root_path_resolves_symlinks_to_match_language_server_paths() {
+        use std::fs::create_dir;
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("temp dir");
+        let project = temp.path().join("project");
+        create_dir(&project).expect("create project dir");
+        let link = temp.path().join("link");
+        symlink(&project, &link).expect("create symlink");
+
+        let registry = LspRegistry::new(link);
+
+        assert_eq!(registry.root_path(), project.canonicalize().expect("canonical project dir"));
     }
 }
