@@ -103,11 +103,18 @@ fn plan_coexists_with_streaming_transcript() {
     app.on_acp_event(text_chunk("Here is the explanation."));
 
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let viewport = viewport_buffer(&mut terminal);
+    let transcript_row = row_containing(&viewport, "Here is the explanation.").expect("transcript visible");
+    let plan_row = row_containing(&viewport, "Plan").expect("plan header visible");
+    let viewport = buffer_text(&viewport);
 
     assert!(viewport.contains("Plan"), "plan header visible:\n{viewport}");
     assert!(viewport.contains("Research"), "plan entry visible:\n{viewport}");
     assert!(viewport.contains("Here is the explanation."), "transcript visible:\n{viewport}");
+    assert!(
+        transcript_row < plan_row,
+        "transcript should render above plan (transcript row {transcript_row}, plan row {plan_row}):\n{viewport}"
+    );
 }
 
 #[test]

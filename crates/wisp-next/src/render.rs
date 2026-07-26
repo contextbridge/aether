@@ -124,8 +124,8 @@ impl FrameLayout {
     /// the conversation share whatever the composer and status line leave.
     fn split(&self, area: Rect) -> [Rect; 4] {
         Layout::vertical([
-            Constraint::Length(self.plan_height),
             Constraint::Fill(1),
+            Constraint::Length(self.plan_height),
             Constraint::Length(self.composer_height),
             Constraint::Length(self.status_line_rows),
         ])
@@ -147,7 +147,7 @@ impl FrameLayout {
 }
 
 fn draw_frame(frame: &mut Frame, app: &mut App, presenter: &mut Presenter, layout: &FrameLayout) {
-    let [plan_area, transcript_area, composer_area, status_area] = layout.split(frame.area());
+    let [transcript_area, plan_area, composer_area, status_area] = layout.split(frame.area());
     let buf = frame.buffer_mut();
 
     PlanView::new(&layout.plan_entries, presenter.theme()).render(layout.indent(plan_area), buf);
