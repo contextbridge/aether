@@ -101,19 +101,19 @@ fn shift_backtab_cycles_mode_option_and_wraps() {
     let options = vec![mode_option("code", &["code", "plan", "ask"])];
     let (mut app, mut command_rx) = AppBuilder::new().config_options(options).build();
 
-    app.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
+    app.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
     let cmd = command_rx.try_recv().unwrap();
     assert!(
         matches!(cmd, PromptCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "mode" && value == "plan")
     );
 
-    app.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
+    app.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
     let cmd = command_rx.try_recv().unwrap();
     assert!(
         matches!(cmd, PromptCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "mode" && value == "ask")
     );
 
-    app.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
+    app.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
     let cmd = command_rx.try_recv().unwrap();
     assert!(
         matches!(cmd, PromptCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "mode" && value == "code")
@@ -125,13 +125,13 @@ fn shift_backtab_cycles_grouped_mode_options() {
     let options = vec![grouped_mode_option("code", &[("built-in", &["code", "plan"]), ("custom", &["review"])])];
     let (mut app, mut command_rx) = AppBuilder::new().config_options(options).build();
 
-    app.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
+    app.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
     let cmd = command_rx.try_recv().unwrap();
     assert!(
         matches!(cmd, PromptCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "mode" && value == "plan")
     );
 
-    app.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
+    app.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
     let cmd = command_rx.try_recv().unwrap();
     assert!(
         matches!(cmd, PromptCommand::SetConfigOption { ref config_id, ref value, .. } if config_id == "mode" && value == "review"),
