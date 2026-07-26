@@ -299,7 +299,7 @@ fn build_response_request(model: &str, context: &Context) -> Result<CreateRespon
         tool_choice: None,
         top_p: settings.top_p,
         truncation: None,
-        prompt_cache_key: None,
+        prompt_cache_key: context.prompt_cache_key().map(String::from),
         safety_identifier: None,
         max_tool_calls: None,
         prompt_cache_retention: None,
@@ -461,6 +461,7 @@ mod tests {
             vec![],
         );
         context.set_reasoning_effort(Some(ReasoningEffort::Max));
+        context.set_prompt_cache_key(Some("cache-key".to_string()));
 
         let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
         let captured = server.captured().await;
@@ -468,6 +469,7 @@ mod tests {
         assert!(responses.iter().all(Result::is_ok), "{responses:?}");
         assert_eq!(captured.body["reasoning"]["effort"], "max");
         assert_eq!(captured.body["model"], "gpt-5.6");
+        assert_eq!(captured.body["prompt_cache_key"], "cache-key");
         assert_eq!(captured.body["stream"], true);
     }
 

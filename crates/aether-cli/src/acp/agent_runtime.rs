@@ -149,17 +149,11 @@ pub(crate) struct ProductionRuntimeFactory {
     cwd: PathBuf,
     mcp_servers: Vec<McpServer>,
     agent_deps: AgentDeps,
-    prompt_cache_key: Option<String>,
 }
 
 impl ProductionRuntimeFactory {
-    pub fn new(
-        cwd: PathBuf,
-        client_servers: Vec<McpServer>,
-        agent_deps: AgentDeps,
-        prompt_cache_key: Option<String>,
-    ) -> Self {
-        Self { cwd, mcp_servers: client_servers, agent_deps, prompt_cache_key }
+    pub fn new(cwd: PathBuf, client_servers: Vec<McpServer>, agent_deps: AgentDeps) -> Self {
+        Self { cwd, mcp_servers: client_servers, agent_deps }
     }
 }
 
@@ -179,14 +173,10 @@ impl RuntimeFactory for ProductionRuntimeFactory {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| SessionError::UnsupportedMcpServer(e.to_string()))?;
 
-        let mut builder = RuntimeBuilder::from_spec(self.cwd.clone(), spec.clone())
+        let builder = RuntimeBuilder::from_spec(self.cwd.clone(), spec.clone())
             .extra_servers(extra_servers)
             .oauth_handler_factory(mcp_oauth_handler_factory())
             .agent_deps(self.agent_deps.clone());
-
-        if let Some(key) = self.prompt_cache_key.clone() {
-            builder = builder.prompt_cache_key(key);
-        }
 
         let runtime = builder.build(None, Some(initial_messages)).await?;
         let snapshot = McpConnectionDetails {

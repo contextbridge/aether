@@ -21,7 +21,6 @@ pub struct RuntimeBuilder {
     extra_mcp_servers: Vec<McpServer>,
     oauth_applicator: Option<Box<dyn FnOnce(McpBuilder) -> McpBuilder + Send>>,
     agent_deps: AgentDeps,
-    prompt_cache_key: Option<String>,
 }
 
 pub struct Runtime {
@@ -51,7 +50,6 @@ impl RuntimeBuilder {
             extra_mcp_servers: Vec::new(),
             oauth_applicator: None,
             agent_deps: AgentDeps::default(),
-            prompt_cache_key: None,
         })
     }
 
@@ -63,13 +61,7 @@ impl RuntimeBuilder {
             extra_mcp_servers: Vec::new(),
             oauth_applicator: None,
             agent_deps: AgentDeps::default(),
-            prompt_cache_key: None,
         }
-    }
-
-    pub fn prompt_cache_key(mut self, key: String) -> Self {
-        self.prompt_cache_key = Some(key);
-        self
     }
 
     pub fn agent_deps(mut self, deps: AgentDeps) -> Self {
@@ -100,12 +92,11 @@ impl RuntimeBuilder {
         messages: Option<Vec<ChatMessage>>,
     ) -> Result<Runtime, CliError> {
         let deps = self.agent_deps.clone();
-        let prompt_cache_key = self.prompt_cache_key.clone();
         let (spec, spawn) = self.spawn_mcp().await?;
         let McpSpawnResult { command_tx: mcp_tx, event_rx, handle: mcp_handle } = spawn;
 
         let (agent_tx, agent_rx, agent_handle) =
-            spawn_agent(&spec, &deps, mcp_tx.clone(), Vec::new(), prompt_cache_key, |mut agent_builder| {
+            spawn_agent(&spec, &deps, mcp_tx.clone(), Vec::new(), |mut agent_builder| {
                 if let Some(prompt) = custom_prompt {
                     agent_builder = agent_builder.system_prompt(prompt);
                 }
@@ -127,7 +118,6 @@ impl RuntimeBuilder {
     /// callers that need the agent ready to use tools on its first turn.
     pub async fn build_ready(self, messages: Vec<ChatMessage>) -> Result<(Runtime, McpConnectionDetails), CliError> {
         let deps = self.agent_deps.clone();
-        let prompt_cache_key = self.prompt_cache_key.clone();
         let (spec, mut spawn) = self.spawn_mcp().await?;
         let snapshot = spawn
             .block_until_ready()
@@ -140,7 +130,7 @@ impl RuntimeBuilder {
         runtime_spec.prompts.push(Prompt::McpInstructions(snapshot.instructions.clone()));
 
         let (agent_tx, agent_rx, agent_handle) =
-            spawn_agent(&runtime_spec, &deps, mcp_tx.clone(), filtered_tools, prompt_cache_key, |agent_builder| {
+            spawn_agent(&runtime_spec, &deps, mcp_tx.clone(), filtered_tools, |agent_builder| {
                 agent_builder.messages(messages)
             })
             .await?;
@@ -195,17 +185,12 @@ async fn spawn_agent(
     deps: &AgentDeps,
     mcp_tx: Sender<McpCommand>,
     tool_definitions: Vec<ToolDefinition>,
-    prompt_cache_key: Option<String>,
     configure: impl FnOnce(AgentBuilder) -> AgentBuilder,
 ) -> Result<(Sender<Command>, Receiver<AgentEvent>, AgentHandle), CliError> {
-    let mut builder = AgentBuilder::from_spec(spec, vec![], deps)
+    let builder = AgentBuilder::from_spec(spec, vec![], deps)
         .await
         .map_err(|error| CliError::AgentError(error.to_string()))?
         .tools(mcp_tx, tool_definitions);
-
-    if let Some(key) = prompt_cache_key {
-        builder = builder.prompt_cache_key(key);
-    }
 
     configure(builder).spawn().await.map_err(|error| CliError::AgentError(error.to_string()))
 }
