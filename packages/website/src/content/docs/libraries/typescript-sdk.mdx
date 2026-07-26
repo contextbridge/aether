@@ -92,6 +92,61 @@ for await (const message of session.prompt("Now list likely refactors")) {
 
 Only one prompt can be in progress per session.
 
+## Run a single headless prompt
+
+`runHeadless()` is the programmatic equivalent of [`aether headless`](/aether/running/headless/). It runs one prompt to completion (with no streaming iterator), captures the process output, and resolves with a result. Use it for scripts, CI jobs, and batch workflows where you want the final output rather than streamed updates.
+
+```ts
+import { runHeadless } from "@aether-agent/sdk";
+
+const result = await runHeadless({
+  cwd: process.cwd(),
+  prompt: "Summarize the architecture",
+  output: "text",
+});
+
+console.log(result.stdout);
+```
+
+### Result
+
+`runHeadless()` resolves to an `AetherHeadlessResult`:
+
+| Field       | Type                  | Description                                                                 |
+| ----------- | --------------------- | --------------------------------------------------------------------------- |
+| `stdout`    | `string`              | Captured stdout from the `aether headless` process.                         |
+| `stderr`    | `string`              | Captured stderr (diagnostics/tracing).                                      |
+| `exitCode`  | `number`              | Process exit code. `0` on success; non-zero when the turn ends with a failed outcome. |
+| `signal`    | `NodeJS.Signals \| null` | Termination signal, if the process was killed instead of exiting normally. |
+
+Because `aether headless` exits non-zero on a failed turn, `runHeadless()` **rejects** with an `AetherSdkError` (`code: "process_exited"`) in that case instead of resolving. Wrap the call in `try`/`catch` (or read the error's details) when a failed turn is an expected outcome.
+
+### Options
+
+`AetherHeadlessOptions` mirrors the [headless CLI flags](/aether/running/headless/#flags) plus SDK process controls:
+
+| Option          | Description                                                                                          |
+| --------------- | ---------------------------------------------------------------------------------------------------- |
+| `prompt`        | Required. Prompt text to run.                                                                        |
+| `agent`         | Named agent from `.aether/settings.json`. Mutually exclusive with `model`.                           |
+| `model`         | Direct model id, such as `anthropic:claude-sonnet-4-5`. Mutually exclusive with `agent`.             |
+| `cwd`           | Working directory. Defaults to `process.cwd()`.                                                      |
+| `settings`      | Inline Aether settings object. Mutually exclusive with `settingsFile`.                               |
+| `settingsFile`  | Path to an alternate settings JSON file.                                                             |
+| `systemPrompt`  | Additional system prompt text.                                                                       |
+| `output`        | `"text"`, `"pretty"`, or `"json"`. Defaults to `"text"`. See [output formats](/aether/running/headless/#output-formats). |
+| `events`        | Event kinds to emit (only meaningful with `output: "json"`). See [event filtering](/aether/running/headless/#event-filtering).   |
+| `verbose`       | Verbose diagnostic logging to stderr.                                                                |
+| `providers`     | Provider connection overrides, such as custom Bedrock endpoints or auth behavior.                    |
+| `traceContext`  | A remote W3C `traceparent` with optional `tracestate`, or a standalone `traceId`. See [Telemetry](/aether/settings/telemetry/#correlating-sdk-runs). |
+| `binaryPath`    | Override the bundled CLI binary with an absolute path or command available on `PATH`.                |
+| `env`           | Environment variables for the spawned `aether headless` process.                                     |
+| `stdout`        | `"pipe"` (capture, the default) or `"inherit"` (write directly to the parent stdio).                 |
+| `stderr`        | `"pipe"` (the default) or `"inherit"`.                                                                |
+| `abortSignal`   | Cancel the run and tear down the subprocess.                                                         |
+
+Unlike `AetherSession.start()`, headless runs are non-interactive, so there are no permission or elicitation handlers.
+
 ## Messages
 
 `session.prompt()` yields `AetherMessage` objects. Each has a `type` discriminator:
