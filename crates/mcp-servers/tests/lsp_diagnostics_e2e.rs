@@ -64,7 +64,6 @@ fn canonical_path(path: &str) -> String {
 /// Test: MCP `edit_file` tool → rust-analyzer picks up change → diagnostics queryable
 #[tokio::test]
 async fn test_mcp_edit_produces_diagnostics() {
-    // 1. Create a Cargo project with a type error
     let project = CargoProject::new("mcp_edit_diag").expect("Failed to create project");
     project
         .add_file(
@@ -79,15 +78,12 @@ async fn test_mcp_edit_produces_diagnostics() {
 
     let main_rs = project.file_path_str("src/main.rs");
 
-    // 2. Start CodingMcp with LSP enabled
     let (_server_handle, client) = connect_lsp(&project).await;
 
-    // 3. Wait for rust-analyzer to index and report the initial type error
     let result = poll_diagnostics(&client, Some(&main_rs), has_errors).await;
     let errors = result["summary"]["errors"].as_u64().unwrap();
     assert!(errors > 0, "Expected type error diagnostics");
 
-    // 4. Fix the error using MCP tools: read_file then edit_file
     call_tool(&client, "read_file", serde_json::json!({ "filePath": main_rs })).await;
 
     call_tool(
@@ -99,10 +95,9 @@ async fn test_mcp_edit_produces_diagnostics() {
         }),
     )
     .await;
-    // 5. Poll until errors clear
+
     poll_diagnostics(&client, Some(&main_rs), has_no_errors).await;
 
-    // 6. Re-introduce a different error via MCP edit
     call_tool(&client, "read_file", serde_json::json!({ "filePath": main_rs })).await;
 
     call_tool(
@@ -115,7 +110,6 @@ async fn test_mcp_edit_produces_diagnostics() {
     )
     .await;
 
-    // 7. Poll until errors reappear
     let result = poll_diagnostics(&client, Some(&main_rs), has_errors).await;
     let errors = result["summary"]["errors"].as_u64().unwrap();
     assert!(errors > 0, "Expected type error after re-introducing bug");
@@ -126,7 +120,6 @@ async fn test_mcp_edit_produces_diagnostics() {
 /// the LSP to re-publish diagnostics after syncing a changed document.
 #[tokio::test]
 async fn test_diagnostics_available_after_edit_without_polling() {
-    // 1. Create a Cargo project with valid code
     let project = CargoProject::new("diag_after_edit_no_poll").expect("Failed to create project");
     project
         .add_file(
@@ -141,13 +134,10 @@ async fn test_diagnostics_available_after_edit_without_polling() {
 
     let main_rs = project.file_path_str("src/main.rs");
 
-    // 2. Start CodingMcp with LSP enabled
     let (_server_handle, client) = connect_lsp(&project).await;
 
-    // 3. Wait for initial indexing — no errors expected
     poll_diagnostics(&client, Some(&main_rs), has_no_errors).await;
 
-    // 4. Introduce a syntax error via edit_file
     call_tool(&client, "read_file", serde_json::json!({ "filePath": main_rs })).await;
 
     call_tool(
@@ -160,7 +150,6 @@ async fn test_diagnostics_available_after_edit_without_polling() {
     )
     .await;
 
-    // 5. Poll until rust-analyzer reports errors for the edited file.
     poll_diagnostics(&client, Some(&main_rs), has_errors).await;
 }
 
@@ -169,7 +158,6 @@ async fn test_diagnostics_available_after_edit_without_polling() {
 /// documents before returning the cache.
 #[tokio::test]
 async fn test_diagnostics_all_files_after_edit() {
-    // 1. Create a Cargo project with valid code
     let project = CargoProject::new("diag_all_files").expect("Failed to create project");
     project
         .add_file(
@@ -184,13 +172,10 @@ async fn test_diagnostics_all_files_after_edit() {
 
     let main_rs = project.file_path_str("src/main.rs");
 
-    // 2. Start CodingMcp with LSP enabled
     let (_server_handle, client) = connect_lsp(&project).await;
 
-    // 3. Wait for initial indexing — no errors expected (use per-file poll to prime the cache)
     poll_diagnostics(&client, Some(&main_rs), has_no_errors).await;
 
-    // 4. Introduce a type error via edit_file
     call_tool(&client, "read_file", serde_json::json!({ "filePath": main_rs })).await;
 
     call_tool(
@@ -203,7 +188,6 @@ async fn test_diagnostics_all_files_after_edit() {
     )
     .await;
 
-    // 5. Poll workspace diagnostics until rust-analyzer reports errors.
     poll_diagnostics(&client, None, has_errors).await;
 }
 
@@ -228,7 +212,6 @@ async fn test_workspace_diagnostics_after_edit_without_file_check() {
 
     let (_server_handle, client) = connect_lsp(&project).await;
 
-    // Wait for RA to finish initial indexing via workspace-scope polling.
     poll_diagnostics(&client, None, has_no_errors).await;
 
     call_tool(&client, "read_file", serde_json::json!({ "filePath": main_rs })).await;
@@ -243,7 +226,6 @@ async fn test_workspace_diagnostics_after_edit_without_file_check() {
     )
     .await;
 
-    // Poll workspace diagnostics until the edit is picked up by RA.
     poll_workspace_diagnostics(&client, |result| file_error_count(result, &main_rs) > 0, Duration::from_secs(30)).await;
 }
 
@@ -304,7 +286,6 @@ async fn test_workspace_diagnostics_clear_after_fix_without_file_check() {
 /// cache, not just previously-opened documents.
 #[tokio::test]
 async fn test_diagnostics_all_files_after_external_edit() {
-    // 1. Create a Cargo project with valid code
     let project = CargoProject::new("diag_all_ext_edit").expect("Failed to create project");
     project
         .add_file(
@@ -320,14 +301,10 @@ async fn test_diagnostics_all_files_after_external_edit() {
     let main_rs = project.file_path_str("src/main.rs");
     let main_rs_path = project.root().join("src/main.rs");
 
-    // 2. Start CodingMcp with LSP enabled
     let (_server_handle, client) = connect_lsp(&project).await;
 
-    // 3. Wait for initial indexing — no errors expected.
-    //    Use per-file poll so the diagnostics cache has an entry for this URI.
     poll_diagnostics(&client, Some(&main_rs), has_no_errors).await;
 
-    // 4. Edit the file EXTERNALLY (bypassing MCP tools), introducing a type error
     std::fs::write(
         &main_rs_path,
         r#"fn main() {
@@ -338,7 +315,6 @@ async fn test_diagnostics_all_files_after_external_edit() {
     )
     .expect("Failed to write file");
 
-    // 5. Poll workspace diagnostics until file watcher + RA report errors.
     poll_diagnostics(&client, None, has_errors).await;
 }
 
@@ -347,7 +323,6 @@ async fn test_diagnostics_all_files_after_external_edit() {
 /// diagnostics cache fresh, so the daemon should simply return whatever is cached.
 #[tokio::test]
 async fn test_diagnostics_all_files_after_external_edit_single_call() {
-    // 1. Create a Cargo project with valid code
     let project = CargoProject::new("diag_ext_single_call").expect("Failed to create project");
     project
         .add_file(
@@ -363,13 +338,10 @@ async fn test_diagnostics_all_files_after_external_edit_single_call() {
     let main_rs = project.file_path_str("src/main.rs");
     let main_rs_path = project.root().join("src/main.rs");
 
-    // 2. Start CodingMcp with LSP enabled
     let (_server_handle, client) = connect_lsp(&project).await;
 
-    // 3. Wait for initial indexing — no errors expected
     poll_diagnostics(&client, Some(&main_rs), has_no_errors).await;
 
-    // 4. Edit the file EXTERNALLY, introducing a type error
     std::fs::write(
         &main_rs_path,
         r#"fn main() {
@@ -380,14 +352,12 @@ async fn test_diagnostics_all_files_after_external_edit_single_call() {
     )
     .expect("Failed to write file");
 
-    // 5. Poll workspace diagnostics until file watcher + RA report errors.
     poll_diagnostics(&client, None, has_errors).await;
 }
 
 /// Test: External `fs::write` → file watcher → diagnostics queryable
 #[tokio::test]
 async fn test_external_file_change_produces_diagnostics() {
-    // 1. Create a Cargo project with a type error
     let project = CargoProject::new("ext_write_diag").expect("Failed to create project");
     project
         .add_file(
@@ -403,15 +373,12 @@ async fn test_external_file_change_produces_diagnostics() {
     let main_rs = project.file_path_str("src/main.rs");
     let main_rs_path = project.root().join("src/main.rs");
 
-    // 2. Start CodingMcp with LSP enabled
     let (_server_handle, client) = connect_lsp(&project).await;
 
-    // 3. Wait for rust-analyzer to index and report the initial type error
     let result = poll_diagnostics(&client, Some(&main_rs), has_errors).await;
     let errors = result["summary"]["errors"].as_u64().unwrap();
     assert!(errors > 0, "Expected type error diagnostics");
 
-    // 4. Fix the error via direct filesystem write (bypassing MCP tools)
     std::fs::write(
         &main_rs_path,
         r#"fn main() {
@@ -422,10 +389,8 @@ async fn test_external_file_change_produces_diagnostics() {
     )
     .expect("Failed to write file");
 
-    // 5. Poll until errors clear (file watcher → didChangeWatchedFiles → RA re-reads)
     poll_diagnostics(&client, Some(&main_rs), has_no_errors).await;
 
-    // 6. Introduce a new error via direct filesystem write
     std::fs::write(
         &main_rs_path,
         r#"fn main() {
@@ -436,7 +401,6 @@ async fn test_external_file_change_produces_diagnostics() {
     )
     .expect("Failed to write file");
 
-    // 7. Poll until errors reappear
     let result = poll_diagnostics(&client, Some(&main_rs), has_errors).await;
     let errors = result["summary"]["errors"].as_u64().unwrap();
     assert!(errors > 0, "Expected type error after external write");
@@ -453,7 +417,6 @@ async fn test_external_file_change_produces_diagnostics() {
 /// for workspace scope, this file will be invisible.
 #[tokio::test]
 async fn test_diagnostics_all_files_discovers_file_watcher_uris() {
-    // 1. Create a Cargo project with valid code
     let project = CargoProject::new("diag_fw_discover").expect("Failed to create project");
     project
         .add_file(
@@ -468,20 +431,10 @@ async fn test_diagnostics_all_files_discovers_file_watcher_uris() {
 
     let main_rs_path = project.root().join("src/main.rs");
 
-    // 2. Start CodingMcp with LSP enabled
     let (_server_handle, client) = connect_lsp(&project).await;
 
-    // 3. Wait for RA to finish initial indexing using workspace-scope polling.
-    //    We use None (workspace scope) instead of Some(path) (file scope) because
-    //    file-scope polling triggers ensure_document_open -> didOpen ->
-    //    publishDiagnostics, which would prime the per-file diagnostics cache
-    //    and mask the bug we're testing. Workspace-scope polling just calls
-    //    wait_for_current_generation() + reads the diagnostics store -- it does
-    //    NOT open any documents.
     poll_diagnostics(&client, None, has_no_errors).await;
 
-    // 4. Edit the file EXTERNALLY to introduce a type error.
-    //    The file watcher should fire didChangeWatchedFiles.
     std::fs::write(
         &main_rs_path,
         r#"fn main() {
@@ -492,7 +445,5 @@ async fn test_diagnostics_all_files_discovers_file_watcher_uris() {
     )
     .expect("Failed to write file");
 
-    // 5. Poll workspace diagnostics until the file watcher detects the change
-    //    and RA reports errors.
     poll_diagnostics(&client, None, has_errors).await;
 }
