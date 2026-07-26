@@ -1,8 +1,8 @@
-use super::{LiveSettingsData, SettingsPane, summarize};
+use super::{LiveSettingsData, PaneBehavior, summarize};
 use crate::filterable_list::FilterableList;
 use crate::render_context::RenderContext;
 use crate::selection::Direction;
-use crate::surface::{Surface, SurfaceMessage, one};
+use crate::surface::{Action, Surface, one};
 use agent_client_protocol::schema::AuthMethod;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
@@ -37,19 +37,19 @@ impl ProviderLoginPane {
 
 impl Surface for ProviderLoginPane {
     /// Starts login for the focused provider, unless one is already running.
-    fn activate(&mut self) -> Vec<SurfaceMessage> {
+    fn activate(&mut self) -> Vec<Action> {
         one(self
             .entries
             .selected_entry()
             .filter(|entry| entry.status != ProviderLoginStatus::Authenticating)
-            .map(|entry| SurfaceMessage::AuthenticateProvider(entry.method_id.clone())))
+            .map(|entry| Action::AuthenticateProvider(entry.method_id.clone())))
     }
 
-    fn click(&mut self, row: u16, _column: u16) -> Vec<SurfaceMessage> {
+    fn click(&mut self, row: u16, _column: u16) -> Vec<Action> {
         if self.entries.select_at(row) { self.activate() } else { Vec::new() }
     }
 
-    fn scroll(&mut self, direction: Direction) -> Vec<SurfaceMessage> {
+    fn scroll(&mut self, direction: Direction) -> Vec<Action> {
         self.entries.step(direction, |_| true);
         Vec::new()
     }
@@ -72,7 +72,7 @@ impl Surface for ProviderLoginPane {
     }
 }
 
-impl SettingsPane for ProviderLoginPane {
+impl PaneBehavior for ProviderLoginPane {
     fn refresh(&mut self, live: &LiveSettingsData) {
         let keep = self.entries.selected_entry().map(|entry| entry.method_id.clone());
         self.entries = list_of(live.providers.clone());

@@ -8,12 +8,12 @@ use tui_scrollview::{ScrollView, ScrollbarVisibility};
 
 use crate::annotation::Draft;
 use crate::diff::{DiffTone, SPLIT_VIEW_MIN_WIDTH, diff_line, join_split, split_side, split_widths};
-use crate::effects::SurfaceEvent;
 use crate::git_diff::{FileDiff, FileStatus, PatchAnchor, PatchLine, PatchLineKind, StageState};
 use crate::list_view::ListView;
 use crate::render_context::RenderContext;
-use crate::surface::{MouseAction, Surface, SurfaceMessage};
+use crate::surface::{Action, MouseAction, Surface};
 use crate::syntax::SyntaxHighlighter;
+use crate::tasks::TaskResult;
 use crate::theme::Theme;
 use crate::widgets::{TextInput, wrapped_with_cursor};
 use crate::wrap::{fit_line, rows as rows_u16, wrap_text_char};
@@ -190,7 +190,7 @@ impl GitDiffScreen {
     }
 
     /// Makes `self.patch.view` a render of `file` at the current width, reusing
-    /// the active view or a cached one when nothing that affects it has changed.
+    /// the active view when nothing that affects it has changed.
     fn ensure_diff_view(
         &mut self,
         file: &FileDiff,
@@ -214,19 +214,7 @@ impl GitDiffScreen {
             return;
         }
 
-        // Cached views are always draft-free, so this only hits when the user is
-        // browsing rather than typing. Remove the hit before parking the active
-        // view, so parking cannot shift the index out from under the removal.
-        let cached =
-            self.patch.cache.iter().position(|view| view.key == key).map(|position| self.patch.cache.remove(position));
-        if let Some(view) = cached {
-            self.park_active_diff_view();
-            self.patch.view = Some(view);
-            return;
-        }
-
         self.ensure_patch_rows(file, &key.patch, theme, highlighter);
-        self.park_active_diff_view();
         self.patch.view = Some(self.build_diff_view(&key, theme));
     }
 
@@ -421,16 +409,23 @@ impl GitDiffScreen {
 impl Surface for GitDiffScreen {
     /// The screen owns every key, so nothing falls through to the shared list
     /// navigation.
-    fn on_surface_key(&mut self, key: crossterm::event::KeyEvent) -> Option<Vec<SurfaceMessage>> {
+    fn on_surface_key(&mut self, key: crossterm::event::KeyEvent) -> Option<Vec<Action>> {
         Some(self.handle_key(key))
     }
 
-    fn on_event(&mut self, event: SurfaceEvent) -> Vec<SurfaceMessage> {
-        let SurfaceEvent::GitDiff(event) = event;
-        self.handle_event(event)
+    fn on_task_result(&mut self, result: TaskResult) -> Vec<Action> {
+        match result {
+            TaskResult::GitDiff(event) => self.handle_event(event),
+            _ => Vec::new(),
+        }
     }
 
-    fn on_mouse(&mut self, action: MouseAction, row: u16, column: u16) -> Vec<SurfaceMessage> {
+    fn on_paste(&mut self, text: &str) -> Vec<Action> {
+        self.handle_paste(text);
+        Vec::new()
+    }
+
+    fn on_mouse(&mut self, action: MouseAction, row: u16, column: u16) -> Vec<Action> {
         self.handle_mouse(action, row, column);
         Vec::new()
     }

@@ -55,18 +55,11 @@ impl App {
         self.pending_theme.take()
     }
 
-    /// Themes are a client-side setting: persist the choice, hand the loaded
-    /// theme to the renderer, and mirror it back into the settings menu.
+    /// Themes are persisted and parsed by the task runner.
     pub(super) fn apply_theme_change(&mut self, value: &str) {
-        self.ui_settings.theme.file = (!value.is_empty()).then(|| value.to_string());
-        if let Err(error) = crate::settings::save_settings(&self.ui_settings) {
-            tracing::warn!("Failed to save theme settings: {error}");
-        }
-        self.pending_theme = Some(if value.is_empty() {
-            crate::theme::Theme::default()
-        } else {
-            crate::settings::load_theme_file(value)
-        });
+        let mut settings = self.ui_settings.clone();
+        settings.theme.file = (!value.is_empty()).then(|| value.to_string());
+        self.pending_tasks.push_back(crate::tasks::Task::ApplyTheme { settings, value: value.to_string() });
         self.apply_settings_change(&crate::settings_overlay::SettingsChange {
             config_id: acp_utils::config_option_id::THEME_CONFIG_ID.to_string(),
             new_value: value.to_string(),
@@ -74,11 +67,10 @@ impl App {
     }
 }
 
-pub(super) fn build_theme_entries(settings: &UiSettings) -> Vec<SettingsMenuEntry> {
+pub(super) fn build_theme_entries(settings: &UiSettings, files: &[String]) -> Vec<SettingsMenuEntry> {
     use acp_utils::config_meta::SelectOptionMeta;
     use acp_utils::config_option_id::THEME_CONFIG_ID;
 
-    let files = crate::settings::list_theme_files();
     let mut values: Vec<SettingsMenuValue> = Vec::new();
 
     values.push(SettingsMenuValue {
@@ -89,7 +81,7 @@ pub(super) fn build_theme_entries(settings: &UiSettings) -> Vec<SettingsMenuEntr
         meta: SelectOptionMeta::default(),
     });
 
-    for file in &files {
+    for file in files {
         let display = file.trim_end_matches(".tmTheme").to_string();
         values.push(SettingsMenuValue {
             value: file.clone(),

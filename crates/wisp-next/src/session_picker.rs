@@ -1,7 +1,7 @@
 use crate::filterable_list::FilterableList;
 use crate::render_context::RenderContext;
 use crate::selection::Direction;
-use crate::surface::{ListFilter, Surface, SurfaceMessage, one};
+use crate::surface::{Action, ListFilter, Surface, one};
 use crate::wrap::truncate_to_width;
 use acp_utils::notifications::SessionPreviewResponse;
 use agent_client_protocol::schema::{self as acp, SessionId};
@@ -59,7 +59,7 @@ impl SessionPicker {
 
     /// Marks the selected session's preview as in-flight and returns the request
     /// for it, or nothing when it is already loading or cached.
-    fn preview_request(&mut self) -> Vec<SurfaceMessage> {
+    fn preview_request(&mut self) -> Vec<Action> {
         if !self.preview_enabled {
             return Vec::new();
         }
@@ -70,7 +70,7 @@ impl SessionPicker {
             return Vec::new();
         }
         self.previews.insert(session_id.clone(), PreviewState::Loading);
-        vec![SurfaceMessage::RequestSessionPreview { session_id }]
+        vec![Action::RequestSessionPreview { session_id }]
     }
 
     fn render_list(&mut self, area: Rect, buf: &mut Buffer, theme: &crate::theme::Theme) {
@@ -155,8 +155,8 @@ impl SessionPicker {
 }
 
 impl Surface for SessionPicker {
-    fn activate(&mut self) -> Vec<SurfaceMessage> {
-        one(self.sessions.selected_entry().map(|session| SurfaceMessage::LoadSession {
+    fn activate(&mut self) -> Vec<Action> {
+        one(self.sessions.selected_entry().map(|session| Action::LoadSession {
             session_id: SessionId::new(session.session_id.0.to_string()),
             cwd: session.cwd.clone(),
         }))
@@ -166,16 +166,16 @@ impl Surface for SessionPicker {
         Some(&mut self.sessions)
     }
 
-    fn on_filter_changed(&mut self) -> Vec<SurfaceMessage> {
+    fn on_filter_changed(&mut self) -> Vec<Action> {
         self.preview_request()
     }
 
-    fn scroll(&mut self, direction: Direction) -> Vec<SurfaceMessage> {
+    fn scroll(&mut self, direction: Direction) -> Vec<Action> {
         self.sessions.step(direction, |_| true);
         self.preview_request()
     }
 
-    fn click(&mut self, row: u16, _column: u16) -> Vec<SurfaceMessage> {
+    fn click(&mut self, row: u16, _column: u16) -> Vec<Action> {
         if !self.sessions.select_at(row) {
             return Vec::new();
         }

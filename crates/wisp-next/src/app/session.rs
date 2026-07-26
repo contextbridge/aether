@@ -2,7 +2,7 @@ use super::config::{build_theme_entries, update_config_option_value};
 use super::{App, Layer, WorkspaceMoveState};
 use crate::picker::CommandEntry;
 use crate::settings_overlay::{SettingsChange, SettingsOverlay};
-use crate::surface::SurfaceMessage;
+use crate::surface::Action;
 use crate::workspace_status::WorkspaceStatus;
 use acp_utils::notifications::AetherCapabilities;
 use agent_client_protocol::schema::{self as acp, SessionId};
@@ -59,9 +59,15 @@ impl App {
 
     fn open_settings(&mut self) {
         let mut overlay = SettingsOverlay::new(&self.config_options, self.server_statuses.clone(), &self.auth_methods);
-        overlay.add_local_entries(build_theme_entries(&self.ui_settings));
+        overlay.add_local_entries(build_theme_entries(&self.ui_settings, &[]));
         overlay.add_status_entries();
         self.open_layer(Layer::Settings(overlay));
+        self.pending_tasks.push_back(crate::tasks::Task::ListThemes);
+    }
+
+    pub(super) fn refresh_settings_themes(&mut self, files: &[String]) {
+        let entries = build_theme_entries(&self.ui_settings, files);
+        self.with_settings(|overlay| overlay.add_local_entries(entries));
     }
 
     fn begin_workspace_move(&mut self) {
@@ -75,24 +81,22 @@ impl App {
         }
     }
 
-    pub(super) fn handle_surface_messages(&mut self, messages: Vec<SurfaceMessage>) {
-        for message in messages {
-            self.handle_surface_message(message);
+    pub(super) fn dispatch_actions(&mut self, actions: Vec<Action>) {
+        for action in actions {
+            self.handle_action(action);
         }
     }
 
-    fn handle_surface_message(&mut self, message: SurfaceMessage) {
-        match message {
-            // `Back` is handled by whichever surface opened the one that sent
-            // it, so it never reaches here.
-            SurfaceMessage::Back | SurfaceMessage::Close => self.close_layer(),
-            SurfaceMessage::Effect(effect) => self.pending_effects.push_back(effect),
-            SurfaceMessage::SubmitReview(prompt) => self.submit_review(&prompt),
-            SurfaceMessage::LoadSession { session_id, cwd } => self.load_session(&session_id, &cwd),
-            SurfaceMessage::RequestSessionPreview { session_id } => {
+    fn handle_action(&mut self, action: Action) {
+        match action {
+            Action::Close => self.close_layer(),
+            Action::Task(task) => self.pending_tasks.push_back(task),
+            Action::SubmitReview(prompt) => self.submit_review(&prompt),
+            Action::LoadSession { session_id, cwd } => self.load_session(&session_id, &cwd),
+            Action::RequestSessionPreview { session_id } => {
                 let _ = self.prompt_handle.session_preview(&SessionId::new(session_id));
             }
-            SurfaceMessage::MoveWorkspace { target } => {
+            Action::MoveWorkspace { target } => {
                 self.close_layer();
                 self.workspace_move_state = WorkspaceMoveState::Moving;
                 if self
@@ -102,16 +106,16 @@ impl App {
                     self.workspace_move_state = WorkspaceMoveState::Idle;
                 }
             }
-            SurfaceMessage::SetConfigOption { config_id, value } => {
+            Action::SetConfigOption { config_id, value } => {
                 if self.prompt_handle.set_config_option(&self.session_id, &config_id, &value).is_ok() {
                     self.apply_settings_change(&SettingsChange { config_id, new_value: value });
                 }
             }
-            SurfaceMessage::SetTheme(value) => self.apply_theme_change(&value),
-            SurfaceMessage::AuthenticateServer(name) => {
+            Action::SetTheme(value) => self.apply_theme_change(&value),
+            Action::AuthenticateServer(name) => {
                 let _ = self.prompt_handle.authenticate_mcp_server(&self.session_id, &name);
             }
-            SurfaceMessage::AuthenticateProvider(method_id) => {
+            Action::AuthenticateProvider(method_id) => {
                 self.with_settings(|overlay| overlay.on_authenticate_started(&method_id));
                 let _ = self.prompt_handle.authenticate(&method_id);
             }
@@ -153,7 +157,7 @@ impl App {
     }
 
     pub(super) fn on_workspace_moved(&mut self, new_cwd: std::path::PathBuf) {
-        self.workspace_status = WorkspaceStatus::resolve(&new_cwd);
+        self.pending_tasks.push_back(crate::tasks::Task::ResolveWorkspace { cwd: new_cwd.clone() });
         self.close_layer();
         self.reset_conversation();
         self.notify(&format!("Moved to {}", crate::workspace_status::home_relative_path(&new_cwd)));
@@ -167,13 +171,21 @@ impl App {
         self.working_dir = new_cwd;
     }
 
+    pub(super) fn finish_workspace_move(&mut self, new_cwd: &std::path::Path, status: WorkspaceStatus) {
+        if self.working_dir == new_cwd {
+            self.workspace_status = status;
+        }
+    }
+
     /// Sends the review the git-diff screen assembled as a normal prompt.
     pub(super) fn submit_review(&mut self, prompt: &str) {
         if self.turn.prompt_in_flight {
             return;
         }
         self.turn.prompt_in_flight = true;
-        self.transcript.push_user_message(&format!("[wisp-next] Submitted review of working tree diff.\n{prompt}"));
+        self.conversation
+            .transcript
+            .push_user_message(&format!("[wisp-next] Submitted review of working tree diff.\n{prompt}"));
         match self.prompt_handle.prompt(&self.session_id, prompt, None) {
             Ok(()) => self.close_layer(),
             Err(error) => {
@@ -205,7 +217,7 @@ impl App {
     /// Writes a `[wisp-next]` line into the transcript, the channel for anything
     /// the UI needs to tell the user outside the agent's own output.
     pub(super) fn notify(&mut self, message: &str) {
-        self.transcript.push_user_message(&format!("[wisp-next] {message}"));
+        self.conversation.transcript.push_user_message(&format!("[wisp-next] {message}"));
     }
 
     fn report_if_err<E: std::fmt::Display>(&mut self, action: &str, result: Result<(), E>) -> Option<()> {

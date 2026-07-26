@@ -5,7 +5,7 @@ fn workspace_move_command_hidden_without_capability() {
     let (mut app, _command_rx) = make_app();
 
     app.on_key(key(KeyCode::Char('/')));
-    assert!(app.composer().has_overlay());
+    assert!(app.composer().has_completion());
 
     let mut terminal = make_terminal();
     let mut renderer = Presenter::new(&UiSettings::default());
@@ -20,7 +20,7 @@ fn workspace_move_command_visible_with_capability() {
     let (mut app, _command_rx) = make_app_with_workspace_move();
 
     app.on_key(key(KeyCode::Char('/')));
-    assert!(app.composer().has_overlay());
+    assert!(app.composer().has_completion());
 
     let mut terminal = make_terminal();
     let mut renderer = Presenter::new(&UiSettings::default());
@@ -39,7 +39,7 @@ fn workspace_move_command_rejected_when_prompt_in_flight() {
     type_text(&mut app, "/move");
     app.on_key(key(KeyCode::Tab));
 
-    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Idle);
+    assert_eq!(app.workspace_move_state(), WorkspaceMoveState::Idle);
     let mut terminal = make_terminal();
     let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
@@ -54,14 +54,14 @@ fn workspace_move_command_rejected_when_already_listing() {
 
     type_text(&mut app, "/move");
     app.on_key(key(KeyCode::Tab));
-    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Listing);
+    assert_eq!(app.workspace_move_state(), WorkspaceMoveState::Listing);
 
     let list_cmd = command_rx.try_recv().unwrap();
     assert!(matches!(list_cmd, PromptCommand::ListWorkspaces(_)));
 
     type_text(&mut app, "/move");
     app.on_key(key(KeyCode::Tab));
-    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Listing);
+    assert_eq!(app.workspace_move_state(), WorkspaceMoveState::Listing);
 
     let mut terminal = make_terminal();
     let mut renderer = Presenter::new(&UiSettings::default());
@@ -81,7 +81,7 @@ fn workspace_list_synchronous_failure_resets_state() {
     type_text(&mut app, "/move");
     app.on_key(key(KeyCode::Tab));
 
-    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Idle);
+    assert_eq!(app.workspace_move_state(), WorkspaceMoveState::Idle);
     let mut terminal = make_terminal();
     let mut renderer = Presenter::new(&UiSettings::default());
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
@@ -98,11 +98,11 @@ fn workspace_list_failed_event_resets_state() {
 
     type_text(&mut app, "/move");
     app.on_key(key(KeyCode::Tab));
-    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Listing);
+    assert_eq!(app.workspace_move_state(), WorkspaceMoveState::Listing);
     let _ = command_rx.try_recv().unwrap();
 
     app.on_acp_event(workspace_list_failed("network error"));
-    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Idle);
+    assert_eq!(app.workspace_move_state(), WorkspaceMoveState::Idle);
 
     let mut terminal = make_terminal();
     let mut renderer = Presenter::new(&UiSettings::default());
@@ -120,7 +120,7 @@ fn workspace_picker_opens_with_existing_workspaces() {
 
     type_text(&mut app, "/move");
     app.on_key(key(KeyCode::Tab));
-    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Listing);
+    assert_eq!(app.workspace_move_state(), WorkspaceMoveState::Listing);
     let _ = command_rx.try_recv().unwrap();
 
     app.on_acp_event(workspaces_listed(vec![
@@ -128,7 +128,7 @@ fn workspace_picker_opens_with_existing_workspaces() {
         workspace_entry("/home/user/code/other", false),
         workspace_entry("/tmp/sandbox", false),
     ]));
-    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Picking);
+    assert_eq!(app.workspace_move_state(), WorkspaceMoveState::Picking);
     assert!(app.has_modal());
 
     let mut terminal = make_terminal();
@@ -150,7 +150,7 @@ fn workspace_picker_shows_empty_state_when_no_workspaces() {
     let _ = command_rx.try_recv().unwrap();
 
     app.on_acp_event(workspaces_listed(vec![workspace_entry("/home/user/code/current", true)]));
-    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Picking);
+    assert_eq!(app.workspace_move_state(), WorkspaceMoveState::Picking);
     assert!(app.has_modal());
 
     let mut terminal = make_terminal();
@@ -172,11 +172,11 @@ fn workspace_picker_esc_closes_and_resets_state() {
         workspace_entry("/home/user/code/current", true),
         workspace_entry("/home/user/code/other", false),
     ]));
-    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Picking);
+    assert_eq!(app.workspace_move_state(), WorkspaceMoveState::Picking);
     assert!(app.has_modal());
 
     app.on_key(key(KeyCode::Esc));
-    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Idle);
+    assert_eq!(app.workspace_move_state(), WorkspaceMoveState::Idle);
     assert!(!app.has_modal());
 }
 
@@ -194,7 +194,7 @@ fn workspace_picker_enter_selects_existing_workspace() {
     ]));
 
     app.on_key(key(KeyCode::Enter));
-    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Moving);
+    assert_eq!(app.workspace_move_state(), WorkspaceMoveState::Moving);
     assert!(!app.has_modal());
 
     let cmd = command_rx.try_recv().unwrap();
@@ -271,10 +271,11 @@ fn workspace_naming_new_enter_with_name_emits_move_target() {
     app.on_acp_event(workspaces_listed(vec![workspace_entry("/home/user/code/current", true)]));
 
     app.on_key(key(KeyCode::Enter));
-    type_text(&mut app, "my-new-workspace");
+    app.on_paste("my-new-workspace");
+    assert!(app.composer().text().is_empty(), "paste must belong to the workspace editor");
     app.on_key(key(KeyCode::Enter));
 
-    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Moving);
+    assert_eq!(app.workspace_move_state(), WorkspaceMoveState::Moving);
     assert!(!app.has_modal());
 
     let cmd = command_rx.try_recv().unwrap();
@@ -338,13 +339,13 @@ fn workspace_move_success_updates_cwd_and_reloads_session() {
     ]));
 
     app.on_key(key(KeyCode::Enter));
-    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Moving);
+    assert_eq!(app.workspace_move_state(), WorkspaceMoveState::Moving);
 
     let cmd = command_rx.try_recv().unwrap();
     assert!(matches!(cmd, PromptCommand::MoveWorkspace { .. }));
 
     app.on_acp_event(workspace_moved("/home/user/code/other"));
-    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::LoadingSession);
+    assert_eq!(app.workspace_move_state(), WorkspaceMoveState::LoadingSession);
 
     let load_cmd = command_rx.try_recv().unwrap();
     match load_cmd {
@@ -356,7 +357,7 @@ fn workspace_move_success_updates_cwd_and_reloads_session() {
     }
 
     app.on_acp_event(session_loaded("test-session", Vec::new()));
-    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Idle);
+    assert_eq!(app.workspace_move_state(), WorkspaceMoveState::Idle);
 }
 
 #[test]
@@ -381,7 +382,7 @@ fn workspace_move_success_buffers_and_replays_session_updates() {
     app.on_acp_event(session_update_for("test-session", user_message_chunk("buffered-message")));
 
     app.on_acp_event(session_loaded("test-session", Vec::new()));
-    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Idle);
+    assert_eq!(app.workspace_move_state(), WorkspaceMoveState::Idle);
 
     let mut terminal = make_terminal();
     let mut renderer = Presenter::new(&UiSettings::default());
@@ -412,7 +413,7 @@ fn workspace_move_load_session_failure_recovers() {
 
     fail_signal.store(true, Ordering::SeqCst);
     app.on_acp_event(workspace_moved("/home/user/code/other"));
-    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Idle);
+    assert_eq!(app.workspace_move_state(), WorkspaceMoveState::Idle);
 
     let mut terminal = make_terminal();
     let mut renderer = Presenter::new(&UiSettings::default());
@@ -436,10 +437,10 @@ fn workspace_move_failed_event_resets_state() {
 
     app.on_key(key(KeyCode::Enter));
     let _ = command_rx.try_recv().unwrap();
-    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Moving);
+    assert_eq!(app.workspace_move_state(), WorkspaceMoveState::Moving);
 
     app.on_acp_event(workspace_move_failed("permission denied"));
-    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Idle);
+    assert_eq!(app.workspace_move_state(), WorkspaceMoveState::Idle);
 
     let mut terminal = make_terminal();
     let mut renderer = Presenter::new(&UiSettings::default());
@@ -464,7 +465,7 @@ fn workspace_move_synchronous_error_resets_state() {
 
     fail_signal.store(true, Ordering::SeqCst);
     app.on_key(key(KeyCode::Enter));
-    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Idle);
+    assert_eq!(app.workspace_move_state(), WorkspaceMoveState::Idle);
 
     let mut terminal = make_terminal();
     let mut renderer = Presenter::new(&UiSettings::default());
@@ -512,5 +513,5 @@ fn workspace_move_picker_closes_when_connection_closes() {
 
     app.on_acp_event(AcpEvent::ConnectionClosed);
     assert!(!app.has_modal());
-    assert_eq!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Idle);
+    assert_eq!(app.workspace_move_state(), WorkspaceMoveState::Idle);
 }

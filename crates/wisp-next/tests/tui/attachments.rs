@@ -191,6 +191,7 @@ fn media_only_submit_sends_with_content_blocks() {
 
     app.on_paste(img.to_str().unwrap());
     app.on_key(key(KeyCode::Enter));
+    settle_tasks(&mut app);
 
     let cmd = command_rx.try_recv().unwrap();
     match cmd {
@@ -212,6 +213,7 @@ fn submit_with_text_and_media_merges_both() {
     app.on_paste(img.to_str().unwrap());
     type_text(&mut app, "describe this");
     app.on_key(key(KeyCode::Enter));
+    settle_tasks(&mut app);
 
     let cmd = command_rx.try_recv().unwrap();
     match cmd {
@@ -231,6 +233,7 @@ fn submit_clears_pending_media() {
 
     app.on_paste(img.to_str().unwrap());
     app.on_key(key(KeyCode::Enter));
+    settle_tasks(&mut app);
     command_rx.try_recv().unwrap();
 
     assert!(app.composer().pending_media().is_empty());
@@ -297,6 +300,7 @@ fn agent_rejects_image_when_capability_missing() {
 
     app.on_paste(img.to_str().unwrap());
     app.on_key(key(KeyCode::Enter));
+    settle_tasks(&mut app);
 
     assert!(command_rx.try_recv().is_err(), "prompt should be blocked locally");
     assert!(!app.waiting_for_response());
@@ -321,6 +325,7 @@ fn agent_rejects_audio_when_capability_missing() {
 
     app.on_paste(audio.to_str().unwrap());
     app.on_key(key(KeyCode::Enter));
+    settle_tasks(&mut app);
 
     assert!(command_rx.try_recv().is_err(), "prompt should be blocked locally");
     assert!(!app.waiting_for_response());
@@ -339,6 +344,7 @@ fn selected_model_rejects_image() {
 
     app.on_paste(img.to_str().unwrap());
     app.on_key(key(KeyCode::Enter));
+    settle_tasks(&mut app);
 
     assert!(command_rx.try_recv().is_err(), "prompt should be blocked locally");
     let messages: Vec<_> = app
@@ -363,6 +369,7 @@ fn missing_model_metadata_rejects_media() {
 
     app.on_paste(img.to_str().unwrap());
     app.on_key(key(KeyCode::Enter));
+    settle_tasks(&mut app);
 
     assert!(command_rx.try_recv().is_err(), "prompt should be blocked locally");
     let messages: Vec<_> = app
@@ -389,6 +396,7 @@ fn supported_media_sends_blocks() {
 
     app.on_paste(img.to_str().unwrap());
     app.on_key(key(KeyCode::Enter));
+    settle_tasks(&mut app);
 
     let cmd = command_rx.try_recv().unwrap();
     match cmd {
@@ -409,6 +417,7 @@ fn sync_prompt_failure_resets_busy_state() {
     app.on_paste(img.to_str().unwrap());
     fail_signal.store(true, Ordering::Relaxed);
     app.on_key(key(KeyCode::Enter));
+    settle_tasks(&mut app);
 
     assert!(!app.waiting_for_response(), "sync prompt failure should reset busy state");
     assert!(command_rx.try_recv().is_err(), "no prompt should be sent");
@@ -446,6 +455,7 @@ fn submit_is_blocked_when_composer_empty_without_media() {
     let (mut app, mut command_rx) = make_app();
 
     app.on_key(key(KeyCode::Enter));
+    settle_tasks(&mut app);
 
     assert!(command_rx.try_recv().is_err());
 }
@@ -506,6 +516,7 @@ fn selected_model_rejects_audio() {
 
     app.on_paste(audio.to_str().unwrap());
     app.on_key(key(KeyCode::Enter));
+    settle_tasks(&mut app);
 
     assert!(command_rx.try_recv().is_err(), "prompt should be blocked locally");
     let messages: Vec<_> = app
@@ -534,6 +545,7 @@ fn selected_model_rejects_image_grouped() {
 
     app.on_paste(img.to_str().unwrap());
     app.on_key(key(KeyCode::Enter));
+    settle_tasks(&mut app);
 
     assert!(command_rx.try_recv().is_err(), "prompt should be blocked locally");
     let messages: Vec<_> = app
@@ -562,6 +574,7 @@ fn selected_model_rejects_audio_grouped() {
 
     app.on_paste(audio.to_str().unwrap());
     app.on_key(key(KeyCode::Enter));
+    settle_tasks(&mut app);
 
     assert!(command_rx.try_recv().is_err(), "prompt should be blocked locally");
     let messages: Vec<_> = app
@@ -597,6 +610,7 @@ fn comma_separated_multi_model_rejects_image() {
 
     app.on_paste(img.to_str().unwrap());
     app.on_key(key(KeyCode::Enter));
+    settle_tasks(&mut app);
 
     assert!(command_rx.try_recv().is_err(), "prompt should be blocked — multi-select includes unsupported model");
 }
@@ -619,6 +633,7 @@ fn comma_separated_multi_model_sends_when_all_support_media() {
 
     app.on_paste(img.to_str().unwrap());
     app.on_key(key(KeyCode::Enter));
+    settle_tasks(&mut app);
 
     let cmd = command_rx.try_recv().unwrap();
     match cmd {
@@ -640,6 +655,7 @@ fn rejection_preserves_text_and_placeholders_in_transcript() {
     app.on_paste(img.to_str().unwrap());
     type_text(&mut app, "describe this image");
     app.on_key(key(KeyCode::Enter));
+    settle_tasks(&mut app);
 
     assert!(command_rx.try_recv().is_err(), "prompt should be blocked locally");
 
@@ -667,6 +683,7 @@ fn sync_failure_preserves_text_and_placeholders_in_transcript() {
     type_text(&mut app, "describe this");
     fail_signal.store(true, Ordering::Relaxed);
     app.on_key(key(KeyCode::Enter));
+    settle_tasks(&mut app);
 
     assert!(!app.waiting_for_response(), "sync failure should reset busy state");
     assert!(command_rx.try_recv().is_err(), "no prompt should be sent");

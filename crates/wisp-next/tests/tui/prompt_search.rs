@@ -376,11 +376,11 @@ fn prompt_search_ctrl_r_does_not_steal_from_modal() {
 fn prompt_search_ctrl_r_does_not_open_during_composer_overlay() {
     let (mut app, _command_rx) = make_app_with_prompt_search();
     app.on_key(key(KeyCode::Char('/')));
-    assert!(app.composer().has_overlay());
+    assert!(app.composer().has_completion());
 
     app.on_key(ctrl('r'));
     assert!(!app.composer().has_prompt_search());
-    assert!(app.composer().has_overlay());
+    assert!(app.composer().has_completion());
 }
 
 #[test]

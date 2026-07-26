@@ -1,5 +1,5 @@
 use super::App;
-use crate::attachments::PromptAttachment;
+use crate::attachments::{AttachmentOutcome, PromptAttachment};
 use crate::prompt_search::PromptSearchPicker;
 use crate::session_config_view::SessionConfigView;
 use acp_utils::config_option_id::ConfigOptionId;
@@ -7,7 +7,7 @@ use agent_client_protocol::schema as acp;
 
 impl App {
     pub(super) fn submit(&mut self) {
-        if self.composer.is_empty() || self.turn.prompt_in_flight {
+        if self.composer.is_empty() || self.turn.prompt_in_flight || self.pending_submission.is_some() {
             return;
         }
 
@@ -17,10 +17,26 @@ impl App {
             mentions.into_iter().map(|m| PromptAttachment { path: m.path, display_name: m.display_name }).collect();
         all_attachments.extend(pending_media);
 
-        let outcome = crate::attachments::build_attachments(&all_attachments);
-        self.transcript.push_user_message(&text);
+        self.pending_submission = Some(super::PendingSubmission { text });
+        if all_attachments.is_empty() {
+            self.finish_submission(AttachmentOutcome {
+                blocks: Vec::new(),
+                placeholders: Vec::new(),
+                warnings: Vec::new(),
+            });
+        } else {
+            self.pending_tasks.push_back(crate::tasks::Task::PrepareSubmission { attachments: all_attachments });
+        }
+    }
+
+    pub(super) fn finish_submission(&mut self, outcome: AttachmentOutcome) {
+        let Some(pending) = self.pending_submission.take() else {
+            return;
+        };
+        let text = pending.text;
+        self.conversation.transcript.push_user_message(&text);
         for placeholder in &outcome.placeholders {
-            self.transcript.push_user_message(placeholder);
+            self.conversation.transcript.push_user_message(placeholder);
         }
         for warning in &outcome.warnings {
             self.notify(warning);

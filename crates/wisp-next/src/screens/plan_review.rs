@@ -18,7 +18,7 @@ use crate::plan_review::{
 };
 use crate::render_context::RenderContext;
 use crate::selection::{Direction, SelectionState, scroll_into_view, step_clamped};
-use crate::surface::{MouseAction, Surface, SurfaceMessage};
+use crate::surface::{Action, MouseAction, Surface};
 use crate::syntax::SyntaxHighlighter;
 use crate::theme::Theme;
 use crate::widgets::{block_cursor_spans, render_vertical_scrollbar};
@@ -133,9 +133,9 @@ impl PlanReviewScreen {
         }
     }
 
-    fn handle_key(&mut self, key: KeyEvent) -> Vec<SurfaceMessage> {
+    fn handle_key(&mut self, key: KeyEvent) -> Vec<Action> {
         if self.responder.is_answered() {
-            return vec![SurfaceMessage::Close];
+            return vec![Action::Close];
         }
         if self.draft.is_some() {
             self.handle_draft_key(key);
@@ -152,7 +152,7 @@ impl PlanReviewScreen {
     }
 
     /// Keys that end the review, available from either pane.
-    fn decision_key(&mut self, key: KeyEvent) -> Option<Vec<SurfaceMessage>> {
+    fn decision_key(&mut self, key: KeyEvent) -> Option<Vec<Action>> {
         match key.code {
             KeyCode::Esc => self.responder.cancel(),
             KeyCode::Char('a') => {
@@ -172,7 +172,7 @@ impl PlanReviewScreen {
             }
             _ => return None,
         }
-        Some(vec![SurfaceMessage::Close])
+        Some(vec![Action::Close])
     }
 
     fn handle_plan_key(&mut self, key: KeyEvent) {
@@ -430,11 +430,18 @@ impl PlanReviewScreen {
 impl Surface for PlanReviewScreen {
     /// The screen owns every key, so nothing falls through to the shared list
     /// navigation.
-    fn on_surface_key(&mut self, key: KeyEvent) -> Option<Vec<SurfaceMessage>> {
+    fn on_surface_key(&mut self, key: KeyEvent) -> Option<Vec<Action>> {
         Some(self.handle_key(key))
     }
 
-    fn on_mouse(&mut self, action: MouseAction, row: u16, column: u16) -> Vec<SurfaceMessage> {
+    fn on_paste(&mut self, text: &str) -> Vec<Action> {
+        if let Some(draft) = self.draft.as_mut() {
+            draft.on_paste(text);
+        }
+        Vec::new()
+    }
+
+    fn on_mouse(&mut self, action: MouseAction, row: u16, column: u16) -> Vec<Action> {
         match action {
             MouseAction::ScrollUp => self.scroll(Direction::Backward),
             MouseAction::ScrollDown => self.scroll(Direction::Forward),

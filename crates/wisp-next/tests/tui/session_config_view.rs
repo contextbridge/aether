@@ -2,7 +2,7 @@ use acp_utils::config_meta::SelectOptionMeta;
 use acp_utils::config_option_id::ConfigOptionId;
 use agent_client_protocol::schema::{SessionConfigOption, SessionConfigSelectGroup, SessionConfigSelectOption};
 use utils::ReasoningEffort;
-use wisp_next::session_config_view::SessionConfigView;
+use wisp_next::test_support::session_config_view::SessionConfigView;
 
 fn option(value: &str, name: &str) -> SessionConfigSelectOption {
     SessionConfigSelectOption::new(value.to_string(), name.to_string())

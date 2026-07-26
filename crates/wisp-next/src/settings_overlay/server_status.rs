@@ -1,8 +1,8 @@
-use super::{LiveSettingsData, SettingsPane, summarize};
+use super::{LiveSettingsData, PaneBehavior, summarize};
 use crate::list_view::ListView;
 use crate::render_context::RenderContext;
 use crate::selection::{Direction, SelectionState};
-use crate::surface::{Surface, SurfaceMessage, one};
+use crate::surface::{Action, Surface, one};
 use acp_utils::notifications::{McpServerStatus, McpServerStatusEntry};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
@@ -52,16 +52,16 @@ impl ServerStatusPane {
 }
 
 impl Surface for ServerStatusPane {
-    fn activate(&mut self) -> Vec<SurfaceMessage> {
+    fn activate(&mut self) -> Vec<Action> {
         one(self
             .selected_entry()
             .filter(|entry| entry.can_authenticate())
-            .map(|entry| SurfaceMessage::AuthenticateServer(entry.name.clone())))
+            .map(|entry| Action::AuthenticateServer(entry.name.clone())))
     }
 
     /// Headers and spacers are not selectable, so a click on one is ignored
     /// rather than moving focus to a row that cannot be authenticated.
-    fn click(&mut self, row: u16, _column: u16) -> Vec<SurfaceMessage> {
+    fn click(&mut self, row: u16, _column: u16) -> Vec<Action> {
         let restore = self.selection.selected();
         if !self.selection.select_at(row, self.rows.len()) {
             return Vec::new();
@@ -73,7 +73,7 @@ impl Surface for ServerStatusPane {
         self.activate()
     }
 
-    fn scroll(&mut self, direction: Direction) -> Vec<SurfaceMessage> {
+    fn scroll(&mut self, direction: Direction) -> Vec<Action> {
         let rows = &self.rows;
         self.selection.step(rows.len(), direction, |index| is_server(&rows[index]));
         Vec::new()
@@ -105,7 +105,7 @@ impl Surface for ServerStatusPane {
     }
 }
 
-impl SettingsPane for ServerStatusPane {
+impl PaneBehavior for ServerStatusPane {
     fn refresh(&mut self, live: &LiveSettingsData) {
         let keep = self.selected_entry().map(|entry| entry.name.clone());
         self.set_rows(live.servers.clone(), keep.as_deref());

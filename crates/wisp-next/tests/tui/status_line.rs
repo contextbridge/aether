@@ -6,11 +6,11 @@ use ratatui::TerminalOptions;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use std::time::{Duration, Instant};
-use wisp_next::app::{App, AppConfig};
-use wisp_next::presentation::Presenter;
-use wisp_next::render::sync_terminal;
-use wisp_next::settings::{StatusLineSegmentConfig, StatusLineSettings, StatusLineStyle, UiSettings};
-use wisp_next::workspace_status::WorkspaceStatus;
+use wisp_next::test_support::app::{App, AppConfig};
+use wisp_next::test_support::presentation::Presenter;
+use wisp_next::test_support::render::sync_terminal;
+use wisp_next::test_support::settings::{StatusLineSegmentConfig, StatusLineSettings, StatusLineStyle, UiSettings};
+use wisp_next::test_support::workspace_status::WorkspaceStatus;
 
 fn make_app_with_settings(settings: &UiSettings) -> (App, acp_utils::client::AcpPromptHandle) {
     let prompt_handle = acp_utils::client::AcpPromptHandle::noop();
@@ -30,7 +30,7 @@ fn make_app_with_settings(settings: &UiSettings) -> (App, acp_utils::client::Acp
 }
 
 fn make_terminal(width: u16, height: u16) -> ratatui::Terminal<TestBackend> {
-    let viewport_height = wisp_next::inline_viewport_height(height);
+    let viewport_height = wisp_next::test_support::inline_viewport_height(height);
     ratatui::Terminal::with_options(
         TestBackend::new(width, height),
         TerminalOptions { viewport: ratatui::Viewport::Inline(viewport_height) },
@@ -122,7 +122,7 @@ fn context_usage(used: u32, limit: u32) -> AcpEvent {
 
 #[test]
 fn status_line_renders_all_default_segments() {
-    let settings = UiSettings::default().with_default_status_line(StatusLineSettings::wisp_defaults());
+    let settings = UiSettings::default();
     let (mut app, _ph) = make_app_with_settings(&settings);
     app.on_acp_event(config_update(vec![model_option()]));
     app.on_acp_event(context_usage(100_000, 200_000));
@@ -138,26 +138,8 @@ fn status_line_renders_all_default_segments() {
 }
 
 #[test]
-fn status_line_aether_defaults_omit_agent() {
-    let settings = UiSettings::default().with_default_status_line(StatusLineSettings::aether_defaults());
-    let (mut app, _ph) = make_app_with_settings(&settings);
-    app.on_acp_event(config_update(vec![model_option(), mode_option()]));
-    app.on_acp_event(context_usage(100_000, 200_000));
-    let mut terminal = make_terminal(120, 15);
-
-    sync(&mut app, &mut terminal);
-
-    let text = buffer_text(&viewport_buffer(&mut terminal));
-    assert!(text.contains("~/code/demo"), "should contain cwd, got:\n{text}");
-    assert!(text.contains("main"), "should contain git ref, got:\n{text}");
-    assert!(text.contains("Code"), "should contain mode, got:\n{text}");
-    assert!(text.contains("Claude Sonnet"), "should contain model, got:\n{text}");
-    assert!(!text.contains("aether"), "aether defaults should omit agent, got:\n{text}");
-}
-
-#[test]
 fn status_line_shows_reasoning_bar() {
-    let settings = UiSettings::default().with_default_status_line(StatusLineSettings::wisp_defaults());
+    let settings = UiSettings::default();
     let (mut app, _ph) = make_app_with_settings(&settings);
     app.on_acp_event(config_update(vec![model_option(), reasoning_option()]));
     let mut terminal = make_terminal(120, 15);
@@ -170,7 +152,7 @@ fn status_line_shows_reasoning_bar() {
 
 #[test]
 fn status_line_reasoning_hidden_without_option() {
-    let settings = UiSettings::default().with_default_status_line(StatusLineSettings::wisp_defaults());
+    let settings = UiSettings::default();
     let (mut app, _ph) = make_app_with_settings(&settings);
     app.on_acp_event(config_update(vec![model_option()]));
     let mut terminal = make_terminal(120, 15);
@@ -186,7 +168,7 @@ fn status_line_reasoning_hidden_without_option() {
 
 #[test]
 fn status_line_context_gauge_shows_slots_and_tokens() {
-    let settings = UiSettings::default().with_default_status_line(StatusLineSettings::wisp_defaults());
+    let settings = UiSettings::default();
     let (mut app, _ph) = make_app_with_settings(&settings);
     app.on_acp_event(config_update(vec![model_option()]));
     app.on_acp_event(context_usage(100_000, 200_000));
@@ -202,7 +184,7 @@ fn status_line_context_gauge_shows_slots_and_tokens() {
 
 #[test]
 fn status_line_context_gauge_full_has_three_filled_slots() {
-    let settings = UiSettings::default().with_default_status_line(StatusLineSettings::wisp_defaults());
+    let settings = UiSettings::default();
     let (mut app, _ph) = make_app_with_settings(&settings);
     app.on_acp_event(config_update(vec![model_option()]));
     app.on_acp_event(context_usage(200_000, 200_000));
@@ -216,7 +198,7 @@ fn status_line_context_gauge_full_has_three_filled_slots() {
 
 #[test]
 fn status_line_ctrl_c_confirmation_replaces_right_side() {
-    let settings = UiSettings::default().with_default_status_line(StatusLineSettings::wisp_defaults());
+    let settings = UiSettings::default();
     let (mut app, _ph) = make_app_with_settings(&settings);
     app.on_acp_event(config_update(vec![model_option()]));
 
@@ -281,7 +263,7 @@ fn status_line_narrow_wraps_to_two_rows() {
 
 #[test]
 fn status_line_wide_stays_on_one_row() {
-    let settings = UiSettings::default().with_default_status_line(StatusLineSettings::wisp_defaults());
+    let settings = UiSettings::default();
     let (mut app, _ph) = make_app_with_settings(&settings);
     app.on_acp_event(config_update(vec![model_option(), reasoning_option()]));
     app.on_acp_event(context_usage(100_000, 200_000));
@@ -363,7 +345,7 @@ fn status_line_text_segment_styled() {
 
 #[test]
 fn status_line_server_health_hidden_when_healthy() {
-    let settings = UiSettings::default().with_default_status_line(StatusLineSettings::wisp_defaults());
+    let settings = UiSettings::default();
     let (mut app, _ph) = make_app_with_settings(&settings);
     app.on_acp_event(config_update(vec![model_option()]));
     let mut terminal = make_terminal(120, 15);
@@ -377,7 +359,7 @@ fn status_line_server_health_hidden_when_healthy() {
 
 #[test]
 fn status_line_server_health_shows_unhealthy() {
-    let settings = UiSettings::default().with_default_status_line(StatusLineSettings::wisp_defaults());
+    let settings = UiSettings::default();
     let (mut app, _ph) = make_app_with_settings(&settings);
     app.on_acp_event(config_update(vec![model_option()]));
 
@@ -397,7 +379,7 @@ fn status_line_server_health_shows_unhealthy() {
 
 #[test]
 fn status_line_server_health_hidden_when_busy() {
-    let settings = UiSettings::default().with_default_status_line(StatusLineSettings::wisp_defaults());
+    let settings = UiSettings::default();
     let (mut app, _ph) = make_app_with_settings(&settings);
     app.on_acp_event(config_update(vec![model_option()]));
 
@@ -417,7 +399,7 @@ fn status_line_server_health_hidden_when_busy() {
 
 #[test]
 fn status_line_context_color_warning_at_71_percent() {
-    let settings = UiSettings::default().with_default_status_line(StatusLineSettings::wisp_defaults());
+    let settings = UiSettings::default();
     let (mut app, _ph) = make_app_with_settings(&settings);
     app.on_acp_event(config_update(vec![model_option()]));
     app.on_acp_event(context_usage(142_000, 200_000));
@@ -431,7 +413,7 @@ fn status_line_context_color_warning_at_71_percent() {
 
 #[test]
 fn status_line_context_color_error_at_86_percent() {
-    let settings = UiSettings::default().with_default_status_line(StatusLineSettings::wisp_defaults());
+    let settings = UiSettings::default();
     let (mut app, _ph) = make_app_with_settings(&settings);
     app.on_acp_event(config_update(vec![model_option()]));
     app.on_acp_event(context_usage(172_000, 200_000));
@@ -467,7 +449,7 @@ fn status_line_two_row_never_enters_scrollback() {
 
 #[test]
 fn status_line_zero_width_no_panic() {
-    let settings = UiSettings::default().with_default_status_line(StatusLineSettings::wisp_defaults());
+    let settings = UiSettings::default();
     let (mut app, _ph) = make_app_with_settings(&settings);
     app.on_acp_event(config_update(vec![model_option()]));
     let mut terminal = make_terminal(0, 15);
@@ -477,7 +459,7 @@ fn status_line_zero_width_no_panic() {
 
 #[test]
 fn status_line_multi_model_comma_separated() {
-    let settings = UiSettings::default().with_default_status_line(StatusLineSettings::wisp_defaults());
+    let settings = UiSettings::default();
     let (mut app, _ph) = make_app_with_settings(&settings);
     let options = vec![acp::SessionConfigOption::select(
         "model",
@@ -499,7 +481,7 @@ fn status_line_multi_model_comma_separated() {
 
 #[test]
 fn status_line_ctrl_c_disarms_after_window() {
-    let settings = UiSettings::default().with_default_status_line(StatusLineSettings::wisp_defaults());
+    let settings = UiSettings::default();
     let (mut app, _ph) = make_app_with_settings(&settings);
     app.on_acp_event(config_update(vec![model_option()]));
 
@@ -567,7 +549,7 @@ fn status_line_unicode_truncation_uses_display_width() {
 
 #[test]
 fn status_line_mode_displays_current_mode() {
-    let settings = UiSettings::default().with_default_status_line(StatusLineSettings::aether_defaults());
+    let settings = UiSettings::default();
     let (mut app, _ph) = make_app_with_settings(&settings);
     app.on_acp_event(config_update(vec![model_option(), mode_option()]));
     let mut terminal = make_terminal(120, 15);
@@ -580,7 +562,7 @@ fn status_line_mode_displays_current_mode() {
 
 #[test]
 fn status_line_reasoning_max_effort_uses_warning_color() {
-    let settings = UiSettings::default().with_default_status_line(StatusLineSettings::wisp_defaults());
+    let settings = UiSettings::default();
     let (mut app, _ph) = make_app_with_settings(&settings);
     let options = vec![acp::SessionConfigOption::select(
         "reasoning_effort",
@@ -626,7 +608,7 @@ fn status_line_hidden_segments_do_not_appear() {
 
 #[test]
 fn status_line_busy_shows_spinner_and_working() {
-    let settings = UiSettings::default().with_default_status_line(StatusLineSettings::wisp_defaults());
+    let settings = UiSettings::default();
     let (mut app, _ph) = make_app_with_settings(&settings);
     app.on_acp_event(config_update(vec![model_option()]));
     let mut terminal = make_terminal(120, 15);
@@ -736,7 +718,7 @@ fn status_line_two_row_unicode_overflow_truncates_at_display_width() {
 
 #[test]
 fn context_zero_limit_renders_empty_gauge() {
-    let settings = UiSettings::default().with_default_status_line(StatusLineSettings::wisp_defaults());
+    let settings = UiSettings::default();
     let (mut app, _ph) = make_app_with_settings(&settings);
     app.on_acp_event(config_update(vec![model_option()]));
     app.on_acp_event(context_usage(0, 0));
@@ -751,7 +733,7 @@ fn context_zero_limit_renders_empty_gauge() {
 
 #[test]
 fn context_exact_boundary_71_percent_shows_warning() {
-    let settings = UiSettings::default().with_default_status_line(StatusLineSettings::wisp_defaults());
+    let settings = UiSettings::default();
     let (mut app, _ph) = make_app_with_settings(&settings);
     app.on_acp_event(config_update(vec![model_option()]));
     app.on_acp_event(context_usage(142_000, 200_000));
@@ -765,7 +747,7 @@ fn context_exact_boundary_71_percent_shows_warning() {
 
 #[test]
 fn context_exact_boundary_86_percent_shows_error() {
-    let settings = UiSettings::default().with_default_status_line(StatusLineSettings::wisp_defaults());
+    let settings = UiSettings::default();
     let (mut app, _ph) = make_app_with_settings(&settings);
     app.on_acp_event(config_update(vec![model_option()]));
     app.on_acp_event(context_usage(172_000, 200_000));
@@ -779,7 +761,7 @@ fn context_exact_boundary_86_percent_shows_error() {
 
 #[test]
 fn reasoning_none_effort_shows_empty_bar() {
-    let settings = UiSettings::default().with_default_status_line(StatusLineSettings::wisp_defaults());
+    let settings = UiSettings::default();
     let (mut app, _ph) = make_app_with_settings(&settings);
     let options = vec![
         model_option(),
@@ -806,7 +788,7 @@ fn reasoning_none_effort_shows_empty_bar() {
 
 #[test]
 fn context_small_tokens_renders_correctly() {
-    let settings = UiSettings::default().with_default_status_line(StatusLineSettings::wisp_defaults());
+    let settings = UiSettings::default();
     let (mut app, _ph) = make_app_with_settings(&settings);
     app.on_acp_event(config_update(vec![model_option()]));
     app.on_acp_event(context_usage(500, 200_000));
@@ -821,7 +803,7 @@ fn context_small_tokens_renders_correctly() {
 
 #[test]
 fn context_exactly_half_fills_one_and_a_half_slots() {
-    let settings = UiSettings::default().with_default_status_line(StatusLineSettings::wisp_defaults());
+    let settings = UiSettings::default();
     let (mut app, _ph) = make_app_with_settings(&settings);
     app.on_acp_event(config_update(vec![model_option()]));
     app.on_acp_event(context_usage(100_000, 200_000));

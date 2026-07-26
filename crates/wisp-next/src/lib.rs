@@ -1,49 +1,51 @@
-pub mod annotation;
-pub mod app;
-pub mod attachments;
+pub(crate) mod annotation;
+pub(crate) mod app;
+pub(crate) mod attachments;
 pub mod cli;
-pub mod composer;
-pub mod diff;
-pub mod dropped_files;
-pub mod edit_buffer;
-pub mod effects;
-pub mod elicitation;
+pub(crate) mod composer;
+pub(crate) mod diff;
+pub(crate) mod dropped_files;
+pub(crate) mod edit_buffer;
+pub(crate) mod elicitation;
 pub mod error;
-pub mod filterable_list;
-pub mod generation;
-pub mod git_diff;
-pub mod keybindings;
-pub mod list_view;
-pub mod markdown;
-pub mod modal;
-pub mod picker;
-pub mod plan_review;
-pub mod plan_tracker;
-pub mod plan_view;
-pub mod platform;
-pub mod presentation;
-pub mod progress_indicator;
-pub mod prompt_search;
-pub mod render;
-pub mod render_context;
-pub mod screens;
-pub mod selection;
+pub(crate) mod filterable_list;
+pub(crate) mod generation;
+pub(crate) mod git_diff;
+pub(crate) mod keybindings;
+pub(crate) mod list_view;
+pub(crate) mod markdown;
+pub(crate) mod modal;
+pub(crate) mod picker;
+pub(crate) mod plan_review;
+pub(crate) mod plan_tracker;
+pub(crate) mod plan_view;
+pub(crate) mod platform;
+pub(crate) mod presentation;
+pub(crate) mod progress_indicator;
+pub(crate) mod prompt_search;
+pub(crate) mod render;
+pub(crate) mod render_context;
+pub(crate) mod screens;
+pub(crate) mod selection;
 pub mod session;
-pub mod session_config_view;
-pub mod session_loading_buffer;
-pub mod session_picker;
+pub(crate) mod session_config_view;
+pub(crate) mod session_loading_buffer;
+pub(crate) mod session_picker;
 pub mod settings;
-pub mod settings_overlay;
-pub mod status_line;
-pub mod surface;
-pub mod syntax;
-pub mod theme;
-pub mod tool_calls;
-pub mod transcript;
-pub mod widgets;
-pub mod workspace_picker;
-pub mod workspace_status;
-pub mod wrap;
+pub(crate) mod settings_overlay;
+pub(crate) mod status_line;
+pub(crate) mod surface;
+pub(crate) mod syntax;
+pub(crate) mod tasks;
+#[doc(hidden)]
+pub mod test_support;
+pub(crate) mod theme;
+pub(crate) mod tool_calls;
+pub(crate) mod transcript;
+pub(crate) mod widgets;
+pub(crate) mod workspace_picker;
+pub(crate) mod workspace_status;
+pub(crate) mod wrap;
 
 use acp_utils::client::AcpEvent;
 use app::{App, AppConfig};
@@ -161,7 +163,7 @@ async fn event_loop(
     stdout: &mut impl Write,
 ) -> Result<(), AppError> {
     let mut terminal_events = EventStream::new();
-    let (effect_result_tx, mut effect_result_rx) = mpsc::unbounded_channel();
+    let (task_result_tx, mut task_result_rx) = mpsc::unbounded_channel();
     let mut tick_interval = {
         let mut tick = interval(Duration::from_millis(100));
         tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -194,9 +196,9 @@ async fn event_loop(
                 }
             }
 
-            effect_result = effect_result_rx.recv() => {
-                if let Some(result) = effect_result {
-                    app.on_effect_result(result);
+            task_result = task_result_rx.recv() => {
+                if let Some(result) = task_result {
+                    app.on_task_result(result);
                 }
             }
 
@@ -205,10 +207,10 @@ async fn event_loop(
 
         process_terminal_state(app, stdout, &mut capture_enabled);
 
-        while let Some(effect) = app.take_effect() {
-            let event_tx = effect_result_tx.clone();
+        while let Some(task) = app.take_task() {
+            let result_tx = task_result_tx.clone();
             tokio::spawn(async move {
-                let _ = event_tx.send(effect.execute().await);
+                let _ = result_tx.send(task.execute().await);
             });
         }
 

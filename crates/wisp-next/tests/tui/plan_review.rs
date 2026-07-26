@@ -6,15 +6,15 @@ use ratatui::buffer::Buffer;
 use std::path::PathBuf;
 use tokio::sync::oneshot;
 use utils::plan_review::PlanReviewElicitationMeta;
-use wisp_next::elicitation::ElicitationResponder;
-use wisp_next::generation::Generation;
-use wisp_next::plan_review::{PlanDocument, ReviewComment, compile_feedback};
-use wisp_next::render_context::RenderContext;
-use wisp_next::screens::plan_review::PlanReviewScreen;
-use wisp_next::surface::MouseAction;
-use wisp_next::surface::{Surface, SurfaceMessage};
-use wisp_next::syntax::SyntaxHighlighter;
-use wisp_next::theme::Theme;
+use wisp_next::test_support::elicitation::ElicitationResponder;
+use wisp_next::test_support::generation::Generation;
+use wisp_next::test_support::plan_review::{PlanDocument, ReviewComment, compile_feedback};
+use wisp_next::test_support::render_context::RenderContext;
+use wisp_next::test_support::screens::plan_review::PlanReviewScreen;
+use wisp_next::test_support::surface::MouseAction;
+use wisp_next::test_support::surface::{Action, Surface};
+use wisp_next::test_support::syntax::SyntaxHighlighter;
+use wisp_next::test_support::theme::Theme;
 
 fn make_meta(markdown: &str) -> PlanReviewElicitationMeta {
     PlanReviewElicitationMeta::new(&PathBuf::from("/tmp/plan.md"), markdown)
@@ -35,7 +35,7 @@ fn key(code: KeyCode) -> KeyEvent {
 
 /// Sends a key and reports whether it ended the review.
 fn closes(screen: &mut PlanReviewScreen, key: KeyEvent) -> bool {
-    screen.on_key(key).iter().any(|message| matches!(message, SurfaceMessage::Close))
+    screen.on_key(key).iter().any(|message| matches!(message, Action::Close))
 }
 
 fn render_screen(screen: &mut PlanReviewScreen, width: u16, height: u16) -> Buffer {

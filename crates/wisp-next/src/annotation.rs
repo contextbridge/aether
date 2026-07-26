@@ -29,6 +29,10 @@ impl<A> Draft<A> {
         Self { anchor, buffer: EditBuffer::default() }
     }
 
+    pub fn on_paste(&mut self, text: &str) {
+        self.buffer.insert_paste(text);
+    }
+
     /// Applies one keystroke. Enter files whatever was typed, Esc abandons it,
     /// and everything else goes to the shared editing keys.
     pub fn on_key(&mut self, key: KeyEvent) -> DraftOutcome {

@@ -1,14 +1,14 @@
-mod effects;
 mod input;
 mod rendering;
 mod state;
+mod tasks;
 
-pub use effects::{GitDiffEffect, GitDiffEvent};
 pub use state::GitDiffScreen;
+pub use tasks::{GitDiffEvent, GitDiffTask};
 
-use crate::surface::SurfaceMessage;
+use crate::surface::Action;
 
-/// Wraps an effect as the single message its handler returns.
-fn effect(effect: GitDiffEffect) -> Vec<SurfaceMessage> {
-    vec![SurfaceMessage::Effect(effect.into())]
+/// Wraps a task as the single action its handler returns.
+fn task(task: GitDiffTask) -> Vec<Action> {
+    vec![Action::Task(task.into())]
 }

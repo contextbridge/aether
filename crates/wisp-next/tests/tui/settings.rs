@@ -1,5 +1,5 @@
 use super::support::*;
-use wisp_next::surface::Surface;
+use wisp_next::test_support::surface::Surface;
 
 fn server_status_entry(name: &str, status: McpServerStatus) -> McpServerStatusEntry {
     McpServerStatusEntry::new(name, status)
@@ -672,7 +672,7 @@ fn settings_builtin_is_listed_in_command_picker() {
     let (mut app, _command_rx) = make_app();
 
     app.on_key(key(KeyCode::Char('/')));
-    assert!(app.composer().has_overlay());
+    assert!(app.composer().has_completion());
 
     let mut terminal = make_terminal();
     let mut renderer = Presenter::new(&UiSettings::default());
@@ -737,16 +737,13 @@ fn settings_over_renders_with_no_config_options() {
 #[test]
 fn settings_overlay_render_clears_covered_buffer_cells() {
     let options = vec![select_option("model", "gpt-4o")];
-    let mut overlay = wisp_next::settings_overlay::SettingsOverlay::new(&options, Vec::new(), &[]);
+    let mut overlay = SettingsOverlay::new(&options, Vec::new(), &[]);
     let area = ratatui::layout::Rect::new(0, 0, 40, 15);
     let mut buffer = Buffer::filled(area, Cell::new("X"));
     let theme = Theme::default();
-    let mut highlighter = wisp_next::syntax::SyntaxHighlighter::new();
-    let mut cx = wisp_next::render_context::RenderContext {
-        theme: &theme,
-        highlighter: &mut highlighter,
-        theme_generation: Generation::default(),
-    };
+    let mut highlighter = SyntaxHighlighter::new();
+    let mut cx =
+        RenderContext { theme: &theme, highlighter: &mut highlighter, theme_generation: Generation::default() };
 
     overlay.render(area, &mut buffer, &mut cx);
 

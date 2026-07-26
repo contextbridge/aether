@@ -3,10 +3,10 @@ pub(crate) use acp_utils::client::{AcpEvent, AcpPromptHandle, PromptCommand};
 pub(crate) use acp_utils::config_meta::SelectOptionMeta;
 pub(crate) use acp_utils::config_option_id::ConfigOptionId;
 pub(crate) use acp_utils::notifications::{
-    AetherCapabilities, AuthMethodsUpdatedParams, ContextClearedParams, ContextCompactionParams, ContextUsage,
-    ContextUsageParams, CreateElicitationRequestParams, ElicitationAction, ElicitationParams, McpNotification,
-    McpServerAuthCapability, McpServerStatus, McpServerStatusEntry, SessionPreviewResponse, SessionPreviewRole,
-    SessionPreviewTurn, SubAgentEvent, SubAgentProgressParams, SubAgentToolRequest, SubAgentToolResult, WorkspaceEntry,
+    AetherCapabilities, AuthMethodsUpdatedParams, ContextClearedParams, ContextCompactionParams,
+    CreateElicitationRequestParams, ElicitationAction, ElicitationParams, McpNotification, McpServerAuthCapability,
+    McpServerStatus, McpServerStatusEntry, SessionPreviewResponse, SessionPreviewRole, SessionPreviewTurn,
+    SubAgentEvent, SubAgentProgressParams, SubAgentToolRequest, SubAgentToolResult, WorkspaceEntry,
     WorkspaceListResponse, WorkspaceMoveResponse,
 };
 pub(crate) use acp_utils::testing::test_connection;
@@ -25,18 +25,22 @@ pub(crate) use std::time::{Duration, Instant};
 pub(crate) use tempfile::TempDir;
 pub(crate) use tokio::sync::mpsc::UnboundedReceiver;
 pub(crate) use tokio::task::LocalSet;
-pub(crate) use wisp_next::app::{App, AppConfig, HistoryItem, LayerKind};
-pub(crate) use wisp_next::composer::Composer;
-pub(crate) use wisp_next::effects::{Effect, EffectResult, SurfaceEvent};
-pub(crate) use wisp_next::generation::Generation;
-pub(crate) use wisp_next::picker::CommandEntry;
-pub(crate) use wisp_next::picker::index_files;
-pub(crate) use wisp_next::presentation::{Presenter, Segment};
-pub(crate) use wisp_next::render::sync_terminal as sync_terminal_with_renderer;
-pub(crate) use wisp_next::screens::git_diff::GitDiffEvent;
-pub(crate) use wisp_next::settings::UiSettings;
-pub(crate) use wisp_next::theme::Theme;
-pub(crate) use wisp_next::{inline_viewport_height, workspace_status::WorkspaceStatus};
+pub(crate) use wisp_next::test_support::app::{App, AppConfig, HistoryItem, LayerKind, WorkspaceMoveState};
+pub(crate) use wisp_next::test_support::composer::Composer;
+pub(crate) use wisp_next::test_support::generation::Generation;
+pub(crate) use wisp_next::test_support::picker::CommandEntry;
+pub(crate) use wisp_next::test_support::picker::index_files;
+pub(crate) use wisp_next::test_support::presentation::{Presenter, Segment};
+pub(crate) use wisp_next::test_support::render::sync_terminal as sync_terminal_with_renderer;
+pub(crate) use wisp_next::test_support::render_context::RenderContext;
+pub(crate) use wisp_next::test_support::screens::git_diff::GitDiffEvent;
+pub(crate) use wisp_next::test_support::settings::{StatusLineSegmentConfig, UiSettings};
+pub(crate) use wisp_next::test_support::settings_overlay::SettingsOverlay;
+pub(crate) use wisp_next::test_support::syntax::SyntaxHighlighter;
+pub(crate) use wisp_next::test_support::tasks::{Task, TaskResult};
+pub(crate) use wisp_next::test_support::theme::Theme;
+pub(crate) use wisp_next::test_support::tool_calls::ToolStatus;
+pub(crate) use wisp_next::test_support::{inline_viewport_height, workspace_status::WorkspaceStatus};
 
 /// Builds an `App` wired to a recording (or failable) prompt handle.
 ///
@@ -226,7 +230,7 @@ impl TestUi {
 /// Opens the `@` picker on `composer` and delivers the file index, the way the
 /// event loop does once the walk completes.
 pub(crate) fn open_file_picker(composer: &mut Composer, root: &std::path::Path) {
-    let Effect::IndexFiles { request_id, root } = composer.open_file_picker(root) else {
+    let Task::IndexFiles { request_id, root } = composer.open_file_picker(root) else {
         panic!("opening the file picker should ask for a file index");
     };
     composer.on_files_indexed(request_id, index_files(&root));
@@ -234,11 +238,11 @@ pub(crate) fn open_file_picker(composer: &mut Composer, root: &std::path::Path) 
 
 /// Runs whatever work the app has queued and feeds the results back, so a test
 /// sees the state the event loop would have produced.
-pub(crate) fn settle_effects(app: &mut App) {
+pub(crate) fn settle_tasks(app: &mut App) {
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-    while let Some(effect) = app.take_effect() {
-        let result = runtime.block_on(effect.execute());
-        app.on_effect_result(result);
+    while let Some(task) = app.take_task() {
+        let result = runtime.block_on(task.execute());
+        app.on_task_result(result);
     }
 }
 

@@ -10,11 +10,11 @@ use crate::edit_buffer::EditBuffer;
 use crate::git_diff::{DiffScope, FileDiff, FileStatus, GitDiffDocument, PatchAnchor, ReviewQueue, StageState};
 use crate::selection::{Direction, SelectionState, scroll_into_view};
 
-use crate::surface::SurfaceMessage;
+use crate::surface::Action;
 
-use super::effect;
+use super::task;
 
-use super::effects::GitDiffEffect;
+use super::tasks::GitDiffTask;
 use crate::generation::Generation;
 
 pub struct GitDiffScreen {
@@ -30,7 +30,7 @@ pub struct GitDiffScreen {
     /// The flattened file tree the drawer draws. Rebuilt only when the document
     /// or the collapsed set changes, rather than on every key, click, and frame.
     drawer_entries: Vec<DrawerEntry>,
-    /// Bumped whenever a reload replaces the document, invalidating cached patches.
+    /// Bumped whenever a reload replaces the document, invalidating rendered patches.
     pub(super) document_revision: Generation,
     pub(super) bottom_bar: BottomBar,
     pub(super) show_full_file: bool,
@@ -51,10 +51,6 @@ pub(super) struct PatchView {
     /// The syntax-highlighted patch, independent of anything drawn over it.
     pub(super) rows: Option<PatchRows>,
     pub(super) view: Option<DiffView>,
-    /// Bounded MRU cache of fully-rendered, stable (draft-free) diff views for files other
-    /// than the one currently selected, so switching files does not re-run syntax
-    /// highlighting for recently-visited patches.
-    pub(super) cache: Vec<DiffView>,
 }
 
 /// The review being assembled: comments already filed, and the one being typed.
@@ -74,10 +70,6 @@ pub(super) struct Request {
     /// A destructive action armed and waiting for its key to be pressed again.
     pub(super) pending: Option<PendingAction>,
 }
-
-/// Maximum number of recently-rendered file patches kept for instant re-display when the
-/// user browses between files.
-pub(super) const DIFF_VIEW_CACHE_LIMIT: usize = 8;
 
 /// A rendered patch, and everything about the state it was rendered from. It is
 /// reusable exactly while [`DiffViewKey`] still matches.
@@ -132,7 +124,7 @@ pub(super) struct PatchKey {
     pub(super) document_revision: Generation,
 }
 
-/// Identity of a rendered patch. A cached view is reused only while every part
+/// Identity of a rendered patch. The active view is reused only while every part
 /// of this still holds — including the draft's text and cursor, so the box the
 /// user is typing into redraws on each keystroke.
 #[derive(Clone, PartialEq, Eq)]
@@ -199,7 +191,7 @@ pub(super) enum BottomBar {
 }
 
 impl GitDiffScreen {
-    pub fn new(working_dir: PathBuf) -> (Self, GitDiffEffect) {
+    pub fn new(working_dir: PathBuf) -> (Self, GitDiffTask) {
         let mut screen = Self {
             working_dir,
             repo_root: None,
@@ -219,11 +211,11 @@ impl GitDiffScreen {
             review: Review::default(),
             request: Request::default(),
         };
-        let effect = screen.begin_load();
-        (screen, effect)
+        let task = screen.begin_load();
+        (screen, task)
     }
 
-    pub(super) fn begin_load(&mut self) -> GitDiffEffect {
+    pub(super) fn begin_load(&mut self) -> GitDiffTask {
         if let Some(path) = self.selected_file().map(|file| file.path.clone()) {
             self.selected_path = Some(path);
         }
@@ -231,7 +223,7 @@ impl GitDiffScreen {
         self.review.queue.clear();
         self.bump_comments_revision();
         self.state = GitDiffLoadState::Loading;
-        GitDiffEffect::Load {
+        GitDiffTask::Load {
             request_id: self.begin_request(),
             working_dir: self.working_dir.clone(),
             repo_root: self.repo_root.clone(),
@@ -252,20 +244,19 @@ impl GitDiffScreen {
         self.bump_comments_revision();
         self.patch.rows = None;
         self.patch.view = None;
-        self.patch.cache.clear();
         self.state = GitDiffLoadState::Ready(document);
         self.rebuild_drawer();
     }
 
-    pub(super) fn stage_all(&mut self) -> Vec<SurfaceMessage> {
-        self.repo_operation(|request_id, repo_root| GitDiffEffect::StageAll { request_id, repo_root })
+    pub(super) fn stage_all(&mut self) -> Vec<Action> {
+        self.repo_operation(|request_id, repo_root| GitDiffTask::StageAll { request_id, repo_root })
     }
 
-    pub(super) fn unstage_all(&mut self) -> Vec<SurfaceMessage> {
-        self.repo_operation(|request_id, repo_root| GitDiffEffect::UnstageAll { request_id, repo_root })
+    pub(super) fn unstage_all(&mut self) -> Vec<Action> {
+        self.repo_operation(|request_id, repo_root| GitDiffTask::UnstageAll { request_id, repo_root })
     }
 
-    pub(super) fn toggle_stage(&mut self) -> Vec<SurfaceMessage> {
+    pub(super) fn toggle_stage(&mut self) -> Vec<Action> {
         let Some(entry) = self.selected_drawer_entry().cloned() else {
             return Vec::new();
         };
@@ -277,14 +268,14 @@ impl GitDiffScreen {
         let paths: Vec<String> = files.iter().map(|file| file.path.clone()).collect();
         self.repo_operation(move |request_id, repo_root| {
             if all_staged {
-                GitDiffEffect::UnstageFiles { request_id, repo_root, paths }
+                GitDiffTask::UnstageFiles { request_id, repo_root, paths }
             } else {
-                GitDiffEffect::StageFiles { request_id, repo_root, paths }
+                GitDiffTask::StageFiles { request_id, repo_root, paths }
             }
         })
     }
 
-    pub(super) fn begin_commit(&mut self) -> Vec<SurfaceMessage> {
+    pub(super) fn begin_commit(&mut self) -> Vec<Action> {
         if self.request.in_flight {
             return Vec::new();
         }
@@ -296,7 +287,7 @@ impl GitDiffScreen {
         Vec::new()
     }
 
-    pub(super) fn begin_discard(&mut self) -> Vec<SurfaceMessage> {
+    pub(super) fn begin_discard(&mut self) -> Vec<Action> {
         if self.request.in_flight {
             return Vec::new();
         }
@@ -307,7 +298,7 @@ impl GitDiffScreen {
         Vec::new()
     }
 
-    pub(super) fn toggle_full_file(&mut self) -> Vec<SurfaceMessage> {
+    pub(super) fn toggle_full_file(&mut self) -> Vec<Action> {
         if self.request.in_flight {
             return Vec::new();
         }
@@ -324,7 +315,7 @@ impl GitDiffScreen {
             return Vec::new();
         };
         let messages =
-            self.repo_operation(|request_id, repo_root| GitDiffEffect::LoadFullFile { request_id, repo_root, path });
+            self.repo_operation(|request_id, repo_root| GitDiffTask::LoadFullFile { request_id, repo_root, path });
         if messages.is_empty() {
             self.show_full_file = false;
         }
@@ -367,37 +358,35 @@ impl GitDiffScreen {
         let Some(file) = self.selected_file() else {
             return;
         };
-        let positions: Vec<PatchCursor> = file
-            .hunks
-            .iter()
-            .enumerate()
-            .flat_map(|(hunk, entry)| (0..entry.lines.len()).map(move |line| PatchCursor { hunk, line }))
-            .collect();
-        let Some(last) = positions.len().checked_sub(1) else {
+        let total = file.hunks.iter().map(|hunk| hunk.lines.len()).sum::<usize>();
+        let Some(last) = total.checked_sub(1) else {
             return;
         };
-        let current = positions.iter().position(|position| *position == self.patch.cursor).unwrap_or(0);
+        let current = file
+            .hunks
+            .iter()
+            .take(self.patch.cursor.hunk)
+            .map(|hunk| hunk.lines.len())
+            .sum::<usize>()
+            .saturating_add(self.patch.cursor.line)
+            .min(last);
         let next = match direction {
             Direction::Backward => current.saturating_sub(amount),
             Direction::Forward => current.saturating_add(amount).min(last),
         };
-        self.patch.cursor = positions[next];
+        let mut remaining = next;
+        for (hunk, entry) in file.hunks.iter().enumerate() {
+            if remaining < entry.lines.len() {
+                self.patch.cursor = PatchCursor { hunk, line: remaining };
+                break;
+            }
+            remaining -= entry.lines.len();
+        }
         self.sync_scroll_to_cursor();
     }
 
-    /// Moves the currently-active diff view into the MRU cache (when it is a stable,
-    /// draft-free snapshot) so it can be reused if the user switches back to its file.
-    pub(super) fn park_active_diff_view(&mut self) {
-        if let Some(view) = self.patch.view.take()
-            && view.key.draft.is_none()
-        {
-            self.patch.cache.insert(0, view);
-            self.patch.cache.truncate(DIFF_VIEW_CACHE_LIMIT);
-        }
-    }
-
     /// Identity of the active draft: its anchor plus the text and cursor that
-    /// were rendered, so a cached view is reused only while all three match.
+    /// were rendered, so the active view is reused only while all three match.
     pub(super) fn draft_key(&self) -> Option<DraftKey> {
         self.review.draft.as_ref().map(|draft| DraftKey {
             anchor: draft.anchor,
@@ -445,7 +434,7 @@ impl GitDiffScreen {
         }
     }
 
-    pub(super) fn begin_draft(&mut self) -> Vec<SurfaceMessage> {
+    pub(super) fn begin_draft(&mut self) -> Vec<Action> {
         let anchored = self
             .selected_file()
             .and_then(|file| file.hunks.get(self.patch.cursor.hunk))
@@ -461,13 +450,13 @@ impl GitDiffScreen {
         Vec::new()
     }
 
-    pub(super) fn undo_last_comment(&mut self) -> Vec<SurfaceMessage> {
+    pub(super) fn undo_last_comment(&mut self) -> Vec<Action> {
         self.review.queue.pop();
         self.bump_comments_revision();
         Vec::new()
     }
 
-    pub(super) fn submit_review(&mut self) -> Vec<SurfaceMessage> {
+    pub(super) fn submit_review(&mut self) -> Vec<Action> {
         if self.review.queue.is_empty() {
             self.bottom_bar = BottomBar::Error("No comments to submit".to_string());
             return Vec::new();
@@ -476,7 +465,7 @@ impl GitDiffScreen {
             self.bottom_bar = BottomBar::Error("Already submitting".to_string());
             return Vec::new();
         }
-        vec![SurfaceMessage::SubmitReview(self.review.queue.format_prompt())]
+        vec![Action::SubmitReview(self.review.queue.format_prompt())]
     }
 
     pub(super) fn bump_comments_revision(&mut self) {
@@ -595,13 +584,10 @@ impl GitDiffScreen {
 
     /// Runs `build` against the repository root, doing nothing when the diff has
     /// not yet reported one.
-    pub(super) fn repo_operation(
-        &mut self,
-        build: impl FnOnce(Generation, PathBuf) -> GitDiffEffect,
-    ) -> Vec<SurfaceMessage> {
+    pub(super) fn repo_operation(&mut self, build: impl FnOnce(Generation, PathBuf) -> GitDiffTask) -> Vec<Action> {
         let Some(repo_root) = self.repo_root.clone() else {
             return Vec::new();
         };
-        effect(build(self.begin_request(), repo_root))
+        task(build(self.begin_request(), repo_root))
     }
 }

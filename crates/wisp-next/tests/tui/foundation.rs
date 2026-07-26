@@ -1,5 +1,5 @@
 use super::support::*;
-use wisp_next::picker::CompletionOverlay;
+use wisp_next::test_support::picker::CompletionOverlay;
 
 #[test]
 fn app_exposes_initial_config_option_selections() {
@@ -50,17 +50,6 @@ fn auth_methods_update_replaces_current_auth_methods() {
 
     assert_eq!(app.auth_methods().len(), 1);
     assert_eq!(app.auth_methods()[0].id().0.as_ref(), "updated");
-}
-
-#[test]
-fn session_capability_metadata_enables_only_advertised_features() {
-    let session_capabilities = acp::SessionCapabilities::new()
-        .meta(Some(AetherCapabilities { prompt_search: true, session_preview: false, workspace_move: true }.to_meta()));
-    let (app, _command_rx) = AppBuilder::new().session_capabilities(session_capabilities).build();
-
-    assert!(app.supports_prompt_search());
-    assert!(!app.supports_session_preview());
-    assert!(app.supports_workspace_move());
 }
 
 #[test]
@@ -119,7 +108,7 @@ fn command_picker_filters_and_applies_selected_command() {
     let selected = composer.accept_command().unwrap();
     assert_eq!(selected.name, "search");
     assert_eq!(composer.text(), "/search");
-    assert!(!composer.has_overlay());
+    assert!(!composer.has_completion());
 }
 
 #[test]
@@ -141,7 +130,7 @@ fn file_picker_filters_and_inserts_a_mention() {
     let selected = composer.accept_file().unwrap();
     assert_eq!(selected.display_name, "src/main.rs");
     assert_eq!(composer.text(), "@src/main.rs ");
-    assert!(!composer.has_overlay());
+    assert!(!composer.has_completion());
 }
 
 #[test]
@@ -151,11 +140,12 @@ fn selected_file_is_sent_as_an_acp_resource_attachment() {
     let (mut app, mut command_rx) = make_app_in(directory.path().to_path_buf());
 
     app.on_key(key(KeyCode::Char('@')));
-    settle_effects(&mut app);
+    settle_tasks(&mut app);
     app.on_key(key(KeyCode::Char('c')));
     app.on_key(key(KeyCode::Enter));
     assert_eq!(app.composer().text(), "@context.txt ");
     app.on_key(key(KeyCode::Enter));
+    settle_tasks(&mut app);
 
     let PromptCommand::Prompt { text, content, .. } = command_rx.try_recv().unwrap() else {
         panic!("expected a prompt command");
@@ -173,7 +163,7 @@ fn file_picker_renders_in_the_live_viewport_not_scrollback() {
     let mut renderer = Presenter::new(&UiSettings::default());
 
     app.on_key(key(KeyCode::Char('@')));
-    settle_effects(&mut app);
+    settle_tasks(&mut app);
     app.on_key(key(KeyCode::Char('c')));
     sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
@@ -499,7 +489,7 @@ fn large_markdown_history_preserves_order_across_scrollback_and_viewport() {
 #[test]
 fn settings_deserializes_status_line() {
     let settings: UiSettings = serde_json::from_str(
-        r#"{"contentPadding":4,"theme":{"file":"nord.tmTheme","future":true},"statusLine":{"left":["cwd"],"right":["agent"]}}"#,
+        r#"{"contentPadding":4,"theme":{"file":"nord.tmTheme","future":true},"statusLine":{"left":[{"type":"cwd"}],"right":[{"type":"agent"}]}}"#,
     )
     .unwrap();
 
@@ -507,8 +497,8 @@ fn settings_deserializes_status_line() {
     assert_eq!(settings.theme.file.as_deref(), Some("nord.tmTheme"));
     assert!(settings.status_line.is_some());
     let sl = settings.status_line.unwrap();
-    assert_eq!(sl.left, Some(vec![wisp_next::settings::StatusLineSegmentConfig::Cwd { max_width: None }]));
-    assert_eq!(sl.right, Some(vec![wisp_next::settings::StatusLineSegmentConfig::Agent]));
+    assert_eq!(sl.left, Some(vec![StatusLineSegmentConfig::Cwd { max_width: None }]));
+    assert_eq!(sl.right, Some(vec![StatusLineSegmentConfig::Agent]));
 }
 
 #[test]

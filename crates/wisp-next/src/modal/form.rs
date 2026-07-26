@@ -83,6 +83,12 @@ impl FormModal {
         FormAction::None
     }
 
+    pub(super) fn paste(&mut self, text: &str) {
+        if let Some(FormFieldKind::Text(buffer) | FormFieldKind::Number(buffer)) = self.focused_kind() {
+            buffer.insert_paste(text);
+        }
+    }
+
     /// Moves between fields, or within the focused multi-select's options.
     pub(super) fn scroll(&mut self, direction: Direction) {
         if let Some(FormFieldKind::Multi { options, cursor, .. }) = self.focused_kind() {

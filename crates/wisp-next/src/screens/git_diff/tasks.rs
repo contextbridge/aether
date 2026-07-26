@@ -9,7 +9,7 @@ use crate::git_diff::{
 };
 
 #[derive(Debug)]
-pub enum GitDiffEffect {
+pub enum GitDiffTask {
     Load { request_id: Generation, working_dir: PathBuf, repo_root: Option<PathBuf>, scope: DiffScope },
     StageFiles { request_id: Generation, repo_root: PathBuf, paths: Vec<String> },
     UnstageFiles { request_id: Generation, repo_root: PathBuf, paths: Vec<String> },
@@ -37,7 +37,7 @@ impl GitDiffEvent {
     }
 }
 
-impl GitDiffEffect {
+impl GitDiffTask {
     pub async fn execute(self) -> GitDiffEvent {
         let request_id = self.request_id();
         let result = std::panic::AssertUnwindSafe(self.execute_inner()).catch_unwind().await;
@@ -50,7 +50,7 @@ impl GitDiffEffect {
         }
     }
 
-    /// The request this effect will report back under.
+    /// The request this task will report back under.
     pub fn request_id(&self) -> Generation {
         match self {
             Self::Load { request_id, .. }

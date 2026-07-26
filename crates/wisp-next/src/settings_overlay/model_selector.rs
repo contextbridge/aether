@@ -1,8 +1,8 @@
-use super::{SettingsChange, SettingsMenuValue, SettingsPane, message_for_change};
+use super::{PaneBehavior, SettingsChange, SettingsMenuValue, message_for_change};
 use crate::filterable_list::FilterableList;
 use crate::render_context::RenderContext;
 use crate::selection::Direction;
-use crate::surface::{ListFilter, Surface, SurfaceMessage};
+use crate::surface::{Action, ListFilter, Surface};
 use crate::theme::Theme;
 use crate::wrap::truncate_to_width;
 use acp_utils::config_option_id::ConfigOptionId;
@@ -119,7 +119,7 @@ impl ModelSelector {
 }
 
 impl Surface for ModelSelector {
-    fn on_surface_key(&mut self, key: KeyEvent) -> Option<Vec<SurfaceMessage>> {
+    fn on_surface_key(&mut self, key: KeyEvent) -> Option<Vec<Action>> {
         match key.code {
             KeyCode::Tab => self.cycle_reasoning(Direction::Forward),
             KeyCode::BackTab => self.cycle_reasoning(Direction::Backward),
@@ -133,7 +133,7 @@ impl Surface for ModelSelector {
         Some(&mut self.items)
     }
 
-    fn click(&mut self, row: u16, _column: u16) -> Vec<SurfaceMessage> {
+    fn click(&mut self, row: u16, _column: u16) -> Vec<Action> {
         if self.items.select_at(row) {
             self.toggle_focused();
         }
@@ -141,7 +141,7 @@ impl Surface for ModelSelector {
     }
 
     /// Scanning a long model list stops at either end rather than wrapping.
-    fn scroll(&mut self, direction: Direction) -> Vec<SurfaceMessage> {
+    fn scroll(&mut self, direction: Direction) -> Vec<Action> {
         self.items.step_clamped(direction, |value| !value.is_disabled);
         self.clamp_reasoning_to_focused();
         Vec::new()
@@ -224,8 +224,8 @@ impl ModelSelector {
     }
 }
 
-impl SettingsPane for ModelSelector {
-    fn take_changes(&mut self) -> Vec<SurfaceMessage> {
+impl PaneBehavior for ModelSelector {
+    fn take_changes(&mut self) -> Vec<Action> {
         self.pending_changes().iter().map(message_for_change).collect()
     }
 

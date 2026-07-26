@@ -254,10 +254,10 @@ fn app_routes_ctrl_e_to_move_line_end() {
 fn shift_enter_closes_command_overlay_and_inserts_newline() {
     let (mut app, _command_rx) = make_app();
     app.on_key(key(KeyCode::Char('/')));
-    assert!(app.composer().has_overlay(), "command overlay active");
+    assert!(app.composer().has_completion(), "command overlay active");
 
     app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
-    assert!(!app.composer().has_overlay(), "overlay closed after Shift+Enter");
+    assert!(!app.composer().has_completion(), "overlay closed after Shift+Enter");
     assert_eq!(app.composer().text(), "/\n");
 }
 
@@ -266,10 +266,10 @@ fn ctrl_j_closes_file_overlay_and_inserts_newline() {
     let directory = tempfile::tempdir().unwrap();
     let (mut app, _command_rx) = make_app_in(directory.path().to_path_buf());
     app.on_key(key(KeyCode::Char('@')));
-    assert!(app.composer().has_overlay(), "file overlay active");
+    assert!(app.composer().has_completion(), "file overlay active");
 
     app.on_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL));
-    assert!(!app.composer().has_overlay(), "overlay closed after Ctrl-J");
+    assert!(!app.composer().has_completion(), "overlay closed after Ctrl-J");
     assert_eq!(app.composer().text(), "@\n");
 }
 
@@ -277,10 +277,10 @@ fn ctrl_j_closes_file_overlay_and_inserts_newline() {
 fn alt_enter_closes_command_overlay_and_inserts_newline() {
     let (mut app, _command_rx) = make_app();
     app.on_key(key(KeyCode::Char('/')));
-    assert!(app.composer().has_overlay());
+    assert!(app.composer().has_completion());
 
     app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
-    assert!(!app.composer().has_overlay(), "overlay closed after Alt+Enter");
+    assert!(!app.composer().has_completion(), "overlay closed after Alt+Enter");
     assert_eq!(app.composer().text(), "/\n");
 }
 

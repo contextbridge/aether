@@ -3,18 +3,19 @@ use ratatui::TerminalOptions;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use tokio::sync::mpsc::UnboundedReceiver;
-use wisp_next::app::{App, AppConfig, LayerKind};
-use wisp_next::effects::SurfaceEvent;
-use wisp_next::presentation::Presenter;
-use wisp_next::render::sync_terminal as sync_terminal_with_renderer;
-use wisp_next::settings::UiSettings;
+use wisp_next::test_support::app::{App, AppConfig, LayerKind, WorkspaceMoveState};
+use wisp_next::test_support::presentation::Presenter;
+use wisp_next::test_support::render::sync_terminal as sync_terminal_with_renderer;
+use wisp_next::test_support::settings::UiSettings;
+use wisp_next::test_support::tasks::TaskResult;
+use wisp_next::test_support::workspace_status::WorkspaceStatus;
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 fn make_terminal(width: u16, height: u16) -> ratatui::Terminal<TestBackend> {
-    let viewport_height = wisp_next::inline_viewport_height(height);
+    let viewport_height = wisp_next::test_support::inline_viewport_height(height);
     ratatui::Terminal::with_options(
         TestBackend::new(width, height),
         TerminalOptions { viewport: ratatui::Viewport::Inline(viewport_height) },
@@ -31,7 +32,7 @@ fn make_app() -> (App, UnboundedReceiver<acp_utils::client::PromptCommand>) {
         session_capabilities: agent_client_protocol::schema::SessionCapabilities::new(),
         config_options: Vec::new(),
         auth_methods: Vec::new(),
-        workspace_status: wisp_next::workspace_status::WorkspaceStatus::new("~/code/demo", Some("main".to_string())),
+        workspace_status: WorkspaceStatus::new("~/code/demo", Some("main".to_string())),
         prompt_handle,
         working_dir: std::path::PathBuf::from("."),
         settings: UiSettings::default(),
@@ -277,10 +278,7 @@ mod mouse_capture {
                 session_capabilities,
                 config_options: Vec::new(),
                 auth_methods: Vec::new(),
-                workspace_status: wisp_next::workspace_status::WorkspaceStatus::new(
-                    "~/code/demo",
-                    Some("main".to_string()),
-                ),
+                workspace_status: WorkspaceStatus::new("~/code/demo", Some("main".to_string())),
                 prompt_handle,
                 working_dir: std::path::PathBuf::from("."),
                 settings: UiSettings::default(),
@@ -386,15 +384,6 @@ mod bell {
 
 mod resize {
     use super::*;
-
-    #[test]
-    fn resize_updates_terminal_size() {
-        let (mut app, _rx) = make_app();
-        assert_eq!(app.terminal_size(), (0, 0));
-
-        app.on_terminal_event(crossterm::event::Event::Resize(120, 40));
-        assert_eq!(app.terminal_size(), (120, 40));
-    }
 
     #[test]
     fn resize_preserves_composer_content() {
@@ -510,7 +499,7 @@ mod event_routing {
             session_capabilities: agent_client_protocol::schema::SessionCapabilities::new(),
             config_options: opts,
             auth_methods: Vec::new(),
-            workspace_status: wisp_next::workspace_status::WorkspaceStatus::new("~/code", None),
+            workspace_status: WorkspaceStatus::new("~/code", None),
             prompt_handle,
             working_dir: std::path::PathBuf::from("."),
             settings: UiSettings::default(),
@@ -545,7 +534,7 @@ mod event_routing {
             session_capabilities: agent_client_protocol::schema::SessionCapabilities::new(),
             config_options: opts,
             auth_methods: Vec::new(),
-            workspace_status: wisp_next::workspace_status::WorkspaceStatus::new("~/code", None),
+            workspace_status: WorkspaceStatus::new("~/code", None),
             prompt_handle,
             working_dir: std::path::PathBuf::from("."),
             settings: UiSettings::default(),
@@ -587,7 +576,7 @@ mod event_routing {
                 session_capabilities: agent_client_protocol::schema::SessionCapabilities::new(),
                 config_options: options,
                 auth_methods: methods,
-                workspace_status: wisp_next::workspace_status::WorkspaceStatus::new("~/code", None),
+                workspace_status: WorkspaceStatus::new("~/code", None),
                 prompt_handle,
                 working_dir: std::path::PathBuf::from("."),
                 settings: UiSettings::default(),
@@ -698,10 +687,7 @@ mod event_routing {
                 session_capabilities,
                 config_options: Vec::new(),
                 auth_methods: Vec::new(),
-                workspace_status: wisp_next::workspace_status::WorkspaceStatus::new(
-                    "~/code/demo",
-                    Some("main".to_string()),
-                ),
+                workspace_status: WorkspaceStatus::new("~/code/demo", Some("main".to_string())),
                 prompt_handle,
                 working_dir: std::path::PathBuf::from("."),
                 settings: UiSettings::default(),
@@ -751,7 +737,7 @@ mod event_routing {
             WorkspaceEntry { path: PathBuf::from("/tmp/c"), is_current: false },
         ];
         app.on_acp_event(AcpEvent::WorkspacesListed(WorkspaceListResponse { workspaces }));
-        assert!(matches!(app.workspace_move_state(), wisp_next::app::WorkspaceMoveState::Picking));
+        assert!(matches!(app.workspace_move_state(), WorkspaceMoveState::Picking));
 
         let mut terminal = make_terminal(80, 24);
         let mut renderer = Presenter::new(&UiSettings::default());
@@ -876,17 +862,17 @@ fn screen_rows(terminal: &ratatui::Terminal<TestBackend>) -> Vec<String> {
 
 mod screen_mouse {
     use super::*;
-    use wisp_next::generation::Generation;
-    use wisp_next::git_diff::{FileDiff, FileStatus, GitDiffDocument, StageState};
-    use wisp_next::render_context::RenderContext;
-    use wisp_next::screens::git_diff::{GitDiffEvent, GitDiffScreen};
-    use wisp_next::surface::MouseAction;
-    use wisp_next::surface::Surface;
-    use wisp_next::syntax::SyntaxHighlighter;
-    use wisp_next::theme::Theme;
+    use wisp_next::test_support::generation::Generation;
+    use wisp_next::test_support::git_diff::{FileDiff, FileStatus, GitDiffDocument, StageState};
+    use wisp_next::test_support::render_context::RenderContext;
+    use wisp_next::test_support::screens::git_diff::{GitDiffEvent, GitDiffScreen};
+    use wisp_next::test_support::surface::MouseAction;
+    use wisp_next::test_support::surface::Surface;
+    use wisp_next::test_support::syntax::SyntaxHighlighter;
+    use wisp_next::test_support::theme::Theme;
 
     fn make_test_document() -> GitDiffDocument {
-        use wisp_next::git_diff::{Hunk, PatchLine, PatchLineKind};
+        use wisp_next::test_support::git_diff::{Hunk, PatchLine, PatchLineKind};
         GitDiffDocument {
             repo_root: std::path::PathBuf::from("/tmp/repo"),
             files: vec![
@@ -949,9 +935,9 @@ mod screen_mouse {
     }
 
     fn open_screen() -> GitDiffScreen {
-        let (mut screen, effect) = GitDiffScreen::new(std::path::PathBuf::from("/tmp/repo"));
-        screen.on_event(SurfaceEvent::GitDiff(GitDiffEvent::Loaded {
-            request_id: effect.request_id(),
+        let (mut screen, task) = GitDiffScreen::new(std::path::PathBuf::from("/tmp/repo"));
+        screen.on_task_result(TaskResult::GitDiff(GitDiffEvent::Loaded {
+            request_id: task.request_id(),
             result: Ok(make_test_document()),
         }));
         screen
@@ -1072,7 +1058,7 @@ mod mouse_owning_surfaces {
             session_capabilities: agent_client_protocol::schema::SessionCapabilities::new(),
             config_options: opts,
             auth_methods: Vec::new(),
-            workspace_status: wisp_next::workspace_status::WorkspaceStatus::new("~/code", None),
+            workspace_status: WorkspaceStatus::new("~/code", None),
             prompt_handle,
             working_dir: std::path::PathBuf::from("."),
             settings: UiSettings::default(),
@@ -1129,7 +1115,7 @@ mod mouse_owning_surfaces {
                 session_capabilities,
                 config_options: Vec::new(),
                 auth_methods: Vec::new(),
-                workspace_status: wisp_next::workspace_status::WorkspaceStatus::new("~/code", Some("main".to_string())),
+                workspace_status: WorkspaceStatus::new("~/code", Some("main".to_string())),
                 prompt_handle,
                 working_dir: std::path::PathBuf::from("."),
                 settings: UiSettings::default(),

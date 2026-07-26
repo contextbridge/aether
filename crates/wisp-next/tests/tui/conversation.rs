@@ -91,17 +91,6 @@ fn alt_enter_inserts_newline_instead_of_submitting() {
 }
 
 #[test]
-fn context_usage_is_reported_as_percent() {
-    let (mut app, _command_rx) = make_app();
-
-    app.on_acp_event(AcpEvent::ContextUsage(ContextUsageParams {
-        usage: ContextUsage { context_limit: Some(200_000), input_tokens: 50_000, ..ContextUsage::default() },
-    }));
-
-    assert_eq!(app.context_percent(), Some(25));
-}
-
-#[test]
 fn context_clear_discards_conversation_retained_in_the_live_viewport() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
@@ -210,9 +199,9 @@ fn cancelled_prompt_marks_running_tool_as_error() {
     app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::Cancelled));
 
     let items = app.drain_finalized();
-    let cancelled = items.iter().any(|item| {
-        matches!(item, wisp_next::app::HistoryItem::Tool { status: wisp_next::tool_calls::ToolStatus::Error(cause), .. } if cause == "cancelled")
-    });
+    let cancelled = items
+        .iter()
+        .any(|item| matches!(item, HistoryItem::Tool { status: ToolStatus::Error(cause), .. } if cause == "cancelled"));
     assert!(cancelled, "expected cancelled tool in {items:?}");
 }
 

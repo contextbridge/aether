@@ -2,9 +2,9 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
 use ratatui::widgets::Widget;
-use wisp_next::filterable_list::FilterableList;
-use wisp_next::selection::Direction;
-use wisp_next::theme::Theme;
+use wisp_next::test_support::filterable_list::FilterableList;
+use wisp_next::test_support::selection::Direction;
+use wisp_next::test_support::theme::Theme;
 
 #[test]
 fn filters_once_per_query_change_and_selects_from_cached_matches() {

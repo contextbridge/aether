@@ -155,11 +155,11 @@ fn command_picker_consumes_tab_without_changing_config() {
     let (mut app, _command_rx) = AppBuilder::new().config_options(options).build();
 
     app.on_key(key(KeyCode::Char('/')));
-    assert!(app.composer().has_overlay());
+    assert!(app.composer().has_completion());
 
     app.on_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
 
-    assert!(!app.composer().has_overlay());
+    assert!(!app.composer().has_completion());
 }
 
 #[test]

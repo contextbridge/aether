@@ -1,12 +1,12 @@
 use super::config::{cycle_quick_option, cycle_reasoning_option, update_config_option_value};
 use super::{App, ExitState, Layer};
 use crate::dropped_files::parse_dropped_file_paths;
-use crate::effects::{Effect, EffectResult};
 use crate::render_context::RenderContext;
 use crate::screens::git_diff::GitDiffScreen;
 use crate::selection::Direction;
-use crate::surface::{MouseAction, Surface};
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent};
+use crate::surface::{MouseAction, Surface, UiEvent};
+use crate::tasks::{Task, TaskResult};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use std::time::{Duration, Instant};
@@ -15,21 +15,38 @@ pub(super) const CTRL_C_CONFIRM_WINDOW: Duration = Duration::from_secs(1);
 
 impl App {
     pub fn on_terminal_event(&mut self, event: Event) {
-        match event {
-            Event::Key(key) => self.on_key(key),
-            Event::Paste(text) => self.on_paste(&text),
-            Event::Resize(width, height) => self.last_terminal_size = (width, height),
-            Event::Mouse(mouse) => self.on_mouse(mouse),
-            _ => {}
+        let event = match event {
+            Event::Key(key) => UiEvent::Key(key),
+            Event::Paste(text) => UiEvent::Paste(text),
+            Event::Mouse(mouse) => {
+                let Some(action) = MouseAction::from_event(mouse.kind) else { return };
+                UiEvent::Mouse(action, Position::new(mouse.column, mouse.row))
+            }
+            _ => return,
+        };
+        self.on_ui_event(event);
+    }
+
+    fn on_ui_event(&mut self, event: UiEvent) {
+        if let Some(layer) = self.layer.as_mut() {
+            let actions = layer.surface().on_ui_event(event);
+            self.dispatch_actions(actions);
+            self.refresh_progress();
+            return;
         }
+        match event {
+            UiEvent::Key(key) if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
+                self.dispatch_key(key);
+            }
+            UiEvent::Key(_) => {}
+            UiEvent::Paste(text) => self.on_composer_paste(&text),
+            UiEvent::Mouse(action, position) => self.composer.on_overlay_mouse(action, position.y),
+        }
+        self.refresh_progress();
     }
 
     pub fn on_key(&mut self, key: KeyEvent) {
-        if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
-            return;
-        }
-        self.dispatch_key(key);
-        self.refresh_progress();
+        self.on_ui_event(UiEvent::Key(key));
     }
 
     /// Routes a keystroke to whichever layer owns input, innermost first.
@@ -46,7 +63,7 @@ impl App {
 
         if let Some(layer) = self.layer.as_mut() {
             let messages = layer.surface().on_key(key);
-            self.handle_surface_messages(messages);
+            self.dispatch_actions(messages);
             return;
         }
 
@@ -72,7 +89,7 @@ impl App {
     fn on_composer_key(&mut self, key: KeyEvent) {
         if self.keybindings.open_prompt_search.matches(key)
             && self.capabilities.prompt_search
-            && !self.composer.has_overlay()
+            && !self.composer.has_completion()
         {
             self.composer.open_prompt_search();
             return;
@@ -90,7 +107,7 @@ impl App {
             return;
         }
 
-        if self.composer.has_overlay() {
+        if self.composer.has_completion() {
             self.on_completion_key(key);
             return;
         }
@@ -123,8 +140,8 @@ impl App {
                 if self.keybindings.open_command_picker.matches(key) && self.composer.text() == "/" {
                     self.composer.open_command_picker(self.available_commands.clone());
                 } else if self.keybindings.open_file_picker.matches(key) {
-                    let effect = self.composer.open_file_picker(&self.working_dir);
-                    self.pending_effects.push_back(effect);
+                    let task = self.composer.open_file_picker(&self.working_dir);
+                    self.pending_tasks.push_back(task);
                 }
             }
             // Up/Down fall through to prompt history once the cursor is on the
@@ -198,6 +215,10 @@ impl App {
     }
 
     pub fn on_paste(&mut self, text: &str) {
+        self.on_ui_event(UiEvent::Paste(text.to_string()));
+    }
+
+    fn on_composer_paste(&mut self, text: &str) {
         if self.composer.has_prompt_search() {
             let query = self.composer.prompt_search_on_paste(text);
             self.apply_prompt_search_query(query);
@@ -216,25 +237,30 @@ impl App {
         self.layer.as_mut()?.surface().render(area, buf, cx)
     }
 
-    /// Routes an effect result: file-index results belong to the composer, and
-    /// everything else to whichever surface asked for the work.
-    pub fn on_effect_result(&mut self, result: EffectResult) {
-        let event = match result {
-            EffectResult::FilesIndexed { request_id, files } => {
-                self.composer.on_files_indexed(request_id, files);
-                return;
+    /// Routes a completed task to its single owner.
+    pub fn on_task_result(&mut self, result: TaskResult) {
+        match result {
+            TaskResult::FilesIndexed { request_id, files } => self.composer.on_files_indexed(request_id, files),
+            TaskResult::SubmissionPrepared(outcome) => self.finish_submission(outcome),
+            TaskResult::ThemesListed(files) => self.refresh_settings_themes(&files),
+            TaskResult::ThemeApplied { settings, theme, error } => {
+                self.ui_settings = settings;
+                self.pending_theme = Some(theme);
+                if let Some(error) = error {
+                    self.notify(&format!("Failed to save theme settings: {error}"));
+                }
             }
-            EffectResult::Surface(event) => event,
-        };
-        let Some(layer) = self.layer.as_mut() else {
-            return;
-        };
-        let messages = layer.surface().on_event(event);
-        self.handle_surface_messages(messages);
+            TaskResult::WorkspaceResolved { cwd, status } => self.finish_workspace_move(&cwd, status),
+            result @ TaskResult::GitDiff(_) => {
+                let Some(layer) = self.layer.as_mut() else { return };
+                let actions = layer.surface().on_task_result(result);
+                self.dispatch_actions(actions);
+            }
+        }
     }
 
-    pub fn take_effect(&mut self) -> Option<Effect> {
-        self.pending_effects.pop_front()
+    pub fn take_task(&mut self) -> Option<Task> {
+        self.pending_tasks.pop_front()
     }
 
     pub fn take_bell(&mut self) -> bool {
@@ -251,31 +277,9 @@ impl App {
         }
     }
 
-    pub fn terminal_size(&self) -> (u16, u16) {
-        self.last_terminal_size
-    }
-
     fn open_git_diff(&mut self) {
-        let (screen, effect) = GitDiffScreen::new(self.working_dir.clone());
+        let (screen, task) = GitDiffScreen::new(self.working_dir.clone());
         self.open_layer(Layer::GitDiff(Box::new(screen)));
-        self.pending_effects.push_back(effect.into());
-    }
-
-    /// Routes a mouse event to whatever owns input.
-    ///
-    /// Rows and columns stay in terminal coordinates the whole way down: each
-    /// list records the area it drew its rows into, so none of them has to
-    /// re-derive how many borders and headers sit above the first row, and a
-    /// click that lands on nothing is simply ignored.
-    fn on_mouse(&mut self, event: MouseEvent) {
-        let Some(action) = MouseAction::from_event(event.kind) else {
-            return;
-        };
-        if let Some(layer) = self.layer.as_mut() {
-            let messages = layer.surface().on_mouse(action, event.row, event.column);
-            self.handle_surface_messages(messages);
-            return;
-        }
-        self.composer.on_overlay_mouse(action, event.row);
+        self.pending_tasks.push_back(task.into());
     }
 }

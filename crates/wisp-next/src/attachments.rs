@@ -1,6 +1,7 @@
 use agent_client_protocol::schema as acp;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use url::Url;
 
@@ -22,6 +23,12 @@ pub struct AttachmentOutcome {
     pub blocks: Vec<acp::ContentBlock>,
     pub placeholders: Vec<String>,
     pub warnings: Vec<String>,
+}
+
+impl AttachmentOutcome {
+    pub fn failed(warning: String) -> Self {
+        Self { blocks: Vec::new(), placeholders: Vec::new(), warnings: vec![warning] }
+    }
 }
 
 pub fn classify_attachment(path: &Path) -> AttachmentKind {
@@ -57,7 +64,17 @@ pub fn build_attachments(attachments: &[PromptAttachment]) -> AttachmentOutcome 
 const MAX_ATTACHMENT_BYTES: usize = 1_000_000;
 
 fn build_one(path: &Path, display_name: &str) -> Result<(acp::ContentBlock, Option<String>), String> {
-    let bytes = std::fs::read(path).map_err(|error| format!("Could not attach {display_name}: {error}"))?;
+    let metadata = std::fs::metadata(path).map_err(|error| format!("Could not attach {display_name}: {error}"))?;
+    if metadata.len() > MAX_ATTACHMENT_BYTES as u64 {
+        return Err(format!("Skipped {display_name}: attachment exceeds {MAX_ATTACHMENT_BYTES} bytes"));
+    }
+    let file = std::fs::File::open(path).map_err(|error| format!("Could not attach {display_name}: {error}"))?;
+    let capacity = usize::try_from(metadata.len())
+        .map_err(|_| format!("Could not attach {display_name}: file size is not supported on this platform"))?;
+    let mut bytes = Vec::with_capacity(capacity);
+    file.take(MAX_ATTACHMENT_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("Could not attach {display_name}: {error}"))?;
     if bytes.len() > MAX_ATTACHMENT_BYTES {
         return Err(format!("Skipped {display_name}: attachment exceeds {MAX_ATTACHMENT_BYTES} bytes"));
     }

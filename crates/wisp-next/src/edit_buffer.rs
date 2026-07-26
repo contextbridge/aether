@@ -60,6 +60,14 @@ impl EditBuffer {
         self.cursor += text.len();
     }
 
+    pub fn insert_paste(&mut self, text: &str) {
+        for character in
+            text.chars().filter(|character| !character.is_control() || *character == '\n' || *character == '\t')
+        {
+            self.insert_char(character);
+        }
+    }
+
     pub fn backspace(&mut self) -> bool {
         let Some(previous) = self.previous_boundary() else {
             return false;

@@ -195,7 +195,7 @@ fn sub_agent_multiple_sub_agents_per_parent() {
 
 mod progress_indicator_tests {
     use super::*;
-    use wisp_next::progress_indicator::SPINNER_FRAMES;
+    use wisp_next::test_support::progress_indicator::SPINNER_FRAMES;
 
     #[test]
     fn idle_renders_no_progress_indicator() {

@@ -2,7 +2,7 @@ use crate::edit_buffer::{EditBuffer, apply_edit_key};
 use crate::filterable_list::FilterableList;
 use crate::render_context::RenderContext;
 use crate::selection::Direction;
-use crate::surface::{ListFilter, Surface, SurfaceMessage};
+use crate::surface::{Action, ListFilter, Surface};
 use crate::widgets::TextInput;
 use crate::workspace_status::home_relative_path;
 use acp_utils::notifications::{WorkspaceEntry, WorkspaceMoveTarget};
@@ -50,7 +50,7 @@ impl WorkspacePicker {
         }
     }
 
-    fn on_naming_key(&mut self, key: KeyEvent) -> Vec<SurfaceMessage> {
+    fn on_naming_key(&mut self, key: KeyEvent) -> Vec<Action> {
         let Mode::NamingNew { name } = &mut self.mode else {
             return Vec::new();
         };
@@ -64,7 +64,7 @@ impl WorkspacePicker {
                 if trimmed.is_empty() {
                     return Vec::new();
                 }
-                vec![SurfaceMessage::MoveWorkspace { target: WorkspaceMoveTarget::New { name: trimmed } }]
+                vec![Action::MoveWorkspace { target: WorkspaceMoveTarget::New { name: trimmed } }]
             }
             _ => {
                 apply_edit_key(name, key);
@@ -114,10 +114,10 @@ impl WorkspacePicker {
 impl Surface for WorkspacePicker {
     /// Acts on the focused row: existing workspaces move immediately, while
     /// "create new" switches to the name prompt.
-    fn activate(&mut self) -> Vec<SurfaceMessage> {
+    fn activate(&mut self) -> Vec<Action> {
         match self.rows.selected_entry().cloned() {
             Some(WorkspaceRow::Existing(entry)) => {
-                vec![SurfaceMessage::MoveWorkspace { target: WorkspaceMoveTarget::Existing { path: entry.path } }]
+                vec![Action::MoveWorkspace { target: WorkspaceMoveTarget::Existing { path: entry.path } }]
             }
             Some(WorkspaceRow::CreateNew) => {
                 self.mode = Mode::NamingNew { name: EditBuffer::default() };
@@ -129,25 +129,32 @@ impl Surface for WorkspacePicker {
 
     /// While naming a new workspace the prompt owns every key, so nothing falls
     /// through to the list's navigation and filter keys.
-    fn on_surface_key(&mut self, key: KeyEvent) -> Option<Vec<SurfaceMessage>> {
+    fn on_surface_key(&mut self, key: KeyEvent) -> Option<Vec<Action>> {
         if matches!(self.mode, Mode::NamingNew { .. }) {
             return Some(self.on_naming_key(key));
         }
         matches!(key.code, KeyCode::Enter | KeyCode::Tab).then(|| self.activate())
     }
 
+    fn on_paste(&mut self, text: &str) -> Vec<Action> {
+        if let Mode::NamingNew { name } = &mut self.mode {
+            name.insert_paste(text);
+        }
+        Vec::new()
+    }
+
     fn filter(&mut self) -> Option<&mut dyn ListFilter> {
         Some(&mut self.rows)
     }
 
-    fn scroll(&mut self, direction: Direction) -> Vec<SurfaceMessage> {
+    fn scroll(&mut self, direction: Direction) -> Vec<Action> {
         if matches!(self.mode, Mode::List) {
             self.rows.step(direction, |_| true);
         }
         Vec::new()
     }
 
-    fn click(&mut self, row: u16, _column: u16) -> Vec<SurfaceMessage> {
+    fn click(&mut self, row: u16, _column: u16) -> Vec<Action> {
         if matches!(self.mode, Mode::List) {
             self.rows.select_at(row);
         }

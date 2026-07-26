@@ -397,7 +397,7 @@ fn builtin_clear_appears_in_command_picker() {
     let (mut app, _command_rx) = make_app();
 
     app.on_key(key(KeyCode::Char('/')));
-    assert!(app.composer().has_overlay());
+    assert!(app.composer().has_completion());
 
     let mut terminal = make_terminal();
     let mut renderer = Presenter::new(&UiSettings::default());

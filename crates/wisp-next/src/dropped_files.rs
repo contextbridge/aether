@@ -26,13 +26,7 @@ pub fn parse_dropped_file_paths(pasted: &str) -> Option<Vec<PathBuf>> {
         return None;
     }
 
-    let valid: Vec<PathBuf> = paths.into_iter().filter(|p| p.is_file()).collect();
-
-    if valid.is_empty() {
-        return None;
-    }
-
-    Some(valid)
+    Some(paths)
 }
 
 fn try_parse_single_path(input: &str) -> Option<PathBuf> {
@@ -171,15 +165,18 @@ mod tests {
     }
 
     #[test]
-    fn missing_path_is_rejected() {
-        assert!(parse_dropped_file_paths("/nonexistent/path/to/file.png").is_none());
+    fn missing_absolute_path_is_parsed_without_filesystem_io() {
+        assert_eq!(
+            parse_dropped_file_paths("/nonexistent/path/to/file.png"),
+            Some(vec![PathBuf::from("/nonexistent/path/to/file.png")])
+        );
     }
 
     #[test]
-    fn directory_path_is_rejected() {
+    fn directory_shaped_absolute_path_is_parsed_lexically() {
         let tmp = TempDir::new().unwrap();
         let input = tmp.path().to_str().unwrap();
-        assert!(parse_dropped_file_paths(input).is_none());
+        assert_eq!(parse_dropped_file_paths(input), Some(vec![tmp.path().to_path_buf()]));
     }
 
     #[test]

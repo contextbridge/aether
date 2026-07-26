@@ -1,6 +1,5 @@
 use crate::composer::Composer;
 use crate::diff::DiffPreview;
-use crate::effects::Effect;
 use crate::generation::Generation;
 use crate::keybindings::Keybindings;
 use crate::modal::ElicitationModal;
@@ -17,6 +16,7 @@ use crate::settings::{
 use crate::settings_overlay::SettingsOverlay;
 use crate::status_line::StatusLineModel;
 use crate::surface::Surface;
+use crate::tasks::Task;
 use crate::tool_calls::{ToolCallLog, ToolStatus};
 use crate::transcript::{SegmentContent, Transcript};
 use crate::workspace_picker::WorkspacePicker;
@@ -120,6 +120,60 @@ struct TurnState {
     spinner_tick: usize,
 }
 
+struct Conversation {
+    transcript: Transcript,
+    tool_calls: ToolCallLog,
+    last_drained_kind: Option<HistoryKind>,
+    generation: Generation,
+}
+
+impl Default for Conversation {
+    fn default() -> Self {
+        Self {
+            transcript: Transcript::new(),
+            tool_calls: ToolCallLog::new(),
+            last_drained_kind: None,
+            generation: Generation::default(),
+        }
+    }
+}
+
+impl Conversation {
+    fn clear(&mut self) {
+        self.transcript.clear();
+        self.tool_calls.clear();
+        self.last_drained_kind = None;
+        self.generation.bump();
+    }
+
+    fn drain_finalized(&mut self, prompt_in_flight: bool) -> Vec<HistoryItem> {
+        let drained = self.transcript.drain_finalized_prefix(&self.tool_calls, prompt_in_flight);
+        let mut items = Vec::with_capacity(drained.len());
+        for segment in drained {
+            let tool_id = match &segment {
+                SegmentContent::ToolCall(id) => Some(id.clone()),
+                _ => None,
+            };
+            items.push(resolve_history_segment(&segment, &self.tool_calls));
+            if let Some(id) = tool_id {
+                self.tool_calls.remove(&id);
+            }
+        }
+        if let Some(last) = items.last() {
+            self.last_drained_kind = Some(last.kind());
+        }
+        items
+    }
+
+    fn pending_items(&self) -> Vec<HistoryItem> {
+        self.transcript.pending().iter().map(|segment| resolve_history_segment(segment, &self.tool_calls)).collect()
+    }
+}
+
+struct PendingSubmission {
+    text: String,
+}
+
 /// Root UI state: reduces terminal input and ACP events into the transcript,
 /// tool-call log, and composer that the renderer draws each frame.
 pub struct App {
@@ -140,22 +194,19 @@ pub struct App {
     session_loading_buffer: SessionLoadingBuffer,
     layer: Option<Layer>,
     workspace_move_state: WorkspaceMoveState,
-    transcript: Transcript,
-    tool_calls: ToolCallLog,
+    conversation: Conversation,
     composer: Composer,
     turn: TurnState,
     unhealthy_server_count: usize,
     server_statuses: Vec<McpServerStatusEntry>,
     exit_state: ExitState,
     progress_indicator: ProgressIndicator,
-    last_drained_kind: Option<HistoryKind>,
-    transcript_generation: Generation,
-    pending_effects: VecDeque<Effect>,
+    pending_tasks: VecDeque<Task>,
+    pending_submission: Option<PendingSubmission>,
     ui_settings: UiSettings,
     pending_theme: Option<crate::theme::Theme>,
     plan_tracker: PlanTracker,
     pending_bell: Option<()>,
-    last_terminal_size: (u16, u16),
 }
 
 pub struct AppConfig {
@@ -263,22 +314,19 @@ impl App {
             session_loading_buffer: SessionLoadingBuffer::new(),
             layer: None,
             workspace_move_state: WorkspaceMoveState::Idle,
-            transcript: Transcript::new(),
-            tool_calls: ToolCallLog::new(),
+            conversation: Conversation::default(),
             composer: Composer::new(),
             turn: TurnState::default(),
             unhealthy_server_count: 0,
             server_statuses: Vec::new(),
             exit_state: ExitState::Idle,
             progress_indicator: ProgressIndicator::default(),
-            last_drained_kind: None,
-            transcript_generation: Generation::default(),
-            pending_effects: VecDeque::new(),
+            pending_tasks: VecDeque::new(),
+            pending_submission: None,
             ui_settings: config.settings,
             pending_theme: None,
             plan_tracker: PlanTracker::default(),
             pending_bell: None,
-            last_terminal_size: (0, 0),
         }
     }
 
@@ -297,7 +345,7 @@ impl App {
 
     pub fn wants_tick(&self) -> bool {
         self.turn.prompt_in_flight
-            || self.tool_calls.any_running()
+            || self.conversation.tool_calls.any_running()
             || !self.workspace_move_state.is_idle()
             || self.turn.compaction_active
             || self.progress_indicator.is_active()
@@ -345,36 +393,20 @@ impl App {
     /// Remove transcript segments that can never mutate again and resolve them
     /// for one-time handoff to the terminal presenter.
     pub fn drain_finalized(&mut self) -> Vec<HistoryItem> {
-        let drained = self.transcript.drain_finalized_prefix(&self.tool_calls, self.turn.prompt_in_flight);
-        let mut items = Vec::with_capacity(drained.len());
-        for segment in drained {
-            let tool_id = match &segment {
-                SegmentContent::ToolCall(id) => Some(id.clone()),
-                _ => None,
-            };
-            items.push(resolve_history_segment(&segment, &self.tool_calls));
-            if let Some(id) = tool_id {
-                self.tool_calls.remove(&id);
-            }
-        }
-
-        if let Some(last) = items.last() {
-            self.last_drained_kind = Some(last.kind());
-        }
-        items
+        self.conversation.drain_finalized(self.turn.prompt_in_flight)
     }
 
     /// Segments still owned by the live viewport (streaming tail, running tools).
     pub fn pending_items(&self) -> Vec<HistoryItem> {
-        self.transcript.pending().iter().map(|segment| resolve_history_segment(segment, &self.tool_calls)).collect()
+        self.conversation.pending_items()
     }
 
     pub fn last_drained_kind(&self) -> Option<HistoryKind> {
-        self.last_drained_kind
+        self.conversation.last_drained_kind
     }
 
     pub fn transcript_generation(&self) -> Generation {
-        self.transcript_generation
+        self.conversation.generation
     }
 
     pub fn composer(&self) -> &Composer {
@@ -401,18 +433,6 @@ impl App {
         &self.auth_methods
     }
 
-    pub fn supports_prompt_search(&self) -> bool {
-        self.capabilities.prompt_search
-    }
-
-    pub fn supports_session_preview(&self) -> bool {
-        self.capabilities.session_preview
-    }
-
-    pub fn supports_workspace_move(&self) -> bool {
-        self.capabilities.workspace_move
-    }
-
     pub fn content_padding(&self) -> usize {
         self.content_padding
     }
@@ -432,13 +452,6 @@ impl App {
         }
     }
 
-    pub fn context_percent(&self) -> Option<u8> {
-        self.turn.context_usage.map(|usage| {
-            let percent = u64::from(usage.used_tokens) * 100 / u64::from(usage.limit_tokens).max(1);
-            u8::try_from(percent).unwrap_or(100).min(100)
-        })
-    }
-
     pub fn ui_settings(&self) -> &UiSettings {
         &self.ui_settings
     }
@@ -450,11 +463,7 @@ impl App {
 
     /// Either the prompt or one of its tool calls is still running.
     pub fn is_agent_busy(&self) -> bool {
-        self.turn.prompt_in_flight || self.tool_calls.any_running()
-    }
-
-    pub fn compaction_active(&self) -> bool {
-        self.turn.compaction_active
+        self.turn.prompt_in_flight || self.conversation.tool_calls.any_running()
     }
 
     pub fn progress_indicator(&self) -> &ProgressIndicator {
@@ -488,10 +497,8 @@ impl App {
     /// them can forget a field and leave stale state on screen.
     fn reset_conversation(&mut self) {
         self.reset_turn_state();
-        self.transcript.clear();
-        self.tool_calls.clear();
-        self.last_drained_kind = None;
-        self.transcript_generation.bump();
+        self.pending_submission = None;
+        self.conversation.clear();
     }
 
     /// Clears the per-turn indicators that must not survive into a different

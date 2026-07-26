@@ -2,12 +2,12 @@ mod view;
 
 use crate::attachments::{AttachmentKind, PromptAttachment, classify_attachment};
 use crate::edit_buffer::EditBuffer;
-use crate::effects::Effect;
 use crate::generation::Generation;
 use crate::picker::{CommandEntry, CompletionOverlay, FileEntry};
 use crate::prompt_search::{self, PromptSearchPicker};
 use crate::selection::Direction;
 use crate::surface::MouseAction;
+use crate::tasks::Task;
 use acp_utils::notifications::PromptSearchResponse;
 use crossterm::event::KeyCode;
 use ratatui::layout::Position;
@@ -152,8 +152,7 @@ impl Composer {
     }
 
     pub fn add_dropped_media(&mut self, paths: Vec<std::path::PathBuf>) -> bool {
-        let mut existing: HashSet<std::path::PathBuf> =
-            self.pending_media.iter().filter_map(|a| std::fs::canonicalize(&a.path).ok()).collect();
+        let mut existing: HashSet<std::path::PathBuf> = self.pending_media.iter().map(|a| a.path.clone()).collect();
 
         let before = self.pending_media.len();
 
@@ -162,9 +161,7 @@ impl Composer {
             if !matches!(kind, AttachmentKind::Image | AttachmentKind::Audio) {
                 continue;
             }
-            if let Ok(canon) = std::fs::canonicalize(&path)
-                && !existing.insert(canon)
-            {
+            if !existing.insert(path.clone()) {
                 continue;
             }
             let display_name = path
@@ -207,8 +204,7 @@ impl Composer {
 
     pub fn insert_paste(&mut self, text: &str) {
         self.history.reset();
-        let filtered: String = text.chars().filter(|c| !c.is_control() || *c == '\n' || *c == '\t').collect();
-        self.buffer.insert_str(&filtered);
+        self.buffer.insert_paste(text);
     }
 
     pub fn insert_newline(&mut self) {
@@ -270,10 +266,10 @@ impl Composer {
     /// Opens the `@` picker and asks for the file index it will show. The walk
     /// runs off the event loop, so opening the picker never stalls the keystroke
     /// that triggered it.
-    pub fn open_file_picker(&mut self, root: &std::path::Path) -> Effect {
+    pub fn open_file_picker(&mut self, root: &std::path::Path) -> Task {
         let request_id = Generation::next();
         self.overlay = Some(Overlay::Completion(CompletionOverlay::file(request_id)));
-        Effect::IndexFiles { request_id, root: root.to_path_buf() }
+        Task::IndexFiles { request_id, root: root.to_path_buf() }
     }
 
     pub fn on_files_indexed(&mut self, request_id: Generation, files: Vec<FileEntry>) {
@@ -283,7 +279,7 @@ impl Composer {
     }
 
     /// Whether the completion list is open.
-    pub fn has_overlay(&self) -> bool {
+    pub fn has_completion(&self) -> bool {
         self.completion_ref().is_some()
     }
 

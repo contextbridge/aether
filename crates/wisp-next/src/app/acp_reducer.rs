@@ -113,9 +113,9 @@ impl App {
                 self.abandon_workspace_move(&format!("Workspace move failed: {error}"));
             }
             AcpEvent::SubAgentProgress(progress) => {
-                self.tool_calls.on_sub_agent_progress(&progress);
-                if self.tool_calls.has_tool(&progress.parent_tool_id) {
-                    self.transcript.ensure_tool_segment(&progress.parent_tool_id);
+                self.conversation.tool_calls.on_sub_agent_progress(&progress);
+                if self.conversation.tool_calls.has_tool(&progress.parent_tool_id) {
+                    self.conversation.transcript.ensure_tool_segment(&progress.parent_tool_id);
                 }
             }
         }
@@ -145,7 +145,7 @@ impl App {
         self.session_id = session_id;
         self.config_options = config_options;
         self.reset_turn_state();
-        self.transcript_generation.bump();
+        self.conversation.generation.bump();
         for update in updates {
             self.on_session_update(&update);
         }
@@ -215,29 +215,29 @@ impl App {
         match update {
             acp::SessionUpdate::UserMessageChunk(chunk) => {
                 if let Some(text) = render_user_content_block(&chunk.content) {
-                    self.transcript.push_user_message(&text);
+                    self.conversation.transcript.push_user_message(&text);
                 }
             }
             acp::SessionUpdate::AgentMessageChunk(chunk) => {
                 if let acp::ContentBlock::Text(text_content) = &chunk.content {
-                    self.transcript.append_text_chunk(&text_content.text);
+                    self.conversation.transcript.append_text_chunk(&text_content.text);
                 }
             }
             acp::SessionUpdate::AgentThoughtChunk(chunk) => {
                 if let acp::ContentBlock::Text(text_content) = &chunk.content {
-                    self.transcript.append_thought_chunk(&text_content.text);
+                    self.conversation.transcript.append_thought_chunk(&text_content.text);
                 }
             }
             acp::SessionUpdate::ToolCall(tool_call) => {
-                self.transcript.close_thought_block();
-                self.tool_calls.on_tool_call(tool_call);
-                self.transcript.ensure_tool_segment(&tool_call.tool_call_id.0);
+                self.conversation.transcript.close_thought_block();
+                self.conversation.tool_calls.on_tool_call(tool_call);
+                self.conversation.transcript.ensure_tool_segment(&tool_call.tool_call_id.0);
             }
             acp::SessionUpdate::ToolCallUpdate(update) => {
-                self.transcript.close_thought_block();
-                self.tool_calls.on_tool_call_update(update);
-                if self.tool_calls.has_tool(&update.tool_call_id.0) {
-                    self.transcript.ensure_tool_segment(&update.tool_call_id.0);
+                self.conversation.transcript.close_thought_block();
+                self.conversation.tool_calls.on_tool_call_update(update);
+                if self.conversation.tool_calls.has_tool(&update.tool_call_id.0) {
+                    self.conversation.transcript.ensure_tool_segment(&update.tool_call_id.0);
                 }
             }
             acp::SessionUpdate::AvailableCommandsUpdate(update) => {
@@ -259,16 +259,16 @@ impl App {
             }
             acp::SessionUpdate::ConfigOptionUpdate(update) => {
                 self.config_options.clone_from(&update.config_options);
-                self.transcript.close_thought_block();
+                self.conversation.transcript.close_thought_block();
                 let options = self.config_options.clone();
                 self.with_settings(|overlay| overlay.update_config_options(&options));
             }
             acp::SessionUpdate::Plan(plan) => {
                 self.plan_tracker.replace(plan.entries.clone(), Instant::now());
-                self.transcript.close_thought_block();
+                self.conversation.transcript.close_thought_block();
             }
             _ => {
-                self.transcript.close_thought_block();
+                self.conversation.transcript.close_thought_block();
             }
         }
     }
@@ -277,8 +277,8 @@ impl App {
         let was_in_flight = self.turn.prompt_in_flight;
         self.turn.prompt_in_flight = false;
         self.turn.compaction_active = false;
-        self.tool_calls.finalize_running(terminal_status);
-        self.transcript.close_thought_block();
+        self.conversation.tool_calls.finalize_running(terminal_status);
+        self.conversation.transcript.close_thought_block();
         if was_in_flight && matches!(terminal_status, ToolStatus::Success) {
             self.pending_bell = Some(());
         }

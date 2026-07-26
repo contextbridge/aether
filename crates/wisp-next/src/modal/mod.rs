@@ -17,7 +17,7 @@ use self::form::{FormAction, FormModal};
 use self::url::UrlModal;
 use crate::platform::{BrowserOpener, ClipboardWriter, default_browser_opener, default_clipboard_writer};
 use crate::selection::Direction;
-use crate::surface::{Surface, SurfaceMessage};
+use crate::surface::{Action, Surface};
 
 pub struct ElicitationModal {
     kind: ModalKind,
@@ -65,7 +65,7 @@ impl ElicitationModal {
         true
     }
 
-    fn on_url_key(&mut self, key: KeyEvent) -> Vec<SurfaceMessage> {
+    fn on_url_key(&mut self, key: KeyEvent) -> Vec<Action> {
         let ModalKind::Url(url) = &mut self.kind else {
             return Vec::new();
         };
@@ -73,7 +73,7 @@ impl ElicitationModal {
         match key.code {
             KeyCode::Esc => {
                 self.responder.cancel();
-                return vec![SurfaceMessage::Close];
+                return vec![Action::Close];
             }
             KeyCode::Enter => {
                 if let Err(error) = (self.browser_opener)(&url.url) {
@@ -102,10 +102,7 @@ impl ElicitationModal {
 impl Surface for ElicitationModal {
     /// A modal answers a request, so it owns every key: nothing falls through
     /// to the shared list navigation.
-    fn on_surface_key(&mut self, key: KeyEvent) -> Option<Vec<SurfaceMessage>> {
-        if !matches!(key.kind, crossterm::event::KeyEventKind::Press | crossterm::event::KeyEventKind::Repeat) {
-            return Some(Vec::new());
-        }
+    fn on_surface_key(&mut self, key: KeyEvent) -> Option<Vec<Action>> {
         let ModalKind::Form(form) = &mut self.kind else {
             return Some(self.on_url_key(key));
         };
@@ -113,23 +110,30 @@ impl Surface for ElicitationModal {
             FormAction::None => Vec::new(),
             FormAction::Cancel => {
                 self.responder.cancel();
-                vec![SurfaceMessage::Close]
+                vec![Action::Close]
             }
             FormAction::Accept(content) => {
                 self.responder.respond(ElicitationAction::Accept, Some(content));
-                vec![SurfaceMessage::Close]
+                vec![Action::Close]
             }
         })
     }
 
-    fn scroll(&mut self, direction: Direction) -> Vec<SurfaceMessage> {
+    fn on_paste(&mut self, text: &str) -> Vec<Action> {
+        if let ModalKind::Form(form) = &mut self.kind {
+            form.paste(text);
+        }
+        Vec::new()
+    }
+
+    fn scroll(&mut self, direction: Direction) -> Vec<Action> {
         if let ModalKind::Form(form) = &mut self.kind {
             form.scroll(direction);
         }
         Vec::new()
     }
 
-    fn click(&mut self, row: u16, _column: u16) -> Vec<SurfaceMessage> {
+    fn click(&mut self, row: u16, _column: u16) -> Vec<Action> {
         if let ModalKind::Form(form) = &mut self.kind {
             form.click(row);
         }
@@ -181,8 +185,8 @@ mod tests {
     }
 
     /// Whether the modal asked to be dismissed.
-    fn closes(messages: &[SurfaceMessage]) -> bool {
-        messages.iter().any(|message| matches!(message, SurfaceMessage::Close))
+    fn closes(messages: &[Action]) -> bool {
+        messages.iter().any(|message| matches!(message, Action::Close))
     }
 
     fn noop_handlers() -> (BrowserOpener, ClipboardWriter) {

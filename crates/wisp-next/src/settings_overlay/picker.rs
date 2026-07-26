@@ -1,8 +1,8 @@
-use super::{SettingsChange, SettingsMenuEntry, SettingsMenuValue, SettingsPane, message_for_change};
+use super::{PaneBehavior, SettingsChange, SettingsMenuEntry, SettingsMenuValue, message_for_change};
 use crate::filterable_list::FilterableList;
 use crate::render_context::RenderContext;
 use crate::selection::Direction;
-use crate::surface::{ListFilter, Surface, SurfaceMessage};
+use crate::surface::{Action, ListFilter, Surface};
 use crate::theme::Theme;
 use crate::wrap::truncate_to_width;
 use ratatui::buffer::Buffer;
@@ -60,24 +60,24 @@ impl SettingsPicker {
 impl Surface for SettingsPicker {
     /// Confirms the focused value, returning to the menu. Yields no change when
     /// the value is disabled or already current.
-    fn activate(&mut self) -> Vec<SurfaceMessage> {
+    fn activate(&mut self) -> Vec<Action> {
         let change = self
             .values
             .selected_entry()
             .filter(|value| !value.is_disabled && value.value != self.current_value)
             .map(|value| SettingsChange { config_id: self.config_id.clone(), new_value: value.value.clone() });
-        change.iter().map(message_for_change).chain([SurfaceMessage::Back]).collect()
+        change.iter().map(message_for_change).chain([Action::Close]).collect()
     }
 
     fn filter(&mut self) -> Option<&mut dyn ListFilter> {
         Some(&mut self.values)
     }
 
-    fn click(&mut self, row: u16, _column: u16) -> Vec<SurfaceMessage> {
+    fn click(&mut self, row: u16, _column: u16) -> Vec<Action> {
         if self.values.select_at(row) { self.activate() } else { Vec::new() }
     }
 
-    fn scroll(&mut self, direction: Direction) -> Vec<SurfaceMessage> {
+    fn scroll(&mut self, direction: Direction) -> Vec<Action> {
         self.values.step(direction, |value| !value.is_disabled);
         Vec::new()
     }
@@ -88,7 +88,7 @@ impl Surface for SettingsPicker {
     }
 }
 
-impl SettingsPane for SettingsPicker {
+impl PaneBehavior for SettingsPicker {
     fn footer(&self) -> String {
         "[Enter] Confirm  [Esc] Back".to_string()
     }
