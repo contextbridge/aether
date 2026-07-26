@@ -3,6 +3,7 @@ mod agent_builder;
 mod agent_deps;
 mod error;
 mod prompt;
+mod prompt_cache_key;
 mod retry_config;
 
 pub use crate::events::{AgentCommand, AgentEvent, Command, UserCommand};

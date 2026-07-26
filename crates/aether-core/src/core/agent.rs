@@ -1,5 +1,6 @@
 use crate::context::{CompactionConfig, CompactionError, CompactionResult, Compactor, TokenTracker};
 use crate::core::PromptCache;
+use crate::core::prompt_cache_key::derive_prompt_cache_key;
 pub use crate::core::retry_config::RetryConfig;
 use crate::events::{
     AgentCommand, AgentEvent, AgentObserver, Command, CompactionOutcome, ContextEvent, ContextUsage, LlmCallOutcome,
@@ -320,6 +321,7 @@ impl Agent {
     }
 
     async fn start_llm_stream(&mut self, delay: Option<Duration>, attempt: u32) {
+        self.refresh_prompt_cache_key();
         self.streams.remove(&StreamKey::Llm);
         let stream: EventStream = match delay {
             None => {
@@ -668,6 +670,11 @@ impl Agent {
                 }
             },
         }
+    }
+
+    fn refresh_prompt_cache_key(&mut self) {
+        let key = derive_prompt_cache_key(self.llm.as_ref(), &self.context);
+        self.context.set_prompt_cache_key(Some(key));
     }
 
     fn update_context(

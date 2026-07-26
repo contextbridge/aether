@@ -45,7 +45,6 @@ pub struct AgentBuilder {
     compaction_config: Option<CompactionConfig>,
     max_auto_continues: u32,
     retry_config: RetryConfig,
-    prompt_cache_key: Option<String>,
     context_window: Option<u32>,
     model_settings: ModelSettings,
     observers: Vec<Box<dyn AgentObserver>>,
@@ -64,7 +63,6 @@ impl AgentBuilder {
             compaction_config: Some(CompactionConfig::default()),
             max_auto_continues: 3,
             retry_config: RetryConfig::default(),
-            prompt_cache_key: None,
             context_window: None,
             model_settings: ModelSettings::default(),
             observers: Vec::new(),
@@ -189,15 +187,6 @@ impl AgentBuilder {
         self
     }
 
-    /// Set a prompt cache key for LLM provider request routing.
-    ///
-    /// This is typically a session ID (UUID) that remains stable across all
-    /// turns within a conversation, improving prompt cache hit rates.
-    pub fn prompt_cache_key(mut self, key: String) -> Self {
-        self.prompt_cache_key = Some(key);
-        self
-    }
-
     /// Override the effective model context window in tokens.
     pub fn context_window(mut self, context_window: Option<u32>) -> Self {
         self.context_window = context_window;
@@ -238,7 +227,6 @@ impl AgentBuilder {
         let (command_tx, command_rx) = mpsc::channel::<Command>(self.channel_capacity);
         let (message_tx, agent_event_rx) = mpsc::channel::<AgentEvent>(self.channel_capacity);
         let mut context = Context::new(messages, self.tool_definitions);
-        context.set_prompt_cache_key(self.prompt_cache_key);
         context.set_model_settings(self.model_settings);
 
         let config = AgentConfig {

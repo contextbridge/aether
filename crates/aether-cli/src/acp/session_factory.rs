@@ -116,7 +116,7 @@ impl SessionFactory {
             error!("Failed to write session meta: {e}");
         }
 
-        let runtime_factory = self.production_runtime_factory(args.cwd, args.mcp_servers, &session_id);
+        let runtime_factory = self.production_runtime_factory(args.cwd, args.mcp_servers);
         self.build_session(SessionId::new(session_id), runtime_factory, mode_catalog, resolved, Vec::new(), cx).await
     }
 
@@ -136,23 +136,13 @@ impl SessionFactory {
         let mut mode_catalog = self.load_mode_catalog(&args.cwd).await?;
         let resolved = self.resolve_loaded_session(&mut mode_catalog, &meta, &events)?;
 
-        let runtime_factory = self.production_runtime_factory(args.cwd, args.mcp_servers, &session_id);
+        let runtime_factory = self.production_runtime_factory(args.cwd, args.mcp_servers);
         self.build_session(SessionId::new(session_id), runtime_factory, mode_catalog, resolved, events, cx).await
     }
 
-    fn production_runtime_factory(
-        &self,
-        cwd: PathBuf,
-        mcp_servers: Vec<acp::McpServer>,
-        session_id: &str,
-    ) -> Arc<dyn RuntimeFactory> {
+    fn production_runtime_factory(&self, cwd: PathBuf, mcp_servers: Vec<acp::McpServer>) -> Arc<dyn RuntimeFactory> {
         let deps = AgentDeps::new(Arc::clone(&self.oauth_credential_store), self.observer_factory.clone());
-        Arc::new(ProductionRuntimeFactory::new(
-            cwd,
-            map_acp_mcp_servers(mcp_servers),
-            deps,
-            Some(session_id.to_string()),
-        ))
+        Arc::new(ProductionRuntimeFactory::new(cwd, map_acp_mcp_servers(mcp_servers), deps))
     }
 
     async fn build_session(
