@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.23](https://github.com/contextbridge/aether/compare/aether-llm-v0.7.22...aether-llm-v0.7.23) - 2026-07-27
+
+### Added
+
+- *(llm)* Add support for bedrock mantle models ([#293](https://github.com/contextbridge/aether/pull/293))
+
+### Fixed
+
+- Set cache key based on prompt contents. ([#279](https://github.com/contextbridge/aether/pull/279))
+
+### Other
+
+- Update models ([#292](https://github.com/contextbridge/aether/pull/292))
+- scheduled code-cleanup ([#276](https://github.com/contextbridge/aether/pull/276))
+
 ## [0.7.22](https://github.com/contextbridge/aether/compare/aether-llm-v0.7.21...aether-llm-v0.7.22) - 2026-07-20
 
 ### Other

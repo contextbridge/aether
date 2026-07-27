@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.31](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.30...aether-mcp-servers-v0.4.31) - 2026-07-27
+
+### Added
+
+- recover from wedged or crashed language servers in lspd ([#275](https://github.com/contextbridge/aether/pull/275))
+
+### Fixed
+
+- Set cache key based on prompt contents. ([#279](https://github.com/contextbridge/aether/pull/279))
+
+### Other
+
+- scheduled code-cleanup ([#291](https://github.com/contextbridge/aether/pull/291))
+- scheduled code-cleanup ([#277](https://github.com/contextbridge/aether/pull/277))
+- scheduled code-cleanup ([#272](https://github.com/contextbridge/aether/pull/272))
+- release ([#269](https://github.com/contextbridge/aether/pull/269))
+
 ## [0.4.30](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.29...aether-mcp-servers-v0.4.30) - 2026-07-21
 
 ### Other
