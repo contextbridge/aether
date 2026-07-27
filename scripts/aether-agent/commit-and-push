@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+message_file="$RUNNER_TEMP/commit-message.txt"
+if [[ ! -s "$message_file" ]]; then
+    printf 'chore: apply Aether changes for #%s\n' "$NUMBER" > "$message_file"
+fi
+
+# A plan run may only produce a plan, so stage it and discard whatever else the agent touched. `plans/`
+# is gitignored at every depth, hence the force; once tracked, later revisions stage through `git add --all`.
+if [[ "$MODE" == "plan" ]]; then
+    if [[ -d "$PLANS_DIR" ]]; then
+        git add --force "$PLANS_DIR"
+    fi
+    git checkout -- .
+    git clean --force --quiet -d
+fi
+
+# The agent is free to commit its own work, so only commit what it left behind.
+git add --all
+if ! git diff --cached --quiet; then
+    git commit --file "$message_file"
+fi
+
+if [[ "$(git rev-parse HEAD)" == "$START_SHA" ]]; then
+    echo "pushed=false" >> "$GITHUB_OUTPUT"
+    exit 0
+fi
+
+subject="$(git log -1 --format=%s)"
+
+# A plan has served its purpose once real code lands beside it on the branch.
+implemented=false
+if [[ "$MODE" == "pr" ]]; then
+    mapfile -t plans < <(git ls-files -- "$PLANS_DIR/*-plan.md")
+    if (( ${#plans[@]} > 0 )) \
+        && ! git diff --quiet "$START_SHA" HEAD -- . ":(exclude)$PLANS_DIR"; then
+        git rm --quiet -- "${plans[@]}"
+        git commit --message 'chore: drop plan now that it is implemented'
+        implemented=true
+    fi
+fi
+
+# Checkout deliberately left no credentials on disk, so authenticate this one push explicitly.
+git push "https://x-access-token:$GH_TOKEN@github.com/$GH_REPO.git" "HEAD:$BRANCH"
+
+{
+    echo "pushed=true"
+    echo "implemented=$implemented"
+    echo "subject=$subject"
+} >> "$GITHUB_OUTPUT"

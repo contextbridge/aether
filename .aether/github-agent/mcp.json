@@ -1,0 +1,18 @@
+{
+  "servers": {
+    "coding": {
+      "type": "in-memory",
+      "args": ["--rules-dir", "./.aether/skills"]
+    },
+    "skills": {
+      "type": "in-memory",
+      "args": ["--dir", "./.aether/skills"]
+    },
+    "tasks": {
+      "type": "in-memory"
+    },
+    "subagents": {
+      "type": "in-memory"
+    }
+  }
+}

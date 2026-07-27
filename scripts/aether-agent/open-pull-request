@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [[ -n "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // ""')" ]]; then
+    exit 0
+fi
+
+body="$RUNNER_TEMP/pr-body.md"
+printf 'Closes #%s\n\n' "$NUMBER" > "$body"
+
+draft=()
+if [[ "$MODE" == "plan" ]]; then
+    title="plan: $ISSUE_TITLE"
+    draft=(--draft)
+    printf 'Aether planned issue #%s. Review the plan inline, reply with `@aether` to revise it,\n' \
+        "$NUMBER" >> "$body"
+    printf 'and comment `@aether implement` to build it on this branch.\n\n' >> "$body"
+else
+    title="$SUBJECT"
+    printf 'Opened by Aether from issue #%s.\n\n' "$NUMBER" >> "$body"
+fi
+printf 'Run: %s\n' "$RUN_URL" >> "$body"
+
+gh pr create \
+    --base "$BASE" \
+    --head "$BRANCH" \
+    --title "$title" \
+    --body-file "$body" \
+    --label aether \
+    --label automated \
+    "${draft[@]}"

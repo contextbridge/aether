@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+log="$RUNNER_TEMP/aether-headless.jsonl"
+summary=""
+if [[ -s "$log" ]]; then
+    summary="$(jq -rs '
+        [.[] | select(.category == "message" and .event.type == "text" and .event.is_complete)]
+        | last // {} | .event.chunk // ""
+    ' "$log")"
+fi
+
+comment="$RUNNER_TEMP/comment.md"
+if [[ -n "$summary" ]]; then
+    printf '%s\n\n' "$summary" > "$comment"
+else
+    : > "$comment"
+fi
+
+if [[ "$FAILED" == "true" ]]; then
+    printf 'Aether did not finish. [See the run](%s).\n' "$RUN_URL" >> "$comment"
+elif [[ "$PUSHED" == "true" ]]; then
+    printf 'Pushed to `%s`. [See the run](%s).\n' "$BRANCH" "$RUN_URL" >> "$comment"
+else
+    printf 'Aether made no changes. [See the run](%s).\n' "$RUN_URL" >> "$comment"
+fi
+
+if [[ "$MODE" == "pr" ]]; then
+    gh pr comment "$NUMBER" --body-file "$comment"
+else
+    gh issue comment "$NUMBER" --body-file "$comment"
+fi

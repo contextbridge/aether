@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [[ "$EVENT_NAME" == "pull_request_review_comment" ]]; then
+    mode="pr"
+    number="$REVIEW_PR_NUMBER"
+elif [[ "$IS_PULL_REQUEST" == "true" ]]; then
+    mode="pr"
+    number="$ISSUE_NUMBER"
+elif [[ "$LABEL_NAME" == "aether:plan" ]]; then
+    mode="plan"
+    number="$ISSUE_NUMBER"
+else
+    mode="implement"
+    number="$ISSUE_NUMBER"
+fi
+
+if [[ "$mode" == "pr" ]]; then
+    pr="$(gh pr view "$number" --json headRefName,baseRefName,isCrossRepository)"
+    if [[ "$(jq -r '.isCrossRepository' <<<"$pr")" == "true" ]]; then
+        echo "::error::Aether cannot push to pull request #$number because it comes from a fork."
+        exit 1
+    fi
+    branch="$(jq -r '.headRefName' <<<"$pr")"
+    base="$(jq -r '.baseRefName' <<<"$pr")"
+else
+    branch="aether/issue-$number"
+    base="$DEFAULT_BRANCH"
+    open_pr="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // ""')"
+    # An earlier run's branch survives its pull request being merged or closed. Reusing it would
+    # stack new work on stale commits, so branch off the base again instead.
+    if [[ -z "$open_pr" ]] && gh api "/repos/$GH_REPO/git/ref/heads/$branch" > /dev/null 2>&1; then
+        branch="$branch-$GITHUB_RUN_NUMBER"
+    fi
+fi
+
+{
+    echo "mode=$mode"
+    echo "number=$number"
+    echo "branch=$branch"
+    echo "base=$base"
+    echo "plan_file=$PLANS_DIR/issue-$number-plan.md"
+} >> "$GITHUB_OUTPUT"
