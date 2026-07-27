@@ -9,11 +9,13 @@ use self::model_selector::ModelSelector;
 use self::picker::SettingsPicker;
 use self::provider_login::{ProviderLoginEntry, ProviderLoginPane, ProviderLoginStatus, build_provider_login_entries};
 use self::server_status::ServerStatusPane;
-use crate::elicitation::ElicitationResponder;
+use crate::modal::ElicitationModal;
+use crate::platform::{BrowserOpener, ClipboardWriter};
 use crate::render_context::RenderContext;
 use crate::selection::Direction;
 use crate::session_config_view::SessionConfigView;
 use crate::surface::{Action, Surface};
+use crate::theme::Theme;
 use crate::widgets::key_hints;
 use acp_utils::config_meta::SelectOptionMeta;
 use acp_utils::notifications::{
@@ -23,7 +25,7 @@ use agent_client_protocol::Responder;
 use agent_client_protocol::schema::{AuthMethod, SessionConfigOption};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Position, Rect};
+use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph, Widget};
@@ -83,7 +85,10 @@ pub struct SettingsOverlay {
     pane: Option<Box<dyn SettingsPane>>,
     current_reasoning_effort: Option<String>,
     live: LiveSettingsData,
-    pending_elicitation: Option<PendingElicitation>,
+    /// A request the overlay answers itself, drawn under the pane and owning
+    /// input until it is answered. Authenticating an OAuth server asks for a
+    /// browser this way, so the pane that started it has to survive the ask.
+    pending_elicitation: Option<ElicitationModal>,
 }
 
 /// Agent-pushed state that panes display. The overlay owns it so a pane opened
@@ -183,32 +188,38 @@ impl SettingsOverlay {
     }
 
     pub fn on_elicitation_request(&mut self, params: ElicitationParams, responder: Responder<ElicitationResponse>) {
-        self.cancel_pending_elicitation();
-        let elicitation_id = match &params.request {
-            acp_utils::notifications::CreateElicitationRequestParams::UrlElicitationParams {
-                elicitation_id, ..
-            } => elicitation_id.clone(),
-            acp_utils::notifications::CreateElicitationRequestParams::FormElicitationParams { .. } => String::new(),
-        };
-        self.pending_elicitation = Some(PendingElicitation {
-            server_name: params.server_name,
-            elicitation_id,
-            _responder: ElicitationResponder::new(responder),
-        });
+        self.pending_elicitation = Some(ElicitationModal::new(params, responder));
+    }
+
+    /// As [`Self::on_elicitation_request`], against the given handlers rather
+    /// than the platform's browser and clipboard.
+    pub fn on_elicitation_request_with(
+        &mut self,
+        params: ElicitationParams,
+        responder: Responder<ElicitationResponse>,
+        browser_opener: BrowserOpener,
+        clipboard_writer: ClipboardWriter,
+    ) {
+        self.pending_elicitation =
+            Some(ElicitationModal::with_url_handlers(params, responder, browser_opener, clipboard_writer));
     }
 
     pub fn on_url_elicitation_complete(&mut self, params: &UrlElicitationCompleteParams) {
-        if self.pending_elicitation.as_ref().is_some_and(|pending| pending.matches(params)) {
-            self.cancel_pending_elicitation();
+        if self.pending_elicitation.as_mut().is_some_and(|pending| pending.on_url_complete(params)) {
+            self.pending_elicitation = None;
         }
     }
 
+    /// Drops an unanswered request, which cancels it.
     pub fn cancel_pending_elicitation(&mut self) {
         self.pending_elicitation = None;
     }
 
     /// Key hints for the current focus, shown in the overlay footer.
     fn footer_hints(&self) -> Vec<KeyHint> {
+        if let Some(pending) = self.pending_elicitation.as_ref() {
+            return pending.key_hints();
+        }
         self.pane
             .as_ref()
             .map_or_else(|| vec![("Enter", "select".to_string()), ("Esc", "close".to_string())], |pane| pane.footer())
@@ -225,6 +236,35 @@ impl SettingsOverlay {
         if let Some(pane) = self.pane.as_mut() {
             pane.refresh(&self.live);
         }
+    }
+
+    /// Draws whichever of the menu or the open pane has focus.
+    fn render_content(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
+        let Some(pane) = self.pane.as_mut() else {
+            self.menu.render(area, buf, cx.theme);
+            return None;
+        };
+        pane.render(area, buf, cx)
+    }
+
+    /// Splits `inner` into the rows the menu or pane keeps and the rows a
+    /// pending request takes at the bottom, separated by a blank line. The pane
+    /// keeps at least one row so the request never draws over it entirely.
+    fn split_for_prompt(&self, inner: Rect, theme: &Theme) -> (Rect, Option<Rect>) {
+        let Some(pending) = self.pending_elicitation.as_ref() else {
+            return (inner, None);
+        };
+        // The prompt lines up with the menu and pane rows, which carry their own
+        // leading space.
+        let width = inner.width.saturating_sub(1);
+        let height = pending.inline_height(theme, width).min(inner.height.saturating_sub(2));
+        if height == 0 {
+            return (inner, None);
+        }
+        let [content, _gap, prompt] =
+            Layout::vertical([Constraint::Min(1), Constraint::Length(1), Constraint::Length(height)]).areas(inner);
+        let [_indent, prompt] = Layout::horizontal([Constraint::Length(1), Constraint::Min(0)]).areas(prompt);
+        (content, Some(prompt))
     }
 
     fn on_menu_key(&mut self, key: KeyEvent) -> Vec<Action> {
@@ -281,6 +321,14 @@ impl Surface for SettingsOverlay {
     /// The overlay owns every key: the menu and its panes have their own
     /// keymaps, so nothing falls through to the shared list navigation.
     fn on_surface_key(&mut self, key: KeyEvent) -> Option<Vec<Action>> {
+        if let Some(pending) = self.pending_elicitation.as_mut() {
+            // Answering a request returns focus to the pane behind it rather
+            // than closing the overlay the request arrived in.
+            if pending.on_key(key).iter().any(|action| matches!(action, Action::Close)) {
+                self.pending_elicitation = None;
+            }
+            return Some(Vec::new());
+        }
         let Some(pane) = self.pane.as_mut() else {
             return Some(self.on_menu_key(key));
         };
@@ -296,7 +344,17 @@ impl Surface for SettingsOverlay {
         Some(self.apply(messages))
     }
 
+    fn on_paste(&mut self, text: &str) -> Vec<Action> {
+        match self.pending_elicitation.as_mut() {
+            Some(pending) => pending.on_paste(text),
+            None => Vec::new(),
+        }
+    }
+
     fn scroll(&mut self, direction: Direction) -> Vec<Action> {
+        if let Some(pending) = self.pending_elicitation.as_mut() {
+            return pending.scroll(direction);
+        }
         let Some(pane) = self.pane.as_mut() else {
             self.menu.step(direction);
             return Vec::new();
@@ -306,6 +364,9 @@ impl Surface for SettingsOverlay {
     }
 
     fn click(&mut self, row: u16, column: u16) -> Vec<Action> {
+        if let Some(pending) = self.pending_elicitation.as_mut() {
+            return pending.click(row, column);
+        }
         let Some(pane) = self.pane.as_mut() else {
             if self.menu.click_at(row) {
                 self.pane = self.open_selected_pane();
@@ -314,6 +375,12 @@ impl Surface for SettingsOverlay {
         };
         let messages = pane.click(row, column);
         self.apply(messages)
+    }
+
+    /// A URL request wants the terminal's own text selection back, so the URL
+    /// can be copied by hand when opening a browser is not an option.
+    fn needs_mouse_capture(&self) -> bool {
+        self.pending_elicitation.as_ref().is_none_or(Surface::needs_mouse_capture)
     }
 
     fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
@@ -337,11 +404,16 @@ impl Surface for SettingsOverlay {
         let inner = block.inner(area);
         block.render(area, buf);
 
-        let Some(pane) = self.pane.as_mut() else {
-            self.menu.render(inner, buf, theme);
-            return None;
+        let (content, prompt) = self.split_for_prompt(inner, theme);
+        let cursor = self.render_content(content, buf, cx);
+
+        let (Some(prompt), Some(pending)) = (prompt, self.pending_elicitation.as_mut()) else {
+            return cursor;
         };
-        pane.render(inner, buf, cx)
+        pending.render_inline(prompt, buf, theme);
+        // The request owns input, so it is not the pane behind it that the
+        // terminal cursor belongs to.
+        None
     }
 }
 
@@ -352,20 +424,6 @@ impl LiveSettingsData {
 
     fn provider_summary(&self) -> String {
         provider_login::summary(&self.providers)
-    }
-}
-
-/// An elicitation the overlay answers in place. Holding the responder is what
-/// keeps it outstanding; dropping this cancels it.
-struct PendingElicitation {
-    server_name: String,
-    elicitation_id: String,
-    _responder: ElicitationResponder,
-}
-
-impl PendingElicitation {
-    fn matches(&self, params: &UrlElicitationCompleteParams) -> bool {
-        self.server_name == params.server_name && self.elicitation_id == params.elicitation_id
     }
 }
 

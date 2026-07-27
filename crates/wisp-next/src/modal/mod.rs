@@ -11,13 +11,16 @@ use agent_client_protocol::Responder;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Position, Rect};
-use ratatui::widgets::{Clear, Widget};
+use ratatui::text::Text;
+use ratatui::widgets::{Clear, Paragraph, Widget};
 
 use self::form::{FormAction, FormModal};
 use self::url::UrlModal;
 use crate::platform::{BrowserOpener, ClipboardWriter, default_browser_opener, default_clipboard_writer};
 use crate::selection::Direction;
 use crate::surface::{Action, Surface};
+use crate::theme::Theme;
+use crate::wrap::rows;
 
 pub struct ElicitationModal {
     kind: ModalKind,
@@ -58,11 +61,47 @@ impl ElicitationModal {
         let McpNotification::UrlElicitationComplete(params) = notification else {
             return false;
         };
+        self.on_url_complete(params)
+    }
+
+    /// Accepts the request when `params` reports the browser flow it was
+    /// waiting on has finished, reporting whether it did.
+    pub fn on_url_complete(&mut self, params: &UrlElicitationCompleteParams) -> bool {
         if !self.matches_url_completion(params) {
             return false;
         }
         self.responder.respond(ElicitationAction::Accept, None);
         true
+    }
+
+    /// Draws the request inside a host that keeps its own chrome, rather than as
+    /// a modal over everything. The settings overlay shows an OAuth prompt this
+    /// way so the server row that started it stays on screen.
+    pub fn render_inline(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
+        match &mut self.kind {
+            ModalKind::Form(form) => form.render(area, buf, theme),
+            ModalKind::Url(url) => {
+                Paragraph::new(Text::from(url.body_lines(theme, area.width))).render(area, buf);
+            }
+        }
+    }
+
+    /// The rows [`Self::render_inline`] wants at `width`. A form scrolls its
+    /// fields, so it takes whatever the host can spare.
+    pub fn inline_height(&self, theme: &Theme, width: u16) -> u16 {
+        match &self.kind {
+            ModalKind::Form(_) => u16::MAX,
+            ModalKind::Url(url) => rows(url.body_lines(theme, width).len()),
+        }
+    }
+
+    /// The keys this request answers, for a host that draws its own footer.
+    pub fn key_hints(&self) -> Vec<(&'static str, String)> {
+        let hints: Vec<(&'static str, &'static str)> = match &self.kind {
+            ModalKind::Form(form) => form.hints(),
+            ModalKind::Url(_) => url::HINTS.to_vec(),
+        };
+        hints.into_iter().map(|(key, description)| (key, description.to_string())).collect()
     }
 
     fn on_url_key(&mut self, key: KeyEvent) -> Vec<Action> {

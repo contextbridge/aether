@@ -6,8 +6,8 @@ pub(crate) use acp_utils::notifications::{
     AetherCapabilities, AuthMethodsUpdatedParams, ContextClearedParams, ContextCompactionParams,
     CreateElicitationRequestParams, ElicitationAction, ElicitationParams, McpNotification, McpServerAuthCapability,
     McpServerStatus, McpServerStatusEntry, SessionPreviewResponse, SessionPreviewRole, SessionPreviewTurn,
-    SubAgentEvent, SubAgentProgressParams, SubAgentToolRequest, SubAgentToolResult, WorkspaceEntry,
-    WorkspaceListResponse, WorkspaceMoveResponse,
+    SubAgentEvent, SubAgentProgressParams, SubAgentToolRequest, SubAgentToolResult, UrlElicitationCompleteParams,
+    WorkspaceEntry, WorkspaceListResponse, WorkspaceMoveResponse,
 };
 pub(crate) use acp_utils::testing::test_connection;
 pub(crate) use agent_client_protocol::schema::{self as acp, SessionId};

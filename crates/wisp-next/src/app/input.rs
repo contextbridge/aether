@@ -224,6 +224,7 @@ impl App {
     pub fn needs_mouse_capture(&self) -> bool {
         match self.layer.as_ref() {
             Some(Layer::Elicitation(modal)) => modal.needs_mouse_capture(),
+            Some(Layer::Settings(overlay)) => overlay.needs_mouse_capture(),
             Some(_) => true,
             None => self.composer.has_open_overlay(),
         }

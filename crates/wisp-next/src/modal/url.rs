@@ -2,9 +2,11 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Text};
-use ratatui::widgets::{Block, Paragraph, Widget, Wrap};
+use ratatui::widgets::{Block, Paragraph, Widget};
 
 use crate::theme::Theme;
+use crate::widgets::key_hints;
+use crate::wrap::wrap_line;
 
 pub(super) struct UrlModal {
     pub(super) server_name: String,
@@ -51,40 +53,55 @@ impl UrlModal {
     }
 
     pub(super) fn render(&self, area: Rect, buf: &mut Buffer, theme: &Theme) {
-        let mut lines = vec![
+        let block = Block::bordered().title(" URL authorization ").border_style(Style::new().fg(theme.accent));
+        let inner = block.inner(area);
+        block.render(area, buf);
+
+        let mut lines = self.body_lines(theme, inner.width);
+        lines.push(key_hints(&HINTS, theme));
+        Paragraph::new(Text::from(lines)).render(inner, buf);
+    }
+
+    /// What is being authorized, where the browser would go, and anything about
+    /// the URL worth a second look — everything but the key hints, which a host
+    /// drawing this inline puts in its own footer.
+    pub(super) fn body_lines(&self, theme: &Theme, width: u16) -> Vec<Line<'static>> {
+        let mut lines = wrap_line(
             Line::styled(
                 format!("Request from {}", self.server_name),
                 Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
             ),
-            Line::raw(self.message.clone()),
-        ];
+            width,
+        );
+        lines.extend(wrap_line(Line::raw(self.message.clone()), width));
 
         if let Some(ref host) = self.host {
-            lines.push(Line::styled(format!("Host: {host}"), Style::new().fg(theme.muted)));
+            lines.extend(wrap_line(Line::styled(format!("Host: {host}"), Style::new().fg(theme.muted)), width));
         }
 
         if !self.warnings.is_empty() {
             lines.push(Line::raw(""));
             for warning in &self.warnings {
-                lines.push(Line::styled(warning.clone(), Style::new().fg(theme.warning)));
+                lines.extend(wrap_line(Line::styled(warning.clone(), Style::new().fg(theme.warning)), width));
             }
         }
 
         if let Some(ref message) = self.copy_message {
             lines.push(Line::raw(""));
-            lines.push(Line::styled(message.clone(), Style::new().fg(theme.muted)));
+            lines.extend(wrap_line(Line::styled(message.clone(), Style::new().fg(theme.muted)), width));
         }
 
         if let Some(ref error) = self.launch_error {
             lines.push(Line::raw(""));
-            lines.push(Line::styled(error.clone(), Style::new().fg(theme.error)));
+            lines.extend(wrap_line(Line::styled(error.clone(), Style::new().fg(theme.error)), width));
         }
 
-        lines.push(Line::styled("Enter open browser · c copy URL · Esc cancel", Style::new().fg(theme.muted)));
-        let block = Block::bordered().title(" URL authorization ").border_style(Style::new().fg(theme.accent));
-        Paragraph::new(Text::from(lines)).block(block).wrap(Wrap { trim: false }).render(area, buf);
+        lines
     }
 }
+
+/// The keys a URL request answers, for whichever footer is drawing them.
+pub(super) const HINTS: [(&str, &str); 3] = [("Enter", "open browser"), ("c", "copy URL"), ("Esc", "cancel")];
 
 fn is_local_http_url(url: &url::Url) -> bool {
     if url.scheme() != "http" {

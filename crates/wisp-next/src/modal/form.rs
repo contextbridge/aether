@@ -246,16 +246,21 @@ impl FormModal {
         lines
     }
 
+    /// The keys this form answers, for whichever footer is drawing them.
+    pub(super) fn hints(&self) -> Vec<(&'static str, &'static str)> {
+        let mut hints = vec![("Enter", "submit"), ("Esc", "cancel")];
+        if self.fields.iter().any(|field| matches!(field.kind, FormFieldKind::Multi { .. })) {
+            hints.splice(0..0, [("↑↓", "option"), ("Space", "toggle")]);
+        }
+        hints
+    }
+
     fn footer_lines(&self, theme: &Theme, width: u16) -> Vec<Line<'static>> {
         let mut lines = match &self.validation_error {
             Some(error) => wrap_line(Line::styled(error.clone(), Style::new().fg(theme.error)), width),
             None => Vec::new(),
         };
-        let mut hints = vec![("Enter", "submit"), ("Esc", "cancel")];
-        if self.fields.iter().any(|field| matches!(field.kind, FormFieldKind::Multi { .. })) {
-            hints.splice(0..0, [("↑↓", "option"), ("Space", "toggle")]);
-        }
-        lines.push(key_hints(&hints, theme));
+        lines.push(key_hints(&self.hints(), theme));
         lines
     }
 

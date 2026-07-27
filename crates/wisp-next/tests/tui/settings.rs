@@ -33,6 +33,28 @@ fn auth_methods_updated(methods: Vec<acp::AuthMethod>) -> AcpEvent {
     AcpEvent::AuthMethodsUpdated(AuthMethodsUpdatedParams { auth_methods: methods })
 }
 
+fn url_elicitation(server_name: &str, url: &str, elicitation_id: &str) -> ElicitationParams {
+    ElicitationParams {
+        server_name: server_name.to_string(),
+        request: CreateElicitationRequestParams::UrlElicitationParams {
+            meta: None,
+            message: "Open this URL to authorize MCP server access.".to_string(),
+            url: url.to_string(),
+            elicitation_id: elicitation_id.to_string(),
+        },
+    }
+}
+
+/// Walks settings down to the MCP servers pane and authenticates the selected
+/// server: the flow that makes the agent hand back an OAuth URL.
+fn authenticate_selected_oauth_server(app: &mut App) {
+    type_text(app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+    app.on_key(key(KeyCode::Enter));
+}
+
 #[test]
 fn server_status_unhealthy_count_updates_status_line() {
     let (mut app, _command_rx) = make_app();
@@ -284,7 +306,7 @@ fn auth_methods_updated_replaces_provider_entries() {
 }
 
 #[test]
-fn closing_settings_overlay_cancels_pending_elicitation() {
+fn esc_on_settings_elicitation_cancels_it_and_keeps_the_overlay_open() {
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
     LocalSet::new().block_on(&runtime, async {
         let (mut app, _command_rx) = make_app();
@@ -296,22 +318,141 @@ fn closing_settings_overlay_cancels_pending_elicitation() {
         let (cx, mut peer) = test_connection().await;
         let (responder, response_rx) = peer.fake_elicitation(&cx).await;
         app.on_acp_event(AcpEvent::ElicitationRequest {
-            params: ElicitationParams {
-                server_name: "test".to_string(),
-                request: CreateElicitationRequestParams::UrlElicitationParams {
-                    meta: None,
-                    message: "auth".to_string(),
-                    url: "https://example.com".to_string(),
-                    elicitation_id: "el-1".to_string(),
-                },
-            },
+            params: url_elicitation("test", "https://example.com", "el-1"),
             responder,
         });
 
         app.on_key(key(KeyCode::Esc));
 
         let response = response_rx.await.unwrap();
-        assert_eq!(response.action, acp_utils::notifications::ElicitationAction::Cancel);
+        assert_eq!(response.action, ElicitationAction::Cancel);
+        assert!(app.has_modal(), "cancelling the request should leave the settings overlay open");
+
+        app.on_key(key(KeyCode::Esc));
+        assert!(!app.has_modal(), "the next Esc should close the settings overlay");
+    });
+}
+
+#[test]
+fn oauth_url_prompt_is_shown_in_settings_overlay() {
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    LocalSet::new().block_on(&runtime, async {
+        let (mut app, _command_rx) = make_app();
+        app.on_acp_event(mcp_notification(vec![oauth_server("linear", McpServerStatus::NeedsOAuth)]));
+        authenticate_selected_oauth_server(&mut app);
+
+        let (cx, mut peer) = test_connection().await;
+        let (responder, _response_rx) = peer.fake_elicitation(&cx).await;
+        app.on_acp_event(AcpEvent::ElicitationRequest {
+            params: url_elicitation("linear", "https://linear.app/oauth", "aether-oauth"),
+            responder,
+        });
+
+        let mut terminal = make_terminal_tall();
+        sync_terminal(&mut terminal, &mut app).unwrap();
+        let viewport = buffer_text(&viewport_buffer(&mut terminal));
+
+        assert!(viewport.contains("linear.app"), "should show the host being authorized:\n{viewport}");
+        assert!(viewport.contains("open browser"), "should offer to open the browser:\n{viewport}");
+        assert!(viewport.contains("linear"), "the pane that started the request should stay visible:\n{viewport}");
+    });
+}
+
+#[test]
+fn enter_on_settings_oauth_prompt_opens_the_browser() {
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    LocalSet::new().block_on(&runtime, async {
+        let opened: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
+        let mut overlay = SettingsOverlay::new(&[], vec![], &[]);
+
+        let (cx, mut peer) = test_connection().await;
+        let (responder, _response_rx) = peer.fake_elicitation(&cx).await;
+        overlay.on_elicitation_request_with(
+            url_elicitation("linear", "https://linear.app/oauth", "aether-oauth"),
+            responder,
+            {
+                let opened = opened.clone();
+                Arc::new(move |url: &str| {
+                    *opened.lock().unwrap() = Some(url.to_string());
+                    Ok(())
+                })
+            },
+            Arc::new(|_| Ok(())),
+        );
+
+        overlay.on_key(key(KeyCode::Enter));
+
+        assert_eq!(opened.lock().unwrap().as_deref(), Some("https://linear.app/oauth"));
+    });
+}
+
+#[test]
+fn url_elicitation_complete_accepts_and_clears_settings_prompt() {
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    LocalSet::new().block_on(&runtime, async {
+        let (mut app, _command_rx) = make_app();
+        app.on_acp_event(mcp_notification(vec![oauth_server("linear", McpServerStatus::Authenticating)]));
+        authenticate_selected_oauth_server(&mut app);
+
+        let (cx, mut peer) = test_connection().await;
+        let (responder, response_rx) = peer.fake_elicitation(&cx).await;
+        app.on_acp_event(AcpEvent::ElicitationRequest {
+            params: url_elicitation("linear", "https://linear.app/oauth", "aether-oauth"),
+            responder,
+        });
+
+        app.on_acp_event(AcpEvent::McpNotification(McpNotification::UrlElicitationComplete(
+            UrlElicitationCompleteParams {
+                server_name: "linear".to_string(),
+                elicitation_id: "aether-oauth".to_string(),
+            },
+        )));
+
+        let response = response_rx.await.unwrap();
+        assert_eq!(response.action, ElicitationAction::Accept);
+
+        let mut terminal = make_terminal_tall();
+        sync_terminal(&mut terminal, &mut app).unwrap();
+        let viewport = buffer_text(&viewport_buffer(&mut terminal));
+        assert!(viewport.contains("Configuration"), "the settings overlay should stay open:\n{viewport}");
+        assert!(!viewport.contains("open browser"), "the finished prompt should be gone:\n{viewport}");
+    });
+}
+
+#[test]
+fn form_elicitation_is_answered_inside_the_settings_overlay() {
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    LocalSet::new().block_on(&runtime, async {
+        let (mut app, _command_rx) = make_app();
+        type_text(&mut app, "/settings");
+        app.on_key(key(KeyCode::Tab));
+
+        let (cx, mut peer) = test_connection().await;
+        let (responder, response_rx) = peer.fake_elicitation(&cx).await;
+        app.on_acp_event(AcpEvent::ElicitationRequest {
+            params: ElicitationParams {
+                server_name: "linear".to_string(),
+                request: CreateElicitationRequestParams::FormElicitationParams {
+                    meta: None,
+                    message: "Paste an API token".to_string(),
+                    requested_schema: ElicitationSchema::builder().required_string("token").build().unwrap(),
+                },
+            },
+            responder,
+        });
+
+        let mut terminal = make_terminal_tall();
+        sync_terminal(&mut terminal, &mut app).unwrap();
+        let viewport = buffer_text(&viewport_buffer(&mut terminal));
+        assert!(viewport.contains("Paste an API token"), "the request should be visible:\n{viewport}");
+
+        type_text(&mut app, "secret");
+        app.on_key(key(KeyCode::Enter));
+
+        let response = response_rx.await.unwrap();
+        assert_eq!(response.action, ElicitationAction::Accept);
+        assert_eq!(response.content.unwrap()["token"], "secret");
+        assert!(app.has_modal(), "answering the request should leave the settings overlay open");
     });
 }
 
