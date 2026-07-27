@@ -175,9 +175,6 @@ async fn accept_oauth_callback_parses_code_and_state() {
 
     let handle = tokio::spawn(async move { accept_oauth_callback(&listener).await });
 
-    // Give the callback server time to start
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
     let client = reqwest::Client::new();
     let _response = client.get(&callback_url).send().await.expect("Failed to send callback request");
 
