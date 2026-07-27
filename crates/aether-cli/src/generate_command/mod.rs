@@ -2,10 +2,7 @@ use crate::output::OutputFormat;
 use futures::StreamExt;
 use llm::catalog::{ReasoningEffortError, validate_reasoning_effort};
 use llm::parser::ModelProviderParser;
-use llm::types::IsoString;
-use llm::{
-    ChatMessage, ContentBlock, Context, LlmError, LlmResponse, ModelSettings, ReasoningEffort, StreamingModelProvider,
-};
+use llm::{ChatMessage, Context, LlmError, LlmResponse, ModelSettings, ReasoningEffort, StreamingModelProvider};
 use std::io::{Read, stdin};
 use std::process::ExitCode;
 use thiserror::Error;
@@ -93,9 +90,9 @@ pub async fn run(args: GenerateArgs) -> Result<ExitCode, GenerateCommandError> {
     let messages = {
         let mut messages = Vec::new();
         if let Some(system) = args.system.as_deref() {
-            messages.push(ChatMessage::System { content: system.to_string(), timestamp: IsoString::now() });
+            messages.push(ChatMessage::system(system));
         }
-        messages.push(ChatMessage::User { content: vec![ContentBlock::text(&prompt)], timestamp: IsoString::now() });
+        messages.push(ChatMessage::user(&prompt));
         messages
     };
 

@@ -257,8 +257,7 @@ mod tests {
 
     #[test]
     fn map_text_only_user_message_unchanged() {
-        let messages =
-            vec![ChatMessage::User { content: vec![ContentBlock::text("Hello")], timestamp: IsoString::now() }];
+        let messages = vec![ChatMessage::user("Hello")];
         let result = map_messages(&messages).unwrap();
         assert_eq!(result.len(), 1);
     }

@@ -141,8 +141,7 @@ mod tests {
 
     #[test]
     fn test_map_simple_user_message() {
-        let messages =
-            vec![ChatMessage::User { content: vec![ContentBlock::text("Hello")], timestamp: IsoString::now() }];
+        let messages = vec![ChatMessage::user("Hello")];
 
         let (system, mapped) = map_messages(&messages).unwrap();
         assert_eq!(system, None);
@@ -210,10 +209,7 @@ mod tests {
 
     #[test]
     fn test_map_system_message() {
-        let messages = vec![
-            ChatMessage::System { content: "You are a helpful assistant".to_string(), timestamp: IsoString::now() },
-            ChatMessage::User { content: vec![ContentBlock::text("Hello")], timestamp: IsoString::now() },
-        ];
+        let messages = vec![ChatMessage::system("You are a helpful assistant"), ChatMessage::user("Hello")];
 
         let (system, mapped) = map_messages(&messages).unwrap();
         assert_eq!(system, Some("You are a helpful assistant".to_string()));

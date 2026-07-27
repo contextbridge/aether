@@ -20,8 +20,4 @@ mod providers {
         mod fixture_tests;
         mod types_tests;
     }
-    #[cfg(feature = "codex")]
-    mod codex {
-        mod fixture_tests;
-    }
 }

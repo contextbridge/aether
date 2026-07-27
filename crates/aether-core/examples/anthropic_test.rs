@@ -50,10 +50,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Prepare context
     let messages = vec![
-        ChatMessage::System {
-            content: "You are a helpful AI assistant. Be concise but informative in your responses.".to_string(),
-            timestamp: IsoString::now(),
-        },
+        ChatMessage::system("You are a helpful AI assistant. Be concise but informative in your responses."),
         ChatMessage::User { content: vec![llm::ContentBlock::text(args.prompt)], timestamp: IsoString::now() },
     ];
 

@@ -39,6 +39,17 @@ struct ModelData {
     limit: Option<LimitData>,
     #[serde(default)]
     modalities: Option<ModalitiesData>,
+    #[serde(default)]
+    provider: Option<ModelProviderData>,
+}
+
+/// Per-model transport override.
+#[derive(Debug, Deserialize)]
+struct ModelProviderData {
+    #[serde(default)]
+    api: Option<String>,
+    #[serde(default)]
+    shape: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -110,6 +121,10 @@ struct ProviderConfig {
     oauth_provider_id: Option<&'static str>,
     /// Fallback levels when source metadata does not declare granular efforts.
     fallback_reasoning_levels: &'static [&'static str],
+    /// When true, a model's `provider.api`/`provider.shape` metadata is read as a
+    /// per-model transport override. Off elsewhere because most providers publish
+    /// unrelated data (npm package names) under the same key.
+    use_model_transport: bool,
     /// When true, the inner catalog enum is named `{Enum}FoundationModel` and
     /// `LlmModel::{Enum}` carries a hand-written `{Enum}Model` wrapper (defined
     /// outside of codegen) that adds a `Profile(String)` fall-through plus any
@@ -145,6 +160,7 @@ impl ProviderConfig {
             env_var,
             oauth_provider_id: None,
             fallback_reasoning_levels: &["low", "medium", "high"],
+            use_model_transport: false,
             is_hybrid_dynamic: false,
         }
     }
@@ -212,6 +228,7 @@ const PROVIDERS: &[ProviderConfig] = &[
         env_var: None,
         oauth_provider_id: Some("codex"),
         fallback_reasoning_levels: &["low", "medium", "high", "xhigh"],
+        use_model_transport: false,
         is_hybrid_dynamic: false,
     },
     ProviderConfig::standard("deepseek", "DeepSeek", "deepseek", "DeepSeek", Some("DEEPSEEK_API_KEY")),
@@ -235,6 +252,7 @@ const PROVIDERS: &[ProviderConfig] = &[
     },
     ProviderConfig {
         genai_provider_name: "aws.bedrock",
+        use_model_transport: true,
         is_hybrid_dynamic: true,
         ..ProviderConfig::standard("amazon-bedrock", "Bedrock", "bedrock", "AWS Bedrock", None)
     },
@@ -276,6 +294,12 @@ struct ModelInfo {
     reasoning_levels: Vec<String>,
     input_modalities: Vec<String>,
     supports_prompt_caching: bool,
+    transport: Option<TransportInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum TransportInfo {
+    OpenAiResponses { base_url_template: String },
 }
 
 type ProviderModels = BTreeMap<&'static str, Vec<ModelInfo>>;
@@ -311,6 +335,10 @@ pub enum CodegenError {
     ConfiguredModelUnavailable { provider_id: String, model_id: String },
     #[error("Model '{model_id}' declares unsupported reasoning effort '{effort}'")]
     UnsupportedReasoningEffort { model_id: String, effort: String },
+    #[error("Model '{model_id}' declares unsupported wire shape '{shape}'")]
+    UnsupportedWireShape { model_id: String, shape: String },
+    #[error("Model '{model_id}' must declare both an endpoint and wire shape")]
+    IncompleteTransport { model_id: String },
 }
 
 /// Run the codegen, returning the generated Rust source and per-provider docs.
@@ -402,9 +430,30 @@ fn collect_models_from(
                 reasoning_levels,
                 input_modalities,
                 supports_prompt_caching: m.cost.as_ref().is_some_and(CostData::has_prompt_caching),
+                transport: transport_for_model(cfg, m)?,
             })
         })
         .collect()
+}
+
+fn transport_for_model(cfg: &ProviderConfig, model: &ModelData) -> Result<Option<TransportInfo>, CodegenError> {
+    if !cfg.use_model_transport {
+        return Ok(None);
+    }
+    let Some(provider) = &model.provider else {
+        return Ok(None);
+    };
+
+    match (&provider.api, provider.shape.as_deref()) {
+        (None, None) => Ok(None),
+        (Some(base_url_template), Some("responses")) => {
+            Ok(Some(TransportInfo::OpenAiResponses { base_url_template: base_url_template.clone() }))
+        }
+        (_, Some(shape)) if shape != "responses" => {
+            Err(CodegenError::UnsupportedWireShape { model_id: model.id.clone(), shape: shape.to_string() })
+        }
+        _ => Err(CodegenError::IncompleteTransport { model_id: model.id.clone() }),
+    }
 }
 
 fn reasoning_levels_for_model(cfg: &ProviderConfig, model: &ModelData) -> Result<Vec<String>, CodegenError> {
@@ -690,6 +739,8 @@ fn emit_provider_impls(provider_models: &ProviderModels) -> TokenStream {
             }
         });
 
+        let transport_arms = emit_transport_arms(models);
+
         let all_variants = models.iter().map(|m| format_ident!("{}", m.variant_name));
 
         let from_str_impl = emit_from_str_impl(&enum_ident, cfg.parser_name, models);
@@ -726,6 +777,11 @@ fn emit_provider_impls(provider_models: &ProviderModels) -> TokenStream {
                 }
 
                 #(#modality_methods)*
+
+                #[allow(clippy::too_many_lines)]
+                pub fn transport(self) -> Option<ModelTransport> {
+                    match self { #transport_arms }
+                }
 
                 const ALL: &[#enum_ident] = &[#(Self::#all_variants),*];
             }
@@ -801,6 +857,19 @@ fn emit_reasoning_levels_arms(models: &[ModelInfo]) -> TokenStream {
     )
 }
 
+fn emit_transport_arms(models: &[ModelInfo]) -> TokenStream {
+    grouped_arms(
+        models,
+        |m| m.transport.clone(),
+        |m| match m.transport.as_ref() {
+            Some(TransportInfo::OpenAiResponses { base_url_template }) => {
+                quote! { Some(ModelTransport::OpenAiResponses { base_url_template: #base_url_template }) }
+            }
+            None => quote! { None },
+        },
+    )
+}
+
 /// Map a reasoning level string to its `ReasoningEffort` variant name
 /// (the serialized name with the first letter capitalized).
 fn level_str_to_variant(level: &str) -> String {
@@ -860,6 +929,7 @@ fn emit_llm_model_impl() -> TokenStream {
     let supports_reasoning = emit_llm_supports_reasoning();
     let supports_prompt_caching = emit_llm_supports_prompt_caching();
     let modality_methods = ["image", "audio"].iter().map(|m| emit_llm_supports_modality(m));
+    let transport = emit_llm_transport();
     let all = emit_llm_all();
 
     quote! {
@@ -877,6 +947,7 @@ fn emit_llm_model_impl() -> TokenStream {
             #supports_reasoning
             #supports_prompt_caching
             #(#modality_methods)*
+            #transport
             #all
         }
     }
@@ -1058,6 +1129,17 @@ fn emit_llm_supports_prompt_caching() -> TokenStream {
     quote! {
         /// Whether this model supports provider-side prompt caching
         pub fn supports_prompt_caching(&self) -> bool {
+            #body
+        }
+    }
+}
+
+fn emit_llm_transport() -> TokenStream {
+    let body = llm_delegate_with_dynamic_default("transport", &quote! { None });
+    quote! {
+        /// Per-model transport override, when the model does not use its
+        /// provider's default endpoint and wire protocol.
+        pub fn transport(&self) -> Option<ModelTransport> {
             #body
         }
     }
@@ -1294,6 +1376,10 @@ fn emit_provider_docs(ctx: &CodegenCtx) -> HashMap<String, String> {
                     &mut doc,
                     "Uses the default AWS credential chain (environment variables, config files, IAM roles).",
                 );
+                pushln(
+                    &mut doc,
+                    "Models served from a dedicated endpoint also accept a Bedrock API key in `AWS_BEARER_TOKEN_BEDROCK`.",
+                );
             }
         }
         blank(&mut doc);
@@ -1316,6 +1402,8 @@ fn emit_provider_docs(ctx: &CodegenCtx) -> HashMap<String, String> {
             );
         }
 
+        push_transport_section(&mut doc, models);
+
         docs.insert(cfg.dev_id.to_string(), doc);
     }
 
@@ -1332,6 +1420,31 @@ fn emit_provider_docs(ctx: &CodegenCtx) -> HashMap<String, String> {
     }
 
     docs
+}
+
+/// Document the models that do not use the provider's default endpoint.
+fn push_transport_section(doc: &mut String, models: &[ModelInfo]) {
+    let overridden: Vec<&ModelInfo> = models.iter().filter(|m| m.transport.is_some()).collect();
+    if overridden.is_empty() {
+        return;
+    }
+
+    blank(doc);
+    pushln(doc, "# Models with a dedicated endpoint");
+    blank(doc);
+    pushln(doc, "These models are served from their own endpoint and wire protocol");
+    pushln(doc, "rather than the provider's default. `${VAR}` placeholders are resolved");
+    pushln(doc, "at request time.");
+    blank(doc);
+    pushln(doc, "| Model ID | Endpoint | Wire shape |");
+    pushln(doc, "|----------|----------|------------|");
+    for model in overridden {
+        let transport = model.transport.as_ref().expect("filtered to models with a transport");
+        let (api, shape) = match transport {
+            TransportInfo::OpenAiResponses { base_url_template } => (base_url_template.as_str(), "responses"),
+        };
+        pushln(doc, format!("| `{}` | `{api}` | `{shape}` |", model.model_id));
+    }
 }
 
 /// Format a token count as human-readable (e.g. `1_000_000` → `1M`, `200_000` → `200k`).
@@ -1399,6 +1512,107 @@ mod tests {
         for model_id in ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] {
             assert_eq!(window(model_id), 372_000);
         }
+    }
+
+    #[test]
+    fn transport_override_is_preserved_from_model_metadata() {
+        let mut data = minimal_models_dev_json();
+        insert_models(
+            &mut data,
+            "amazon-bedrock",
+            json!({
+                "with-transport": {
+                    "id": "with-transport", "name": "With Transport", "tool_call": true,
+                    "limit": {"context": 1000, "output": 0},
+                    "provider": {
+                        "npm": "@ai-sdk/amazon-bedrock/mantle",
+                        "api": "https://example.${AWS_REGION}.api.aws/openai/v1",
+                        "shape": "responses"
+                    }
+                },
+                "without-transport": {
+                    "id": "without-transport", "name": "Without Transport", "tool_call": true,
+                    "limit": {"context": 1000, "output": 0}
+                }
+            }),
+        );
+
+        let models = build_from_value(&data);
+        let transport =
+            |id: &str| models["amazon-bedrock"].iter().find(|m| m.model_id == id).unwrap().transport.clone();
+
+        assert_eq!(
+            transport("with-transport"),
+            Some(TransportInfo::OpenAiResponses {
+                base_url_template: "https://example.${AWS_REGION}.api.aws/openai/v1".to_string(),
+            })
+        );
+        assert_eq!(transport("without-transport"), None);
+    }
+
+    #[test]
+    fn transport_override_with_only_an_npm_package_is_ignored() {
+        let mut data = minimal_models_dev_json();
+        anthropic_models(
+            &mut data,
+            json!({
+                "npm-only": {
+                    "id": "npm-only", "name": "Npm Only", "tool_call": true,
+                    "limit": {"context": 1000, "output": 0},
+                    "provider": {"npm": "@ai-sdk/anthropic"}
+                }
+            }),
+        );
+
+        let models = build_from_value(&data);
+
+        assert_eq!(models["anthropic"].iter().find(|m| m.model_id == "npm-only").unwrap().transport, None);
+    }
+
+    #[test]
+    fn unknown_wire_shape_is_rejected() {
+        let mut data = minimal_models_dev_json();
+        insert_models(
+            &mut data,
+            "amazon-bedrock",
+            json!({
+                "weird": {
+                    "id": "weird", "name": "Weird", "tool_call": true,
+                    "limit": {"context": 1000, "output": 0},
+                    "provider": {"api": "https://example.com/v1", "shape": "telepathy"}
+                }
+            }),
+        );
+        let parsed: ModelsDevData = serde_json::from_value(data).expect("parse fixture");
+
+        let error = build_provider_models(&parsed).unwrap_err();
+
+        assert!(
+            matches!(error, CodegenError::UnsupportedWireShape { ref model_id, ref shape }
+                if model_id == "weird" && shape == "telepathy"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn incomplete_bedrock_transport_is_rejected() {
+        let mut data = minimal_models_dev_json();
+        insert_models(
+            &mut data,
+            "amazon-bedrock",
+            json!({
+                "incomplete": {
+                    "id": "incomplete", "name": "Incomplete", "tool_call": true,
+                    "limit": {"context": 1000, "output": 0},
+                    "provider": {"api": "https://example.com/v1"}
+                }
+            }),
+        );
+        let parsed: ModelsDevData = serde_json::from_value(data).expect("parse fixture");
+
+        let error = build_provider_models(&parsed).unwrap_err();
+
+        assert!(matches!(error, CodegenError::IncompleteTransport { ref model_id } if model_id == "incomplete"));
     }
 
     #[test]

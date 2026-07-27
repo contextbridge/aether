@@ -237,10 +237,6 @@ mod tests {
     use crate::tools::{ToolCallError, ToolCallRequest, ToolCallResult};
     use crate::types::IsoString;
 
-    fn user_message(text: &str) -> ChatMessage {
-        ChatMessage::User { content: vec![ContentBlock::text(text)], timestamp: IsoString::now() }
-    }
-
     fn assistant_message(content: &str, tool_calls: Vec<ToolCallRequest>) -> ChatMessage {
         ChatMessage::Assistant {
             content: content.to_string(),
@@ -274,7 +270,7 @@ mod tests {
 
     #[test]
     fn test_map_simple_user_message() {
-        let messages = vec![user_message("Hello")];
+        let messages = vec![ChatMessage::user("Hello")];
 
         let (system, mapped) = map_messages(&messages, None).unwrap();
         assert!(system.is_empty());
@@ -315,10 +311,7 @@ mod tests {
 
     #[test]
     fn test_map_system_message() {
-        let messages = vec![
-            ChatMessage::System { content: "You are helpful".to_string(), timestamp: IsoString::now() },
-            user_message("Hello"),
-        ];
+        let messages = vec![ChatMessage::system("You are helpful"), ChatMessage::user("Hello")];
 
         let (system, mapped) = map_messages(&messages, None).unwrap();
         assert_eq!(system.len(), 1);
@@ -456,10 +449,7 @@ mod tests {
 
     #[test]
     fn system_cache_point_is_added_when_cache_point_provided() {
-        let messages = vec![
-            ChatMessage::System { content: "You are helpful".to_string(), timestamp: IsoString::now() },
-            user_message("Hello"),
-        ];
+        let messages = vec![ChatMessage::system("You are helpful"), ChatMessage::user("Hello")];
         let cache_point = default_cache_point().unwrap();
 
         let (system, _mapped) = map_messages(&messages, Some(&cache_point)).unwrap();
@@ -471,7 +461,7 @@ mod tests {
 
     #[test]
     fn system_cache_point_is_not_added_without_system_content() {
-        let messages = vec![user_message("Hello")];
+        let messages = vec![ChatMessage::user("Hello")];
         let cache_point = default_cache_point().unwrap();
 
         let (system, _mapped) = map_messages(&messages, Some(&cache_point)).unwrap();
@@ -481,7 +471,7 @@ mod tests {
 
     #[test]
     fn message_cache_point_is_added_to_last_user_message() {
-        let messages = vec![user_message("Hello")];
+        let messages = vec![ChatMessage::user("Hello")];
         let cache_point = default_cache_point().unwrap();
 
         let (_system, mapped) = map_messages(&messages, Some(&cache_point)).unwrap();
@@ -495,7 +485,7 @@ mod tests {
 
     #[test]
     fn message_cache_point_is_added_only_to_last_message_in_multi_turn_history() {
-        let messages = vec![user_message("turn 1"), assistant_message("ack", vec![]), user_message("turn 2")];
+        let messages = vec![ChatMessage::user("turn 1"), assistant_message("ack", vec![]), ChatMessage::user("turn 2")];
         let cache_point = default_cache_point().unwrap();
 
         let (_system, mapped) = map_messages(&messages, Some(&cache_point)).unwrap();
@@ -508,7 +498,7 @@ mod tests {
     #[test]
     fn message_cache_point_is_added_to_tool_result_message() {
         let messages = vec![
-            user_message("search please"),
+            ChatMessage::user("search please"),
             assistant_message("", vec![tool_call("call_1", "search", "{}")]),
             tool_result_ok("call_1", "search", "{}", "found"),
         ];
@@ -522,7 +512,7 @@ mod tests {
 
     #[test]
     fn message_cache_points_not_added_when_cache_point_is_none() {
-        let messages = vec![user_message("turn 1"), assistant_message("ack", vec![]), user_message("turn 2")];
+        let messages = vec![ChatMessage::user("turn 1"), assistant_message("ack", vec![]), ChatMessage::user("turn 2")];
 
         let (_system, mapped) = map_messages(&messages, None).unwrap();
 

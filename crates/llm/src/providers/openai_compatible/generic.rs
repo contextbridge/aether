@@ -1,7 +1,7 @@
 use async_openai::{Client, config::OpenAIConfig};
 use schemars::Schema;
 
-use crate::provider::get_context_window;
+use crate::provider::{error_stream, get_context_window};
 use crate::tool_schema::normalize_for_moonshot;
 use crate::{
     Context, LlmError, LlmModel, LlmResponseStream, ProviderAuthMode, ProviderConnectionConfig, Result,
@@ -142,7 +142,7 @@ impl StreamingModelProvider for GenericOpenAiProvider {
             self.config.tool_schema_transform,
         ) {
             Ok(req) => req,
-            Err(e) => return Box::pin(async_stream::stream! { yield Err(e); }),
+            Err(e) => return error_stream(e),
         };
         create_custom_stream_generic(&self.client, request)
     }
@@ -158,8 +158,8 @@ mod tests {
 
     use super::*;
     use crate::providers::test_capture_server::CaptureServer;
-    use crate::types::IsoString;
-    use crate::{ChatMessage, ContentBlock};
+
+    use crate::ChatMessage;
 
     #[test]
     fn azure_foundry_requires_a_configured_url() {
@@ -184,10 +184,7 @@ mod tests {
         )
         .unwrap()
         .with_model("gpt-5.5");
-        let context = Context::new(
-            vec![ChatMessage::User { content: vec![ContentBlock::text("Hello")], timestamp: IsoString::now() }],
-            vec![],
-        );
+        let context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
 
         let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
         let captured = server.captured().await;

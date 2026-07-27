@@ -6,12 +6,11 @@ use aether_core::events::{
 };
 use aether_core::testing::{TestScenario, test_agent};
 use llm::testing::llm_response;
-use llm::types::IsoString;
 use llm::{ChatMessage, ContentBlock};
 use tokio::sync::Notify;
 
 fn user_message(text: &str) -> ChatMessage {
-    ChatMessage::User { content: vec![ContentBlock::text(text)], timestamp: IsoString::now() }
+    ChatMessage::user(text)
 }
 
 #[tokio::test]

@@ -4,9 +4,11 @@ use crate::providers::local::discovery::discover_local_models;
 
 mod bedrock;
 mod model_spec;
+pub mod transport;
 
 pub use bedrock::BedrockModel;
 pub use model_spec::{ModelSpec, ModelSpecError, ReasoningEffortError, validate_reasoning_effort};
+pub use transport::{ModelTransport, TemplateError, expand_api_template};
 
 include!(concat!(env!("OUT_DIR"), "/generated.rs"));
 
@@ -187,6 +189,52 @@ mod tests {
     fn dynamic_providers_have_no_context_window() {
         assert_eq!(LlmModel::Ollama("foo".into()).context_window(), None);
         assert_eq!(LlmModel::LlamaCpp("foo".into()).context_window(), None);
+    }
+
+    #[test]
+    fn bedrock_responses_models_carry_their_endpoint_and_wire_shape() {
+        let cases = [
+            ("openai.gpt-5.6-luna", "https://bedrock-mantle.${AWS_REGION}.api.aws/openai/v1"),
+            ("openai.gpt-5.6-sol", "https://bedrock-mantle.${AWS_REGION}.api.aws/openai/v1"),
+            ("openai.gpt-5.6-terra", "https://bedrock-mantle.${AWS_REGION}.api.aws/openai/v1"),
+            ("openai.gpt-5.5", "https://bedrock-mantle.${AWS_REGION}.api.aws/openai/v1"),
+            ("openai.gpt-5.4", "https://bedrock-mantle.${AWS_REGION}.api.aws/openai/v1"),
+            ("xai.grok-4.3", "https://bedrock-mantle.${AWS_REGION}.api.aws/openai/v1"),
+            ("openai.gpt-oss-120b", "https://bedrock-mantle.${AWS_REGION}.api.aws/v1"),
+            ("openai.gpt-oss-20b", "https://bedrock-mantle.${AWS_REGION}.api.aws/v1"),
+        ];
+
+        for (id, expected_api) in cases {
+            let model: LlmModel = format!("bedrock:{id}").parse().unwrap();
+            assert_eq!(
+                model.transport(),
+                Some(ModelTransport::OpenAiResponses { base_url_template: expected_api }),
+                "{id}"
+            );
+        }
+    }
+
+    #[test]
+    fn converse_models_and_profiles_declare_no_transport_override() {
+        for id in ["anthropic.claude-opus-5", "amazon.nova-lite-v1:0", "us.anthropic.claude-future-model-v99:0"] {
+            let model: LlmModel = format!("bedrock:{id}").parse().unwrap();
+            assert_eq!(model.transport(), None, "{id}");
+        }
+        assert_eq!(LlmModel::Ollama("llama3.2".into()).transport(), None);
+        assert_eq!("anthropic:claude-opus-4-6".parse::<LlmModel>().unwrap().transport(), None);
+    }
+
+    #[test]
+    fn every_declared_transport_template_resolves() {
+        for model in LlmModel::all() {
+            let Some(ModelTransport::OpenAiResponses { base_url_template }) = model.transport() else {
+                continue;
+            };
+            let resolved = expand_api_template(base_url_template, |_| Some("test-region".to_string()))
+                .unwrap_or_else(|e| panic!("{model} has an unresolvable endpoint template: {e}"));
+            assert!(resolved.starts_with("https://"), "{model} resolved to '{resolved}'");
+            assert!(!resolved.contains("${"), "{model} left a placeholder in '{resolved}'");
+        }
     }
 
     #[test]

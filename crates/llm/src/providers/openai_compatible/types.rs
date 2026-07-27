@@ -301,10 +301,7 @@ mod tests {
 
     fn context_with_assistant_message(message: ChatMessage) -> crate::Context {
         crate::Context::new(
-            vec![
-                ChatMessage::User { content: vec![ContentBlock::text("run a tool")], timestamp: IsoString::now() },
-                message,
-            ],
+            vec![ChatMessage::user("run a tool"), message],
             vec![ToolDefinition::new("test__tool", "test", serde_json::json!({ "type": "object" }))],
         )
     }
@@ -321,7 +318,7 @@ mod tests {
 
     #[test]
     fn test_build_request_maps_model_settings_and_omits_when_unset() {
-        let user = || ChatMessage::User { content: vec![ContentBlock::text("hello")], timestamp: IsoString::now() };
+        let user = || ChatMessage::user("hello");
 
         let mut context = Context::new(vec![user()], vec![]);
         context.set_model_settings(ModelSettings { temperature: Some(0.0), top_p: Some(0.5), max_tokens: Some(64) });
@@ -339,10 +336,7 @@ mod tests {
 
     #[test]
     fn test_build_request_includes_stream_options_with_usage() {
-        let context = crate::Context::new(
-            vec![ChatMessage::User { content: vec![ContentBlock::text("hello")], timestamp: IsoString::now() }],
-            vec![],
-        );
+        let context = crate::Context::new(vec![ChatMessage::user("hello")], vec![]);
         let request = build_chat_request("test-model", &context, None).unwrap();
 
         let json = serde_json::to_value(&request).unwrap();

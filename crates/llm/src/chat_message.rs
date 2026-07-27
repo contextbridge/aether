@@ -135,6 +135,16 @@ pub enum ChatMessage {
 }
 
 impl ChatMessage {
+    /// A user message carrying a single block of text, stamped now.
+    pub fn user(text: impl Into<String>) -> Self {
+        ChatMessage::User { content: vec![ContentBlock::text(text)], timestamp: IsoString::now() }
+    }
+
+    /// A system prompt, stamped now.
+    pub fn system(content: impl Into<String>) -> Self {
+        ChatMessage::System { content: content.into(), timestamp: IsoString::now() }
+    }
+
     /// Returns true if this message is a tool call result
     pub fn is_tool_result(&self) -> bool {
         matches!(self, ChatMessage::ToolCallResult(_))

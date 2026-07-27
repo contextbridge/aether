@@ -9,6 +9,7 @@ pub mod gemini;
 pub mod local;
 pub mod openai;
 pub mod openai_compatible;
+pub(crate) mod openai_responses;
 pub mod openrouter;
 #[cfg(test)]
 pub(crate) mod test_capture_server;

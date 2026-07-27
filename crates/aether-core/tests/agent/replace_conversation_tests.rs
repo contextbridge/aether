@@ -13,7 +13,7 @@ async fn replace_conversation_preserves_system_prompt_for_next_request() {
         .scenario(
             TestScenario::new()
                 .replace_conversation(vec![
-                    ChatMessage::User { content: vec![ContentBlock::text("old user")], timestamp: IsoString::now() },
+                    ChatMessage::user("old user"),
                     ChatMessage::Assistant {
                         content: "old assistant".to_string(),
                         reasoning: AssistantReasoning::default(),
@@ -50,10 +50,7 @@ async fn replace_conversation_preserves_token_usage() {
             TestScenario::new()
                 .user_text("first user")
                 .wait_for_turn_end()
-                .replace_conversation(vec![ChatMessage::User {
-                    content: vec![ContentBlock::text("replacement user")],
-                    timestamp: IsoString::now(),
-                }])
+                .replace_conversation(vec![ChatMessage::user("replacement user")])
                 .wait_for(|event| matches!(event, AgentEvent::Context(ContextEvent::UsageUpdated { .. }))),
         )
         .run()

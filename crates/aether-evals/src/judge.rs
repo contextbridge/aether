@@ -1,7 +1,6 @@
 use aether_core::events::{AgentEvent, MessageEvent, ToolEvent, TurnEvent, TurnOutcome};
 use futures::StreamExt;
-use llm::types::IsoString;
-use llm::{ChatMessage, ContentBlock, Context, LlmResponse, StreamingModelProvider};
+use llm::{ChatMessage, Context, LlmResponse, StreamingModelProvider};
 use schemars::{JsonSchema, Schema, schema_for};
 use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
@@ -185,8 +184,7 @@ impl Judge {
     }
 
     async fn stream_response(&self, llm: &dyn StreamingModelProvider) -> Result<String, JudgeError> {
-        let message =
-            ChatMessage::User { content: vec![ContentBlock::text(self.prompt.clone())], timestamp: IsoString::now() };
+        let message = ChatMessage::user(self.prompt.clone());
         let mut response_stream = llm.stream_response(&Context::new(vec![message], vec![]));
         let mut raw_response = String::new();
         while let Some(result) = response_stream.next().await {

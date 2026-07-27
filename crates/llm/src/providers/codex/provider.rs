@@ -1,17 +1,11 @@
-use super::mappers::{map_messages, map_tools};
 use super::oauth::CodexTokenManager;
-use super::streaming::{CodexStreamEvent, process_response_stream};
-use crate::provider::{LlmResponseStream, StreamingModelProvider, get_context_window};
+use crate::provider::{LlmResponseStream, StreamingModelProvider, get_context_window, stream_from};
+use crate::providers::openai_responses::mappers::{ResponsesRequestPolicy, build_wire_request};
+use crate::providers::openai_responses::streaming::process_response_stream;
+use crate::providers::openai_responses::transport::{ResponsesEventStream, decode_response_sse};
 use crate::{Context, LlmError, Result};
 use aether_auth::OAuthCredentialStorage;
-use async_openai::types::responses::{
-    CreateResponse, IncludeEnum, InputParam, Reasoning, ReasoningSummary, ResponseTextParam,
-    TextResponseFormatConfiguration, Verbosity,
-};
-use eventsource_stream::Eventsource;
-use futures::StreamExt;
 use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderValue};
-use serde_json::Value;
 use std::sync::Arc;
 use tracing::debug;
 
@@ -49,36 +43,8 @@ impl CodexProvider {
         self
     }
 
-    fn build_typed_request(&self, context: &Context) -> Result<CreateResponse> {
-        let (system_prompt, input) = map_messages(context.messages())?;
-        let tools = if context.tools().is_empty() { None } else { Some(map_tools(context.tools())?) };
-
-        Ok(CreateResponse {
-            model: Some(self.model.clone()),
-            input: InputParam::Items(input),
-            instructions: system_prompt,
-            tools,
-            store: Some(false),
-            stream: Some(true),
-            reasoning: Some(Reasoning { effort: None, summary: Some(ReasoningSummary::Auto) }),
-            include: Some(vec![IncludeEnum::ReasoningEncryptedContent]),
-            text: Some(ResponseTextParam {
-                format: TextResponseFormatConfiguration::Text,
-                verbosity: Some(Verbosity::Medium),
-            }),
-            prompt_cache_key: context.prompt_cache_key().map(String::from),
-            ..Default::default()
-        })
-    }
-
-    /// The typed `async-openai` request cannot encode every effort the Codex
-    /// API accepts (e.g. `max`), so the effort is written onto the serialized
-    /// wire body instead.
-    fn build_wire_request(&self, context: &Context) -> Result<Value> {
-        let mut body = serde_json::to_value(self.build_typed_request(context)?)?;
-        let effort = context.reasoning_effort().map_or("medium", crate::ReasoningEffort::as_str);
-        body["reasoning"]["effort"] = effort.into();
-        Ok(body)
+    fn build_wire_request(&self, context: &Context) -> Result<serde_json::Value> {
+        build_wire_request(&self.model, context, &ResponsesRequestPolicy::codex())
     }
 
     async fn build_headers(&self) -> Result<HeaderMap> {
@@ -106,11 +72,7 @@ impl CodexProvider {
     /// Uses manual SSE parsing because the Codex API does not return a
     /// `Content-Type: text/event-stream` header, which `reqwest_eventsource`
     /// (used by `async-openai`'s `create_stream`) requires.
-    async fn send_request(
-        &self,
-        request: Value,
-        headers: HeaderMap,
-    ) -> Result<impl futures::Stream<Item = Result<CodexStreamEvent>>> {
+    async fn send_request(&self, request: serde_json::Value, headers: HeaderMap) -> Result<ResponsesEventStream> {
         let url = format!("{}/responses", self.base_url);
 
         debug!("Sending request to Codex API: {url}");
@@ -137,21 +99,7 @@ impl CodexProvider {
             });
         }
 
-        let event_stream = response.bytes_stream().eventsource().filter_map(|result| {
-            std::future::ready(match result {
-                Ok(event) if event.data == "[DONE]" => None,
-                Ok(event) => match serde_json::from_str::<CodexStreamEvent>(&event.data) {
-                    Ok(parsed) => Some(Ok(parsed)),
-                    Err(e) => {
-                        debug!("Failed to parse Codex SSE line: {} - Error: {e}", event.data);
-                        None
-                    }
-                },
-                Err(e) => Some(Err(LlmError::StreamInterrupted(e.to_string()))),
-            })
-        });
-
-        Ok(event_stream)
+        Ok(decode_response_sse(response))
     }
 }
 
@@ -166,41 +114,16 @@ impl StreamingModelProvider for CodexProvider {
 
     fn stream_response(&self, context: &Context) -> LlmResponseStream {
         let provider = self.clone();
-        let context = match self.model() {
-            Some(model) => context.filter_encrypted_reasoning(&model),
-            None => context.clone(),
-        };
+        let context = context.clone();
 
-        Box::pin(async_stream::stream! {
-            let headers = match provider.build_headers().await {
-                Ok(h) => h,
-                Err(e) => {
-                    yield Err(e);
-                    return;
-                }
-            };
-
-            let request = match provider.build_wire_request(&context) {
-                Ok(r) => r,
-                Err(e) => {
-                    yield Err(e);
-                    return;
-                }
-            };
-
-            let event_stream = match provider.send_request(request, headers).await {
-                Ok(s) => s,
-                Err(e) => {
-                    yield Err(e);
-                    return;
-                }
-            };
-
-            let mut response_stream = Box::pin(process_response_stream(event_stream));
-            while let Some(result) = response_stream.next().await {
-                yield result;
-            }
-        })
+        stream_from(
+            async move {
+                let headers = provider.build_headers().await?;
+                let request = provider.build_wire_request(&context)?;
+                provider.send_request(request, headers).await
+            },
+            process_response_stream,
+        )
     }
 
     fn display_name(&self) -> String {
@@ -212,13 +135,12 @@ impl StreamingModelProvider for CodexProvider {
 mod tests {
     use super::*;
     use crate::ChatMessage;
-    use crate::ContentBlock;
     use crate::ToolDefinition;
     use crate::providers::test_capture_server::CaptureServer;
-    use crate::types::IsoString;
     use aether_auth::{FakeOAuthCredentialStore, OAuthCredential};
     use base64::Engine;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use futures::StreamExt;
 
     #[test]
     fn context_window_uses_codex_subscription_limit() {
@@ -237,10 +159,7 @@ mod tests {
         let mut server = CaptureServer::start().await;
         let provider = server_backed_provider(&server).with_model("gpt-5.6-luna");
         let mut context = Context::new(
-            vec![
-                ChatMessage::System { content: "You are helpful".to_string(), timestamp: IsoString::now() },
-                ChatMessage::User { content: vec![ContentBlock::text("Think harder")], timestamp: IsoString::now() },
-            ],
+            vec![ChatMessage::system("You are helpful"), ChatMessage::user("Think harder")],
             vec![ToolDefinition::new(
                 "bash",
                 "Run a command",
@@ -275,10 +194,7 @@ mod tests {
     async fn stream_response_defaults_to_medium_effort_on_the_wire() {
         let mut server = CaptureServer::start().await;
         let provider = server_backed_provider(&server);
-        let context = Context::new(
-            vec![ChatMessage::User { content: vec![ContentBlock::text("Hello")], timestamp: IsoString::now() }],
-            vec![],
-        );
+        let context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
 
         let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
         let captured = server.captured().await;
