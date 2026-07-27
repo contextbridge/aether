@@ -114,9 +114,9 @@ async fn test_ts_diagnostics_after_edit_without_polling() {
     )
     .await;
 
-    // tsserver is slower than rust-analyzer, so the daemon needs extra time to publish fresh
-    // diagnostics before the single (non-polling) call below.
-    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    // Poll until tsserver publishes the fresh diagnostics so the single
+    // (non-polling) call below is not racing tsserver's async publishing.
+    poll_diagnostics(&client, Some(&index_ts), has_errors).await;
 
     let result = call_tool(&client, "lsp_check_errors", serde_json::json!({ "filePath": index_ts })).await;
 

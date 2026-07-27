@@ -263,16 +263,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_agent_handle_abort() {
-        let handle = AgentHandle {
-            handle: tokio::spawn(async {
-                tokio::time::sleep(Duration::from_mins(1)).await;
-            }),
-        };
+        let handle = AgentHandle { handle: tokio::spawn(std::future::pending::<()>()) };
         assert!(!handle.is_finished());
         handle.abort();
-        // Give the runtime a moment to process the abort
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        assert!(handle.is_finished());
+        while !handle.is_finished() {
+            tokio::task::yield_now().await;
+        }
     }
 
     #[tokio::test]
