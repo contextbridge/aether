@@ -19,6 +19,9 @@ aws-sdk-bedrockruntime = "1.133.0"
 # Capped below 1.5.0: it makes DeferredSignerSender::send generic, which breaks
 # type inference in aws-runtime 1.7.4 (latest). Lift once aws-runtime ships a fix.
 aws-smithy-types = ">=1.4.9, <1.7.0"
+aws-smithy-runtime-api = "1.14.0"
+aws-credential-types = "1.3.0"
+aws-sigv4 = "1.5.1"
 
 # Async runtime
 tokio = { version = "^1.52.3" }

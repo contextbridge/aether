@@ -1,57 +1,17 @@
-use std::collections::HashMap;
-
 use async_openai::Client;
 use async_openai::config::OpenAIConfig;
-use async_openai::types::responses::{
-    CreateResponse, EasyInputContent, EasyInputMessage, FunctionCallOutput, FunctionCallOutputItemParam, FunctionTool,
-    FunctionToolCall, ImageDetail, IncludeEnum, InputContent, InputImageContent, InputItem, InputParam,
-    InputTextContent, Item, MessageType, OutputItem, Reasoning, ReasoningSummary, ResponseStreamEvent, ResponseUsage,
-    Role, Tool,
-};
 use serde_json::Value;
 use tokio_stream::StreamExt;
-use tracing::{debug, error};
+use tracing::debug;
 
-use crate::provider::get_context_window;
+use crate::provider::{error_stream, get_context_window, stream_from};
 use crate::providers::openai_compatible::AetherOpenAiConfig;
+use crate::providers::openai_responses::mappers::{ResponsesRequestPolicy, build_wire_request};
+use crate::providers::openai_responses::streaming::{ResponsesStreamEvent, process_response_stream};
 use crate::{
-    ChatMessage, ContentBlock, Context, LlmError, LlmModel, LlmResponse, LlmResponseStream, ProviderAuthMode,
-    ProviderConnectionConfig, ProviderFactory, Result, StopReason, StreamingModelProvider, TokenUsage, ToolDefinition,
+    Context, LlmError, LlmModel, LlmResponseStream, ProviderAuthMode, ProviderConnectionConfig, ProviderFactory,
+    Result, StreamingModelProvider,
 };
-
-impl From<ResponseUsage> for TokenUsage {
-    fn from(usage: ResponseUsage) -> Self {
-        TokenUsage {
-            input_tokens: usage.input_tokens,
-            output_tokens: usage.output_tokens,
-            cache_read_tokens: Some(usage.input_tokens_details.cached_tokens),
-            reasoning_tokens: Some(usage.output_tokens_details.reasoning_tokens),
-            ..TokenUsage::default()
-        }
-    }
-}
-
-pub(crate) fn map_user_content_for_responses(parts: &[ContentBlock]) -> Result<EasyInputContent> {
-    let mut items = Vec::with_capacity(parts.len());
-    for p in parts {
-        match p {
-            ContentBlock::Text { text } => {
-                items.push(InputContent::InputText(InputTextContent { text: text.clone() }));
-            }
-            ContentBlock::Image { .. } => {
-                items.push(InputContent::InputImage(InputImageContent {
-                    detail: ImageDetail::Auto,
-                    file_id: None,
-                    image_url: Some(p.as_data_uri().unwrap()),
-                }));
-            }
-            ContentBlock::Audio { .. } => {
-                return Err(LlmError::UnsupportedContent("OpenAI Responses does not support audio input".into()));
-            }
-        }
-    }
-    Ok(EasyInputContent::ContentList(items))
-}
 
 pub struct OpenAiProvider {
     client: Client<AetherOpenAiConfig>,
@@ -92,45 +52,26 @@ impl StreamingModelProvider for OpenAiProvider {
     fn stream_response(&self, context: &Context) -> LlmResponseStream {
         let client = self.client.clone();
         let model = self.model.clone();
-        let request = match build_wire_request(&model, context) {
-            Ok(req) => req,
-            Err(e) => return Box::pin(async_stream::stream! { yield Err(e); }),
+        let request = match build_wire_request(&model, context, &ResponsesRequestPolicy::openai()) {
+            Ok(request) => request,
+            Err(e) => return error_stream(e),
         };
 
-        Box::pin(async_stream::stream! {
-            debug!("Starting OpenAI Responses API stream for model: {model}");
-
-            let stream = match client.responses().create_stream_byot::<Value, ResponseStreamEvent>(request).await {
-                Ok(s) => s,
-                Err(e) => {
-                    error!("Failed to create OpenAI Responses stream: {e:?}");
-                    yield Err(LlmError::ApiRequest(e.to_string()));
-                    return;
-                }
-            };
-
-            let mut stream = Box::pin(stream);
-            let mut fn_calls: HashMap<String, (String, String)> = HashMap::new();
-            let mut started = false;
-
-            while let Some(result) = stream.next().await {
-                match result {
-                    Ok(event) => {
-                        for response in process_event(event, &mut fn_calls, &mut started) {
-                            yield response;
-                        }
-                    }
-                    Err(e) => {
-                        yield Err(LlmError::ApiError(e.to_string()));
-                        break;
-                    }
-                }
-            }
-
-            if !started {
-                yield Ok(LlmResponse::done());
-            }
-        })
+        stream_from(
+            async move {
+                debug!("Starting OpenAI Responses API stream for model: {model}");
+                client
+                    .responses()
+                    .create_stream_byot::<Value, ResponsesStreamEvent>(request)
+                    .await
+                    .map_err(|e| LlmError::ApiRequest(e.to_string()))
+            },
+            |stream| {
+                process_response_stream(Box::pin(
+                    stream.map(|result| result.map_err(|e| LlmError::StreamInterrupted(e.to_string()))),
+                ))
+            },
+        )
     }
 
     fn display_name(&self) -> String {
@@ -146,306 +87,11 @@ impl StreamingModelProvider for OpenAiProvider {
     }
 }
 
-fn process_event(
-    event: ResponseStreamEvent,
-    fn_calls: &mut HashMap<String, (String, String)>,
-    started: &mut bool,
-) -> Vec<Result<LlmResponse>> {
-    match event {
-        ResponseStreamEvent::ResponseCreated(e) => {
-            *started = true;
-            vec![Ok(LlmResponse::start(&e.response.id))]
-        }
-        ResponseStreamEvent::ResponseOutputTextDelta(e) if !e.delta.is_empty() => {
-            vec![Ok(LlmResponse::text(&e.delta))]
-        }
-        ResponseStreamEvent::ResponseReasoningSummaryTextDelta(e) if !e.delta.is_empty() => {
-            vec![Ok(LlmResponse::reasoning(&e.delta))]
-        }
-        ResponseStreamEvent::ResponseOutputItemAdded(e) => {
-            if let OutputItem::FunctionCall(fc) = e.item {
-                let item_id = fc.id.clone().unwrap_or_default();
-                fn_calls.insert(item_id, (fc.call_id.clone(), fc.name.clone()));
-                vec![Ok(LlmResponse::tool_request_start(&fc.call_id, &fc.name))]
-            } else {
-                vec![]
-            }
-        }
-        ResponseStreamEvent::ResponseFunctionCallArgumentsDelta(e) => {
-            if let Some((call_id, _)) = fn_calls.get(&e.item_id) {
-                vec![Ok(LlmResponse::tool_request_arg(call_id, &e.delta))]
-            } else {
-                vec![]
-            }
-        }
-        ResponseStreamEvent::ResponseFunctionCallArgumentsDone(e) => {
-            if let Some((call_id, name)) = fn_calls.remove(&e.item_id) {
-                let name = e.name.unwrap_or(name);
-                vec![Ok(LlmResponse::tool_request_complete(&call_id, &name, &e.arguments))]
-            } else {
-                vec![]
-            }
-        }
-        ResponseStreamEvent::ResponseCompleted(e) => {
-            let mut results = Vec::new();
-            if let Some(usage) = e.response.usage {
-                results.push(Ok(LlmResponse::Usage { tokens: usage.into() }));
-            }
-            results.push(Ok(LlmResponse::done_with_stop_reason(StopReason::EndTurn)));
-            results
-        }
-        ResponseStreamEvent::ResponseFailed(e) => {
-            let msg = e.response.error.map_or_else(|| "Unknown error".to_string(), |err| err.message);
-            vec![Err(LlmError::ApiError(msg))]
-        }
-        ResponseStreamEvent::ResponseIncomplete(_) => {
-            vec![Ok(LlmResponse::done_with_stop_reason(StopReason::Length))]
-        }
-        ResponseStreamEvent::ResponseError(e) => {
-            vec![Err(LlmError::ApiError(e.message))]
-        }
-        _ => vec![],
-    }
-}
-
-fn build_response_request(model: &str, context: &Context) -> Result<CreateResponse> {
-    let mut instructions: Option<String> = None;
-    let mut items: Vec<InputItem> = Vec::new();
-
-    for msg in context.messages() {
-        match msg {
-            ChatMessage::System { content, .. } => {
-                instructions = Some(content.clone());
-            }
-            ChatMessage::User { content, .. } => {
-                items.push(InputItem::EasyMessage(EasyInputMessage {
-                    r#type: MessageType::Message,
-                    role: Role::User,
-                    content: map_user_content_for_responses(content)?,
-                    phase: None,
-                }));
-            }
-            ChatMessage::Assistant { content, tool_calls, .. } => {
-                if !content.is_empty() {
-                    items.push(InputItem::EasyMessage(EasyInputMessage {
-                        r#type: MessageType::Message,
-                        role: Role::Assistant,
-                        content: EasyInputContent::Text(content.clone()),
-                        phase: None,
-                    }));
-                }
-                for tc in tool_calls {
-                    items.push(InputItem::Item(Item::FunctionCall(FunctionToolCall {
-                        call_id: tc.id.clone(),
-                        name: tc.name.clone(),
-                        arguments: tc.arguments.clone(),
-                        namespace: None,
-                        id: None,
-                        status: None,
-                    })));
-                }
-            }
-            ChatMessage::ToolCallResult(result) => {
-                let (call_id, output) = match result {
-                    Ok(r) => (r.id.clone(), r.result.clone()),
-                    Err(e) => (e.id.clone(), e.error.clone()),
-                };
-                items.push(InputItem::Item(Item::FunctionCallOutput(FunctionCallOutputItemParam {
-                    call_id,
-                    output: FunctionCallOutput::Text(output),
-                    id: None,
-                    status: None,
-                })));
-            }
-            ChatMessage::Summary { content, .. } => {
-                items.push(InputItem::EasyMessage(EasyInputMessage {
-                    r#type: MessageType::Message,
-                    role: Role::User,
-                    content: EasyInputContent::Text(format!("[Previous conversation handoff]\n\n{content}")),
-                    phase: None,
-                }));
-            }
-            ChatMessage::Error { .. } => {}
-        }
-    }
-
-    let tools = map_tools(context.tools())?;
-
-    let reasoning =
-        context.reasoning_effort().map(|_| Reasoning { effort: None, summary: Some(ReasoningSummary::Auto) });
-
-    let settings = context.model_settings();
-
-    Ok(CreateResponse {
-        model: Some(model.to_string()),
-        input: InputParam::Items(items),
-        instructions,
-        tools: if tools.is_empty() { None } else { Some(tools) },
-        reasoning,
-        stream: Some(true),
-        include: Some(vec![IncludeEnum::ReasoningEncryptedContent]),
-        store: Some(false),
-        background: None,
-        conversation: None,
-        max_output_tokens: settings.max_tokens,
-        metadata: None,
-        parallel_tool_calls: None,
-        previous_response_id: None,
-        prompt: None,
-        service_tier: None,
-        stream_options: None,
-        temperature: settings.temperature,
-        text: None,
-        tool_choice: None,
-        top_p: settings.top_p,
-        truncation: None,
-        prompt_cache_key: context.prompt_cache_key().map(String::from),
-        safety_identifier: None,
-        max_tool_calls: None,
-        prompt_cache_retention: None,
-        top_logprobs: None,
-    })
-}
-
-fn map_tools(tools: &[ToolDefinition]) -> Result<Vec<Tool>> {
-    tools
-        .iter()
-        .map(|tool| {
-            Ok(Tool::Function(FunctionTool {
-                name: tool.name.clone(),
-                description: Some(tool.description.clone()),
-                parameters: Some(tool.parameters.clone()),
-                strict: Some(false),
-                defer_loading: None,
-            }))
-        })
-        .collect()
-}
-
-/// The typed `async-openai` request cannot encode every effort the Responses
-/// API accepts (e.g. `max`), so the effort is written onto the serialized wire
-/// body instead.
-fn build_wire_request(model: &str, context: &Context) -> Result<Value> {
-    let mut body = serde_json::to_value(build_response_request(model, context)?)?;
-    if let Some(effort) = context.reasoning_effort() {
-        body["reasoning"]["effort"] = effort.as_str().into();
-    }
-    Ok(body)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::AssistantReasoning;
-    use crate::ReasoningEffort;
-    use crate::ToolCallRequest;
     use crate::providers::test_capture_server::CaptureServer;
-    use crate::types::IsoString;
-
-    #[test]
-    fn test_build_request_simple_user_message() {
-        let context = Context::new(
-            vec![ChatMessage::User { content: vec![ContentBlock::text("Hello")], timestamp: IsoString::now() }],
-            vec![],
-        );
-
-        let req = build_response_request("gpt-4.1", &context).unwrap();
-        assert_eq!(req.model, Some("gpt-4.1".to_string()));
-        assert!(req.instructions.is_none());
-        assert!(req.tools.is_none());
-        assert!(req.reasoning.is_none());
-
-        let json = serde_json::to_value(&req).unwrap();
-        assert_eq!(json["input"][0]["role"], "user");
-        assert_eq!(json["input"][0]["content"][0]["text"], "Hello");
-    }
-
-    #[test]
-    fn test_build_request_with_system_message() {
-        let context = Context::new(
-            vec![
-                ChatMessage::System { content: "You are helpful.".to_string(), timestamp: IsoString::now() },
-                ChatMessage::User { content: vec![ContentBlock::text("Hi")], timestamp: IsoString::now() },
-            ],
-            vec![],
-        );
-
-        let req = build_response_request("gpt-4.1", &context).unwrap();
-        assert_eq!(req.instructions, Some("You are helpful.".to_string()));
-
-        let json = serde_json::to_value(&req).unwrap();
-        let items = json["input"].as_array().unwrap();
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0]["role"], "user");
-    }
-
-    #[test]
-    fn test_build_request_with_tool_calls() {
-        let context = Context::new(
-            vec![
-                ChatMessage::User { content: vec![ContentBlock::text("Search for rust")], timestamp: IsoString::now() },
-                ChatMessage::Assistant {
-                    content: String::new(),
-                    reasoning: AssistantReasoning::default(),
-                    timestamp: IsoString::now(),
-                    tool_calls: vec![ToolCallRequest {
-                        id: "call_1".to_string(),
-                        name: "search".to_string(),
-                        arguments: r#"{"q":"rust"}"#.to_string(),
-                    }],
-                },
-                ChatMessage::ToolCallResult(Ok(crate::ToolCallResult {
-                    id: "call_1".to_string(),
-                    name: "search".to_string(),
-                    arguments: r#"{"q":"rust"}"#.to_string(),
-                    result: "Found results".to_string(),
-                })),
-            ],
-            vec![ToolDefinition::new("search", "Search", serde_json::json!({ "type": "object" }))],
-        );
-
-        let req = build_response_request("gpt-4.1", &context).unwrap();
-        let json = serde_json::to_value(&req).unwrap();
-
-        let items = json["input"].as_array().unwrap();
-        assert_eq!(items[0]["role"], "user");
-        assert_eq!(items[1]["type"], "function_call");
-        assert_eq!(items[1]["call_id"], "call_1");
-        assert_eq!(items[2]["type"], "function_call_output");
-        assert_eq!(items[2]["call_id"], "call_1");
-        assert_eq!(items[2]["output"], "Found results");
-
-        assert!(req.tools.is_some());
-        let tools_json = serde_json::to_value(&req.tools).unwrap();
-        assert_eq!(tools_json[0]["type"], "function");
-        assert_eq!(tools_json[0]["name"], "search");
-    }
-
-    #[test]
-    fn test_build_wire_request_maps_every_reasoning_effort() {
-        for effort in ReasoningEffort::all() {
-            let mut context = Context::new(
-                vec![ChatMessage::User { content: vec![ContentBlock::text("Think")], timestamp: IsoString::now() }],
-                vec![],
-            );
-            context.set_reasoning_effort(Some(*effort));
-
-            let body = build_wire_request("gpt-5.6", &context).unwrap();
-            assert_eq!(body["reasoning"]["effort"], effort.as_str());
-            assert_eq!(body["reasoning"]["summary"], "auto");
-        }
-    }
-
-    #[test]
-    fn test_build_wire_request_omits_reasoning_without_effort() {
-        let context = Context::new(
-            vec![ChatMessage::User { content: vec![ContentBlock::text("Hi")], timestamp: IsoString::now() }],
-            vec![],
-        );
-
-        let body = build_wire_request("gpt-4.1", &context).unwrap();
-        assert!(body["reasoning"].is_null());
-    }
+    use crate::{ChatMessage, ReasoningEffort};
 
     #[tokio::test]
     async fn stream_response_sends_max_effort_on_the_wire() {
@@ -456,10 +102,7 @@ mod tests {
             ..Default::default()
         };
         let provider = OpenAiProvider::from_env_with_connection(connection).await.unwrap().with_model("gpt-5.6");
-        let mut context = Context::new(
-            vec![ChatMessage::User { content: vec![ContentBlock::text("Think harder")], timestamp: IsoString::now() }],
-            vec![],
-        );
+        let mut context = Context::new(vec![ChatMessage::user("Think harder")], vec![]);
         context.set_reasoning_effort(Some(ReasoningEffort::Max));
         context.set_prompt_cache_key(Some("cache-key".to_string()));
 
@@ -473,51 +116,25 @@ mod tests {
         assert_eq!(captured.body["stream"], true);
     }
 
-    #[test]
-    fn test_build_request_applies_model_settings() {
-        let mut context = Context::new(
-            vec![ChatMessage::User { content: vec![ContentBlock::text("Hello")], timestamp: IsoString::now() }],
-            vec![],
-        );
-        context.set_model_settings(crate::ModelSettings {
-            temperature: Some(0.0),
-            top_p: Some(0.5),
-            max_tokens: Some(128),
-        });
-
-        let req = build_response_request("gpt-4.1", &context).unwrap();
-        assert_eq!(req.temperature, Some(0.0));
-        assert_eq!(req.top_p, Some(0.5));
-        assert_eq!(req.max_output_tokens, Some(128));
-    }
-
-    #[test]
-    fn test_build_request_with_audio_returns_unsupported_content() {
+    #[tokio::test]
+    async fn stream_response_surfaces_a_mapping_failure_as_the_only_item() {
+        let connection = ProviderConnectionConfig { auth_mode: ProviderAuthMode::None, ..Default::default() };
+        let provider = OpenAiProvider::from_env_with_connection(connection).await.unwrap();
         let context = Context::new(
             vec![ChatMessage::User {
-                content: vec![ContentBlock::Audio { data: "YXVkaW8=".to_string(), mime_type: "audio/wav".to_string() }],
-                timestamp: IsoString::now(),
+                content: vec![crate::ContentBlock::Audio {
+                    data: "YXVkaW8=".to_string(),
+                    mime_type: "audio/wav".to_string(),
+                }],
+                timestamp: crate::types::IsoString::now(),
             }],
             vec![],
         );
 
-        assert!(matches!(build_response_request("gpt-4.1", &context), Err(LlmError::UnsupportedContent(_))));
-    }
+        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
 
-    #[test]
-    fn test_map_tools_valid() {
-        let tools = vec![ToolDefinition::new(
-            "read_file",
-            "Read a file",
-            serde_json::from_str(r#"{"type":"object","properties":{"path":{"type":"string"}}}"#).unwrap(),
-        )];
-
-        let result = map_tools(&tools).unwrap();
-        assert_eq!(result.len(), 1);
-
-        let json = serde_json::to_value(&result[0]).unwrap();
-        assert_eq!(json["type"], "function");
-        assert_eq!(json["name"], "read_file");
+        assert_eq!(responses.len(), 1);
+        assert!(matches!(responses[0], Err(LlmError::UnsupportedContent(_))), "{responses:?}");
     }
 
     #[test]

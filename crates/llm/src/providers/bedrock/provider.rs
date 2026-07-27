@@ -1,8 +1,12 @@
+use super::mantle::{MantleAuth, MantleClient};
 use super::mappers::{default_cache_point, map_messages, map_tools};
 use super::streaming::process_bedrock_stream;
-use crate::provider::{LlmResponseStream, ProviderFactory, StreamingModelProvider, get_context_window};
+use crate::catalog::transport::ModelTransport;
+use crate::provider::{LlmResponseStream, ProviderFactory, StreamingModelProvider, get_context_window, stream_from};
+use crate::providers::openai_responses::streaming::process_response_stream;
 use crate::{Context, LlmError, ProviderAuthMode, ProviderConnectionConfig, Result};
 use aws_config::Region;
+use aws_credential_types::provider::SharedCredentialsProvider;
 use aws_sdk_bedrockruntime::config::{BehaviorVersion, Credentials};
 use aws_sdk_bedrockruntime::error::SdkError;
 use aws_sdk_bedrockruntime::operation::converse_stream::ConverseStreamError;
@@ -10,8 +14,7 @@ use aws_sdk_bedrockruntime::primitives::event_stream::EventReceiver;
 use aws_sdk_bedrockruntime::types::error::ConverseStreamOutputError;
 use aws_sdk_bedrockruntime::types::{ConverseStreamOutput, InferenceConfiguration};
 use aws_sdk_bedrockruntime::{Client, Config};
-use futures::StreamExt;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 const DEFAULT_MODEL: &str = "anthropic.claude-sonnet-4-5-20250929-v1:0";
 const DEFAULT_MAX_TOKENS: i32 = 16_384;
@@ -28,6 +31,7 @@ pub struct AwsCredentials {
 #[derive(Clone)]
 pub struct BedrockProvider {
     client: Client,
+    mantle: MantleClient,
     model: String,
     inference_profile_arn: Option<String>,
 }
@@ -35,30 +39,49 @@ pub struct BedrockProvider {
 impl BedrockProvider {
     /// Create a provider using the default AWS credential chain
     /// (env vars, `~/.aws/credentials`, IAM roles, SSO).
-    pub async fn new() -> Self {
-        Self::new_with_connection(ProviderConnectionConfig::default()).await
-    }
+    pub async fn new(connection: ProviderConnectionConfig) -> Self {
+        if connection.auth_mode == ProviderAuthMode::None {
+            return Self::from_config(None, region_from_env().as_deref(), connection);
+        }
 
-    pub async fn new_with_connection(connection: ProviderConnectionConfig) -> Self {
-        let client = if connection.auth_mode == ProviderAuthMode::None {
-            build_no_auth_client(connection.base_url.as_deref(), region_from_env().as_deref())
-        } else {
-            let mut loader = aws_config::defaults(BehaviorVersion::latest());
-            if let Some(url) = &connection.base_url {
-                loader = loader.endpoint_url(url.clone());
-            }
-            let config = loader.load().await;
-            Client::new(&config)
-        };
+        let mut loader = aws_config::defaults(BehaviorVersion::latest());
+        if let Some(url) = &connection.base_url {
+            loader = loader.endpoint_url(url.clone());
+        }
 
-        Self { client, model: DEFAULT_MODEL.to_string(), inference_profile_arn: connection.inference_profile_arn }
+        let config = loader.load().await;
+        let region = config
+            .region()
+            .map(ToString::to_string)
+            .or_else(region_from_env)
+            .unwrap_or_else(|| DEFAULT_REGION.to_string());
+        let auth = mantle_auth(config.credentials_provider(), &region);
+        Self::assemble(Client::new(&config), region, auth, connection)
     }
 
     /// Create a provider from explicit configuration without async credential discovery.
-    pub fn from_config(credentials: Option<AwsCredentials>, region: Option<&str>) -> Self {
-        let client = build_client(credentials, region);
+    pub fn from_config(
+        credentials: Option<AwsCredentials>,
+        region: Option<&str>,
+        connection: ProviderConnectionConfig,
+    ) -> Self {
+        let region = region.unwrap_or(DEFAULT_REGION).to_string();
+        let auth = match connection.auth_mode {
+            ProviderAuthMode::Default => mantle_auth(credentials.clone().map(shared_credentials), &region),
+            ProviderAuthMode::None => MantleAuth::None,
+        };
+        let client = build_client(credentials, &region, connection.base_url.as_deref(), connection.auth_mode);
+        Self::assemble(client, region, auth, connection)
+    }
 
-        Self { client, model: DEFAULT_MODEL.to_string(), inference_profile_arn: None }
+    fn assemble(client: Client, region: String, auth: MantleAuth, connection: ProviderConnectionConfig) -> Self {
+        let mantle = MantleClient::new(region, auth, connection.base_url.clone());
+        Self {
+            client,
+            mantle,
+            model: DEFAULT_MODEL.to_string(),
+            inference_profile_arn: connection.inference_profile_arn,
+        }
     }
 
     pub fn with_model(mut self, model: &str) -> Self {
@@ -71,8 +94,21 @@ impl BedrockProvider {
         self
     }
 
+    /// Authenticate Responses-transport requests with a Bedrock API key instead
+    /// of `SigV4`. Equivalent to setting `AWS_BEARER_TOKEN_BEDROCK`.
+    pub fn with_bearer_token(mut self, token: impl Into<String>) -> Self {
+        self.mantle = self.mantle.with_auth(MantleAuth::BearerToken(token.into()));
+        self
+    }
+
     fn request_model_id(&self) -> &str {
         self.inference_profile_arn.as_deref().unwrap_or(&self.model)
+    }
+
+    /// The Responses-API transport for the current model, when the catalog says
+    /// it is not served by the Converse API.
+    fn mantle_transport(&self) -> Option<ModelTransport> {
+        self.model().and_then(|model| model.transport())
     }
 
     async fn send_converse_stream(
@@ -129,11 +165,11 @@ impl BedrockProvider {
 
 impl ProviderFactory for BedrockProvider {
     async fn from_env() -> Result<Self> {
-        Ok(Self::new().await)
+        Ok(Self::new(ProviderConnectionConfig::default()).await)
     }
 
     async fn from_env_with_connection(connection: ProviderConnectionConfig) -> Result<Self> {
-        Ok(Self::new_with_connection(connection).await)
+        Ok(Self::new(connection).await)
     }
 
     fn with_model(self, model: &str) -> Self {
@@ -154,19 +190,22 @@ impl StreamingModelProvider for BedrockProvider {
         let provider = self.clone();
         let context = context.clone();
 
-        Box::pin(async_stream::stream! {
-            match provider.send_converse_stream(&context).await {
-                Ok(receiver) => {
-                    let mut stream = Box::pin(process_bedrock_stream(receiver));
-                    while let Some(result) = stream.next().await {
-                        yield result;
-                    }
-                }
-                Err(e) => {
-                    yield Err(e);
-                }
-            }
-        })
+        let Some(transport) = self.mantle_transport() else {
+            return stream_from(async move { provider.send_converse_stream(&context).await }, process_bedrock_stream);
+        };
+
+        if let Some(arn) = self.inference_profile_arn.as_deref() {
+            warn!(
+                model = %self.model,
+                inference_profile_arn = %arn,
+                "Ignoring inferenceProfileArn: this model is served by the Responses API, which has no inference profiles"
+            );
+        }
+
+        stream_from(
+            async move { provider.mantle.stream(&provider.model, &transport, &context).await },
+            process_response_stream,
+        )
     }
 
     fn display_name(&self) -> String {
@@ -199,35 +238,50 @@ impl From<SdkError<ConverseStreamError>> for LlmError {
     }
 }
 
-fn build_client(credentials: Option<AwsCredentials>, region: Option<&str>) -> Client {
-    let mut config = Config::builder().behavior_version(BehaviorVersion::latest());
+fn build_client(
+    credentials: Option<AwsCredentials>,
+    region: &str,
+    base_url: Option<&str>,
+    auth_mode: ProviderAuthMode,
+) -> Client {
+    let mut config =
+        Config::builder().behavior_version(BehaviorVersion::latest()).region(Region::new(region.to_string()));
 
-    if let Some(creds) = credentials {
-        config = config.credentials_provider(Credentials::new(
-            creds.access_key_id,
-            creds.secret_access_key,
-            creds.session_token,
-            None,
-            "aether-bedrock-provider",
-        ));
+    if auth_mode == ProviderAuthMode::None {
+        config = config.allow_no_auth();
+    } else if let Some(credentials) = credentials {
+        config = config.credentials_provider(shared_credentials(credentials));
     }
-
-    config = config.region(Region::new(region.unwrap_or(DEFAULT_REGION).to_string()));
-
-    Client::from_conf(config.build())
-}
-
-fn build_no_auth_client(base_url: Option<&str>, region: Option<&str>) -> Client {
-    let mut config = Config::builder()
-        .behavior_version(BehaviorVersion::latest())
-        .allow_no_auth()
-        .region(Region::new(region.unwrap_or(DEFAULT_REGION).to_string()));
-
     if let Some(url) = base_url {
         config = config.endpoint_url(url);
     }
 
     Client::from_conf(config.build())
+}
+
+fn shared_credentials(credentials: AwsCredentials) -> SharedCredentialsProvider {
+    SharedCredentialsProvider::new(Credentials::new(
+        credentials.access_key_id,
+        credentials.secret_access_key,
+        credentials.session_token,
+        None,
+        "aether-bedrock-provider",
+    ))
+}
+
+/// Resolve the credential scheme for the Responses transport.
+///
+/// A Bedrock API key takes precedence over the credential chain because it is
+/// the scheme the model catalog advertises for these endpoints; `SigV4` keeps
+/// SSO and IAM-role users working without extra configuration.
+fn mantle_auth(credentials: Option<SharedCredentialsProvider>, region: &str) -> MantleAuth {
+    if let Some(token) = MantleAuth::bearer_token_from_env() {
+        return MantleAuth::BearerToken(token);
+    }
+    match credentials {
+        Some(credentials) => MantleAuth::SigV4 { credentials, region: region.to_string() },
+        None => MantleAuth::None,
+    }
 }
 
 fn region_from_env() -> Option<String> {
@@ -240,14 +294,17 @@ fn region_from_env() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog::Provider;
+    use crate::providers::test_capture_server::CaptureServer;
     use crate::types::IsoString;
-    use crate::{ChatMessage, ContentBlock};
+    use crate::{AssistantReasoning, ChatMessage, EncryptedReasoningContent, LlmModel};
     use axum::Router;
     use axum::body::Body;
     use axum::extract::State;
     use axum::http::{HeaderMap, Method, Request, StatusCode};
     use axum::response::IntoResponse;
     use axum::routing::any;
+    use futures::StreamExt;
     use std::sync::Arc;
     use tokio::net::TcpListener;
     use tokio::sync::{Mutex, oneshot};
@@ -261,7 +318,30 @@ mod tests {
     }
 
     fn test_provider() -> BedrockProvider {
-        BedrockProvider::from_config(None, None)
+        BedrockProvider::from_config(None, None, ProviderConnectionConfig::default())
+    }
+
+    /// A catalog model routed to the Responses transport, resolved from the
+    /// catalog so a models.dev sync that retires one model does not quietly
+    /// leave these tests exercising the Converse path instead.
+    fn mantle_model() -> String {
+        LlmModel::all()
+            .iter()
+            .find(|model| model.provider_enum() == Provider::Bedrock && model.transport().is_some())
+            .expect("catalog must expose at least one Responses-transport Bedrock model")
+            .model_id()
+            .to_string()
+    }
+
+    /// A provider talking to `server` over the Responses transport, unauthenticated.
+    async fn mantle_provider(server: &CaptureServer) -> BedrockProvider {
+        BedrockProvider::new(ProviderConnectionConfig {
+            base_url: Some(server.base_url.clone()),
+            auth_mode: ProviderAuthMode::None,
+            ..Default::default()
+        })
+        .await
+        .with_model(&mantle_model())
     }
 
     #[test]
@@ -284,19 +364,14 @@ mod tests {
     #[tokio::test]
     async fn auth_none_sends_unsigned_request_to_custom_endpoint() {
         let endpoint = FakeBedrockEndpoint::start().await;
-        let provider = BedrockProvider::new_with_connection(ProviderConnectionConfig {
+        let provider = BedrockProvider::new(ProviderConnectionConfig {
             base_url: Some(endpoint.url.clone()),
             auth_mode: ProviderAuthMode::None,
             ..Default::default()
         })
         .await;
 
-        let context = Context::new(
-            vec![ChatMessage::User { content: vec![ContentBlock::text("hello")], timestamp: IsoString::now() }],
-            vec![],
-        );
-
-        let result = provider.send_converse_stream(&context).await;
+        let result = provider.send_converse_stream(&hello_context()).await;
         let request = endpoint.request.await.expect("fake Bedrock endpoint received no request");
 
         assert!(result.is_err());
@@ -310,35 +385,188 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_from_config_with_credentials() {
-        let credentials = AwsCredentials {
+    fn static_credentials() -> AwsCredentials {
+        AwsCredentials {
             access_key_id: "AKIAIOSFODNN7EXAMPLE".to_string(),
             secret_access_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string(),
             session_token: None,
-        };
+        }
+    }
 
-        let provider = BedrockProvider::from_config(Some(credentials), None);
+    fn hello_context() -> Context {
+        Context::new(vec![ChatMessage::user("Hello")], vec![])
+    }
+
+    #[tokio::test]
+    async fn responses_shape_models_are_sent_to_the_responses_endpoint() {
+        let mut server = CaptureServer::start().await;
+        let provider = mantle_provider(&server).await;
+        let mut context = hello_context();
+        context.set_reasoning_effort(Some(crate::ReasoningEffort::Xhigh));
+
+        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+        let captured = server.captured().await;
+
+        assert!(!responses.is_empty());
+        assert_eq!(captured.path, "/responses");
+        assert_eq!(captured.body["model"], mantle_model());
+        assert_eq!(captured.body["stream"], true);
+        assert_eq!(captured.body["store"], false);
+        assert_eq!(captured.body["reasoning"]["effort"], "xhigh");
+        assert_eq!(captured.body["input"][0]["role"], "user");
+        assert_eq!(captured.body["input"][0]["content"][0]["type"], "input_text");
+        assert_eq!(captured.body["input"][0]["content"][0]["text"], "Hello");
+        assert!(captured.headers.get("authorization").is_none(), "{:?}", captured.headers);
+    }
+
+    #[tokio::test]
+    async fn responses_transport_rejects_malformed_and_truncated_streams() {
+        for response in [
+            "data: {not-json}\n\n",
+            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\"}}\n\ndata: [DONE]\n\n",
+        ] {
+            let mut server = CaptureServer::start_with_response(response).await;
+            let provider = mantle_provider(&server).await;
+
+            let responses = provider.stream_response(&hello_context()).collect::<Vec<_>>().await;
+            let _ = server.captured().await;
+
+            assert!(responses.iter().any(|response| matches!(response, Err(LlmError::StreamInterrupted(_)))));
+            assert!(!responses.iter().any(|response| matches!(response, Ok(crate::LlmResponse::Done { .. }))));
+        }
+    }
+
+    #[tokio::test]
+    async fn responses_transport_drops_encrypted_reasoning_from_another_model() {
+        let mut server = CaptureServer::start().await;
+        let provider = mantle_provider(&server).await;
+        let context = Context::new(
+            vec![ChatMessage::Assistant {
+                content: "previous answer".to_string(),
+                reasoning: AssistantReasoning {
+                    summary_text: None,
+                    encrypted_content: Some(EncryptedReasoningContent {
+                        id: "reasoning-id".to_string(),
+                        model: "bedrock:openai.gpt-5.5".parse().unwrap(),
+                        content: "opaque-for-another-model".to_string(),
+                    }),
+                },
+                timestamp: IsoString::now(),
+                tool_calls: vec![],
+            }],
+            vec![],
+        );
+
+        let _ = provider.stream_response(&context).collect::<Vec<_>>().await;
+        let captured = server.captured().await;
+
+        assert!(
+            captured.body["input"].as_array().unwrap().iter().all(|item| item["type"] != "reasoning"),
+            "{}",
+            captured.body
+        );
+    }
+
+    #[tokio::test]
+    async fn converse_shape_models_do_not_use_the_responses_endpoint() {
+        let endpoint = FakeBedrockEndpoint::start().await;
+        let provider = BedrockProvider::new(ProviderConnectionConfig {
+            base_url: Some(endpoint.url.clone()),
+            auth_mode: ProviderAuthMode::None,
+            ..Default::default()
+        })
+        .await
+        .with_model(DEFAULT_MODEL);
+
+        let _ = provider.stream_response(&hello_context()).collect::<Vec<_>>().await;
+        let request = endpoint.request.await.expect("fake Bedrock endpoint received no request");
+
+        assert!(request.path.starts_with("/model/"), "{}", request.path);
+    }
+
+    #[tokio::test]
+    async fn bearer_token_authenticates_responses_requests() {
+        let mut server = CaptureServer::start().await;
+        let provider = BedrockProvider::from_config(
+            None,
+            Some("us-west-2"),
+            ProviderConnectionConfig { base_url: Some(server.base_url.clone()), ..Default::default() },
+        )
+        .with_bearer_token("test-token")
+        .with_model(&mantle_model());
+
+        let _ = provider.stream_response(&hello_context()).collect::<Vec<_>>().await;
+        let captured = server.captured().await;
+
+        assert_eq!(captured.headers.get("authorization").unwrap(), "Bearer test-token");
+    }
+
+    #[tokio::test]
+    async fn credential_chain_sigv4_signs_responses_requests() {
+        let mut server = CaptureServer::start().await;
+        let provider = BedrockProvider::from_config(
+            Some(static_credentials()),
+            Some("us-west-2"),
+            ProviderConnectionConfig { base_url: Some(server.base_url.clone()), ..Default::default() },
+        )
+        .with_model(&mantle_model());
+
+        let _ = provider.stream_response(&hello_context()).collect::<Vec<_>>().await;
+        let captured = server.captured().await;
+
+        let authorization = captured.headers.get("authorization").expect("request was not signed").to_str().unwrap();
+        assert!(
+            authorization.starts_with("AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/"),
+            "unexpected authorization header: {authorization}"
+        );
+        assert!(authorization.contains("/us-west-2/bedrock/aws4_request"), "{authorization}");
+        assert!(captured.headers.contains_key("x-amz-date"), "{:?}", captured.headers);
+    }
+
+    #[test]
+    fn only_responses_shape_models_route_to_the_mantle_transport() {
+        let mantle = test_provider().with_model(&mantle_model());
+        let converse = test_provider().with_model(DEFAULT_MODEL);
+        let profile = test_provider().with_model("us.anthropic.claude-future-model-v99:0");
+
+        assert!(matches!(mantle.mantle_transport(), Some(ModelTransport::OpenAiResponses { .. })));
+        assert_eq!(converse.mantle_transport(), None);
+        assert_eq!(profile.mantle_transport(), None);
+    }
+
+    #[test]
+    fn explicit_connection_preserves_inference_profile() {
+        let provider = BedrockProvider::from_config(
+            None,
+            Some("us-west-2"),
+            ProviderConnectionConfig { inference_profile_arn: Some("arn:test".to_string()), ..Default::default() },
+        );
+
+        assert_eq!(provider.inference_profile_arn.as_deref(), Some("arn:test"));
+    }
+
+    #[test]
+    fn test_from_config_with_credentials() {
+        let provider =
+            BedrockProvider::from_config(Some(static_credentials()), None, ProviderConnectionConfig::default());
         assert_eq!(provider.model, DEFAULT_MODEL);
     }
 
     #[test]
     fn test_from_config_with_credentials_and_region() {
-        let credentials = AwsCredentials {
-            access_key_id: "AKIAIOSFODNN7EXAMPLE".to_string(),
-            secret_access_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string(),
-            session_token: Some("FwoGZXIvYXdzEBYaD...".to_string()),
-        };
+        let credentials =
+            AwsCredentials { session_token: Some("FwoGZXIvYXdzEBYaD...".to_string()), ..static_credentials() };
 
-        let provider = BedrockProvider::from_config(Some(credentials), Some("us-west-2"))
-            .with_model("anthropic.claude-opus-4-20250514-v1:0");
+        let provider =
+            BedrockProvider::from_config(Some(credentials), Some("us-west-2"), ProviderConnectionConfig::default())
+                .with_model("anthropic.claude-opus-4-20250514-v1:0");
 
         assert_eq!(provider.model, "anthropic.claude-opus-4-20250514-v1:0");
     }
 
     #[test]
     fn test_from_config_with_region_only() {
-        let provider = BedrockProvider::from_config(None, Some("eu-west-1"));
+        let provider = BedrockProvider::from_config(None, Some("eu-west-1"), ProviderConnectionConfig::default());
         assert_eq!(provider.model, DEFAULT_MODEL);
     }
 
@@ -367,20 +595,16 @@ mod tests {
     #[tokio::test]
     async fn separate_inference_profile_arn_is_used_as_request_model_id() {
         let endpoint = FakeBedrockEndpoint::start().await;
-        let provider = BedrockProvider::new_with_connection(ProviderConnectionConfig {
+        let provider = BedrockProvider::new(ProviderConnectionConfig {
             base_url: Some(endpoint.url.clone()),
             auth_mode: ProviderAuthMode::None,
             request_model: None,
             inference_profile_arn: Some(application_inference_profile_arn().to_string()),
         })
         .await
-        .with_model("anthropic.claude-sonnet-4-5-20250929-v1:0");
-        let context = Context::new(
-            vec![ChatMessage::User { content: vec![ContentBlock::text("hello")], timestamp: IsoString::now() }],
-            vec![],
-        );
+        .with_model(DEFAULT_MODEL);
 
-        let result = provider.send_converse_stream(&context).await;
+        let result = provider.send_converse_stream(&hello_context()).await;
         let request = endpoint.request.await.expect("fake Bedrock endpoint received no request");
 
         assert!(result.is_err());

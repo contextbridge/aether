@@ -1,5 +1,5 @@
 use super::types::OpenRouterChatRequest;
-use crate::provider::get_context_window;
+use crate::provider::{error_stream, get_context_window};
 use crate::providers::openai_compatible::{
     AetherOpenAiConfig, build_chat_request, streaming::create_custom_stream_generic,
 };
@@ -82,7 +82,7 @@ impl StreamingModelProvider for OpenRouterProvider {
         // See: https://openrouter.ai/docs/use-cases/usage-accounting
         let mut request: OpenRouterChatRequest = match build_chat_request(&self.model, context, None) {
             Ok(req) => req.into(),
-            Err(e) => return Box::pin(async_stream::stream! { yield Err(e); }),
+            Err(e) => return error_stream(e),
         };
 
         if let Some(effort) = context.reasoning_effort() {

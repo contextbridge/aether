@@ -143,7 +143,7 @@ mod tests {
 
         let context = Context::new(
             vec![
-                ChatMessage::System { content: "System".to_string(), timestamp: IsoString::now() },
+                ChatMessage::system("System"),
                 ChatMessage::User {
                     content: vec![llm::ContentBlock::text("Test message")],
                     timestamp: IsoString::now(),
@@ -173,7 +173,7 @@ mod tests {
 
         let context = Context::new(
             vec![
-                ChatMessage::System { content: "System".to_string(), timestamp: IsoString::now() },
+                ChatMessage::system("System"),
                 ChatMessage::User { content: vec![llm::ContentBlock::text("Test")], timestamp: IsoString::now() },
             ],
             vec![],
@@ -190,10 +190,7 @@ mod tests {
         let fake_llm = Arc::new(FakeLlmProvider::with_single_response(vec![]));
         let compactor = Compactor::new(fake_llm);
 
-        let context = Context::new(
-            vec![ChatMessage::System { content: "System".to_string(), timestamp: IsoString::now() }],
-            vec![],
-        );
+        let context = Context::new(vec![ChatMessage::system("System")], vec![]);
 
         let result = compactor.compact(context).await;
         assert!(matches!(result, Err(CompactionError::NothingToCompact)));

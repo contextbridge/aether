@@ -3,6 +3,7 @@ use std::str::FromStr;
 
 use crate::ReasoningEffort;
 use crate::catalog::BedrockFoundationModel;
+use crate::catalog::transport::ModelTransport;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum BedrockModel {
@@ -61,6 +62,13 @@ impl BedrockModel {
         match self {
             Self::Foundation(m) => m.supports_audio(),
             Self::Profile(_) => false,
+        }
+    }
+
+    pub fn transport(&self) -> Option<ModelTransport> {
+        match self {
+            Self::Foundation(m) => m.transport(),
+            Self::Profile(_) => None,
         }
     }
 }

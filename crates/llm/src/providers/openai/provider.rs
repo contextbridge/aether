@@ -8,6 +8,7 @@ use super::{
     mappers::{map_messages, map_tools},
     streaming::process_completion_stream,
 };
+use crate::provider::error_stream;
 use crate::{Context, LlmError, LlmResponseStream, StreamingModelProvider};
 
 /// A Provider that's compatible with `OpenAI`'s chat completion API
@@ -27,7 +28,7 @@ impl<T: OpenAiChatProvider + Send + Sync> StreamingModelProvider for T {
         let prompt_cache_key = context.prompt_cache_key().map(String::from);
         let messages = match map_messages(context.messages()) {
             Ok(messages) => messages,
-            Err(e) => return Box::pin(async_stream::stream! { yield Err(e); }),
+            Err(e) => return error_stream(e),
         };
         let message_count = messages.len();
         let tools = if context.tools().is_empty() {
@@ -35,7 +36,7 @@ impl<T: OpenAiChatProvider + Send + Sync> StreamingModelProvider for T {
         } else {
             match map_tools(context.tools(), None) {
                 Ok(t) => Some(t),
-                Err(e) => return Box::pin(async_stream::stream! { yield Err(e); }),
+                Err(e) => return error_stream(e),
             }
         };
 

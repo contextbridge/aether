@@ -91,10 +91,7 @@ mod tests {
     use llm::ToolCallResult;
 
     fn system_context() -> Context {
-        Context::new(
-            vec![ChatMessage::System { content: "You are helpful.".to_string(), timestamp: IsoString::now() }],
-            vec![],
-        )
+        Context::new(vec![ChatMessage::system("You are helpful.")], vec![])
     }
 
     fn user_msg(content: &str) -> UserEvent {

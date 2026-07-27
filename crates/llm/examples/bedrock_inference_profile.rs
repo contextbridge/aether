@@ -1,8 +1,7 @@
 //! Stream a one-shot prompt through a Bedrock inference profile.
 use futures::StreamExt;
 use llm::providers::bedrock::BedrockProvider;
-use llm::types::IsoString;
-use llm::{ChatMessage, ContentBlock, Context, LlmResponse, StreamingModelProvider};
+use llm::{ChatMessage, Context, LlmResponse, ProviderConnectionConfig, StreamingModelProvider};
 use std::env;
 use std::io::Write;
 use std::process::ExitCode;
@@ -25,7 +24,10 @@ async fn main() -> ExitCode {
     };
     let prompt = args.next().unwrap_or_else(|| "Say hello in one sentence.".to_string());
 
-    let provider = BedrockProvider::new().await.with_model(&model).with_inference_profile_arn(&arn);
+    let provider = BedrockProvider::new(ProviderConnectionConfig::default())
+        .await
+        .with_model(&model)
+        .with_inference_profile_arn(&arn);
     println!("→ {}", provider.display_name());
 
     match provider.context_window() {
@@ -34,10 +36,7 @@ async fn main() -> ExitCode {
     }
     println!("  prompt: {prompt}\n");
 
-    let context = Context::new(
-        vec![ChatMessage::User { content: vec![ContentBlock::text(prompt)], timestamp: IsoString::now() }],
-        Vec::new(),
-    );
+    let context = Context::new(vec![ChatMessage::user(prompt)], Vec::new());
 
     let mut stream = provider.stream_response(&context);
     let mut saw_error = false;

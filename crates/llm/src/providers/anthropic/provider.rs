@@ -268,10 +268,10 @@ fn format_headers(headers: &header::HeaderMap) -> String {
 mod tests {
     use super::*;
     use crate::ChatMessage;
-    use crate::ContentBlock;
+
     use crate::ToolDefinition;
     use crate::providers::anthropic::types::{SystemContent, SystemContentBlock};
-    use crate::types::IsoString;
+
     use reqwest::header::AUTHORIZATION;
 
     fn create_test_provider() -> AnthropicProvider {
@@ -307,10 +307,7 @@ mod tests {
     fn test_build_request_simple() {
         let provider = create_test_provider();
 
-        let context = Context::new(
-            vec![ChatMessage::User { content: vec![ContentBlock::text("Hello")], timestamp: IsoString::now() }],
-            vec![],
-        );
+        let context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
 
         let request = provider.build_request(&context).unwrap();
         assert_eq!(request.model, "claude-sonnet-4-5-20250929");
@@ -325,10 +322,7 @@ mod tests {
         let provider = create_test_provider();
 
         let context = Context::new(
-            vec![
-                ChatMessage::System { content: "You are helpful".to_string(), timestamp: IsoString::now() },
-                ChatMessage::User { content: vec![ContentBlock::text("Hello")], timestamp: IsoString::now() },
-            ],
+            vec![ChatMessage::system("You are helpful"), ChatMessage::user("Hello")],
             vec![ToolDefinition::new(
                 "search",
                 "Search for information",
@@ -359,10 +353,7 @@ mod tests {
         let provider = AnthropicProvider::new(Some("test-api-key".to_string())).unwrap(); // Caching is enabled by default
 
         let context = Context::new(
-            vec![
-                ChatMessage::System { content: "Hello".to_string(), timestamp: IsoString::now() },
-                ChatMessage::User { content: vec![ContentBlock::text("Hello")], timestamp: IsoString::now() },
-            ],
+            vec![ChatMessage::system("Hello"), ChatMessage::user("Hello")],
             vec![ToolDefinition::new(
                 "search",
                 "Search for information",
@@ -397,10 +388,7 @@ mod tests {
     fn test_build_request_with_reasoning_effort() {
         let provider = create_test_provider();
 
-        let mut context = Context::new(
-            vec![ChatMessage::User { content: vec![ContentBlock::text("Think hard")], timestamp: IsoString::now() }],
-            vec![],
-        );
+        let mut context = Context::new(vec![ChatMessage::user("Think hard")], vec![]);
         context.set_reasoning_effort(Some(crate::ReasoningEffort::High));
 
         let request = provider.build_request(&context).unwrap();
@@ -416,10 +404,7 @@ mod tests {
     #[test]
     fn test_build_request_without_reasoning_effort_has_no_thinking() {
         let provider = create_test_provider();
-        let context = Context::new(
-            vec![ChatMessage::User { content: vec![ContentBlock::text("Hello")], timestamp: IsoString::now() }],
-            vec![],
-        );
+        let context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
 
         let request = provider.build_request(&context).unwrap();
         assert!(request.thinking.is_none());
@@ -428,10 +413,7 @@ mod tests {
     #[test]
     fn test_build_request_applies_model_settings() {
         let provider = create_test_provider();
-        let mut context = Context::new(
-            vec![ChatMessage::User { content: vec![ContentBlock::text("Hello")], timestamp: IsoString::now() }],
-            vec![],
-        );
+        let mut context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
         context.set_model_settings(crate::ModelSettings {
             temperature: Some(0.0),
             top_p: Some(0.5),
@@ -447,10 +429,7 @@ mod tests {
     #[test]
     fn test_build_request_thinking_clears_sampling() {
         let provider = create_test_provider();
-        let mut context = Context::new(
-            vec![ChatMessage::User { content: vec![ContentBlock::text("Think")], timestamp: IsoString::now() }],
-            vec![],
-        );
+        let mut context = Context::new(vec![ChatMessage::user("Think")], vec![]);
         context.set_model_settings(crate::ModelSettings { temperature: Some(0.2), top_p: Some(0.9), max_tokens: None });
         context.set_reasoning_effort(Some(crate::ReasoningEffort::High));
 
@@ -463,10 +442,7 @@ mod tests {
     fn test_build_request_thinking_bumps_max_tokens_if_needed() {
         let provider = AnthropicProvider::new(Some("test-api-key".to_string())).unwrap();
 
-        let mut context = Context::new(
-            vec![ChatMessage::User { content: vec![ContentBlock::text("Hi")], timestamp: IsoString::now() }],
-            vec![],
-        );
+        let mut context = Context::new(vec![ChatMessage::user("Hi")], vec![]);
         context.set_model_settings(crate::ModelSettings { max_tokens: Some(500), ..Default::default() });
         context.set_reasoning_effort(Some(crate::ReasoningEffort::Low));
 
