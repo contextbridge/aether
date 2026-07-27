@@ -1,6 +1,4 @@
-mod common;
-
-use common::{TestClient, TestResult};
+use crate::common::{TestClient, TestResult};
 use mcp_servers::skills::SkillsMcp;
 use mcp_servers::skills::tools::{ListSkillsInput, LoadSkillsInput, SkillRequest};
 use serde::{Deserialize, Serialize};

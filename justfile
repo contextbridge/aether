@@ -15,11 +15,11 @@ check:
 
 # Run tests with nextest
 test *PKGS:
-    cargo nextest run --no-tests pass --all-features {{ if PKGS == "" { "--workspace" } else { PKGS } }}
+    cargo nextest run --no-tests pass --all-features {{ if PKGS == "" { "--workspace --exclude internal-evals" } else { PKGS } }}
 
 # Run tests with nextest's CI profile and JUnit output
 test-ci *PKGS:
-    cargo nextest run --no-tests pass --profile ci --all-features {{ if PKGS == "" { "--workspace" } else { PKGS } }}
+    cargo nextest run --no-tests pass --profile ci --all-features {{ if PKGS == "" { "--workspace --exclude internal-evals" } else { PKGS } }}
 
 # Run real LLM evals from the dedicated eval crate against a fresh sandbox image
 evals *ARGS: build-sandbox

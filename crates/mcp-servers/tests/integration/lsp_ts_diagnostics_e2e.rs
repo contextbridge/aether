@@ -9,10 +9,8 @@
 //!
 //! Run with: `cargo test -p mcp-servers -- --ignored lsp_ts_diagnostics`
 
-mod common;
-
+use crate::common::{call_tool, connect_lsp, has_errors, has_no_errors, poll_diagnostics};
 use aether_lspd::testing::{NodeProject, TestProject};
-use common::{call_tool, connect_lsp, has_errors, has_no_errors, poll_diagnostics};
 
 /// Test: MCP `edit_file` tool → `typescript-language-server` picks up change → diagnostics queryable
 #[tokio::test]

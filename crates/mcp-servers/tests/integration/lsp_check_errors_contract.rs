@@ -1,7 +1,5 @@
-mod common;
-
+use crate::common::{CodingWorkspace, call_tool, call_tool_error, connect_lsp};
 use aether_lspd::testing::{CargoProject, TestProject};
-use common::{CodingWorkspace, call_tool, call_tool_error, connect_lsp};
 
 #[tokio::test]
 async fn lsp_check_errors_accepts_flat_file_path_and_infers_file_scope() {

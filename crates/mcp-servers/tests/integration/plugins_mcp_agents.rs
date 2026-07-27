@@ -1,9 +1,7 @@
-mod common;
-
+use crate::common::{TestClient, TestResult};
 use aether_auth::FakeOAuthCredentialStore;
 use aether_core::core::AgentDeps;
 use aether_project::{AetherSettings, AetherSettingsSource, AgentCatalog, SettingsFileSource};
-use common::{TestClient, TestResult};
 use mcp_servers::subagents::SubAgentsMcp;
 use mcp_servers::subagents::tools::{SpawnSubAgentsInput, SubAgentTask};
 use std::fs;

@@ -1,6 +1,4 @@
-mod common;
-
-use common::{CodingWorkspace, call_tool_error};
+use crate::common::{CodingWorkspace, call_tool_error};
 
 #[tokio::test]
 async fn lsp_workspace_search_schema_requires_one_language() {

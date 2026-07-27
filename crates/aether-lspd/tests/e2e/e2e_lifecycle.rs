@@ -1,7 +1,5 @@
-mod common;
-
+use crate::common::{CargoProject, DaemonHarness, TestProject, hover_text, use_fake_rust_server};
 use aether_lspd::{LanguageId, LspClient, lockfile_path, socket_path};
-use common::{CargoProject, DaemonHarness, TestProject, hover_text, use_fake_rust_server};
 use lsp_types::PublishDiagnosticsParams;
 use std::time::{Duration, Instant};
 
