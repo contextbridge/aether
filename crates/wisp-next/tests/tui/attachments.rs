@@ -281,7 +281,7 @@ fn attachment_chips_render_in_layout() {
 
     app.on_paste(img.to_str().unwrap());
 
-    let layout = app.composer().layout(80, &Theme::default());
+    let layout = app.composer_mut().layout(80, &Theme::default());
     let text: String = layout
         .lines
         .iter()

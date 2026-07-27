@@ -28,6 +28,9 @@ pub struct Composer {
     mentions: Vec<SelectedFileMention>,
     pending_media: Vec<PromptAttachment>,
     history: PromptHistory,
+    /// Columns the last layout wrapped the input at. Unset until the composer
+    /// has been drawn once, which reads as "wide enough that nothing wraps".
+    content_width: Option<usize>,
 }
 
 /// The inline surface open around the composer's text.
@@ -233,12 +236,17 @@ impl Composer {
         self.buffer.move_line_end();
     }
 
+    /// Moves the cursor to the visual row above, reporting whether there was
+    /// one. A long line the composer soft-wrapped has rows above without any
+    /// newline before the cursor, so this follows what is on screen rather than
+    /// the newlines in the text.
     pub fn move_up(&mut self) -> bool {
-        self.buffer.move_up()
+        self.move_visual_row(|row| row.checked_sub(1))
     }
 
+    /// Moves the cursor to the visual row below, reporting whether there was one.
     pub fn move_down(&mut self) -> bool {
-        self.buffer.move_down()
+        self.move_visual_row(|row| Some(row + 1))
     }
 
     pub fn recall_previous(&mut self) -> bool {
@@ -514,8 +522,22 @@ impl Composer {
         self.completion_ref().is_some_and(|overlay| overlay.query().is_empty())
     }
 
-    pub fn line_count(&self) -> usize {
-        self.buffer.text().split('\n').count()
+    fn set_content_width(&mut self, content_width: usize) {
+        self.content_width = Some(content_width);
+    }
+
+    /// Moves the cursor to the row `target` picks, keeping its column where that
+    /// row is long enough to hold it.
+    fn move_visual_row(&mut self, target: impl FnOnce(usize) -> Option<usize>) -> bool {
+        let content_width = self.content_width.unwrap_or(usize::MAX);
+        let layout = view::input_layout(self.buffer.text(), self.buffer.cursor(), content_width);
+        let Some(cursor) =
+            target(layout.cursor_row).and_then(|row| layout.byte_at(self.buffer.text(), row, layout.cursor_column))
+        else {
+            return false;
+        };
+        self.buffer.set_cursor(cursor);
+        true
     }
 
     /// The cursor's byte offset into [`Composer::text`].

@@ -1,6 +1,6 @@
 //! Explicit facade for integration tests.
 
-pub use crate::inline_viewport_height;
+pub use crate::terminal::inline_viewport_height;
 
 pub mod app {
     pub use crate::app::*;

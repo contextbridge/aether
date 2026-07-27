@@ -1,7 +1,8 @@
-use super::App;
+use super::{App, RuntimeEffect};
 use crate::session_config_view::{SessionConfigView, as_select};
 use crate::settings::UiSettings;
 use crate::settings_overlay::{SettingsMenuEntry, SettingsMenuValue};
+use crate::theme::Theme;
 use acp_utils::config_option_id::ConfigOptionId;
 use agent_client_protocol::schema::{self as acp};
 use utils::ReasoningEffort;
@@ -39,15 +40,41 @@ pub(super) fn extract_config_selections(config_options: &[acp::SessionConfigOpti
 }
 
 impl App {
-    /// Themes are persisted and parsed by the task runner.
+    /// Themes are persisted and parsed by the task runner. Only one change runs
+    /// at a time, because two racing saves can finish in either order and leave
+    /// both the presenter and the settings file on a choice the user moved past.
     pub(super) fn apply_theme_change(&mut self, value: &str) {
-        let mut settings = self.ui.settings.clone();
-        settings.theme.file = (!value.is_empty()).then(|| value.to_string());
-        self.spawn(crate::tasks::Task::ApplyTheme { settings, value: value.to_string() });
         self.apply_settings_change(&crate::settings_overlay::SettingsChange {
             config_id: acp_utils::config_option_id::THEME_CONFIG_ID.to_string(),
             new_value: value.to_string(),
         });
+        if self.theme_change.in_flight {
+            self.theme_change.queued = Some(value.to_string());
+        } else {
+            self.spawn_theme_change(value.to_string());
+        }
+    }
+
+    /// Adopts a finished theme change, unless the user has since chosen another
+    /// one — that choice starts now, so it is the one that lands last.
+    pub(super) fn finish_theme_change(&mut self, settings: UiSettings, theme: Theme, error: Option<String>) {
+        self.theme_change.in_flight = false;
+        if let Some(error) = error {
+            self.notify(&format!("Failed to save theme settings: {error}"));
+        }
+        if let Some(value) = self.theme_change.queued.take() {
+            self.spawn_theme_change(value);
+            return;
+        }
+        self.ui.settings = settings;
+        self.effects.push_back(RuntimeEffect::SetTheme(theme));
+    }
+
+    fn spawn_theme_change(&mut self, value: String) {
+        let mut settings = self.ui.settings.clone();
+        settings.theme.file = (!value.is_empty()).then(|| value.clone());
+        self.theme_change.in_flight = true;
+        self.spawn(crate::tasks::Task::ApplyTheme { settings, value });
     }
 }
 

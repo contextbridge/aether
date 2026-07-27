@@ -333,6 +333,31 @@ fn session_loading_buffer_queues_updates_then_replays() {
 }
 
 #[test]
+fn updates_from_the_abandoned_session_do_not_reach_the_loaded_one() {
+    let (mut app, mut command_rx) = make_app();
+
+    type_text(&mut app, "/resume");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(sessions_listed(vec![session_info("loaded", "/tmp/loaded", "Loaded", "2025-01-01T00:00:00Z")]));
+    app.on_key(key(KeyCode::Enter));
+    let _ = command_rx.try_recv().unwrap();
+    app.on_acp_event(session_loaded("loaded", Vec::new()));
+
+    app.on_acp_event(session_update_for("test-session", user_message_chunk("late message from the old session")));
+
+    let mut terminal = make_terminal();
+    let mut renderer = Presenter::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(
+        !viewport.contains("late message"),
+        "an update for the session that was left behind must not land in the new one:\n{viewport}"
+    );
+}
+
+#[test]
 fn loaded_session_uses_server_config_values() {
     let options = vec![select_option("model", "opus"), mode_option("plan", &["code", "plan", "ask"])];
     let (mut app, mut command_rx) = AppBuilder::new().config_options(options).build();

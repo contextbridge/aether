@@ -37,6 +37,7 @@ pub(crate) mod status_line;
 pub(crate) mod surface;
 pub(crate) mod syntax;
 pub(crate) mod tasks;
+pub(crate) mod terminal;
 #[doc(hidden)]
 pub mod test_support;
 pub(crate) mod theme;
@@ -49,10 +50,7 @@ pub(crate) mod wrap;
 
 use acp_utils::client::AcpEvent;
 use app::{App, AppConfig, RuntimeEffect};
-use crossterm::event::{
-    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, EventStream,
-    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
-};
+use crossterm::event::{Event, EventStream};
 use crossterm::{execute, terminal::size};
 use error::AppError;
 use futures::StreamExt;
@@ -62,8 +60,9 @@ use session::Session;
 use settings::UiSettings;
 use std::fs::create_dir_all;
 use std::future::pending;
-use std::io::{self, Write};
+use std::io;
 use std::time::{Duration, Instant};
+use terminal::{TerminalModes, inline_viewport_height, resync_inline_viewport};
 use tokio::select;
 use tokio::sync::mpsc;
 use tokio::time::{MissedTickBehavior, interval};
@@ -120,11 +119,6 @@ pub fn setup_logging(log_dir: Option<&str>) {
 
 pub const DEFAULT_LOG_DIR: &str = "/tmp/wisp-next-logs";
 
-pub fn inline_viewport_height(terminal_height: u16) -> u16 {
-    if terminal_height == 0 { 0 } else { terminal_height.saturating_sub(INLINE_SCROLLBACK_RESERVE).max(1) }
-}
-
-const INLINE_SCROLLBACK_RESERVE: u16 = 2;
 const MAX_ACP_EVENTS_PER_FRAME: usize = 1_000;
 
 async fn run_app(
@@ -133,24 +127,13 @@ async fn run_app(
     mut event_rx: mpsc::UnboundedReceiver<AcpEvent>,
 ) -> Result<(), AppError> {
     let (_, terminal_height) = size()?;
-    let viewport_height = inline_viewport_height(terminal_height);
-    let mut terminal = ratatui::init_with_options(TerminalOptions { viewport: Viewport::Inline(viewport_height) });
-    let mut stdout = io::stdout();
-    let flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-        | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
-        | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES;
-    let keyboard_enhancement_enabled = execute!(stdout, PushKeyboardEnhancementFlags(flags)).is_ok();
+    let viewport = Viewport::Inline(inline_viewport_height(terminal_height));
+    let mut terminal = ratatui::try_init_with_options(TerminalOptions { viewport })?;
+    let mut modes = TerminalModes::enable()?;
 
-    let result = match execute!(stdout, EnableBracketedPaste) {
-        Ok(()) => event_loop(&mut terminal, &mut app, &mut presenter, &mut event_rx, &mut stdout).await,
-        Err(e) => Err(AppError::Io(e)),
-    };
+    let result = event_loop(&mut terminal, &mut app, &mut presenter, &mut event_rx, &mut modes).await;
 
-    let _ = execute!(stdout, DisableMouseCapture);
-    let _ = execute!(stdout, DisableBracketedPaste);
-    if keyboard_enhancement_enabled {
-        let _ = execute!(stdout, PopKeyboardEnhancementFlags);
-    }
+    drop(modes);
     ratatui::restore();
     result
 }
@@ -160,7 +143,7 @@ async fn event_loop(
     app: &mut App,
     presenter: &mut Presenter,
     event_rx: &mut mpsc::UnboundedReceiver<AcpEvent>,
-    stdout: &mut impl Write,
+    modes: &mut TerminalModes,
 ) -> Result<(), AppError> {
     let mut terminal_events = EventStream::new();
     let (task_result_tx, mut task_result_rx) = mpsc::unbounded_channel();
@@ -169,7 +152,7 @@ async fn event_loop(
         tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
         tick
     };
-    let mut capture_enabled = false;
+    let mut stdout = io::stdout();
 
     render::sync_terminal(terminal, app, presenter)?;
     loop {
@@ -183,7 +166,12 @@ async fn event_loop(
         select! {
             terminal_event = terminal_events.next() => {
                 match terminal_event {
-                    Some(Ok(event)) => app.on_terminal_event(event),
+                    Some(Ok(event)) => {
+                        if matches!(event, Event::Resize(_, _)) {
+                            resync_inline_viewport(terminal)?;
+                        }
+                        app.on_terminal_event(event);
+                    }
                     Some(Err(e)) => return Err(AppError::Io(e)),
                     None => return Ok(()),
                 }
@@ -223,24 +211,11 @@ async fn event_loop(
                 }
             }
         }
-        sync_mouse_capture(app, stdout, &mut capture_enabled);
+        modes.set_mouse_capture(app.needs_mouse_capture());
 
         if app.exit_requested() {
             return Ok(());
         }
         render::sync_terminal(terminal, app, presenter)?;
-    }
-}
-
-/// Turns mouse reporting on only while something on screen wants it, so an
-/// ordinary composer leaves the terminal's own selection and scrollback alone.
-fn sync_mouse_capture(app: &App, stdout: &mut impl Write, capture_enabled: &mut bool) {
-    let needs_capture = app.needs_mouse_capture();
-    if needs_capture && !*capture_enabled {
-        let _ = execute!(stdout, EnableMouseCapture);
-        *capture_enabled = true;
-    } else if !needs_capture && *capture_enabled {
-        let _ = execute!(stdout, DisableMouseCapture);
-        *capture_enabled = false;
     }
 }

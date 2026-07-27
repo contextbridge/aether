@@ -22,7 +22,12 @@ impl App {
     fn on_acp_event_inner(&mut self, event: AcpEvent) {
         match event {
             AcpEvent::SessionUpdate { session_id, update } => {
-                if let Some(passthrough) = self.session_loading_buffer.push(&session_id, *update) {
+                // An update that is neither buffered for a pending load nor
+                // addressed to the session on screen belongs to one the user
+                // has already moved on from.
+                if let Some(passthrough) = self.session_loading_buffer.push(&session_id, *update)
+                    && session_id == self.agent.session_id
+                {
                     self.on_session_update(&passthrough);
                 }
             }
@@ -35,6 +40,7 @@ impl App {
             }
             AcpEvent::PromptError(error) => {
                 tracing::error!("Prompt error: {error}");
+                self.abandon_session_load();
                 self.finish_prompt(&ToolStatus::Error(format!("failed: {error}")));
                 self.notify(&format!("Prompt failed: {error}"));
             }
@@ -118,6 +124,16 @@ impl App {
                     self.conversation.transcript.ensure_tool_segment(&progress.parent_tool_id);
                 }
             }
+        }
+    }
+
+    /// Stops waiting on a session load. The agent reports a rejected load as a
+    /// plain prompt error, so this is the only signal that the buffered updates
+    /// and the loading indicator will never be released by a `SessionLoaded`.
+    fn abandon_session_load(&mut self) {
+        self.session_loading_buffer.clear();
+        if self.workspace_move_state == WorkspaceMoveState::LoadingSession {
+            self.workspace_move_state = WorkspaceMoveState::Idle;
         }
     }
 

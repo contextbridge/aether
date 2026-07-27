@@ -1090,6 +1090,23 @@ fn settings_theme_empty_file_list_shows_only_default() {
 // ── Regression tests for review findings ──
 
 #[test]
+fn rapid_theme_changes_settle_on_the_newest_choice() {
+    let (mut app, _command_rx) = AppBuilder::new().build();
+    open_settings(&mut app);
+    app.on_task_result(TaskResult::ThemesListed(vec!["first.tmTheme".to_string(), "second.tmTheme".to_string()]));
+
+    select_theme(&mut app, "first");
+    select_theme(&mut app, "second");
+    settle_theme_tasks_newest_first(&mut app);
+
+    assert_eq!(
+        app.ui_settings().theme.file.as_deref(),
+        Some("second.tmTheme"),
+        "a theme change that finishes late must not undo the one the user made after it"
+    );
+}
+
+#[test]
 fn theme_entry_preserved_after_config_option_update() {
     let (mut app, _command_rx) = AppBuilder::new().config_options(vec![select_option("model", "gpt-4o")]).build();
 
@@ -1256,6 +1273,33 @@ fn settings_menu_text(options: Vec<acp::SessionConfigOption>) -> String {
 fn open_settings(app: &mut App) {
     type_text(app, "/settings");
     app.on_key(key(KeyCode::Tab));
+}
+
+/// Opens the Theme picker (the first menu entry), filters it down to `name`, and
+/// confirms.
+fn select_theme(app: &mut App, name: &str) {
+    app.on_key(key(KeyCode::Enter));
+    type_text(app, name);
+    app.on_key(key(KeyCode::Enter));
+}
+
+/// Runs the queued theme work, handing each batch of results back newest first —
+/// the order two saves racing on the runtime can finish in.
+fn settle_theme_tasks_newest_first(app: &mut App) {
+    loop {
+        let mut batch = Vec::new();
+        while let Some(effect) = app.take_effect() {
+            if let RuntimeEffect::Spawn(Task::ApplyTheme { settings, .. }) = effect {
+                batch.push(settings);
+            }
+        }
+        if batch.is_empty() {
+            return;
+        }
+        for settings in batch.into_iter().rev() {
+            app.on_task_result(TaskResult::ThemeApplied { settings, theme: Theme::default(), error: None });
+        }
+    }
 }
 
 fn overlay_text(app: &mut App) -> String {

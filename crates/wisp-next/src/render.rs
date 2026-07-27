@@ -1,8 +1,8 @@
-use crate::INLINE_SCROLLBACK_RESERVE;
 use crate::app::App;
 use crate::plan_view::PlanView;
 use crate::presentation::{Presenter, Segment};
 use crate::status_line::StatusLine;
+use crate::terminal::INLINE_SCROLLBACK_RESERVE;
 use crate::theme::Theme;
 use crate::wrap::rows;
 use agent_client_protocol::schema::PlanEntry;
@@ -87,7 +87,7 @@ impl FrameLayout {
     fn new(area: Rect, app: &mut App, presenter: &mut Presenter) -> Self {
         let status_line = StatusLine::new(&app.status_line_model(), presenter.theme());
         let status_line_rows = status_line.height(area.width);
-        let composer_layout = app.composer().layout(area.width, presenter.theme());
+        let composer_layout = app.composer_mut().layout(area.width, presenter.theme());
         let completion_rows = rows(app.composer().completion_ref().map_or(0, |o| o.row_count(COMPLETION_MAX_ROWS)));
         let prompt_search_rows =
             rows(app.composer().prompt_search_ref().map_or(0, |p| p.height(PROMPT_SEARCH_MAX_ROWS)));

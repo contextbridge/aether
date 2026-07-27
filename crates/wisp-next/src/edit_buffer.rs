@@ -107,27 +107,6 @@ impl EditBuffer {
         self.cursor = self.line_end();
     }
 
-    pub fn move_up(&mut self) -> bool {
-        let start = self.line_start();
-        if start == 0 {
-            return false;
-        }
-        let previous_start = self.text[..start - 1].rfind('\n').map_or(0, |index| index + 1);
-        self.cursor = self.column_offset(previous_start, start - 1);
-        true
-    }
-
-    pub fn move_down(&mut self) -> bool {
-        let end = self.line_end();
-        if end == self.text.len() {
-            return false;
-        }
-        let next_start = end + 1;
-        let next_end = self.text[next_start..].find('\n').map_or(self.text.len(), |index| next_start + index);
-        self.cursor = self.column_offset(next_start, next_end);
-        true
-    }
-
     pub fn replace_range(&mut self, range: std::ops::Range<usize>, replacement: &str) {
         let cursor = range.start + replacement.len();
         self.text.replace_range(range, replacement);
@@ -151,13 +130,6 @@ impl EditBuffer {
 
     fn line_end(&self) -> usize {
         self.text[self.cursor..].find('\n').map_or(self.text.len(), |index| self.cursor + index)
-    }
-
-    /// Byte offset within `start..end` at the cursor's current character column,
-    /// clamped to the end of that range.
-    fn column_offset(&self, start: usize, end: usize) -> usize {
-        let column = self.text[self.line_start()..self.cursor].chars().count();
-        self.text[start..end].char_indices().nth(column).map_or(end, |(offset, _)| start + offset)
     }
 
     fn previous_boundary(&self) -> Option<usize> {
@@ -267,24 +239,6 @@ mod tests {
         buffer.set_cursor(0);
         assert!(!buffer.move_left());
         assert!(!buffer.backspace());
-    }
-
-    #[test]
-    fn vertical_motion_preserves_the_character_column() {
-        let mut buffer = EditBuffer::new("hello\n界\nworld");
-        buffer.set_cursor(0);
-        buffer.move_line_end();
-        assert_eq!(buffer.cursor(), 5);
-
-        assert!(buffer.move_down(), "onto the shorter middle line");
-        assert_eq!(&buffer.text()[..buffer.cursor()], "hello\n界", "clamps to the end of a shorter line");
-
-        assert!(buffer.move_down());
-        assert!(!buffer.move_down(), "already on the last line");
-
-        assert!(buffer.move_up());
-        assert!(buffer.move_up());
-        assert!(!buffer.move_up(), "already on the first line");
     }
 
     #[test]

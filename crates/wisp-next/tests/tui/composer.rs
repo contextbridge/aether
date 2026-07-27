@@ -2,7 +2,7 @@ use super::support::*;
 
 #[test]
 fn composer_empty_renders_top_and_bottom_rules() {
-    let composer = Composer::new();
+    let mut composer = Composer::new();
     let layout = composer.layout(80, &Theme::default());
 
     assert_eq!(layout.lines.len(), 3, "empty composer: top rule, prompt, bottom rule");
@@ -29,7 +29,8 @@ fn composer_wrapped_renders_top_and_bottom_rules() {
     composer.insert_str("abcdefghijkl");
     let layout = composer.layout(8, &Theme::default());
 
-    assert_eq!(layout.lines.len(), 4, "wrapped: top rule, 2 content rows, bottom rule");
+    // The text fills both rows exactly, so the cursor wraps onto a third.
+    assert_eq!(layout.lines.len(), 5, "wrapped: top rule, 3 content rows, bottom rule");
     assert!(line_text(&layout.lines[0]).chars().all(|c| c == '─'));
     assert!(line_text(layout.lines.last().unwrap()).chars().all(|c| c == '─'));
 }
@@ -48,7 +49,7 @@ fn composer_hard_newline_renders_top_and_bottom_rules() {
 
 #[test]
 fn cursor_at_prompt_start() {
-    let composer = Composer::new();
+    let mut composer = Composer::new();
     let layout = composer.layout(80, &Theme::default());
 
     assert_eq!(layout.cursor.x, 2);
@@ -98,6 +99,42 @@ fn cursor_after_multiple_mentions() {
 
     assert_eq!(layout.cursor.x, 18);
     assert_eq!(layout.cursor.y, 1);
+}
+
+#[test]
+fn cursor_wraps_onto_its_own_row_when_the_last_row_is_full() {
+    let mut composer = Composer::new();
+    composer.insert_str("abcd");
+
+    let layout = composer.layout(6, &Theme::default());
+
+    assert_eq!(layout.lines.len(), 4, "top rule, the full row, the row the cursor wrapped onto, bottom rule");
+    assert_eq!(layout.cursor, Position::new(2, 2), "the cursor belongs at the start of the row below the full one");
+}
+
+#[test]
+fn vertical_movement_follows_wrapped_rows() {
+    let mut composer = Composer::new();
+    composer.insert_str("abcdefgh");
+    composer.move_left();
+    composer.move_left();
+    composer.layout(6, &Theme::default());
+
+    assert!(composer.move_up(), "up should step onto the wrapped row above rather than recall history");
+    assert_eq!(composer.cursor_position(), (0, 2));
+    assert!(composer.move_down(), "down should step back onto the wrapped row below");
+    assert_eq!(composer.cursor_position(), (0, 6));
+}
+
+#[test]
+fn vertical_movement_stops_at_the_first_and_last_wrapped_rows() {
+    let mut composer = Composer::new();
+    composer.insert_str("abcdefgh");
+    composer.layout(6, &Theme::default());
+
+    assert!(!composer.move_down(), "the cursor is already on the last row, so history recall takes over");
+    while composer.move_up() {}
+    assert_eq!(composer.cursor_position(), (0, 0));
 }
 
 #[test]

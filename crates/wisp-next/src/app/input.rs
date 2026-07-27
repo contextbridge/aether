@@ -1,5 +1,5 @@
 use super::config::{cycle_quick_option, cycle_reasoning_option, update_config_option_value};
-use super::{App, ExitState, Layer, RuntimeEffect};
+use super::{App, ExitState, Layer};
 use crate::dropped_files::parse_dropped_file_paths;
 use crate::picker::CommandEntry;
 use crate::render_context::RenderContext;
@@ -209,13 +209,7 @@ impl App {
             TaskResult::FilesIndexed { request_id, files } => self.composer.on_files_indexed(request_id, files),
             TaskResult::SubmissionPrepared(outcome) => self.finish_submission(outcome),
             TaskResult::ThemesListed(files) => self.refresh_settings_themes(&files),
-            TaskResult::ThemeApplied { settings, theme, error } => {
-                self.ui.settings = settings;
-                self.effects.push_back(RuntimeEffect::SetTheme(theme));
-                if let Some(error) = error {
-                    self.notify(&format!("Failed to save theme settings: {error}"));
-                }
-            }
+            TaskResult::ThemeApplied { settings, theme, error } => self.finish_theme_change(settings, theme, error),
             TaskResult::WorkspaceResolved { cwd, status } => self.finish_workspace_move(&cwd, status),
             result @ TaskResult::GitDiff(_) => {
                 let Some(layer) = self.layer.as_mut() else { return };

@@ -423,6 +423,44 @@ fn workspace_move_load_session_failure_recovers() {
 }
 
 #[test]
+fn workspace_move_server_side_load_failure_recovers() {
+    let (mut app, mut command_rx) = make_app_with_workspace_move();
+
+    type_text(&mut app, "/move");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(workspaces_listed(vec![
+        workspace_entry("/home/user/code/current", true),
+        workspace_entry("/home/user/code/other", false),
+    ]));
+
+    app.on_key(key(KeyCode::Enter));
+    let _ = command_rx.try_recv().unwrap();
+
+    app.on_acp_event(workspace_moved("/home/user/code/other"));
+    let _ = command_rx.try_recv().unwrap();
+    assert_eq!(app.workspace_move_state(), WorkspaceMoveState::LoadingSession);
+
+    app.on_acp_event(AcpEvent::PromptError(agent_client_protocol::Error::internal_error()));
+    assert_eq!(
+        app.workspace_move_state(),
+        WorkspaceMoveState::Idle,
+        "a load that fails on the server should stop the loading indicator"
+    );
+
+    app.on_acp_event(session_update_for("test-session", user_message_chunk("after the failure")));
+    let mut terminal = make_terminal();
+    let mut renderer = Presenter::new(&UiSettings::default());
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(
+        viewport.lines().any(|l| l.contains("after the failure")),
+        "updates should stop being buffered once the load fails:\n{viewport}"
+    );
+}
+
+#[test]
 fn workspace_move_failed_event_resets_state() {
     let (mut app, mut command_rx) = make_app_with_workspace_move();
 

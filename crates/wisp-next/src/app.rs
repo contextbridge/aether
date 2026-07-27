@@ -165,6 +165,15 @@ struct PendingSubmission {
     text: String,
 }
 
+/// The theme change running off the event loop, and the newer choice waiting for
+/// it. Only one runs at a time so the save and the switch happen in the order the
+/// user made them.
+#[derive(Default)]
+struct ThemeChange {
+    in_flight: bool,
+    queued: Option<String>,
+}
+
 /// Root UI state: reduces terminal input and ACP events into the transcript,
 /// tool-call log, and composer that the renderer draws each frame.
 pub struct App {
@@ -186,6 +195,7 @@ pub struct App {
     effects: VecDeque<RuntimeEffect>,
     pending_submission: Option<PendingSubmission>,
     plan_tracker: PlanTracker,
+    theme_change: ThemeChange,
 }
 
 /// The agent connection, and everything it told us about itself when the
@@ -316,6 +326,7 @@ impl App {
             effects: VecDeque::new(),
             pending_submission: None,
             plan_tracker: PlanTracker::default(),
+            theme_change: ThemeChange::default(),
         }
     }
 
