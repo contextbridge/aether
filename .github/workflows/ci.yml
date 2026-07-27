@@ -8,6 +8,8 @@ on:
 
 env:
   CARGO_INCREMENTAL: "0"
+  # Linking the test binaries dominated the test job; mold cuts it ~5x.
+  RUSTFLAGS: "-Clink-arg=-fuse-ld=mold"
 
 jobs:
   fmt:
@@ -17,12 +19,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev
       - uses: jdx/mise-action@v4
-      - uses: Swatinem/rust-cache@v2
-      - name: Build aether-lspd
-        run: cargo build -p aether-lspd
       - name: Check formatting
         run: just fmt-check
 
@@ -34,9 +31,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev mold
       - uses: jdx/mise-action@v4
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Six jobs each saving a cache per push put the repo permanently over
+          # GitHub's 10 GiB limit, so every run raced eviction. PRs restore only.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build aether-lspd
         run: cargo build -p aether-lspd
       - name: Clippy check
@@ -50,9 +51,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev mold
       - uses: jdx/mise-action@v4
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build aether-lspd
         run: cargo build -p aether-lspd
       - name: Run tests
@@ -66,9 +69,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev mold
       - uses: jdx/mise-action@v4
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Check formatting
@@ -96,9 +101,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev mold
       - uses: jdx/mise-action@v4
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build aether-lspd
         run: cargo build -p aether-lspd
       - name: Check documentation
