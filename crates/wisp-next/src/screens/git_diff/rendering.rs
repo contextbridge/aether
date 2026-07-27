@@ -25,6 +25,9 @@ use super::state::{
 /// Below this width the file drawer is hidden and the patch gets the full area.
 pub(super) const DRAWER_MIN_WIDTH: u16 = 72;
 
+/// Narrowest the drawer can be resized to before it stops being a usable file list.
+const DRAWER_MIN_COLUMNS: u16 = 16;
+
 /// The patch as rendered rows, with review comments woven in.
 type PatchRowSet = AnnotatedRows<PatchCursor>;
 
@@ -70,7 +73,7 @@ impl GitDiffScreen {
             return self.render_patch(area, buf, cx);
         }
         let [drawer, separator, patch] = Layout::horizontal([
-            Constraint::Length(drawer_width(area.width)),
+            Constraint::Length(self.drawer_width(area.width)),
             Constraint::Length(1),
             Constraint::Min(1),
         ])
@@ -120,6 +123,18 @@ impl GitDiffScreen {
                 ])
             }
         }
+    }
+
+    /// Drawer width for a body of `total` columns: a third of it, moved by
+    /// however far the reviewer has resized the drawer. The offset is re-anchored
+    /// to the width actually granted, so the resize keys bite on the first press
+    /// after the drawer has hit an edge. Only valid for a body at least
+    /// [`DRAWER_MIN_WIDTH`] wide, which is the only width that draws a drawer.
+    fn drawer_width(&mut self, total: u16) -> u16 {
+        let natural = (total / 3).clamp(24, 36);
+        let width = natural.saturating_add_signed(self.drawer_offset).clamp(DRAWER_MIN_COLUMNS, total / 2);
+        self.drawer_offset = columns(width) - columns(natural);
+        width
     }
 
     fn render_patch(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
@@ -367,7 +382,13 @@ impl GitDiffScreen {
                         ("space", "stage"),
                     ]
                 };
-                hints.extend([("C", "commit"), ("d", "discard"), ("o", "full file"), ("r", "refresh")]);
+                hints.extend([
+                    ("C", "commit"),
+                    ("d", "discard"),
+                    ("o", "full file"),
+                    ("r", "refresh"),
+                    ("</>", "width"),
+                ]);
                 hints.push(("Ctrl-G/Esc", "close"));
 
                 let mut line = key_hints(&hints, theme);
@@ -520,9 +541,9 @@ enum SplitGroup<'a> {
     Changed { removed: Vec<SplitSide<'a>>, added: Vec<SplitSide<'a>> },
 }
 
-/// Drawer width for a body of `total` columns: a third, within sane bounds.
-pub(super) fn drawer_width(total: u16) -> u16 {
-    (total / 3).clamp(24, 36)
+/// A column count as a signed offset, for arithmetic between the two.
+fn columns(count: u16) -> i16 {
+    i16::try_from(count).unwrap_or(i16::MAX)
 }
 
 fn notice(text: impl Into<String>, color: ratatui::style::Color) -> Paragraph<'static> {

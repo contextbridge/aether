@@ -1441,3 +1441,77 @@ async fn git_diff_draft_cursor_with_unicode() {
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("héllo★ wörld"), "unicode insertion should work:\n{viewport}");
 }
+
+/// Column the patch pane's header sits at, which moves as the drawer resizes.
+fn patch_header_column(viewport: &str) -> usize {
+    viewport
+        .lines()
+        .find_map(|line| line.find("app.rs  modified").map(|byte| line[..byte].chars().count()))
+        .unwrap_or_else(|| panic!("patch header should render:\n{viewport}"))
+}
+
+async fn open_git_diff_with_change() -> (App, Terminal<TestBackend>, Presenter, tempfile::TempDir) {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(root.join("app.rs"), "fn old() {}\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("app.rs"), "fn new() {}\n").unwrap();
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    let terminal = make_terminal_with_width(160);
+    let renderer = Presenter::new(&UiSettings::default());
+
+    app.on_key(ctrl('g'));
+    settle_screen_tasks(&mut app).await;
+    (app, terminal, renderer, directory)
+}
+
+#[tokio::test]
+async fn git_diff_resize_keys_widen_and_narrow_the_file_drawer() {
+    let (mut app, mut terminal, mut renderer, _directory) = open_git_diff_with_change().await;
+
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let natural = patch_header_column(&buffer_text(&viewport_buffer(&mut terminal)));
+
+    app.on_key(key(KeyCode::Char('>')));
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert_eq!(patch_header_column(&viewport), natural + 4, "'>' should widen the drawer:\n{viewport}");
+
+    app.on_key(key(KeyCode::Char('<')));
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert_eq!(patch_header_column(&viewport), natural, "'<' should narrow the drawer back:\n{viewport}");
+}
+
+#[tokio::test]
+async fn git_diff_drawer_stops_narrowing_and_widens_on_the_next_press() {
+    let (mut app, mut terminal, mut renderer, _directory) = open_git_diff_with_change().await;
+
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let natural = patch_header_column(&buffer_text(&viewport_buffer(&mut terminal)));
+
+    for _ in 0..8 {
+        app.on_key(key(KeyCode::Char('<')));
+    }
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let narrowest = patch_header_column(&viewport);
+    assert!(narrowest < natural, "'<' should have narrowed the drawer:\n{viewport}");
+
+    app.on_key(key(KeyCode::Char('<')));
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert_eq!(patch_header_column(&viewport), narrowest, "drawer should stop at its narrowest:\n{viewport}");
+
+    app.on_key(key(KeyCode::Char('>')));
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert_eq!(
+        patch_header_column(&viewport),
+        narrowest + 4,
+        "overshooting the narrow edge should not have to be undone press for press:\n{viewport}"
+    );
+}

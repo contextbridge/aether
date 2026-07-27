@@ -25,6 +25,9 @@ pub struct GitDiffScreen {
     pub(super) drawer_selection: SelectionState,
     pub(super) focus: Focus,
     pub(super) collapsed: HashSet<String>,
+    /// Columns the reviewer has widened the file drawer by, relative to the
+    /// width the body would give it on its own.
+    pub(super) drawer_offset: i16,
     /// The flattened file tree the drawer draws. Rebuilt only when the document
     /// or the collapsed set changes, rather than on every key, click, and frame.
     drawer_entries: Vec<DrawerEntry>,
@@ -183,6 +186,7 @@ impl GitDiffScreen {
             drawer_selection: SelectionState::default(),
             focus: Focus::Drawer,
             collapsed: HashSet::new(),
+            drawer_offset: 0,
             drawer_entries: Vec::new(),
             document_revision: Generation::default(),
             bottom_bar: BottomBar::Help,
@@ -319,6 +323,13 @@ impl GitDiffScreen {
         }
         self.drawer_selection.step_clamped(self.drawer_entries.len(), direction, |_| true);
         self.follow_drawer_selection();
+    }
+
+    /// Widens the file drawer by `columns`, or narrows it when negative. The
+    /// next frame clamps the result to what the body can honour.
+    pub(super) fn resize_drawer(&mut self, columns: i16) -> Vec<Action> {
+        self.drawer_offset = self.drawer_offset.saturating_add(columns);
+        Vec::new()
     }
 
     /// Points the patch pane at the file the drawer selection landed on, if it

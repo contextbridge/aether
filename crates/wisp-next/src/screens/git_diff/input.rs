@@ -19,6 +19,9 @@ use crate::selection::Direction;
 const MOUSE_SCROLL_LINES: usize = 3;
 const PAGE_SCROLL_LINES: usize = 10;
 
+/// Columns each press of the resize keys moves the file drawer's edge.
+const DRAWER_RESIZE_STEP: i16 = 4;
+
 impl GitDiffScreen {
     pub(super) fn handle_mouse(&mut self, action: MouseAction, row: u16, column: u16) {
         if self.request.in_flight {
@@ -169,6 +172,8 @@ impl GitDiffScreen {
             KeyCode::Char(' ') => self.guarded(PendingAction::Stage, GitDiffScreen::toggle_stage),
             KeyCode::Char('C') => self.guarded(PendingAction::Commit, GitDiffScreen::begin_commit),
             KeyCode::Char('d') => self.guarded(PendingAction::Discard, GitDiffScreen::begin_discard),
+            KeyCode::Char('<') => self.resize_drawer(-DRAWER_RESIZE_STEP),
+            KeyCode::Char('>') => self.resize_drawer(DRAWER_RESIZE_STEP),
             KeyCode::Char('c') if self.focus == Focus::Patch => self.begin_draft(),
             KeyCode::Char('u') if self.focus == Focus::Patch => self.undo_last_comment(),
             KeyCode::Char('s') if self.focus == Focus::Patch => self.submit_review(),
