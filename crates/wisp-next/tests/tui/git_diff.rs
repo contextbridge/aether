@@ -1,8 +1,10 @@
 use super::support::*;
 
 async fn settle_screen_tasks(app: &mut App) {
-    while let Some(task) = app.take_task() {
-        app.on_task_result(task.execute().await);
+    while let Some(effect) = app.take_effect() {
+        if let RuntimeEffect::Spawn(task) = effect {
+            app.on_task_result(task.execute().await);
+        }
     }
 }
 

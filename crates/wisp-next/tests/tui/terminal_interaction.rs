@@ -3,7 +3,7 @@ use ratatui::TerminalOptions;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use tokio::sync::mpsc::UnboundedReceiver;
-use wisp_next::test_support::app::{App, AppConfig, LayerKind, WorkspaceMoveState};
+use wisp_next::test_support::app::{App, AppConfig, RuntimeEffect, WorkspaceMoveState};
 use wisp_next::test_support::presentation::Presenter;
 use wisp_next::test_support::render::sync_terminal as sync_terminal_with_renderer;
 use wisp_next::test_support::settings::UiSettings;
@@ -13,6 +13,16 @@ use wisp_next::test_support::workspace_status::WorkspaceStatus;
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Whether the app asked the terminal to ring the bell, draining whatever else
+/// it had queued along with it.
+fn rang_bell(app: &mut App) -> bool {
+    let mut rang = false;
+    while let Some(effect) = app.take_effect() {
+        rang |= matches!(effect, RuntimeEffect::RingBell);
+    }
+    rang
+}
 
 fn make_terminal(width: u16, height: u16) -> ratatui::Terminal<TestBackend> {
     let viewport_height = wisp_next::test_support::inline_viewport_height(height);
@@ -45,7 +55,7 @@ fn key(code: KeyCode) -> KeyEvent {
 }
 
 fn has_session_picker(app: &App) -> bool {
-    app.layer_kind() == Some(LayerKind::Sessions)
+    app.has_session_picker()
 }
 
 /// The area a layer is drawn into: the whole inline viewport.
@@ -323,7 +333,7 @@ mod bell {
 
         app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
 
-        assert!(app.take_bell());
+        assert!(rang_bell(&mut app));
     }
 
     #[test]
@@ -333,7 +343,7 @@ mod bell {
         super::submit_prompt(&mut app, "hello");
         app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::Cancelled));
 
-        assert!(!app.take_bell());
+        assert!(!rang_bell(&mut app));
     }
 
     #[test]
@@ -343,7 +353,7 @@ mod bell {
         super::submit_prompt(&mut app, "hello");
         app.on_acp_event(AcpEvent::PromptError(agent_client_protocol::Error::internal_error()));
 
-        assert!(!app.take_bell());
+        assert!(!rang_bell(&mut app));
     }
 
     #[test]
@@ -353,7 +363,7 @@ mod bell {
         super::submit_prompt(&mut app, "hello");
         app.on_acp_event(AcpEvent::ConnectionClosed);
 
-        assert!(!app.take_bell());
+        assert!(!rang_bell(&mut app));
     }
 
     #[test]
@@ -363,7 +373,7 @@ mod bell {
         // No prompt in flight — PromptDone is unsolicited
         app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
 
-        assert!(!app.take_bell());
+        assert!(!rang_bell(&mut app));
     }
 
     #[test]
@@ -373,8 +383,8 @@ mod bell {
         super::submit_prompt(&mut app, "first");
         app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
 
-        assert!(app.take_bell());
-        assert!(!app.take_bell());
+        assert!(rang_bell(&mut app));
+        assert!(!rang_bell(&mut app));
     }
 }
 
@@ -469,9 +479,9 @@ mod event_routing {
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
         // Scroll events should be consumed internally
-        let bell_before = app.take_bell();
+        let bell_before = rang_bell(&mut app);
         app.on_terminal_event(scroll_down(40, 5));
-        assert_eq!(bell_before, app.take_bell());
+        assert_eq!(bell_before, rang_bell(&mut app));
     }
 
     #[test]
@@ -511,10 +521,10 @@ mod event_routing {
         let mut terminal = make_terminal(80, 24);
         let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
-        assert!(app.layer_kind().is_some());
+        assert!(app.has_layer());
 
         app.on_terminal_event(scroll_down(40, 5));
-        assert!(!app.take_bell());
+        assert!(!rang_bell(&mut app));
     }
 
     #[test]
@@ -550,7 +560,7 @@ mod event_routing {
         let rect = layer_rect(&mut terminal);
         let click_y = rect.y + 2;
         app.on_terminal_event(click(rect.x + 2, click_y));
-        assert!(!app.take_bell());
+        assert!(!rang_bell(&mut app));
     }
 
     #[test]
@@ -659,12 +669,12 @@ mod event_routing {
         let mut terminal = make_terminal(80, 24);
         let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
-        assert!(app.layer_kind().is_some());
+        assert!(app.has_layer());
 
         // Scroll down
         let rect = layer_rect(&mut terminal);
         app.on_terminal_event(scroll_down(rect.x + 2, rect.y + 2));
-        assert!(!app.take_bell());
+        assert!(!rang_bell(&mut app));
         assert!(has_session_picker(&app));
     }
 
@@ -705,7 +715,7 @@ mod event_routing {
         // Scroll should be consumed internally
         app.on_terminal_event(scroll_down(rect.x + 2, rect.y + 1));
         app.on_terminal_event(scroll_up(rect.x + 2, rect.y + 1));
-        assert!(!app.take_bell());
+        assert!(!rang_bell(&mut app));
     }
 
     #[test]
@@ -722,7 +732,7 @@ mod event_routing {
         let rect = layer_rect(&mut terminal);
         app.on_terminal_event(scroll_down(rect.x + 2, rect.y + rect.height.saturating_sub(1)));
         app.on_terminal_event(click(rect.x + 2, rect.y + rect.height.saturating_sub(1)));
-        assert!(!app.take_bell());
+        assert!(!rang_bell(&mut app));
     }
 
     #[test]
@@ -747,7 +757,7 @@ mod event_routing {
         app.on_terminal_event(scroll_down(rect.x + 2, rect.y + 2));
         app.on_terminal_event(scroll_up(rect.x + 2, rect.y + 2));
         app.on_terminal_event(click(rect.x + 2, rect.y + 2));
-        assert!(!app.take_bell());
+        assert!(!rang_bell(&mut app));
     }
 
     #[test]
@@ -788,7 +798,60 @@ mod event_routing {
 
             let rect = layer_rect(&mut terminal);
             app.on_terminal_event(scroll_down(rect.x + 2, rect.y + 3));
-            assert!(!app.take_bell());
+            assert!(!rang_bell(&mut app));
+        });
+    }
+
+    /// A form with more fields than the modal is tall has to scroll, or the
+    /// fields below the fold can never be reached.
+    #[test]
+    fn form_modal_scrolls_the_focused_field_into_view() {
+        use acp_utils::notifications::{CreateElicitationRequestParams, ElicitationParams};
+        use acp_utils::testing::test_connection;
+
+        let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        let local = tokio::task::LocalSet::new();
+        local.block_on(&rt, async {
+            const FIELDS: usize = 40;
+
+            let (mut app, _rx) = make_app();
+            let (cx, mut peer) = test_connection().await;
+            let (responder, _response_rx) = peer.fake_elicitation(&cx).await;
+
+            let mut builder = acp_utils::ElicitationSchema::builder();
+            for index in 0..FIELDS {
+                builder = builder.optional_bool(format!("field_{index:02}"), false);
+            }
+
+            app.on_acp_event(AcpEvent::ElicitationRequest {
+                params: ElicitationParams {
+                    server_name: "test".into(),
+                    request: CreateElicitationRequestParams::FormElicitationParams {
+                        meta: None,
+                        message: "Pick some".into(),
+                        requested_schema: builder.build().unwrap(),
+                    },
+                },
+                responder,
+            });
+
+            let mut terminal = make_terminal(80, 24);
+            let mut presenter = Presenter::new(&UiSettings::default());
+            sync_terminal_with_renderer(&mut terminal, &mut app, &mut presenter).unwrap();
+
+            let shows = |terminal: &ratatui::Terminal<TestBackend>, needle: &str| {
+                screen_rows(terminal).iter().any(|row| row.contains(needle))
+            };
+            assert!(shows(&terminal, "field_00"), "the first field starts on screen");
+            assert!(!shows(&terminal, "field_39"), "the last field starts below the fold");
+
+            for _ in 1..FIELDS {
+                app.on_key(key(KeyCode::Down));
+            }
+            sync_terminal_with_renderer(&mut terminal, &mut app, &mut presenter).unwrap();
+
+            assert!(shows(&terminal, "field_39"), "the focused field scrolled into view");
+            assert!(!shows(&terminal, "field_00"), "the fields above it scrolled away");
         });
     }
 
@@ -840,6 +903,56 @@ mod event_routing {
             let bravo = row_with("bravo");
             assert!(bravo.contains("[x]"), "the clicked field should be checked, got {bravo:?}");
             assert!(alpha.contains("[ ]"), "the field above it should be untouched, got {alpha:?}");
+        });
+    }
+
+    /// A field is as many rows as it was drawn on, so clicking its description
+    /// hits the field rather than falling between two of them.
+    #[test]
+    fn form_modal_click_hits_every_row_a_field_occupies() {
+        use acp_utils::notifications::{CreateElicitationRequestParams, ElicitationParams};
+        use acp_utils::testing::test_connection;
+
+        let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        let local = tokio::task::LocalSet::new();
+        local.block_on(&rt, async {
+            let (mut app, _rx) = make_app();
+            let (cx, mut peer) = test_connection().await;
+            let (responder, _response_rx) = peer.fake_elicitation(&cx).await;
+
+            let schema = acp_utils::ElicitationSchema::builder()
+                .optional_bool_with("alpha", |field| field.description("the first switch"))
+                .optional_bool_with("bravo", |field| field.description("the second switch"))
+                .build()
+                .unwrap();
+
+            app.on_acp_event(AcpEvent::ElicitationRequest {
+                params: ElicitationParams {
+                    server_name: "test".into(),
+                    request: CreateElicitationRequestParams::FormElicitationParams {
+                        meta: None,
+                        message: "Pick one".into(),
+                        requested_schema: schema,
+                    },
+                },
+                responder,
+            });
+
+            let mut terminal = make_terminal(80, 24);
+            let mut presenter = Presenter::new(&UiSettings::default());
+            sync_terminal_with_renderer(&mut terminal, &mut app, &mut presenter).unwrap();
+
+            let rows = screen_rows(&terminal);
+            let description_row =
+                rows.iter().position(|row| row.contains("the second switch")).expect("description should be on screen");
+            app.on_terminal_event(click(20, u16::try_from(description_row).unwrap()));
+            sync_terminal_with_renderer(&mut terminal, &mut app, &mut presenter).unwrap();
+
+            let rows = screen_rows(&terminal);
+            let row_with = |needle: &str| rows.iter().find(|row| row.contains(needle)).unwrap().clone();
+            let bravo = row_with("bravo");
+            assert!(bravo.contains("[x]"), "clicking a field's description should toggle it, got {bravo:?}");
+            assert!(row_with("alpha").contains("[ ]"), "the other field should be untouched");
         });
     }
 }
@@ -1093,7 +1206,7 @@ mod mouse_owning_surfaces {
         let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
 
-        assert!(app.layer_kind().is_some());
+        assert!(app.has_layer());
     }
 
     #[test]
@@ -1130,7 +1243,7 @@ mod mouse_owning_surfaces {
 
         // History search is a composer overlay rather than a layer, so it owns
         // the mouse without anything being pushed above the conversation.
-        assert!(app.layer_kind().is_none());
+        assert!(!app.has_layer());
         assert!(app.composer().has_prompt_search());
         assert!(app.needs_mouse_capture());
     }

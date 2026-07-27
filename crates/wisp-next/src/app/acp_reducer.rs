@@ -197,7 +197,7 @@ impl App {
         self.close_layer();
         self.workspace_move_state = WorkspaceMoveState::Idle;
         self.session_loading_buffer.clear();
-        self.pending_bell = false;
+        self.cancel_bell();
         self.exit_state = ExitState::Exiting;
     }
 
@@ -280,7 +280,7 @@ impl App {
         self.conversation.tool_calls.finalize_running(terminal_status);
         self.conversation.transcript.close_thought_block();
         if was_in_flight && matches!(terminal_status, ToolStatus::Success) {
-            self.pending_bell = true;
+            self.ring_bell();
         }
     }
 }

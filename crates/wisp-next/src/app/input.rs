@@ -1,11 +1,11 @@
 use super::config::{cycle_quick_option, cycle_reasoning_option, update_config_option_value};
-use super::{App, ExitState, Layer};
+use super::{App, ExitState, Layer, RuntimeEffect};
 use crate::dropped_files::parse_dropped_file_paths;
 use crate::picker::CommandEntry;
 use crate::render_context::RenderContext;
 use crate::screens::git_diff::GitDiffScreen;
 use crate::surface::{MouseAction, Surface, UiEvent};
-use crate::tasks::{Task, TaskResult};
+use crate::tasks::TaskResult;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
@@ -143,7 +143,7 @@ impl App {
                     self.composer.open_command_picker(self.available_commands.clone());
                 } else if self.ui.keybindings.open_file_picker.matches(key) {
                     let task = self.composer.open_file_picker(&self.agent.working_dir);
-                    self.pending_tasks.push_back(task);
+                    self.spawn(task);
                 }
             }
             // Up/Down fall through to prompt history once the cursor is on the
@@ -211,7 +211,7 @@ impl App {
             TaskResult::ThemesListed(files) => self.refresh_settings_themes(&files),
             TaskResult::ThemeApplied { settings, theme, error } => {
                 self.ui.settings = settings;
-                self.ui.pending_theme = Some(theme);
+                self.effects.push_back(RuntimeEffect::SetTheme(theme));
                 if let Some(error) = error {
                     self.notify(&format!("Failed to save theme settings: {error}"));
                 }
@@ -223,14 +223,6 @@ impl App {
                 self.dispatch_actions(actions);
             }
         }
-    }
-
-    pub fn take_task(&mut self) -> Option<Task> {
-        self.pending_tasks.pop_front()
-    }
-
-    pub fn take_bell(&mut self) -> bool {
-        std::mem::take(&mut self.pending_bell)
     }
 
     /// Only the bare composer works without mouse reporting; every other
@@ -246,6 +238,6 @@ impl App {
     fn open_git_diff(&mut self) {
         let (screen, task) = GitDiffScreen::new(self.agent.working_dir.clone());
         self.open_layer(Layer::GitDiff(Box::new(screen)));
-        self.pending_tasks.push_back(task.into());
+        self.spawn(task);
     }
 }

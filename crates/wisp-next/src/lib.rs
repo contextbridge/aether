@@ -48,7 +48,7 @@ pub(crate) mod workspace_status;
 pub(crate) mod wrap;
 
 use acp_utils::client::AcpEvent;
-use app::{App, AppConfig};
+use app::{App, AppConfig, RuntimeEffect};
 use crossterm::event::{
     DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, EventStream,
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
@@ -190,8 +190,12 @@ async fn event_loop(
             }
 
             acp_event = event_rx.recv() => {
-                let Some(first_event) = acp_event else { return Ok(()); };
-                for event in collect_batch(first_event, MAX_ACP_EVENTS_PER_FRAME, || event_rx.try_recv().ok()) {
+                let Some(event) = acp_event else { return Ok(()); };
+                app.on_acp_event(event);
+                // Bounded so a burst of agent traffic cannot starve terminal
+                // input, which is what cancelling the burst goes through.
+                for _ in 1..MAX_ACP_EVENTS_PER_FRAME {
+                    let Ok(event) = event_rx.try_recv() else { break };
                     app.on_acp_event(event);
                 }
             }
@@ -205,32 +209,32 @@ async fn event_loop(
             () = tick_fut => app.on_tick(Instant::now()),
         }
 
-        process_terminal_state(app, stdout, &mut capture_enabled);
-
-        while let Some(task) = app.take_task() {
-            let result_tx = task_result_tx.clone();
-            tokio::spawn(async move {
-                let _ = result_tx.send(task.execute().await);
-            });
+        while let Some(effect) = app.take_effect() {
+            match effect {
+                RuntimeEffect::Spawn(task) => {
+                    let result_tx = task_result_tx.clone();
+                    tokio::spawn(async move {
+                        let _ = result_tx.send(task.execute().await);
+                    });
+                }
+                RuntimeEffect::SetTheme(theme) => presenter.set_theme(theme),
+                RuntimeEffect::RingBell => {
+                    let _ = execute!(stdout, crossterm::style::Print("\x07"));
+                }
+            }
         }
-
-        if let Some(theme) = app.take_pending_theme() {
-            presenter.set_theme(theme);
-        }
+        sync_mouse_capture(app, stdout, &mut capture_enabled);
 
         if app.exit_requested() {
-            process_terminal_state(app, stdout, &mut capture_enabled);
             return Ok(());
         }
         render::sync_terminal(terminal, app, presenter)?;
     }
 }
 
-fn process_terminal_state(app: &mut App, stdout: &mut impl Write, capture_enabled: &mut bool) {
-    if app.take_bell() {
-        let _ = execute!(stdout, crossterm::style::Print("\x07"));
-    }
-
+/// Turns mouse reporting on only while something on screen wants it, so an
+/// ordinary composer leaves the terminal's own selection and scrollback alone.
+fn sync_mouse_capture(app: &App, stdout: &mut impl Write, capture_enabled: &mut bool) {
     let needs_capture = app.needs_mouse_capture();
     if needs_capture && !*capture_enabled {
         let _ = execute!(stdout, EnableMouseCapture);
@@ -239,15 +243,4 @@ fn process_terminal_state(app: &mut App, stdout: &mut impl Write, capture_enable
         let _ = execute!(stdout, DisableMouseCapture);
         *capture_enabled = false;
     }
-}
-
-fn collect_batch<T>(first: T, max: usize, mut try_next: impl FnMut() -> Option<T>) -> Vec<T> {
-    let mut events = vec![first];
-    while events.len() < max {
-        match try_next() {
-            Some(event) => events.push(event),
-            None => break,
-        }
-    }
-    events
 }

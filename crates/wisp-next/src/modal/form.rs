@@ -3,16 +3,17 @@ use acp_utils::{
 };
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Paragraph, Widget, Wrap};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Paragraph, Widget};
 use serde_json::{Map, Value};
 
 use crate::edit_buffer::{EditBuffer, apply_edit_key};
-use crate::selection::Direction;
+use crate::selection::{Direction, scroll_into_view};
 use crate::theme::Theme;
-use crate::wrap::rows;
+use crate::widgets::{key_hints, render_vertical_scrollbar};
+use crate::wrap::{rows, wrap_line};
 
 pub(super) struct FormModal {
     server_name: String,
@@ -20,9 +21,22 @@ pub(super) struct FormModal {
     pub(super) fields: Vec<FormField>,
     pub(super) selected: usize,
     validation_error: Option<String>,
-    /// Terminal row the first field was last drawn on, so a click lands on the
-    /// field the user actually pointed at wherever the modal was centred.
-    first_field_row: u16,
+    body: BodyView,
+}
+
+/// The scrolling middle of the modal, where the fields are drawn.
+///
+/// A frame records what it laid out here, so a click lands on the field the
+/// user actually pointed at and the next frame scrolls against rows that
+/// really exist — neither has to recompute how tall a field was drawn.
+#[derive(Default)]
+struct BodyView {
+    /// First field row on screen.
+    scroll: usize,
+    /// Where the rows were drawn, for hit-testing a click.
+    area: Rect,
+    /// The field each row belongs to.
+    field_of_row: Vec<usize>,
 }
 
 pub(super) struct FormField {
@@ -60,7 +74,7 @@ impl FormModal {
         let required: Vec<&str> = schema.required.as_deref().unwrap_or(&[]).iter().map(String::as_str).collect();
         let fields =
             schema.properties.iter().map(|(name, prop)| FormField::from_primitive(name, prop, &required)).collect();
-        Self { server_name, message, fields, selected: 0, validation_error: None, first_field_row: 0 }
+        Self { server_name, message, fields, selected: 0, validation_error: None, body: BodyView::default() }
     }
 
     pub(super) fn on_key(&mut self, key: KeyEvent) -> FormAction {
@@ -110,23 +124,22 @@ impl FormModal {
     /// Focuses the field drawn at terminal `row` and activates it, so a click
     /// both selects and toggles in one gesture.
     pub(super) fn click(&mut self, row: u16) {
-        let Some(field_row) = row.checked_sub(self.first_field_row).map(usize::from) else {
+        let Some(body_row) = row.checked_sub(self.body.area.y).map(usize::from) else {
             return;
         };
-        let mut current = 0usize;
-        for index in 0..self.fields.len() {
-            if current == field_row {
-                self.selected = index;
-                match self.focused_kind() {
-                    Some(FormFieldKind::Boolean(_) | FormFieldKind::Single { .. }) => {
-                        self.cycle_focused(Direction::Forward);
-                    }
-                    Some(FormFieldKind::Multi { .. }) => self.toggle_multi_select(),
-                    _ => {}
-                }
-                return;
+        if body_row >= usize::from(self.body.area.height) {
+            return;
+        }
+        let Some(&field) = self.body.field_of_row.get(self.body.scroll + body_row) else {
+            return;
+        };
+        self.selected = field;
+        match self.focused_kind() {
+            Some(FormFieldKind::Boolean(_) | FormFieldKind::Single { .. }) => {
+                self.cycle_focused(Direction::Forward);
             }
-            current += self.fields[index].rendered_rows();
+            Some(FormFieldKind::Multi { .. }) => self.toggle_multi_select(),
+            _ => {}
         }
     }
 
@@ -187,58 +200,117 @@ impl FormModal {
         FormAction::Accept(Value::Object(content))
     }
 
+    /// Draws the modal as a fixed header, a scrolling body of fields, and a
+    /// fixed footer, so a form with more fields than the modal is tall stays
+    /// reachable.
     pub(super) fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
-        let mut lines = vec![Line::styled(
+        let block = Block::bordered().title(" Elicitation ").border_style(Style::new().fg(theme.accent));
+        let inner = block.inner(area);
+        block.render(area, buf);
+
+        let header = self.header_lines(theme, inner.width);
+        let footer = self.footer_lines(theme, inner.width);
+        let [header_area, body_area, footer_area] = Layout::vertical([
+            Constraint::Length(rows(header.len())),
+            Constraint::Min(0),
+            Constraint::Length(rows(footer.len())),
+        ])
+        .areas(inner);
+
+        Paragraph::new(header).render(header_area, buf);
+        Paragraph::new(footer).render(footer_area, buf);
+
+        let [rows_area, track_area] =
+            Layout::horizontal([Constraint::Min(0), Constraint::Length(SCROLLBAR_WIDTH)]).areas(body_area);
+        let (lines, field_of_row) = self.field_rows(theme, rows_area.width);
+        self.body.area = rows_area;
+        self.body.field_of_row = field_of_row;
+        self.body.scroll = self.scrolled_to_selection(usize::from(rows_area.height));
+
+        let total = lines.len();
+        for (row, line) in lines.into_iter().skip(self.body.scroll).take(usize::from(rows_area.height)).enumerate() {
+            line.render(Rect { y: rows_area.y + rows(row), height: 1, ..rows_area }, buf);
+        }
+        render_vertical_scrollbar(track_area, buf, total, self.body.scroll);
+    }
+
+    fn header_lines(&self, theme: &Theme, width: u16) -> Vec<Line<'static>> {
+        let title = Line::styled(
             format!("Request from {}", self.server_name),
             Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
-        )];
+        );
+        let mut lines = wrap_line(title, width);
         if !self.message.is_empty() {
-            lines.push(Line::raw(self.message.clone()));
+            lines.extend(wrap_line(Line::raw(self.message.clone()), width));
         }
-        let block = Block::bordered().title(" Elicitation ").border_style(Style::new().fg(theme.accent));
-        self.first_field_row = block.inner(area).y.saturating_add(rows(lines.len()));
+        lines
+    }
 
+    fn footer_lines(&self, theme: &Theme, width: u16) -> Vec<Line<'static>> {
+        let mut lines = match &self.validation_error {
+            Some(error) => wrap_line(Line::styled(error.clone(), Style::new().fg(theme.error)), width),
+            None => Vec::new(),
+        };
+        let mut hints = vec![("Enter", "submit"), ("Esc", "cancel")];
+        if self.fields.iter().any(|field| matches!(field.kind, FormFieldKind::Multi { .. })) {
+            hints.splice(0..0, [("↑↓", "option"), ("Space", "toggle")]);
+        }
+        lines.push(key_hints(&hints, theme));
+        lines
+    }
+
+    /// The fields as rendered rows, with the field each row belongs to.
+    ///
+    /// One pass builds both, so a click can never be resolved against a layout
+    /// that differs from the one that was drawn.
+    fn field_rows(&self, theme: &Theme, width: u16) -> (Vec<Line<'static>>, Vec<usize>) {
+        let mut lines = Vec::new();
+        let mut field_of_row = Vec::new();
         for (index, field) in self.fields.iter().enumerate() {
+            let mut push = |line: Line<'static>| {
+                for wrapped in wrap_line(line, width) {
+                    lines.push(wrapped);
+                    field_of_row.push(index);
+                }
+            };
+
             let marker = if index == self.selected { "›" } else { " " };
             let required = if field.required { " *" } else { "" };
-            let styled_label =
-                Span::styled(format!("{marker} {}{required}: ", field.label), Style::new().fg(theme.heading));
+            let label = Span::styled(format!("{marker} {}{required}: ", field.label), Style::new().fg(theme.heading));
             match &field.kind {
                 FormFieldKind::Multi { options, selected, cursor } => {
-                    lines.push(Line::from(styled_label));
-                    for (opt_index, option) in options.iter().enumerate() {
-                        let prefix = if opt_index == *cursor { "›" } else { " " };
-                        let checkbox = if selected[opt_index] { "[x]" } else { "[ ]" };
-                        let opt_style = if opt_index == *cursor {
-                            Style::new().fg(theme.accent)
-                        } else {
-                            Style::new().fg(theme.text_primary)
-                        };
-                        lines.push(Line::styled(format!("  {prefix} {checkbox} {}", option.title), opt_style));
+                    push(Line::from(label));
+                    for (option_index, option) in options.iter().enumerate() {
+                        let focused = option_index == *cursor;
+                        let prefix = if focused { "›" } else { " " };
+                        let checkbox = if selected[option_index] { "[x]" } else { "[ ]" };
+                        let style =
+                            if focused { Style::new().fg(theme.accent) } else { Style::new().fg(theme.text_primary) };
+                        push(Line::styled(format!("  {prefix} {checkbox} {}", option.title), style));
                     }
                 }
-                _ => {
-                    lines.push(Line::from(vec![styled_label, Span::raw(field.display_value())]));
-                }
+                _ => push(Line::from(vec![label, Span::raw(field.display_value())])),
             }
             if let Some(description) = &field.description {
-                lines.push(Line::styled(format!("    {description}"), Style::new().fg(theme.muted)));
+                push(Line::styled(format!("    {description}"), Style::new().fg(theme.muted)));
             }
         }
-        if let Some(error) = &self.validation_error {
-            lines.push(Line::styled(error.clone(), Style::new().fg(theme.error)));
-        }
-        if self.fields.iter().any(|f| matches!(&f.kind, FormFieldKind::Multi { .. })) {
-            lines.push(Line::styled(
-                "↑↓ option · Space toggle · Enter submit · Esc cancel",
-                Style::new().fg(theme.muted),
-            ));
-        } else {
-            lines.push(Line::styled("Enter submit · Esc cancel", Style::new().fg(theme.muted)));
-        }
-        Paragraph::new(Text::from(lines)).block(block).wrap(Wrap { trim: false }).render(area, buf);
+        (lines, field_of_row)
+    }
+
+    /// The body scroll moved the least it can to show the selected field,
+    /// preferring its label when the whole field will not fit.
+    fn scrolled_to_selection(&self, height: usize) -> usize {
+        let mut rows = self.body.field_of_row.iter().enumerate().filter(|&(_, &field)| field == self.selected);
+        let Some((first, _)) = rows.next() else {
+            return 0;
+        };
+        let last = rows.next_back().map_or(first, |(row, _)| row);
+        scroll_into_view(scroll_into_view(self.body.scroll, last, height), first, height)
     }
 }
+
+const SCROLLBAR_WIDTH: u16 = 1;
 
 impl FormField {
     fn from_primitive(name: &str, prop: &PrimitiveSchema, required: &[&str]) -> Self {
@@ -299,16 +371,6 @@ impl FormField {
                     .collect(),
             )),
         }
-    }
-
-    /// Lines this field occupies, so click targets line up with what is drawn.
-    fn rendered_rows(&self) -> usize {
-        let options = match &self.kind {
-            FormFieldKind::Multi { options, .. } => options.len(),
-            _ => 0,
-        };
-        let description = usize::from(self.description.as_ref().is_some_and(|text| !text.is_empty()));
-        1 + options + description
     }
 
     fn display_value(&self) -> String {

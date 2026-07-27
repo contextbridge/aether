@@ -1,26 +1,14 @@
 use super::App;
-use crate::session_config_view::{SessionConfigView, as_select, select_values};
+use crate::session_config_view::{SessionConfigView, as_select};
 use crate::settings::UiSettings;
 use crate::settings_overlay::{SettingsMenuEntry, SettingsMenuValue};
 use acp_utils::config_option_id::ConfigOptionId;
-use agent_client_protocol::schema::{self as acp, SessionConfigOptionCategory};
+use agent_client_protocol::schema::{self as acp};
 use utils::ReasoningEffort;
-pub(super) fn is_cycleable_mode_option(option: &acp::SessionConfigOption) -> bool {
-    matches!(option.kind, acp::SessionConfigKind::Select(_))
-        && option.category == Some(SessionConfigOptionCategory::Mode)
-}
 
 pub(super) fn cycle_quick_option(config_options: &[acp::SessionConfigOption]) -> Option<(String, String)> {
-    let option = config_options.iter().find(|option| is_cycleable_mode_option(option))?;
-    let select = as_select(option)?;
-    let values = select_values(select);
-    if values.is_empty() {
-        return None;
-    }
-
-    let current_index = values.iter().position(|entry| entry.value == select.current_value).unwrap_or(0);
-    let next_index = (current_index + 1) % values.len();
-    values.get(next_index).map(|next| (option.id.0.to_string(), next.value.0.to_string()))
+    let (id, value) = SessionConfigView::new(config_options).next_mode()?;
+    Some((id.to_string(), value.to_string()))
 }
 
 pub(super) fn cycle_reasoning_option(config_options: &[acp::SessionConfigOption]) -> Option<(String, String)> {
@@ -51,15 +39,11 @@ pub(super) fn extract_config_selections(config_options: &[acp::SessionConfigOpti
 }
 
 impl App {
-    pub fn take_pending_theme(&mut self) -> Option<crate::theme::Theme> {
-        self.ui.pending_theme.take()
-    }
-
     /// Themes are persisted and parsed by the task runner.
     pub(super) fn apply_theme_change(&mut self, value: &str) {
         let mut settings = self.ui.settings.clone();
         settings.theme.file = (!value.is_empty()).then(|| value.to_string());
-        self.pending_tasks.push_back(crate::tasks::Task::ApplyTheme { settings, value: value.to_string() });
+        self.spawn(crate::tasks::Task::ApplyTheme { settings, value: value.to_string() });
         self.apply_settings_change(&crate::settings_overlay::SettingsChange {
             config_id: acp_utils::config_option_id::THEME_CONFIG_ID.to_string(),
             new_value: value.to_string(),

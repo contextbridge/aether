@@ -63,7 +63,7 @@ impl App {
         overlay.add_local_entries(build_theme_entries(&self.ui.settings, &[]));
         overlay.add_status_entries();
         self.open_layer(Layer::Settings(overlay));
-        self.pending_tasks.push_back(crate::tasks::Task::ListThemes);
+        self.spawn(crate::tasks::Task::ListThemes);
     }
 
     pub(super) fn refresh_settings_themes(&mut self, files: &[String]) {
@@ -91,7 +91,7 @@ impl App {
     fn handle_action(&mut self, action: Action) {
         match action {
             Action::Close => self.close_layer(),
-            Action::Task(task) => self.pending_tasks.push_back(task),
+            Action::Task(task) => self.spawn(task),
             Action::SubmitReview(prompt) => self.submit_review(&prompt),
             Action::LoadSession { session_id, cwd } => self.load_session(&session_id, &cwd),
             Action::RequestSessionPreview { session_id } => {
@@ -158,7 +158,7 @@ impl App {
     }
 
     pub(super) fn on_workspace_moved(&mut self, new_cwd: std::path::PathBuf) {
-        self.pending_tasks.push_back(crate::tasks::Task::ResolveWorkspace { cwd: new_cwd.clone() });
+        self.spawn(crate::tasks::Task::ResolveWorkspace { cwd: new_cwd.clone() });
         self.close_layer();
         self.reset_conversation();
         self.notify(&format!("Moved to {}", crate::workspace_status::home_relative_path(&new_cwd)));

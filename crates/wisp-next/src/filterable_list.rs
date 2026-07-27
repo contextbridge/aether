@@ -111,10 +111,13 @@ impl<T> FilterableList<T> {
 
     /// The matching entries as [`ListView`] rows, each built by `row`. Decorate
     /// the result with the usual [`ListView`] chrome.
-    pub fn view<'a>(&'a mut self, theme: &'a Theme, row: impl FnMut(&T) -> Line<'static>) -> ListView<'a> {
+    ///
+    /// `row` runs only for the entries actually drawn, so filtering a list of
+    /// every file in the working tree does not format one row per match.
+    pub fn view<'a>(&'a mut self, theme: &'a Theme, mut row: impl FnMut(&T) -> Line<'static> + 'a) -> ListView<'a> {
         let Self { entries, filtered_indices, selection, .. } = self;
-        let rows = filtered_indices.iter().map(|&index| &entries[index]).map(row).collect();
-        ListView::new(rows, selection, theme)
+        let (entries, filtered_indices) = (&*entries, &*filtered_indices);
+        ListView::lazy(filtered_indices.len(), move |index| row(&entries[filtered_indices[index]]), selection, theme)
     }
 
     fn refilter(&mut self) {

@@ -25,7 +25,7 @@ impl App {
                 warnings: Vec::new(),
             });
         } else {
-            self.pending_tasks.push_back(crate::tasks::Task::PrepareSubmission { attachments: all_attachments });
+            self.spawn(crate::tasks::Task::PrepareSubmission { attachments: all_attachments });
         }
     }
 

@@ -1,7 +1,8 @@
 use acp_utils::config_meta::SelectOptionMeta;
 use acp_utils::config_option_id::ConfigOptionId;
 use agent_client_protocol::schema::{
-    SessionConfigKind, SessionConfigOption, SessionConfigSelect, SessionConfigSelectOption, SessionConfigSelectOptions,
+    SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelect,
+    SessionConfigSelectOption, SessionConfigSelectOptions,
 };
 use utils::ReasoningEffort;
 
@@ -59,6 +60,20 @@ impl<'a> SessionConfigView<'a> {
             })
             .collect();
         (!names.is_empty()).then(|| names.join(" + "))
+    }
+
+    /// The mode option a quick-cycle key steps through and the value it steps
+    /// to, wrapping at the end. `None` when the agent offers no mode to cycle.
+    pub fn next_mode(&self) -> Option<(&'a str, &'a str)> {
+        let option = self
+            .options
+            .iter()
+            .find(|option| option.category == Some(SessionConfigOptionCategory::Mode) && as_select(option).is_some())?;
+        let select = as_select(option)?;
+        let values = select_values(select);
+        let current = values.iter().position(|value| value.value == select.current_value).unwrap_or(0);
+        let next = values.get((current + 1) % values.len().max(1))?;
+        Some((option.id.0.as_ref(), next.value.0.as_ref()))
     }
 
     pub fn reasoning_levels(&self) -> Vec<ReasoningEffort> {

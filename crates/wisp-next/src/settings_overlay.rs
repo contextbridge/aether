@@ -14,6 +14,7 @@ use crate::render_context::RenderContext;
 use crate::selection::Direction;
 use crate::session_config_view::SessionConfigView;
 use crate::surface::{Action, Surface};
+use crate::widgets::key_hints;
 use acp_utils::config_meta::SelectOptionMeta;
 use acp_utils::notifications::{
     ElicitationParams, ElicitationResponse, McpServerStatusEntry, UrlElicitationCompleteParams,
@@ -24,7 +25,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph, Widget};
 
 const MIN_WIDTH: u16 = 6;
@@ -79,7 +80,7 @@ impl PaneKind {
 pub struct SettingsOverlay {
     menu: SettingsMenu,
     /// The pane drawn over the menu. `None` means the menu itself has focus.
-    pane: Option<SettingsPane>,
+    pane: Option<Box<dyn SettingsPane>>,
     current_reasoning_effort: Option<String>,
     live: LiveSettingsData,
     pending_elicitation: Option<PendingElicitation>,
@@ -97,16 +98,14 @@ pub(crate) struct LiveSettingsData {
 /// Panes are ordinary [`Surface`]s — they get the same key routing, filtering,
 /// and mouse handling as every other layer — plus the two things only a settings
 /// pane has: footer hints, and agent-pushed data that can change underneath it.
-enum SettingsPane {
-    Picker(SettingsPicker),
-    Models(ModelSelector),
-    Servers(ServerStatusPane),
-    Providers(ProviderLoginPane),
-}
-
-trait PaneBehavior {
+///
+/// The overlay never asks which pane it is holding, so this is a trait object
+/// rather than an enum: adding a pane is a new type and a new arm of
+/// [`SettingsOverlay::open_selected_pane`], not an edit to four dispatch
+/// methods.
+trait SettingsPane: Surface {
     /// Key hints for the overlay footer while this pane has focus.
-    fn footer(&self) -> String;
+    fn footer(&self) -> Vec<KeyHint>;
 
     /// Re-reads agent-pushed data after it changes underneath the pane.
     fn refresh(&mut self, live: &LiveSettingsData) {
@@ -120,43 +119,8 @@ trait PaneBehavior {
     }
 }
 
-impl SettingsPane {
-    fn surface(&mut self) -> &mut dyn Surface {
-        match self {
-            Self::Picker(pane) => pane,
-            Self::Models(pane) => pane,
-            Self::Servers(pane) => pane,
-            Self::Providers(pane) => pane,
-        }
-    }
-
-    fn footer(&self) -> String {
-        match self {
-            Self::Picker(pane) => pane.footer(),
-            Self::Models(pane) => pane.footer(),
-            Self::Servers(pane) => pane.footer(),
-            Self::Providers(pane) => pane.footer(),
-        }
-    }
-
-    fn refresh(&mut self, live: &LiveSettingsData) {
-        match self {
-            Self::Picker(pane) => pane.refresh(live),
-            Self::Models(pane) => pane.refresh(live),
-            Self::Servers(pane) => pane.refresh(live),
-            Self::Providers(pane) => pane.refresh(live),
-        }
-    }
-
-    fn take_changes(&mut self) -> Vec<Action> {
-        match self {
-            Self::Picker(pane) => pane.take_changes(),
-            Self::Models(pane) => pane.take_changes(),
-            Self::Servers(pane) => pane.take_changes(),
-            Self::Providers(pane) => pane.take_changes(),
-        }
-    }
-}
+/// A key and what it does, for [`key_hints`].
+pub(crate) type KeyHint = (&'static str, String);
 
 impl SettingsOverlay {
     pub fn new(
@@ -244,8 +208,10 @@ impl SettingsOverlay {
     }
 
     /// Key hints for the current focus, shown in the overlay footer.
-    pub fn footer_text(&self) -> String {
-        self.pane.as_ref().map_or_else(|| "[Enter] Select  [Esc] Close".to_string(), SettingsPane::footer)
+    fn footer_hints(&self) -> Vec<KeyHint> {
+        self.pane
+            .as_ref()
+            .map_or_else(|| vec![("Enter", "select".to_string()), ("Esc", "close".to_string())], |pane| pane.footer())
     }
 
     fn set_provider_status(&mut self, method_id: &str, status: ProviderLoginStatus) {
@@ -272,22 +238,23 @@ impl SettingsOverlay {
         Vec::new()
     }
 
-    fn open_selected_pane(&self) -> Option<SettingsPane> {
-        match self.menu.selected_row()? {
+    fn open_selected_pane(&self) -> Option<Box<dyn SettingsPane>> {
+        let pane: Box<dyn SettingsPane> = match self.menu.selected_row()? {
             MenuRow::Pane { kind: PaneKind::McpServers, .. } => {
-                Some(SettingsPane::Servers(ServerStatusPane::new(self.live.servers.clone())))
+                Box::new(ServerStatusPane::new(self.live.servers.clone()))
             }
             MenuRow::Pane { kind: PaneKind::ProviderLogins, .. } => {
-                Some(SettingsPane::Providers(ProviderLoginPane::new(self.live.providers.clone())))
+                Box::new(ProviderLoginPane::new(self.live.providers.clone()))
             }
-            MenuRow::Select(entry) if entry.multi_select => Some(SettingsPane::Models(ModelSelector::new(
+            MenuRow::Select(entry) if entry.multi_select => Box::new(ModelSelector::new(
                 entry.config_id.clone(),
                 entry.values.clone(),
                 &entry.current_raw_value,
                 self.current_reasoning_effort.as_deref(),
-            ))),
-            MenuRow::Select(entry) => SettingsPicker::from_entry(entry).map(SettingsPane::Picker),
-        }
+            )),
+            MenuRow::Select(entry) => Box::new(SettingsPicker::from_entry(entry)?),
+        };
+        Some(pane)
     }
 
     /// Handles pane actions locally: [`Action::Close`] returns focus to the
@@ -324,7 +291,7 @@ impl Surface for SettingsOverlay {
             messages.push(Action::Close);
             messages
         } else {
-            pane.surface().on_key(key)
+            pane.on_key(key)
         };
         Some(self.apply(messages))
     }
@@ -334,7 +301,7 @@ impl Surface for SettingsOverlay {
             self.menu.step(direction);
             return Vec::new();
         };
-        let messages = pane.surface().scroll(direction);
+        let messages = pane.scroll(direction);
         self.apply(messages)
     }
 
@@ -345,7 +312,7 @@ impl Surface for SettingsOverlay {
             }
             return Vec::new();
         };
-        let messages = pane.surface().click(row, column);
+        let messages = pane.click(row, column);
         self.apply(messages)
     }
 
@@ -359,9 +326,12 @@ impl Surface for SettingsOverlay {
         }
         // The key hints ride on the bottom border rather than claiming a row of
         // their own, so a short terminal spends every inner row on content.
+        let mut footer = key_hints(&self.footer_hints(), theme);
+        footer.spans.insert(0, Span::raw(" "));
+        footer.push_span(Span::raw(" "));
         let block = Block::bordered()
             .title(" Configuration ")
-            .title_bottom(Line::styled(format!(" {} ", self.footer_text()), Style::new().fg(theme.text_secondary)))
+            .title_bottom(footer)
             .style(Style::new().bg(theme.background))
             .border_style(Style::new().fg(theme.text_secondary));
         let inner = block.inner(area);
@@ -371,7 +341,7 @@ impl Surface for SettingsOverlay {
             self.menu.render(inner, buf, theme);
             return None;
         };
-        pane.surface().render(inner, buf, cx)
+        pane.render(inner, buf, cx)
     }
 }
 

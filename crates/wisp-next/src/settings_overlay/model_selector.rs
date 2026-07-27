@@ -1,4 +1,4 @@
-use super::{PaneBehavior, SettingsChange, SettingsMenuValue, message_for_change};
+use super::{KeyHint, SettingsChange, SettingsMenuValue, SettingsPane, message_for_change};
 use crate::filterable_list::FilterableList;
 use crate::render_context::RenderContext;
 use crate::selection::Direction;
@@ -223,13 +223,17 @@ impl ModelSelector {
     }
 }
 
-impl PaneBehavior for ModelSelector {
+impl SettingsPane for ModelSelector {
     fn take_changes(&mut self) -> Vec<Action> {
         self.pending_changes().iter().map(message_for_change).collect()
     }
 
-    fn footer(&self) -> String {
-        format!("[Space/Enter] Toggle  [Tab] Effort: {}  [Esc] Done", self.reasoning_label())
+    fn footer(&self) -> Vec<KeyHint> {
+        vec![
+            ("Space/Enter", "toggle".to_string()),
+            ("Tab", format!("effort: {}", self.reasoning_label())),
+            ("Esc", "done".to_string()),
+        ]
     }
 }
 

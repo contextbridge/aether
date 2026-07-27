@@ -1,4 +1,4 @@
-use super::{LiveSettingsData, PaneBehavior, summarize};
+use super::{KeyHint, LiveSettingsData, SettingsPane, summarize};
 use crate::list_view::ListView;
 use crate::render_context::RenderContext;
 use crate::selection::{Direction, SelectionState};
@@ -104,14 +104,14 @@ impl Surface for ServerStatusPane {
     }
 }
 
-impl PaneBehavior for ServerStatusPane {
+impl SettingsPane for ServerStatusPane {
     fn refresh(&mut self, live: &LiveSettingsData) {
         let keep = self.selected_entry().map(|entry| entry.name.clone());
         self.set_rows(live.servers.clone(), keep.as_deref());
     }
 
-    fn footer(&self) -> String {
-        "[Enter] Authenticate OAuth servers  [Esc] Back".to_string()
+    fn footer(&self) -> Vec<KeyHint> {
+        vec![("Enter", "authenticate OAuth servers".to_string()), ("Esc", "back".to_string())]
     }
 }
 

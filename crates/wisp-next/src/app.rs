@@ -64,27 +64,11 @@ pub enum Layer {
     PlanReview(Box<PlanReviewScreen>),
 }
 
-/// Which layer is open, for the questions that do not need the layer itself.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LayerKind {
-    Settings,
-    Sessions,
-    Workspaces,
-    Elicitation,
-    GitDiff,
-    PlanReview,
-}
-
 impl Layer {
-    pub fn kind(&self) -> LayerKind {
-        match self {
-            Self::Settings(_) => LayerKind::Settings,
-            Self::Sessions(_) => LayerKind::Sessions,
-            Self::Workspaces(_) => LayerKind::Workspaces,
-            Self::Elicitation(_) => LayerKind::Elicitation,
-            Self::GitDiff(_) => LayerKind::GitDiff,
-            Self::PlanReview(_) => LayerKind::PlanReview,
-        }
+    /// Whether this layer replaces the conversation rather than drawing above
+    /// it, which also stops the transcript committing to terminal scrollback.
+    pub fn is_fullscreen(&self) -> bool {
+        matches!(self, Self::GitDiff(_) | Self::PlanReview(_))
     }
 
     fn surface(&mut self) -> &mut dyn Surface {
@@ -99,12 +83,19 @@ impl Layer {
     }
 }
 
-impl LayerKind {
-    /// Whether this layer replaces the conversation rather than drawing above
-    /// it, which also stops the transcript committing to terminal scrollback.
-    pub fn is_fullscreen(self) -> bool {
-        matches!(self, Self::GitDiff | Self::PlanReview)
-    }
+/// Something only the process outside the UI can do: work to run off the event
+/// loop, or a change to the terminal itself.
+///
+/// One ordered queue rather than a field per effect, so the event loop has a
+/// single thing to drain and effects happen in the order they were asked for.
+#[derive(Debug)]
+pub enum RuntimeEffect {
+    /// Run this off the UI thread. Its result comes back through
+    /// [`App::on_task_result`].
+    Spawn(Task),
+    /// Hand the presenter a newly chosen theme.
+    SetTheme(crate::theme::Theme),
+    RingBell,
 }
 
 /// Everything that belongs to the conversation turn in progress.
@@ -191,10 +182,10 @@ pub struct App {
     server_statuses: Vec<McpServerStatusEntry>,
     exit_state: ExitState,
     progress_indicator: ProgressIndicator,
-    pending_tasks: VecDeque<Task>,
+    /// What the event loop still owes the outside world.
+    effects: VecDeque<RuntimeEffect>,
     pending_submission: Option<PendingSubmission>,
     plan_tracker: PlanTracker,
-    pending_bell: bool,
 }
 
 /// The agent connection, and everything it told us about itself when the
@@ -218,8 +209,6 @@ struct UiConfig {
     keybindings: Keybindings,
     content_padding: usize,
     status_line: ResolvedStatusLineSettings,
-    /// A newly chosen theme the event loop still has to hand to the presenter.
-    pending_theme: Option<crate::theme::Theme>,
 }
 
 pub struct AppConfig {
@@ -311,7 +300,6 @@ impl App {
                 keybindings: Keybindings::default(),
                 content_padding,
                 status_line,
-                pending_theme: None,
             },
             workspace_status: config.workspace_status,
             available_commands: initial_commands,
@@ -325,11 +313,30 @@ impl App {
             server_statuses: Vec::new(),
             exit_state: ExitState::Idle,
             progress_indicator: ProgressIndicator::default(),
-            pending_tasks: VecDeque::new(),
+            effects: VecDeque::new(),
             pending_submission: None,
             plan_tracker: PlanTracker::default(),
-            pending_bell: false,
         }
+    }
+
+    /// The next thing the event loop owes the outside world, in the order it
+    /// was asked for.
+    pub fn take_effect(&mut self) -> Option<RuntimeEffect> {
+        self.effects.pop_front()
+    }
+
+    fn spawn(&mut self, task: impl Into<Task>) {
+        self.effects.push_back(RuntimeEffect::Spawn(task.into()));
+    }
+
+    fn ring_bell(&mut self) {
+        self.effects.push_back(RuntimeEffect::RingBell);
+    }
+
+    /// Silences a bell the terminal has not been given yet, for the turns that
+    /// end in something other than a reply worth announcing.
+    fn cancel_bell(&mut self) {
+        self.effects.retain(|effect| !matches!(effect, RuntimeEffect::RingBell));
     }
 
     pub fn on_tick(&mut self, now: Instant) {
@@ -355,9 +362,15 @@ impl App {
             || self.plan_tracker.has_completed_in_grace_period()
     }
 
-    /// Which layer is open, if any.
-    pub fn layer_kind(&self) -> Option<LayerKind> {
-        self.layer.as_ref().map(Layer::kind)
+    /// Whether any layer is open.
+    pub fn has_layer(&self) -> bool {
+        self.layer.is_some()
+    }
+
+    /// Test seam: the one layer whose identity a test asserts on rather than
+    /// reaching for what it draws.
+    pub fn has_session_picker(&self) -> bool {
+        matches!(self.layer, Some(Layer::Sessions(_)))
     }
 
     /// Runs `apply` when the settings overlay is open. Agent pushes that only
@@ -377,11 +390,11 @@ impl App {
     /// Whether an overlay is open. Full-screen views are excluded: they replace
     /// the conversation rather than sitting above it.
     pub fn has_modal(&self) -> bool {
-        self.layer_kind().is_some_and(|kind| !kind.is_fullscreen())
+        self.layer.as_ref().is_some_and(|layer| !layer.is_fullscreen())
     }
 
     pub fn full_screen_active(&self) -> bool {
-        self.layer_kind().is_some_and(LayerKind::is_fullscreen)
+        self.layer.as_ref().is_some_and(Layer::is_fullscreen)
     }
 
     pub fn workspace_move_state(&self) -> WorkspaceMoveState {

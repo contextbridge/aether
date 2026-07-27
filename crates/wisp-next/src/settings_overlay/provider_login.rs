@@ -1,4 +1,4 @@
-use super::{LiveSettingsData, PaneBehavior, summarize};
+use super::{KeyHint, LiveSettingsData, SettingsPane, summarize};
 use crate::filterable_list::FilterableList;
 use crate::render_context::RenderContext;
 use crate::selection::Direction;
@@ -72,7 +72,7 @@ impl Surface for ProviderLoginPane {
     }
 }
 
-impl PaneBehavior for ProviderLoginPane {
+impl SettingsPane for ProviderLoginPane {
     fn refresh(&mut self, live: &LiveSettingsData) {
         let keep = self.entries.selected_entry().map(|entry| entry.method_id.clone());
         self.entries = list_of(live.providers.clone());
@@ -83,8 +83,8 @@ impl PaneBehavior for ProviderLoginPane {
         }
     }
 
-    fn footer(&self) -> String {
-        "[Enter] Authenticate  [Esc] Back".to_string()
+    fn footer(&self) -> Vec<KeyHint> {
+        vec![("Enter", "authenticate".to_string()), ("Esc", "back".to_string())]
     }
 }
 

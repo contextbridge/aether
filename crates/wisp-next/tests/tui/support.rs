@@ -25,7 +25,7 @@ pub(crate) use std::time::{Duration, Instant};
 pub(crate) use tempfile::TempDir;
 pub(crate) use tokio::sync::mpsc::UnboundedReceiver;
 pub(crate) use tokio::task::LocalSet;
-pub(crate) use wisp_next::test_support::app::{App, AppConfig, HistoryItem, LayerKind, WorkspaceMoveState};
+pub(crate) use wisp_next::test_support::app::{App, AppConfig, HistoryItem, RuntimeEffect, WorkspaceMoveState};
 pub(crate) use wisp_next::test_support::composer::Composer;
 pub(crate) use wisp_next::test_support::generation::Generation;
 pub(crate) use wisp_next::test_support::picker::CommandEntry;
@@ -240,15 +240,17 @@ pub(crate) fn open_file_picker(composer: &mut Composer, root: &std::path::Path) 
 /// sees the state the event loop would have produced.
 pub(crate) fn settle_tasks(app: &mut App) {
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-    while let Some(task) = app.take_task() {
-        let result = runtime.block_on(task.execute());
-        app.on_task_result(result);
+    while let Some(effect) = app.take_effect() {
+        if let RuntimeEffect::Spawn(task) = effect {
+            let result = runtime.block_on(task.execute());
+            app.on_task_result(result);
+        }
     }
 }
 
 /// Whether the session picker is the open layer.
 pub(crate) fn has_session_picker(app: &App) -> bool {
-    app.layer_kind() == Some(LayerKind::Sessions)
+    app.has_session_picker()
 }
 
 pub(crate) fn key(code: KeyCode) -> KeyEvent {

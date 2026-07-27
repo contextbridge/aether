@@ -26,7 +26,7 @@ pub fn render_vertical_scrollbar(area: Rect, buf: &mut Buffer, content_rows: usi
 /// A single space separates the pairs: the highlighted keys already break them
 /// up, and these footers are long enough that anything wider wraps at 80
 /// columns.
-pub fn key_hints(hints: &[(&str, &str)], theme: &Theme) -> Line<'static> {
+pub fn key_hints(hints: &[(impl AsRef<str>, impl AsRef<str>)], theme: &Theme) -> Line<'static> {
     let key_style = Style::new().fg(theme.accent).add_modifier(Modifier::BOLD);
     let muted = Style::new().fg(theme.muted);
     let mut spans = Vec::with_capacity(hints.len() * 3);
@@ -34,8 +34,8 @@ pub fn key_hints(hints: &[(&str, &str)], theme: &Theme) -> Line<'static> {
         if !spans.is_empty() {
             spans.push(Span::raw(" "));
         }
-        spans.push(Span::styled((*key).to_string(), key_style));
-        spans.push(Span::styled(format!(" {description}"), muted));
+        spans.push(Span::styled(key.as_ref().to_string(), key_style));
+        spans.push(Span::styled(format!(" {}", description.as_ref()), muted));
     }
     Line::from(spans)
 }

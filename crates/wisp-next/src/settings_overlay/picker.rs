@@ -1,4 +1,4 @@
-use super::{PaneBehavior, SettingsChange, SettingsMenuEntry, SettingsMenuValue, message_for_change};
+use super::{KeyHint, SettingsChange, SettingsMenuEntry, SettingsMenuValue, SettingsPane, message_for_change};
 use crate::filterable_list::FilterableList;
 use crate::render_context::RenderContext;
 use crate::selection::Direction;
@@ -87,8 +87,8 @@ impl Surface for SettingsPicker {
     }
 }
 
-impl PaneBehavior for SettingsPicker {
-    fn footer(&self) -> String {
-        "[Enter] Confirm  [Esc] Back".to_string()
+impl SettingsPane for SettingsPicker {
+    fn footer(&self) -> Vec<KeyHint> {
+        vec![("Enter", "confirm".to_string()), ("Esc", "back".to_string())]
     }
 }
