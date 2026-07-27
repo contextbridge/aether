@@ -1,6 +1,6 @@
 use crate::credential::{OAuthCredential, OAuthCredentialStorage};
 use crate::error::OAuthError;
-use age::scrypt::Identity;
+use age::scrypt::{Identity, Recipient as ScryptRecipient};
 use age::secrecy::SecretString;
 use age::{Decryptor, Encryptor};
 use async_trait::async_trait;
@@ -23,12 +23,18 @@ struct CredentialStore {
 pub struct EncryptedFileOAuthCredentialStorage {
     path: PathBuf,
     passphrase: String,
+    scrypt_work_factor: Option<u8>,
     write_guard: Mutex<()>,
 }
 
 impl EncryptedFileOAuthCredentialStorage {
     pub fn new(path: PathBuf, passphrase: String) -> Self {
-        Self { path, passphrase, write_guard: Mutex::new(()) }
+        Self { path, passphrase, scrypt_work_factor: None, write_guard: Mutex::new(()) }
+    }
+
+    pub fn with_scrypt_work_factor(mut self, log_n: u8) -> Self {
+        self.scrypt_work_factor = Some(log_n);
+        self
     }
 
     pub fn from_settings(path: Option<PathBuf>, password_env: Option<&str>) -> Result<Self, OAuthError> {
@@ -44,13 +50,19 @@ impl EncryptedFileOAuthCredentialStorage {
         Ok(Self::new(path, passphrase))
     }
 
-    fn encrypt(plaintext: &[u8], passphrase: &str) -> Result<Vec<u8>, OAuthError> {
+    fn encrypt(plaintext: &[u8], passphrase: &str, work_factor: Option<u8>) -> Result<Vec<u8>, OAuthError> {
         let fail = |e| OAuthError::CredentialStore(format!("Encryption failed: {e}"));
 
+        let mut recipient = ScryptRecipient::new(SecretString::from(passphrase));
+        if let Some(log_n) = work_factor {
+            recipient.set_work_factor(log_n);
+        }
+
+        let encryptor = Encryptor::with_recipients(once(&recipient as &dyn age::Recipient))
+            .map_err(|e| OAuthError::CredentialStore(format!("Encryption failed: {e}")))?;
+
         let mut ciphertext = Vec::new();
-        let mut writer = Encryptor::with_user_passphrase(SecretString::from(passphrase))
-            .wrap_output(&mut ciphertext)
-            .map_err(fail)?;
+        let mut writer = encryptor.wrap_output(&mut ciphertext).map_err(fail)?;
         writer.write_all(plaintext).map_err(fail)?;
         writer.finish().map_err(fail)?;
 
@@ -101,7 +113,7 @@ impl EncryptedFileOAuthCredentialStorage {
         let plaintext = serde_json::to_vec(&store)
             .map_err(|e| OAuthError::CredentialStore(format!("Failed to serialize credentials: {e}")))?;
 
-        let ciphertext = Self::encrypt(&plaintext, &self.passphrase)?;
+        let ciphertext = Self::encrypt(&plaintext, &self.passphrase, self.scrypt_work_factor)?;
         write_atomic(&self.path, &ciphertext)
     }
 }
@@ -159,6 +171,9 @@ impl OAuthCredentialStorage for EncryptedFileOAuthCredentialStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `N = 2^10`, fast enough that the KDF stops dominating the suite.
+    const TEST_WORK_FACTOR: u8 = 10;
 
     #[tokio::test]
     async fn save_then_load_round_trips() {
@@ -259,7 +274,8 @@ mod tests {
     #[test]
     fn encrypt_decrypt_round_trips() {
         let plaintext = b"hello, world!";
-        let ciphertext = EncryptedFileOAuthCredentialStorage::encrypt(plaintext, "passphrase").unwrap();
+        let ciphertext =
+            EncryptedFileOAuthCredentialStorage::encrypt(plaintext, "passphrase", Some(TEST_WORK_FACTOR)).unwrap();
         let decrypted = EncryptedFileOAuthCredentialStorage::decrypt(&ciphertext, "passphrase").unwrap();
         assert_eq!(decrypted, plaintext);
     }
@@ -277,6 +293,6 @@ mod tests {
     fn temp_store(passphrase: &str) -> EncryptedFileOAuthCredentialStorage {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.keep().join("creds.enc");
-        EncryptedFileOAuthCredentialStorage::new(path, passphrase.to_string())
+        EncryptedFileOAuthCredentialStorage::new(path, passphrase.to_string()).with_scrypt_work_factor(TEST_WORK_FACTOR)
     }
 }
