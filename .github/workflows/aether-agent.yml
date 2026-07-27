@@ -25,7 +25,7 @@ jobs:
       (github.event_name == 'issues'
        && contains(fromJSON('["aether:plan", "aether:implement"]'), github.event.label.name)) ||
       (github.event_name != 'issues'
-       && contains(github.event.comment.body, '@aether')
+       && startsWith(github.event.comment.body, '/aether')
        && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
     runs-on: ubuntu-latest
     timeout-minutes: 45

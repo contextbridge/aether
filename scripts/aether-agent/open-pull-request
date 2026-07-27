@@ -13,9 +13,9 @@ draft=()
 if [[ "$MODE" == "plan" ]]; then
     title="plan: $ISSUE_TITLE"
     draft=(--draft)
-    printf 'Aether planned issue #%s. Review the plan inline, reply with `@aether` to revise it,\n' \
+    printf 'Aether planned issue #%s. Review the plan inline, start a reply with `/aether` to revise it,\n' \
         "$NUMBER" >> "$body"
-    printf 'and comment `@aether implement` to build it on this branch.\n\n' >> "$body"
+    printf 'and comment `/aether implement the plan` to build it on this branch.\n\n' >> "$body"
 else
     title="$SUBJECT"
     printf 'Opened by Aether from issue #%s.\n\n' "$NUMBER" >> "$body"
