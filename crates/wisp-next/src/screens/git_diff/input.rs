@@ -2,7 +2,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Position;
 
 use super::GitDiffScreen;
-use crate::annotation::DraftOutcome;
+use crate::annotation::{apply_draft_key, paste_into_draft};
 use crate::edit_buffer::apply_edit_key;
 use crate::git_diff::{CommentContext, PatchAnchor, QueuedComment};
 use crate::screens::git_diff::GitDiffEvent;
@@ -97,11 +97,7 @@ impl GitDiffScreen {
     pub(super) fn handle_paste(&mut self, text: &str) {
         match &mut self.bottom_bar {
             BottomBar::CommitEditor { buffer } => buffer.insert_paste(text),
-            _ => {
-                if let Some(draft) = self.review.draft.as_mut() {
-                    draft.on_paste(text);
-                }
-            }
+            _ => paste_into_draft(&mut self.review.draft, text),
         }
     }
 
@@ -269,16 +265,9 @@ impl GitDiffScreen {
     }
 
     fn on_draft_key(&mut self, key: KeyEvent) -> Vec<Action> {
-        let Some(draft) = self.review.draft.as_mut() else {
-            return Vec::new();
-        };
-        let anchor = draft.anchor;
-        match draft.on_key(key) {
-            DraftOutcome::Continue => return Vec::new(),
-            DraftOutcome::Commit(body) => self.file_comment(anchor, body),
-            DraftOutcome::Discard => {}
+        if let Some((anchor, body)) = apply_draft_key(&mut self.review.draft, key) {
+            self.file_comment(anchor, body);
         }
-        self.review.draft = None;
         Vec::new()
     }
 

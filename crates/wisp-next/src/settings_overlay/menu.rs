@@ -107,10 +107,7 @@ impl SettingsMenu {
             .iter()
             .map(|row| Line::styled(format!(" {}", row.label()), Style::new().fg(theme.text_primary)))
             .collect();
-        ListView::new(rows, &mut self.selection, theme)
-            .empty_message(" (no settings options)")
-            .highlight_style(Style::new().fg(theme.background).bg(theme.text_primary))
-            .render(area, buffer);
+        ListView::new(rows, &mut self.selection, theme).pane(" (no settings options)").render(area, buffer);
     }
 
     /// Adds or refreshes the row that opens `kind`'s pane.

@@ -14,6 +14,38 @@ pub fn render_markdown(
     MarkdownRenderer::new(theme, highlighter, width).render(source)
 }
 
+/// A fenced code-block delimiter: the character it is drawn with, how many of
+/// them, and whatever follows on the line.
+///
+/// The run length is part of it because a fence only closes on a run at least
+/// as long as the one that opened it, so a four-backtick block can contain
+/// three-backtick fences of its own without ending early.
+pub(crate) struct Fence<'a> {
+    character: char,
+    length: usize,
+    rest: &'a str,
+}
+
+impl<'a> Fence<'a> {
+    /// The fence delimiter `line` is, when it is one.
+    pub(crate) fn parse(line: &'a str) -> Option<Self> {
+        let trimmed = line.trim_start();
+        let character = trimmed.chars().next().filter(|&c| c == '`' || c == '~')?;
+        let length = trimmed.chars().take_while(|&c| c == character).count();
+        (length >= 3).then(|| Self { character, length, rest: &trimmed[length..] })
+    }
+
+    /// The language tag on an opening fence.
+    pub(crate) fn language(&self) -> &'a str {
+        self.rest.split_whitespace().next().unwrap_or("")
+    }
+
+    /// Whether this delimiter closes a block that `opening` started.
+    pub(crate) fn closes(&self, opening: &Self) -> bool {
+        self.character == opening.character && self.length >= opening.length && self.rest.trim().is_empty()
+    }
+}
+
 struct MarkdownRenderer<'a> {
     theme: &'a Theme,
     highlighter: &'a mut SyntaxHighlighter,

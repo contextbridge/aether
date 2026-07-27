@@ -1,4 +1,4 @@
-use crate::markdown::InlineMarkdownSpanBuilder;
+use crate::markdown::{Fence, InlineMarkdownSpanBuilder};
 use crate::syntax::SyntaxHighlighter;
 use crate::theme::Theme;
 use pulldown_cmark::{Event, Options, Parser};
@@ -20,18 +20,22 @@ pub fn render_markdown_source_lines(
 
     while index < raw_lines.len() {
         let raw = raw_lines[index];
-        if let Some(fence) = FenceDelimiter::parse(raw) {
+        if let Some(opening) = Fence::parse(raw) {
             rendered.push(SourceMarkdownLine { line: Line::styled(raw.to_string(), Style::new().fg(theme.muted)) });
             index += 1;
 
             let code_start = index;
-            while index < raw_lines.len() && FenceDelimiter::parse(raw_lines[index]).is_none() {
+            // Only a run at least as long as the opening one closes the block,
+            // so a fence nested inside it does not end it early.
+            while index < raw_lines.len()
+                && !Fence::parse(raw_lines[index]).is_some_and(|closing| closing.closes(&opening))
+            {
                 index += 1;
             }
             let code_end = index;
             let code_text: String = raw_lines[code_start..code_end].join("\n");
             if !code_text.is_empty() {
-                let highlighted_lines = highlighter.highlight(&code_text, &fence.lang, theme);
+                let highlighted_lines = highlighter.highlight(&code_text, opening.language(), theme);
                 for line in highlighted_lines {
                     let styled_line = Line::from(
                         line.spans
@@ -90,26 +94,6 @@ fn render_single_markdown_line(raw: &str, theme: &Theme) -> Line<'static> {
 fn is_table_source_line(raw: &str) -> bool {
     let trimmed = raw.trim();
     trimmed.starts_with('|') && trimmed.ends_with('|') && trimmed.matches('|').count() >= 2
-}
-
-struct FenceDelimiter {
-    lang: String,
-}
-
-impl FenceDelimiter {
-    fn parse(raw: &str) -> Option<Self> {
-        let trimmed = raw.trim_start();
-        let marker = if trimmed.starts_with("```") {
-            "```"
-        } else if trimmed.starts_with("~~~") {
-            "~~~"
-        } else {
-            return None;
-        };
-
-        let rest = trimmed.trim_start_matches(marker).trim();
-        Some(Self { lang: rest.split_whitespace().next().unwrap_or("").to_string() })
-    }
 }
 
 #[cfg(test)]
@@ -181,6 +165,18 @@ mod tests {
         let mut highlighter = SyntaxHighlighter::new();
         let result = render_markdown_source_lines("```rust\nfn main() {}\n```", &theme, &mut highlighter);
         assert_eq!(result.len(), 3);
+    }
+
+    #[test]
+    fn a_shorter_fence_does_not_close_a_longer_one() {
+        let theme = Theme::default();
+        let mut highlighter = SyntaxHighlighter::new();
+        let source = "````markdown\n```rust\nfn main() {}\n```\n````\nafter";
+        let result = render_markdown_source_lines(source, &theme, &mut highlighter);
+
+        assert_eq!(result.len(), 6, "every source line keeps its own row");
+        let last: String = result[5].line.spans.iter().map(|span| span.content.as_ref()).collect();
+        assert_eq!(last, "after", "the text past the outer fence must not be swallowed into it");
     }
 
     #[test]

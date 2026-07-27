@@ -430,7 +430,56 @@ impl Composer {
         self.buffer.set_cursor(cursor);
     }
 
-    pub fn close_overlay(&mut self) {
+    /// Applies a keystroke to the open completion list, returning the command it
+    /// accepted.
+    ///
+    /// The mirror of [`Composer::prompt_search_on_key`]: the composer owns the
+    /// list's own keys and the edits they imply, and the app decides what an
+    /// accepted command means.
+    pub fn completion_on_key(&mut self, key: crossterm::event::KeyEvent) -> Option<CommandEntry> {
+        match key.code {
+            KeyCode::Esc => self.close_overlay(),
+            KeyCode::Up => self.step_completion(Direction::Backward),
+            KeyCode::Down => self.step_completion(Direction::Forward),
+            KeyCode::Enter | KeyCode::Tab => {
+                let command = self.accept_command();
+                if command.is_none() {
+                    self.accept_file();
+                }
+                return command;
+            }
+            KeyCode::Backspace if self.active_token_is_empty() => {
+                self.backspace();
+                self.close_overlay();
+            }
+            KeyCode::Backspace => {
+                self.backspace();
+                self.refresh_overlay_query();
+            }
+            KeyCode::Char(character)
+                if !key
+                    .modifiers
+                    .intersects(crossterm::event::KeyModifiers::CONTROL | crossterm::event::KeyModifiers::ALT) =>
+            {
+                self.insert_char(character);
+                if character.is_whitespace() {
+                    self.close_overlay();
+                } else {
+                    self.refresh_overlay_query();
+                }
+            }
+            _ => {}
+        }
+        None
+    }
+
+    fn step_completion(&mut self, direction: Direction) {
+        if let Some(overlay) = self.completion() {
+            overlay.step(direction);
+        }
+    }
+
+    fn close_overlay(&mut self) {
         self.overlay = None;
     }
 
@@ -461,7 +510,7 @@ impl Composer {
         }
     }
 
-    pub fn active_token_is_empty(&self) -> bool {
+    fn active_token_is_empty(&self) -> bool {
         self.completion_ref().is_some_and(|overlay| overlay.query().is_empty())
     }
 

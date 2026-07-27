@@ -52,12 +52,12 @@ pub(super) fn extract_config_selections(config_options: &[acp::SessionConfigOpti
 
 impl App {
     pub fn take_pending_theme(&mut self) -> Option<crate::theme::Theme> {
-        self.pending_theme.take()
+        self.ui.pending_theme.take()
     }
 
     /// Themes are persisted and parsed by the task runner.
     pub(super) fn apply_theme_change(&mut self, value: &str) {
-        let mut settings = self.ui_settings.clone();
+        let mut settings = self.ui.settings.clone();
         settings.theme.file = (!value.is_empty()).then(|| value.to_string());
         self.pending_tasks.push_back(crate::tasks::Task::ApplyTheme { settings, value: value.to_string() });
         self.apply_settings_change(&crate::settings_overlay::SettingsChange {

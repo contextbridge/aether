@@ -217,8 +217,7 @@ impl ModelSelector {
                     },
                 )
             })
-            .empty_message(" (no matches found)")
-            .highlight_style(Style::new().fg(theme.background).bg(theme.text_primary))
+            .pane(" (no matches found)")
             .scrollbar()
             .render(list_area, buf);
     }

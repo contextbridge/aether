@@ -1,12 +1,11 @@
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Constraint, Layout, Position, Rect, Size};
+use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Clear, Paragraph, StatefulWidget, Widget};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Clear, Paragraph, Widget};
 use std::collections::HashSet;
-use tui_scrollview::{ScrollView, ScrollbarVisibility};
 
-use crate::annotation::Draft;
+use crate::annotation::{AnnotatedRows, Draft, draft_key};
 use crate::diff::{DiffTone, SPLIT_VIEW_MIN_WIDTH, diff_line, join_split, split_side, split_widths};
 use crate::git_diff::{FileDiff, FileStatus, PatchAnchor, PatchLine, PatchLineKind, StageState};
 use crate::list_view::ListView;
@@ -15,17 +14,19 @@ use crate::surface::{Action, MouseAction, Surface};
 use crate::syntax::SyntaxHighlighter;
 use crate::tasks::TaskResult;
 use crate::theme::Theme;
-use crate::widgets::{TextInput, wrapped_with_cursor};
+use crate::widgets::{TextInput, key_hints, wrapped_with_cursor};
 use crate::wrap::{fit_line, rows as rows_u16, wrap_text_char};
 
 use super::GitDiffScreen;
 use super::state::{
-    BottomBar, CursorRow, DiffView, DiffViewKey, DrawerEntry, Focus, GitDiffLoadState, PatchCursor, PatchKey, PatchRow,
-    PatchRows,
+    BottomBar, DiffView, DiffViewKey, DrawerEntry, Focus, GitDiffLoadState, PatchCursor, PatchKey, PatchRow, PatchRows,
 };
 
 /// Below this width the file drawer is hidden and the patch gets the full area.
 pub(super) const DRAWER_MIN_WIDTH: u16 = 72;
+
+/// The patch as rendered rows, with review comments woven in.
+type PatchRowSet = AnnotatedRows<PatchCursor>;
 
 impl GitDiffScreen {
     pub(super) fn render_screen(
@@ -133,11 +134,14 @@ impl GitDiffScreen {
             return None;
         }
 
-        self.ensure_diff_view(&file, content_area.width, theme, cx.highlighter);
+        self.ensure_diff_view(&file, PatchRowSet::content_width(content_area.width), theme, cx.highlighter);
 
+        // The cursor is only marked while the reviewer is browsing: a draft
+        // already has the terminal cursor sitting in its box.
+        let cursor_row =
+            (self.focus == Focus::Patch && self.review.draft.is_none()).then(|| self.cursor_row()).flatten();
         let view = self.patch.view.as_ref()?;
-        StatefulWidget::render(&view.scroll_view, content_area, buf, &mut self.patch.scroll);
-        self.overlay_cursor_indicator(content_area, buf, theme);
+        view.rows.render(content_area, buf, self.patch.scroll, cursor_row, theme);
         self.draft_cursor_position(content_area)
     }
 
@@ -179,12 +183,12 @@ impl GitDiffScreen {
     }
 
     fn draft_cursor_position(&self, content_area: Rect) -> Option<Position> {
-        let (draft_row, draft_col) = self.patch.view.as_ref()?.draft_cursor?;
-        let offset = usize::from(self.patch.scroll.offset().y);
+        let (draft_row, draft_col) = self.patch.view.as_ref()?.rows.draft_cursor()?;
+        let offset = self.patch.scroll;
         if draft_row < offset || draft_row >= offset + usize::from(content_area.height) {
             return None;
         }
-        let row = content_area.y + u16::try_from(draft_row - offset).unwrap_or(u16::MAX);
+        let row = content_area.y + rows_u16(draft_row - offset);
         let column = (content_area.x + draft_col).min(content_area.right().saturating_sub(1));
         Some(Position::new(column, row))
     }
@@ -207,7 +211,7 @@ impl GitDiffScreen {
                 document_revision: self.document_revision,
             },
             comments_revision: self.review.revision,
-            draft: self.draft_key(),
+            draft: draft_key(self.review.draft.as_ref()),
         };
 
         if self.patch.view.as_ref().is_some_and(|view| view.key == key) {
@@ -243,58 +247,25 @@ impl GitDiffScreen {
         self.patch.rows = Some(PatchRows { rows, key: key.clone() });
     }
 
-    /// Weaves the review comments into the cached patch rows and paints the
-    /// result into a scrollable buffer.
+    /// Weaves the review comments into the cached patch rows.
     fn build_diff_view(&self, key: &DiffViewKey, theme: &Theme) -> DiffView {
         let width = key.patch.content_width;
         let empty = Vec::new();
-        let rows = self.patch.rows.as_ref().map_or(&empty, |cached| &cached.rows);
+        let source = self.patch.rows.as_ref().map_or(&empty, |cached| &cached.rows);
 
-        let mut lines: Vec<Line<'static>> = Vec::with_capacity(rows.len());
-        let mut cursor_rows = Vec::new();
-        let mut draft_cursor = None;
-        for row in rows {
-            if let Some(cursor) = row.anchor.filter(|_| row.selectable) {
-                cursor_rows.push(CursorRow { hunk: cursor.hunk, line: cursor.line, row: lines.len() });
+        let mut rows = AnnotatedRows::default();
+        for row in source {
+            match row.anchor {
+                Some(cursor) if row.selectable => rows.push(row.line.clone(), cursor),
+                Some(cursor) => rows.push_anchored(row.line.clone(), cursor),
+                None => rows.push_inert(row.line.clone()),
             }
-            lines.push(row.line.clone());
             if let Some(cursor) = row.anchor {
-                self.push_annotations(
-                    &mut lines,
-                    self.anchor(cursor.hunk, cursor.line),
-                    width,
-                    theme,
-                    &mut draft_cursor,
-                );
+                self.push_annotations(&mut rows, self.anchor(cursor.hunk, cursor.line), width, theme);
             }
         }
 
-        let content_height = rows_u16(lines.len().max(1));
-        let mut scroll_view = ScrollView::new(Size::new(width, content_height))
-            .vertical_scrollbar_visibility(ScrollbarVisibility::Automatic);
-        scroll_view.render_widget(Paragraph::new(Text::from(lines)), Rect::new(0, 0, width, content_height));
-
-        DiffView { scroll_view, cursor_rows, draft_cursor, key: key.clone() }
-    }
-
-    fn overlay_cursor_indicator(&self, content_area: Rect, buf: &mut Buffer, theme: &Theme) {
-        if self.focus != Focus::Patch || self.review.draft.is_some() {
-            return;
-        }
-        let Some(cursor_row) = self.patch.view.as_ref().and_then(|view| self.cursor_row_in(view)) else {
-            return;
-        };
-        let offset = usize::from(self.patch.scroll.offset().y);
-        if cursor_row < offset || cursor_row >= offset + usize::from(content_area.height) {
-            return;
-        }
-        let y = content_area.y + rows_u16(cursor_row - offset);
-        for x in content_area.x..content_area.right() {
-            if let Some(cell) = buf.cell_mut((x, y)) {
-                cell.set_bg(theme.accent);
-                cell.set_fg(theme.background);
-            }
-        }
+        DiffView { rows, key: key.clone() }
     }
 
     fn build_full_file_rows(
@@ -332,17 +303,10 @@ impl GitDiffScreen {
     }
 
     /// Appends the submitted comments and the in-progress draft anchored to the
-    /// patch line just pushed, recording where the draft's cursor lands.
-    fn push_annotations(
-        &self,
-        lines: &mut Vec<Line<'static>>,
-        anchor: PatchAnchor,
-        width: u16,
-        theme: &Theme,
-        draft_cursor: &mut Option<(usize, u16)>,
-    ) {
+    /// patch line just pushed.
+    fn push_annotations(&self, rows: &mut PatchRowSet, anchor: PatchAnchor, width: u16, theme: &Theme) {
         for comment in self.review.queue.comments().iter().filter(|comment| comment.anchor == anchor) {
-            lines.extend(comment_box(
+            rows.push_annotation(comment_box(
                 "┌─ Comment ─",
                 &wrap_text_char(&comment.body, comment_body_width(width)),
                 theme.info,
@@ -355,8 +319,7 @@ impl GitDiffScreen {
             return;
         };
         let (body, cursor) = draft_body(draft, comment_body_width(width));
-        *draft_cursor = Some((lines.len() + cursor.0, cursor.1));
-        lines.extend(comment_box("┌ Draft ─", &body, theme.accent, width, theme));
+        rows.push_draft(comment_box("┌ Draft ─", &body, theme.accent, width, theme), cursor);
     }
 
     fn anchor(&self, hunk: usize, line: usize) -> PatchAnchor {
@@ -392,14 +355,30 @@ impl GitDiffScreen {
                 None
             }
             BottomBar::Help => {
-                let queued = self.review.queue.len();
-                let count = if queued > 0 { format!(" ({})", plural(queued, "comment")) } else { String::new() };
-                let keys = if self.focus == Focus::Drawer {
-                    "j/k move · h/l pane · space stage · a/A all · t scope · C commit · d discard · o full file · r refresh"
+                let mut hints = if self.focus == Focus::Drawer {
+                    vec![("j/k", "move"), ("h/l", "pane"), ("space", "stage"), ("a/A", "all"), ("t", "scope")]
                 } else {
-                    "j/k scroll · c comment · s submit · u undo · h/l pane · space stage · C commit · d discard · o full file · r refresh"
+                    vec![
+                        ("j/k", "scroll"),
+                        ("c", "comment"),
+                        ("s", "submit"),
+                        ("u", "undo"),
+                        ("h/l", "pane"),
+                        ("space", "stage"),
+                    ]
                 };
-                notice(format!("{keys}{count} · Ctrl-G/Esc close"), theme.muted).render(area, buf);
+                hints.extend([("C", "commit"), ("d", "discard"), ("o", "full file"), ("r", "refresh")]);
+                hints.push(("Ctrl-G/Esc", "close"));
+
+                let mut line = key_hints(&hints, theme);
+                let queued = self.review.queue.len();
+                if queued > 0 {
+                    line.push_span(Span::styled(
+                        format!("  ({})", plural(queued, "comment")),
+                        Style::new().fg(theme.info),
+                    ));
+                }
+                Paragraph::new(line).render(area, buf);
                 None
             }
         }

@@ -1,14 +1,12 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use ratatui::layout::Position;
 use ratatui::text::Line;
-use tui_scrollview::{ScrollView, ScrollViewState};
 
-use crate::annotation::Draft;
+use crate::annotation::{AnnotatedRows, Draft, DraftKey};
 use crate::edit_buffer::EditBuffer;
 use crate::git_diff::{DiffScope, FileDiff, FileStatus, GitDiffDocument, PatchAnchor, ReviewQueue, StageState};
-use crate::selection::{Direction, SelectionState, scroll_into_view};
+use crate::selection::{Direction, SelectionState, scroll_into_view, step_clamped};
 
 use crate::surface::Action;
 
@@ -44,7 +42,8 @@ pub struct GitDiffScreen {
 /// rendered views backing both.
 #[derive(Default)]
 pub(super) struct PatchView {
-    pub(super) scroll: ScrollViewState,
+    /// First rendered row on screen.
+    pub(super) scroll: usize,
     /// Rows the pane had on the last frame, for scrolling the cursor into view.
     pub(super) height: u16,
     pub(super) cursor: PatchCursor,
@@ -74,9 +73,7 @@ pub(super) struct Request {
 /// A rendered patch, and everything about the state it was rendered from. It is
 /// reusable exactly while [`DiffViewKey`] still matches.
 pub(super) struct DiffView {
-    pub(super) scroll_view: ScrollView,
-    pub(super) cursor_rows: Vec<CursorRow>,
-    pub(super) draft_cursor: Option<(usize, u16)>,
+    pub(super) rows: AnnotatedRows<PatchCursor>,
     pub(super) key: DiffViewKey,
 }
 
@@ -131,23 +128,7 @@ pub(super) struct PatchKey {
 pub(super) struct DiffViewKey {
     pub(super) patch: PatchKey,
     pub(super) comments_revision: Generation,
-    pub(super) draft: Option<DraftKey>,
-}
-
-#[derive(Clone, PartialEq, Eq)]
-pub(super) struct DraftKey {
-    pub(super) anchor: PatchAnchor,
-    pub(super) text_len: usize,
-    pub(super) cursor: usize,
-}
-
-/// The patch line a rendered row belongs to, so the cursor can be mapped to a
-/// row and back.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct CursorRow {
-    pub(super) hunk: usize,
-    pub(super) line: usize,
-    pub(super) row: usize,
+    pub(super) draft: Option<DraftKey<PatchAnchor>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -385,52 +366,29 @@ impl GitDiffScreen {
         self.sync_scroll_to_cursor();
     }
 
-    /// Identity of the active draft: its anchor plus the text and cursor that
-    /// were rendered, so the active view is reused only while all three match.
-    pub(super) fn draft_key(&self) -> Option<DraftKey> {
-        self.review.draft.as_ref().map(|draft| DraftKey {
-            anchor: draft.anchor,
-            text_len: draft.buffer.text().len(),
-            cursor: draft.buffer.cursor(),
-        })
-    }
-
-    /// Row within `view` that the patch cursor currently occupies.
-    pub(super) fn cursor_row_in(&self, view: &DiffView) -> Option<usize> {
-        view.cursor_rows
-            .iter()
-            .find(|entry| entry.hunk == self.patch.cursor.hunk && entry.line == self.patch.cursor.line)
-            .map(|entry| entry.row)
+    /// Row the patch cursor currently occupies.
+    pub(super) fn cursor_row(&self) -> Option<usize> {
+        self.patch.view.as_ref()?.rows.row_of(self.patch.cursor)
     }
 
     pub(super) fn sync_scroll_to_cursor(&mut self) {
-        let Some(cursor_row) = self.patch.view.as_ref().and_then(|view| self.cursor_row_in(view)) else {
+        let Some(cursor_row) = self.cursor_row() else {
             return;
         };
-        let offset = usize::from(self.patch.scroll.offset().y);
-        self.set_patch_offset(scroll_into_view(offset, cursor_row, usize::from(self.patch.height)));
+        self.patch.scroll = scroll_into_view(self.patch.scroll, cursor_row, usize::from(self.patch.height));
     }
 
     pub(super) fn move_patch_scroll(&mut self, direction: Direction, amount: usize) {
-        let current = usize::from(self.patch.scroll.offset().y);
-        self.set_patch_offset(match direction {
-            Direction::Backward => current.saturating_sub(amount),
-            Direction::Forward => current.saturating_add(amount),
-        });
+        let last_row = self.patch.view.as_ref().map_or(0, |view| view.rows.len().saturating_sub(1));
+        self.patch.scroll = step_clamped(self.patch.scroll, direction, amount, last_row);
         self.sync_cursor_to_scroll();
     }
 
+    /// Puts the cursor on whichever patch line the pane is now scrolled to.
     pub(super) fn sync_cursor_to_scroll(&mut self) {
-        let Some(view) = &self.patch.view else {
-            return;
-        };
-        let offset = usize::from(self.patch.scroll.offset().y);
-        let index = match view.cursor_rows.binary_search_by_key(&offset, |entry| entry.row) {
-            Ok(index) => index,
-            Err(index) => index.saturating_sub(1),
-        };
-        if let Some(entry) = view.cursor_rows.get(index) {
-            self.patch.cursor = PatchCursor { hunk: entry.hunk, line: entry.line };
+        if let Some(cursor) = self.patch.view.as_ref().and_then(|view| view.rows.anchor_at_or_above(self.patch.scroll))
+        {
+            self.patch.cursor = cursor;
         }
     }
 
@@ -576,10 +534,6 @@ impl GitDiffScreen {
             return None;
         };
         document.files.get(index)
-    }
-
-    fn set_patch_offset(&mut self, row: usize) {
-        self.patch.scroll.set_offset(Position::new(0, u16::try_from(row).unwrap_or(u16::MAX)));
     }
 
     /// Runs `build` against the repository root, doing nothing when the diff has

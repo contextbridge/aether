@@ -59,6 +59,13 @@ impl<'a> ListView<'a> {
         self.block(Block::bordered().title(title.into()).style(style))
     }
 
+    /// The chrome every settings pane shares: an inverted highlight and the
+    /// standard "nothing here" placeholder.
+    pub fn pane(self, empty_message: &'a str) -> Self {
+        let highlight = Style::new().fg(self.theme.background).bg(self.theme.text_primary);
+        self.empty_message(empty_message).highlight_style(highlight)
+    }
+
     /// Reserves the rightmost column for a scrollbar, so the track never sits on
     /// top of the rows.
     pub fn scrollbar(mut self) -> Self {

@@ -6,10 +6,10 @@ use crate::wrap::{truncate_spans, truncate_to_width};
 use acp_utils::config_option_id::ConfigOptionId;
 use agent_client_protocol::schema::SessionConfigOption;
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Alignment, Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Widget};
+use ratatui::widgets::Widget;
 use utils::ReasoningEffort;
 
 /// Everything the status line reads out of `App`, borrowed for one frame.
@@ -47,7 +47,9 @@ impl StatusLine {
         } else {
             render_segments(model, &settings.right, theme)
         };
-        Self { left: Line::from(left), right: Line::from(right) }
+        // The alignment rides on the line itself, so rendering it is a borrow
+        // rather than a copy into a `Paragraph`.
+        Self { left: Line::from(left), right: Line::from(right).right_aligned() }
     }
 
     /// Rows this status line needs: one when both halves fit side by side, two
@@ -71,21 +73,21 @@ impl Widget for &StatusLine {
             return;
         }
         let width = usize::from(area.width);
-        let clipped = |line: &Line<'static>| Paragraph::new(Line::from(truncate_spans(&line.spans, width)));
+        let clipped = |line: &Line<'static>| Line { spans: truncate_spans(&line.spans, width), ..line.clone() };
 
         if self.fits_on_one_row(width) {
             if self.right.width() == 0 {
                 clipped(&self.left).render(area, buf);
             } else {
-                Paragraph::new(self.left.clone()).alignment(Alignment::Left).render(area, buf);
-                Paragraph::new(self.right.clone()).alignment(Alignment::Right).render(area, buf);
+                (&self.left).render(area, buf);
+                (&self.right).render(area, buf);
             }
             return;
         }
 
         // Too wide for one row: stack, or clip to the left half when there is
         // only one row to work with.
-        let [left_row, right_row] = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(area);
+        let [left_row, right_row] = Layout::vertical([Constraint::Length(1); 2]).areas(area);
         clipped(&self.left).render(left_row, buf);
         clipped(&self.right).render(right_row, buf);
     }

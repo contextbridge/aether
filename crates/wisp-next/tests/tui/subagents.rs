@@ -147,8 +147,8 @@ fn sub_agent_drain_includes_sub_agents_in_history_items() {
     assert_eq!(sub_agents.len(), 1);
     assert_eq!(sub_agents[0].agent_name, "explorer");
     assert!(sub_agents[0].done);
-    assert_eq!(sub_agents[0].tools.len(), 1);
-    assert_eq!(sub_agents[0].tools[0].name, "grep");
+    assert_eq!(sub_agents[0].tool_calls.len(), 1);
+    assert_eq!(sub_agents[0].tool_calls[0].name, "grep");
 }
 
 #[test]

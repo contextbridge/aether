@@ -65,7 +65,7 @@ impl App {
             }
             AcpEvent::McpNotification(notification) => self.on_mcp_notification(&notification),
             AcpEvent::AuthMethodsUpdated(params) => {
-                self.auth_methods.clone_from(&params.auth_methods);
+                self.agent.auth_methods.clone_from(&params.auth_methods);
                 self.with_settings(|overlay| overlay.update_auth_methods(&params.auth_methods));
             }
             AcpEvent::AuthenticateComplete { method_id } => {
@@ -128,11 +128,11 @@ impl App {
     }
 
     fn open_session_picker(&mut self, sessions: Vec<acp::SessionInfo>) {
-        let current_id = self.session_id.clone();
+        let current_id = self.agent.session_id.clone();
         let others = sessions.into_iter().filter(|session| session.session_id != current_id).collect();
-        let picker = SessionPicker::new(others, self.capabilities.session_preview);
+        let picker = SessionPicker::new(others, self.agent.capabilities.session_preview);
         if let Some(id) = picker.initial_preview_request() {
-            let _ = self.prompt_handle.session_preview(&SessionId::new(id));
+            let _ = self.agent.handle.session_preview(&SessionId::new(id));
         }
         self.open_layer(Layer::Sessions(picker));
     }
@@ -142,8 +142,8 @@ impl App {
     /// so only per-turn state is reset here.
     fn on_session_loaded(&mut self, session_id: SessionId, config_options: Vec<acp::SessionConfigOption>) {
         let updates = self.session_loading_buffer.take(&session_id);
-        self.session_id = session_id;
-        self.config_options = config_options;
+        self.agent.session_id = session_id;
+        self.agent.config_options = config_options;
         self.reset_turn_state();
         self.conversation.generation.bump();
         for update in updates {
@@ -157,9 +157,9 @@ impl App {
         self.session_loading_buffer.clear();
         self.close_elicitation_owner();
         self.close_layer();
-        let previous_selections = extract_config_selections(&self.config_options);
-        self.session_id = session_id;
-        self.config_options = config_options;
+        let previous_selections = extract_config_selections(&self.agent.config_options);
+        self.agent.session_id = session_id;
+        self.agent.config_options = config_options;
         self.reset_conversation();
         self.notify("New session created");
         self.restore_config_selections(&previous_selections);
@@ -197,7 +197,7 @@ impl App {
         self.close_layer();
         self.workspace_move_state = WorkspaceMoveState::Idle;
         self.session_loading_buffer.clear();
-        self.pending_bell = None;
+        self.pending_bell = false;
         self.exit_state = ExitState::Exiting;
     }
 
@@ -255,12 +255,12 @@ impl App {
                         builtin: false,
                     })
                     .collect();
-                self.available_commands = merge_builtins(agent_commands, &self.capabilities);
+                self.available_commands = merge_builtins(agent_commands, &self.agent.capabilities);
             }
             acp::SessionUpdate::ConfigOptionUpdate(update) => {
-                self.config_options.clone_from(&update.config_options);
+                self.agent.config_options.clone_from(&update.config_options);
                 self.conversation.transcript.close_thought_block();
-                let options = self.config_options.clone();
+                let options = self.agent.config_options.clone();
                 self.with_settings(|overlay| overlay.update_config_options(&options));
             }
             acp::SessionUpdate::Plan(plan) => {
@@ -280,7 +280,7 @@ impl App {
         self.conversation.tool_calls.finalize_running(terminal_status);
         self.conversation.transcript.close_thought_block();
         if was_in_flight && matches!(terminal_status, ToolStatus::Success) {
-            self.pending_bell = Some(());
+            self.pending_bell = true;
         }
     }
 }

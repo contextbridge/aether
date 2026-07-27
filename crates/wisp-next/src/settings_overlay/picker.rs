@@ -51,8 +51,7 @@ impl SettingsPicker {
                 };
                 Line::styled(label, style)
             })
-            .empty_message(" (no matches found)")
-            .highlight_style(Style::new().fg(theme.background).bg(theme.text_primary))
+            .pane(" (no matches found)")
             .render(list_area, buffer);
     }
 }

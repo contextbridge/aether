@@ -17,7 +17,7 @@ use crate::settings_overlay::SettingsOverlay;
 use crate::status_line::StatusLineModel;
 use crate::surface::Surface;
 use crate::tasks::Task;
-use crate::tool_calls::{ToolCallLog, ToolStatus};
+use crate::tool_calls::{SubAgentState, ToolCallLog, ToolStatus};
 use crate::transcript::{SegmentContent, Transcript};
 use crate::workspace_picker::WorkspacePicker;
 use crate::workspace_status::WorkspaceStatus;
@@ -177,19 +177,9 @@ struct PendingSubmission {
 /// Root UI state: reduces terminal input and ACP events into the transcript,
 /// tool-call log, and composer that the renderer draws each frame.
 pub struct App {
-    session_id: SessionId,
-    agent_name: String,
-    prompt_capabilities: acp::PromptCapabilities,
-    session_capabilities: acp::SessionCapabilities,
-    capabilities: AetherCapabilities,
-    config_options: Vec<acp::SessionConfigOption>,
-    auth_methods: Vec<acp::AuthMethod>,
-    prompt_handle: AcpPromptHandle,
-    keybindings: Keybindings,
+    agent: Agent,
+    ui: UiConfig,
     workspace_status: WorkspaceStatus,
-    content_padding: usize,
-    status_line: ResolvedStatusLineSettings,
-    working_dir: PathBuf,
     available_commands: Vec<CommandEntry>,
     session_loading_buffer: SessionLoadingBuffer,
     layer: Option<Layer>,
@@ -203,10 +193,33 @@ pub struct App {
     progress_indicator: ProgressIndicator,
     pending_tasks: VecDeque<Task>,
     pending_submission: Option<PendingSubmission>,
-    ui_settings: UiSettings,
-    pending_theme: Option<crate::theme::Theme>,
     plan_tracker: PlanTracker,
-    pending_bell: Option<()>,
+    pending_bell: bool,
+}
+
+/// The agent connection, and everything it told us about itself when the
+/// session opened. Only the session id and config options change afterwards, as
+/// sessions are swapped and settings are edited.
+struct Agent {
+    session_id: SessionId,
+    name: String,
+    handle: AcpPromptHandle,
+    working_dir: PathBuf,
+    prompt_capabilities: acp::PromptCapabilities,
+    session_capabilities: acp::SessionCapabilities,
+    capabilities: AetherCapabilities,
+    config_options: Vec<acp::SessionConfigOption>,
+    auth_methods: Vec<acp::AuthMethod>,
+}
+
+/// How the UI is configured, as opposed to what it is currently showing.
+struct UiConfig {
+    settings: UiSettings,
+    keybindings: Keybindings,
+    content_padding: usize,
+    status_line: ResolvedStatusLineSettings,
+    /// A newly chosen theme the event loop still has to hand to the presenter.
+    pending_theme: Option<crate::theme::Theme>,
 }
 
 pub struct AppConfig {
@@ -235,25 +248,10 @@ pub enum HistoryItem {
         diff: Option<DiffPreview>,
         raw_input: String,
         display_value: Option<String>,
-        sub_agents: Vec<SubAgentHistoryItem>,
+        /// The sub-agent tree drawn beneath this tool, taken from the log as-is
+        /// rather than projected into a parallel set of types.
+        sub_agents: Vec<SubAgentState>,
     },
-}
-
-/// Rendered sub-agent entry for the tree view beneath a parent tool.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SubAgentHistoryItem {
-    pub agent_name: String,
-    pub done: bool,
-    pub tools: Vec<SubAgentToolHistoryItem>,
-}
-
-/// A single tool call within a sub-agent, rendered as a tree leaf.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SubAgentToolHistoryItem {
-    pub name: String,
-    pub arguments: String,
-    pub display_value: Option<String>,
-    pub status: ToolStatus,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -297,19 +295,25 @@ impl App {
         let capabilities = AetherCapabilities::from_meta(config.session_capabilities.meta.as_ref());
         let initial_commands = builtin_commands(&capabilities);
         Self {
-            session_id: config.session_id,
-            agent_name: config.agent_name,
-            prompt_capabilities: config.prompt_capabilities,
-            capabilities,
-            session_capabilities: config.session_capabilities,
-            config_options: config.config_options,
-            auth_methods: config.auth_methods,
-            prompt_handle: config.prompt_handle,
-            keybindings: Keybindings::default(),
+            agent: Agent {
+                session_id: config.session_id,
+                name: config.agent_name,
+                handle: config.prompt_handle,
+                working_dir: config.working_dir,
+                prompt_capabilities: config.prompt_capabilities,
+                session_capabilities: config.session_capabilities,
+                capabilities,
+                config_options: config.config_options,
+                auth_methods: config.auth_methods,
+            },
+            ui: UiConfig {
+                settings: config.settings,
+                keybindings: Keybindings::default(),
+                content_padding,
+                status_line,
+                pending_theme: None,
+            },
             workspace_status: config.workspace_status,
-            content_padding,
-            status_line,
-            working_dir: config.working_dir,
             available_commands: initial_commands,
             session_loading_buffer: SessionLoadingBuffer::new(),
             layer: None,
@@ -323,10 +327,8 @@ impl App {
             progress_indicator: ProgressIndicator::default(),
             pending_tasks: VecDeque::new(),
             pending_submission: None,
-            ui_settings: config.settings,
-            pending_theme: None,
             plan_tracker: PlanTracker::default(),
-            pending_bell: None,
+            pending_bell: false,
         }
     }
 
@@ -418,33 +420,33 @@ impl App {
     }
 
     pub fn prompt_capabilities(&self) -> &acp::PromptCapabilities {
-        &self.prompt_capabilities
+        &self.agent.prompt_capabilities
     }
 
     pub fn session_capabilities(&self) -> &acp::SessionCapabilities {
-        &self.session_capabilities
+        &self.agent.session_capabilities
     }
 
     pub fn config_options(&self) -> &[acp::SessionConfigOption] {
-        &self.config_options
+        &self.agent.config_options
     }
 
     pub fn auth_methods(&self) -> &[acp::AuthMethod] {
-        &self.auth_methods
+        &self.agent.auth_methods
     }
 
     pub fn content_padding(&self) -> usize {
-        self.content_padding
+        self.ui.content_padding
     }
 
     /// Everything the status line reads, gathered for one frame.
     pub fn status_line_model(&self) -> StatusLineModel<'_> {
         StatusLineModel {
-            settings: &self.status_line,
-            config_options: &self.config_options,
+            settings: &self.ui.status_line,
+            config_options: &self.agent.config_options,
             workspace: &self.workspace_status,
-            agent_name: &self.agent_name,
-            content_padding: self.content_padding,
+            agent_name: &self.agent.name,
+            content_padding: self.ui.content_padding,
             context_usage: self.turn.context_usage,
             unhealthy_servers: self.unhealthy_server_count,
             waiting_for_response: self.turn.prompt_in_flight,
@@ -453,7 +455,7 @@ impl App {
     }
 
     pub fn ui_settings(&self) -> &UiSettings {
-        &self.ui_settings
+        &self.ui.settings
     }
 
     /// A prompt is outstanding, so the agent owes us a reply.
@@ -470,6 +472,8 @@ impl App {
         &self.progress_indicator
     }
 
+    /// Test seam: the status line reads this through
+    /// [`App::status_line_model`] rather than calling it.
     pub fn exit_confirmation_active(&self) -> bool {
         self.exit_state.is_confirming()
     }
@@ -482,10 +486,13 @@ impl App {
         self.plan_tracker.current_entries()
     }
 
+    /// Reaches past the renderer for the integration tests, which assert on the
+    /// state a frame is drawn from rather than on the frame.
     pub fn has_plan(&self) -> bool {
         self.plan_tracker.has_entries()
     }
 
+    /// Test seam: drives the plan tracker's grace period without waiting on it.
     pub fn plan_tracker_mut(&mut self) -> &mut PlanTracker {
         &mut self.plan_tracker
     }
@@ -531,29 +538,6 @@ impl App {
     }
 }
 
-fn build_sub_agent_history_items(tool_calls: &ToolCallLog, tool_id: &str) -> Vec<SubAgentHistoryItem> {
-    let Some(agents) = tool_calls.sub_agent_states(tool_id) else {
-        return Vec::new();
-    };
-    agents
-        .iter()
-        .map(|agent| SubAgentHistoryItem {
-            agent_name: agent.agent_name.clone(),
-            done: agent.done,
-            tools: agent
-                .tool_calls
-                .iter()
-                .map(|call| SubAgentToolHistoryItem {
-                    name: call.name.clone(),
-                    arguments: call.arguments.clone(),
-                    display_value: call.display_value.clone(),
-                    status: call.status.clone(),
-                })
-                .collect(),
-        })
-        .collect()
-}
-
 fn resolve_history_segment(segment: &SegmentContent, tool_calls: &ToolCallLog) -> HistoryItem {
     match segment {
         SegmentContent::UserMessage(text) => HistoryItem::User(text.clone()),
@@ -567,7 +551,7 @@ fn resolve_history_segment(segment: &SegmentContent, tool_calls: &ToolCallLog) -
                 diff: entry.and_then(|value| value.diff.clone()),
                 raw_input: entry.map_or_else(String::new, |value| value.raw_input.clone()),
                 display_value: entry.and_then(|value| value.display_value.clone()),
-                sub_agents: build_sub_agent_history_items(tool_calls, id),
+                sub_agents: tool_calls.sub_agent_states(id).map(<[SubAgentState]>::to_vec).unwrap_or_default(),
             }
         }
     }

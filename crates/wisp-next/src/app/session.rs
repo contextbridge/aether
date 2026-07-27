@@ -46,10 +46,10 @@ impl App {
         self.composer.clear();
         match cmd.name.as_str() {
             "clear" => {
-                self.report_if_err("create new session", self.prompt_handle.new_session(&self.working_dir));
+                self.report_if_err("create new session", self.agent.handle.new_session(&self.agent.working_dir));
             }
             "resume" => {
-                self.report_if_err("list sessions", self.prompt_handle.list_sessions());
+                self.report_if_err("list sessions", self.agent.handle.list_sessions());
             }
             "settings" => self.open_settings(),
             "move" => self.begin_workspace_move(),
@@ -58,15 +58,16 @@ impl App {
     }
 
     fn open_settings(&mut self) {
-        let mut overlay = SettingsOverlay::new(&self.config_options, self.server_statuses.clone(), &self.auth_methods);
-        overlay.add_local_entries(build_theme_entries(&self.ui_settings, &[]));
+        let mut overlay =
+            SettingsOverlay::new(&self.agent.config_options, self.server_statuses.clone(), &self.agent.auth_methods);
+        overlay.add_local_entries(build_theme_entries(&self.ui.settings, &[]));
         overlay.add_status_entries();
         self.open_layer(Layer::Settings(overlay));
         self.pending_tasks.push_back(crate::tasks::Task::ListThemes);
     }
 
     pub(super) fn refresh_settings_themes(&mut self, files: &[String]) {
-        let entries = build_theme_entries(&self.ui_settings, files);
+        let entries = build_theme_entries(&self.ui.settings, files);
         self.with_settings(|overlay| overlay.add_local_entries(entries));
     }
 
@@ -76,7 +77,7 @@ impl App {
             return;
         }
         self.workspace_move_state = WorkspaceMoveState::Listing;
-        if self.report_if_err("list workspaces", self.prompt_handle.list_workspaces(&self.session_id)).is_none() {
+        if self.report_if_err("list workspaces", self.agent.handle.list_workspaces(&self.agent.session_id)).is_none() {
             self.workspace_move_state = WorkspaceMoveState::Idle;
         }
     }
@@ -94,30 +95,30 @@ impl App {
             Action::SubmitReview(prompt) => self.submit_review(&prompt),
             Action::LoadSession { session_id, cwd } => self.load_session(&session_id, &cwd),
             Action::RequestSessionPreview { session_id } => {
-                let _ = self.prompt_handle.session_preview(&SessionId::new(session_id));
+                let _ = self.agent.handle.session_preview(&SessionId::new(session_id));
             }
             Action::MoveWorkspace { target } => {
                 self.close_layer();
                 self.workspace_move_state = WorkspaceMoveState::Moving;
                 if self
-                    .report_if_err("move workspace", self.prompt_handle.move_workspace(&self.session_id, target))
+                    .report_if_err("move workspace", self.agent.handle.move_workspace(&self.agent.session_id, target))
                     .is_none()
                 {
                     self.workspace_move_state = WorkspaceMoveState::Idle;
                 }
             }
             Action::SetConfigOption { config_id, value } => {
-                if self.prompt_handle.set_config_option(&self.session_id, &config_id, &value).is_ok() {
+                if self.agent.handle.set_config_option(&self.agent.session_id, &config_id, &value).is_ok() {
                     self.apply_settings_change(&SettingsChange { config_id, new_value: value });
                 }
             }
             Action::SetTheme(value) => self.apply_theme_change(&value),
             Action::AuthenticateServer(name) => {
-                let _ = self.prompt_handle.authenticate_mcp_server(&self.session_id, &name);
+                let _ = self.agent.handle.authenticate_mcp_server(&self.agent.session_id, &name);
             }
             Action::AuthenticateProvider(method_id) => {
                 self.with_settings(|overlay| overlay.on_authenticate_started(&method_id));
-                let _ = self.prompt_handle.authenticate(&method_id);
+                let _ = self.agent.handle.authenticate(&method_id);
             }
         }
     }
@@ -142,12 +143,12 @@ impl App {
 
     pub(super) fn apply_settings_change(&mut self, change: &SettingsChange) {
         self.with_settings(|overlay| overlay.apply_change(change));
-        update_config_option_value(&mut self.config_options, &change.config_id, &change.new_value);
+        update_config_option_value(&mut self.agent.config_options, &change.config_id, &change.new_value);
     }
 
     fn load_session(&mut self, session_id: &SessionId, cwd: &std::path::Path) {
         self.session_loading_buffer.begin_load(session_id.clone());
-        if let Err(error) = self.prompt_handle.load_session(session_id, cwd) {
+        if let Err(error) = self.agent.handle.load_session(session_id, cwd) {
             self.session_loading_buffer.remove(session_id);
             self.notify(&format!("Failed to load session: {error}"));
             return;
@@ -162,17 +163,17 @@ impl App {
         self.reset_conversation();
         self.notify(&format!("Moved to {}", crate::workspace_status::home_relative_path(&new_cwd)));
         self.workspace_move_state = WorkspaceMoveState::LoadingSession;
-        self.session_loading_buffer.begin_load(self.session_id.clone());
-        if let Err(error) = self.prompt_handle.load_session(&self.session_id, &new_cwd) {
-            self.session_loading_buffer.remove(&self.session_id);
+        self.session_loading_buffer.begin_load(self.agent.session_id.clone());
+        if let Err(error) = self.agent.handle.load_session(&self.agent.session_id, &new_cwd) {
+            self.session_loading_buffer.remove(&self.agent.session_id);
             self.notify(&format!("Failed to reload session after move: {error}"));
             self.workspace_move_state = WorkspaceMoveState::Idle;
         }
-        self.working_dir = new_cwd;
+        self.agent.working_dir = new_cwd;
     }
 
     pub(super) fn finish_workspace_move(&mut self, new_cwd: &std::path::Path, status: WorkspaceStatus) {
-        if self.working_dir == new_cwd {
+        if self.agent.working_dir == new_cwd {
             self.workspace_status = status;
         }
     }
@@ -186,7 +187,7 @@ impl App {
         self.conversation
             .transcript
             .push_user_message(&format!("[wisp-next] Submitted review of working tree diff.\n{prompt}"));
-        match self.prompt_handle.prompt(&self.session_id, prompt, None) {
+        match self.agent.handle.prompt(&self.agent.session_id, prompt, None) {
             Ok(()) => self.close_layer(),
             Err(error) => {
                 tracing::error!("failed to send review prompt: {error}");
@@ -200,14 +201,14 @@ impl App {
     /// a `/clear` keeps the model and mode the user had chosen.
     pub(super) fn restore_config_selections(&mut self, previous: &[(String, String)]) {
         for (config_id, value) in previous {
-            let Some(option) = self.config_options.iter().find(|option| option.id.0.as_ref() == config_id) else {
+            let Some(option) = self.agent.config_options.iter().find(|option| option.id.0.as_ref() == config_id) else {
                 continue;
             };
             let acp::SessionConfigKind::Select(select) = &option.kind else {
                 continue;
             };
             if select.current_value.0.as_ref() != value
-                && let Err(error) = self.prompt_handle.set_config_option(&self.session_id, config_id, value)
+                && let Err(error) = self.agent.handle.set_config_option(&self.agent.session_id, config_id, value)
             {
                 tracing::warn!("Failed to restore config option {config_id} after new session: {error}");
             }

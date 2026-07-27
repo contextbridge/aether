@@ -41,6 +41,9 @@ pub(super) enum FormFieldKind {
     Multi { options: Vec<SelectOption>, selected: Vec<bool>, cursor: usize },
 }
 
+/// A field's display label and its optional description.
+type Labelling = (String, Option<String>);
+
 pub(super) struct SelectOption {
     value: String,
     title: String,
@@ -239,37 +242,26 @@ impl FormModal {
 
 impl FormField {
     fn from_primitive(name: &str, prop: &PrimitiveSchema, required: &[&str]) -> Self {
-        let (label, description, kind) = match prop {
+        use FormFieldKind::{Boolean, Number, Text};
+        let (labelling, kind) = match prop {
             PrimitiveSchema::Boolean(b) => {
-                let label = b.title.as_deref().unwrap_or(name).to_string();
-                let description = b.description.as_deref().map(str::to_string);
-                let kind = FormFieldKind::Boolean(b.default.unwrap_or(false));
-                (label, description, kind)
+                (labelling(b.title.as_deref(), b.description.as_deref(), name), Boolean(b.default.unwrap_or(false)))
             }
-            PrimitiveSchema::Integer(i) => {
-                let label = i.title.as_deref().unwrap_or(name).to_string();
-                let description = i.description.as_deref().map(str::to_string);
-                let default_str = i.default.map(|d| d.to_string()).unwrap_or_default();
-                (label, description, FormFieldKind::Number(default_str.into()))
-            }
-            PrimitiveSchema::Number(n) => {
-                let label = n.title.as_deref().unwrap_or(name).to_string();
-                let description = n.description.as_deref().map(str::to_string);
-                let default_str = n.default.map(|d| d.to_string()).unwrap_or_default();
-                (label, description, FormFieldKind::Number(default_str.into()))
-            }
-            PrimitiveSchema::String(s) => {
-                let label = s.title.as_deref().unwrap_or(name).to_string();
-                let description = s.description.as_deref().map(str::to_string);
-                let default_str = s.default.clone().unwrap_or_default();
-                (label, description, FormFieldKind::Text(default_str.into()))
-            }
-            PrimitiveSchema::Enum(e) => {
-                let (label, description) = extract_enum_metadata(e, name);
-                let kind = parse_enum_kind(e);
-                (label, description, kind)
-            }
+            PrimitiveSchema::Integer(i) => (
+                labelling(i.title.as_deref(), i.description.as_deref(), name),
+                Number(stringified_default(i.default).into()),
+            ),
+            PrimitiveSchema::Number(n) => (
+                labelling(n.title.as_deref(), n.description.as_deref(), name),
+                Number(stringified_default(n.default).into()),
+            ),
+            PrimitiveSchema::String(s) => (
+                labelling(s.title.as_deref(), s.description.as_deref(), name),
+                Text(s.default.clone().unwrap_or_default().into()),
+            ),
+            PrimitiveSchema::Enum(e) => (enum_labelling(e, name), parse_enum_kind(e)),
         };
+        let (label, description) = labelling;
         Self { name: name.to_string(), label, description, required: required.contains(&name), kind }
     }
 
@@ -337,65 +329,54 @@ impl FormField {
     }
 }
 
-fn extract_enum_metadata(e: &EnumSchema, name: &str) -> (String, Option<String>) {
-    match e {
-        EnumSchema::Single(s) => match s {
-            SingleSelectEnumSchema::Untitled(u) => {
-                (u.title.as_deref().unwrap_or(name).to_string(), u.description.as_deref().map(str::to_string))
-            }
-            SingleSelectEnumSchema::Titled(t) => {
-                (t.title.as_deref().unwrap_or(name).to_string(), t.description.as_deref().map(str::to_string))
-            }
-        },
-        EnumSchema::Multi(m) => match m {
-            MultiSelectEnumSchema::Untitled(u) => {
-                (u.title.as_deref().unwrap_or(name).to_string(), u.description.as_deref().map(str::to_string))
-            }
-            MultiSelectEnumSchema::Titled(t) => {
-                (t.title.as_deref().unwrap_or(name).to_string(), t.description.as_deref().map(str::to_string))
-            }
-        },
-        EnumSchema::Legacy(l) => {
-            (l.title.as_deref().unwrap_or(name).to_string(), l.description.as_deref().map(str::to_string))
-        }
-    }
+/// A field's display label and description: the schema's own title and
+/// description, falling back to the property name.
+fn labelling(title: Option<&str>, description: Option<&str>, name: &str) -> Labelling {
+    (title.unwrap_or(name).to_string(), description.map(str::to_string))
+}
+
+/// Every enum variant carries its title and description in the same two fields,
+/// just at a different depth.
+fn enum_labelling(e: &EnumSchema, name: &str) -> Labelling {
+    let (title, description) = match e {
+        EnumSchema::Single(SingleSelectEnumSchema::Untitled(s)) => (&s.title, &s.description),
+        EnumSchema::Single(SingleSelectEnumSchema::Titled(s)) => (&s.title, &s.description),
+        EnumSchema::Multi(MultiSelectEnumSchema::Untitled(m)) => (&m.title, &m.description),
+        EnumSchema::Multi(MultiSelectEnumSchema::Titled(m)) => (&m.title, &m.description),
+        EnumSchema::Legacy(l) => (&l.title, &l.description),
+    };
+    labelling(title.as_deref(), description.as_deref(), name)
 }
 
 fn parse_enum_kind(e: &EnumSchema) -> FormFieldKind {
     match e {
-        EnumSchema::Single(s) => match s {
-            SingleSelectEnumSchema::Untitled(u) => {
-                let options = options_from_strings(&u.enum_);
-                let default_idx =
-                    u.default.as_ref().and_then(|d| options.iter().position(|o| o.value == *d)).unwrap_or(0);
-                FormFieldKind::Single { options, selected: default_idx }
-            }
-            SingleSelectEnumSchema::Titled(t) => {
-                let options = options_from_const_titles(&t.one_of);
-                let default_idx =
-                    t.default.as_ref().and_then(|d| options.iter().position(|o| o.value == *d)).unwrap_or(0);
-                FormFieldKind::Single { options, selected: default_idx }
-            }
-        },
-        EnumSchema::Multi(m) => match m {
-            MultiSelectEnumSchema::Untitled(u) => {
-                let options = options_from_strings(&u.items.enum_);
-                let defaults = u.default.as_deref().unwrap_or(&[]);
-                let selected: Vec<bool> = options.iter().map(|o| defaults.contains(&o.value)).collect();
-                FormFieldKind::Multi { options, selected, cursor: 0 }
-            }
-            MultiSelectEnumSchema::Titled(t) => {
-                let options = options_from_const_titles(&t.items.any_of);
-                let defaults = t.default.as_deref().unwrap_or(&[]);
-                let selected: Vec<bool> = options.iter().map(|o| defaults.contains(&o.value)).collect();
-                FormFieldKind::Multi { options, selected, cursor: 0 }
-            }
-        },
-        EnumSchema::Legacy(l) => {
-            let options = options_from_strings(&l.enum_);
-            FormFieldKind::Single { options, selected: 0 }
+        EnumSchema::Single(SingleSelectEnumSchema::Untitled(s)) => {
+            single(options_from_strings(&s.enum_), s.default.as_deref())
+        }
+        EnumSchema::Single(SingleSelectEnumSchema::Titled(s)) => {
+            single(options_from_const_titles(&s.one_of), s.default.as_deref())
+        }
+        EnumSchema::Legacy(l) => single(options_from_strings(&l.enum_), None),
+        EnumSchema::Multi(MultiSelectEnumSchema::Untitled(m)) => {
+            multi(options_from_strings(&m.items.enum_), m.default.as_deref())
+        }
+        EnumSchema::Multi(MultiSelectEnumSchema::Titled(m)) => {
+            multi(options_from_const_titles(&m.items.any_of), m.default.as_deref())
         }
     }
+}
+
+/// A single-select focused on `default`, or on the first option when the
+/// default names an option that is not offered.
+fn single(options: Vec<SelectOption>, default: Option<&str>) -> FormFieldKind {
+    let selected = default.and_then(|value| options.iter().position(|o| o.value == value)).unwrap_or(0);
+    FormFieldKind::Single { options, selected }
+}
+
+fn multi(options: Vec<SelectOption>, defaults: Option<&[String]>) -> FormFieldKind {
+    let defaults = defaults.unwrap_or(&[]);
+    let selected = options.iter().map(|o| defaults.contains(&o.value)).collect();
+    FormFieldKind::Multi { options, selected, cursor: 0 }
 }
 
 fn options_from_strings(values: &[String]) -> Vec<SelectOption> {
@@ -404,6 +385,10 @@ fn options_from_strings(values: &[String]) -> Vec<SelectOption> {
 
 fn options_from_const_titles(items: &[ConstTitle]) -> Vec<SelectOption> {
     items.iter().map(|ct| SelectOption { value: ct.const_.clone(), title: ct.title.clone() }).collect()
+}
+
+fn stringified_default<T: std::fmt::Display>(default: Option<T>) -> String {
+    default.map(|value| value.to_string()).unwrap_or_default()
 }
 
 #[cfg(test)]

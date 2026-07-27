@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph, Widget};
 use utils::plan_review::{PlanReviewDecision, PlanReviewElicitationMeta};
 
-use crate::annotation::{Draft, DraftOutcome};
+use crate::annotation::{AnnotatedRows, Draft, apply_draft_key, paste_into_draft};
 use crate::edit_buffer::EditBuffer;
 use crate::elicitation::ElicitationResponder;
 use crate::generation::Generation;
@@ -21,7 +21,7 @@ use crate::selection::{Direction, SelectionState, scroll_into_view, step_clamped
 use crate::surface::{Action, MouseAction, Surface};
 use crate::syntax::SyntaxHighlighter;
 use crate::theme::Theme;
-use crate::widgets::{block_cursor_spans, render_vertical_scrollbar};
+use crate::widgets::{block_cursor_spans, key_hints};
 use crate::wrap::{rows as rows_u16, wrap_line};
 
 const MIN_SPLIT_WIDTH: u16 = 60;
@@ -44,15 +44,28 @@ pub struct PlanReviewScreen {
     source_lines: Vec<SourceMarkdownLine>,
     source_presentation_theme_generation: Option<Generation>,
     comments: Vec<ReviewComment>,
-    plan_scroll: usize,
-    plan_cursor_line: usize,
+    plan: PlanPane,
     outline_selection: SelectionState,
     draft: Option<Draft<usize>>,
     focus: Focus,
     responder: ElicitationResponder,
-    /// Where the plan's rows were last drawn, for hit-testing clicks.
-    plan_rows_area: Rect,
 }
+
+/// The plan pane: where it is scrolled, which source line the cursor is on, and
+/// the rows last drawn — what a click or a wheel notch is resolved against.
+#[derive(Default)]
+struct PlanPane {
+    /// First rendered row on screen.
+    scroll: usize,
+    /// Source line the cursor sits on.
+    cursor_line: usize,
+    rows: PlanRowSet,
+    /// Where the rows were last drawn, for hit-testing clicks.
+    area: Rect,
+}
+
+/// The plan as rendered rows, with review comments woven in.
+type PlanRowSet = AnnotatedRows<usize>;
 
 impl PlanReviewScreen {
     pub fn new(meta: PlanReviewElicitationMeta, responder: impl Into<ElicitationResponder>) -> Self {
@@ -65,13 +78,11 @@ impl PlanReviewScreen {
             source_lines: Vec::new(),
             source_presentation_theme_generation: None,
             comments: Vec::new(),
-            plan_scroll: 0,
-            plan_cursor_line: 0,
+            plan: PlanPane::default(),
             outline_selection,
             draft: None,
             focus: Focus::Plan,
             responder,
-            plan_rows_area: Rect::ZERO,
         }
     }
 
@@ -95,21 +106,29 @@ impl PlanReviewScreen {
 
         self.source_lines = render_markdown_source_lines(&self.document.markdown_text(), theme, highlighter);
         self.source_presentation_theme_generation = Some(theme_generation);
-        self.plan_cursor_line = self.plan_cursor_line.min(self.source_line_max_index());
+        self.plan.cursor_line = self.plan.cursor_line.min(self.source_line_max_index());
     }
 
+    /// Scrolls the plan by rendered rows, dragging the cursor to whichever
+    /// source line the pane now starts on.
     fn scroll(&mut self, direction: Direction) {
         if self.focus != Focus::Plan {
             self.move_outline(direction);
             return;
         }
-        let max = self.source_line_max_index();
-        self.plan_scroll = step_clamped(self.plan_scroll, direction, MOUSE_SCROLL_LINES, max);
-        self.plan_cursor_line = step_clamped(self.plan_cursor_line, direction, MOUSE_SCROLL_LINES, max);
+        let last_row = self.plan.rows.len().saturating_sub(1);
+        self.plan.scroll = step_clamped(self.plan.scroll, direction, MOUSE_SCROLL_LINES, last_row);
+        self.follow_scroll();
+    }
+
+    fn follow_scroll(&mut self) {
+        if let Some(line) = self.plan.rows.anchor_at_or_above(self.plan.scroll) {
+            self.plan.cursor_line = line;
+        }
     }
 
     fn move_cursor(&mut self, direction: Direction) {
-        self.plan_cursor_line = step_clamped(self.plan_cursor_line, direction, 1, self.source_line_max_index());
+        self.plan.cursor_line = step_clamped(self.plan.cursor_line, direction, 1, self.source_line_max_index());
     }
 
     /// Moves the outline selection, stopping at either end.
@@ -126,10 +145,12 @@ impl PlanReviewScreen {
             self.outline_selection.select_at(row, self.document.outline.len());
             return;
         }
-        if self.plan_rows_area.contains(position) {
+        if self.plan.area.contains(position) {
             self.focus = Focus::Plan;
-            let offset = usize::from(row - self.plan_rows_area.y);
-            self.plan_cursor_line = (self.plan_scroll + offset).min(self.source_line_max_index());
+            let clicked_row = self.plan.scroll + usize::from(row - self.plan.area.y);
+            if let Some(line) = self.plan.rows.anchor_at_or_above(clicked_row) {
+                self.plan.cursor_line = line;
+            }
         }
     }
 
@@ -178,11 +199,11 @@ impl PlanReviewScreen {
     fn handle_plan_key(&mut self, key: KeyEvent) {
         let max = self.source_line_max_index();
         match key.code {
-            KeyCode::Char('c') => self.draft = Some(Draft::new(self.plan_cursor_line + 1)),
+            KeyCode::Char('c') => self.draft = Some(Draft::new(self.plan.cursor_line + 1)),
             KeyCode::Char('j') | KeyCode::Down => self.move_cursor(Direction::Forward),
             KeyCode::Char('k') | KeyCode::Up => self.move_cursor(Direction::Backward),
-            KeyCode::Char('g') => self.plan_cursor_line = 0,
-            KeyCode::Char('G') => self.plan_cursor_line = max,
+            KeyCode::Char('g') => self.plan.cursor_line = 0,
+            KeyCode::Char('G') => self.plan.cursor_line = max,
             KeyCode::Char('n') => self.jump_heading(Direction::Forward),
             KeyCode::Char('p') => self.jump_heading(Direction::Backward),
             KeyCode::Char('h') | KeyCode::Left if !self.document.outline.is_empty() => self.focus = Focus::Outline,
@@ -201,7 +222,7 @@ impl PlanReviewScreen {
                 if let Some(section) =
                     self.outline_selection.selected().and_then(|selected| self.document.outline.get(selected))
                 {
-                    self.plan_cursor_line = section.first_line_no.saturating_sub(1).min(self.source_line_max_index());
+                    self.plan.cursor_line = section.first_line_no.saturating_sub(1).min(self.source_line_max_index());
                     self.focus = Focus::Plan;
                 }
             }
@@ -211,27 +232,20 @@ impl PlanReviewScreen {
     }
 
     fn handle_draft_key(&mut self, key: KeyEvent) {
-        let Some(draft) = self.draft.as_mut() else {
-            return;
-        };
-        let line_no = draft.anchor;
-        match draft.on_key(key) {
-            DraftOutcome::Continue => return,
-            DraftOutcome::Commit(body) => self.comments.push(ReviewComment::new(line_no, body)),
-            DraftOutcome::Discard => {}
+        if let Some((line_no, body)) = apply_draft_key(&mut self.draft, key) {
+            self.comments.push(ReviewComment::new(line_no, body));
         }
-        self.draft = None;
     }
 
     /// Moves the cursor to the next or previous section heading.
     fn jump_heading(&mut self, direction: Direction) {
         let headings = self.document.outline.iter().map(|section| section.first_line_no.saturating_sub(1));
         let target = match direction {
-            Direction::Forward => headings.into_iter().find(|&line| line > self.plan_cursor_line),
-            Direction::Backward => headings.into_iter().rfind(|&line| line < self.plan_cursor_line),
+            Direction::Forward => headings.into_iter().find(|&line| line > self.plan.cursor_line),
+            Direction::Backward => headings.into_iter().rfind(|&line| line < self.plan.cursor_line),
         };
         if let Some(line) = target {
-            self.plan_cursor_line = line.min(self.source_line_max_index());
+            self.plan.cursor_line = line.min(self.source_line_max_index());
         }
     }
 
@@ -241,7 +255,7 @@ impl PlanReviewScreen {
             return;
         }
 
-        let [body_area, footer_area] = area.layout(&Layout::vertical([Constraint::Min(0), Constraint::Length(1)]));
+        let [body_area, footer_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
         let use_split = self.uses_split(area);
 
         if use_split {
@@ -307,7 +321,7 @@ impl PlanReviewScreen {
 
         let inner = block.inner(area);
         block.render(area, buf);
-        self.plan_rows_area = inner;
+        self.plan.area = inner;
 
         let height = usize::from(inner.height);
         if height == 0 {
@@ -318,112 +332,91 @@ impl PlanReviewScreen {
             return;
         }
 
-        let gutter_width = digit_count(self.source_line_count().max(1)) + GUTTER_SEPARATOR_WIDTH;
-        let content_width = inner.width.saturating_sub(u16::try_from(gutter_width).unwrap_or(u16::MAX));
+        let gutter_width = digit_count(self.source_line_count()) + GUTTER_SEPARATOR_WIDTH;
+        let content_width = PlanRowSet::content_width(inner.width).saturating_sub(rows_u16(gutter_width));
         if content_width == 0 {
             return;
         }
 
-        self.plan_cursor_line = self.plan_cursor_line.min(self.source_line_max_index());
-        self.plan_scroll = scroll_into_view(self.plan_scroll, self.plan_cursor_line, height);
-        let (rows, source_rows, cursor_row) = self.build_rows(gutter_width, content_width, theme);
+        self.plan.cursor_line = self.plan.cursor_line.min(self.source_line_max_index());
+        self.plan.rows = self.build_rows(gutter_width, content_width, theme);
 
-        // Comments and drafts push lines apart, so the scroll offset the rows
-        // are drawn at is tracked in rendered rows rather than source lines.
-        let source_scroll = source_rows.get(self.plan_scroll).copied().unwrap_or_default();
-        let scroll = cursor_row.map_or(source_scroll, |row| scroll_into_view(source_scroll, row, height));
-
-        let highlight = (self.focus == Focus::Plan).then_some(cursor_row).flatten();
-        for (offset, line) in rows.iter().skip(scroll).take(height).enumerate() {
-            let row = Rect { y: inner.y + rows_u16(offset), height: 1, ..inner };
-            match highlight {
-                Some(index) if index == scroll + offset => highlight_row(line.clone(), theme).render(row, buf),
-                _ => line.render(row, buf),
-            }
+        // Comments and drafts push source lines apart, so the scroll offset is
+        // tracked in rendered rows rather than source lines.
+        let cursor_row = self.plan.rows.row_of(self.plan.cursor_line);
+        if let Some(row) = cursor_row {
+            self.plan.scroll = scroll_into_view(self.plan.scroll, row, height);
         }
-        render_vertical_scrollbar(inner, buf, rows.len(), scroll);
+        let highlight = (self.focus == Focus::Plan).then_some(cursor_row).flatten();
+        self.plan.rows.render(inner, buf, self.plan.scroll, highlight, theme);
     }
 
-    /// Lays the plan out as rendered rows, returning them alongside the row each
-    /// source line starts on and the row holding the cursor.
-    fn build_rows(
-        &self,
-        gutter_width: usize,
-        content_width: u16,
-        theme: &Theme,
-    ) -> (Vec<Line<'static>>, Vec<usize>, Option<usize>) {
-        let mut rows: Vec<Line<'static>> = Vec::new();
-        let mut source_rows = Vec::with_capacity(self.source_line_count());
-        let mut cursor_row = None;
+    /// Lays the plan out as rendered rows, with each comment and the draft woven
+    /// in beneath the source line it is anchored to.
+    fn build_rows(&self, gutter_width: usize, content_width: u16, theme: &Theme) -> PlanRowSet {
+        let mut rows = PlanRowSet::default();
 
         for (index, source) in self.source_lines.iter().enumerate().take(self.source_line_count()) {
-            source_rows.push(rows.len());
             let line_no = index + 1;
 
             for (wrap_index, wrapped) in wrap_line(source.line.clone(), content_width).into_iter().enumerate() {
                 let mut row = if wrap_index == 0 {
-                    if index == self.plan_cursor_line {
-                        cursor_row = Some(rows.len());
-                    }
                     build_gutter(line_no, gutter_width, theme)
                 } else {
-                    build_tail_gutter(gutter_width)
+                    tail_gutter(gutter_width)
                 };
                 row.spans.extend(wrapped.spans);
-                rows.push(row);
+                // Only the first row of a wrapped line takes the cursor, so
+                // stepping by one always moves a whole source line.
+                if wrap_index == 0 {
+                    rows.push(row, index);
+                } else {
+                    rows.push_anchored(row, index);
+                }
             }
 
             for comment in self.comments.iter().filter(|comment| comment.line_no == line_no) {
-                rows.push(annotation_row(
+                rows.push_annotation([annotation_row(
                     gutter_width,
                     &format!("┌ comment on line {line_no}"),
                     Style::new().fg(theme.info).add_modifier(Modifier::ITALIC),
                     theme,
-                ));
-                rows.extend(comment.body.lines().map(|text| {
+                )]);
+                rows.push_annotation(comment.body.lines().map(|text| {
                     annotation_row(gutter_width, &format!("│ {text}"), Style::new().fg(theme.text_secondary), theme)
                 }));
             }
 
             if let Some(draft) = self.draft.as_ref().filter(|draft| draft.anchor == line_no) {
-                rows.push(annotation_row(
-                    gutter_width,
-                    "┌ [new comment]",
-                    Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
-                    theme,
-                ));
-                rows.push(draft_row(&draft.buffer, gutter_width, theme));
+                rows.push_annotation([
+                    annotation_row(
+                        gutter_width,
+                        "┌ [new comment]",
+                        Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
+                        theme,
+                    ),
+                    draft_row(&draft.buffer, gutter_width, theme),
+                ]);
             }
         }
 
-        (rows, source_rows, cursor_row)
+        rows
     }
 
     fn render_footer(&self, area: Rect, buf: &mut Buffer, theme: &Theme, has_outline: bool) {
-        let plan_focused = self.focus == Focus::Plan;
-        let mut spans: Vec<Span<'static>> = Vec::new();
-
-        if plan_focused {
-            add_hint(&mut spans, "j/k", "move", theme);
-            add_hint(&mut spans, "n/p", "heading", theme);
+        let mut hints = vec![("j/k", "move")];
+        if self.focus == Focus::Plan {
+            hints.push(("n/p", "heading"));
             if has_outline {
-                add_hint(&mut spans, "h", "outline", theme);
+                hints.push(("h", "outline"));
             }
-            add_hint(&mut spans, "c", "comment", theme);
-            add_hint(&mut spans, "u", "undo", theme);
+            hints.push(("c", "comment"));
         } else {
-            add_hint(&mut spans, "j/k", "move", theme);
-            add_hint(&mut spans, "g/G", "top/end", theme);
-            add_hint(&mut spans, "enter", "jump", theme);
-            add_hint(&mut spans, "l", "plan", theme);
-            add_hint(&mut spans, "u", "undo", theme);
+            hints.extend([("g/G", "top/end"), ("enter", "jump"), ("l", "plan")]);
         }
+        hints.extend([("u", "undo"), ("a", "approve"), ("r", "changes"), ("Esc", "cancel")]);
 
-        add_hint(&mut spans, "a", "approve", theme);
-        add_hint(&mut spans, "r", "changes", theme);
-        add_hint(&mut spans, "Esc", "cancel", theme);
-
-        Paragraph::new(Line::from(spans)).style(Style::new().bg(theme.sidebar_bg)).render(area, buf);
+        Paragraph::new(key_hints(&hints, theme)).style(Style::new().bg(theme.sidebar_bg)).render(area, buf);
     }
 }
 
@@ -435,9 +428,7 @@ impl Surface for PlanReviewScreen {
     }
 
     fn on_paste(&mut self, text: &str) -> Vec<Action> {
-        if let Some(draft) = self.draft.as_mut() {
-            draft.on_paste(text);
-        }
+        paste_into_draft(&mut self.draft, text);
         Vec::new()
     }
 
@@ -488,18 +479,6 @@ fn draft_row(buffer: &EditBuffer, gutter_width: usize, theme: &Theme) -> Line<'s
     row
 }
 
-/// Repaints a whole row in the cursor colours.
-fn highlight_row(line: Line<'static>, theme: &Theme) -> Line<'static> {
-    Line::from(
-        line.spans
-            .into_iter()
-            .map(|span| {
-                Span::styled(span.content, span.style.patch(Style::new().bg(theme.accent).fg(theme.background)))
-            })
-            .collect::<Vec<_>>(),
-    )
-}
-
 fn digit_count(value: usize) -> usize {
     value.checked_ilog10().map_or(0, |digits| usize::try_from(digits).unwrap_or(0)) + 1
 }
@@ -512,14 +491,6 @@ fn build_gutter(line_no: usize, width: usize, theme: &Theme) -> Line<'static> {
     line
 }
 
-fn build_tail_gutter(width: usize) -> Line<'static> {
+fn tail_gutter(width: usize) -> Line<'static> {
     Line::from(Span::raw(" ".repeat(width)))
-}
-
-fn add_hint(spans: &mut Vec<Span<'static>>, key: &str, desc: &str, theme: &Theme) {
-    if !spans.is_empty() {
-        spans.push(Span::raw(" "));
-    }
-    spans.push(Span::styled(key.to_string(), Style::new().fg(theme.accent).add_modifier(Modifier::BOLD)));
-    spans.push(Span::styled(format!(" {desc}"), Style::new().fg(theme.muted)));
 }

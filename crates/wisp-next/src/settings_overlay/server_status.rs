@@ -98,8 +98,7 @@ impl Surface for ServerStatusPane {
             }
         });
         ListView::new(rows.collect(), &mut self.selection, theme)
-            .empty_message(" (no MCP servers configured)")
-            .highlight_style(Style::new().fg(theme.background).bg(theme.text_primary))
+            .pane(" (no MCP servers configured)")
             .render(area, buf);
         None
     }

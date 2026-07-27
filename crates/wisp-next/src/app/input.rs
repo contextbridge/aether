@@ -1,9 +1,9 @@
 use super::config::{cycle_quick_option, cycle_reasoning_option, update_config_option_value};
 use super::{App, ExitState, Layer};
 use crate::dropped_files::parse_dropped_file_paths;
+use crate::picker::CommandEntry;
 use crate::render_context::RenderContext;
 use crate::screens::git_diff::GitDiffScreen;
-use crate::selection::Direction;
 use crate::surface::{MouseAction, Surface, UiEvent};
 use crate::tasks::{Task, TaskResult};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -51,7 +51,7 @@ impl App {
 
     /// Routes a keystroke to whichever layer owns input, innermost first.
     fn dispatch_key(&mut self, key: KeyEvent) {
-        if self.keybindings.exit.matches(key) {
+        if self.ui.keybindings.exit.matches(key) {
             if self.exit_state.is_confirming() {
                 self.exit_state = ExitState::Exiting;
             } else {
@@ -87,15 +87,15 @@ impl App {
     }
 
     fn on_composer_key(&mut self, key: KeyEvent) {
-        if self.keybindings.open_prompt_search.matches(key)
-            && self.capabilities.prompt_search
+        if self.ui.keybindings.open_prompt_search.matches(key)
+            && self.agent.capabilities.prompt_search
             && !self.composer.has_completion()
         {
             self.composer.open_prompt_search();
             return;
         }
 
-        if self.keybindings.toggle_git_diff.matches(key) {
+        if self.ui.keybindings.toggle_git_diff.matches(key) {
             self.open_git_diff();
             return;
         }
@@ -108,28 +108,30 @@ impl App {
         }
 
         if self.composer.has_completion() {
-            self.on_completion_key(key);
+            if let Some(command) = self.composer.completion_on_key(key) {
+                self.run_accepted_command(&command);
+            }
             return;
         }
 
-        if self.keybindings.cycle_reasoning.matches(key) {
-            self.apply_config_cycle(cycle_reasoning_option(&self.config_options));
+        if self.ui.keybindings.cycle_reasoning.matches(key) {
+            self.apply_config_cycle(cycle_reasoning_option(&self.agent.config_options));
             return;
         }
 
-        if self.keybindings.cycle_mode.matches(key) {
-            self.apply_config_cycle(cycle_quick_option(&self.config_options));
+        if self.ui.keybindings.cycle_mode.matches(key) {
+            self.apply_config_cycle(cycle_quick_option(&self.agent.config_options));
             return;
         }
 
-        if self.keybindings.submit.matches(key) {
+        if self.ui.keybindings.submit.matches(key) {
             self.submit();
             return;
         }
 
-        if self.keybindings.cancel.matches(key) {
+        if self.ui.keybindings.cancel.matches(key) {
             if self.turn.prompt_in_flight {
-                let _ = self.prompt_handle.cancel(&self.session_id);
+                let _ = self.agent.handle.cancel(&self.agent.session_id);
             }
             return;
         }
@@ -137,10 +139,10 @@ impl App {
         match key.code {
             KeyCode::Char(character) if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
                 self.composer.insert_char(character);
-                if self.keybindings.open_command_picker.matches(key) && self.composer.text() == "/" {
+                if self.ui.keybindings.open_command_picker.matches(key) && self.composer.text() == "/" {
                     self.composer.open_command_picker(self.available_commands.clone());
-                } else if self.keybindings.open_file_picker.matches(key) {
-                    let task = self.composer.open_file_picker(&self.working_dir);
+                } else if self.ui.keybindings.open_file_picker.matches(key) {
+                    let task = self.composer.open_file_picker(&self.agent.working_dir);
                     self.pending_tasks.push_back(task);
                 }
             }
@@ -160,53 +162,17 @@ impl App {
 
     fn apply_config_cycle(&mut self, next: Option<(String, String)>) {
         if let Some((id, value)) = next
-            && self.prompt_handle.set_config_option(&self.session_id, &id, &value).is_ok()
+            && self.agent.handle.set_config_option(&self.agent.session_id, &id, &value).is_ok()
         {
-            update_config_option_value(&mut self.config_options, &id, &value);
+            update_config_option_value(&mut self.agent.config_options, &id, &value);
         }
     }
 
-    fn on_completion_key(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Esc => self.composer.close_overlay(),
-            KeyCode::Up => self.move_completion(Direction::Backward),
-            KeyCode::Down => self.move_completion(Direction::Forward),
-            KeyCode::Enter | KeyCode::Tab => self.accept_completion(),
-            KeyCode::Backspace if self.composer.active_token_is_empty() => {
-                self.composer.backspace();
-                self.composer.close_overlay();
-            }
-            KeyCode::Backspace => {
-                self.composer.backspace();
-                self.composer.refresh_overlay_query();
-            }
-            KeyCode::Char(character) if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
-                self.composer.insert_char(character);
-                if character.is_whitespace() {
-                    self.composer.close_overlay();
-                } else {
-                    self.composer.refresh_overlay_query();
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn move_completion(&mut self, direction: Direction) {
-        if let Some(overlay) = self.composer.completion() {
-            overlay.step(direction);
-        }
-    }
-
-    /// Accepts the focused completion. Builtin commands run immediately;
-    /// commands taking input leave the composer ready for it.
-    fn accept_completion(&mut self) {
-        let Some(command) = self.composer.accept_command() else {
-            self.composer.accept_file();
-            return;
-        };
+    /// Builtin commands run as soon as they are accepted; commands taking input
+    /// leave the composer ready for it.
+    fn run_accepted_command(&mut self, command: &CommandEntry) {
         if command.builtin {
-            self.dispatch_builtin_command(&command);
+            self.dispatch_builtin_command(command);
         } else if command.has_input {
             self.composer.insert_char(' ');
         } else {
@@ -244,8 +210,8 @@ impl App {
             TaskResult::SubmissionPrepared(outcome) => self.finish_submission(outcome),
             TaskResult::ThemesListed(files) => self.refresh_settings_themes(&files),
             TaskResult::ThemeApplied { settings, theme, error } => {
-                self.ui_settings = settings;
-                self.pending_theme = Some(theme);
+                self.ui.settings = settings;
+                self.ui.pending_theme = Some(theme);
                 if let Some(error) = error {
                     self.notify(&format!("Failed to save theme settings: {error}"));
                 }
@@ -264,7 +230,7 @@ impl App {
     }
 
     pub fn take_bell(&mut self) -> bool {
-        self.pending_bell.take().is_some()
+        std::mem::take(&mut self.pending_bell)
     }
 
     /// Only the bare composer works without mouse reporting; every other
@@ -278,7 +244,7 @@ impl App {
     }
 
     fn open_git_diff(&mut self) {
-        let (screen, task) = GitDiffScreen::new(self.working_dir.clone());
+        let (screen, task) = GitDiffScreen::new(self.agent.working_dir.clone());
         self.open_layer(Layer::GitDiff(Box::new(screen)));
         self.pending_tasks.push_back(task.into());
     }

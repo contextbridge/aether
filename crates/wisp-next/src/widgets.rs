@@ -1,8 +1,9 @@
 use crate::edit_buffer::EditBuffer;
+use crate::theme::Theme;
 use crate::wrap::{fit_prefix, text_position_in_wrap, wrap_text_char};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, StatefulWidget, Widget};
 use unicode_width::UnicodeWidthStr;
@@ -17,6 +18,26 @@ pub fn render_vertical_scrollbar(area: Rect, buf: &mut Buffer, content_rows: usi
     let scrollable = content_rows.saturating_sub(usize::from(area.height));
     let mut state = ScrollbarState::new(scrollable).position(offset);
     StatefulWidget::render(Scrollbar::new(ScrollbarOrientation::VerticalRight), area, buf, &mut state);
+}
+
+/// A footer's key hints, each key in the accent colour ahead of its muted
+/// description. Every full-screen surface labels its keys the same way.
+///
+/// A single space separates the pairs: the highlighted keys already break them
+/// up, and these footers are long enough that anything wider wraps at 80
+/// columns.
+pub fn key_hints(hints: &[(&str, &str)], theme: &Theme) -> Line<'static> {
+    let key_style = Style::new().fg(theme.accent).add_modifier(Modifier::BOLD);
+    let muted = Style::new().fg(theme.muted);
+    let mut spans = Vec::with_capacity(hints.len() * 3);
+    for (key, description) in hints {
+        if !spans.is_empty() {
+            spans.push(Span::raw(" "));
+        }
+        spans.push(Span::styled((*key).to_string(), key_style));
+        spans.push(Span::styled(format!(" {description}"), muted));
+    }
+    Line::from(spans)
 }
 
 /// Wraps `buffer`'s text to `width` columns, with the cursor's row and column

@@ -95,10 +95,8 @@ impl SessionPicker {
 
     fn render_preview(&self, area: Rect, buf: &mut Buffer, theme: &crate::theme::Theme) {
         let block = Block::bordered().title(" Preview ").style(Style::new().fg(theme.text_primary));
-        let inner = block.inner(area);
-        block.render(area, buf);
-
         let Some(session) = self.sessions.selected_entry() else {
+            block.render(area, buf);
             return;
         };
         let muted = Style::new().fg(theme.muted);
@@ -150,7 +148,7 @@ impl SessionPicker {
             }
         }
 
-        Paragraph::new(lines).render(inner, buf);
+        Paragraph::new(lines).block(block).render(area, buf);
     }
 }
 
@@ -185,10 +183,10 @@ impl Surface for SessionPicker {
     fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
         let theme = cx.theme;
         if !self.has_sessions() {
-            let block = Block::bordered().title(" Sessions ").style(Style::new().fg(theme.text_primary));
-            let inner = block.inner(area);
-            block.render(area, buf);
-            Paragraph::new("  No previous sessions found.").style(Style::new().fg(theme.muted)).render(inner, buf);
+            Paragraph::new("  No previous sessions found.")
+                .style(Style::new().fg(theme.muted))
+                .block(Block::bordered().title(" Sessions ").style(Style::new().fg(theme.text_primary)))
+                .render(area, buf);
             return None;
         }
 

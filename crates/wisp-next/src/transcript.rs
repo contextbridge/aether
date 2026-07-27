@@ -1,3 +1,4 @@
+use crate::markdown::Fence;
 use crate::tool_calls::ToolCallLog;
 
 /// One unit of conversation content, in transcript order.
@@ -118,7 +119,7 @@ impl Transcript {
 /// rendered as an independent markdown document, so a fence split across
 /// segments would lose its language context and syntax highlighting.
 fn last_finalizable_offset(text: &str) -> Option<usize> {
-    let mut open_fence: Option<(char, usize)> = None;
+    let mut open_fence: Option<Fence<'_>> = None;
     let mut finalizable = None;
     let mut offset = 0;
     for line in text.split_inclusive('\n') {
@@ -126,31 +127,17 @@ fn last_finalizable_offset(text: &str) -> Option<usize> {
         if !line.ends_with('\n') {
             break;
         }
-        match open_fence {
-            None => match fence_delimiter(line) {
-                Some((fence_char, length, _)) => open_fence = Some((fence_char, length)),
-                None => finalizable = Some(offset),
-            },
-            Some((fence_char, length)) => {
-                if let Some((close_char, close_length, rest)) = fence_delimiter(line)
-                    && close_char == fence_char
-                    && close_length >= length
-                    && rest.trim().is_empty()
-                {
-                    open_fence = None;
-                    finalizable = Some(offset);
-                }
+        match (&open_fence, Fence::parse(line)) {
+            (None, Some(opening)) => open_fence = Some(opening),
+            (None, None) => finalizable = Some(offset),
+            (Some(opening), Some(closing)) if closing.closes(opening) => {
+                open_fence = None;
+                finalizable = Some(offset);
             }
+            (Some(_), _) => {}
         }
     }
     finalizable
-}
-
-fn fence_delimiter(line: &str) -> Option<(char, usize, &str)> {
-    let trimmed = line.trim_start();
-    let fence_char = trimmed.chars().next().filter(|&c| c == '`' || c == '~')?;
-    let length = trimmed.chars().take_while(|&c| c == fence_char).count();
-    (length >= 3).then(|| (fence_char, length, &trimmed[length..]))
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use crate::app::{HistoryItem, HistoryKind, SubAgentHistoryItem};
+use crate::app::{HistoryItem, HistoryKind};
 use crate::diff::render_diff;
 use crate::generation::Generation;
 use crate::markdown::render_markdown;
@@ -11,7 +11,7 @@ use crate::render_context::RenderContext;
 use crate::settings::UiSettings;
 use crate::syntax::SyntaxHighlighter;
 use crate::theme::Theme;
-use crate::tool_calls::{SUB_AGENT_VISIBLE_TOOL_LIMIT, ToolStatus};
+use crate::tool_calls::{SUB_AGENT_VISIBLE_TOOL_LIMIT, SubAgentState, ToolStatus};
 use crate::wrap::{truncate_to_width, wrap_line, wrap_text};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -316,7 +316,7 @@ fn tool_line(
 
 /// Tree of sub-agents beneath a spawning tool, each with its recent tool calls.
 fn sub_agent_tree_lines(
-    sub_agents: &[SubAgentHistoryItem],
+    sub_agents: &[SubAgentState],
     spinner_tick: usize,
     padding: usize,
     theme: &Theme,
@@ -338,12 +338,12 @@ fn sub_agent_tree_lines(
         ]));
 
         // Only the most recent calls are shown; older ones collapse into a count.
-        let hidden = agent.tools.len().saturating_sub(SUB_AGENT_VISIBLE_TOOL_LIMIT);
+        let hidden = agent.tool_calls.len().saturating_sub(SUB_AGENT_VISIBLE_TOOL_LIMIT);
         if hidden > 0 {
             lines.push(Line::styled(format!("{pad}  … {hidden} earlier tool calls"), muted));
         }
 
-        let visible: Vec<_> = agent.tools.iter().skip(hidden).collect();
+        let visible: Vec<_> = agent.tool_calls.iter().skip(hidden).collect();
         for (index, tool) in visible.iter().enumerate() {
             let branch = if index + 1 == visible.len() { "  └─ " } else { "  ├─ " };
             let mut line = Line::from(vec![

@@ -22,7 +22,7 @@ use agent_client_protocol::Responder;
 use agent_client_protocol::schema::{AuthMethod, SessionConfigOption};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Constraint, Layout, Position, Rect};
+use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Clear, Paragraph, Widget};
@@ -357,20 +357,21 @@ impl Surface for SettingsOverlay {
                 .render(area, buf);
             return None;
         }
+        // The key hints ride on the bottom border rather than claiming a row of
+        // their own, so a short terminal spends every inner row on content.
         let block = Block::bordered()
             .title(" Configuration ")
+            .title_bottom(Line::styled(format!(" {} ", self.footer_text()), Style::new().fg(theme.text_secondary)))
             .style(Style::new().bg(theme.background))
             .border_style(Style::new().fg(theme.text_secondary));
         let inner = block.inner(area);
         block.render(area, buf);
 
-        let [content_area, footer_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
-        Paragraph::new(Line::from(self.footer_text())).render(footer_area, buf);
         let Some(pane) = self.pane.as_mut() else {
-            self.menu.render(content_area, buf, theme);
+            self.menu.render(inner, buf, theme);
             return None;
         };
-        pane.surface().render(content_area, buf, cx)
+        pane.surface().render(inner, buf, cx)
     }
 }
 

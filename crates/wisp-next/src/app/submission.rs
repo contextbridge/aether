@@ -50,7 +50,7 @@ impl App {
         self.turn.prompt_in_flight = true;
         self.turn.submitted_prompt_count = self.turn.submitted_prompt_count.saturating_add(1);
         let content = (!outcome.blocks.is_empty()).then_some(outcome.blocks);
-        if let Err(error) = self.prompt_handle.prompt(&self.session_id, &text, content) {
+        if let Err(error) = self.agent.handle.prompt(&self.agent.session_id, &text, content) {
             tracing::error!("failed to send prompt: {error}");
             self.turn.prompt_in_flight = false;
             self.notify(&format!("Failed to send prompt: {error}"));
@@ -64,14 +64,14 @@ impl App {
             return None;
         }
 
-        if requires_image && !self.prompt_capabilities.image {
+        if requires_image && !self.agent.prompt_capabilities.image {
             return Some("ACP agent does not support image input.".to_string());
         }
-        if requires_audio && !self.prompt_capabilities.audio {
+        if requires_audio && !self.agent.prompt_capabilities.audio {
             return Some("ACP agent does not support audio input.".to_string());
         }
 
-        let config = SessionConfigView::new(&self.config_options);
+        let config = SessionConfigView::new(&self.agent.config_options);
         let values = config.current_values(ConfigOptionId::Model);
         if values.is_empty() {
             return None;
@@ -98,7 +98,7 @@ impl App {
         };
         let params =
             acp_utils::notifications::PromptSearchParams { query, limit: None, search_generation: generation.get() };
-        if let Err(error) = self.prompt_handle.search_prompts(params)
+        if let Err(error) = self.agent.handle.search_prompts(params)
             && let Some(picker) = self.composer.prompt_search()
         {
             picker.on_failed(generation, format!("search failed: {error}"));
