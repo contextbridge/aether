@@ -1,7 +1,5 @@
-mod common;
-
+use crate::common::{CargoProject, DaemonHarness, TestProject, hover_text, use_fake_rust_server};
 use aether_lspd::LanguageId;
-use common::{CargoProject, DaemonHarness, TestProject, hover_text, use_fake_rust_server};
 use lsp_types::{DocumentSymbolResponse, GotoDefinitionResponse};
 
 #[tokio::test]

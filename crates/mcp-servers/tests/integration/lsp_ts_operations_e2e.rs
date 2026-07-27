@@ -7,10 +7,8 @@
 //!
 //! Run with: `cargo test -p mcp-servers -- lsp_ts_operations`
 
-mod common;
-
+use crate::common::{call_tool, connect_lsp, poll_lsp_tool};
 use aether_lspd::testing::{NodeProject, TestProject};
-use common::{call_tool, connect_lsp, poll_lsp_tool};
 
 /// Test: hover returns type information for a TypeScript variable
 #[tokio::test]

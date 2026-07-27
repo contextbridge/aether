@@ -1,6 +1,4 @@
-mod common;
-
-use common::{CodingWorkspace, TestResult, test_error};
+use crate::common::{CodingWorkspace, TestResult, test_error};
 use mcp_servers::coding::tools::ast_grep::AstGrepInput;
 use mcp_servers::coding::tools::bash::BashInput;
 use mcp_servers::coding::tools::find::FindInput;

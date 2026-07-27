@@ -1,0 +1,18 @@
+mod common;
+
+mod coding_mcp_tools;
+mod lsp_check_errors_contract;
+mod lsp_diagnostics_e2e;
+mod lsp_operations_e2e;
+mod lsp_ts_diagnostics_e2e;
+mod lsp_ts_operations_e2e;
+mod lsp_workspace_search_contract;
+mod plan_mcp;
+mod plugins_mcp_agents;
+mod plugins_mcp_skills;
+mod skills_self_improvement;
+mod stdio_transport;
+mod test_bash;
+mod test_read_before_edit_safety;
+mod test_read_file_rule_meta;
+mod test_web_fetch;

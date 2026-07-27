@@ -9,10 +9,8 @@
 //!
 //! Run with: `cargo test -p mcp-servers -- lsp_diagnostics`
 
-mod common;
-
+use crate::common::{call_tool, connect_lsp, has_errors, has_no_errors, poll_diagnostics, try_call_tool};
 use aether_lspd::testing::{CargoProject, TestProject};
-use common::{call_tool, connect_lsp, has_errors, has_no_errors, poll_diagnostics, try_call_tool};
 use rmcp::RoleClient;
 use rmcp::model::ClientInfo;
 use rmcp::service::RunningService;
