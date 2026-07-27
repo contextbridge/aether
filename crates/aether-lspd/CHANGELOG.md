@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.26](https://github.com/contextbridge/aether/compare/aether-lspd-v0.1.25...aether-lspd-v0.1.26) - 2026-07-27
+
+### Added
+
+- recover from wedged or crashed language servers in lspd ([#275](https://github.com/contextbridge/aether/pull/275))
+
 ## [0.1.25](https://github.com/contextbridge/aether/compare/aether-lspd-v0.1.24...aether-lspd-v0.1.25) - 2026-07-21
 
 ### Other

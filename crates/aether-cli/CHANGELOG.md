@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.28](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.27...aether-agent-cli-v0.7.28) - 2026-07-27
+
+### Added
+
+- *(llm)* Add support for bedrock mantle models ([#293](https://github.com/contextbridge/aether/pull/293))
+
+### Fixed
+
+- Set cache key based on prompt contents. ([#279](https://github.com/contextbridge/aether/pull/279))
+
+### Other
+
+- release ([#269](https://github.com/contextbridge/aether/pull/269))
+
 ## [0.7.27](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.26...aether-agent-cli-v0.7.27) - 2026-07-21
 
 ### Other

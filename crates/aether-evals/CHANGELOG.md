@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.17](https://github.com/contextbridge/aether/compare/aether-evals-v0.2.16...aether-evals-v0.2.17) - 2026-07-27
+
+### Added
+
+- *(llm)* Add support for bedrock mantle models ([#293](https://github.com/contextbridge/aether/pull/293))
+
+### Other
+
+- scheduled code-cleanup ([#276](https://github.com/contextbridge/aether/pull/276))
+
 ## [0.2.16](https://github.com/contextbridge/aether/compare/aether-evals-v0.2.15...aether-evals-v0.2.16) - 2026-07-21
 
 ### Other

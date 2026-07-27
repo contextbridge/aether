@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.35](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.34...aether-wisp-v0.4.35) - 2026-07-27
+
+### Other
+
+- update Cargo.toml dependencies
+
 ## [0.4.34](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.33...aether-wisp-v0.4.34) - 2026-07-21
 
 ### Other

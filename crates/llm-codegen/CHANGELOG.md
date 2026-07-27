@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.17](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.16...aether-llm-codegen-v0.2.17) - 2026-07-27
+
+### Added
+
+- *(llm)* Add support for bedrock mantle models ([#293](https://github.com/contextbridge/aether/pull/293))
+
 ## [0.2.16](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.15...aether-llm-codegen-v0.2.16) - 2026-07-20
 
 ### Added
