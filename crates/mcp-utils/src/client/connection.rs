@@ -7,12 +7,12 @@ use crate::{client::OAuthHandlerContext, transport::create_in_memory_transport};
 use aether_auth::{OAuthCredentialStorage, create_auth_manager_from_store, perform_oauth_flow};
 use llm::ToolAnnotations;
 use rmcp::{
-    RoleClient, RoleServer, ServiceExt,
-    model::{ClientInfo, Tool as RmcpTool},
-    serve_client,
+    ClientCacheConfig, ClientLifecycleMode, RoleClient, RoleServer, ServiceExt,
+    model::{ClientInfo, ProtocolVersion, Tool as RmcpTool},
+    serve_client_with_lifecycle,
     service::{DynService, RunningService},
     transport::{
-        StreamableHttpClientTransport, TokioChildProcess, auth::AuthClient,
+        IntoTransport, StreamableHttpClientTransport, TokioChildProcess, auth::AuthClient,
         streamable_http_client::StreamableHttpClientTransportConfig,
     },
 };
@@ -104,7 +104,7 @@ impl McpServerConnection {
         mcp_client: McpClient,
     ) -> Result<Self> {
         let transport = StreamableHttpClientTransport::with_client(auth_client, config);
-        let client = serve_client(mcp_client, transport)
+        let client = serve_client_modern(mcp_client, transport)
             .await
             .map_err(|e| McpError::ConnectionFailed(format!("reconnect failed for '{name}': {e}")))?;
         Ok(Self::from_parts(client, None))
@@ -215,7 +215,7 @@ async fn connect_stdio(
     };
     let stderr_task = stderr.map(|stderr| spawn_stderr_logger(server_name.to_string(), stderr));
 
-    match serve_client(mcp_client, proc).await {
+    match serve_client_modern(mcp_client, proc).await {
         Ok(client) => McpConnectOutcome::Connected {
             conn: McpServerConnection::from_parts(client, stderr_task),
             reauth_config: None,
@@ -290,10 +290,10 @@ async fn connect_http(
         tracing::debug!("Using OAuth for server '{name}'");
         let auth_client = AuthClient::new(reqwest::Client::default(), auth_manager);
         let transport = StreamableHttpClientTransport::with_client(auth_client, config.transport.clone());
-        serve_client(mcp_client, transport).await.map_err(conn_err)
+        serve_client_modern(mcp_client, transport).await.map_err(conn_err)
     } else {
         let transport = StreamableHttpClientTransport::from_config(config.transport.clone());
-        serve_client(mcp_client, transport).await.map_err(conn_err)
+        serve_client_modern(mcp_client, transport).await.map_err(conn_err)
     };
 
     match result {
@@ -341,9 +341,37 @@ async fn serve_in_memory(
         }
     });
 
-    let client = serve_client(mcp_client, client_transport)
+    let client = serve_client_modern(mcp_client, client_transport)
         .await
         .map_err(|e| McpError::ConnectionFailed(format!("Failed to connect to in-memory server '{label}': {e}")))?;
 
     Ok((client, server_handle))
+}
+
+/// Start an MCP client using rmcp's modern lifecycle: it probes
+/// `server/discover` (negotiating the `2026-07-28` protocol, which unlocks MRTR
+/// and other stateless features when the server supports it) and transparently
+/// falls back to the legacy `initialize` handshake for older servers. A
+/// server-advertised TTL-honoring response cache is enabled so repeated
+/// `tools/list` / `resources/list` / `prompts/list` calls within the server's
+/// `ttlMs` are served from cache instead of re-fetched.
+async fn serve_client_modern<T, E, A>(
+    mcp_client: McpClient,
+    transport: T,
+) -> std::result::Result<RunningService<RoleClient, McpClient>, rmcp::service::ClientInitializeError>
+where
+    T: IntoTransport<RoleClient, E, A>,
+    E: std::error::Error + Send + Sync + 'static,
+{
+    let client = serve_client_with_lifecycle(
+        mcp_client,
+        transport,
+        ClientLifecycleMode::Auto {
+            preferred_versions: vec![ProtocolVersion::V_2026_07_28, ProtocolVersion::V_2025_11_25],
+            legacy_version: None,
+        },
+    )
+    .await?;
+    client.peer().set_response_cache_config(ClientCacheConfig::default()).await;
+    Ok(client)
 }

@@ -4,7 +4,7 @@ use mcp_utils::client::{McpServer, McpTransport};
 use rmcp::{
     RoleServer, ServerHandler,
     model::{
-        CallToolRequestParams, CallToolResult, CreateElicitationRequestParams, ElicitationAction, ErrorCode, ErrorData,
+        CallToolRequestParams, CallToolResponse, ElicitRequestParams, ElicitationAction, ErrorCode, ErrorData,
         Implementation, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
     },
     service::{DynService, RequestContext},
@@ -13,6 +13,10 @@ use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
+
+/// MCP error code for `URL_ELICITATION_REQUIRED`. rmcp 3 no longer exposes this as
+/// a named constant, so the raw code (`-32042`) is kept here.
+const URL_ELICITATION_REQUIRED: ErrorCode = ErrorCode(-32042);
 
 /// Fake MCP server whose single tool always fails with `-32042`
 /// `URL_ELICITATION_REQUIRED`, carrying one URL elicitation request in `data`.
@@ -63,18 +67,18 @@ impl ServerHandler for UrlElicitationRequiredServer {
             "properties": {}
         }))
         .unwrap();
-        Ok(ListToolsResult {
-            tools: vec![Tool::new("needs_browser", "Always returns URL_ELICITATION_REQUIRED", Arc::new(input_schema))],
-            next_cursor: None,
-            meta: None,
-        })
+        Ok(ListToolsResult::with_all_items(vec![Tool::new(
+            "needs_browser",
+            "Always returns URL_ELICITATION_REQUIRED",
+            Arc::new(input_schema),
+        )]))
     }
 
     async fn call_tool(
         &self,
         _request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, ErrorData> {
+    ) -> Result<CallToolResponse, ErrorData> {
         let data = json!({
             "elicitations": [
                 {
@@ -85,7 +89,7 @@ impl ServerHandler for UrlElicitationRequiredServer {
                 }
             ]
         });
-        Err(ErrorData::new(ErrorCode::URL_ELICITATION_REQUIRED, "browser interaction required", Some(data)))
+        Err(ErrorData::new(URL_ELICITATION_REQUIRED, "browser interaction required", Some(data)))
     }
 }
 
@@ -105,27 +109,19 @@ impl ServerHandler for MalformedUrlElicitationRequiredServer {
             "properties": {}
         }))
         .unwrap();
-        Ok(ListToolsResult {
-            tools: vec![Tool::new(
-                "needs_browser",
-                "Returns malformed URL_ELICITATION_REQUIRED data",
-                Arc::new(input_schema),
-            )],
-            next_cursor: None,
-            meta: None,
-        })
+        Ok(ListToolsResult::with_all_items(vec![Tool::new(
+            "needs_browser",
+            "Returns malformed URL_ELICITATION_REQUIRED data",
+            Arc::new(input_schema),
+        )]))
     }
 
     async fn call_tool(
         &self,
         _request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, ErrorData> {
-        Err(ErrorData::new(
-            ErrorCode::URL_ELICITATION_REQUIRED,
-            "browser interaction required",
-            Some(self.data.clone()),
-        ))
+    ) -> Result<CallToolResponse, ErrorData> {
+        Err(ErrorData::new(URL_ELICITATION_REQUIRED, "browser interaction required", Some(self.data.clone())))
     }
 }
 
@@ -156,7 +152,7 @@ fn call_tool_request() -> llm::ToolCallRequest {
 /// manager. Includes the server name and the raw request params for assertion.
 struct CapturedElicitation {
     server_name: String,
-    request: CreateElicitationRequestParams,
+    request: ElicitRequestParams,
 }
 
 /// Spawn an MCP manager with one fake server that always returns
@@ -179,11 +175,7 @@ async fn spawn_scripted(
         while let Some(event) = event_rx.recv().await {
             if let mcp_utils::client::McpClientEvent::Elicitation(req) = event {
                 let captured = CapturedElicitation { server_name: req.server_name, request: req.request };
-                let _ = req.response_sender.send(rmcp::model::CreateElicitationResult {
-                    action: user_action,
-                    content: None,
-                    meta: Option::default(),
-                });
+                let _ = req.response_sender.send(rmcp::model::ElicitResult::new(user_action));
                 return Some(captured);
             }
         }
@@ -236,13 +228,14 @@ async fn url_elicitation_required_accept_returns_retry_needed_error_without_url(
     let captured = script_handle.await.unwrap().expect("elicitation was never dispatched");
     assert_eq!(captured.server_name, "browser_server");
     match captured.request {
-        CreateElicitationRequestParams::UrlElicitationParams { url: req_url, elicitation_id, .. } => {
+        ElicitRequestParams::UrlElicitationParams { url: req_url, elicitation_id, .. } => {
             assert_eq!(req_url, url);
             assert_eq!(elicitation_id, "el-42");
         }
-        CreateElicitationRequestParams::FormElicitationParams { .. } => {
+        ElicitRequestParams::FormElicitationParams { .. } => {
             panic!("expected UrlElicitationParams, got FormElicitationParams")
         }
+        _ => panic!("unexpected elicitation request variant"),
     }
 }
 

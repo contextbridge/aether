@@ -5274,13 +5274,16 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "1.8.0"
+version = "3.0.0-beta.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d1f571c72940a19d9532fe52dbea8bc9912bf1d766c2970bb824056b86f3f59"
+checksum = "3875f7c471c2d709062bc2165d8dc883b021b44255bd00bb4d8025f5108178c8"
 dependencies = [
  "async-trait",
+ "base64",
+ "bytes",
  "chrono",
  "futures",
+ "hmac 0.13.0",
  "http 1.4.2",
  "oauth2",
  "pastey",
@@ -5291,6 +5294,7 @@ dependencies = [
  "schemars 1.2.1",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "sse-stream",
  "thiserror 2.0.19",
  "tokio",
@@ -5298,13 +5302,14 @@ dependencies = [
  "tokio-util",
  "tracing",
  "url",
+ "uuid",
 ]
 
 [[package]]
 name = "rmcp-macros"
-version = "1.8.0"
+version = "3.0.0-beta.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1aad0035b69380782d78ea95b508327e6deaa2235909053e596eea8f27b5e1d5"
+checksum = "37a5ce7541aff2f3df9e8c3c48c7241800fa6fa68e2fbcba386c0d7dcdfc953c"
 dependencies = [
  "darling 0.23.0",
  "proc-macro2",

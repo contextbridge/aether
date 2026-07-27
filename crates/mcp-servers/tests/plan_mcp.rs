@@ -5,7 +5,7 @@ use mcp_servers::file_ops::FileEdit;
 use mcp_servers::plan::{EditPlanInput, SubmitPlanInput, WritePlanInput};
 use mcp_servers::{DEFAULT_PLAN_PROMPT, PlanMcp};
 use mcp_utils::client::{McpClient, McpClientEvent};
-use rmcp::model::{CreateElicitationRequestParams, CreateElicitationResult, ElicitationAction, GetPromptRequestParams};
+use rmcp::model::{ElicitRequestParams, ElicitResult, ElicitationAction, GetPromptRequestParams};
 use serde_json::json;
 use std::fs;
 use tempfile::TempDir;
@@ -35,8 +35,8 @@ async fn submit_plan_raw(mcp: &TestClient<PlanMcp, McpClient>, plan_name: &str) 
 
 fn respond_to_elicitation_request(
     mut event_rx: mpsc::Receiver<McpClientEvent>,
-    response: CreateElicitationResult,
-) -> tokio::task::JoinHandle<Option<CreateElicitationRequestParams>> {
+    response: ElicitResult,
+) -> tokio::task::JoinHandle<Option<ElicitRequestParams>> {
     tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
             if let McpClientEvent::Elicitation(req) = event {
@@ -63,11 +63,7 @@ async fn submit_plan_attaches_plan_review_metadata_and_preserves_schema() -> Tes
 
     let task_handle = respond_to_elicitation_request(
         event_rx,
-        CreateElicitationResult {
-            action: ElicitationAction::Accept,
-            content: Some(json!({ "decision": "approve" })),
-            meta: None,
-        },
+        ElicitResult::new(ElicitationAction::Accept).with_content(json!({ "decision": "approve" })),
     );
 
     let mcp = TestClient::start_with(|| PlanMcp::new().with_plans_dir(temp_dir.path().to_path_buf()), client).await?;
@@ -77,8 +73,7 @@ async fn submit_plan_attaches_plan_review_metadata_and_preserves_schema() -> Tes
 
     let plan_path = temp_dir.path().join("example-plan.md");
     let elicitation_request = task_handle.await?.expect("expected elicitation request");
-    let CreateElicitationRequestParams::FormElicitationParams { meta, requested_schema, .. } = elicitation_request
-    else {
+    let ElicitRequestParams::FormElicitationParams { meta, requested_schema, .. } = elicitation_request else {
         panic!("submit_plan should issue form elicitation request");
     };
 
@@ -252,7 +247,7 @@ async fn get_prompt_falls_back_when_configured_file_missing() {
 
 fn extract_user_text(message: &rmcp::model::PromptMessage) -> String {
     match &message.content {
-        rmcp::model::PromptMessageContent::Text { text } => text.clone(),
+        rmcp::model::ContentBlock::Text(text_content) => text_content.text.clone(),
         other => panic!("expected text content, got {other:?}"),
     }
 }

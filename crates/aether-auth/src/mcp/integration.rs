@@ -51,8 +51,12 @@ pub async fn perform_oauth_flow(
         );
     }
 
-    let metadata = manager.discover_metadata().await.map_err(rmcp_err("OAuth metadata discovery failed"))?;
-    manager.set_metadata(metadata);
+    // rmcp 3 resolves metadata through protected-resource metadata (RFC 9728),
+    // then authorization-server metadata, then a legacy-endpoint fallback. The
+    // returned metadata must be handed back via `set_metadata` before any client
+    // is configured.
+    let resolution = manager.resolve_metadata().await.map_err(rmcp_err("OAuth metadata discovery failed"))?;
+    manager.set_metadata(resolution.metadata);
 
     let scopes = manager.select_scopes(None, &[]);
     let scope_refs = scopes.iter().map(String::as_str).collect::<Vec<_>>();

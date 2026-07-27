@@ -8,8 +8,8 @@ use futures::stream::{self, StreamExt};
 use llm::{ToolCallError, ToolCallRequest, ToolCallResult};
 use rmcp::RoleClient;
 use rmcp::model::{
-    CallToolRequestParams, CreateElicitationRequestParams, ErrorCode, GetPromptResult, ProgressNotificationParam,
-    Prompt,
+    CallToolRequestParams, ElicitRequestParams, ElicitationAction, ErrorCode, GetPromptResult, InputRequest,
+    InputRequiredResult, InputResponses, ProgressNotificationParam, Prompt,
 };
 use rmcp::service::RunningService;
 use std::collections::HashSet;
@@ -18,6 +18,16 @@ use std::time::Duration;
 use tokio::select;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+
+/// MCP error code signalling that a tool call requires URL elicitation before it
+/// can proceed. rmcp 3 no longer exposes this as a named constant, so the raw
+/// code (`-32042`) is kept here.
+const URL_ELICITATION_REQUIRED_ERROR_CODE: ErrorCode = ErrorCode(-32042);
+
+/// Maximum number of MRTR (multi round-trip request) input rounds before
+/// abandoning a tool call, preventing a misbehaving remote server from keeping
+/// a request alive indefinitely.
+const MRTR_MAX_ROUNDS: usize = 5;
 
 /// Events emitted during tool execution lifecycle
 #[derive(Debug)]
@@ -174,58 +184,137 @@ async fn execute_mcp_call(
     use rmcp::model::{ClientRequest::CallToolRequest, Request, ServerResult};
     use rmcp::service::PeerRequestOptions;
 
-    let handle = client
-        .send_cancellable_request(CallToolRequest(Request::new(params)), {
-            let mut opts = PeerRequestOptions::default();
-            opts.timeout = Some(timeout);
-            opts
-        })
-        .await
-        .map_err(|e| ToolCallError::from_request(request, format!("Failed to send tool request: {e}")))?;
+    let mut params = params;
+    for round in 0..MRTR_MAX_ROUNDS {
+        let tool_call_id = tool_call_id.clone();
+        let handle = client
+            .send_cancellable_request(CallToolRequest(Request::new(params.clone())), {
+                let mut opts = PeerRequestOptions::default();
+                opts.timeout = Some(timeout);
+                opts
+            })
+            .await
+            .map_err(|e| ToolCallError::from_request(request, format!("Failed to send tool request: {e}")))?;
 
-    let progress_subscriber = client.service().progress_dispatcher.subscribe(handle.progress_token.clone()).await;
+        let progress_subscriber = client.service().progress_dispatcher.subscribe(handle.progress_token.clone()).await;
 
-    let progress_stream = progress_subscriber
-        .map(move |progress| Either::Left(ToolExecutionEvent::Progress { tool_id: tool_call_id.clone(), progress }));
+        let progress_stream = progress_subscriber.map(move |progress| {
+            Either::Left(ToolExecutionEvent::Progress { tool_id: tool_call_id.clone(), progress })
+        });
 
-    let result_stream = stream::once(handle.await_response()).map(Either::Right);
-    let combined_stream = stream::select(progress_stream, result_stream);
-    tokio::pin!(combined_stream);
+        let result_stream = stream::once(handle.await_response()).map(Either::Right);
+        let combined_stream = stream::select(progress_stream, result_stream);
+        tokio::pin!(combined_stream);
 
-    let server_result = loop {
-        match combined_stream.next().await {
-            Some(Either::Left(progress_event)) => {
-                let _ = event_tx.send(progress_event).await;
-            }
-            Some(Either::Right(result)) => {
-                break match result {
-                    Ok(server_result) => server_result,
-                    Err(e) => {
-                        if let rmcp::service::ServiceError::McpError(ref error_data) = e
-                            && error_data.code == ErrorCode::URL_ELICITATION_REQUIRED
-                        {
-                            return Err(handle_url_elicitation_required(&client, request, error_data).await);
+        let server_result = loop {
+            match combined_stream.next().await {
+                Some(Either::Left(progress_event)) => {
+                    let _ = event_tx.send(progress_event).await;
+                }
+                Some(Either::Right(result)) => {
+                    break match result {
+                        Ok(server_result) => server_result,
+                        Err(e) => {
+                            if let rmcp::service::ServiceError::McpError(ref error_data) = e
+                                && error_data.code == URL_ELICITATION_REQUIRED_ERROR_CODE
+                            {
+                                return Err(handle_url_elicitation_required(&client, request, error_data).await);
+                            }
+                            return Err(ToolCallError::from_request(request, format!("Tool execution failed: {e}")));
                         }
-                        return Err(ToolCallError::from_request(request, format!("Tool execution failed: {e}")));
-                    }
-                };
+                    };
+                }
+                None => {
+                    return Err(ToolCallError::from_request(request, "Stream ended without result"));
+                }
             }
-            None => {
-                return Err(ToolCallError::from_request(request, "Stream ended without result"));
+        };
+
+        match server_result {
+            ServerResult::CallToolResult(mcp_result) => return mcp_result_to_tool_call_result(request, mcp_result),
+            // MRTR (2026-07-28 spec): the server needs client-side input before
+            // the tool call can complete. Fulfil the requested inputs through
+            // the existing elicitation channel and retry the original call.
+            ServerResult::InputRequiredResult(input_required) => {
+                let responses = fulfil_mrtr_input_requests(&client, request, &input_required).await?;
+                params.input_responses = Some(responses);
+                params.request_state = input_required.request_state.clone();
+                tracing::info!(round, "Retrying tool call after MRTR input required");
+            }
+            other => {
+                return Err(ToolCallError::from_request(
+                    request,
+                    format!("Unexpected response type from MCP server: {other:?}"),
+                ));
             }
         }
+    }
+
+    Err(ToolCallError::from_request(
+        request,
+        format!("Server requested input more than {MRTR_MAX_ROUNDS} times; aborting to avoid an infinite loop"),
+    ))
+}
+
+/// Fulfil the server-initiated requests carried by an MRTR `InputRequiredResult`.
+///
+/// Only elicitation requests are supported — they reuse the same consent
+/// channel (`McpClient::dispatch_elicitation`) as direct `create_elicitation`
+/// calls and the `-32042` URL-elicitation path. Sampling and roots requests are
+/// not supported and abort the call. A declined or cancelled elicitation also
+/// aborts. The resulting responses are echoed back with the server's opaque
+/// `requestState` on the next `tools/call` round.
+async fn fulfil_mrtr_input_requests(
+    client: &Arc<RunningService<RoleClient, McpClient>>,
+    request: &ToolCallRequest,
+    input_required: &InputRequiredResult,
+) -> Result<InputResponses, ToolCallError> {
+    let server_name = client.service().server_name().to_string();
+    let Some(input_requests) = input_required.input_requests.as_ref() else {
+        // The server only echoed request state (no new input to collect); retry.
+        return Ok(InputResponses::new());
     };
 
-    let ServerResult::CallToolResult(mcp_result) = server_result else {
-        return Err(ToolCallError::from_request(request, "Unexpected response type from MCP server"));
-    };
+    let mut responses = InputResponses::new();
+    for (key, input_request) in input_requests {
+        let InputRequest::Elicitation(elicit) = input_request else {
+            return Err(ToolCallError::from_request(
+                request,
+                format!(
+                    "Server '{server_name}' requested an input type that is not supported \
+                     (only elicitation is supported)"
+                ),
+            ));
+        };
 
-    mcp_result_to_tool_call_result(request, mcp_result)
+        let result = client.service().dispatch_elicitation(elicit.params.clone()).await;
+        match result.action {
+            ElicitationAction::Decline => {
+                return Err(ToolCallError::from_request(
+                    request,
+                    format!("Required input for server '{server_name}' was declined"),
+                ));
+            }
+            ElicitationAction::Cancel => {
+                return Err(ToolCallError::from_request(
+                    request,
+                    format!("Required input for server '{server_name}' was cancelled"),
+                ));
+            }
+            _ => {
+                let value = serde_json::to_value(&result).map_err(|e| {
+                    ToolCallError::from_request(request, format!("Failed to serialize MRTR response: {e}"))
+                })?;
+                responses.insert(key.clone(), value);
+            }
+        }
+    }
+    Ok(responses)
 }
 
 #[derive(serde::Deserialize)]
 struct UrlElicitationRequiredData {
-    elicitations: Vec<CreateElicitationRequestParams>,
+    elicitations: Vec<ElicitRequestParams>,
 }
 
 #[derive(Debug)]
@@ -247,7 +336,7 @@ impl std::fmt::Display for UrlElicitationRequiredParseError {
 
 fn parse_required_url_elicitations(
     error_data: &rmcp::model::ErrorData,
-) -> Result<Vec<CreateElicitationRequestParams>, UrlElicitationRequiredParseError> {
+) -> Result<Vec<ElicitRequestParams>, UrlElicitationRequiredParseError> {
     let data = error_data.data.as_ref().ok_or(UrlElicitationRequiredParseError::MissingData)?;
     let parsed: UrlElicitationRequiredData =
         serde_json::from_value(data.clone()).map_err(UrlElicitationRequiredParseError::InvalidData)?;
@@ -255,7 +344,7 @@ fn parse_required_url_elicitations(
     let url_elicitations = parsed
         .elicitations
         .into_iter()
-        .filter(|elicitation| matches!(elicitation, CreateElicitationRequestParams::UrlElicitationParams { .. }))
+        .filter(|elicitation| matches!(elicitation, ElicitRequestParams::UrlElicitationParams { .. }))
         .collect::<Vec<_>>();
 
     if url_elicitations.is_empty() {
@@ -310,6 +399,9 @@ async fn handle_url_elicitation_required(
             rmcp::model::ElicitationAction::Accept => {
                 tracing::info!("User accepted URL elicitation for server '{server_name}'");
             }
+            // `ElicitationAction` is non-exhaustive in rmcp 3; treat any future
+            // action as accepted so the browser flow is not blocked.
+            _ => {}
         }
     }
 
@@ -342,14 +434,14 @@ mod tests {
         assert_eq!(parsed.elicitations.len(), 1);
         assert!(matches!(
             &parsed.elicitations[0],
-            CreateElicitationRequestParams::UrlElicitationParams { elicitation_id, .. } if elicitation_id == "el-1"
+            ElicitRequestParams::UrlElicitationParams { elicitation_id, .. } if elicitation_id == "el-1"
         ));
     }
 
     #[test]
     fn parse_required_url_elicitations_filters_to_url_only() {
         let error_data = rmcp::model::ErrorData {
-            code: rmcp::model::ErrorCode::URL_ELICITATION_REQUIRED,
+            code: URL_ELICITATION_REQUIRED_ERROR_CODE,
             message: "URL elicitation required".into(),
             data: Some(serde_json::json!({
                 "elicitations": [
@@ -372,7 +464,7 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert!(matches!(
             &result[0],
-            CreateElicitationRequestParams::UrlElicitationParams { elicitation_id, .. } if elicitation_id == "el-1"
+            ElicitRequestParams::UrlElicitationParams { elicitation_id, .. } if elicitation_id == "el-1"
         ));
     }
 }

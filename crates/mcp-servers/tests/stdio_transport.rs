@@ -16,7 +16,7 @@ fn tool_names(tools: &[rmcp::model::Tool]) -> Vec<&str> {
     tools.iter().map(|t| t.name.as_ref()).collect()
 }
 
-fn extract_text(content: &rmcp::model::Content) -> &str {
+fn extract_text(content: &rmcp::model::ContentBlock) -> &str {
     content.as_text().expect("expected text content").text.as_str()
 }
 

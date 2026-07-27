@@ -1,7 +1,7 @@
 use rmcp::{
     ErrorData as McpError, Json, RoleServer, ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{CallToolResult, Content, Implementation, ServerCapabilities, ServerInfo},
+    model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerInfo},
     service::DynService,
     tool, tool_handler, tool_router,
 };
@@ -154,13 +154,13 @@ impl FakeMcpServer {
         let Parameters(DivideNumbersRequest { a, b }) = request;
 
         if b == 0 {
-            return Ok(CallToolResult::error(vec![Content::text("Division by zero")]));
+            return Ok(CallToolResult::error(vec![ContentBlock::text("Division by zero")]));
         }
 
         let result = DivideNumbersResult { quotient: a / b };
         let result_json = serde_json::to_string(&result).unwrap();
 
-        Ok(CallToolResult::success(vec![Content::text(result_json)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(result_json)]))
     }
 
     #[tool(description = "A tool that sleeps for a specified duration (for testing timeouts)")]

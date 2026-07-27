@@ -10,9 +10,9 @@ use rmcp::{
         wrapper::{Json, Parameters},
     },
     model::{
-        CreateElicitationRequestParams, ElicitationAction, ElicitationSchema, EnumSchema, GetPromptRequestParams,
-        GetPromptResult, Implementation, ListPromptsResult, Meta, PaginatedRequestParams, Prompt, PromptArgument,
-        PromptMessage, PromptMessageRole, ServerCapabilities, ServerInfo,
+        ElicitRequestParams, ElicitationAction, ElicitationSchema, EnumSchema, GetPromptRequestParams,
+        GetPromptResponse, GetPromptResult, Implementation, ListPromptsResult, MetaObject, PaginatedRequestParams,
+        Prompt, PromptArgument, PromptMessage, RequestMetaObject, Role, ServerCapabilities, ServerInfo,
     },
     service::RequestContext,
     tool, tool_handler, tool_router,
@@ -202,10 +202,10 @@ impl PlanMcp {
         Ok(Json(SubmitPlanOutput { approved: false, feedback }))
     }
 
-    fn build_elicitation_form(plan: &Plan) -> Result<CreateElicitationRequestParams, String> {
+    fn build_elicitation_form(plan: &Plan) -> Result<ElicitRequestParams, String> {
         let meta = PlanReviewElicitationMeta::new(&plan.path, &plan.content)
             .to_json()
-            .map(Meta)
+            .map(|map| RequestMetaObject(MetaObject(map)))
             .map_err(|e| format!("failed to serialize plan review metadata: {e}"))?;
 
         let approve = PlanReviewDecision::Approve.as_str();
@@ -216,7 +216,7 @@ impl PlanMcp {
             .map_err(|e| format!("failed to build decision schema: {e}"))?
             .build();
 
-        Ok(CreateElicitationRequestParams::FormElicitationParams {
+        Ok(ElicitRequestParams::FormElicitationParams {
             meta: Some(meta),
             message: format!("Approve plan {}? Review the markdown and choose approve or deny.", plan.path.display()),
             requested_schema: ElicitationSchema::builder()
@@ -251,14 +251,14 @@ impl ServerHandler for PlanMcp {
             ]),
         );
 
-        Ok(ListPromptsResult { prompts: vec![prompt], next_cursor: None, meta: None })
+        Ok(ListPromptsResult::with_all_items(vec![prompt]))
     }
 
     async fn get_prompt(
         &self,
         request: GetPromptRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<GetPromptResult, McpError> {
+    ) -> Result<GetPromptResponse, McpError> {
         if request.name.as_str() != PROMPT_NAME {
             return Err(McpError::invalid_params(format!("Prompt '{}' not found", request.name), None));
         }
@@ -273,8 +273,8 @@ impl ServerHandler for PlanMcp {
         });
 
         let content = substitute_parameters(&prompt, &arguments);
-        let messages = vec![PromptMessage::new_text(PromptMessageRole::User, content)];
-        Ok(GetPromptResult::new(messages).with_description("Enter plan mode.".to_string()))
+        let messages = vec![PromptMessage::new_text(Role::User, content)];
+        Ok(GetPromptResult::new(messages).with_description("Enter plan mode.".to_string()).into())
     }
 }
 

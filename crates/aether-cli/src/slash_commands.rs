@@ -1,6 +1,6 @@
 use aether_core::mcp::run_mcp_task::McpCommand;
 use agent_client_protocol::schema::AvailableCommand;
-use rmcp::model::{GetPromptResult, Prompt as McpPrompt, PromptMessageContent};
+use rmcp::model::{ContentBlock, GetPromptResult, Prompt as McpPrompt};
 use std::collections::HashSet;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
@@ -93,7 +93,7 @@ fn prompt_result_text(prompt_result: &GetPromptResult) -> Result<String, SlashCo
         .messages
         .first()
         .and_then(|message| match &message.content {
-            PromptMessageContent::Text { text } => Some(text.clone()),
+            ContentBlock::Text(text_content) => Some(text_content.text.clone()),
             _ => None,
         })
         .ok_or(SlashCommandError::NoTextContent)

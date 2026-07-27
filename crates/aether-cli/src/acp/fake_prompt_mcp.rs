@@ -1,6 +1,6 @@
 use rmcp::model::{
-    GetPromptRequestParams, GetPromptResult, Implementation, ListPromptsResult, PaginatedRequestParams,
-    Prompt as McpPrompt, PromptMessage, PromptMessageRole, ServerCapabilities, ServerInfo,
+    GetPromptRequestParams, GetPromptResponse, GetPromptResult, Implementation, ListPromptsResult,
+    PaginatedRequestParams, Prompt as McpPrompt, PromptMessage, Role, ServerCapabilities, ServerInfo,
 };
 use rmcp::service::{DynService, RequestContext};
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
@@ -33,18 +33,18 @@ impl ServerHandler for FakePromptMcp {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListPromptsResult, McpError> {
         let prompt = McpPrompt::new(&self.prompt_name, Some(format!("{} command", self.prompt_name)), None);
-        Ok(ListPromptsResult { prompts: vec![prompt], next_cursor: None, meta: None })
+        Ok(ListPromptsResult::with_all_items(vec![prompt]))
     }
 
     async fn get_prompt(
         &self,
         request: GetPromptRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<GetPromptResult, McpError> {
+    ) -> Result<GetPromptResponse, McpError> {
         if request.name.as_str() != self.prompt_name {
             return Err(McpError::invalid_params(format!("Prompt '{}' not found", request.name), None));
         }
-        let messages = vec![PromptMessage::new_text(PromptMessageRole::User, format!("expanded {}", self.prompt_name))];
-        Ok(GetPromptResult::new(messages))
+        let messages = vec![PromptMessage::new_text(Role::User, format!("expanded {}", self.prompt_name))];
+        Ok(GetPromptResult::new(messages).into())
     }
 }

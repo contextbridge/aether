@@ -166,14 +166,12 @@ impl SubAgentsMcp {
                     let progress_data_str = serde_json::to_string(&progress_payload).unwrap_or_default();
 
                     tokio::spawn(async move {
+                        #[allow(clippy::cast_precision_loss)]
+                        let progress = counter as f64;
                         let _ = peer
-                            .notify_progress(ProgressNotificationParam {
-                                progress_token: token,
-                                #[allow(clippy::cast_precision_loss)]
-                                progress: counter as f64,
-                                total: None,
-                                message: Some(progress_data_str),
-                            })
+                            .notify_progress(
+                                ProgressNotificationParam::new(token, progress).with_message(progress_data_str),
+                            )
                             .await;
                     });
                 }

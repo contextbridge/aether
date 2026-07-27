@@ -5,8 +5,7 @@ use rmcp::{
         wrapper::{Json, Parameters},
     },
     model::{
-        CreateElicitationRequestParams, ElicitationAction, ElicitationSchema, Implementation, ServerCapabilities,
-        ServerInfo,
+        ElicitRequestParams, ElicitationAction, ElicitationSchema, Implementation, ServerCapabilities, ServerInfo,
     },
     service::RequestContext,
     tool, tool_handler, tool_router,
@@ -88,7 +87,7 @@ impl SurveyMcp {
         let schema = parse_schema(args.schema).map_err(|e| e.to_string())?;
         let result = context
             .peer
-            .create_elicitation(CreateElicitationRequestParams::FormElicitationParams {
+            .create_elicitation(ElicitRequestParams::FormElicitationParams {
                 meta: None,
                 message: args.message,
                 requested_schema: schema,

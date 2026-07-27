@@ -11,7 +11,7 @@ use llm::catalog::LlmModel;
 use llm::parser::ModelProviderParser;
 use llm::{ChatMessage, ContentBlock, ProviderConnectionOverrides, ReasoningEffort};
 use mcp_utils::client::{ElicitationRequest, McpClientEvent, McpServerStatusEntry, cancel_result};
-use rmcp::model::{CreateElicitationRequestParams, CreateElicitationResult};
+use rmcp::model::{ElicitRequestParams, ElicitResult};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
@@ -592,7 +592,7 @@ async fn on_elicitation_request(connection: &ConnectionTo<Client>, elicitation: 
         .map_err(|e| AcpServerError::protocol("_aether/elicitation", e))
     {
         Ok(response) => {
-            let mut result = CreateElicitationResult::new(response.action);
+            let mut result = ElicitResult::new(response.action);
             result.content = response.content;
             result
         }
@@ -617,7 +617,7 @@ fn spawn_elicitation_request(connection: &ConnectionTo<Client>, elicitation: Eli
     }
 }
 
-fn build_elicitation_params(server_name: &str, request: &CreateElicitationRequestParams) -> ElicitationParams {
+fn build_elicitation_params(server_name: &str, request: &ElicitRequestParams) -> ElicitationParams {
     ElicitationParams { server_name: server_name.to_string(), request: request.clone() }
 }
 
@@ -787,7 +787,7 @@ mod tests {
 
     #[test]
     fn test_build_elicitation_params_from_form() {
-        let elicitation = CreateElicitationRequestParams::FormElicitationParams {
+        let elicitation = ElicitRequestParams::FormElicitationParams {
             meta: None,
             message: "Pick a color".to_string(),
             requested_schema: rmcp::model::ElicitationSchema::builder().required_bool("approved").build().unwrap(),
@@ -796,18 +796,19 @@ mod tests {
         let params = build_elicitation_params("test-server", &elicitation);
         assert_eq!(params.server_name, "test-server");
         match &params.request {
-            CreateElicitationRequestParams::FormElicitationParams { message, requested_schema, .. } => {
+            ElicitRequestParams::FormElicitationParams { message, requested_schema, .. } => {
                 assert_eq!(message, "Pick a color");
                 assert_eq!(requested_schema.properties.len(), 1);
                 assert!(requested_schema.properties.contains_key("approved"));
             }
-            CreateElicitationRequestParams::UrlElicitationParams { .. } => panic!("Expected Form, got Url"),
+            ElicitRequestParams::UrlElicitationParams { .. } => panic!("Expected Form, got Url"),
+            _ => panic!("unexpected elicitation request variant"),
         }
     }
 
     #[test]
     fn test_build_elicitation_params_from_url() {
-        let elicitation = CreateElicitationRequestParams::UrlElicitationParams {
+        let elicitation = ElicitRequestParams::UrlElicitationParams {
             meta: None,
             message: "Authorize GitHub".to_string(),
             url: "https://github.com/login/oauth".to_string(),
@@ -817,12 +818,13 @@ mod tests {
         let params = build_elicitation_params("github", &elicitation);
         assert_eq!(params.server_name, "github");
         match &params.request {
-            CreateElicitationRequestParams::UrlElicitationParams { message, url, elicitation_id, .. } => {
+            ElicitRequestParams::UrlElicitationParams { message, url, elicitation_id, .. } => {
                 assert_eq!(message, "Authorize GitHub");
                 assert_eq!(url, "https://github.com/login/oauth");
                 assert_eq!(elicitation_id, "el-123");
             }
-            CreateElicitationRequestParams::FormElicitationParams { .. } => panic!("Expected Url, got Form"),
+            ElicitRequestParams::FormElicitationParams { .. } => panic!("Expected Url, got Form"),
+            _ => panic!("unexpected elicitation request variant"),
         }
     }
 
@@ -953,7 +955,7 @@ mod tests {
                     let (tx, rx) = oneshot::channel();
                     let elicitation = ElicitationRequest {
                         server_name: "test-server".to_string(),
-                        request: CreateElicitationRequestParams::FormElicitationParams {
+                        request: ElicitRequestParams::FormElicitationParams {
                             meta: None,
                             message: "Pick a color".to_string(),
                             requested_schema: rmcp::model::ElicitationSchema::builder()
@@ -985,7 +987,7 @@ mod tests {
                     let (tx, rx) = oneshot::channel();
                     let elicitation = ElicitationRequest {
                         server_name: "github".to_string(),
-                        request: CreateElicitationRequestParams::UrlElicitationParams {
+                        request: ElicitRequestParams::UrlElicitationParams {
                             meta: None,
                             message: "Authorize".to_string(),
                             url: "https://example.com/oauth".to_string(),
@@ -1034,7 +1036,7 @@ mod tests {
                     let (tx, rx) = oneshot::channel();
                     let elicitation = ElicitationRequest {
                         server_name: "test-server".to_string(),
-                        request: CreateElicitationRequestParams::FormElicitationParams {
+                        request: ElicitRequestParams::FormElicitationParams {
                             meta: None,
                             message: "Pick a color".to_string(),
                             requested_schema: rmcp::model::ElicitationSchema::builder()
@@ -1067,7 +1069,7 @@ mod tests {
                     let (tx, rx) = oneshot::channel();
                     let elicitation = ElicitationRequest {
                         server_name: "test-server".to_string(),
-                        request: CreateElicitationRequestParams::UrlElicitationParams {
+                        request: ElicitRequestParams::UrlElicitationParams {
                             meta: None,
                             message: "Authorize".to_string(),
                             url: "https://example.com".to_string(),

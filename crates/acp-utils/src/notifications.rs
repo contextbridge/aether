@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use agent_client_protocol::schema::AuthMethod;
 use agent_client_protocol::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 pub use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
-pub use rmcp::model::CreateElicitationRequestParams;
+pub use rmcp::model::ElicitRequestParams;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 pub use mcp_utils::status::{McpServerAuthCapability, McpServerStatus, McpServerStatusEntry};
@@ -99,7 +99,7 @@ pub struct AuthMethodsUpdatedParams {
 #[request(method = "_aether/elicitation", response = ElicitationResponse)]
 pub struct ElicitationParams {
     pub server_name: String,
-    pub request: CreateElicitationRequestParams,
+    pub request: ElicitRequestParams,
 }
 
 pub use rmcp::model::ElicitationAction;
@@ -519,7 +519,7 @@ mod tests {
 
         let params = ElicitationParams {
             server_name: "github".to_string(),
-            request: CreateElicitationRequestParams::FormElicitationParams {
+            request: ElicitRequestParams::FormElicitationParams {
                 meta: None,
                 message: "Pick a color".to_string(),
                 requested_schema: ElicitationSchema::builder()
@@ -542,7 +542,7 @@ mod tests {
     fn elicitation_params_url_variant_has_mode_field() {
         let params = ElicitationParams {
             server_name: "github".to_string(),
-            request: CreateElicitationRequestParams::UrlElicitationParams {
+            request: ElicitRequestParams::UrlElicitationParams {
                 meta: None,
                 message: "Authorize GitHub".to_string(),
                 url: "https://github.com/login/oauth".to_string(),

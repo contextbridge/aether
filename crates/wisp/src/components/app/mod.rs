@@ -28,9 +28,7 @@ use crate::workspace_status::WorkspaceStatus;
 use acp_utils::client::{AcpEvent, AcpPromptHandle};
 use acp_utils::config_meta::SelectOptionMeta;
 use acp_utils::config_option_id::ConfigOptionId;
-use acp_utils::notifications::{
-    AetherCapabilities, CreateElicitationRequestParams, ElicitationAction, ElicitationResponse,
-};
+use acp_utils::notifications::{AetherCapabilities, ElicitRequestParams, ElicitationAction, ElicitationResponse};
 use agent_client_protocol::Responder;
 use agent_client_protocol::schema::{self as acp, SessionId};
 use attachments::build_attachment_blocks;
@@ -739,12 +737,12 @@ impl Component for App {
     }
 }
 
-fn plan_review_meta_from_request(request: &CreateElicitationRequestParams) -> Option<PlanReviewElicitationMeta> {
+fn plan_review_meta_from_request(request: &ElicitRequestParams) -> Option<PlanReviewElicitationMeta> {
     match request {
-        CreateElicitationRequestParams::FormElicitationParams { meta, .. } => {
-            PlanReviewElicitationMeta::parse(meta.as_ref().map(|meta| &meta.0))
+        ElicitRequestParams::FormElicitationParams { meta, .. } => {
+            PlanReviewElicitationMeta::parse(meta.as_ref().map(|request_meta| &request_meta.0.0))
         }
-        CreateElicitationRequestParams::UrlElicitationParams { .. } => None,
+        _ => None,
     }
 }
 
@@ -908,7 +906,7 @@ mod tests {
 
         acp_utils::notifications::ElicitationParams {
             server_name: "plan-server".to_string(),
-            request: acp_utils::notifications::CreateElicitationRequestParams::FormElicitationParams {
+            request: acp_utils::notifications::ElicitRequestParams::FormElicitationParams {
                 meta: Some(
                     serde_json::from_value(serde_json::Value::Object(meta))
                         .expect("deserialize plan review metadata into rmcp meta"),

@@ -70,36 +70,61 @@ impl OAuthServer {
                 captured_requests.lock().unwrap().push(request_line.clone());
                 let path = request_line.split_whitespace().nth(1).unwrap();
 
-                let body = if path.contains("oauth-protected-resource") {
-                    serde_json::json!({
-                        "resource": format!("{origin}/mcp"),
-                        "authorization_servers": [&origin]
-                    })
+                let (status, reason, body) = if path.contains("oauth-protected-resource") {
+                    (
+                        200,
+                        "OK",
+                        serde_json::json!({
+                            "resource": format!("{origin}/mcp"),
+                            "authorization_servers": [&origin]
+                        })
+                        .to_string(),
+                    )
                 } else if path == "/token" {
-                    serde_json::json!({
-                        "access_token": "access-token",
-                        "token_type": "Bearer",
-                        "expires_in": 3600
-                    })
+                    (
+                        200,
+                        "OK",
+                        serde_json::json!({
+                            "access_token": "access-token",
+                            "token_type": "Bearer",
+                            "expires_in": 3600
+                        })
+                        .to_string(),
+                    )
                 } else if path == "/register" {
-                    serde_json::json!({
-                        "client_id": "registered-client",
-                        "redirect_uris": ["http://localhost:3118/"]
-                    })
+                    (
+                        200,
+                        "OK",
+                        serde_json::json!({
+                              "client_id": "registered-client",
+                              "redirect_uris": ["http://localhost:3118/"]
+                          })
+                        .to_string(),
+                    )
+                } else if path == "/mcp" {
+                    // The MCP endpoint is a protected resource: an
+                    // unauthenticated GET is rejected, which drives rmcp's
+                    // RFC 9728 protected-resource-metadata discovery through
+                    // the oauth-protected-resource well-known lookup.
+                    (401, "Unauthorized", String::new())
                 } else {
-                    serde_json::json!({
-                        "issuer": origin,
-                        "authorization_endpoint": format!("{origin}/authorize"),
-                        "token_endpoint": format!("{origin}/token"),
-                        "registration_endpoint": format!("{origin}/register"),
-                        "response_types_supported": ["code"],
-                        "code_challenge_methods_supported": ["S256"],
-                        "scopes_supported": ["openid"]
-                    })
-                }
-                .to_string();
+                    (
+                        200,
+                        "OK",
+                        serde_json::json!({
+                              "issuer": origin,
+                              "authorization_endpoint": format!("{origin}/authorize"),
+                              "token_endpoint": format!("{origin}/token"),
+                              "registration_endpoint": format!("{origin}/register"),
+                              "response_types_supported": ["code"],
+                              "code_challenge_methods_supported": ["S256"],
+                              "scopes_supported": ["openid"]
+                          })
+                        .to_string(),
+                    )
+                };
                 let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                     body.len(),
                     body
                 );
