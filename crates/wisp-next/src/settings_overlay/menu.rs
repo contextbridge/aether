@@ -69,9 +69,19 @@ impl SettingsMenu {
         self.selection.selected().and_then(|selected| self.rows.get(selected))
     }
 
-    /// Adds rows that are not part of the agent's schema, above the ones that are.
-    pub(super) fn add_local_entries(&mut self, entries: Vec<SettingsMenuEntry>) {
-        self.rows.splice(0..0, entries.into_iter().map(MenuRow::Select));
+    /// Adds or refreshes rows that are not part of the agent's schema, above the
+    /// ones that are. Refreshing in place matters for a row whose values arrive
+    /// after it is drawn — the theme list is read off disk — because a second row
+    /// for the same option would leave the user a copy that never fills in.
+    pub(super) fn upsert_local_entries(&mut self, entries: Vec<SettingsMenuEntry>) {
+        let mut added = Vec::new();
+        for entry in entries {
+            match self.local_row_index(&entry.config_id) {
+                Some(index) => self.rows[index] = MenuRow::Select(entry),
+                None => added.push(MenuRow::Select(entry)),
+            }
+        }
+        self.rows.splice(0..0, added);
         self.selection.clamp(self.rows.len());
     }
 
@@ -120,6 +130,12 @@ impl SettingsMenu {
             None => self.rows.push(row),
         }
         self.selection.clamp(self.rows.len());
+    }
+
+    fn local_row_index(&self, config_id: &str) -> Option<usize> {
+        self.rows
+            .iter()
+            .position(|row| matches!(row, MenuRow::Select(entry) if entry.local && entry.config_id == config_id))
     }
 }
 

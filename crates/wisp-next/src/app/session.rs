@@ -60,7 +60,7 @@ impl App {
     fn open_settings(&mut self) {
         let mut overlay =
             SettingsOverlay::new(&self.agent.config_options, self.server_statuses.clone(), &self.agent.auth_methods);
-        overlay.add_local_entries(build_theme_entries(&self.ui.settings, &[]));
+        overlay.upsert_local_entries(build_theme_entries(&self.ui.settings, &[]));
         overlay.add_status_entries();
         self.open_layer(Layer::Settings(overlay));
         self.spawn(crate::tasks::Task::ListThemes);
@@ -68,7 +68,7 @@ impl App {
 
     pub(super) fn refresh_settings_themes(&mut self, files: &[String]) {
         let entries = build_theme_entries(&self.ui.settings, files);
-        self.with_settings(|overlay| overlay.add_local_entries(entries));
+        self.with_settings(|overlay| overlay.upsert_local_entries(entries));
     }
 
     fn begin_workspace_move(&mut self) {

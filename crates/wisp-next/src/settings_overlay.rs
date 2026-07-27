@@ -142,8 +142,9 @@ impl SettingsOverlay {
         }
     }
 
-    pub fn add_local_entries(&mut self, entries: Vec<SettingsMenuEntry>) {
-        self.menu.add_local_entries(entries);
+    /// Adds the given rows, replacing any already shown for the same option.
+    pub fn upsert_local_entries(&mut self, entries: Vec<SettingsMenuEntry>) {
+        self.menu.upsert_local_entries(entries);
     }
 
     /// Adds the rows that open panes rather than pick a config value.

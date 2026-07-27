@@ -1231,6 +1231,43 @@ fn settings_theme_empty_file_list_shows_only_default() {
 // ── Regression tests for review findings ──
 
 #[test]
+fn opening_settings_requests_the_theme_list() {
+    let (mut app, _command_rx) = AppBuilder::new().build();
+    open_settings(&mut app);
+
+    let mut effects = Vec::new();
+    while let Some(effect) = app.take_effect() {
+        effects.push(effect);
+    }
+    assert!(
+        effects.iter().any(|effect| matches!(effect, RuntimeEffect::Spawn(Task::ListThemes))),
+        "opening settings must ask for the theme list"
+    );
+}
+
+#[test]
+fn listed_themes_appear_in_the_theme_picker() {
+    let (mut app, _command_rx) = AppBuilder::new().build();
+    open_settings(&mut app);
+    app.on_task_result(TaskResult::ThemesListed(vec!["dracula.tmTheme".to_string(), "kanagawa.tmTheme".to_string()]));
+
+    app.on_key(key(KeyCode::Enter));
+    let text = overlay_text(&mut app);
+    assert!(text.contains("dracula"), "theme picker should list dracula:\n{text}");
+    assert!(text.contains("kanagawa"), "theme picker should list kanagawa:\n{text}");
+}
+
+#[test]
+fn settings_menu_has_a_single_theme_row_after_themes_load() {
+    let (mut app, _command_rx) = AppBuilder::new().build();
+    open_settings(&mut app);
+    app.on_task_result(TaskResult::ThemesListed(vec!["dracula.tmTheme".to_string()]));
+
+    let text = overlay_text(&mut app);
+    assert_eq!(text.matches("Theme:").count(), 1, "the theme row must be replaced, not duplicated:\n{text}");
+}
+
+#[test]
 fn rapid_theme_changes_settle_on_the_newest_choice() {
     let (mut app, _command_rx) = AppBuilder::new().build();
     open_settings(&mut app);
