@@ -93,9 +93,8 @@ impl Transcript {
     ///
     /// A segment is final when it is a user message, a completed tool call, or
     /// streamed text/thought content that is no longer the trailing segment of
-    /// an in-flight prompt. Text segments are split after completed lines
-    /// outside fenced code blocks so finalized content can move independently
-    /// of the trailing streaming line.
+    /// an in-flight prompt. Text segments are split after blank lines outside
+    /// fenced code blocks, keeping each Markdown block intact for rendering.
     pub fn drain_finalized_prefix(&mut self, tool_calls: &ToolCallLog, prompt_in_flight: bool) -> Vec<SegmentContent> {
         let final_len = self
             .segments
@@ -129,12 +128,9 @@ fn last_finalizable_offset(text: &str) -> Option<usize> {
         }
         match (&open_fence, Fence::parse(line)) {
             (None, Some(opening)) => open_fence = Some(opening),
-            (None, None) => finalizable = Some(offset),
-            (Some(opening), Some(closing)) if closing.closes(opening) => {
-                open_fence = None;
-                finalizable = Some(offset);
-            }
-            (Some(_), _) => {}
+            (None, None) if line.trim().is_empty() => finalizable = Some(offset),
+            (Some(opening), Some(closing)) if closing.closes(opening) => open_fence = None,
+            _ => {}
         }
     }
     finalizable
@@ -161,7 +157,7 @@ mod tests {
     }
 
     #[test]
-    fn text_chunks_keep_code_fences_in_one_segment() {
+    fn text_chunks_keep_code_fences_and_adjacent_text_in_one_segment() {
         let mut transcript = Transcript::new();
         transcript.append_text_chunk("Here you go:\n");
         transcript.append_text_chunk("```rust\n");
@@ -170,11 +166,7 @@ mod tests {
 
         assert_eq!(
             transcript.pending(),
-            [
-                SegmentContent::Text("Here you go:\n".to_string()),
-                SegmentContent::Text("```rust\nfn main() {}\n```\n".to_string()),
-                SegmentContent::Text(String::new()),
-            ]
+            [SegmentContent::Text("Here you go:\n```rust\nfn main() {}\n```\n".to_string())]
         );
     }
 
@@ -185,10 +177,7 @@ mod tests {
         transcript.append_text_chunk("```rust\n");
         transcript.append_text_chunk("````\n");
 
-        assert_eq!(
-            transcript.pending(),
-            [SegmentContent::Text("````markdown\n```rust\n````\n".to_string()), SegmentContent::Text(String::new()),]
-        );
+        assert_eq!(transcript.pending(), [SegmentContent::Text("````markdown\n```rust\n````\n".to_string())]);
     }
 
     #[test]

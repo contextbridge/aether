@@ -83,8 +83,10 @@ impl<'a> MarkdownRenderer<'a> {
             self.on_event(event);
         }
         self.flush_current();
-        while self.lines.last().is_some_and(line_is_empty) {
-            self.lines.pop();
+        if !source_ends_with_blank_line(source) {
+            while self.lines.last().is_some_and(line_is_empty) {
+                self.lines.pop();
+            }
         }
         self.lines.into_iter().flat_map(|line| wrap_line(line, self.width)).collect()
     }
@@ -330,6 +332,10 @@ impl<'a> InlineMarkdownSpanBuilder<'a> {
 
 fn line_is_empty(line: &Line<'_>) -> bool {
     line.spans.iter().all(|span| span.content.is_empty())
+}
+
+fn source_ends_with_blank_line(source: &str) -> bool {
+    source.ends_with('\n') && source.lines().next_back().is_some_and(|line| line.trim().is_empty())
 }
 
 fn compute_column_widths(rows: &[Vec<Vec<Span<'static>>>], num_columns: usize) -> Vec<usize> {

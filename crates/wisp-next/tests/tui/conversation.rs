@@ -166,6 +166,28 @@ fn completed_streaming_text_remains_adjacent_to_the_composer_once() {
 }
 
 #[test]
+fn streamed_markdown_blocks_keep_blank_separators() {
+    let (mut app, _command_rx) = make_app();
+    let mut terminal = make_terminal_tall();
+    let mut renderer = Presenter::new(&UiSettings::default());
+    submit_prompt(&mut app, "format this");
+
+    for chunk in ["### Root\n", "\n", "Keep this paragraph separate.\n", "\n", "- first item\n"] {
+        app.on_acp_event(text_chunk(chunk));
+    }
+    app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+
+    let conversation = conversation_buffer(&mut terminal);
+    let heading = row_containing(&conversation, "### Root").expect("heading should render");
+    let paragraph = row_containing(&conversation, "Keep this paragraph separate.").expect("paragraph should render");
+    let item = row_containing(&conversation, "first item").expect("list item should render");
+
+    assert_eq!(paragraph - heading, 2, "heading and paragraph need one blank row");
+    assert_eq!(item - paragraph, 2, "paragraph and list need one blank row");
+}
+
+#[test]
 fn running_tool_holds_later_content_out_of_committed_history() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
