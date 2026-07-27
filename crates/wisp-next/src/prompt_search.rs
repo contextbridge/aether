@@ -171,7 +171,7 @@ fn result_line(result: &PromptSearchResult, max_width: usize, theme: &Theme) -> 
         Style::new().fg(theme.text_secondary),
         Style::new().fg(theme.warning),
     );
-    let mut spans = truncate_spans(&prompt, prompt_budget);
+    let mut spans = truncate_spans(&prompt, prompt_budget, Style::default());
     if shows_cwd {
         let used: usize = spans.iter().map(Span::width).sum();
         spans.push(Span::raw(" ".repeat(prompt_budget + CWD_GAP - used)));

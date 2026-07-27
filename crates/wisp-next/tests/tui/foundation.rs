@@ -389,6 +389,31 @@ fn markdown_horizontal_rule_uses_available_width() {
 }
 
 #[test]
+fn transcript_markdown_wraps_at_word_boundaries() {
+    let mut renderer = Presenter::new(&UiSettings::default());
+
+    let lines = renderer.lines(Segment::Committed, &[HistoryItem::Text("alpha beta gamma".to_string())], None, 9, 0, 0);
+
+    assert_eq!(lines.iter().map(line_text).collect::<Vec<_>>(), ["alpha", "beta", "gamma"]);
+}
+
+#[test]
+fn transcript_markdown_separates_a_heading_from_its_paragraph() {
+    let mut renderer = Presenter::new(&UiSettings::default());
+
+    let lines = renderer.lines(
+        Segment::Committed,
+        &[HistoryItem::Text("# Heading\n\nParagraph text.".to_string())],
+        None,
+        40,
+        0,
+        0,
+    );
+
+    assert_eq!(lines.iter().map(line_text).collect::<Vec<_>>(), ["# Heading", "", "Paragraph text."]);
+}
+
+#[test]
 fn transcript_wrapping_expands_tabs() {
     let mut renderer = Presenter::new(&UiSettings::default());
 

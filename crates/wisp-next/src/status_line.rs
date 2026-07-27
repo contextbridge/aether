@@ -73,7 +73,8 @@ impl Widget for &StatusLine {
             return;
         }
         let width = usize::from(area.width);
-        let clipped = |line: &Line<'static>| Line { spans: truncate_spans(&line.spans, width), ..line.clone() };
+        let clipped =
+            |line: &Line<'static>| Line { spans: truncate_spans(&line.spans, width, Style::default()), ..line.clone() };
 
         if self.fits_on_one_row(width) {
             if self.right.width() == 0 {
