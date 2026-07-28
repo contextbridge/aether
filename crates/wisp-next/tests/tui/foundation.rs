@@ -469,6 +469,16 @@ fn markdown_renders_lists_strikethrough_and_tables() {
 }
 
 #[test]
+fn default_theme_is_sage() {
+    let theme = Theme::default();
+
+    assert_eq!(theme.syntect().name.as_deref(), Some("Sage"));
+    assert_eq!(theme.background, Color::Rgb(0x15, 0x1d, 0x1f));
+    assert_eq!(theme.text_primary, Color::Rgb(0xd4, 0xdd, 0xd6));
+    assert_eq!(theme.accent, Color::Rgb(0x8f, 0xbc, 0xb0));
+}
+
+#[test]
 fn theme_loads_semantic_colors_from_tmtheme_file() {
     let mut file = tempfile::Builder::new().suffix(".tmTheme").tempfile().unwrap();
     write!(

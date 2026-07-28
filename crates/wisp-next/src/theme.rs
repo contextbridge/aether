@@ -5,7 +5,6 @@ use std::sync::Arc;
 use syntect::highlighting::{Highlighter, Theme as SyntectTheme, ThemeSet};
 use syntect::parsing::Scope;
 use tracing::warn;
-use two_face::theme::EmbeddedThemeName;
 
 #[derive(Clone, Debug)]
 pub struct Theme {
@@ -97,8 +96,7 @@ impl Theme {
 
 impl Default for Theme {
     fn default() -> Self {
-        let themes = two_face::theme::extra();
-        Self::from_syntect(themes.get(EmbeddedThemeName::Nord).clone())
+        Self::from_syntect(tui::Theme::default().syntect_theme().clone())
     }
 }
 

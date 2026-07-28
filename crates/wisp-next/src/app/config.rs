@@ -87,7 +87,7 @@ pub(super) fn build_theme_entries(settings: &UiSettings, files: &[String]) -> Ve
     values.push(SettingsMenuValue {
         value: String::new(),
         name: "Default".to_string(),
-        description: Some("Built-in Nord theme".to_string()),
+        description: Some("Built-in Sage theme".to_string()),
         is_disabled: false,
         meta: SelectOptionMeta::default(),
     });

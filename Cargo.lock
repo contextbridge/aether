@@ -469,6 +469,7 @@ name = "aether-wisp-next"
 version = "0.1.0"
 dependencies = [
  "aether-acp-utils",
+ "aether-tui",
  "aether-utils",
  "agent-client-protocol",
  "base64 0.23.0",

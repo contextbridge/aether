@@ -363,7 +363,7 @@ fn render_table_row(
         if let Some(cell) = row.get(col) {
             let cell_width: usize = cell.iter().map(Span::width).sum();
             for span in cell {
-                spans.push(Span::styled(span.content.clone(), span.style.patch(row_style)));
+                spans.push(Span::styled(span.content.clone(), row_style.patch(span.style)));
             }
             let padding = col_width.saturating_sub(cell_width);
             if padding > 0 {
