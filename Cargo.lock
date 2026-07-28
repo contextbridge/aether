@@ -45,7 +45,7 @@ dependencies = [
 
 [[package]]
 name = "aether-acp-utils"
-version = "0.3.34"
+version = "0.3.35"
 dependencies = [
  "aether-acp-utils",
  "aether-mcp-utils",
@@ -66,7 +66,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-cli"
-version = "0.7.28"
+version = "0.7.29"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
@@ -104,7 +104,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-core"
-version = "0.6.25"
+version = "0.6.26"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
@@ -139,7 +139,7 @@ dependencies = [
 
 [[package]]
 name = "aether-auth"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "age",
  "apple-native-keyring-store",
@@ -171,7 +171,7 @@ dependencies = [
 
 [[package]]
 name = "aether-evals"
-version = "0.2.17"
+version = "0.2.18"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -190,7 +190,7 @@ dependencies = [
 
 [[package]]
 name = "aether-llm"
-version = "0.7.23"
+version = "0.7.24"
 dependencies = [
  "aether-auth",
  "aether-doctest",
@@ -244,7 +244,7 @@ dependencies = [
 
 [[package]]
 name = "aether-lspd"
-version = "0.1.26"
+version = "0.1.27"
 dependencies = [
  "aether-lspd",
  "clap",
@@ -268,7 +268,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp-servers"
-version = "0.4.31"
+version = "0.4.32"
 dependencies = [
  "aether-agent-core",
  "aether-auth",
@@ -305,7 +305,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp-utils"
-version = "0.5.28"
+version = "0.5.29"
 dependencies = [
  "aether-auth",
  "aether-doctest",
@@ -327,7 +327,7 @@ dependencies = [
 
 [[package]]
 name = "aether-project"
-version = "0.5.26"
+version = "0.5.27"
 dependencies = [
  "aether-agent-core",
  "aether-doctest",
@@ -348,7 +348,7 @@ dependencies = [
 
 [[package]]
 name = "aether-schemas"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "aether-agent-cli",
  "aether-agent-core",
@@ -379,7 +379,7 @@ dependencies = [
 
 [[package]]
 name = "aether-telemetry"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -402,7 +402,7 @@ dependencies = [
 
 [[package]]
 name = "aether-tui"
-version = "0.2.18"
+version = "0.2.19"
 dependencies = [
  "aether-tui",
  "crossterm",
@@ -439,7 +439,7 @@ dependencies = [
 
 [[package]]
 name = "aether-wisp"
-version = "0.4.35"
+version = "0.4.36"
 dependencies = [
  "aether-acp-utils",
  "aether-tui",

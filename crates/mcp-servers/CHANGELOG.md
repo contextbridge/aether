@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.32](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.31...aether-mcp-servers-v0.4.32) - 2026-07-28
+
+### Other
+
+- Seepdup tests ([#294](https://github.com/contextbridge/aether/pull/294))
+
 ## [0.4.31](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.30...aether-mcp-servers-v0.4.31) - 2026-07-27
 
 ### Added

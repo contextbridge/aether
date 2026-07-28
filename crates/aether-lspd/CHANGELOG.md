@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.27](https://github.com/contextbridge/aether/compare/aether-lspd-v0.1.26...aether-lspd-v0.1.27) - 2026-07-28
+
+### Other
+
+- Seepdup tests ([#294](https://github.com/contextbridge/aether/pull/294))
+
 ## [0.1.26](https://github.com/contextbridge/aether/compare/aether-lspd-v0.1.25...aether-lspd-v0.1.26) - 2026-07-27
 
 ### Added
