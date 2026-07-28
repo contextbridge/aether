@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.19](https://github.com/contextbridge/aether/compare/aether-tui-v0.2.18...aether-tui-v0.2.19) - 2026-07-28
+
+### Other
+
+- Seepdup tests ([#294](https://github.com/contextbridge/aether/pull/294))
+
 ## [0.2.18](https://github.com/contextbridge/aether/compare/aether-tui-v0.2.17...aether-tui-v0.2.18) - 2026-07-20
 
 ### Fixed

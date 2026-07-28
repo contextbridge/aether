@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.24](https://github.com/contextbridge/aether/compare/aether-llm-v0.7.23...aether-llm-v0.7.24) - 2026-07-28
+
+### Other
+
+- updated the following local packages: aether-auth
+
 ## [0.7.23](https://github.com/contextbridge/aether/compare/aether-llm-v0.7.22...aether-llm-v0.7.23) - 2026-07-27
 
 ### Added
