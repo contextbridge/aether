@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.28](https://github.com/contextbridge/aether/compare/aether-project-v0.5.27...aether-project-v0.5.28) - 2026-07-28
+
+### Other
+
+- update Cargo.lock dependencies
+
 ## [0.5.27](https://github.com/contextbridge/aether/compare/aether-project-v0.5.26...aether-project-v0.5.27) - 2026-07-28
 
 ### Other
