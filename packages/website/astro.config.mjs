@@ -1,20 +1,15 @@
 // @ts-check
 import { defineConfig } from "astro/config";
-import { unified } from "@astrojs/markdown-remark";
 import starlight from "@astrojs/starlight";
 import starlightLlmsTxt from "starlight-llms-txt";
 import mdx from "@astrojs/mdx";
 import mermaid from "astro-mermaid";
 import icon from "astro-icon";
-import remarkGfm from "remark-gfm";
 import tailwindcss from "@tailwindcss/vite";
 import { GITHUB_URL } from "./src/consts.ts";
 
 export default defineConfig({
   site: "https://aether-agent.io",
-  markdown: {
-    processor: unified({ remarkPlugins: [remarkGfm] }),
-  },
   integrations: [
     icon(),
     mermaid({
