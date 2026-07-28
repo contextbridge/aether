@@ -1,5 +1,5 @@
 use crate::content_capture::{ContentBuffer, ContentCapture};
-use crate::content_json::{messages_json, tool_definitions_json};
+use crate::content_json::{input_messages_json, output_messages_json, tool_definitions_json};
 use crate::gen_ai_metrics::GenAiMetrics;
 use crate::genai_constants as semconv;
 use crate::llm_call_state::LlmCallState;
@@ -65,7 +65,7 @@ impl OtelObserver {
         input.set(&ContentBlock::join_text(content));
         let mut attributes = vec![KeyValue::new(semconv::GEN_AI_OPERATION_NAME, "invoke_agent")];
         if let Some(text) = input.get() {
-            attributes.push(KeyValue::new(semconv::GEN_AI_INPUT_MESSAGES, messages_json("user", text)));
+            attributes.push(KeyValue::new(semconv::GEN_AI_INPUT_MESSAGES, input_messages_json(text)));
         }
         let builder = SpanBuilder::from_name("invoke_agent").with_kind(SpanKind::Internal).with_attributes(attributes);
         let span_context = self.instrumentation.start_span(builder, self.instrumentation.root_parent.as_ref());
@@ -171,11 +171,8 @@ impl TurnState {
         drop(executing_tools);
         match outcome {
             TurnOutcome::Completed => {
-                if let Some(text) = output.get() {
-                    span.set_attribute(KeyValue::new(
-                        semconv::GEN_AI_OUTPUT_MESSAGES,
-                        messages_json("assistant", text),
-                    ));
+                if let Some(text) = output_messages_json(output.get(), &[], None) {
+                    span.set_attribute(KeyValue::new(semconv::GEN_AI_OUTPUT_MESSAGES, text));
                 }
                 span.end_ok();
             }
@@ -214,7 +211,7 @@ impl TurnState {
         // compaction call's actual input is the internal summarization prompt.
         if call.purpose == LlmCallPurpose::Chat {
             if let Some(input) = self.input.get() {
-                attributes.push(KeyValue::new(semconv::GEN_AI_INPUT_MESSAGES, messages_json("user", input)));
+                attributes.push(KeyValue::new(semconv::GEN_AI_INPUT_MESSAGES, input_messages_json(input)));
             }
             if instrumentation.capture_content && !tools.is_empty() {
                 attributes.push(KeyValue::new(semconv::GEN_AI_TOOL_DEFINITIONS, tool_definitions_json(tools)));
@@ -228,7 +225,7 @@ impl TurnState {
             context,
             instrumentation.metrics.clone(),
             call.purpose,
-            instrumentation.capture().buffer(),
+            instrumentation.capture(),
             metric_attributes,
         );
         *self.llm_call_slot(call.purpose) = Some(state);
@@ -236,7 +233,7 @@ impl TurnState {
 
     fn on_tool_call(&mut self, request: &ToolCallRequest, instrumentation: &OtelInstrumentation) {
         if let Some(chat) = &mut self.chat_call {
-            chat.record_tool_call_start(&request.id, &request.name);
+            chat.record_tool_call_start(request);
         }
         let mut arguments = instrumentation.capture().buffer();
         arguments.set(&request.arguments);
@@ -245,7 +242,7 @@ impl TurnState {
 
     fn on_tool_call_update(&mut self, tool_call_id: &str, chunk: &str) {
         if let Some(chat) = &mut self.chat_call {
-            chat.record_output_chunk();
+            chat.record_tool_call_update(tool_call_id, chunk);
         }
         if let Some(arguments) = self.streamed_arguments.get_mut(tool_call_id) {
             arguments.push(chunk);
