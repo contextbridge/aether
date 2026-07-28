@@ -266,7 +266,13 @@ mod tests {
 
         assert_eq!(
             tokens,
-            TokenUsage { input_tokens: 100, output_tokens: 50, cache_read_tokens: Some(30), ..TokenUsage::default() }
+            TokenUsage {
+                input_tokens: 100,
+                output_tokens: 50,
+                cache_read_tokens: Some(30),
+                cache_reporting_exclusive: Some(false),
+                ..TokenUsage::default()
+            }
         );
     }
 
@@ -299,6 +305,7 @@ mod tests {
                 output_tokens: 500,
                 cache_read_tokens: Some(100),
                 cache_creation_tokens: Some(50),
+                cache_reporting_exclusive: Some(false),
                 input_audio_tokens: Some(10),
                 input_video_tokens: Some(5),
                 reasoning_tokens: Some(300),

@@ -25,6 +25,9 @@ pub struct TokenUsage {
     pub cache_read_tokens: Option<u32>,
     #[serde(default)]
     pub cache_creation_tokens: Option<u32>,
+    /// Whether cache token counts are separate from, rather than included in, `input_tokens`.
+    #[serde(default)]
+    pub cache_reporting_exclusive: Option<bool>,
     #[serde(default)]
     pub input_audio_tokens: Option<u32>,
     #[serde(default)]

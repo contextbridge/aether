@@ -41,6 +41,12 @@ pub const TOOL_CALL_ID: &str = "tool_call.id";
 pub const TOOL_CALL_NAME: &str = "tool_call.name";
 pub const LLM_ATTEMPT: &str = "aether.llm.attempt";
 pub const LLM_PURPOSE: &str = "aether.llm.purpose";
+pub const AI_INPUT_TOKEN_PRICE: &str = "$ai_input_token_price";
+pub const AI_OUTPUT_TOKEN_PRICE: &str = "$ai_output_token_price";
+pub const AI_CACHE_READ_TOKEN_PRICE: &str = "$ai_cache_read_token_price";
+pub const AI_CACHE_WRITE_TOKEN_PRICE: &str = "$ai_cache_write_token_price";
+pub const AI_CACHE_REPORTING_EXCLUSIVE: &str = "$ai_cache_reporting_exclusive";
+pub const AI_REASONING_TOKENS: &str = "$ai_reasoning_tokens";
 
 pub fn genai_instrumentation_scope(version: impl Into<String>) -> InstrumentationScope {
     InstrumentationScope::builder("aether.genai")

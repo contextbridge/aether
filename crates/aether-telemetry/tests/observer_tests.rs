@@ -9,7 +9,7 @@ use aether_telemetry::{
     GENAI_SEMCONV_SCHEMA_URL, GenAiMetrics, OtelInstrumentation, OtelObserver, genai_instrumentation_scope,
 };
 use llm::testing::llm_response;
-use llm::{LlmError, LlmResponse, StopReason, TokenUsage};
+use llm::{LlmError, LlmResponse, ModelPricing, StopReason, TokenUsage};
 use opentelemetry::metrics::MeterProvider as _;
 use opentelemetry::trace::{Status, TracerProvider as _};
 use opentelemetry::{Array, Value};
@@ -176,6 +176,53 @@ async fn completed_llm_calls_capture_finish_reasons() -> Result<(), Box<dyn Erro
             .named(&format!("chat model-{index}"))
             .assert_attr("gen_ai.response.finish_reasons", finish_reasons(expected));
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn completed_llm_calls_emit_posthog_custom_pricing_and_token_properties() -> Result<(), Box<dyn Error>> {
+    let usage = TokenUsage {
+        cache_read_tokens: Some(40),
+        cache_creation_tokens: Some(10),
+        cache_reporting_exclusive: Some(true),
+        reasoning_tokens: Some(7),
+        ..TokenUsage::new(100, 20)
+    };
+    let events = AgentTrace::from_events(vec![
+        AgentEvent::Turn(TurnEvent::Started { content: vec![] }),
+        AgentEvent::Turn(TurnEvent::LlmCallStarted {
+            purpose: LlmCallPurpose::Chat,
+            provider: Some("anthropic".to_string()),
+            model: Some("priced-model".to_string()),
+            display_name: "priced-model".to_string(),
+            pricing: Some(ModelPricing {
+                input_per_million: 3.0,
+                output_per_million: 15.0,
+                cache_read_per_million: Some(0.3),
+                cache_write_per_million: Some(3.75),
+            }),
+            attempt: 0,
+            max_attempts: 1,
+        }),
+        AgentEvent::Turn(TurnEvent::LlmCallEnded {
+            purpose: LlmCallPurpose::Chat,
+            outcome: LlmCallOutcome::Completed { stop_reason: None, usage: Some(usage) },
+        }),
+        AgentEvent::turn_ended(TurnOutcome::Completed),
+    ]);
+
+    let spans = otel_test().redacting().observe_trace(&events).spans();
+    let chat = spans.named("chat priced-model");
+    chat.assert_attr("$ai_input_token_price", 0.000_003);
+    chat.assert_attr("$ai_output_token_price", 0.000_015);
+    chat.assert_attr("$ai_cache_read_token_price", 0.000_000_3);
+    chat.assert_attr("$ai_cache_write_token_price", 0.000_003_75);
+    chat.assert_attr("$ai_cache_reporting_exclusive", true);
+    chat.assert_attr("$ai_reasoning_tokens", 7);
+    // PostHog derives these from the semconv cache token attributes; duplicating
+    // them would be redundant.
+    chat.assert_no_attr("$ai_cache_read_input_tokens");
+    chat.assert_no_attr("$ai_cache_creation_input_tokens");
     Ok(())
 }
 
@@ -372,6 +419,7 @@ fn chat_call(provider: &str, model: &str, outcome: LlmCallOutcome) -> [AgentEven
             provider: Some(provider.to_string()),
             model: Some(model.to_string()),
             display_name: model.to_string(),
+            pricing: None,
             attempt: 0,
             max_attempts: 1,
         }),

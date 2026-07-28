@@ -6,7 +6,7 @@ use crate::llm_call_state::LlmCallState;
 use crate::span_guard::{ErrorKind, SpanGuard};
 use aether_core::events::{AgentEvent, AgentObserver, LlmCallPurpose, MessageEvent, ToolEvent, TurnEvent, TurnOutcome};
 use llm::catalog::Provider;
-use llm::{ContentBlock, ToolCallError, ToolCallRequest, ToolCallResult, ToolDefinition};
+use llm::{ContentBlock, ModelPricing, ToolCallError, ToolCallRequest, ToolCallResult, ToolDefinition};
 use opentelemetry::trace::{SpanBuilder, SpanKind, TraceContextExt, Tracer as _};
 use opentelemetry::{Context, KeyValue};
 use opentelemetry_sdk::trace::SdkTracer;
@@ -121,13 +121,22 @@ impl TurnState {
 
     fn on_event(&mut self, message: &AgentEvent, instrumentation: &OtelInstrumentation, tools: &[ToolDefinition]) {
         match message {
-            AgentEvent::Turn(TurnEvent::LlmCallStarted { purpose, provider, model, display_name, attempt, .. }) => {
+            AgentEvent::Turn(TurnEvent::LlmCallStarted {
+                purpose,
+                provider,
+                model,
+                display_name,
+                pricing,
+                attempt,
+                ..
+            }) => {
                 self.start_llm_call(
                     LlmCallStart {
                         purpose: *purpose,
                         provider: provider.as_deref(),
                         model: model.as_deref(),
                         display_name,
+                        pricing: *pricing,
                         attempt: *attempt,
                     },
                     instrumentation,
@@ -207,6 +216,9 @@ impl TurnState {
         let mut attributes = metric_attributes.clone();
         attributes.push(KeyValue::new(semconv::GEN_AI_REQUEST_STREAM, true));
         attributes.push(KeyValue::new(semconv::LLM_ATTEMPT, i64::from(call.attempt)));
+        if let Some(pricing) = call.pricing {
+            attributes.extend(pricing_attributes(pricing));
+        }
         // Only chat calls carry the turn's input and tool definitions; a
         // compaction call's actual input is the internal summarization prompt.
         if call.purpose == LlmCallPurpose::Chat {
@@ -308,5 +320,25 @@ struct LlmCallStart<'a> {
     provider: Option<&'a str>,
     model: Option<&'a str>,
     display_name: &'a str,
+    pricing: Option<ModelPricing>,
     attempt: u32,
 }
+
+fn pricing_attributes(pricing: ModelPricing) -> Vec<KeyValue> {
+    let mut attributes = vec![
+        KeyValue::new(semconv::AI_INPUT_TOKEN_PRICE, pricing.input_per_million / TOKENS_PER_MILLION),
+        KeyValue::new(semconv::AI_OUTPUT_TOKEN_PRICE, pricing.output_per_million / TOKENS_PER_MILLION),
+    ];
+
+    if let Some(price) = pricing.cache_read_per_million {
+        attributes.push(KeyValue::new(semconv::AI_CACHE_READ_TOKEN_PRICE, price / TOKENS_PER_MILLION));
+    }
+
+    if let Some(price) = pricing.cache_write_per_million {
+        attributes.push(KeyValue::new(semconv::AI_CACHE_WRITE_TOKEN_PRICE, price / TOKENS_PER_MILLION));
+    }
+
+    attributes
+}
+
+const TOKENS_PER_MILLION: f64 = 1_000_000.0;

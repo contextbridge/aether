@@ -66,8 +66,7 @@ struct ModalitiesData {
     input: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 struct CostData {
     #[serde(default)]
     input: f64,
@@ -293,6 +292,7 @@ struct ModelInfo {
     context_window: u32,
     reasoning_levels: Vec<String>,
     input_modalities: Vec<String>,
+    pricing: Option<CostData>,
     supports_prompt_caching: bool,
     transport: Option<TransportInfo>,
 }
@@ -422,6 +422,7 @@ fn collect_models_from(
             let source_context_window = m.limit.as_ref().map_or(0, |l| l.context);
             let context_window =
                 cfg.explicit_model(&m.id).map_or(source_context_window, |explicit| explicit.context_window);
+            let pricing = if cfg.dev_id == "codex" { None } else { m.cost.clone() };
             Ok(ModelInfo {
                 variant_name: model_id_to_variant(&m.id),
                 model_id: m.id.clone(),
@@ -430,6 +431,7 @@ fn collect_models_from(
                 reasoning_levels,
                 input_modalities,
                 supports_prompt_caching: m.cost.as_ref().is_some_and(CostData::has_prompt_caching),
+                pricing,
                 transport: transport_for_model(cfg, m)?,
             })
         })
@@ -721,6 +723,8 @@ fn emit_provider_impls(provider_models: &ProviderModels) -> TokenStream {
             },
         );
 
+        let pricing_arms = emit_pricing_arms(models);
+
         let modality_methods = ["image", "audio"].iter().map(|modality| {
             let method = format_ident!("supports_{}", modality);
             let mod_owned = (*modality).to_string();
@@ -776,6 +780,11 @@ fn emit_provider_impls(provider_models: &ProviderModels) -> TokenStream {
                     match self { #prompt_caching_arms }
                 }
 
+                #[allow(clippy::too_many_lines, clippy::match_same_arms, clippy::unreadable_literal)]
+                pub fn pricing(self) -> Option<ModelPricing> {
+                    match self { #pricing_arms }
+                }
+
                 #(#modality_methods)*
 
                 #[allow(clippy::too_many_lines)]
@@ -790,6 +799,28 @@ fn emit_provider_impls(provider_models: &ProviderModels) -> TokenStream {
         }
     });
     quote! { #(#impls)* }
+}
+
+fn emit_pricing_arms(models: &[ModelInfo]) -> TokenStream {
+    let arms = models.iter().map(|model| {
+        let variant = format_ident!("{}", model.variant_name);
+        let Some(pricing) = &model.pricing else {
+            return quote! { Self::#variant => None, };
+        };
+        let input = pricing.input;
+        let output = pricing.output;
+        let cache_read = pricing.cache_read.map_or_else(|| quote! { None }, |value| quote! { Some(#value) });
+        let cache_write = pricing.cache_write.map_or_else(|| quote! { None }, |value| quote! { Some(#value) });
+        quote! {
+            Self::#variant => Some(ModelPricing {
+                input_per_million: #input,
+                output_per_million: #output,
+                cache_read_per_million: #cache_read,
+                cache_write_per_million: #cache_write,
+            }),
+        }
+    });
+    quote! { #(#arms)* }
 }
 
 fn emit_from_str_impl(enum_ident: &proc_macro2::Ident, parser_name: &str, models: &[ModelInfo]) -> TokenStream {
@@ -928,6 +959,7 @@ fn emit_llm_model_impl() -> TokenStream {
     let reasoning_levels = emit_llm_reasoning_levels();
     let supports_reasoning = emit_llm_supports_reasoning();
     let supports_prompt_caching = emit_llm_supports_prompt_caching();
+    let pricing = emit_llm_pricing();
     let modality_methods = ["image", "audio"].iter().map(|m| emit_llm_supports_modality(m));
     let transport = emit_llm_transport();
     let all = emit_llm_all();
@@ -946,6 +978,7 @@ fn emit_llm_model_impl() -> TokenStream {
             #reasoning_levels
             #supports_reasoning
             #supports_prompt_caching
+            #pricing
             #(#modality_methods)*
             #transport
             #all
@@ -1129,6 +1162,15 @@ fn emit_llm_supports_prompt_caching() -> TokenStream {
     quote! {
         /// Whether this model supports provider-side prompt caching
         pub fn supports_prompt_caching(&self) -> bool {
+            #body
+        }
+    }
+}
+
+fn emit_llm_pricing() -> TokenStream {
+    let body = llm_delegate_with_dynamic_default("pricing", &quote! { None });
+    quote! {
+        pub fn pricing(&self) -> Option<ModelPricing> {
             #body
         }
     }
@@ -1713,6 +1755,43 @@ mod tests {
         let error = build_provider_models(&parsed).unwrap_err();
 
         assert!(matches!(error, CodegenError::UnsupportedReasoningEffort { .. }));
+    }
+
+    #[test]
+    fn build_preserves_model_pricing_and_omits_codex_subscription_pricing() {
+        let mut data = minimal_models_dev_json();
+        anthropic_models(
+            &mut data,
+            json!({
+                "priced": {
+                    "id": "priced", "name": "Priced", "tool_call": true,
+                    "limit": {"context": 200_000, "output": 0},
+                    "cost": {"input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_write": 3.75}
+                }
+            }),
+        );
+        insert_models(
+            &mut data,
+            "openai",
+            json!({
+                "gpt-5.5": {
+                    "id": "gpt-5.5", "name": "GPT-5.5", "tool_call": true,
+                    "limit": {"context": 1_050_000, "output": 128_000},
+                    "cost": {"input": 1.25, "output": 10.0, "cache_read": 0.125}
+                }
+            }),
+        );
+
+        let models = build_from_value(&data);
+        let priced = models["anthropic"].iter().find(|model| model.model_id == "priced").unwrap();
+        assert_eq!(priced.pricing.as_ref().map(|pricing| pricing.input), Some(3.0));
+        assert_eq!(priced.pricing.as_ref().map(|pricing| pricing.output), Some(15.0));
+        assert_eq!(priced.pricing.as_ref().and_then(|pricing| pricing.cache_read), Some(0.3));
+        assert_eq!(priced.pricing.as_ref().and_then(|pricing| pricing.cache_write), Some(3.75));
+
+        let codex = models["codex"].iter().find(|model| model.model_id == "gpt-5.5").unwrap();
+        assert_eq!(codex.pricing, None);
+        assert!(codex.supports_prompt_caching);
     }
 
     #[test]

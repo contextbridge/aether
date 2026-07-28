@@ -18,7 +18,7 @@ mod tool_schema;
 mod tools;
 pub mod types;
 
-pub use catalog::LlmModel;
+pub use catalog::{LlmModel, ModelPricing};
 pub use chat_message::{AssistantReasoning, ChatMessage, ContentBlock, EncryptedReasoningContent};
 pub use context::Context;
 pub use credential::ProviderCredential;

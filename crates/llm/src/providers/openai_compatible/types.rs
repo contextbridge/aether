@@ -266,6 +266,7 @@ impl From<Usage> for TokenUsage {
             output_tokens: u32::try_from(usage.completion_tokens.max(0)).unwrap_or(0),
             cache_read_tokens: prompt.cached_tokens,
             cache_creation_tokens: prompt.cache_write_tokens,
+            cache_reporting_exclusive: Some(false),
             input_audio_tokens: prompt.audio_tokens,
             input_video_tokens: prompt.video_tokens,
             reasoning_tokens: completion.reasoning_tokens,

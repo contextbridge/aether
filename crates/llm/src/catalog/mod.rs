@@ -4,10 +4,12 @@ use crate::providers::local::discovery::discover_local_models;
 
 mod bedrock;
 mod model_spec;
+mod pricing;
 pub mod transport;
 
 pub use bedrock::BedrockModel;
 pub use model_spec::{ModelSpec, ModelSpecError, ReasoningEffortError, validate_reasoning_effort};
+pub use pricing::ModelPricing;
 pub use transport::{ModelTransport, TemplateError, expand_api_template};
 
 include!(concat!(env!("OUT_DIR"), "/generated.rs"));
@@ -50,6 +52,32 @@ mod tests {
             let parsed: LlmModel = s.parse().unwrap();
             assert_eq!(&parsed, model);
         }
+    }
+
+    #[test]
+    fn model_pricing_comes_from_provider_catalog() {
+        let model: LlmModel = "anthropic:claude-sonnet-4-5".parse().unwrap();
+
+        assert_eq!(
+            model.pricing(),
+            Some(ModelPricing {
+                input_per_million: 3.0,
+                output_per_million: 15.0,
+                cache_read_per_million: Some(0.3),
+                cache_write_per_million: Some(3.75),
+            })
+        );
+    }
+
+    #[test]
+    fn models_without_usage_pricing_do_not_inherit_unrelated_prices() {
+        let codex: LlmModel = "codex:gpt-5.5".parse().unwrap();
+        let local: LlmModel = "ollama:local-model".parse().unwrap();
+        let bedrock_profile: LlmModel = "bedrock:us.anthropic.claude-future-model-v99:0".parse().unwrap();
+
+        assert_eq!(codex.pricing(), None);
+        assert_eq!(local.pricing(), None);
+        assert_eq!(bedrock_profile.pricing(), None);
     }
 
     #[test]
