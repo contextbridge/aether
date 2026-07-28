@@ -1,0 +1,6 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_mantle_cache_write"},"sequence_number":0}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_mantle_cache_write","status":"completed","usage":{"input_tokens":1024,"input_tokens_details":{"cached_tokens":0,"cache_write_tokens":1024},"output_tokens":8,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":1032}},"sequence_number":1}
+

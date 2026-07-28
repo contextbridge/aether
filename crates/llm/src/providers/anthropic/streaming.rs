@@ -376,6 +376,7 @@ mod tests {
                 output_tokens: 25,
                 cache_read_tokens: Some(60),
                 cache_creation_tokens: Some(40),
+                cache_reporting_exclusive: Some(true),
                 ..TokenUsage::default()
             })
         );

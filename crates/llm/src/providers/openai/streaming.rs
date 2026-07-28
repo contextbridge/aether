@@ -16,6 +16,7 @@ impl From<CompletionUsage> for TokenUsage {
             input_tokens: usage.prompt_tokens,
             output_tokens: usage.completion_tokens,
             cache_read_tokens: prompt.cached_tokens,
+            cache_reporting_exclusive: Some(false),
             input_audio_tokens: prompt.audio_tokens,
             reasoning_tokens: completion.reasoning_tokens,
             output_audio_tokens: completion.audio_tokens,

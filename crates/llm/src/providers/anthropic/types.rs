@@ -267,6 +267,7 @@ impl From<&Usage> for TokenUsage {
             output_tokens: usage.output_tokens,
             cache_read_tokens: usage.cache_read_input_tokens,
             cache_creation_tokens: usage.cache_creation_input_tokens,
+            cache_reporting_exclusive: Some(true),
             ..TokenUsage::default()
         }
     }

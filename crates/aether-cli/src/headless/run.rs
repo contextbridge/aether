@@ -608,6 +608,7 @@ mod tests {
             provider: None,
             model: None,
             display_name: "test".to_string(),
+            pricing: None,
             attempt,
             max_attempts: 3,
         })

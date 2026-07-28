@@ -2,8 +2,8 @@ use std::borrow::Cow;
 use std::str::FromStr;
 
 use crate::ReasoningEffort;
-use crate::catalog::BedrockFoundationModel;
 use crate::catalog::transport::ModelTransport;
+use crate::catalog::{BedrockFoundationModel, ModelPricing};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum BedrockModel {
@@ -62,6 +62,13 @@ impl BedrockModel {
         match self {
             Self::Foundation(m) => m.supports_audio(),
             Self::Profile(_) => false,
+        }
+    }
+
+    pub fn pricing(&self) -> Option<ModelPricing> {
+        match self {
+            Self::Foundation(m) => m.pricing(),
+            Self::Profile(_) => None,
         }
     }
 

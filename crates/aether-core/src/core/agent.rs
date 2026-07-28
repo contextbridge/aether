@@ -732,7 +732,8 @@ impl Agent {
         AgentEvent::Turn(TurnEvent::LlmCallStarted {
             purpose,
             provider: model.as_ref().map(|m| m.provider().to_string()),
-            model: model.map(|m| m.model_id().into_owned()),
+            model: model.as_ref().map(|m| m.model_id().into_owned()),
+            pricing: model.and_then(|m| m.pricing()),
             display_name: self.llm.display_name(),
             attempt,
             max_attempts: self.retry_config.max_attempts,

@@ -1,4 +1,4 @@
-use llm::{ContentBlock, StopReason, TokenUsage};
+use llm::{ContentBlock, ModelPricing, StopReason, TokenUsage};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -61,6 +61,7 @@ pub enum TurnEvent {
         provider: Option<String>,
         model: Option<String>,
         display_name: String,
+        pricing: Option<ModelPricing>,
         /// 0 for the initial call, incrementing per retry.
         attempt: u32,
         max_attempts: u32,

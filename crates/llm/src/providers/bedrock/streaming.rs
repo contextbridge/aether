@@ -19,6 +19,7 @@ impl From<&BedrockTokenUsage> for TokenUsage {
             output_tokens: u32::try_from(usage.output_tokens).unwrap_or(0),
             cache_read_tokens: usage.cache_read_input_tokens().and_then(|v| u32::try_from(v).ok()),
             cache_creation_tokens: usage.cache_write_input_tokens().and_then(|v| u32::try_from(v).ok()),
+            cache_reporting_exclusive: Some(true),
             ..TokenUsage::default()
         }
     }
@@ -368,6 +369,7 @@ mod tests {
                 assert_eq!(sample.output_tokens, 50);
                 assert_eq!(sample.cache_read_tokens, Some(40));
                 assert_eq!(sample.cache_creation_tokens, Some(20));
+                assert_eq!(sample.cache_reporting_exclusive, Some(true));
             }
             _ => panic!("expected Emit(Usage{{..}})"),
         }

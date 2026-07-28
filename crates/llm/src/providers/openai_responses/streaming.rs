@@ -1,18 +1,39 @@
 use async_openai::types::responses::{OutputItem, ResponseUsage, Status};
 use futures::Stream;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer, de::Error as _};
 use tokio_stream::StreamExt;
 
 use crate::providers::tool_call_collector::ToolCallCollector;
 use crate::{LlmError, LlmResponse, Result, StopReason, TokenUsage};
 
-impl From<ResponseUsage> for TokenUsage {
-    fn from(usage: ResponseUsage) -> Self {
+#[derive(Debug)]
+pub struct ResponsesUsage {
+    usage: ResponseUsage,
+    cache_write_tokens: Option<u32>,
+}
+
+impl<'de> Deserialize<'de> for ResponsesUsage {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let extension = serde_json::from_value::<ResponsesUsageExtension>(value.clone()).map_err(D::Error::custom)?;
+        let usage = serde_json::from_value(value).map_err(D::Error::custom)?;
+
+        Ok(Self { usage, cache_write_tokens: extension.input_tokens_details.cache_write_tokens })
+    }
+}
+
+impl From<ResponsesUsage> for TokenUsage {
+    fn from(usage: ResponsesUsage) -> Self {
         TokenUsage {
-            input_tokens: usage.input_tokens,
-            output_tokens: usage.output_tokens,
-            cache_read_tokens: Some(usage.input_tokens_details.cached_tokens),
-            reasoning_tokens: Some(usage.output_tokens_details.reasoning_tokens),
+            input_tokens: usage.usage.input_tokens,
+            output_tokens: usage.usage.output_tokens,
+            cache_read_tokens: Some(usage.usage.input_tokens_details.cached_tokens),
+            cache_creation_tokens: usage.cache_write_tokens,
+            cache_reporting_exclusive: Some(false),
+            reasoning_tokens: Some(usage.usage.output_tokens_details.reasoning_tokens),
             ..TokenUsage::default()
         }
     }
@@ -108,7 +129,7 @@ pub struct ResponsesCompletedEvent {
 #[derive(Debug, Deserialize)]
 pub struct ResponsesCompleted {
     #[serde(default)]
-    pub usage: Option<ResponseUsage>,
+    pub usage: Option<ResponsesUsage>,
     #[serde(default)]
     pub status: Option<Status>,
 }
@@ -177,6 +198,18 @@ where
             }
         }
     }
+}
+
+#[derive(Deserialize, Default)]
+struct ResponsesUsageExtension {
+    #[serde(default)]
+    input_tokens_details: ResponsesInputTokenDetailsExtension,
+}
+
+#[derive(Deserialize, Default)]
+struct ResponsesInputTokenDetailsExtension {
+    #[serde(default)]
+    cache_write_tokens: Option<u32>,
 }
 
 fn process_event(
@@ -448,6 +481,16 @@ mod tests {
         assert!(usage.reasoning_tokens.is_some_and(|tokens| tokens > 0), "{usage:?}");
     }
 
+    #[tokio::test]
+    async fn captured_mantle_fixture_preserves_cache_write_usage() {
+        let responses =
+            process_fixture(include_str!("../../../tests/fixtures/openai_responses/03_mantle_cache_write.sse")).await;
+
+        assert!(responses.iter().all(Result::is_ok), "{responses:?}");
+        let usage = fixture_usage(&responses).expect("fixture should report usage");
+        assert_eq!(usage.cache_creation_tokens, Some(1024));
+    }
+
     /// Decode a captured SSE body and run it through the shared processor.
     async fn process_fixture(sse: &str) -> Vec<Result<LlmResponse>> {
         let events = sse
@@ -498,6 +541,7 @@ mod tests {
                 input_tokens: 120,
                 output_tokens: 80,
                 cache_read_tokens: Some(50),
+                cache_reporting_exclusive: Some(false),
                 reasoning_tokens: Some(30),
                 ..TokenUsage::default()
             })
@@ -562,7 +606,7 @@ mod tests {
         })
     }
 
-    fn completed(status: Status, usage: Option<ResponseUsage>) -> ResponsesStreamEvent {
+    fn completed(status: Status, usage: Option<ResponsesUsage>) -> ResponsesStreamEvent {
         ResponsesStreamEvent::Completed(ResponsesCompletedEvent {
             response: ResponsesCompleted { usage, status: Some(status) },
         })
@@ -590,7 +634,7 @@ mod tests {
         )
     }
 
-    fn make_usage(input_tokens: u32, output_tokens: u32) -> ResponseUsage {
+    fn make_usage(input_tokens: u32, output_tokens: u32) -> ResponsesUsage {
         make_usage_full(input_tokens, output_tokens, 0, 0)
     }
 
@@ -599,7 +643,7 @@ mod tests {
         output_tokens: u32,
         cached_tokens: u32,
         reasoning_tokens: u32,
-    ) -> ResponseUsage {
+    ) -> ResponsesUsage {
         serde_json::from_value(make_usage_json(input_tokens, output_tokens, cached_tokens, reasoning_tokens)).unwrap()
     }
 
