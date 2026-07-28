@@ -141,5 +141,9 @@ export default defineConfig({
     }),
     mdx({ optimize: true }),
   ],
-  vite: { plugins: [tailwindcss()] },
+  vite: {
+    // Astro currently provides Vite 7 while Tailwind is typed against Vite 8.
+    // @ts-expect-error Vite plugin types differ between the two versions.
+    plugins: tailwindcss(),
+  },
 });
