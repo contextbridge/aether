@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.28](https://github.com/contextbridge/aether/compare/aether-lspd-v0.1.27...aether-lspd-v0.1.28) - 2026-07-28
+
+### Other
+
+- isolate LSP timeout recovery coverage ([#300](https://github.com/contextbridge/aether/pull/300))
+
 ## [0.1.27](https://github.com/contextbridge/aether/compare/aether-lspd-v0.1.26...aether-lspd-v0.1.27) - 2026-07-28
 
 ### Other

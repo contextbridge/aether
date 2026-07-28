@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.30](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.29...aether-agent-cli-v0.7.30) - 2026-07-28
+
+### Fixed
+
+- *(aether-telemetry)* Include reasoning tokens and pricing information ([#301](https://github.com/contextbridge/aether/pull/301))
+
 ## [0.7.29](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.28...aether-agent-cli-v0.7.29) - 2026-07-28
 
 ### Other
