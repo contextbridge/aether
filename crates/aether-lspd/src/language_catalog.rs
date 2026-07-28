@@ -104,7 +104,7 @@ impl ServerKind {
         }
     }
 
-    fn env_key(self) -> &'static str {
+    pub(crate) fn env_key(self) -> &'static str {
         match self {
             Self::RustAnalyzer => "RUST_ANALYZER",
             Self::TypeScriptLanguageServer => "TYPESCRIPT_LANGUAGE_SERVER",

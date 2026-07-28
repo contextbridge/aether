@@ -4,8 +4,9 @@ pub mod daemon_harness;
 pub use cargo_project::{CargoProject, TestProject};
 pub use daemon_harness::DaemonHarness;
 
+use aether_lspd::LanguageId;
+use aether_lspd::testing::configure_fake_server;
 use lsp_types::Hover;
-use std::path::PathBuf;
 use std::sync::Once;
 
 #[allow(dead_code)]
@@ -23,14 +24,8 @@ pub fn use_fake_rust_server() {
 /// ignored. Don't mix differently-configured fake servers in one test binary.
 #[allow(dead_code)]
 pub fn use_fake_rust_server_with_args(extra_args: &[&str]) {
-    FAKE_SERVER_ENV.call_once(|| {
-        let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("common").join("fake_lsp_server.py");
-        let mut args = vec![script.to_string_lossy().to_string()];
-        args.extend(extra_args.iter().map(ToString::to_string));
-        unsafe {
-            std::env::set_var("AETHER_LSPD_SERVER_COMMAND_RUST_ANALYZER", "python3");
-            std::env::set_var("AETHER_LSPD_SERVER_ARGS_RUST_ANALYZER", serde_json::to_string(&args).unwrap());
-        }
+    FAKE_SERVER_ENV.call_once(|| unsafe {
+        configure_fake_server(LanguageId::Rust, extra_args);
     });
 }
 
