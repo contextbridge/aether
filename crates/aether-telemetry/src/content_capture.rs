@@ -30,6 +30,13 @@ impl ContentCapture {
             Self::Capture => Some(content),
         }
     }
+
+    pub(crate) fn collect<T: Default>(self) -> Option<T> {
+        match self {
+            Self::Redact => None,
+            Self::Capture => Some(T::default()),
+        }
+    }
 }
 
 impl ContentBuffer {

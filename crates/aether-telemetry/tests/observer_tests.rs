@@ -9,10 +9,10 @@ use aether_telemetry::{
     GENAI_SEMCONV_SCHEMA_URL, GenAiMetrics, OtelInstrumentation, OtelObserver, genai_instrumentation_scope,
 };
 use llm::testing::llm_response;
-use llm::{LlmError, LlmResponse, StopReason};
-use opentelemetry::Value;
+use llm::{LlmError, LlmResponse, StopReason, TokenUsage};
 use opentelemetry::metrics::MeterProvider as _;
 use opentelemetry::trace::{Status, TracerProvider as _};
+use opentelemetry::{Array, Value};
 use opentelemetry_sdk::metrics::data::{ResourceMetrics, ScopeMetrics};
 use opentelemetry_sdk::metrics::{InMemoryMetricExporter, SdkMeterProvider};
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider, SpanData};
@@ -98,7 +98,7 @@ async fn capture_content_gates_input_output_and_tool_payloads() -> Result<(), Bo
     chat.assert_attr("gen_ai.input.messages", input_messages);
     chat.assert_attr(
         "gen_ai.output.messages",
-        r#"[{"parts":[{"content":"hello ","type":"text"}],"role":"assistant"}]"#,
+        r#"[{"parts":[{"content":"hello ","type":"text"},{"arguments":{"a":3,"b":5},"id":"call_1","name":"test__add_numbers","type":"tool_call"}],"role":"assistant"}]"#,
     );
     let tool_definitions = chat.attr_string("gen_ai.tool.definitions").expect("tool definitions captured");
     let tool_definitions: JsonValue = serde_json::from_str(&tool_definitions)?;
@@ -127,6 +127,86 @@ async fn capture_content_gates_input_output_and_tool_payloads() -> Result<(), Bo
     let tool = spans.named("execute_tool test__add_numbers");
     tool.assert_no_attr("gen_ai.tool.call.arguments");
     tool.assert_no_attr("gen_ai.tool.call.result");
+    Ok(())
+}
+
+#[tokio::test]
+async fn tool_only_llm_call_captures_generation_output() -> Result<(), Box<dyn Error>> {
+    let request = AddNumbersRequest::new(3, 5);
+    let responses = [
+        llm_response("m1")
+            .tool_call("call_1", "test__add_numbers", &[&request.json()?])
+            .build_with_stop_reason(StopReason::ToolCalls),
+        llm_response("m2").text(&["The sum is 8"]).build(),
+    ];
+    let trace = test_agent().llm_responses(&responses).user_text("3+5 = ?").run_trace().await?;
+
+    let spans = otel_test().capturing().observe_trace(&trace).spans();
+
+    let chat = spans.prefixed("chat")[0];
+    chat.assert_attr(
+        "gen_ai.output.messages",
+        r#"[{"finish_reason":"tool_call","parts":[{"arguments":{"a":3,"b":5},"id":"call_1","name":"test__add_numbers","type":"tool_call"}],"role":"assistant"}]"#,
+    );
+    chat.assert_attr("gen_ai.response.finish_reasons", finish_reasons("tool_call"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn completed_llm_calls_capture_finish_reasons() -> Result<(), Box<dyn Error>> {
+    let cases = [
+        (StopReason::EndTurn, "stop"),
+        (StopReason::Length, "length"),
+        (StopReason::ToolCalls, "tool_call"),
+        (StopReason::ContentFilter, "content_filter"),
+        (StopReason::FunctionCall, "tool_call"),
+        (StopReason::Unknown("provider_reason".to_string()), "provider_reason"),
+    ];
+    let mut events = vec![AgentEvent::Turn(TurnEvent::Started { content: vec![] })];
+    for (index, (stop_reason, _)) in cases.iter().enumerate() {
+        let outcome = LlmCallOutcome::Completed { stop_reason: Some(stop_reason.clone()), usage: None };
+        events.extend(chat_call("test", &format!("model-{index}"), outcome));
+    }
+    events.push(AgentEvent::turn_ended(TurnOutcome::Completed));
+
+    let spans = otel_test().redacting().observe_trace(&AgentTrace::from_events(events)).spans();
+
+    for (index, (_, expected)) in cases.iter().enumerate() {
+        spans
+            .named(&format!("chat model-{index}"))
+            .assert_attr("gen_ai.response.finish_reasons", finish_reasons(expected));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn completed_llm_calls_capture_token_usage_breakdown() -> Result<(), Box<dyn Error>> {
+    let usage = TokenUsage {
+        cache_read_tokens: Some(40),
+        cache_creation_tokens: Some(10),
+        reasoning_tokens: Some(7),
+        ..TokenUsage::new(100, 20)
+    };
+    let mut events = vec![AgentEvent::Turn(TurnEvent::Started { content: vec![] })];
+    events.extend(chat_call("test", "model", LlmCallOutcome::Completed { stop_reason: None, usage: Some(usage) }));
+    events.push(AgentEvent::turn_ended(TurnOutcome::Completed));
+
+    let telemetry = otel_test().redacting().observe_trace(&AgentTrace::from_events(events));
+
+    let spans = telemetry.spans();
+    let chat = spans.named("chat model");
+    chat.assert_attr("gen_ai.usage.input_tokens", 100);
+    chat.assert_attr("gen_ai.usage.output_tokens", 20);
+    chat.assert_attr("gen_ai.usage.cache_read.input_tokens", 40);
+    chat.assert_attr("gen_ai.usage.cache_creation.input_tokens", 10);
+    chat.assert_attr("gen_ai.usage.reasoning.output_tokens", 7);
+
+    let expected: BTreeSet<String> = ["input", "output"].into_iter().map(String::from).collect();
+    assert_eq!(
+        telemetry.metric_attribute_values("gen_ai.token.type"),
+        expected,
+        "the metric's token.type vocabulary is just input/output — breakdowns live on span attributes"
+    );
     Ok(())
 }
 
@@ -201,25 +281,10 @@ async fn compaction_call_is_tagged_and_parented_to_the_turn() -> Result<(), Box<
 
 #[tokio::test]
 async fn provider_names_map_to_genai_semconv() -> Result<(), Box<dyn Error>> {
-    let call = |provider: &str, model: &str| {
-        [
-            AgentEvent::Turn(TurnEvent::LlmCallStarted {
-                purpose: LlmCallPurpose::Chat,
-                provider: Some(provider.to_string()),
-                model: Some(model.to_string()),
-                display_name: model.to_string(),
-                attempt: 0,
-                max_attempts: 3,
-            }),
-            AgentEvent::Turn(TurnEvent::LlmCallEnded {
-                purpose: LlmCallPurpose::Chat,
-                outcome: LlmCallOutcome::Completed { stop_reason: None, usage: None },
-            }),
-        ]
-    };
+    let completed = || LlmCallOutcome::Completed { stop_reason: None, usage: None };
     let mut events = vec![AgentEvent::Turn(TurnEvent::Started { content: vec![] })];
-    events.extend(call("gemini", "gemini-2.5-pro"));
-    events.extend(call("my-custom-proxy", "custom-model"));
+    events.extend(chat_call("gemini", "gemini-2.5-pro", completed()));
+    events.extend(chat_call("my-custom-proxy", "custom-model", completed()));
     events.push(AgentEvent::turn_ended(TurnOutcome::Completed));
 
     let spans = otel_test().redacting().observe_trace(&AgentTrace::from_events(events)).spans();
@@ -298,6 +363,24 @@ async fn happy_tool_trace() -> Result<AgentTrace, Box<dyn Error>> {
         .user_text("3+5 = ?")
         .run_trace()
         .await
+}
+
+fn chat_call(provider: &str, model: &str, outcome: LlmCallOutcome) -> [AgentEvent; 2] {
+    [
+        AgentEvent::Turn(TurnEvent::LlmCallStarted {
+            purpose: LlmCallPurpose::Chat,
+            provider: Some(provider.to_string()),
+            model: Some(model.to_string()),
+            display_name: model.to_string(),
+            attempt: 0,
+            max_attempts: 1,
+        }),
+        AgentEvent::Turn(TurnEvent::LlmCallEnded { purpose: LlmCallPurpose::Chat, outcome }),
+    ]
+}
+
+fn finish_reasons(reason: &str) -> Value {
+    Value::Array(Array::String(vec![reason.to_string().into()]))
 }
 
 fn otel_test() -> OtelTestBuilder {
@@ -399,30 +482,38 @@ impl OtelHarness {
             .collect()
     }
 
-    fn metric_attribute_keys(&self) -> BTreeSet<String> {
+    fn metric_attributes(&self) -> Vec<(String, String)> {
         use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData};
 
-        fn histogram_keys<T>(data: &MetricData<T>, keys: &mut BTreeSet<String>) {
+        fn histogram_attributes<T>(data: &MetricData<T>, pairs: &mut Vec<(String, String)>) {
             if let MetricData::Histogram(histogram) = data {
                 for point in histogram.data_points() {
-                    keys.extend(point.attributes().map(|kv| kv.key.to_string()));
+                    pairs.extend(point.attributes().map(|kv| (kv.key.to_string(), kv.value.to_string())));
                 }
             }
         }
 
-        let mut keys = BTreeSet::new();
+        let mut pairs = Vec::new();
         for resource in &self.finished_metrics() {
             for scope in resource.scope_metrics() {
                 for metric in scope.metrics() {
                     match metric.data() {
-                        AggregatedMetrics::F64(data) => histogram_keys(data, &mut keys),
-                        AggregatedMetrics::U64(data) => histogram_keys(data, &mut keys),
-                        AggregatedMetrics::I64(data) => histogram_keys(data, &mut keys),
+                        AggregatedMetrics::F64(data) => histogram_attributes(data, &mut pairs),
+                        AggregatedMetrics::U64(data) => histogram_attributes(data, &mut pairs),
+                        AggregatedMetrics::I64(data) => histogram_attributes(data, &mut pairs),
                     }
                 }
             }
         }
-        keys
+        pairs
+    }
+
+    fn metric_attribute_keys(&self) -> BTreeSet<String> {
+        self.metric_attributes().into_iter().map(|(key, _)| key).collect()
+    }
+
+    fn metric_attribute_values(&self, key: &str) -> BTreeSet<String> {
+        self.metric_attributes().into_iter().filter(|(k, _)| k == key).map(|(_, value)| value).collect()
     }
 }
 
