@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.33](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.32...aether-mcp-servers-v0.4.33) - 2026-07-28
+
+### Other
+
+- isolate LSP timeout recovery coverage ([#300](https://github.com/contextbridge/aether/pull/300))
+
 ## [0.4.32](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.31...aether-mcp-servers-v0.4.32) - 2026-07-28
 
 ### Other

@@ -45,7 +45,7 @@ dependencies = [
 
 [[package]]
 name = "aether-acp-utils"
-version = "0.3.35"
+version = "0.3.36"
 dependencies = [
  "aether-acp-utils",
  "aether-mcp-utils",
@@ -66,7 +66,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-cli"
-version = "0.7.29"
+version = "0.7.30"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
@@ -104,7 +104,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-core"
-version = "0.6.26"
+version = "0.6.27"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
@@ -171,7 +171,7 @@ dependencies = [
 
 [[package]]
 name = "aether-evals"
-version = "0.2.18"
+version = "0.2.19"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -190,7 +190,7 @@ dependencies = [
 
 [[package]]
 name = "aether-llm"
-version = "0.7.24"
+version = "0.7.25"
 dependencies = [
  "aether-auth",
  "aether-doctest",
@@ -229,7 +229,7 @@ dependencies = [
 
 [[package]]
 name = "aether-llm-codegen"
-version = "0.2.17"
+version = "0.2.18"
 dependencies = [
  "aether-utils",
  "prettyplease",
@@ -244,7 +244,7 @@ dependencies = [
 
 [[package]]
 name = "aether-lspd"
-version = "0.1.27"
+version = "0.1.28"
 dependencies = [
  "aether-lspd",
  "clap",
@@ -268,7 +268,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp-servers"
-version = "0.4.32"
+version = "0.4.33"
 dependencies = [
  "aether-agent-core",
  "aether-auth",
@@ -305,7 +305,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp-utils"
-version = "0.5.29"
+version = "0.5.30"
 dependencies = [
  "aether-auth",
  "aether-doctest",
@@ -327,7 +327,7 @@ dependencies = [
 
 [[package]]
 name = "aether-project"
-version = "0.5.27"
+version = "0.5.28"
 dependencies = [
  "aether-agent-core",
  "aether-doctest",
@@ -348,7 +348,7 @@ dependencies = [
 
 [[package]]
 name = "aether-schemas"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "aether-agent-cli",
  "aether-agent-core",
@@ -379,7 +379,7 @@ dependencies = [
 
 [[package]]
 name = "aether-telemetry"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -439,7 +439,7 @@ dependencies = [
 
 [[package]]
 name = "aether-wisp"
-version = "0.4.36"
+version = "0.4.37"
 dependencies = [
  "aether-acp-utils",
  "aether-tui",
@@ -2340,13 +2340,13 @@ dependencies = [
 
 [[package]]
 name = "displaydoc"
-version = "0.2.6"
+version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ac70aa55017e108007fbaf5aa0f54b021c98f92ff8af59d42eda9da96e3dd4f"
+checksum = "c6232dd377dcc64799954cbd3a9bb882e9cdc1308ccd87b1c098f1fb2eaf82a8"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -3963,7 +3963,7 @@ dependencies = [
  "bitflags 2.13.1",
  "libc",
  "plain",
- "redox_syscall 0.9.0",
+ "redox_syscall 0.9.1",
 ]
 
 [[package]]
@@ -5128,9 +5128,9 @@ dependencies = [
 
 [[package]]
 name = "redox_syscall"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5102a6aaa05aa011a238e178e6bca86d2cb56fc9f586d37cb80f5bca6e07759"
+checksum = "07507be7b4a5f9f26eeb41eeaebb1f5a7ff29dfb29739facc21d35bf8b11c21e"
 dependencies = [
  "bitflags 2.13.1",
 ]
