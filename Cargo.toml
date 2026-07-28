@@ -121,11 +121,6 @@ testcontainers = "0.27.3"
 [profile.dev]
 debug = 1
 
-# Dependencies are rebuilt rarely and cached in CI, so optimizing them is close to
-# free at build time and pays off every test run
-[profile.dev.package."*"]
-opt-level = 2
-
 [profile.dist]
 inherits = "release"
 lto = "thin"
