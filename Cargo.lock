@@ -278,7 +278,7 @@ dependencies = [
  "aether-mcp-utils",
  "aether-project",
  "aether-utils",
- "ast-grep-core 0.43.0",
+ "ast-grep-core",
  "ast-grep-language",
  "chrono",
  "clap",
@@ -664,18 +664,6 @@ dependencies = [
 
 [[package]]
 name = "ast-grep-core"
-version = "0.43.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce81c07a23ebe5012b2053ba72af27e36699bf5f8ae6c204cdc2906aa277e5a6"
-dependencies = [
- "bit-set 0.10.0",
- "regex",
- "thiserror 2.0.19",
- "tree-sitter",
-]
-
-[[package]]
-name = "ast-grep-core"
 version = "0.45.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f378c151f97e66921165bcfd962793cb85f86a7453bb20598913292c96a09f1"
@@ -692,7 +680,7 @@ version = "0.45.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75ac3b94d4adab9542f0b690d2ebe6885893bed074906673ba92230e5fcfb0e0"
 dependencies = [
- "ast-grep-core 0.45.0",
+ "ast-grep-core",
  "ignore",
  "serde",
  "tree-sitter",
@@ -1493,15 +1481,6 @@ dependencies = [
 
 [[package]]
 name = "bit-set"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09ec2f926cc3060f09db9ebc5b52823d85268d24bb917e472c0c4bea35780a7d"
-dependencies = [
- "bit-vec 0.9.1",
-]
-
-[[package]]
-name = "bit-set"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56d87354e4229f54a44f7bf2435906a4656dba36026ab6eaca629a2c436a691c"
@@ -1514,15 +1493,6 @@ name = "bit-vec"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e764a1d40d510daf35e07be9eb06e75770908c27d411ee6c92109c9840eaaf7"
-
-[[package]]
-name = "bit-vec"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b71798fca2c1fe1086445a7258a4bc81e6e49dcd24c8d0dd9a1e57395b603f51"
-dependencies = [
- "serde",
-]
 
 [[package]]
 name = "bit-vec"
@@ -6478,7 +6448,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
