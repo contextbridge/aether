@@ -30,6 +30,10 @@ impl LspDaemon {
 
     /// Run the daemon until shutdown.
     pub async fn run(self) -> DaemonResult<()> {
+        self.run_until_shutdown(spawn_shutdown_signal_handler()).await
+    }
+
+    pub(crate) async fn run_until_shutdown(self, shutdown_rx: oneshot::Receiver<()>) -> DaemonResult<()> {
         if let Some(parent) = self.socket_path.parent() {
             create_dir_all(parent).map_err(DaemonError::Io)?;
         }
@@ -38,8 +42,6 @@ impl LspDaemon {
             .map_err(|e| DaemonError::LockfileError(e.to_string()))?;
 
         let _ = remove_file(&self.socket_path);
-
-        let shutdown_rx = spawn_shutdown_signal_handler();
 
         tracing::info!("Daemon listening on {:?}", self.socket_path);
         self.run_listener_loop(shutdown_rx).await?;
