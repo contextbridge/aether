@@ -4,9 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [0.7.25](https://github.com/contextbridge/aether/compare/aether-llm-v0.7.24...aether-llm-v0.7.25) - 2026-07-28
 
-### Other
+### Fixed
 
-- updated the following local packages: aether-llm-codegen
+- *(aether-telemetry)* Include reasoning tokens and pricing information ([#301](https://github.com/contextbridge/aether/pull/301))
 
 ## [0.7.24](https://github.com/contextbridge/aether/compare/aether-llm-v0.7.23...aether-llm-v0.7.24) - 2026-07-28
 

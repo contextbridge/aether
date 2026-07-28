@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [0.2.18](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.17...aether-llm-codegen-v0.2.18) - 2026-07-28
 
+### Fixed
+
+- *(aether-telemetry)* Include reasoning tokens and pricing information ([#301](https://github.com/contextbridge/aether/pull/301))
+
 ### Other
 
 - *(deps)* bump prettyplease from 0.2.37 to 0.3.0 ([#286](https://github.com/contextbridge/aether/pull/286))
