@@ -1,6 +1,6 @@
 [package]
 name = "aether-evals"
-version = "0.2.20"
+version = "0.2.21"
 edition = "2024"
 description = "Dockerized eval harness for Aether AI agents"
 license = "MIT"

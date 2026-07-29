@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.29](https://github.com/contextbridge/aether/compare/aether-lspd-v0.1.28...aether-lspd-v0.1.29) - 2026-07-29
+
+### Fixed
+
+- *(aether-lspd)* Race condition with lsp events ([#308](https://github.com/contextbridge/aether/pull/308))
+
 ## [0.1.28](https://github.com/contextbridge/aether/compare/aether-lspd-v0.1.27...aether-lspd-v0.1.28) - 2026-07-28
 
 ### Other
