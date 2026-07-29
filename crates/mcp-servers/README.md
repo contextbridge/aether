@@ -97,7 +97,7 @@ let builder = mcp()
         async move { TasksMcp::from_args(args).unwrap().into_dyn() }.boxed()
     }))
     .register_in_memory_server("subagents", Box::new(|args| {
-        async move { SubAgentsMcp::from_args(args).unwrap().into_dyn() }.boxed()
+        async move { SubAgentsMcp::standalone_from_args(args).unwrap().into_dyn() }.boxed()
     }))
     .register_in_memory_server("plan", Box::new(|_args| {
         async move { PlanMcp::new().into_dyn() }.boxed()

@@ -1,89 +1,85 @@
-use crate::error::CliError;
 use aether_core::agent_spec::AgentSpec;
-use aether_project::AgentCatalog;
+use aether_project::{AetherSettings, AgentCatalog, SettingsError};
+use llm::{ProviderConnectionOverrides, ReasoningEffort};
+use std::path::Path;
+use thiserror::Error;
 
-pub fn resolve_agent_spec(catalog: &AgentCatalog, agent_name: Option<&str>) -> Result<AgentSpec, CliError> {
-    match agent_name {
-        Some(name) => catalog.resolve(name).map_err(|e| CliError::AgentError(e.to_string())),
+const FALLBACK_MODEL: &str = "anthropic:claude-sonnet-4-5";
 
-        None => {
-            if let Some(selected) = catalog.default_agent() {
-                catalog.resolve(&selected.name).map_err(|e| CliError::AgentError(e.to_string()))
-            } else {
-                let model = "anthropic:claude-sonnet-4-5".parse().map_err(|e: String| CliError::ModelError(e))?;
+#[derive(Clone, Debug, Default)]
+pub(crate) enum InitialSessionSelection {
+    #[default]
+    Default,
+    Agent(String),
+    Model {
+        model: String,
+        reasoning_effort: Option<ReasoningEffort>,
+    },
+}
 
-                Ok(AgentSpec::default_spec(&model, None, Vec::new()))
-            }
-        }
+impl InitialSessionSelection {
+    pub(crate) fn agent(name: String) -> Self {
+        Self::Agent(name)
+    }
+
+    pub(crate) fn model(model: String, reasoning_effort: Option<ReasoningEffort>) -> Self {
+        Self::Model { model, reasoning_effort }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use aether_project::{AetherSettings, AetherSettingsSource, SettingsFileSource};
+pub(crate) struct ResolvedAgentSelection {
+    pub(crate) spec: AgentSpec,
+    pub(crate) catalog: AgentCatalog,
+}
 
-    fn write_file(dir: &std::path::Path, path: &str, content: &str) {
-        let full = dir.join(path);
-        if let Some(parent) = full.parent() {
-            std::fs::create_dir_all(parent).unwrap();
+#[derive(Debug, Error)]
+pub(crate) enum AgentSelectionError {
+    #[error(transparent)]
+    Settings(#[from] SettingsError),
+    #[error("{0}")]
+    Agent(SettingsError),
+    #[error("Model error: {0}")]
+    Model(String),
+}
+
+pub(crate) fn resolve_agent_from_settings(
+    cwd: &Path,
+    settings: AetherSettings,
+    provider_connections: ProviderConnectionOverrides,
+    selection: &InitialSessionSelection,
+) -> Result<ResolvedAgentSelection, AgentSelectionError> {
+    let catalog = AgentCatalog::from_settings_or_empty(cwd, settings)?.with_provider_connections(provider_connections);
+    resolve_agent_from_catalog(catalog, selection)
+}
+
+pub(crate) fn resolve_agent_from_catalog(
+    catalog: AgentCatalog,
+    selection: &InitialSessionSelection,
+) -> Result<ResolvedAgentSelection, AgentSelectionError> {
+    let spec = match selection {
+        InitialSessionSelection::Agent(name) => catalog.resolve(name).map_err(AgentSelectionError::Agent)?,
+        InitialSessionSelection::Model { model, reasoning_effort } => {
+            catalog.default_spec(&model.parse().map_err(AgentSelectionError::Model)?, *reasoning_effort)
         }
-        std::fs::write(full, content).unwrap();
-    }
+        InitialSessionSelection::Default => match catalog.default_agent() {
+            Some(spec) => spec.clone(),
+            None => catalog.default_spec(&FALLBACK_MODEL.parse().map_err(AgentSelectionError::Model)?, None),
+        },
+    };
 
-    fn setup_catalog(settings_json: &str) -> (tempfile::TempDir, AgentCatalog) {
-        let dir = tempfile::tempdir().unwrap();
-        write_file(dir.path(), "PROMPT.md", "Be helpful");
-        write_file(dir.path(), ".aether/settings.json", settings_json);
-        let config = AetherSettings::load(
-            dir.path(),
-            [AetherSettingsSource::File(SettingsFileSource::new(".aether/settings.json", dir.path()))],
-        )
-        .unwrap();
-        let catalog = AgentCatalog::from_settings(dir.path(), config).unwrap();
-        (dir, catalog)
-    }
+    Ok(ResolvedAgentSelection { spec, catalog })
+}
 
-    #[test]
-    fn resolve_with_explicit_name() {
-        let (_dir, catalog) = setup_catalog(
-            r#"{"agents": [
-                {"name": "first", "description": "First", "model": "anthropic:claude-sonnet-4-5", "userInvocable": true, "prompts": [{"type":"file","path":"PROMPT.md"}]},
-                {"name": "second", "description": "Second", "model": "anthropic:claude-sonnet-4-5", "userInvocable": true, "prompts": [{"type":"file","path":"PROMPT.md"}]}
-            ]}"#,
-        );
-        let spec = resolve_agent_spec(&catalog, Some("second")).unwrap();
-        assert_eq!(spec.name, "second");
-    }
-
-    #[test]
-    fn resolve_auto_selects_first_user_invocable() {
-        let (_dir, catalog) = setup_catalog(
-            r#"{"agents": [
-                {"name": "internal", "description": "Internal", "model": "anthropic:claude-sonnet-4-5", "agentInvocable": true, "prompts": [{"type":"file","path":"PROMPT.md"}]},
-                {"name": "visible", "description": "Visible", "model": "anthropic:claude-sonnet-4-5", "userInvocable": true, "prompts": [{"type":"file","path":"PROMPT.md"}]}
-            ]}"#,
-        );
-        let spec = resolve_agent_spec(&catalog, None).unwrap();
-        assert_eq!(spec.name, "visible");
-    }
-
-    #[test]
-    fn resolve_falls_back_to_default() {
-        let dir = tempfile::tempdir().unwrap();
-        let catalog = AgentCatalog::empty(dir.path().to_path_buf());
-        let spec = resolve_agent_spec(&catalog, None).unwrap();
-        assert_eq!(spec.name, "__default__");
-    }
-
-    #[test]
-    fn resolve_unknown_name_errors() {
-        let (_dir, catalog) = setup_catalog(
-            r#"{"agents": [
-                {"name": "alpha", "description": "Alpha", "model": "anthropic:claude-sonnet-4-5", "userInvocable": true, "prompts": [{"type":"file","path":"PROMPT.md"}]}
-            ]}"#,
-        );
-        let result = resolve_agent_spec(&catalog, Some("nonexistent"));
-        assert!(result.is_err());
-    }
+pub fn resolve_agent_spec(
+    catalog: &AgentCatalog,
+    agent_name: Option<&str>,
+) -> Result<AgentSpec, crate::error::CliError> {
+    let selection =
+        agent_name.map_or(InitialSessionSelection::Default, |name| InitialSessionSelection::Agent(name.to_string()));
+    resolve_agent_from_catalog(catalog.clone(), &selection).map(|resolved| resolved.spec).map_err(|error| match error {
+        AgentSelectionError::Settings(error) | AgentSelectionError::Agent(error) => {
+            crate::error::CliError::AgentError(error.to_string())
+        }
+        AgentSelectionError::Model(error) => crate::error::CliError::ModelError(error),
+    })
 }

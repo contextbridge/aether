@@ -6,10 +6,10 @@ use aether_core::mcp::McpBuilder;
 use aether_core::mcp::McpSpawnResult;
 use aether_core::mcp::mcp;
 use aether_core::mcp::run_mcp_task::McpCommand;
-use llm::{ChatMessage, LlmModel, ToolDefinition};
+use llm::{ChatMessage, ToolDefinition};
 use mcp_servers::McpBuilderExt;
 use mcp_utils::client::{McpClientEvent, McpConnectionDetails, McpServer, OAuthHandlerFactory};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::task::JoinHandle;
 use tracing::debug;
@@ -38,21 +38,6 @@ pub struct PromptInfo {
 }
 
 impl RuntimeBuilder {
-    pub fn new(cwd: &Path, model: &str) -> Result<Self, CliError> {
-        let cwd = cwd.canonicalize().map_err(CliError::IoError)?;
-        let parsed_model: LlmModel = model.parse().map_err(CliError::ModelError)?;
-        let spec = AgentSpec::default_spec(&parsed_model, None, Vec::new());
-
-        Ok(Self {
-            cwd,
-            spec,
-            mcp_config_sources: Vec::new(),
-            extra_mcp_servers: Vec::new(),
-            oauth_applicator: None,
-            agent_deps: AgentDeps::default(),
-        })
-    }
-
     pub fn from_spec(cwd: PathBuf, spec: AgentSpec) -> Self {
         Self {
             cwd,
@@ -149,13 +134,14 @@ impl RuntimeBuilder {
     }
 
     async fn spawn_mcp(self) -> Result<(AgentSpec, McpSpawnResult), CliError> {
-        let mut builder = mcp(&self.cwd).with_agent_deps(self.agent_deps.clone());
+        let deps = self.agent_deps.clone();
+        let mut builder = mcp(&self.cwd);
 
         if let Some(apply_oauth) = self.oauth_applicator {
             builder = apply_oauth(builder);
         }
 
-        builder = builder.with_builtin_servers();
+        builder = builder.with_builtin_servers(deps);
 
         if !self.extra_mcp_servers.is_empty() {
             builder = builder.with_servers(self.extra_mcp_servers);

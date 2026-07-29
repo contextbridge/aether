@@ -5,11 +5,12 @@ use super::error::SessionError;
 use super::fake_prompt_mcp::FakePromptMcp;
 use super::model_config::{Modes, ValidatedMode};
 use super::session_actor::{SessionActor, SessionActorInit};
+use super::session_agents::SessionAgents;
 use super::session_config_state::SessionConfigState;
-use super::session_factory::InitialSessionSelection;
 use super::state::{AcpState, AcpStateConfig};
 use crate::acp::session_store::SessionStore;
 use crate::error::CliError;
+use crate::resolve::InitialSessionSelection;
 use crate::settings_args::SettingsSourceArgs;
 use crate::workspace::WorkspaceManager;
 use crate::workspace::testing::StdCopyCloner;
@@ -22,6 +23,7 @@ use aether_core::events::{AgentEvent, Command, MessageEvent};
 use aether_core::mcp::McpSpawnResult;
 use aether_core::mcp::mcp;
 use aether_core::session::{SessionControlEvent, SessionEvent, SessionMeta, UserEvent, last_agent_from_events};
+use aether_project::AgentCatalog;
 use agent_client_protocol::schema::{SessionId, SessionUpdate};
 use agent_client_protocol::{Agent, Client, ConnectionTo};
 use llm::ProviderConnectionOverrides;
@@ -180,7 +182,8 @@ impl AcpTestHarness {
         model: &str,
     ) {
         let model_spec: llm::catalog::LlmModel = "anthropic:claude-sonnet-4-5".parse().expect("test model parses");
-        let spec = AgentSpec::default_spec(&model_spec, None, Vec::new());
+        let mut specs = SessionAgents::new(AgentCatalog::empty(PathBuf::from("/tmp")));
+        specs.set_default(AgentSpec::bare(&model_spec, None, Vec::new()));
         let factory = Arc::new(StubRuntimeFactory {
             cwd: PathBuf::from("/tmp"),
             agent_parts: Mutex::new(Some(StubAgentParts { tx: agent_tx, rx: agent_rx, handle: agent_handle })),
@@ -192,7 +195,7 @@ impl AcpTestHarness {
             repository: self.session_store.clone(),
             oauth_credential_store: fake_oauth_store(),
             active_agent: AgentKey::Default,
-            specs: HashMap::from([(AgentKey::Default, spec)]),
+            specs,
             runtime_factory: factory,
             transcript: Vec::new(),
             modes: Modes::default(),
@@ -254,12 +257,13 @@ impl AcpTestHarness {
             coder_def.mcp = None;
         }
 
-        let mut specs = HashMap::new();
+        let mut catalog_specs = Vec::new();
         let mut agents = HashMap::new();
         for def in [planner_def, coder_def] {
-            specs.insert(AgentKey::Named(def.spec.name.clone()), def.spec.clone());
+            catalog_specs.push(def.spec.clone());
             agents.insert(def.spec.name.clone(), def);
         }
+        let specs = SessionAgents::new(AgentCatalog::new(PathBuf::from("/tmp"), catalog_specs, None));
 
         let factory = Arc::new(FakeRuntimeFactory { cwd: PathBuf::from("/tmp"), agents });
         let initial_agent = selected_mode.clone().unwrap_or_else(|| "Planner".to_string());
@@ -506,7 +510,7 @@ fn switching_modes() -> Modes {
 
 fn fake_agent_spec(name: &str) -> AgentSpec {
     let model: llm::catalog::LlmModel = "anthropic:claude-sonnet-4-5".parse().expect("test model parses");
-    let mut spec = AgentSpec::default_spec(&model, None, vec![Prompt::text(&format!("{name} system prompt"))]);
+    let mut spec = AgentSpec::bare(&model, None, vec![Prompt::text(&format!("{name} system prompt"))]);
     spec.name = name.to_string();
     spec.description = format!("{name} test agent");
     spec.exposure = AgentSpecExposure::user_only();

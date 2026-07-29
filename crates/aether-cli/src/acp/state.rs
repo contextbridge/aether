@@ -29,8 +29,9 @@ use super::model_config::supports_prompt_audio;
 use super::protocol::content::map_acp_to_content_blocks;
 use super::protocol::replay::replay_to_client;
 use super::session_actor::{ConfigSnapshot, SessionCommand, SessionHandle};
-use super::session_factory::{InitialSessionSelection, SessionFactory};
+use super::session_factory::SessionFactory;
 use super::session_store::SessionStore;
+use crate::resolve::InitialSessionSelection;
 use crate::settings_args::SettingsSourceArgs;
 use crate::workspace::{WorkspaceError, WorkspaceManager};
 
