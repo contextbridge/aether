@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.30](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.6.29...aether-agent-core-v0.6.30) - 2026-07-29
+
+### Added
+
+- *(telemetry)* name agent invocation spans ([#312](https://github.com/contextbridge/aether/pull/312))
+
 ## [0.6.29](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.6.28...aether-agent-core-v0.6.29) - 2026-07-29
 
 ### Fixed
