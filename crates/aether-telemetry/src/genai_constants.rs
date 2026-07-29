@@ -8,6 +8,7 @@ pub use opentelemetry_semantic_conventions::SCHEMA_URL as GENAI_SEMCONV_SCHEMA_U
 use opentelemetry_semantic_conventions::{attribute, metric};
 
 pub const ERROR_TYPE: &str = attribute::ERROR_TYPE;
+pub const GEN_AI_AGENT_NAME: &str = attribute::GEN_AI_AGENT_NAME;
 pub const GEN_AI_INPUT_MESSAGES: &str = attribute::GEN_AI_INPUT_MESSAGES;
 pub const GEN_AI_OPERATION_NAME: &str = attribute::GEN_AI_OPERATION_NAME;
 pub const GEN_AI_OUTPUT_MESSAGES: &str = attribute::GEN_AI_OUTPUT_MESSAGES;

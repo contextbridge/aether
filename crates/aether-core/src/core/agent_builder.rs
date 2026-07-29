@@ -84,7 +84,7 @@ impl AgentBuilder {
             .context_window(spec.context_window)
             .model_settings(spec.model_settings.clone());
 
-        if let Some(observer) = deps.observer() {
+        if let Some(observer) = deps.observer(&spec.name) {
             builder = builder.observer(observer);
         }
 

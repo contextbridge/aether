@@ -507,6 +507,7 @@ impl OtelHarness {
             metrics,
             capture_content,
             root_parent: None,
+            agent_name: None,
         });
         Self {
             observer: Some(observer),

@@ -41,7 +41,9 @@ impl AgentDeps {
     }
 
     /// A fresh observer isolated to one agent, if a factory is configured.
-    pub fn observer(&self) -> Option<Box<dyn AgentObserver>> {
-        self.observer_factory.as_ref().map(|factory| factory.agent(self.parent_trace_context.as_ref()))
+    pub fn observer(&self, agent_name: &str) -> Option<Box<dyn AgentObserver>> {
+        self.observer_factory
+            .as_ref()
+            .map(|factory| factory.agent(Some(agent_name), self.parent_trace_context.as_ref()))
     }
 }
