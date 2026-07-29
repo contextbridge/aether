@@ -47,7 +47,7 @@ tracing-appender = "0.2"
 agent-client-protocol = "0.14.0"
 
 # MCP and API clients
-rmcp = { version = "^1.7.0", default-features = false }
+rmcp = { version = "^3.0.0", default-features = false }
 async-openai = { version = "^0.41.0", features = ["byot", "chat-completion", "responses"] }
 reqwest = { version = "^0.13.4", default-features = false, features = ["json", "query", "rustls", "http2", "stream"] }
 oauth2 = "5.0"
