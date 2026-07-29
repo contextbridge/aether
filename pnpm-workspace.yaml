@@ -1,6 +1,9 @@
 packages:
   - "packages/*"
 
+overrides:
+  "@astrojs/mdx": 6.0.3
+
 onlyBuiltDependencies:
   - "@aether-agent/cli"
   - esbuild
