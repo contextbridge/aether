@@ -1,3 +1,4 @@
+use crate::events::TraceContext;
 use mcp_utils::client::{
     McpClient, McpConnectAttempt, McpConnectionAttemptManager, McpError, McpManager, McpServer, McpServerStatusEntry,
 };
@@ -8,7 +9,7 @@ use futures::stream::{self, StreamExt};
 use llm::{ToolCallError, ToolCallRequest, ToolCallResult};
 use rmcp::RoleClient;
 use rmcp::model::{
-    CallToolRequestParams, CreateElicitationRequestParams, ErrorCode, GetPromptResult, ProgressNotificationParam,
+    CallToolRequestParams, CreateElicitationRequestParams, ErrorCode, GetPromptResult, Meta, ProgressNotificationParam,
     Prompt,
 };
 use rmcp::service::RunningService;
@@ -22,7 +23,6 @@ use tokio::sync::oneshot;
 /// Events emitted during tool execution lifecycle
 #[derive(Debug)]
 pub enum ToolExecutionEvent {
-    Started { tool_id: String, tool_name: String },
     Progress { tool_id: String, progress: ProgressNotificationParam },
     Complete { tool_id: String, result: Result<ToolCallResult, ToolCallError>, result_meta: Option<ToolResultMeta> },
 }
@@ -34,6 +34,7 @@ const MCP_AUTH_TIMEOUT: Duration = Duration::from_mins(3);
 pub enum McpCommand {
     ExecuteTool {
         request: ToolCallRequest,
+        trace_context: Option<TraceContext>,
         timeout: Duration,
         tx: mpsc::Sender<ToolExecutionEvent>,
     },
@@ -98,18 +99,23 @@ pub async fn run_mcp_task(
 
 async fn on_command(command: McpCommand, mcp: &mut McpManager, auth_tasks: &mut McpConnectionAttemptManager) {
     match command {
-        McpCommand::ExecuteTool { request, timeout, tx } => {
+        McpCommand::ExecuteTool { request, trace_context, timeout, tx } => {
             let tool_id = request.id.clone();
-            let tool_name = request.name.clone();
-
-            let _ =
-                tx.send(ToolExecutionEvent::Started { tool_id: tool_id.clone(), tool_name: tool_name.clone() }).await;
 
             match mcp.get_client_for_tool(&request.name, &request.arguments) {
                 Ok((client, params)) => {
+                    let trace_meta = trace_context.as_ref().map(TraceContext::to_meta);
                     tokio::spawn(async move {
-                        let outcome =
-                            execute_mcp_call(client, &request, params, timeout, tool_id.clone(), tx.clone()).await;
+                        let outcome = execute_mcp_call(
+                            client,
+                            &request,
+                            params,
+                            trace_meta,
+                            timeout,
+                            tool_id.clone(),
+                            tx.clone(),
+                        )
+                        .await;
                         let (result, result_meta) = match outcome {
                             Ok((r, m)) => (Ok(r), m),
                             Err(e) => (Err(e), None),
@@ -166,6 +172,7 @@ async fn execute_mcp_call(
     client: Arc<RunningService<RoleClient, McpClient>>,
     request: &ToolCallRequest,
     params: CallToolRequestParams,
+    trace_meta: Option<Meta>,
     timeout: Duration,
     tool_call_id: String,
     event_tx: mpsc::Sender<ToolExecutionEvent>,
@@ -178,6 +185,7 @@ async fn execute_mcp_call(
         .send_cancellable_request(CallToolRequest(Request::new(params)), {
             let mut opts = PeerRequestOptions::default();
             opts.timeout = Some(timeout);
+            opts.meta = trace_meta;
             opts
         })
         .await

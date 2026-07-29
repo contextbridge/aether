@@ -36,6 +36,8 @@ pub const GEN_AI_CLIENT_TOKEN_USAGE: &str = metric::GEN_AI_CLIENT_TOKEN_USAGE;
 
 pub const GENAI_RESPONSE_START_EVENT: &str = "gen_ai.response.start";
 pub const GENAI_TOOL_CALL_START_EVENT: &str = "gen_ai.tool_call.start";
+pub const MCP_METHOD_NAME: &str = "mcp.method.name";
+pub const MCP_TOOL_NAME: &str = "mcp.tool.name";
 pub const MESSAGE_ID: &str = "message.id";
 pub const TOOL_CALL_ID: &str = "tool_call.id";
 pub const TOOL_CALL_NAME: &str = "tool_call.name";

@@ -198,7 +198,12 @@ async fn call_needs_browser(
 ) -> (Result<llm::ToolCallResult, llm::ToolCallError>, Option<mcp_utils::display_meta::ToolResultMeta>) {
     let (event_tx, mut event_rx) = mpsc::channel(10);
     command_tx
-        .send(McpCommand::ExecuteTool { request: call_tool_request(), timeout: Duration::from_secs(10), tx: event_tx })
+        .send(McpCommand::ExecuteTool {
+            request: call_tool_request(),
+            trace_context: None,
+            timeout: Duration::from_secs(10),
+            tx: event_tx,
+        })
         .await
         .unwrap();
     drain_until_complete(&mut event_rx).await

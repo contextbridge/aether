@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use aether_core::events::{AgentEvent, LlmCallOutcome, LlmCallPurpose, TurnEvent, TurnOutcome};
+use aether_core::events::{
+    AgentEvent, LlmCallOutcome, LlmCallPurpose, ToolEvent, TraceContext, TurnEvent, TurnOutcome,
+};
 use aether_telemetry::{AgentTraceContext, TelemetryConfig, TelemetryRuntime};
 use axum::Router;
 use axum::body::Bytes;
@@ -25,13 +27,7 @@ async fn runtime_exports_metrics_to_a_signal_specific_endpoint() {
         ..collector_config(&collector)
     })
     .expect("runtime initializes against a signal-specific endpoint");
-    {
-        let factory = runtime.observer_factory();
-        let mut observer = factory();
-        for event in events() {
-            observer.on_event(&event);
-        }
-    };
+    observe_a_turn(&runtime, None);
 
     runtime.shutdown().expect("runtime flushes metrics");
     let exports = collector.exports();
@@ -51,13 +47,7 @@ async fn runtime_exports_traces_to_a_signal_specific_endpoint() {
         ..collector_config(&collector)
     })
     .expect("runtime initializes against a signal-specific endpoint");
-    {
-        let factory = runtime.observer_factory();
-        let mut observer = factory();
-        for event in events() {
-            observer.on_event(&event);
-        }
-    };
+    observe_a_turn(&runtime, None);
 
     runtime.shutdown().expect("runtime flushes traces");
     let exports = collector.exports();
@@ -85,11 +75,7 @@ async fn runtime_parents_every_turn_to_the_supplied_trace_context() {
     .expect("runtime initializes against collector");
 
     for _ in 0..2 {
-        let factory = runtime.observer_factory();
-        let mut observer = factory();
-        for event in events() {
-            observer.on_event(&event);
-        }
+        observe_a_turn(&runtime, None);
     }
 
     runtime.shutdown().expect("runtime flushes traces");
@@ -98,6 +84,81 @@ async fn runtime_parents_every_turn_to_the_supplied_trace_context() {
 
     assert_propagated_hierarchy(&spans, &expected_trace_id, &expected_parent_span_id);
     assert!(!exports.metrics.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn observer_factory_prefers_a_dynamic_parent_context() {
+    let collector = FakeOtlpCollector::start().await;
+    let parent = TraceContext {
+        traceparent: "00-ffeeddccbbaa99887766554433221100-fedcba9876543210-01".to_string(),
+        tracestate: Some("vendor=dynamic".to_string()),
+    };
+    let runtime = TelemetryRuntime::new(&TelemetryConfig {
+        headers: test_headers("dynamic-parent"),
+        sample_ratio: 0.0,
+        ..collector_config(&collector)
+    })
+    .expect("runtime initializes against collector");
+    observe_a_turn(&runtime, Some(&parent));
+
+    runtime.shutdown().expect("runtime flushes traces");
+    let exports = collector.exports();
+    let spans = trace_spans(&exports);
+    let turn = spans.iter().find(|span| span.name == "invoke_agent").expect("turn span exported");
+
+    assert_eq!(
+        turn.trace_id,
+        vec![0xff, 0xee, 0xdd, 0xcc, 0xbb, 0xaa, 0x99, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, 0x00]
+    );
+    assert_eq!(turn.parent_span_id, vec![0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn propagated_mcp_context_connects_parent_tool_server_and_child_agent_spans() {
+    let collector = FakeOtlpCollector::start().await;
+    let runtime = TelemetryRuntime::new(&TelemetryConfig {
+        headers: test_headers("mcp-hierarchy"),
+        ..collector_config(&collector)
+    })
+    .expect("runtime initializes against collector");
+    {
+        let factory = runtime.observer_factory();
+        let mut parent = factory.agent(None);
+        parent.on_event(&AgentEvent::Turn(TurnEvent::Started { content: vec![] }));
+        parent.on_event(&AgentEvent::Tool(ToolEvent::ExecutionStarted {
+            tool_id: "call_1".to_string(),
+            tool_name: "subagents__spawn_subagent".to_string(),
+        }));
+        let outbound = parent.tool_trace_context("call_1").expect("outbound tool span provides propagation context");
+
+        let server = factory.tool_call_request("spawn_subagent", Some(&outbound));
+        let mut child = factory.agent(server.trace_context().as_ref());
+        child.on_event(&AgentEvent::Turn(TurnEvent::Started { content: vec![] }));
+        child.on_event(&AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Completed }));
+        server.finish(None);
+        parent.on_event(&AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Completed }));
+    }
+
+    runtime.shutdown().expect("runtime flushes traces");
+    let exports = collector.exports();
+    let spans = trace_spans(&exports);
+    let tool = spans
+        .iter()
+        .find(|span| span.name == "execute_tool subagents__spawn_subagent")
+        .expect("parent tool span exported");
+    let server = spans.iter().find(|span| span.name == "tools/call spawn_subagent").expect("MCP server span exported");
+    let child = spans
+        .iter()
+        .find(|span| span.name == "invoke_agent" && span.parent_span_id == server.span_id)
+        .expect("child agent span is parented by the MCP server span");
+
+    assert_eq!(server.trace_id, tool.trace_id);
+    assert_eq!(server.parent_span_id, tool.span_id);
+    assert_eq!(child.trace_id, tool.trace_id);
+    // Both ends of the call agree on the tool's wire name, so a backend can
+    // group them even though the caller knows it by its namespaced name.
+    assert_eq!(string_attribute(tool, "mcp.tool.name"), Some("spawn_subagent"));
+    assert_eq!(string_attribute(server, "mcp.tool.name"), Some("spawn_subagent"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -115,11 +176,7 @@ async fn runtime_starts_root_spans_with_the_supplied_trace_id() {
     .expect("runtime initializes against collector");
 
     for _ in 0..2 {
-        let factory = runtime.observer_factory();
-        let mut observer = factory();
-        for event in events() {
-            observer.on_event(&event);
-        }
+        observe_a_turn(&runtime, None);
     }
 
     runtime.shutdown().expect("runtime flushes traces");
@@ -144,13 +201,7 @@ async fn runtime_exports_genai_spans_and_metrics_to_an_otlp_collector() {
         ..collector_config(&collector)
     })
     .expect("runtime initializes against collector");
-    {
-        let factory = runtime.observer_factory();
-        let mut observer = factory();
-        for event in events() {
-            observer.on_event(&event);
-        }
-    };
+    observe_a_turn(&runtime, None);
 
     runtime.shutdown().expect("runtime flushes both signals");
     let exports = collector.exports();
@@ -208,6 +259,17 @@ fn test_headers(value: &str) -> HashMap<String, String> {
     HashMap::from([("x-telemetry-test".to_string(), value.to_string())])
 }
 
+fn string_attribute<'a>(span: &'a Span, key: &str) -> Option<&'a str> {
+    use opentelemetry_proto::tonic::common::v1::any_value::Value;
+
+    span.attributes.iter().find(|attribute| attribute.key == key).and_then(|attribute| {
+        match &attribute.value.as_ref()?.value {
+            Some(Value::StringValue(value)) => Some(value.as_str()),
+            _ => None,
+        }
+    })
+}
+
 fn trace_spans(exports: &Exports) -> Vec<&Span> {
     exports
         .traces
@@ -231,6 +293,15 @@ fn assert_propagated_hierarchy(spans: &[&Span], expected_trace_id: &[u8], expect
     let span_ids = spans.iter().map(|span| span.span_id.clone()).collect::<std::collections::HashSet<_>>();
     assert_eq!(span_ids.len(), spans.len());
     assert!(span_ids.iter().all(|span_id| !span_id.is_empty() && span_id.iter().any(|byte| *byte != 0)));
+}
+
+/// Feeds one complete turn through a fresh observer, whose spans the runtime
+/// exports once the observer is dropped.
+fn observe_a_turn(runtime: &TelemetryRuntime, parent: Option<&TraceContext>) {
+    let mut observer = runtime.observer_factory().agent(parent);
+    for event in events() {
+        observer.on_event(&event);
+    }
 }
 
 fn events() -> Vec<AgentEvent> {

@@ -530,12 +530,27 @@ impl Agent {
         let stream = ReceiverStream::new(rx).map(StreamEvent::ToolExecution);
         self.streams.insert(StreamKey::Tool(tool_call.id.clone()), Box::pin(stream));
 
-        if let Some(ref mcp_command_tx) = self.mcp_command_tx {
-            let mcp_future =
-                mcp_command_tx.send(McpCommand::ExecuteTool { request: tool_call, timeout: self.tool_timeout, tx });
-            if let Err(e) = mcp_future.await {
-                tracing::warn!("Failed to send tool request to MCP task: {:?}", e);
-            }
+        let tool_id = tool_call.id.clone();
+        tracing::debug!("Tool execution started: {} ({})", tool_call.name, tool_id);
+        self.emit(AgentEvent::Tool(ToolEvent::ExecutionStarted {
+            tool_id: tool_id.clone(),
+            tool_name: tool_call.name.clone(),
+        }))
+        .await;
+
+        let Some(mcp_command_tx) = self.mcp_command_tx.clone() else {
+            emit_tool_failure(&tx, ToolCallError::from_request(&tool_call, "MCP task is not available")).await;
+            return;
+        };
+
+        let trace_context = self.observers.iter().find_map(|observer| observer.tool_trace_context(&tool_id));
+        let tool_error = ToolCallError::from_request(&tool_call, "Failed to send tool request to MCP task");
+        let command =
+            McpCommand::ExecuteTool { request: tool_call, trace_context, timeout: self.tool_timeout, tx: tx.clone() };
+
+        if mcp_command_tx.send(command).await.is_err() {
+            tracing::warn!("Failed to send tool request to MCP task");
+            emit_tool_failure(&tx, tool_error).await;
         }
     }
 
@@ -622,11 +637,6 @@ impl Agent {
 
     async fn on_tool_execution_event(&mut self, event: ToolExecutionEvent, state: &mut IterationState) {
         match event {
-            ToolExecutionEvent::Started { tool_id, tool_name } => {
-                tracing::debug!("Tool execution started: {} ({})", tool_name, tool_id);
-                self.emit(AgentEvent::Tool(ToolEvent::ExecutionStarted { tool_id, tool_name })).await;
-            }
-
             ToolExecutionEvent::Progress { tool_id, progress } => {
                 tracing::debug!(
                     "Tool progress for {}: {}/{}",
@@ -740,6 +750,12 @@ impl Agent {
         })
     }
 }
+
+async fn emit_tool_failure(tx: &mpsc::Sender<ToolExecutionEvent>, error: ToolCallError) {
+    let tool_id = error.id.clone();
+    let _ = tx.send(ToolExecutionEvent::Complete { tool_id, result: Err(error), result_meta: None }).await;
+}
+
 pub(crate) struct AutoContinue {
     max: u32,
     count: u32,

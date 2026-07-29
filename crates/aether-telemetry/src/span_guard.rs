@@ -64,6 +64,7 @@ impl Drop for SpanGuard {
 pub(crate) enum ErrorKind {
     Cancelled,
     LlmError,
+    McpError,
     ToolError,
 }
 
@@ -72,6 +73,7 @@ impl ErrorKind {
         match self {
             Self::Cancelled => "cancelled",
             Self::LlmError => "llm_error",
+            Self::McpError => "mcp_error",
             Self::ToolError => "tool_error",
         }
     }
