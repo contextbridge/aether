@@ -88,7 +88,7 @@ age = "0.12.1"
 thiserror = "2.0"
 
 # Storage
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "macros", "migrate"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "macros", "migrate"] }
 
 # Unix-specific
 nix = { version = "0.31", default-features = false }
