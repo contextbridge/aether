@@ -198,7 +198,7 @@ mod tests {
 
         let output = execute_task_update(input, &mut store).unwrap();
 
-        assert_eq!(output.task.status, "inProgress");
+        assert_eq!(output.task.status, TaskStatus::InProgress);
         assert_eq!(output.changes, vec!["status"]);
     }
 
@@ -271,7 +271,7 @@ mod tests {
 
         let output = execute_task_update(input, &mut store).unwrap();
 
-        assert_eq!(output.task.status, "completed");
+        assert_eq!(output.task.status, TaskStatus::Completed);
         assert!(output.message.contains("Completed task"));
     }
 
@@ -317,7 +317,7 @@ mod tests {
 
         let output = execute_task_update(input, &mut store).unwrap();
 
-        assert_eq!(output.task.status, "completed");
+        assert_eq!(output.task.status, TaskStatus::Completed);
         assert!(output.changes.contains(&"summary".to_string()));
         assert!(output.changes.contains(&"decisions".to_string()));
         assert!(output.changes.contains(&"facts".to_string()));

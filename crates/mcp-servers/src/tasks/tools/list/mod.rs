@@ -100,7 +100,7 @@ pub fn execute_task_list(input: &TaskListInput, store: &TaskStore) -> TaskListOu
         format!("Found {count} tasks{filter_desc}")
     };
 
-    let done = tasks.iter().filter(|t| t.status == "completed").count();
+    let done = tasks.iter().filter(|t| t.status == TaskStatus::Completed).count();
     let display_meta = ToolDisplayMeta::new("Todo", format!("{done}/{count} tasks"));
 
     TaskListOutput { status: "success".to_string(), tasks, count, message, meta: Some(display_meta.into()) }
@@ -220,7 +220,7 @@ mod tests {
         );
 
         assert_eq!(output.count, 1);
-        assert_eq!(output.tasks[0].status, "inProgress");
+        assert_eq!(output.tasks[0].status, TaskStatus::InProgress);
     }
 
     #[test]

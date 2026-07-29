@@ -65,13 +65,22 @@ pub struct ReadBackgroundBashInput {
     pub filter: Option<String>,
 }
 
+/// Status of a background shell process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum BackgroundShellStatus {
+    Running,
+    Completed,
+    Failed,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadBackgroundBashOutput {
     /// New output since last check
     pub output: String,
     /// Current shell status
-    pub status: String, // "running" | "completed" | "failed"
+    pub status: BackgroundShellStatus,
     /// Exit code (when completed)
     pub exit_code: Option<i32>,
     /// Display metadata for human-friendly rendering
@@ -107,7 +116,7 @@ pub async fn read_background_bash(
     if task_handle.is_finished() {
         let (exit_code, killed) = task_handle.await.map_err(|e| BashError::JoinFailed(e.to_string()))?;
 
-        let status = if killed { "failed".to_string() } else { "completed".to_string() };
+        let status = if killed { BackgroundShellStatus::Failed } else { BackgroundShellStatus::Completed };
 
         let display_meta = ToolDisplayMeta::new("Run command", format!("<background> (exit {exit_code})"));
 
@@ -121,7 +130,7 @@ pub async fn read_background_bash(
         Ok((
             ReadBackgroundBashOutput {
                 output,
-                status: "running".to_string(),
+                status: BackgroundShellStatus::Running,
                 exit_code: None,
                 meta: Some(display_meta.into()),
             },

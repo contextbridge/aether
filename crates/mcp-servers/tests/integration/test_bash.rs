@@ -1,6 +1,7 @@
 use mcp_servers::coding::error::BashError;
 use mcp_servers::coding::tools::bash::{
-    BackgroundProcessHandle, BashInput, BashResult, ReadBackgroundBashOutput, execute_command, read_background_bash,
+    BackgroundProcessHandle, BackgroundShellStatus, BashInput, BashResult, ReadBackgroundBashOutput, execute_command,
+    read_background_bash,
 };
 use std::fs::canonicalize;
 
@@ -127,7 +128,9 @@ async fn test_background_process() {
             assert!(!handle.shell_id.is_empty());
 
             let (result1, mut handle_opt) = read_background_bash(handle, None).await.unwrap();
-            assert!(result1.status == "running" || result1.status == "completed");
+            assert!(
+                result1.status == BackgroundShellStatus::Running || result1.status == BackgroundShellStatus::Completed
+            );
 
             let mut combined_output = result1.output.clone();
             let (final_status, final_exit) = loop {
@@ -145,7 +148,7 @@ async fn test_background_process() {
                 }
             };
 
-            assert_eq!(final_status, "completed");
+            assert_eq!(final_status, BackgroundShellStatus::Completed);
             assert_eq!(final_exit, Some(0));
             assert!(combined_output.contains("line1"));
             assert!(combined_output.contains("line2"));
@@ -169,7 +172,7 @@ async fn test_background_process_with_timeout() {
         BashResult::Background(handle) => {
             let result = read_until_terminal(handle, None).await;
 
-            assert_eq!(result.status, "failed");
+            assert_eq!(result.status, BackgroundShellStatus::Failed);
             assert!(result.output.contains("timed out"));
         }
         BashResult::Completed(_) => panic!("Expected background result, got completed"),
@@ -203,7 +206,7 @@ async fn test_read_background_bash() {
             assert!(result.output.contains("line1"));
             assert!(result.output.contains("line2"));
             assert!(result.output.contains("error"));
-            assert_eq!(result.status, "completed");
+            assert_eq!(result.status, BackgroundShellStatus::Completed);
             assert_eq!(result.exit_code, Some(0));
         }
         BashResult::Completed(_) => panic!("Expected background result"),
@@ -228,7 +231,7 @@ async fn test_read_background_bash_with_filter() {
             assert!(result.output.contains("ERROR: something went wrong"));
             assert!(result.output.contains("ERROR: another issue"));
             assert!(!result.output.contains("INFO: all good"));
-            assert_eq!(result.status, "completed");
+            assert_eq!(result.status, BackgroundShellStatus::Completed);
         }
         BashResult::Completed(_) => panic!("Expected background result"),
     }
@@ -245,7 +248,7 @@ async fn test_read_background_bash_running_status() {
         BashResult::Background(handle) => {
             let (result, _) = read_background_bash(handle, None).await.unwrap();
 
-            assert_eq!(result.status, "running");
+            assert_eq!(result.status, BackgroundShellStatus::Running);
             assert_eq!(result.exit_code, None);
         }
         BashResult::Completed(_) => panic!("Expected background result"),
@@ -267,7 +270,7 @@ async fn test_read_background_bash_failed_status() {
         BashResult::Background(handle) => {
             let result = read_until_terminal(handle, None).await;
 
-            assert_eq!(result.status, "failed");
+            assert_eq!(result.status, BackgroundShellStatus::Failed);
             assert!(result.exit_code.is_some());
         }
         BashResult::Completed(_) => panic!("Expected background result"),
