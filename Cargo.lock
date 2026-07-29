@@ -66,7 +66,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-cli"
-version = "0.7.30"
+version = "0.7.31"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
@@ -104,7 +104,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-core"
-version = "0.6.27"
+version = "0.6.28"
 dependencies = [
  "aether-acp-utils",
  "aether-agent-core",
@@ -171,7 +171,7 @@ dependencies = [
 
 [[package]]
 name = "aether-evals"
-version = "0.2.19"
+version = "0.2.20"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -268,7 +268,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp-servers"
-version = "0.4.33"
+version = "0.4.34"
 dependencies = [
  "aether-agent-core",
  "aether-auth",
@@ -327,7 +327,7 @@ dependencies = [
 
 [[package]]
 name = "aether-project"
-version = "0.5.28"
+version = "0.5.29"
 dependencies = [
  "aether-agent-core",
  "aether-doctest",
@@ -348,7 +348,7 @@ dependencies = [
 
 [[package]]
 name = "aether-schemas"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "aether-agent-cli",
  "aether-agent-core",
@@ -379,7 +379,7 @@ dependencies = [
 
 [[package]]
 name = "aether-telemetry"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -6448,7 +6448,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
