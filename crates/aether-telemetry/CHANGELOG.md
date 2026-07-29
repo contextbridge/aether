@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.11](https://github.com/contextbridge/aether/compare/aether-telemetry-v0.1.10...aether-telemetry-v0.1.11) - 2026-07-29
+
+### Added
+
+- *(telemetry)* name agent invocation spans ([#312](https://github.com/contextbridge/aether/pull/312))
+
 ## [0.1.10](https://github.com/contextbridge/aether/compare/aether-telemetry-v0.1.9...aether-telemetry-v0.1.10) - 2026-07-29
 
 ### Other
