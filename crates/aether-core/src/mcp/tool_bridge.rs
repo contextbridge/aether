@@ -40,8 +40,15 @@ pub fn mcp_result_to_tool_call_result(
     mcp_result: rmcp::model::CallToolResult,
 ) -> Result<(ToolCallResult, Option<ToolResultMeta>), ToolCallError> {
     if mcp_result.is_error.unwrap_or(false) {
-        let error_msg =
-            mcp_result.content.first().map_or_else(|| "Unknown error".to_string(), |content| format!("{content:?}"));
+        let error_msg = mcp_result.content.first().map_or_else(
+            || "Unknown error".to_string(),
+            |content| {
+                content.as_text().map_or_else(
+                    || serde_json::to_string(content).unwrap_or_else(|_| "Unknown error".to_string()),
+                    |text| text.text.clone(),
+                )
+            },
+        );
         Err(ToolCallError {
             id: request.id.clone(),
             name: request.name.clone(),
@@ -100,7 +107,7 @@ fn maybe_spillover(tool_id: &str, result: String, max_bytes: usize, dir: &Path) 
 
 fn extract_result_and_meta(
     structured_content: Option<serde_json::Value>,
-    content: &[rmcp::model::Content],
+    content: &[rmcp::model::ContentBlock],
 ) -> (serde_json::Value, Option<ToolResultMeta>) {
     if let Some(mut val) = structured_content {
         let result_meta = extract_result_meta(&mut val);
@@ -140,7 +147,7 @@ fn extract_result_meta(value: &mut serde_json::Value) -> Option<ToolResultMeta> 
 mod tests {
     use super::*;
     use mcp_utils::display_meta::PlanMetaStatus;
-    use rmcp::model::{CallToolResult as McpCallToolResult, Content};
+    use rmcp::model::{CallToolResult as McpCallToolResult, ContentBlock};
     use serde::Serialize;
     use serde_json::json;
 
@@ -167,7 +174,7 @@ mod tests {
             "_meta": { "display": { "title": "Read file", "value": "file.rs, 50 lines" } }
         });
         let mut mcp = McpCallToolResult::structured(structured);
-        mcp.content = vec![Content::text("plain text fallback")];
+        mcp.content = vec![ContentBlock::text("plain text fallback")];
         let (result, meta) = mcp_result_to_tool_call_result(&req(), mcp).unwrap();
 
         assert!(!result.result.contains("_meta"));
@@ -237,7 +244,7 @@ mod tests {
 
     #[test]
     fn test_tool_call_result_falls_back_to_content() {
-        let mcp = McpCallToolResult::success(vec![Content::text("plain text result")]);
+        let mcp = McpCallToolResult::success(vec![ContentBlock::text("plain text result")]);
         let (result, meta) = mcp_result_to_tool_call_result(&req(), mcp).unwrap();
         assert!(result.result.contains("plain text result"));
         assert!(meta.is_none());
@@ -313,10 +320,23 @@ mod tests {
     }
 
     #[test]
-    fn test_tool_call_result_handles_error() {
-        let mcp = McpCallToolResult::error(vec![Content::text("Error: file not found")]);
+    fn test_tool_call_result_handles_text_error_without_sdk_debug_output() {
+        let mcp = McpCallToolResult::error(vec![ContentBlock::text("Error: file not found")]);
         let err = mcp_result_to_tool_call_result(&req(), mcp).unwrap_err();
-        assert!(err.error.contains("file not found"));
+        assert_eq!(err.error, "Tool execution error: Error: file not found");
+    }
+
+    #[test]
+    fn test_tool_call_result_serializes_non_text_error_content() {
+        let image = serde_json::from_value(serde_json::json!({
+            "type": "image",
+            "data": "aW1hZ2U=",
+            "mimeType": "image/png"
+        }))
+        .unwrap();
+        let mcp = McpCallToolResult::error(vec![image]);
+        let err = mcp_result_to_tool_call_result(&req(), mcp).unwrap_err();
+        assert_eq!(err.error, r#"Tool execution error: {"type":"image","data":"aW1hZ2U=","mimeType":"image/png"}"#);
     }
 
     #[test]

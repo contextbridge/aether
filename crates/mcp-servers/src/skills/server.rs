@@ -6,8 +6,8 @@ use rmcp::{
         wrapper::{Json, Parameters},
     },
     model::{
-        GetPromptRequestParams, GetPromptResult, Implementation, ListPromptsResult, PaginatedRequestParams, Prompt,
-        PromptArgument, PromptMessage, PromptMessageRole, ServerCapabilities, ServerInfo,
+        GetPromptRequestParams, GetPromptResponse, Implementation, ListPromptsResult, PaginatedRequestParams, Prompt,
+        PromptArgument, PromptMessage, Role, ServerCapabilities, ServerInfo,
     },
     service::RequestContext,
     tool, tool_handler, tool_router,
@@ -281,14 +281,14 @@ impl ServerHandler for SkillsMcp {
             })
             .collect();
 
-        Ok(ListPromptsResult { prompts, next_cursor: None, meta: None })
+        Ok(ListPromptsResult::with_all_items(prompts))
     }
 
     async fn get_prompt(
         &self,
         request: GetPromptRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<GetPromptResult, McpError> {
+    ) -> Result<GetPromptResponse, McpError> {
         let catalog = self.catalog.read().await;
         let spec = catalog
             .slash_commands()
@@ -308,9 +308,9 @@ impl ServerHandler for SkillsMcp {
         let expander = ShellExpander::new();
         let cwd = WorkspacePaths::new(self.root_dir.clone()).root().to_path_buf();
         let content = expander.expand(&content, &cwd).await;
-        let messages = vec![PromptMessage::new_text(PromptMessageRole::User, content)];
+        let messages = vec![PromptMessage::new_text(Role::User, content)];
 
-        Ok(GetPromptResult::new(messages).with_description(spec.description.clone()))
+        Ok(rmcp::model::GetPromptResult::new(messages).with_description(spec.description.clone()).into())
     }
 }
 

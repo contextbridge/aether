@@ -7,7 +7,7 @@ use rmcp::{
         wrapper::{Json, Parameters},
     },
     model::{
-        CreateElicitationRequestParams, ElicitationSchema, EnumSchema, Implementation, ProgressNotificationParam,
+        ElicitRequestParams, ElicitationSchema, EnumSchema, Implementation, ProgressNotificationParam,
         ServerCapabilities, ServerInfo,
     },
     service::RequestContext,
@@ -168,15 +168,7 @@ async fn notify_preview(context: &RequestContext<RoleServer>, meta: ToolDisplayM
     if let Some(token) = context.meta.get_progress_token() {
         let result_meta = ToolResultMeta::from(meta);
         let message = serde_json::to_string(&result_meta).unwrap_or_default();
-        let _ = context
-            .peer
-            .notify_progress(ProgressNotificationParam {
-                progress_token: token,
-                progress: 0.0,
-                total: None,
-                message: Some(message),
-            })
-            .await;
+        let _ = context.peer.notify_progress(ProgressNotificationParam::new(token, 0.0).with_message(message)).await;
     }
 }
 
@@ -321,7 +313,7 @@ When using tools that take file paths, always use absolute paths from:
         let message = format!("Allow {tool_name}: {description}?");
         let result = context
             .peer
-            .create_elicitation(CreateElicitationRequestParams::FormElicitationParams {
+            .create_elicitation(ElicitRequestParams::FormElicitationParams {
                 meta: None,
                 message,
                 requested_schema: ElicitationSchema::builder()
@@ -667,12 +659,7 @@ When using tools that take file paths, always use absolute paths from:
                     if let Some(token) = progress_token {
                         let message = format!("Search rate limited; retrying in {} seconds.", delay.as_secs());
                         let _ = peer
-                            .notify_progress(ProgressNotificationParam {
-                                progress_token: token,
-                                progress: 0.0,
-                                total: None,
-                                message: Some(message),
-                            })
+                            .notify_progress(ProgressNotificationParam::new(token, 0.0).with_message(message))
                             .await;
                     }
                 }

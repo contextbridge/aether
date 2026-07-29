@@ -192,13 +192,14 @@ impl SubAgentsMcp {
 
                     tokio::spawn(async move {
                         let _ = peer
-                            .notify_progress(ProgressNotificationParam {
-                                progress_token: token,
-                                #[allow(clippy::cast_precision_loss)]
-                                progress: counter as f64,
-                                total: None,
-                                message: Some(progress_data_str),
-                            })
+                            .notify_progress(
+                                ProgressNotificationParam::new(token, {
+                                    #[allow(clippy::cast_precision_loss)]
+                                    let progress = counter as f64;
+                                    progress
+                                })
+                                .with_message(progress_data_str),
+                            )
                             .await;
                     });
                 }

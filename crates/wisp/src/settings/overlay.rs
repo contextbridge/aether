@@ -189,6 +189,7 @@ impl SettingsOverlay {
                     context,
                 ),
                 ElicitationUi::Form(_) => shortcut_footer(&[("[Enter]", " Submit  "), ("[Esc]", " Cancel")], context),
+                ElicitationUi::Unsupported(_) => shortcut_footer(&[("[Esc]", " Close")], context),
             };
         }
         let text = match &self.active_pane {

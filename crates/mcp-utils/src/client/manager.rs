@@ -16,8 +16,8 @@ use futures::future::join_all;
 use rmcp::{
     RoleClient,
     model::{
-        CallToolRequestParams, ClientCapabilities, ClientInfo, CreateElicitationRequestParams, CreateElicitationResult,
-        ElicitationAction, FormElicitationCapability, Implementation, Tool as RmcpTool, UrlElicitationCapability,
+        CallToolRequestParams, ClientCapabilities, ClientInfo, ElicitRequestParams, ElicitResult, ElicitationAction,
+        FormElicitationCapability, Implementation, Tool as RmcpTool, UrlElicitationCapability,
     },
     service::RunningService,
 };
@@ -49,8 +49,8 @@ pub struct OAuthHandlerContext {
 #[derive(Debug)]
 pub struct ElicitationRequest {
     pub server_name: String,
-    pub request: CreateElicitationRequestParams,
-    pub response_sender: oneshot::Sender<CreateElicitationResult>,
+    pub request: ElicitRequestParams,
+    pub response_sender: oneshot::Sender<ElicitResult>,
 }
 
 #[derive(Debug, Clone)]

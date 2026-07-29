@@ -9,8 +9,8 @@ use futures::stream::{self, StreamExt};
 use llm::{ToolCallError, ToolCallRequest, ToolCallResult};
 use rmcp::RoleClient;
 use rmcp::model::{
-    CallToolRequestParams, CreateElicitationRequestParams, ErrorCode, GetPromptResult, Meta, ProgressNotificationParam,
-    Prompt,
+    CallToolRequestParams, ElicitRequestParams, ErrorCode, GetPromptResult, ProgressNotificationParam, Prompt,
+    RequestMetaObject,
 };
 use rmcp::service::RunningService;
 use std::collections::HashSet;
@@ -28,6 +28,7 @@ pub enum ToolExecutionEvent {
 }
 
 const MCP_AUTH_TIMEOUT: Duration = Duration::from_mins(3);
+const URL_ELICITATION_REQUIRED: ErrorCode = ErrorCode(-32042);
 
 /// Commands that can be sent to the MCP manager task
 #[derive(Debug)]
@@ -172,7 +173,7 @@ async fn execute_mcp_call(
     client: Arc<RunningService<RoleClient, McpClient>>,
     request: &ToolCallRequest,
     params: CallToolRequestParams,
-    trace_meta: Option<Meta>,
+    trace_meta: Option<RequestMetaObject>,
     timeout: Duration,
     tool_call_id: String,
     event_tx: mpsc::Sender<ToolExecutionEvent>,
@@ -210,7 +211,7 @@ async fn execute_mcp_call(
                     Ok(server_result) => server_result,
                     Err(e) => {
                         if let rmcp::service::ServiceError::McpError(ref error_data) = e
-                            && error_data.code == ErrorCode::URL_ELICITATION_REQUIRED
+                            && error_data.code == URL_ELICITATION_REQUIRED
                         {
                             return Err(handle_url_elicitation_required(&client, request, error_data).await);
                         }
@@ -233,7 +234,7 @@ async fn execute_mcp_call(
 
 #[derive(serde::Deserialize)]
 struct UrlElicitationRequiredData {
-    elicitations: Vec<CreateElicitationRequestParams>,
+    elicitations: Vec<ElicitRequestParams>,
 }
 
 #[derive(Debug)]
@@ -255,7 +256,7 @@ impl std::fmt::Display for UrlElicitationRequiredParseError {
 
 fn parse_required_url_elicitations(
     error_data: &rmcp::model::ErrorData,
-) -> Result<Vec<CreateElicitationRequestParams>, UrlElicitationRequiredParseError> {
+) -> Result<Vec<ElicitRequestParams>, UrlElicitationRequiredParseError> {
     let data = error_data.data.as_ref().ok_or(UrlElicitationRequiredParseError::MissingData)?;
     let parsed: UrlElicitationRequiredData =
         serde_json::from_value(data.clone()).map_err(UrlElicitationRequiredParseError::InvalidData)?;
@@ -263,7 +264,7 @@ fn parse_required_url_elicitations(
     let url_elicitations = parsed
         .elicitations
         .into_iter()
-        .filter(|elicitation| matches!(elicitation, CreateElicitationRequestParams::UrlElicitationParams { .. }))
+        .filter(|elicitation| matches!(elicitation, ElicitRequestParams::UrlElicitationParams { .. }))
         .collect::<Vec<_>>();
 
     if url_elicitations.is_empty() {
@@ -318,6 +319,12 @@ async fn handle_url_elicitation_required(
             rmcp::model::ElicitationAction::Accept => {
                 tracing::info!("User accepted URL elicitation for server '{server_name}'");
             }
+            _ => {
+                return ToolCallError::from_request(
+                    request,
+                    format!("Required browser interaction for server '{server_name}' returned an unsupported response"),
+                );
+            }
         }
     }
 
@@ -350,14 +357,14 @@ mod tests {
         assert_eq!(parsed.elicitations.len(), 1);
         assert!(matches!(
             &parsed.elicitations[0],
-            CreateElicitationRequestParams::UrlElicitationParams { elicitation_id, .. } if elicitation_id == "el-1"
+            ElicitRequestParams::UrlElicitationParams { elicitation_id, .. } if elicitation_id == "el-1"
         ));
     }
 
     #[test]
     fn parse_required_url_elicitations_filters_to_url_only() {
         let error_data = rmcp::model::ErrorData {
-            code: rmcp::model::ErrorCode::URL_ELICITATION_REQUIRED,
+            code: URL_ELICITATION_REQUIRED,
             message: "URL elicitation required".into(),
             data: Some(serde_json::json!({
                 "elicitations": [
@@ -380,7 +387,7 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert!(matches!(
             &result[0],
-            CreateElicitationRequestParams::UrlElicitationParams { elicitation_id, .. } if elicitation_id == "el-1"
+            ElicitRequestParams::UrlElicitationParams { elicitation_id, .. } if elicitation_id == "el-1"
         ));
     }
 }

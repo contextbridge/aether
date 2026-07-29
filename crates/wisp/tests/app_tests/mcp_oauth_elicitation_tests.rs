@@ -1,7 +1,7 @@
 use super::common::*;
 use acp_utils::{
     notifications::{
-        CreateElicitationRequestParams, ElicitationAction, ElicitationParams, McpNotification, McpServerAuthCapability,
+        ElicitRequestParams, ElicitationAction, ElicitationParams, McpNotification, McpServerAuthCapability,
         McpServerStatus, McpServerStatusEntry, UrlElicitationCompleteParams,
     },
     testing::test_connection,
@@ -99,7 +99,7 @@ fn url_elicitation_params(
 ) -> ElicitationParams {
     ElicitationParams {
         server_name: server_name.into(),
-        request: CreateElicitationRequestParams::UrlElicitationParams {
+        request: ElicitRequestParams::UrlElicitationParams {
             meta: None,
             message: message.into(),
             url: url.into(),

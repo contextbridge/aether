@@ -10,7 +10,7 @@ use crate::components::session_picker::{SessionEntry, SessionPicker, SessionPick
 use crate::components::tool_call_statuses::{PromptTermination, ToolCallStatuses};
 use crate::components::workspace_picker::{WorkspacePicker, WorkspacePickerMessage};
 use crate::keybindings::Keybindings;
-use acp_utils::CreateElicitationRequestParams;
+use acp_utils::ElicitRequestParams;
 use acp_utils::notifications::{
     AetherCapabilities, ElicitationResponse, PromptSearchParams, PromptSearchResponse, SessionPreviewResponse,
     WorkspaceEntry, WorkspaceMoveTarget,
@@ -309,7 +309,7 @@ impl ConversationScreen {
         params: acp_utils::notifications::ElicitationParams,
         responder: Responder<ElicitationResponse>,
     ) {
-        if let CreateElicitationRequestParams::UrlElicitationParams { elicitation_id, .. } = &params.request {
+        if let ElicitRequestParams::UrlElicitationParams { elicitation_id, .. } = &params.request {
             self.pending_url_elicitations.insert((params.server_name.clone(), elicitation_id.clone()));
         }
         self.active_modal = Some(Modal::Elicitation(ElicitationForm::from_params(params, responder)));

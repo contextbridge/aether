@@ -3,8 +3,8 @@ use rmcp::{
     ClientHandler, RoleClient,
     handler::client::progress::ProgressDispatcher,
     model::{
-        ClientInfo, CreateElicitationRequestParams, CreateElicitationResult, ElicitationAction,
-        ElicitationResponseNotificationParam, ErrorData, ProgressNotificationParam,
+        ClientInfo, ConstString, CustomNotification, ElicitRequestParams, ElicitResult, ElicitationAction,
+        ElicitationResponseNotificationMethod, ErrorData, ProgressNotificationParam,
     },
     service::{NotificationContext, RequestContext},
 };
@@ -33,7 +33,7 @@ impl McpClient {
     ///
     /// Used by both the `create_elicitation` handler and the `-32042`
     /// `URL_ELICITATION_REQUIRED` error path to ensure the same user-facing flow.
-    pub async fn dispatch_elicitation(&self, request: CreateElicitationRequestParams) -> CreateElicitationResult {
+    pub async fn dispatch_elicitation(&self, request: ElicitRequestParams) -> ElicitResult {
         let (response_tx, response_rx) = oneshot::channel();
         let elicitation_request =
             ElicitationRequest { server_name: self.server_name.clone(), request, response_sender: response_tx };
@@ -45,9 +45,6 @@ impl McpClient {
     }
 
     /// Forward a URL elicitation completion through the shared event channel.
-    ///
-    /// Split out from `on_url_elicitation_notification_complete` so it can be
-    /// tested without constructing a `NotificationContext`.
     pub async fn forward_url_elicitation_complete(&self, elicitation_id: String) {
         let event = McpClientEvent::UrlElicitationComplete(super::UrlElicitationCompleteParams {
             server_name: self.server_name.clone(),
@@ -59,8 +56,8 @@ impl McpClient {
     }
 }
 
-pub fn cancel_result() -> CreateElicitationResult {
-    CreateElicitationResult { action: ElicitationAction::Cancel, content: None, meta: Option::default() }
+pub fn cancel_result() -> ElicitResult {
+    ElicitResult::new(ElicitationAction::Cancel)
 }
 
 impl ClientHandler for McpClient {
@@ -74,18 +71,32 @@ impl ClientHandler for McpClient {
 
     async fn create_elicitation(
         &self,
-        request: CreateElicitationRequestParams,
+        request: ElicitRequestParams,
         _context: RequestContext<RoleClient>,
-    ) -> Result<CreateElicitationResult, ErrorData> {
+    ) -> Result<ElicitResult, ErrorData> {
         Ok(self.dispatch_elicitation(request).await)
     }
 
-    async fn on_url_elicitation_notification_complete(
+    async fn on_custom_notification(
         &self,
-        params: ElicitationResponseNotificationParam,
+        notification: CustomNotification,
         _context: NotificationContext<RoleClient>,
     ) {
-        self.forward_url_elicitation_complete(params.elicitation_id).await;
+        if notification.method != ElicitationResponseNotificationMethod::VALUE {
+            return;
+        }
+
+        let Some(elicitation_id) = notification
+            .params
+            .as_ref()
+            .and_then(|params| params.get("elicitationId"))
+            .and_then(serde_json::Value::as_str)
+        else {
+            tracing::warn!("URL elicitation completion notification is missing elicitationId");
+            return;
+        };
+
+        self.forward_url_elicitation_complete(elicitation_id.to_string()).await;
     }
 }
 
@@ -122,7 +133,7 @@ mod tests {
         let (event_tx, _) = mpsc::channel(1);
         let client = make_client(event_tx);
 
-        let request = CreateElicitationRequestParams::FormElicitationParams {
+        let request = ElicitRequestParams::FormElicitationParams {
             meta: None,
             message: "test".to_string(),
             requested_schema: ElicitationSchema::new(BTreeMap::new()),
@@ -138,7 +149,7 @@ mod tests {
         let (event_tx, mut event_rx) = mpsc::channel(1);
         let client = make_client(event_tx);
 
-        let request = CreateElicitationRequestParams::FormElicitationParams {
+        let request = ElicitRequestParams::FormElicitationParams {
             meta: None,
             message: "test".to_string(),
             requested_schema: ElicitationSchema::new(BTreeMap::new()),
@@ -162,7 +173,7 @@ mod tests {
         let (event_tx, mut event_rx) = mpsc::channel(1);
         let client = make_client(event_tx);
 
-        let request = CreateElicitationRequestParams::UrlElicitationParams {
+        let request = ElicitRequestParams::UrlElicitationParams {
             meta: None,
             message: "Auth".to_string(),
             url: "https://example.com/auth".to_string(),
@@ -173,11 +184,7 @@ mod tests {
             let event = event_rx.recv().await.unwrap();
             let elicitation = unwrap_elicitation(event);
             assert_eq!(elicitation.server_name, "test-server");
-            let _ = elicitation.response_sender.send(CreateElicitationResult {
-                action: ElicitationAction::Accept,
-                content: None,
-                meta: Option::default(),
-            });
+            let _ = elicitation.response_sender.send(ElicitResult::new(ElicitationAction::Accept));
         });
 
         let result = client.dispatch_elicitation(request).await;
