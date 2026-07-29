@@ -1,0 +1,16 @@
+{
+  "theme": { "file": "gruvbox-dark.tmTheme" },
+  "contentPadding": 3,
+  "statusLine": {
+    "separator": " | ",
+    "left": ["cwd", "gitRef", { "type": "text", "value": "v1.2", "style": "muted" }],
+    "right": [
+      "agent",
+      "mode",
+      { "type": "model", "maxWidth": 40 },
+      "reasoning",
+      "context",
+      "serverHealth"
+    ]
+  }
+}

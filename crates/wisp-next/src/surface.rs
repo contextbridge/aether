@@ -3,10 +3,20 @@ use crate::selection::Direction;
 use crate::tasks::{Task, TaskResult};
 use acp_utils::notifications::WorkspaceMoveTarget;
 use agent_client_protocol::schema::SessionId;
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use std::path::PathBuf;
+
+pub(crate) const COMPOSED_MODIFIERS: KeyModifiers = KeyModifiers::CONTROL
+    .union(KeyModifiers::ALT)
+    .union(KeyModifiers::SUPER)
+    .union(KeyModifiers::HYPER)
+    .union(KeyModifiers::META);
+
+pub(crate) fn is_composed_char(key: KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Char(_)) && key.modifiers.intersects(COMPOSED_MODIFIERS)
+}
 
 /// A layer drawn over the conversation that owns all input while it is open:
 /// a picker, a modal, or a full-screen view.
@@ -99,7 +109,7 @@ pub trait Surface {
                 Some(filter) => filter.pop_query_char(),
                 None => return Vec::new(),
             },
-            KeyCode::Char(character) if !character.is_control() => match self.filter() {
+            KeyCode::Char(character) if !character.is_control() && !is_composed_char(key) => match self.filter() {
                 Some(filter) => filter.push_query_char(character),
                 None => return Vec::new(),
             },

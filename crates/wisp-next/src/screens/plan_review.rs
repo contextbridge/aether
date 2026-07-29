@@ -18,7 +18,7 @@ use crate::plan_review::{
 };
 use crate::render_context::RenderContext;
 use crate::selection::{Direction, SelectionState, scroll_into_view, step_clamped};
-use crate::surface::{Action, MouseAction, Surface};
+use crate::surface::{Action, MouseAction, Surface, is_composed_char};
 use crate::syntax::SyntaxHighlighter;
 use crate::theme::Theme;
 use crate::widgets::{block_cursor_spans, key_hints};
@@ -160,6 +160,10 @@ impl PlanReviewScreen {
         }
         if self.draft.is_some() {
             self.handle_draft_key(key);
+            return Vec::new();
+        }
+        // Draft editing chords remain available; all following bindings are plain keys.
+        if is_composed_char(key) {
             return Vec::new();
         }
         if let Some(outcome) = self.decision_key(key) {

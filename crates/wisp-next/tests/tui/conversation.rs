@@ -70,6 +70,52 @@ fn ctrl_c_confirmation_disarms_after_window() {
 }
 
 #[test]
+fn double_ctrl_c_exits_over_session_picker() {
+    let (mut app, mut command_rx) = make_app();
+    type_text(&mut app, "/resume");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+    app.on_acp_event(sessions_listed(vec![session_info("other", "/tmp/elsewhere", "Other", "2025-01-01T00:00:00Z")]));
+    assert_ctrl_c_exits_over_open_layer(&mut app);
+}
+
+#[test]
+fn ctrl_c_during_streaming_arms_exit_without_cancelling() {
+    let (mut app, mut command_rx) = make_app();
+    submit_prompt(&mut app, "stream me");
+    command_rx.try_recv().unwrap();
+    app.on_acp_event(text_chunk("partial reply"));
+    assert!(app.waiting_for_response());
+
+    app.on_key(ctrl('c'));
+    assert!(app.exit_confirmation_active());
+    assert!(!app.exit_requested());
+    assert!(command_rx.try_recv().is_err(), "Ctrl+C is exit, not cancel");
+    assert!(app.waiting_for_response());
+
+    app.on_acp_event(text_chunk("more reply"));
+    assert!(app.exit_confirmation_active());
+    app.on_key(ctrl('c'));
+    assert!(app.exit_requested());
+}
+
+#[test]
+fn double_ctrl_c_exits_over_an_open_completion_overlay() {
+    let (mut app, _command_rx) = make_app();
+
+    // The completion overlay is composer-owned, not a modal Layer.
+    type_text(&mut app, "/");
+    assert!(app.composer().has_completion());
+
+    app.on_key(ctrl('c'));
+    assert!(app.exit_confirmation_active());
+    assert!(!app.composer().has_completion());
+
+    app.on_key(ctrl('c'));
+    assert!(app.exit_requested());
+}
+
+#[test]
 fn connection_closed_requests_exit() {
     let (mut app, _command_rx) = make_app();
 

@@ -26,6 +26,9 @@ pub(crate) use tempfile::TempDir;
 pub(crate) use tokio::sync::mpsc::UnboundedReceiver;
 pub(crate) use tokio::task::LocalSet;
 pub(crate) use wisp_next::test_support::app::{App, AppConfig, HistoryItem, RuntimeEffect, WorkspaceMoveState};
+pub(crate) use wisp_next::test_support::attachments::{
+    AttachmentKind, PromptAttachment, build_attachments, classify_attachment,
+};
 pub(crate) use wisp_next::test_support::composer::Composer;
 pub(crate) use wisp_next::test_support::generation::Generation;
 pub(crate) use wisp_next::test_support::picker::CommandEntry;
@@ -253,6 +256,15 @@ pub(crate) fn has_session_picker(app: &App) -> bool {
     app.has_session_picker()
 }
 
+pub(crate) fn assert_ctrl_c_exits_over_open_layer(app: &mut App) {
+    assert!(app.has_layer(), "test must open a layer before asserting the exit shortcut");
+    app.on_key(ctrl('c'));
+    assert!(app.exit_confirmation_active(), "first Ctrl+C should arm exit confirmation");
+    assert!(!app.exit_requested());
+    app.on_key(ctrl('c'));
+    assert!(app.exit_requested(), "second Ctrl+C should request exit");
+}
+
 pub(crate) fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
@@ -319,6 +331,8 @@ pub(crate) fn viewport_buffer(terminal: &mut Terminal<TestBackend>) -> Buffer {
     viewport
 }
 
+/// Content Ratatui's `insert_before` committed above the inline viewport.
+/// Purging is asserted separately through `RuntimeEffect`.
 pub(crate) fn history_buffer(terminal: &mut Terminal<TestBackend>) -> Buffer {
     let viewport_area = terminal.get_frame().area();
     let screen = terminal.backend().buffer();

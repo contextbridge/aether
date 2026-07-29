@@ -182,3 +182,59 @@ fn failed_config_update_shows_error_and_does_not_corrupt_state() {
     };
     assert_eq!(select.current_value.0.as_ref(), "medium");
 }
+
+#[test]
+fn double_ctrl_c_exits_over_elicitation_modal() {
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    LocalSet::new().block_on(&runtime, async {
+        let (mut app, _command_rx) = make_app();
+        let (cx, mut peer) = test_connection().await;
+        let (responder, _response_rx) = peer.fake_elicitation(&cx).await;
+
+        app.on_acp_event(AcpEvent::ElicitationRequest {
+            params: ElicitationParams {
+                server_name: "test-server".to_string(),
+                request: CreateElicitationRequestParams::FormElicitationParams {
+                    meta: None,
+                    message: String::new(),
+                    requested_schema: ElicitationSchema::builder().build().unwrap(),
+                },
+            },
+            responder,
+        });
+        assert!(app.has_modal());
+        assert_ctrl_c_exits_over_open_layer(&mut app);
+    });
+}
+
+#[test]
+fn form_modal_composed_space_does_not_toggle() {
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    LocalSet::new().block_on(&runtime, async {
+        let (mut app, _command_rx) = make_app();
+        let (cx, mut peer) = test_connection().await;
+        let (responder, response_rx) = peer.fake_elicitation(&cx).await;
+
+        app.on_acp_event(AcpEvent::ElicitationRequest {
+            params: ElicitationParams {
+                server_name: "test-server".to_string(),
+                request: CreateElicitationRequestParams::FormElicitationParams {
+                    meta: None,
+                    message: String::new(),
+                    requested_schema: ElicitationSchema::builder().optional_bool("approved", false).build().unwrap(),
+                },
+            },
+            responder,
+        });
+        assert!(app.has_modal());
+
+        app.on_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL));
+        app.on_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::SUPER));
+        app.on_key(key(KeyCode::Char(' ')));
+        app.on_key(key(KeyCode::Enter));
+
+        let response = response_rx.await.unwrap();
+        assert_eq!(response.action, ElicitationAction::Accept);
+        assert_eq!(response.content, Some(serde_json::json!({ "approved": true })));
+    });
+}

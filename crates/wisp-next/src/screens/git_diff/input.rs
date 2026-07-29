@@ -8,6 +8,7 @@ use crate::git_diff::{CommentContext, PatchAnchor, QueuedComment};
 use crate::screens::git_diff::GitDiffEvent;
 use crate::surface::Action;
 use crate::surface::MouseAction;
+use crate::surface::is_composed_char;
 
 use super::rendering::plural;
 use super::state::{BottomBar, Focus, GitDiffLoadState, PatchCursor, PendingAction};
@@ -157,6 +158,11 @@ impl GitDiffScreen {
     }
 
     fn on_browse_key(&mut self, key: KeyEvent) -> Vec<Action> {
+        // Ignore composed chords so a stray Ctrl+D or Alt+A can't stage, commit,
+        // or discard. The plain keys below still drive the destructive actions.
+        if is_composed_char(key) {
+            return Vec::new();
+        }
         match key.code {
             KeyCode::Char('t') | KeyCode::Tab => self.guarded(PendingAction::ScopeSwitch, |screen| {
                 screen.scope = screen.scope.next();
@@ -247,6 +253,9 @@ impl GitDiffScreen {
     }
 
     fn on_discard_confirm_key(&mut self, key: KeyEvent) -> Vec<Action> {
+        if is_composed_char(key) {
+            return Vec::new();
+        }
         match key.code {
             KeyCode::Char('y' | 'Y') => {
                 let BottomBar::DiscardConfirmation { path, status } =
@@ -355,5 +364,5 @@ fn is_dismiss_key(key: KeyEvent) -> bool {
 }
 
 fn is_confirm_key(key: KeyEvent, action: PendingAction) -> bool {
-    action.confirm_keys().contains(&key.code)
+    !is_composed_char(key) && action.confirm_keys().contains(&key.code)
 }

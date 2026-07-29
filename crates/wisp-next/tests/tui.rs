@@ -24,6 +24,8 @@ mod plan_review;
 mod plans;
 #[path = "tui/prompt_search.rs"]
 mod prompt_search;
+#[path = "tui/scrollback.rs"]
+mod scrollback;
 #[path = "tui/session_config_view.rs"]
 mod session_config_view;
 #[path = "tui/sessions.rs"]
@@ -36,5 +38,7 @@ mod status_line;
 mod subagents;
 #[path = "tui/terminal_interaction.rs"]
 mod terminal_interaction;
+#[path = "tui/terminal_modes.rs"]
+mod terminal_modes;
 #[path = "tui/workspace.rs"]
 mod workspace;

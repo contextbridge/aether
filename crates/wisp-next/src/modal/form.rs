@@ -11,6 +11,7 @@ use serde_json::{Map, Value};
 
 use crate::edit_buffer::{EditBuffer, apply_edit_key};
 use crate::selection::{Direction, scroll_into_view};
+use crate::surface::is_composed_char;
 use crate::theme::Theme;
 use crate::widgets::{key_hints, render_vertical_scrollbar};
 use crate::wrap::{rows, wrap_line};
@@ -90,7 +91,7 @@ impl FormModal {
             KeyCode::Up | KeyCode::BackTab => self.scroll(Direction::Backward),
             KeyCode::Down | KeyCode::Tab => self.scroll(Direction::Forward),
             KeyCode::Left => self.cycle_focused(Direction::Backward),
-            KeyCode::Right | KeyCode::Char(' ') => self.cycle_focused(Direction::Forward),
+            KeyCode::Right | KeyCode::Char(' ') if !is_composed_char(key) => self.cycle_focused(Direction::Forward),
             _ => {
                 if let Some(FormFieldKind::Text(value) | FormFieldKind::Number(value)) = self.focused_kind() {
                     apply_edit_key(value, key);
@@ -150,7 +151,7 @@ impl FormModal {
         match key.code {
             KeyCode::Up => self.scroll(Direction::Backward),
             KeyCode::Down => self.scroll(Direction::Forward),
-            KeyCode::Char(' ') => self.toggle_multi_select(),
+            KeyCode::Char(' ') if !is_composed_char(key) => self.toggle_multi_select(),
             _ => return false,
         }
         true

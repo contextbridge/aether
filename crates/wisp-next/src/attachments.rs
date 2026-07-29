@@ -33,10 +33,9 @@ impl AttachmentOutcome {
 
 pub fn classify_attachment(path: &Path) -> AttachmentKind {
     let mime = mime_guess::from_path(path).first_or_octet_stream().to_string();
-
-    if mime.starts_with("image/") {
+    if IMAGE_MIME_TYPES.contains(&mime.as_str()) {
         AttachmentKind::Image
-    } else if mime.starts_with("audio/") {
+    } else if AUDIO_MIME_TYPES.contains(&mime.as_str()) {
         AttachmentKind::Audio
     } else if mime.starts_with("text/") {
         AttachmentKind::Text
@@ -49,10 +48,13 @@ pub fn build_attachments(attachments: &[PromptAttachment]) -> AttachmentOutcome 
     let mut outcome = AttachmentOutcome { blocks: Vec::new(), placeholders: Vec::new(), warnings: Vec::new() };
     for attachment in attachments {
         match build_one(&attachment.path, &attachment.display_name) {
-            Ok((block, placeholder)) => {
+            Ok((block, placeholder, warning)) => {
                 outcome.blocks.push(block);
                 if let Some(placeholder) = placeholder {
                     outcome.placeholders.push(placeholder);
+                }
+                if let Some(warning) = warning {
+                    outcome.warnings.push(warning);
                 }
             }
             Err(warning) => outcome.warnings.push(warning),
@@ -61,91 +63,102 @@ pub fn build_attachments(attachments: &[PromptAttachment]) -> AttachmentOutcome 
     outcome
 }
 
-const MAX_ATTACHMENT_BYTES: usize = 1_000_000;
+const MAX_EMBED_TEXT_BYTES: usize = 1024 * 1024;
+const MAX_MEDIA_BYTES: usize = 10 * 1024 * 1024;
+const IMAGE_MIME_TYPES: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp"];
+const AUDIO_MIME_TYPES: &[&str] = &["audio/wav", "audio/mpeg", "audio/mp3", "audio/ogg"];
 
-fn build_one(path: &Path, display_name: &str) -> Result<(acp::ContentBlock, Option<String>), String> {
-    let metadata = std::fs::metadata(path).map_err(|error| format!("Could not attach {display_name}: {error}"))?;
-    if metadata.len() > MAX_ATTACHMENT_BYTES as u64 {
-        return Err(format!("Skipped {display_name}: attachment exceeds {MAX_ATTACHMENT_BYTES} bytes"));
-    }
-    let file = std::fs::File::open(path).map_err(|error| format!("Could not attach {display_name}: {error}"))?;
-    let capacity = usize::try_from(metadata.len())
-        .map_err(|_| format!("Could not attach {display_name}: file size is not supported on this platform"))?;
-    let mut bytes = Vec::with_capacity(capacity);
-    file.take(MAX_ATTACHMENT_BYTES as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|error| format!("Could not attach {display_name}: {error}"))?;
-    if bytes.len() > MAX_ATTACHMENT_BYTES {
-        return Err(format!("Skipped {display_name}: attachment exceeds {MAX_ATTACHMENT_BYTES} bytes"));
-    }
+fn build_one(path: &Path, display_name: &str) -> Result<(acp::ContentBlock, Option<String>, Option<String>), String> {
     let mime_type = mime_guess::from_path(path).first_or_octet_stream().to_string();
-    if mime_type.starts_with("image/") {
-        return Ok((
-            acp::ContentBlock::Image(acp::ImageContent::new(BASE64.encode(bytes), &mime_type)),
-            Some(format!("[image attachment: {display_name}]")),
+    match classify_attachment(path) {
+        AttachmentKind::Image | AttachmentKind::Audio => {
+            build_media_block(path, display_name, &mime_type).map(|(block, placeholder)| (block, placeholder, None))
+        }
+        AttachmentKind::Text | AttachmentKind::Unsupported => build_text_block(path, display_name, &mime_type),
+    }
+}
+
+fn build_media_block(
+    path: &Path,
+    display_name: &str,
+    mime_type: &str,
+) -> Result<(acp::ContentBlock, Option<String>), String> {
+    let metadata = std::fs::metadata(path).map_err(|error| format!("Failed to read {display_name}: {error}"))?;
+    if metadata.len() > MAX_MEDIA_BYTES as u64 {
+        return Err(format!(
+            "Skipped {display_name}: file too large ({size} bytes, max {MAX_MEDIA_BYTES})",
+            size = metadata.len()
         ));
     }
-    if mime_type.starts_with("audio/") {
-        return Ok((
-            acp::ContentBlock::Audio(acp::AudioContent::new(BASE64.encode(bytes), &mime_type)),
-            Some(format!("[audio attachment: {display_name}]")),
-        ));
+    // metadata().len() is a point-in-time snapshot; cap the read so a file that grows
+    // between the size check and the read cannot force an unbounded allocation.
+    let capacity = metadata.len().min(MAX_MEDIA_BYTES as u64);
+    let mut bytes = Vec::with_capacity(usize::try_from(capacity).unwrap_or(MAX_MEDIA_BYTES));
+    std::fs::File::open(path)
+        .map_err(|error| format!("Failed to read {display_name}: {error}"))?
+        .take((MAX_MEDIA_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("Failed to read {display_name}: {error}"))?;
+    if bytes.len() > MAX_MEDIA_BYTES {
+        return Err(format!("Skipped {display_name}: file too large (max {MAX_MEDIA_BYTES})"));
     }
-    let text = String::from_utf8(bytes).map_err(|_| format!("Skipped binary or non-UTF-8 file: {display_name}"))?;
-    let uri_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let uri = Url::from_file_path(uri_path)
-        .map_err(|()| format!("Could not create a file URI for {display_name}"))?
-        .to_string();
+    let data = BASE64.encode(&bytes);
+    let (block, placeholder) = if IMAGE_MIME_TYPES.contains(&mime_type) {
+        (
+            acp::ContentBlock::Image(acp::ImageContent::new(data, mime_type)),
+            format!("[image attachment: {display_name}]"),
+        )
+    } else {
+        (
+            acp::ContentBlock::Audio(acp::AudioContent::new(data, mime_type)),
+            format!("[audio attachment: {display_name}]"),
+        )
+    };
+    Ok((block, Some(placeholder)))
+}
+
+fn build_text_block(
+    path: &Path,
+    display_name: &str,
+    mime_type: &str,
+) -> Result<(acp::ContentBlock, Option<String>, Option<String>), String> {
+    let file = std::fs::File::open(path).map_err(|error| format!("Failed to read {display_name}: {error}"))?;
+    // Read at most one byte past the cap so truncating never pulls an unbounded file into memory.
+    let mut bytes = Vec::new();
+    file.take((MAX_EMBED_TEXT_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("Failed to read {display_name}: {error}"))?;
+
+    let truncated = bytes.len() > MAX_EMBED_TEXT_BYTES;
+    if truncated {
+        bytes.truncate(MAX_EMBED_TEXT_BYTES);
+    }
+
+    let text = match std::str::from_utf8(&bytes) {
+        Ok(text) => text.to_string(),
+        // Truncation can only split the final multi-byte code point, so back up to the
+        // last complete boundary. A definite invalid sequence (error_len) means the file
+        // is genuinely non-UTF-8 and must be rejected rather than silently truncated.
+        Err(error) if truncated && error.error_len().is_none() => {
+            std::str::from_utf8(&bytes[..error.valid_up_to()]).expect("valid_up_to marks a UTF-8 boundary").to_string()
+        }
+        Err(_) => return Err(format!("Skipped binary or non-UTF8 file: {display_name}")),
+    };
+
+    let uri = attachment_uri(path, display_name)?;
+    let warning = truncated.then(|| format!("Truncated {display_name} to {MAX_EMBED_TEXT_BYTES} bytes"));
     Ok((
         acp::ContentBlock::Resource(acp::EmbeddedResource::new(acp::EmbeddedResourceResource::TextResourceContents(
             acp::TextResourceContents::new(text, uri).mime_type(mime_type),
         ))),
         None,
+        warning,
     ))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn classify_attachment_detects_images() {
-        assert_eq!(classify_attachment(Path::new("photo.png")), AttachmentKind::Image);
-        assert_eq!(classify_attachment(Path::new("photo.jpg")), AttachmentKind::Image);
-        assert_eq!(classify_attachment(Path::new("photo.gif")), AttachmentKind::Image);
-        assert_eq!(classify_attachment(Path::new("photo.bmp")), AttachmentKind::Image);
-    }
-
-    #[test]
-    fn classify_attachment_detects_audio() {
-        assert_eq!(classify_attachment(Path::new("note.wav")), AttachmentKind::Audio);
-        assert_eq!(classify_attachment(Path::new("note.mp3")), AttachmentKind::Audio);
-        assert_eq!(classify_attachment(Path::new("note.ogg")), AttachmentKind::Audio);
-    }
-
-    #[test]
-    fn classify_attachment_detects_text() {
-        assert_eq!(classify_attachment(Path::new("readme.txt")), AttachmentKind::Text);
-    }
-
-    #[test]
-    fn classify_attachment_unknown_extension_is_unsupported() {
-        assert_eq!(classify_attachment(Path::new("data.xyz")), AttachmentKind::Unsupported);
-    }
-
-    #[test]
-    fn build_from_attachment_produces_image_block() {
-        use tempfile::TempDir;
-        let tmp = TempDir::new().unwrap();
-        let path = tmp.path().join("test.png");
-        std::fs::write(&path, b"fake png data").unwrap();
-
-        let attachments = vec![PromptAttachment { path, display_name: "test.png".to_string() }];
-        let outcome = build_attachments(&attachments);
-
-        assert_eq!(outcome.blocks.len(), 1);
-        assert!(outcome.warnings.is_empty());
-        assert_eq!(outcome.placeholders, vec!["[image attachment: test.png]"]);
-        assert!(matches!(outcome.blocks[0], acp::ContentBlock::Image(_)));
-    }
+fn attachment_uri(path: &Path, display_name: &str) -> Result<String, String> {
+    let uri_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    Url::from_file_path(uri_path)
+        .map(|url| url.to_string())
+        .map_err(|()| format!("Failed to build file URI for {display_name}"))
 }

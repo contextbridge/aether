@@ -451,6 +451,39 @@ fn narrow_terminal_renders_session_picker_without_preview_pane() {
 }
 
 #[test]
+fn composed_chars_do_not_filter_the_session_picker() {
+    let (mut app, mut command_rx) = make_app();
+
+    type_text(&mut app, "/resume");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+    app.on_acp_event(sessions_listed(vec![
+        session_info("sess-1", "/tmp/one", "Session One", "2025-01-01T00:00:00Z"),
+        session_info("sess-2", "/tmp/two", "Session Two", "2025-01-02T00:00:00Z"),
+    ]));
+
+    let mut terminal = make_terminal_with_width(60);
+    let mut renderer = Presenter::new(&UiSettings::default());
+
+    // Composed characters must not reach the picker's filter query.
+    app.on_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+    app.on_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::ALT));
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(!viewport.contains("'o'"), "composed chars must not filter the picker:\n{viewport}");
+    assert!(
+        viewport.contains("Session One") && viewport.contains("Session Two"),
+        "both rows should still show:\n{viewport}"
+    );
+
+    // The plain character still filters.
+    app.on_key(key(KeyCode::Char('o')));
+    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(viewport.contains("'o'"), "plain char should set the filter query:\n{viewport}");
+}
+
+#[test]
 fn new_modal_replaces_session_picker() {
     let (mut app, mut command_rx) = make_app();
 

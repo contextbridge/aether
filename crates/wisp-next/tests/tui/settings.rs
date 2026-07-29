@@ -115,6 +115,15 @@ fn settings_overlay_shows_mcp_servers_entry() {
 }
 
 #[test]
+fn double_ctrl_c_exits_over_settings_overlay() {
+    let (mut app, _command_rx) = make_app();
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    assert!(app.has_modal());
+    assert_ctrl_c_exits_over_open_layer(&mut app);
+}
+
+#[test]
 fn settings_overlay_shows_provider_logins_when_auth_methods_present() {
     let (mut app, _command_rx) = AppBuilder::new().auth_methods(vec![auth_method("codex", "Codex", None)]).build();
 
@@ -1078,6 +1087,46 @@ fn settings_multi_select_toggle_and_confirm() {
         PromptCommand::SetConfigOption { config_id, value, .. } => {
             assert_eq!(config_id, "model");
             assert!(value.contains("anthropic:opus"), "value: {value}");
+        }
+        other => panic!("expected SetConfigOption, got: {other:?}"),
+    }
+}
+
+#[test]
+fn model_selector_composed_space_does_not_toggle() {
+    let (mut app, mut command_rx) = AppBuilder::new()
+        .config_options(vec![{
+            let mut opt = acp::SessionConfigOption::select(
+                "model",
+                "Model",
+                "",
+                vec![
+                    acp::SessionConfigSelectOption::new("anthropic:opus", "Anthropic / Opus"),
+                    acp::SessionConfigSelectOption::new("anthropic:sonnet", "Anthropic / Sonnet"),
+                ],
+            );
+            let mut meta = serde_json::Map::new();
+            meta.insert("multi_select".to_string(), serde_json::Value::Bool(true));
+            opt = opt.meta(Some(meta));
+            opt
+        }])
+        .build();
+
+    type_text(&mut app, "/settings");
+    app.on_key(key(KeyCode::Tab));
+    app.on_key(key(KeyCode::Down));
+    app.on_key(key(KeyCode::Enter));
+
+    app.on_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL));
+    app.on_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::ALT));
+    app.on_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::SUPER));
+    app.on_key(key(KeyCode::Char(' ')));
+    app.on_key(key(KeyCode::Esc));
+
+    match command_rx.try_recv().expect("plain space should select one model") {
+        PromptCommand::SetConfigOption { config_id, value, .. } => {
+            assert_eq!(config_id, "model");
+            assert_eq!(value, "anthropic:opus");
         }
         other => panic!("expected SetConfigOption, got: {other:?}"),
     }

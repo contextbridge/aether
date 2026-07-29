@@ -2,8 +2,18 @@
 
 pub use crate::terminal::inline_viewport_height;
 
+pub mod terminal {
+    pub use crate::terminal::{
+        LifecycleError, TerminalIo, TerminalModes, inline_viewport_height, run_terminal_lifecycle,
+    };
+}
+
 pub mod app {
     pub use crate::app::*;
+}
+
+pub mod attachments {
+    pub use crate::attachments::*;
 }
 
 pub mod composer {

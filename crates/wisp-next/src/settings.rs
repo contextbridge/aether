@@ -1,5 +1,5 @@
 use acp_utils::settings::SettingsStore;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::path::{Path, PathBuf};
 use tracing::warn;
 
@@ -50,18 +50,72 @@ pub struct StatusLineSettings {
     pub right: Option<Vec<StatusLineSegmentConfig>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+/// A configured status-line segment.
+///
+/// Uses the legacy wire contract so old and new wisp clients can share
+/// `~/.wisp/settings.json`: simple segments round-trip as shorthand strings
+/// (`"cwd"`, `"model"`, ...), while segments that carry data — Cwd/Model with
+/// `maxWidth`, and Text — are tagged objects (`{"type":"model","maxWidth":40}`).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StatusLineSegmentConfig {
+    Cwd { max_width: Option<u16> },
+    GitRef,
+    Agent,
+    Mode,
+    Model { max_width: Option<u16> },
+    Reasoning,
+    Context,
+    ServerHealth,
+    Text { value: String, style: Option<StatusLineStyle> },
+}
+
+impl Serialize for StatusLineSegmentConfig {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.clone().into_wire().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for StatusLineSegmentConfig {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match StatusLineSegmentConfigWire::deserialize(deserializer)? {
+            StatusLineSegmentConfigWire::Shorthand(name) => name.into(),
+            StatusLineSegmentConfigWire::Object(object) => object.into(),
+        })
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum StatusLineSegmentConfigWire {
+    Shorthand(StatusLineSegmentName),
+    Object(StatusLineSegmentConfigObject),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum StatusLineSegmentName {
+    Cwd,
+    GitRef,
+    Agent,
+    Mode,
+    Model,
+    Reasoning,
+    Context,
+    ServerHealth,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+enum StatusLineSegmentConfigObject {
     Cwd {
-        #[serde(default, skip_serializing_if = "Option::is_none", rename = "maxWidth")]
+        #[serde(default, rename = "maxWidth")]
         max_width: Option<u16>,
     },
     GitRef,
     Agent,
     Mode,
     Model {
-        #[serde(default, skip_serializing_if = "Option::is_none", rename = "maxWidth")]
+        #[serde(default, rename = "maxWidth")]
         max_width: Option<u16>,
     },
     Reasoning,
@@ -72,6 +126,61 @@ pub enum StatusLineSegmentConfig {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         style: Option<StatusLineStyle>,
     },
+}
+
+impl StatusLineSegmentConfig {
+    fn into_wire(self) -> StatusLineSegmentConfigWire {
+        match self {
+            Self::Cwd { max_width: None } => StatusLineSegmentConfigWire::Shorthand(StatusLineSegmentName::Cwd),
+            Self::Cwd { max_width: Some(max_width) } => {
+                StatusLineSegmentConfigWire::Object(StatusLineSegmentConfigObject::Cwd { max_width: Some(max_width) })
+            }
+            Self::GitRef => StatusLineSegmentConfigWire::Shorthand(StatusLineSegmentName::GitRef),
+            Self::Agent => StatusLineSegmentConfigWire::Shorthand(StatusLineSegmentName::Agent),
+            Self::Mode => StatusLineSegmentConfigWire::Shorthand(StatusLineSegmentName::Mode),
+            Self::Model { max_width: None } => StatusLineSegmentConfigWire::Shorthand(StatusLineSegmentName::Model),
+            Self::Model { max_width: Some(max_width) } => {
+                StatusLineSegmentConfigWire::Object(StatusLineSegmentConfigObject::Model { max_width: Some(max_width) })
+            }
+            Self::Reasoning => StatusLineSegmentConfigWire::Shorthand(StatusLineSegmentName::Reasoning),
+            Self::Context => StatusLineSegmentConfigWire::Shorthand(StatusLineSegmentName::Context),
+            Self::ServerHealth => StatusLineSegmentConfigWire::Shorthand(StatusLineSegmentName::ServerHealth),
+            Self::Text { value, style } => {
+                StatusLineSegmentConfigWire::Object(StatusLineSegmentConfigObject::Text { value, style })
+            }
+        }
+    }
+}
+
+impl From<StatusLineSegmentName> for StatusLineSegmentConfig {
+    fn from(name: StatusLineSegmentName) -> Self {
+        match name {
+            StatusLineSegmentName::Cwd => Self::Cwd { max_width: None },
+            StatusLineSegmentName::GitRef => Self::GitRef,
+            StatusLineSegmentName::Agent => Self::Agent,
+            StatusLineSegmentName::Mode => Self::Mode,
+            StatusLineSegmentName::Model => Self::Model { max_width: None },
+            StatusLineSegmentName::Reasoning => Self::Reasoning,
+            StatusLineSegmentName::Context => Self::Context,
+            StatusLineSegmentName::ServerHealth => Self::ServerHealth,
+        }
+    }
+}
+
+impl From<StatusLineSegmentConfigObject> for StatusLineSegmentConfig {
+    fn from(object: StatusLineSegmentConfigObject) -> Self {
+        match object {
+            StatusLineSegmentConfigObject::Cwd { max_width } => Self::Cwd { max_width },
+            StatusLineSegmentConfigObject::GitRef => Self::GitRef,
+            StatusLineSegmentConfigObject::Agent => Self::Agent,
+            StatusLineSegmentConfigObject::Mode => Self::Mode,
+            StatusLineSegmentConfigObject::Model { max_width } => Self::Model { max_width },
+            StatusLineSegmentConfigObject::Reasoning => Self::Reasoning,
+            StatusLineSegmentConfigObject::Context => Self::Context,
+            StatusLineSegmentConfigObject::ServerHealth => Self::ServerHealth,
+            StatusLineSegmentConfigObject::Text { value, style } => Self::Text { value, style },
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -209,6 +318,16 @@ fn resolve_theme_file_path_from_name(file_name: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+
+    use acp_utils::settings::SettingsStore;
+    use tempfile::TempDir;
+
+    /// A realistic `~/.wisp/settings.json` written by the legacy wisp client:
+    /// shorthand status-line strings (`cwd`, `gitRef`, ...) where no data is needed,
+    /// tagged objects only where the legacy schema requires them
+    /// (`{"type":"model","maxWidth":40}`, `{"type":"text",...}`).
+    const LEGACY_WISP_SETTINGS: &str = include_str!("../tests/fixtures/legacy_settings.json");
 
     #[test]
     fn status_line_segments_support_tagged_objects() {
@@ -234,7 +353,7 @@ mod tests {
     }
 
     #[test]
-    fn status_line_segments_serialize_as_tagged_objects() {
+    fn status_line_segments_serialize_with_legacy_wire_contract() {
         let segments = vec![
             StatusLineSegmentConfig::Cwd { max_width: None },
             StatusLineSegmentConfig::GitRef,
@@ -242,12 +361,7 @@ mod tests {
             StatusLineSegmentConfig::Model { max_width: None },
         ];
 
-        assert_eq!(
-            serde_json::to_value(&segments).unwrap(),
-            serde_json::json!([
-                {"type":"cwd"}, {"type":"gitRef"}, {"type":"agent"}, {"type":"model"}
-            ])
-        );
+        assert_eq!(serde_json::to_value(&segments).unwrap(), serde_json::json!(["cwd", "gitRef", "agent", "model"]));
     }
 
     #[test]
@@ -333,14 +447,112 @@ mod tests {
     }
 
     #[test]
-    fn string_status_line_segment_is_rejected() {
+    fn legacy_shorthand_status_line_segments_load() {
+        let settings: UiSettings = serde_json::from_str(LEGACY_WISP_SETTINGS)
+            .expect("legacy ~/.wisp/settings.json with shorthand status-line segments must load");
+
+        let status_line = settings.status_line.expect("statusLine should be present");
+        assert_eq!(status_line.separator.as_deref(), Some(" | "));
+        assert_eq!(
+            status_line.left,
+            Some(vec![
+                StatusLineSegmentConfig::Cwd { max_width: None },
+                StatusLineSegmentConfig::GitRef,
+                StatusLineSegmentConfig::Text { value: "v1.2".to_string(), style: Some(StatusLineStyle::Muted) },
+            ]),
+        );
+        assert_eq!(
+            status_line.right,
+            Some(vec![
+                StatusLineSegmentConfig::Agent,
+                StatusLineSegmentConfig::Mode,
+                StatusLineSegmentConfig::Model { max_width: Some(40) },
+                StatusLineSegmentConfig::Reasoning,
+                StatusLineSegmentConfig::Context,
+                StatusLineSegmentConfig::ServerHealth,
+            ]),
+        );
+
+        assert_eq!(settings.content_padding, Some(3));
+        assert_eq!(settings.theme.file.as_deref(), Some("gruvbox-dark.tmTheme"));
+    }
+
+    #[test]
+    fn legacy_status_line_resolves_loaded_segments() {
+        let settings: UiSettings = serde_json::from_str(LEGACY_WISP_SETTINGS).unwrap();
+        let resolved = resolve_status_line_settings(&settings);
+
+        assert_eq!(resolved.separator, " | ");
+        assert_eq!(
+            resolved.left,
+            vec![
+                StatusLineSegmentConfig::Cwd { max_width: None },
+                StatusLineSegmentConfig::GitRef,
+                StatusLineSegmentConfig::Text { value: "v1.2".to_string(), style: Some(StatusLineStyle::Muted) },
+            ],
+        );
+        assert_eq!(
+            resolved.right,
+            vec![
+                StatusLineSegmentConfig::Agent,
+                StatusLineSegmentConfig::Mode,
+                StatusLineSegmentConfig::Model { max_width: Some(40) },
+                StatusLineSegmentConfig::Reasoning,
+                StatusLineSegmentConfig::Context,
+                StatusLineSegmentConfig::ServerHealth,
+            ],
+        );
+    }
+
+    #[test]
+    fn legacy_status_line_round_trips_through_settings_store() {
+        let loaded: UiSettings = serde_json::from_str(LEGACY_WISP_SETTINGS).unwrap();
+
+        let temp = TempDir::new().unwrap();
+        let store = SettingsStore::from_path(temp.path());
+        store.save(&loaded).expect("save via the real SettingsStore must succeed");
+
+        // The saved file must reproduce the legacy wire form (shorthand for simple
+        // segments, tagged objects only where data is required), proving old and
+        // new wisp clients can alternate writes without churn.
+        let on_disk = fs::read_to_string(temp.path().join("settings.json")).unwrap();
+        let saved: serde_json::Value = serde_json::from_str(&on_disk).unwrap();
+        let expected: serde_json::Value = serde_json::from_str(LEGACY_WISP_SETTINGS).unwrap();
+        assert_eq!(saved, expected, "save must reproduce the legacy wire form");
+
+        let reloaded: UiSettings = store.load_or_create();
+        assert_eq!(reloaded, loaded, "every modeled field must survive the save/reload");
+    }
+
+    #[test]
+    fn loaded_segments_round_trip_with_legacy_wire_contract() {
+        let loaded: UiSettings = serde_json::from_str(LEGACY_WISP_SETTINGS).unwrap();
+        let status_line = loaded.status_line.unwrap();
+
+        assert_eq!(
+            serde_json::to_value(status_line.left.as_ref().unwrap()).unwrap(),
+            serde_json::json!(["cwd", "gitRef", {"type": "text", "value": "v1.2", "style": "muted"}]),
+        );
+        assert_eq!(
+            serde_json::to_value(status_line.right.as_ref().unwrap()).unwrap(),
+            serde_json::json!([
+                "agent",
+                "mode",
+                {"type": "model", "maxWidth": 40},
+                "reasoning",
+                "context",
+                "serverHealth"
+            ]),
+        );
+    }
+
+    #[test]
+    fn unknown_status_line_segment_string_is_rejected() {
         let err =
             serde_json::from_str::<UiSettings>(r#"{"statusLine": {"left": ["invalidSegmentName"]}}"#).unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("unknown variant")
-                || msg.contains("did not match")
-                || msg.contains("expected internally tagged enum"),
+            msg.contains("unknown variant") || msg.contains("did not match"),
             "should reject invalid segment names, got: {msg}"
         );
     }

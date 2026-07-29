@@ -1,4 +1,5 @@
 use super::support::*;
+use std::path::{Path, PathBuf};
 
 fn make_app_with_prompt_capabilities(
     prompt_capabilities: acp::PromptCapabilities,
@@ -155,6 +156,103 @@ fn paste_non_media_file_falls_back_to_text() {
 
     assert!(app.composer().pending_media().is_empty());
     assert!(!app.composer().text().is_empty());
+}
+
+#[test]
+fn paste_nonexistent_path_remains_as_text() {
+    let (mut app, _command_rx) = make_app();
+    let tmp = TempDir::new().unwrap();
+    let missing = tmp.path().join("photo.png");
+    let input = missing.to_str().unwrap();
+
+    app.on_paste(input);
+
+    assert!(app.composer().pending_media().is_empty());
+    assert_eq!(app.composer().text(), input);
+}
+
+#[test]
+fn paste_nonexistent_file_uri_remains_as_text() {
+    let (mut app, _command_rx) = make_app();
+    let tmp = TempDir::new().unwrap();
+    let missing = tmp.path().join("note.wav");
+    let uri = format!("file://{}", missing.display());
+
+    app.on_paste(&uri);
+
+    assert!(app.composer().pending_media().is_empty());
+    assert_eq!(app.composer().text(), uri);
+}
+
+#[test]
+fn paste_directory_path_remains_as_text() {
+    let (mut app, _command_rx) = make_app();
+    let tmp = TempDir::new().unwrap();
+    // A directory with a media-like extension is the dangerous case.
+    let dir = tmp.path().join("assets.png");
+    std::fs::create_dir(&dir).unwrap();
+    let input = dir.to_str().unwrap();
+
+    app.on_paste(input);
+
+    assert!(app.composer().pending_media().is_empty());
+    assert_eq!(app.composer().text(), input);
+}
+
+#[test]
+fn paste_multiple_nonexistent_paths_remain_as_text() {
+    let (mut app, _command_rx) = make_app();
+    let tmp = TempDir::new().unwrap();
+    let a = tmp.path().join("a.png");
+    let b = tmp.path().join("b.wav");
+    let input = format!("{}\n{}", a.display(), b.display());
+
+    app.on_paste(&input);
+
+    assert!(app.composer().pending_media().is_empty());
+    assert_eq!(app.composer().text(), input);
+}
+
+#[test]
+fn paste_existing_regular_file_becomes_media_and_clears_text() {
+    let (mut app, _command_rx) = make_app();
+    let tmp = TempDir::new().unwrap();
+    let img = create_temp_file(&tmp, "photo.png", b"fake png");
+
+    app.on_paste(img.to_str().unwrap());
+
+    assert_eq!(app.composer().pending_media().len(), 1);
+    assert_eq!(app.composer().pending_media()[0].display_name, "photo.png");
+    assert!(app.composer().text().is_empty(), "a real regular media file consumes the pasted path");
+}
+
+#[test]
+fn paste_mixed_valid_and_missing_media_keeps_text_and_adds_nothing() {
+    let (mut app, _command_rx) = make_app();
+    let tmp = TempDir::new().unwrap();
+    let valid = create_temp_file(&tmp, "photo.png", b"img");
+    let missing = tmp.path().join("gone.wav");
+    let input = format!("{}\n{}", valid.display(), missing.display());
+
+    app.on_paste(&input);
+
+    assert!(app.composer().pending_media().is_empty());
+    assert_eq!(app.composer().text(), input);
+}
+
+#[test]
+fn paste_mixed_valid_media_and_directory_keeps_text_and_adds_nothing() {
+    let (mut app, _command_rx) = make_app();
+    let tmp = TempDir::new().unwrap();
+    let valid = create_temp_file(&tmp, "photo.png", b"img");
+    let dir = tmp.path().join("clips.png");
+    std::fs::create_dir(&dir).unwrap();
+    let input = format!("{}\n{}", valid.display(), dir.display());
+
+    app.on_paste(&input);
+
+    assert!(app.composer().pending_media().is_empty());
+    assert_eq!(app.composer().text(), input);
 }
 
 #[test]
@@ -701,4 +799,315 @@ fn sync_failure_preserves_text_and_placeholders_in_transcript() {
     assert!(messages.iter().any(|msg| msg.contains("Failed to send prompt")), "error message shown");
 }
 
-// ── Workspace move tests ──
+const ONE_MIB: usize = 1024 * 1024;
+const TEN_MIB: usize = 10 * 1024 * 1024;
+
+fn write_temp(name: &str, bytes: &[u8]) -> (TempDir, PathBuf) {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join(name);
+    std::fs::write(&path, bytes).unwrap();
+    (dir, path)
+}
+
+fn attach(path: PathBuf, display_name: &str) -> Vec<PromptAttachment> {
+    vec![PromptAttachment { path, display_name: display_name.to_string() }]
+}
+
+fn text_of(block: &acp::ContentBlock) -> &str {
+    match block {
+        acp::ContentBlock::Resource(resource) => match &resource.resource {
+            acp::EmbeddedResourceResource::TextResourceContents(contents) => &contents.text,
+            _ => panic!("resource block is not text"),
+        },
+        _ => panic!("expected a text resource block, got {block:?}"),
+    }
+}
+
+fn mime_of(block: &acp::ContentBlock) -> &str {
+    match block {
+        acp::ContentBlock::Image(image) => &image.mime_type,
+        acp::ContentBlock::Audio(audio) => &audio.mime_type,
+        acp::ContentBlock::Resource(resource) => match &resource.resource {
+            acp::EmbeddedResourceResource::TextResourceContents(contents) => {
+                contents.mime_type.as_deref().unwrap_or("")
+            }
+            _ => "",
+        },
+        _ => "",
+    }
+}
+
+#[test]
+fn classify_attachment_detects_whitelisted_images() {
+    assert_eq!(classify_attachment(Path::new("photo.png")), AttachmentKind::Image);
+    assert_eq!(classify_attachment(Path::new("photo.jpg")), AttachmentKind::Image);
+    assert_eq!(classify_attachment(Path::new("photo.jpeg")), AttachmentKind::Image);
+    assert_eq!(classify_attachment(Path::new("photo.gif")), AttachmentKind::Image);
+    assert_eq!(classify_attachment(Path::new("photo.webp")), AttachmentKind::Image);
+}
+
+#[test]
+fn classify_attachment_excludes_image_mime_outside_whitelist() {
+    assert_eq!(classify_attachment(Path::new("icon.svg")), AttachmentKind::Unsupported);
+    assert_eq!(classify_attachment(Path::new("photo.bmp")), AttachmentKind::Unsupported);
+}
+
+#[test]
+fn classify_attachment_detects_whitelisted_audio() {
+    assert_eq!(classify_attachment(Path::new("note.wav")), AttachmentKind::Audio);
+    assert_eq!(classify_attachment(Path::new("note.mp3")), AttachmentKind::Audio);
+    assert_eq!(classify_attachment(Path::new("note.ogg")), AttachmentKind::Audio);
+}
+
+#[test]
+fn classify_attachment_detects_text() {
+    assert_eq!(classify_attachment(Path::new("readme.txt")), AttachmentKind::Text);
+}
+
+#[test]
+fn classify_attachment_unknown_extension_is_unsupported() {
+    assert_eq!(classify_attachment(Path::new("data.xyz")), AttachmentKind::Unsupported);
+}
+
+#[test]
+fn image_at_ten_mib_limit_is_accepted() {
+    let (_dir, path) = write_temp("photo.png", &vec![0u8; TEN_MIB]);
+    let outcome = build_attachments(&attach(path, "photo.png"));
+
+    assert_eq!(outcome.blocks.len(), 1);
+    assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+    assert!(matches!(outcome.blocks[0], acp::ContentBlock::Image(_)));
+    assert_eq!(mime_of(&outcome.blocks[0]), "image/png");
+    assert_eq!(outcome.placeholders, vec!["[image attachment: photo.png]"]);
+}
+
+#[test]
+fn image_above_ten_mib_is_rejected() {
+    let (_dir, path) = write_temp("photo.png", &vec![0u8; TEN_MIB + 1]);
+    let outcome = build_attachments(&attach(path, "photo.png"));
+
+    assert!(outcome.blocks.is_empty());
+    assert!(outcome.placeholders.is_empty());
+    assert_eq!(outcome.warnings.len(), 1);
+    assert_eq!(outcome.warnings[0], "Skipped photo.png: file too large (10485761 bytes, max 10485760)");
+}
+
+#[test]
+fn audio_at_ten_mib_limit_is_accepted() {
+    let (_dir, path) = write_temp("note.wav", &vec![0u8; TEN_MIB]);
+    let outcome = build_attachments(&attach(path, "note.wav"));
+
+    assert_eq!(outcome.blocks.len(), 1);
+    assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+    assert!(matches!(outcome.blocks[0], acp::ContentBlock::Audio(_)));
+    assert_eq!(mime_of(&outcome.blocks[0]), "audio/wav");
+    assert_eq!(outcome.placeholders, vec!["[audio attachment: note.wav]"]);
+}
+
+#[test]
+fn audio_above_ten_mib_is_rejected() {
+    let (_dir, path) = write_temp("note.wav", &vec![0u8; TEN_MIB + 1]);
+    let outcome = build_attachments(&attach(path, "note.wav"));
+
+    assert!(outcome.blocks.is_empty());
+    assert!(outcome.placeholders.is_empty());
+    assert_eq!(outcome.warnings.len(), 1);
+    assert_eq!(outcome.warnings[0], "Skipped note.wav: file too large (10485761 bytes, max 10485760)");
+}
+
+#[test]
+fn text_just_under_one_mib_is_not_truncated() {
+    let body = "x".repeat(ONE_MIB - 1);
+    let (_dir, path) = write_temp("notes.txt", body.as_bytes());
+    let outcome = build_attachments(&attach(path, "notes.txt"));
+
+    assert_eq!(outcome.blocks.len(), 1);
+    assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+    assert_eq!(text_of(&outcome.blocks[0]).len(), ONE_MIB - 1);
+    assert_eq!(text_of(&outcome.blocks[0]), &body);
+}
+
+#[test]
+fn text_exactly_one_mib_is_not_truncated() {
+    let body = "x".repeat(ONE_MIB);
+    let (_dir, path) = write_temp("notes.txt", body.as_bytes());
+    let outcome = build_attachments(&attach(path, "notes.txt"));
+
+    assert_eq!(outcome.blocks.len(), 1);
+    assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+    assert_eq!(text_of(&outcome.blocks[0]).len(), ONE_MIB);
+}
+
+#[test]
+fn text_just_over_one_mib_is_truncated_with_warning() {
+    let body = "x".repeat(ONE_MIB + 1);
+    let (_dir, path) = write_temp("notes.txt", body.as_bytes());
+    let outcome = build_attachments(&attach(path, "notes.txt"));
+
+    assert_eq!(outcome.blocks.len(), 1);
+    assert_eq!(outcome.warnings.len(), 1);
+    assert_eq!(outcome.warnings[0], "Truncated notes.txt to 1048576 bytes");
+    let text = text_of(&outcome.blocks[0]);
+    assert_eq!(text.len(), ONE_MIB);
+    assert_eq!(text, &body[..ONE_MIB]);
+}
+
+#[test]
+fn text_far_over_one_mib_embeds_only_one_mib() {
+    let body = "x".repeat(ONE_MIB * 4);
+    let (_dir, path) = write_temp("big.txt", body.as_bytes());
+    let outcome = build_attachments(&attach(path, "big.txt"));
+
+    assert_eq!(outcome.blocks.len(), 1);
+    assert_eq!(outcome.warnings.len(), 1);
+    assert_eq!(text_of(&outcome.blocks[0]).len(), ONE_MIB);
+}
+
+#[test]
+fn text_truncated_across_multibyte_boundary_stays_valid_utf8() {
+    let body = "€".repeat((ONE_MIB / 3) + 2);
+    let (_dir, path) = write_temp("multibyte.txt", body.as_bytes());
+    let outcome = build_attachments(&attach(path, "multibyte.txt"));
+
+    assert_eq!(outcome.blocks.len(), 1);
+    assert_eq!(outcome.warnings.len(), 1);
+    // ONE_MIB is not a multiple of three, so truncation lands mid-codepoint; the
+    // result must back up to the last complete UTF-8 boundary rather than panic.
+    let valid_len = ONE_MIB - (ONE_MIB % 3);
+    assert_eq!(text_of(&outcome.blocks[0]), &body[..valid_len]);
+}
+
+#[test]
+fn oversized_file_with_early_invalid_utf8_is_rejected() {
+    // An invalid byte well before the truncation point is a real error, not a
+    // truncation-induced incomplete sequence, so it must not be accepted as a prefix.
+    let mut body = vec![b'a'; ONE_MIB + 10];
+    body[100] = 0xff;
+    let (_dir, path) = write_temp("bad.txt", &body);
+    let outcome = build_attachments(&attach(path, "bad.txt"));
+
+    assert!(outcome.blocks.is_empty(), "invalid UTF-8 must not be accepted as a truncated prefix");
+    assert_eq!(outcome.warnings.len(), 1);
+    assert_eq!(outcome.warnings[0], "Skipped binary or non-UTF8 file: bad.txt");
+}
+
+#[test]
+fn svg_is_embedded_as_text_not_an_image() {
+    let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\"/>";
+    let (_dir, path) = write_temp("icon.svg", svg.as_bytes());
+    let outcome = build_attachments(&attach(path, "icon.svg"));
+
+    assert_eq!(outcome.blocks.len(), 1);
+    assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+    assert!(matches!(outcome.blocks[0], acp::ContentBlock::Resource(_)));
+    assert_eq!(text_of(&outcome.blocks[0]), svg);
+    assert_eq!(mime_of(&outcome.blocks[0]), "image/svg+xml");
+    assert!(outcome.placeholders.is_empty());
+}
+
+#[test]
+fn unsupported_audio_mime_is_embedded_as_text_not_audio() {
+    let flac = b"fake but valid UTF-8 audio metadata";
+    let (_dir, path) = write_temp("track.flac", flac);
+    let outcome = build_attachments(&attach(path, "track.flac"));
+
+    assert_eq!(outcome.blocks.len(), 1);
+    assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+    assert!(matches!(outcome.blocks[0], acp::ContentBlock::Resource(_)), "audio/flac is not a whitelisted media type");
+    assert!(mime_of(&outcome.blocks[0]).starts_with("audio/"), "kept its audio/* MIME but stayed a text resource");
+    assert_eq!(text_of(&outcome.blocks[0]), std::str::from_utf8(flac).unwrap());
+    assert!(outcome.placeholders.is_empty());
+}
+
+#[test]
+fn unsupported_image_mime_binary_is_skipped_with_warning() {
+    let (_dir, path) = write_temp("raster.bmp", &[0x42, 0x4d, 0xff, 0x00]);
+    let outcome = build_attachments(&attach(path, "raster.bmp"));
+
+    assert!(outcome.blocks.is_empty(), "image/bmp is not whitelisted, and the binary body is non-UTF-8");
+    assert_eq!(outcome.warnings.len(), 1);
+    assert_eq!(outcome.warnings[0], "Skipped binary or non-UTF8 file: raster.bmp");
+}
+
+#[test]
+fn non_utf8_file_is_skipped_with_warning() {
+    let (_dir, path) = write_temp("data.bin", &[0xff, 0xfe, 0xfd]);
+    let outcome = build_attachments(&attach(path, "data.bin"));
+
+    assert!(outcome.blocks.is_empty());
+    assert_eq!(outcome.warnings.len(), 1);
+    assert_eq!(outcome.warnings[0], "Skipped binary or non-UTF8 file: data.bin");
+}
+
+#[test]
+fn unsupported_extension_text_is_embedded_as_resource() {
+    let (_dir, path) = write_temp("notes.xyz", b"hello world");
+    let outcome = build_attachments(&attach(path, "notes.xyz"));
+
+    assert_eq!(outcome.blocks.len(), 1);
+    assert!(outcome.warnings.is_empty());
+    assert!(matches!(outcome.blocks[0], acp::ContentBlock::Resource(_)));
+    assert_eq!(text_of(&outcome.blocks[0]), "hello world");
+}
+
+#[test]
+fn multi_attachment_preserves_order_with_truncated_text_between_media() {
+    let dir = TempDir::new().unwrap();
+    let img = create_temp_file(&dir, "photo.png", b"png bytes");
+    let big = create_temp_file(&dir, "big.txt", &vec![b'a'; ONE_MIB + 5]);
+    let wav = create_temp_file(&dir, "note.wav", b"wav bytes");
+    let attachments = vec![
+        PromptAttachment { path: img, display_name: "photo.png".to_string() },
+        PromptAttachment { path: big, display_name: "big.txt".to_string() },
+        PromptAttachment { path: wav, display_name: "note.wav".to_string() },
+    ];
+
+    let outcome = build_attachments(&attachments);
+
+    assert_eq!(outcome.blocks.len(), 3);
+    assert!(matches!(outcome.blocks[0], acp::ContentBlock::Image(_)));
+    assert!(matches!(outcome.blocks[1], acp::ContentBlock::Resource(_)));
+    assert!(matches!(outcome.blocks[2], acp::ContentBlock::Audio(_)));
+    // The truncated text block carries no placeholder; image and audio do, in order.
+    assert_eq!(outcome.placeholders, vec!["[image attachment: photo.png]", "[audio attachment: note.wav]"]);
+    // The truncation warning is emitted without dropping the truncated block.
+    assert_eq!(outcome.warnings, vec!["Truncated big.txt to 1048576 bytes"]);
+    assert_eq!(text_of(&outcome.blocks[1]).len(), ONE_MIB);
+}
+
+#[test]
+fn image_and_audio_blocks_carry_base64_of_the_file_bytes() {
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD as BASE64;
+
+    let image_bytes = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0xde, 0xad, 0xbe, 0xef];
+    let (_image_dir, image_path) = write_temp("photo.png", &image_bytes);
+    let audio_bytes = *b"RIFF fake wav payload with non-text bytes \xff\x01\x02";
+    let (_audio_dir, audio_path) = write_temp("note.wav", &audio_bytes);
+
+    let outcome = build_attachments(&[
+        PromptAttachment { path: image_path, display_name: "photo.png".to_string() },
+        PromptAttachment { path: audio_path, display_name: "note.wav".to_string() },
+    ]);
+
+    assert_eq!(outcome.blocks.len(), 2);
+    assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+
+    let decoded_image = match &outcome.blocks[0] {
+        acp::ContentBlock::Image(image) => {
+            assert_eq!(image.mime_type, "image/png");
+            BASE64.decode(&image.data).unwrap()
+        }
+        other => panic!("expected image block, got {other:?}"),
+    };
+    assert_eq!(decoded_image, image_bytes);
+
+    let decoded_audio = match &outcome.blocks[1] {
+        acp::ContentBlock::Audio(audio) => {
+            assert_eq!(audio.mime_type, "audio/wav");
+            BASE64.decode(&audio.data).unwrap()
+        }
+        other => panic!("expected audio block, got {other:?}"),
+    };
+    assert_eq!(decoded_audio, audio_bytes);
+}

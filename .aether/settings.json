@@ -6,6 +6,7 @@
       "model": "zai:glm-5.2",
       "reasoningEffort": "high",
       "userInvocable": true,
+      "agentInvocable": true,
       "prompts": [".aether/SYSTEM.md", "AGENTS.md"],
       "mcps": ["mcp.json"]
     },

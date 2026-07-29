@@ -51,6 +51,7 @@ pub(crate) mod wrap;
 use acp_utils::client::AcpEvent;
 use app::{App, AppConfig, RuntimeEffect};
 use crossterm::event::{Event, EventStream};
+use crossterm::terminal::{Clear, ClearType};
 use crossterm::{execute, terminal::size};
 use error::AppError;
 use futures::StreamExt;
@@ -62,7 +63,7 @@ use std::fs::create_dir_all;
 use std::future::pending;
 use std::io;
 use std::time::{Duration, Instant};
-use terminal::{TerminalModes, inline_viewport_height, resync_inline_viewport};
+use terminal::{StdTerminalIo, TerminalModes, inline_viewport_height, resync_inline_viewport, run_terminal_lifecycle};
 use tokio::select;
 use tokio::sync::mpsc;
 use tokio::time::{MissedTickBehavior, interval};
@@ -128,14 +129,19 @@ async fn run_app(
 ) -> Result<(), AppError> {
     let (_, terminal_height) = size()?;
     let viewport = Viewport::Inline(inline_viewport_height(terminal_height));
-    let mut terminal = ratatui::try_init_with_options(TerminalOptions { viewport })?;
-    let mut modes = TerminalModes::enable()?;
 
-    let result = event_loop(&mut terminal, &mut app, &mut presenter, &mut event_rx, &mut modes).await;
-
-    drop(modes);
-    ratatui::restore();
-    result
+    // `run_terminal_lifecycle` owns the whole init -> setup -> event loop ->
+    // teardown sequence and restores the terminal on every return path, including
+    // a ratatui init failure that strands raw mode and a panic unwinding out of
+    // the event loop.
+    run_terminal_lifecycle(StdTerminalIo::new(), TerminalOptions { viewport }, |mut terminal, mut modes| {
+        let app = &mut app;
+        let presenter = &mut presenter;
+        let event_rx = &mut event_rx;
+        async move { event_loop(&mut terminal, app, presenter, event_rx, &mut modes).await }
+    })
+    .await?;
+    Ok(())
 }
 
 async fn event_loop(
@@ -143,7 +149,7 @@ async fn event_loop(
     app: &mut App,
     presenter: &mut Presenter,
     event_rx: &mut mpsc::UnboundedReceiver<AcpEvent>,
-    modes: &mut TerminalModes,
+    modes: &mut TerminalModes<StdTerminalIo>,
 ) -> Result<(), AppError> {
     let mut terminal_events = EventStream::new();
     let (task_result_tx, mut task_result_rx) = mpsc::unbounded_channel();
@@ -208,6 +214,10 @@ async fn event_loop(
                 RuntimeEffect::SetTheme(theme) => presenter.set_theme(theme),
                 RuntimeEffect::RingBell => {
                     let _ = execute!(stdout, crossterm::style::Print("\x07"));
+                }
+                RuntimeEffect::PurgeScrollback => {
+                    // Purge only the scrollback; Clear(All) would desync the inline viewport's diff buffer.
+                    execute!(stdout, Clear(ClearType::Purge))?;
                 }
             }
         }

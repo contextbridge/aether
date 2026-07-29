@@ -142,6 +142,17 @@ fn workspace_picker_opens_with_existing_workspaces() {
 }
 
 #[test]
+fn double_ctrl_c_exits_over_workspace_picker() {
+    let (mut app, mut command_rx) = make_app_with_workspace_move();
+    type_text(&mut app, "/move");
+    app.on_key(key(KeyCode::Tab));
+    let _ = command_rx.try_recv().unwrap();
+    app.on_acp_event(workspaces_listed(vec![workspace_entry("/tmp/sandbox", false)]));
+    assert!(app.has_modal());
+    assert_ctrl_c_exits_over_open_layer(&mut app);
+}
+
+#[test]
 fn workspace_picker_shows_empty_state_when_no_workspaces() {
     let (mut app, mut command_rx) = make_app_with_workspace_move();
 

@@ -21,6 +21,14 @@ fn init_git_repo(dir: &std::path::Path) {
     run_git(dir, &["config", "commit.gpgsign", "false"]);
 }
 
+fn staged_files(root: &std::path::Path) -> Vec<String> {
+    run_git(root, &["diff", "--cached", "--name-only"]).lines().map(str::to_string).collect()
+}
+
+fn commit_count(root: &std::path::Path) -> usize {
+    run_git(root, &["rev-list", "--count", "HEAD"]).trim().parse().unwrap()
+}
+
 #[test]
 fn ctrl_g_opens_and_esc_closes_git_diff() {
     let directory = tempfile::tempdir().unwrap();
@@ -404,6 +412,128 @@ async fn git_diff_discard_restores_deleted_file() {
 
     let content = std::fs::read_to_string(root.join("file.txt")).unwrap();
     assert_eq!(content, "original\n");
+}
+
+#[tokio::test]
+async fn git_diff_modified_chars_do_not_arm_or_confirm_discard() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(root.join("file.txt"), "original\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("file.txt"), "changed\n").unwrap();
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    let mut terminal = make_terminal_with_width(160);
+    app.on_key(ctrl('g'));
+    settle_screen_tasks(&mut app).await;
+
+    for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT, KeyModifiers::SUPER] {
+        app.on_key(KeyEvent::new(KeyCode::Char('d'), modifiers));
+        settle_screen_tasks(&mut app).await;
+    }
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    assert!(
+        !buffer_text(&viewport_buffer(&mut terminal)).contains("Discard changes"),
+        "composed 'd' must not arm discard"
+    );
+    assert_eq!(std::fs::read_to_string(root.join("file.txt")).unwrap(), "changed\n");
+
+    app.on_key(key(KeyCode::Char('d')));
+    settle_screen_tasks(&mut app).await;
+    app.on_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
+    app.on_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::SUPER));
+    settle_screen_tasks(&mut app).await;
+    assert_eq!(std::fs::read_to_string(root.join("file.txt")).unwrap(), "changed\n", "composed 'y' must not confirm");
+
+    app.on_key(key(KeyCode::Char('y')));
+    settle_screen_tasks(&mut app).await;
+    assert_eq!(std::fs::read_to_string(root.join("file.txt")).unwrap(), "original\n");
+}
+
+#[tokio::test]
+async fn git_diff_modified_chars_do_not_stage_or_unstage() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(root.join("file.txt"), "original\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("file.txt"), "changed\n").unwrap();
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    app.on_key(ctrl('g'));
+    settle_screen_tasks(&mut app).await;
+
+    for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT, KeyModifiers::SUPER] {
+        app.on_key(KeyEvent::new(KeyCode::Char('a'), modifiers));
+        settle_screen_tasks(&mut app).await;
+    }
+    assert!(staged_files(root).is_empty(), "composed 'a' must not stage");
+
+    app.on_key(key(KeyCode::Char('a')));
+    settle_screen_tasks(&mut app).await;
+    assert_eq!(staged_files(root), vec!["file.txt".to_string()], "plain 'a' should stage all");
+
+    // 'A' is Shift+'a'; a chord carrying an extra modifier must not unstage.
+    app.on_key(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT | KeyModifiers::CONTROL));
+    settle_screen_tasks(&mut app).await;
+    assert_eq!(staged_files(root), vec!["file.txt".to_string()], "composed 'A' must not unstage");
+
+    app.on_key(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT));
+    settle_screen_tasks(&mut app).await;
+    assert!(staged_files(root).is_empty(), "plain 'A' should unstage all");
+}
+
+#[tokio::test]
+async fn git_diff_modified_chars_do_not_open_commit_editor() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+    std::fs::write(root.join("file.txt"), "original\n").unwrap();
+    run_git(root, &["add", "-A"]);
+    run_git(root, &["commit", "--quiet", "-m", "init"]);
+    std::fs::write(root.join("file.txt"), "changed\n").unwrap();
+    run_git(root, &["add", "-A"]);
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    let mut terminal = make_terminal_with_width(160);
+    app.on_key(ctrl('g'));
+    settle_screen_tasks(&mut app).await;
+    let commits_before = commit_count(root);
+
+    app.on_key(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SHIFT | KeyModifiers::CONTROL));
+    settle_screen_tasks(&mut app).await;
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    assert!(
+        !buffer_text(&viewport_buffer(&mut terminal)).contains("commit ›"),
+        "composed 'C' must not open the editor"
+    );
+    assert_eq!(commit_count(root), commits_before);
+
+    app.on_key(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SHIFT));
+    settle_screen_tasks(&mut app).await;
+    sync_terminal(&mut terminal, &mut app).unwrap();
+    assert!(buffer_text(&viewport_buffer(&mut terminal)).contains("commit ›"));
+
+    type_text(&mut app, "msg");
+    app.on_key(key(KeyCode::Enter));
+    settle_screen_tasks(&mut app).await;
+    assert_eq!(commit_count(root), commits_before + 1, "plain keys should commit");
+}
+
+#[tokio::test]
+async fn double_ctrl_c_exits_over_git_diff() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    init_git_repo(root);
+
+    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
+    app.on_key(ctrl('g'));
+    settle_screen_tasks(&mut app).await;
+    assert!(app.full_screen_active());
+    assert_ctrl_c_exits_over_open_layer(&mut app);
 }
 
 #[tokio::test]

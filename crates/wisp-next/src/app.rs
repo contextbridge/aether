@@ -96,6 +96,9 @@ pub enum RuntimeEffect {
     /// Hand the presenter a newly chosen theme.
     SetTheme(crate::theme::Theme),
     RingBell,
+    /// Clear the terminal's own scrollback of conversation content that scrolled
+    /// out of the inline viewport, once the conversation it belonged to is gone.
+    PurgeScrollback,
 }
 
 /// Everything that belongs to the conversation turn in progress.
@@ -521,12 +524,10 @@ impl App {
         &mut self.plan_tracker
     }
 
-    /// Drops everything tied to the current conversation.
-    ///
-    /// Every path that swaps conversations — clearing context, creating a
-    /// session, loading one, moving workspace — goes through this, so none of
-    /// them can forget a field and leave stale state on screen.
+    /// Drops all conversation state. Every conversation swap funnels through
+    /// here so each also emits exactly one terminal scrollback purge.
     fn reset_conversation(&mut self) {
+        self.effects.push_back(RuntimeEffect::PurgeScrollback);
         self.reset_turn_state();
         self.pending_submission = None;
         self.conversation.clear();

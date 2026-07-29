@@ -155,13 +155,19 @@ impl Composer {
     }
 
     pub fn add_dropped_media(&mut self, paths: Vec<std::path::PathBuf>) -> bool {
+        // Atomic across the whole parsed list: if any path is missing or not a
+        // regular file, the paste is ambiguous, so attach nothing and let the
+        // caller keep the original payload as composer text.
+        if !paths.iter().all(|path| path.is_file()) {
+            return false;
+        }
+
         let mut existing: HashSet<std::path::PathBuf> = self.pending_media.iter().map(|a| a.path.clone()).collect();
 
         let before = self.pending_media.len();
 
         for path in paths {
-            let kind = classify_attachment(&path);
-            if !matches!(kind, AttachmentKind::Image | AttachmentKind::Audio) {
+            if !matches!(classify_attachment(&path), AttachmentKind::Image | AttachmentKind::Audio) {
                 continue;
             }
             if !existing.insert(path.clone()) {

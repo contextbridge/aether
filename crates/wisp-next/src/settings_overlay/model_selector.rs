@@ -2,7 +2,7 @@ use super::{KeyHint, SettingsChange, SettingsMenuValue, SettingsPane, message_fo
 use crate::filterable_list::FilterableList;
 use crate::render_context::RenderContext;
 use crate::selection::Direction;
-use crate::surface::{Action, ListFilter, Surface};
+use crate::surface::{Action, ListFilter, Surface, is_composed_char};
 use crate::theme::Theme;
 use crate::wrap::truncate_to_width;
 use acp_utils::config_option_id::ConfigOptionId;
@@ -123,7 +123,7 @@ impl Surface for ModelSelector {
         match key.code {
             KeyCode::Tab => self.cycle_reasoning(Direction::Forward),
             KeyCode::BackTab => self.cycle_reasoning(Direction::Backward),
-            KeyCode::Enter | KeyCode::Char(' ') => self.toggle_focused(),
+            KeyCode::Enter | KeyCode::Char(' ') if !is_composed_char(key) => self.toggle_focused(),
             _ => return None,
         }
         Some(Vec::new())

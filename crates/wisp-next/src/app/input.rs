@@ -28,6 +28,16 @@ impl App {
     }
 
     fn on_ui_event(&mut self, event: UiEvent) {
+        // Exit handling must precede layer routing so no modal can swallow it.
+        if let UiEvent::Key(key) = &event
+            && matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+            && self.ui.keybindings.exit.matches(*key)
+        {
+            self.arm_or_confirm_exit();
+            self.refresh_progress();
+            return;
+        }
+
         if let Some(layer) = self.layer.as_mut() {
             let actions = layer.surface().on_ui_event(event);
             self.dispatch_actions(actions);
@@ -45,22 +55,21 @@ impl App {
         self.refresh_progress();
     }
 
+    fn arm_or_confirm_exit(&mut self) {
+        if self.exit_state.is_confirming() {
+            self.exit_state = ExitState::Exiting;
+        } else {
+            self.composer.clear();
+            self.exit_state = ExitState::Confirming(Instant::now());
+        }
+    }
+
     pub fn on_key(&mut self, key: KeyEvent) {
         self.on_ui_event(UiEvent::Key(key));
     }
 
     /// Routes a keystroke to whichever layer owns input, innermost first.
     fn dispatch_key(&mut self, key: KeyEvent) {
-        if self.ui.keybindings.exit.matches(key) {
-            if self.exit_state.is_confirming() {
-                self.exit_state = ExitState::Exiting;
-            } else {
-                self.composer.clear();
-                self.exit_state = ExitState::Confirming(Instant::now());
-            }
-            return;
-        }
-
         if let Some(layer) = self.layer.as_mut() {
             let messages = layer.surface().on_key(key);
             self.dispatch_actions(messages);

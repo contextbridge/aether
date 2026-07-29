@@ -16,6 +16,11 @@ use wisp_next::test_support::surface::{Action, Surface};
 use wisp_next::test_support::syntax::SyntaxHighlighter;
 use wisp_next::test_support::theme::Theme;
 
+use super::support::{
+    AcpEvent, CreateElicitationRequestParams, ElicitationParams, ElicitationSchema, LocalSet,
+    assert_ctrl_c_exits_over_open_layer, make_app, test_connection,
+};
+
 fn make_meta(markdown: &str) -> PlanReviewElicitationMeta {
     PlanReviewElicitationMeta::new(&PathBuf::from("/tmp/plan.md"), markdown)
 }
@@ -386,6 +391,67 @@ fn responder_is_called_exactly_once_on_request_changes() {
     assert!(closes(&mut screen, key(KeyCode::Char('j'))));
     assert!(closes(&mut screen, key(KeyCode::Char('a'))));
     assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn modified_chars_do_not_approve_or_reject_the_plan() {
+    let (mut screen, mut rx) = make_screen("# Plan\nbody");
+    for modifiers in
+        [KeyModifiers::CONTROL, KeyModifiers::ALT, KeyModifiers::SUPER, KeyModifiers::HYPER, KeyModifiers::META]
+    {
+        assert!(!closes(&mut screen, KeyEvent::new(KeyCode::Char('a'), modifiers)), "{modifiers:?} must not approve");
+        assert!(!closes(&mut screen, KeyEvent::new(KeyCode::Char('r'), modifiers)), "{modifiers:?} must not reject");
+    }
+    assert!(rx.try_recv().is_err(), "no decision should be sent for a composed char");
+
+    assert!(closes(&mut screen, key(KeyCode::Char('a'))));
+    let response = rx.try_recv().expect("plain 'a' should approve");
+    assert_eq!(response.action, ElicitationAction::Accept);
+    assert_eq!(response.content.unwrap()["decision"], "approve");
+}
+
+#[test]
+fn modified_chars_do_not_start_a_comment_or_navigate() {
+    let (mut screen, _rx) = make_screen("# Plan\nfirst\nsecond");
+
+    assert!(!closes(&mut screen, KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)));
+    assert!(!buffer_text(&render_screen(&mut screen, 80, 24)).contains("new comment"));
+
+    let before = render_screen(&mut screen, 80, 24);
+    assert!(!closes(&mut screen, KeyEvent::new(KeyCode::Char('j'), KeyModifiers::ALT)));
+    assert_eq!(buffer_text(&before), buffer_text(&render_screen(&mut screen, 80, 24)));
+
+    assert!(!closes(&mut screen, key(KeyCode::Char('j'))));
+}
+
+#[test]
+fn double_ctrl_c_exits_over_plan_review() {
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    LocalSet::new().block_on(&runtime, async {
+        let (mut app, _command_rx) = make_app();
+        let (cx, mut peer) = test_connection().await;
+        let (responder, _response_rx) = peer.fake_elicitation(&cx).await;
+
+        // Build the plan-review elicitation meta without a direct rmcp dependency:
+        // round-trip the metadata through serde into the field's `Meta` type.
+        let meta = serde_json::from_value(serde_json::Value::Object(
+            PlanReviewElicitationMeta::new(&PathBuf::from("/tmp/plan.md"), "# Plan\nbody").to_json().unwrap(),
+        ))
+        .unwrap();
+        app.on_acp_event(AcpEvent::ElicitationRequest {
+            params: ElicitationParams {
+                server_name: "plan".to_string(),
+                request: CreateElicitationRequestParams::FormElicitationParams {
+                    meta: Some(meta),
+                    message: "Approve plan?".to_string(),
+                    requested_schema: ElicitationSchema::builder().build().unwrap(),
+                },
+            },
+            responder,
+        });
+        assert!(app.full_screen_active());
+        assert_ctrl_c_exits_over_open_layer(&mut app);
+    });
 }
 
 // ============================================================================

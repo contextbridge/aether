@@ -118,6 +118,8 @@ fn context_usage(used: u32, limit: u32) -> AcpEvent {
     })
 }
 
+const LEGACY_WISP_SETTINGS: &str = include_str!("../fixtures/legacy_settings.json");
+
 // ── Status line rendering tests ──
 
 #[test]
@@ -814,4 +816,26 @@ fn context_exactly_half_fills_one_and_a_half_slots() {
     let text = buffer_text(&viewport_buffer(&mut terminal));
     assert!(text.contains("100k"), "should show formatted count, got:\n{text}");
     assert!(text.contains("200k"), "should show limit, got:\n{text}");
+}
+
+#[test]
+fn status_line_renders_from_legacy_shorthand_settings() {
+    let settings: UiSettings = serde_json::from_str(LEGACY_WISP_SETTINGS)
+        .expect("legacy ~/.wisp/settings.json with shorthand status-line segments must load");
+
+    let (mut app, _ph) = make_app_with_settings(&settings);
+    app.on_acp_event(config_update(vec![model_option(), mode_option(), reasoning_option()]));
+    app.on_acp_event(context_usage(100_000, 200_000));
+    let mut terminal = make_terminal(120, 15);
+
+    sync(&mut app, &mut terminal);
+
+    let text = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(text.contains("v1.2"), "text object segment should render, got:\n{text}");
+    assert!(text.contains("~/code/demo"), "cwd shorthand segment should render, got:\n{text}");
+    assert!(text.contains("main"), "gitRef shorthand segment should render, got:\n{text}");
+    assert!(text.contains("aether"), "agent shorthand segment should render, got:\n{text}");
+    assert!(text.contains("Code"), "mode shorthand segment should render, got:\n{text}");
+    assert!(text.contains("Claude Sonnet"), "model object segment should render, got:\n{text}");
+    assert!(text.contains("medium"), "reasoning shorthand segment should render, got:\n{text}");
 }
