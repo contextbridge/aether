@@ -1,6 +1,13 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -129,6 +136,75 @@ describe("createWorkspace", () => {
     expect(referenceDiff?.stats.filesChanged).toBe(2);
   });
 
+  it("captures committed agent changes from the start commit", async () => {
+    const ws = await createGitWorkspace({ "app.txt": "before\n" });
+    const workspaceGit = (...args: string[]) =>
+      execFileSync("git", args, { cwd: ws.rootPath, stdio: "pipe" });
+    await writeFile(ws.join("app.txt"), "agent committed\n");
+    workspaceGit("add", ".");
+    workspaceGit(
+      "-c",
+      "user.email=agent@example.com",
+      "-c",
+      "user.name=Agent",
+      "commit",
+      "-m",
+      "agent change",
+    );
+
+    const { agentDiff } = await ws.captureGitDiffs();
+
+    expect(agentDiff?.diff).toContain("+agent committed");
+    expect(agentDiff?.stats).toMatchObject({
+      filesChanged: 1,
+      linesAdded: 1,
+      linesRemoved: 1,
+    });
+  });
+
+  it("captures staged, unstaged, added, and deleted tracked changes", async () => {
+    const ws = await createGitWorkspace({
+      "staged.txt": "before staged\n",
+      "unstaged.txt": "before unstaged\n",
+      "deleted.txt": "before deleted\n",
+    });
+    const workspaceGit = (...args: string[]) =>
+      execFileSync("git", args, { cwd: ws.rootPath, stdio: "pipe" });
+
+    await writeFile(ws.join("staged.txt"), "after staged\n");
+    await writeFile(ws.join("added.txt"), "added\n");
+    workspaceGit("add", "staged.txt", "added.txt");
+    await writeFile(ws.join("unstaged.txt"), "after unstaged\n");
+    await unlink(ws.join("deleted.txt"));
+
+    const { agentDiff } = await ws.captureGitDiffs();
+
+    expect(agentDiff?.diff).toContain("staged.txt");
+    expect(agentDiff?.diff).toContain("+after staged");
+    expect(agentDiff?.diff).toContain("unstaged.txt");
+    expect(agentDiff?.diff).toContain("+after unstaged");
+    expect(agentDiff?.diff).toContain("added.txt");
+    expect(agentDiff?.diff).toContain("+added");
+    expect(agentDiff?.diff).toContain("deleted.txt");
+    expect(agentDiff?.diff).toContain("-before deleted");
+    expect(agentDiff?.stats).toEqual({
+      filesChanged: 4,
+      linesAdded: 3,
+      linesRemoved: 3,
+    });
+  });
+
+  it("captures an unchanged workspace as an empty agent diff", async () => {
+    const ws = await createGitWorkspace({ "app.txt": "unchanged\n" });
+
+    const { agentDiff } = await ws.captureGitDiffs();
+
+    expect(agentDiff).toEqual({
+      diff: "",
+      stats: { filesChanged: 0, linesAdded: 0, linesRemoved: 0 },
+    });
+  });
+
   it("creates a bundle and instantiates a workspace from it, honoring subdir and diffs", async () => {
     const repo = track(await mkdtemp(join(tmpdir(), "ws-repo-")));
     const git = (...args: string[]) =>
@@ -198,4 +274,28 @@ afterEach(async () => {
 function track(path: string): string {
   cleanups.push(path);
   return path;
+}
+
+async function createGitWorkspace(
+  files: Record<string, string>,
+): Promise<Workspace> {
+  const repo = track(await mkdtemp(join(tmpdir(), "ws-repo-")));
+  const git = (...args: string[]) =>
+    execFileSync("git", args, { cwd: repo, stdio: "pipe" });
+  git("init", "--initial-branch", "main");
+  git("config", "user.email", "eval@example.com");
+  git("config", "user.name", "Eval");
+  for (const [path, content] of Object.entries(files)) {
+    await writeFile(join(repo, path), content);
+  }
+  git("add", ".");
+  git("commit", "-m", "start");
+  const startCommit = git("rev-parse", "HEAD").toString().trim();
+  const workspace = await Workspace.fromGitRepo({
+    url: `file://${repo}`,
+    startCommit,
+    goldCommit: startCommit,
+  });
+  cleanups.push(workspace.rootPath);
+  return workspace;
 }

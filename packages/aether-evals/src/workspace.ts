@@ -180,7 +180,7 @@ export class Workspace implements AsyncDisposable {
     const repo = GitRepo.fromPath(this.path);
     const { startCommit, goldCommit } = commits;
     const [agentDiff, referenceDiff] = await Promise.all([
-      captureDiff(() => repo.diffUnstaged()),
+      captureDiff(() => repo.diff(startCommit)),
       captureDiff(() => repo.diff(startCommit, goldCommit)),
     ]);
     return { agentDiff, referenceDiff };
