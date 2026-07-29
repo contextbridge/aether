@@ -22,7 +22,7 @@ impl From<TaskStatus> for PlanMetaStatus {
 pub struct TaskSummary {
     pub id: String,
     pub title: String,
-    pub status: String,
+    pub status: TaskStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -36,7 +36,7 @@ impl From<&Task> for TaskSummary {
         Self {
             id: task.id.to_string(),
             title: task.title.clone(),
-            status: task.status.as_wire_str().to_string(),
+            status: task.status,
             parent: task.parent.as_ref().map(std::string::ToString::to_string),
             assignee: task.assignee.clone(),
             deps: task.deps.iter().map(std::string::ToString::to_string).collect(),
