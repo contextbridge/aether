@@ -158,7 +158,8 @@ impl Workspace {
         };
 
         let repo = GitRepo::from_path(self.path());
-        let agent_diff = repo.diff_unstaged().ok().map(|diff| GitDiff { stats: DiffStats::from_diff(&diff), diff });
+        let agent_diff =
+            repo.diff_range(start_commit, None).ok().map(|diff| GitDiff { stats: DiffStats::from_diff(&diff), diff });
         let reference_diff =
             repo.diff(start_commit, gold_commit).ok().map(|diff| GitDiff { stats: DiffStats::from_diff(&diff), diff });
 
@@ -279,6 +280,66 @@ mod tests {
     }
 
     #[test]
+    fn capture_git_diffs_includes_committed_agent_changes() {
+        let (repo, start, gold) = init_repo();
+        let workspace = Workspace::from_git_repo(GitRepoSpec {
+            url: format!("file://{}", repo.path().display()),
+            start_commit: start,
+            gold_commit: gold,
+            subdir: None,
+        })
+        .unwrap();
+
+        write(workspace.join("root.txt"), "agent committed\n").unwrap();
+        git(workspace.root_path(), &["add", "."]);
+        git(
+            workspace.root_path(),
+            &["-c", "user.email=agent@example.com", "-c", "user.name=Agent", "commit", "-m", "agent change"],
+        );
+
+        let (agent_diff, _) = workspace.capture_git_diffs();
+        let agent_diff = agent_diff.unwrap();
+
+        assert!(agent_diff.diff.contains("+agent committed"));
+        assert_eq!(agent_diff.stats.files_changed, 1);
+        assert_eq!(agent_diff.stats.lines_added, 1);
+        assert_eq!(agent_diff.stats.lines_removed, 1);
+    }
+
+    #[test]
+    fn capture_git_diffs_includes_staged_unstaged_added_and_deleted_changes() {
+        let (repo, start, gold) = init_repo();
+        let workspace = Workspace::from_git_repo(GitRepoSpec {
+            url: format!("file://{}", repo.path().display()),
+            start_commit: start,
+            gold_commit: gold,
+            subdir: None,
+        })
+        .unwrap();
+
+        write(workspace.join("root.txt"), "staged change\n").unwrap();
+        write(workspace.join("added.txt"), "added\n").unwrap();
+        git(workspace.root_path(), &["add", "root.txt", "added.txt"]);
+        write(workspace.join("pkg/inner.txt"), "unstaged change\n").unwrap();
+        std::fs::remove_file(workspace.join("deleted.txt")).unwrap();
+
+        let (agent_diff, _) = workspace.capture_git_diffs();
+        let agent_diff = agent_diff.unwrap();
+
+        assert!(agent_diff.diff.contains("root.txt"));
+        assert!(agent_diff.diff.contains("+staged change"));
+        assert!(agent_diff.diff.contains("pkg/inner.txt"));
+        assert!(agent_diff.diff.contains("+unstaged change"));
+        assert!(agent_diff.diff.contains("added.txt"));
+        assert!(agent_diff.diff.contains("+added"));
+        assert!(agent_diff.diff.contains("deleted.txt"));
+        assert!(agent_diff.diff.contains("-before deleted"));
+        assert_eq!(agent_diff.stats.files_changed, 4);
+        assert_eq!(agent_diff.stats.lines_added, 3);
+        assert_eq!(agent_diff.stats.lines_removed, 3);
+    }
+
+    #[test]
     fn from_git_bundle_missing_file_errors() {
         let result = Workspace::from_git_bundle(GitBundleSpec {
             bundle_path: PathBuf::from("/nonexistent/repo.bundle"),
@@ -298,6 +359,7 @@ mod tests {
         git(path, &["config", "user.name", "Eval"]);
 
         write(path.join("root.txt"), "root v1\n").unwrap();
+        write(path.join("deleted.txt"), "before deleted\n").unwrap();
         create_dir_all(path.join("pkg")).unwrap();
         write(path.join("pkg").join("inner.txt"), "inner v1\n").unwrap();
         git(path, &["add", "."]);

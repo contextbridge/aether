@@ -116,13 +116,6 @@ impl GitRepo {
     pub fn diff(&self, from_commit: &str, to_commit: &str) -> Result<String, GitRepoError> {
         self.diff_range(from_commit, Some(to_commit))
     }
-
-    /// Get the diff of unstaged changes in the working directory
-    ///
-    /// Returns the output of `git diff` which shows all unstaged changes
-    pub fn diff_unstaged(&self) -> Result<String, GitRepoError> {
-        self.diff_range("HEAD", None)
-    }
 }
 
 /// Run `git` (optionally inside `cwd`) and return its stdout.

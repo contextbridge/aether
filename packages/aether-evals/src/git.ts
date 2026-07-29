@@ -76,10 +76,6 @@ export class GitRepo {
     const result = await git(["-C", this.path, "diff", range], signal);
     return result.stdout;
   }
-
-  async diffUnstaged(signal?: AbortSignal): Promise<string> {
-    return this.diff("HEAD", undefined, signal);
-  }
 }
 
 async function git(args: string[], signal?: AbortSignal) {
