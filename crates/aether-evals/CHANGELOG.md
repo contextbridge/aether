@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.21](https://github.com/contextbridge/aether/compare/aether-evals-v0.2.20...aether-evals-v0.2.21) - 2026-07-29
+
+### Fixed
+
+- *(aether-evals)* capture agent diff from start commit ([#306](https://github.com/contextbridge/aether/pull/306))
+
 ## [0.2.20](https://github.com/contextbridge/aether/compare/aether-evals-v0.2.19...aether-evals-v0.2.20) - 2026-07-29
 
 ### Other

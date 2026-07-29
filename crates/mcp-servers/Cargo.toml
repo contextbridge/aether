@@ -1,6 +1,6 @@
 [package]
 name = "aether-mcp-servers"
-version = "0.4.34"
+version = "0.4.35"
 edition = "2024"
 description = "Built-in MCP tool servers for the Aether AI agent framework"
 license = "MIT"
@@ -87,7 +87,7 @@ schemars = { workspace = true }
 clap = { workspace = true, features = ["env"] }
 mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", default-features = false, version = "0.5.30" }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.11" }
-aether-lspd = { path = "../aether-lspd", optional = true, version = "0.1.28" }
+aether-lspd = { path = "../aether-lspd", optional = true, version = "0.1.29" }
 futures = { workspace = true, optional = true }
 globset = { workspace = true, optional = true }
 grep = { workspace = true, optional = true }
@@ -117,7 +117,7 @@ llm = { package = "aether-llm", path = "../llm", optional = true, version = "0.7
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
-aether-lspd = { path = "../aether-lspd", features = ["testing"], version = "0.1.28" }
+aether-lspd = { path = "../aether-lspd", features = ["testing"], version = "0.1.29" }
 mcp-servers = { package = "aether-mcp-servers", path = ".", features = ["test-helpers"] }
 mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", features = ["client"], version = "0.5.30" }
 

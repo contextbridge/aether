@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.32](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.31...aether-agent-cli-v0.7.32) - 2026-07-29
+
+### Other
+
+- updated the following local packages: aether-lspd, aether-mcp-servers
+
 ## [0.7.31](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.30...aether-agent-cli-v0.7.31) - 2026-07-29
 
 ### Added
