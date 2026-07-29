@@ -78,6 +78,7 @@ impl TelemetryRuntime {
             metrics: GenAiMetrics::new(&meter_provider.meter_with_scope(scope)),
             capture_content: config.capture_content,
             root_parent: trace_root.parent,
+            agent_name: None,
         };
 
         Ok(Self { tracer_provider, meter_provider, instrumentation })
@@ -105,8 +106,9 @@ impl TelemetryRuntime {
 }
 
 impl ObserverFactory for OtelObserverFactory {
-    fn agent(&self, parent: Option<&TraceContext>) -> Box<dyn AgentObserver> {
+    fn agent(&self, agent_name: Option<&str>, parent: Option<&TraceContext>) -> Box<dyn AgentObserver> {
         let mut instrumentation = self.instrumentation.clone();
+        instrumentation.agent_name = agent_name.map(str::to_string);
         if let Some(parent) = parent.and_then(extract_trace_context) {
             instrumentation.root_parent = Some(parent);
         }

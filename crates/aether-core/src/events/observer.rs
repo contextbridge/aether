@@ -27,8 +27,8 @@ pub trait McpRequestInstrumentation: Send {
 
 /// Creates observers isolated to one agent or one inbound MCP request.
 pub trait ObserverFactory: Send + Sync {
-    /// A fresh observer for one agent, continuing `parent`'s trace when supplied.
-    fn agent(&self, parent: Option<&TraceContext>) -> Box<dyn AgentObserver>;
+    /// A fresh observer for one agent, continuing the parent trace when supplied.
+    fn agent(&self, agent_name: Option<&str>, parent: Option<&TraceContext>) -> Box<dyn AgentObserver>;
 
     /// Instrumentation for one inbound `tools/call` request.
     fn tool_call_request(&self, tool_name: &str, parent: Option<&TraceContext>) -> Box<dyn McpRequestInstrumentation>;

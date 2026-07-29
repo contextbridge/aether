@@ -114,6 +114,29 @@ async fn observer_factory_prefers_a_dynamic_parent_context() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn observer_factory_names_agent_spans() {
+    let collector = FakeOtlpCollector::start().await;
+    let runtime = TelemetryRuntime::new(&TelemetryConfig {
+        headers: test_headers("named-agent"),
+        ..collector_config(&collector)
+    })
+    .expect("runtime initializes against collector");
+    {
+        let mut observer = runtime.observer_factory().agent(Some("PatchWaveFix"), None);
+        observer.on_event(&AgentEvent::Turn(TurnEvent::Started { content: vec![] }));
+        observer.on_event(&AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Completed }));
+    }
+
+    runtime.shutdown().expect("runtime flushes traces");
+    let exports = collector.exports();
+    let spans = trace_spans(&exports);
+    let turn = spans.iter().find(|span| span.name == "invoke_agent PatchWaveFix").expect("named agent span exported");
+
+    assert_eq!(string_attribute(turn, "gen_ai.operation.name"), Some("invoke_agent"));
+    assert_eq!(string_attribute(turn, "gen_ai.agent.name"), Some("PatchWaveFix"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn propagated_mcp_context_connects_parent_tool_server_and_child_agent_spans() {
     let collector = FakeOtlpCollector::start().await;
     let runtime = TelemetryRuntime::new(&TelemetryConfig {
@@ -123,7 +146,7 @@ async fn propagated_mcp_context_connects_parent_tool_server_and_child_agent_span
     .expect("runtime initializes against collector");
     {
         let factory = runtime.observer_factory();
-        let mut parent = factory.agent(None);
+        let mut parent = factory.agent(Some("PatchWaveFix"), None);
         parent.on_event(&AgentEvent::Turn(TurnEvent::Started { content: vec![] }));
         parent.on_event(&AgentEvent::Tool(ToolEvent::ExecutionStarted {
             tool_id: "call_1".to_string(),
@@ -132,7 +155,7 @@ async fn propagated_mcp_context_connects_parent_tool_server_and_child_agent_span
         let outbound = parent.tool_trace_context("call_1").expect("outbound tool span provides propagation context");
 
         let server = factory.tool_call_request("spawn_subagent", Some(&outbound));
-        let mut child = factory.agent(server.trace_context().as_ref());
+        let mut child = factory.agent(Some("Explore"), server.trace_context().as_ref());
         child.on_event(&AgentEvent::Turn(TurnEvent::Started { content: vec![] }));
         child.on_event(&AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Completed }));
         server.finish(None);
@@ -149,7 +172,7 @@ async fn propagated_mcp_context_connects_parent_tool_server_and_child_agent_span
     let server = spans.iter().find(|span| span.name == "tools/call spawn_subagent").expect("MCP server span exported");
     let child = spans
         .iter()
-        .find(|span| span.name == "invoke_agent" && span.parent_span_id == server.span_id)
+        .find(|span| span.name == "invoke_agent Explore" && span.parent_span_id == server.span_id)
         .expect("child agent span is parented by the MCP server span");
 
     assert_eq!(server.trace_id, tool.trace_id);
@@ -298,7 +321,7 @@ fn assert_propagated_hierarchy(spans: &[&Span], expected_trace_id: &[u8], expect
 /// Feeds one complete turn through a fresh observer, whose spans the runtime
 /// exports once the observer is dropped.
 fn observe_a_turn(runtime: &TelemetryRuntime, parent: Option<&TraceContext>) {
-    let mut observer = runtime.observer_factory().agent(parent);
+    let mut observer = runtime.observer_factory().agent(None, parent);
     for event in events() {
         observer.on_event(&event);
     }

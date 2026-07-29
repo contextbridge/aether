@@ -32,6 +32,7 @@ pub struct OtelInstrumentation {
     pub metrics: GenAiMetrics,
     pub capture_content: bool,
     pub root_parent: Option<Context>,
+    pub agent_name: Option<String>,
 }
 
 impl OtelObserver {
@@ -74,11 +75,19 @@ impl OtelObserver {
 
         let mut input = self.otel.capture().buffer();
         input.set(&ContentBlock::join_text(content));
-        let mut attributes = vec![KeyValue::new(semconv::GEN_AI_OPERATION_NAME, "invoke_agent")];
+        let operation_name = "invoke_agent";
+        let mut attributes = vec![KeyValue::new(semconv::GEN_AI_OPERATION_NAME, operation_name)];
+        let span_name = match &self.otel.agent_name {
+            Some(agent_name) => {
+                attributes.push(KeyValue::new(semconv::GEN_AI_AGENT_NAME, agent_name.clone()));
+                format!("{operation_name} {agent_name}")
+            }
+            None => operation_name.to_string(),
+        };
         if let Some(text) = input.get() {
             attributes.push(KeyValue::new(semconv::GEN_AI_INPUT_MESSAGES, input_messages_json(text)));
         }
-        let builder = SpanBuilder::from_name("invoke_agent").with_kind(SpanKind::Internal).with_attributes(attributes);
+        let builder = SpanBuilder::from_name(span_name).with_kind(SpanKind::Internal).with_attributes(attributes);
         let span_context = self.otel.start_span(builder, self.otel.root_parent.as_ref());
         let span = SpanGuard::new(span_context, TURN_CANCEL_MESSAGE);
         self.turn = Some(TurnState::new(span, input, self.otel.capture()));
