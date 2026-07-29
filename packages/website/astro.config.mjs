@@ -142,6 +142,11 @@ export default defineConfig({
     mdx({ optimize: true }),
   ],
   vite: {
+    resolve: {
+      // Vite 8's Rolldown resolver requires this option to be explicit.
+      // @ts-expect-error Astro currently provides Vite 7, which lacks this option.
+      tsconfigPaths: false,
+    },
     // Astro currently provides Vite 7 while Tailwind is typed against Vite 8.
     // @ts-expect-error Vite plugin types differ between the two versions.
     plugins: tailwindcss(),
