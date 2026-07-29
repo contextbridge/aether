@@ -7,7 +7,8 @@ use serde_json::Value;
 use sqlx::migrate::{MigrateError, Migrator};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteRow};
 use sqlx::{
-    Column, Connection, Executor, QueryBuilder, Row, Sqlite, SqliteConnection, Transaction, TypeInfo, ValueRef,
+    AssertSqlSafe, Column, Connection, Executor, QueryBuilder, Row, SqlSafeStr, Sqlite, SqliteConnection, Transaction,
+    TypeInfo, ValueRef,
 };
 use std::collections::{HashMap, HashSet};
 use std::fs::create_dir_all;
@@ -138,7 +139,8 @@ impl Db {
     }
 
     pub(crate) async fn query(&mut self, sql: &str, limits: QueryLimits) -> Result<QueryOutput, SessionIndexError> {
-        let describe = self.conn.describe(sql).await?;
+        let sql = AssertSqlSafe(sql).into_sql_str();
+        let describe = self.conn.describe(sql.clone()).await?;
         let columns = describe.columns().iter().map(|column| column.name().to_string()).collect::<Vec<_>>();
         let mut rows = sqlx::query(sql).fetch(&mut self.conn);
         let mut output_rows = Vec::new();
