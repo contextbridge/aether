@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.29](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.6.28...aether-agent-core-v0.6.29) - 2026-07-29
+
+### Fixed
+
+- make agent resolution canonical across runtimes ([#310](https://github.com/contextbridge/aether/pull/310))
+
 ## [0.6.28](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.6.27...aether-agent-core-v0.6.28) - 2026-07-29
 
 ### Added

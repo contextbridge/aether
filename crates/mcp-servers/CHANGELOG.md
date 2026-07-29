@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.36](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.35...aether-mcp-servers-v0.4.36) - 2026-07-29
+
+### Fixed
+
+- make agent resolution canonical across runtimes ([#310](https://github.com/contextbridge/aether/pull/310))
+
 ## [0.4.35](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.34...aether-mcp-servers-v0.4.35) - 2026-07-29
 
 ### Other
