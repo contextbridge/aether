@@ -3,7 +3,9 @@ use std::error::Error;
 use std::time::Duration;
 
 use aether_core::core::RetryConfig;
-use aether_core::events::{AgentEvent, AgentObserver, LlmCallOutcome, LlmCallPurpose, TurnEvent, TurnOutcome};
+use aether_core::events::{
+    AgentEvent, AgentObserver, LlmCallOutcome, LlmCallPurpose, ToolEvent, TurnEvent, TurnOutcome,
+};
 use aether_core::testing::{AddNumbersRequest, AgentTrace, DivideNumbersRequest, TestScenario, test_agent};
 use aether_telemetry::{
     GENAI_SEMCONV_SCHEMA_URL, GenAiMetrics, OtelInstrumentation, OtelObserver, genai_instrumentation_scope,
@@ -11,12 +13,31 @@ use aether_telemetry::{
 use llm::testing::llm_response;
 use llm::{LlmError, LlmResponse, ModelPricing, StopReason, TokenUsage};
 use opentelemetry::metrics::MeterProvider as _;
-use opentelemetry::trace::{Status, TracerProvider as _};
+use opentelemetry::trace::{SpanKind, Status, TracerProvider as _};
 use opentelemetry::{Array, Value};
 use opentelemetry_sdk::metrics::data::{ResourceMetrics, ScopeMetrics};
 use opentelemetry_sdk::metrics::{InMemoryMetricExporter, SdkMeterProvider};
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider, SpanData};
 use serde_json::Value as JsonValue;
+
+#[tokio::test]
+async fn tool_span_exposes_w3c_parent_context() -> Result<(), Box<dyn Error>> {
+    let mut harness = otel_test().redacting().build();
+    let observer = harness.observer.as_mut().expect("observer still alive");
+    observer.on_event(&AgentEvent::Turn(TurnEvent::Started { content: vec![] }));
+    observer.on_event(&AgentEvent::Tool(ToolEvent::ExecutionStarted {
+        tool_id: "call_1".to_string(),
+        tool_name: "subagents__spawn_subagent".to_string(),
+    }));
+    let context = observer.tool_trace_context("call_1").expect("tool span exposes trace context");
+    harness.drop_observer();
+    let spans = harness.spans();
+    let tool = spans.named("execute_tool subagents__spawn_subagent");
+    let expected = format!("00-{}-{}-01", tool.span_context.trace_id(), tool.span_context.span_id());
+
+    assert_eq!(context.traceparent, expected);
+    Ok(())
+}
 
 #[tokio::test]
 async fn spans_form_a_turn_rooted_hierarchy() -> Result<(), Box<dyn Error>> {
@@ -44,7 +65,10 @@ async fn spans_form_a_turn_rooted_hierarchy() -> Result<(), Box<dyn Error>> {
     chats[0].assert_attr("gen_ai.usage.input_tokens", 100);
     chats[0].assert_attr("gen_ai.usage.output_tokens", 20);
     chats[1].assert_attr("gen_ai.usage.input_tokens", 30);
+    assert_eq!(tool.span_kind, SpanKind::Client);
+    tool.assert_attr("mcp.method.name", "tools/call");
     tool.assert_attr("gen_ai.tool.name", "test__add_numbers");
+    tool.assert_attr("mcp.tool.name", "add_numbers");
     tool.assert_attr("gen_ai.tool.call.id", "call_1");
     Ok(())
 }

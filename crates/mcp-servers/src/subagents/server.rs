@@ -1,6 +1,5 @@
 use aether_core::core::AgentDeps;
-use aether_core::events::AgentEvent;
-use aether_core::events::SubAgentProgressPayload;
+use aether_core::events::{AgentEvent, SubAgentProgressPayload, TraceContext};
 use aether_project::{AetherSettings, AgentCatalog};
 use clap::Parser;
 use rmcp::{
@@ -22,6 +21,9 @@ use crate::error::ServerInitError;
 use crate::workspace_paths::resolve_path;
 
 type ProgressCallback = Box<dyn Fn(&str, &str, &AgentEvent) + Send + Sync>;
+
+/// The name `spawn_subagent` is exposed under, as callers see it on the wire.
+const SPAWN_SUBAGENT_TOOL: &str = "spawn_subagent";
 
 #[derive(Debug, Clone, Parser)]
 pub struct SubAgentsMcpArgs {
@@ -136,7 +138,30 @@ impl SubAgentsMcp {
         context: RequestContext<RoleServer>,
     ) -> Result<Json<SpawnSubAgentsOutput>, String> {
         let Parameters(args) = request;
+        let remote_parent = TraceContext::from_meta(&context.meta);
+        let request_instrumentation = self
+            .agent_deps
+            .observer_factory
+            .as_ref()
+            .map(|factory| factory.tool_call_request(SPAWN_SUBAGENT_TOOL, remote_parent.as_ref()));
 
+        let child_parent = request_instrumentation.as_ref().and_then(|instrumentation| instrumentation.trace_context());
+        let result = self.spawn(args, &context, child_parent).await;
+        if let Some(instrumentation) = request_instrumentation {
+            instrumentation.finish(result.as_ref().err().map(String::as_str));
+        }
+        result.map(Json)
+    }
+
+    /// Runs the requested tasks, leaving the caller to report the outcome to
+    /// whatever is instrumenting the request. Sub-agents trace beneath
+    /// `parent_trace_context`, which is this request's own span.
+    async fn spawn(
+        &self,
+        args: SpawnSubAgentsInput,
+        context: &RequestContext<RoleServer>,
+        parent_trace_context: Option<TraceContext>,
+    ) -> Result<SpawnSubAgentsOutput, String> {
         if !args.tasks.is_empty() && self.catalog.agent_invocable().next().is_none() {
             return Err("No agent-invocable sub-agents are registered in this project. \
                  The spawn_subagent tool is not usable — do not call it again."
@@ -180,10 +205,10 @@ impl SubAgentsMcp {
             })
         };
 
-        let executor = AgentExecutor::new(self.catalog.clone(), self.project_root.clone(), self.agent_deps.clone())
+        let deps = self.agent_deps.clone().with_parent_trace_context(parent_trace_context);
+        let executor = AgentExecutor::new(self.catalog.clone(), self.project_root.clone(), deps)
             .with_progress_callback(progress_callback);
 
-        let output = executor.execute_tasks(args.tasks).await;
-        Ok(Json(output))
+        Ok(executor.execute_tasks(args.tasks).await)
     }
 }

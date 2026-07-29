@@ -1,7 +1,7 @@
 use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::AgentSpec;
 use aether_core::core::AgentDeps;
-use aether_core::events::ObserverFactory;
+use aether_core::events::DynObserverFactory;
 use aether_core::session::{SessionEvent, SessionMeta, last_agent_from_events};
 use agent_client_protocol::schema::{self as acp, LoadSessionRequest, NewSessionRequest, SessionId};
 use agent_client_protocol::{Client, ConnectionTo};
@@ -52,7 +52,7 @@ pub(crate) struct SessionFactory {
     oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
     session_store: Arc<SessionStore>,
     initial_selection: InitialSessionSelection,
-    observer_factory: Option<ObserverFactory>,
+    observer_factory: Option<DynObserverFactory>,
 }
 
 /// The fully-built session ready to be registered with [`AcpState`](super::state::AcpState).
@@ -70,7 +70,7 @@ impl SessionFactory {
         oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
         session_store: Arc<SessionStore>,
         initial_selection: InitialSessionSelection,
-        observer_factory: Option<ObserverFactory>,
+        observer_factory: Option<DynObserverFactory>,
     ) -> Self {
         Self {
             settings_source,

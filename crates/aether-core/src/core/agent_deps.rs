@@ -1,4 +1,4 @@
-use crate::events::{AgentObserver, ObserverFactory};
+use crate::events::{AgentObserver, DynObserverFactory, TraceContext};
 use aether_auth::OAuthCredentialStorage;
 use std::sync::Arc;
 
@@ -8,19 +8,28 @@ use std::sync::Arc;
 #[derive(Clone, Default)]
 pub struct AgentDeps {
     pub oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
-    pub observer_factory: Option<ObserverFactory>,
+    pub observer_factory: Option<DynObserverFactory>,
+    /// Remote trace these agents continue, set by whoever handled the request
+    /// that spawned them.
+    pub parent_trace_context: Option<TraceContext>,
 }
 
 impl AgentDeps {
     pub fn new(
         oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
-        observer_factory: Option<ObserverFactory>,
+        observer_factory: Option<DynObserverFactory>,
     ) -> Self {
-        Self { oauth_credential_store: Some(oauth_credential_store), observer_factory }
+        Self { oauth_credential_store: Some(oauth_credential_store), observer_factory, parent_trace_context: None }
     }
 
-    /// A fresh observer for one agent, if a factory is configured.
+    /// Continue `parent`'s trace in every agent built from these deps.
+    pub fn with_parent_trace_context(mut self, parent: Option<TraceContext>) -> Self {
+        self.parent_trace_context = parent;
+        self
+    }
+
+    /// A fresh observer isolated to one agent, if a factory is configured.
     pub fn observer(&self) -> Option<Box<dyn AgentObserver>> {
-        self.observer_factory.as_ref().map(|factory| factory())
+        self.observer_factory.as_ref().map(|factory| factory.agent(self.parent_trace_context.as_ref()))
     }
 }

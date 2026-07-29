@@ -29,7 +29,7 @@ async fn call_proxy_tool(
     let (event_tx, mut event_rx) = mpsc::channel(10);
     spawn
         .command_tx
-        .send(McpCommand::ExecuteTool { request, timeout: Duration::from_secs(10), tx: event_tx })
+        .send(McpCommand::ExecuteTool { request, trace_context: None, timeout: Duration::from_secs(10), tx: event_tx })
         .await
         .unwrap();
 

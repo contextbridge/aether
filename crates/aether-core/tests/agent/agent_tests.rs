@@ -9,7 +9,8 @@ use aether_core::{
     },
 };
 use llm::testing::{FakeLlmProvider, llm_response};
-use llm::{ChatMessage, ContentBlock, LlmResponse, StopReason};
+use llm::{ChatMessage, ContentBlock, LlmResponse, StopReason, ToolDefinition};
+use tokio::sync::mpsc;
 
 fn split_json_in_half(input: &str) -> (&str, &str) {
     let split = input.char_indices().nth(input.len() / 2).map_or(1, |(idx, _)| idx).max(1).min(input.len() - 1);
@@ -118,6 +119,42 @@ async fn test_single_tool_call() -> Result<(), Box<dyn Error>> {
 
     let messages = test_agent().llm_responses(&llm_responses).user_text("3+5 = ?").run().await?;
     assert_eq!(content_events(messages), expected_messages);
+    Ok(())
+}
+
+#[tokio::test]
+async fn failed_mcp_command_submission_completes_the_tool_with_an_error() -> Result<(), Box<dyn Error>> {
+    let tool_request = AddNumbersRequest::new(3, 5);
+    let llm = FakeLlmProvider::new(vec![
+        llm_response("message_1").tool_call("call_1", "test__add_numbers", &[&tool_request.json()?]).build(),
+        llm_response("message_2").text(&["recovered"]).build(),
+    ]);
+    let (mcp_tx, mcp_rx) = mpsc::channel(1);
+    drop(mcp_rx);
+    let tool = ToolDefinition::new("test__add_numbers", "Adds numbers", serde_json::json!({ "type": "object" }));
+    let (command_tx, mut event_rx, _handle) = aether_core::core::agent(llm).tools(mcp_tx, vec![tool]).spawn().await?;
+
+    command_tx.send(Command::UserCommand(UserCommand::Text { content: vec![ContentBlock::text("3+5 = ?")] })).await?;
+    drop(command_tx);
+
+    let mut events = Vec::new();
+    for _ in 0..20 {
+        let event = event_rx.recv().await.expect("agent emits a terminal turn event");
+        let turn_ended = event.turn_outcome().is_some();
+        events.push(event);
+        if turn_ended {
+            break;
+        }
+    }
+
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            AgentEvent::Tool(ToolEvent::Error { error })
+                if error.id == "call_1" && error.error.contains("MCP task")
+        )
+    }));
+    assert!(matches!(events.last(), Some(AgentEvent::Turn(TurnEvent::Ended { .. }))));
     Ok(())
 }
 

@@ -3,15 +3,18 @@ use crate::error::{TelemetryInitError, TelemetryShutdownError};
 use crate::gen_ai_metrics::GenAiMetrics;
 use crate::genai_constants;
 use crate::otel_observer::OtelInstrumentation;
+use crate::span_guard::{ErrorKind, SpanGuard};
+use crate::trace_context::{extract_trace_context, inject_trace_context};
+use aether_core::events::{
+    AgentObserver, DynObserverFactory, McpRequestInstrumentation, ObserverFactory, TraceContext,
+};
 use opentelemetry::metrics::MeterProvider as _;
-use opentelemetry::propagation::TextMapPropagator;
-use opentelemetry::trace::{TraceContextExt, TraceId, TraceState, TracerProvider as _};
+use opentelemetry::trace::{SpanBuilder, SpanKind, TraceId, TraceState, TracerProvider as _};
 use opentelemetry::{Context, KeyValue};
 use opentelemetry_otlp::{MetricExporter, SpanExporter, WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::metrics::SdkMeterProvider;
 use opentelemetry_sdk::metrics::periodic_reader_with_async_runtime::PeriodicReader;
-use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::runtime::Tokio;
 use opentelemetry_sdk::trace::span_processor_with_async_runtime::BatchSpanProcessor;
 use opentelemetry_sdk::trace::{IdGenerator, RandomIdGenerator, Sampler, SdkTracerProvider};
@@ -22,6 +25,14 @@ pub struct TelemetryRuntime {
     tracer_provider: SdkTracerProvider,
     meter_provider: SdkMeterProvider,
     instrumentation: OtelInstrumentation,
+}
+
+struct OtelObserverFactory {
+    instrumentation: OtelInstrumentation,
+}
+
+struct OtelMcpRequestInstrumentation {
+    span: SpanGuard,
 }
 
 /// Fully-resolved telemetry configuration. Every field is required: defaults
@@ -72,9 +83,8 @@ impl TelemetryRuntime {
         Ok(Self { tracer_provider, meter_provider, instrumentation })
     }
 
-    pub fn observer_factory(&self) -> aether_core::events::ObserverFactory {
-        let instrumentation = self.instrumentation.clone();
-        std::sync::Arc::new(move || Box::new(crate::OtelObserver::new(instrumentation.clone())))
+    pub fn observer_factory(&self) -> DynObserverFactory {
+        std::sync::Arc::new(OtelObserverFactory { instrumentation: self.instrumentation.clone() })
     }
 
     /// Flushes and shuts down, logging any failure. For callers whose only
@@ -91,6 +101,46 @@ impl TelemetryRuntime {
         let traces = self.tracer_provider.shutdown().map_err(TelemetryShutdownError::Trace);
         let metrics = self.meter_provider.shutdown().map_err(TelemetryShutdownError::Metric);
         traces.and(metrics)
+    }
+}
+
+impl ObserverFactory for OtelObserverFactory {
+    fn agent(&self, parent: Option<&TraceContext>) -> Box<dyn AgentObserver> {
+        let mut instrumentation = self.instrumentation.clone();
+        if let Some(parent) = parent.and_then(extract_trace_context) {
+            instrumentation.root_parent = Some(parent);
+        }
+        Box::new(crate::OtelObserver::new(instrumentation))
+    }
+
+    fn tool_call_request(&self, tool_name: &str, parent: Option<&TraceContext>) -> Box<dyn McpRequestInstrumentation> {
+        let remote_parent = parent.and_then(extract_trace_context);
+        let attributes = vec![
+            KeyValue::new(genai_constants::GEN_AI_OPERATION_NAME, "execute_tool"),
+            KeyValue::new(genai_constants::GEN_AI_TOOL_NAME, tool_name.to_string()),
+            KeyValue::new(genai_constants::MCP_METHOD_NAME, TOOLS_CALL_METHOD),
+            KeyValue::new(genai_constants::MCP_TOOL_NAME, tool_name.to_string()),
+        ];
+        let builder = SpanBuilder::from_name(format!("{TOOLS_CALL_METHOD} {tool_name}"))
+            .with_kind(SpanKind::Server)
+            .with_attributes(attributes);
+        let context = self
+            .instrumentation
+            .start_span(builder, remote_parent.as_ref().or(self.instrumentation.root_parent.as_ref()));
+        Box::new(OtelMcpRequestInstrumentation { span: SpanGuard::new(context, "MCP request cancelled") })
+    }
+}
+
+impl McpRequestInstrumentation for OtelMcpRequestInstrumentation {
+    fn trace_context(&self) -> Option<TraceContext> {
+        inject_trace_context(self.span.context())
+    }
+
+    fn finish(mut self: Box<Self>, error: Option<&str>) {
+        match error {
+            Some(error) => self.span.end_error(Some(ErrorKind::McpError), error),
+            None => self.span.end_ok(),
+        }
     }
 }
 
@@ -112,6 +162,8 @@ impl TelemetryConfig {
         self.endpoint.as_deref().filter(|endpoint| !endpoint.is_empty()).ok_or(TelemetryInitError::MissingOtlpEndpoint)
     }
 }
+
+const TOOLS_CALL_METHOD: &str = "tools/call";
 
 #[derive(Default)]
 struct TraceRoot {
@@ -141,17 +193,15 @@ fn resolve_trace_root(trace_context: Option<&AgentTraceContext>) -> Result<Trace
     };
 
     match trace_context {
-        AgentTraceContext::Parent { tracestate, .. } => {
-            if let Some(tracestate) = tracestate {
+        AgentTraceContext::Parent(trace_context) => {
+            if let Some(tracestate) = &trace_context.tracestate {
                 TraceState::from_str(tracestate).map_err(|_| TelemetryInitError::InvalidTraceContext("tracestate"))?;
             }
 
-            let context = TraceContextPropagator::new().extract(trace_context);
-            if !context.span().span_context().is_valid() {
-                return Err(TelemetryInitError::InvalidTraceContext("traceparent"));
-            }
+            let parent =
+                extract_trace_context(trace_context).ok_or(TelemetryInitError::InvalidTraceContext("traceparent"))?;
 
-            Ok(TraceRoot { parent: Some(context), trace_id: None })
+            Ok(TraceRoot { parent: Some(parent), trace_id: None })
         }
         AgentTraceContext::Root { trace_id } => {
             let trace_id = parse_trace_id(trace_id)?;

@@ -4,7 +4,11 @@ use crate::gen_ai_metrics::GenAiMetrics;
 use crate::genai_constants as semconv;
 use crate::llm_call_state::LlmCallState;
 use crate::span_guard::{ErrorKind, SpanGuard};
-use aether_core::events::{AgentEvent, AgentObserver, LlmCallPurpose, MessageEvent, ToolEvent, TurnEvent, TurnOutcome};
+use crate::trace_context::inject_trace_context;
+use aether_core::events::{
+    AgentEvent, AgentObserver, LlmCallPurpose, MessageEvent, ToolEvent, TraceContext, TurnEvent, TurnOutcome,
+    mcp_tool_name,
+};
 use llm::catalog::Provider;
 use llm::{ContentBlock, ModelPricing, ToolCallError, ToolCallRequest, ToolCallResult, ToolDefinition};
 use opentelemetry::trace::{SpanBuilder, SpanKind, TraceContextExt, Tracer as _};
@@ -17,9 +21,11 @@ use std::collections::HashMap;
 pub struct OtelObserver {
     turn: Option<TurnState>,
     tool_definitions: Vec<ToolDefinition>,
-    instrumentation: OtelInstrumentation,
+    otel: OtelInstrumentation,
 }
 
+/// The process-wide export pipeline — tracer, meters, and the capture and
+/// parenting policy every span it produces inherits.
 #[derive(Clone)]
 pub struct OtelInstrumentation {
     pub tracer: SdkTracer,
@@ -29,8 +35,8 @@ pub struct OtelInstrumentation {
 }
 
 impl OtelObserver {
-    pub fn new(instrumentation: OtelInstrumentation) -> Self {
-        Self { turn: None, tool_definitions: Vec::new(), instrumentation }
+    pub fn new(otel: OtelInstrumentation) -> Self {
+        Self { turn: None, tool_definitions: Vec::new(), otel }
     }
 }
 
@@ -48,10 +54,15 @@ impl AgentObserver for OtelObserver {
             }
             message => {
                 if let Some(turn) = &mut self.turn {
-                    turn.on_event(message, &self.instrumentation, &self.tool_definitions);
+                    turn.on_event(message, &self.otel, &self.tool_definitions);
                 }
             }
         }
+    }
+
+    fn tool_trace_context(&self, tool_id: &str) -> Option<TraceContext> {
+        let span = self.turn.as_ref()?.executing_tools.get(tool_id)?;
+        inject_trace_context(span.context())
     }
 }
 
@@ -61,16 +72,16 @@ impl OtelObserver {
         // starting the new span, so the stale turn can't become its parent.
         self.turn = None;
 
-        let mut input = self.instrumentation.capture().buffer();
+        let mut input = self.otel.capture().buffer();
         input.set(&ContentBlock::join_text(content));
         let mut attributes = vec![KeyValue::new(semconv::GEN_AI_OPERATION_NAME, "invoke_agent")];
         if let Some(text) = input.get() {
             attributes.push(KeyValue::new(semconv::GEN_AI_INPUT_MESSAGES, input_messages_json(text)));
         }
         let builder = SpanBuilder::from_name("invoke_agent").with_kind(SpanKind::Internal).with_attributes(attributes);
-        let span_context = self.instrumentation.start_span(builder, self.instrumentation.root_parent.as_ref());
+        let span_context = self.otel.start_span(builder, self.otel.root_parent.as_ref());
         let span = SpanGuard::new(span_context, TURN_CANCEL_MESSAGE);
-        self.turn = Some(TurnState::new(span, input, self.instrumentation.capture()));
+        self.turn = Some(TurnState::new(span, input, self.otel.capture()));
     }
 }
 
@@ -81,7 +92,7 @@ impl OtelInstrumentation {
 
     /// Starts a span under `parent`. Providers for disabled tracing use an
     /// always-off sampler, so callers never need to branch.
-    fn start_span(&self, builder: SpanBuilder, parent: Option<&Context>) -> Context {
+    pub(crate) fn start_span(&self, builder: SpanBuilder, parent: Option<&Context>) -> Context {
         let parent = parent.cloned().unwrap_or_default();
         Context::new().with_span(self.tracer.build_with_context(builder, &parent))
     }
@@ -266,6 +277,10 @@ impl TurnState {
             KeyValue::new(semconv::GEN_AI_OPERATION_NAME, "execute_tool"),
             KeyValue::new(semconv::GEN_AI_TOOL_NAME, tool_name.to_string()),
             KeyValue::new(semconv::GEN_AI_TOOL_CALL_ID, tool_id.to_string()),
+            KeyValue::new(semconv::MCP_METHOD_NAME, "tools/call"),
+            // The server sees the tool without our namespacing prefix, so this
+            // is what joins this span to the server's span for the same call.
+            KeyValue::new(semconv::MCP_TOOL_NAME, mcp_tool_name(tool_name).to_string()),
         ];
         let arguments = self.streamed_arguments.remove(tool_id);
 
@@ -274,7 +289,7 @@ impl TurnState {
         }
 
         let builder = SpanBuilder::from_name(format!("execute_tool {tool_name}"))
-            .with_kind(SpanKind::Internal)
+            .with_kind(SpanKind::Client)
             .with_attributes(attributes);
         let context = instrumentation.start_span(builder, Some(self.span.context()));
         self.executing_tools.insert(tool_id.to_string(), SpanGuard::new(context, TOOL_CANCEL_MESSAGE));
