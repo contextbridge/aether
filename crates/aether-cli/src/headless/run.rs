@@ -37,8 +37,10 @@ async fn run_agent(config: RunConfig, telemetry: Option<Arc<TelemetryRuntime>>) 
         spec.prompts.push(Prompt::text(&system_prompt));
     }
 
+    let registry = config.agent_catalog.registry().clone();
     let deps =
-        AgentDeps::new(config.oauth_credential_store, telemetry.as_ref().map(|runtime| runtime.observer_factory()));
+        AgentDeps::new(config.oauth_credential_store, telemetry.as_ref().map(|runtime| runtime.observer_factory()))
+            .with_agent_registry(registry);
     let (agent, _mcp_snapshot) = RuntimeBuilder::from_spec(config.cwd.clone(), spec)
         .mcp_sources(config.mcp_config_sources)
         .agent_deps(deps)

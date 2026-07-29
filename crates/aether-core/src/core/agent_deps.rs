@@ -1,3 +1,4 @@
+use crate::core::AgentRegistry;
 use crate::events::{AgentObserver, DynObserverFactory, TraceContext};
 use aether_auth::OAuthCredentialStorage;
 use std::sync::Arc;
@@ -12,6 +13,7 @@ pub struct AgentDeps {
     /// Remote trace these agents continue, set by whoever handled the request
     /// that spawned them.
     pub parent_trace_context: Option<TraceContext>,
+    pub agent_registry: AgentRegistry,
 }
 
 impl AgentDeps {
@@ -19,12 +21,22 @@ impl AgentDeps {
         oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
         observer_factory: Option<DynObserverFactory>,
     ) -> Self {
-        Self { oauth_credential_store: Some(oauth_credential_store), observer_factory, parent_trace_context: None }
+        Self {
+            oauth_credential_store: Some(oauth_credential_store),
+            observer_factory,
+            parent_trace_context: None,
+            agent_registry: AgentRegistry::default(),
+        }
     }
 
     /// Continue `parent`'s trace in every agent built from these deps.
     pub fn with_parent_trace_context(mut self, parent: Option<TraceContext>) -> Self {
         self.parent_trace_context = parent;
+        self
+    }
+
+    pub fn with_agent_registry(mut self, registry: AgentRegistry) -> Self {
+        self.agent_registry = registry;
         self
     }
 

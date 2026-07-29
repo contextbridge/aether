@@ -5,7 +5,6 @@ use aether_core::{
     events::{AgentEvent, Command, MessageEvent, TurnEvent, TurnOutcome, UserCommand},
     mcp::{McpSpawnResult, mcp, run_mcp_task::McpCommand},
 };
-use aether_project::AgentCatalog;
 use llm::ToolDefinition;
 use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
 use schemars::JsonSchema;
@@ -154,16 +153,16 @@ pub type ProgressCallback = Box<dyn Fn(&str, &str, &AgentEvent) + Send + Sync>;
 /// Executor for spawning and running sub-agents
 #[derive(Clone)]
 pub struct AgentExecutor {
-    catalog: Arc<AgentCatalog>,
     progress_callback: Option<Arc<ProgressCallback>>,
     project_root: PathBuf,
     deps: AgentDeps,
 }
 
 impl AgentExecutor {
-    /// Create a new `AgentExecutor` with the given agent catalog and project root.
-    pub fn new(catalog: AgentCatalog, project_root: PathBuf, deps: AgentDeps) -> Self {
-        Self { catalog: Arc::new(catalog), progress_callback: None, project_root, deps }
+    /// Create a new `AgentExecutor` rooted at `project_root`. The agents it may
+    /// spawn come from `deps`, so nested delegation sees the same catalog.
+    pub fn new(project_root: PathBuf, deps: AgentDeps) -> Self {
+        Self { progress_callback: None, project_root, deps }
     }
 
     /// Set a callback for receiving progress updates during agent execution
@@ -219,11 +218,11 @@ impl AgentExecutor {
         let agent_name = task.agent_name.clone();
 
         let result: Result<String, String> = async {
-            let mut spec = self.catalog.resolve(&task.agent_name).map_err(|e| e.to_string())?;
-
-            if !spec.exposure.agent_invocable {
-                return Err(format!("Agent '{}' is not agent-invocable", task.agent_name));
-            }
+            let mut spec = self
+                .deps
+                .agent_registry
+                .resolve_agent_invocable(&task.agent_name)
+                .map_err(|error| error.to_string())?;
 
             let mut spawn_result = self.spawn_mcps(&spec.mcp_config_sources).await?;
             let snapshot = spawn_result
@@ -290,7 +289,7 @@ impl AgentExecutor {
     }
 
     async fn spawn_mcps(&self, effective_mcp_config_sources: &[McpConfigSource]) -> Result<McpSpawnResult, String> {
-        let mut builder = mcp(&self.project_root).with_agent_deps(self.deps.clone()).with_builtin_servers();
+        let mut builder = mcp(&self.project_root).with_builtin_servers(self.deps.clone());
 
         if !effective_mcp_config_sources.is_empty() {
             builder = builder

@@ -2,22 +2,21 @@ use crate::aether_settings::{project_settings_exist, user_settings_exist};
 use crate::error::SettingsError;
 use crate::{AetherSettings, AgentConfig, McpFileSpec, McpSourceSpec};
 use aether_core::agent_spec::{AgentSpec, AgentSpecExposure, McpConfigSource};
-use aether_core::core::Prompt;
-use llm::ProviderConnectionOverrides;
-use llm::catalog::{ModelSpec, ModelSpecError};
+use aether_core::core::{AgentRegistry, Prompt};
+use llm::catalog::{LlmModel, ModelSpec, ModelSpecError};
+use llm::{ProviderConnectionOverrides, ReasoningEffort};
 use mcp_utils::client::McpConfig;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use utils::variables::VarError;
 
 /// A resolved catalog of agents from a project.
-///
-/// This type owns project-relative resolution context.
 #[derive(Debug, Clone)]
 pub struct AgentCatalog {
     project_root: PathBuf,
-    specs: Vec<AgentSpec>,
+    registry: AgentRegistry,
     selected_agent: Option<String>,
+    provider_connections: ProviderConnectionOverrides,
 }
 
 impl AgentCatalog {
@@ -38,7 +37,7 @@ impl AgentCatalog {
 
     pub fn from_settings_or_empty(project_root: &Path, settings: AetherSettings) -> Result<Self, SettingsError> {
         if settings.agents.is_empty() {
-            return Ok(Self::empty(project_root.to_path_buf()));
+            return Ok(Self::with_defaults(project_root.to_path_buf(), Vec::new(), None, settings.providers));
         }
         Self::from_settings(project_root, settings)
     }
@@ -47,6 +46,7 @@ impl AgentCatalog {
         validate_selected_agent(&settings)?;
         let selected_agent =
             settings.agent.as_deref().map(str::trim).filter(|name| !name.is_empty()).map(str::to_string);
+        let provider_connections = settings.providers.clone();
         let defaults = AgentDefaults { prompts: settings.prompts, mcps: settings.mcps, providers: settings.providers };
         let mut seen_names = HashSet::new();
         let mut specs = Vec::with_capacity(settings.agents.len());
@@ -54,11 +54,33 @@ impl AgentCatalog {
             specs.push(resolve_agent_entry(project_root, entry, &defaults, index, &mut seen_names)?);
         }
 
-        Ok(Self::new(project_root.to_path_buf(), specs, selected_agent))
+        Ok(Self::with_defaults(project_root.to_path_buf(), specs, selected_agent, provider_connections))
     }
 
-    pub(crate) fn new(project_root: PathBuf, specs: Vec<AgentSpec>, selected_agent: Option<String>) -> Self {
-        Self { project_root, specs, selected_agent }
+    pub fn new(project_root: PathBuf, specs: Vec<AgentSpec>, selected_agent: Option<String>) -> Self {
+        Self::with_defaults(project_root, specs, selected_agent, ProviderConnectionOverrides::default())
+    }
+
+    #[must_use]
+    pub fn with_provider_connections(mut self, overrides: ProviderConnectionOverrides) -> Self {
+        if overrides.is_empty() {
+            return self;
+        }
+
+        let specs = self
+            .registry
+            .all()
+            .iter()
+            .cloned()
+            .map(|mut spec| {
+                spec.provider_connections.merge(overrides.clone());
+                spec
+            })
+            .collect();
+
+        self.registry = AgentRegistry::new(specs);
+        self.provider_connections.merge(overrides);
+        self
     }
 
     /// Create an empty catalog for a project with no settings.
@@ -73,7 +95,7 @@ impl AgentCatalog {
 
     /// Get all agent specs in the catalog.
     pub fn all(&self) -> &[AgentSpec] {
-        &self.specs
+        self.registry.all()
     }
 
     pub fn selected_agent(&self) -> Option<&str> {
@@ -81,33 +103,48 @@ impl AgentCatalog {
     }
 
     pub fn default_agent(&self) -> Option<&AgentSpec> {
-        self.selected_agent
-            .as_deref()
-            .and_then(|name| self.specs.iter().find(|spec| spec.name == name))
-            .or_else(|| self.user_invocable().next())
+        self.selected_agent.as_deref().and_then(|name| self.registry.get(name)).or_else(|| self.user_invocable().next())
     }
 
     /// Get a specific agent by name.
     pub fn get(&self, name: &str) -> Result<&AgentSpec, SettingsError> {
-        self.specs
-            .iter()
-            .find(|spec| spec.name == name)
-            .ok_or_else(|| SettingsError::AgentNotFound { name: name.to_string() })
+        self.registry.get(name).ok_or_else(|| SettingsError::AgentNotFound { name: name.to_string() })
     }
 
     /// Iterate over user-invocable agents.
     pub fn user_invocable(&self) -> impl Iterator<Item = &AgentSpec> {
-        self.specs.iter().filter(|s| s.exposure.user_invocable)
+        self.registry.all().iter().filter(|s| s.exposure.user_invocable)
     }
 
     /// Iterate over agent-invocable agents.
     pub fn agent_invocable(&self) -> impl Iterator<Item = &AgentSpec> {
-        self.specs.iter().filter(|s| s.exposure.agent_invocable)
+        self.registry.agent_invocable()
+    }
+
+    pub fn registry(&self) -> &AgentRegistry {
+        &self.registry
+    }
+
+    pub fn default_spec(&self, model: &LlmModel, reasoning_effort: Option<ReasoningEffort>) -> AgentSpec {
+        let mut spec = AgentSpec::bare(model, reasoning_effort, Vec::new());
+        spec.provider_connections.merge(self.provider_connections.clone());
+        spec
     }
 
     /// Resolve and return a named agent spec ready for runtime use.
     pub fn resolve(&self, name: &str) -> Result<AgentSpec, SettingsError> {
         self.get(name).cloned()
+    }
+}
+
+impl AgentCatalog {
+    fn with_defaults(
+        project_root: PathBuf,
+        specs: Vec<AgentSpec>,
+        selected_agent: Option<String>,
+        provider_connections: ProviderConnectionOverrides,
+    ) -> Self {
+        Self { project_root, registry: AgentRegistry::new(specs), selected_agent, provider_connections }
     }
 }
 
@@ -296,6 +333,113 @@ mod tests {
             Prompt::File { path, .. } => path.ends_with(expected),
             Prompt::Text(_) | Prompt::McpInstructions(_) => false,
         })
+    }
+
+    fn overrides(url: &str) -> ProviderConnectionOverrides {
+        ProviderConnectionOverrides::new(std::collections::BTreeMap::from([(
+            "anthropic".to_string(),
+            llm::ProviderConnectionOverride::url(url),
+        )]))
+    }
+
+    fn base_url(spec: &AgentSpec) -> Option<String> {
+        spec.provider_connections.config_for("anthropic").base_url
+    }
+
+    #[test]
+    fn provider_connections_reach_every_agent_not_just_the_selected_one() {
+        let dir = create_temp_project();
+        let catalog = AgentCatalog::new(
+            dir.path().to_path_buf(),
+            vec![make_spec("planner", AgentSpecExposure::both()), make_spec("worker", AgentSpecExposure::agent_only())],
+            None,
+        )
+        .with_provider_connections(overrides("https://runtime.test"));
+
+        for name in ["planner", "worker"] {
+            assert_eq!(base_url(catalog.get(name).unwrap()).as_deref(), Some("https://runtime.test"), "agent {name}");
+        }
+    }
+
+    #[test]
+    fn runtime_provider_connections_win_over_settings_declared_ones() {
+        let dir = create_temp_project();
+        let mut declared = make_spec("planner", AgentSpecExposure::both());
+        declared.provider_connections = overrides("https://from-settings.test");
+
+        let catalog = AgentCatalog::new(dir.path().to_path_buf(), vec![declared], None)
+            .with_provider_connections(overrides("https://runtime.test"));
+
+        assert_eq!(base_url(catalog.get("planner").unwrap()).as_deref(), Some("https://runtime.test"));
+    }
+
+    #[test]
+    fn default_spec_inherits_runtime_provider_connections() {
+        let dir = create_temp_project();
+        let catalog =
+            AgentCatalog::empty(dir.path().to_path_buf()).with_provider_connections(overrides("https://runtime.test"));
+
+        let spec = catalog.default_spec(&"anthropic:claude-sonnet-4-5".parse().unwrap(), None);
+
+        assert_eq!(spec.name, "__default__");
+        assert_eq!(base_url(&spec).as_deref(), Some("https://runtime.test"));
+    }
+
+    #[test]
+    fn settings_provider_connections_apply_to_explicit_model_specs() {
+        let dir = create_temp_project();
+        write_file(dir.path(), "BASE.md", "Base instructions");
+        let settings = AetherSettings {
+            agents: vec![AgentConfig {
+                name: "planner".to_string(),
+                description: "Planner agent".to_string(),
+                model: "anthropic:claude-sonnet-4-5".to_string(),
+                user_invocable: true,
+                prompts: vec![crate::PromptSource::file("BASE.md")],
+                ..AgentConfig::default()
+            }],
+            providers: overrides("https://settings.test"),
+            ..AetherSettings::default()
+        };
+        let catalog = AgentCatalog::from_settings_or_empty(dir.path(), settings).unwrap();
+
+        let spec = catalog.default_spec(&"anthropic:claude-sonnet-4-5".parse().unwrap(), None);
+
+        assert_eq!(base_url(&spec).as_deref(), Some("https://settings.test"));
+    }
+
+    #[test]
+    fn settings_provider_connections_apply_to_fallback_specs_without_agents() {
+        let dir = create_temp_project();
+        let settings = AetherSettings { providers: overrides("https://settings.test"), ..AetherSettings::default() };
+        let catalog = AgentCatalog::from_settings_or_empty(dir.path(), settings).unwrap();
+
+        let spec = catalog.default_spec(&"anthropic:claude-sonnet-4-5".parse().unwrap(), None);
+
+        assert_eq!(base_url(&spec).as_deref(), Some("https://settings.test"));
+    }
+
+    #[test]
+    fn runtime_provider_connections_override_settings_for_default_specs() {
+        let dir = create_temp_project();
+        let settings = AetherSettings { providers: overrides("https://settings.test"), ..AetherSettings::default() };
+        let catalog = AgentCatalog::from_settings_or_empty(dir.path(), settings)
+            .unwrap()
+            .with_provider_connections(overrides("https://runtime.test"));
+
+        let spec = catalog.default_spec(&"anthropic:claude-sonnet-4-5".parse().unwrap(), None);
+
+        assert_eq!(base_url(&spec).as_deref(), Some("https://runtime.test"));
+    }
+
+    #[test]
+    fn default_spec_without_overrides_leaves_connections_unset() {
+        let dir = create_temp_project();
+        let catalog = AgentCatalog::empty(dir.path().to_path_buf());
+
+        let spec = catalog.default_spec(&"anthropic:claude-sonnet-4-5".parse().unwrap(), None);
+
+        assert_eq!(base_url(&spec), None);
     }
 
     #[test]

@@ -62,7 +62,7 @@ async fn main() -> Result<(), StdioError> {
             serve_stdio(server).await
         }
         "subagents" => {
-            let server = SubAgentsMcp::from_args(cli.args).map_err(StdioError::ServerArgs)?;
+            let server = SubAgentsMcp::standalone_from_args(cli.args).map_err(StdioError::ServerArgs)?;
             serve_stdio(server).await
         }
         "survey" => {

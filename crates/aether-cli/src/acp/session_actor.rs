@@ -1,7 +1,6 @@
 use acp_utils::notifications::{ElicitationParams, McpNotification};
 use acp_utils::server::AcpServerError;
 use aether_auth::OAuthCredentialStorage;
-use aether_core::agent_spec::AgentSpec;
 use aether_core::context::ext::conversation_messages_from_events;
 use aether_core::events::{AgentCommand, AgentEvent, Command, ToolEvent, TurnOutcome};
 use aether_core::session::{SessionControlEvent, SessionEvent, UserEvent};
@@ -29,6 +28,7 @@ use super::protocol::events::{
     AgentExtNotification, map_agent_event_to_session_notification, try_extract_plan_notification,
     try_into_agent_notification,
 };
+use super::session_agents::SessionAgents;
 use super::session_config_state::{SessionConfigState, Switch};
 use super::session_store::SessionStore;
 use super::slash_commands::{expand_slash_command_in_content, send_available_commands};
@@ -115,7 +115,7 @@ pub(crate) struct SessionActorInit {
     pub repository: Arc<SessionStore>,
     pub oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
     pub active_agent: AgentKey,
-    pub specs: HashMap<AgentKey, AgentSpec>,
+    pub specs: SessionAgents,
     pub runtime_factory: Arc<dyn RuntimeFactory>,
     pub transcript: Vec<SessionEvent>,
     pub modes: Modes,
@@ -126,7 +126,7 @@ pub(crate) struct SessionActorInit {
 /// is serialized through the command channel.
 pub(crate) struct SessionActor {
     active_agent: AgentKey,
-    specs: HashMap<AgentKey, AgentSpec>,
+    specs: SessionAgents,
     runtimes: HashMap<AgentKey, AgentRuntime>,
     runtime_factory: Arc<dyn RuntimeFactory>,
     runtime_event_tx: mpsc::Sender<RuntimeEvent>,

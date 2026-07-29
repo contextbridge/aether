@@ -67,8 +67,9 @@ pub struct AgentSpec {
 }
 
 impl AgentSpec {
-    /// Create a default (no-mode) agent spec with the provided prompts.
-    pub fn default_spec(model: &LlmModel, reasoning_effort: Option<ReasoningEffort>, prompts: Vec<Prompt>) -> Self {
+    /// Create a bare no-mode spec without catalog defaults or runtime policy.
+    /// Production callers should prefer their catalog's `default_spec` API.
+    pub fn bare(model: &LlmModel, reasoning_effort: Option<ReasoningEffort>, prompts: Vec<Prompt>) -> Self {
         Self {
             name: "__default__".to_string(),
             description: "Default agent".to_string(),
@@ -228,7 +229,7 @@ mod tests {
     fn default_spec_has_expected_fields() {
         let model: LlmModel = "anthropic:claude-sonnet-4-5".parse().unwrap();
         let prompts = vec![Prompt::file(PathBuf::from("/tmp/BASE.md"), PathBuf::from("/tmp"))];
-        let spec = AgentSpec::default_spec(&model, None, prompts.clone());
+        let spec = AgentSpec::bare(&model, None, prompts.clone());
 
         assert_eq!(spec.name, "__default__");
         assert_eq!(spec.description, "Default agent");

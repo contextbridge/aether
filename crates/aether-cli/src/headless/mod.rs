@@ -11,14 +11,14 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io::{IsTerminal, Read as _, stdin};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use crate::credentials::oauth_credential_store_from_config;
 use crate::mcp_config_args::McpConfigArgs;
 use crate::output::OutputFormat;
 use crate::provider_connection_args::ProviderConnectionArgs;
-use crate::resolve::resolve_agent_spec;
+use crate::resolve::{AgentSelectionError, InitialSessionSelection, resolve_agent_from_settings};
 use crate::settings_args::SettingsSourceArgs;
 use aether_auth::OAuthCredentialStorage;
 use std::sync::Arc;
@@ -54,6 +54,7 @@ pub struct RunConfig {
     pub cwd: PathBuf,
     pub mcp_config_sources: Vec<McpConfigSource>,
     pub spec: AgentSpec,
+    pub agent_catalog: AgentCatalog,
     pub system_prompt: Option<String>,
     pub output: OutputFormat,
     pub verbose: bool,
@@ -157,20 +158,24 @@ impl RunConfig {
         let provider_connections = args.provider_connection.clone().into_overrides();
         let oauth_credential_store = oauth_credential_store_from_config(settings.credentials_store.clone())?;
         let telemetry = settings.telemetry.clone();
-        let spec = resolve_spec_from_settings(
-            args.agent.as_deref(),
-            args.model.as_deref(),
-            &cwd,
-            settings,
-            provider_connections,
-        )?;
+        let selection = match (args.agent, args.model) {
+            (Some(agent), None) => InitialSessionSelection::Agent(agent),
+            (None, Some(model)) => InitialSessionSelection::Model { model, reasoning_effort: None },
+            (None, None) => InitialSessionSelection::Default,
+            (Some(_), Some(_)) => {
+                return Err(CliError::ConflictingArgs("Cannot specify both --agent and --model".to_string()));
+            }
+        };
+        let resolved = resolve_agent_from_settings(&cwd, settings, provider_connections, &selection)
+            .map_err(map_selection_error)?;
         let mcp_config_sources = args.mcp_config.sources(&cwd);
 
         Ok(Self {
             prompt,
             cwd,
             mcp_config_sources,
-            spec,
+            spec: resolved.spec,
+            agent_catalog: resolved.catalog,
             system_prompt: args.system_prompt,
             output: args.output,
             verbose: args.verbose,
@@ -189,13 +194,16 @@ impl RunConfig {
         let provider_connections = ProviderConnectionOverrides::new(options.providers.unwrap_or_default());
         let oauth_credential_store = oauth_credential_store_from_config(settings.credentials_store.clone())?;
         let telemetry = settings.telemetry.clone();
-        let spec = resolve_spec_from_settings(
-            options.agent.as_deref(),
-            options.model.as_deref(),
-            &cwd,
-            settings,
-            provider_connections,
-        )?;
+        let selection = match (options.agent, options.model) {
+            (Some(agent), None) => InitialSessionSelection::Agent(agent),
+            (None, Some(model)) => InitialSessionSelection::Model { model, reasoning_effort: None },
+            (None, None) => InitialSessionSelection::Default,
+            (Some(_), Some(_)) => {
+                return Err(CliError::ConflictingArgs("Cannot specify both --agent and --model".to_string()));
+            }
+        };
+        let resolved = resolve_agent_from_settings(&cwd, settings, provider_connections, &selection)
+            .map_err(map_selection_error)?;
         let mcp_config_sources = options
             .mcp_config
             .map(|config| serde_json::to_string(&config).expect("mcp config serialize"))
@@ -207,7 +215,8 @@ impl RunConfig {
             prompt,
             cwd,
             mcp_config_sources,
-            spec,
+            spec: resolved.spec,
+            agent_catalog: resolved.catalog,
             system_prompt: options.system_prompt,
             output: options.output.unwrap_or(OutputFormat::Text),
             verbose: options.verbose.unwrap_or(false),
@@ -236,161 +245,10 @@ fn resolve_prompt(args: &HeadlessArgs) -> Result<String, CliError> {
     }
 }
 
-fn resolve_spec_from_settings(
-    agent: Option<&str>,
-    model: Option<&str>,
-    cwd: &Path,
-    settings: AetherSettings,
-    provider_connections: ProviderConnectionOverrides,
-) -> Result<AgentSpec, CliError> {
-    if agent.is_some() && model.is_some() {
-        return Err(CliError::ConflictingArgs("Cannot specify both --agent and --model".to_string()));
-    }
-
-    let catalog = AgentCatalog::from_settings_or_empty(cwd, settings)?;
-
-    let mut spec = match model {
-        Some(m) => {
-            let parsed = m.parse().map_err(CliError::ModelError)?;
-            AgentSpec::default_spec(&parsed, None, Vec::new())
-        }
-        None => resolve_agent_spec(&catalog, agent)?,
-    };
-    spec.provider_connections.merge(provider_connections);
-    Ok(spec)
-}
-
-#[cfg(test)]
-mod tests {
-    use std::fs::{create_dir_all, write};
-
-    use super::*;
-
-    fn resolve_spec(
-        agent: Option<&str>,
-        model: Option<&str>,
-        cwd: &Path,
-        settings_source: &SettingsSourceArgs,
-        provider_connections: ProviderConnectionOverrides,
-    ) -> Result<AgentSpec, CliError> {
-        let settings = settings_source.load_settings(cwd)?;
-        resolve_spec_from_settings(agent, model, cwd, settings, provider_connections)
-    }
-
-    #[test]
-    fn resolve_spec_with_named_agent() {
-        let dir = setup_dir_with_agents();
-        let spec = resolve_spec(
-            Some("beta"),
-            None,
-            dir.path(),
-            &project_settings_args(),
-            ProviderConnectionOverrides::default(),
-        )
-        .unwrap();
-        assert_eq!(spec.name, "beta");
-    }
-
-    #[test]
-    fn resolve_spec_with_model_creates_default() {
-        let dir = setup_dir_with_agents();
-        let spec = resolve_spec(
-            None,
-            Some("anthropic:claude-sonnet-4-5"),
-            dir.path(),
-            &project_settings_args(),
-            ProviderConnectionOverrides::default(),
-        )
-        .unwrap();
-        assert_eq!(spec.name, "__default__");
-    }
-
-    #[test]
-    fn resolve_spec_defaults_to_first_user_invocable() {
-        let dir = setup_dir_with_agents();
-        let spec =
-            resolve_spec(None, None, dir.path(), &project_settings_args(), ProviderConnectionOverrides::default())
-                .unwrap();
-        assert_eq!(spec.name, "alpha");
-    }
-
-    #[test]
-    fn resolve_spec_defaults_to_fallback_without_settings() {
-        let dir = tempfile::tempdir().unwrap();
-        let spec = resolve_spec(None, None, dir.path(), &empty_settings_args(), ProviderConnectionOverrides::default())
-            .unwrap();
-        assert_eq!(spec.name, "__default__");
-    }
-
-    #[test]
-    fn resolve_spec_rejects_both_agent_and_model() {
-        let dir = setup_dir_with_agents();
-        let err = resolve_spec(
-            Some("alpha"),
-            Some("anthropic:claude-sonnet-4-5"),
-            dir.path(),
-            &SettingsSourceArgs::default(),
-            ProviderConnectionOverrides::default(),
-        )
-        .unwrap_err();
-        assert!(err.to_string().contains("Cannot specify both"), "unexpected error: {err}");
-    }
-
-    #[test]
-    fn resolve_spec_rejects_invalid_model() {
-        let dir = tempfile::tempdir().unwrap();
-        let err = resolve_spec(
-            None,
-            Some("not-a-valid-model"),
-            dir.path(),
-            &empty_settings_args(),
-            ProviderConnectionOverrides::default(),
-        )
-        .unwrap_err();
-        assert!(matches!(err, CliError::ModelError(_)));
-    }
-
-    #[test]
-    fn resolve_spec_rejects_unknown_agent() {
-        let dir = setup_dir_with_agents();
-        let err = resolve_spec(
-            Some("nonexistent"),
-            None,
-            dir.path(),
-            &project_settings_args(),
-            ProviderConnectionOverrides::default(),
-        )
-        .unwrap_err();
-        assert!(matches!(err, CliError::AgentError(_)));
-    }
-
-    fn write_file(dir: &std::path::Path, path: &str, content: &str) {
-        let full = dir.join(path);
-        if let Some(parent) = full.parent() {
-            create_dir_all(parent).unwrap();
-        }
-        write(full, content).unwrap();
-    }
-
-    fn project_settings_args() -> SettingsSourceArgs {
-        SettingsSourceArgs { settings_json: None, settings_file: Some(PathBuf::from(".aether/settings.json")) }
-    }
-
-    fn empty_settings_args() -> SettingsSourceArgs {
-        SettingsSourceArgs { settings_json: Some(r#"{"agents":[]}"#.to_string()), settings_file: None }
-    }
-
-    fn setup_dir_with_agents() -> tempfile::TempDir {
-        let dir = tempfile::tempdir().unwrap();
-        write_file(dir.path(), "PROMPT.md", "Be helpful");
-        write_file(
-            dir.path(),
-            ".aether/settings.json",
-            r#"{"agents": [
-                {"name": "alpha", "description": "Alpha agent", "model": "anthropic:claude-sonnet-4-5", "userInvocable": true, "prompts": [{"type":"file","path":"PROMPT.md"}]},
-                {"name": "beta", "description": "Beta agent", "model": "anthropic:claude-sonnet-4-5", "userInvocable": true, "prompts": [{"type":"file","path":"PROMPT.md"}]}
-            ]}"#,
-        );
-        dir
+fn map_selection_error(error: AgentSelectionError) -> CliError {
+    match error {
+        AgentSelectionError::Settings(error) => CliError::Settings(error),
+        AgentSelectionError::Agent(error) => CliError::AgentError(error.to_string()),
+        AgentSelectionError::Model(error) => CliError::ModelError(error),
     }
 }

@@ -8,6 +8,7 @@ pub(crate) mod model_config;
 pub(crate) mod prompt_history_index;
 pub(crate) mod protocol;
 pub(crate) mod session_actor;
+pub(crate) mod session_agents;
 pub(crate) mod session_config_state;
 pub(crate) mod session_factory;
 pub(crate) mod session_store;
@@ -42,11 +43,11 @@ use tracing_appender::rolling::daily;
 use tracing_subscriber::EnvFilter;
 
 use crate::credentials::oauth_credential_store_from_config;
+use crate::resolve::InitialSessionSelection;
 use crate::telemetry::build_telemetry_runtime;
 use crate::workspace::WorkspaceManager;
 use aether_auth::OAuthError;
 use aether_project::SettingsError;
-use session_factory::InitialSessionSelection;
 use session_store::SessionStore;
 
 #[derive(clap::Args, Debug)]

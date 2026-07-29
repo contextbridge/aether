@@ -4,7 +4,7 @@ use super::PromptArgs;
 use crate::error::CliError;
 use crate::resolve::resolve_agent_spec;
 use crate::runtime::RuntimeBuilder;
-use aether_core::core::Prompt;
+use aether_core::core::{AgentDeps, Prompt};
 use llm::ToolDefinition;
 use serde_json::Value;
 
@@ -13,7 +13,9 @@ pub async fn run_prompt(args: PromptArgs) -> Result<(), CliError> {
     let catalog = args.settings_source.load_agent_catalog(&cwd).map_err(|e| CliError::AgentError(e.to_string()))?;
     let spec = resolve_agent_spec(&catalog, args.agent.as_deref())?;
 
+    let registry = catalog.registry().clone();
     let info = RuntimeBuilder::from_spec(cwd.clone(), spec)
+        .agent_deps(AgentDeps::default().with_agent_registry(registry))
         .mcp_sources(args.mcp_config.sources(&cwd))
         .build_prompt_info()
         .await?;

@@ -39,63 +39,53 @@ impl SubAgentsMcpArgs {
 
         Self::try_parse_from(full_args).map_err(ServerInitError::InvalidArgs)
     }
+
+    /// The project root to serve, falling back to `default_root` when the
+    /// caller did not name one.
+    fn resolve_root(self, default_root: &Path) -> PathBuf {
+        self.project_root.map_or_else(|| default_root.to_path_buf(), |path| resolve_path(default_root, path))
+    }
 }
 
 #[doc = include_str!("../docs/subagents_mcp.md")]
 #[derive(Clone)]
 pub struct SubAgentsMcp {
-    catalog: AgentCatalog,
     tool_router: ToolRouter<Self>,
     project_root: PathBuf,
     agent_deps: AgentDeps,
 }
 
 impl SubAgentsMcp {
-    pub fn from_project_root(project_root: PathBuf) -> Result<Self, ServerInitError> {
+    pub fn embedded(project_root: PathBuf, agent_deps: AgentDeps) -> Self {
+        Self { tool_router: Self::tool_router(), project_root, agent_deps }
+    }
+
+    pub fn embedded_from_args(
+        args: Vec<String>,
+        base_dir: &Path,
+        agent_deps: AgentDeps,
+    ) -> Result<Self, ServerInitError> {
+        Ok(Self::embedded(SubAgentsMcpArgs::from_args(args)?.resolve_root(base_dir), agent_deps))
+    }
+
+    pub fn standalone(project_root: PathBuf) -> Result<Self, ServerInitError> {
         let settings = AetherSettings::load_default(&project_root)
             .map_err(|e| ServerInitError::Other(format!("Failed to load agents: {e}")))?;
-        let catalog = if settings.agents.is_empty() {
-            AgentCatalog::empty(project_root.clone())
-        } else {
-            AgentCatalog::from_settings(&project_root, settings)
-                .map_err(|e| ServerInitError::Other(format!("Failed to load agents: {e}")))?
-        };
-        Ok(Self::new(catalog, project_root))
+        let catalog = AgentCatalog::from_settings_or_empty(&project_root, settings)
+            .map_err(|e| ServerInitError::Other(format!("Failed to load agents: {e}")))?;
+        let registry = catalog.registry().clone();
+        Ok(Self::embedded(project_root, AgentDeps::default().with_agent_registry(registry)))
     }
 
-    pub fn new(catalog: AgentCatalog, project_root: PathBuf) -> Self {
-        Self { catalog, tool_router: Self::tool_router(), project_root, agent_deps: AgentDeps::default() }
-    }
-
-    /// Cross-cutting dependencies (OAuth credentials, observers) passed to
-    /// every sub-agent this server spawns.
-    pub fn with_agent_deps(mut self, deps: AgentDeps) -> Self {
-        self.agent_deps = deps;
-        self
-    }
-
-    pub fn from_args(args: Vec<String>) -> Result<Self, ServerInitError> {
-        let parsed_args = SubAgentsMcpArgs::from_args(args)?;
-        let project_root = parsed_args.project_root.unwrap_or_else(|| PathBuf::from("."));
-        Self::from_project_root(project_root)
-    }
-
-    pub fn from_args_with_default_project_root(
-        args: Vec<String>,
-        default_root: &Path,
-    ) -> Result<Self, ServerInitError> {
-        let parsed_args = SubAgentsMcpArgs::from_args(args)?;
-        let project_root = parsed_args
-            .project_root
-            .map_or_else(|| default_root.to_path_buf(), |path| resolve_path(default_root, path));
-        Self::from_project_root(project_root)
+    pub fn standalone_from_args(args: Vec<String>) -> Result<Self, ServerInitError> {
+        Self::standalone(SubAgentsMcpArgs::from_args(args)?.resolve_root(Path::new(".")))
     }
 
     fn build_instructions(&self) -> String {
         let mut instructions = include_str!("./instructions.md").to_string();
-        let invocable: Vec<_> = self.catalog.agent_invocable().collect();
+        let mut invocable = self.agent_deps.agent_registry.agent_invocable().peekable();
 
-        if invocable.is_empty() {
+        if invocable.peek().is_none() {
             instructions.push_str(
                 "\n\n**No sub-agents are currently available.** \
                  The spawn_subagent tool has no registered agents and should not be called.",
@@ -162,7 +152,7 @@ impl SubAgentsMcp {
         context: &RequestContext<RoleServer>,
         parent_trace_context: Option<TraceContext>,
     ) -> Result<SpawnSubAgentsOutput, String> {
-        if !args.tasks.is_empty() && self.catalog.agent_invocable().next().is_none() {
+        if !args.tasks.is_empty() && self.agent_deps.agent_registry.agent_invocable().next().is_none() {
             return Err("No agent-invocable sub-agents are registered in this project. \
                  The spawn_subagent tool is not usable — do not call it again."
                 .to_string());
@@ -206,8 +196,7 @@ impl SubAgentsMcp {
         };
 
         let deps = self.agent_deps.clone().with_parent_trace_context(parent_trace_context);
-        let executor = AgentExecutor::new(self.catalog.clone(), self.project_root.clone(), deps)
-            .with_progress_callback(progress_callback);
+        let executor = AgentExecutor::new(self.project_root.clone(), deps).with_progress_callback(progress_callback);
 
         Ok(executor.execute_tasks(args.tasks).await)
     }
