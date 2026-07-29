@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.28](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.6.27...aether-agent-core-v0.6.28) - 2026-07-29
+
+### Added
+
+- *(aether-telemetry)* Connect parent agent and subagent tracing spans together ([#305](https://github.com/contextbridge/aether/pull/305))
+
 ## [0.6.27](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.6.26...aether-agent-core-v0.6.27) - 2026-07-28
 
 ### Fixed

@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.34](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.33...aether-mcp-servers-v0.4.34) - 2026-07-29
+
+### Added
+
+- *(aether-telemetry)* Connect parent agent and subagent tracing spans together ([#305](https://github.com/contextbridge/aether/pull/305))
+
+### Other
+
+- scheduled code-cleanup ([#304](https://github.com/contextbridge/aether/pull/304))
+
 ## [0.4.33](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.32...aether-mcp-servers-v0.4.33) - 2026-07-28
 
 ### Other
