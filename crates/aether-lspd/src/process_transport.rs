@@ -63,7 +63,7 @@ enum TransportCommand {
 struct ProcessTransportActor {
     process: Child,
     stdin: ChildStdin,
-    reader: BufReader<ChildStdout>,
+    message_rx: mpsc::Receiver<Value>,
     command_rx: mpsc::Receiver<TransportCommand>,
     event_tx: mpsc::Sender<TransportEvent>,
     watcher: FileWatcherHandle,
@@ -97,12 +97,14 @@ impl ProcessTransport {
         let (command_tx, command_rx) = mpsc::channel(100);
         let (event_tx, event_rx) = mpsc::channel(100);
         let (watcher_tx, watcher_rx) = mpsc::channel(64);
+        let (message_tx, message_rx) = mpsc::channel(100);
         let watcher = FileWatcherHandle::spawn(root_path.to_path_buf(), watcher_tx);
+        tokio::spawn(read_lsp_messages(BufReader::new(stdout), message_tx));
 
         let actor = ProcessTransportActor {
             process,
             stdin,
-            reader: BufReader::new(stdout),
+            message_rx,
             command_rx,
             event_tx,
             watcher,
@@ -156,13 +158,10 @@ impl ProcessTransportActor {
 
         loop {
             tokio::select! {
-                msg = read_lsp_message(&mut self.reader) => {
+                msg = self.message_rx.recv() => {
                     match msg {
-                        Ok(Some(message)) => self.handle_lsp_message(message).await,
-                        Ok(None) => break,
-                        Err(err) => {
-                            tracing::warn!(%err, "Error reading LSP message");
-                        }
+                        Some(message) => self.handle_lsp_message(message).await,
+                        None => break,
                     }
                 }
                 Some(command) = self.command_rx.recv() => {
@@ -259,7 +258,7 @@ impl ProcessTransportActor {
 
         self.send_request(INITIALIZE_REQUEST_ID, Initialize::METHOD, serde_json::to_value(&params).unwrap()).await?;
 
-        while let Some(message) = read_lsp_message(&mut self.reader).await? {
+        while let Some(message) = self.message_rx.recv().await {
             if message.get("id").and_then(Value::as_i64) == Some(INITIALIZE_REQUEST_ID) {
                 send_notification(&mut self.stdin, Initialized::METHOD, serde_json::json!({})).await?;
                 return Ok(());
@@ -411,6 +410,26 @@ async fn send_notification(stdin: &mut ChildStdin, method: &str, params: Value) 
         "params": params
     });
     write_lsp_message(stdin, &msg).await
+}
+
+/// Read frames sequentially on a dedicated task and forward complete messages.
+///
+/// `read_line` and `read_exact` are not cancellation-safe, so a read that gets cancelled mid-frame
+/// causes later responses to be silently lost.
+async fn read_lsp_messages(mut reader: BufReader<ChildStdout>, message_tx: mpsc::Sender<Value>) {
+    loop {
+        match read_lsp_message(&mut reader).await {
+            Ok(Some(message)) => {
+                if message_tx.send(message).await.is_err() {
+                    break;
+                }
+            }
+            Ok(None) => break,
+            Err(err) => {
+                tracing::warn!(%err, "Error reading LSP message");
+            }
+        }
+    }
 }
 
 async fn read_lsp_message(reader: &mut BufReader<ChildStdout>) -> std::io::Result<Option<Value>> {
