@@ -3,7 +3,7 @@ use std::error::Error;
 use std::time::Duration;
 
 use aether_core::core::RetryConfig;
-use aether_core::events::{AgentEvent, Command, TurnOutcome, UserCommand};
+use aether_core::events::{AgentEvent, TurnOutcome};
 use aether_core::testing::test_agent;
 use llm::{LlmError, LlmResponse};
 
@@ -195,42 +195,24 @@ async fn rate_limited_error_is_retried() -> Result<(), Box<dyn Error>> {
 
 #[tokio::test(start_paused = true)]
 async fn cancel_during_retry_wait_aborts_pending_retry() -> Result<(), Box<dyn Error>> {
-    use aether_core::core::agent;
-    use llm::testing::FakeLlmProvider;
+    use aether_core::testing::TestScenario;
 
     let attempts: Vec<Vec<Result<LlmResponse, LlmError>>> = vec![
         vec![Err(LlmError::ServerError { status: Some(503), message: "boom".into() })],
         vec![Ok(LlmResponse::start("msg_2")), Ok(LlmResponse::text("should not see this")), Ok(LlmResponse::done())],
     ];
 
-    let llm = FakeLlmProvider::from_results(attempts);
-    let captured = llm.captured_contexts();
-
     // Long retry delay; with virtual time it never elapses unless we advance.
     let retry = RetryConfig { max_attempts: 5, base_delay: Duration::from_mins(1), max_delay: Duration::from_mins(1) };
 
-    let (tx, mut rx, _handle) = agent(llm).retry(retry).spawn().await?;
+    let result = test_agent()
+        .retry_config(retry)
+        .llm_result_responses(&attempts)
+        .scenario(TestScenario::new().user_text("go").wait_for_retry(1).cancel().wait_for_turn_end())
+        .run_with_context()
+        .await?;
 
-    tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("go")] })).await?;
-
-    loop {
-        match rx.recv().await {
-            Some(AgentEvent::Turn(TurnEvent::RetryScheduled { attempt: 1, .. })) => break,
-            Some(_) => {}
-            None => panic!("channel closed before the retry was scheduled"),
-        }
-    }
-
-    tx.send(Command::UserCommand(UserCommand::Cancel)).await?;
-
-    let mut messages = Vec::new();
-    while let Some(msg) = rx.recv().await {
-        let is_turn_end = matches!(msg, AgentEvent::Turn(TurnEvent::Ended { .. }));
-        messages.push(msg);
-        if is_turn_end {
-            break;
-        }
-    }
+    let messages = &result.messages;
 
     let retry_started = messages
         .iter()
@@ -241,7 +223,7 @@ async fn cancel_during_retry_wait_aborts_pending_retry() -> Result<(), Box<dyn E
     assert!(has_cancelled, "expected the turn to end as cancelled, got {messages:?}");
 
     // The retry should never have fired — only the original failed call counts.
-    let captured = captured.lock().unwrap();
+    let captured = result.captured_contexts.lock().unwrap();
     assert_eq!(captured.len(), 1, "retry must not fire after cancel; expected 1 LLM call");
 
     Ok(())
