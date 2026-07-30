@@ -143,7 +143,7 @@ export default defineConfig({
   ],
   vite: {
     resolve: {
-      // Vite 8's Rolldown resolver requires this option to be explicit.
+      // Vite 8's Rolldown resolver requires this option when Tailwind invokes it.
       // @ts-expect-error Astro currently provides Vite 7, which lacks this option.
       tsconfigPaths: false,
     },
