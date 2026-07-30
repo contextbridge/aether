@@ -5,7 +5,8 @@ use std::time::Duration;
 use aether_core::{
     events::{AgentEvent, Command, TurnOutcome, UserCommand},
     testing::{
-        agent_event, test_agent, {AddNumbersRequest, AddNumbersResult, DivideNumbersRequest, SlowToolRequest},
+        AddNumbersRequest, AddNumbersResult, DivideNumbersRequest, SlowToolRequest, agent_event, content_events,
+        test_agent,
     },
 };
 use llm::testing::{FakeLlmProvider, llm_response};
@@ -15,25 +16,6 @@ use tokio::sync::mpsc;
 fn split_json_in_half(input: &str) -> (&str, &str) {
     let split = input.char_indices().nth(input.len() / 2).map_or(1, |(idx, _)| idx).max(1).min(input.len() - 1);
     input.split_at(split)
-}
-
-/// Strips turn/call lifecycle noise, leaving only the content events the
-/// `agent_event` builder describes.
-fn content_events(events: Vec<AgentEvent>) -> Vec<AgentEvent> {
-    events
-        .into_iter()
-        .filter(|event| {
-            !matches!(
-                event,
-                AgentEvent::Turn(
-                    TurnEvent::Started { .. }
-                        | TurnEvent::RetryScheduled { .. }
-                        | TurnEvent::LlmCallStarted { .. }
-                        | TurnEvent::LlmCallEnded { .. }
-                ) | AgentEvent::Tool(ToolEvent::ExecutionStarted { .. } | ToolEvent::DefinitionsUpdated { .. })
-            )
-        })
-        .collect()
 }
 
 #[tokio::test]
@@ -52,20 +34,12 @@ async fn test_text_message() -> Result<(), Box<dyn Error>> {
 #[tokio::test]
 async fn test_llm_call_lifecycle_reports_model_and_usage() -> Result<(), Box<dyn Error>> {
     let model: llm::LlmModel = "codex:gpt-5.5".parse()?;
-    let llm =
-        FakeLlmProvider::new(vec![llm_response("msg_1").text(&["hi"]).usage(120, 7).build()]).with_model(model.clone());
-    let (tx, mut rx, _handle) = aether_core::core::agent(llm).spawn().await?;
-
-    tx.send(Command::UserCommand(UserCommand::Text { content: vec![llm::ContentBlock::text("hello")] })).await?;
-
-    let mut events = Vec::new();
-    while let Some(event) = rx.recv().await {
-        let is_turn_end = event.turn_outcome().is_some();
-        events.push(event);
-        if is_turn_end {
-            break;
-        }
-    }
+    let events = test_agent()
+        .model(model.clone())
+        .llm_responses(&[llm_response("msg_1").text(&["hi"]).usage(120, 7).build()])
+        .user_text("hello")
+        .run()
+        .await?;
 
     let started = events
         .iter()
