@@ -428,12 +428,12 @@ async fn happy_tool_trace() -> Result<AgentTrace, Box<dyn Error>> {
             .build(),
         llm_response("m2").text(&["The sum is 8"]).usage(30, 7).build(),
     ];
-    test_agent()
+    Ok(test_agent()
         .model("anthropic:claude-sonnet-4-5".parse()?)
         .llm_responses(&responses)
         .user_text("3+5 = ?")
         .run_trace()
-        .await
+        .await?)
 }
 
 fn chat_call(provider: &str, model: &str, outcome: LlmCallOutcome) -> [AgentEvent; 2] {
