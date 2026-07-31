@@ -87,7 +87,7 @@ pub fn truncate_to_width(text: &str, max_width: usize) -> String {
 /// plain-text view of [`wrap_line`], so styled and unstyled content can never
 /// wrap differently.
 pub fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
-    wrap_line(Line::from(Span::raw(text.to_string())), rows(max_width))
+    wrap_line(Line::from(Span::raw(text.to_string())), as_u16(max_width))
         .iter()
         .map(|line| line.spans.iter().map(|span| span.content.as_ref()).collect())
         .collect()
@@ -135,9 +135,9 @@ pub fn fit_line(mut line: Line<'static>, width: usize, fill_style: Style) -> Lin
     line
 }
 
-/// `count` as a row or column count, saturating rather than wrapping on the
-/// terminals nobody has.
-pub fn rows(count: usize) -> u16 {
+/// `count` as a terminal row or column count, saturating rather than wrapping
+/// on the terminals nobody has.
+pub fn as_u16(count: usize) -> u16 {
     u16::try_from(count).unwrap_or(u16::MAX)
 }
 
@@ -341,7 +341,7 @@ mod tests {
     fn wrap_text_agrees_with_wrap_line() {
         let text = "the quick brown\tfox jumps over the lazy dog";
         for width in 1..24 {
-            assert_eq!(wrap_text(text, width), wrapped(raw_line(text), rows(width)), "disagree at width {width}");
+            assert_eq!(wrap_text(text, width), wrapped(raw_line(text), as_u16(width)), "disagree at width {width}");
         }
     }
 

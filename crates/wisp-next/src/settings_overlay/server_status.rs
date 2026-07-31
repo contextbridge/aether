@@ -113,7 +113,7 @@ impl SettingsPane for ServerStatusPane {
     }
 
     fn footer(&self) -> Vec<KeyHint> {
-        vec![("Enter", "authenticate OAuth servers".to_string()), ("Esc", "back".to_string())]
+        vec![("Enter", "authenticate OAuth servers".into()), ("Esc", "back".into())]
     }
 }
 

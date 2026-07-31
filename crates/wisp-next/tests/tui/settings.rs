@@ -389,7 +389,7 @@ fn enter_on_settings_oauth_prompt_opens_the_browser() {
             Arc::new(|_| Ok(())),
         );
 
-        overlay.on_key(key(KeyCode::Enter));
+        overlay.on_ui_event(UiEvent::Key(key(KeyCode::Enter)));
 
         assert_eq!(opened.lock().unwrap().as_deref(), Some("https://linear.app/oauth"));
     });

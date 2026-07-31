@@ -22,8 +22,8 @@ use crate::platform::{BrowserOpener, ClipboardWriter, default_browser_opener, de
 use crate::selection::Direction;
 use crate::surface::{Action, Surface};
 use crate::theme::Theme;
-use crate::widgets::key_hints;
-use crate::wrap::rows;
+use crate::widgets::{KeyHint, key_hints};
+use crate::wrap::as_u16;
 
 pub struct ElicitationModal {
     kind: ModalKind,
@@ -94,17 +94,16 @@ impl ElicitationModal {
     pub fn inline_height(&self, theme: &Theme, width: u16) -> u16 {
         match &self.kind {
             ModalKind::Form(_) => u16::MAX,
-            ModalKind::Url(url) => rows(url.body_lines(theme, width).len()),
+            ModalKind::Url(url) => as_u16(url.body_lines(theme, width).len()),
         }
     }
 
     /// The keys this request answers, for a host that draws its own footer.
-    pub fn key_hints(&self) -> Vec<(&'static str, String)> {
-        let hints: Vec<(&'static str, &'static str)> = match &self.kind {
+    pub fn key_hints(&self) -> Vec<KeyHint> {
+        match &self.kind {
             ModalKind::Form(form) => form.hints(),
             ModalKind::Url(_) => url::HINTS.to_vec(),
-        };
-        hints.into_iter().map(|(key, description)| (key, description.to_string())).collect()
+        }
     }
 
     fn on_url_key(&mut self, key: KeyEvent) -> Vec<Action> {

@@ -353,58 +353,46 @@ fn parse_porcelain_status(input: &str) -> HashMap<String, StageState> {
 }
 
 async fn resolve_repo_root(working_dir: &Path) -> Result<PathBuf, GitDiffError> {
-    let output = tokio::process::Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .current_dir(working_dir)
-        .output()
-        .await
-        .map_err(|error| GitDiffError::CommandFailed { stderr: error.to_string() })?;
-
-    if !output.status.success() {
-        // Distinguish "not a git repository" from other failures via a locale-independent
-        // probe: `git rev-parse --is-inside-work-tree` only succeeds inside a work tree.
-        let inside_work_tree = tokio::process::Command::new("git")
-            .args(["rev-parse", "--is-inside-work-tree"])
-            .current_dir(working_dir)
-            .output()
-            .await
-            .is_ok_and(|result| result.status.success());
-        if !inside_work_tree {
-            return Err(GitDiffError::NotARepository);
-        }
-        return Err(GitDiffError::CommandFailed { stderr: String::from_utf8_lossy(&output.stderr).into_owned() });
+    let error = match git(working_dir, &["rev-parse", "--show-toplevel"]).await {
+        Ok(root) => return Ok(PathBuf::from(root.trim())),
+        Err(error) => error,
+    };
+    // Distinguish "not a git repository" from other failures via a locale-independent
+    // probe: `git rev-parse --is-inside-work-tree` only succeeds inside a work tree.
+    if git_succeeds(working_dir, &["rev-parse", "--is-inside-work-tree"]).await {
+        return Err(error);
     }
-
-    Ok(PathBuf::from(String::from_utf8_lossy(&output.stdout).trim().to_string()))
+    Err(GitDiffError::NotARepository)
 }
 
 async fn head_exists(repo_root: &Path) -> bool {
     // `git rev-parse --verify HEAD` exits non-zero when HEAD is unborn (no commits yet).
     // The exit code is locale-independent, unlike git's translated stderr messages.
-    let Ok(output) = tokio::process::Command::new("git")
-        .args(["rev-parse", "--verify", "--quiet", "HEAD"])
-        .current_dir(repo_root)
-        .output()
-        .await
-    else {
-        return false;
-    };
-    output.status.success()
+    git_succeeds(repo_root, &["rev-parse", "--verify", "--quiet", "HEAD"]).await
 }
 
 async fn git(repo_root: &Path, args: &[&str]) -> Result<String, GitDiffError> {
-    let output = tokio::process::Command::new("git")
-        .args(args)
-        .current_dir(repo_root)
-        .output()
-        .await
-        .map_err(|error| GitDiffError::CommandFailed { stderr: error.to_string() })?;
+    let output =
+        run_git(repo_root, args).await.map_err(|error| GitDiffError::CommandFailed { stderr: error.to_string() })?;
 
     if !output.status.success() {
         return Err(GitDiffError::CommandFailed { stderr: String::from_utf8_lossy(&output.stderr).into_owned() });
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Whether `git args` exits zero, for the probes whose answer is the exit code
+/// rather than the output.
+async fn git_succeeds(repo_root: &Path, args: &[&str]) -> bool {
+    run_git(repo_root, args).await.is_ok_and(|output| output.status.success())
+}
+
+fn run_git(
+    repo_root: &Path,
+    args: &[&str],
+) -> impl std::future::Future<Output = std::io::Result<std::process::Output>> {
+    tokio::process::Command::new("git").args(args).current_dir(repo_root).output()
 }
 
 async fn build_untracked_file_diff(repo_root: &Path, path: String) -> FileDiff {

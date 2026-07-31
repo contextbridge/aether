@@ -1,5 +1,4 @@
 use super::support::*;
-use wisp_next::test_support::picker::CompletionOverlay;
 
 #[test]
 fn app_exposes_initial_config_option_selections() {
@@ -102,7 +101,7 @@ fn command_picker_filters_and_applies_selected_command() {
     composer.insert_str("sea");
     composer.refresh_overlay_query();
 
-    assert_eq!(composer.completion_ref().map(CompletionOverlay::query), Some("sea"));
+    assert_eq!(composer.completion().map(|overlay| overlay.query()), Some("sea"));
     assert!(completion_contains(&mut composer, "/search"));
 
     let selected = composer.accept_command().unwrap();
@@ -124,7 +123,7 @@ fn file_picker_filters_and_inserts_a_mention() {
     composer.insert_str("main");
     composer.refresh_overlay_query();
 
-    assert_eq!(composer.completion_ref().map(CompletionOverlay::query), Some("main"));
+    assert_eq!(composer.completion().map(|overlay| overlay.query()), Some("main"));
     assert!(completion_contains(&mut composer, "src/main.rs"));
 
     let selected = composer.accept_file().unwrap();
@@ -374,7 +373,7 @@ fn wide_diff_marks_truncated_panel_content() {
 fn markdown_blockquote_prefixes_inline_code_first_content() {
     let mut renderer = Presenter::new(&UiSettings::default());
 
-    let lines = renderer.lines(Segment::Committed, &[HistoryItem::Text("> `quoted`".to_string())], None, 40, 0, 0);
+    let lines = renderer.lines(Segment::Committed, &[HistoryItem::Text("> `quoted`".into())], None, 40, 0, 0);
 
     assert_eq!(line_text(&lines[0]), "  quoted");
 }
@@ -383,7 +382,7 @@ fn markdown_blockquote_prefixes_inline_code_first_content() {
 fn markdown_horizontal_rule_uses_available_width() {
     let mut renderer = Presenter::new(&UiSettings::default());
 
-    let lines = renderer.lines(Segment::Committed, &[HistoryItem::Text("---".to_string())], None, 20, 0, 0);
+    let lines = renderer.lines(Segment::Committed, &[HistoryItem::Text("---".into())], None, 20, 0, 0);
 
     assert_eq!(line_text(&lines[0]), "─".repeat(20));
 }
@@ -392,7 +391,7 @@ fn markdown_horizontal_rule_uses_available_width() {
 fn transcript_markdown_wraps_at_word_boundaries() {
     let mut renderer = Presenter::new(&UiSettings::default());
 
-    let lines = renderer.lines(Segment::Committed, &[HistoryItem::Text("alpha beta gamma".to_string())], None, 9, 0, 0);
+    let lines = renderer.lines(Segment::Committed, &[HistoryItem::Text("alpha beta gamma".into())], None, 9, 0, 0);
 
     assert_eq!(lines.iter().map(line_text).collect::<Vec<_>>(), ["alpha", "beta", "gamma"]);
 }
@@ -401,14 +400,8 @@ fn transcript_markdown_wraps_at_word_boundaries() {
 fn transcript_markdown_separates_a_heading_from_its_paragraph() {
     let mut renderer = Presenter::new(&UiSettings::default());
 
-    let lines = renderer.lines(
-        Segment::Committed,
-        &[HistoryItem::Text("# Heading\n\nParagraph text.".to_string())],
-        None,
-        40,
-        0,
-        0,
-    );
+    let lines =
+        renderer.lines(Segment::Committed, &[HistoryItem::Text("# Heading\n\nParagraph text.".into())], None, 40, 0, 0);
 
     assert_eq!(lines.iter().map(line_text).collect::<Vec<_>>(), ["# Heading", "", "Paragraph text."]);
 }
@@ -417,7 +410,7 @@ fn transcript_markdown_separates_a_heading_from_its_paragraph() {
 fn transcript_wrapping_expands_tabs() {
     let mut renderer = Presenter::new(&UiSettings::default());
 
-    let lines = renderer.lines(Segment::Committed, &[HistoryItem::Text("a\tb".to_string())], None, 4, 0, 0);
+    let lines = renderer.lines(Segment::Committed, &[HistoryItem::Text("a\tb".into())], None, 4, 0, 0);
 
     assert_eq!(lines.iter().map(line_text).collect::<Vec<_>>(), ["a   ", "b"]);
 }
@@ -426,7 +419,7 @@ fn transcript_wrapping_expands_tabs() {
 fn transcript_wrapping_never_exceeds_a_one_column_allocation() {
     let mut renderer = Presenter::new(&UiSettings::default());
 
-    let lines = renderer.lines(Segment::Committed, &[HistoryItem::Text("界".to_string())], None, 1, 0, 0);
+    let lines = renderer.lines(Segment::Committed, &[HistoryItem::Text("界".into())], None, 1, 0, 0);
 
     assert!(lines.iter().all(|line| line.width() <= 1), "{lines:?}");
     assert_eq!(line_text(&lines[0]), "…");
@@ -453,7 +446,7 @@ fn markdown_renders_lists_strikethrough_and_tables() {
     let mut renderer = Presenter::new(&UiSettings::default());
     let markdown = "- first\n- second\n\n~~removed~~\n\n| Name | Value |\n| --- | --- |\n| alpha | beta |";
 
-    let lines = renderer.lines(Segment::Committed, &[HistoryItem::Text(markdown.to_string())], None, 40, 0, 0);
+    let lines = renderer.lines(Segment::Committed, &[HistoryItem::Text(markdown.into())], None, 40, 0, 0);
     let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
 
     assert!(text.contains("• first"), "{text}");

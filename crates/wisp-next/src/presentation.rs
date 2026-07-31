@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 
 use crate::app::{HistoryItem, HistoryKind};
 use crate::diff::render_diff;
@@ -128,7 +129,7 @@ impl Presenter {
     pub fn lines(
         &mut self,
         segment: Segment,
-        items: &[HistoryItem],
+        items: &[HistoryItem<'_>],
         previous_kind: Option<HistoryKind>,
         width: u16,
         padding: usize,
@@ -145,7 +146,7 @@ impl Presenter {
                 // Only the live tail is worth caching: a committed segment is
                 // rendered once and never asked for again.
                 HistoryItem::Text(text) if segment == Segment::Live => {
-                    lines.extend(self.cached_markdown(text, width, padding));
+                    lines.extend(self.cached_markdown(text, width, padding).iter().cloned());
                 }
                 _ => lines.extend(self.item_lines(item, width, padding, spinner_tick)),
             }
@@ -157,7 +158,7 @@ impl Presenter {
         lines
     }
 
-    fn cached_markdown(&mut self, text: &str, width: u16, padding: usize) -> Vec<Line<'static>> {
+    fn cached_markdown(&mut self, text: &str, width: u16, padding: usize) -> Rc<[Line<'static>]> {
         let Self { theme, highlighter, pending_markdown_cache, .. } = self;
         let content_width = content_width(width, padding);
         let mut hasher = DefaultHasher::new();
@@ -169,7 +170,7 @@ impl Presenter {
 
     fn item_lines(
         &mut self,
-        item: &HistoryItem,
+        item: &HistoryItem<'_>,
         width: u16,
         padding: usize,
         spinner_tick: usize,
@@ -182,7 +183,7 @@ impl Presenter {
             HistoryItem::Thought(text) => indent_lines(
                 wrap_line(
                     Line::styled(
-                        text.clone(),
+                        text.to_string(),
                         Style::new().fg(theme.blockquote).add_modifier(Modifier::ITALIC | Modifier::DIM),
                     ),
                     content_width,
@@ -192,7 +193,7 @@ impl Presenter {
             HistoryItem::Tool { title, status, diff, raw_input, display_value, sub_agents } => {
                 let mut lines =
                     vec![tool_line(title, raw_input, display_value.as_deref(), status, spinner_tick, padding, theme)];
-                if matches!(status, ToolStatus::Success)
+                if matches!(status.as_ref(), ToolStatus::Success)
                     && let Some(preview) = diff
                 {
                     let rendered = render_diff(preview, content_width, theme, highlighter);
@@ -226,8 +227,8 @@ pub(crate) fn indent_lines(lines: Vec<Line<'static>>, padding: usize) -> Vec<Lin
 /// its previous render without accumulating an entry per intermediate prefix.
 #[derive(Default)]
 struct PendingMarkdownCache {
-    current: HashMap<(u64, u16), Vec<Line<'static>>>,
-    frame: HashMap<(u64, u16), Vec<Line<'static>>>,
+    current: HashMap<(u64, u16), Rc<[Line<'static>]>>,
+    frame: HashMap<(u64, u16), Rc<[Line<'static>]>>,
 }
 
 impl PendingMarkdownCache {
@@ -235,9 +236,9 @@ impl PendingMarkdownCache {
         &mut self,
         key: (u64, u16),
         build: impl FnOnce() -> Vec<Line<'static>>,
-    ) -> Vec<Line<'static>> {
-        let lines = self.frame.remove(&key).or_else(|| self.current.remove(&key)).unwrap_or_else(build);
-        self.frame.insert(key, lines.clone());
+    ) -> Rc<[Line<'static>]> {
+        let lines = self.frame.remove(&key).or_else(|| self.current.remove(&key)).unwrap_or_else(|| Rc::from(build()));
+        self.frame.insert(key, Rc::clone(&lines));
         lines
     }
 
@@ -364,10 +365,10 @@ fn sub_agent_tree_lines(
 
 #[cfg(test)]
 mod tests {
-    use super::PendingMarkdownCache;
+    use super::{PendingMarkdownCache, Rc};
     use ratatui::text::Line;
 
-    fn render(cache: &mut PendingMarkdownCache, key: u64, text: &str) -> Vec<Line<'static>> {
+    fn render(cache: &mut PendingMarkdownCache, key: u64, text: &str) -> Rc<[Line<'static>]> {
         cache.get_or_insert_with((key, 80), || vec![Line::raw(text.to_string())])
     }
 
@@ -392,7 +393,7 @@ mod tests {
 
         let reused = cache.get_or_insert_with((1, 80), || panic!("cached render must not be rebuilt"));
 
-        assert_eq!(reused, vec![Line::raw("built once")]);
+        assert_eq!(*reused, [Line::raw("built once")]);
     }
 
     #[test]

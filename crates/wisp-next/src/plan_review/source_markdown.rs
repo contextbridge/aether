@@ -36,10 +36,10 @@ pub fn render_markdown_source_lines(
             let code_text: String = raw_lines[code_start..code_end].join("\n");
             if !code_text.is_empty() {
                 let highlighted_lines = highlighter.highlight(&code_text, opening.language(), theme);
-                for line in highlighted_lines {
+                for line in highlighted_lines.iter() {
                     let styled_line = Line::from(
                         line.spans
-                            .into_iter()
+                            .iter()
                             .map(|span| {
                                 Span::styled(span.content.to_string(), span.style.patch(Style::new().bg(theme.code_bg)))
                             })

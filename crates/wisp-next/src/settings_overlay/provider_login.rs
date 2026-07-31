@@ -1,8 +1,7 @@
 use super::{KeyHint, LiveSettingsData, SettingsPane, summarize};
 use crate::filterable_list::FilterableList;
 use crate::render_context::RenderContext;
-use crate::selection::Direction;
-use crate::surface::{Action, Surface, one};
+use crate::surface::{Action, Surface, SurfaceList, one};
 use agent_client_protocol::schema::AuthMethod;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
@@ -45,13 +44,12 @@ impl Surface for ProviderLoginPane {
             .map(|entry| Action::AuthenticateProvider(entry.method_id.clone())))
     }
 
-    fn click(&mut self, row: u16, _column: u16) -> Vec<Action> {
-        if self.entries.select_at(row) { self.activate() } else { Vec::new() }
+    fn list(&mut self) -> Option<&mut dyn SurfaceList> {
+        Some(&mut self.entries)
     }
 
-    fn scroll(&mut self, direction: Direction) -> Vec<Action> {
-        self.entries.step(direction, |_| true);
-        Vec::new()
+    fn activates_on_click(&self) -> bool {
+        true
     }
 
     fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
@@ -84,7 +82,7 @@ impl SettingsPane for ProviderLoginPane {
     }
 
     fn footer(&self) -> Vec<KeyHint> {
-        vec![("Enter", "authenticate".to_string()), ("Esc", "back".to_string())]
+        vec![("Enter", "authenticate".into()), ("Esc", "back".into())]
     }
 }
 

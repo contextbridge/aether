@@ -5,7 +5,9 @@ use ratatui::text::{Line, Text};
 use ratatui::widgets::{Paragraph, Widget};
 
 use crate::theme::Theme;
+use crate::widgets::KeyHint;
 use crate::wrap::wrap_line;
+use std::borrow::Cow;
 
 pub(super) struct UrlModal {
     pub(super) server_name: String,
@@ -97,7 +99,8 @@ impl UrlModal {
 }
 
 /// The keys a URL request answers, for whichever footer is drawing them.
-pub(super) const HINTS: [(&str, &str); 3] = [("Enter", "open browser"), ("c", "copy URL"), ("Esc", "cancel")];
+pub(super) const HINTS: [KeyHint; 3] =
+    [("Enter", Cow::Borrowed("open browser")), ("c", Cow::Borrowed("copy URL")), ("Esc", Cow::Borrowed("cancel"))];
 
 fn is_local_http_url(url: &url::Url) -> bool {
     if url.scheme() != "http" {

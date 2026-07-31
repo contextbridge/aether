@@ -11,13 +11,13 @@ use crate::surface::MouseAction;
 use crate::surface::is_composed_char;
 
 use super::rendering::plural;
-use super::state::{BottomBar, Focus, GitDiffLoadState, PatchCursor, PendingAction};
+use super::state::{BottomBar, GitDiffLoadState, PatchCursor, PendingAction};
 use super::task;
 use super::tasks::GitDiffTask;
+use crate::screens::review::{MOUSE_SCROLL_LINES, Pane};
 use crate::selection::Direction;
 
-/// Lines a mouse wheel notch and a page key move the patch pane.
-const MOUSE_SCROLL_LINES: usize = 3;
+/// Rendered rows a page key moves the patch pane.
 const PAGE_SCROLL_LINES: usize = 10;
 
 /// Columns each press of the resize keys moves the file drawer's edge.
@@ -38,7 +38,7 @@ impl GitDiffScreen {
     /// Scrolls whichever pane has focus: the patch by a few lines, the file
     /// drawer by one entry.
     fn scroll_focused(&mut self, direction: Direction) {
-        if self.focus == Focus::Patch {
+        if self.focus == Pane::Document {
             self.move_patch_scroll(direction, MOUSE_SCROLL_LINES);
         } else {
             self.move_vertical(direction);
@@ -52,11 +52,11 @@ impl GitDiffScreen {
             return;
         }
         if !self.drawer_selection.rows_area().contains(Position::new(column, row)) {
-            self.focus = Focus::Patch;
+            self.focus = Pane::Document;
             return;
         }
 
-        self.focus = Focus::Drawer;
+        self.focus = Pane::Nav;
         if self.drawer_selection.select_at(row, self.drawer_entries().len()) {
             self.follow_drawer_selection();
         }
@@ -180,21 +180,21 @@ impl GitDiffScreen {
             KeyCode::Char('d') => self.guarded(PendingAction::Discard, GitDiffScreen::begin_discard),
             KeyCode::Char('<') => self.resize_drawer(-DRAWER_RESIZE_STEP),
             KeyCode::Char('>') => self.resize_drawer(DRAWER_RESIZE_STEP),
-            KeyCode::Char('c') if self.focus == Focus::Patch => self.begin_draft(),
-            KeyCode::Char('u') if self.focus == Focus::Patch => self.undo_last_comment(),
-            KeyCode::Char('s') if self.focus == Focus::Patch => self.submit_review(),
-            KeyCode::Char('o') if self.focus == Focus::Patch => self.toggle_full_file(),
+            KeyCode::Char('c') if self.focus == Pane::Document => self.begin_draft(),
+            KeyCode::Char('u') if self.focus == Pane::Document => self.undo_last_comment(),
+            KeyCode::Char('s') if self.focus == Pane::Document => self.submit_review(),
+            KeyCode::Char('o') if self.focus == Pane::Document => self.toggle_full_file(),
             KeyCode::Left | KeyCode::Char('h') => {
-                if self.focus == Focus::Patch {
-                    self.focus = Focus::Drawer;
+                if self.focus == Pane::Document {
+                    self.focus = Pane::Nav;
                 } else {
                     self.collapse_selected();
                 }
                 Vec::new()
             }
             KeyCode::Right | KeyCode::Char('l') | KeyCode::Enter => {
-                if self.focus == Focus::Drawer && !self.expand_or_open_selected() {
-                    self.focus = Focus::Patch;
+                if self.focus == Pane::Nav && !self.expand_or_open_selected() {
+                    self.focus = Pane::Document;
                 }
                 Vec::new()
             }
@@ -230,7 +230,7 @@ impl GitDiffScreen {
     fn reset_file_view(&mut self) {
         self.show_full_file = false;
         self.full_file_content = None;
-        self.patch.cursor = PatchCursor::default();
+        self.patch.document.cursor = PatchCursor::default();
     }
 
     fn on_commit_editor_key(&mut self, key: KeyEvent) -> Vec<Action> {

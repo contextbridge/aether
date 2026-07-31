@@ -15,7 +15,7 @@ fn filters_once_per_query_change_and_selects_from_cached_matches() {
     assert_eq!(list.filtered_entries().map(|(_, entry)| entry.as_str()).collect::<Vec<_>>(), ["alpha", "alphabet"]);
     assert_eq!(list.selected_entry().map(String::as_str), Some("alpha"));
 
-    list.step(Direction::Forward, |_| true);
+    list.step(Direction::Forward);
     assert_eq!(list.selected_entry().map(String::as_str), Some("alphabet"));
 
     list.set_query("alp");
@@ -45,7 +45,7 @@ fn maps_a_click_to_the_row_drawn_under_it() {
     let mut buffer = Buffer::empty(area);
 
     for _ in 0..7 {
-        list.step(Direction::Forward, |_| true);
+        list.step(Direction::Forward);
     }
     list.view(&Theme::default(), |entry| Line::raw(entry.clone()))
         .empty_message("empty")

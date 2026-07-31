@@ -1,8 +1,7 @@
 use super::{KeyHint, SettingsChange, SettingsMenuEntry, SettingsMenuValue, SettingsPane, message_for_change};
 use crate::filterable_list::FilterableList;
 use crate::render_context::RenderContext;
-use crate::selection::Direction;
-use crate::surface::{Action, ListFilter, Surface};
+use crate::surface::{Action, Surface, SurfaceList};
 use crate::theme::Theme;
 use crate::wrap::truncate_to_width;
 use ratatui::buffer::Buffer;
@@ -22,7 +21,8 @@ pub(super) struct SettingsPicker {
 impl SettingsPicker {
     pub(super) fn from_entry(entry: &SettingsMenuEntry) -> Option<Self> {
         let current_value = entry.values.get(entry.current_value_index)?.value.clone();
-        let mut values = FilterableList::new(entry.values.clone(), |value| format!("{} {}", value.name, value.value));
+        let mut values = FilterableList::new(entry.values.clone(), |value| format!("{} {}", value.name, value.value))
+            .selectable(|value| !value.is_disabled);
         values.select_index(entry.current_value_index);
 
         Some(Self { config_id: entry.config_id.clone(), title: entry.title.clone(), current_value, values })
@@ -68,17 +68,12 @@ impl Surface for SettingsPicker {
         change.iter().map(message_for_change).chain([Action::Close]).collect()
     }
 
-    fn filter(&mut self) -> Option<&mut dyn ListFilter> {
+    fn list(&mut self) -> Option<&mut dyn SurfaceList> {
         Some(&mut self.values)
     }
 
-    fn click(&mut self, row: u16, _column: u16) -> Vec<Action> {
-        if self.values.select_at(row) { self.activate() } else { Vec::new() }
-    }
-
-    fn scroll(&mut self, direction: Direction) -> Vec<Action> {
-        self.values.step(direction, |value| !value.is_disabled);
-        Vec::new()
+    fn activates_on_click(&self) -> bool {
+        true
     }
 
     fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
@@ -89,6 +84,6 @@ impl Surface for SettingsPicker {
 
 impl SettingsPane for SettingsPicker {
     fn footer(&self) -> Vec<KeyHint> {
-        vec![("Enter", "confirm".to_string()), ("Esc", "back".to_string())]
+        vec![("Enter", "confirm".into()), ("Esc", "back".into())]
     }
 }

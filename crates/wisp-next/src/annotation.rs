@@ -7,18 +7,47 @@
 
 use crate::edit_buffer::{EditBuffer, apply_edit_key};
 use crate::theme::Theme;
-use crate::widgets::render_vertical_scrollbar;
-use crate::wrap::rows as rows_u16;
+use crate::widgets::{SCROLLBAR_WIDTH, render_vertical_scrollbar, row_area, rows_and_track};
+use crate::wrap::{text_position_in_wrap, wrap_text_char};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::text::Line;
+use ratatui::layout::Rect;
+use ratatui::style::Style;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
+use std::rc::Rc;
 
 /// A comment being typed, anchored to wherever `A` points.
 pub struct Draft<A> {
     pub anchor: A,
     pub buffer: EditBuffer,
+}
+
+/// Wraps a draft's text to `width` columns, with the cursor's row and column
+/// within the wrapped result.
+///
+/// For a draft box embedded in scrolled content, where the terminal cursor has
+/// to be placed by the caller rather than by a focused widget.
+pub fn wrapped_with_cursor(buffer: &EditBuffer, width: usize) -> (Vec<String>, (usize, u16)) {
+    (wrap_text_char(buffer.text(), width), text_position_in_wrap(&buffer.text()[..buffer.cursor()], width))
+}
+
+/// Draws a draft with a block cursor painted into the text.
+///
+/// Used where the terminal cursor is not available because the draft is one row
+/// of a larger rendered document rather than the focused widget.
+pub fn block_cursor_spans(buffer: &EditBuffer, text_style: Style, cursor_style: Style) -> Vec<Span<'static>> {
+    let text = buffer.text();
+    let cursor = buffer.cursor();
+    let cursor_len = text[cursor..].chars().next().map_or(0, char::len_utf8);
+    // Past the end of the text there is no character to invert, so a space
+    // stands in for one.
+    let under_cursor = if cursor_len == 0 { " " } else { &text[cursor..cursor + cursor_len] };
+    vec![
+        Span::styled(text[..cursor].to_string(), text_style),
+        Span::styled(under_cursor.to_string(), cursor_style),
+        Span::styled(text[cursor + cursor_len..].to_string(), text_style),
+    ]
 }
 
 /// A document laid out as rendered rows, with review annotations woven in
@@ -33,12 +62,39 @@ pub struct AnnotatedRows<A> {
 }
 
 /// One rendered row: a source line, or an annotation hanging beneath one.
-struct Row<A> {
-    line: Line<'static>,
+///
+/// The line is shared rather than owned so a caller can cache the expensive
+/// half — the syntax-highlighted document — and reweave its annotations on
+/// every keystroke for the cost of a pointer copy per row.
+#[derive(Clone)]
+pub struct Row<A> {
+    line: Rc<Line<'static>>,
     /// The source line this row belongs to, when it belongs to one.
     anchor: Option<A>,
     /// Whether the cursor may rest on this row.
     selectable: bool,
+}
+
+impl<A: Copy> Row<A> {
+    /// A source row the cursor can rest on and annotations can hang from.
+    pub fn at(line: Line<'static>, anchor: A) -> Self {
+        Self { line: Rc::new(line), anchor: Some(anchor), selectable: true }
+    }
+
+    /// A source row annotations can hang from, but the cursor skips over.
+    pub fn anchored(line: Line<'static>, anchor: A) -> Self {
+        Self { line: Rc::new(line), anchor: Some(anchor), selectable: false }
+    }
+
+    /// A row that is neither, such as a placeholder while a file loads.
+    pub fn inert(line: Line<'static>) -> Self {
+        Self { line: Rc::new(line), anchor: None, selectable: false }
+    }
+
+    /// What a comment on this row would anchor to, when it can carry one.
+    pub fn anchor(&self) -> Option<A> {
+        self.anchor
+    }
 }
 
 impl<A> Default for AnnotatedRows<A> {
@@ -56,22 +112,23 @@ impl<A: Copy + PartialEq> AnnotatedRows<A> {
 
     /// A source row the cursor can rest on and annotations can hang from.
     pub fn push(&mut self, line: Line<'static>, anchor: A) {
-        self.rows.push(Row { line, anchor: Some(anchor), selectable: true });
+        self.rows.push(Row::at(line, anchor));
     }
 
     /// A source row annotations can hang from, but the cursor skips over.
     pub fn push_anchored(&mut self, line: Line<'static>, anchor: A) {
-        self.rows.push(Row { line, anchor: Some(anchor), selectable: false });
+        self.rows.push(Row::anchored(line, anchor));
     }
 
-    /// A row that is neither, such as a placeholder while a file loads.
-    pub fn push_inert(&mut self, line: Line<'static>) {
-        self.rows.push(Row { line, anchor: None, selectable: false });
+    /// A source row built elsewhere, so a caller that caches its rendered
+    /// document can reweave annotations without rebuilding it.
+    pub fn push_row(&mut self, row: &Row<A>) {
+        self.rows.push(row.clone());
     }
 
     /// Annotation rows beneath the source row most recently pushed.
     pub fn push_annotation(&mut self, lines: impl IntoIterator<Item = Line<'static>>) {
-        self.rows.extend(lines.into_iter().map(|line| Row { line, anchor: None, selectable: false }));
+        self.rows.extend(lines.into_iter().map(Row::inert));
     }
 
     /// Like [`AnnotatedRows::push_annotation`], recording where the draft's text
@@ -104,10 +161,12 @@ impl<A: Copy + PartialEq> AnnotatedRows<A> {
     /// Draws the rows visible from `offset`, painting `cursor` in the cursor
     /// colours and reserving the rightmost column for the scrollbar track.
     pub fn render(&self, area: Rect, buf: &mut Buffer, offset: usize, cursor: Option<usize>, theme: &Theme) {
-        let [body, track] = Layout::horizontal([Constraint::Min(0), Constraint::Length(SCROLLBAR_WIDTH)]).areas(area);
-        for (index, row) in self.rows.iter().skip(offset).take(usize::from(body.height)).enumerate() {
-            let row_area = Rect { y: body.y + rows_u16(index), height: 1, ..body };
-            (&row.line).render(row_area, buf);
+        let (body, track) = rows_and_track(area, true);
+        for (index, row) in self.rows.iter().skip(offset).enumerate() {
+            let Some(row_area) = row_area(body, index) else {
+                break;
+            };
+            row.line.as_ref().render(row_area, buf);
             if cursor == Some(offset + index) {
                 paint_cursor_row(row_area, buf, theme);
             }
@@ -115,8 +174,6 @@ impl<A: Copy + PartialEq> AnnotatedRows<A> {
         render_vertical_scrollbar(track, buf, self.rows.len(), offset);
     }
 }
-
-const SCROLLBAR_WIDTH: u16 = 1;
 
 /// Repaints a whole row in the cursor colours, including the columns past the
 /// end of its text.

@@ -24,6 +24,7 @@ use crate::workspace_status::WorkspaceStatus;
 use acp_utils::client::AcpPromptHandle;
 use acp_utils::notifications::{AetherCapabilities, McpServerStatusEntry};
 use agent_client_protocol::schema::{self as acp, SessionId};
+use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -140,17 +141,15 @@ impl Conversation {
         self.generation.bump();
     }
 
-    fn drain_finalized(&mut self, prompt_in_flight: bool) -> Vec<HistoryItem> {
+    fn drain_finalized(&mut self, prompt_in_flight: bool) -> Vec<HistoryItem<'static>> {
         let drained = self.transcript.drain_finalized_prefix(&self.tool_calls, prompt_in_flight);
-        let mut items = Vec::with_capacity(drained.len());
-        for segment in drained {
-            let tool_id = match &segment {
-                SegmentContent::ToolCall(id) => Some(id.clone()),
-                _ => None,
-            };
-            items.push(resolve_history_segment(&segment, &self.tool_calls));
-            if let Some(id) = tool_id {
-                self.tool_calls.remove(&id);
+        let items: Vec<HistoryItem<'static>> =
+            drained.iter().map(|segment| resolve_history_segment(segment, &self.tool_calls).into_owned()).collect();
+        // Only once every segment is detached from the log can the entries they
+        // were resolved against be dropped.
+        for segment in &drained {
+            if let SegmentContent::ToolCall(id) = segment {
+                self.tool_calls.remove(id);
             }
         }
         if let Some(last) = items.last() {
@@ -159,7 +158,7 @@ impl Conversation {
         items
     }
 
-    fn pending_items(&self) -> Vec<HistoryItem> {
+    fn pending_items(&self) -> Vec<HistoryItem<'_>> {
         self.transcript.pending().iter().map(|segment| resolve_history_segment(segment, &self.tool_calls)).collect()
     }
 }
@@ -239,20 +238,25 @@ pub struct AppConfig {
 
 /// A transcript segment resolved for rendering: tool calls carry their final
 /// title and status instead of an id that needs a lookup.
+///
+/// Borrowed rather than owned, because the live tail is resolved afresh on every
+/// frame while the agent works: owning it meant deep-copying each running tool's
+/// diff and sub-agent tree ten times a second. Only [`App::drain_finalized`]
+/// needs owned items, because it drops the log entries it resolved against.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum HistoryItem {
-    User(String),
-    Text(String),
-    Thought(String),
+pub enum HistoryItem<'a> {
+    User(Cow<'a, str>),
+    Text(Cow<'a, str>),
+    Thought(Cow<'a, str>),
     Tool {
-        title: String,
-        status: ToolStatus,
-        diff: Option<DiffPreview>,
-        raw_input: String,
-        display_value: Option<String>,
+        title: Cow<'a, str>,
+        status: Cow<'a, ToolStatus>,
+        diff: Option<Cow<'a, DiffPreview>>,
+        raw_input: Cow<'a, str>,
+        display_value: Option<Cow<'a, str>>,
         /// The sub-agent tree drawn beneath this tool, taken from the log as-is
         /// rather than projected into a parallel set of types.
-        sub_agents: Vec<SubAgentState>,
+        sub_agents: Cow<'a, [SubAgentState]>,
     },
 }
 
@@ -264,13 +268,31 @@ pub enum HistoryKind {
     Tool,
 }
 
-impl HistoryItem {
+impl HistoryItem<'_> {
     pub fn kind(&self) -> HistoryKind {
         match self {
             HistoryItem::User(_) => HistoryKind::User,
             HistoryItem::Text(_) => HistoryKind::Text,
             HistoryItem::Thought(_) => HistoryKind::Thought,
             HistoryItem::Tool { .. } => HistoryKind::Tool,
+        }
+    }
+
+    /// Detaches the item from the log it was resolved against, so it can outlive
+    /// the entries [`App::drain_finalized`] is about to drop.
+    pub fn into_owned(self) -> HistoryItem<'static> {
+        match self {
+            HistoryItem::User(text) => HistoryItem::User(Cow::Owned(text.into_owned())),
+            HistoryItem::Text(text) => HistoryItem::Text(Cow::Owned(text.into_owned())),
+            HistoryItem::Thought(text) => HistoryItem::Thought(Cow::Owned(text.into_owned())),
+            HistoryItem::Tool { title, status, diff, raw_input, display_value, sub_agents } => HistoryItem::Tool {
+                title: Cow::Owned(title.into_owned()),
+                status: Cow::Owned(status.into_owned()),
+                diff: diff.map(|diff| Cow::Owned(diff.into_owned())),
+                raw_input: Cow::Owned(raw_input.into_owned()),
+                display_value: display_value.map(|value| Cow::Owned(value.into_owned())),
+                sub_agents: Cow::Owned(sub_agents.into_owned()),
+            },
         }
     }
 }
@@ -421,12 +443,12 @@ impl App {
 
     /// Remove transcript segments that can never mutate again and resolve them
     /// for one-time handoff to the terminal presenter.
-    pub fn drain_finalized(&mut self) -> Vec<HistoryItem> {
+    pub fn drain_finalized(&mut self) -> Vec<HistoryItem<'static>> {
         self.conversation.drain_finalized(self.turn.prompt_in_flight)
     }
 
     /// Segments still owned by the live viewport (streaming tail, running tools).
-    pub fn pending_items(&self) -> Vec<HistoryItem> {
+    pub fn pending_items(&self) -> Vec<HistoryItem<'_>> {
         self.conversation.pending_items()
     }
 
@@ -563,20 +585,24 @@ impl App {
     }
 }
 
-fn resolve_history_segment(segment: &SegmentContent, tool_calls: &ToolCallLog) -> HistoryItem {
+/// Status shown for a tool call whose log entry has already been dropped, so a
+/// resolved segment can borrow one rather than allocate a fallback per frame.
+static DRAINED_TOOL_STATUS: ToolStatus = ToolStatus::Success;
+
+fn resolve_history_segment<'a>(segment: &'a SegmentContent, tool_calls: &'a ToolCallLog) -> HistoryItem<'a> {
     match segment {
-        SegmentContent::UserMessage(text) => HistoryItem::User(text.clone()),
-        SegmentContent::Text(text) => HistoryItem::Text(text.clone()),
-        SegmentContent::Thought(text) => HistoryItem::Thought(text.clone()),
+        SegmentContent::UserMessage(text) => HistoryItem::User(Cow::Borrowed(text)),
+        SegmentContent::Text(text) => HistoryItem::Text(Cow::Borrowed(text)),
+        SegmentContent::Thought(text) => HistoryItem::Thought(Cow::Borrowed(text)),
         SegmentContent::ToolCall(id) => {
             let entry = tool_calls.entry(id);
             HistoryItem::Tool {
-                title: entry.map_or_else(|| id.clone(), |value| value.title.clone()),
-                status: entry.map_or(ToolStatus::Success, |value| value.status.clone()),
-                diff: entry.and_then(|value| value.diff.clone()),
-                raw_input: entry.map_or_else(String::new, |value| value.raw_input.clone()),
-                display_value: entry.and_then(|value| value.display_value.clone()),
-                sub_agents: tool_calls.sub_agent_states(id).map(<[SubAgentState]>::to_vec).unwrap_or_default(),
+                title: Cow::Borrowed(entry.map_or(id.as_str(), |value| value.title.as_str())),
+                status: Cow::Borrowed(entry.map_or(&DRAINED_TOOL_STATUS, |value| &value.status)),
+                diff: entry.and_then(|value| value.diff.as_ref()).map(Cow::Borrowed),
+                raw_input: Cow::Borrowed(entry.map_or("", |value| value.raw_input.as_str())),
+                display_value: entry.and_then(|value| value.display_value.as_deref()).map(Cow::Borrowed),
+                sub_agents: Cow::Borrowed(tool_calls.sub_agent_states(id).unwrap_or(&[])),
             }
         }
     }

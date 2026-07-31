@@ -203,11 +203,12 @@ impl<'a> MarkdownRenderer<'a> {
     }
 
     fn finish_code_block(&mut self) {
-        let mut lines = self.highlighter.highlight(&self.code, &self.code_language, self.theme);
-        for line in &mut lines {
+        let highlighted = self.highlighter.highlight(&self.code, &self.code_language, self.theme);
+        self.lines.extend(highlighted.iter().map(|line| {
+            let mut line = line.clone();
             line.style = line.style.patch(Style::new().bg(self.theme.code_bg));
-        }
-        self.lines.extend(lines);
+            line
+        }));
         self.in_code_block = false;
         self.code.clear();
         self.code_language.clear();

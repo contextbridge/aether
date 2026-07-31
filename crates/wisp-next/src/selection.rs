@@ -1,5 +1,4 @@
 use ratatui::layout::Rect;
-use ratatui::widgets::ListState;
 
 /// Cursor and scroll offset for a list of `len` items.
 ///
@@ -7,11 +6,13 @@ use ratatui::widgets::ListState;
 /// collection it indexes: filters, reloads, and live updates all change `len`
 /// without invalidating the selection.
 ///
-/// Scrolling the selection into view is [`List`](ratatui::widgets::List)'s job:
-/// it rewrites `offset` during rendering so the selected row is always drawn.
+/// Scrolling the selection into view belongs to whoever draws the rows, because
+/// only it knows how many fit; [`ListView`](crate::list_view::ListView) writes
+/// the window it settled on back through [`SelectionState::set_offset`].
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SelectionState {
-    list: ListState,
+    selected: Option<usize>,
+    offset: usize,
     rows_area: Rect,
 }
 
@@ -23,20 +24,26 @@ impl SelectionState {
     }
 
     pub fn selected(&self) -> Option<usize> {
-        self.list.selected()
+        self.selected
     }
 
     pub fn offset(&self) -> usize {
-        self.list.offset()
+        self.offset
+    }
+
+    /// Records the window the rows were actually drawn from, so the next frame
+    /// scrolls against it and a click hit-tests against the same rows.
+    pub fn set_offset(&mut self, offset: usize) {
+        self.offset = offset;
     }
 
     pub fn select(&mut self, selected: Option<usize>, len: usize) {
-        self.list.select(selected.filter(|index| *index < len));
+        self.selected = selected.filter(|index| *index < len);
         self.clamp(len);
     }
 
     pub fn select_first(&mut self, len: usize) {
-        self.list.select((len > 0).then_some(0));
+        self.selected = (len > 0).then_some(0);
         self.clamp(len);
     }
 
@@ -71,7 +78,7 @@ impl SelectionState {
     /// whose rows are a mix of headers and entries never land on a header.
     pub fn step(&mut self, len: usize, direction: Direction, selectable: impl Fn(usize) -> bool) {
         if len == 0 {
-            self.list.select(None);
+            self.selected = None;
             return;
         }
         let mut index = self.selected().unwrap_or_default().min(len - 1);
@@ -81,7 +88,7 @@ impl SelectionState {
                 Direction::Forward => (index + 1) % len,
             };
             if selectable(index) {
-                self.list.select(Some(index));
+                self.selected = Some(index);
                 return;
             }
         }
@@ -99,24 +106,20 @@ impl SelectionState {
             Direction::Forward => (current + 1..len).find(|&index| selectable(index)),
         };
         if let Some(next) = next {
-            self.list.select(Some(next));
+            self.selected = Some(next);
         }
     }
 
     pub fn clamp(&mut self, len: usize) {
         if len == 0 {
-            self.list.select(None);
-            *self.list.offset_mut() = 0;
+            self.selected = None;
+            self.offset = 0;
         } else if self.selected().is_none_or(|selected| selected >= len) {
-            self.list.select(Some(len - 1));
+            self.selected = Some(len - 1);
         }
-        if self.offset() >= len {
-            *self.list.offset_mut() = len.saturating_sub(1);
+        if self.offset >= len {
+            self.offset = len.saturating_sub(1);
         }
-    }
-
-    pub fn list_state_mut(&mut self) -> &mut ListState {
-        &mut self.list
     }
 }
 
@@ -183,7 +186,7 @@ mod tests {
     #[test]
     fn visible_rows_include_list_offset() {
         let mut state = SelectionState::new(10);
-        *state.list_state_mut().offset_mut() = 4;
+        state.set_offset(4);
         state.select_row(2, 10);
         assert_eq!(state.selected(), Some(6));
     }

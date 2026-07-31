@@ -1,7 +1,6 @@
 use crate::filterable_list::FilterableList;
 use crate::render_context::RenderContext;
-use crate::selection::Direction;
-use crate::surface::{Action, ListFilter, Surface, one};
+use crate::surface::{Action, Surface, SurfaceList, one};
 use crate::wrap::truncate_to_width;
 use acp_utils::notifications::SessionPreviewResponse;
 use agent_client_protocol::schema::{self as acp, SessionId};
@@ -160,23 +159,12 @@ impl Surface for SessionPicker {
         }))
     }
 
-    fn filter(&mut self) -> Option<&mut dyn ListFilter> {
+    fn list(&mut self) -> Option<&mut dyn SurfaceList> {
         Some(&mut self.sessions)
     }
 
-    fn on_filter_changed(&mut self) -> Vec<Action> {
-        self.preview_request()
-    }
-
-    fn scroll(&mut self, direction: Direction) -> Vec<Action> {
-        self.sessions.step(direction, |_| true);
-        self.preview_request()
-    }
-
-    fn click(&mut self, row: u16, _column: u16) -> Vec<Action> {
-        if !self.sessions.select_at(row) {
-            return Vec::new();
-        }
+    /// Every way the focus can move wants the newly focused session previewed.
+    fn on_selection_changed(&mut self) -> Vec<Action> {
         self.preview_request()
     }
 

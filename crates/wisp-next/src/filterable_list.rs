@@ -1,19 +1,29 @@
 use crate::list_view::ListView;
 use crate::selection::{Direction, SelectionState};
-use crate::surface::ListFilter;
+use crate::surface::SurfaceList;
 use crate::theme::Theme;
 use nucleo::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo::{Config, Matcher, Utf32Str};
 use ratatui::text::Line;
 
-/// A list of `T` with a fuzzy-match filter and a persistent selection.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// A list of `T` with a fuzzy-match filter, a persistent selection, and the
+/// navigation policy that selection moves under.
+///
+/// Holding the policy here rather than passing it to every move is what lets a
+/// surface hand the whole list to the shared key and mouse handling in
+/// [`Surface`](crate::surface::Surface) instead of reimplementing it.
+#[derive(Clone, Debug)]
 pub struct FilterableList<T> {
     entries: Vec<T>,
     match_keys: Vec<String>,
     query: String,
     filtered_indices: Vec<usize>,
     selection: SelectionState,
+    /// Entries navigation may land on; the rest are stepped over.
+    selectable: fn(&T) -> bool,
+    /// Whether stepping wraps at the ends. Long lists that are scanned rather
+    /// than cycled stop instead.
+    wraps: bool,
 }
 
 impl<T> FilterableList<T> {
@@ -21,7 +31,28 @@ impl<T> FilterableList<T> {
         let match_keys = entries.iter().map(&match_key).collect();
         let filtered_indices = (0..entries.len()).collect();
         let selection = SelectionState::new(entries.len());
-        Self { entries, match_keys, query: String::new(), filtered_indices, selection }
+        Self {
+            entries,
+            match_keys,
+            query: String::new(),
+            filtered_indices,
+            selection,
+            selectable: |_| true,
+            wraps: true,
+        }
+    }
+
+    /// Restricts navigation to the entries `selectable` accepts, so disabled
+    /// rows are never focused.
+    pub fn selectable(mut self, selectable: fn(&T) -> bool) -> Self {
+        self.selectable = selectable;
+        self
+    }
+
+    /// Stops navigation at the ends instead of wrapping.
+    pub fn clamped(mut self) -> Self {
+        self.wraps = false;
+        self
     }
 
     pub fn entries(&self) -> &[T] {
@@ -84,22 +115,21 @@ impl<T> FilterableList<T> {
         hit
     }
 
-    /// Wrapping move to the nearest filtered entry in `direction` satisfying
-    /// `selectable`, so disabled rows are never focused.
-    pub fn step(&mut self, direction: Direction, selectable: impl Fn(&T) -> bool) {
-        let Self { entries, filtered_indices, selection, .. } = self;
-        selection.step(filtered_indices.len(), direction, |row| selectable(&entries[filtered_indices[row]]));
+    /// Moves to the nearest filtered entry in `direction` that this list's
+    /// policy allows the selection to rest on.
+    pub fn step(&mut self, direction: Direction) {
+        let Self { entries, filtered_indices, selection, selectable, wraps, .. } = self;
+        let allowed = |row: usize| selectable(&entries[filtered_indices[row]]);
+        if *wraps {
+            selection.step(filtered_indices.len(), direction, allowed);
+        } else {
+            selection.step_clamped(filtered_indices.len(), direction, allowed);
+        }
     }
 
     /// Block title for a picker pane, showing the active query when there is one.
     pub fn search_title(&self, label: &str) -> String {
         if self.query.is_empty() { format!(" {label} ") } else { format!(" {label} '{}' ", self.query) }
-    }
-
-    /// Like [`Self::step`], but stops at the ends instead of wrapping.
-    pub fn step_clamped(&mut self, direction: Direction, selectable: impl Fn(&T) -> bool) {
-        let Self { entries, filtered_indices, selection, .. } = self;
-        selection.step_clamped(filtered_indices.len(), direction, |row| selectable(&entries[filtered_indices[row]]));
     }
 
     pub fn select_index(&mut self, index: usize) {
@@ -132,18 +162,26 @@ impl<T> FilterableList<T> {
 
     fn clear_offset_when_empty(&mut self) {
         if self.filtered_indices.is_empty() {
-            *self.selection.list_state_mut().offset_mut() = 0;
+            self.selection.set_offset(0);
         }
     }
 }
 
-impl<T> ListFilter for FilterableList<T> {
+impl<T> SurfaceList for FilterableList<T> {
     fn push_query_char(&mut self, character: char) {
         FilterableList::push_query_char(self, character);
     }
 
     fn pop_query_char(&mut self) {
         FilterableList::pop_query_char(self);
+    }
+
+    fn step(&mut self, direction: Direction) {
+        FilterableList::step(self, direction);
+    }
+
+    fn select_at(&mut self, row: u16) -> bool {
+        FilterableList::select_at(self, row)
     }
 }
 

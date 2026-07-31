@@ -1,12 +1,11 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use ratatui::text::Line;
-
-use crate::annotation::{AnnotatedRows, Draft, DraftKey};
+use crate::annotation::{Draft, DraftKey, Row};
 use crate::edit_buffer::EditBuffer;
 use crate::git_diff::{DiffScope, FileDiff, FileStatus, GitDiffDocument, PatchAnchor, ReviewQueue, StageState};
-use crate::selection::{Direction, SelectionState, scroll_into_view, step_clamped};
+use crate::screens::review::{DocumentPane, Pane};
+use crate::selection::{Direction, SelectionState};
 
 use crate::surface::Action;
 
@@ -23,7 +22,7 @@ pub struct GitDiffScreen {
     pub(super) selected_file: usize,
     pub(super) selected_path: Option<String>,
     pub(super) drawer_selection: SelectionState,
-    pub(super) focus: Focus,
+    pub(super) focus: Pane,
     pub(super) collapsed: HashSet<String>,
     /// Columns the reviewer has widened the file drawer by, relative to the
     /// width the body would give it on its own.
@@ -41,18 +40,16 @@ pub struct GitDiffScreen {
     pub(super) request: Request,
 }
 
-/// The patch pane: where it is scrolled, where its cursor sits, and the
-/// rendered views backing both.
+/// The patch pane: the document under review, plus the two cached renders
+/// behind it.
 #[derive(Default)]
 pub(super) struct PatchView {
-    /// First rendered row on screen.
-    pub(super) scroll: usize,
-    /// Rows the pane had on the last frame, for scrolling the cursor into view.
-    pub(super) height: u16,
-    pub(super) cursor: PatchCursor,
+    pub(super) document: DocumentPane<PatchCursor>,
     /// The syntax-highlighted patch, independent of anything drawn over it.
     pub(super) rows: Option<PatchRows>,
-    pub(super) view: Option<DiffView>,
+    /// What the woven rows currently in `document` were built from; they are
+    /// reusable exactly while this still matches.
+    pub(super) view_key: Option<DiffViewKey>,
 }
 
 /// The review being assembled: comments already filed, and the one being typed.
@@ -73,13 +70,6 @@ pub(super) struct Request {
     pub(super) pending: Option<PendingAction>,
 }
 
-/// A rendered patch, and everything about the state it was rendered from. It is
-/// reusable exactly while [`DiffViewKey`] still matches.
-pub(super) struct DiffView {
-    pub(super) rows: AnnotatedRows<PatchCursor>,
-    pub(super) key: DiffViewKey,
-}
-
 /// The syntax-highlighted patch, one row per rendered line, before any review
 /// comment is woven in.
 pub(super) struct PatchRows {
@@ -87,31 +77,10 @@ pub(super) struct PatchRows {
     pub(super) key: PatchKey,
 }
 
-/// One rendered row of a patch.
-pub(super) struct PatchRow {
-    pub(super) line: Line<'static>,
-    /// The patch line a comment on this row anchors to, when it has one.
-    pub(super) anchor: Option<PatchCursor>,
-    /// Whether the patch cursor can rest on this row.
-    pub(super) selectable: bool,
-}
-
-impl PatchRow {
-    /// A row the cursor can rest on and comments can hang from.
-    pub(super) fn at(line: Line<'static>, cursor: PatchCursor) -> Self {
-        Self { line, anchor: Some(cursor), selectable: true }
-    }
-
-    /// A row comments can hang from, but the cursor skips over.
-    pub(super) fn anchored(line: Line<'static>, cursor: PatchCursor) -> Self {
-        Self { line, anchor: Some(cursor), selectable: false }
-    }
-
-    /// A row that is neither, such as a placeholder while a file loads.
-    pub(super) fn inert(line: Line<'static>) -> Self {
-        Self { line, anchor: None, selectable: false }
-    }
-}
+/// One rendered row of a patch. The same row type the woven result is built
+/// from, so weaving comments in is a pointer copy per row rather than a
+/// re-render of the file.
+pub(super) type PatchRow = Row<PatchCursor>;
 
 /// Identity of the highlighted patch. Nothing a reviewer types is part of it,
 /// so typing never re-highlights the file.
@@ -149,12 +118,6 @@ pub(super) struct PatchCursor {
     pub(super) line: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Focus {
-    Drawer,
-    Patch,
-}
-
 pub(super) enum GitDiffLoadState {
     Loading,
     Ready(GitDiffDocument),
@@ -184,7 +147,7 @@ impl GitDiffScreen {
             selected_file: 0,
             selected_path: None,
             drawer_selection: SelectionState::default(),
-            focus: Focus::Drawer,
+            focus: Pane::Nav,
             collapsed: HashSet::new(),
             drawer_offset: 0,
             drawer_entries: Vec::new(),
@@ -224,11 +187,11 @@ impl GitDiffScreen {
             .and_then(|path| document.files.iter().position(|file| file.path == path))
             .unwrap_or(0)
             .min(document.files.len().saturating_sub(1));
-        self.patch.cursor = PatchCursor::default();
+        self.patch.document.cursor = PatchCursor::default();
         self.document_revision.bump();
         self.bump_comments_revision();
         self.patch.rows = None;
-        self.patch.view = None;
+        self.patch.view_key = None;
         self.state = GitDiffLoadState::Ready(document);
         self.rebuild_drawer();
     }
@@ -314,7 +277,7 @@ impl GitDiffScreen {
 
     /// Moves the focused pane's cursor by one entry.
     pub(super) fn move_vertical(&mut self, direction: Direction) {
-        if self.focus == Focus::Patch {
+        if self.focus == Pane::Document {
             self.move_patch_cursor(direction, 1);
             return;
         }
@@ -354,13 +317,14 @@ impl GitDiffScreen {
         let Some(last) = total.checked_sub(1) else {
             return;
         };
+        let cursor = self.patch.document.cursor;
         let current = file
             .hunks
             .iter()
-            .take(self.patch.cursor.hunk)
+            .take(cursor.hunk)
             .map(|hunk| hunk.lines.len())
             .sum::<usize>()
-            .saturating_add(self.patch.cursor.line)
+            .saturating_add(cursor.line)
             .min(last);
         let next = match direction {
             Direction::Backward => current.saturating_sub(amount),
@@ -369,51 +333,26 @@ impl GitDiffScreen {
         let mut remaining = next;
         for (hunk, entry) in file.hunks.iter().enumerate() {
             if remaining < entry.lines.len() {
-                self.patch.cursor = PatchCursor { hunk, line: remaining };
+                self.patch.document.cursor = PatchCursor { hunk, line: remaining };
                 break;
             }
             remaining -= entry.lines.len();
         }
-        self.sync_scroll_to_cursor();
-    }
-
-    /// Row the patch cursor currently occupies.
-    pub(super) fn cursor_row(&self) -> Option<usize> {
-        self.patch.view.as_ref()?.rows.row_of(self.patch.cursor)
-    }
-
-    pub(super) fn sync_scroll_to_cursor(&mut self) {
-        let Some(cursor_row) = self.cursor_row() else {
-            return;
-        };
-        self.patch.scroll = scroll_into_view(self.patch.scroll, cursor_row, usize::from(self.patch.height));
+        self.patch.document.follow_cursor();
     }
 
     pub(super) fn move_patch_scroll(&mut self, direction: Direction, amount: usize) {
-        let last_row = self.patch.view.as_ref().map_or(0, |view| view.rows.len().saturating_sub(1));
-        self.patch.scroll = step_clamped(self.patch.scroll, direction, amount, last_row);
-        self.sync_cursor_to_scroll();
-    }
-
-    /// Puts the cursor on whichever patch line the pane is now scrolled to.
-    pub(super) fn sync_cursor_to_scroll(&mut self) {
-        if let Some(cursor) = self.patch.view.as_ref().and_then(|view| view.rows.anchor_at_or_above(self.patch.scroll))
-        {
-            self.patch.cursor = cursor;
-        }
+        self.patch.document.scroll_by(direction, amount);
     }
 
     pub(super) fn begin_draft(&mut self) -> Vec<Action> {
+        let cursor = self.patch.document.cursor;
         let anchored = self
             .selected_file()
-            .and_then(|file| file.hunks.get(self.patch.cursor.hunk))
-            .is_some_and(|hunk| hunk.lines.len() > self.patch.cursor.line);
+            .and_then(|file| file.hunks.get(cursor.hunk))
+            .is_some_and(|hunk| hunk.lines.len() > cursor.line);
         if anchored {
-            let anchor = PatchAnchor {
-                file_index: self.selected_file,
-                hunk: self.patch.cursor.hunk,
-                line: self.patch.cursor.line,
-            };
+            let anchor = PatchAnchor { file_index: self.selected_file, hunk: cursor.hunk, line: cursor.line };
             self.review.draft = Some(Draft::new(anchor));
         }
         Vec::new()

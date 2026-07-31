@@ -4,7 +4,8 @@ use crate::presentation::{Presenter, Segment};
 use crate::status_line::StatusLine;
 use crate::terminal::INLINE_SCROLLBACK_RESERVE;
 use crate::theme::Theme;
-use crate::wrap::rows;
+use crate::widgets::render_rows;
+use crate::wrap::as_u16;
 use agent_client_protocol::schema::PlanEntry;
 use ratatui::Frame;
 use ratatui::Terminal;
@@ -54,7 +55,7 @@ pub fn sync_terminal<B: Backend>(
         let overflow = presenter.scrollback_mut().take_overflow(layout.committed_capacity());
         for chunk in overflow.chunks(usize::from(u16::MAX)) {
             let chunk = chunk.to_vec();
-            terminal.insert_before(rows(chunk.len()), move |buffer| {
+            terminal.insert_before(as_u16(chunk.len()), move |buffer| {
                 Paragraph::new(Text::from(chunk)).render(buffer.area, buffer);
             })?;
         }
@@ -88,18 +89,20 @@ impl FrameLayout {
         let status_line = StatusLine::new(&app.status_line_model(), presenter.theme());
         let status_line_rows = status_line.height(area.width);
         let composer_layout = app.composer_mut().layout(area.width, presenter.theme());
-        let completion_rows = rows(app.composer().completion_ref().map_or(0, |o| o.row_count(COMPLETION_MAX_ROWS)));
+        let completion_rows =
+            as_u16(app.composer_mut().completion().map_or(0, |overlay| overlay.row_count(COMPLETION_MAX_ROWS)));
         let prompt_search_rows =
-            rows(app.composer().prompt_search_ref().map_or(0, |p| p.height(PROMPT_SEARCH_MAX_ROWS)));
+            as_u16(app.composer_mut().prompt_search().map_or(0, |picker| picker.height(PROMPT_SEARCH_MAX_ROWS)));
         let requested_composer_height =
-            rows(composer_layout.lines.len()).saturating_add(completion_rows).saturating_add(prompt_search_rows);
+            as_u16(composer_layout.lines.len()).saturating_add(completion_rows).saturating_add(prompt_search_rows);
         let composer_height = requested_composer_height.max(1).min(area.height.saturating_sub(status_line_rows));
 
         let remaining = area.height.saturating_sub(composer_height).saturating_sub(status_line_rows);
         let plan_entries = app.plan_entries();
         // The plan never takes more than a third of what is left, so a long plan
         // cannot squeeze out the conversation.
-        let plan_height = rows(PlanView::new(&plan_entries, presenter.theme()).line_count()).min(remaining.div_ceil(3));
+        let plan_height =
+            as_u16(PlanView::new(&plan_entries, presenter.theme()).line_count()).min(remaining.div_ceil(3));
         let progress_lines = app.progress_indicator().lines(presenter.theme(), app.spinner_tick());
         let live_lines =
             if app.full_screen_active() { Vec::new() } else { live_history_lines(app, presenter, area.width) };
@@ -115,7 +118,7 @@ impl FrameLayout {
             plan_height,
             progress_lines,
             live_lines,
-            content_padding: rows(app.content_padding()),
+            content_padding: as_u16(app.content_padding()),
             transcript_height: remaining.saturating_sub(plan_height),
         }
     }
@@ -171,14 +174,14 @@ fn draw_transcript(layout: &FrameLayout, committed: &[Line<'static>], area: Rect
     let committed = tail(committed, &mut remaining);
 
     let [committed_area, live_area, progress_area] = Layout::vertical([
-        Constraint::Length(rows(committed.len())),
-        Constraint::Length(rows(live.len())),
-        Constraint::Length(rows(progress.len())),
+        Constraint::Length(as_u16(committed.len())),
+        Constraint::Length(as_u16(live.len())),
+        Constraint::Length(as_u16(progress.len())),
     ])
     .areas(area);
-    render_lines(committed, committed_area, buf);
-    render_lines(live, live_area, buf);
-    render_lines(progress, layout.indent(progress_area), buf);
+    render_rows(committed, committed_area, buf);
+    render_rows(live, live_area, buf);
+    render_rows(progress, layout.indent(progress_area), buf);
 }
 
 /// The last `remaining` lines of `lines`, decrementing `remaining` by how many
@@ -187,13 +190,6 @@ fn tail<'a>(lines: &'a [Line<'static>], remaining: &mut usize) -> &'a [Line<'sta
     let taken = lines.len().min(*remaining);
     *remaining -= taken;
     &lines[lines.len() - taken..]
-}
-
-/// Draws one line per row, avoiding the full copy a `Paragraph` would need.
-fn render_lines(lines: &[Line<'static>], area: Rect, buf: &mut Buffer) {
-    for (index, line) in lines.iter().take(usize::from(area.height)).enumerate() {
-        line.render(Rect { y: area.y + rows(index), height: 1, ..area }, buf);
-    }
 }
 
 fn live_history_lines(app: &App, presenter: &mut Presenter, width: u16) -> Vec<Line<'static>> {
@@ -236,13 +232,13 @@ fn render_composer(
 
     // Keep the cursor line visible when the composer is taller than its area.
     let skip = layout.composer_layout.lines.len().saturating_sub(usize::from(body_area.height));
-    render_lines(&layout.composer_layout.lines[skip..], body_area, buf);
+    render_rows(&layout.composer_layout.lines[skip..], body_area, buf);
 
     let cursor_row = usize::from(layout.composer_layout.cursor.y);
     if cursor_row < skip {
         return None;
     }
     let x = body_area.x.saturating_add(layout.composer_layout.cursor.x);
-    let y = body_area.y.saturating_add(rows(cursor_row - skip));
+    let y = body_area.y.saturating_add(as_u16(cursor_row - skip));
     (x < body_area.right() && y < body_area.bottom()).then(|| Position::new(x, y))
 }

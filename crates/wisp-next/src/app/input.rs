@@ -1,5 +1,6 @@
 use super::config::{cycle_quick_option, cycle_reasoning_option, update_config_option_value};
 use super::{App, ExitState, Layer};
+use crate::composer::ComposerOutcome;
 use crate::dropped_files::parse_dropped_file_paths;
 use crate::picker::CommandEntry;
 use crate::render_context::RenderContext;
@@ -68,30 +69,23 @@ impl App {
         self.on_ui_event(UiEvent::Key(key));
     }
 
-    /// Routes a keystroke to whichever layer owns input, innermost first.
+    /// Routes a keystroke the conversation owns. Layers are handled by
+    /// [`Self::on_ui_event`] before this is reached.
     fn dispatch_key(&mut self, key: KeyEvent) {
-        if let Some(layer) = self.layer.as_mut() {
-            let messages = layer.surface().on_key(key);
-            self.dispatch_actions(messages);
-            return;
-        }
-
-        if self.composer.has_prompt_search() {
-            let query = self.composer.prompt_search_on_key(key);
-            self.apply_prompt_search_query(query);
+        if let Some(outcome) = self.composer.on_prompt_search_key(key) {
+            self.apply_composer_outcome(outcome);
             return;
         }
 
         self.on_composer_key(key);
     }
 
-    /// A new query goes to the agent; an emptied one restores the draft the
-    /// search replaced.
-    fn apply_prompt_search_query(&mut self, query: Option<String>) {
-        match query {
-            Some(query) if !query.trim().is_empty() => self.send_prompt_search_query(query),
-            Some(_) => self.composer.restore_prompt_search_draft(),
-            None => {}
+    /// Acts on the little the composer's overlays cannot do for themselves.
+    fn apply_composer_outcome(&mut self, outcome: ComposerOutcome) {
+        match outcome {
+            ComposerOutcome::Handled => {}
+            ComposerOutcome::AcceptedCommand(command) => self.run_accepted_command(&command),
+            ComposerOutcome::Search(query) => self.send_prompt_search_query(query),
         }
     }
 
@@ -116,10 +110,8 @@ impl App {
             return;
         }
 
-        if self.composer.has_completion() {
-            if let Some(command) = self.composer.completion_on_key(key) {
-                self.run_accepted_command(&command);
-            }
+        if let Some(outcome) = self.composer.on_completion_key(key) {
+            self.apply_composer_outcome(outcome);
             return;
         }
 
@@ -194,9 +186,8 @@ impl App {
     }
 
     fn on_composer_paste(&mut self, text: &str) {
-        if self.composer.has_prompt_search() {
-            let query = self.composer.prompt_search_on_paste(text);
-            self.apply_prompt_search_query(query);
+        if let Some(outcome) = self.composer.on_prompt_search_paste(text) {
+            self.apply_composer_outcome(outcome);
             return;
         }
         let added = parse_dropped_file_paths(text).is_some_and(|paths| self.composer.add_dropped_media(paths));

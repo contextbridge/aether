@@ -1,9 +1,9 @@
 use crate::selection::{SelectionState, scroll_into_view};
 use crate::theme::Theme;
-use crate::widgets::render_vertical_scrollbar;
-use crate::wrap::{fit_line, rows as rows_u16};
+use crate::widgets::{render_vertical_scrollbar, row_area, rows_and_track};
+use crate::wrap::{as_u16, fit_line};
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Paragraph, Widget};
@@ -115,9 +115,7 @@ impl Widget for ListView<'_> {
             return;
         }
 
-        let track_width = u16::from(scrollbar);
-        let [rows_area, track_area] =
-            Layout::horizontal([Constraint::Min(0), Constraint::Length(track_width)]).areas(inner);
+        let (rows_area, track_area) = rows_and_track(inner, scrollbar);
         selection.set_rows_area(rows_area);
         let height = usize::from(rows_area.height);
         if height == 0 {
@@ -128,14 +126,16 @@ impl Widget for ListView<'_> {
         let offset = visible_offset(selection.offset(), selected, rows.len, height);
         // Clicks are hit-tested against the offset the rows were drawn from, so
         // the window this frame settled on has to be written back.
-        *selection.list_state_mut().offset_mut() = offset;
+        selection.set_offset(offset);
 
-        let symbol_width = rows_u16(highlight_symbol.map_or(0, str::width));
+        let symbol_width = as_u16(highlight_symbol.map_or(0, str::width));
         let content_width = usize::from(rows_area.width.saturating_sub(symbol_width));
         let highlight = highlight.unwrap_or_else(|| Style::new().fg(theme.text_primary).bg(theme.sidebar_bg));
 
         for (drawn, index) in (offset..rows.len.min(offset + height)).enumerate() {
-            let whole = Rect { y: rows_area.y + rows_u16(drawn), height: 1, ..rows_area };
+            let Some(whole) = row_area(rows_area, drawn) else {
+                break;
+            };
             let content = Rect { x: whole.x + symbol_width, width: whole.width.saturating_sub(symbol_width), ..whole };
             fit_line(rows.build(index), content_width, Style::default()).render(content, buf);
             if selected == Some(index) {

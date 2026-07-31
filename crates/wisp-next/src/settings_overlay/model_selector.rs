@@ -2,7 +2,7 @@ use super::{KeyHint, SettingsChange, SettingsMenuValue, SettingsPane, message_fo
 use crate::filterable_list::FilterableList;
 use crate::render_context::RenderContext;
 use crate::selection::Direction;
-use crate::surface::{Action, ListFilter, Surface, is_composed_char};
+use crate::surface::{Action, Surface, SurfaceList, is_composed_char};
 use crate::theme::Theme;
 use crate::wrap::truncate_to_width;
 use acp_utils::config_option_id::ConfigOptionId;
@@ -46,7 +46,11 @@ impl ModelSelector {
             .collect();
         let reasoning = current_reasoning_effort.and_then(|effort| effort.parse().ok());
 
-        let mut items = FilterableList::new(items, |value| format!("{} {}", value.name, value.value));
+        // Scanning a long model list stops at either end rather than wrapping,
+        // and never rests on a model the agent cannot offer.
+        let mut items = FilterableList::new(items, |value| format!("{} {}", value.name, value.value))
+            .selectable(|value| !value.is_disabled)
+            .clamped();
         // Focus a model that is already chosen, else the first selectable one.
         let initial = items
             .entries()
@@ -129,20 +133,22 @@ impl Surface for ModelSelector {
         Some(Vec::new())
     }
 
-    fn filter(&mut self) -> Option<&mut dyn ListFilter> {
-        Some(&mut self.items)
-    }
-
-    fn click(&mut self, row: u16, _column: u16) -> Vec<Action> {
-        if self.items.select_at(row) {
-            self.toggle_focused();
-        }
+    /// Toggling is what Enter does, so it is also what a click does.
+    fn activate(&mut self) -> Vec<Action> {
+        self.toggle_focused();
         Vec::new()
     }
 
-    /// Scanning a long model list stops at either end rather than wrapping.
-    fn scroll(&mut self, direction: Direction) -> Vec<Action> {
-        self.items.step_clamped(direction, |value| !value.is_disabled);
+    fn list(&mut self) -> Option<&mut dyn SurfaceList> {
+        Some(&mut self.items)
+    }
+
+    fn activates_on_click(&self) -> bool {
+        true
+    }
+
+    /// The effort control follows whichever model the move focused.
+    fn on_selection_changed(&mut self) -> Vec<Action> {
         self.clamp_reasoning_to_focused();
         Vec::new()
     }
@@ -230,9 +236,9 @@ impl SettingsPane for ModelSelector {
 
     fn footer(&self) -> Vec<KeyHint> {
         vec![
-            ("Space/Enter", "toggle".to_string()),
-            ("Tab", format!("effort: {}", self.reasoning_label())),
-            ("Esc", "done".to_string()),
+            ("Space/Enter", "toggle".into()),
+            ("Tab", format!("effort: {}", self.reasoning_label()).into()),
+            ("Esc", "done".into()),
         ]
     }
 }

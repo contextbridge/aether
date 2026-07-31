@@ -93,14 +93,15 @@ pub fn highlighted_spans(
     theme: &Theme,
     highlighter: &mut SyntaxHighlighter,
 ) -> Vec<Span<'static>> {
-    highlighter
-        .highlight(source, language, theme)
-        .into_iter()
-        .next()
-        .unwrap_or_else(|| Line::raw(source.to_string()))
+    let lines = highlighter.highlight(source, language, theme);
+    let Some(first) = lines.first() else {
+        return vec![Span::styled(source.to_string(), Style::new().bg(background))];
+    };
+    first
         .spans
-        .into_iter()
-        .map(|mut span| {
+        .iter()
+        .map(|span| {
+            let mut span = span.clone();
             span.style = span.style.patch(Style::new().bg(background));
             span
         })

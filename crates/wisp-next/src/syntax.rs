@@ -4,6 +4,7 @@ use ratatui::text::{Line, Span};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::FontStyle;
 use syntect::parsing::{SyntaxReference, SyntaxSet};
@@ -15,9 +16,13 @@ const MAX_CACHE_ENTRIES: usize = 512;
 /// runs once per source line per rendered patch.
 type CacheKey = (u64, u64);
 
+/// Highlighted lines, shared rather than copied out of the cache: a hit on a
+/// long code block would otherwise clone every line of it.
+pub type HighlightedLines = Rc<[Line<'static>]>;
+
 pub struct SyntaxHighlighter {
     syntax_set: SyntaxSet,
-    cache: HashMap<CacheKey, Vec<Line<'static>>>,
+    cache: HashMap<CacheKey, HighlightedLines>,
     /// Insertion order, for evicting the oldest entry when the cache is full.
     /// Entries are not promoted on a hit — callers that re-render the same lines
     /// every frame cache the finished result themselves.
@@ -29,19 +34,19 @@ impl SyntaxHighlighter {
         Self { syntax_set: two_face::syntax::extra_newlines(), cache: HashMap::new(), insertion_order: VecDeque::new() }
     }
 
-    pub fn highlight(&mut self, code: &str, language: &str, theme: &Theme) -> Vec<Line<'static>> {
+    pub fn highlight(&mut self, code: &str, language: &str, theme: &Theme) -> HighlightedLines {
         let key = cache_key(code, language);
         if let Some(lines) = self.cache.get(&key) {
-            return lines.clone();
+            return Rc::clone(lines);
         }
-        let lines = self.render(code, language, theme);
+        let lines: HighlightedLines = Rc::from(self.render(code, language, theme));
         if self.cache.len() >= MAX_CACHE_ENTRIES
             && let Some(oldest) = self.insertion_order.pop_front()
         {
             self.cache.remove(&oldest);
         }
         self.insertion_order.push_back(key);
-        self.cache.insert(key, lines.clone());
+        self.cache.insert(key, Rc::clone(&lines));
         lines
     }
 

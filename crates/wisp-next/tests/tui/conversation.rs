@@ -269,7 +269,7 @@ fn cancelled_prompt_marks_running_tool_as_error() {
     let items = app.drain_finalized();
     let cancelled = items
         .iter()
-        .any(|item| matches!(item, HistoryItem::Tool { status: ToolStatus::Error(cause), .. } if cause == "cancelled"));
+        .any(|item| matches!(item, HistoryItem::Tool { status, .. } if *status.as_ref() == ToolStatus::Error("cancelled".to_string())));
     assert!(cancelled, "expected cancelled tool in {items:?}");
 }
 

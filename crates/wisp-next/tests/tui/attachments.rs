@@ -407,7 +407,7 @@ fn agent_rejects_image_when_capability_missing() {
         .pending_items()
         .iter()
         .filter_map(|item| match item {
-            HistoryItem::User(text) => Some(text.clone()),
+            HistoryItem::User(text) => Some(text.to_string()),
             _ => None,
         })
         .collect();
@@ -449,7 +449,7 @@ fn selected_model_rejects_image() {
         .pending_items()
         .iter()
         .filter_map(|item| match item {
-            HistoryItem::User(text) => Some(text.clone()),
+            HistoryItem::User(text) => Some(text.to_string()),
             _ => None,
         })
         .collect();
@@ -474,7 +474,7 @@ fn missing_model_metadata_rejects_media() {
         .pending_items()
         .iter()
         .filter_map(|item| match item {
-            HistoryItem::User(text) => Some(text.clone()),
+            HistoryItem::User(text) => Some(text.to_string()),
             _ => None,
         })
         .collect();
@@ -524,7 +524,7 @@ fn sync_prompt_failure_resets_busy_state() {
         .pending_items()
         .iter()
         .filter_map(|item| match item {
-            HistoryItem::User(text) => Some(text.clone()),
+            HistoryItem::User(text) => Some(text.to_string()),
             _ => None,
         })
         .collect();
@@ -621,7 +621,7 @@ fn selected_model_rejects_audio() {
         .pending_items()
         .iter()
         .filter_map(|item| match item {
-            HistoryItem::User(text) => Some(text.clone()),
+            HistoryItem::User(text) => Some(text.to_string()),
             _ => None,
         })
         .collect();
@@ -650,7 +650,7 @@ fn selected_model_rejects_image_grouped() {
         .pending_items()
         .iter()
         .filter_map(|item| match item {
-            HistoryItem::User(text) => Some(text.clone()),
+            HistoryItem::User(text) => Some(text.to_string()),
             _ => None,
         })
         .collect();
@@ -679,7 +679,7 @@ fn selected_model_rejects_audio_grouped() {
         .pending_items()
         .iter()
         .filter_map(|item| match item {
-            HistoryItem::User(text) => Some(text.clone()),
+            HistoryItem::User(text) => Some(text.to_string()),
             _ => None,
         })
         .collect();
@@ -761,7 +761,7 @@ fn rejection_preserves_text_and_placeholders_in_transcript() {
         .pending_items()
         .iter()
         .filter_map(|item| match item {
-            HistoryItem::User(text) => Some(text.clone()),
+            HistoryItem::User(text) => Some(text.to_string()),
             _ => None,
         })
         .collect();
@@ -790,7 +790,7 @@ fn sync_failure_preserves_text_and_placeholders_in_transcript() {
         .pending_items()
         .iter()
         .filter_map(|item| match item {
-            HistoryItem::User(text) => Some(text.clone()),
+            HistoryItem::User(text) => Some(text.to_string()),
             _ => None,
         })
         .collect();

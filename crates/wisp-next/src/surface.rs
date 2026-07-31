@@ -18,6 +18,13 @@ pub(crate) fn is_composed_char(key: KeyEvent) -> bool {
     matches!(key.code, KeyCode::Char(_)) && key.modifiers.intersects(COMPOSED_MODIFIERS)
 }
 
+/// Whether `key` is a keystroke rather than the release half of one. Surfaces
+/// that route [`UiEvent`]s themselves apply this filter in place of the one
+/// [`Surface::on_ui_event`] does for them.
+pub(crate) fn is_press(key: KeyEvent) -> bool {
+    matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+}
+
 /// A layer drawn over the conversation that owns all input while it is open:
 /// a picker, a modal, or a full-screen view.
 ///
@@ -41,29 +48,51 @@ pub trait Surface {
         (key.code == KeyCode::Enter).then(|| self.activate())
     }
 
-    /// Moves the selection, returning any work the move implies (such as
-    /// fetching a preview for the newly focused row).
-    fn scroll(&mut self, direction: Direction) -> Vec<Action> {
-        let _ = direction;
+    /// The filtered list this surface is a view of, when it is one.
+    ///
+    /// Supplying it is what makes typing filter, arrows and the wheel navigate,
+    /// and a click select — a surface that has one writes none of that itself.
+    fn list(&mut self) -> Option<&mut dyn SurfaceList> {
+        None
+    }
+
+    /// Work implied by the selection moving, however it moved: a filter edit, an
+    /// arrow, a wheel notch, or a click. Fetching a preview for the newly
+    /// focused row goes here.
+    fn on_selection_changed(&mut self) -> Vec<Action> {
         Vec::new()
+    }
+
+    /// Whether a click acts on the row it lands on as well as focusing it.
+    /// Pickers whose rows are cheap to act on say yes; those whose rows commit
+    /// the whole session only move focus.
+    fn activates_on_click(&self) -> bool {
+        false
+    }
+
+    /// Moves the selection, returning any work the move implies.
+    fn scroll(&mut self, direction: Direction) -> Vec<Action> {
+        let Some(list) = self.list() else {
+            return Vec::new();
+        };
+        list.step(direction);
+        self.on_selection_changed()
     }
 
     /// Selects whatever is drawn at terminal `row`/`column`, if anything is.
     fn click(&mut self, row: u16, column: u16) -> Vec<Action> {
-        let _ = (row, column);
-        Vec::new()
-    }
-
-    /// The query this surface filters its list by, when it has one. Supplying
-    /// it is what makes typing and backspace filter.
-    fn filter(&mut self) -> Option<&mut dyn ListFilter> {
-        None
-    }
-
-    /// Work implied by an edit to [`Surface::filter`], such as fetching a
-    /// preview for whichever row the new query focused.
-    fn on_filter_changed(&mut self) -> Vec<Action> {
-        Vec::new()
+        let _ = column;
+        let Some(list) = self.list() else {
+            return Vec::new();
+        };
+        if !list.select_at(row) {
+            return Vec::new();
+        }
+        let mut actions = self.on_selection_changed();
+        if self.activates_on_click() {
+            actions.extend(self.activate());
+        }
+        actions
     }
 
     /// A completed task this surface asked for.
@@ -88,7 +117,7 @@ pub trait Surface {
     /// Routes any input event through this surface's single ownership boundary.
     fn on_ui_event(&mut self, event: UiEvent) -> Vec<Action> {
         match event {
-            UiEvent::Key(key) if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) => self.on_key(key),
+            UiEvent::Key(key) if is_press(key) => self.on_key(key),
             UiEvent::Key(_) => Vec::new(),
             UiEvent::Paste(text) => self.on_paste(&text),
             UiEvent::Mouse(action, position) => self.on_mouse(action, position.y, position.x),
@@ -105,17 +134,17 @@ pub trait Surface {
             KeyCode::Esc => return vec![Action::Close],
             KeyCode::Up => return self.scroll(Direction::Backward),
             KeyCode::Down => return self.scroll(Direction::Forward),
-            KeyCode::Backspace => match self.filter() {
-                Some(filter) => filter.pop_query_char(),
+            KeyCode::Backspace => match self.list() {
+                Some(list) => list.pop_query_char(),
                 None => return Vec::new(),
             },
-            KeyCode::Char(character) if !character.is_control() && !is_composed_char(key) => match self.filter() {
-                Some(filter) => filter.push_query_char(character),
+            KeyCode::Char(character) if !character.is_control() && !is_composed_char(key) => match self.list() {
+                Some(list) => list.push_query_char(character),
                 None => return Vec::new(),
             },
             _ => return Vec::new(),
         }
-        self.on_filter_changed()
+        self.on_selection_changed()
     }
 
     fn on_mouse(&mut self, action: MouseAction, row: u16, column: u16) -> Vec<Action> {
@@ -159,12 +188,20 @@ pub enum Action {
     SubmitReview(String),
 }
 
-/// The query-editing half of a filtered list, in object-safe form so surfaces
-/// can hand theirs to the shared key handling.
-pub trait ListFilter {
+/// The navigable half of a filtered list, in object-safe form so surfaces can
+/// hand theirs to the shared key and mouse handling without it knowing the item
+/// type.
+pub trait SurfaceList {
     fn push_query_char(&mut self, character: char);
 
     fn pop_query_char(&mut self);
+
+    /// Moves the selection one entry in `direction`, under whatever navigation
+    /// policy the list was built with.
+    fn step(&mut self, direction: Direction);
+
+    /// Selects the entry drawn at terminal `row`, reporting whether one was hit.
+    fn select_at(&mut self, row: u16) -> bool;
 }
 
 /// Input delivered to exactly one active owner.

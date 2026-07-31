@@ -14,7 +14,7 @@ use crate::platform::{BrowserOpener, ClipboardWriter};
 use crate::render_context::RenderContext;
 use crate::selection::Direction;
 use crate::session_config_view::SessionConfigView;
-use crate::surface::{Action, Surface};
+use crate::surface::{Action, MouseAction, Surface, UiEvent, is_press};
 use crate::theme::Theme;
 use crate::widgets::key_hints;
 use acp_utils::config_meta::SelectOptionMeta;
@@ -124,8 +124,7 @@ trait SettingsPane: Surface {
     }
 }
 
-/// A key and what it does, for [`key_hints`].
-pub(crate) type KeyHint = (&'static str, String);
+pub(crate) use crate::widgets::KeyHint;
 
 impl SettingsOverlay {
     pub fn new(
@@ -223,7 +222,7 @@ impl SettingsOverlay {
         }
         self.pane
             .as_ref()
-            .map_or_else(|| vec![("Enter", "select".to_string()), ("Esc", "close".to_string())], |pane| pane.footer())
+            .map_or_else(|| vec![("Enter", "select".into()), ("Esc", "close".into())], |pane| pane.footer())
     }
 
     fn set_provider_status(&mut self, method_id: &str, status: ProviderLoginStatus) {
@@ -266,6 +265,24 @@ impl SettingsOverlay {
             Layout::vertical([Constraint::Min(1), Constraint::Length(1), Constraint::Length(height)]).areas(inner);
         let [_indent, prompt] = Layout::horizontal([Constraint::Length(1), Constraint::Min(0)]).areas(prompt);
         (content, Some(prompt))
+    }
+
+    /// Handles an event the menu itself owns, because no pane or request is open
+    /// above it.
+    fn on_menu_event(&mut self, event: &UiEvent) -> Vec<Action> {
+        match event {
+            UiEvent::Key(key) if is_press(*key) => return self.on_menu_key(*key),
+            // The menu has no editor, so a paste has nowhere to land.
+            UiEvent::Key(_) | UiEvent::Paste(_) => {}
+            UiEvent::Mouse(MouseAction::ScrollUp, _) => self.menu.step(Direction::Backward),
+            UiEvent::Mouse(MouseAction::ScrollDown, _) => self.menu.step(Direction::Forward),
+            UiEvent::Mouse(MouseAction::Click, position) => {
+                if self.menu.click_at(position.y) {
+                    self.pane = self.open_selected_pane();
+                }
+            }
+        }
+        Vec::new()
     }
 
     fn on_menu_key(&mut self, key: KeyEvent) -> Vec<Action> {
@@ -319,62 +336,35 @@ impl SettingsOverlay {
 }
 
 impl Surface for SettingsOverlay {
-    /// The overlay owns every key: the menu and its panes have their own
-    /// keymaps, so nothing falls through to the shared list navigation.
-    fn on_surface_key(&mut self, key: KeyEvent) -> Option<Vec<Action>> {
+    /// Routes every event to whichever of the three things inside the overlay
+    /// owns input, innermost first.
+    ///
+    /// One entry point rather than one override per event kind, because the
+    /// triage is the same for all of them — and because only routing them
+    /// together makes "a request closing returns focus to the pane behind it"
+    /// hold for a click as reliably as it does for a keystroke.
+    fn on_ui_event(&mut self, event: UiEvent) -> Vec<Action> {
         if let Some(pending) = self.pending_elicitation.as_mut() {
             // Answering a request returns focus to the pane behind it rather
             // than closing the overlay the request arrived in.
-            if pending.on_key(key).iter().any(|action| matches!(action, Action::Close)) {
+            if pending.on_ui_event(event).iter().any(|action| matches!(action, Action::Close)) {
                 self.pending_elicitation = None;
             }
-            return Some(Vec::new());
+            return Vec::new();
         }
-        let Some(pane) = self.pane.as_mut() else {
-            return Some(self.on_menu_key(key));
+        let Some(pane) = self.pane.as_deref_mut() else {
+            return self.on_menu_event(&event);
         };
         // Esc leaves the pane rather than the overlay, committing whatever the
         // pane batched up while it was open.
-        let messages = if key.code == KeyCode::Esc {
-            let mut messages = pane.take_changes();
-            messages.push(Action::Close);
-            messages
-        } else {
-            pane.on_key(key)
-        };
-        Some(self.apply(messages))
-    }
-
-    fn on_paste(&mut self, text: &str) -> Vec<Action> {
-        match self.pending_elicitation.as_mut() {
-            Some(pending) => pending.on_paste(text),
-            None => Vec::new(),
-        }
-    }
-
-    fn scroll(&mut self, direction: Direction) -> Vec<Action> {
-        if let Some(pending) = self.pending_elicitation.as_mut() {
-            return pending.scroll(direction);
-        }
-        let Some(pane) = self.pane.as_mut() else {
-            self.menu.step(direction);
-            return Vec::new();
-        };
-        let messages = pane.scroll(direction);
-        self.apply(messages)
-    }
-
-    fn click(&mut self, row: u16, column: u16) -> Vec<Action> {
-        if let Some(pending) = self.pending_elicitation.as_mut() {
-            return pending.click(row, column);
-        }
-        let Some(pane) = self.pane.as_mut() else {
-            if self.menu.click_at(row) {
-                self.pane = self.open_selected_pane();
+        let messages = match event {
+            UiEvent::Key(key) if is_press(key) && key.code == KeyCode::Esc => {
+                let mut messages = pane.take_changes();
+                messages.push(Action::Close);
+                messages
             }
-            return Vec::new();
+            event => pane.on_ui_event(event),
         };
-        let messages = pane.click(row, column);
         self.apply(messages)
     }
 

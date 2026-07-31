@@ -1,12 +1,52 @@
 use crate::edit_buffer::EditBuffer;
 use crate::theme::Theme;
-use crate::wrap::{fit_prefix, text_position_in_wrap, wrap_text_char};
+use crate::wrap::{as_u16, fit_prefix};
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Position, Rect};
+use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, StatefulWidget, Widget};
+use std::borrow::Cow;
 use unicode_width::UnicodeWidthStr;
+
+/// A key and what it does, for [`key_hints`]. Borrowed for the fixed labels most
+/// footers use, owned for the ones that interpolate live state.
+pub type KeyHint = (&'static str, Cow<'static, str>);
+
+/// Columns a vertical scrollbar track occupies.
+pub const SCROLLBAR_WIDTH: u16 = 1;
+
+/// Splits `area` into the rows and the scrollbar track beside them, so the
+/// track never sits on top of a row. Without a scrollbar the rows get it all.
+///
+/// Every scrolling pane in the UI — list, document, and form — carves its area
+/// up this way, and builds its rows to the width this leaves.
+pub fn rows_and_track(area: Rect, scrollbar: bool) -> (Rect, Rect) {
+    let track_width = if scrollbar { SCROLLBAR_WIDTH } else { 0 };
+    let [rows, track] = Layout::horizontal([Constraint::Min(0), Constraint::Length(track_width)]).areas(area);
+    (rows, track)
+}
+
+/// The full-width, one-row `Rect` for the `index`-th visible row of `area`, or
+/// nothing once `index` falls past the bottom.
+pub fn row_area(area: Rect, index: usize) -> Option<Rect> {
+    let offset = as_u16(index);
+    (offset < area.height).then(|| Rect { y: area.y + offset, height: 1, ..area })
+}
+
+/// Draws `lines` one per row from the top of `area`, stopping when it runs out
+/// of rows.
+///
+/// One line per row rather than a [`Paragraph`], which would copy every line
+/// into a `Text` first.
+pub fn render_rows<'a>(lines: impl IntoIterator<Item = &'a Line<'static>>, area: Rect, buf: &mut Buffer) {
+    for (index, line) in lines.into_iter().enumerate() {
+        let Some(row) = row_area(area, index) else {
+            return;
+        };
+        line.render(row, buf);
+    }
+}
 
 /// Draws the vertical scrollbar for `content_rows` of content scrolled to
 /// `offset`, sized against the rows `area` can actually show.
@@ -38,33 +78,6 @@ pub fn key_hints(hints: &[(impl AsRef<str>, impl AsRef<str>)], theme: &Theme) ->
         spans.push(Span::styled(format!(" {}", description.as_ref()), muted));
     }
     Line::from(spans)
-}
-
-/// Wraps `buffer`'s text to `width` columns, with the cursor's row and column
-/// within the wrapped result.
-///
-/// For inputs embedded in scrolled content, where the terminal cursor has to be
-/// placed by the caller rather than by the widget.
-pub fn wrapped_with_cursor(buffer: &EditBuffer, width: usize) -> (Vec<String>, (usize, u16)) {
-    (wrap_text_char(buffer.text(), width), text_position_in_wrap(&buffer.text()[..buffer.cursor()], width))
-}
-
-/// Draws `buffer` with a block cursor painted into the text.
-///
-/// Used where the terminal cursor is not available because the input is one row
-/// of a larger rendered document rather than the focused widget.
-pub fn block_cursor_spans(buffer: &EditBuffer, text_style: Style, cursor_style: Style) -> Vec<Span<'static>> {
-    let text = buffer.text();
-    let cursor = buffer.cursor();
-    let cursor_len = text[cursor..].chars().next().map_or(0, char::len_utf8);
-    // Past the end of the text there is no character to invert, so a space
-    // stands in for one.
-    let under_cursor = if cursor_len == 0 { " " } else { &text[cursor..cursor + cursor_len] };
-    vec![
-        Span::styled(text[..cursor].to_string(), text_style),
-        Span::styled(under_cursor.to_string(), cursor_style),
-        Span::styled(text[cursor + cursor_len..].to_string(), text_style),
-    ]
 }
 
 #[derive(Clone, Copy)]

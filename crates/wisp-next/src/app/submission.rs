@@ -1,6 +1,5 @@
 use super::App;
 use crate::attachments::{AttachmentOutcome, PromptAttachment};
-use crate::prompt_search::PromptSearchPicker;
 use crate::session_config_view::SessionConfigView;
 use acp_utils::config_option_id::ConfigOptionId;
 use agent_client_protocol::schema as acp;
@@ -93,7 +92,7 @@ impl App {
     }
 
     pub(super) fn send_prompt_search_query(&mut self, query: String) {
-        let Some(generation) = self.composer.prompt_search_ref().map(PromptSearchPicker::search_generation) else {
+        let Some(generation) = self.composer.prompt_search().map(|picker| picker.search_generation()) else {
             return;
         };
         let params =

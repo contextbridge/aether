@@ -108,6 +108,22 @@ pub struct ComposerLayout {
     pub cursor: Position,
 }
 
+/// What a keystroke or paste the composer's own overlay consumed asks the app
+/// to do next.
+///
+/// The composer owns its overlays and every edit they imply; the app is told
+/// only the two things it has to act on outside the composer, so the overlay
+/// state itself never has to leave.
+#[derive(Debug)]
+pub enum ComposerOutcome {
+    /// Fully handled inside the composer.
+    Handled,
+    /// A command was accepted from the `/` list and needs running.
+    AcceptedCommand(CommandEntry),
+    /// The history-search query changed and needs re-running against the agent.
+    Search(String),
+}
+
 impl Composer {
     pub fn new() -> Self {
         Self::default()
@@ -294,7 +310,7 @@ impl Composer {
 
     /// Whether the completion list is open.
     pub fn has_completion(&self) -> bool {
-        self.completion_ref().is_some()
+        matches!(self.overlay, Some(Overlay::Completion(_)))
     }
 
     /// The open completion list, for navigation and rendering.
@@ -305,23 +321,9 @@ impl Composer {
         }
     }
 
-    pub fn completion_ref(&self) -> Option<&CompletionOverlay> {
-        match self.overlay.as_ref()? {
-            Overlay::Completion(overlay) => Some(overlay),
-            Overlay::PromptSearch { .. } => None,
-        }
-    }
-
     /// The open prompt-history picker, for queries and rendering.
     pub fn prompt_search(&mut self) -> Option<&mut PromptSearchPicker> {
         match self.overlay.as_mut()? {
-            Overlay::PromptSearch { picker, .. } => Some(picker),
-            Overlay::Completion(_) => None,
-        }
-    }
-
-    pub fn prompt_search_ref(&self) -> Option<&PromptSearchPicker> {
-        match self.overlay.as_ref()? {
             Overlay::PromptSearch { picker, .. } => Some(picker),
             Overlay::Completion(_) => None,
         }
@@ -358,7 +360,7 @@ impl Composer {
     }
 
     pub fn has_prompt_search(&self) -> bool {
-        self.prompt_search_ref().is_some()
+        matches!(self.overlay, Some(Overlay::PromptSearch { .. }))
     }
 
     pub fn open_prompt_search(&mut self) {
@@ -368,7 +370,7 @@ impl Composer {
 
     /// Closes the search, restoring the draft it replaced unless the user
     /// confirmed one of the results.
-    pub fn close_prompt_search(&mut self, confirmed: bool) {
+    fn close_prompt_search(&mut self, confirmed: bool) {
         let Some(Overlay::PromptSearch { draft, .. }) = self.overlay.take() else {
             return;
         };
@@ -377,9 +379,51 @@ impl Composer {
         }
     }
 
+    /// Applies a keystroke to the open history search, or reports that there is
+    /// none for it to go to.
+    pub fn on_prompt_search_key(&mut self, key: crossterm::event::KeyEvent) -> Option<ComposerOutcome> {
+        if !self.has_prompt_search() {
+            return None;
+        }
+        let query = self.prompt_search_query_on_key(key);
+        Some(self.search_outcome(query))
+    }
+
+    /// Applies a paste to the open history search, or reports that there is none
+    /// for it to go to.
+    pub fn on_prompt_search_paste(&mut self, text: &str) -> Option<ComposerOutcome> {
+        let query = self.prompt_search()?.push_str(text);
+        Some(self.search_outcome(Some(query)))
+    }
+
+    /// Applies a keystroke to the open completion list, or reports that there is
+    /// none for it to go to.
+    pub fn on_completion_key(&mut self, key: crossterm::event::KeyEvent) -> Option<ComposerOutcome> {
+        if !self.has_completion() {
+            return None;
+        }
+        Some(match self.completion_on_key(key) {
+            Some(command) => ComposerOutcome::AcceptedCommand(command),
+            None => ComposerOutcome::Handled,
+        })
+    }
+
+    /// A new query goes to the agent; an emptied one puts back the draft the
+    /// search replaced, which is the composer's own business.
+    fn search_outcome(&mut self, query: Option<String>) -> ComposerOutcome {
+        match query {
+            Some(query) if !query.trim().is_empty() => ComposerOutcome::Search(query),
+            Some(_) => {
+                self.restore_prompt_search_draft();
+                ComposerOutcome::Handled
+            }
+            None => ComposerOutcome::Handled,
+        }
+    }
+
     /// Applies a keystroke to the open history search, returning the query to
     /// re-run when the keystroke changed it.
-    pub fn prompt_search_on_key(&mut self, key: crossterm::event::KeyEvent) -> Option<String> {
+    fn prompt_search_query_on_key(&mut self, key: crossterm::event::KeyEvent) -> Option<String> {
         let picker = self.prompt_search()?;
         match key.code {
             KeyCode::Esc => {
@@ -413,10 +457,6 @@ impl Composer {
         }
     }
 
-    pub fn prompt_search_on_paste(&mut self, text: &str) -> Option<String> {
-        Some(self.prompt_search()?.push_str(text))
-    }
-
     pub fn prompt_search_on_results(&mut self, response: PromptSearchResponse) {
         let Some(picker) = self.prompt_search() else {
             return;
@@ -428,14 +468,14 @@ impl Composer {
 
     /// Puts back the draft the search replaced, for a query that no longer
     /// selects anything.
-    pub fn restore_prompt_search_draft(&mut self) {
+    fn restore_prompt_search_draft(&mut self) {
         if let Some(Overlay::PromptSearch { draft, .. }) = &self.overlay {
             self.buffer.set_text(draft.clone());
         }
     }
 
     fn apply_selected_search_result(&mut self) {
-        let Some(result) = self.prompt_search_ref().and_then(PromptSearchPicker::selected_result) else {
+        let Some(result) = self.prompt_search().and_then(|picker| picker.selected_result()) else {
             return;
         };
         let prompt = result.prompt.clone();
@@ -447,10 +487,10 @@ impl Composer {
     /// Applies a keystroke to the open completion list, returning the command it
     /// accepted.
     ///
-    /// The mirror of [`Composer::prompt_search_on_key`]: the composer owns the
+    /// The mirror of [`Composer::on_prompt_search_key`]: the composer owns the
     /// list's own keys and the edits they imply, and the app decides what an
     /// accepted command means.
-    pub fn completion_on_key(&mut self, key: crossterm::event::KeyEvent) -> Option<CommandEntry> {
+    fn completion_on_key(&mut self, key: crossterm::event::KeyEvent) -> Option<CommandEntry> {
         match key.code {
             KeyCode::Esc => self.close_overlay(),
             KeyCode::Up => self.step_completion(Direction::Backward),
@@ -498,14 +538,14 @@ impl Composer {
     }
 
     pub fn accept_command(&mut self) -> Option<CommandEntry> {
-        let command = self.completion_ref()?.selected_command()?;
+        let command = self.completion()?.selected_command()?;
         self.replace_token('/', &format!("/{}", command.name));
         self.overlay = None;
         Some(command)
     }
 
     pub fn accept_file(&mut self) -> Option<FileEntry> {
-        let file = self.completion_ref()?.selected_file()?;
+        let file = self.completion()?.selected_file()?;
         self.replace_token('@', &format!("@{} ", file.display_name));
         self.mentions.push(SelectedFileMention { path: file.path.clone(), display_name: file.display_name.clone() });
         self.overlay = None;
@@ -513,7 +553,7 @@ impl Composer {
     }
 
     pub fn refresh_overlay_query(&mut self) {
-        let Some(trigger) = self.completion_ref().map(CompletionOverlay::trigger) else {
+        let Some(trigger) = self.completion().map(|overlay| overlay.trigger()) else {
             return;
         };
         let query = self
@@ -524,8 +564,8 @@ impl Composer {
         }
     }
 
-    fn active_token_is_empty(&self) -> bool {
-        self.completion_ref().is_some_and(|overlay| overlay.query().is_empty())
+    fn active_token_is_empty(&mut self) -> bool {
+        self.completion().is_some_and(|overlay| overlay.query().is_empty())
     }
 
     fn set_content_width(&mut self, content_width: usize) {

@@ -13,8 +13,8 @@ use crate::edit_buffer::{EditBuffer, apply_edit_key};
 use crate::selection::{Direction, scroll_into_view};
 use crate::surface::is_composed_char;
 use crate::theme::Theme;
-use crate::widgets::render_vertical_scrollbar;
-use crate::wrap::{rows, wrap_line};
+use crate::widgets::{KeyHint, render_rows, render_vertical_scrollbar, rows_and_track};
+use crate::wrap::{as_u16, wrap_line};
 
 pub(super) struct FormModal {
     server_name: String,
@@ -206,22 +206,18 @@ impl FormModal {
     pub(super) fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
         let header = self.header_lines(theme, area.width);
         let [header_area, body_area] =
-            Layout::vertical([Constraint::Length(rows(header.len())), Constraint::Min(0)]).areas(area);
+            Layout::vertical([Constraint::Length(as_u16(header.len())), Constraint::Min(0)]).areas(area);
 
         Paragraph::new(header).render(header_area, buf);
 
-        let [rows_area, track_area] =
-            Layout::horizontal([Constraint::Min(0), Constraint::Length(SCROLLBAR_WIDTH)]).areas(body_area);
+        let (rows_area, track_area) = rows_and_track(body_area, true);
         let (lines, field_of_row) = self.field_rows(theme, rows_area.width);
         self.body.area = rows_area;
         self.body.field_of_row = field_of_row;
         self.body.scroll = self.scrolled_to_selection(usize::from(rows_area.height));
 
-        let total = lines.len();
-        for (row, line) in lines.into_iter().skip(self.body.scroll).take(usize::from(rows_area.height)).enumerate() {
-            line.render(Rect { y: rows_area.y + rows(row), height: 1, ..rows_area }, buf);
-        }
-        render_vertical_scrollbar(track_area, buf, total, self.body.scroll);
+        render_rows(lines.iter().skip(self.body.scroll), rows_area, buf);
+        render_vertical_scrollbar(track_area, buf, lines.len(), self.body.scroll);
     }
 
     fn header_lines(&self, theme: &Theme, width: u16) -> Vec<Line<'static>> {
@@ -240,10 +236,10 @@ impl FormModal {
     }
 
     /// The keys this form answers, for whichever footer is drawing them.
-    pub(super) fn hints(&self) -> Vec<(&'static str, &'static str)> {
-        let mut hints = vec![("Enter", "submit"), ("Esc", "cancel")];
+    pub(super) fn hints(&self) -> Vec<KeyHint> {
+        let mut hints: Vec<KeyHint> = vec![("Enter", "submit".into()), ("Esc", "cancel".into())];
         if self.fields.iter().any(|field| matches!(field.kind, FormFieldKind::Multi { .. })) {
-            hints.splice(0..0, [("↑↓", "option"), ("Space", "toggle")]);
+            hints.splice(0..0, [("↑↓", "option".into()), ("Space", "toggle".into())]);
         }
         hints
     }
@@ -298,8 +294,6 @@ impl FormModal {
         scroll_into_view(scroll_into_view(self.body.scroll, last, height), first, height)
     }
 }
-
-const SCROLLBAR_WIDTH: u16 = 1;
 
 impl FormField {
     fn from_primitive(name: &str, prop: &PrimitiveSchema, required: &[&str]) -> Self {

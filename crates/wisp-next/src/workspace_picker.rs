@@ -1,8 +1,7 @@
 use crate::edit_buffer::{EditBuffer, apply_edit_key};
 use crate::filterable_list::FilterableList;
 use crate::render_context::RenderContext;
-use crate::selection::Direction;
-use crate::surface::{Action, ListFilter, Surface};
+use crate::surface::{Action, Surface, SurfaceList};
 use crate::widgets::TextInput;
 use crate::workspace_status::home_relative_path;
 use acp_utils::notifications::{WorkspaceEntry, WorkspaceMoveTarget};
@@ -143,22 +142,10 @@ impl Surface for WorkspacePicker {
         Vec::new()
     }
 
-    fn filter(&mut self) -> Option<&mut dyn ListFilter> {
-        Some(&mut self.rows)
-    }
-
-    fn scroll(&mut self, direction: Direction) -> Vec<Action> {
-        if matches!(self.mode, Mode::List) {
-            self.rows.step(direction, |_| true);
-        }
-        Vec::new()
-    }
-
-    fn click(&mut self, row: u16, _column: u16) -> Vec<Action> {
-        if matches!(self.mode, Mode::List) {
-            self.rows.select_at(row);
-        }
-        Vec::new()
+    /// Only the list has rows to filter, navigate, and click; while a new
+    /// workspace is being named the prompt owns input instead.
+    fn list(&mut self) -> Option<&mut dyn SurfaceList> {
+        matches!(self.mode, Mode::List).then(|| &mut self.rows as &mut dyn SurfaceList)
     }
 
     fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {

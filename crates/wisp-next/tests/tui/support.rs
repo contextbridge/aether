@@ -39,6 +39,7 @@ pub(crate) use wisp_next::test_support::render_context::RenderContext;
 pub(crate) use wisp_next::test_support::screens::git_diff::GitDiffEvent;
 pub(crate) use wisp_next::test_support::settings::{StatusLineSegmentConfig, UiSettings};
 pub(crate) use wisp_next::test_support::settings_overlay::SettingsOverlay;
+pub(crate) use wisp_next::test_support::surface::UiEvent;
 pub(crate) use wisp_next::test_support::syntax::SyntaxHighlighter;
 pub(crate) use wisp_next::test_support::tasks::{Task, TaskResult};
 pub(crate) use wisp_next::test_support::theme::Theme;

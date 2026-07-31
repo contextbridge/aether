@@ -30,7 +30,7 @@ pub enum CompletionEntry {
 }
 
 /// The inline completion list the composer shows after a `/` or `@` trigger.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct CompletionOverlay {
     trigger: char,
     entries: FilterableList<CompletionEntry>,
@@ -81,7 +81,7 @@ impl CompletionOverlay {
     }
 
     pub fn step(&mut self, direction: Direction) {
-        self.entries.step(direction, |_| true);
+        self.entries.step(direction);
     }
 
     /// Selects the entry drawn at terminal `row`, if one is there.
