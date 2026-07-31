@@ -1,11 +1,10 @@
 use std::collections::BTreeMap;
-use std::error::Error;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{Notify, mpsc};
 
 use crate::context::CompactionConfig;
-use crate::core::{Prompt, RetryConfig, agent};
+use crate::core::{AgentError, Prompt, RetryConfig, agent};
 use crate::events::{
     AgentCommand, AgentEvent, AgentObserver, Command, ContextEvent, ToolEvent, TurnEvent, UserCommand,
 };
@@ -181,6 +180,18 @@ pub struct TestAgentResult {
     pub captured_contexts: Arc<Mutex<Vec<Context>>>,
 }
 
+/// Error returned by [`TestAgentBuilder::run`], [`TestAgentBuilder::run_trace`], and
+/// [`TestAgentBuilder::run_with_context`].
+#[derive(Debug, thiserror::Error)]
+pub enum TestAgentError {
+    #[error(transparent)]
+    Agent(#[from] AgentError),
+    #[error("failed to send command to the test agent: {0}")]
+    SendCommand(#[from] mpsc::error::SendError<Command>),
+}
+
+pub type TestResult<T> = std::result::Result<T, TestAgentError>;
+
 struct ProviderTestConfig {
     responses: Vec<Vec<Result<LlmResponse, LlmError>>>,
     model: Option<LlmModel>,
@@ -333,14 +344,14 @@ impl TestAgentBuilder {
         self
     }
 
-    pub async fn run(self) -> Result<Vec<AgentEvent>, Box<dyn Error>> {
+    pub async fn run(self) -> TestResult<Vec<AgentEvent>> {
         let result = self.run_with_context().await?;
         Ok(result.messages)
     }
 
     /// Runs the test agent with a recording observer attached and returns the
     /// full event trace, including internal events.
-    pub async fn run_trace(self) -> Result<AgentTrace, Box<dyn Error>> {
+    pub async fn run_trace(self) -> TestResult<AgentTrace> {
         let observer = FakeAgentObserver::new();
         let events = observer.events();
         self.observer(Box::new(observer)).run().await?;
@@ -351,7 +362,7 @@ impl TestAgentBuilder {
     ///
     /// Use this when you need to verify what context was passed to the LLM,
     /// for example when testing that file attachments are properly formatted.
-    pub async fn run_with_context(self) -> Result<TestAgentResult, Box<dyn Error>> {
+    pub async fn run_with_context(self) -> TestResult<TestAgentResult> {
         let Self { provider, agent: config, execution } = self;
         let mut llm = FakeLlmProvider::from_results(provider.responses).with_context_window(provider.context_window);
         if let Some(model) = provider.model {
@@ -363,7 +374,13 @@ impl TestAgentBuilder {
         let captured_contexts = llm.captured_contexts();
 
         let mut mcp_spawn = if config.include_fake_mcp {
-            Some(mcp("/workspace").with_servers(vec![fake_mcp("test", FakeMcpServer::new())]).spawn().await?)
+            Some(
+                mcp("/workspace")
+                    .with_servers(vec![fake_mcp("test", FakeMcpServer::new())])
+                    .spawn()
+                    .await
+                    .map_err(AgentError::from)?,
+            )
         } else {
             None
         };
