@@ -6,14 +6,14 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Paragraph, Widget};
+use ratatui::widgets::{Paragraph, Widget};
 use serde_json::{Map, Value};
 
 use crate::edit_buffer::{EditBuffer, apply_edit_key};
 use crate::selection::{Direction, scroll_into_view};
 use crate::surface::is_composed_char;
 use crate::theme::Theme;
-use crate::widgets::{key_hints, render_vertical_scrollbar};
+use crate::widgets::render_vertical_scrollbar;
 use crate::wrap::{rows, wrap_line};
 
 pub(super) struct FormModal {
@@ -201,25 +201,14 @@ impl FormModal {
         FormAction::Accept(Value::Object(content))
     }
 
-    /// Draws the modal as a fixed header, a scrolling body of fields, and a
-    /// fixed footer, so a form with more fields than the modal is tall stays
-    /// reachable.
+    /// Draws the form's request header and scrolling fields into the supplied
+    /// content area. The surrounding frame and key hints belong to the host.
     pub(super) fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
-        let block = Block::bordered().title(" Elicitation ").border_style(Style::new().fg(theme.accent));
-        let inner = block.inner(area);
-        block.render(area, buf);
-
-        let header = self.header_lines(theme, inner.width);
-        let footer = self.footer_lines(theme, inner.width);
-        let [header_area, body_area, footer_area] = Layout::vertical([
-            Constraint::Length(rows(header.len())),
-            Constraint::Min(0),
-            Constraint::Length(rows(footer.len())),
-        ])
-        .areas(inner);
+        let header = self.header_lines(theme, area.width);
+        let [header_area, body_area] =
+            Layout::vertical([Constraint::Length(rows(header.len())), Constraint::Min(0)]).areas(area);
 
         Paragraph::new(header).render(header_area, buf);
-        Paragraph::new(footer).render(footer_area, buf);
 
         let [rows_area, track_area] =
             Layout::horizontal([Constraint::Min(0), Constraint::Length(SCROLLBAR_WIDTH)]).areas(body_area);
@@ -244,6 +233,9 @@ impl FormModal {
         if !self.message.is_empty() {
             lines.extend(wrap_line(Line::raw(self.message.clone()), width));
         }
+        if let Some(error) = &self.validation_error {
+            lines.extend(wrap_line(Line::styled(error.clone(), Style::new().fg(theme.error)), width));
+        }
         lines
     }
 
@@ -254,15 +246,6 @@ impl FormModal {
             hints.splice(0..0, [("↑↓", "option"), ("Space", "toggle")]);
         }
         hints
-    }
-
-    fn footer_lines(&self, theme: &Theme, width: u16) -> Vec<Line<'static>> {
-        let mut lines = match &self.validation_error {
-            Some(error) => wrap_line(Line::styled(error.clone(), Style::new().fg(theme.error)), width),
-            None => Vec::new(),
-        };
-        lines.push(key_hints(&self.hints(), theme));
-        lines
     }
 
     /// The fields as rendered rows, with the field each row belongs to.

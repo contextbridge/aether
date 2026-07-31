@@ -2,10 +2,9 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Text};
-use ratatui::widgets::{Block, Paragraph, Widget};
+use ratatui::widgets::{Paragraph, Widget};
 
 use crate::theme::Theme;
-use crate::widgets::key_hints;
 use crate::wrap::wrap_line;
 
 pub(super) struct UrlModal {
@@ -52,14 +51,11 @@ impl UrlModal {
         Self { server_name, elicitation_id, message, url, host, warnings, launch_error: None, copy_message: None }
     }
 
+    /// What is being authorized, where the browser would go, and anything about
+    /// the URL worth a second look. The surrounding frame and key hints belong
+    /// to the host.
     pub(super) fn render(&self, area: Rect, buf: &mut Buffer, theme: &Theme) {
-        let block = Block::bordered().title(" URL authorization ").border_style(Style::new().fg(theme.accent));
-        let inner = block.inner(area);
-        block.render(area, buf);
-
-        let mut lines = self.body_lines(theme, inner.width);
-        lines.push(key_hints(&HINTS, theme));
-        Paragraph::new(Text::from(lines)).render(inner, buf);
+        Paragraph::new(Text::from(self.body_lines(theme, area.width))).render(area, buf);
     }
 
     /// What is being authorized, where the browser would go, and anything about

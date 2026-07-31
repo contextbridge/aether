@@ -9,7 +9,7 @@ use self::model_selector::ModelSelector;
 use self::picker::SettingsPicker;
 use self::provider_login::{ProviderLoginEntry, ProviderLoginPane, ProviderLoginStatus, build_provider_login_entries};
 use self::server_status::ServerStatusPane;
-use crate::modal::ElicitationModal;
+use crate::modal::{ElicitationModal, frame::ModalFrame};
 use crate::platform::{BrowserOpener, ClipboardWriter};
 use crate::render_context::RenderContext;
 use crate::selection::Direction;
@@ -27,8 +27,8 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::Style;
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Clear, Paragraph, Widget};
+use ratatui::text::Line;
+use ratatui::widgets::{Clear, Paragraph, Widget};
 
 const MIN_WIDTH: u16 = 6;
 const MIN_HEIGHT: u16 = 3;
@@ -386,24 +386,16 @@ impl Surface for SettingsOverlay {
 
     fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
         let theme = cx.theme;
-        Clear.render(area, buf);
         if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
+            Clear.render(area, buf);
             Paragraph::new(Line::styled("(terminal too small)", Style::new().fg(theme.text_secondary)))
                 .render(area, buf);
             return None;
         }
-        // The key hints ride on the bottom border rather than claiming a row of
-        // their own, so a short terminal spends every inner row on content.
-        let mut footer = key_hints(&self.footer_hints(), theme);
-        footer.spans.insert(0, Span::raw(" "));
-        footer.push_span(Span::raw(" "));
-        let block = Block::bordered()
-            .title(" Configuration ")
-            .title_bottom(footer)
-            .style(Style::new().bg(theme.background))
-            .border_style(Style::new().fg(theme.text_secondary));
-        let inner = block.inner(area);
-        block.render(area, buf);
+        let footer = key_hints(&self.footer_hints(), theme);
+        let frame =
+            ModalFrame::new("Configuration", Some(footer), Constraint::Percentage(80), Constraint::Percentage(80));
+        let inner = frame.render(area, buf, theme);
 
         let (content, prompt) = self.split_for_prompt(inner, theme);
         let cursor = self.render_content(content, buf, cx);

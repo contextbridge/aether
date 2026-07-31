@@ -864,6 +864,8 @@ fn settings_overlay_renders_on_terminal() {
         viewport.contains("mode") || viewport.contains("code"),
         "settings overlay should show mode entry:\n{viewport}"
     );
+    assert!(viewport.contains("Configuration"), "settings should use the shared modal title:\n{viewport}");
+    assert!(viewport.contains("Enter select"), "settings should use the modal footer:\n{viewport}");
 }
 
 #[test]
@@ -885,7 +887,7 @@ fn settings_over_renders_with_no_config_options() {
 }
 
 #[test]
-fn settings_overlay_render_clears_covered_buffer_cells() {
+fn settings_overlay_render_clears_only_the_modal_rectangle() {
     let options = vec![select_option("model", "gpt-4o")];
     let mut overlay = SettingsOverlay::new(&options, Vec::new(), &[]);
     let area = ratatui::layout::Rect::new(0, 0, 40, 15);
@@ -897,7 +899,15 @@ fn settings_overlay_render_clears_covered_buffer_cells() {
 
     overlay.render(area, &mut buffer, &mut cx);
 
-    assert!(!buffer_text(&buffer).contains('X'), "overlay must clear every covered cell");
+    let modal = area.centered(ratatui::layout::Constraint::Percentage(80), ratatui::layout::Constraint::Percentage(80));
+    assert_eq!(buffer.cell((area.x, area.y)).unwrap().symbol(), "X");
+    assert!(
+        (modal.top()..modal.bottom()).all(|y| {
+            (modal.left()..modal.right()).all(|x| buffer.cell((x, y)).is_some_and(|cell| cell.symbol() != "X"))
+        }),
+        "the modal rectangle should be cleared:\n{}",
+        buffer_text(&buffer)
+    );
 }
 
 #[test]

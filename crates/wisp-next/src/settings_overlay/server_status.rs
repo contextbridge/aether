@@ -94,7 +94,9 @@ impl Surface for ServerStatusPane {
                     McpServerStatus::Failed { .. } => Style::new().fg(theme.error),
                     McpServerStatus::Authenticating | McpServerStatus::NeedsOAuth => Style::new().fg(theme.warning),
                 };
-                Line::styled(format!(" {prefix}{}  {indicator} {detail}", entry.name), style)
+                let row_prefix = (area.width > 30).then_some(" ").unwrap_or("");
+                let name_separator = if area.width <= 30 { " " } else { "  " };
+                Line::styled(format!("{row_prefix}{prefix}{}{name_separator}{indicator} {detail}", entry.name), style)
             }
         });
         ListView::new(rows.collect(), &mut self.selection, theme)

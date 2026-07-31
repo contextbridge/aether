@@ -1,4 +1,5 @@
 mod form;
+pub(crate) mod frame;
 mod url;
 
 use crate::elicitation::ElicitationResponder;
@@ -12,14 +13,16 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Position, Rect};
 use ratatui::text::Text;
-use ratatui::widgets::{Clear, Paragraph, Widget};
+use ratatui::widgets::{Paragraph, Widget};
 
 use self::form::{FormAction, FormModal};
+use self::frame::ModalFrame;
 use self::url::UrlModal;
 use crate::platform::{BrowserOpener, ClipboardWriter, default_browser_opener, default_clipboard_writer};
 use crate::selection::Direction;
 use crate::surface::{Action, Surface};
 use crate::theme::Theme;
+use crate::widgets::key_hints;
 use crate::wrap::rows;
 
 pub struct ElicitationModal {
@@ -189,11 +192,15 @@ impl Surface for ElicitationModal {
     }
 
     fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
-        let area = area.centered(Constraint::Percentage(80), Constraint::Percentage(80));
-        Clear.render(area, buf);
+        let (title, footer) = match &self.kind {
+            ModalKind::Form(form) => ("Elicitation", key_hints(&form.hints(), cx.theme)),
+            ModalKind::Url(_) => ("URL authorization", key_hints(&url::HINTS, cx.theme)),
+        };
+        let frame = ModalFrame::new(title, Some(footer), Constraint::Percentage(80), Constraint::Percentage(80));
+        let inner = frame.render(area, buf, cx.theme);
         match &mut self.kind {
-            ModalKind::Form(form) => form.render(area, buf, cx.theme),
-            ModalKind::Url(url) => url.render(area, buf, cx.theme),
+            ModalKind::Form(form) => form.render(inner, buf, cx.theme),
+            ModalKind::Url(url) => url.render(inner, buf, cx.theme),
         }
         None
     }

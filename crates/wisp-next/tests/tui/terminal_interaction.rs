@@ -611,12 +611,10 @@ mod event_routing {
         let (mut app, mut commands) = settings_app(options, vec![], vec![]);
         let mut terminal = make_terminal(80, 24);
         open_settings(&mut app, &mut terminal);
-        let rect = layer_rect(&mut terminal);
-        app.on_terminal_event(click(rect.x + 2, rect.y + 2));
+        app.on_terminal_event(click(10, 4));
         let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
-        let rect = layer_rect(&mut terminal);
-        app.on_terminal_event(click(rect.x + 2, rect.y + 3));
+        app.on_terminal_event(click(10, 5));
         assert!(matches!(
             commands.try_recv(),
             Ok(acp_utils::client::PromptCommand::SetConfigOption { config_id, value, .. }) if config_id == "model" && value == "b"
@@ -627,12 +625,10 @@ mod event_routing {
         let (mut app, mut commands) = settings_app(vec![], vec![server], vec![]);
         let mut terminal = make_terminal(80, 24);
         open_settings(&mut app, &mut terminal);
-        let rect = layer_rect(&mut terminal);
-        app.on_terminal_event(click(rect.x + 2, rect.y + 2));
+        app.on_terminal_event(click(10, 4));
         let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
-        let rect = layer_rect(&mut terminal);
-        app.on_terminal_event(click(rect.x + 2, rect.y + 1));
+        app.on_terminal_event(click(10, 3));
         assert!(matches!(
             commands.try_recv(),
             Ok(acp_utils::client::PromptCommand::AuthenticateMcpServer { server_name, .. }) if server_name == "linear"
@@ -642,12 +638,10 @@ mod event_routing {
         let (mut app, mut commands) = settings_app(vec![], vec![], methods);
         let mut terminal = make_terminal(80, 24);
         open_settings(&mut app, &mut terminal);
-        let rect = layer_rect(&mut terminal);
-        app.on_terminal_event(click(rect.x + 2, rect.y + 3));
+        app.on_terminal_event(click(10, 5));
         let mut renderer = Presenter::new(&UiSettings::default());
         sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
-        let rect = layer_rect(&mut terminal);
-        app.on_terminal_event(click(rect.x + 2, rect.y + 1));
+        app.on_terminal_event(click(10, 3));
         assert!(matches!(
             commands.try_recv(),
             Ok(acp_utils::client::PromptCommand::Authenticate { method_id }) if method_id == "codex"
