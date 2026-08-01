@@ -1,9 +1,10 @@
 use super::support::*;
 
-async fn settle_screen_tasks(app: &mut App) {
-    while let Some(effect) = app.take_effect() {
+async fn settle_screen_tasks(ui: &mut TestUi) {
+    while let Some(effect) = ui.app_mut().take_effect() {
         if let RuntimeEffect::Spawn(task) = effect {
-            app.on_task_result(task.execute().await);
+            let result = task.execute().await;
+            ui.app_mut().on_task_result(result);
         }
     }
 }
@@ -29,19 +30,26 @@ fn commit_count(root: &std::path::Path) -> usize {
     run_git(root, &["rev-list", "--count", "HEAD"]).trim().parse().unwrap()
 }
 
+fn make_ui_in(working_dir: std::path::PathBuf, width: u16) -> TestUi {
+    TestUiBuilder::new().working_dir(working_dir).dimensions(width, 15).build()
+}
+
+fn make_failable_ui_in(working_dir: std::path::PathBuf) -> (TestUi, Arc<AtomicBool>) {
+    TestUiBuilder::new().working_dir(working_dir).build_failable()
+}
+
 #[test]
 fn ctrl_g_opens_and_esc_closes_git_diff() {
     let directory = tempfile::tempdir().unwrap();
-    let (mut app, _command_rx) = make_app_in(directory.path().to_path_buf());
-    let mut ui = TestUi::new(make_terminal());
+    let mut ui = TestUiBuilder::new().working_dir(directory.path().to_path_buf()).build();
 
-    app.on_key(ctrl('g'));
-    ui.draw(&mut app);
-    assert!(buffer_text(ui.terminal.backend().buffer()).contains("Git Diff"));
+    ui.key(ctrl('g'));
+    ui.draw();
+    assert!(buffer_text(ui.terminal_mut().backend().buffer()).contains("Git Diff"));
 
-    app.on_key(key(KeyCode::Esc));
-    ui.draw(&mut app);
-    assert!(!buffer_text(ui.terminal.backend().buffer()).contains("Git diff"));
+    ui.key(key(KeyCode::Esc));
+    ui.draw();
+    assert!(!buffer_text(ui.terminal_mut().backend().buffer()).contains("Git diff"));
 }
 
 #[tokio::test]
@@ -53,15 +61,13 @@ async fn git_diff_empty_repo_without_commits_shows_untracked_files() {
     init_git_repo(root);
     std::fs::write(root.join("README.md"), "hello world\n").unwrap();
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Renderer::new(&UiSettings::default());
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
 
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
 
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("README.md"), "untracked file should appear in empty repo:\n{viewport}");
     assert!(viewport.contains("hello world"), "untracked file content should render:\n{viewport}");
 }
@@ -78,15 +84,13 @@ async fn git_diff_split_view_aligns_moved_identical_line() {
     run_git(root, &["commit", "--quiet", "-m", "init"]);
     std::fs::write(root.join("moved.rs"), "shared_call();\nlet after = new();\n").unwrap();
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Renderer::new(&UiSettings::default());
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
 
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
 
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let viewport = ui.viewport_text();
     assert!(
         viewport.lines().any(|line| line.matches("shared_call").count() == 2),
         "moved identical line should be aligned onto the same split row:\n{viewport}"
@@ -106,17 +110,17 @@ async fn git_diff_renders_file_drawer_and_highlighted_patch() {
     std::fs::write(root.join("src/lib.rs"), "fn new_lib() {}\n").unwrap();
     std::fs::write(root.join("src/main.rs"), "fn new_main() {}\n").unwrap();
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Renderer::new(&UiSettings::default());
-    let removed_background = renderer.theme().diff_removed_bg;
-    let added_background = renderer.theme().diff_added_bg;
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
+    let removed_background = ui.theme().diff_removed_bg;
+    let removed_fg = ui.theme().diff_removed_fg;
+    let added_background = ui.theme().diff_added_bg;
+    let added_fg = ui.theme().diff_added_fg;
 
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
 
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("Git Diff · Both"), "{viewport}");
     assert!(viewport.contains("lib.rs"), "{viewport}");
     assert!(viewport.contains("main.rs"), "{viewport}");
@@ -125,16 +129,16 @@ async fn git_diff_renders_file_drawer_and_highlighted_patch() {
         viewport.lines().any(|line| line.contains("old_lib") && line.contains("new_lib")),
         "expected wide Git patch to use split layout:\n{viewport}"
     );
-    assert!(has_cell(terminal.backend().buffer(), "f", |cell| {
-        cell.bg == removed_background && cell.fg != renderer.theme().diff_removed_fg
+    assert!(has_cell(ui.terminal_mut().backend().buffer(), "f", |cell| {
+        cell.bg == removed_background && cell.fg != removed_fg
     }));
-    assert!(has_cell(terminal.backend().buffer(), "f", |cell| {
-        cell.bg == added_background && cell.fg != renderer.theme().diff_added_fg
+    assert!(has_cell(ui.terminal_mut().backend().buffer(), "f", |cell| {
+        cell.bg == added_background && cell.fg != added_fg
     }));
 
-    app.on_key(key(KeyCode::Char('j')));
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    assert!(buffer_text(terminal.backend().buffer()).contains("new_main"));
+    ui.key(key(KeyCode::Char('j')));
+    ui.draw();
+    assert!(buffer_text(ui.terminal_mut().backend().buffer()).contains("new_main"));
 }
 
 #[tokio::test]
@@ -148,20 +152,19 @@ async fn git_diff_cycles_scope_and_stages_selected_file() {
     std::fs::write(root.join("tracked.rs"), "fn new() {}\n").unwrap();
     std::fs::write(root.join("untracked.rs"), "fn scratch() {}\n").unwrap();
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(160);
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
 
-    app.on_key(key(KeyCode::Char(' ')));
-    settle_screen_tasks(&mut app).await;
+    ui.key(key(KeyCode::Char(' ')));
+    settle_screen_tasks(&mut ui).await;
     let status = run_git(root, &["status", "--porcelain"]);
     assert!(status.contains("M  tracked.rs"), "{status}");
 
-    app.on_key(key(KeyCode::Char('t')));
-    settle_screen_tasks(&mut app).await;
-    sync_terminal(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Char('t')));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("Git Diff · Unstaged"), "{viewport}");
     assert!(viewport.contains("untracked.rs"), "{viewport}");
 }
@@ -179,12 +182,12 @@ async fn git_diff_stages_selected_directory() {
     std::fs::write(root.join("src/a.rs"), "fn changed_a() {}\n").unwrap();
     std::fs::write(root.join("src/b.rs"), "fn changed_b() {}\n").unwrap();
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
-    app.on_key(key(KeyCode::Up));
-    app.on_key(key(KeyCode::Char(' ')));
-    settle_screen_tasks(&mut app).await;
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
+    ui.key(key(KeyCode::Up));
+    ui.key(key(KeyCode::Char(' ')));
+    settle_screen_tasks(&mut ui).await;
 
     let status = run_git(root, &["status", "--porcelain"]);
     assert!(status.contains("M  src/a.rs"), "{status}");
@@ -194,17 +197,16 @@ async fn git_diff_stages_selected_directory() {
 #[tokio::test]
 async fn git_diff_reports_non_repository_without_blocking_close() {
     let directory = tempfile::tempdir().unwrap();
-    let (mut app, _command_rx) = make_app_in(directory.path().to_path_buf());
-    let mut terminal = make_terminal_with_width(80);
+    let mut ui = make_ui_in(directory.path().to_path_buf(), 80);
 
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
-    sync_terminal(&mut terminal, &mut app).unwrap();
-    assert!(buffer_text(terminal.backend().buffer()).contains("Not a git repository"));
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    assert!(buffer_text(ui.terminal_mut().backend().buffer()).contains("Not a git repository"));
 
-    app.on_key(key(KeyCode::Esc));
-    sync_terminal(&mut terminal, &mut app).unwrap();
-    assert!(!buffer_text(terminal.backend().buffer()).contains("Git Diff"));
+    ui.key(key(KeyCode::Esc));
+    ui.draw();
+    assert!(!buffer_text(ui.terminal_mut().backend().buffer()).contains("Git Diff"));
 }
 
 #[tokio::test]
@@ -216,21 +218,20 @@ async fn git_diff_commit_disabled_with_nothing_staged() {
     run_git(root, &["add", "-A"]);
     run_git(root, &["commit", "--quiet", "-m", "init"]);
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(160);
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
 
-    app.on_key(key(KeyCode::Char('C')));
-    settle_screen_tasks(&mut app).await;
-    sync_terminal(&mut terminal, &mut app).unwrap();
+    ui.key(key(KeyCode::Char('C')));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
 
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("Nothing staged to commit"), "{viewport}");
 
-    app.on_key(key(KeyCode::Esc));
-    sync_terminal(&mut terminal, &mut app).unwrap();
-    assert!(!buffer_text(terminal.backend().buffer()).contains("Git Diff"));
+    ui.key(key(KeyCode::Esc));
+    ui.draw();
+    assert!(!buffer_text(ui.terminal_mut().backend().buffer()).contains("Git Diff"));
 }
 
 #[tokio::test]
@@ -244,16 +245,16 @@ async fn git_diff_commit_success() {
     std::fs::write(root.join("file.txt"), "changed\n").unwrap();
     run_git(root, &["add", "-A"]);
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
 
-    app.on_key(key(KeyCode::Char('C')));
-    settle_screen_tasks(&mut app).await;
+    ui.key(key(KeyCode::Char('C')));
+    settle_screen_tasks(&mut ui).await;
 
-    type_text(&mut app, "my commit message");
-    app.on_key(key(KeyCode::Enter));
-    settle_screen_tasks(&mut app).await;
+    ui.type_text("my commit message");
+    ui.key(key(KeyCode::Enter));
+    settle_screen_tasks(&mut ui).await;
 
     let log = run_git(root, &["log", "--oneline", "-1"]);
     assert!(log.contains("my commit message"), "log was: {log}");
@@ -270,19 +271,18 @@ async fn git_diff_commit_empty_message_shows_error() {
     std::fs::write(root.join("file.txt"), "changed\n").unwrap();
     run_git(root, &["add", "-A"]);
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(160);
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
 
-    app.on_key(key(KeyCode::Char('C')));
-    settle_screen_tasks(&mut app).await;
+    ui.key(key(KeyCode::Char('C')));
+    settle_screen_tasks(&mut ui).await;
 
-    app.on_key(key(KeyCode::Enter));
-    settle_screen_tasks(&mut app).await;
-    sync_terminal(&mut terminal, &mut app).unwrap();
+    ui.key(key(KeyCode::Enter));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
 
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("Commit message cannot be empty"), "{viewport}");
 }
 
@@ -297,20 +297,19 @@ async fn git_diff_commit_esc_cancels() {
     std::fs::write(root.join("file.txt"), "changed\n").unwrap();
     run_git(root, &["add", "-A"]);
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(160);
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
 
-    app.on_key(key(KeyCode::Char('C')));
-    settle_screen_tasks(&mut app).await;
+    ui.key(key(KeyCode::Char('C')));
+    settle_screen_tasks(&mut ui).await;
 
-    type_text(&mut app, "should not commit");
-    app.on_key(key(KeyCode::Esc));
-    settle_screen_tasks(&mut app).await;
-    sync_terminal(&mut terminal, &mut app).unwrap();
+    ui.type_text("should not commit");
+    ui.key(key(KeyCode::Esc));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
 
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("Git Diff"), "should still be on diff screen:\n{viewport}");
 }
 
@@ -324,22 +323,21 @@ async fn git_diff_discard_confirmation_cancelled() {
     run_git(root, &["commit", "--quiet", "-m", "init"]);
     std::fs::write(root.join("file.txt"), "changed\n").unwrap();
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(160);
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
 
-    app.on_key(key(KeyCode::Char('d')));
-    settle_screen_tasks(&mut app).await;
-    sync_terminal(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Char('d')));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("Discard changes to"), "{viewport}");
     assert!(viewport.contains("file.txt"), "{viewport}");
 
-    app.on_key(key(KeyCode::Char('n')));
-    settle_screen_tasks(&mut app).await;
-    sync_terminal(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Char('n')));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(!viewport.contains("Discard"), "discard prompt should be gone:\n{viewport}");
 
     let content = std::fs::read_to_string(root.join("file.txt")).unwrap();
@@ -356,14 +354,14 @@ async fn git_diff_discard_reverts_modified_file() {
     run_git(root, &["commit", "--quiet", "-m", "init"]);
     std::fs::write(root.join("file.txt"), "changed\n").unwrap();
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
 
-    app.on_key(key(KeyCode::Char('d')));
-    settle_screen_tasks(&mut app).await;
-    app.on_key(key(KeyCode::Char('y')));
-    settle_screen_tasks(&mut app).await;
+    ui.key(key(KeyCode::Char('d')));
+    settle_screen_tasks(&mut ui).await;
+    ui.key(key(KeyCode::Char('y')));
+    settle_screen_tasks(&mut ui).await;
 
     let content = std::fs::read_to_string(root.join("file.txt")).unwrap();
     assert_eq!(content, "original\n");
@@ -379,14 +377,14 @@ async fn git_diff_discard_removes_untracked_file() {
     run_git(root, &["commit", "--quiet", "-m", "init"]);
     std::fs::write(root.join("untracked.txt"), "scratch\n").unwrap();
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
 
-    app.on_key(key(KeyCode::Char('d')));
-    settle_screen_tasks(&mut app).await;
-    app.on_key(key(KeyCode::Char('y')));
-    settle_screen_tasks(&mut app).await;
+    ui.key(key(KeyCode::Char('d')));
+    settle_screen_tasks(&mut ui).await;
+    ui.key(key(KeyCode::Char('y')));
+    settle_screen_tasks(&mut ui).await;
 
     assert!(!root.join("untracked.txt").exists());
 }
@@ -401,14 +399,14 @@ async fn git_diff_discard_restores_deleted_file() {
     run_git(root, &["commit", "--quiet", "-m", "init"]);
     std::fs::remove_file(root.join("file.txt")).unwrap();
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
 
-    app.on_key(key(KeyCode::Char('d')));
-    settle_screen_tasks(&mut app).await;
-    app.on_key(key(KeyCode::Char('y')));
-    settle_screen_tasks(&mut app).await;
+    ui.key(key(KeyCode::Char('d')));
+    settle_screen_tasks(&mut ui).await;
+    ui.key(key(KeyCode::Char('y')));
+    settle_screen_tasks(&mut ui).await;
 
     let content = std::fs::read_to_string(root.join("file.txt")).unwrap();
     assert_eq!(content, "original\n");
@@ -424,31 +422,27 @@ async fn git_diff_modified_chars_do_not_arm_or_confirm_discard() {
     run_git(root, &["commit", "--quiet", "-m", "init"]);
     std::fs::write(root.join("file.txt"), "changed\n").unwrap();
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(160);
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
 
     for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT, KeyModifiers::SUPER] {
-        app.on_key(KeyEvent::new(KeyCode::Char('d'), modifiers));
-        settle_screen_tasks(&mut app).await;
+        ui.key(KeyEvent::new(KeyCode::Char('d'), modifiers));
+        settle_screen_tasks(&mut ui).await;
     }
-    sync_terminal(&mut terminal, &mut app).unwrap();
-    assert!(
-        !buffer_text(&viewport_buffer(&mut terminal)).contains("Discard changes"),
-        "composed 'd' must not arm discard"
-    );
+    ui.draw();
+    assert!(!ui.viewport_text().contains("Discard changes"), "composed 'd' must not arm discard");
     assert_eq!(std::fs::read_to_string(root.join("file.txt")).unwrap(), "changed\n");
 
-    app.on_key(key(KeyCode::Char('d')));
-    settle_screen_tasks(&mut app).await;
-    app.on_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
-    app.on_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::SUPER));
-    settle_screen_tasks(&mut app).await;
+    ui.key(key(KeyCode::Char('d')));
+    settle_screen_tasks(&mut ui).await;
+    ui.key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
+    ui.key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::SUPER));
+    settle_screen_tasks(&mut ui).await;
     assert_eq!(std::fs::read_to_string(root.join("file.txt")).unwrap(), "changed\n", "composed 'y' must not confirm");
 
-    app.on_key(key(KeyCode::Char('y')));
-    settle_screen_tasks(&mut app).await;
+    ui.key(key(KeyCode::Char('y')));
+    settle_screen_tasks(&mut ui).await;
     assert_eq!(std::fs::read_to_string(root.join("file.txt")).unwrap(), "original\n");
 }
 
@@ -462,27 +456,27 @@ async fn git_diff_modified_chars_do_not_stage_or_unstage() {
     run_git(root, &["commit", "--quiet", "-m", "init"]);
     std::fs::write(root.join("file.txt"), "changed\n").unwrap();
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
 
     for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT, KeyModifiers::SUPER] {
-        app.on_key(KeyEvent::new(KeyCode::Char('a'), modifiers));
-        settle_screen_tasks(&mut app).await;
+        ui.key(KeyEvent::new(KeyCode::Char('a'), modifiers));
+        settle_screen_tasks(&mut ui).await;
     }
     assert!(staged_files(root).is_empty(), "composed 'a' must not stage");
 
-    app.on_key(key(KeyCode::Char('a')));
-    settle_screen_tasks(&mut app).await;
+    ui.key(key(KeyCode::Char('a')));
+    settle_screen_tasks(&mut ui).await;
     assert_eq!(staged_files(root), vec!["file.txt".to_string()], "plain 'a' should stage all");
 
     // 'A' is Shift+'a'; a chord carrying an extra modifier must not unstage.
-    app.on_key(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT | KeyModifiers::CONTROL));
-    settle_screen_tasks(&mut app).await;
+    ui.key(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT | KeyModifiers::CONTROL));
+    settle_screen_tasks(&mut ui).await;
     assert_eq!(staged_files(root), vec!["file.txt".to_string()], "composed 'A' must not unstage");
 
-    app.on_key(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT));
-    settle_screen_tasks(&mut app).await;
+    ui.key(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT));
+    settle_screen_tasks(&mut ui).await;
     assert!(staged_files(root).is_empty(), "plain 'A' should unstage all");
 }
 
@@ -497,29 +491,25 @@ async fn git_diff_modified_chars_do_not_open_commit_editor() {
     std::fs::write(root.join("file.txt"), "changed\n").unwrap();
     run_git(root, &["add", "-A"]);
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(160);
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
     let commits_before = commit_count(root);
 
-    app.on_key(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SHIFT | KeyModifiers::CONTROL));
-    settle_screen_tasks(&mut app).await;
-    sync_terminal(&mut terminal, &mut app).unwrap();
-    assert!(
-        !buffer_text(&viewport_buffer(&mut terminal)).contains("commit ›"),
-        "composed 'C' must not open the editor"
-    );
+    ui.key(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SHIFT | KeyModifiers::CONTROL));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    assert!(!ui.viewport_text().contains("commit ›"), "composed 'C' must not open the editor");
     assert_eq!(commit_count(root), commits_before);
 
-    app.on_key(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SHIFT));
-    settle_screen_tasks(&mut app).await;
-    sync_terminal(&mut terminal, &mut app).unwrap();
-    assert!(buffer_text(&viewport_buffer(&mut terminal)).contains("commit ›"));
+    ui.key(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SHIFT));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    assert!(ui.viewport_text().contains("commit ›"));
 
-    type_text(&mut app, "msg");
-    app.on_key(key(KeyCode::Enter));
-    settle_screen_tasks(&mut app).await;
+    ui.type_text("msg");
+    ui.key(key(KeyCode::Enter));
+    settle_screen_tasks(&mut ui).await;
     assert_eq!(commit_count(root), commits_before + 1, "plain keys should commit");
 }
 
@@ -529,11 +519,11 @@ async fn double_ctrl_c_exits_over_git_diff() {
     let root = directory.path();
     init_git_repo(root);
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
-    assert!(app.full_screen_active());
-    assert_ctrl_c_exits_over_open_layer(&mut app);
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
+    assert!(ui.app().full_screen_active());
+    assert_ctrl_c_exits_over_open_layer(ui.app_mut());
 }
 
 #[tokio::test]
@@ -547,25 +537,23 @@ async fn git_diff_full_file_toggle_shows_content() {
     run_git(root, &["commit", "--quiet", "-m", "init"]);
     std::fs::write(root.join("src/main.rs"), "fn new() {}\nfn extra() {}\n").unwrap();
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Renderer::new(&UiSettings::default());
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
 
-    app.on_key(key(KeyCode::Enter));
-    app.on_key(key(KeyCode::Char('o')));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
+    ui.key(key(KeyCode::Enter));
+    ui.key(key(KeyCode::Char('o')));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
 
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("[full file]"), "{viewport}");
     assert!(viewport.contains("fn new()"), "{viewport}");
     assert!(viewport.contains("fn extra()"), "{viewport}");
 
-    app.on_key(key(KeyCode::Char('o')));
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Char('o')));
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(!viewport.contains("[full file]"), "{viewport}");
     assert!(viewport.contains("fn old()"), "{viewport}");
 }
@@ -595,21 +583,18 @@ extra
     )
     .unwrap();
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(120);
-    let mut renderer = Renderer::new(&UiSettings::default());
-    let added_background = renderer.theme().diff_added_bg;
+    let mut ui = make_ui_in(root.to_path_buf(), 120);
+    let added_background = ui.theme().diff_added_bg;
 
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
-    app.on_key(key(KeyCode::Enter));
-    app.on_key(key(KeyCode::Char('o')));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
+    ui.key(key(KeyCode::Enter));
+    ui.key(key(KeyCode::Char('o')));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
 
-    let buffer = terminal.backend().buffer();
     assert!(
-        rows_with_background(buffer, added_background) >= 2,
+        rows_with_background(&ui.viewport(), added_background) >= 2,
         "added lines (new, extra) should be highlighted with the added background"
     );
 }
@@ -624,17 +609,16 @@ async fn git_diff_full_file_shows_deleted_message() {
     run_git(root, &["commit", "--quiet", "-m", "init"]);
     std::fs::remove_file(root.join("file.txt")).unwrap();
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(160);
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
 
-    app.on_key(key(KeyCode::Enter));
-    app.on_key(key(KeyCode::Char('o')));
-    settle_screen_tasks(&mut app).await;
-    sync_terminal(&mut terminal, &mut app).unwrap();
+    ui.key(key(KeyCode::Enter));
+    ui.key(key(KeyCode::Char('o')));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
 
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("deleted"), "{viewport}");
 }
 
@@ -648,17 +632,16 @@ async fn git_diff_full_file_toggle_at_narrow_width() {
     run_git(root, &["commit", "--quiet", "-m", "init"]);
     std::fs::write(root.join("file.rs"), "fn new() {}\nfn two() {}\n").unwrap();
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(50);
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
+    let mut ui = make_ui_in(root.to_path_buf(), 50);
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
 
-    app.on_key(key(KeyCode::Enter));
-    app.on_key(key(KeyCode::Char('o')));
-    settle_screen_tasks(&mut app).await;
-    sync_terminal(&mut terminal, &mut app).unwrap();
+    ui.key(key(KeyCode::Enter));
+    ui.key(key(KeyCode::Char('o')));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
 
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("fn new()"), "{viewport}");
     assert!(viewport.contains("fn two()"), "{viewport}");
 }
@@ -673,43 +656,42 @@ async fn git_diff_stale_event_rejected() {
     run_git(root, &["commit", "--quiet", "-m", "init"]);
     std::fs::write(root.join("file.rs"), "fn changed() {}\n").unwrap();
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
 
     let stale_event = GitDiffEvent::ActionFinished { request_id: Generation::from(0), result: Ok(()) };
-    app.on_task_result(TaskResult::GitDiff(stale_event));
-    settle_screen_tasks(&mut app).await;
+    ui.app_mut().on_task_result(TaskResult::GitDiff(stale_event));
+    settle_screen_tasks(&mut ui).await;
 
-    app.on_key(key(KeyCode::Esc));
-    settle_screen_tasks(&mut app).await;
+    ui.key(key(KeyCode::Esc));
+    settle_screen_tasks(&mut ui).await;
 }
 
 #[tokio::test]
 async fn git_diff_screen_closable_on_error() {
     let directory = tempfile::tempdir().unwrap();
-    let (mut app, _command_rx) = make_app_in(directory.path().to_path_buf());
-    let mut terminal = make_terminal_with_width(80);
+    let mut ui = make_ui_in(directory.path().to_path_buf(), 80);
 
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
-    sync_terminal(&mut terminal, &mut app).unwrap();
-    assert!(buffer_text(terminal.backend().buffer()).contains("Not a git repository"));
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    assert!(buffer_text(ui.terminal_mut().backend().buffer()).contains("Not a git repository"));
 
-    app.on_key(key(KeyCode::Esc));
-    settle_screen_tasks(&mut app).await;
-    sync_terminal(&mut terminal, &mut app).unwrap();
-    assert!(!buffer_text(terminal.backend().buffer()).contains("Git Diff"));
+    ui.key(key(KeyCode::Esc));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    assert!(!buffer_text(ui.terminal_mut().backend().buffer()).contains("Git Diff"));
 
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
-    sync_terminal(&mut terminal, &mut app).unwrap();
-    assert!(buffer_text(terminal.backend().buffer()).contains("Not a git repository"));
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    assert!(buffer_text(ui.terminal_mut().backend().buffer()).contains("Not a git repository"));
 
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
-    sync_terminal(&mut terminal, &mut app).unwrap();
-    assert!(!buffer_text(terminal.backend().buffer()).contains("Git Diff"));
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    assert!(!buffer_text(ui.terminal_mut().backend().buffer()).contains("Git Diff"));
 }
 
 #[tokio::test]
@@ -730,28 +712,27 @@ async fn git_diff_commit_failure_shows_error() {
     std::fs::write(root.join("file.txt"), "changed\n").unwrap();
     run_git(root, &["add", "-A"]);
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(160);
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
 
-    app.on_key(key(KeyCode::Char('C')));
-    settle_screen_tasks(&mut app).await;
-    type_text(&mut app, "should fail");
-    app.on_key(key(KeyCode::Enter));
-    settle_screen_tasks(&mut app).await;
-    sync_terminal(&mut terminal, &mut app).unwrap();
+    ui.key(key(KeyCode::Char('C')));
+    settle_screen_tasks(&mut ui).await;
+    ui.type_text("should fail");
+    ui.key(key(KeyCode::Enter));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
 
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let viewport = ui.viewport_text();
     assert!(
         viewport.contains("nope") || viewport.contains("CommandFailed") || viewport.contains("failed"),
         "expected commit error in viewport:\n{viewport}"
     );
 
-    app.on_key(key(KeyCode::Esc));
-    settle_screen_tasks(&mut app).await;
-    sync_terminal(&mut terminal, &mut app).unwrap();
-    assert!(!buffer_text(terminal.backend().buffer()).contains("Git Diff"));
+    ui.key(key(KeyCode::Esc));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    assert!(!buffer_text(ui.terminal_mut().backend().buffer()).contains("Git Diff"));
 }
 
 #[tokio::test]
@@ -764,13 +745,12 @@ async fn git_diff_binary_file_shows_label() {
     run_git(root, &["commit", "--quiet", "-m", "init"]);
     std::fs::write(root.join("image.png"), b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01").unwrap();
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(160);
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
-    sync_terminal(&mut terminal, &mut app).unwrap();
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
 
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("Binary file"), "expected binary file label in:\n{viewport}");
 }
 
@@ -784,24 +764,23 @@ async fn git_diff_full_file_binary_shows_message() {
     run_git(root, &["commit", "--quiet", "-m", "init"]);
     std::fs::write(root.join("data.bin"), b"\x00\x01\x02\x03\x04").unwrap();
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(160);
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
 
-    app.on_key(key(KeyCode::Enter));
-    app.on_key(key(KeyCode::Char('o')));
-    settle_screen_tasks(&mut app).await;
-    sync_terminal(&mut terminal, &mut app).unwrap();
+    ui.key(key(KeyCode::Enter));
+    ui.key(key(KeyCode::Char('o')));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
 
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let viewport = ui.viewport_text();
     assert!(
         viewport.contains("Binary file") || viewport.contains("binary"),
         "expected binary message in full-file mode:\n{viewport}"
     );
 
-    app.on_key(key(KeyCode::Esc));
-    settle_screen_tasks(&mut app).await;
+    ui.key(key(KeyCode::Esc));
+    settle_screen_tasks(&mut ui).await;
 }
 
 #[tokio::test]
@@ -814,36 +793,35 @@ async fn git_diff_full_file_load_error_exits_full_file_mode() {
     run_git(root, &["commit", "--quiet", "-m", "init"]);
     std::fs::write(root.join("source.rs"), "fn answer() -> u32 { 43 }\n").unwrap();
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(160);
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
 
-    app.on_key(key(KeyCode::Enter));
-    app.on_key(key(KeyCode::Char('o')));
-    settle_screen_tasks(&mut app).await;
-    sync_terminal(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Enter));
+    ui.key(key(KeyCode::Char('o')));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("[full file]"), "{viewport}");
 
     std::fs::remove_file(root.join("source.rs")).unwrap();
-    app.on_key(key(KeyCode::Char('o')));
-    settle_screen_tasks(&mut app).await;
-    app.on_key(key(KeyCode::Char('o')));
-    settle_screen_tasks(&mut app).await;
-    sync_terminal(&mut terminal, &mut app).unwrap();
+    ui.key(key(KeyCode::Char('o')));
+    settle_screen_tasks(&mut ui).await;
+    ui.key(key(KeyCode::Char('o')));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
 
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let viewport = ui.viewport_text();
     assert!(!viewport.contains("[full file]"), "should exit full-file mode on load error:\n{viewport}");
     assert!(
         viewport.contains("Cannot read") || viewport.contains("source.rs"),
         "should show error in footer:\n{viewport}"
     );
 
-    app.on_key(key(KeyCode::Esc));
-    settle_screen_tasks(&mut app).await;
-    sync_terminal(&mut terminal, &mut app).unwrap();
-    assert!(!buffer_text(terminal.backend().buffer()).contains("Git Diff"));
+    ui.key(key(KeyCode::Esc));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    assert!(!buffer_text(ui.terminal_mut().backend().buffer()).contains("Git Diff"));
 }
 
 #[tokio::test]
@@ -857,23 +835,22 @@ async fn git_diff_commit_editor_unicode_cursor_and_render() {
     std::fs::write(root.join("file.txt"), "changed\n").unwrap();
     run_git(root, &["add", "-A"]);
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(160);
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
 
-    app.on_key(key(KeyCode::Char('C')));
-    settle_screen_tasks(&mut app).await;
+    ui.key(key(KeyCode::Char('C')));
+    settle_screen_tasks(&mut ui).await;
 
-    type_text(&mut app, "héllo wörld — café");
-    settle_screen_tasks(&mut app).await;
-    sync_terminal(&mut terminal, &mut app).unwrap();
+    ui.type_text("héllo wörld — café");
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
 
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("héllo wörld — café"), "expected unicode commit message:\n{viewport}");
 
-    app.on_key(key(KeyCode::Esc));
-    settle_screen_tasks(&mut app).await;
+    ui.key(key(KeyCode::Esc));
+    settle_screen_tasks(&mut ui).await;
 }
 
 #[tokio::test]
@@ -887,56 +864,54 @@ async fn git_diff_comment_draft_submit_cancel_undo() {
     run_git(root, &["commit", "--quiet", "-m", "init"]);
     std::fs::write(root.join("src/lib.rs"), "fn new() {}\nfn another() {}\nfn third() {}\n").unwrap();
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Renderer::new(&UiSettings::default());
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
 
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
 
     // Navigate into patch pane: move to file, then enter
-    app.on_key(key(KeyCode::Char('j')));
-    app.on_key(key(KeyCode::Enter));
-    settle_screen_tasks(&mut app).await;
+    ui.key(key(KeyCode::Char('j')));
+    ui.key(key(KeyCode::Enter));
+    settle_screen_tasks(&mut ui).await;
 
     // Press 'c' to start draft on first line
-    app.on_key(key(KeyCode::Char('c')));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Char('c')));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("Draft"), "draft should appear:\n{viewport}");
 
     // Type a comment
-    type_text(&mut app, "this looks wrong");
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.type_text("this looks wrong");
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("this looks wrong"), "typed text should appear in draft:\n{viewport}");
 
     // Submit the comment
-    app.on_key(key(KeyCode::Enter));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Enter));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("Comment"), "submitted comment should appear:\n{viewport}");
     assert!(viewport.contains("this looks wrong"), "submitted text should be visible:\n{viewport}");
 
     // Undo the comment
-    app.on_key(key(KeyCode::Char('u')));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Char('u')));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(!viewport.contains("this looks wrong"), "comment should be removed after undo:\n{viewport}");
 
     // Esc cancels draft
-    app.on_key(key(KeyCode::Char('c')));
-    type_text(&mut app, "will cancel");
-    settle_screen_tasks(&mut app).await;
-    app.on_key(key(KeyCode::Esc));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Char('c')));
+    ui.type_text("will cancel");
+    settle_screen_tasks(&mut ui).await;
+    ui.key(key(KeyCode::Esc));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(!viewport.contains("will cancel"), "cancelled draft should not appear:\n{viewport}");
 }
 
@@ -950,22 +925,20 @@ async fn git_diff_comment_counts_in_footer() {
     run_git(root, &["commit", "--quiet", "-m", "init"]);
     std::fs::write(root.join("lib.rs"), "fn new() {}\nfn two() {}\n").unwrap();
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Renderer::new(&UiSettings::default());
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
 
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
-    app.on_key(key(KeyCode::Enter)); // into patch
-    settle_screen_tasks(&mut app).await;
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
+    ui.key(key(KeyCode::Enter)); // into patch
+    settle_screen_tasks(&mut ui).await;
 
     // Add a comment
-    app.on_key(key(KeyCode::Char('c')));
-    type_text(&mut app, "feedback");
-    app.on_key(key(KeyCode::Enter));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Char('c')));
+    ui.type_text("feedback");
+    ui.key(key(KeyCode::Enter));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.lines().any(|l| l.contains("1 comment")), "file header should show comment count:\n{viewport}");
 
     // Footer should show total count - check the raw footer area
@@ -984,40 +957,38 @@ async fn git_diff_comments_survive_file_switches() {
     std::fs::write(root.join("a.rs"), "fn a_new() {}\n").unwrap();
     std::fs::write(root.join("b.rs"), "fn b_new() {}\n").unwrap();
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Renderer::new(&UiSettings::default());
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
 
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
-    app.on_key(key(KeyCode::Enter)); // into patch
-    settle_screen_tasks(&mut app).await;
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
+    ui.key(key(KeyCode::Enter)); // into patch
+    settle_screen_tasks(&mut ui).await;
 
     // Add comment on first file (a.rs)
-    app.on_key(key(KeyCode::Char('c')));
-    type_text(&mut app, "comment on A");
-    app.on_key(key(KeyCode::Enter));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Char('c')));
+    ui.type_text("comment on A");
+    ui.key(key(KeyCode::Enter));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("comment on A"), "comment on A should be visible:\n{viewport}");
 
     // Switch to drawer and select second file
-    app.on_key(key(KeyCode::Char('h')));
-    app.on_key(key(KeyCode::Char('j')));
-    app.on_key(key(KeyCode::Enter));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Char('h')));
+    ui.key(key(KeyCode::Char('j')));
+    ui.key(key(KeyCode::Enter));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(!viewport.contains("comment on A"), "comment on A should not appear on B:\n{viewport}");
 
     // Switch back to first file
-    app.on_key(key(KeyCode::Char('h')));
-    app.on_key(key(KeyCode::Char('k')));
-    app.on_key(key(KeyCode::Enter));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Char('h')));
+    ui.key(key(KeyCode::Char('k')));
+    ui.key(key(KeyCode::Enter));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("comment on A"), "comment on A should persist after switching back:\n{viewport}");
 }
 
@@ -1035,35 +1006,33 @@ async fn git_diff_comments_survive_repeated_file_switches() {
     std::fs::write(root.join("a.rs"), "fn a_new() {}\n").unwrap();
     std::fs::write(root.join("b.rs"), "fn b_new() {}\n").unwrap();
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Renderer::new(&UiSettings::default());
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
 
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
-    app.on_key(key(KeyCode::Enter));
-    settle_screen_tasks(&mut app).await;
-    app.on_key(key(KeyCode::Char('c')));
-    type_text(&mut app, "comment on A");
-    app.on_key(key(KeyCode::Enter));
-    settle_screen_tasks(&mut app).await;
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
+    ui.key(key(KeyCode::Enter));
+    settle_screen_tasks(&mut ui).await;
+    ui.key(key(KeyCode::Char('c')));
+    ui.type_text("comment on A");
+    ui.key(key(KeyCode::Enter));
+    settle_screen_tasks(&mut ui).await;
 
     // A -> B -> A -> B -> A: exercise repeated view rebuilding.
     for _ in 0..2 {
-        app.on_key(key(KeyCode::Char('h')));
-        app.on_key(key(KeyCode::Char('j')));
-        app.on_key(key(KeyCode::Enter));
-        settle_screen_tasks(&mut app).await;
-        renderer.draw(&mut terminal, &mut app).unwrap();
-        let viewport = buffer_text(&viewport_buffer(&mut terminal));
+        ui.key(key(KeyCode::Char('h')));
+        ui.key(key(KeyCode::Char('j')));
+        ui.key(key(KeyCode::Enter));
+        settle_screen_tasks(&mut ui).await;
+        ui.draw();
+        let viewport = ui.viewport_text();
         assert!(!viewport.contains("comment on A"), "comment on A must not leak onto B");
 
-        app.on_key(key(KeyCode::Char('h')));
-        app.on_key(key(KeyCode::Char('k')));
-        app.on_key(key(KeyCode::Enter));
-        settle_screen_tasks(&mut app).await;
-        renderer.draw(&mut terminal, &mut app).unwrap();
-        let viewport = buffer_text(&viewport_buffer(&mut terminal));
+        ui.key(key(KeyCode::Char('h')));
+        ui.key(key(KeyCode::Char('k')));
+        ui.key(key(KeyCode::Enter));
+        settle_screen_tasks(&mut ui).await;
+        ui.draw();
+        let viewport = ui.viewport_text();
         assert!(viewport.contains("comment on A"), "comment on A must survive repeated file switches");
     }
 }
@@ -1078,28 +1047,26 @@ async fn git_diff_submit_review_emits_prompt() {
     run_git(root, &["commit", "--quiet", "-m", "init"]);
     std::fs::write(root.join("lib.rs"), "fn new() {}\n").unwrap();
 
-    let (mut app, mut command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Renderer::new(&UiSettings::default());
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
 
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
-    app.on_key(key(KeyCode::Enter)); // into patch
-    settle_screen_tasks(&mut app).await;
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
+    ui.key(key(KeyCode::Enter)); // into patch
+    settle_screen_tasks(&mut ui).await;
 
     // Add a comment
-    app.on_key(key(KeyCode::Char('c')));
-    type_text(&mut app, "feedback text");
-    app.on_key(key(KeyCode::Enter));
-    settle_screen_tasks(&mut app).await;
+    ui.key(key(KeyCode::Char('c')));
+    ui.type_text("feedback text");
+    ui.key(key(KeyCode::Enter));
+    settle_screen_tasks(&mut ui).await;
 
     // Submit
-    app.on_key(key(KeyCode::Char('s')));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
+    ui.key(key(KeyCode::Char('s')));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
 
     // Verify the prompt was sent
-    let cmd = command_rx.try_recv().unwrap();
+    let cmd = ui.command_rx().try_recv().unwrap();
     match cmd {
         PromptCommand::Prompt { text, content, .. } => {
             assert!(text.contains("I'm reviewing the working tree diff"), "text should contain review prefix:\n{text}");
@@ -1111,7 +1078,7 @@ async fn git_diff_submit_review_emits_prompt() {
     }
 
     // Screen should be closed after successful submit
-    assert!(!app.full_screen_active(), "screen should close after submit");
+    assert!(!ui.app().full_screen_active(), "screen should close after submit");
 }
 
 #[tokio::test]
@@ -1124,21 +1091,19 @@ async fn git_diff_submit_no_comments_shows_error() {
     run_git(root, &["commit", "--quiet", "-m", "init"]);
     std::fs::write(root.join("lib.rs"), "fn new() {}\n").unwrap();
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Renderer::new(&UiSettings::default());
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
 
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
-    app.on_key(key(KeyCode::Enter)); // into patch
-    settle_screen_tasks(&mut app).await;
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
+    ui.key(key(KeyCode::Enter)); // into patch
+    settle_screen_tasks(&mut ui).await;
 
     // Press 's' with no comments
-    app.on_key(key(KeyCode::Char('s')));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
+    ui.key(key(KeyCode::Char('s')));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
 
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("No comments to submit"), "should show error for no comments:\n{viewport}");
 }
 
@@ -1152,41 +1117,35 @@ async fn git_diff_submit_send_failure_preserves_comments() {
     run_git(root, &["commit", "--quiet", "-m", "init"]);
     std::fs::write(root.join("lib.rs"), "fn new() {}\n").unwrap();
 
-    let (mut app, fail_signal, _command_rx) = make_failable_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Renderer::new(&UiSettings::default());
+    let (mut ui, fail_signal) = make_failable_ui_in(root.to_path_buf());
 
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
-    app.on_key(key(KeyCode::Enter)); // into patch
-    settle_screen_tasks(&mut app).await;
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
+    ui.key(key(KeyCode::Enter)); // into patch
+    settle_screen_tasks(&mut ui).await;
 
     // Add a comment
-    app.on_key(key(KeyCode::Char('c')));
-    type_text(&mut app, "feedback text");
-    app.on_key(key(KeyCode::Enter));
-    settle_screen_tasks(&mut app).await;
+    ui.key(key(KeyCode::Char('c')));
+    ui.type_text("feedback text");
+    ui.key(key(KeyCode::Enter));
+    settle_screen_tasks(&mut ui).await;
 
     // Enable send failure
     fail_signal.store(true, Ordering::SeqCst);
 
     // Try to submit
-    app.on_key(key(KeyCode::Char('s')));
-    settle_screen_tasks(&mut app).await;
+    ui.key(key(KeyCode::Char('s')));
+    settle_screen_tasks(&mut ui).await;
 
     // The screen should still be active (failure retains state)
-    assert!(app.full_screen_active(), "screen should remain open after send failure");
+    assert!(ui.app().full_screen_active(), "screen should remain open after send failure");
 
     // Comments should still be visible
-    app.on_key(key(KeyCode::Esc)); // close screen to check transcript
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Esc)); // close screen to check transcript
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("Failed to send review"), "should show send failure message in transcript:\n{viewport}");
-}
-
-fn make_failable_app_in(working_dir: std::path::PathBuf) -> (App, Arc<AtomicBool>, UnboundedReceiver<PromptCommand>) {
-    AppBuilder::new().working_dir(working_dir).build_failable()
 }
 
 #[tokio::test]
@@ -1199,46 +1158,44 @@ async fn git_diff_comment_refresh_confirm_clears_cancel_preserves() {
     run_git(root, &["commit", "--quiet", "-m", "init"]);
     std::fs::write(root.join("lib.rs"), "fn new() {}\n").unwrap();
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Renderer::new(&UiSettings::default());
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
 
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
-    app.on_key(key(KeyCode::Enter));
-    settle_screen_tasks(&mut app).await;
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
+    ui.key(key(KeyCode::Enter));
+    settle_screen_tasks(&mut ui).await;
 
-    app.on_key(key(KeyCode::Char('c')));
-    type_text(&mut app, "keep me");
-    app.on_key(key(KeyCode::Enter));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Char('c')));
+    ui.type_text("keep me");
+    ui.key(key(KeyCode::Enter));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("keep me"), "comment should appear before refresh:\n{viewport}");
 
     // First 'r' — show confirmation
-    app.on_key(key(KeyCode::Char('r')));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Char('r')));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("will clear"), "confirmation message should appear:\n{viewport}");
     assert!(viewport.contains("keep me"), "comment should still appear during confirmation:\n{viewport}");
 
     // Esc cancels
-    app.on_key(key(KeyCode::Esc));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Esc));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("keep me"), "comment should survive cancel:\n{viewport}");
     assert!(!viewport.contains("will clear"), "confirmation message should be gone:\n{viewport}");
 
     // Confirm path: press r twice
-    app.on_key(key(KeyCode::Char('r')));
-    settle_screen_tasks(&mut app).await;
-    app.on_key(key(KeyCode::Char('r')));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Char('r')));
+    settle_screen_tasks(&mut ui).await;
+    ui.key(key(KeyCode::Char('r')));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(!viewport.contains("keep me"), "comment should be cleared after confirmed refresh:\n{viewport}");
     assert!(viewport.contains("Git Diff"), "screen should still show diff:\n{viewport}");
 }
@@ -1253,41 +1210,39 @@ async fn git_diff_comment_scope_switch_confirm_clears_cancel_preserves() {
     run_git(root, &["commit", "--quiet", "-m", "init"]);
     std::fs::write(root.join("lib.rs"), "fn new() {}\n").unwrap();
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Renderer::new(&UiSettings::default());
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
 
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
-    app.on_key(key(KeyCode::Enter));
-    settle_screen_tasks(&mut app).await;
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
+    ui.key(key(KeyCode::Enter));
+    settle_screen_tasks(&mut ui).await;
 
-    app.on_key(key(KeyCode::Char('c')));
-    type_text(&mut app, "scope comment");
-    app.on_key(key(KeyCode::Enter));
-    settle_screen_tasks(&mut app).await;
+    ui.key(key(KeyCode::Char('c')));
+    ui.type_text("scope comment");
+    ui.key(key(KeyCode::Enter));
+    settle_screen_tasks(&mut ui).await;
 
     // First 't' — show confirmation
-    app.on_key(key(KeyCode::Char('t')));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Char('t')));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("will clear"), "confirmation should appear:\n{viewport}");
 
     // Esc cancels — comments preserved
-    app.on_key(key(KeyCode::Esc));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Esc));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("scope comment"), "comment should survive cancel:\n{viewport}");
 
     // Confirm path
-    app.on_key(key(KeyCode::Char('t')));
-    settle_screen_tasks(&mut app).await;
-    app.on_key(key(KeyCode::Char('t')));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Char('t')));
+    settle_screen_tasks(&mut ui).await;
+    ui.key(key(KeyCode::Char('t')));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(!viewport.contains("scope comment"), "comment should be cleared after scope switch:\n{viewport}");
     assert!(viewport.contains("Git Diff"), "screen should still show diff:\n{viewport}");
 }
@@ -1302,41 +1257,39 @@ async fn git_diff_comment_stage_all_confirm_clears_cancel_preserves() {
     run_git(root, &["commit", "--quiet", "-m", "init"]);
     std::fs::write(root.join("lib.rs"), "fn new() {}\n").unwrap();
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Renderer::new(&UiSettings::default());
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
 
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
-    app.on_key(key(KeyCode::Enter));
-    settle_screen_tasks(&mut app).await;
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
+    ui.key(key(KeyCode::Enter));
+    settle_screen_tasks(&mut ui).await;
 
-    app.on_key(key(KeyCode::Char('c')));
-    type_text(&mut app, "stage me");
-    app.on_key(key(KeyCode::Enter));
-    settle_screen_tasks(&mut app).await;
+    ui.key(key(KeyCode::Char('c')));
+    ui.type_text("stage me");
+    ui.key(key(KeyCode::Enter));
+    settle_screen_tasks(&mut ui).await;
 
     // First 'a' — show confirmation
-    app.on_key(key(KeyCode::Char('a')));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Char('a')));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("will clear"), "confirmation should appear:\n{viewport}");
 
     // Esc cancels
-    app.on_key(key(KeyCode::Esc));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Esc));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("stage me"), "comment should survive cancel:\n{viewport}");
 
     // Confirm path
-    app.on_key(key(KeyCode::Char('a')));
-    settle_screen_tasks(&mut app).await;
-    app.on_key(key(KeyCode::Char('a')));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Char('a')));
+    settle_screen_tasks(&mut ui).await;
+    ui.key(key(KeyCode::Char('a')));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(!viewport.contains("stage me"), "comment should be cleared after stage-all:\n{viewport}");
 }
 
@@ -1351,41 +1304,39 @@ async fn git_diff_comment_toggle_stage_confirm_clears_cancel_preserves() {
     run_git(root, &["commit", "--quiet", "-m", "init"]);
     std::fs::write(root.join("src/lib.rs"), "fn new() {}\n").unwrap();
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Renderer::new(&UiSettings::default());
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
 
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
-    app.on_key(key(KeyCode::Enter));
-    settle_screen_tasks(&mut app).await;
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
+    ui.key(key(KeyCode::Enter));
+    settle_screen_tasks(&mut ui).await;
 
-    app.on_key(key(KeyCode::Char('c')));
-    type_text(&mut app, "space comment");
-    app.on_key(key(KeyCode::Enter));
-    settle_screen_tasks(&mut app).await;
+    ui.key(key(KeyCode::Char('c')));
+    ui.type_text("space comment");
+    ui.key(key(KeyCode::Enter));
+    settle_screen_tasks(&mut ui).await;
 
     // First space — show confirmation
-    app.on_key(key(KeyCode::Char(' ')));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Char(' ')));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("will clear"), "confirmation should appear:\n{viewport}");
 
     // Esc cancels
-    app.on_key(key(KeyCode::Esc));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Esc));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("space comment"), "comment should survive cancel:\n{viewport}");
 
     // Confirm path
-    app.on_key(key(KeyCode::Char(' ')));
-    settle_screen_tasks(&mut app).await;
-    app.on_key(key(KeyCode::Char(' ')));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Char(' ')));
+    settle_screen_tasks(&mut ui).await;
+    ui.key(key(KeyCode::Char(' ')));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(!viewport.contains("space comment"), "comment should be cleared after stage:\n{viewport}");
 }
 
@@ -1400,32 +1351,30 @@ async fn git_diff_comment_commit_cancel_preserves_comments() {
     std::fs::write(root.join("lib.rs"), "fn changed() {}\n").unwrap();
     run_git(root, &["add", "-A"]);
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Renderer::new(&UiSettings::default());
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
 
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
-    app.on_key(key(KeyCode::Enter));
-    settle_screen_tasks(&mut app).await;
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
+    ui.key(key(KeyCode::Enter));
+    settle_screen_tasks(&mut ui).await;
 
-    app.on_key(key(KeyCode::Char('c')));
-    type_text(&mut app, "commit comment");
-    app.on_key(key(KeyCode::Enter));
-    settle_screen_tasks(&mut app).await;
+    ui.key(key(KeyCode::Char('c')));
+    ui.type_text("commit comment");
+    ui.key(key(KeyCode::Enter));
+    settle_screen_tasks(&mut ui).await;
 
     // First 'C' — show confirmation (even though nothing staged, confirm appears first)
-    app.on_key(key(KeyCode::Char('C')));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Char('C')));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("will clear"), "confirmation should appear:\n{viewport}");
 
     // Esc cancels — comments preserved
-    app.on_key(key(KeyCode::Esc));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Esc));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("commit comment"), "comment should survive cancel:\n{viewport}");
 }
 
@@ -1439,41 +1388,39 @@ async fn git_diff_comment_discard_cancel_preserves_comments() {
     run_git(root, &["commit", "--quiet", "-m", "init"]);
     std::fs::write(root.join("lib.rs"), "fn changed() {}\n").unwrap();
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Renderer::new(&UiSettings::default());
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
 
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
-    app.on_key(key(KeyCode::Enter));
-    settle_screen_tasks(&mut app).await;
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
+    ui.key(key(KeyCode::Enter));
+    settle_screen_tasks(&mut ui).await;
 
-    app.on_key(key(KeyCode::Char('c')));
-    type_text(&mut app, "discard comment");
-    app.on_key(key(KeyCode::Enter));
-    settle_screen_tasks(&mut app).await;
+    ui.key(key(KeyCode::Char('c')));
+    ui.type_text("discard comment");
+    ui.key(key(KeyCode::Enter));
+    settle_screen_tasks(&mut ui).await;
 
     // First 'd' — show confirmation
-    app.on_key(key(KeyCode::Char('d')));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Char('d')));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("will clear"), "confirmation should appear:\n{viewport}");
 
     // Esc cancels — comments preserved
-    app.on_key(key(KeyCode::Esc));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Esc));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("discard comment"), "comment should survive cancel:\n{viewport}");
 
     // Confirm path — should enter discard confirmation
-    app.on_key(key(KeyCode::Char('d')));
-    settle_screen_tasks(&mut app).await;
-    app.on_key(key(KeyCode::Char('d')));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Char('d')));
+    settle_screen_tasks(&mut ui).await;
+    ui.key(key(KeyCode::Char('d')));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("Discard changes"), "discard confirmation should appear:\n{viewport}");
 }
 
@@ -1488,46 +1435,44 @@ async fn git_diff_comment_unstage_all_confirm_clears_cancel_preserves() {
     std::fs::write(root.join("lib.rs"), "fn changed() {}\n").unwrap();
     run_git(root, &["add", "-A"]);
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Renderer::new(&UiSettings::default());
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
 
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
     // Switch to staged scope to see the staged file
-    app.on_key(key(KeyCode::Char('t')));
-    settle_screen_tasks(&mut app).await;
-    app.on_key(key(KeyCode::Char('t')));
-    settle_screen_tasks(&mut app).await;
-    app.on_key(key(KeyCode::Enter));
-    settle_screen_tasks(&mut app).await;
+    ui.key(key(KeyCode::Char('t')));
+    settle_screen_tasks(&mut ui).await;
+    ui.key(key(KeyCode::Char('t')));
+    settle_screen_tasks(&mut ui).await;
+    ui.key(key(KeyCode::Enter));
+    settle_screen_tasks(&mut ui).await;
 
-    app.on_key(key(KeyCode::Char('c')));
-    type_text(&mut app, "unstage me");
-    app.on_key(key(KeyCode::Enter));
-    settle_screen_tasks(&mut app).await;
+    ui.key(key(KeyCode::Char('c')));
+    ui.type_text("unstage me");
+    ui.key(key(KeyCode::Enter));
+    settle_screen_tasks(&mut ui).await;
 
     // First 'A' — show confirmation
-    app.on_key(key(KeyCode::Char('A')));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Char('A')));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("will clear"), "confirmation should appear:\n{viewport}");
 
     // Esc cancels
-    app.on_key(key(KeyCode::Esc));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Esc));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("unstage me"), "comment should survive cancel:\n{viewport}");
 
     // Confirm path
-    app.on_key(key(KeyCode::Char('A')));
-    settle_screen_tasks(&mut app).await;
-    app.on_key(key(KeyCode::Char('A')));
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Char('A')));
+    settle_screen_tasks(&mut ui).await;
+    ui.key(key(KeyCode::Char('A')));
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(!viewport.contains("unstage me"), "comment should be cleared after unstage-all:\n{viewport}");
 }
 
@@ -1541,34 +1486,32 @@ async fn git_diff_draft_cursor_with_unicode() {
     run_git(root, &["commit", "--quiet", "-m", "init"]);
     std::fs::write(root.join("lib.rs"), "fn new() {}\n").unwrap();
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Renderer::new(&UiSettings::default());
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
 
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
-    app.on_key(key(KeyCode::Enter));
-    settle_screen_tasks(&mut app).await;
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
+    ui.key(key(KeyCode::Enter));
+    settle_screen_tasks(&mut ui).await;
 
     // Start draft and type unicode text
-    app.on_key(key(KeyCode::Char('c')));
-    type_text(&mut app, "héllo wörld");
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Char('c')));
+    ui.type_text("héllo wörld");
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("héllo wörld"), "unicode text should appear in draft:\n{viewport}");
 
     // Move cursor left and type more
-    app.on_key(key(KeyCode::Left));
-    app.on_key(key(KeyCode::Left));
-    app.on_key(key(KeyCode::Left));
-    app.on_key(key(KeyCode::Left));
-    app.on_key(key(KeyCode::Left));
-    app.on_key(key(KeyCode::Left));
-    type_text(&mut app, "★");
-    settle_screen_tasks(&mut app).await;
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Left));
+    ui.key(key(KeyCode::Left));
+    ui.key(key(KeyCode::Left));
+    ui.key(key(KeyCode::Left));
+    ui.key(key(KeyCode::Left));
+    ui.key(key(KeyCode::Left));
+    ui.type_text("★");
+    settle_screen_tasks(&mut ui).await;
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("héllo★ wörld"), "unicode insertion should work:\n{viewport}");
 }
 
@@ -1580,7 +1523,7 @@ fn patch_header_column(viewport: &str) -> usize {
         .unwrap_or_else(|| panic!("patch header should render:\n{viewport}"))
 }
 
-async fn open_git_diff_with_change() -> (App, Terminal<TestBackend>, Renderer, tempfile::TempDir) {
+async fn open_git_diff_with_change() -> (TestUi, tempfile::TempDir) {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     init_git_repo(root);
@@ -1589,56 +1532,53 @@ async fn open_git_diff_with_change() -> (App, Terminal<TestBackend>, Renderer, t
     run_git(root, &["commit", "--quiet", "-m", "init"]);
     std::fs::write(root.join("app.rs"), "fn new() {}\n").unwrap();
 
-    let (mut app, _command_rx) = make_app_in(root.to_path_buf());
-    let terminal = make_terminal_with_width(160);
-    let renderer = Renderer::new(&UiSettings::default());
-
-    app.on_key(ctrl('g'));
-    settle_screen_tasks(&mut app).await;
-    (app, terminal, renderer, directory)
+    let mut ui = make_ui_in(root.to_path_buf(), 160);
+    ui.key(ctrl('g'));
+    settle_screen_tasks(&mut ui).await;
+    (ui, directory)
 }
 
 #[tokio::test]
 async fn git_diff_resize_keys_widen_and_narrow_the_file_drawer() {
-    let (mut app, mut terminal, mut renderer, _directory) = open_git_diff_with_change().await;
+    let (mut ui, _directory) = open_git_diff_with_change().await;
 
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let natural = patch_header_column(&buffer_text(&viewport_buffer(&mut terminal)));
+    ui.draw();
+    let natural = patch_header_column(&ui.viewport_text());
 
-    app.on_key(key(KeyCode::Char('>')));
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Char('>')));
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert_eq!(patch_header_column(&viewport), natural + 4, "'>' should widen the drawer:\n{viewport}");
 
-    app.on_key(key(KeyCode::Char('<')));
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Char('<')));
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert_eq!(patch_header_column(&viewport), natural, "'<' should narrow the drawer back:\n{viewport}");
 }
 
 #[tokio::test]
 async fn git_diff_drawer_stops_narrowing_and_widens_on_the_next_press() {
-    let (mut app, mut terminal, mut renderer, _directory) = open_git_diff_with_change().await;
+    let (mut ui, _directory) = open_git_diff_with_change().await;
 
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let natural = patch_header_column(&buffer_text(&viewport_buffer(&mut terminal)));
+    ui.draw();
+    let natural = patch_header_column(&ui.viewport_text());
 
     for _ in 0..8 {
-        app.on_key(key(KeyCode::Char('<')));
+        ui.key(key(KeyCode::Char('<')));
     }
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.draw();
+    let viewport = ui.viewport_text();
     let narrowest = patch_header_column(&viewport);
     assert!(narrowest < natural, "'<' should have narrowed the drawer:\n{viewport}");
 
-    app.on_key(key(KeyCode::Char('<')));
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Char('<')));
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert_eq!(patch_header_column(&viewport), narrowest, "drawer should stop at its narrowest:\n{viewport}");
 
-    app.on_key(key(KeyCode::Char('>')));
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Char('>')));
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert_eq!(
         patch_header_column(&viewport),
         narrowest + 4,

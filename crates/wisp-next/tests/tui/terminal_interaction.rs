@@ -3,11 +3,12 @@ use ratatui::TerminalOptions;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use tokio::sync::mpsc::UnboundedReceiver;
-use wisp_next::test_support::app::{App, AppConfig, RuntimeEffect, WorkspaceMoveState};
-use wisp_next::test_support::renderer::Renderer;
-use wisp_next::test_support::settings::UiSettings;
+use wisp_next::test_support::app::{App, RuntimeEffect, WorkspaceMoveState};
 use wisp_next::test_support::tasks::TaskResult;
-use wisp_next::test_support::workspace_status::WorkspaceStatus;
+
+use super::support::AppBuilder;
+use super::support::TestUi;
+use super::support::TestUiBuilder;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -23,30 +24,12 @@ fn rang_bell(app: &mut App) -> bool {
     rang
 }
 
-fn make_terminal(width: u16, height: u16) -> ratatui::Terminal<TestBackend> {
-    let viewport_height = wisp_next::test_support::inline_viewport_height(height);
-    ratatui::Terminal::with_options(
-        TestBackend::new(width, height),
-        TerminalOptions { viewport: ratatui::Viewport::Inline(viewport_height) },
-    )
-    .unwrap()
+fn make_app() -> (App, UnboundedReceiver<acp_utils::client::PromptCommand>) {
+    AppBuilder::new().build()
 }
 
-fn make_app() -> (App, UnboundedReceiver<acp_utils::client::PromptCommand>) {
-    let (prompt_handle, command_rx) = acp_utils::client::AcpPromptHandle::recording();
-    let app = App::new(AppConfig {
-        session_id: agent_client_protocol::schema::SessionId::new("test-session"),
-        agent_name: "aether".to_string(),
-        prompt_capabilities: agent_client_protocol::schema::PromptCapabilities::new(),
-        session_capabilities: agent_client_protocol::schema::SessionCapabilities::new(),
-        config_options: Vec::new(),
-        auth_methods: Vec::new(),
-        workspace_status: WorkspaceStatus::new("~/code/demo", Some("main".to_string())),
-        prompt_handle,
-        working_dir: std::path::PathBuf::from("."),
-        settings: UiSettings::default(),
-    });
-    (app, command_rx)
+fn make_ui() -> TestUi {
+    TestUiBuilder::new().dimensions(80, 24).build()
 }
 
 fn key(code: KeyCode) -> KeyEvent {
@@ -58,8 +41,8 @@ fn has_session_picker(app: &App) -> bool {
 }
 
 /// The area a layer is drawn into: the whole inline viewport.
-fn layer_rect(terminal: &mut ratatui::Terminal<TestBackend>) -> ratatui::layout::Rect {
-    terminal.get_frame().area()
+fn layer_rect(ui: &mut TestUi) -> ratatui::layout::Rect {
+    ui.terminal_mut().get_frame().area()
 }
 
 fn mouse_event(kind: MouseEventKind, column: u16, row: u16) -> crossterm::event::Event {
@@ -89,7 +72,7 @@ mod picker_click {
 
     #[test]
     fn session_picker_click_first_row_selects_index_zero() {
-        let (mut app, _rx) = make_app();
+        let mut ui = make_ui();
 
         // Open session picker with sessions
         let sessions = vec![
@@ -97,42 +80,38 @@ mod picker_click {
             SessionInfo::new(agent_client_protocol::schema::SessionId::new("s2"), "/tmp"),
             SessionInfo::new(agent_client_protocol::schema::SessionId::new("s3"), "/tmp"),
         ];
-        app.on_acp_event(AcpEvent::SessionsListed { sessions });
-        assert!(has_session_picker(&app));
+        ui.acp_event(AcpEvent::SessionsListed { sessions });
+        assert!(has_session_picker(ui.app()));
 
-        let mut terminal = make_terminal(80, 24);
-        let mut renderer = Renderer::new(&UiSettings::default());
-        renderer.draw(&mut terminal, &mut app).unwrap();
-        let rect = layer_rect(&mut terminal);
+        ui.draw();
+        let rect = layer_rect(&mut ui);
         // Click on the second content row (local_y=2 → row=1 after border offset)
-        app.on_terminal_event(click(rect.x + 2, rect.y + 2));
-        assert!(has_session_picker(&app), "picker should remain open");
+        ui.terminal_event(click(rect.x + 2, rect.y + 2));
+        assert!(has_session_picker(ui.app()), "picker should remain open");
     }
 
     #[test]
     fn session_picker_click_outside_row_range_is_clamped() {
-        let (mut app, _rx) = make_app();
+        let mut ui = make_ui();
 
         let sessions = vec![
             SessionInfo::new(agent_client_protocol::schema::SessionId::new("s1"), "/tmp"),
             SessionInfo::new(agent_client_protocol::schema::SessionId::new("s2"), "/tmp"),
         ];
-        app.on_acp_event(AcpEvent::SessionsListed { sessions });
-        assert!(has_session_picker(&app));
+        ui.acp_event(AcpEvent::SessionsListed { sessions });
+        assert!(has_session_picker(ui.app()));
 
-        let mut terminal = make_terminal(80, 24);
-        let mut renderer = Renderer::new(&UiSettings::default());
-        renderer.draw(&mut terminal, &mut app).unwrap();
+        ui.draw();
 
-        let rect = layer_rect(&mut terminal);
+        let rect = layer_rect(&mut ui);
         // Click far below content (local_y=20 → row=19 after offset, clamped to last item)
-        app.on_terminal_event(click(rect.x + 2, rect.y + 20));
-        assert!(has_session_picker(&app));
+        ui.terminal_event(click(rect.x + 2, rect.y + 20));
+        assert!(has_session_picker(ui.app()));
     }
 
     #[test]
     fn session_picker_click_with_filter_uses_visible_rows() {
-        let (mut app, _rx) = make_app();
+        let mut ui = make_ui();
 
         let mut session_a = SessionInfo::new(agent_client_protocol::schema::SessionId::new("aaa"), "/tmp");
         session_a.title = Some("Alpha Project".to_string());
@@ -141,24 +120,22 @@ mod picker_click {
         let mut session_c = SessionInfo::new(agent_client_protocol::schema::SessionId::new("ccc"), "/tmp");
         session_c.title = Some("Alpha Config".to_string());
 
-        app.on_acp_event(AcpEvent::SessionsListed { sessions: vec![session_a, session_b, session_c] });
-        assert!(has_session_picker(&app));
+        ui.acp_event(AcpEvent::SessionsListed { sessions: vec![session_a, session_b, session_c] });
+        assert!(has_session_picker(ui.app()));
 
         // Type filter: "Alpha"
-        app.on_key(key(KeyCode::Char('A')));
-        app.on_key(key(KeyCode::Char('l')));
-        app.on_key(key(KeyCode::Char('p')));
-        app.on_key(key(KeyCode::Char('h')));
-        app.on_key(key(KeyCode::Char('a')));
+        ui.key(key(KeyCode::Char('A')));
+        ui.key(key(KeyCode::Char('l')));
+        ui.key(key(KeyCode::Char('p')));
+        ui.key(key(KeyCode::Char('h')));
+        ui.key(key(KeyCode::Char('a')));
 
-        let mut terminal = make_terminal(80, 24);
-        let mut renderer = Renderer::new(&UiSettings::default());
-        renderer.draw(&mut terminal, &mut app).unwrap();
+        ui.draw();
 
-        let rect = layer_rect(&mut terminal);
+        let rect = layer_rect(&mut ui);
         // Click on first visible row
-        app.on_terminal_event(click(rect.x + 2, rect.y + 2));
-        assert!(has_session_picker(&app));
+        ui.terminal_event(click(rect.x + 2, rect.y + 2));
+        assert!(has_session_picker(ui.app()));
     }
 
     #[test]
@@ -170,15 +147,13 @@ mod picker_click {
             WorkspaceEntry { path: std::path::PathBuf::from("/tmp/ws2"), is_current: false },
             WorkspaceEntry { path: std::path::PathBuf::from("/tmp/ws3"), is_current: false },
         ];
-        let (mut app, _rx) = make_app();
-        app.on_acp_event(AcpEvent::WorkspacesListed(WorkspaceListResponse { workspaces }));
+        let mut ui = make_ui();
+        ui.acp_event(AcpEvent::WorkspacesListed(WorkspaceListResponse { workspaces }));
 
-        let mut terminal = make_terminal(80, 24);
-        let mut renderer = Renderer::new(&UiSettings::default());
-        renderer.draw(&mut terminal, &mut app).unwrap();
-        let rect = layer_rect(&mut terminal);
+        ui.draw();
+        let rect = layer_rect(&mut ui);
         // Click on the first content row (local_y=1 → row=0 after border offset)
-        app.on_terminal_event(click(rect.x + 2, rect.y + 1));
+        ui.terminal_event(click(rect.x + 2, rect.y + 1));
     }
 
     #[test]
@@ -186,16 +161,14 @@ mod picker_click {
         use acp_utils::notifications::{WorkspaceEntry, WorkspaceListResponse};
 
         let workspaces = vec![WorkspaceEntry { path: std::path::PathBuf::from("/tmp/ws1"), is_current: false }];
-        let (mut app, _rx) = make_app();
-        app.on_acp_event(AcpEvent::WorkspacesListed(WorkspaceListResponse { workspaces }));
+        let mut ui = make_ui();
+        ui.acp_event(AcpEvent::WorkspacesListed(WorkspaceListResponse { workspaces }));
 
-        let mut terminal = make_terminal(80, 24);
-        let mut renderer = Renderer::new(&UiSettings::default());
-        renderer.draw(&mut terminal, &mut app).unwrap();
+        ui.draw();
 
-        let rect = layer_rect(&mut terminal);
+        let rect = layer_rect(&mut ui);
         // Click far below content
-        app.on_terminal_event(click(rect.x + 2, rect.y + 15));
+        ui.terminal_event(click(rect.x + 2, rect.y + 15));
     }
 
     #[test]
@@ -207,22 +180,20 @@ mod picker_click {
             WorkspaceEntry { path: std::path::PathBuf::from("/tmp/project-beta"), is_current: false },
             WorkspaceEntry { path: std::path::PathBuf::from("/tmp/other"), is_current: false },
         ];
-        let (mut app, _rx) = make_app();
-        app.on_acp_event(AcpEvent::WorkspacesListed(WorkspaceListResponse { workspaces }));
+        let mut ui = make_ui();
+        ui.acp_event(AcpEvent::WorkspacesListed(WorkspaceListResponse { workspaces }));
 
         // Type filter: "beta"
-        app.on_key(key(KeyCode::Char('b')));
-        app.on_key(key(KeyCode::Char('e')));
-        app.on_key(key(KeyCode::Char('t')));
-        app.on_key(key(KeyCode::Char('a')));
+        ui.key(key(KeyCode::Char('b')));
+        ui.key(key(KeyCode::Char('e')));
+        ui.key(key(KeyCode::Char('t')));
+        ui.key(key(KeyCode::Char('a')));
 
-        let mut terminal = make_terminal(80, 24);
-        let mut renderer = Renderer::new(&UiSettings::default());
-        renderer.draw(&mut terminal, &mut app).unwrap();
+        ui.draw();
 
-        let rect = layer_rect(&mut terminal);
+        let rect = layer_rect(&mut ui);
         // Click on first visible row
-        app.on_terminal_event(click(rect.x + 2, rect.y + 2));
+        ui.terminal_event(click(rect.x + 2, rect.y + 2));
     }
 }
 
@@ -270,29 +241,7 @@ mod mouse_capture {
 
     #[test]
     fn capture_when_prompt_search_is_open() {
-        let mut app = {
-            let session_capabilities = agent_client_protocol::schema::SessionCapabilities::new().meta(Some(
-                acp_utils::notifications::AetherCapabilities {
-                    prompt_search: true,
-                    session_preview: false,
-                    workspace_move: false,
-                }
-                .to_meta(),
-            ));
-            let (prompt_handle, _command_rx) = acp_utils::client::AcpPromptHandle::recording();
-            App::new(AppConfig {
-                session_id: agent_client_protocol::schema::SessionId::new("test-session"),
-                agent_name: "aether".to_string(),
-                prompt_capabilities: agent_client_protocol::schema::PromptCapabilities::new(),
-                session_capabilities,
-                config_options: Vec::new(),
-                auth_methods: Vec::new(),
-                workspace_status: WorkspaceStatus::new("~/code/demo", Some("main".to_string())),
-                prompt_handle,
-                working_dir: std::path::PathBuf::from("."),
-                settings: UiSettings::default(),
-            })
-        };
+        let (mut app, _rx) = AppBuilder::new().prompt_search().build();
 
         app.on_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
         assert!(app.needs_mouse_capture());
@@ -407,18 +356,16 @@ mod resize {
 
     #[test]
     fn resize_no_duplicate_history() {
-        let (mut app, _rx) = make_app();
-        let mut terminal = make_terminal(80, 20);
-        let mut renderer = Renderer::new(&UiSettings::default());
+        let mut ui = TestUiBuilder::new().dimensions(80, 20).build();
 
-        super::submit_prompt(&mut app, "before resize");
+        ui.submit("before resize");
 
         // Render at initial size then resize
-        renderer.draw(&mut terminal, &mut app).unwrap();
-        app.on_terminal_event(crossterm::event::Event::Resize(120, 30));
-        renderer.draw(&mut terminal, &mut app).unwrap();
+        ui.draw();
+        ui.terminal_event(crossterm::event::Event::Resize(120, 30));
+        ui.draw();
 
-        let viewport = super::buffer_text(terminal.backend().buffer());
+        let viewport = super::buffer_text(ui.terminal_mut().backend().buffer());
         assert_eq!(viewport.matches("before resize").count(), 1);
     }
 }
@@ -465,22 +412,20 @@ mod event_routing {
 
     #[test]
     fn mouse_event_routes_to_topmost_surface() {
-        let (mut app, _rx) = make_app();
+        let mut ui = make_ui();
 
         // Open settings overlay
-        app.on_key(key(KeyCode::Char('/')));
-        app.on_key(key(KeyCode::Char('s')));
-        app.on_key(key(KeyCode::Tab));
-        app.on_key(key(KeyCode::Enter));
+        ui.key(key(KeyCode::Char('/')));
+        ui.key(key(KeyCode::Char('s')));
+        ui.key(key(KeyCode::Tab));
+        ui.key(key(KeyCode::Enter));
 
-        let mut terminal = make_terminal(80, 24);
-        let mut renderer = Renderer::new(&UiSettings::default());
-        renderer.draw(&mut terminal, &mut app).unwrap();
+        ui.draw();
 
         // Scroll events should be consumed internally
-        let bell_before = rang_bell(&mut app);
-        app.on_terminal_event(scroll_down(40, 5));
-        assert_eq!(bell_before, rang_bell(&mut app));
+        let bell_before = rang_bell(ui.app_mut());
+        ui.terminal_event(scroll_down(40, 5));
+        assert_eq!(bell_before, rang_bell(ui.app_mut()));
     }
 
     #[test]
@@ -500,30 +445,16 @@ mod event_routing {
                 vec![SessionConfigSelectOption::new("code", "Code"), SessionConfigSelectOption::new("chat", "Chat")],
             ),
         ];
-        let (prompt_handle, _rx) = acp_utils::client::AcpPromptHandle::recording();
-        let mut app = App::new(AppConfig {
-            session_id: agent_client_protocol::schema::SessionId::new("test"),
-            agent_name: "aether".to_string(),
-            prompt_capabilities: agent_client_protocol::schema::PromptCapabilities::new(),
-            session_capabilities: agent_client_protocol::schema::SessionCapabilities::new(),
-            config_options: opts,
-            auth_methods: Vec::new(),
-            workspace_status: WorkspaceStatus::new("~/code", None),
-            prompt_handle,
-            working_dir: std::path::PathBuf::from("."),
-            settings: UiSettings::default(),
-        });
+        let mut ui = TestUiBuilder::new().config_options(opts).dimensions(80, 24).build();
 
-        type_text(&mut app, "/settings");
-        app.on_key(key(KeyCode::Tab));
+        ui.type_text("/settings");
+        ui.key(key(KeyCode::Tab));
 
-        let mut terminal = make_terminal(80, 24);
-        let mut renderer = Renderer::new(&UiSettings::default());
-        renderer.draw(&mut terminal, &mut app).unwrap();
-        assert!(app.has_layer());
+        ui.draw();
+        assert!(ui.app().has_layer());
 
-        app.on_terminal_event(scroll_down(40, 5));
-        assert!(!rang_bell(&mut app));
+        ui.terminal_event(scroll_down(40, 5));
+        assert!(!rang_bell(ui.app_mut()));
     }
 
     #[test]
@@ -535,31 +466,17 @@ mod event_routing {
             "a",
             vec![SessionConfigSelectOption::new("a", "Alpha"), SessionConfigSelectOption::new("b", "Beta")],
         )];
-        let (prompt_handle, _rx) = acp_utils::client::AcpPromptHandle::recording();
-        let mut app = App::new(AppConfig {
-            session_id: agent_client_protocol::schema::SessionId::new("test"),
-            agent_name: "aether".to_string(),
-            prompt_capabilities: agent_client_protocol::schema::PromptCapabilities::new(),
-            session_capabilities: agent_client_protocol::schema::SessionCapabilities::new(),
-            config_options: opts,
-            auth_methods: Vec::new(),
-            workspace_status: WorkspaceStatus::new("~/code", None),
-            prompt_handle,
-            working_dir: std::path::PathBuf::from("."),
-            settings: UiSettings::default(),
-        });
+        let mut ui = TestUiBuilder::new().config_options(opts).dimensions(80, 24).build();
 
-        type_text(&mut app, "/settings");
-        app.on_key(key(KeyCode::Tab));
+        ui.type_text("/settings");
+        ui.key(key(KeyCode::Tab));
 
-        let mut terminal = make_terminal(80, 24);
-        let mut renderer = Renderer::new(&UiSettings::default());
-        renderer.draw(&mut terminal, &mut app).unwrap();
+        ui.draw();
 
-        let rect = layer_rect(&mut terminal);
+        let rect = layer_rect(&mut ui);
         let click_y = rect.y + 2;
-        app.on_terminal_event(click(rect.x + 2, click_y));
-        assert!(!rang_bell(&mut app));
+        ui.terminal_event(click(rect.x + 2, click_y));
+        assert!(!rang_bell(ui.app_mut()));
     }
 
     #[test]
@@ -576,29 +493,16 @@ mod event_routing {
             options: Vec<SessionConfigOption>,
             servers: Vec<McpServerStatusEntry>,
             methods: Vec<AuthMethod>,
-        ) -> (App, UnboundedReceiver<acp_utils::client::PromptCommand>) {
-            let (prompt_handle, command_rx) = acp_utils::client::AcpPromptHandle::recording();
-            let mut app = App::new(AppConfig {
-                session_id: agent_client_protocol::schema::SessionId::new("test"),
-                agent_name: "aether".to_string(),
-                prompt_capabilities: agent_client_protocol::schema::PromptCapabilities::new(),
-                session_capabilities: agent_client_protocol::schema::SessionCapabilities::new(),
-                config_options: options,
-                auth_methods: methods,
-                workspace_status: WorkspaceStatus::new("~/code", None),
-                prompt_handle,
-                working_dir: std::path::PathBuf::from("."),
-                settings: UiSettings::default(),
-            });
-            app.on_acp_event(AcpEvent::McpNotification(McpNotification::ServerStatus { servers }));
-            (app, command_rx)
+        ) -> TestUi {
+            let mut ui = TestUiBuilder::new().config_options(options).auth_methods(methods).dimensions(80, 24).build();
+            ui.acp_event(AcpEvent::McpNotification(McpNotification::ServerStatus { servers }));
+            ui
         }
 
-        fn open_settings(app: &mut App, terminal: &mut ratatui::Terminal<TestBackend>) {
-            type_text(app, "/settings");
-            app.on_key(key(KeyCode::Tab));
-            let mut renderer = Renderer::new(&UiSettings::default());
-            renderer.draw(terminal, app).unwrap();
+        fn open_settings(ui: &mut TestUi) {
+            ui.type_text("/settings");
+            ui.key(key(KeyCode::Tab));
+            ui.draw();
         }
 
         let options = vec![SessionConfigOption::select(
@@ -607,125 +511,91 @@ mod event_routing {
             "a",
             vec![SessionConfigSelectOption::new("a", "Alpha"), SessionConfigSelectOption::new("b", "Beta")],
         )];
-        let (mut app, mut commands) = settings_app(options, vec![], vec![]);
-        let mut terminal = make_terminal(80, 24);
-        open_settings(&mut app, &mut terminal);
-        app.on_terminal_event(click(10, 4));
-        let mut renderer = Renderer::new(&UiSettings::default());
-        renderer.draw(&mut terminal, &mut app).unwrap();
-        app.on_terminal_event(click(10, 5));
+        let mut ui = settings_app(options, vec![], vec![]);
+        open_settings(&mut ui);
+        ui.terminal_event(click(10, 4));
+        ui.draw();
+        ui.terminal_event(click(10, 5));
         assert!(matches!(
-            commands.try_recv(),
+            ui.command_rx().try_recv(),
             Ok(acp_utils::client::PromptCommand::SetConfigOption { config_id, value, .. }) if config_id == "model" && value == "b"
         ));
 
         let server = McpServerStatusEntry::new("linear", McpServerStatus::NeedsOAuth)
             .with_auth_capability(McpServerAuthCapability::OAuth);
-        let (mut app, mut commands) = settings_app(vec![], vec![server], vec![]);
-        let mut terminal = make_terminal(80, 24);
-        open_settings(&mut app, &mut terminal);
-        app.on_terminal_event(click(10, 4));
-        let mut renderer = Renderer::new(&UiSettings::default());
-        renderer.draw(&mut terminal, &mut app).unwrap();
-        app.on_terminal_event(click(10, 3));
+        let mut ui = settings_app(vec![], vec![server], vec![]);
+        open_settings(&mut ui);
+        ui.terminal_event(click(10, 4));
+        ui.draw();
+        ui.terminal_event(click(10, 3));
         assert!(matches!(
-            commands.try_recv(),
+            ui.command_rx().try_recv(),
             Ok(acp_utils::client::PromptCommand::AuthenticateMcpServer { server_name, .. }) if server_name == "linear"
         ));
 
         let methods = vec![AuthMethod::Agent(AuthMethodAgent::new("codex", "Codex"))];
-        let (mut app, mut commands) = settings_app(vec![], vec![], methods);
-        let mut terminal = make_terminal(80, 24);
-        open_settings(&mut app, &mut terminal);
-        app.on_terminal_event(click(10, 5));
-        let mut renderer = Renderer::new(&UiSettings::default());
-        renderer.draw(&mut terminal, &mut app).unwrap();
-        app.on_terminal_event(click(10, 3));
+        let mut ui = settings_app(vec![], vec![], methods);
+        open_settings(&mut ui);
+        ui.terminal_event(click(10, 5));
+        ui.draw();
+        ui.terminal_event(click(10, 3));
         assert!(matches!(
-            commands.try_recv(),
+            ui.command_rx().try_recv(),
             Ok(acp_utils::client::PromptCommand::Authenticate { method_id }) if method_id == "codex"
         ));
     }
     #[test]
     fn session_picker_scroll_changes_selection() {
-        let (mut app, _rx) = make_app();
+        let mut ui = make_ui();
         let current = agent_client_protocol::schema::SessionId::new("test-session");
         let sessions = vec![
             SessionInfo::new(agent_client_protocol::schema::SessionId::new("a"), "/tmp/a"),
             SessionInfo::new(agent_client_protocol::schema::SessionId::new("b"), "/tmp/b"),
             SessionInfo::new(agent_client_protocol::schema::SessionId::new("c"), "/tmp/c"),
         ];
-        app.on_acp_event(AcpEvent::SessionsListed { sessions });
+        ui.acp_event(AcpEvent::SessionsListed { sessions });
         std::mem::drop(current);
-        assert!(has_session_picker(&app));
+        assert!(has_session_picker(ui.app()));
 
-        let mut terminal = make_terminal(80, 24);
-        let mut renderer = Renderer::new(&UiSettings::default());
-        renderer.draw(&mut terminal, &mut app).unwrap();
-        assert!(app.has_layer());
+        ui.draw();
+        assert!(ui.app().has_layer());
 
         // Scroll down
-        let rect = layer_rect(&mut terminal);
-        app.on_terminal_event(scroll_down(rect.x + 2, rect.y + 2));
-        assert!(!rang_bell(&mut app));
-        assert!(has_session_picker(&app));
+        let rect = layer_rect(&mut ui);
+        ui.terminal_event(scroll_down(rect.x + 2, rect.y + 2));
+        assert!(!rang_bell(ui.app_mut()));
+        assert!(has_session_picker(ui.app()));
     }
 
     #[test]
     fn prompt_search_scroll_up_and_down() {
-        let mut app = {
-            let session_capabilities = agent_client_protocol::schema::SessionCapabilities::new().meta(Some(
-                acp_utils::notifications::AetherCapabilities {
-                    prompt_search: true,
-                    session_preview: false,
-                    workspace_move: false,
-                }
-                .to_meta(),
-            ));
-            let (prompt_handle, _command_rx) = acp_utils::client::AcpPromptHandle::recording();
-            App::new(AppConfig {
-                session_id: agent_client_protocol::schema::SessionId::new("test-session"),
-                agent_name: "aether".to_string(),
-                prompt_capabilities: agent_client_protocol::schema::PromptCapabilities::new(),
-                session_capabilities,
-                config_options: Vec::new(),
-                auth_methods: Vec::new(),
-                workspace_status: WorkspaceStatus::new("~/code/demo", Some("main".to_string())),
-                prompt_handle,
-                working_dir: std::path::PathBuf::from("."),
-                settings: UiSettings::default(),
-            })
-        };
+        let mut ui = TestUiBuilder::new().prompt_search().dimensions(80, 24).build();
 
-        app.on_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
-        assert!(app.needs_mouse_capture());
+        ui.key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        assert!(ui.app().needs_mouse_capture());
 
-        let mut terminal = make_terminal(80, 24);
-        let mut renderer = Renderer::new(&UiSettings::default());
-        renderer.draw(&mut terminal, &mut app).unwrap();
+        ui.draw();
 
-        let rect = layer_rect(&mut terminal);
+        let rect = layer_rect(&mut ui);
         // Scroll should be consumed internally
-        app.on_terminal_event(scroll_down(rect.x + 2, rect.y + 1));
-        app.on_terminal_event(scroll_up(rect.x + 2, rect.y + 1));
-        assert!(!rang_bell(&mut app));
+        ui.terminal_event(scroll_down(rect.x + 2, rect.y + 1));
+        ui.terminal_event(scroll_up(rect.x + 2, rect.y + 1));
+        assert!(!rang_bell(ui.app_mut()));
     }
 
     #[test]
     fn composer_overlay_scroll_and_click() {
-        let (mut app, _rx) = make_app();
+        let mut ui = make_ui();
         // Open command picker
-        app.on_key(key(KeyCode::Char('/')));
-        assert!(app.needs_mouse_capture());
+        ui.key(key(KeyCode::Char('/')));
+        assert!(ui.app().needs_mouse_capture());
 
-        let mut terminal = make_terminal(80, 24);
-        let mut renderer = Renderer::new(&UiSettings::default());
-        renderer.draw(&mut terminal, &mut app).unwrap();
+        ui.draw();
 
-        let rect = layer_rect(&mut terminal);
-        app.on_terminal_event(scroll_down(rect.x + 2, rect.y + rect.height.saturating_sub(1)));
-        app.on_terminal_event(click(rect.x + 2, rect.y + rect.height.saturating_sub(1)));
-        assert!(!rang_bell(&mut app));
+        let rect = layer_rect(&mut ui);
+        ui.terminal_event(scroll_down(rect.x + 2, rect.y + rect.height.saturating_sub(1)));
+        ui.terminal_event(click(rect.x + 2, rect.y + rect.height.saturating_sub(1)));
+        assert!(!rang_bell(ui.app_mut()));
     }
 
     #[test]
@@ -733,24 +603,22 @@ mod event_routing {
         use acp_utils::notifications::{WorkspaceEntry, WorkspaceListResponse};
         use std::path::PathBuf;
 
-        let (mut app, _rx) = make_app();
+        let mut ui = make_ui();
         let workspaces = vec![
             WorkspaceEntry { path: PathBuf::from("/tmp/a"), is_current: false },
             WorkspaceEntry { path: PathBuf::from("/tmp/b"), is_current: false },
             WorkspaceEntry { path: PathBuf::from("/tmp/c"), is_current: false },
         ];
-        app.on_acp_event(AcpEvent::WorkspacesListed(WorkspaceListResponse { workspaces }));
-        assert!(matches!(app.workspace_move_state(), WorkspaceMoveState::Picking));
+        ui.acp_event(AcpEvent::WorkspacesListed(WorkspaceListResponse { workspaces }));
+        assert!(matches!(ui.app().workspace_move_state(), WorkspaceMoveState::Picking));
 
-        let mut terminal = make_terminal(80, 24);
-        let mut renderer = Renderer::new(&UiSettings::default());
-        renderer.draw(&mut terminal, &mut app).unwrap();
+        ui.draw();
 
-        let rect = layer_rect(&mut terminal);
-        app.on_terminal_event(scroll_down(rect.x + 2, rect.y + 2));
-        app.on_terminal_event(scroll_up(rect.x + 2, rect.y + 2));
-        app.on_terminal_event(click(rect.x + 2, rect.y + 2));
-        assert!(!rang_bell(&mut app));
+        let rect = layer_rect(&mut ui);
+        ui.terminal_event(scroll_down(rect.x + 2, rect.y + 2));
+        ui.terminal_event(scroll_up(rect.x + 2, rect.y + 2));
+        ui.terminal_event(click(rect.x + 2, rect.y + 2));
+        assert!(!rang_bell(ui.app_mut()));
     }
 
     #[test]
@@ -761,7 +629,7 @@ mod event_routing {
         let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
         let local = tokio::task::LocalSet::new();
         local.block_on(&rt, async {
-            let (mut app, _rx) = make_app();
+            let mut ui = make_ui();
             let (cx, mut peer) = test_connection().await;
             let (responder, _response_rx) = peer.fake_elicitation(&cx).await;
 
@@ -771,7 +639,7 @@ mod event_routing {
                 .build()
                 .unwrap();
 
-            app.on_acp_event(AcpEvent::ElicitationRequest {
+            ui.acp_event(AcpEvent::ElicitationRequest {
                 params: ElicitationParams {
                     server_name: "test".into(),
                     request: CreateElicitationRequestParams::FormElicitationParams {
@@ -783,15 +651,13 @@ mod event_routing {
                 responder,
             });
 
-            assert!(app.needs_mouse_capture());
+            assert!(ui.app().needs_mouse_capture());
 
-            let mut terminal = make_terminal(80, 24);
-            let mut renderer = Renderer::new(&UiSettings::default());
-            renderer.draw(&mut terminal, &mut app).unwrap();
+            ui.draw();
 
-            let rect = layer_rect(&mut terminal);
-            app.on_terminal_event(scroll_down(rect.x + 2, rect.y + 3));
-            assert!(!rang_bell(&mut app));
+            let rect = layer_rect(&mut ui);
+            ui.terminal_event(scroll_down(rect.x + 2, rect.y + 3));
+            assert!(!rang_bell(ui.app_mut()));
         });
     }
 
@@ -807,7 +673,7 @@ mod event_routing {
         local.block_on(&rt, async {
             const FIELDS: usize = 40;
 
-            let (mut app, _rx) = make_app();
+            let mut ui = make_ui();
             let (cx, mut peer) = test_connection().await;
             let (responder, _response_rx) = peer.fake_elicitation(&cx).await;
 
@@ -816,7 +682,7 @@ mod event_routing {
                 builder = builder.optional_bool(format!("field_{index:02}"), false);
             }
 
-            app.on_acp_event(AcpEvent::ElicitationRequest {
+            ui.acp_event(AcpEvent::ElicitationRequest {
                 params: ElicitationParams {
                     server_name: "test".into(),
                     request: CreateElicitationRequestParams::FormElicitationParams {
@@ -828,23 +694,19 @@ mod event_routing {
                 responder,
             });
 
-            let mut terminal = make_terminal(80, 24);
-            let mut presenter = Renderer::new(&UiSettings::default());
-            presenter.draw(&mut terminal, &mut app).unwrap();
+            ui.draw();
 
-            let shows = |terminal: &ratatui::Terminal<TestBackend>, needle: &str| {
-                screen_rows(terminal).iter().any(|row| row.contains(needle))
-            };
-            assert!(shows(&terminal, "field_00"), "the first field starts on screen");
-            assert!(!shows(&terminal, "field_39"), "the last field starts below the fold");
+            let shows = |ui: &mut TestUi, needle: &str| screen_rows(ui).iter().any(|row| row.contains(needle));
+            assert!(shows(&mut ui, "field_00"), "the first field starts on screen");
+            assert!(!shows(&mut ui, "field_39"), "the last field starts below the fold");
 
             for _ in 1..FIELDS {
-                app.on_key(key(KeyCode::Down));
+                ui.key(key(KeyCode::Down));
             }
-            presenter.draw(&mut terminal, &mut app).unwrap();
+            ui.draw();
 
-            assert!(shows(&terminal, "field_39"), "the focused field scrolled into view");
-            assert!(!shows(&terminal, "field_00"), "the fields above it scrolled away");
+            assert!(shows(&mut ui, "field_39"), "the focused field scrolled into view");
+            assert!(!shows(&mut ui, "field_00"), "the fields above it scrolled away");
         });
     }
 
@@ -859,7 +721,7 @@ mod event_routing {
         let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
         let local = tokio::task::LocalSet::new();
         local.block_on(&rt, async {
-            let (mut app, _rx) = make_app();
+            let mut ui = make_ui();
             let (cx, mut peer) = test_connection().await;
             let (responder, _response_rx) = peer.fake_elicitation(&cx).await;
 
@@ -869,7 +731,7 @@ mod event_routing {
                 .build()
                 .unwrap();
 
-            app.on_acp_event(AcpEvent::ElicitationRequest {
+            ui.acp_event(AcpEvent::ElicitationRequest {
                 params: ElicitationParams {
                     server_name: "test".into(),
                     request: CreateElicitationRequestParams::FormElicitationParams {
@@ -881,16 +743,14 @@ mod event_routing {
                 responder,
             });
 
-            let mut terminal = make_terminal(80, 24);
-            let mut presenter = Renderer::new(&UiSettings::default());
-            presenter.draw(&mut terminal, &mut app).unwrap();
+            ui.draw();
 
-            let rows = screen_rows(&terminal);
+            let rows = screen_rows(&mut ui);
             let bravo_row = rows.iter().position(|row| row.contains("bravo")).expect("field should be on screen");
-            app.on_terminal_event(click(20, u16::try_from(bravo_row).unwrap()));
-            presenter.draw(&mut terminal, &mut app).unwrap();
+            ui.terminal_event(click(20, u16::try_from(bravo_row).unwrap()));
+            ui.draw();
 
-            let rows = screen_rows(&terminal);
+            let rows = screen_rows(&mut ui);
             let row_with = |needle: &str| rows.iter().find(|row| row.contains(needle)).unwrap().clone();
             let alpha = row_with("alpha");
             let bravo = row_with("bravo");
@@ -909,7 +769,7 @@ mod event_routing {
         let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
         let local = tokio::task::LocalSet::new();
         local.block_on(&rt, async {
-            let (mut app, _rx) = make_app();
+            let mut ui = make_ui();
             let (cx, mut peer) = test_connection().await;
             let (responder, _response_rx) = peer.fake_elicitation(&cx).await;
 
@@ -919,7 +779,7 @@ mod event_routing {
                 .build()
                 .unwrap();
 
-            app.on_acp_event(AcpEvent::ElicitationRequest {
+            ui.acp_event(AcpEvent::ElicitationRequest {
                 params: ElicitationParams {
                     server_name: "test".into(),
                     request: CreateElicitationRequestParams::FormElicitationParams {
@@ -931,17 +791,15 @@ mod event_routing {
                 responder,
             });
 
-            let mut terminal = make_terminal(80, 24);
-            let mut presenter = Renderer::new(&UiSettings::default());
-            presenter.draw(&mut terminal, &mut app).unwrap();
+            ui.draw();
 
-            let rows = screen_rows(&terminal);
+            let rows = screen_rows(&mut ui);
             let description_row =
                 rows.iter().position(|row| row.contains("the second switch")).expect("description should be on screen");
-            app.on_terminal_event(click(20, u16::try_from(description_row).unwrap()));
-            presenter.draw(&mut terminal, &mut app).unwrap();
+            ui.terminal_event(click(20, u16::try_from(description_row).unwrap()));
+            ui.draw();
 
-            let rows = screen_rows(&terminal);
+            let rows = screen_rows(&mut ui);
             let row_with = |needle: &str| rows.iter().find(|row| row.contains(needle)).unwrap().clone();
             let bravo = row_with("bravo");
             assert!(bravo.contains("[x]"), "clicking a field's description should toggle it, got {bravo:?}");
@@ -951,8 +809,8 @@ mod event_routing {
 }
 
 /// The screen's rows as text, indexed by terminal row.
-fn screen_rows(terminal: &ratatui::Terminal<TestBackend>) -> Vec<String> {
-    let buffer = terminal.backend().buffer();
+fn screen_rows(ui: &mut TestUi) -> Vec<String> {
+    let buffer = ui.terminal_mut().backend().buffer();
     (buffer.area.top()..buffer.area.bottom())
         .map(|y| {
             (buffer.area.left()..buffer.area.right())
@@ -1156,38 +1014,24 @@ mod mouse_owning_surfaces {
                 agent_client_protocol::schema::SessionConfigSelectOption::new("b", "Beta"),
             ],
         )];
-        let (prompt_handle, _rx) = acp_utils::client::AcpPromptHandle::recording();
-        let mut app = App::new(AppConfig {
-            session_id: agent_client_protocol::schema::SessionId::new("test"),
-            agent_name: "aether".to_string(),
-            prompt_capabilities: agent_client_protocol::schema::PromptCapabilities::new(),
-            session_capabilities: agent_client_protocol::schema::SessionCapabilities::new(),
-            config_options: opts,
-            auth_methods: Vec::new(),
-            workspace_status: WorkspaceStatus::new("~/code", None),
-            prompt_handle,
-            working_dir: std::path::PathBuf::from("."),
-            settings: UiSettings::default(),
-        });
+        let mut ui = TestUiBuilder::new().config_options(opts).dimensions(80, 24).build();
 
         // Type /settings to open the settings overlay
-        type_text(&mut app, "/settings");
-        app.on_key(key(KeyCode::Tab));
+        ui.type_text("/settings");
+        ui.key(key(KeyCode::Tab));
 
-        assert!(app.has_modal(), "settings overlay should be open after /settings+Tab");
+        assert!(ui.app().has_modal(), "settings overlay should be open after /settings+Tab");
 
-        let mut terminal = make_terminal(80, 24);
-        let mut renderer = Renderer::new(&UiSettings::default());
-        renderer.draw(&mut terminal, &mut app).unwrap();
+        ui.draw();
 
-        assert!(app.has_modal(), "the overlay should still be open after a render");
+        assert!(ui.app().has_modal(), "the overlay should still be open after a render");
     }
 
     #[test]
     fn session_picker_sets_surface_rect() {
-        let (mut app, _rx) = make_app();
+        let mut ui = make_ui();
         let current = agent_client_protocol::schema::SessionId::new("test-session");
-        app.on_acp_event(AcpEvent::SessionsListed {
+        ui.acp_event(AcpEvent::SessionsListed {
             sessions: vec![agent_client_protocol::schema::SessionInfo::new(
                 agent_client_protocol::schema::SessionId::new("other"),
                 std::path::PathBuf::from("/tmp"),
@@ -1195,50 +1039,24 @@ mod mouse_owning_surfaces {
         });
         std::mem::drop(current);
 
-        let mut terminal = make_terminal(80, 24);
-        let mut renderer = Renderer::new(&UiSettings::default());
-        renderer.draw(&mut terminal, &mut app).unwrap();
+        ui.draw();
 
-        assert!(app.has_layer());
+        assert!(ui.app().has_layer());
     }
 
     #[test]
     fn prompt_search_sets_surface_rect() {
-        let mut app = {
-            let session_capabilities = agent_client_protocol::schema::SessionCapabilities::new().meta(Some(
-                acp_utils::notifications::AetherCapabilities {
-                    prompt_search: true,
-                    session_preview: false,
-                    workspace_move: false,
-                }
-                .to_meta(),
-            ));
-            let (prompt_handle, _command_rx) = acp_utils::client::AcpPromptHandle::recording();
-            App::new(AppConfig {
-                session_id: agent_client_protocol::schema::SessionId::new("test"),
-                agent_name: "aether".to_string(),
-                prompt_capabilities: agent_client_protocol::schema::PromptCapabilities::new(),
-                session_capabilities,
-                config_options: Vec::new(),
-                auth_methods: Vec::new(),
-                workspace_status: WorkspaceStatus::new("~/code", Some("main".to_string())),
-                prompt_handle,
-                working_dir: std::path::PathBuf::from("."),
-                settings: UiSettings::default(),
-            })
-        };
+        let mut ui = TestUiBuilder::new().prompt_search().dimensions(80, 24).build();
 
-        app.on_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        ui.key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
 
-        let mut terminal = make_terminal(80, 24);
-        let mut renderer = Renderer::new(&UiSettings::default());
-        renderer.draw(&mut terminal, &mut app).unwrap();
+        ui.draw();
 
         // History search is a composer overlay rather than a layer, so it owns
         // the mouse without anything being pushed above the conversation.
-        assert!(!app.has_layer());
-        assert!(app.composer().has_prompt_search());
-        assert!(app.needs_mouse_capture());
+        assert!(!ui.app().has_layer());
+        assert!(ui.app().composer().has_prompt_search());
+        assert!(ui.app().needs_mouse_capture());
     }
 }
 

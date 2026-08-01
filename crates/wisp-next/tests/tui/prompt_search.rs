@@ -1,10 +1,11 @@
 use super::support::*;
 
 fn make_app_with_prompt_search() -> (App, UnboundedReceiver<PromptCommand>) {
-    let session_capabilities = acp::SessionCapabilities::new().meta(Some(
-        AetherCapabilities { prompt_search: true, session_preview: false, workspace_move: false }.to_meta(),
-    ));
-    AppBuilder::new().session_capabilities(session_capabilities).build()
+    AppBuilder::new().prompt_search().build()
+}
+
+fn make_ui_with_prompt_search() -> TestUi {
+    TestUiBuilder::new().prompt_search().build()
 }
 
 fn prompt_search_result(prompt: &str, start: usize, end: usize) -> acp_utils::notifications::PromptSearchResult {
@@ -66,89 +67,79 @@ fn ctrl_r_opens_prompt_search_when_capability_is_enabled() {
 
 #[test]
 fn prompt_search_shows_loading_state_after_query() {
-    let (mut app, mut command_rx) = make_app_with_prompt_search();
-    app.on_key(ctrl('r'));
-    app.on_key(key(KeyCode::Char('h')));
+    let mut ui = make_ui_with_prompt_search();
+    ui.key(ctrl('r'));
+    ui.key(key(KeyCode::Char('h')));
 
-    let cmd = command_rx.try_recv().unwrap();
+    let cmd = ui.command_rx().try_recv().unwrap();
     assert!(
         matches!(&cmd, PromptCommand::SearchPrompts(params) if params.query == "h"),
         "expected SearchPrompts with query 'h', got {cmd:?}"
     );
 
-    let mut terminal = make_terminal();
-    let mut renderer = Renderer::new(&UiSettings::default());
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("history search: h"), "viewport:\n{viewport}");
     assert!(viewport.contains("searching"), "viewport:\n{viewport}");
 }
 
 #[test]
 fn prompt_search_empty_query_renders_instruction() {
-    let (mut app, _command_rx) = make_app_with_prompt_search();
-    app.on_key(ctrl('r'));
+    let mut ui = make_ui_with_prompt_search();
+    ui.key(ctrl('r'));
 
-    let mut terminal = make_terminal();
-    let mut renderer = Renderer::new(&UiSettings::default());
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("history search:"), "viewport:\n{viewport}");
     assert!(viewport.contains("type to search prompt history"), "viewport:\n{viewport}");
 }
 
 #[test]
 fn prompt_search_shows_results_after_response() {
-    let (mut app, mut command_rx) = make_app_with_prompt_search();
-    app.on_key(ctrl('r'));
-    app.on_key(key(KeyCode::Char('h')));
-    let _ = command_rx.try_recv().unwrap();
+    let mut ui = make_ui_with_prompt_search();
+    ui.key(ctrl('r'));
+    ui.key(key(KeyCode::Char('h')));
+    let _ = ui.command_rx().try_recv().unwrap();
 
-    app.on_acp_event(AcpEvent::PromptSearchResults(prompt_search_response(
+    ui.acp_event(AcpEvent::PromptSearchResults(prompt_search_response(
         "h",
         vec![prompt_search_result("hello world", 0, 1)],
     )));
 
-    let mut terminal = make_terminal();
-    let mut renderer = Renderer::new(&UiSettings::default());
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("hello world"), "viewport:\n{viewport}");
 }
 
 #[test]
 fn prompt_search_no_results_shows_no_matches() {
-    let (mut app, mut command_rx) = make_app_with_prompt_search();
-    app.on_key(ctrl('r'));
-    type_text(&mut app, "zzz");
-    let _ = command_rx.try_recv().unwrap();
+    let mut ui = make_ui_with_prompt_search();
+    ui.key(ctrl('r'));
+    ui.type_text("zzz");
+    let _ = ui.command_rx().try_recv().unwrap();
 
-    app.on_acp_event(AcpEvent::PromptSearchResults(prompt_search_response_gen("zzz", vec![], 3)));
+    ui.acp_event(AcpEvent::PromptSearchResults(prompt_search_response_gen("zzz", vec![], 3)));
 
-    let mut terminal = make_terminal();
-    let mut renderer = Renderer::new(&UiSettings::default());
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("no matching prompts"), "viewport:\n{viewport}");
 }
 
 #[test]
 fn prompt_search_shows_error_on_failure() {
-    let (mut app, mut command_rx) = make_app_with_prompt_search();
-    app.on_key(ctrl('r'));
-    app.on_key(key(KeyCode::Char('h')));
-    let _ = command_rx.try_recv().unwrap();
+    let mut ui = make_ui_with_prompt_search();
+    ui.key(ctrl('r'));
+    ui.key(key(KeyCode::Char('h')));
+    let _ = ui.command_rx().try_recv().unwrap();
 
-    app.on_acp_event(AcpEvent::PromptSearchFailed {
+    ui.acp_event(AcpEvent::PromptSearchFailed {
         query: "h".to_string(),
         search_generation: 1,
         error: "connection refused".to_string(),
     });
 
-    let mut terminal = make_terminal();
-    let mut renderer = Renderer::new(&UiSettings::default());
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("error: connection refused"), "viewport:\n{viewport}");
 }
 
@@ -230,80 +221,74 @@ fn prompt_search_escape_restores_multiline_draft() {
 
 #[test]
 fn prompt_search_up_and_down_change_selection() {
-    let (mut app, mut command_rx) = make_app_with_prompt_search();
-    app.on_key(ctrl('r'));
-    app.on_key(key(KeyCode::Char('h')));
-    let _ = command_rx.try_recv().unwrap();
+    let mut ui = make_ui_with_prompt_search();
+    ui.key(ctrl('r'));
+    ui.key(key(KeyCode::Char('h')));
+    let _ = ui.command_rx().try_recv().unwrap();
 
-    app.on_acp_event(AcpEvent::PromptSearchResults(prompt_search_response(
+    ui.acp_event(AcpEvent::PromptSearchResults(prompt_search_response(
         "h",
         vec![prompt_search_result("hello", 0, 1), prompt_search_result("hey", 0, 1)],
     )));
 
-    let mut terminal = make_terminal();
-    let mut renderer = Renderer::new(&UiSettings::default());
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("hello"), "viewport:\n{viewport}");
 
-    app.on_key(key(KeyCode::Down));
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Down));
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("hey"), "viewport:\n{viewport}");
 
-    app.on_key(key(KeyCode::Up));
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Up));
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("hello"), "viewport:\n{viewport}");
 }
 
 #[test]
 fn prompt_search_stale_response_is_ignored() {
-    let (mut app, mut command_rx) = make_app_with_prompt_search();
-    app.on_key(ctrl('r'));
-    app.on_key(key(KeyCode::Char('h')));
-    app.on_key(key(KeyCode::Char('e')));
-    let _ = command_rx.try_recv().unwrap();
+    let mut ui = make_ui_with_prompt_search();
+    ui.key(ctrl('r'));
+    ui.key(key(KeyCode::Char('h')));
+    ui.key(key(KeyCode::Char('e')));
+    let _ = ui.command_rx().try_recv().unwrap();
 
-    app.on_acp_event(AcpEvent::PromptSearchResults(prompt_search_response_gen(
+    ui.acp_event(AcpEvent::PromptSearchResults(prompt_search_response_gen(
         "he",
         vec![prompt_search_result("hello", 0, 2)],
         2,
     )));
 
-    app.on_acp_event(AcpEvent::PromptSearchResults(prompt_search_response_gen(
+    ui.acp_event(AcpEvent::PromptSearchResults(prompt_search_response_gen(
         "h",
         vec![prompt_search_result("STALE", 0, 1)],
         1,
     )));
 
-    let mut terminal = make_terminal();
-    let mut renderer = Renderer::new(&UiSettings::default());
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("hello"), "should show current result:\n{viewport}");
     assert!(!viewport.contains("STALE"), "should not show stale result:\n{viewport}");
 }
 
 #[test]
 fn prompt_search_prefills_selected_result_with_cursor_at_match() {
-    let (mut app, mut command_rx) = make_app_with_prompt_search();
-    app.on_key(ctrl('r'));
-    app.on_key(key(KeyCode::Char('q')));
-    let _ = command_rx.try_recv().unwrap();
+    let mut ui = make_ui_with_prompt_search();
+    ui.key(ctrl('r'));
+    ui.key(key(KeyCode::Char('q')));
+    let _ = ui.command_rx().try_recv().unwrap();
 
-    app.on_acp_event(AcpEvent::PromptSearchResults(prompt_search_response(
+    ui.acp_event(AcpEvent::PromptSearchResults(prompt_search_response(
         "q",
         vec![prompt_search_result("the quick brown fox", 4, 9)],
     )));
 
-    let mut terminal = make_terminal();
-    let mut renderer = Renderer::new(&UiSettings::default());
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("the quick brown fox"), "viewport:\n{viewport}");
 
-    let (row, col) = app.composer().cursor_position();
+    let (row, col) = ui.app().composer().cursor_position();
     assert_eq!((row, col), (0, 9), "cursor should be at match end position 9");
 }
 
@@ -323,26 +308,21 @@ fn prompt_search_paste_sanitizes_query() {
 
 #[test]
 fn prompt_search_backspace_to_empty_restores_draft_but_keeps_picker_open() {
-    let (mut app, mut command_rx) = make_app_with_prompt_search();
-    type_text(&mut app, "draft");
-    app.on_key(ctrl('r'));
-    app.on_key(key(KeyCode::Char('h')));
-    let _ = command_rx.try_recv().unwrap();
+    let mut ui = make_ui_with_prompt_search();
+    ui.type_text("draft");
+    ui.key(ctrl('r'));
+    ui.key(key(KeyCode::Char('h')));
+    let _ = ui.command_rx().try_recv().unwrap();
 
-    app.on_acp_event(AcpEvent::PromptSearchResults(prompt_search_response(
-        "h",
-        vec![prompt_search_result("hello", 0, 1)],
-    )));
+    ui.acp_event(AcpEvent::PromptSearchResults(prompt_search_response("h", vec![prompt_search_result("hello", 0, 1)])));
 
-    app.on_key(key(KeyCode::Backspace));
+    ui.key(key(KeyCode::Backspace));
 
-    assert!(app.composer().has_prompt_search());
-    assert_eq!(app.composer().text(), "draft");
+    assert!(ui.app().composer().has_prompt_search());
+    assert_eq!(ui.app().composer().text(), "draft");
 
-    let mut terminal = make_terminal();
-    let mut renderer = Renderer::new(&UiSettings::default());
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("type to search prompt history"), "viewport:\n{viewport}");
 }
 
@@ -385,31 +365,29 @@ fn prompt_search_ctrl_r_does_not_open_during_composer_overlay() {
 
 #[test]
 fn prompt_search_unicode_query_is_accepted() {
-    let (mut app, mut command_rx) = make_app_with_prompt_search();
-    app.on_key(ctrl('r'));
-    app.on_key(key(KeyCode::Char('ñ')));
+    let mut ui = make_ui_with_prompt_search();
+    ui.key(ctrl('r'));
+    ui.key(key(KeyCode::Char('ñ')));
 
-    let cmd = command_rx.try_recv().unwrap();
+    let cmd = ui.command_rx().try_recv().unwrap();
     assert!(
         matches!(&cmd, PromptCommand::SearchPrompts(params) if params.query == "ñ"),
         "expected unicode query 'ñ', got {cmd:?}"
     );
 
-    let mut terminal = make_terminal();
-    let mut renderer = Renderer::new(&UiSettings::default());
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("history search: ñ"), "viewport:\n{viewport}");
 }
 
 #[test]
 fn prompt_search_rows_truncate_prompt_and_show_cwd_basename() {
-    let (mut app, mut command_rx) = make_app_with_prompt_search();
-    app.on_key(ctrl('r'));
-    type_text(&mut app, "quick");
-    let _ = command_rx.try_recv().unwrap();
+    let mut ui = make_ui_with_prompt_search();
+    ui.key(ctrl('r'));
+    ui.type_text("quick");
+    let _ = ui.command_rx().try_recv().unwrap();
 
-    app.on_acp_event(AcpEvent::PromptSearchResults(prompt_search_response_gen(
+    ui.acp_event(AcpEvent::PromptSearchResults(prompt_search_response_gen(
         "quick",
         vec![prompt_search_result_with_cwd(
             "the quick brown fox jumps over the lazy dog",
@@ -420,10 +398,8 @@ fn prompt_search_rows_truncate_prompt_and_show_cwd_basename() {
         5,
     )));
 
-    let mut terminal = make_terminal();
-    let mut renderer = Renderer::new(&UiSettings::default());
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("…"), "should have ellipsis in truncated prompt:\n{viewport}");
     assert!(viewport.contains("repo-name"), "should show cwd basename:\n{viewport}");
 }
@@ -493,121 +469,111 @@ fn prompt_search_enter_preserves_cursor_after_manual_navigation() {
 
 #[test]
 fn prompt_search_identical_repeated_query_uses_generation_not_just_string() {
-    let (mut app, mut command_rx) = make_app_with_prompt_search();
-    app.on_key(ctrl('r'));
+    let mut ui = make_ui_with_prompt_search();
+    ui.key(ctrl('r'));
 
     // First search for "xy"
-    app.on_key(key(KeyCode::Char('x')));
-    app.on_key(key(KeyCode::Char('y')));
-    let _ = command_rx.try_recv().unwrap();
-    let _ = command_rx.try_recv().unwrap();
+    ui.key(key(KeyCode::Char('x')));
+    ui.key(key(KeyCode::Char('y')));
+    let _ = ui.command_rx().try_recv().unwrap();
+    let _ = ui.command_rx().try_recv().unwrap();
 
     // Backspace twice to get empty query (draft restored)
-    app.on_key(key(KeyCode::Backspace));
-    app.on_key(key(KeyCode::Backspace));
+    ui.key(key(KeyCode::Backspace));
+    ui.key(key(KeyCode::Backspace));
 
     // Type "xy" again — same query string but generation is now higher
-    app.on_key(key(KeyCode::Char('x')));
-    app.on_key(key(KeyCode::Char('y')));
-    let _ = command_rx.try_recv().unwrap();
-    let _ = command_rx.try_recv().unwrap();
+    ui.key(key(KeyCode::Char('x')));
+    ui.key(key(KeyCode::Char('y')));
+    let _ = ui.command_rx().try_recv().unwrap();
+    let _ = ui.command_rx().try_recv().unwrap();
 
     // Stale response from first "xy" with generation=2 should be ignored
-    app.on_acp_event(AcpEvent::PromptSearchResults(prompt_search_response_gen(
+    ui.acp_event(AcpEvent::PromptSearchResults(prompt_search_response_gen(
         "xy",
         vec![prompt_search_result("STALE_FIRST", 0, 2)],
         2,
     )));
 
-    let mut terminal = make_terminal();
-    let mut renderer = Renderer::new(&UiSettings::default());
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(!viewport.contains("STALE_FIRST"), "stale response from first 'xy' must be ignored:\n{viewport}");
     assert!(viewport.contains("searching"), "second 'xy' should still be loading:\n{viewport}");
 
     // Fresh response from second "xy" with generation=5 should be accepted
     // (gen: 0→x=1, xy=2, backspace=3, backspace(empty)=3, x=4, xy=5)
-    app.on_acp_event(AcpEvent::PromptSearchResults(prompt_search_response_gen(
+    ui.acp_event(AcpEvent::PromptSearchResults(prompt_search_response_gen(
         "xy",
         vec![prompt_search_result("FRESH_SECOND", 0, 2)],
         5,
     )));
 
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("FRESH_SECOND"), "fresh response from second 'xy' must be shown:\n{viewport}");
 }
 
 #[test]
 fn prompt_search_send_failure_is_visible_in_picker() {
-    let (mut app, fail_signal, mut command_rx) = AppBuilder::new().prompt_search().build_failable();
-    app.on_key(ctrl('r'));
+    let (mut ui, fail_signal) = TestUiBuilder::new().prompt_search().build_failable();
+    ui.key(ctrl('r'));
 
     fail_signal.store(true, Ordering::Relaxed);
-    app.on_key(key(KeyCode::Char('h')));
-    assert!(command_rx.try_recv().is_err(), "send should have failed");
+    ui.key(key(KeyCode::Char('h')));
+    assert!(ui.command_rx().try_recv().is_err(), "send should have failed");
 
-    let mut terminal = make_terminal();
-    let mut renderer = Renderer::new(&UiSettings::default());
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("search failed"), "send failure must be visible in picker:\n{viewport}");
 
-    assert!(app.composer().has_prompt_search(), "picker must remain open");
-    assert!(!app.exit_requested(), "app must remain interactive");
+    assert!(ui.app().composer().has_prompt_search(), "picker must remain open");
+    assert!(!ui.app().exit_requested(), "app must remain interactive");
 }
 
 #[test]
 fn prompt_search_stale_failure_is_accepted_for_current_query() {
-    let (mut app, mut command_rx) = make_app_with_prompt_search();
-    app.on_key(ctrl('r'));
-    app.on_key(key(KeyCode::Char('x')));
-    let _ = command_rx.try_recv().unwrap();
+    let mut ui = make_ui_with_prompt_search();
+    ui.key(ctrl('r'));
+    ui.key(key(KeyCode::Char('x')));
+    let _ = ui.command_rx().try_recv().unwrap();
 
-    app.on_acp_event(AcpEvent::PromptSearchFailed {
+    ui.acp_event(AcpEvent::PromptSearchFailed {
         query: "x".to_string(),
         search_generation: 1,
         error: "server error".to_string(),
     });
 
-    let mut terminal = make_terminal();
-    let mut renderer = Renderer::new(&UiSettings::default());
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("server error"), "failure must be visible:\n{viewport}");
 
-    assert!(app.composer().has_prompt_search(), "picker must remain open after failure");
+    assert!(ui.app().composer().has_prompt_search(), "picker must remain open after failure");
 }
 
 #[test]
 fn prompt_search_stale_failure_must_not_overwrite_newer_success() {
-    let (mut app, mut command_rx) = make_app_with_prompt_search();
-    app.on_key(ctrl('r'));
-    app.on_key(key(KeyCode::Char('x')));
-    let _ = command_rx.try_recv().unwrap();
+    let mut ui = make_ui_with_prompt_search();
+    ui.key(ctrl('r'));
+    ui.key(key(KeyCode::Char('x')));
+    let _ = ui.command_rx().try_recv().unwrap();
 
-    app.on_key(key(KeyCode::Char('y')));
-    let _ = command_rx.try_recv().unwrap();
+    ui.key(key(KeyCode::Char('y')));
+    let _ = ui.command_rx().try_recv().unwrap();
 
-    app.on_acp_event(AcpEvent::PromptSearchResults(prompt_search_response_gen(
+    ui.acp_event(AcpEvent::PromptSearchResults(prompt_search_response_gen(
         "xy",
         vec![prompt_search_result("fresh result for xy", 0, 2)],
         2,
     )));
 
-    app.on_acp_event(AcpEvent::PromptSearchFailed {
+    ui.acp_event(AcpEvent::PromptSearchFailed {
         query: "x".to_string(),
         search_generation: 1,
         error: "stale error".to_string(),
     });
 
-    let mut terminal = make_terminal();
-    let mut renderer = Renderer::new(&UiSettings::default());
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("fresh result for xy"), "newer success results must survive stale failure:\n{viewport}");
     assert!(!viewport.contains("stale error"), "stale failure must be ignored:\n{viewport}");
 }
-
-// ── Settings overlay integration tests ──

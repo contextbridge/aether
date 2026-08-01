@@ -3,11 +3,11 @@ pub(crate) use acp_utils::client::{AcpEvent, AcpPromptHandle, PromptCommand};
 pub(crate) use acp_utils::config_meta::SelectOptionMeta;
 pub(crate) use acp_utils::config_option_id::ConfigOptionId;
 pub(crate) use acp_utils::notifications::{
-    AetherCapabilities, AuthMethodsUpdatedParams, ContextClearedParams, ContextCompactionParams,
-    CreateElicitationRequestParams, ElicitationAction, ElicitationParams, McpNotification, McpServerAuthCapability,
-    McpServerStatus, McpServerStatusEntry, SessionPreviewResponse, SessionPreviewRole, SessionPreviewTurn,
-    SubAgentEvent, SubAgentProgressParams, SubAgentToolRequest, SubAgentToolResult, UrlElicitationCompleteParams,
-    WorkspaceEntry, WorkspaceListResponse, WorkspaceMoveResponse,
+    AuthMethodsUpdatedParams, ContextClearedParams, ContextCompactionParams, CreateElicitationRequestParams,
+    ElicitationAction, ElicitationParams, McpNotification, McpServerAuthCapability, McpServerStatus,
+    McpServerStatusEntry, SessionPreviewResponse, SessionPreviewRole, SessionPreviewTurn, SubAgentEvent,
+    SubAgentProgressParams, SubAgentToolRequest, SubAgentToolResult, UrlElicitationCompleteParams, WorkspaceEntry,
+    WorkspaceListResponse, WorkspaceMoveResponse,
 };
 pub(crate) use acp_utils::testing::test_connection;
 pub(crate) use agent_client_protocol::schema::{self as acp, SessionId};
@@ -16,7 +16,6 @@ pub(crate) use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
 pub(crate) use ratatui::buffer::{Buffer, Cell};
 pub(crate) use ratatui::layout::{Position, Size};
 pub(crate) use ratatui::style::{Color, Modifier};
-pub(crate) use ratatui::{Terminal, TerminalOptions, Viewport};
 pub(crate) use std::fmt::Write as FmtWrite;
 pub(crate) use std::io::Write as IoWrite;
 pub(crate) use std::sync::Arc;
@@ -25,6 +24,8 @@ pub(crate) use std::time::{Duration, Instant};
 pub(crate) use tempfile::TempDir;
 pub(crate) use tokio::sync::mpsc::UnboundedReceiver;
 pub(crate) use tokio::task::LocalSet;
+pub(crate) use wisp_next::test_support::TestUi;
+pub(crate) use wisp_next::test_support::TestUiBuilder;
 pub(crate) use wisp_next::test_support::app::{App, AppConfig, HistoryItem, RuntimeEffect, WorkspaceMoveState};
 pub(crate) use wisp_next::test_support::attachments::{
     AttachmentKind, PromptAttachment, build_attachments, classify_attachment,
@@ -33,7 +34,7 @@ pub(crate) use wisp_next::test_support::composer::Composer;
 pub(crate) use wisp_next::test_support::generation::Generation;
 pub(crate) use wisp_next::test_support::picker::CommandEntry;
 pub(crate) use wisp_next::test_support::picker::index_files;
-pub(crate) use wisp_next::test_support::renderer::{DrawContext, Renderer};
+pub(crate) use wisp_next::test_support::renderer::DrawContext;
 pub(crate) use wisp_next::test_support::screens::git_diff::GitDiffEvent;
 pub(crate) use wisp_next::test_support::settings::{StatusLineSegmentConfig, UiSettings};
 pub(crate) use wisp_next::test_support::settings_overlay::SettingsOverlay;
@@ -42,19 +43,13 @@ pub(crate) use wisp_next::test_support::syntax::SyntaxHighlighter;
 pub(crate) use wisp_next::test_support::tasks::{Task, TaskResult};
 pub(crate) use wisp_next::test_support::theme::Theme;
 pub(crate) use wisp_next::test_support::tool_calls::ToolStatus;
-pub(crate) use wisp_next::test_support::{inline_viewport_height, workspace_status::WorkspaceStatus};
+pub(crate) use wisp_next::test_support::workspace_status::WorkspaceStatus;
 
-/// Builds an `App` wired to a recording (or failable) prompt handle.
-///
-/// Defaults match the plain `make_app()` case; each method turns on exactly the
-/// one thing a test cares about.
+/// Builds an `App` wired to a recording (or failable) prompt handle, for tests
+/// that never draw. Rendering scenarios should use [`TestUiBuilder`] instead.
 #[derive(Default)]
 pub(crate) struct AppBuilder {
-    working_dir: Option<std::path::PathBuf>,
-    capabilities: AetherCapabilities,
-    config_options: Vec<acp::SessionConfigOption>,
-    auth_methods: Vec<acp::AuthMethod>,
-    session_capabilities: Option<acp::SessionCapabilities>,
+    builder: TestUiBuilder,
 }
 
 impl AppBuilder {
@@ -63,70 +58,43 @@ impl AppBuilder {
     }
 
     pub(crate) fn working_dir(mut self, working_dir: impl Into<std::path::PathBuf>) -> Self {
-        self.working_dir = Some(working_dir.into());
+        self.builder = self.builder.working_dir(working_dir);
         self
     }
 
     pub(crate) fn config_options(mut self, options: Vec<acp::SessionConfigOption>) -> Self {
-        self.config_options = options;
+        self.builder = self.builder.config_options(options);
         self
     }
 
     pub(crate) fn auth_methods(mut self, methods: Vec<acp::AuthMethod>) -> Self {
-        self.auth_methods = methods;
-        self
-    }
-
-    /// Overrides the capabilities wholesale, for tests that care about metadata
-    /// the individual toggles do not cover.
-    pub(crate) fn session_capabilities(mut self, capabilities: acp::SessionCapabilities) -> Self {
-        self.session_capabilities = Some(capabilities);
+        self.builder = self.builder.auth_methods(methods);
         self
     }
 
     pub(crate) fn prompt_search(mut self) -> Self {
-        self.capabilities.prompt_search = true;
+        self.builder = self.builder.prompt_search();
         self
     }
 
     pub(crate) fn session_preview(mut self) -> Self {
-        self.capabilities.session_preview = true;
+        self.builder = self.builder.session_preview();
         self
     }
 
     pub(crate) fn workspace_move(mut self) -> Self {
-        self.capabilities.workspace_move = true;
+        self.builder = self.builder.workspace_move();
         self
     }
 
     /// Builds against a handle that records every command it is given.
     pub(crate) fn build(self) -> (App, UnboundedReceiver<PromptCommand>) {
-        let (prompt_handle, command_rx) = AcpPromptHandle::recording();
-        (self.build_with(prompt_handle), command_rx)
+        self.builder.build_app()
     }
 
     /// Builds against a handle whose commands fail once the returned flag is set.
     pub(crate) fn build_failable(self) -> (App, Arc<AtomicBool>, UnboundedReceiver<PromptCommand>) {
-        let (prompt_handle, fail_signal, command_rx) = AcpPromptHandle::failable();
-        (self.build_with(prompt_handle), fail_signal, command_rx)
-    }
-
-    fn build_with(self, prompt_handle: AcpPromptHandle) -> App {
-        let session_capabilities = self
-            .session_capabilities
-            .unwrap_or_else(|| acp::SessionCapabilities::new().meta(Some(self.capabilities.to_meta())));
-        App::new(AppConfig {
-            session_id: SessionId::new("test-session"),
-            agent_name: "aether".to_string(),
-            prompt_capabilities: acp::PromptCapabilities::new(),
-            session_capabilities,
-            config_options: self.config_options,
-            auth_methods: self.auth_methods,
-            workspace_status: WorkspaceStatus::new("~/code/demo", Some("main".to_string())),
-            prompt_handle,
-            working_dir: self.working_dir.unwrap_or_else(|| std::path::PathBuf::from(".")),
-            settings: UiSettings::default(),
-        })
+        self.builder.build_app_failable()
     }
 }
 
@@ -174,180 +142,6 @@ fn select_options(values: &[&str]) -> Vec<acp::SessionConfigSelectOption> {
     values.iter().map(|&value| acp::SessionConfigSelectOption::new(value.to_string(), value.to_string())).collect()
 }
 
-pub(crate) fn make_terminal() -> Terminal<TestBackend> {
-    make_terminal_with_width(40)
-}
-
-pub(crate) fn make_terminal_with_width(width: u16) -> Terminal<TestBackend> {
-    let terminal_height = 15;
-    Terminal::with_options(
-        TestBackend::new(width, terminal_height),
-        TerminalOptions { viewport: Viewport::Inline(inline_viewport_height(terminal_height)) },
-    )
-    .unwrap()
-}
-
-pub(crate) fn make_terminal_tall() -> Terminal<TestBackend> {
-    make_terminal_with_dimensions(80, 30)
-}
-
-pub(crate) fn make_terminal_with_dimensions(width: u16, height: u16) -> Terminal<TestBackend> {
-    Terminal::with_options(
-        TestBackend::new(width, height),
-        TerminalOptions { viewport: Viewport::Inline(inline_viewport_height(height)) },
-    )
-    .unwrap()
-}
-
-/// Draws one frame with a throwaway renderer.
-///
-/// Only correct for a test that draws once: the renderer owns the committed
-/// scrollback, so a fresh one per frame silently drops whatever earlier frames
-/// committed. Tests that draw repeatedly use [`TestUi`].
-pub(crate) fn sync_terminal(
-    terminal: &mut Terminal<TestBackend>,
-    app: &mut App,
-) -> Result<(), std::convert::Infallible> {
-    let mut renderer = Renderer::new(&UiSettings::default());
-    renderer.draw(terminal, app)
-}
-
-/// A terminal and the renderer that owns its scrollback, for tests that draw
-/// more than one frame.
-pub(crate) struct TestUi {
-    pub(crate) terminal: Terminal<TestBackend>,
-    renderer: Renderer,
-}
-
-impl TestUi {
-    pub(crate) fn new(terminal: Terminal<TestBackend>) -> Self {
-        Self { terminal, renderer: Renderer::new(&UiSettings::default()) }
-    }
-
-    pub(crate) fn with_dimensions(width: u16, height: u16) -> Self {
-        Self::new(make_terminal_with_dimensions(width, height))
-    }
-
-    pub(crate) fn draw(&mut self, app: &mut App) {
-        self.renderer.draw(&mut self.terminal, app).unwrap();
-    }
-
-    /// Resizes the backing terminal. The next [`Self::draw`] re-measures the
-    /// inline viewport the way `Renderer::draw` does in the event loop.
-    pub(crate) fn resize(&mut self, width: u16, height: u16) {
-        self.terminal.backend_mut().resize(width, height);
-    }
-
-    /// The theme the renderer draws with.
-    pub(crate) fn theme(&self) -> &Theme {
-        self.renderer.theme()
-    }
-
-    /// What the inline viewport currently shows: the composer, status line,
-    /// and the live tail of the conversation.
-    pub(crate) fn viewport(&mut self) -> Buffer {
-        viewport_buffer(&mut self.terminal)
-    }
-
-    /// The terminal's own scrollback plus the rows the inline viewport leaves
-    /// above itself: the committed conversation that left the live tail.
-    pub(crate) fn history(&mut self) -> Buffer {
-        history_buffer(&mut self.terminal)
-    }
-
-    /// [`Self::history`] stacked on [`Self::viewport`]: everything the
-    /// conversation has shown, oldest at the top.
-    pub(crate) fn conversation(&mut self) -> Buffer {
-        conversation_buffer(&mut self.terminal)
-    }
-
-    pub(crate) fn viewport_text(&mut self) -> String {
-        buffer_text(&self.viewport())
-    }
-
-    pub(crate) fn history_text(&mut self) -> String {
-        buffer_text(&self.history())
-    }
-
-    pub(crate) fn conversation_text(&mut self) -> String {
-        buffer_text(&self.conversation())
-    }
-
-    /// Row (within the viewport buffer) of the first line containing `needle`.
-    pub(crate) fn viewport_row(&mut self, needle: &str) -> Option<u16> {
-        row_containing(&self.viewport(), needle)
-    }
-
-    pub(crate) fn assert_viewport_contains(&mut self, needle: &str) {
-        let viewport = self.viewport_text();
-        assert!(
-            viewport.contains(needle),
-            "viewport should contain {needle:?}:
-{viewport}"
-        );
-    }
-
-    pub(crate) fn assert_viewport_not_contains(&mut self, needle: &str) {
-        let viewport = self.viewport_text();
-        assert!(
-            !viewport.contains(needle),
-            "viewport should not contain {needle:?}:
-{viewport}"
-        );
-    }
-
-    pub(crate) fn assert_history_contains(&mut self, needle: &str) {
-        let history = self.history_text();
-        assert!(
-            history.contains(needle),
-            "history should contain {needle:?}:
-{history}"
-        );
-    }
-
-    pub(crate) fn assert_history_not_contains(&mut self, needle: &str) {
-        let history = self.history_text();
-        assert!(
-            !history.contains(needle),
-            "history should not contain {needle:?}:
-{history}"
-        );
-    }
-
-    pub(crate) fn assert_conversation_contains(&mut self, needle: &str) {
-        let conversation = self.conversation_text();
-        assert!(
-            conversation.contains(needle),
-            "conversation should contain {needle:?}:
-{conversation}"
-        );
-    }
-
-    pub(crate) fn assert_conversation_not_contains(&mut self, needle: &str) {
-        let conversation = self.conversation_text();
-        assert!(
-            !conversation.contains(needle),
-            "conversation should not contain {needle:?}:
-{conversation}"
-        );
-    }
-
-    /// Asserts the viewport's visible text matches `expected` row-by-row.
-    pub(crate) fn assert_viewport<S: AsRef<str>>(&mut self, expected: &[S]) {
-        assert_buffer_eq(&self.viewport(), expected);
-    }
-
-    /// Asserts the committed history's visible text matches `expected` row-by-row.
-    pub(crate) fn assert_history<S: AsRef<str>>(&mut self, expected: &[S]) {
-        assert_buffer_eq(&self.history(), expected);
-    }
-
-    /// Asserts the stitched conversation's visible text matches `expected` row-by-row.
-    pub(crate) fn assert_conversation<S: AsRef<str>>(&mut self, expected: &[S]) {
-        assert_buffer_eq(&self.conversation(), expected);
-    }
-}
-
 /// Opens the `@` picker on `composer` and delivers the file index, the way the
 /// event loop does once the walk completes.
 pub(crate) fn open_file_picker(composer: &mut Composer, root: &std::path::Path) {
@@ -358,7 +152,8 @@ pub(crate) fn open_file_picker(composer: &mut Composer, root: &std::path::Path) 
 }
 
 /// Runs whatever work the app has queued and feeds the results back, so a test
-/// sees the state the event loop would have produced.
+/// sees the state the event loop would have produced. Prefer
+/// [`TestUi::settle_tasks`] for scenarios that own a [`TestUi`].
 pub(crate) fn settle_tasks(app: &mut App) {
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
     while let Some(effect) = app.take_effect() {
@@ -435,61 +230,6 @@ pub(crate) fn tool_completed_with_diff_contents(id: &str, old: &str, new: &str) 
             .content(vec![acp::ToolCallContent::Diff(diff)])
             .status(acp::ToolCallStatus::Completed),
     )))
-}
-
-pub(crate) fn viewport_buffer(terminal: &mut Terminal<TestBackend>) -> Buffer {
-    let area = terminal.get_frame().area();
-    let screen = terminal.backend().buffer();
-    let mut viewport = Buffer::empty(ratatui::layout::Rect::new(0, 0, area.width, area.height));
-    for y in 0..area.height {
-        for x in 0..area.width {
-            viewport[(x, y)] = screen[(area.x + x, area.y + y)].clone();
-        }
-    }
-    viewport
-}
-
-/// Content Ratatui's `insert_before` committed above the inline viewport.
-/// Purging is asserted separately through `RuntimeEffect`.
-pub(crate) fn history_buffer(terminal: &mut Terminal<TestBackend>) -> Buffer {
-    let viewport_area = terminal.get_frame().area();
-    let screen = terminal.backend().buffer();
-    let scrollback = terminal.backend().scrollback();
-    let history_height = scrollback.area.height.saturating_add(viewport_area.top());
-    let mut history = Buffer::empty(ratatui::layout::Rect::new(0, 0, screen.area.width, history_height));
-    for y in 0..scrollback.area.height {
-        for x in 0..scrollback.area.width {
-            history[(x, y)] = scrollback[(x, y)].clone();
-        }
-    }
-    for y in 0..viewport_area.top() {
-        for x in 0..screen.area.width {
-            history[(x, scrollback.area.height + y)] = screen[(x, y)].clone();
-        }
-    }
-    history
-}
-
-pub(crate) fn conversation_buffer(terminal: &mut Terminal<TestBackend>) -> Buffer {
-    let history = history_buffer(terminal);
-    let viewport = viewport_buffer(terminal);
-    let mut conversation = Buffer::empty(ratatui::layout::Rect::new(
-        0,
-        0,
-        viewport.area.width,
-        history.area.height.saturating_add(viewport.area.height),
-    ));
-    for y in 0..history.area.height {
-        for x in 0..history.area.width {
-            conversation[(x, y)] = history[(x, y)].clone();
-        }
-    }
-    for y in 0..viewport.area.height {
-        for x in 0..viewport.area.width {
-            conversation[(x, history.area.height + y)] = viewport[(x, y)].clone();
-        }
-    }
-    conversation
 }
 
 pub(crate) fn row_containing(buffer: &Buffer, needle: &str) -> Option<u16> {
@@ -642,10 +382,6 @@ pub(crate) fn workspace_moved(new_cwd: &str) -> AcpEvent {
 
 pub(crate) fn workspace_move_failed(error: &str) -> AcpEvent {
     AcpEvent::WorkspaceMoveFailed { error: error.to_string() }
-}
-
-pub(crate) fn make_failable_app_with_workspace_move() -> (App, Arc<AtomicBool>, UnboundedReceiver<PromptCommand>) {
-    AppBuilder::new().workspace_move().build_failable()
 }
 
 /// Records the backend calls a frame's history insertion and viewport draw

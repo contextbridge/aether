@@ -15,102 +15,89 @@ fn assert_command(rx: &mut UnboundedReceiver<PromptCommand>, expected: impl Fn(&
     assert!(expected(&command), "{label} sent {command:?}");
 }
 
-fn commit_overflowing_reply(
-    app: &mut App,
-    command_rx: &mut UnboundedReceiver<PromptCommand>,
-    terminal: &mut Terminal<TestBackend>,
-    presenter: &mut Renderer,
-) {
-    submit_prompt(app, "talk at length");
-    assert_command(command_rx, |c| matches!(c, PromptCommand::Prompt { .. }), "the overflowing reply");
+fn commit_overflowing_reply(ui: &mut TestUi) {
+    ui.submit("talk at length");
+    assert_command(ui.command_rx(), |c| matches!(c, PromptCommand::Prompt { .. }), "the overflowing reply");
     let mut reply = String::new();
     for index in 0..30 {
         writeln!(reply, "overflow-line-{index}").unwrap();
         reply.push('\n');
     }
-    app.on_acp_event(text_chunk(&format!("{reply}still streaming")));
-    presenter.draw(terminal, app).unwrap();
+    ui.acp_event(text_chunk(&format!("{reply}still streaming")));
+    ui.draw();
     assert!(
-        buffer_text(&history_buffer(terminal)).contains("overflow-line-0"),
+        ui.history_text().contains("overflow-line-0"),
         "precondition: a prior reply must have been committed to scrollback"
     );
     // Complete the turn so the app is idle and later commands (e.g. /move) are not blocked.
-    app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
 }
 
 #[test]
 fn purges_once_on_context_clear() {
-    let (mut app, mut command_rx) = make_app();
-    let mut terminal = make_terminal();
-    let mut presenter = Renderer::new(&UiSettings::default());
+    let mut ui = TestUi::new();
 
-    commit_overflowing_reply(&mut app, &mut command_rx, &mut terminal, &mut presenter);
+    commit_overflowing_reply(&mut ui);
 
-    app.on_acp_event(AcpEvent::ContextCleared(ContextClearedParams::default()));
+    ui.acp_event(AcpEvent::ContextCleared(ContextClearedParams::default()));
 
-    assert_eq!(purge_count(&mut app), 1, "a context clear should purge native scrollback exactly once");
+    assert_eq!(purge_count(ui.app_mut()), 1, "a context clear should purge native scrollback exactly once");
 }
 
 #[test]
 fn clear_command_purges_only_when_the_new_session_lands() {
-    let (mut app, mut command_rx) = make_app();
-    let mut terminal = make_terminal();
-    let mut presenter = Renderer::new(&UiSettings::default());
+    let mut ui = TestUi::new();
 
-    commit_overflowing_reply(&mut app, &mut command_rx, &mut terminal, &mut presenter);
+    commit_overflowing_reply(&mut ui);
 
-    type_text(&mut app, "/clear");
-    app.on_key(key(KeyCode::Tab));
-    assert_command(&mut command_rx, |c| matches!(c, PromptCommand::NewSession { .. }), "/clear");
-    assert_eq!(purge_count(&mut app), 0, "requesting a new session must not purge before it lands");
+    ui.type_text("/clear");
+    ui.key(key(KeyCode::Tab));
+    assert_command(ui.command_rx(), |c| matches!(c, PromptCommand::NewSession { .. }), "/clear");
+    assert_eq!(purge_count(ui.app_mut()), 0, "requesting a new session must not purge before it lands");
 
-    app.on_acp_event(new_session_created("fresh-session", Vec::new()));
+    ui.acp_event(new_session_created("fresh-session", Vec::new()));
 
-    assert_eq!(purge_count(&mut app), 1, "a landed new session should purge native scrollback exactly once");
+    assert_eq!(purge_count(ui.app_mut()), 1, "a landed new session should purge native scrollback exactly once");
 }
 
 #[test]
 fn session_switch_purges_once_and_the_loaded_landing_does_not_purge_again() {
-    let (mut app, mut command_rx) = make_app();
-    let mut terminal = make_terminal();
-    let mut presenter = Renderer::new(&UiSettings::default());
+    let mut ui = TestUi::new();
 
-    commit_overflowing_reply(&mut app, &mut command_rx, &mut terminal, &mut presenter);
+    commit_overflowing_reply(&mut ui);
 
-    type_text(&mut app, "/resume");
-    app.on_key(key(KeyCode::Tab));
-    assert_command(&mut command_rx, |c| matches!(c, PromptCommand::ListSessions), "/resume");
-    app.on_acp_event(sessions_listed(vec![session_info("other", "/tmp/elsewhere", "Other", "2025-01-01T00:00:00Z")]));
-    app.on_key(key(KeyCode::Enter));
-    assert_command(&mut command_rx, |c| matches!(c, PromptCommand::LoadSession { .. }), "resume");
+    ui.type_text("/resume");
+    ui.key(key(KeyCode::Tab));
+    assert_command(ui.command_rx(), |c| matches!(c, PromptCommand::ListSessions), "/resume");
+    ui.acp_event(sessions_listed(vec![session_info("other", "/tmp/elsewhere", "Other", "2025-01-01T00:00:00Z")]));
+    ui.key(key(KeyCode::Enter));
+    assert_command(ui.command_rx(), |c| matches!(c, PromptCommand::LoadSession { .. }), "resume");
 
-    assert_eq!(purge_count(&mut app), 1, "requesting the session load should purge once");
+    assert_eq!(purge_count(ui.app_mut()), 1, "requesting the session load should purge once");
 
-    app.on_acp_event(session_loaded("other", Vec::new()));
+    ui.acp_event(session_loaded("other", Vec::new()));
 
-    assert_eq!(purge_count(&mut app), 0, "the session landing must not purge a second time");
+    assert_eq!(purge_count(ui.app_mut()), 0, "the session landing must not purge a second time");
 }
 
 #[test]
 fn successful_workspace_move_purges_once() {
-    let (mut app, mut command_rx) = make_app_with_workspace_move();
-    let mut terminal = make_terminal();
-    let mut presenter = Renderer::new(&UiSettings::default());
+    let mut ui = TestUiBuilder::new().workspace_move().build();
 
-    commit_overflowing_reply(&mut app, &mut command_rx, &mut terminal, &mut presenter);
+    commit_overflowing_reply(&mut ui);
 
-    type_text(&mut app, "/move");
-    app.on_key(key(KeyCode::Tab));
-    assert_command(&mut command_rx, |c| matches!(c, PromptCommand::ListWorkspaces(_)), "/move");
-    app.on_acp_event(workspaces_listed(vec![
+    ui.type_text("/move");
+    ui.key(key(KeyCode::Tab));
+    assert_command(ui.command_rx(), |c| matches!(c, PromptCommand::ListWorkspaces(_)), "/move");
+    ui.acp_event(workspaces_listed(vec![
         workspace_entry("/home/user/code/current", true),
         workspace_entry("/home/user/code/other", false),
     ]));
-    app.on_key(key(KeyCode::Enter));
-    assert_command(&mut command_rx, |c| matches!(c, PromptCommand::MoveWorkspace(_)), "move");
-    app.on_acp_event(workspace_moved("/home/user/code/other"));
+    ui.key(key(KeyCode::Enter));
+    assert_command(ui.command_rx(), |c| matches!(c, PromptCommand::MoveWorkspace(_)), "move");
+    ui.acp_event(workspace_moved("/home/user/code/other"));
 
-    assert_eq!(purge_count(&mut app), 1, "a successful workspace move should purge native scrollback exactly once");
+    assert_eq!(purge_count(ui.app_mut()), 1, "a successful workspace move should purge native scrollback exactly once");
 }
 
 /// The purge is unconditional: even a reset with no committed content must clear
@@ -126,14 +113,12 @@ fn resets_purge_even_with_no_committed_content() {
 
 #[test]
 fn an_ordinary_render_does_not_purge() {
-    let (mut app, mut command_rx) = make_app();
-    let mut terminal = make_terminal();
-    let mut presenter = Renderer::new(&UiSettings::default());
+    let mut ui = TestUi::new();
 
-    commit_overflowing_reply(&mut app, &mut command_rx, &mut terminal, &mut presenter);
-    presenter.draw(&mut terminal, &mut app).unwrap();
+    commit_overflowing_reply(&mut ui);
+    ui.draw();
 
-    assert_eq!(purge_count(&mut app), 0, "an ordinary render must not purge native scrollback");
+    assert_eq!(purge_count(ui.app_mut()), 0, "an ordinary render must not purge native scrollback");
 }
 
 #[test]

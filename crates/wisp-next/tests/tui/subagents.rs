@@ -95,20 +95,18 @@ fn sub_agent_wants_tick_while_running() {
 
 #[test]
 fn sub_agent_renders_tree_guides_in_viewport() {
-    let (mut app, _command_rx) = make_app();
+    let mut ui = TestUi::new();
 
     // Start a parent tool call and enter prompt mode
-    app.on_acp_event(tool_call("parent-1", "spawn_subagent"));
-    app.on_acp_event(tool_completed("parent-1"));
+    ui.acp_event(tool_call("parent-1", "spawn_subagent"));
+    ui.acp_event(tool_completed("parent-1"));
 
     // Add sub-agents with child tools
-    app.on_acp_event(sub_agent_tool_call("parent-1", "task-a", "explorer", "c1", "grep", r#"{"pattern":"test"}"#));
-    app.on_acp_event(sub_agent_tool_call("parent-1", "task-a", "explorer", "c2", "read", r#"{"path":"src/main.rs"}"#));
+    ui.acp_event(sub_agent_tool_call("parent-1", "task-a", "explorer", "c1", "grep", r#"{"pattern":"test"}"#));
+    ui.acp_event(sub_agent_tool_call("parent-1", "task-a", "explorer", "c2", "read", r#"{"path":"src/main.rs"}"#));
 
-    let mut terminal = make_terminal();
-    let mut renderer = Renderer::new(&UiSettings::default());
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.draw();
+    let viewport = ui.viewport_text();
 
     // Tree guides should be visible for the sub-agent
     assert!(viewport.contains("explorer"), "viewport should show agent name:\n{viewport}");
@@ -176,17 +174,15 @@ fn sub_agent_prompt_cancelled_finalizes_sub_agents() {
 
 #[test]
 fn sub_agent_multiple_sub_agents_per_parent() {
-    let (mut app, _command_rx) = make_app();
-    app.on_acp_event(tool_call("parent-1", "spawn_subagent"));
-    app.on_acp_event(tool_completed("parent-1"));
+    let mut ui = TestUi::new();
+    ui.acp_event(tool_call("parent-1", "spawn_subagent"));
+    ui.acp_event(tool_completed("parent-1"));
 
-    app.on_acp_event(sub_agent_tool_call("parent-1", "task-a", "explorer", "c1", "grep", "{}"));
-    app.on_acp_event(sub_agent_tool_call("parent-1", "task-b", "builder", "c2", "write", "{}"));
+    ui.acp_event(sub_agent_tool_call("parent-1", "task-a", "explorer", "c1", "grep", "{}"));
+    ui.acp_event(sub_agent_tool_call("parent-1", "task-b", "builder", "c2", "write", "{}"));
 
-    let mut terminal = make_terminal();
-    let mut renderer = Renderer::new(&UiSettings::default());
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.draw();
+    let viewport = ui.viewport_text();
 
     // Both agent names should be visible
     assert!(viewport.contains("explorer"), "viewport should show explorer:\n{viewport}");
@@ -199,10 +195,9 @@ mod progress_indicator_tests {
 
     #[test]
     fn idle_renders_no_progress_indicator() {
-        let (mut app, _command_rx) = make_app();
-        let mut terminal = make_terminal();
-        sync_terminal(&mut terminal, &mut app).unwrap();
-        let full = buffer_text(terminal.backend().buffer());
+        let mut ui = TestUi::new();
+        ui.draw();
+        let full = ui.viewport_text();
         let has_spinner = SPINNER_FRAMES.iter().any(|frame| full.contains(frame));
         assert!(!has_spinner, "buffer should not contain spinner when idle:\n{full}");
         assert!(!full.contains("Working..."), "{full}");
@@ -211,18 +206,18 @@ mod progress_indicator_tests {
 
     #[test]
     fn prompt_shows_progress_with_esc_hint() {
-        let (mut app, _command_rx) = make_app();
-        submit_prompt(&mut app, "hello");
+        let mut ui = TestUi::new();
+        ui.submit("hello");
         assert!(
-            app.progress_indicator().is_active(),
+            ui.app().progress_indicator().is_active(),
             "progress indicator not active. prompt_in_flight={}, is_agent_busy={}",
-            app.waiting_for_response(),
-            app.is_agent_busy()
+            ui.app().waiting_for_response(),
+            ui.app().is_agent_busy()
         );
         // Use a 120-char terminal to fit the full tip + esc hint on one line
-        let mut terminal = make_terminal_with_dimensions(120, 30);
-        sync_terminal(&mut terminal, &mut app).unwrap();
-        let full = buffer_text(terminal.backend().buffer());
+        ui.resize(120, 30);
+        ui.draw();
+        let full = ui.viewport_text();
         let has_spinner = SPINNER_FRAMES.iter().any(|frame| full.contains(frame));
         assert!(has_spinner, "full buffer should contain spinner during prompt:\n{full}");
         assert!(full.contains("esc to interrupt"), "full buffer should show esc hint:\n{full}");
@@ -230,136 +225,129 @@ mod progress_indicator_tests {
 
     #[test]
     fn prompt_done_hides_progress() {
-        let (mut app, _command_rx) = make_app();
-        submit_prompt(&mut app, "hello");
-        app.on_acp_event(text_chunk("response"));
-        app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
-        let mut terminal = make_terminal();
-        sync_terminal(&mut terminal, &mut app).unwrap();
-        let full = buffer_text(terminal.backend().buffer());
+        let mut ui = TestUi::new();
+        ui.submit("hello");
+        ui.acp_event(text_chunk("response"));
+        ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+        ui.draw();
+        let full = ui.viewport_text();
         assert!(!full.contains("esc to interrupt"), "{full}");
         assert!(!full.contains("Working..."), "{full}");
     }
 
     #[test]
     fn compaction_active_shows_compacting_message() {
-        let (mut app, _command_rx) = make_app();
-        app.on_acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
-        let mut terminal = make_terminal();
-        sync_terminal(&mut terminal, &mut app).unwrap();
-        let viewport = buffer_text(&viewport_buffer(&mut terminal));
+        let mut ui = TestUi::new();
+        ui.acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
+        ui.draw();
+        let viewport = ui.viewport_text();
         assert!(viewport.contains("Compacting context"), "{viewport}");
     }
 
     #[test]
     fn compaction_inactive_hides_indicator() {
-        let (mut app, _command_rx) = make_app();
-        app.on_acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
-        app.on_acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: false }));
-        let mut terminal = make_terminal();
-        sync_terminal(&mut terminal, &mut app).unwrap();
-        let viewport = buffer_text(&viewport_buffer(&mut terminal));
+        let mut ui = TestUi::new();
+        ui.acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
+        ui.acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: false }));
+        ui.draw();
+        let viewport = ui.viewport_text();
         assert!(!viewport.contains("Compacting context"), "{viewport}");
     }
 
     #[test]
     fn compaction_during_prompt_shows_esc_hint() {
-        let (mut app, _command_rx) = make_app();
-        submit_prompt(&mut app, "hello");
-        app.on_acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
-        let mut terminal = make_terminal_with_dimensions(120, 30);
-        sync_terminal(&mut terminal, &mut app).unwrap();
-        let full = buffer_text(terminal.backend().buffer());
+        let mut ui = TestUi::new();
+        ui.submit("hello");
+        ui.acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
+        ui.resize(120, 30);
+        ui.draw();
+        let full = ui.viewport_text();
         assert!(full.contains("Compacting context"), "{full}");
         assert!(full.contains("esc to interrupt"), "{full}");
     }
 
     #[test]
     fn workspace_moving_shows_progress() {
-        let (mut app, mut command_rx) = make_app_with_workspace_move();
-        type_text(&mut app, "/move");
-        app.on_key(key(KeyCode::Tab));
-        let _ = command_rx.try_recv().unwrap();
-        app.on_acp_event(workspaces_listed(vec![
+        let mut ui = TestUiBuilder::new().workspace_move().build();
+        ui.type_text("/move");
+        ui.key(key(KeyCode::Tab));
+        let _ = ui.command_rx().try_recv().unwrap();
+        ui.acp_event(workspaces_listed(vec![
             workspace_entry("/home/user/code/current", true),
             workspace_entry("/home/user/code/other", false),
         ]));
-        app.on_key(key(KeyCode::Enter));
-        let _ = command_rx.try_recv().unwrap();
-        let mut terminal = make_terminal_with_dimensions(120, 30);
-        sync_terminal(&mut terminal, &mut app).unwrap();
-        let full = buffer_text(terminal.backend().buffer());
+        ui.key(key(KeyCode::Enter));
+        let _ = ui.command_rx().try_recv().unwrap();
+        ui.resize(120, 30);
+        ui.draw();
+        let full = ui.viewport_text();
         assert!(full.contains("Moving workspace"), "{full}");
         assert!(!full.contains("esc to interrupt"), "{full}");
     }
 
     #[test]
     fn workspace_loading_session_shows_progress() {
-        let (mut app, mut command_rx) = make_app_with_workspace_move();
-        type_text(&mut app, "/move");
-        app.on_key(key(KeyCode::Tab));
-        let _ = command_rx.try_recv().unwrap();
-        app.on_acp_event(workspaces_listed(vec![
+        let mut ui = TestUiBuilder::new().workspace_move().build();
+        ui.type_text("/move");
+        ui.key(key(KeyCode::Tab));
+        let _ = ui.command_rx().try_recv().unwrap();
+        ui.acp_event(workspaces_listed(vec![
             workspace_entry("/home/user/code/current", true),
             workspace_entry("/home/user/code/other", false),
         ]));
-        app.on_key(key(KeyCode::Enter));
-        let _ = command_rx.try_recv().unwrap();
-        app.on_acp_event(workspace_moved("/home/user/code/other"));
-        let mut terminal = make_terminal();
-        sync_terminal(&mut terminal, &mut app).unwrap();
-        let viewport = buffer_text(&viewport_buffer(&mut terminal));
+        ui.key(key(KeyCode::Enter));
+        let _ = ui.command_rx().try_recv().unwrap();
+        ui.acp_event(workspace_moved("/home/user/code/other"));
+        ui.draw();
+        let viewport = ui.viewport_text();
         assert!(viewport.contains("Loading session in new workspace"), "{viewport}");
     }
 
     #[test]
     fn workspace_move_failure_clears_indicator() {
-        let (mut app, mut command_rx) = make_app_with_workspace_move();
-        type_text(&mut app, "/move");
-        app.on_key(key(KeyCode::Tab));
-        let _ = command_rx.try_recv().unwrap();
-        app.on_acp_event(workspaces_listed(vec![
+        let mut ui = TestUiBuilder::new().workspace_move().build();
+        ui.type_text("/move");
+        ui.key(key(KeyCode::Tab));
+        let _ = ui.command_rx().try_recv().unwrap();
+        ui.acp_event(workspaces_listed(vec![
             workspace_entry("/home/user/code/current", true),
             workspace_entry("/home/user/code/other", false),
         ]));
-        app.on_key(key(KeyCode::Enter));
-        let _ = command_rx.try_recv().unwrap();
-        app.on_acp_event(workspace_move_failed("permission denied"));
-        let mut terminal = make_terminal();
-        sync_terminal(&mut terminal, &mut app).unwrap();
-        let viewport = buffer_text(&viewport_buffer(&mut terminal));
+        ui.key(key(KeyCode::Enter));
+        let _ = ui.command_rx().try_recv().unwrap();
+        ui.acp_event(workspace_move_failed("permission denied"));
+        ui.draw();
+        let viewport = ui.viewport_text();
         assert!(!viewport.contains("Moving workspace"), "{viewport}");
         assert!(!viewport.contains("Loading session"), "{viewport}");
     }
 
     #[test]
     fn workspace_move_precedence_over_compaction() {
-        let (mut app, mut command_rx) = make_app_with_workspace_move();
-        type_text(&mut app, "/move");
-        app.on_key(key(KeyCode::Tab));
-        let _ = command_rx.try_recv().unwrap();
-        app.on_acp_event(workspaces_listed(vec![
+        let mut ui = TestUiBuilder::new().workspace_move().build();
+        ui.type_text("/move");
+        ui.key(key(KeyCode::Tab));
+        let _ = ui.command_rx().try_recv().unwrap();
+        ui.acp_event(workspaces_listed(vec![
             workspace_entry("/home/user/code/current", true),
             workspace_entry("/home/user/code/other", false),
         ]));
-        app.on_key(key(KeyCode::Enter));
-        let _ = command_rx.try_recv().unwrap();
-        app.on_acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
-        let mut terminal = make_terminal();
-        sync_terminal(&mut terminal, &mut app).unwrap();
-        let viewport = buffer_text(&viewport_buffer(&mut terminal));
+        ui.key(key(KeyCode::Enter));
+        let _ = ui.command_rx().try_recv().unwrap();
+        ui.acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
+        ui.draw();
+        let viewport = ui.viewport_text();
         assert!(viewport.contains("Moving workspace"), "{viewport}");
         assert!(!viewport.contains("Compacting"), "{viewport}");
     }
 
     #[test]
     fn compaction_precedence_over_agent_work() {
-        let (mut app, _command_rx) = make_app();
-        submit_prompt(&mut app, "hello");
-        app.on_acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
-        let mut terminal = make_terminal();
-        sync_terminal(&mut terminal, &mut app).unwrap();
-        let viewport = buffer_text(&viewport_buffer(&mut terminal));
+        let mut ui = TestUi::new();
+        ui.submit("hello");
+        ui.acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
+        ui.draw();
+        let viewport = ui.viewport_text();
         assert!(viewport.contains("Compacting context"), "{viewport}");
     }
 
@@ -404,21 +392,20 @@ mod progress_indicator_tests {
 
     #[test]
     fn tick_animates_spinner_deterministically() {
-        let (mut app, _command_rx) = make_app();
-        submit_prompt(&mut app, "hello");
+        let mut ui = TestUi::new();
+        ui.submit("hello");
 
         let now = Instant::now();
 
         // Capture rendering at tick 0
-        let mut terminal_a = make_terminal_with_dimensions(120, 30);
-        sync_terminal(&mut terminal_a, &mut app).unwrap();
-        let full_a = buffer_text(terminal_a.backend().buffer());
+        ui.resize(120, 30);
+        ui.draw();
+        let full_a = ui.viewport_text();
 
         // Advance tick once
-        app.on_tick(now);
-        let mut terminal_b = make_terminal_with_dimensions(120, 30);
-        sync_terminal(&mut terminal_b, &mut app).unwrap();
-        let full_b = buffer_text(terminal_b.backend().buffer());
+        ui.tick(now);
+        ui.draw();
+        let full_b = ui.viewport_text();
 
         // Different frames should produce different braille characters
         assert_ne!(full_a, full_b, "spinner should animate with each tick");
@@ -426,41 +413,40 @@ mod progress_indicator_tests {
 
     #[test]
     fn tick_stops_when_idle() {
-        let (mut app, _command_rx) = make_app();
-        submit_prompt(&mut app, "hello");
+        let mut ui = TestUi::new();
+        ui.submit("hello");
 
         let now = Instant::now();
-        app.on_tick(now);
+        ui.tick(now);
 
         // Complete the prompt
-        app.on_acp_event(text_chunk("response"));
-        app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+        ui.acp_event(text_chunk("response"));
+        ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
         // Tick while idle — should not change
-        app.on_tick(now);
-        let mut terminal = make_terminal_with_dimensions(120, 30);
-        sync_terminal(&mut terminal, &mut app).unwrap();
-        let full = buffer_text(terminal.backend().buffer());
+        ui.tick(now);
+        ui.resize(120, 30);
+        ui.draw();
+        let full = ui.viewport_text();
         assert!(!full.contains("esc to interrupt"), "{full}");
     }
 
     #[test]
     fn progress_is_not_inserted_into_scrollback() {
-        let (mut app, _command_rx) = make_app();
+        let mut ui = TestUi::new();
         // Fill enough content to trigger scrollback
-        submit_prompt(&mut app, "hello");
+        ui.submit("hello");
         let mut response = String::new();
         for i in 0..20 {
             writeln!(response, "line-{i}").unwrap();
         }
-        app.on_acp_event(text_chunk(&response));
-        app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+        ui.acp_event(text_chunk(&response));
+        ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
 
         // Submit another prompt so we can see progress indicator
-        submit_prompt(&mut app, "another");
-        let mut terminal = make_terminal();
-        sync_terminal(&mut terminal, &mut app).unwrap();
+        ui.submit("another");
+        ui.draw();
 
-        let scrollback = buffer_text(&history_buffer(&mut terminal));
+        let scrollback = ui.history_text();
         let has_spinner = SPINNER_FRAMES.iter().any(|frame| scrollback.contains(frame));
         assert!(!has_spinner, "scrollback should not contain progress spinner:\n{scrollback}");
         assert!(!scrollback.contains("esc to interrupt"), "scrollback should not contain esc hint:\n{scrollback}");
@@ -469,60 +455,57 @@ mod progress_indicator_tests {
 
     #[test]
     fn context_cleared_resets_progress_state() {
-        let (mut app, _command_rx) = make_app();
-        submit_prompt(&mut app, "hello");
-        app.on_acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
-        app.on_acp_event(AcpEvent::ContextCleared(ContextClearedParams {}));
+        let mut ui = TestUi::new();
+        ui.submit("hello");
+        ui.acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
+        ui.acp_event(AcpEvent::ContextCleared(ContextClearedParams {}));
 
-        let mut terminal = make_terminal();
-        sync_terminal(&mut terminal, &mut app).unwrap();
-        let viewport = buffer_text(&viewport_buffer(&mut terminal));
+        ui.draw();
+        let viewport = ui.viewport_text();
         assert!(!viewport.contains("Compacting"), "{viewport}");
         assert!(!viewport.contains("esc to interrupt"), "{viewport}");
-        assert!(!app.wants_tick(), "wants_tick should be false after context cleared");
+        assert!(!ui.app().wants_tick(), "wants_tick should be false after context cleared");
     }
 
     #[test]
     fn new_session_resets_progress_state() {
-        let (mut app, _command_rx) = make_app();
-        submit_prompt(&mut app, "hello");
-        app.on_acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
-        app.on_acp_event(AcpEvent::NewSessionCreated {
+        let mut ui = TestUi::new();
+        ui.submit("hello");
+        ui.acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
+        ui.acp_event(AcpEvent::NewSessionCreated {
             session_id: SessionId::new("new-session"),
             config_options: Vec::new(),
         });
 
-        let mut terminal = make_terminal();
-        sync_terminal(&mut terminal, &mut app).unwrap();
-        let viewport = buffer_text(&viewport_buffer(&mut terminal));
+        ui.draw();
+        let viewport = ui.viewport_text();
         assert!(!viewport.contains("Compacting"), "{viewport}");
-        assert!(!app.wants_tick(), "wants_tick should be false after new session");
+        assert!(!ui.app().wants_tick(), "wants_tick should be false after new session");
     }
 
     #[test]
     fn session_loaded_resets_progress_state() {
-        let (mut app, _command_rx) = make_app();
-        submit_prompt(&mut app, "hello");
-        app.on_acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
-        app.on_acp_event(AcpEvent::SessionLoaded {
+        let mut ui = TestUi::new();
+        ui.submit("hello");
+        ui.acp_event(AcpEvent::ContextCompaction(ContextCompactionParams { active: true }));
+        ui.acp_event(AcpEvent::SessionLoaded {
             session_id: SessionId::new("loaded-session"),
             config_options: Vec::new(),
         });
 
-        let mut terminal = make_terminal();
-        sync_terminal(&mut terminal, &mut app).unwrap();
-        let viewport = buffer_text(&viewport_buffer(&mut terminal));
+        ui.draw();
+        let viewport = ui.viewport_text();
         assert!(!viewport.contains("Compacting"), "{viewport}");
     }
 
     #[test]
     fn progress_lines_include_padding() {
-        let (mut app, _command_rx) = make_app();
-        submit_prompt(&mut app, "hello");
-        let mut terminal = make_terminal_with_dimensions(120, 30);
-        sync_terminal(&mut terminal, &mut app).unwrap();
+        let mut ui = TestUi::new();
+        ui.submit("hello");
+        ui.resize(120, 30);
+        ui.draw();
 
-        let full = buffer_text(terminal.backend().buffer());
+        let full = ui.viewport_text();
         let spinner_lines: Vec<_> =
             full.lines().filter(|line| SPINNER_FRAMES.iter().any(|frame| line.contains(frame))).collect();
         assert!(!spinner_lines.is_empty(), "should have spinner lines:\n{full}");
@@ -533,18 +516,15 @@ mod progress_indicator_tests {
 
     #[test]
     fn workspace_list_failed_clears_indicator() {
-        let (mut app, mut command_rx) = make_app_with_workspace_move();
-        type_text(&mut app, "/move");
-        app.on_key(key(KeyCode::Tab));
-        let _ = command_rx.try_recv().unwrap();
-        app.on_acp_event(workspace_list_failed("network error"));
+        let mut ui = TestUiBuilder::new().workspace_move().build();
+        ui.type_text("/move");
+        ui.key(key(KeyCode::Tab));
+        let _ = ui.command_rx().try_recv().unwrap();
+        ui.acp_event(workspace_list_failed("network error"));
 
-        let mut terminal = make_terminal();
-        sync_terminal(&mut terminal, &mut app).unwrap();
-        let viewport = buffer_text(&viewport_buffer(&mut terminal));
+        ui.draw();
+        let viewport = ui.viewport_text();
         assert!(!viewport.contains("Moving workspace"), "{viewport}");
-        assert!(!app.wants_tick(), "wants_tick should be false after list failure");
+        assert!(!ui.app().wants_tick(), "wants_tick should be false after list failure");
     }
 }
-
-// --- Plan ACP-event integration tests ---

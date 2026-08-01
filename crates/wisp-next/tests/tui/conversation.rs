@@ -138,28 +138,25 @@ fn alt_enter_inserts_newline_instead_of_submitting() {
 
 #[test]
 fn context_clear_discards_conversation_retained_in_the_live_viewport() {
-    let (mut app, _command_rx) = make_app();
-    let mut terminal = make_terminal();
-    let mut renderer = Renderer::new(&UiSettings::default());
-    submit_prompt(&mut app, "old retained message");
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    assert!(buffer_text(&viewport_buffer(&mut terminal)).contains("old retained message"));
+    let mut ui = TestUi::new();
+    ui.submit("old retained message");
+    ui.draw();
+    ui.assert_viewport_contains("old retained message");
 
-    app.on_acp_event(AcpEvent::ContextCleared(ContextClearedParams::default()));
-    renderer.draw(&mut terminal, &mut app).unwrap();
+    ui.acp_event(AcpEvent::ContextCleared(ContextClearedParams::default()));
+    ui.draw();
 
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let viewport = ui.viewport_text();
     assert!(!viewport.contains("old retained message"), "{viewport}");
     assert!(viewport.contains("[wisp-next] Context cleared"), "{viewport}");
 }
 
 #[test]
 fn fitting_user_message_remains_in_the_live_viewport() {
-    let (mut app, _command_rx) = make_app();
-    let mut ui = TestUi::new(make_terminal());
+    let mut ui = TestUi::new();
 
-    submit_prompt(&mut app, "hello viewport");
-    ui.draw(&mut app);
+    ui.submit("hello viewport");
+    ui.draw();
 
     ui.assert_viewport_contains("hello viewport");
     ui.assert_history_not_contains("hello viewport");
@@ -167,20 +164,18 @@ fn fitting_user_message_remains_in_the_live_viewport() {
 
 #[test]
 fn completed_stream_lines_remain_live_until_they_overflow() {
-    let (mut app, _command_rx) = make_app();
-    let mut terminal = make_terminal();
-    let mut renderer = Renderer::new(&UiSettings::default());
-    submit_prompt(&mut app, "hi");
+    let mut ui = TestUi::new();
+    ui.submit("hi");
 
     let mut completed = String::new();
     for index in 0..20 {
         writeln!(completed, "line-{index}\n").unwrap();
     }
-    app.on_acp_event(text_chunk(&format!("{completed}partial")));
-    renderer.draw(&mut terminal, &mut app).unwrap();
+    ui.acp_event(text_chunk(&format!("{completed}partial")));
+    ui.draw();
 
-    let scrollback = buffer_text(&history_buffer(&mut terminal));
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let scrollback = ui.history_text();
+    let viewport = ui.viewport_text();
     assert!(scrollback.contains("line-0"));
     assert!(!scrollback.contains("partial"));
     assert!(viewport.contains("line-19"));
@@ -189,20 +184,19 @@ fn completed_stream_lines_remain_live_until_they_overflow() {
 
 #[test]
 fn completed_streaming_text_remains_adjacent_to_the_composer_once() {
-    let (mut app, _command_rx) = make_app();
-    let mut ui = TestUi::new(make_terminal());
-    submit_prompt(&mut app, "hi");
+    let mut ui = TestUi::new();
+    ui.submit("hi");
 
-    app.on_acp_event(text_chunk("streamed "));
-    app.on_acp_event(text_chunk("answer"));
-    ui.draw(&mut app);
+    ui.acp_event(text_chunk("streamed "));
+    ui.acp_event(text_chunk("answer"));
+    ui.draw();
 
     ui.assert_viewport_contains("streamed answer");
     ui.assert_history_not_contains("streamed answer");
 
-    app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
-    ui.draw(&mut app);
-    ui.draw(&mut app);
+    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.draw();
+    ui.draw();
 
     let conversation = ui.conversation_text();
     assert_eq!(conversation.matches("streamed answer").count(), 1);
@@ -211,18 +205,16 @@ fn completed_streaming_text_remains_adjacent_to_the_composer_once() {
 
 #[test]
 fn streamed_markdown_blocks_keep_blank_separators() {
-    let (mut app, _command_rx) = make_app();
-    let mut terminal = make_terminal_tall();
-    let mut renderer = Renderer::new(&UiSettings::default());
-    submit_prompt(&mut app, "format this");
+    let mut ui = TestUi::with_dimensions(80, 30);
+    ui.submit("format this");
 
     for chunk in ["### Root\n", "\n", "Keep this paragraph separate.\n", "\n", "- first item\n"] {
-        app.on_acp_event(text_chunk(chunk));
+        ui.acp_event(text_chunk(chunk));
     }
-    app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
-    renderer.draw(&mut terminal, &mut app).unwrap();
+    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.draw();
 
-    let conversation = conversation_buffer(&mut terminal);
+    let conversation = ui.conversation();
     let heading = row_containing(&conversation, "### Root").expect("heading should render");
     let paragraph = row_containing(&conversation, "Keep this paragraph separate.").expect("paragraph should render");
     let item = row_containing(&conversation, "first item").expect("list item should render");
@@ -233,27 +225,25 @@ fn streamed_markdown_blocks_keep_blank_separators() {
 
 #[test]
 fn running_tool_holds_later_content_out_of_committed_history() {
-    let (mut app, _command_rx) = make_app();
-    let mut terminal = make_terminal();
-    let mut renderer = Renderer::new(&UiSettings::default());
-    submit_prompt(&mut app, "run a tool");
+    let mut ui = TestUi::new();
+    ui.submit("run a tool");
 
-    app.on_acp_event(tool_call("tool-1", "Reading main.rs"));
-    app.on_acp_event(text_chunk("tool output summary"));
-    renderer.draw(&mut terminal, &mut app).unwrap();
+    ui.acp_event(tool_call("tool-1", "Reading main.rs"));
+    ui.acp_event(text_chunk("tool output summary"));
+    ui.draw();
 
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("Reading main.rs"));
-    assert!(!buffer_text(&history_buffer(&mut terminal)).contains("Reading main.rs"));
+    assert!(!ui.history_text().contains("Reading main.rs"));
 
-    app.on_acp_event(tool_completed("tool-1"));
-    app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
-    renderer.draw(&mut terminal, &mut app).unwrap();
+    ui.acp_event(tool_completed("tool-1"));
+    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.draw();
 
-    let conversation = buffer_text(&conversation_buffer(&mut terminal));
+    let conversation = ui.conversation_text();
     assert!(conversation.contains("Reading main.rs"));
     assert!(conversation.contains("tool output summary"));
-    assert!(app.pending_items().is_empty());
+    assert!(ui.app().pending_items().is_empty());
 }
 
 #[test]
@@ -284,17 +274,16 @@ fn tool_call_update_with_raw(id: &str, raw_input: serde_json::Value) -> AcpEvent
 
 #[test]
 fn streamed_raw_input_fragments_accumulate_and_show_after_completion() {
-    let (mut app, _command_rx) = make_app();
-    let mut terminal = make_terminal_with_width(80);
-    submit_prompt(&mut app, "run tool");
-    app.on_acp_event(tool_call("tool-1", "Edit file"));
-    app.on_acp_event(tool_call_update_with_raw("tool-1", serde_json::Value::String("first ".to_string())));
-    app.on_acp_event(tool_call_update_with_raw("tool-1", serde_json::Value::String("second".to_string())));
-    app.on_acp_event(tool_completed_status("tool-1"));
+    let mut ui = TestUi::with_dimensions(80, 15);
+    ui.submit("run tool");
+    ui.acp_event(tool_call("tool-1", "Edit file"));
+    ui.acp_event(tool_call_update_with_raw("tool-1", serde_json::Value::String("first ".to_string())));
+    ui.acp_event(tool_call_update_with_raw("tool-1", serde_json::Value::String("second".to_string())));
+    ui.acp_event(tool_completed_status("tool-1"));
 
-    sync_terminal(&mut terminal, &mut app).unwrap();
+    ui.draw();
 
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("first second"), "streamed fragments must appear: {viewport}");
 }
 
@@ -322,110 +311,103 @@ fn tool_failed_status(id: &str) -> AcpEvent {
 
 #[test]
 fn running_tool_hides_raw_arguments() {
-    let (mut app, _command_rx) = make_app();
-    let mut terminal = make_terminal();
-    submit_prompt(&mut app, "run tool");
+    let mut ui = TestUi::new();
+    ui.submit("run tool");
     let raw = serde_json::json!({"path": "/src/main.rs"});
-    app.on_acp_event(tool_call_with_raw("tool-1", "Read file", raw));
+    ui.acp_event(tool_call_with_raw("tool-1", "Read file", raw));
 
-    sync_terminal(&mut terminal, &mut app).unwrap();
+    ui.draw();
 
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("Read file"), "title must be visible: {viewport}");
     assert!(!viewport.contains("/src/main.rs"), "raw args must be hidden while running: {viewport}");
 }
 
 #[test]
 fn completed_tool_shows_raw_arguments() {
-    let (mut app, _command_rx) = make_app();
-    let mut terminal = make_terminal_with_width(80);
-    submit_prompt(&mut app, "run tool");
+    let mut ui = TestUi::with_dimensions(80, 15);
+    ui.submit("run tool");
     let raw = serde_json::json!({"path": "/src/main.rs"});
-    app.on_acp_event(tool_call_with_raw("tool-1", "Read file", raw));
-    app.on_acp_event(tool_completed_status("tool-1"));
+    ui.acp_event(tool_call_with_raw("tool-1", "Read file", raw));
+    ui.acp_event(tool_completed_status("tool-1"));
 
-    sync_terminal(&mut terminal, &mut app).unwrap();
+    ui.draw();
 
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("/src/main.rs"), "raw args must be visible after completion: {viewport}");
 }
 
 #[test]
 fn display_value_overrides_raw_arguments_in_rendered_output() {
-    let (mut app, _command_rx) = make_app();
-    let mut terminal = make_terminal_with_width(80);
-    submit_prompt(&mut app, "run tool");
+    let mut ui = TestUi::with_dimensions(80, 15);
+    ui.submit("run tool");
     let raw = serde_json::json!({"path": "/src/main.rs"});
-    app.on_acp_event(tool_call_with_raw("tool-1", "Read file", raw));
-    app.on_acp_event(tool_call_update_with_display_value("tool-1", "42 lines read"));
-    app.on_acp_event(tool_completed_status("tool-1"));
+    ui.acp_event(tool_call_with_raw("tool-1", "Read file", raw));
+    ui.acp_event(tool_call_update_with_display_value("tool-1", "42 lines read"));
+    ui.acp_event(tool_completed_status("tool-1"));
 
-    sync_terminal(&mut terminal, &mut app).unwrap();
+    ui.draw();
 
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("42 lines read"), "display_value must be visible: {viewport}");
     assert!(!viewport.contains("/src/main.rs"), "raw args must be hidden when display_value is set: {viewport}");
 }
 
 #[test]
 fn error_cause_is_visible_in_rendered_output() {
-    let (mut app, _command_rx) = make_app();
-    let mut terminal = make_terminal_with_width(80);
-    submit_prompt(&mut app, "run tool");
-    app.on_acp_event(tool_call("tool-1", "Failing tool"));
-    app.on_acp_event(tool_failed_status("tool-1"));
+    let mut ui = TestUi::with_dimensions(80, 15);
+    ui.submit("run tool");
+    ui.acp_event(tool_call("tool-1", "Failing tool"));
+    ui.acp_event(tool_failed_status("tool-1"));
 
-    sync_terminal(&mut terminal, &mut app).unwrap();
+    ui.draw();
 
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("failed"), "error cause must be visible: {viewport}");
     assert!(!viewport.contains("(failed)"), "error cause must NOT have parentheses: {viewport}");
 }
 
 #[test]
 fn truncation_adds_visible_ellipsis_for_long_arguments() {
-    let (mut app, _command_rx) = make_app();
-    let mut terminal = make_terminal_with_width(250);
-    submit_prompt(&mut app, "run tool");
+    let mut ui = TestUi::with_dimensions(250, 15);
+    ui.submit("run tool");
     let long = "x".repeat(300);
-    app.on_acp_event(tool_call_with_raw("tool-1", "Long arg", serde_json::Value::String(long)));
-    app.on_acp_event(tool_completed_status("tool-1"));
+    ui.acp_event(tool_call_with_raw("tool-1", "Long arg", serde_json::Value::String(long)));
+    ui.acp_event(tool_completed_status("tool-1"));
 
-    sync_terminal(&mut terminal, &mut app).unwrap();
+    ui.draw();
 
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let viewport = ui.viewport_text();
     assert!(viewport.contains('…'), "truncated args must show ellipsis: {viewport}");
 }
 
 #[test]
 fn truncation_keeps_short_arguments_unchanged() {
-    let (mut app, _command_rx) = make_app();
-    let mut terminal = make_terminal_with_width(250);
-    submit_prompt(&mut app, "run tool");
+    let mut ui = TestUi::with_dimensions(250, 15);
+    ui.submit("run tool");
     let short = "hello world";
-    app.on_acp_event(tool_call_with_raw("tool-1", "Short arg", serde_json::Value::String(short.to_string())));
-    app.on_acp_event(tool_completed_status("tool-1"));
+    ui.acp_event(tool_call_with_raw("tool-1", "Short arg", serde_json::Value::String(short.to_string())));
+    ui.acp_event(tool_completed_status("tool-1"));
 
-    sync_terminal(&mut terminal, &mut app).unwrap();
+    ui.draw();
 
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let viewport = ui.viewport_text();
     assert!(viewport.contains(short), "short args must appear in full: {viewport}");
     assert!(!viewport.contains('…'), "short args must NOT have ellipsis: {viewport}");
 }
 
 #[test]
 fn truncation_is_unicode_safe_no_split_characters() {
-    let (mut app, _command_rx) = make_app();
-    let mut terminal = make_terminal_with_width(250);
-    submit_prompt(&mut app, "run tool");
+    let mut ui = TestUi::with_dimensions(250, 15);
+    ui.submit("run tool");
     let prefix = "a".repeat(195);
     let unicode_arg = format!("{prefix}こんにちは世界");
-    app.on_acp_event(tool_call_with_raw("tool-1", "Unicode tool", serde_json::Value::String(unicode_arg)));
-    app.on_acp_event(tool_completed_status("tool-1"));
+    ui.acp_event(tool_call_with_raw("tool-1", "Unicode tool", serde_json::Value::String(unicode_arg)));
+    ui.acp_event(tool_completed_status("tool-1"));
 
-    sync_terminal(&mut terminal, &mut app).unwrap();
+    ui.draw();
 
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let viewport = ui.viewport_text();
     assert!(viewport.contains('…'), "truncated Unicode args must show ellipsis: {viewport}");
     assert!(viewport.contains('ん'), "char-based truncation must preserve leading multi-byte chars: {viewport}");
     assert!(!viewport.contains('ち'), "truncation must stop at char boundary (199 chars): {viewport}");
@@ -433,9 +415,8 @@ fn truncation_is_unicode_safe_no_split_characters() {
 
 #[test]
 fn char_based_truncation_preserves_multi_byte_under_200_chars() {
-    let (mut app, _command_rx) = make_app();
-    let mut terminal = make_terminal_with_width(250);
-    submit_prompt(&mut app, "run tool");
+    let mut ui = TestUi::with_dimensions(250, 15);
+    ui.submit("run tool");
     // 100 ASCII chars + 50 × '界' (3 bytes each) = 150 chars, but 100 + 150 = 250 bytes
     // This is under 200 chars so it must NOT be truncated even though it exceeds 200 bytes.
     let half = "a".repeat(100);
@@ -443,64 +424,59 @@ fn char_based_truncation_preserves_multi_byte_under_200_chars() {
     let arg = format!("{half}{unicode_half}");
     assert!(arg.len() > 200, "arg must exceed 200 bytes for this test");
     assert!(arg.chars().count() < 200, "arg must be under 200 chars (with leading space)");
-    app.on_acp_event(tool_call_with_raw("tool-1", "Unicode tool", serde_json::Value::String(arg)));
-    app.on_acp_event(tool_completed_status("tool-1"));
+    ui.acp_event(tool_call_with_raw("tool-1", "Unicode tool", serde_json::Value::String(arg)));
+    ui.acp_event(tool_completed_status("tool-1"));
 
-    sync_terminal(&mut terminal, &mut app).unwrap();
+    ui.draw();
 
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let viewport = ui.viewport_text();
     assert!(!viewport.contains('…'), "under 200 chars must not be truncated: {viewport}");
     assert!(viewport.contains('界'), "multi-byte chars must appear in full: {viewport}");
 }
 
 #[test]
 fn truncation_boundary_exactly_200_bytes_no_ellipsis() {
-    let (mut app, _command_rx) = make_app();
-    let mut terminal = make_terminal_with_width(250);
-    submit_prompt(&mut app, "run tool");
+    let mut ui = TestUi::with_dimensions(250, 15);
+    ui.submit("run tool");
     let exactly_199 = "x".repeat(199);
-    app.on_acp_event(tool_call_with_raw("tool-1", "199-char arg", serde_json::Value::String(exactly_199)));
-    app.on_acp_event(tool_completed_status("tool-1"));
+    ui.acp_event(tool_call_with_raw("tool-1", "199-char arg", serde_json::Value::String(exactly_199)));
+    ui.acp_event(tool_completed_status("tool-1"));
 
-    sync_terminal(&mut terminal, &mut app).unwrap();
+    ui.draw();
 
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let viewport = ui.viewport_text();
     assert!(!viewport.contains('…'), "199-char args must not be truncated (fit in 200 with space): {viewport}");
 }
 
 #[test]
 fn truncation_preserved_in_scrollback() {
-    let (mut app, _command_rx) = make_app();
-    let mut terminal = make_terminal_with_dimensions(250, 15);
-    let mut renderer = Renderer::new(&UiSettings::default());
-    submit_prompt(&mut app, "run tool");
+    let mut ui = TestUi::with_dimensions(250, 15);
+    ui.submit("run tool");
     let long = "x".repeat(300);
-    app.on_acp_event(tool_call_with_raw("tool-1", "Long arg", serde_json::Value::String(long)));
-    app.on_acp_event(tool_completed_status("tool-1"));
-    app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.acp_event(tool_call_with_raw("tool-1", "Long arg", serde_json::Value::String(long)));
+    ui.acp_event(tool_completed_status("tool-1"));
+    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
 
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    renderer.draw(&mut terminal, &mut app).unwrap();
+    ui.draw();
+    ui.draw();
 
-    let conversation = buffer_text(&conversation_buffer(&mut terminal));
+    let conversation = ui.conversation_text();
     assert!(conversation.contains('…'), "truncation must survive drain to scrollback: {conversation}");
 }
 
 #[test]
 fn tool_arguments_preserved_in_scrollback_exactly_once() {
-    let (mut app, _command_rx) = make_app();
-    let mut terminal = make_terminal();
-    let mut renderer = Renderer::new(&UiSettings::default());
+    let mut ui = TestUi::new();
     let raw = serde_json::json!({"path": "/src/main.rs"});
-    submit_prompt(&mut app, "run tool");
-    app.on_acp_event(tool_call_with_raw("tool-1", "Read file", raw));
-    app.on_acp_event(tool_completed_status("tool-1"));
-    app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.submit("run tool");
+    ui.acp_event(tool_call_with_raw("tool-1", "Read file", raw));
+    ui.acp_event(tool_completed_status("tool-1"));
+    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
 
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    renderer.draw(&mut terminal, &mut app).unwrap();
+    ui.draw();
+    ui.draw();
 
-    let conversation = buffer_text(&conversation_buffer(&mut terminal));
+    let conversation = ui.conversation_text();
     let occurrences = conversation.matches("/src/main.rs").count();
     assert_eq!(occurrences, 1, "tool args must appear exactly once in conversation: {conversation}");
     assert!(conversation.contains("Read file"), "title must appear: {conversation}");
@@ -508,21 +484,20 @@ fn tool_arguments_preserved_in_scrollback_exactly_once() {
 
 #[test]
 fn diff_not_rendered_while_tool_is_running() {
-    let (mut app, _command_rx) = make_app();
-    let mut terminal = make_terminal();
-    submit_prompt(&mut app, "run tool");
-    app.on_acp_event(tool_call("tool-1", "Edit file"));
+    let mut ui = TestUi::new();
+    ui.submit("run tool");
+    ui.acp_event(tool_call("tool-1", "Edit file"));
 
     let diff = acp::Diff::new("src/main.rs", "new content").old_text("old content");
     let update = acp::ToolCallUpdate::new(
         "tool-1".to_string(),
         acp::ToolCallUpdateFields::new().content(vec![acp::ToolCallContent::Diff(diff)]),
     );
-    app.on_acp_event(session_update(acp::SessionUpdate::ToolCallUpdate(update)));
+    ui.acp_event(session_update(acp::SessionUpdate::ToolCallUpdate(update)));
 
-    sync_terminal(&mut terminal, &mut app).unwrap();
+    ui.draw();
 
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("Edit file"), "title must be visible: {viewport}");
     assert!(!viewport.contains("old content"), "diff must NOT render while running: {viewport}");
     assert!(!viewport.contains("new content"), "diff must NOT render while running: {viewport}");
@@ -530,11 +505,9 @@ fn diff_not_rendered_while_tool_is_running() {
 
 #[test]
 fn diff_not_rendered_after_failed_status() {
-    let (mut app, _command_rx) = make_app();
-    let mut terminal = make_terminal();
-    let mut renderer = Renderer::new(&UiSettings::default());
-    submit_prompt(&mut app, "run tool");
-    app.on_acp_event(tool_call("tool-1", "Edit file"));
+    let mut ui = TestUi::new();
+    ui.submit("run tool");
+    ui.acp_event(tool_call("tool-1", "Edit file"));
 
     let diff = acp::Diff::new("src/main.rs", "new content").old_text("old content");
     let update = acp::ToolCallUpdate::new(
@@ -543,13 +516,13 @@ fn diff_not_rendered_after_failed_status() {
             .content(vec![acp::ToolCallContent::Diff(diff)])
             .status(acp::ToolCallStatus::Failed),
     );
-    app.on_acp_event(session_update(acp::SessionUpdate::ToolCallUpdate(update)));
-    app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.acp_event(session_update(acp::SessionUpdate::ToolCallUpdate(update)));
+    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
 
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    renderer.draw(&mut terminal, &mut app).unwrap();
+    ui.draw();
+    ui.draw();
 
-    let conversation = buffer_text(&conversation_buffer(&mut terminal));
+    let conversation = ui.conversation_text();
     assert!(!conversation.contains("old content"), "diff must NOT render after failure: {conversation}");
     assert!(!conversation.contains("new content"), "diff must NOT render after failure: {conversation}");
     assert!(conversation.contains("failed"), "error cause must be visible: {conversation}");
@@ -557,12 +530,11 @@ fn diff_not_rendered_after_failed_status() {
 
 #[test]
 fn short_streaming_message_renders_above_progress_indicator_and_composer() {
-    let (mut app, _command_rx) = make_app();
-    let mut ui = TestUi::new(make_terminal());
-    submit_prompt(&mut app, "prompt");
-    app.on_acp_event(text_chunk("short answer"));
+    let mut ui = TestUi::new();
+    ui.submit("prompt");
+    ui.acp_event(text_chunk("short answer"));
 
-    ui.draw(&mut app);
+    ui.draw();
 
     let prompt_row = ui.viewport_row("prompt").unwrap();
     let message_row = ui.viewport_row("short answer").unwrap();
@@ -578,14 +550,13 @@ fn short_streaming_message_renders_above_progress_indicator_and_composer() {
 
 #[test]
 fn progress_indicator_renders_below_streaming_message() {
-    let (mut app, _command_rx) = make_app();
-    let mut terminal = make_terminal_with_width(80);
-    submit_prompt(&mut app, "prompt");
-    app.on_acp_event(text_chunk("streamed answer"));
+    let mut ui = TestUi::with_dimensions(80, 15);
+    ui.submit("prompt");
+    ui.acp_event(text_chunk("streamed answer"));
 
-    sync_terminal(&mut terminal, &mut app).unwrap();
+    ui.draw();
 
-    let viewport = viewport_buffer(&mut terminal);
+    let viewport = ui.viewport();
     let message_row = row_containing(&viewport, "streamed answer").expect("streamed message should be visible");
     let spinner_row = row_containing(&viewport, "⠋").expect("progress spinner should be visible");
     assert!(
@@ -597,13 +568,12 @@ fn progress_indicator_renders_below_streaming_message() {
 
 #[test]
 fn composer_echo_and_status_line_render_in_viewport() {
-    let (mut app, _command_rx) = make_app();
-    let mut terminal = make_terminal();
+    let mut ui = TestUi::new();
 
-    type_text(&mut app, "typing");
-    sync_terminal(&mut terminal, &mut app).unwrap();
+    ui.type_text("typing");
+    ui.draw();
 
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("> typing"));
     assert!(viewport.contains("~/code/demo · main"));
     assert!(viewport.contains("aether"));

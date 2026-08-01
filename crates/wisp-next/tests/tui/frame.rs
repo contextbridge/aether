@@ -2,17 +2,11 @@ use super::support::*;
 
 #[test]
 fn first_frame_never_inserts_scrollback() {
-    let (mut app, _command_rx) = make_app();
-    let mut terminal = Terminal::with_options(
-        RecordingBackend::new(40, 15),
-        TerminalOptions { viewport: Viewport::Inline(inline_viewport_height(15)) },
-    )
-    .unwrap();
-    let mut renderer = Renderer::new(&UiSettings::default());
+    let mut ui = TestUi::with_backend(RecordingBackend::new(40, 15));
 
-    renderer.draw(&mut terminal, &mut app).unwrap();
+    ui.draw();
 
-    let events = &terminal.backend().events;
+    let events: Vec<BackendEvent> = ui.terminal_mut().backend().events.clone();
     assert_eq!(
         events.iter().filter(|event| **event == BackendEvent::Scroll).count(),
         0,
@@ -27,36 +21,30 @@ fn first_frame_never_inserts_scrollback() {
 
 #[test]
 fn resize_growth_inserts_pending_history_before_the_viewport_draws() {
-    let (mut app, _command_rx) = make_app();
-    let mut terminal = Terminal::with_options(
-        RecordingBackend::new(40, 15),
-        TerminalOptions { viewport: Viewport::Inline(inline_viewport_height(15)) },
-    )
-    .unwrap();
-    let mut renderer = Renderer::new(&UiSettings::default());
-    renderer.draw(&mut terminal, &mut app).unwrap();
+    let mut ui = TestUi::with_backend(RecordingBackend::new(40, 15));
+    ui.draw();
 
     // Shrunk below the scrollback reserve, the finished reply stays queued
     // instead of overflowing into the terminal's own scrollback.
-    terminal.backend_mut().resize(40, 10);
-    submit_prompt(&mut app, "hello");
+    ui.terminal_mut().backend_mut().resize(40, 10);
+    ui.submit("hello");
     let mut reply = String::new();
     for index in 0..30 {
         writeln!(reply, "overflow-line-{index}").unwrap();
         reply.push('\n');
     }
-    app.on_acp_event(text_chunk(&reply));
-    app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    assert!(!app.pending_items().is_empty(), "precondition: the finished reply must still be pending");
-    assert!(!buffer_text(terminal.backend().scrollback()).contains("overflow-line-0"));
+    ui.acp_event(text_chunk(&reply));
+    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.draw();
+    assert!(!ui.app().pending_items().is_empty(), "precondition: the finished reply must still be pending");
+    assert!(!buffer_text(ui.terminal_mut().backend().scrollback()).contains("overflow-line-0"));
 
-    terminal.backend_mut().events.clear();
+    ui.terminal_mut().backend_mut().events.clear();
 
-    terminal.backend_mut().resize(40, 15);
-    renderer.draw(&mut terminal, &mut app).unwrap();
+    ui.terminal_mut().backend_mut().resize(40, 15);
+    ui.draw();
 
-    let events = &terminal.backend().events;
+    let events: Vec<BackendEvent> = ui.terminal_mut().backend().events.clone();
     let draw = events.iter().position(|event| *event == BackendEvent::ShowCursor).expect("the viewport must be drawn");
     let insert = events.iter().position(|event| *event == BackendEvent::Scroll).expect("history must be inserted");
     assert!(insert < draw, "expected history insertion before the viewport draw: {events:?}");
@@ -65,34 +53,32 @@ fn resize_growth_inserts_pending_history_before_the_viewport_draws() {
         1,
         "the frame should be drawn once, not once per side of the insertion: {events:?}"
     );
-    assert!(app.pending_items().is_empty());
-    assert!(buffer_text(terminal.backend().scrollback()).contains("overflow-line-0"));
+    assert!(ui.app().pending_items().is_empty());
+    assert!(buffer_text(ui.terminal_mut().backend().scrollback()).contains("overflow-line-0"));
 }
 
 #[test]
 fn redrawing_without_state_change_preserves_the_visible_rows() {
-    let (mut app, _command_rx) = make_app();
-    let mut ui = TestUi::new(make_terminal());
-    submit_prompt(&mut app, "idempotent");
-    app.on_acp_event(text_chunk("streaming reply"));
-    ui.draw(&mut app);
+    let mut ui = TestUi::new();
+    ui.submit("idempotent");
+    ui.acp_event(text_chunk("streaming reply"));
+    ui.draw();
 
     let viewport: Vec<String> = ui.viewport_text().lines().map(str::to_string).collect();
     let conversation: Vec<String> = ui.conversation_text().lines().map(str::to_string).collect();
-    ui.draw(&mut app);
+    ui.draw();
     ui.assert_viewport(&viewport);
     ui.assert_conversation(&conversation);
 }
 
 #[test]
 fn completed_turn_settles_into_a_stable_viewport() {
-    let (mut app, _command_rx) = make_app();
     let mut ui = TestUi::with_dimensions(40, 15);
-    submit_prompt(&mut app, "hi");
-    app.on_acp_event(text_chunk("final answer"));
-    app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
-    ui.draw(&mut app);
-    ui.draw(&mut app);
+    ui.submit("hi");
+    ui.acp_event(text_chunk("final answer"));
+    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.draw();
+    ui.draw();
 
     let rows = [
         "",
@@ -115,16 +101,15 @@ fn completed_turn_settles_into_a_stable_viewport() {
 
 #[test]
 fn scoped_buffers_partition_the_committed_and_live_conversation() {
-    let (mut app, _command_rx) = make_app();
-    let mut ui = TestUi::new(make_terminal());
-    submit_prompt(&mut app, "hello");
+    let mut ui = TestUi::new();
+    ui.submit("hello");
     let mut reply = String::new();
     for index in 0..30 {
         writeln!(reply, "overflow-line-{index}").unwrap();
         reply.push('\n');
     }
-    app.on_acp_event(text_chunk(&format!("{reply}still-streaming")));
-    ui.draw(&mut app);
+    ui.acp_event(text_chunk(&format!("{reply}still-streaming")));
+    ui.draw();
 
     ui.assert_history_contains("overflow-line-0");
     ui.assert_history_not_contains("still-streaming");
@@ -138,29 +123,28 @@ fn scoped_buffers_partition_the_committed_and_live_conversation() {
 
 #[test]
 fn resize_growth_commits_history_that_the_small_viewport_queued() {
-    let (mut app, _command_rx) = make_app();
-    let mut ui = TestUi::new(make_terminal());
-    ui.draw(&mut app);
+    let mut ui = TestUi::new();
+    ui.draw();
 
     ui.resize(40, 10);
-    submit_prompt(&mut app, "hello");
+    ui.submit("hello");
     let mut reply = String::new();
     for index in 0..30 {
         writeln!(reply, "queued-line-{index}").unwrap();
         reply.push('\n');
     }
-    app.on_acp_event(text_chunk(&reply));
-    app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
-    ui.draw(&mut app);
+    ui.acp_event(text_chunk(&reply));
+    ui.acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.draw();
 
     ui.assert_history_not_contains("queued-line-0");
-    assert!(!app.pending_items().is_empty(), "precondition: without scrollback room the reply stays queued");
+    assert!(!ui.app().pending_items().is_empty(), "precondition: without scrollback room the reply stays queued");
 
     ui.resize(40, 15);
-    ui.draw(&mut app);
+    ui.draw();
 
     ui.assert_history_contains("queued-line-0");
-    assert!(app.pending_items().is_empty());
+    assert!(ui.app().pending_items().is_empty());
 
     let mut expected_history = vec![String::new(); 4];
     expected_history[3] = "  hello".to_string();

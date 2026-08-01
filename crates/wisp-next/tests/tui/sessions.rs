@@ -16,27 +16,25 @@ fn clear_is_builtin_and_issues_new_session_command() {
 
 #[test]
 fn clear_creates_new_session_and_resets_state() {
-    let (mut app, mut command_rx) = make_app();
-    let mut terminal = make_terminal();
-    let mut renderer = Renderer::new(&UiSettings::default());
+    let mut ui = TestUi::new();
 
-    submit_prompt(&mut app, "old message");
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    assert!(buffer_text(&viewport_buffer(&mut terminal)).contains("old message"));
+    ui.submit("old message");
+    ui.draw();
+    ui.assert_viewport_contains("old message");
 
-    type_text(&mut app, "/clear");
-    app.on_key(key(KeyCode::Tab));
-    let _ = command_rx.try_recv().unwrap();
+    ui.type_text("/clear");
+    ui.key(key(KeyCode::Tab));
+    let _ = ui.command_rx().try_recv().unwrap();
 
-    let old_generation = app.transcript_generation();
-    app.on_acp_event(new_session_created("new-session", vec![select_option("model", "sonnet")]));
+    let old_generation = ui.app().transcript_generation();
+    ui.acp_event(new_session_created("new-session", vec![select_option("model", "sonnet")]));
 
     let mut bumped = old_generation;
     bumped.bump();
-    assert_eq!(app.transcript_generation(), bumped);
-    assert_eq!(app.pending_items().len(), 1);
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert_eq!(ui.app().transcript_generation(), bumped);
+    assert_eq!(ui.app().pending_items().len(), 1);
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(!viewport.contains("old message"), "old message should be gone after clear:\n{viewport}");
 }
 
@@ -112,19 +110,17 @@ fn resume_loads_selected_session() {
 
 #[test]
 fn empty_session_list_shows_no_sessions() {
-    let (mut app, mut command_rx) = make_app();
+    let mut ui = TestUi::new();
 
-    type_text(&mut app, "/resume");
-    app.on_key(key(KeyCode::Tab));
-    let _ = command_rx.try_recv().unwrap();
+    ui.type_text("/resume");
+    ui.key(key(KeyCode::Tab));
+    let _ = ui.command_rx().try_recv().unwrap();
 
-    app.on_acp_event(sessions_listed(vec![]));
+    ui.acp_event(sessions_listed(vec![]));
 
-    assert!(has_session_picker(&app));
-    let mut terminal = make_terminal();
-    let mut renderer = Renderer::new(&UiSettings::default());
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    assert!(has_session_picker(ui.app()));
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("No previous sessions"), "expected empty state:\n{viewport}");
 }
 
@@ -250,107 +246,99 @@ fn session_preview_updated_when_selection_changes() {
 
 #[test]
 fn stale_preview_does_not_replace_current() {
-    let (mut app, mut command_rx) = make_app_with_session_preview();
+    let mut ui = TestUiBuilder::new().session_preview().build();
 
-    type_text(&mut app, "/resume");
-    app.on_key(key(KeyCode::Tab));
-    let _ = command_rx.try_recv().unwrap();
+    ui.type_text("/resume");
+    ui.key(key(KeyCode::Tab));
+    let _ = ui.command_rx().try_recv().unwrap();
 
-    app.on_acp_event(sessions_listed(vec![
+    ui.acp_event(sessions_listed(vec![
         session_info("sess-1", "/tmp/one", "Session One", "2025-01-01T00:00:00Z"),
         session_info("sess-2", "/tmp/two", "Session Two", "2025-01-02T00:00:00Z"),
     ]));
-    let _ = command_rx.try_recv().unwrap();
+    let _ = ui.command_rx().try_recv().unwrap();
 
-    app.on_key(key(KeyCode::Down));
-    let _ = command_rx.try_recv().unwrap();
+    ui.key(key(KeyCode::Down));
+    let _ = ui.command_rx().try_recv().unwrap();
 
-    app.on_acp_event(AcpEvent::SessionPreviewLoaded(session_preview_response("sess-1")));
+    ui.acp_event(AcpEvent::SessionPreviewLoaded(session_preview_response("sess-1")));
 
-    let mut terminal = make_terminal();
-    let mut renderer = Renderer::new(&UiSettings::default());
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(!viewport.contains("hello"), "stale preview should not be shown:\n{viewport}");
 }
 
 #[test]
 fn session_preview_failure_shows_error() {
-    let (mut app, mut command_rx) = make_app_with_session_preview();
+    let mut ui = TestUiBuilder::new().session_preview().dimensions(160, 15).build();
 
-    type_text(&mut app, "/resume");
-    app.on_key(key(KeyCode::Tab));
-    let _ = command_rx.try_recv().unwrap();
+    ui.type_text("/resume");
+    ui.key(key(KeyCode::Tab));
+    let _ = ui.command_rx().try_recv().unwrap();
 
-    app.on_acp_event(sessions_listed(vec![session_info("sess-1", "/tmp/one", "Session One", "2025-01-01T00:00:00Z")]));
-    let _ = command_rx.try_recv().unwrap();
+    ui.acp_event(sessions_listed(vec![session_info("sess-1", "/tmp/one", "Session One", "2025-01-01T00:00:00Z")]));
+    let _ = ui.command_rx().try_recv().unwrap();
 
-    app.on_acp_event(AcpEvent::SessionPreviewFailed {
+    ui.acp_event(AcpEvent::SessionPreviewFailed {
         session_id: "sess-1".to_string(),
         error: "server unreachable".to_string(),
     });
 
-    let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Renderer::new(&UiSettings::default());
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("server unreachable"), "expected error in preview:\n{viewport}");
 }
 
 #[test]
 fn session_loading_buffer_queues_updates_then_replays() {
-    let (mut app, mut command_rx) = make_app();
+    let mut ui = TestUi::new();
 
-    type_text(&mut app, "/resume");
-    app.on_key(key(KeyCode::Tab));
-    let _ = command_rx.try_recv().unwrap();
+    ui.type_text("/resume");
+    ui.key(key(KeyCode::Tab));
+    let _ = ui.command_rx().try_recv().unwrap();
 
-    app.on_acp_event(sessions_listed(vec![session_info("loaded", "/tmp/loaded", "Loaded", "2025-01-01T00:00:00Z")]));
-    app.on_key(key(KeyCode::Enter));
-    let _ = command_rx.try_recv().unwrap();
+    ui.acp_event(sessions_listed(vec![session_info("loaded", "/tmp/loaded", "Loaded", "2025-01-01T00:00:00Z")]));
+    ui.key(key(KeyCode::Enter));
+    let _ = ui.command_rx().try_recv().unwrap();
 
-    app.on_acp_event(session_update_for("loaded", user_message_chunk("buffered message")));
-    app.on_acp_event(session_update_for(
+    ui.acp_event(session_update_for("loaded", user_message_chunk("buffered message")));
+    ui.acp_event(session_update_for(
         "loaded",
         acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(acp::TextContent::new(
             "buffered agent",
         )))),
     ));
 
-    let mut terminal = make_terminal();
-    let mut renderer = Renderer::new(&UiSettings::default());
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(!viewport.contains("buffered message"), "buffered updates should not render yet:\n{viewport}");
     assert!(!viewport.contains("buffered agent"), "buffered updates should not render yet:\n{viewport}");
 
-    app.on_acp_event(session_loaded("loaded", vec![select_option("model", "sonnet")]));
+    ui.acp_event(session_loaded("loaded", vec![select_option("model", "sonnet")]));
 
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("buffered message"), "buffered updates should be replayed:\n{viewport}");
     assert!(viewport.contains("buffered agent"), "buffered updates should be replayed:\n{viewport}");
 }
 
 #[test]
 fn updates_from_the_abandoned_session_do_not_reach_the_loaded_one() {
-    let (mut app, mut command_rx) = make_app();
+    let mut ui = TestUi::new();
 
-    type_text(&mut app, "/resume");
-    app.on_key(key(KeyCode::Tab));
-    let _ = command_rx.try_recv().unwrap();
+    ui.type_text("/resume");
+    ui.key(key(KeyCode::Tab));
+    let _ = ui.command_rx().try_recv().unwrap();
 
-    app.on_acp_event(sessions_listed(vec![session_info("loaded", "/tmp/loaded", "Loaded", "2025-01-01T00:00:00Z")]));
-    app.on_key(key(KeyCode::Enter));
-    let _ = command_rx.try_recv().unwrap();
-    app.on_acp_event(session_loaded("loaded", Vec::new()));
+    ui.acp_event(sessions_listed(vec![session_info("loaded", "/tmp/loaded", "Loaded", "2025-01-01T00:00:00Z")]));
+    ui.key(key(KeyCode::Enter));
+    let _ = ui.command_rx().try_recv().unwrap();
+    ui.acp_event(session_loaded("loaded", Vec::new()));
 
-    app.on_acp_event(session_update_for("test-session", user_message_chunk("late message from the old session")));
+    ui.acp_event(session_update_for("test-session", user_message_chunk("late message from the old session")));
 
-    let mut terminal = make_terminal();
-    let mut renderer = Renderer::new(&UiSettings::default());
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(
         !viewport.contains("late message"),
         "an update for the session that was left behind must not land in the new one:\n{viewport}"
@@ -419,57 +407,50 @@ fn session_list_error_shows_in_transcript() {
 
 #[test]
 fn builtin_clear_appears_in_command_picker() {
-    let (mut app, _command_rx) = make_app();
+    let mut ui = TestUi::new();
 
-    app.on_key(key(KeyCode::Char('/')));
-    assert!(app.composer().has_completion());
+    ui.key(key(KeyCode::Char('/')));
+    assert!(ui.app().composer().has_completion());
 
-    let mut terminal = make_terminal();
-    let mut renderer = Renderer::new(&UiSettings::default());
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("/clear"), "built-in /clear should be in command picker:\n{viewport}");
     assert!(viewport.contains("/resume"), "built-in /resume should be in command picker:\n{viewport}");
 }
 
 #[test]
 fn narrow_terminal_renders_session_picker_without_preview_pane() {
-    let (mut app, mut command_rx) = make_app_with_session_preview();
+    let mut ui = TestUiBuilder::new().session_preview().dimensions(60, 15).build();
 
-    type_text(&mut app, "/resume");
-    app.on_key(key(KeyCode::Tab));
-    let _ = command_rx.try_recv().unwrap();
+    ui.type_text("/resume");
+    ui.key(key(KeyCode::Tab));
+    let _ = ui.command_rx().try_recv().unwrap();
 
-    app.on_acp_event(sessions_listed(vec![session_info("sess-1", "/tmp/one", "Session One", "2025-01-01T00:00:00Z")]));
+    ui.acp_event(sessions_listed(vec![session_info("sess-1", "/tmp/one", "Session One", "2025-01-01T00:00:00Z")]));
 
-    let mut terminal = make_terminal_with_width(60);
-    let mut renderer = Renderer::new(&UiSettings::default());
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("Session One"), "narrow picker should show session list:\n{viewport}");
     assert!(!viewport.contains("Session preview"), "narrow picker should hide preview pane:\n{viewport}");
 }
 
 #[test]
 fn composed_chars_do_not_filter_the_session_picker() {
-    let (mut app, mut command_rx) = make_app();
+    let mut ui = TestUi::with_dimensions(60, 15);
 
-    type_text(&mut app, "/resume");
-    app.on_key(key(KeyCode::Tab));
-    let _ = command_rx.try_recv().unwrap();
-    app.on_acp_event(sessions_listed(vec![
+    ui.type_text("/resume");
+    ui.key(key(KeyCode::Tab));
+    let _ = ui.command_rx().try_recv().unwrap();
+    ui.acp_event(sessions_listed(vec![
         session_info("sess-1", "/tmp/one", "Session One", "2025-01-01T00:00:00Z"),
         session_info("sess-2", "/tmp/two", "Session Two", "2025-01-02T00:00:00Z"),
     ]));
 
-    let mut terminal = make_terminal_with_width(60);
-    let mut renderer = Renderer::new(&UiSettings::default());
-
     // Composed characters must not reach the picker's filter query.
-    app.on_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
-    app.on_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::ALT));
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+    ui.key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::ALT));
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(!viewport.contains("'o'"), "composed chars must not filter the picker:\n{viewport}");
     assert!(
         viewport.contains("Session One") && viewport.contains("Session Two"),
@@ -477,9 +458,9 @@ fn composed_chars_do_not_filter_the_session_picker() {
     );
 
     // The plain character still filters.
-    app.on_key(key(KeyCode::Char('o')));
-    renderer.draw(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.key(key(KeyCode::Char('o')));
+    ui.draw();
+    let viewport = ui.viewport_text();
     assert!(viewport.contains("'o'"), "plain char should set the filter query:\n{viewport}");
 }
 

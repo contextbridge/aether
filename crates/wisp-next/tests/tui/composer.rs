@@ -159,12 +159,11 @@ fn cursor_preserved_after_resize_reflow() {
 
 #[test]
 fn tiny_terminal_does_not_overwrite_status_line() {
-    let (mut app, _command_rx) = make_app();
-    let mut terminal = make_terminal();
-    type_text(&mut app, "hello");
+    let mut ui = TestUi::new();
+    ui.type_text("hello");
 
-    sync_terminal(&mut terminal, &mut app).unwrap();
-    let viewport = buffer_text(&viewport_buffer(&mut terminal));
+    ui.draw();
+    let viewport = ui.viewport_text();
 
     assert!(viewport.contains("aether"), "status line (agent name) still visible");
     assert!(viewport.contains("> hello"), "composer still visible");
