@@ -21,13 +21,14 @@ use crate::tool_calls::{SubAgentState, ToolCallLog, ToolStatus};
 use crate::transcript::{SegmentContent, Transcript};
 use crate::workspace_picker::WorkspacePicker;
 use crate::workspace_status::WorkspaceStatus;
-use acp_utils::client::AcpPromptHandle;
+use acp_utils::client::{AcpEvent, AcpPromptHandle};
 use acp_utils::notifications::{AetherCapabilities, McpServerStatusEntry};
 use agent_client_protocol::schema::{self as acp, SessionId};
 use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::Instant;
+use tokio::sync::mpsc;
 
 mod acp_reducer;
 mod config;
@@ -313,6 +314,42 @@ impl WorkspaceMoveState {
 }
 
 impl App {
+    /// Build the UI from a freshly connected ACP session.
+    ///
+    /// Returns the pieces only the process outside the UI needs: the settings
+    /// (to seed the renderer) and the event channel feeding the event loop.
+    /// Crate-internal entry-point wiring, not part of the public or test API.
+    pub(crate) fn from_session(
+        session: crate::session::Session,
+    ) -> (Self, UiSettings, mpsc::UnboundedReceiver<AcpEvent>) {
+        let crate::session::Session {
+            session_id,
+            agent_name,
+            settings,
+            prompt_capabilities,
+            session_capabilities,
+            config_options,
+            auth_methods,
+            event_rx,
+            prompt_handle,
+            working_dir,
+            workspace_status,
+        } = session;
+        let app = Self::new(AppConfig {
+            settings: settings.clone(),
+            session_id,
+            agent_name,
+            workspace_status,
+            prompt_capabilities,
+            session_capabilities,
+            config_options,
+            auth_methods,
+            prompt_handle,
+            working_dir,
+        });
+        (app, settings, event_rx)
+    }
+
     pub fn new(config: AppConfig) -> Self {
         let content_padding = resolve_content_padding(&config.settings);
         let status_line = resolve_status_line_settings(&config.settings);

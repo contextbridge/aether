@@ -47,7 +47,7 @@ pub(crate) mod workspace_status;
 pub(crate) mod wrap;
 
 use acp_utils::client::AcpEvent;
-use app::{App, AppConfig, RuntimeEffect};
+use app::{App, RuntimeEffect};
 use crossterm::event::{Event, EventStream};
 use crossterm::terminal::{Clear, ClearType};
 use crossterm::{execute, terminal::size};
@@ -77,32 +77,8 @@ pub async fn run_tui(agent_command: &str, settings: UiSettings) -> Result<(), Ap
 
 /// Run the TUI from an already-initialized ACP session.
 pub async fn run_with_session(session: Session) -> Result<(), AppError> {
-    let Session {
-        session_id,
-        agent_name,
-        prompt_capabilities,
-        session_capabilities,
-        config_options,
-        auth_methods,
-        settings,
-        event_rx,
-        prompt_handle,
-        working_dir,
-        workspace_status,
-    } = session;
+    let (app, settings, event_rx) = App::from_session(session);
     let renderer = Renderer::new(&settings);
-    let app = App::new(AppConfig {
-        session_id,
-        agent_name,
-        workspace_status,
-        prompt_capabilities,
-        session_capabilities,
-        config_options,
-        auth_methods,
-        prompt_handle,
-        working_dir,
-        settings,
-    });
     run_app(app, renderer, event_rx).await
 }
 
