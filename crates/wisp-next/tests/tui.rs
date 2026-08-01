@@ -16,6 +16,8 @@ mod conversation;
 mod filterable_list;
 #[path = "tui/foundation.rs"]
 mod foundation;
+#[path = "tui/frame.rs"]
+mod frame;
 #[path = "tui/git_diff.rs"]
 mod git_diff;
 #[path = "tui/plan_review.rs"]

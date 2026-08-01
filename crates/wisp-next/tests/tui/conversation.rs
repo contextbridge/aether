@@ -156,14 +156,13 @@ fn context_clear_discards_conversation_retained_in_the_live_viewport() {
 #[test]
 fn fitting_user_message_remains_in_the_live_viewport() {
     let (mut app, _command_rx) = make_app();
-    let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut ui = TestUi::new(make_terminal());
 
     submit_prompt(&mut app, "hello viewport");
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    ui.draw(&mut app);
 
-    assert!(buffer_text(&viewport_buffer(&mut terminal)).contains("hello viewport"));
-    assert!(!buffer_text(&history_buffer(&mut terminal)).contains("hello viewport"));
+    ui.assert_viewport_contains("hello viewport");
+    ui.assert_history_not_contains("hello viewport");
 }
 
 #[test]
@@ -191,24 +190,23 @@ fn completed_stream_lines_remain_live_until_they_overflow() {
 #[test]
 fn completed_streaming_text_remains_adjacent_to_the_composer_once() {
     let (mut app, _command_rx) = make_app();
-    let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut ui = TestUi::new(make_terminal());
     submit_prompt(&mut app, "hi");
 
     app.on_acp_event(text_chunk("streamed "));
     app.on_acp_event(text_chunk("answer"));
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    ui.draw(&mut app);
 
-    assert!(buffer_text(&viewport_buffer(&mut terminal)).contains("streamed answer"));
-    assert!(!buffer_text(&history_buffer(&mut terminal)).contains("streamed answer"));
+    ui.assert_viewport_contains("streamed answer");
+    ui.assert_history_not_contains("streamed answer");
 
     app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    ui.draw(&mut app);
+    ui.draw(&mut app);
 
-    let conversation = buffer_text(&conversation_buffer(&mut terminal));
+    let conversation = ui.conversation_text();
     assert_eq!(conversation.matches("streamed answer").count(), 1);
-    assert!(buffer_text(&viewport_buffer(&mut terminal)).contains("streamed answer"));
+    ui.assert_viewport_contains("streamed answer");
 }
 
 #[test]
@@ -560,17 +558,16 @@ fn diff_not_rendered_after_failed_status() {
 #[test]
 fn short_streaming_message_renders_above_progress_indicator_and_composer() {
     let (mut app, _command_rx) = make_app();
-    let mut terminal = make_terminal();
+    let mut ui = TestUi::new(make_terminal());
     submit_prompt(&mut app, "prompt");
     app.on_acp_event(text_chunk("short answer"));
 
-    sync_terminal(&mut terminal, &mut app).unwrap();
+    ui.draw(&mut app);
 
-    let viewport = viewport_buffer(&mut terminal);
-    let prompt_row = row_containing(&viewport, "prompt").unwrap();
-    let message_row = row_containing(&viewport, "short answer").unwrap();
-    let spinner_row = row_containing(&viewport, "⠋").unwrap();
-    let composer_row = row_containing(&viewport, "> ").unwrap();
+    let prompt_row = ui.viewport_row("prompt").unwrap();
+    let message_row = ui.viewport_row("short answer").unwrap();
+    let spinner_row = ui.viewport_row("⠋").unwrap();
+    let composer_row = ui.viewport_row("> ").unwrap();
     assert!(prompt_row < message_row);
     assert!(
         message_row < spinner_row && spinner_row < composer_row,

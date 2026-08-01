@@ -204,25 +204,24 @@ fn composer_edits_unicode_without_splitting_graphemes() {
 #[test]
 fn markdown_styles_stream_live_and_finalize_once() {
     let (mut app, _command_rx) = make_app();
-    let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    let heading = renderer.theme().heading;
+    let mut ui = TestUi::new(make_terminal());
+    let heading = ui.theme().heading;
     submit_prompt(&mut app, "render markdown");
     app.on_acp_event(text_chunk("# Heading\n\n**boldword** and *italicword*"));
 
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    ui.draw(&mut app);
 
-    let conversation = conversation_buffer(&mut terminal);
+    let conversation = ui.conversation();
     assert!(buffer_text(&conversation).contains("# Heading"));
     assert!(has_cell(&conversation, "H", |cell| cell.fg == heading && cell.modifier.contains(Modifier::BOLD)));
     assert!(has_cell(&conversation, "b", |cell| cell.modifier.contains(Modifier::BOLD)));
     assert!(has_cell(&conversation, "i", |cell| cell.modifier.contains(Modifier::ITALIC)));
 
     app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    ui.draw(&mut app);
+    ui.draw(&mut app);
 
-    let conversation = buffer_text(&conversation_buffer(&mut terminal));
+    let conversation = ui.conversation_text();
     assert_eq!(conversation.matches("Heading").count(), 1);
     assert!(!conversation.contains("**boldword**"));
 }
@@ -631,84 +630,4 @@ fn history_waits_until_resized_viewport_has_scrollback_room() {
 
     assert!(app.pending_items().is_empty());
     assert!(buffer_text(terminal.backend().buffer()).contains("queued while small"));
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BackendEvent {
-    ShowCursor,
-    Scroll,
-}
-
-#[derive(Debug)]
-struct RecordingBackend {
-    inner: TestBackend,
-    events: Vec<BackendEvent>,
-}
-
-impl RecordingBackend {
-    fn new(width: u16, height: u16) -> Self {
-        Self { inner: TestBackend::new(width, height), events: Vec::new() }
-    }
-}
-
-impl Backend for RecordingBackend {
-    type Error = std::convert::Infallible;
-
-    fn draw<'a, I>(&mut self, content: I) -> Result<(), Self::Error>
-    where
-        I: Iterator<Item = (u16, u16, &'a Cell)>,
-    {
-        self.inner.draw(content)
-    }
-
-    fn append_lines(&mut self, lines: u16) -> Result<(), Self::Error> {
-        self.inner.append_lines(lines)
-    }
-
-    fn hide_cursor(&mut self) -> Result<(), Self::Error> {
-        self.inner.hide_cursor()
-    }
-
-    fn show_cursor(&mut self) -> Result<(), Self::Error> {
-        self.events.push(BackendEvent::ShowCursor);
-        self.inner.show_cursor()
-    }
-
-    fn get_cursor_position(&mut self) -> Result<Position, Self::Error> {
-        self.inner.get_cursor_position()
-    }
-
-    fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> Result<(), Self::Error> {
-        self.inner.set_cursor_position(position)
-    }
-
-    fn clear(&mut self) -> Result<(), Self::Error> {
-        self.inner.clear()
-    }
-
-    fn clear_region(&mut self, clear_type: ClearType) -> Result<(), Self::Error> {
-        self.inner.clear_region(clear_type)
-    }
-
-    fn size(&self) -> Result<Size, Self::Error> {
-        self.inner.size()
-    }
-
-    fn window_size(&mut self) -> Result<WindowSize, Self::Error> {
-        self.inner.window_size()
-    }
-
-    fn flush(&mut self) -> Result<(), Self::Error> {
-        self.inner.flush()
-    }
-
-    fn scroll_region_up(&mut self, region: std::ops::Range<u16>, lines: u16) -> Result<(), Self::Error> {
-        self.events.push(BackendEvent::Scroll);
-        self.inner.scroll_region_up(region, lines)
-    }
-
-    fn scroll_region_down(&mut self, region: std::ops::Range<u16>, lines: u16) -> Result<(), Self::Error> {
-        self.events.push(BackendEvent::Scroll);
-        self.inner.scroll_region_down(region, lines)
-    }
 }

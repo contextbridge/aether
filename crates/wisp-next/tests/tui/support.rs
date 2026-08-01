@@ -226,8 +226,127 @@ impl TestUi {
         Self { terminal, presenter: Presenter::new(&UiSettings::default()) }
     }
 
+    pub(crate) fn with_dimensions(width: u16, height: u16) -> Self {
+        Self::new(make_terminal_with_dimensions(width, height))
+    }
+
     pub(crate) fn draw(&mut self, app: &mut App) {
         sync_terminal_with_renderer(&mut self.terminal, app, &mut self.presenter).unwrap();
+    }
+
+    /// Resizes the backing terminal. The next [`Self::draw`] re-measures the
+    /// inline viewport the way `sync_terminal` does in the event loop.
+    pub(crate) fn resize(&mut self, width: u16, height: u16) {
+        self.terminal.backend_mut().resize(width, height);
+    }
+
+    /// The theme the presenter draws with.
+    pub(crate) fn theme(&self) -> &Theme {
+        self.presenter.theme()
+    }
+
+    /// What the inline viewport currently shows: the composer, status line,
+    /// and the live tail of the conversation.
+    pub(crate) fn viewport(&mut self) -> Buffer {
+        viewport_buffer(&mut self.terminal)
+    }
+
+    /// The terminal's own scrollback plus the rows the inline viewport leaves
+    /// above itself: the committed conversation that left the live tail.
+    pub(crate) fn history(&mut self) -> Buffer {
+        history_buffer(&mut self.terminal)
+    }
+
+    /// [`Self::history`] stacked on [`Self::viewport`]: everything the
+    /// conversation has shown, oldest at the top.
+    pub(crate) fn conversation(&mut self) -> Buffer {
+        conversation_buffer(&mut self.terminal)
+    }
+
+    pub(crate) fn viewport_text(&mut self) -> String {
+        buffer_text(&self.viewport())
+    }
+
+    pub(crate) fn history_text(&mut self) -> String {
+        buffer_text(&self.history())
+    }
+
+    pub(crate) fn conversation_text(&mut self) -> String {
+        buffer_text(&self.conversation())
+    }
+
+    /// Row (within the viewport buffer) of the first line containing `needle`.
+    pub(crate) fn viewport_row(&mut self, needle: &str) -> Option<u16> {
+        row_containing(&self.viewport(), needle)
+    }
+
+    pub(crate) fn assert_viewport_contains(&mut self, needle: &str) {
+        let viewport = self.viewport_text();
+        assert!(
+            viewport.contains(needle),
+            "viewport should contain {needle:?}:
+{viewport}"
+        );
+    }
+
+    pub(crate) fn assert_viewport_not_contains(&mut self, needle: &str) {
+        let viewport = self.viewport_text();
+        assert!(
+            !viewport.contains(needle),
+            "viewport should not contain {needle:?}:
+{viewport}"
+        );
+    }
+
+    pub(crate) fn assert_history_contains(&mut self, needle: &str) {
+        let history = self.history_text();
+        assert!(
+            history.contains(needle),
+            "history should contain {needle:?}:
+{history}"
+        );
+    }
+
+    pub(crate) fn assert_history_not_contains(&mut self, needle: &str) {
+        let history = self.history_text();
+        assert!(
+            !history.contains(needle),
+            "history should not contain {needle:?}:
+{history}"
+        );
+    }
+
+    pub(crate) fn assert_conversation_contains(&mut self, needle: &str) {
+        let conversation = self.conversation_text();
+        assert!(
+            conversation.contains(needle),
+            "conversation should contain {needle:?}:
+{conversation}"
+        );
+    }
+
+    pub(crate) fn assert_conversation_not_contains(&mut self, needle: &str) {
+        let conversation = self.conversation_text();
+        assert!(
+            !conversation.contains(needle),
+            "conversation should not contain {needle:?}:
+{conversation}"
+        );
+    }
+
+    /// Asserts the viewport's visible text matches `expected` row-by-row.
+    pub(crate) fn assert_viewport<S: AsRef<str>>(&mut self, expected: &[S]) {
+        assert_buffer_eq(&self.viewport(), expected);
+    }
+
+    /// Asserts the committed history's visible text matches `expected` row-by-row.
+    pub(crate) fn assert_history<S: AsRef<str>>(&mut self, expected: &[S]) {
+        assert_buffer_eq(&self.history(), expected);
+    }
+
+    /// Asserts the stitched conversation's visible text matches `expected` row-by-row.
+    pub(crate) fn assert_conversation<S: AsRef<str>>(&mut self, expected: &[S]) {
+        assert_buffer_eq(&self.conversation(), expected);
     }
 }
 
@@ -395,6 +514,29 @@ pub(crate) fn buffer_text(buffer: &Buffer) -> String {
     out
 }
 
+/// Asserts `buffer`'s visible text matches `expected` row-by-row after trimming
+/// trailing spaces, panicking on the first mismatched line with the full buffer
+/// dumped. Styles and cell identity are not compared; use [`has_cell`] for
+/// focused style checks.
+pub(crate) fn assert_buffer_eq<S: AsRef<str>>(buffer: &Buffer, expected: &[S]) {
+    let actual_lines: Vec<String> =
+        (buffer.area.top()..buffer.area.bottom()).map(|y| row_text(buffer, y).trim_end().to_string()).collect();
+    for index in 0..actual_lines.len().max(expected.len()) {
+        let actual_line = actual_lines.get(index).map_or("", String::as_str);
+        let expected_line = expected.get(index).map_or("", AsRef::as_ref).trim_end();
+        assert_eq!(
+            actual_line,
+            expected_line,
+            "line {index} mismatch:\n  expected: {expected_line:?}\n  actual:   {actual_line:?}\n\nfull buffer:\n{}",
+            actual_lines.join("\n")
+        );
+    }
+}
+
+fn row_text(buffer: &Buffer, y: u16) -> String {
+    (buffer.area.left()..buffer.area.right()).map(|x| buffer.cell((x, y)).map_or(" ", Cell::symbol)).collect()
+}
+
 pub(crate) fn has_cell(buffer: &Buffer, symbol: &str, predicate: impl Fn(&Cell) -> bool) -> bool {
     for y in buffer.area.top()..buffer.area.bottom() {
         for x in buffer.area.left()..buffer.area.right() {
@@ -506,4 +648,95 @@ pub(crate) fn workspace_move_failed(error: &str) -> AcpEvent {
 
 pub(crate) fn make_failable_app_with_workspace_move() -> (App, Arc<AtomicBool>, UnboundedReceiver<PromptCommand>) {
     AppBuilder::new().workspace_move().build_failable()
+}
+
+/// Records the backend calls a frame's history insertion and viewport draw
+/// resolve to, so tests can assert insert-before ordering without inspecting
+/// the diff ratatui computed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BackendEvent {
+    ShowCursor,
+    Scroll,
+}
+
+#[derive(Debug)]
+pub(crate) struct RecordingBackend {
+    inner: TestBackend,
+    pub(crate) events: Vec<BackendEvent>,
+}
+
+impl RecordingBackend {
+    pub(crate) fn new(width: u16, height: u16) -> Self {
+        Self { inner: TestBackend::new(width, height), events: Vec::new() }
+    }
+
+    pub(crate) fn resize(&mut self, width: u16, height: u16) {
+        self.inner.resize(width, height);
+    }
+
+    pub(crate) fn scrollback(&self) -> &Buffer {
+        self.inner.scrollback()
+    }
+}
+
+impl Backend for RecordingBackend {
+    type Error = std::convert::Infallible;
+
+    fn draw<'a, I>(&mut self, content: I) -> Result<(), Self::Error>
+    where
+        I: Iterator<Item = (u16, u16, &'a Cell)>,
+    {
+        self.inner.draw(content)
+    }
+
+    fn append_lines(&mut self, lines: u16) -> Result<(), Self::Error> {
+        self.inner.append_lines(lines)
+    }
+
+    fn hide_cursor(&mut self) -> Result<(), Self::Error> {
+        self.inner.hide_cursor()
+    }
+
+    fn show_cursor(&mut self) -> Result<(), Self::Error> {
+        self.events.push(BackendEvent::ShowCursor);
+        self.inner.show_cursor()
+    }
+
+    fn get_cursor_position(&mut self) -> Result<Position, Self::Error> {
+        self.inner.get_cursor_position()
+    }
+
+    fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> Result<(), Self::Error> {
+        self.inner.set_cursor_position(position)
+    }
+
+    fn clear(&mut self) -> Result<(), Self::Error> {
+        self.inner.clear()
+    }
+
+    fn clear_region(&mut self, clear_type: ClearType) -> Result<(), Self::Error> {
+        self.inner.clear_region(clear_type)
+    }
+
+    fn size(&self) -> Result<Size, Self::Error> {
+        self.inner.size()
+    }
+
+    fn window_size(&mut self) -> Result<WindowSize, Self::Error> {
+        self.inner.window_size()
+    }
+
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        self.inner.flush()
+    }
+
+    fn scroll_region_up(&mut self, region: std::ops::Range<u16>, lines: u16) -> Result<(), Self::Error> {
+        self.events.push(BackendEvent::Scroll);
+        self.inner.scroll_region_up(region, lines)
+    }
+
+    fn scroll_region_down(&mut self, region: std::ops::Range<u16>, lines: u16) -> Result<(), Self::Error> {
+        self.events.push(BackendEvent::Scroll);
+        self.inner.scroll_region_down(region, lines)
+    }
 }
