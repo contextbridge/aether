@@ -77,8 +77,8 @@ fn prompt_search_shows_loading_state_after_query() {
     );
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("history search: h"), "viewport:\n{viewport}");
     assert!(viewport.contains("searching"), "viewport:\n{viewport}");
@@ -90,8 +90,8 @@ fn prompt_search_empty_query_renders_instruction() {
     app.on_key(ctrl('r'));
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("history search:"), "viewport:\n{viewport}");
     assert!(viewport.contains("type to search prompt history"), "viewport:\n{viewport}");
@@ -110,8 +110,8 @@ fn prompt_search_shows_results_after_response() {
     )));
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("hello world"), "viewport:\n{viewport}");
 }
@@ -126,8 +126,8 @@ fn prompt_search_no_results_shows_no_matches() {
     app.on_acp_event(AcpEvent::PromptSearchResults(prompt_search_response_gen("zzz", vec![], 3)));
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("no matching prompts"), "viewport:\n{viewport}");
 }
@@ -146,8 +146,8 @@ fn prompt_search_shows_error_on_failure() {
     });
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("error: connection refused"), "viewport:\n{viewport}");
 }
@@ -241,18 +241,18 @@ fn prompt_search_up_and_down_change_selection() {
     )));
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("hello"), "viewport:\n{viewport}");
 
     app.on_key(key(KeyCode::Down));
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("hey"), "viewport:\n{viewport}");
 
     app.on_key(key(KeyCode::Up));
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("hello"), "viewport:\n{viewport}");
 }
@@ -278,8 +278,8 @@ fn prompt_search_stale_response_is_ignored() {
     )));
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("hello"), "should show current result:\n{viewport}");
     assert!(!viewport.contains("STALE"), "should not show stale result:\n{viewport}");
@@ -298,8 +298,8 @@ fn prompt_search_prefills_selected_result_with_cursor_at_match() {
     )));
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("the quick brown fox"), "viewport:\n{viewport}");
 
@@ -340,8 +340,8 @@ fn prompt_search_backspace_to_empty_restores_draft_but_keeps_picker_open() {
     assert_eq!(app.composer().text(), "draft");
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("type to search prompt history"), "viewport:\n{viewport}");
 }
@@ -396,8 +396,8 @@ fn prompt_search_unicode_query_is_accepted() {
     );
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("history search: ñ"), "viewport:\n{viewport}");
 }
@@ -421,8 +421,8 @@ fn prompt_search_rows_truncate_prompt_and_show_cwd_basename() {
     )));
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("…"), "should have ellipsis in truncated prompt:\n{viewport}");
     assert!(viewport.contains("repo-name"), "should show cwd basename:\n{viewport}");
@@ -520,8 +520,8 @@ fn prompt_search_identical_repeated_query_uses_generation_not_just_string() {
     )));
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(!viewport.contains("STALE_FIRST"), "stale response from first 'xy' must be ignored:\n{viewport}");
     assert!(viewport.contains("searching"), "second 'xy' should still be loading:\n{viewport}");
@@ -534,7 +534,7 @@ fn prompt_search_identical_repeated_query_uses_generation_not_just_string() {
         5,
     )));
 
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("FRESH_SECOND"), "fresh response from second 'xy' must be shown:\n{viewport}");
 }
@@ -549,8 +549,8 @@ fn prompt_search_send_failure_is_visible_in_picker() {
     assert!(command_rx.try_recv().is_err(), "send should have failed");
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("search failed"), "send failure must be visible in picker:\n{viewport}");
 
@@ -572,8 +572,8 @@ fn prompt_search_stale_failure_is_accepted_for_current_query() {
     });
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("server error"), "failure must be visible:\n{viewport}");
 
@@ -603,8 +603,8 @@ fn prompt_search_stale_failure_must_not_overwrite_newer_success() {
     });
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("fresh result for xy"), "newer success results must survive stale failure:\n{viewport}");
     assert!(!viewport.contains("stale error"), "stale failure must be ignored:\n{viewport}");

@@ -3,7 +3,7 @@ use super::{App, ExitState, Layer};
 use crate::composer::ComposerOutcome;
 use crate::dropped_files::parse_dropped_file_paths;
 use crate::picker::CommandEntry;
-use crate::render_context::RenderContext;
+use crate::renderer::DrawContext;
 use crate::screens::git_diff::GitDiffScreen;
 use crate::surface::{MouseAction, Surface, UiEvent};
 use crate::tasks::TaskResult;
@@ -199,7 +199,7 @@ impl App {
 
     /// Draws the open layer over the conversation, returning where it wants the
     /// terminal cursor.
-    pub fn render_layer(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
+    pub fn render_layer(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
         self.layer.as_mut()?.surface().render(area, buf, cx)
     }
 

@@ -94,7 +94,7 @@ pub enum RuntimeEffect {
     /// Run this off the UI thread. Its result comes back through
     /// [`App::on_task_result`].
     Spawn(Task),
-    /// Hand the presenter a newly chosen theme.
+    /// Hand the renderer a newly chosen theme.
     SetTheme(crate::theme::Theme),
     RingBell,
     /// Clear the terminal's own scrollback of conversation content that scrolled
@@ -442,7 +442,7 @@ impl App {
     }
 
     /// Remove transcript segments that can never mutate again and resolve them
-    /// for one-time handoff to the terminal presenter.
+    /// for one-time handoff to the renderer, which moves them into the terminal's own history.
     pub fn drain_finalized(&mut self) -> Vec<HistoryItem<'static>> {
         self.conversation.drain_finalized(self.turn.prompt_in_flight)
     }

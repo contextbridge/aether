@@ -1,6 +1,6 @@
 use super::{KeyHint, LiveSettingsData, SettingsPane, summarize};
 use crate::list_view::ListView;
-use crate::render_context::RenderContext;
+use crate::renderer::DrawContext;
 use crate::selection::{Direction, SelectionState};
 use crate::surface::{Action, Surface, one};
 use acp_utils::notifications::{McpServerStatus, McpServerStatusEntry};
@@ -79,7 +79,7 @@ impl Surface for ServerStatusPane {
         Vec::new()
     }
 
-    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
+    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
         let theme = cx.theme;
         let rows = self.rows.iter().map(|row| match row {
             ServerStatusRow::Header(label) => Line::styled(label.clone(), Style::new().fg(theme.heading)),

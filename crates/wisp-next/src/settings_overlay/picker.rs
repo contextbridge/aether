@@ -1,6 +1,6 @@
 use super::{KeyHint, SettingsChange, SettingsMenuEntry, SettingsMenuValue, SettingsPane, message_for_change};
 use crate::filterable_list::FilterableList;
-use crate::render_context::RenderContext;
+use crate::renderer::DrawContext;
 use crate::surface::{Action, Surface, SurfaceList};
 use crate::theme::Theme;
 use crate::wrap::truncate_to_width;
@@ -76,7 +76,7 @@ impl Surface for SettingsPicker {
         true
     }
 
-    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
+    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
         self.render_pane(area, buf, cx.theme);
         None
     }

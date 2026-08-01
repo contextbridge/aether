@@ -8,8 +8,8 @@ fn workspace_move_command_hidden_without_capability() {
     assert!(app.composer().has_completion());
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("/clear"), "{viewport}");
     assert!(!viewport.contains("/move"), "{viewport}");
@@ -23,8 +23,8 @@ fn workspace_move_command_visible_with_capability() {
     assert!(app.composer().has_completion());
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("/move"), "{viewport}");
 }
@@ -41,8 +41,8 @@ fn workspace_move_command_rejected_when_prompt_in_flight() {
 
     assert_eq!(app.workspace_move_state(), WorkspaceMoveState::Idle);
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.lines().any(|l| l.contains("Cannot move") && l.contains("workspace")), "{viewport}");
     assert!(viewport.lines().any(|l| l.contains("prompt is running")), "{viewport}");
@@ -64,8 +64,8 @@ fn workspace_move_command_rejected_when_already_listing() {
     assert_eq!(app.workspace_move_state(), WorkspaceMoveState::Listing);
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     let collapsed = viewport.replace('\n', " ");
     let words: Vec<&str> = collapsed.split_whitespace().collect();
@@ -83,8 +83,8 @@ fn workspace_list_synchronous_failure_resets_state() {
 
     assert_eq!(app.workspace_move_state(), WorkspaceMoveState::Idle);
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     let collapsed = viewport.replace('\n', " ");
     let words: Vec<&str> = collapsed.split_whitespace().collect();
@@ -105,8 +105,8 @@ fn workspace_list_failed_event_resets_state() {
     assert_eq!(app.workspace_move_state(), WorkspaceMoveState::Idle);
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     let collapsed = viewport.replace('\n', " ");
     let words: Vec<&str> = collapsed.split_whitespace().collect();
@@ -132,8 +132,8 @@ fn workspace_picker_opens_with_existing_workspaces() {
     assert!(app.has_modal());
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("/home/user/code/other"), "{viewport}");
     assert!(viewport.contains("/tmp/sandbox"), "{viewport}");
@@ -165,8 +165,8 @@ fn workspace_picker_shows_empty_state_when_no_workspaces() {
     assert!(app.has_modal());
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(!viewport.contains("No other workspaces available"), "{viewport}");
 }
@@ -236,13 +236,13 @@ fn workspace_picker_enter_selects_create_new_and_shows_naming_mode() {
     app.on_acp_event(workspaces_listed(vec![workspace_entry("/home/user/code/current", true)]));
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("Create new workspace"), "{viewport}");
 
     app.on_key(key(KeyCode::Enter));
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport2 = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport2.contains("New workspace"), "{viewport2}");
 }
@@ -259,14 +259,14 @@ fn workspace_naming_new_esc_returns_to_list_mode() {
 
     app.on_key(key(KeyCode::Enter));
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("New workspace"), "{viewport}");
 
     app.on_key(key(KeyCode::Esc));
     assert!(app.has_modal());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport2 = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport2.contains("Create new workspace"), "{viewport2}");
 }
@@ -321,15 +321,15 @@ fn workspace_picker_filtering_hides_non_matching() {
     ]));
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("project-a"), "{viewport}");
     assert!(viewport.contains("/tmp/test"), "{viewport}");
 
     // Use a query that only matches one entry
     app.on_key(key(KeyCode::Char('j')));
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport2 = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport2.contains("project-a"), "{viewport2}");
     assert!(!viewport2.contains("/tmp/test"), "{viewport2}");
@@ -396,8 +396,8 @@ fn workspace_move_success_buffers_and_replays_session_updates() {
     assert_eq!(app.workspace_move_state(), WorkspaceMoveState::Idle);
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.lines().any(|l| l.contains("buffered-message")), "{viewport}");
     let collapsed = viewport.replace('\n', " ");
@@ -427,8 +427,8 @@ fn workspace_move_load_session_failure_recovers() {
     assert_eq!(app.workspace_move_state(), WorkspaceMoveState::Idle);
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.lines().any(|l| l.contains("Failed to reload session")), "{viewport}");
 }
@@ -462,8 +462,8 @@ fn workspace_move_server_side_load_failure_recovers() {
 
     app.on_acp_event(session_update_for("test-session", user_message_chunk("after the failure")));
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(
         viewport.lines().any(|l| l.contains("after the failure")),
@@ -492,8 +492,8 @@ fn workspace_move_failed_event_resets_state() {
     assert_eq!(app.workspace_move_state(), WorkspaceMoveState::Idle);
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.lines().any(|l| l.contains("Workspace move failed")), "{viewport}");
     assert!(viewport.lines().any(|l| l.contains("permission denied")), "{viewport}");
@@ -517,8 +517,8 @@ fn workspace_move_synchronous_error_resets_state() {
     assert_eq!(app.workspace_move_state(), WorkspaceMoveState::Idle);
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     let collapsed = viewport.replace('\n', " ");
     let words: Vec<&str> = collapsed.split_whitespace().collect();
@@ -540,8 +540,8 @@ fn workspace_picker_renders_on_narrow_terminal() {
     ]));
 
     let mut terminal = make_terminal_with_width(40);
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("project-a"), "{viewport}");
 }

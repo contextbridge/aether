@@ -1,6 +1,6 @@
 use crate::edit_buffer::{EditBuffer, apply_edit_key};
 use crate::filterable_list::FilterableList;
-use crate::render_context::RenderContext;
+use crate::renderer::DrawContext;
 use crate::surface::{Action, Surface, SurfaceList};
 use crate::widgets::TextInput;
 use crate::workspace_status::home_relative_path;
@@ -148,7 +148,7 @@ impl Surface for WorkspacePicker {
         matches!(self.mode, Mode::List).then(|| &mut self.rows as &mut dyn SurfaceList)
     }
 
-    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
+    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
         let theme = cx.theme;
         match &self.mode {
             Mode::List => self.render_list(area, buf, theme),

@@ -18,10 +18,10 @@ fn clear_is_builtin_and_issues_new_session_command() {
 fn clear_creates_new_session_and_resets_state() {
     let (mut app, mut command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
 
     submit_prompt(&mut app, "old message");
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     assert!(buffer_text(&viewport_buffer(&mut terminal)).contains("old message"));
 
     type_text(&mut app, "/clear");
@@ -35,7 +35,7 @@ fn clear_creates_new_session_and_resets_state() {
     bumped.bump();
     assert_eq!(app.transcript_generation(), bumped);
     assert_eq!(app.pending_items().len(), 1);
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(!viewport.contains("old message"), "old message should be gone after clear:\n{viewport}");
 }
@@ -122,8 +122,8 @@ fn empty_session_list_shows_no_sessions() {
 
     assert!(has_session_picker(&app));
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("No previous sessions"), "expected empty state:\n{viewport}");
 }
@@ -268,8 +268,8 @@ fn stale_preview_does_not_replace_current() {
     app.on_acp_event(AcpEvent::SessionPreviewLoaded(session_preview_response("sess-1")));
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(!viewport.contains("hello"), "stale preview should not be shown:\n{viewport}");
 }
@@ -291,8 +291,8 @@ fn session_preview_failure_shows_error() {
     });
 
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("server unreachable"), "expected error in preview:\n{viewport}");
 }
@@ -318,15 +318,15 @@ fn session_loading_buffer_queues_updates_then_replays() {
     ));
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(!viewport.contains("buffered message"), "buffered updates should not render yet:\n{viewport}");
     assert!(!viewport.contains("buffered agent"), "buffered updates should not render yet:\n{viewport}");
 
     app.on_acp_event(session_loaded("loaded", vec![select_option("model", "sonnet")]));
 
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("buffered message"), "buffered updates should be replayed:\n{viewport}");
     assert!(viewport.contains("buffered agent"), "buffered updates should be replayed:\n{viewport}");
@@ -348,8 +348,8 @@ fn updates_from_the_abandoned_session_do_not_reach_the_loaded_one() {
     app.on_acp_event(session_update_for("test-session", user_message_chunk("late message from the old session")));
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(
         !viewport.contains("late message"),
@@ -425,8 +425,8 @@ fn builtin_clear_appears_in_command_picker() {
     assert!(app.composer().has_completion());
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("/clear"), "built-in /clear should be in command picker:\n{viewport}");
     assert!(viewport.contains("/resume"), "built-in /resume should be in command picker:\n{viewport}");
@@ -443,8 +443,8 @@ fn narrow_terminal_renders_session_picker_without_preview_pane() {
     app.on_acp_event(sessions_listed(vec![session_info("sess-1", "/tmp/one", "Session One", "2025-01-01T00:00:00Z")]));
 
     let mut terminal = make_terminal_with_width(60);
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("Session One"), "narrow picker should show session list:\n{viewport}");
     assert!(!viewport.contains("Session preview"), "narrow picker should hide preview pane:\n{viewport}");
@@ -463,12 +463,12 @@ fn composed_chars_do_not_filter_the_session_picker() {
     ]));
 
     let mut terminal = make_terminal_with_width(60);
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
 
     // Composed characters must not reach the picker's filter query.
     app.on_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
     app.on_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::ALT));
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(!viewport.contains("'o'"), "composed chars must not filter the picker:\n{viewport}");
     assert!(
@@ -478,7 +478,7 @@ fn composed_chars_do_not_filter_the_session_picker() {
 
     // The plain character still filters.
     app.on_key(key(KeyCode::Char('o')));
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("'o'"), "plain char should set the filter query:\n{viewport}");
 }

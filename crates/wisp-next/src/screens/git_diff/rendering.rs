@@ -9,7 +9,7 @@ use crate::annotation::{AnnotatedRows, Draft, Row, draft_key, wrapped_with_curso
 use crate::diff::{DiffTone, SPLIT_VIEW_MIN_WIDTH, diff_line, join_split, split_side, split_widths};
 use crate::git_diff::{FileDiff, FileStatus, PatchAnchor, PatchLine, PatchLineKind, StageState};
 use crate::list_view::ListView;
-use crate::render_context::RenderContext;
+use crate::renderer::DrawContext;
 use crate::screens::review::{Pane, body_and_footer, focused_title};
 use crate::surface::{Action, MouseAction, Surface};
 use crate::syntax::SyntaxHighlighter;
@@ -31,12 +31,7 @@ const DRAWER_MIN_COLUMNS: u16 = 16;
 type PatchRowSet = AnnotatedRows<PatchCursor>;
 
 impl GitDiffScreen {
-    pub(super) fn render_screen(
-        &mut self,
-        area: Rect,
-        buf: &mut Buffer,
-        cx: &mut RenderContext<'_>,
-    ) -> Option<Position> {
+    pub(super) fn render_screen(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
         let theme = cx.theme;
         Clear.render(area, buf);
         let block = Block::bordered()
@@ -65,7 +60,7 @@ impl GitDiffScreen {
         self.render_footer(footer, buf, theme).or(cursor)
     }
 
-    fn render_document(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
+    fn render_document(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
         if area.width < DRAWER_MIN_WIDTH {
             // No drawer at this width, so no rows for a click to land on.
             self.drawer_selection.set_rows_area(Rect::ZERO);
@@ -136,7 +131,7 @@ impl GitDiffScreen {
         width
     }
 
-    fn render_patch(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
+    fn render_patch(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
         let theme = cx.theme;
         let file = self.selected_file().cloned()?;
         let [header_area, content_area] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
@@ -420,7 +415,7 @@ impl Surface for GitDiffScreen {
         Vec::new()
     }
 
-    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
+    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
         self.render_screen(area, buf, cx)
     }
 }

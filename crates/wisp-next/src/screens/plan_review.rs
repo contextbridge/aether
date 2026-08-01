@@ -16,7 +16,7 @@ use crate::list_view::ListView;
 use crate::plan_review::{
     PlanDocument, ReviewComment, SourceMarkdownLine, compile_feedback, render_markdown_source_lines,
 };
-use crate::render_context::RenderContext;
+use crate::renderer::DrawContext;
 use crate::screens::review::{DocumentPane, MOUSE_SCROLL_LINES, Pane, body_and_footer, focused_border, focused_title};
 use crate::selection::{Direction, SelectionState, step_clamped};
 use crate::surface::{Action, MouseAction, Surface, is_composed_char};
@@ -399,7 +399,7 @@ impl Surface for PlanReviewScreen {
         Vec::new()
     }
 
-    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
+    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
         self.ensure_source_presentation(cx.theme, cx.highlighter, cx.theme_generation);
         self.render_screen(area, buf, cx.theme);
         None

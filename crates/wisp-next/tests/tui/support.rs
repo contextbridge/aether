@@ -33,9 +33,7 @@ pub(crate) use wisp_next::test_support::composer::Composer;
 pub(crate) use wisp_next::test_support::generation::Generation;
 pub(crate) use wisp_next::test_support::picker::CommandEntry;
 pub(crate) use wisp_next::test_support::picker::index_files;
-pub(crate) use wisp_next::test_support::presentation::{Presenter, Segment};
-pub(crate) use wisp_next::test_support::render::sync_terminal as sync_terminal_with_renderer;
-pub(crate) use wisp_next::test_support::render_context::RenderContext;
+pub(crate) use wisp_next::test_support::renderer::{DrawContext, Renderer};
 pub(crate) use wisp_next::test_support::screens::git_diff::GitDiffEvent;
 pub(crate) use wisp_next::test_support::settings::{StatusLineSegmentConfig, UiSettings};
 pub(crate) use wisp_next::test_support::settings_overlay::SettingsOverlay;
@@ -201,29 +199,29 @@ pub(crate) fn make_terminal_with_dimensions(width: u16, height: u16) -> Terminal
     .unwrap()
 }
 
-/// Draws one frame with a throwaway presenter.
+/// Draws one frame with a throwaway renderer.
 ///
-/// Only correct for a test that draws once: the presenter owns the committed
+/// Only correct for a test that draws once: the renderer owns the committed
 /// scrollback, so a fresh one per frame silently drops whatever earlier frames
 /// committed. Tests that draw repeatedly use [`TestUi`].
 pub(crate) fn sync_terminal(
     terminal: &mut Terminal<TestBackend>,
     app: &mut App,
 ) -> Result<(), std::convert::Infallible> {
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(terminal, app, &mut renderer)
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(terminal, app)
 }
 
-/// A terminal and the presenter that owns its scrollback, for tests that draw
+/// A terminal and the renderer that owns its scrollback, for tests that draw
 /// more than one frame.
 pub(crate) struct TestUi {
     pub(crate) terminal: Terminal<TestBackend>,
-    presenter: Presenter,
+    renderer: Renderer,
 }
 
 impl TestUi {
     pub(crate) fn new(terminal: Terminal<TestBackend>) -> Self {
-        Self { terminal, presenter: Presenter::new(&UiSettings::default()) }
+        Self { terminal, renderer: Renderer::new(&UiSettings::default()) }
     }
 
     pub(crate) fn with_dimensions(width: u16, height: u16) -> Self {
@@ -231,18 +229,18 @@ impl TestUi {
     }
 
     pub(crate) fn draw(&mut self, app: &mut App) {
-        sync_terminal_with_renderer(&mut self.terminal, app, &mut self.presenter).unwrap();
+        self.renderer.draw(&mut self.terminal, app).unwrap();
     }
 
     /// Resizes the backing terminal. The next [`Self::draw`] re-measures the
-    /// inline viewport the way `sync_terminal` does in the event loop.
+    /// inline viewport the way `Renderer::draw` does in the event loop.
     pub(crate) fn resize(&mut self, width: u16, height: u16) {
         self.terminal.backend_mut().resize(width, height);
     }
 
-    /// The theme the presenter draws with.
+    /// The theme the renderer draws with.
     pub(crate) fn theme(&self) -> &Theme {
-        self.presenter.theme()
+        self.renderer.theme()
     }
 
     /// What the inline viewport currently shows: the composer, status line,
@@ -533,7 +531,7 @@ pub(crate) fn assert_buffer_eq<S: AsRef<str>>(buffer: &Buffer, expected: &[S]) {
     }
 }
 
-fn row_text(buffer: &Buffer, y: u16) -> String {
+pub(crate) fn row_text(buffer: &Buffer, y: u16) -> String {
     (buffer.area.left()..buffer.area.right()).map(|x| buffer.cell((x, y)).map_or(" ", Cell::symbol)).collect()
 }
 

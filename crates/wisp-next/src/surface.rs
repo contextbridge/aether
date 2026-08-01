@@ -1,4 +1,4 @@
-use crate::render_context::RenderContext;
+use crate::renderer::DrawContext;
 use crate::selection::Direction;
 use crate::tasks::{Task, TaskResult};
 use acp_utils::notifications::WorkspaceMoveTarget;
@@ -34,7 +34,7 @@ pub(crate) fn is_press(key: KeyEvent) -> bool {
 /// [`Layer`](crate::app::Layer) instead.
 pub trait Surface {
     /// Draws the surface, returning where the terminal cursor should sit.
-    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position>;
+    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position>;
 
     /// Acts on whatever is focused. The default [`Surface::on_surface_key`] runs
     /// this on Enter, and list surfaces run it again when a click lands on a row.

@@ -44,20 +44,12 @@ pub mod plan_review {
     pub use crate::plan_review::*;
 }
 
-pub mod presentation {
-    pub use crate::presentation::*;
-}
-
 pub mod progress_indicator {
     pub use crate::progress_indicator::*;
 }
 
-pub mod render {
-    pub use crate::render::*;
-}
-
-pub mod render_context {
-    pub use crate::render_context::*;
+pub mod renderer {
+    pub use crate::renderer::*;
 }
 
 pub mod screens {

@@ -12,7 +12,7 @@ fn plan_update(entries: Vec<acp::PlanEntry>) -> AcpEvent {
 fn plan_renders_in_viewport() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal_tall();
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
 
     app.on_acp_event(plan_update(vec![
         plan_entry("Research", acp::PlanEntryStatus::InProgress),
@@ -21,7 +21,7 @@ fn plan_renders_in_viewport() {
 
     assert!(app.has_plan());
 
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
 
     assert!(viewport.contains("Plan"), "viewport should show Plan header:\n{viewport}");
@@ -33,7 +33,7 @@ fn plan_renders_in_viewport() {
 fn plan_ordering_in_viewport() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal_tall();
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
 
     app.on_acp_event(plan_update(vec![
         plan_entry("Completed task", acp::PlanEntryStatus::Completed),
@@ -41,7 +41,7 @@ fn plan_ordering_in_viewport() {
         plan_entry("InProgress task", acp::PlanEntryStatus::InProgress),
     ]));
 
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
 
     let in_progress_pos = viewport.find("InProgress task").unwrap();
@@ -56,20 +56,20 @@ fn plan_ordering_in_viewport() {
 fn plan_grace_period_hides_completed() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
 
     let now = Instant::now();
 
     app.plan_tracker_mut().replace(vec![plan_entry("Done", acp::PlanEntryStatus::Completed)], now);
     app.plan_tracker_mut().on_tick(now);
 
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("Done"), "completed entry visible at t=0:\n{viewport}");
 
     app.plan_tracker_mut().on_tick(now + Duration::from_secs(5));
     app.on_key(key(KeyCode::Enter));
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport_after = buffer_text(&viewport_buffer(&mut terminal));
     assert!(!viewport_after.contains("Done"), "completed entry hidden after 5s grace:\n{viewport_after}");
 }
@@ -95,14 +95,14 @@ fn plan_grace_period_timestamp_preserved_across_repeated_updates() {
 fn plan_coexists_with_streaming_transcript() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
 
     app.on_acp_event(plan_update(vec![plan_entry("Research", acp::PlanEntryStatus::InProgress)]));
 
     submit_prompt(&mut app, "explain");
     app.on_acp_event(text_chunk("Here is the explanation."));
 
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = viewport_buffer(&mut terminal);
     let transcript_row = row_containing(&viewport, "Here is the explanation.").expect("transcript visible");
     let plan_row = row_containing(&viewport, "Plan").expect("plan header visible");
@@ -121,14 +121,14 @@ fn plan_coexists_with_streaming_transcript() {
 fn plan_coexists_with_tool_calls() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
 
     app.on_acp_event(plan_update(vec![plan_entry("Edit files", acp::PlanEntryStatus::InProgress)]));
 
     submit_prompt(&mut app, "fix it");
     app.on_acp_event(tool_call("tool-1", "Editing main.rs"));
 
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
 
     assert!(viewport.contains("Edit files"), "plan entry visible:\n{viewport}");
@@ -140,7 +140,7 @@ fn plan_short_terminal_clips_plan() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal_with_width(40);
     terminal.backend_mut().resize(40, 8);
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
 
     app.on_acp_event(plan_update(vec![
         plan_entry("Plan item one", acp::PlanEntryStatus::Pending),
@@ -149,7 +149,7 @@ fn plan_short_terminal_clips_plan() {
         plan_entry("Plan item four", acp::PlanEntryStatus::Pending),
     ]));
 
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
 
     assert!(viewport.contains("Plan"), "plan header visible on short terminal:\n{viewport}");
@@ -164,7 +164,7 @@ fn plan_short_terminal_clips_plan() {
 fn plan_not_in_scrollback() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
 
     app.on_acp_event(plan_update(vec![plan_entry("A plan task", acp::PlanEntryStatus::InProgress)]));
 
@@ -172,7 +172,7 @@ fn plan_not_in_scrollback() {
     app.on_acp_event(text_chunk("response text"));
     app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
 
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let scrollback = buffer_text(&history_buffer(&mut terminal));
 
     assert!(!scrollback.contains("A plan task"), "plan should not be in scrollback:\n{scrollback}");
@@ -182,7 +182,7 @@ fn plan_not_in_scrollback() {
 fn plan_cleared_on_context_cleared() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
 
     app.on_acp_event(plan_update(vec![plan_entry("Task", acp::PlanEntryStatus::Pending)]));
     assert!(app.has_plan());
@@ -190,7 +190,7 @@ fn plan_cleared_on_context_cleared() {
     app.on_acp_event(AcpEvent::ContextCleared(ContextClearedParams::default()));
     assert!(!app.has_plan());
 
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(!viewport.contains("Task"), "plan should be gone after context clear:\n{viewport}");
 }
@@ -199,7 +199,7 @@ fn plan_cleared_on_context_cleared() {
 fn plan_cleared_on_new_session() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
 
     app.on_acp_event(plan_update(vec![plan_entry("Task", acp::PlanEntryStatus::Pending)]));
     assert!(app.has_plan());
@@ -207,7 +207,7 @@ fn plan_cleared_on_new_session() {
     app.on_acp_event(AcpEvent::NewSessionCreated { session_id: SessionId::new("new-id"), config_options: Vec::new() });
     assert!(!app.has_plan());
 
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(!viewport.contains("Task"), "plan should be gone after new session:\n{viewport}");
 }
@@ -216,7 +216,7 @@ fn plan_cleared_on_new_session() {
 fn plan_cleared_on_session_loaded() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
 
     app.on_acp_event(plan_update(vec![plan_entry("Task", acp::PlanEntryStatus::Pending)]));
     assert!(app.has_plan());
@@ -227,7 +227,7 @@ fn plan_cleared_on_session_loaded() {
     });
     assert!(!app.has_plan());
 
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(!viewport.contains("Task"), "plan should be gone after session load:\n{viewport}");
 }

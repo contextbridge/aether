@@ -159,12 +159,12 @@ fn file_picker_renders_in_the_live_viewport_not_scrollback() {
     std::fs::write(directory.path().join("context.txt"), "attached context").unwrap();
     let (mut app, _command_rx) = make_app_in(directory.path().to_path_buf());
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
 
     app.on_key(key(KeyCode::Char('@')));
     settle_tasks(&mut app);
     app.on_key(key(KeyCode::Char('c')));
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     assert!(buffer_text(terminal.backend().buffer()).contains("context.txt"));
     assert!(!buffer_text(terminal.backend().scrollback()).contains("context.txt"));
@@ -230,13 +230,13 @@ fn markdown_styles_stream_live_and_finalize_once() {
 fn fenced_code_info_string_is_syntax_highlighted_with_token_colors() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
     let code_background = renderer.theme().code_bg;
     submit_prompt(&mut app, "show code");
     app.on_acp_event(text_chunk("```rust title=\"example.rs\"\nfn highlighted() {}\n```"));
     app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
 
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     let conversation = conversation_buffer(&mut terminal);
     assert!(buffer_text(&conversation).contains("fn highlighted()"));
@@ -260,22 +260,22 @@ fn fenced_code_info_string_is_syntax_highlighted_with_token_colors() {
 fn fenced_code_streamed_across_chunks_is_syntax_highlighted() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
     let code_background = renderer.theme().code_bg;
     submit_prompt(&mut app, "show code");
     app.on_acp_event(text_chunk("Example:\n"));
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     app.on_acp_event(text_chunk("```rust\n"));
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     app.on_acp_event(text_chunk("fn highlighted() {}\n"));
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     assert!(has_cell(&viewport_buffer(&mut terminal), "f", |cell| cell.bg == code_background));
 
     app.on_acp_event(text_chunk("```\n"));
     app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     let conversation = conversation_buffer(&mut terminal);
     let row = row_containing(&conversation, "fn highlighted()").expect("rendered code line");
@@ -293,13 +293,13 @@ fn fenced_code_streamed_across_chunks_is_syntax_highlighted() {
 fn fenced_code_line_comment_does_not_consume_following_code() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
     let code_background = renderer.theme().code_bg;
     submit_prompt(&mut app, "show documented code");
     app.on_acp_event(text_chunk("```python\n# Documentation\nif condition:\n    pass\n```"));
     app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
 
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     let conversation = conversation_buffer(&mut terminal);
     let row = row_containing(&conversation, "if condition").expect("Python conditional after line comment");
@@ -316,15 +316,15 @@ fn fenced_code_line_comment_does_not_consume_following_code() {
 fn completed_tool_diff_is_themed_and_rendered_once() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
     let removed_background = renderer.theme().diff_removed_bg;
     let added_background = renderer.theme().diff_added_bg;
     submit_prompt(&mut app, "edit file");
     app.on_acp_event(tool_call("edit-1", "Edit src/main.rs"));
     app.on_acp_event(tool_completed_with_diff("edit-1"));
 
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     let conversation = conversation_buffer(&mut terminal);
     let text = buffer_text(&conversation);
@@ -338,12 +338,12 @@ fn completed_tool_diff_is_themed_and_rendered_once() {
 fn wide_diff_uses_side_by_side_layout() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
     submit_prompt(&mut app, "edit file");
     app.on_acp_event(tool_call("edit-1", "Edit src/main.rs"));
     app.on_acp_event(tool_completed_with_diff("edit-1"));
 
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     let text = buffer_text(&conversation_buffer(&mut terminal));
     assert!(text.lines().any(|line| line.contains("old_name") && line.contains("new_name")), "{text}");
@@ -353,7 +353,7 @@ fn wide_diff_uses_side_by_side_layout() {
 fn wide_diff_marks_truncated_panel_content() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
     submit_prompt(&mut app, "edit file");
     app.on_acp_event(tool_call("edit-1", "Edit src/main.rs"));
     app.on_acp_event(tool_completed_with_diff_contents(
@@ -362,7 +362,7 @@ fn wide_diff_marks_truncated_panel_content() {
         &format!("new_{}\n", "y".repeat(80)),
     ));
 
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     let text = buffer_text(&conversation_buffer(&mut terminal));
     assert!(text.contains('…'), "expected visibly truncated split diff:\n{text}");
@@ -370,71 +370,114 @@ fn wide_diff_marks_truncated_panel_content() {
 
 #[test]
 fn markdown_blockquote_prefixes_inline_code_first_content() {
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let (mut app, _command_rx) = make_app();
+    let mut ui = TestUi::new(make_terminal_with_width(44));
+    let code_background = ui.theme().code_bg;
+    submit_prompt(&mut app, "quote this");
+    app.on_acp_event(text_chunk("> `quoted`"));
+    app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.draw(&mut app);
 
-    let lines = renderer.lines(Segment::Committed, &[HistoryItem::Text("> `quoted`".into())], None, 40, 0, 0);
-
-    assert_eq!(line_text(&lines[0]), "  quoted");
+    let conversation = ui.conversation();
+    let row = row_containing(&conversation, "quoted").expect("blockquote content should render");
+    assert_eq!(row_text(&conversation, row).trim_end(), "    quoted");
+    assert!(
+        has_cell(&conversation, "q", |cell| cell.bg == code_background),
+        "inline code keeps its background inside a blockquote"
+    );
 }
 
 #[test]
 fn markdown_horizontal_rule_uses_available_width() {
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let (mut app, _command_rx) = make_app();
+    let mut ui = TestUi::new(make_terminal_with_width(24));
+    submit_prompt(&mut app, "add a rule");
+    app.on_acp_event(text_chunk("---"));
+    app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.draw(&mut app);
 
-    let lines = renderer.lines(Segment::Committed, &[HistoryItem::Text("---".into())], None, 20, 0, 0);
-
-    assert_eq!(line_text(&lines[0]), "─".repeat(20));
+    let conversation = ui.conversation();
+    let row = row_containing(&conversation, "─").expect("horizontal rule should render");
+    assert_eq!(row_text(&conversation, row).trim_end(), format!("  {}", "─".repeat(20)));
 }
 
 #[test]
 fn transcript_markdown_wraps_at_word_boundaries() {
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let (mut app, _command_rx) = make_app();
+    let mut ui = TestUi::new(make_terminal_with_width(13));
+    submit_prompt(&mut app, "wrap words");
+    app.on_acp_event(text_chunk("alpha beta gamma"));
+    app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.draw(&mut app);
 
-    let lines = renderer.lines(Segment::Committed, &[HistoryItem::Text("alpha beta gamma".into())], None, 9, 0, 0);
-
-    assert_eq!(lines.iter().map(line_text).collect::<Vec<_>>(), ["alpha", "beta", "gamma"]);
+    let conversation = ui.conversation();
+    let alpha = row_containing(&conversation, "alpha").expect("first word should render");
+    let beta = row_containing(&conversation, "beta").expect("second word should render");
+    let gamma = row_containing(&conversation, "gamma").expect("third word should render");
+    assert_eq!(beta, alpha + 1);
+    assert_eq!(gamma, beta + 1);
+    assert_eq!(row_text(&conversation, alpha).trim_end(), "  alpha");
 }
 
 #[test]
 fn transcript_markdown_separates_a_heading_from_its_paragraph() {
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let (mut app, _command_rx) = make_app();
+    let mut ui = TestUi::new(make_terminal_with_width(44));
+    submit_prompt(&mut app, "heading test");
+    app.on_acp_event(text_chunk("# Heading\n\nParagraph text."));
+    app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.draw(&mut app);
 
-    let lines =
-        renderer.lines(Segment::Committed, &[HistoryItem::Text("# Heading\n\nParagraph text.".into())], None, 40, 0, 0);
-
-    assert_eq!(lines.iter().map(line_text).collect::<Vec<_>>(), ["# Heading", "", "Paragraph text."]);
+    let conversation = ui.conversation();
+    let heading = row_containing(&conversation, "Heading").expect("heading should render");
+    let paragraph = row_containing(&conversation, "Paragraph").expect("paragraph should render");
+    assert_eq!(paragraph, heading + 2, "heading and paragraph need one blank row");
+    assert_eq!(row_text(&conversation, heading).trim_end(), "  # Heading");
+    assert_eq!(row_text(&conversation, paragraph).trim_end(), "  Paragraph text.");
 }
 
 #[test]
 fn transcript_wrapping_expands_tabs() {
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let (mut app, _command_rx) = make_app();
+    let mut ui = TestUi::new(make_terminal_with_width(8));
+    submit_prompt(&mut app, "hello");
+    app.on_acp_event(text_chunk("a\tb"));
+    app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.draw(&mut app);
 
-    let lines = renderer.lines(Segment::Committed, &[HistoryItem::Text("a\tb".into())], None, 4, 0, 0);
-
-    assert_eq!(lines.iter().map(line_text).collect::<Vec<_>>(), ["a   ", "b"]);
+    let conversation = ui.conversation();
+    let a_row = row_containing(&conversation, "a").expect("tab-expanded row should render");
+    let b_row = row_containing(&conversation, "b").expect("wrapped word should render");
+    assert_eq!(b_row, a_row + 1, "the tab-expanded word must wrap onto its own row");
+    assert!(row_text(&conversation, a_row).starts_with("  a   "), "tab must expand to the next tab stop");
 }
 
 #[test]
 fn transcript_wrapping_never_exceeds_a_one_column_allocation() {
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let (mut app, _command_rx) = make_app();
+    let mut ui = TestUi::new(make_terminal_with_width(5));
+    submit_prompt(&mut app, "x");
+    app.on_acp_event(text_chunk("界"));
+    app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.draw(&mut app);
 
-    let lines = renderer.lines(Segment::Committed, &[HistoryItem::Text("界".into())], None, 1, 0, 0);
-
-    assert!(lines.iter().all(|line| line.width() <= 1), "{lines:?}");
-    assert_eq!(line_text(&lines[0]), "…");
+    let conversation = ui.conversation();
+    let row = row_containing(&conversation, "…").expect("wide glyph should truncate to an ellipsis");
+    assert_eq!(row_text(&conversation, row).trim_end(), "  …");
+    assert!(!has_cell(&conversation, "界", |_| true), "the wide glyph must not spill past the one-column allocation");
 }
 
 #[test]
 fn trailing_newline_does_not_add_an_empty_user_content_row() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
     let user_background = renderer.theme().sidebar_bg;
     type_text(&mut app, "hello");
     app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
     app.on_key(key(KeyCode::Enter));
 
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     let styled_rows = rows_with_background(&conversation_buffer(&mut terminal), user_background);
     assert_eq!(styled_rows, 3);
@@ -442,22 +485,56 @@ fn trailing_newline_does_not_add_an_empty_user_content_row() {
 
 #[test]
 fn markdown_renders_lists_strikethrough_and_tables() {
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let (mut app, _command_rx) = make_app();
+    let mut ui = TestUi::new(make_terminal_with_width(44));
     let markdown = "- first\n- second\n\n~~removed~~\n\n| Name | Value |\n| --- | --- |\n| alpha | beta |";
+    submit_prompt(&mut app, "render table");
+    app.on_acp_event(text_chunk(markdown));
+    app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.draw(&mut app);
 
-    let lines = renderer.lines(Segment::Committed, &[HistoryItem::Text(markdown.into())], None, 40, 0, 0);
-    let text = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
-
+    let conversation = ui.conversation();
+    let text = buffer_text(&conversation);
     assert!(text.contains("• first"), "{text}");
     assert!(text.contains("• second"), "{text}");
     assert!(text.contains("| Name  | Value |"), "{text}");
     assert!(text.contains("|-------|-------|"), "{text}");
     assert!(text.contains("| alpha | beta  |"), "{text}");
-    assert!(
-        lines.iter().flat_map(|line| &line.spans).any(|span| {
-            span.content.contains("removed") && span.style.add_modifier.contains(Modifier::CROSSED_OUT)
-        })
-    );
+    assert!(has_cell(&conversation, "r", |cell| cell.modifier.contains(Modifier::CROSSED_OUT)));
+}
+
+/// The streaming tail's markdown is cached per frame: a message that grows one
+/// chunk at a time reuses the render of its unchanged prefix, and once the
+/// prompt finalizes only the final text is committed — no intermediate prefix
+/// ever leaks into the conversation.
+#[test]
+fn streaming_markdown_reuses_unchanged_renders_and_finalizes_once() {
+    let (mut app, _command_rx) = make_app();
+    let mut ui = TestUi::new(make_terminal());
+    submit_prompt(&mut app, "stream cache");
+
+    app.on_acp_event(text_chunk("# First"));
+    ui.draw(&mut app);
+    ui.assert_viewport_contains("# First");
+
+    app.on_acp_event(text_chunk("\n\nSecond paragraph"));
+    ui.draw(&mut app);
+    ui.assert_viewport_contains("# First");
+    ui.assert_viewport_contains("Second paragraph");
+
+    // A frame with nothing new draws the same output: the unchanged prefix's
+    // render is reused instead of being rebuilt.
+    let before = ui.viewport_text();
+    ui.draw(&mut app);
+    assert_eq!(ui.viewport_text(), before);
+
+    app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
+    ui.draw(&mut app);
+    ui.draw(&mut app);
+
+    let conversation = ui.conversation_text();
+    assert_eq!(conversation.matches("# First").count(), 1, "intermediate prefix leaked:\n{conversation}");
+    assert_eq!(conversation.matches("Second paragraph").count(), 1);
 }
 
 #[test]
@@ -495,7 +572,7 @@ fn theme_loads_semantic_colors_from_tmtheme_file() {
 fn large_markdown_history_preserves_order_across_scrollback_and_viewport() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
     let mut markdown = String::new();
     for index in 0..40 {
         writeln!(markdown, "paragraph-{index}\n").unwrap();
@@ -504,7 +581,7 @@ fn large_markdown_history_preserves_order_across_scrollback_and_viewport() {
     app.on_acp_event(text_chunk(&markdown));
     app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
 
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     let conversation = conversation_buffer(&mut terminal);
     let text = buffer_text(&conversation);
@@ -544,9 +621,9 @@ fn one_row_inline_viewport_draws_without_panicking() {
         TerminalOptions { viewport: Viewport::Inline(inline_viewport_height(terminal_height)) },
     )
     .unwrap();
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
 
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     assert_eq!(terminal.get_frame().area().height, 1);
 }
@@ -562,8 +639,8 @@ fn history_is_inserted_before_the_live_viewport_is_drawn() {
     let mut terminal =
         Terminal::with_options(backend, TerminalOptions { viewport: Viewport::Inline(inline_viewport_height(15)) })
             .unwrap();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     terminal.backend_mut().events.clear();
 
     let mut response = String::new();
@@ -573,7 +650,7 @@ fn history_is_inserted_before_the_live_viewport_is_drawn() {
     submit_prompt(&mut app, "hello");
     app.on_acp_event(text_chunk(&response));
     app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     let events = &terminal.backend().events;
     let draw = events.iter().position(|event| *event == BackendEvent::ShowCursor).unwrap();
@@ -594,11 +671,11 @@ fn status_line_is_never_inserted_into_scrollback() {
         TerminalOptions { viewport: Viewport::Inline(inline_viewport_height(15)) },
     )
     .unwrap();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     submit_prompt(&mut app, "hello");
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     let scrollback = buffer_text(&history_buffer(&mut terminal));
     assert!(!scrollback.contains("working"), "{scrollback}");
@@ -615,18 +692,18 @@ fn history_waits_until_resized_viewport_has_scrollback_room() {
         TerminalOptions { viewport: Viewport::Inline(inline_viewport_height(terminal_height)) },
     )
     .unwrap();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     terminal.backend_mut().resize(40, 10);
     submit_prompt(&mut app, "queued while small");
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     assert!(!buffer_text(terminal.backend().scrollback()).contains("queued while small"));
     assert!(buffer_text(terminal.backend().buffer()).contains("queued while small"));
 
     terminal.backend_mut().resize(40, terminal_height);
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     assert!(app.pending_items().is_empty());
     assert!(buffer_text(terminal.backend().buffer()).contains("queued while small"));

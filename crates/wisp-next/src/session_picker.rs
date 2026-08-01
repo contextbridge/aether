@@ -1,5 +1,5 @@
 use crate::filterable_list::FilterableList;
-use crate::render_context::RenderContext;
+use crate::renderer::DrawContext;
 use crate::surface::{Action, Surface, SurfaceList, one};
 use crate::wrap::truncate_to_width;
 use acp_utils::notifications::SessionPreviewResponse;
@@ -168,7 +168,7 @@ impl Surface for SessionPicker {
         self.preview_request()
     }
 
-    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
+    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
         let theme = cx.theme;
         if !self.has_sessions() {
             Paragraph::new("  No previous sessions found.")

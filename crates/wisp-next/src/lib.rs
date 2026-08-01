@@ -20,11 +20,9 @@ pub(crate) mod plan_review;
 pub(crate) mod plan_tracker;
 pub(crate) mod plan_view;
 pub(crate) mod platform;
-pub(crate) mod presentation;
 pub(crate) mod progress_indicator;
 pub(crate) mod prompt_search;
-pub(crate) mod render;
-pub(crate) mod render_context;
+pub(crate) mod renderer;
 pub(crate) mod screens;
 pub(crate) mod selection;
 pub mod session;
@@ -55,8 +53,8 @@ use crossterm::terminal::{Clear, ClearType};
 use crossterm::{execute, terminal::size};
 use error::AppError;
 use futures::StreamExt;
-use presentation::Presenter;
 use ratatui::{DefaultTerminal, TerminalOptions, Viewport};
+use renderer::Renderer;
 use session::Session;
 use settings::UiSettings;
 use std::fs::create_dir_all;
@@ -92,7 +90,7 @@ pub async fn run_with_session(session: Session) -> Result<(), AppError> {
         working_dir,
         workspace_status,
     } = session;
-    let presenter = Presenter::new(&settings);
+    let renderer = Renderer::new(&settings);
     let app = App::new(AppConfig {
         session_id,
         agent_name,
@@ -105,7 +103,7 @@ pub async fn run_with_session(session: Session) -> Result<(), AppError> {
         working_dir,
         settings,
     });
-    run_app(app, presenter, event_rx).await
+    run_app(app, renderer, event_rx).await
 }
 
 pub fn setup_logging(log_dir: Option<&str>) {
@@ -124,7 +122,7 @@ const MAX_ACP_EVENTS_PER_FRAME: usize = 1_000;
 
 async fn run_app(
     mut app: App,
-    mut presenter: Presenter,
+    mut renderer: Renderer,
     mut event_rx: mpsc::UnboundedReceiver<AcpEvent>,
 ) -> Result<(), AppError> {
     let (_, terminal_height) = size()?;
@@ -136,9 +134,9 @@ async fn run_app(
     // the event loop.
     run_terminal_lifecycle(StdTerminalIo::new(), TerminalOptions { viewport }, |mut terminal, mut modes| {
         let app = &mut app;
-        let presenter = &mut presenter;
+        let renderer = &mut renderer;
         let event_rx = &mut event_rx;
-        async move { event_loop(&mut terminal, app, presenter, event_rx, &mut modes).await }
+        async move { event_loop(&mut terminal, app, renderer, event_rx, &mut modes).await }
     })
     .await?;
     Ok(())
@@ -147,7 +145,7 @@ async fn run_app(
 async fn event_loop(
     terminal: &mut DefaultTerminal,
     app: &mut App,
-    presenter: &mut Presenter,
+    renderer: &mut Renderer,
     event_rx: &mut mpsc::UnboundedReceiver<AcpEvent>,
     modes: &mut TerminalModes<StdTerminalIo>,
 ) -> Result<(), AppError> {
@@ -160,7 +158,7 @@ async fn event_loop(
     };
     let mut stdout = io::stdout();
 
-    render::sync_terminal(terminal, app, presenter)?;
+    renderer.draw(terminal, app)?;
     loop {
         let tick_fut = async {
             if !app.wants_tick() {
@@ -211,7 +209,7 @@ async fn event_loop(
                         let _ = result_tx.send(task.execute().await);
                     });
                 }
-                RuntimeEffect::SetTheme(theme) => presenter.set_theme(theme),
+                RuntimeEffect::SetTheme(theme) => renderer.set_theme(theme),
                 RuntimeEffect::RingBell => {
                     let _ = execute!(stdout, crossterm::style::Print("\x07"));
                 }
@@ -226,6 +224,6 @@ async fn event_loop(
         if app.exit_requested() {
             return Ok(());
         }
-        render::sync_terminal(terminal, app, presenter)?;
+        renderer.draw(terminal, app)?;
     }
 }

@@ -55,11 +55,11 @@ async fn git_diff_empty_repo_without_commits_shows_untracked_files() {
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
 
     app.on_key(ctrl('g'));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("README.md"), "untracked file should appear in empty repo:\n{viewport}");
@@ -80,11 +80,11 @@ async fn git_diff_split_view_aligns_moved_identical_line() {
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
 
     app.on_key(ctrl('g'));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(
@@ -108,13 +108,13 @@ async fn git_diff_renders_file_drawer_and_highlighted_patch() {
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
     let removed_background = renderer.theme().diff_removed_bg;
     let added_background = renderer.theme().diff_added_bg;
 
     app.on_key(ctrl('g'));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("Git Diff · Both"), "{viewport}");
@@ -133,7 +133,7 @@ async fn git_diff_renders_file_drawer_and_highlighted_patch() {
     }));
 
     app.on_key(key(KeyCode::Char('j')));
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     assert!(buffer_text(terminal.backend().buffer()).contains("new_main"));
 }
 
@@ -549,14 +549,14 @@ async fn git_diff_full_file_toggle_shows_content() {
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
     app.on_key(ctrl('g'));
     settle_screen_tasks(&mut app).await;
 
     app.on_key(key(KeyCode::Enter));
     app.on_key(key(KeyCode::Char('o')));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("[full file]"), "{viewport}");
@@ -564,7 +564,7 @@ async fn git_diff_full_file_toggle_shows_content() {
     assert!(viewport.contains("fn extra()"), "{viewport}");
 
     app.on_key(key(KeyCode::Char('o')));
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(!viewport.contains("[full file]"), "{viewport}");
     assert!(viewport.contains("fn old()"), "{viewport}");
@@ -597,7 +597,7 @@ extra
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(120);
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
     let added_background = renderer.theme().diff_added_bg;
 
     app.on_key(ctrl('g'));
@@ -605,7 +605,7 @@ extra
     app.on_key(key(KeyCode::Enter));
     app.on_key(key(KeyCode::Char('o')));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     let buffer = terminal.backend().buffer();
     assert!(
@@ -889,11 +889,11 @@ async fn git_diff_comment_draft_submit_cancel_undo() {
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
 
     app.on_key(ctrl('g'));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     // Navigate into patch pane: move to file, then enter
     app.on_key(key(KeyCode::Char('j')));
@@ -903,21 +903,21 @@ async fn git_diff_comment_draft_submit_cancel_undo() {
     // Press 'c' to start draft on first line
     app.on_key(key(KeyCode::Char('c')));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("Draft"), "draft should appear:\n{viewport}");
 
     // Type a comment
     type_text(&mut app, "this looks wrong");
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("this looks wrong"), "typed text should appear in draft:\n{viewport}");
 
     // Submit the comment
     app.on_key(key(KeyCode::Enter));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("Comment"), "submitted comment should appear:\n{viewport}");
     assert!(viewport.contains("this looks wrong"), "submitted text should be visible:\n{viewport}");
@@ -925,7 +925,7 @@ async fn git_diff_comment_draft_submit_cancel_undo() {
     // Undo the comment
     app.on_key(key(KeyCode::Char('u')));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(!viewport.contains("this looks wrong"), "comment should be removed after undo:\n{viewport}");
 
@@ -935,7 +935,7 @@ async fn git_diff_comment_draft_submit_cancel_undo() {
     settle_screen_tasks(&mut app).await;
     app.on_key(key(KeyCode::Esc));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(!viewport.contains("will cancel"), "cancelled draft should not appear:\n{viewport}");
 }
@@ -952,7 +952,7 @@ async fn git_diff_comment_counts_in_footer() {
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
 
     app.on_key(ctrl('g'));
     settle_screen_tasks(&mut app).await;
@@ -964,7 +964,7 @@ async fn git_diff_comment_counts_in_footer() {
     type_text(&mut app, "feedback");
     app.on_key(key(KeyCode::Enter));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.lines().any(|l| l.contains("1 comment")), "file header should show comment count:\n{viewport}");
 
@@ -986,7 +986,7 @@ async fn git_diff_comments_survive_file_switches() {
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
 
     app.on_key(ctrl('g'));
     settle_screen_tasks(&mut app).await;
@@ -998,7 +998,7 @@ async fn git_diff_comments_survive_file_switches() {
     type_text(&mut app, "comment on A");
     app.on_key(key(KeyCode::Enter));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("comment on A"), "comment on A should be visible:\n{viewport}");
 
@@ -1007,7 +1007,7 @@ async fn git_diff_comments_survive_file_switches() {
     app.on_key(key(KeyCode::Char('j')));
     app.on_key(key(KeyCode::Enter));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(!viewport.contains("comment on A"), "comment on A should not appear on B:\n{viewport}");
 
@@ -1016,7 +1016,7 @@ async fn git_diff_comments_survive_file_switches() {
     app.on_key(key(KeyCode::Char('k')));
     app.on_key(key(KeyCode::Enter));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("comment on A"), "comment on A should persist after switching back:\n{viewport}");
 }
@@ -1037,7 +1037,7 @@ async fn git_diff_comments_survive_repeated_file_switches() {
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
 
     app.on_key(ctrl('g'));
     settle_screen_tasks(&mut app).await;
@@ -1054,7 +1054,7 @@ async fn git_diff_comments_survive_repeated_file_switches() {
         app.on_key(key(KeyCode::Char('j')));
         app.on_key(key(KeyCode::Enter));
         settle_screen_tasks(&mut app).await;
-        sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+        renderer.draw(&mut terminal, &mut app).unwrap();
         let viewport = buffer_text(&viewport_buffer(&mut terminal));
         assert!(!viewport.contains("comment on A"), "comment on A must not leak onto B");
 
@@ -1062,7 +1062,7 @@ async fn git_diff_comments_survive_repeated_file_switches() {
         app.on_key(key(KeyCode::Char('k')));
         app.on_key(key(KeyCode::Enter));
         settle_screen_tasks(&mut app).await;
-        sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+        renderer.draw(&mut terminal, &mut app).unwrap();
         let viewport = buffer_text(&viewport_buffer(&mut terminal));
         assert!(viewport.contains("comment on A"), "comment on A must survive repeated file switches");
     }
@@ -1080,7 +1080,7 @@ async fn git_diff_submit_review_emits_prompt() {
 
     let (mut app, mut command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
 
     app.on_key(ctrl('g'));
     settle_screen_tasks(&mut app).await;
@@ -1096,7 +1096,7 @@ async fn git_diff_submit_review_emits_prompt() {
     // Submit
     app.on_key(key(KeyCode::Char('s')));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     // Verify the prompt was sent
     let cmd = command_rx.try_recv().unwrap();
@@ -1126,7 +1126,7 @@ async fn git_diff_submit_no_comments_shows_error() {
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
 
     app.on_key(ctrl('g'));
     settle_screen_tasks(&mut app).await;
@@ -1136,7 +1136,7 @@ async fn git_diff_submit_no_comments_shows_error() {
     // Press 's' with no comments
     app.on_key(key(KeyCode::Char('s')));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("No comments to submit"), "should show error for no comments:\n{viewport}");
@@ -1154,7 +1154,7 @@ async fn git_diff_submit_send_failure_preserves_comments() {
 
     let (mut app, fail_signal, _command_rx) = make_failable_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
 
     app.on_key(ctrl('g'));
     settle_screen_tasks(&mut app).await;
@@ -1180,7 +1180,7 @@ async fn git_diff_submit_send_failure_preserves_comments() {
     // Comments should still be visible
     app.on_key(key(KeyCode::Esc)); // close screen to check transcript
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("Failed to send review"), "should show send failure message in transcript:\n{viewport}");
 }
@@ -1201,7 +1201,7 @@ async fn git_diff_comment_refresh_confirm_clears_cancel_preserves() {
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
 
     app.on_key(ctrl('g'));
     settle_screen_tasks(&mut app).await;
@@ -1212,14 +1212,14 @@ async fn git_diff_comment_refresh_confirm_clears_cancel_preserves() {
     type_text(&mut app, "keep me");
     app.on_key(key(KeyCode::Enter));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("keep me"), "comment should appear before refresh:\n{viewport}");
 
     // First 'r' — show confirmation
     app.on_key(key(KeyCode::Char('r')));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("will clear"), "confirmation message should appear:\n{viewport}");
     assert!(viewport.contains("keep me"), "comment should still appear during confirmation:\n{viewport}");
@@ -1227,7 +1227,7 @@ async fn git_diff_comment_refresh_confirm_clears_cancel_preserves() {
     // Esc cancels
     app.on_key(key(KeyCode::Esc));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("keep me"), "comment should survive cancel:\n{viewport}");
     assert!(!viewport.contains("will clear"), "confirmation message should be gone:\n{viewport}");
@@ -1237,7 +1237,7 @@ async fn git_diff_comment_refresh_confirm_clears_cancel_preserves() {
     settle_screen_tasks(&mut app).await;
     app.on_key(key(KeyCode::Char('r')));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(!viewport.contains("keep me"), "comment should be cleared after confirmed refresh:\n{viewport}");
     assert!(viewport.contains("Git Diff"), "screen should still show diff:\n{viewport}");
@@ -1255,7 +1255,7 @@ async fn git_diff_comment_scope_switch_confirm_clears_cancel_preserves() {
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
 
     app.on_key(ctrl('g'));
     settle_screen_tasks(&mut app).await;
@@ -1270,14 +1270,14 @@ async fn git_diff_comment_scope_switch_confirm_clears_cancel_preserves() {
     // First 't' — show confirmation
     app.on_key(key(KeyCode::Char('t')));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("will clear"), "confirmation should appear:\n{viewport}");
 
     // Esc cancels — comments preserved
     app.on_key(key(KeyCode::Esc));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("scope comment"), "comment should survive cancel:\n{viewport}");
 
@@ -1286,7 +1286,7 @@ async fn git_diff_comment_scope_switch_confirm_clears_cancel_preserves() {
     settle_screen_tasks(&mut app).await;
     app.on_key(key(KeyCode::Char('t')));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(!viewport.contains("scope comment"), "comment should be cleared after scope switch:\n{viewport}");
     assert!(viewport.contains("Git Diff"), "screen should still show diff:\n{viewport}");
@@ -1304,7 +1304,7 @@ async fn git_diff_comment_stage_all_confirm_clears_cancel_preserves() {
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
 
     app.on_key(ctrl('g'));
     settle_screen_tasks(&mut app).await;
@@ -1319,14 +1319,14 @@ async fn git_diff_comment_stage_all_confirm_clears_cancel_preserves() {
     // First 'a' — show confirmation
     app.on_key(key(KeyCode::Char('a')));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("will clear"), "confirmation should appear:\n{viewport}");
 
     // Esc cancels
     app.on_key(key(KeyCode::Esc));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("stage me"), "comment should survive cancel:\n{viewport}");
 
@@ -1335,7 +1335,7 @@ async fn git_diff_comment_stage_all_confirm_clears_cancel_preserves() {
     settle_screen_tasks(&mut app).await;
     app.on_key(key(KeyCode::Char('a')));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(!viewport.contains("stage me"), "comment should be cleared after stage-all:\n{viewport}");
 }
@@ -1353,7 +1353,7 @@ async fn git_diff_comment_toggle_stage_confirm_clears_cancel_preserves() {
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
 
     app.on_key(ctrl('g'));
     settle_screen_tasks(&mut app).await;
@@ -1368,14 +1368,14 @@ async fn git_diff_comment_toggle_stage_confirm_clears_cancel_preserves() {
     // First space — show confirmation
     app.on_key(key(KeyCode::Char(' ')));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("will clear"), "confirmation should appear:\n{viewport}");
 
     // Esc cancels
     app.on_key(key(KeyCode::Esc));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("space comment"), "comment should survive cancel:\n{viewport}");
 
@@ -1384,7 +1384,7 @@ async fn git_diff_comment_toggle_stage_confirm_clears_cancel_preserves() {
     settle_screen_tasks(&mut app).await;
     app.on_key(key(KeyCode::Char(' ')));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(!viewport.contains("space comment"), "comment should be cleared after stage:\n{viewport}");
 }
@@ -1402,7 +1402,7 @@ async fn git_diff_comment_commit_cancel_preserves_comments() {
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
 
     app.on_key(ctrl('g'));
     settle_screen_tasks(&mut app).await;
@@ -1417,14 +1417,14 @@ async fn git_diff_comment_commit_cancel_preserves_comments() {
     // First 'C' — show confirmation (even though nothing staged, confirm appears first)
     app.on_key(key(KeyCode::Char('C')));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("will clear"), "confirmation should appear:\n{viewport}");
 
     // Esc cancels — comments preserved
     app.on_key(key(KeyCode::Esc));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("commit comment"), "comment should survive cancel:\n{viewport}");
 }
@@ -1441,7 +1441,7 @@ async fn git_diff_comment_discard_cancel_preserves_comments() {
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
 
     app.on_key(ctrl('g'));
     settle_screen_tasks(&mut app).await;
@@ -1456,14 +1456,14 @@ async fn git_diff_comment_discard_cancel_preserves_comments() {
     // First 'd' — show confirmation
     app.on_key(key(KeyCode::Char('d')));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("will clear"), "confirmation should appear:\n{viewport}");
 
     // Esc cancels — comments preserved
     app.on_key(key(KeyCode::Esc));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("discard comment"), "comment should survive cancel:\n{viewport}");
 
@@ -1472,7 +1472,7 @@ async fn git_diff_comment_discard_cancel_preserves_comments() {
     settle_screen_tasks(&mut app).await;
     app.on_key(key(KeyCode::Char('d')));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("Discard changes"), "discard confirmation should appear:\n{viewport}");
 }
@@ -1490,7 +1490,7 @@ async fn git_diff_comment_unstage_all_confirm_clears_cancel_preserves() {
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
 
     app.on_key(ctrl('g'));
     settle_screen_tasks(&mut app).await;
@@ -1510,14 +1510,14 @@ async fn git_diff_comment_unstage_all_confirm_clears_cancel_preserves() {
     // First 'A' — show confirmation
     app.on_key(key(KeyCode::Char('A')));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("will clear"), "confirmation should appear:\n{viewport}");
 
     // Esc cancels
     app.on_key(key(KeyCode::Esc));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("unstage me"), "comment should survive cancel:\n{viewport}");
 
@@ -1526,7 +1526,7 @@ async fn git_diff_comment_unstage_all_confirm_clears_cancel_preserves() {
     settle_screen_tasks(&mut app).await;
     app.on_key(key(KeyCode::Char('A')));
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(!viewport.contains("unstage me"), "comment should be cleared after unstage-all:\n{viewport}");
 }
@@ -1543,7 +1543,7 @@ async fn git_diff_draft_cursor_with_unicode() {
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let mut terminal = make_terminal_with_width(160);
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
 
     app.on_key(ctrl('g'));
     settle_screen_tasks(&mut app).await;
@@ -1554,7 +1554,7 @@ async fn git_diff_draft_cursor_with_unicode() {
     app.on_key(key(KeyCode::Char('c')));
     type_text(&mut app, "héllo wörld");
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("héllo wörld"), "unicode text should appear in draft:\n{viewport}");
 
@@ -1567,7 +1567,7 @@ async fn git_diff_draft_cursor_with_unicode() {
     app.on_key(key(KeyCode::Left));
     type_text(&mut app, "★");
     settle_screen_tasks(&mut app).await;
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("héllo★ wörld"), "unicode insertion should work:\n{viewport}");
 }
@@ -1580,7 +1580,7 @@ fn patch_header_column(viewport: &str) -> usize {
         .unwrap_or_else(|| panic!("patch header should render:\n{viewport}"))
 }
 
-async fn open_git_diff_with_change() -> (App, Terminal<TestBackend>, Presenter, tempfile::TempDir) {
+async fn open_git_diff_with_change() -> (App, Terminal<TestBackend>, Renderer, tempfile::TempDir) {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     init_git_repo(root);
@@ -1591,7 +1591,7 @@ async fn open_git_diff_with_change() -> (App, Terminal<TestBackend>, Presenter, 
 
     let (mut app, _command_rx) = make_app_in(root.to_path_buf());
     let terminal = make_terminal_with_width(160);
-    let renderer = Presenter::new(&UiSettings::default());
+    let renderer = Renderer::new(&UiSettings::default());
 
     app.on_key(ctrl('g'));
     settle_screen_tasks(&mut app).await;
@@ -1602,16 +1602,16 @@ async fn open_git_diff_with_change() -> (App, Terminal<TestBackend>, Presenter, 
 async fn git_diff_resize_keys_widen_and_narrow_the_file_drawer() {
     let (mut app, mut terminal, mut renderer, _directory) = open_git_diff_with_change().await;
 
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let natural = patch_header_column(&buffer_text(&viewport_buffer(&mut terminal)));
 
     app.on_key(key(KeyCode::Char('>')));
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert_eq!(patch_header_column(&viewport), natural + 4, "'>' should widen the drawer:\n{viewport}");
 
     app.on_key(key(KeyCode::Char('<')));
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert_eq!(patch_header_column(&viewport), natural, "'<' should narrow the drawer back:\n{viewport}");
 }
@@ -1620,24 +1620,24 @@ async fn git_diff_resize_keys_widen_and_narrow_the_file_drawer() {
 async fn git_diff_drawer_stops_narrowing_and_widens_on_the_next_press() {
     let (mut app, mut terminal, mut renderer, _directory) = open_git_diff_with_change().await;
 
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let natural = patch_header_column(&buffer_text(&viewport_buffer(&mut terminal)));
 
     for _ in 0..8 {
         app.on_key(key(KeyCode::Char('<')));
     }
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     let narrowest = patch_header_column(&viewport);
     assert!(narrowest < natural, "'<' should have narrowed the drawer:\n{viewport}");
 
     app.on_key(key(KeyCode::Char('<')));
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert_eq!(patch_header_column(&viewport), narrowest, "drawer should stop at its narrowest:\n{viewport}");
 
     app.on_key(key(KeyCode::Char('>')));
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert_eq!(
         patch_header_column(&viewport),

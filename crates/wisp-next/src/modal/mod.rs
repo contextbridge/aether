@@ -3,7 +3,7 @@ pub(crate) mod frame;
 mod url;
 
 use crate::elicitation::ElicitationResponder;
-use crate::render_context::RenderContext;
+use crate::renderer::DrawContext;
 use acp_utils::notifications::{
     CreateElicitationRequestParams, ElicitationAction, ElicitationParams, ElicitationResponse, McpNotification,
     UrlElicitationCompleteParams,
@@ -190,7 +190,7 @@ impl Surface for ElicitationModal {
         self.responder.cancel();
     }
 
-    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
+    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
         let (title, footer) = match &self.kind {
             ModalKind::Form(form) => ("Elicitation", key_hints(&form.hints(), cx.theme)),
             ModalKind::Url(_) => ("URL authorization", key_hints(&url::HINTS, cx.theme)),

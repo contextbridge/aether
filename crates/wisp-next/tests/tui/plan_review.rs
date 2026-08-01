@@ -9,7 +9,7 @@ use utils::plan_review::PlanReviewElicitationMeta;
 use wisp_next::test_support::elicitation::ElicitationResponder;
 use wisp_next::test_support::generation::Generation;
 use wisp_next::test_support::plan_review::{PlanDocument, ReviewComment, compile_feedback};
-use wisp_next::test_support::render_context::RenderContext;
+use wisp_next::test_support::renderer::DrawContext;
 use wisp_next::test_support::screens::plan_review::PlanReviewScreen;
 use wisp_next::test_support::surface::MouseAction;
 use wisp_next::test_support::surface::{Action, Surface};
@@ -51,7 +51,7 @@ fn render_screen(screen: &mut PlanReviewScreen, width: u16, height: u16) -> Buff
     terminal
         .draw(|frame| {
             let mut cx =
-                RenderContext { theme: &theme, highlighter: &mut highlighter, theme_generation: Generation::default() };
+                DrawContext { theme: &theme, highlighter: &mut highlighter, theme_generation: Generation::default() };
             screen.render(frame.area(), frame.buffer_mut(), &mut cx);
         })
         .unwrap();

@@ -4,8 +4,7 @@ use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use tokio::sync::mpsc::UnboundedReceiver;
 use wisp_next::test_support::app::{App, AppConfig, RuntimeEffect, WorkspaceMoveState};
-use wisp_next::test_support::presentation::Presenter;
-use wisp_next::test_support::render::sync_terminal as sync_terminal_with_renderer;
+use wisp_next::test_support::renderer::Renderer;
 use wisp_next::test_support::settings::UiSettings;
 use wisp_next::test_support::tasks::TaskResult;
 use wisp_next::test_support::workspace_status::WorkspaceStatus;
@@ -102,8 +101,8 @@ mod picker_click {
         assert!(has_session_picker(&app));
 
         let mut terminal = make_terminal(80, 24);
-        let mut renderer = Presenter::new(&UiSettings::default());
-        sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+        let mut renderer = Renderer::new(&UiSettings::default());
+        renderer.draw(&mut terminal, &mut app).unwrap();
         let rect = layer_rect(&mut terminal);
         // Click on the second content row (local_y=2 → row=1 after border offset)
         app.on_terminal_event(click(rect.x + 2, rect.y + 2));
@@ -122,8 +121,8 @@ mod picker_click {
         assert!(has_session_picker(&app));
 
         let mut terminal = make_terminal(80, 24);
-        let mut renderer = Presenter::new(&UiSettings::default());
-        sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+        let mut renderer = Renderer::new(&UiSettings::default());
+        renderer.draw(&mut terminal, &mut app).unwrap();
 
         let rect = layer_rect(&mut terminal);
         // Click far below content (local_y=20 → row=19 after offset, clamped to last item)
@@ -153,8 +152,8 @@ mod picker_click {
         app.on_key(key(KeyCode::Char('a')));
 
         let mut terminal = make_terminal(80, 24);
-        let mut renderer = Presenter::new(&UiSettings::default());
-        sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+        let mut renderer = Renderer::new(&UiSettings::default());
+        renderer.draw(&mut terminal, &mut app).unwrap();
 
         let rect = layer_rect(&mut terminal);
         // Click on first visible row
@@ -175,8 +174,8 @@ mod picker_click {
         app.on_acp_event(AcpEvent::WorkspacesListed(WorkspaceListResponse { workspaces }));
 
         let mut terminal = make_terminal(80, 24);
-        let mut renderer = Presenter::new(&UiSettings::default());
-        sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+        let mut renderer = Renderer::new(&UiSettings::default());
+        renderer.draw(&mut terminal, &mut app).unwrap();
         let rect = layer_rect(&mut terminal);
         // Click on the first content row (local_y=1 → row=0 after border offset)
         app.on_terminal_event(click(rect.x + 2, rect.y + 1));
@@ -191,8 +190,8 @@ mod picker_click {
         app.on_acp_event(AcpEvent::WorkspacesListed(WorkspaceListResponse { workspaces }));
 
         let mut terminal = make_terminal(80, 24);
-        let mut renderer = Presenter::new(&UiSettings::default());
-        sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+        let mut renderer = Renderer::new(&UiSettings::default());
+        renderer.draw(&mut terminal, &mut app).unwrap();
 
         let rect = layer_rect(&mut terminal);
         // Click far below content
@@ -218,8 +217,8 @@ mod picker_click {
         app.on_key(key(KeyCode::Char('a')));
 
         let mut terminal = make_terminal(80, 24);
-        let mut renderer = Presenter::new(&UiSettings::default());
-        sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+        let mut renderer = Renderer::new(&UiSettings::default());
+        renderer.draw(&mut terminal, &mut app).unwrap();
 
         let rect = layer_rect(&mut terminal);
         // Click on first visible row
@@ -410,14 +409,14 @@ mod resize {
     fn resize_no_duplicate_history() {
         let (mut app, _rx) = make_app();
         let mut terminal = make_terminal(80, 20);
-        let mut renderer = Presenter::new(&UiSettings::default());
+        let mut renderer = Renderer::new(&UiSettings::default());
 
         super::submit_prompt(&mut app, "before resize");
 
         // Render at initial size then resize
-        sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+        renderer.draw(&mut terminal, &mut app).unwrap();
         app.on_terminal_event(crossterm::event::Event::Resize(120, 30));
-        sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+        renderer.draw(&mut terminal, &mut app).unwrap();
 
         let viewport = super::buffer_text(terminal.backend().buffer());
         assert_eq!(viewport.matches("before resize").count(), 1);
@@ -475,8 +474,8 @@ mod event_routing {
         app.on_key(key(KeyCode::Enter));
 
         let mut terminal = make_terminal(80, 24);
-        let mut renderer = Presenter::new(&UiSettings::default());
-        sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+        let mut renderer = Renderer::new(&UiSettings::default());
+        renderer.draw(&mut terminal, &mut app).unwrap();
 
         // Scroll events should be consumed internally
         let bell_before = rang_bell(&mut app);
@@ -519,8 +518,8 @@ mod event_routing {
         app.on_key(key(KeyCode::Tab));
 
         let mut terminal = make_terminal(80, 24);
-        let mut renderer = Presenter::new(&UiSettings::default());
-        sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+        let mut renderer = Renderer::new(&UiSettings::default());
+        renderer.draw(&mut terminal, &mut app).unwrap();
         assert!(app.has_layer());
 
         app.on_terminal_event(scroll_down(40, 5));
@@ -554,8 +553,8 @@ mod event_routing {
         app.on_key(key(KeyCode::Tab));
 
         let mut terminal = make_terminal(80, 24);
-        let mut renderer = Presenter::new(&UiSettings::default());
-        sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+        let mut renderer = Renderer::new(&UiSettings::default());
+        renderer.draw(&mut terminal, &mut app).unwrap();
 
         let rect = layer_rect(&mut terminal);
         let click_y = rect.y + 2;
@@ -598,8 +597,8 @@ mod event_routing {
         fn open_settings(app: &mut App, terminal: &mut ratatui::Terminal<TestBackend>) {
             type_text(app, "/settings");
             app.on_key(key(KeyCode::Tab));
-            let mut renderer = Presenter::new(&UiSettings::default());
-            sync_terminal_with_renderer(terminal, app, &mut renderer).unwrap();
+            let mut renderer = Renderer::new(&UiSettings::default());
+            renderer.draw(terminal, app).unwrap();
         }
 
         let options = vec![SessionConfigOption::select(
@@ -612,8 +611,8 @@ mod event_routing {
         let mut terminal = make_terminal(80, 24);
         open_settings(&mut app, &mut terminal);
         app.on_terminal_event(click(10, 4));
-        let mut renderer = Presenter::new(&UiSettings::default());
-        sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+        let mut renderer = Renderer::new(&UiSettings::default());
+        renderer.draw(&mut terminal, &mut app).unwrap();
         app.on_terminal_event(click(10, 5));
         assert!(matches!(
             commands.try_recv(),
@@ -626,8 +625,8 @@ mod event_routing {
         let mut terminal = make_terminal(80, 24);
         open_settings(&mut app, &mut terminal);
         app.on_terminal_event(click(10, 4));
-        let mut renderer = Presenter::new(&UiSettings::default());
-        sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+        let mut renderer = Renderer::new(&UiSettings::default());
+        renderer.draw(&mut terminal, &mut app).unwrap();
         app.on_terminal_event(click(10, 3));
         assert!(matches!(
             commands.try_recv(),
@@ -639,8 +638,8 @@ mod event_routing {
         let mut terminal = make_terminal(80, 24);
         open_settings(&mut app, &mut terminal);
         app.on_terminal_event(click(10, 5));
-        let mut renderer = Presenter::new(&UiSettings::default());
-        sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+        let mut renderer = Renderer::new(&UiSettings::default());
+        renderer.draw(&mut terminal, &mut app).unwrap();
         app.on_terminal_event(click(10, 3));
         assert!(matches!(
             commands.try_recv(),
@@ -661,8 +660,8 @@ mod event_routing {
         assert!(has_session_picker(&app));
 
         let mut terminal = make_terminal(80, 24);
-        let mut renderer = Presenter::new(&UiSettings::default());
-        sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+        let mut renderer = Renderer::new(&UiSettings::default());
+        renderer.draw(&mut terminal, &mut app).unwrap();
         assert!(app.has_layer());
 
         // Scroll down
@@ -702,8 +701,8 @@ mod event_routing {
         assert!(app.needs_mouse_capture());
 
         let mut terminal = make_terminal(80, 24);
-        let mut renderer = Presenter::new(&UiSettings::default());
-        sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+        let mut renderer = Renderer::new(&UiSettings::default());
+        renderer.draw(&mut terminal, &mut app).unwrap();
 
         let rect = layer_rect(&mut terminal);
         // Scroll should be consumed internally
@@ -720,8 +719,8 @@ mod event_routing {
         assert!(app.needs_mouse_capture());
 
         let mut terminal = make_terminal(80, 24);
-        let mut renderer = Presenter::new(&UiSettings::default());
-        sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+        let mut renderer = Renderer::new(&UiSettings::default());
+        renderer.draw(&mut terminal, &mut app).unwrap();
 
         let rect = layer_rect(&mut terminal);
         app.on_terminal_event(scroll_down(rect.x + 2, rect.y + rect.height.saturating_sub(1)));
@@ -744,8 +743,8 @@ mod event_routing {
         assert!(matches!(app.workspace_move_state(), WorkspaceMoveState::Picking));
 
         let mut terminal = make_terminal(80, 24);
-        let mut renderer = Presenter::new(&UiSettings::default());
-        sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+        let mut renderer = Renderer::new(&UiSettings::default());
+        renderer.draw(&mut terminal, &mut app).unwrap();
 
         let rect = layer_rect(&mut terminal);
         app.on_terminal_event(scroll_down(rect.x + 2, rect.y + 2));
@@ -787,8 +786,8 @@ mod event_routing {
             assert!(app.needs_mouse_capture());
 
             let mut terminal = make_terminal(80, 24);
-            let mut renderer = Presenter::new(&UiSettings::default());
-            sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+            let mut renderer = Renderer::new(&UiSettings::default());
+            renderer.draw(&mut terminal, &mut app).unwrap();
 
             let rect = layer_rect(&mut terminal);
             app.on_terminal_event(scroll_down(rect.x + 2, rect.y + 3));
@@ -830,8 +829,8 @@ mod event_routing {
             });
 
             let mut terminal = make_terminal(80, 24);
-            let mut presenter = Presenter::new(&UiSettings::default());
-            sync_terminal_with_renderer(&mut terminal, &mut app, &mut presenter).unwrap();
+            let mut presenter = Renderer::new(&UiSettings::default());
+            presenter.draw(&mut terminal, &mut app).unwrap();
 
             let shows = |terminal: &ratatui::Terminal<TestBackend>, needle: &str| {
                 screen_rows(terminal).iter().any(|row| row.contains(needle))
@@ -842,7 +841,7 @@ mod event_routing {
             for _ in 1..FIELDS {
                 app.on_key(key(KeyCode::Down));
             }
-            sync_terminal_with_renderer(&mut terminal, &mut app, &mut presenter).unwrap();
+            presenter.draw(&mut terminal, &mut app).unwrap();
 
             assert!(shows(&terminal, "field_39"), "the focused field scrolled into view");
             assert!(!shows(&terminal, "field_00"), "the fields above it scrolled away");
@@ -883,13 +882,13 @@ mod event_routing {
             });
 
             let mut terminal = make_terminal(80, 24);
-            let mut presenter = Presenter::new(&UiSettings::default());
-            sync_terminal_with_renderer(&mut terminal, &mut app, &mut presenter).unwrap();
+            let mut presenter = Renderer::new(&UiSettings::default());
+            presenter.draw(&mut terminal, &mut app).unwrap();
 
             let rows = screen_rows(&terminal);
             let bravo_row = rows.iter().position(|row| row.contains("bravo")).expect("field should be on screen");
             app.on_terminal_event(click(20, u16::try_from(bravo_row).unwrap()));
-            sync_terminal_with_renderer(&mut terminal, &mut app, &mut presenter).unwrap();
+            presenter.draw(&mut terminal, &mut app).unwrap();
 
             let rows = screen_rows(&terminal);
             let row_with = |needle: &str| rows.iter().find(|row| row.contains(needle)).unwrap().clone();
@@ -933,14 +932,14 @@ mod event_routing {
             });
 
             let mut terminal = make_terminal(80, 24);
-            let mut presenter = Presenter::new(&UiSettings::default());
-            sync_terminal_with_renderer(&mut terminal, &mut app, &mut presenter).unwrap();
+            let mut presenter = Renderer::new(&UiSettings::default());
+            presenter.draw(&mut terminal, &mut app).unwrap();
 
             let rows = screen_rows(&terminal);
             let description_row =
                 rows.iter().position(|row| row.contains("the second switch")).expect("description should be on screen");
             app.on_terminal_event(click(20, u16::try_from(description_row).unwrap()));
-            sync_terminal_with_renderer(&mut terminal, &mut app, &mut presenter).unwrap();
+            presenter.draw(&mut terminal, &mut app).unwrap();
 
             let rows = screen_rows(&terminal);
             let row_with = |needle: &str| rows.iter().find(|row| row.contains(needle)).unwrap().clone();
@@ -971,7 +970,7 @@ mod screen_mouse {
     use super::*;
     use wisp_next::test_support::generation::Generation;
     use wisp_next::test_support::git_diff::{FileDiff, FileStatus, GitDiffDocument, StageState};
-    use wisp_next::test_support::render_context::RenderContext;
+    use wisp_next::test_support::renderer::DrawContext;
     use wisp_next::test_support::screens::git_diff::{GitDiffEvent, GitDiffScreen};
     use wisp_next::test_support::surface::MouseAction;
     use wisp_next::test_support::surface::Surface;
@@ -1030,7 +1029,7 @@ mod screen_mouse {
         let mut terminal = ratatui::Terminal::with_options(backend, TerminalOptions::default()).unwrap();
         terminal
             .draw(|frame| {
-                let mut cx = RenderContext {
+                let mut cx = DrawContext {
                     theme: &theme,
                     highlighter: &mut highlighter,
                     theme_generation: Generation::default(),
@@ -1178,8 +1177,8 @@ mod mouse_owning_surfaces {
         assert!(app.has_modal(), "settings overlay should be open after /settings+Tab");
 
         let mut terminal = make_terminal(80, 24);
-        let mut renderer = Presenter::new(&UiSettings::default());
-        sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+        let mut renderer = Renderer::new(&UiSettings::default());
+        renderer.draw(&mut terminal, &mut app).unwrap();
 
         assert!(app.has_modal(), "the overlay should still be open after a render");
     }
@@ -1197,8 +1196,8 @@ mod mouse_owning_surfaces {
         std::mem::drop(current);
 
         let mut terminal = make_terminal(80, 24);
-        let mut renderer = Presenter::new(&UiSettings::default());
-        sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+        let mut renderer = Renderer::new(&UiSettings::default());
+        renderer.draw(&mut terminal, &mut app).unwrap();
 
         assert!(app.has_layer());
     }
@@ -1232,8 +1231,8 @@ mod mouse_owning_surfaces {
         app.on_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
 
         let mut terminal = make_terminal(80, 24);
-        let mut renderer = Presenter::new(&UiSettings::default());
-        sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+        let mut renderer = Renderer::new(&UiSettings::default());
+        renderer.draw(&mut terminal, &mut app).unwrap();
 
         // History search is a composer overlay rather than a layer, so it owns
         // the mouse without anything being pushed above the conversation.

@@ -825,8 +825,8 @@ fn settings_builtin_is_listed_in_command_picker() {
     assert!(app.composer().has_completion());
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("/settings"), "built-in /settings should be in command picker:\n{viewport}");
 }
@@ -853,8 +853,8 @@ fn settings_overlay_renders_on_terminal() {
     assert!(app.has_modal());
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(
         viewport.contains("model") || viewport.contains("gpt-4o"),
@@ -877,8 +877,8 @@ fn settings_over_renders_with_no_config_options() {
     assert!(app.has_modal());
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(
         viewport.contains("no settings options") || viewport.contains("Configuration"),
@@ -894,8 +894,7 @@ fn settings_overlay_render_clears_only_the_modal_rectangle() {
     let mut buffer = Buffer::filled(area, Cell::new("X"));
     let theme = Theme::default();
     let mut highlighter = SyntaxHighlighter::new();
-    let mut cx =
-        RenderContext { theme: &theme, highlighter: &mut highlighter, theme_generation: Generation::default() };
+    let mut cx = DrawContext { theme: &theme, highlighter: &mut highlighter, theme_generation: Generation::default() };
 
     overlay.render(area, &mut buffer, &mut cx);
 
@@ -917,12 +916,12 @@ fn settings_overlay_clears_conversation_content_behind_it() {
     app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     type_text(&mut app, "/settings");
     app.on_key(key(KeyCode::Tab));
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("Configuration"), "settings overlay should render:\n{viewport}");
@@ -944,16 +943,16 @@ fn settings_overlay_still_valid_after_scrollback() {
     app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     // Now open settings
     type_text(&mut app, "/settings");
     app.on_key(key(KeyCode::Tab));
     assert!(app.has_modal());
 
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("Configuration"), "settings overlay should render after scrollback:\n{viewport}");
 }
@@ -966,8 +965,8 @@ fn settings_overlay_renders_at_narrow_width() {
     app.on_key(key(KeyCode::Tab));
 
     let mut terminal = make_terminal_with_width(30);
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(
         viewport.contains("model") || viewport.contains("gpt-4o"),
@@ -985,8 +984,8 @@ fn settings_overlay_renders_at_short_height() {
 
     let mut terminal = make_terminal_with_width(40);
     terminal.backend_mut().resize(40, 8);
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(
         viewport.contains("model") || viewport.contains("too small"),
@@ -1058,8 +1057,8 @@ fn settings_multi_select_opens_model_selector() {
     app.on_key(key(KeyCode::Enter));
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("Model search"), "should show model selector:\n{viewport}");
 }
@@ -1234,8 +1233,8 @@ fn settings_theme_entry_is_injected_first() {
     assert!(app.has_modal());
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("Theme:"), "Theme entry should render first:\n{viewport}");
 }
@@ -1249,8 +1248,8 @@ fn settings_theme_picker_opens_and_shows_default() {
     app.on_key(key(KeyCode::Enter)); // Open Theme picker (first entry)
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("Default"), "Theme picker should show Default option:\n{viewport}");
     assert!(viewport.contains("Theme"), "Theme picker should have Theme header:\n{viewport}");
@@ -1266,8 +1265,8 @@ fn settings_theme_selection_returns_to_menu() {
     app.on_key(key(KeyCode::Enter)); // Confirm default
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("Theme: Default"), "Should return to menu with Default selected:\n{viewport}");
 }
@@ -1281,8 +1280,8 @@ fn settings_theme_empty_file_list_shows_only_default() {
     app.on_key(key(KeyCode::Enter)); // Open Theme picker
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("Default"), "Should show Default theme option:\n{viewport}");
 }
@@ -1358,8 +1357,8 @@ fn theme_entry_preserved_after_config_option_update() {
     assert!(app.has_modal());
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("Theme:"), "Theme entry must survive ConfigOptionUpdate:\n{viewport}");
 }
@@ -1377,8 +1376,8 @@ fn theme_selection_keeps_overlay_open_and_refreshes_display() {
     assert!(app.has_modal(), "Overlay must stay open after theme selection");
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("Theme: Default"), "Theme should show Default after selection:\n{viewport}");
 }
@@ -1411,8 +1410,8 @@ fn model_selector_provider_heading_does_not_skip_rows() {
     app.on_key(key(KeyCode::Enter)); // Open model selector
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     // All four models must appear — headings should not consume model rows
     assert!(viewport.contains("GPT-4o"), "GPT-4o should be visible:\n{viewport}");
@@ -1447,13 +1446,13 @@ fn model_selector_skips_disabled_models_and_scrolls_to_the_end() {
     }
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("Model 14"), "last enabled model should be focused and visible:\n{viewport}");
 
     app.on_key(key(KeyCode::Down));
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("Model 14"), "selection should remain at the end of the list:\n{viewport}");
 }
@@ -1492,8 +1491,8 @@ fn model_selector_focused_item_visible_with_provider_headings() {
     }
 
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("PaLM"), "Focused last item with headings should be visible:\n{viewport}");
 }

@@ -13,7 +13,7 @@ pub enum SegmentContent {
 /// Ordered conversation history with streaming append semantics.
 ///
 /// Streaming chunks coalesce into the trailing segment; completed segments are
-/// handed off to presentation state via [`Transcript::drain_finalized_prefix`].
+/// handed off to the renderer via [`Transcript::drain_finalized_prefix`].
 #[derive(Debug, Default)]
 pub struct Transcript {
     segments: Vec<SegmentContent>,
@@ -89,7 +89,7 @@ impl Transcript {
     }
 
     /// Remove and return the longest prefix of segments that can never mutate
-    /// again, so presentation state can take ownership exactly once.
+    /// again, so the renderer can take ownership exactly once.
     ///
     /// A segment is final when it is a user message, a completed tool call, or
     /// streamed text/thought content that is no longer the trailing segment of

@@ -11,7 +11,7 @@ use self::provider_login::{ProviderLoginEntry, ProviderLoginPane, ProviderLoginS
 use self::server_status::ServerStatusPane;
 use crate::modal::{ElicitationModal, frame::ModalFrame};
 use crate::platform::{BrowserOpener, ClipboardWriter};
-use crate::render_context::RenderContext;
+use crate::renderer::DrawContext;
 use crate::selection::Direction;
 use crate::session_config_view::SessionConfigView;
 use crate::surface::{Action, MouseAction, Surface, UiEvent, is_press};
@@ -239,7 +239,7 @@ impl SettingsOverlay {
     }
 
     /// Draws whichever of the menu or the open pane has focus.
-    fn render_content(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
+    fn render_content(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
         let Some(pane) = self.pane.as_mut() else {
             self.menu.render(area, buf, cx.theme);
             return None;
@@ -374,7 +374,7 @@ impl Surface for SettingsOverlay {
         self.pending_elicitation.as_ref().is_none_or(Surface::needs_mouse_capture)
     }
 
-    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut RenderContext<'_>) -> Option<Position> {
+    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
         let theme = cx.theme;
         if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
             Clear.render(area, buf);

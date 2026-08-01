@@ -42,7 +42,7 @@ pub(super) fn extract_config_selections(config_options: &[acp::SessionConfigOpti
 impl App {
     /// Themes are persisted and parsed by the task runner. Only one change runs
     /// at a time, because two racing saves can finish in either order and leave
-    /// both the presenter and the settings file on a choice the user moved past.
+    /// both the renderer and the settings file on a choice the user moved past.
     pub(super) fn apply_theme_change(&mut self, value: &str) {
         self.apply_settings_change(&crate::settings_overlay::SettingsChange {
             config_id: acp_utils::config_option_id::THEME_CONFIG_ID.to_string(),

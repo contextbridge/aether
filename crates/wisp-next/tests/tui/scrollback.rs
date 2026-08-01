@@ -19,7 +19,7 @@ fn commit_overflowing_reply(
     app: &mut App,
     command_rx: &mut UnboundedReceiver<PromptCommand>,
     terminal: &mut Terminal<TestBackend>,
-    presenter: &mut Presenter,
+    presenter: &mut Renderer,
 ) {
     submit_prompt(app, "talk at length");
     assert_command(command_rx, |c| matches!(c, PromptCommand::Prompt { .. }), "the overflowing reply");
@@ -29,7 +29,7 @@ fn commit_overflowing_reply(
         reply.push('\n');
     }
     app.on_acp_event(text_chunk(&format!("{reply}still streaming")));
-    sync_terminal_with_renderer(terminal, app, presenter).unwrap();
+    presenter.draw(terminal, app).unwrap();
     assert!(
         buffer_text(&history_buffer(terminal)).contains("overflow-line-0"),
         "precondition: a prior reply must have been committed to scrollback"
@@ -42,7 +42,7 @@ fn commit_overflowing_reply(
 fn purges_once_on_context_clear() {
     let (mut app, mut command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut presenter = Presenter::new(&UiSettings::default());
+    let mut presenter = Renderer::new(&UiSettings::default());
 
     commit_overflowing_reply(&mut app, &mut command_rx, &mut terminal, &mut presenter);
 
@@ -55,7 +55,7 @@ fn purges_once_on_context_clear() {
 fn clear_command_purges_only_when_the_new_session_lands() {
     let (mut app, mut command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut presenter = Presenter::new(&UiSettings::default());
+    let mut presenter = Renderer::new(&UiSettings::default());
 
     commit_overflowing_reply(&mut app, &mut command_rx, &mut terminal, &mut presenter);
 
@@ -73,7 +73,7 @@ fn clear_command_purges_only_when_the_new_session_lands() {
 fn session_switch_purges_once_and_the_loaded_landing_does_not_purge_again() {
     let (mut app, mut command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut presenter = Presenter::new(&UiSettings::default());
+    let mut presenter = Renderer::new(&UiSettings::default());
 
     commit_overflowing_reply(&mut app, &mut command_rx, &mut terminal, &mut presenter);
 
@@ -95,7 +95,7 @@ fn session_switch_purges_once_and_the_loaded_landing_does_not_purge_again() {
 fn successful_workspace_move_purges_once() {
     let (mut app, mut command_rx) = make_app_with_workspace_move();
     let mut terminal = make_terminal();
-    let mut presenter = Presenter::new(&UiSettings::default());
+    let mut presenter = Renderer::new(&UiSettings::default());
 
     commit_overflowing_reply(&mut app, &mut command_rx, &mut terminal, &mut presenter);
 
@@ -128,10 +128,10 @@ fn resets_purge_even_with_no_committed_content() {
 fn an_ordinary_render_does_not_purge() {
     let (mut app, mut command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut presenter = Presenter::new(&UiSettings::default());
+    let mut presenter = Renderer::new(&UiSettings::default());
 
     commit_overflowing_reply(&mut app, &mut command_rx, &mut terminal, &mut presenter);
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut presenter).unwrap();
+    presenter.draw(&mut terminal, &mut app).unwrap();
 
     assert_eq!(purge_count(&mut app), 0, "an ordinary render must not purge native scrollback");
 }

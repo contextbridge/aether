@@ -140,13 +140,13 @@ fn alt_enter_inserts_newline_instead_of_submitting() {
 fn context_clear_discards_conversation_retained_in_the_live_viewport() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
     submit_prompt(&mut app, "old retained message");
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     assert!(buffer_text(&viewport_buffer(&mut terminal)).contains("old retained message"));
 
     app.on_acp_event(AcpEvent::ContextCleared(ContextClearedParams::default()));
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(!viewport.contains("old retained message"), "{viewport}");
@@ -169,7 +169,7 @@ fn fitting_user_message_remains_in_the_live_viewport() {
 fn completed_stream_lines_remain_live_until_they_overflow() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
     submit_prompt(&mut app, "hi");
 
     let mut completed = String::new();
@@ -177,7 +177,7 @@ fn completed_stream_lines_remain_live_until_they_overflow() {
         writeln!(completed, "line-{index}\n").unwrap();
     }
     app.on_acp_event(text_chunk(&format!("{completed}partial")));
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     let scrollback = buffer_text(&history_buffer(&mut terminal));
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
@@ -213,14 +213,14 @@ fn completed_streaming_text_remains_adjacent_to_the_composer_once() {
 fn streamed_markdown_blocks_keep_blank_separators() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal_tall();
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
     submit_prompt(&mut app, "format this");
 
     for chunk in ["### Root\n", "\n", "Keep this paragraph separate.\n", "\n", "- first item\n"] {
         app.on_acp_event(text_chunk(chunk));
     }
     app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     let conversation = conversation_buffer(&mut terminal);
     let heading = row_containing(&conversation, "### Root").expect("heading should render");
@@ -235,12 +235,12 @@ fn streamed_markdown_blocks_keep_blank_separators() {
 fn running_tool_holds_later_content_out_of_committed_history() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
     submit_prompt(&mut app, "run a tool");
 
     app.on_acp_event(tool_call("tool-1", "Reading main.rs"));
     app.on_acp_event(text_chunk("tool output summary"));
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     let viewport = buffer_text(&viewport_buffer(&mut terminal));
     assert!(viewport.contains("Reading main.rs"));
@@ -248,7 +248,7 @@ fn running_tool_holds_later_content_out_of_committed_history() {
 
     app.on_acp_event(tool_completed("tool-1"));
     app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     let conversation = buffer_text(&conversation_buffer(&mut terminal));
     assert!(conversation.contains("Reading main.rs"));
@@ -472,15 +472,15 @@ fn truncation_boundary_exactly_200_bytes_no_ellipsis() {
 fn truncation_preserved_in_scrollback() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal_with_dimensions(250, 15);
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
     submit_prompt(&mut app, "run tool");
     let long = "x".repeat(300);
     app.on_acp_event(tool_call_with_raw("tool-1", "Long arg", serde_json::Value::String(long)));
     app.on_acp_event(tool_completed_status("tool-1"));
     app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
 
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     let conversation = buffer_text(&conversation_buffer(&mut terminal));
     assert!(conversation.contains('…'), "truncation must survive drain to scrollback: {conversation}");
@@ -490,15 +490,15 @@ fn truncation_preserved_in_scrollback() {
 fn tool_arguments_preserved_in_scrollback_exactly_once() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
     let raw = serde_json::json!({"path": "/src/main.rs"});
     submit_prompt(&mut app, "run tool");
     app.on_acp_event(tool_call_with_raw("tool-1", "Read file", raw));
     app.on_acp_event(tool_completed_status("tool-1"));
     app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
 
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     let conversation = buffer_text(&conversation_buffer(&mut terminal));
     let occurrences = conversation.matches("/src/main.rs").count();
@@ -532,7 +532,7 @@ fn diff_not_rendered_while_tool_is_running() {
 fn diff_not_rendered_after_failed_status() {
     let (mut app, _command_rx) = make_app();
     let mut terminal = make_terminal();
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
     submit_prompt(&mut app, "run tool");
     app.on_acp_event(tool_call("tool-1", "Edit file"));
 
@@ -546,8 +546,8 @@ fn diff_not_rendered_after_failed_status() {
     app.on_acp_event(session_update(acp::SessionUpdate::ToolCallUpdate(update)));
     app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
 
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     let conversation = buffer_text(&conversation_buffer(&mut terminal));
     assert!(!conversation.contains("old content"), "diff must NOT render after failure: {conversation}");

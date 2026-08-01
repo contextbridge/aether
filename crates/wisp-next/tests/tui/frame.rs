@@ -8,9 +8,9 @@ fn first_frame_never_inserts_scrollback() {
         TerminalOptions { viewport: Viewport::Inline(inline_viewport_height(15)) },
     )
     .unwrap();
-    let mut renderer = Presenter::new(&UiSettings::default());
+    let mut renderer = Renderer::new(&UiSettings::default());
 
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     let events = &terminal.backend().events;
     assert_eq!(
@@ -33,8 +33,8 @@ fn resize_growth_inserts_pending_history_before_the_viewport_draws() {
         TerminalOptions { viewport: Viewport::Inline(inline_viewport_height(15)) },
     )
     .unwrap();
-    let mut renderer = Presenter::new(&UiSettings::default());
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&UiSettings::default());
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     // Shrunk below the scrollback reserve, the finished reply stays queued
     // instead of overflowing into the terminal's own scrollback.
@@ -47,14 +47,14 @@ fn resize_growth_inserts_pending_history_before_the_viewport_draws() {
     }
     app.on_acp_event(text_chunk(&reply));
     app.on_acp_event(AcpEvent::PromptDone(acp::StopReason::EndTurn));
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
     assert!(!app.pending_items().is_empty(), "precondition: the finished reply must still be pending");
     assert!(!buffer_text(terminal.backend().scrollback()).contains("overflow-line-0"));
 
     terminal.backend_mut().events.clear();
 
     terminal.backend_mut().resize(40, 15);
-    sync_terminal_with_renderer(&mut terminal, &mut app, &mut renderer).unwrap();
+    renderer.draw(&mut terminal, &mut app).unwrap();
 
     let events = &terminal.backend().events;
     let draw = events.iter().position(|event| *event == BackendEvent::ShowCursor).expect("the viewport must be drawn");

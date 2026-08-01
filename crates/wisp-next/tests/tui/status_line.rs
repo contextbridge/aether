@@ -7,8 +7,7 @@ use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use std::time::{Duration, Instant};
 use wisp_next::test_support::app::{App, AppConfig};
-use wisp_next::test_support::presentation::Presenter;
-use wisp_next::test_support::render::sync_terminal;
+use wisp_next::test_support::renderer::Renderer;
 use wisp_next::test_support::settings::{StatusLineSegmentConfig, StatusLineSettings, StatusLineStyle, UiSettings};
 use wisp_next::test_support::workspace_status::WorkspaceStatus;
 
@@ -67,8 +66,8 @@ fn buffer_text(buffer: &Buffer) -> String {
 
 fn sync(app: &mut App, terminal: &mut ratatui::Terminal<TestBackend>) {
     let ui_settings = app.ui_settings().clone();
-    let mut renderer = Presenter::new(&ui_settings);
-    sync_terminal(terminal, app, &mut renderer).unwrap();
+    let mut renderer = Renderer::new(&ui_settings);
+    renderer.draw(terminal, app).unwrap();
 }
 
 fn model_option() -> acp::SessionConfigOption {
