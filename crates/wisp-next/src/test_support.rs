@@ -1,11 +1,9 @@
 //! Explicit facade for integration tests.
 
-pub use crate::terminal::inline_viewport_height;
+pub use crate::terminal::{inline_viewport_height, inline_viewport_needs_resync};
 
 pub mod terminal {
-    pub use crate::terminal::{
-        LifecycleError, TerminalIo, TerminalModes, inline_viewport_height, run_terminal_lifecycle,
-    };
+    pub use crate::terminal::{inline_viewport_height, inline_viewport_needs_resync};
 }
 
 pub mod app {

@@ -606,13 +606,6 @@ fn settings_deserializes_status_line() {
 }
 
 #[test]
-fn inline_viewport_reserves_two_rows_for_scrollback() {
-    assert_eq!(inline_viewport_height(15), 13);
-    assert_eq!(inline_viewport_height(3), 1);
-    assert_eq!(inline_viewport_height(2), 1);
-}
-
-#[test]
 fn one_row_inline_viewport_draws_without_panicking() {
     let (mut app, _command_rx) = make_app();
     let terminal_height = 3;

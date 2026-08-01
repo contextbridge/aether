@@ -40,7 +40,7 @@ mod status_line;
 mod subagents;
 #[path = "tui/terminal_interaction.rs"]
 mod terminal_interaction;
-#[path = "tui/terminal_modes.rs"]
-mod terminal_modes;
+#[path = "tui/terminal_session.rs"]
+mod terminal_session;
 #[path = "tui/workspace.rs"]
 mod workspace;

@@ -53,7 +53,7 @@ use crossterm::terminal::{Clear, ClearType};
 use crossterm::{execute, terminal::size};
 use error::AppError;
 use futures::StreamExt;
-use ratatui::{DefaultTerminal, TerminalOptions, Viewport};
+use ratatui::Viewport;
 use renderer::Renderer;
 use session::Session;
 use settings::UiSettings;
@@ -61,7 +61,7 @@ use std::fs::create_dir_all;
 use std::future::pending;
 use std::io;
 use std::time::{Duration, Instant};
-use terminal::{StdTerminalIo, TerminalModes, inline_viewport_height, resync_inline_viewport, run_terminal_lifecycle};
+use terminal::{TerminalSession, inline_viewport_height};
 use tokio::select;
 use tokio::sync::mpsc;
 use tokio::time::{MissedTickBehavior, interval};
@@ -128,26 +128,17 @@ async fn run_app(
     let (_, terminal_height) = size()?;
     let viewport = Viewport::Inline(inline_viewport_height(terminal_height));
 
-    // `run_terminal_lifecycle` owns the whole init -> setup -> event loop ->
-    // teardown sequence and restores the terminal on every return path, including
-    // a ratatui init failure that strands raw mode and a panic unwinding out of
-    // the event loop.
-    run_terminal_lifecycle(StdTerminalIo::new(), TerminalOptions { viewport }, |mut terminal, mut modes| {
-        let app = &mut app;
-        let renderer = &mut renderer;
-        let event_rx = &mut event_rx;
-        async move { event_loop(&mut terminal, app, renderer, event_rx, &mut modes).await }
-    })
-    .await?;
-    Ok(())
+    // `TerminalSession` owns init -> setup -> event loop -> teardown and
+    // restores the terminal on every return path.
+    let mut session = TerminalSession::enter(viewport)?;
+    event_loop(&mut session, &mut app, &mut renderer, &mut event_rx).await
 }
 
 async fn event_loop(
-    terminal: &mut DefaultTerminal,
+    session: &mut TerminalSession,
     app: &mut App,
     renderer: &mut Renderer,
     event_rx: &mut mpsc::UnboundedReceiver<AcpEvent>,
-    modes: &mut TerminalModes<StdTerminalIo>,
 ) -> Result<(), AppError> {
     let mut terminal_events = EventStream::new();
     let (task_result_tx, mut task_result_rx) = mpsc::unbounded_channel();
@@ -158,7 +149,7 @@ async fn event_loop(
     };
     let mut stdout = io::stdout();
 
-    renderer.draw(terminal, app)?;
+    renderer.draw(session.terminal_mut(), app)?;
     loop {
         let tick_fut = async {
             if !app.wants_tick() {
@@ -172,7 +163,7 @@ async fn event_loop(
                 match terminal_event {
                     Some(Ok(event)) => {
                         if matches!(event, Event::Resize(_, _)) {
-                            resync_inline_viewport(terminal)?;
+                            session.resync_inline_viewport()?;
                         }
                         app.on_terminal_event(event);
                     }
@@ -219,11 +210,11 @@ async fn event_loop(
                 }
             }
         }
-        modes.set_mouse_capture(app.needs_mouse_capture());
+        session.set_mouse_capture(app.needs_mouse_capture());
 
         if app.exit_requested() {
             return Ok(());
         }
-        renderer.draw(terminal, app)?;
+        renderer.draw(session.terminal_mut(), app)?;
     }
 }
