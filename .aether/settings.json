@@ -10,15 +10,6 @@
       "mcps": ["mcp.json"]
     },
     {
-      "name": "Fast",
-      "description": "MiniMax M3 with high reasoning",
-      "model": "openrouter:minimax/minimax-m3",
-      "reasoningEffort": "high",
-      "userInvocable": true,
-      "prompts": [".aether/SYSTEM.md", "AGENTS.md"],
-      "mcps": ["mcp.json"]
-    },
-    {
       "name": "Local",
       "description": "Llama.cpp",
       "model": "llamacpp:unsloth/Qwen3.5-9B-GGUF",
