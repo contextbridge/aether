@@ -157,7 +157,13 @@ impl ToolProxy {
     pub fn extract_server_description(client: &RunningService<RoleClient, McpClient>, server_name: &str) -> String {
         client
             .peer_info()
-            .and_then(|info| info.server_info.description.as_deref().filter(|s| !s.is_empty()).map(ToString::to_string))
+            .and_then(|info| {
+                info.server_info
+                    .as_ref()
+                    .and_then(|server_info| server_info.description.as_deref())
+                    .filter(|description| !description.is_empty())
+                    .map(ToString::to_string)
+            })
             .unwrap_or_else(|| server_name.to_string())
     }
 

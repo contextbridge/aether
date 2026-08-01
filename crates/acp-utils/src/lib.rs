@@ -22,6 +22,6 @@ pub mod testing;
 // Re-export rmcp elicitation schema types so downstream crates (e.g. wisp)
 // don't need a direct rmcp dependency.
 pub use rmcp::model::{
-    ConstTitle, CreateElicitationRequestParams, ElicitationSchema, EnumSchema, MultiSelectEnumSchema, PrimitiveSchema,
+    ConstTitle, ElicitRequestParams, ElicitationSchema, EnumSchema, MultiSelectEnumSchema, PrimitiveSchemaDefinition,
     SingleSelectEnumSchema,
 };

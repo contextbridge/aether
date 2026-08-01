@@ -1,7 +1,7 @@
 use crate::client::manager::{ElicitationRequest, McpClientEvent, OAuthHandlerContext, UrlElicitationCompleteParams};
 use aether_auth::{OAuthCallback, OAuthError, OAuthHandler, accept_oauth_callback};
 use futures::future::BoxFuture;
-use rmcp::model::{CreateElicitationRequestParams, ElicitationAction};
+use rmcp::model::{ElicitRequestParams, ElicitationAction};
 use std::num::NonZeroU16;
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
@@ -46,7 +46,7 @@ impl OAuthHandler for ElicitingOAuthHandler {
             let (response_sender, response_rx) = oneshot::channel();
             let request = ElicitationRequest {
                 server_name: self.server_name.clone(),
-                request: CreateElicitationRequestParams::UrlElicitationParams {
+                request: ElicitRequestParams::UrlElicitationParams {
                     meta: None,
                     message: "Open this URL to authorize MCP server access.".to_string(),
                     url: auth_url,

@@ -16,7 +16,7 @@ use agent_client_protocol::schema::SessionNotification;
 use agent_client_protocol::{
     self as acp, Agent, Builder, ByteStreams, Client, ConnectionTo, HandleDispatchFrom, NullRun, Responder,
 };
-use rmcp::model::{CreateElicitationRequestParams, ElicitationSchema};
+use rmcp::model::{ElicitRequestParams, ElicitationSchema};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use tokio::io::DuplexStream;
@@ -196,7 +196,7 @@ pub async fn test_connection() -> (ConnectionTo<Client>, TestPeer) {
 fn placeholder_params() -> ElicitationParams {
     ElicitationParams {
         server_name: String::new(),
-        request: CreateElicitationRequestParams::FormElicitationParams {
+        request: ElicitRequestParams::FormElicitationParams {
             meta: None,
             message: String::new(),
             requested_schema: ElicitationSchema::builder().build().expect("empty schema is valid"),

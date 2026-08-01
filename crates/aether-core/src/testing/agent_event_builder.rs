@@ -62,9 +62,7 @@ impl AgentEventBuilder {
     ) -> Self {
         let request_json = serde_json::to_string(request).expect("Failed to serialize request");
 
-        let error_result = format!(
-            "Tool execution error: Annotated {{ raw: Text(RawTextContent {{ text: \"{error_message}\", meta: None }}), annotations: None }}"
-        );
+        let error_result = format!("Tool execution error: {error_message}");
 
         self.push_tool_call_start(tool_call_id, name);
         self.push_tool_call_chunk(tool_call_id, &request_json);

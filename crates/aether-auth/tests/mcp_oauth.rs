@@ -70,36 +70,47 @@ impl OAuthServer {
                 captured_requests.lock().unwrap().push(request_line.clone());
                 let path = request_line.split_whitespace().nth(1).unwrap();
 
-                let body = if path.contains("oauth-protected-resource") {
-                    serde_json::json!({
-                        "resource": format!("{origin}/mcp"),
-                        "authorization_servers": [&origin]
-                    })
-                } else if path == "/token" {
-                    serde_json::json!({
-                        "access_token": "access-token",
-                        "token_type": "Bearer",
-                        "expires_in": 3600
-                    })
-                } else if path == "/register" {
-                    serde_json::json!({
-                        "client_id": "registered-client",
-                        "redirect_uris": ["http://localhost:3118/"]
-                    })
+                let (status, headers, body) = if path == "/mcp" {
+                    (
+                        "401 Unauthorized",
+                        format!(
+                            "WWW-Authenticate: Bearer resource_metadata=\"{origin}/.well-known/oauth-protected-resource/mcp\"\r\n"
+                        ),
+                        String::new(),
+                    )
                 } else {
-                    serde_json::json!({
-                        "issuer": origin,
-                        "authorization_endpoint": format!("{origin}/authorize"),
-                        "token_endpoint": format!("{origin}/token"),
-                        "registration_endpoint": format!("{origin}/register"),
-                        "response_types_supported": ["code"],
-                        "code_challenge_methods_supported": ["S256"],
-                        "scopes_supported": ["openid"]
-                    })
-                }
-                .to_string();
+                    let body = if path.contains("oauth-protected-resource") {
+                        serde_json::json!({
+                            "resource": format!("{origin}/mcp"),
+                            "authorization_servers": [&origin]
+                        })
+                    } else if path == "/token" {
+                        serde_json::json!({
+                            "access_token": "access-token",
+                            "token_type": "Bearer",
+                            "expires_in": 3600
+                        })
+                    } else if path == "/register" {
+                        serde_json::json!({
+                            "client_id": "registered-client",
+                            "redirect_uris": ["http://localhost:3118/"]
+                        })
+                    } else {
+                        serde_json::json!({
+                            "issuer": origin,
+                            "authorization_endpoint": format!("{origin}/authorize"),
+                            "token_endpoint": format!("{origin}/token"),
+                            "registration_endpoint": format!("{origin}/register"),
+                            "response_types_supported": ["code"],
+                            "code_challenge_methods_supported": ["S256"],
+                            "scopes_supported": ["openid"]
+                        })
+                    }
+                    .to_string();
+                    ("200 OK", String::new(), body)
+                };
                 let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
                     body.len(),
                     body
                 );

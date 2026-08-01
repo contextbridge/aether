@@ -5,7 +5,7 @@ use mcp_utils::client::{McpServer, McpTransport};
 use rmcp::{
     RoleServer, ServerHandler,
     model::{
-        CallToolRequestParams, CallToolResult, ErrorData, Implementation, ListToolsResult, PaginatedRequestParams,
+        CallToolRequestParams, CallToolResponse, ErrorData, Implementation, ListToolsResult, PaginatedRequestParams,
         ServerCapabilities, ServerInfo, Tool,
     },
     service::{DynService, RequestContext},
@@ -57,19 +57,19 @@ impl ServerHandler for MetaEchoServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         let input_schema = serde_json::from_value(json!({ "type": "object", "properties": {} })).unwrap();
-        Ok(ListToolsResult {
-            tools: vec![Tool::new("capture", "Echoes request metadata", Arc::new(input_schema))],
-            next_cursor: None,
-            meta: None,
-        })
+        Ok(ListToolsResult::with_all_items(vec![Tool::new(
+            "capture",
+            "Echoes request metadata",
+            Arc::new(input_schema),
+        )]))
     }
 
     async fn call_tool(
         &self,
         _request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, ErrorData> {
-        Ok(CallToolResult::structured(serde_json::Value::Object(context.meta.0.clone())))
+    ) -> Result<CallToolResponse, ErrorData> {
+        Ok(rmcp::model::CallToolResult::structured(serde_json::Value::Object(context.meta.0.0.clone())).into())
     }
 }
 

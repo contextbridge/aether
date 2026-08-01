@@ -1,9 +1,8 @@
 use acp_utils::notifications::{
-    CreateElicitationRequestParams, ElicitationAction, ElicitationParams, ElicitationResponse,
-    UrlElicitationCompleteParams,
+    ElicitRequestParams, ElicitationAction, ElicitationParams, ElicitationResponse, UrlElicitationCompleteParams,
 };
 use acp_utils::{
-    ConstTitle, ElicitationSchema, EnumSchema, MultiSelectEnumSchema, PrimitiveSchema, SingleSelectEnumSchema,
+    ConstTitle, ElicitationSchema, EnumSchema, MultiSelectEnumSchema, PrimitiveSchemaDefinition, SingleSelectEnumSchema,
 };
 use agent_client_protocol::Responder;
 use std::io::Write;
@@ -26,6 +25,11 @@ pub enum ElicitationMessage {
 pub enum ElicitationUi {
     Form(Form),
     Url(UrlPrompt),
+    Unsupported(UnsupportedPrompt),
+}
+
+pub struct UnsupportedPrompt {
+    pub message: String,
 }
 
 pub struct UrlPrompt {
@@ -174,6 +178,16 @@ impl Component for ElicitationForm {
                     }
                 }
             }
+            ElicitationUi::Unsupported(_) => {
+                let Event::Key(key) = event else {
+                    return Some(vec![]);
+                };
+                if key.code != KeyCode::Esc {
+                    return Some(vec![]);
+                }
+                let _ = self.responder.take().map(|r| r.respond(Self::cancel()));
+                Some(vec![ElicitationMessage::Responded])
+            }
         }
     }
 
@@ -181,6 +195,7 @@ impl Component for ElicitationForm {
         match &mut self.ui {
             ElicitationUi::Form(form) => form.render(ctx),
             ElicitationUi::Url(prompt) => render_url_prompt(prompt, ctx),
+            ElicitationUi::Unsupported(prompt) => render_unsupported_prompt(prompt, ctx),
         }
     }
 }
@@ -212,13 +227,16 @@ impl ElicitationForm {
         U: Fn(&str) -> Result<(), UrlHandlerError> + Send + Sync + 'static,
     {
         let ui = match params.request {
-            CreateElicitationRequestParams::FormElicitationParams { message, requested_schema, .. } => {
+            ElicitRequestParams::FormElicitationParams { message, requested_schema, .. } => {
                 let fields = parse_schema(&requested_schema);
                 ElicitationUi::Form(Form::new(message, fields))
             }
-            CreateElicitationRequestParams::UrlElicitationParams { message, url, elicitation_id, .. } => {
+            ElicitRequestParams::UrlElicitationParams { message, url, elicitation_id, .. } => {
                 ElicitationUi::Url(UrlPrompt::new(params.server_name, elicitation_id, message, url))
             }
+            _ => ElicitationUi::Unsupported(UnsupportedPrompt {
+                message: "This server requested an unsupported type of input.".to_string(),
+            }),
         };
         Self {
             ui,
@@ -234,6 +252,7 @@ impl ElicitationForm {
                 ElicitationResponse { action: ElicitationAction::Accept, content: Some(form.to_json()) }
             }
             ElicitationUi::Url(_) => ElicitationResponse { action: ElicitationAction::Accept, content: None },
+            ElicitationUi::Unsupported(_) => Self::cancel(),
         }
     }
 
@@ -300,6 +319,17 @@ pub fn render_url_prompt(prompt: &UrlPrompt, ctx: &ViewContext) -> Frame {
     }
 
     Frame::new(lines)
+}
+
+pub fn render_unsupported_prompt(prompt: &UnsupportedPrompt, ctx: &ViewContext) -> Frame {
+    use tui::{Line, Style};
+
+    Frame::new(vec![
+        Line::default(),
+        Line::with_style(&prompt.message, Style::fg(ctx.theme.error())),
+        Line::default(),
+        Line::with_style("Press Esc to close.", Style::fg(ctx.theme.text_secondary())),
+    ])
 }
 
 fn is_local_http_url(url: &url::Url) -> bool {
@@ -397,81 +427,92 @@ fn parse_schema(schema: &ElicitationSchema) -> Vec<FormField> {
     schema
         .properties
         .iter()
-        .map(|(name, prop)| {
+        .filter_map(|(name, prop)| {
+            let Some(kind) = parse_field_kind(prop) else {
+                tracing::warn!(field = name, "Ignoring unsupported elicitation schema field");
+                return None;
+            };
             let (title, description) = extract_metadata(prop);
-            FormField {
+            Some(FormField {
                 name: name.clone(),
                 label: title.unwrap_or_else(|| name.clone()),
                 description,
                 required: required.iter().any(|r| r == name),
-                kind: parse_field_kind(prop),
-            }
+                kind,
+            })
         })
         .collect()
 }
 
-fn parse_field_kind(prop: &PrimitiveSchema) -> FormFieldKind {
+fn parse_field_kind(prop: &PrimitiveSchemaDefinition) -> Option<FormFieldKind> {
     match prop {
-        PrimitiveSchema::Boolean(b) => FormFieldKind::Boolean(Checkbox::new(b.default.unwrap_or(false))),
-        PrimitiveSchema::Integer(_) => FormFieldKind::Number(NumberField::new(String::new(), true)),
-        PrimitiveSchema::Number(_) => FormFieldKind::Number(NumberField::new(String::new(), false)),
-        PrimitiveSchema::String(_) => FormFieldKind::Text(TextField::new(String::new())),
-        PrimitiveSchema::Enum(e) => parse_enum_field(e),
+        PrimitiveSchemaDefinition::Boolean(b) => {
+            Some(FormFieldKind::Boolean(Checkbox::new(b.default.unwrap_or(false))))
+        }
+        PrimitiveSchemaDefinition::Integer(_) => Some(FormFieldKind::Number(NumberField::new(String::new(), true))),
+        PrimitiveSchemaDefinition::Number(_) => Some(FormFieldKind::Number(NumberField::new(String::new(), false))),
+        PrimitiveSchemaDefinition::String(_) => Some(FormFieldKind::Text(TextField::new(String::new()))),
+        PrimitiveSchemaDefinition::Enum(e) => parse_enum_field(e),
+        _ => None,
     }
 }
 
-fn parse_enum_field(e: &EnumSchema) -> FormFieldKind {
+fn parse_enum_field(e: &EnumSchema) -> Option<FormFieldKind> {
     match e {
         EnumSchema::Single(s) => match s {
             SingleSelectEnumSchema::Untitled(u) => {
                 let options = options_from_strings(&u.enum_);
                 let default_idx =
                     u.default.as_ref().and_then(|d| options.iter().position(|o| o.value == *d)).unwrap_or(0);
-                FormFieldKind::SingleSelect(RadioSelect::new(options, default_idx))
+                Some(FormFieldKind::SingleSelect(RadioSelect::new(options, default_idx)))
             }
             SingleSelectEnumSchema::Titled(t) => {
                 let options = options_from_const_titles(&t.one_of);
                 let default_idx =
                     t.default.as_ref().and_then(|d| options.iter().position(|o| o.value == *d)).unwrap_or(0);
-                FormFieldKind::SingleSelect(RadioSelect::new(options, default_idx))
+                Some(FormFieldKind::SingleSelect(RadioSelect::new(options, default_idx)))
             }
+            _ => None,
         },
         EnumSchema::Multi(m) => match m {
             MultiSelectEnumSchema::Untitled(u) => {
                 let options = options_from_strings(&u.items.enum_);
                 let defaults = u.default.as_deref().unwrap_or(&[]);
                 let selected: Vec<bool> = options.iter().map(|o| defaults.contains(&o.value)).collect();
-                FormFieldKind::MultiSelect(MultiSelect::new(options, selected))
+                Some(FormFieldKind::MultiSelect(MultiSelect::new(options, selected)))
             }
             MultiSelectEnumSchema::Titled(t) => {
                 let options = options_from_const_titles(&t.items.any_of);
                 let defaults = t.default.as_deref().unwrap_or(&[]);
                 let selected: Vec<bool> = options.iter().map(|o| defaults.contains(&o.value)).collect();
-                FormFieldKind::MultiSelect(MultiSelect::new(options, selected))
+                Some(FormFieldKind::MultiSelect(MultiSelect::new(options, selected)))
             }
+            _ => None,
         },
         EnumSchema::Legacy(l) => {
             let options = options_from_strings(&l.enum_);
-            FormFieldKind::SingleSelect(RadioSelect::new(options, 0))
+            Some(FormFieldKind::SingleSelect(RadioSelect::new(options, 0)))
         }
+        _ => None,
     }
 }
 
-fn extract_metadata(prop: &PrimitiveSchema) -> (Option<String>, Option<String>) {
+fn extract_metadata(prop: &PrimitiveSchemaDefinition) -> (Option<String>, Option<String>) {
     match prop {
-        PrimitiveSchema::String(s) => {
+        PrimitiveSchemaDefinition::String(s) => {
             (s.title.as_ref().map(ToString::to_string), s.description.as_ref().map(ToString::to_string))
         }
-        PrimitiveSchema::Number(n) => {
+        PrimitiveSchemaDefinition::Number(n) => {
             (n.title.as_ref().map(ToString::to_string), n.description.as_ref().map(ToString::to_string))
         }
-        PrimitiveSchema::Integer(i) => {
+        PrimitiveSchemaDefinition::Integer(i) => {
             (i.title.as_ref().map(ToString::to_string), i.description.as_ref().map(ToString::to_string))
         }
-        PrimitiveSchema::Boolean(b) => {
+        PrimitiveSchemaDefinition::Boolean(b) => {
             (b.title.as_ref().map(ToString::to_string), b.description.as_ref().map(ToString::to_string))
         }
-        PrimitiveSchema::Enum(e) => extract_enum_metadata(e),
+        PrimitiveSchemaDefinition::Enum(e) => extract_enum_metadata(e),
+        _ => (None, None),
     }
 }
 
@@ -484,6 +525,7 @@ fn extract_enum_metadata(e: &EnumSchema) -> (Option<String>, Option<String>) {
             SingleSelectEnumSchema::Titled(t) => {
                 (t.title.as_ref().map(ToString::to_string), t.description.as_ref().map(ToString::to_string))
             }
+            _ => (None, None),
         },
         EnumSchema::Multi(m) => match m {
             MultiSelectEnumSchema::Untitled(u) => {
@@ -492,10 +534,12 @@ fn extract_enum_metadata(e: &EnumSchema) -> (Option<String>, Option<String>) {
             MultiSelectEnumSchema::Titled(t) => {
                 (t.title.as_ref().map(ToString::to_string), t.description.as_ref().map(ToString::to_string))
             }
+            _ => (None, None),
         },
         EnumSchema::Legacy(l) => {
             (l.title.as_ref().map(ToString::to_string), l.description.as_ref().map(ToString::to_string))
         }
+        _ => (None, None),
     }
 }
 

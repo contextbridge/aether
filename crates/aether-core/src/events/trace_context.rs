@@ -1,4 +1,4 @@
-use rmcp::model::Meta;
+use rmcp::model::RequestMetaObject;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -21,15 +21,15 @@ pub struct TraceContext {
 impl TraceContext {
     /// Reads the trace context a caller attached to MCP request metadata via
     /// [`to_meta`](Self::to_meta), if any.
-    pub fn from_meta(meta: &Meta) -> Option<Self> {
+    pub fn from_meta(meta: &RequestMetaObject) -> Option<Self> {
         let traceparent = meta.0.get(TRACEPARENT_KEY)?.as_str()?.to_string();
         let tracestate = meta.0.get(TRACESTATE_KEY).and_then(|value| value.as_str()).map(str::to_string);
         Some(Self { traceparent, tracestate })
     }
 
     /// Attaches the trace context to MCP request metadata.
-    pub fn to_meta(&self) -> Meta {
-        let mut meta = Meta::new();
+    pub fn to_meta(&self) -> RequestMetaObject {
+        let mut meta = RequestMetaObject::new();
         meta.0.insert(TRACEPARENT_KEY.to_string(), self.traceparent.clone().into());
         if let Some(tracestate) = &self.tracestate {
             meta.0.insert(TRACESTATE_KEY.to_string(), tracestate.clone().into());
@@ -67,6 +67,6 @@ mod tests {
 
     #[test]
     fn from_meta_returns_none_without_a_traceparent() {
-        assert_eq!(TraceContext::from_meta(&Meta::new()), None);
+        assert_eq!(TraceContext::from_meta(&RequestMetaObject::new()), None);
     }
 }

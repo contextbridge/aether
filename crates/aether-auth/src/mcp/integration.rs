@@ -51,7 +51,7 @@ pub async fn perform_oauth_flow(
         );
     }
 
-    let metadata = manager.discover_metadata().await.map_err(rmcp_err("OAuth metadata discovery failed"))?;
+    let metadata = manager.resolve_metadata().await.map_err(rmcp_err("OAuth metadata discovery failed"))?.metadata;
     manager.set_metadata(metadata);
 
     let scopes = manager.select_scopes(None, &[]);
