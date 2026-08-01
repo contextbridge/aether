@@ -36,13 +36,22 @@ pub struct InitTarget {
     pub asset_root: PathBuf,
 }
 
+/// Whether [`apply_init`] may overwrite an existing settings file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverwriteMode {
+    /// Leave an existing settings file untouched, returning [`InitOutcome::AlreadyInitialized`].
+    PreserveExisting,
+    /// Overwrite an existing settings file.
+    OverwriteExisting,
+}
+
 #[derive(Debug, Clone)]
 pub struct InitRequest {
     pub target: InitTargetRequest,
     pub provider: Option<Provider>,
     pub preset: Option<Preset>,
     pub harnesses: Vec<HarnessIntegration>,
-    pub force: bool,
+    pub overwrite: OverwriteMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,7 +98,13 @@ impl InitTarget {
 
 impl InitRequest {
     pub fn user_onboarding() -> Self {
-        Self { target: InitTargetRequest::User, provider: None, preset: None, harnesses: vec![], force: false }
+        Self {
+            target: InitTargetRequest::User,
+            provider: None,
+            preset: None,
+            harnesses: vec![],
+            overwrite: OverwriteMode::PreserveExisting,
+        }
     }
 }
 
@@ -98,9 +113,9 @@ pub fn apply_init(
     provider: Provider,
     preset: Preset,
     harnesses: &[HarnessIntegration],
-    force: bool,
+    overwrite: OverwriteMode,
 ) -> Result<InitOutcome, InitError> {
-    if target.settings_path.is_file() && !force {
+    if target.settings_path.is_file() && matches!(overwrite, OverwriteMode::PreserveExisting) {
         return Ok(InitOutcome::AlreadyInitialized { settings_path: target.settings_path });
     }
 
@@ -132,7 +147,7 @@ pub fn apply_init(
 pub async fn run_init(request: InitRequest) -> Result<InitOutcome, InitError> {
     let target = resolve_target(&request)?;
 
-    if target.settings_path.is_file() && !request.force {
+    if target.settings_path.is_file() && matches!(request.overwrite, OverwriteMode::PreserveExisting) {
         return Ok(InitOutcome::AlreadyInitialized { settings_path: target.settings_path });
     }
 
@@ -142,7 +157,7 @@ pub async fn run_init(request: InitRequest) -> Result<InitOutcome, InitError> {
         return Ok(InitOutcome::Cancelled);
     };
 
-    apply_init(target, provider, preset, &harnesses, request.force)
+    apply_init(target, provider, preset, &harnesses, request.overwrite)
 }
 
 pub fn next_steps_message(outcome: &InitOutcome) -> Option<String> {

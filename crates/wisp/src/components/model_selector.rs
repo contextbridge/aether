@@ -15,7 +15,18 @@ pub struct ModelEntry {
     pub disabled_reason: Option<String>,
 }
 
+/// The modality capabilities of a [`ModelEntry`], used to render capability tags.
+#[derive(Debug, Clone, Copy)]
+struct ModelCapabilities {
+    image: bool,
+    audio: bool,
+}
+
 impl ModelEntry {
+    fn capabilities(&self) -> ModelCapabilities {
+        ModelCapabilities { image: self.supports_image, audio: self.supports_audio }
+    }
+
     pub fn is_disabled(&self) -> bool {
         self.disabled_reason.is_some()
     }
@@ -62,8 +73,8 @@ fn compare_model_entries(a: &ModelEntry, b: &ModelEntry) -> Ordering {
         .then_with(|| a.value.cmp(&b.value))
 }
 
-fn capability_tags(supports_image: bool, supports_audio: bool) -> &'static str {
-    match (supports_image, supports_audio) {
+fn capability_tags(caps: ModelCapabilities) -> &'static str {
+    match (caps.image, caps.audio) {
         (true, true) => "img  audio",
         (true, false) => "img",
         (false, true) => "audio",
@@ -360,7 +371,7 @@ impl Component for ModelSelector {
                         let bar = reasoning_bar(self.reasoning_effort, &entry.reasoning_levels);
                         line.push_with_style(format!("    {bar}"), indicator_style);
                     }
-                    let caps = capability_tags(entry.supports_image, entry.supports_audio);
+                    let caps = capability_tags(entry.capabilities());
                     if !caps.is_empty() {
                         line.push_with_style(format!("    {caps}"), indicator_style);
                     }
@@ -700,22 +711,22 @@ mod tests {
 
     #[test]
     fn capability_tags_empty_when_no_support() {
-        assert_eq!(capability_tags(false, false), "");
+        assert_eq!(capability_tags(ModelCapabilities { image: false, audio: false }), "");
     }
 
     #[test]
     fn capability_tags_image_only() {
-        assert_eq!(capability_tags(true, false), "img");
+        assert_eq!(capability_tags(ModelCapabilities { image: true, audio: false }), "img");
     }
 
     #[test]
     fn capability_tags_audio_only() {
-        assert_eq!(capability_tags(false, true), "audio");
+        assert_eq!(capability_tags(ModelCapabilities { image: false, audio: true }), "audio");
     }
 
     #[test]
     fn capability_tags_both() {
-        assert_eq!(capability_tags(true, true), "img  audio");
+        assert_eq!(capability_tags(ModelCapabilities { image: true, audio: true }), "img  audio");
     }
 
     #[test]

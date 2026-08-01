@@ -112,7 +112,7 @@ pub async fn execute_lsp_rename(input: LspRenameInput, registry: &LspRegistry) -
         files_affected,
         changes,
         success: true,
-        meta: Some(rename_display_meta(&input, true, total_edits, files_affected).into()),
+        meta: Some(rename_success_meta(&input, total_edits, files_affected).into()),
         ..Default::default()
     })
 }
@@ -123,7 +123,7 @@ fn rename_failure(input: &LspRenameInput, error: String) -> LspRenameOutput {
         new_name: input.new_name.clone(),
         success: false,
         error: Some(error),
-        meta: Some(rename_display_meta(input, false, 0, 0).into()),
+        meta: Some(rename_failure_meta(input).into()),
         ..Default::default()
     }
 }
@@ -299,21 +299,16 @@ fn convert_text_edit(edit: &lsp_types::TextEdit) -> TextEdit {
     }
 }
 
-fn rename_display_meta(
-    input: &LspRenameInput,
-    success: bool,
-    total_edits: usize,
-    files_affected: usize,
-) -> ToolDisplayMeta {
+fn rename_success_meta(input: &LspRenameInput, total_edits: usize, files_affected: usize) -> ToolDisplayMeta {
+    ToolDisplayMeta::new(
+        "LSP rename",
+        format!("{} → {} ({} edits in {} files)", input.symbol, input.new_name, total_edits, files_affected),
+    )
+}
+
+fn rename_failure_meta(input: &LspRenameInput) -> ToolDisplayMeta {
     let file = basename(&input.file_path);
-    if success {
-        ToolDisplayMeta::new(
-            "LSP rename",
-            format!("{} → {} ({} edits in {} files)", input.symbol, input.new_name, total_edits, files_affected),
-        )
-    } else {
-        ToolDisplayMeta::new("LSP rename failed", format!("{} in {}", input.symbol, file))
-    }
+    ToolDisplayMeta::new("LSP rename failed", format!("{} in {}", input.symbol, file))
 }
 
 #[cfg(test)]

@@ -38,6 +38,13 @@ struct BindMount {
     container: PathBuf,
 }
 
+/// Whether the sandboxed process runs attached to an interactive terminal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TerminalMode {
+    Interactive,
+    NonInteractive,
+}
+
 #[derive(Debug, Error)]
 pub enum SandboxError {
     #[error("Docker is not installed or not in PATH")]
@@ -80,8 +87,8 @@ fn try_exec_in_container(image: &str) -> Result<ExitCode, SandboxError> {
     let aws = aws_bindings(&home, &env_vars);
     apply_overrides(&mut env_vars, aws.env_overrides);
 
-    let tty = io::stdin().is_terminal();
-    let docker_args = build_docker_args(image, &cwd, &aether_home, &aws.mounts, &env_vars, &inner_args, tty);
+    let terminal = if io::stdin().is_terminal() { TerminalMode::Interactive } else { TerminalMode::NonInteractive };
+    let docker_args = build_docker_args(image, &cwd, &aether_home, &aws.mounts, &env_vars, &inner_args, terminal);
 
     exec_docker(&docker_args)
 }
@@ -191,10 +198,10 @@ fn build_docker_args(
     mounts: &[BindMount],
     env_vars: &[(String, String)],
     inner_args: &[String],
-    tty: bool,
+    terminal: TerminalMode,
 ) -> Vec<String> {
     let mut args = vec!["run".to_string(), "--rm".to_string(), "-i".to_string()];
-    if tty {
+    if terminal == TerminalMode::Interactive {
         args.push("-t".to_string());
     }
     args.extend(
@@ -362,7 +369,15 @@ mod tests {
         let env_vars = vec![("ANTHROPIC_API_KEY".to_string(), "sk-123".to_string())];
         let inner_args = vec!["aether".to_string(), "headless".to_string(), "-m".to_string(), "gpt-4".to_string()];
 
-        let args = build_docker_args("test-image:latest", cwd, aether_home, &[], &env_vars, &inner_args, false);
+        let args = build_docker_args(
+            "test-image:latest",
+            cwd,
+            aether_home,
+            &[],
+            &env_vars,
+            &inner_args,
+            TerminalMode::NonInteractive,
+        );
 
         assert!(args.contains(&"run".to_string()));
         assert!(args.contains(&"--rm".to_string()));
@@ -397,7 +412,7 @@ mod tests {
             &[],
             &[],
             &["aether".to_string(), "headless".to_string()],
-            false,
+            TerminalMode::NonInteractive,
         );
 
         assert!(args.contains(&"my-go-sandbox:v2".to_string()));
@@ -408,7 +423,15 @@ mod tests {
     fn build_docker_args_adds_tty_flag_when_requested() {
         let cwd = Path::new("/tmp");
         let aether_home = Path::new("/home/user/.aether");
-        let args = build_docker_args("test-image", cwd, aether_home, &[], &[], &["aether".to_string()], true);
+        let args = build_docker_args(
+            "test-image",
+            cwd,
+            aether_home,
+            &[],
+            &[],
+            &["aether".to_string()],
+            TerminalMode::Interactive,
+        );
 
         assert!(args.contains(&"-t".to_string()));
         assert!(args.contains(&"-i".to_string()));
@@ -418,7 +441,15 @@ mod tests {
     fn build_docker_args_skips_binary_name_only() {
         let cwd = Path::new("/tmp");
         let aether_home = Path::new("/home/user/.aether");
-        let args = build_docker_args("test-image:latest", cwd, aether_home, &[], &[], &["aether".to_string()], false);
+        let args = build_docker_args(
+            "test-image:latest",
+            cwd,
+            aether_home,
+            &[],
+            &[],
+            &["aether".to_string()],
+            TerminalMode::NonInteractive,
+        );
 
         // Only the binary name — nothing after image
         assert_eq!(args.last().unwrap(), "test-image:latest");
@@ -459,7 +490,7 @@ mod tests {
             &aws.mounts,
             &env_vars,
             &["aether".to_string()],
-            false,
+            TerminalMode::NonInteractive,
         );
         assert!(args.contains(&format!("{}:/root/.aws/config:ro", home.path().join(".aws/config").display())));
         assert!(args.contains(&"AWS_WEB_IDENTITY_TOKEN_FILE=/run/aether-aws/AWS_WEB_IDENTITY_TOKEN_FILE".to_string()));

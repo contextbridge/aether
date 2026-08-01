@@ -1,4 +1,4 @@
-use crate::init::{HarnessIntegration, InitRequest, InitTargetRequest, Preset};
+use crate::init::{HarnessIntegration, InitRequest, InitTargetRequest, OverwriteMode, Preset};
 use clap::{Args, Subcommand};
 use llm::catalog::Provider;
 use std::path::PathBuf;
@@ -48,7 +48,13 @@ pub struct SettingsInitArgs {
 impl From<SettingsInitArgs> for InitRequest {
     fn from(args: SettingsInitArgs) -> Self {
         let target = if args.user { InitTargetRequest::User } else { InitTargetRequest::Project { path: args.path } };
-        Self { target, provider: args.provider, preset: args.preset, harnesses: args.harnesses, force: args.force }
+        Self {
+            target,
+            provider: args.provider,
+            preset: args.preset,
+            harnesses: args.harnesses,
+            overwrite: if args.force { OverwriteMode::OverwriteExisting } else { OverwriteMode::PreserveExisting },
+        }
     }
 }
 
