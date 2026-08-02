@@ -18,12 +18,12 @@ pub use connection::{McpConnectAttempt, McpConnectOutcome, McpServerConnection};
 pub use connection_attempt_manager::McpConnectionAttemptManager;
 pub use error::{McpError, Result};
 pub use manager::{
-    ElicitationRequest, McpClientEvent, McpConnectionDetails, McpManager, McpServerStatus, McpServerStatusEntry,
-    OAuthHandlerContext, OAuthHandlerFactory, UrlElicitationCompleteParams,
+    BrowserAuthorizationResponse, ElicitationRequest, McpClientEvent, McpConnectionDetails, McpManager,
+    McpServerStatus, McpServerStatusEntry, OAuthHandlerContext, OAuthHandlerFactory,
 };
 pub use mcp_client::{McpClient, cancel_result};
 pub use naming::{SERVERNAME_DELIMITER, split_on_server_name};
-pub use oauth_handler::{AETHER_OAUTH_ELICITATION_ID, ElicitingOAuthHandler};
+pub use oauth_handler::ElicitingOAuthHandler;
 
 use std::path::PathBuf;
 

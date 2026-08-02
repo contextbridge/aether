@@ -1,6 +1,4 @@
-use acp_utils::notifications::{
-    ElicitRequestParams, ElicitationAction, ElicitationParams, ElicitationResponse, UrlElicitationCompleteParams,
-};
+use acp_utils::notifications::{ElicitationAction, ElicitationParams, ElicitationRequest, ElicitationResponse};
 use acp_utils::{
     ConstTitle, ElicitationSchema, EnumSchema, MultiSelectEnumSchema, PrimitiveSchemaDefinition, SingleSelectEnumSchema,
 };
@@ -17,7 +15,6 @@ pub enum ElicitationMessage {
     Responded,
     /// Emitted when a URL modal successfully opens the browser.
     UrlOpened {
-        elicitation_id: String,
         server_name: String,
     },
 }
@@ -34,7 +31,6 @@ pub struct UnsupportedPrompt {
 
 pub struct UrlPrompt {
     pub server_name: String,
-    pub elicitation_id: String,
     pub message: String,
     pub url: String,
     pub host: Option<String>,
@@ -82,7 +78,7 @@ pub struct ElicitationForm {
 }
 
 impl UrlPrompt {
-    pub fn new(server_name: String, elicitation_id: String, message: String, url: String) -> Self {
+    pub fn new(server_name: String, message: String, url: String) -> Self {
         let parsed_url = url::Url::parse(&url);
         let host = parsed_url.as_ref().ok().and_then(|parsed| parsed.host_str().map(std::string::ToString::to_string));
 
@@ -106,7 +102,7 @@ impl UrlPrompt {
             }
         }
 
-        Self { server_name, elicitation_id, message, url, host, warnings, launch_error: None, copy_message: None }
+        Self { server_name, message, url, host, warnings, launch_error: None, copy_message: None }
     }
 
     pub fn on_key(
@@ -167,10 +163,9 @@ impl Component for ElicitationForm {
                     return Some(vec![]);
                 };
                 match outcome {
-                    UrlPromptOutcome::Opened => Some(vec![ElicitationMessage::UrlOpened {
-                        elicitation_id: prompt.elicitation_id.clone(),
-                        server_name: prompt.server_name.clone(),
-                    }]),
+                    UrlPromptOutcome::Opened => {
+                        Some(vec![ElicitationMessage::UrlOpened { server_name: prompt.server_name.clone() }])
+                    }
                     UrlPromptOutcome::Copied => Some(vec![]),
                     UrlPromptOutcome::Cancelled => {
                         let _ = self.responder.take().map(|r| r.respond(Self::cancel()));
@@ -227,14 +222,14 @@ impl ElicitationForm {
         U: Fn(&str) -> Result<(), UrlHandlerError> + Send + Sync + 'static,
     {
         let ui = match params.request {
-            ElicitRequestParams::FormElicitationParams { message, requested_schema, .. } => {
+            ElicitationRequest::Form { message, requested_schema, .. } => {
                 let fields = parse_schema(&requested_schema);
                 ElicitationUi::Form(Form::new(message, fields))
             }
-            ElicitRequestParams::UrlElicitationParams { message, url, elicitation_id, .. } => {
-                ElicitationUi::Url(UrlPrompt::new(params.server_name, elicitation_id, message, url))
+            ElicitationRequest::Url(url_request) => {
+                ElicitationUi::Url(UrlPrompt::new(params.server_name, url_request.message, url_request.url))
             }
-            _ => ElicitationUi::Unsupported(UnsupportedPrompt {
+            ElicitationRequest::Unsupported => ElicitationUi::Unsupported(UnsupportedPrompt {
                 message: "This server requested an unsupported type of input.".to_string(),
             }),
         };
@@ -260,13 +255,13 @@ impl ElicitationForm {
         ElicitationResponse { action: ElicitationAction::Cancel, content: None }
     }
 
-    /// If this form is showing the URL prompt that `params` refers to, accept
-    /// it and consume the responder. Returns true iff the form was answered.
-    pub fn accept_url_complete(&mut self, params: &UrlElicitationCompleteParams) -> bool {
+    /// If this form is showing the URL prompt for `server_name`, accept it and
+    /// consume the responder. Returns true iff the form was answered.
+    pub fn accept_browser_authorization_completed(&mut self, server_name: &str) -> bool {
         let ElicitationUi::Url(prompt) = &self.ui else {
             return false;
         };
-        if prompt.server_name != params.server_name || prompt.elicitation_id != params.elicitation_id {
+        if prompt.server_name != server_name {
             return false;
         }
         let response = self.confirm();
@@ -340,7 +335,7 @@ fn is_local_http_url(url: &url::Url) -> bool {
     matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "::1"))
 }
 
-fn default_browser_opener(url: &str) -> Result<(), UrlHandlerError> {
+pub(crate) fn default_browser_opener(url: &str) -> Result<(), UrlHandlerError> {
     #[cfg(target_os = "macos")]
     {
         let status = Command::new("open")
@@ -381,7 +376,7 @@ fn default_browser_opener(url: &str) -> Result<(), UrlHandlerError> {
     Err(UrlHandlerError::Unsupported("Unsupported platform for opening URLs"))
 }
 
-fn default_clipboard_writer(text: &str) -> Result<(), UrlHandlerError> {
+pub(crate) fn default_clipboard_writer(text: &str) -> Result<(), UrlHandlerError> {
     #[cfg(target_os = "macos")]
     {
         return cmd("pbcopy", &[], text);
@@ -709,12 +704,8 @@ mod tests {
 
     #[test]
     fn url_prompt_parses_host() {
-        let prompt = UrlPrompt::new(
-            "github".to_string(),
-            "el-1".to_string(),
-            "Authorize".to_string(),
-            "https://github.com/login/oauth".to_string(),
-        );
+        let prompt =
+            UrlPrompt::new("github".to_string(), "Authorize".to_string(), "https://github.com/login/oauth".to_string());
         assert_eq!(prompt.host.as_deref(), Some("github.com"));
         assert!(prompt.warnings.is_empty());
         assert!(prompt.launch_error.is_none());
@@ -722,35 +713,20 @@ mod tests {
 
     #[test]
     fn url_prompt_warns_on_non_https() {
-        let prompt = UrlPrompt::new(
-            "test".to_string(),
-            "el-1".to_string(),
-            "Open this".to_string(),
-            "http://example.com/form".to_string(),
-        );
+        let prompt = UrlPrompt::new("test".to_string(), "Open this".to_string(), "http://example.com/form".to_string());
         assert_eq!(prompt.warnings.len(), 1);
         assert!(prompt.warnings[0].contains("HTTPS"));
     }
 
     #[test]
     fn url_prompt_does_not_warn_on_localhost() {
-        let prompt = UrlPrompt::new(
-            "test".to_string(),
-            "el-1".to_string(),
-            "Local".to_string(),
-            "http://localhost:3000/auth".to_string(),
-        );
+        let prompt = UrlPrompt::new("test".to_string(), "Local".to_string(), "http://localhost:3000/auth".to_string());
         assert!(prompt.warnings.is_empty());
     }
 
     #[test]
     fn url_prompt_warns_on_invalid_url() {
-        let prompt = UrlPrompt::new(
-            "test".to_string(),
-            "el-invalid".to_string(),
-            "Check this".to_string(),
-            "not a valid url".to_string(),
-        );
+        let prompt = UrlPrompt::new("test".to_string(), "Check this".to_string(), "not a valid url".to_string());
         assert!(prompt.host.is_none());
         assert!(
             prompt.warnings.iter().any(|warning| warning.contains("could not be parsed")),
@@ -760,24 +736,16 @@ mod tests {
 
     #[test]
     fn url_prompt_warns_on_punycode() {
-        let prompt = UrlPrompt::new(
-            "test".to_string(),
-            "el-1".to_string(),
-            "Phishing".to_string(),
-            "https://xn--e1afmkfd.xn--p1ai/".to_string(),
-        );
+        let prompt =
+            UrlPrompt::new("test".to_string(), "Phishing".to_string(), "https://xn--e1afmkfd.xn--p1ai/".to_string());
         assert_eq!(prompt.warnings.len(), 1);
         assert!(prompt.warnings[0].contains("punycode"));
     }
 
     #[test]
     fn url_prompt_warns_on_punycode_and_non_https() {
-        let prompt = UrlPrompt::new(
-            "test".to_string(),
-            "el-1".to_string(),
-            "Both".to_string(),
-            "http://xn--e1afmkfd.xn--p1ai/".to_string(),
-        );
+        let prompt =
+            UrlPrompt::new("test".to_string(), "Both".to_string(), "http://xn--e1afmkfd.xn--p1ai/".to_string());
         assert_eq!(prompt.warnings.len(), 2, "both warnings should be present");
         assert!(prompt.warnings.iter().any(|w| w.contains("punycode")));
         assert!(prompt.warnings.iter().any(|w| w.contains("HTTPS")));
@@ -893,7 +861,6 @@ mod tests {
 
         let prompt = UrlPrompt::new(
             "github".to_string(),
-            "el-1".to_string(),
             "Authorize GitHub".to_string(),
             "https://github.com/login/oauth".to_string(),
         );

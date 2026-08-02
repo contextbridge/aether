@@ -43,7 +43,6 @@ coding = [
     "dep:thiserror",
     "dep:lsp-types",
     "dep:reqwest",
-    "dep:uuid",
     "dep:chrono",
     "dep:htmd",
     "dep:dom_smoothie",
@@ -99,7 +98,7 @@ tracing = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }
 lsp-types = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
-uuid = { workspace = true, optional = true }
+uuid = { workspace = true }
 chrono = { workspace = true, optional = true }
 htmd = { workspace = true, optional = true }
 dom_smoothie = { workspace = true, optional = true }

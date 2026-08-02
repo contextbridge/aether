@@ -1,6 +1,7 @@
 #![doc = include_str!("../docs/components_module.md")]
 
 pub mod app;
+pub mod browser_authorization;
 pub mod command_picker;
 pub(crate) mod common;
 pub(crate) mod context_bar;

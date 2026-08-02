@@ -1,6 +1,6 @@
 use crate::settings::WISP_HOME_ENV_MUTEX;
 use acp_utils::ElicitationSchema;
-use acp_utils::notifications::{ElicitRequestParams, ElicitationParams};
+use acp_utils::notifications::{ElicitationParams, ElicitationRequest, UrlElicitationRequest};
 use std::path::Path;
 use tui::{Event, KeyCode, KeyEvent, KeyModifiers};
 
@@ -27,32 +27,22 @@ pub fn elicitation_params(
 ) -> ElicitationParams {
     ElicitationParams {
         server_name: server.into(),
-        request: ElicitRequestParams::FormElicitationParams { meta: None, message: message.into(), requested_schema },
+        request: ElicitationRequest::Form { meta: None, message: message.into(), requested_schema },
     }
 }
 
-pub fn url_elicitation_params(
-    server: impl Into<String>,
-    elicitation_id: impl Into<String>,
-    url: impl Into<String>,
-) -> ElicitationParams {
-    url_elicitation_params_with_message(server, "Auth", elicitation_id, url)
+pub fn url_elicitation_params(server: impl Into<String>, url: impl Into<String>) -> ElicitationParams {
+    url_elicitation_params_with_message(server, "Auth", url)
 }
 
 pub fn url_elicitation_params_with_message(
     server: impl Into<String>,
     message: impl Into<String>,
-    elicitation_id: impl Into<String>,
     url: impl Into<String>,
 ) -> ElicitationParams {
     ElicitationParams {
         server_name: server.into(),
-        request: ElicitRequestParams::UrlElicitationParams {
-            meta: None,
-            message: message.into(),
-            url: url.into(),
-            elicitation_id: elicitation_id.into(),
-        },
+        request: ElicitationRequest::Url(UrlElicitationRequest { message: message.into(), url: url.into() }),
     }
 }
 

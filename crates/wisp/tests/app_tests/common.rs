@@ -1,8 +1,9 @@
 use acp_utils::client::{AcpEvent, AcpPromptHandle, PromptCommand};
 use acp_utils::notifications::SessionPreviewResponse;
-use acp_utils::notifications::{AetherCapabilities, WorkspaceListResponse};
-use acp_utils::notifications::{ElicitationParams, WorkspaceEntry};
-use acp_utils::notifications::{ElicitationResponse, WorkspaceMoveResponse};
+use acp_utils::notifications::{
+    AetherCapabilities, BrowserAuthorizationParams, BrowserAuthorizationResponseParams, WorkspaceEntry,
+    WorkspaceListResponse, WorkspaceMoveResponse,
+};
 use agent_client_protocol::Responder;
 use agent_client_protocol::schema::{self as acp, AuthMethod, SessionCapabilities, SessionConfigOption};
 use std::path::PathBuf;
@@ -335,12 +336,12 @@ impl Renderer {
         Ok(())
     }
 
-    pub(super) fn on_elicitation_request(
+    pub(super) fn on_browser_authorization_request(
         &mut self,
-        params: ElicitationParams,
-        responder: Responder<ElicitationResponse>,
+        params: BrowserAuthorizationParams,
+        responder: Responder<BrowserAuthorizationResponseParams>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        self.handle_acp_event(AcpEvent::ElicitationRequest { params, responder })?;
+        self.handle_acp_event(AcpEvent::BrowserAuthorizationRequest { params, responder })?;
         Ok(())
     }
 

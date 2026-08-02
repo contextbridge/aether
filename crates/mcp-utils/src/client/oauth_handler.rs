@@ -1,12 +1,9 @@
-use crate::client::manager::{ElicitationRequest, McpClientEvent, OAuthHandlerContext, UrlElicitationCompleteParams};
+use crate::client::manager::{BrowserAuthorizationResponse, McpClientEvent, OAuthHandlerContext};
 use aether_auth::{OAuthCallback, OAuthError, OAuthHandler, accept_oauth_callback};
 use futures::future::BoxFuture;
-use rmcp::model::{ElicitRequestParams, ElicitationAction};
 use std::num::NonZeroU16;
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
-
-pub const AETHER_OAUTH_ELICITATION_ID: &str = "aether-oauth";
 
 /// `OAuthHandler` that dispatches the OAuth authorization URL to the host
 pub struct ElicitingOAuthHandler {
@@ -15,7 +12,6 @@ pub struct ElicitingOAuthHandler {
     server_name: String,
     event_sender: mpsc::Sender<McpClientEvent>,
 }
-
 impl ElicitingOAuthHandler {
     pub fn new(ctx: OAuthHandlerContext) -> Result<Self, std::io::Error> {
         let (port, listener) = {
@@ -44,39 +40,30 @@ impl OAuthHandler for ElicitingOAuthHandler {
         let auth_url = auth_url.to_string();
         Box::pin(async move {
             let (response_sender, response_rx) = oneshot::channel();
-            let request = ElicitationRequest {
-                server_name: self.server_name.clone(),
-                request: ElicitRequestParams::UrlElicitationParams {
-                    meta: None,
+            self.event_sender
+                .send(McpClientEvent::BrowserAuthorizationRequested {
+                    server_name: self.server_name.clone(),
                     message: "Open this URL to authorize MCP server access.".to_string(),
                     url: auth_url,
-                    elicitation_id: AETHER_OAUTH_ELICITATION_ID.to_string(),
-                },
-                response_sender,
-            };
-
-            self.event_sender
-                .send(McpClientEvent::Elicitation(request))
+                    response_sender,
+                })
                 .await
                 .map_err(|_| OAuthError::Rmcp("OAuth prompt channel closed".to_string()))?;
 
             let callback = tokio::select! {
                 callback = accept_oauth_callback(&self.listener) => callback,
                 response = response_rx => match response {
-                    Ok(result) if matches!(result.action, ElicitationAction::Decline | ElicitationAction::Cancel) => {
-                        Err(OAuthError::UserCancelled)
+                    Ok(BrowserAuthorizationResponse::Cancel) => Err(OAuthError::UserCancelled),
+                    Ok(BrowserAuthorizationResponse::Proceed) | Err(_) => {
+                        accept_oauth_callback(&self.listener).await
                     }
-                    Ok(_) | Err(_) => accept_oauth_callback(&self.listener).await,
                 },
             }?;
 
-            let complete = UrlElicitationCompleteParams {
-                server_name: self.server_name.clone(),
-                elicitation_id: AETHER_OAUTH_ELICITATION_ID.to_string(),
-            };
+            let complete = McpClientEvent::BrowserAuthorizationCompleted { server_name: self.server_name.clone() };
 
-            if self.event_sender.send(McpClientEvent::UrlElicitationComplete(complete)).await.is_err() {
-                tracing::warn!("Failed to send OAuth URL elicitation completion: receiver dropped");
+            if self.event_sender.send(complete).await.is_err() {
+                tracing::warn!("Failed to send browser authorization completion: receiver dropped");
             }
 
             Ok(callback)

@@ -11,12 +11,15 @@
 //! off a placeholder elicitation request, hands back the captured responder,
 //! and returns a receiver that resolves when the responder is consumed.
 
-use crate::notifications::{ElicitationParams, ElicitationResponse, McpNotification};
+use crate::notifications::{
+    BrowserAuthorizationParams, BrowserAuthorizationResponseParams, ElicitationParams, ElicitationRequest,
+    ElicitationResponse, McpNotification,
+};
 use agent_client_protocol::schema::SessionNotification;
 use agent_client_protocol::{
     self as acp, Agent, Builder, ByteStreams, Client, ConnectionTo, HandleDispatchFrom, NullRun, Responder,
 };
-use rmcp::model::{ElicitRequestParams, ElicitationSchema};
+use rmcp::model::ElicitationSchema;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use tokio::io::DuplexStream;
@@ -32,6 +35,9 @@ pub struct TestPeer {
     elicitation_requests: mpsc::UnboundedReceiver<ElicitationParams>,
     elicitation_responses: Arc<Mutex<VecDeque<ElicitationResponse>>>,
     responder_capture: Arc<Mutex<Option<oneshot::Sender<Responder<ElicitationResponse>>>>>,
+    browser_authorization_requests: mpsc::UnboundedReceiver<BrowserAuthorizationParams>,
+    browser_authorization_responses: Arc<Mutex<VecDeque<BrowserAuthorizationResponseParams>>>,
+    browser_authorization_capture: Arc<Mutex<Option<oneshot::Sender<Responder<BrowserAuthorizationResponseParams>>>>>,
 }
 
 impl TestPeer {
@@ -43,9 +49,15 @@ impl TestPeer {
         let (sn_tx, sn_rx) = mpsc::unbounded_channel::<SessionNotification>();
         let (mcp_tx, mcp_rx) = mpsc::unbounded_channel::<McpNotification>();
         let (el_tx, el_rx) = mpsc::unbounded_channel::<ElicitationParams>();
+        let (ba_tx, ba_rx) = mpsc::unbounded_channel::<BrowserAuthorizationParams>();
         let elicitation_responses: Arc<Mutex<VecDeque<ElicitationResponse>>> = Arc::new(Mutex::new(VecDeque::new()));
         let responder_capture: Arc<Mutex<Option<oneshot::Sender<Responder<ElicitationResponse>>>>> =
             Arc::new(Mutex::new(None));
+        let browser_authorization_responses: Arc<Mutex<VecDeque<BrowserAuthorizationResponseParams>>> =
+            Arc::new(Mutex::new(VecDeque::new()));
+        let browser_authorization_capture: Arc<
+            Mutex<Option<oneshot::Sender<Responder<BrowserAuthorizationResponseParams>>>>,
+        > = Arc::new(Mutex::new(None));
 
         let builder = Client
             .builder()
@@ -90,6 +102,30 @@ impl TestPeer {
                     }
                 },
                 acp::on_receive_request!(),
+            )
+            .on_receive_request(
+                {
+                    let tx = ba_tx;
+                    let responses = browser_authorization_responses.clone();
+                    let capture = browser_authorization_capture.clone();
+                    async move |req: BrowserAuthorizationParams,
+                                responder: Responder<BrowserAuthorizationResponseParams>,
+                                _cx| {
+                        if let Some(capture_tx) = capture.lock().unwrap().take() {
+                            return match capture_tx.send(responder) {
+                                Ok(()) => Ok(()),
+                                Err(responder) => responder.respond_with_error(acp::Error::internal_error()),
+                            };
+                        }
+                        let _ = tx.send(req);
+                        let queued = responses.lock().unwrap().pop_front();
+                        match queued {
+                            Some(response) => responder.respond(response),
+                            None => responder.respond_with_error(acp::Error::method_not_found()),
+                        }
+                    }
+                },
+                acp::on_receive_request!(),
             );
 
         let peer = Self {
@@ -98,6 +134,9 @@ impl TestPeer {
             elicitation_requests: el_rx,
             elicitation_responses,
             responder_capture,
+            browser_authorization_requests: ba_rx,
+            browser_authorization_responses,
+            browser_authorization_capture,
         };
         (peer, builder)
     }
@@ -114,6 +153,10 @@ impl TestPeer {
         self.elicitation_requests.recv().await.expect("peer channel closed")
     }
 
+    pub async fn next_browser_authorization_request(&mut self) -> BrowserAuthorizationParams {
+        self.browser_authorization_requests.recv().await.expect("peer channel closed")
+    }
+
     /// Queue a response the peer will hand back for the next incoming
     /// elicitation request. If the queue is empty when a request arrives, the
     /// peer responds with a protocol error, which exercises the
@@ -125,6 +168,22 @@ impl TestPeer {
     pub fn capture_next_elicitation(&self) -> oneshot::Receiver<Responder<ElicitationResponse>> {
         let (responder_tx, responder_rx) = oneshot::channel::<Responder<ElicitationResponse>>();
         *self.responder_capture.lock().unwrap() = Some(responder_tx);
+        responder_rx
+    }
+
+    /// Queue a response the peer will hand back for the next incoming
+    /// browser-authorization request. If the queue is empty when a request
+    /// arrives, the peer responds with a protocol error, which exercises the
+    /// cancel fallback path in the caller.
+    pub fn queue_browser_authorization_response(&self, response: BrowserAuthorizationResponseParams) {
+        self.browser_authorization_responses.lock().unwrap().push_back(response);
+    }
+
+    pub fn capture_next_browser_authorization(
+        &self,
+    ) -> oneshot::Receiver<Responder<BrowserAuthorizationResponseParams>> {
+        let (responder_tx, responder_rx) = oneshot::channel::<Responder<BrowserAuthorizationResponseParams>>();
+        *self.browser_authorization_capture.lock().unwrap() = Some(responder_tx);
         responder_rx
     }
 
@@ -147,6 +206,29 @@ impl TestPeer {
         let cx = cx.clone();
         spawn_local(async move {
             if let Ok(resp) = cx.send_request(placeholder_params()).block_task().await {
+                let _ = response_tx.send(resp);
+            }
+        });
+
+        let responder = responder_rx.await.expect("client handler must capture responder");
+        (responder, response_rx)
+    }
+
+    /// Kick off a placeholder browser-authorization request from the agent side
+    /// of `cx`, hand back the [`Responder<BrowserAuthorizationResponseParams>`]
+    /// captured on the client side, and return a receiver that resolves when
+    /// the responder is consumed.
+    pub async fn fake_browser_authorization(
+        &mut self,
+        cx: &ConnectionTo<Client>,
+    ) -> (Responder<BrowserAuthorizationResponseParams>, oneshot::Receiver<BrowserAuthorizationResponseParams>) {
+        let (responder_tx, responder_rx) = oneshot::channel::<Responder<BrowserAuthorizationResponseParams>>();
+        *self.browser_authorization_capture.lock().unwrap() = Some(responder_tx);
+
+        let (response_tx, response_rx) = oneshot::channel::<BrowserAuthorizationResponseParams>();
+        let cx = cx.clone();
+        spawn_local(async move {
+            if let Ok(resp) = cx.send_request(placeholder_browser_authorization_params()).block_task().await {
                 let _ = response_tx.send(resp);
             }
         });
@@ -196,10 +278,14 @@ pub async fn test_connection() -> (ConnectionTo<Client>, TestPeer) {
 fn placeholder_params() -> ElicitationParams {
     ElicitationParams {
         server_name: String::new(),
-        request: ElicitRequestParams::FormElicitationParams {
+        request: ElicitationRequest::Form {
             meta: None,
             message: String::new(),
             requested_schema: ElicitationSchema::builder().build().expect("empty schema is valid"),
         },
     }
+}
+
+fn placeholder_browser_authorization_params() -> BrowserAuthorizationParams {
+    BrowserAuthorizationParams { server_name: String::new(), message: String::new(), url: String::new() }
 }

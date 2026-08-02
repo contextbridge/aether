@@ -7,6 +7,7 @@ mod lsp_operations_e2e;
 mod lsp_ts_diagnostics_e2e;
 mod lsp_ts_operations_e2e;
 mod lsp_workspace_search_contract;
+mod mrtr_servers;
 mod plan_mcp;
 mod plugins_mcp_agents;
 mod plugins_mcp_skills;

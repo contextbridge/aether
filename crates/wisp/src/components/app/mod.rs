@@ -28,7 +28,10 @@ use crate::workspace_status::WorkspaceStatus;
 use acp_utils::client::{AcpEvent, AcpPromptHandle};
 use acp_utils::config_meta::SelectOptionMeta;
 use acp_utils::config_option_id::ConfigOptionId;
-use acp_utils::notifications::{AetherCapabilities, ElicitRequestParams, ElicitationAction, ElicitationResponse};
+use acp_utils::notifications::{
+    AetherCapabilities, BrowserAuthorizationParams, BrowserAuthorizationResponseParams, ElicitationAction,
+    ElicitationRequest, ElicitationResponse,
+};
 use agent_client_protocol::Responder;
 use agent_client_protocol::schema::{self as acp, SessionId};
 use attachments::build_attachment_blocks;
@@ -198,6 +201,9 @@ impl App {
                 self.conversation_screen.on_prompt_error(&error);
             }
             AcpEvent::ElicitationRequest { params, responder } => self.on_elicitation_request(params, responder),
+            AcpEvent::BrowserAuthorizationRequest { params, responder } => {
+                self.on_browser_authorization_request(params, responder);
+            }
             AcpEvent::AuthenticateComplete { method_id } => self.on_authenticate_complete(&method_id),
             AcpEvent::AuthenticateFailed { method_id, error } => self.on_authenticate_failed(&method_id, &error),
             AcpEvent::ConfigOptionUpdateFailed { error } => {
@@ -591,6 +597,18 @@ impl App {
         }
     }
 
+    fn on_browser_authorization_request(
+        &mut self,
+        params: BrowserAuthorizationParams,
+        responder: Responder<BrowserAuthorizationResponseParams>,
+    ) {
+        if let Some(ref mut overlay) = self.settings_overlay {
+            overlay.on_browser_authorization_request(params, responder);
+        } else {
+            self.conversation_screen.on_browser_authorization_request(params, responder);
+        }
+    }
+
     fn on_mcp_notification(&mut self, notification: acp_utils::notifications::McpNotification) {
         use acp_utils::notifications::McpNotification;
         match notification {
@@ -600,11 +618,11 @@ impl App {
                 }
                 self.server_statuses = servers;
             }
-            McpNotification::UrlElicitationComplete(params) => {
+            McpNotification::BrowserAuthorizationCompleted { server_name } => {
                 if let Some(ref mut overlay) = self.settings_overlay {
-                    overlay.on_url_elicitation_complete(&params);
+                    overlay.on_browser_authorization_completed(&server_name);
                 }
-                self.conversation_screen.on_url_elicitation_complete(&params);
+                self.conversation_screen.on_browser_authorization_completed(&server_name);
             }
         }
     }
@@ -737,11 +755,9 @@ impl Component for App {
     }
 }
 
-fn plan_review_meta_from_request(request: &ElicitRequestParams) -> Option<PlanReviewElicitationMeta> {
+fn plan_review_meta_from_request(request: &ElicitationRequest) -> Option<PlanReviewElicitationMeta> {
     match request {
-        ElicitRequestParams::FormElicitationParams { meta, .. } => {
-            PlanReviewElicitationMeta::parse(meta.as_ref().map(|meta| &meta.0.0))
-        }
+        ElicitationRequest::Form { meta, .. } => PlanReviewElicitationMeta::parse(meta.as_ref().map(|meta| &meta.0.0)),
         _ => None,
     }
 }
@@ -906,7 +922,7 @@ mod tests {
 
         acp_utils::notifications::ElicitationParams {
             server_name: "plan-server".to_string(),
-            request: acp_utils::notifications::ElicitRequestParams::FormElicitationParams {
+            request: acp_utils::notifications::ElicitationRequest::Form {
                 meta: Some(
                     serde_json::from_value(serde_json::Value::Object(meta))
                         .expect("deserialize plan review metadata into rmcp meta"),
@@ -1553,16 +1569,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn url_completion_appends_status_text_for_known_pending_id() {
+    async fn browser_authorization_completed_appends_status_text_for_known_pending_server() {
         let mut app = make_app();
 
-        app.conversation_screen.pending_url_elicitations.insert(("github".to_string(), "el-1".to_string()));
+        app.conversation_screen.pending_url_elicitations.insert("github".to_string());
 
-        let params = acp_utils::notifications::UrlElicitationCompleteParams {
-            server_name: "github".to_string(),
-            elicitation_id: "el-1".to_string(),
-        };
-        app.conversation_screen.on_url_elicitation_complete(&params);
+        app.conversation_screen.on_browser_authorization_completed("github");
 
         let messages: Vec<_> = app
             .conversation_screen
@@ -1573,43 +1585,35 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(messages.len(), 1, "should show completion message for known ID");
+        assert_eq!(messages.len(), 1, "should show completion message for known server");
         assert!(messages[0].to_lowercase().contains("retry"), "completion message should mention retry");
     }
 
     #[tokio::test]
-    async fn url_completion_ignores_unknown_id() {
+    async fn browser_authorization_completed_ignores_unknown_server() {
         let mut app = make_app();
 
         // No pending elicitations registered
-        let params = acp_utils::notifications::UrlElicitationCompleteParams {
-            server_name: "unknown-server".to_string(),
-            elicitation_id: "el-unknown".to_string(),
-        };
-        app.conversation_screen.on_url_elicitation_complete(&params);
+        app.conversation_screen.on_browser_authorization_completed("unknown-server");
 
         let has_completion = app
             .conversation_screen
             .conversation
             .segments()
             .any(|seg| matches!(seg, SegmentContent::UserMessage(t) if t.contains("finished")));
-        assert!(!has_completion, "should not show completion message for unknown ID");
+        assert!(!has_completion, "should not show completion message for unknown server");
     }
 
     #[tokio::test]
-    async fn url_completion_ignores_mismatched_server_name_for_known_id() {
+    async fn browser_authorization_completed_ignores_mismatched_server_name() {
         let mut app = make_app();
 
-        app.conversation_screen.pending_url_elicitations.insert(("github".to_string(), "el-1".to_string()));
+        app.conversation_screen.pending_url_elicitations.insert("github".to_string());
 
-        let params = acp_utils::notifications::UrlElicitationCompleteParams {
-            server_name: "linear".to_string(),
-            elicitation_id: "el-1".to_string(),
-        };
-        app.conversation_screen.on_url_elicitation_complete(&params);
+        app.conversation_screen.on_browser_authorization_completed("linear");
 
         assert!(
-            app.conversation_screen.pending_url_elicitations.contains(&("github".to_string(), "el-1".to_string())),
+            app.conversation_screen.pending_url_elicitations.contains("github"),
             "mismatched server name should not clear the pending elicitation"
         );
         let has_completion = app
@@ -1621,20 +1625,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn url_completion_ignores_duplicate_id() {
+    async fn browser_authorization_completed_ignores_duplicate_completion() {
         let mut app = make_app();
 
-        app.conversation_screen.pending_url_elicitations.insert(("github".to_string(), "el-1".to_string()));
-
-        let params = acp_utils::notifications::UrlElicitationCompleteParams {
-            server_name: "github".to_string(),
-            elicitation_id: "el-1".to_string(),
-        };
+        app.conversation_screen.pending_url_elicitations.insert("github".to_string());
 
         // First completion should show message
-        app.conversation_screen.on_url_elicitation_complete(&params);
-        // Second completion should be silently ignored (ID already removed)
-        app.conversation_screen.on_url_elicitation_complete(&params);
+        app.conversation_screen.on_browser_authorization_completed("github");
+        // Second completion should be silently ignored (server already removed)
+        app.conversation_screen.on_browser_authorization_completed("github");
 
         let count = app
             .conversation_screen
@@ -1653,7 +1652,7 @@ mod tests {
                 let (cx, mut peer) = test_connection().await;
                 let (responder, _rx) = peer.fake_elicitation(&cx).await;
                 app.conversation_screen.active_modal = Some(Modal::Elicitation(ElicitationForm::from_params(
-                    url_elicitation_params("test-server", "el-1", "https://example.com/auth"),
+                    url_elicitation_params("test-server", "https://example.com/auth"),
                     responder,
                 )));
 
@@ -1666,8 +1665,8 @@ mod tests {
     #[tokio::test]
     async fn reset_after_context_cleared_clears_pending_url_elicitations() {
         let mut app = make_app();
-        app.conversation_screen.pending_url_elicitations.insert(("github".to_string(), "el-1".to_string()));
-        app.conversation_screen.pending_url_elicitations.insert(("linear".to_string(), "el-2".to_string()));
+        app.conversation_screen.pending_url_elicitations.insert("github".to_string());
+        app.conversation_screen.pending_url_elicitations.insert("linear".to_string());
 
         app.conversation_screen.reset_after_context_cleared();
 

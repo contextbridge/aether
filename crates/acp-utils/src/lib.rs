@@ -7,6 +7,7 @@ pub const AETHER_TOOL_NAME_META_KEY: &str = "aetherToolName";
 pub mod config_meta;
 pub mod config_option_id;
 pub mod content;
+pub mod elicitation;
 pub mod notifications;
 pub mod settings;
 

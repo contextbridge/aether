@@ -6,6 +6,7 @@ use agent_client_protocol::schema::AuthMethod;
 use agent_client_protocol::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 pub use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
 pub use rmcp::model::ElicitRequestParams;
+use rmcp::model::RequestMetaObject;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 pub use mcp_utils::status::{McpServerAuthCapability, McpServerStatus, McpServerStatusEntry};
@@ -90,16 +91,46 @@ pub struct AuthMethodsUpdatedParams {
     pub auth_methods: Vec<AuthMethod>,
 }
 
+/// A URL elicitation request from an external server, narrowed to the fields
+/// Aether consumes. The removed protocol elicitation id is dropped at the
+/// rmcp conversion boundary in [`crate::elicitation`]; no Aether wire, domain,
+/// or UI type carries it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UrlElicitationRequest {
+    pub message: String,
+    pub url: String,
+}
+
+/// Aether's own elicitation request kind for the `_aether/elicitation` ext
+/// method. This deliberately mirrors the current MCP elicitation spec instead
+/// of rmcp 3.0's legacy URL shape: the URL variant carries no id,
+/// so Aether never serializes the removed protocol field on its own wire.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "mode")]
+pub enum ElicitationRequest {
+    #[serde(rename = "form", rename_all = "camelCase")]
+    Form {
+        #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+        meta: Option<RequestMetaObject>,
+        message: String,
+        requested_schema: crate::ElicitationSchema,
+    },
+    #[serde(rename = "url", rename_all = "camelCase")]
+    Url(UrlElicitationRequest),
+    #[serde(rename = "unsupported")]
+    Unsupported,
+}
+
 /// Request parameters for the `_aether/elicitation` ext method.
 ///
-/// Carries the full RMCP elicitation request plus the originating server name
+/// Carries Aether's own elicitation request plus the originating server name
 /// so the client can distinguish form vs URL mode and display which server is
 /// requesting.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonRpcRequest)]
 #[request(method = "_aether/elicitation", response = ElicitationResponse)]
 pub struct ElicitationParams {
     pub server_name: String,
-    pub request: ElicitRequestParams,
+    pub request: ElicitationRequest,
 }
 
 pub use rmcp::model::ElicitationAction;
@@ -288,14 +319,39 @@ pub struct ElicitationResponse {
     pub content: Option<serde_json::Value>,
 }
 
-pub use mcp_utils::client::UrlElicitationCompleteParams;
+/// Request parameters for the `_aether/browser_authorization` ext method.
+///
+/// A private Aether wire type for the local OAuth browser prompt. It is not an
+/// MCP protocol notification and carries no protocol elicitation id semantics.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonRpcRequest)]
+#[request(method = "_aether/browser_authorization", response = BrowserAuthorizationResponseParams)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserAuthorizationParams {
+    pub server_name: String,
+    pub message: String,
+    pub url: String,
+}
+
+/// Response to a `_aether/browser_authorization` request: whether the host
+/// proceeded with the browser flow (`proceed: true`) or cancelled it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonRpcResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserAuthorizationResponseParams {
+    pub proceed: bool,
+}
 
 /// Server→client MCP extension notifications (relay → wisp).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonRpcNotification)]
 #[notification(method = "_aether/mcp_event")]
 pub enum McpNotification {
-    ServerStatus { servers: Vec<McpServerStatusEntry> },
-    UrlElicitationComplete(UrlElicitationCompleteParams),
+    ServerStatus {
+        servers: Vec<McpServerStatusEntry>,
+    },
+    /// Private Aether event: the browser flow for `server_name` finished.
+    /// This is not an MCP protocol notification and carries no elicitation id.
+    BrowserAuthorizationCompleted {
+        server_name: String,
+    },
 }
 
 /// Client→server MCP extension requests (wisp → relay).
@@ -376,6 +432,11 @@ mod tests {
         assert_eq!(PromptSearchParams { query: String::new(), limit: None }.method(), "_aether/prompt_search");
         assert_eq!(SessionPreviewParams { session_id: String::new() }.method(), "_aether/session_preview");
         assert_eq!(WorkspaceListParams { session_id: String::new() }.method(), "_aether/workspace_list");
+        assert_eq!(
+            BrowserAuthorizationParams { server_name: String::new(), message: String::new(), url: String::new() }
+                .method(),
+            "_aether/browser_authorization"
+        );
         let move_params =
             WorkspaceMoveParams { session_id: String::new(), target: WorkspaceMoveTarget::New { name: String::new() } };
         assert_eq!(move_params.method(), "_aether/workspace_move");
@@ -489,11 +550,8 @@ mod tests {
     }
 
     #[test]
-    fn mcp_notification_url_elicitation_complete_roundtrip() {
-        let msg = McpNotification::UrlElicitationComplete(UrlElicitationCompleteParams {
-            server_name: "github".to_string(),
-            elicitation_id: "el-456".to_string(),
-        });
+    fn mcp_notification_browser_authorization_completed_roundtrip() {
+        let msg = McpNotification::BrowserAuthorizationCompleted { server_name: "github".to_string() };
 
         let untyped = msg.to_untyped_message().expect("serializable");
         let parsed = McpNotification::parse_message(untyped.method(), untyped.params()).expect("roundtrip");
@@ -514,12 +572,31 @@ mod tests {
     }
 
     #[test]
+    fn browser_authorization_params_roundtrip() {
+        let params = BrowserAuthorizationParams {
+            server_name: "github".to_string(),
+            message: "Open this URL to authorize MCP server access.".to_string(),
+            url: "https://github.com/login/oauth/authorize".to_string(),
+        };
+
+        let untyped = params.to_untyped_message().expect("serializable");
+        assert_eq!(untyped.method(), "_aether/browser_authorization");
+        let parsed = BrowserAuthorizationParams::parse_message(untyped.method(), untyped.params()).expect("roundtrip");
+        assert_eq!(parsed, params);
+
+        let response = BrowserAuthorizationResponseParams { proceed: true };
+        let response_json = serde_json::to_string(&response).unwrap();
+        assert_eq!(response_json, r#"{"proceed":true}"#);
+        assert_eq!(serde_json::from_str::<BrowserAuthorizationResponseParams>(&response_json).unwrap(), response);
+    }
+
+    #[test]
     fn elicitation_params_roundtrip() {
         use rmcp::model::{ElicitationSchema, EnumSchema};
 
         let params = ElicitationParams {
             server_name: "github".to_string(),
-            request: ElicitRequestParams::FormElicitationParams {
+            request: ElicitationRequest::Form {
                 meta: None,
                 message: "Pick a color".to_string(),
                 requested_schema: ElicitationSchema::builder()
@@ -539,20 +616,30 @@ mod tests {
     }
 
     #[test]
-    fn elicitation_params_url_variant_has_mode_field() {
+    fn elicitation_params_url_variant_has_mode_field_and_narrow_wire_shape() {
         let params = ElicitationParams {
             server_name: "github".to_string(),
-            request: ElicitRequestParams::UrlElicitationParams {
-                meta: None,
+            request: ElicitationRequest::Url(UrlElicitationRequest {
                 message: "Authorize GitHub".to_string(),
                 url: "https://github.com/login/oauth".to_string(),
-                elicitation_id: "el-123".to_string(),
-            },
+            }),
         };
 
-        let json = serde_json::to_string(&params).unwrap();
-        assert!(json.contains("\"mode\":\"url\""));
-        assert!(json.contains("\"server_name\":\"github\""));
+        // Asserting the exact wire shape proves the URL variant serializes
+        // nothing beyond Aether's own fields, including no removed id.
+        assert_eq!(
+            serde_json::to_value(&params).unwrap(),
+            serde_json::json!({
+                "server_name": "github",
+                "request": {
+                    "mode": "url",
+                    "message": "Authorize GitHub",
+                    "url": "https://github.com/login/oauth"
+                }
+            })
+        );
+        let parsed: ElicitationParams = serde_json::from_str(&serde_json::to_string(&params).unwrap()).unwrap();
+        assert_eq!(parsed, params);
     }
 
     #[test]

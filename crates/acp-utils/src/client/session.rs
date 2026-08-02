@@ -2,8 +2,8 @@ use super::error::AcpClientError;
 use super::event::AcpEvent;
 use super::prompt_handle::{AcpPromptHandle, PromptCommand};
 use crate::notifications::{
-    AuthMethodsUpdatedParams, ContextClearedParams, ContextCompactionParams, ContextUsageParams, ElicitationParams,
-    McpNotification, McpRequest, SubAgentProgressParams,
+    AuthMethodsUpdatedParams, BrowserAuthorizationParams, ContextClearedParams, ContextCompactionParams,
+    ContextUsageParams, ElicitationParams, McpNotification, McpRequest, SubAgentProgressParams,
 };
 use agent_client_protocol::schema::{
     AuthMethod, AuthenticateRequest, CancelNotification, ConfigOptionUpdate, ContentBlock, InitializeRequest,
@@ -95,6 +95,20 @@ async fn run_client_connection(
                         if let AcpEvent::ElicitationRequest { responder, .. } = send_err.0 {
                             return responder.respond_with_error(acp::Error::internal_error());
                         }
+                    }
+                    Ok(())
+                }
+            },
+            acp::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let event_tx = event_tx.clone();
+                async move |params: BrowserAuthorizationParams, responder, _cx| {
+                    if let Err(send_err) = event_tx.send(AcpEvent::BrowserAuthorizationRequest { params, responder })
+                        && let AcpEvent::BrowserAuthorizationRequest { responder, .. } = send_err.0
+                    {
+                        return responder.respond_with_error(acp::Error::internal_error());
                     }
                     Ok(())
                 }

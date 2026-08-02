@@ -242,7 +242,8 @@ async fn on_mcp_event(
             Some(McpClientEvent::ConnectionReady(next_snapshot))
         }
         event @ (McpClientEvent::Elicitation(_)
-        | McpClientEvent::UrlElicitationComplete(_)
+        | McpClientEvent::BrowserAuthorizationRequested { .. }
+        | McpClientEvent::BrowserAuthorizationCompleted { .. }
         | McpClientEvent::AuthenticationFailed { .. }) => Some(event),
     }
 }

@@ -1,12 +1,14 @@
 use super::menu::{SettingMenuMessage, SettingsMenu};
 use super::picker::{SettingsPicker, SettingsPickerMessage};
+use crate::components::browser_authorization::{BrowserAuthorizationMessage, BrowserAuthorizationPrompt};
 use crate::components::elicitation_form::{ElicitationForm, ElicitationMessage, ElicitationUi, UrlPrompt};
 use crate::components::model_selector::{ModelEntry, ModelSelector, ModelSelectorMessage};
 use crate::components::provider_login::{ProviderLoginMessage, ProviderLoginOverlay};
 use crate::components::server_status::{ServerStatusMessage, ServerStatusOverlay};
 use acp_utils::config_option_id::ConfigOptionId;
 use acp_utils::notifications::{
-    ElicitationParams, ElicitationResponse, McpServerStatusEntry, UrlElicitationCompleteParams,
+    BrowserAuthorizationParams, BrowserAuthorizationResponseParams, ElicitationParams, ElicitationResponse,
+    McpServerStatusEntry,
 };
 use agent_client_protocol::Responder;
 use agent_client_protocol::schema::{self as acp, SessionConfigKind, SessionConfigOption};
@@ -35,6 +37,7 @@ pub struct SettingsOverlay {
     menu: SettingsMenu,
     active_pane: SettingsPane,
     pending_elicitation: Option<ElicitationForm>,
+    pending_browser_authorization: Option<BrowserAuthorizationPrompt>,
     server_statuses: Vec<McpServerStatusEntry>,
     auth_methods: Vec<acp::AuthMethod>,
     current_reasoning_effort: Option<String>,
@@ -59,6 +62,7 @@ impl SettingsOverlay {
             menu,
             active_pane: SettingsPane::Menu,
             pending_elicitation: None,
+            pending_browser_authorization: None,
             server_statuses,
             auth_methods,
             current_reasoning_effort: None,
@@ -144,14 +148,29 @@ impl SettingsOverlay {
         self.pending_elicitation = Some(ElicitationForm::from_params(params, responder));
     }
 
-    pub fn on_url_elicitation_complete(&mut self, params: &UrlElicitationCompleteParams) {
-        if self.pending_elicitation.as_mut().is_some_and(|form| form.accept_url_complete(params)) {
+    pub fn on_browser_authorization_request(
+        &mut self,
+        params: BrowserAuthorizationParams,
+        responder: Responder<BrowserAuthorizationResponseParams>,
+    ) {
+        self.pending_browser_authorization = Some(BrowserAuthorizationPrompt::from_params(params, responder));
+    }
+
+    pub fn on_browser_authorization_completed(&mut self, server_name: &str) {
+        if self
+            .pending_elicitation
+            .as_mut()
+            .is_some_and(|form| form.accept_browser_authorization_completed(server_name))
+        {
             self.pending_elicitation = None;
+        }
+        if self.pending_browser_authorization.as_mut().is_some_and(|prompt| prompt.accept_completed(server_name)) {
+            self.pending_browser_authorization = None;
         }
     }
 
     pub fn needs_mouse_capture(&self) -> bool {
-        self.pending_elicitation.is_none()
+        self.pending_elicitation.is_none() && self.pending_browser_authorization.is_none()
     }
 
     pub fn cursor_col(&self) -> usize {
@@ -192,6 +211,12 @@ impl SettingsOverlay {
                 ElicitationUi::Unsupported(_) => shortcut_footer(&[("[Esc]", " Close")], context),
             };
         }
+        if self.pending_browser_authorization.is_some() {
+            return shortcut_footer(
+                &[("[Enter]", " Open Browser  "), ("[C]", " Copy Link  "), ("[Esc]", " Cancel")],
+                context,
+            );
+        }
         let text = match &self.active_pane {
             SettingsPane::ModelSelector(selector) => {
                 let effort = utils::ReasoningEffort::config_str(selector.reasoning_effort());
@@ -228,6 +253,15 @@ impl Component for SettingsOverlay {
             let outcome = form.on_event(event).await;
             if outcome.unwrap_or_default().into_iter().any(|msg| matches!(msg, ElicitationMessage::Responded)) {
                 self.pending_elicitation = None;
+            }
+            return Some(vec![]);
+        }
+
+        if let Some(prompt) = self.pending_browser_authorization.as_mut() {
+            let outcome = prompt.on_event(event).await;
+            if outcome.unwrap_or_default().into_iter().any(|msg| matches!(msg, BrowserAuthorizationMessage::Responded))
+            {
+                self.pending_browser_authorization = None;
             }
             return Some(vec![]);
         }
@@ -373,6 +407,9 @@ impl Component for SettingsOverlay {
         if let Some(form) = self.pending_elicitation.as_mut() {
             container.push(render_settings_elicitation(form, &child_context).into_lines());
         }
+        if let Some(prompt) = self.pending_browser_authorization.as_mut() {
+            container.push(render_settings_browser_authorization(prompt, &child_context).into_lines());
+        }
         container.render(context)
     }
 }
@@ -383,6 +420,10 @@ fn render_settings_elicitation(form: &mut ElicitationForm, context: &ViewContext
     } else {
         form.render(context)
     }
+}
+
+fn render_settings_browser_authorization(prompt: &mut BrowserAuthorizationPrompt, context: &ViewContext) -> Frame {
+    render_settings_url_prompt(&prompt.prompt, context)
 }
 
 fn render_settings_url_prompt(prompt: &UrlPrompt, context: &ViewContext) -> Frame {

@@ -1,4 +1,5 @@
 use crate::components::app::PromptAttachment;
+use crate::components::browser_authorization::{BrowserAuthorizationMessage, BrowserAuthorizationPrompt};
 use crate::components::command_picker::CommandEntry;
 use crate::components::conversation_window::{ConversationBuffer, ConversationWindow};
 use crate::components::elicitation_form::{ElicitationForm, ElicitationMessage};
@@ -10,10 +11,10 @@ use crate::components::session_picker::{SessionEntry, SessionPicker, SessionPick
 use crate::components::tool_call_statuses::{PromptTermination, ToolCallStatuses};
 use crate::components::workspace_picker::{WorkspacePicker, WorkspacePickerMessage};
 use crate::keybindings::Keybindings;
-use acp_utils::ElicitRequestParams;
 use acp_utils::notifications::{
-    AetherCapabilities, ElicitationResponse, PromptSearchParams, PromptSearchResponse, SessionPreviewResponse,
-    WorkspaceEntry, WorkspaceMoveTarget,
+    AetherCapabilities, BrowserAuthorizationParams, BrowserAuthorizationResponseParams, ElicitationRequest,
+    ElicitationResponse, PromptSearchParams, PromptSearchResponse, SessionPreviewResponse, WorkspaceEntry,
+    WorkspaceMoveTarget,
 };
 use agent_client_protocol::Responder;
 use agent_client_protocol::schema::{self as acp, SessionId};
@@ -61,6 +62,7 @@ impl WorkspaceMoveState {
 
 pub(crate) enum Modal {
     Elicitation(ElicitationForm),
+    BrowserAuthorization(BrowserAuthorizationPrompt),
     SessionPicker(SessionPicker),
     WorkspacePicker(WorkspacePicker),
 }
@@ -77,7 +79,7 @@ pub struct ConversationScreen {
     waiting_for_response: bool,
     pub(crate) active_modal: Option<Modal>,
     pub(crate) content_padding: usize,
-    pub(crate) pending_url_elicitations: HashSet<(String, String)>,
+    pub(crate) pending_url_elicitations: HashSet<String>,
     capabilities: AetherCapabilities,
 }
 
@@ -309,27 +311,38 @@ impl ConversationScreen {
         params: acp_utils::notifications::ElicitationParams,
         responder: Responder<ElicitationResponse>,
     ) {
-        if let ElicitRequestParams::UrlElicitationParams { elicitation_id, .. } = &params.request {
-            self.pending_url_elicitations.insert((params.server_name.clone(), elicitation_id.clone()));
+        if matches!(&params.request, ElicitationRequest::Url(_)) {
+            self.pending_url_elicitations.insert(params.server_name.clone());
         }
         self.active_modal = Some(Modal::Elicitation(ElicitationForm::from_params(params, responder)));
+    }
+
+    pub fn on_browser_authorization_request(
+        &mut self,
+        params: BrowserAuthorizationParams,
+        responder: Responder<BrowserAuthorizationResponseParams>,
+    ) {
+        self.pending_url_elicitations.insert(params.server_name.clone());
+        self.active_modal =
+            Some(Modal::BrowserAuthorization(BrowserAuthorizationPrompt::from_params(params, responder)));
     }
 
     pub fn on_sub_agent_progress(&mut self, progress: &acp_utils::notifications::SubAgentProgressParams) {
         self.tool_call_statuses.on_sub_agent_progress(progress);
     }
 
-    pub fn on_url_elicitation_complete(&mut self, params: &acp_utils::notifications::UrlElicitationCompleteParams) {
-        let key = (params.server_name.clone(), params.elicitation_id.clone());
-        if self.pending_url_elicitations.remove(&key) {
-            if let Some(Modal::Elicitation(form)) = self.active_modal.as_mut()
-                && form.accept_url_complete(params)
-            {
+    pub fn on_browser_authorization_completed(&mut self, server_name: &str) {
+        if self.pending_url_elicitations.remove(server_name) {
+            let modal_closed = match self.active_modal.as_mut() {
+                Some(Modal::Elicitation(form)) => form.accept_browser_authorization_completed(server_name),
+                Some(Modal::BrowserAuthorization(prompt)) => prompt.accept_completed(server_name),
+                _ => false,
+            };
+            if modal_closed {
                 self.active_modal = None;
             }
             self.conversation.push_user_message(&format!(
-                "[wisp] {} finished the browser flow. Retry the previous request if it did not resume automatically.",
-                params.server_name
+                "[wisp] {server_name} finished the browser flow. Retry the previous request if it did not resume automatically."
             ));
         }
     }
@@ -348,8 +361,25 @@ impl ConversationScreen {
                         ElicitationMessage::Responded => {
                             self.active_modal = None;
                         }
-                        ElicitationMessage::UrlOpened { elicitation_id, server_name } => {
-                            self.pending_url_elicitations.insert((server_name.clone(), elicitation_id.clone()));
+                        ElicitationMessage::UrlOpened { server_name } => {
+                            self.pending_url_elicitations.insert(server_name.clone());
+                            self.conversation.push_user_message(&format!(
+                                "[wisp] Opened browser for {server_name}. Complete the flow, then retry the previous action if needed."
+                            ));
+                        }
+                    }
+                }
+                Some(vec![])
+            }
+            Modal::BrowserAuthorization(prompt) => {
+                let outcome = prompt.on_event(event).await;
+                for msg in outcome.unwrap_or_default() {
+                    match msg {
+                        BrowserAuthorizationMessage::Responded => {
+                            self.active_modal = None;
+                        }
+                        BrowserAuthorizationMessage::Opened { server_name } => {
+                            self.pending_url_elicitations.insert(server_name.clone());
                             self.conversation.push_user_message(&format!(
                                 "[wisp] Opened browser for {server_name}. Complete the flow, then retry the previous action if needed."
                             ));
@@ -504,6 +534,7 @@ impl Component for ConversationScreen {
             Some(Modal::SessionPicker(picker)) => Some(picker.render(ctx)),
             Some(Modal::WorkspacePicker(picker)) => Some(picker.render(ctx)),
             Some(Modal::Elicitation(form)) => Some(form.render(ctx)),
+            Some(Modal::BrowserAuthorization(prompt)) => Some(prompt.render(ctx)),
             None => None,
         };
 

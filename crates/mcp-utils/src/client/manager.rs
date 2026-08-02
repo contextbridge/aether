@@ -21,7 +21,6 @@ use rmcp::{
     },
     service::RunningService,
 };
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
@@ -53,16 +52,21 @@ pub struct ElicitationRequest {
     pub response_sender: oneshot::Sender<ElicitResult>,
 }
 
+/// Outcome of a host-displayed browser authorization prompt. A private Aether
+/// type: it never serializes as an MCP notification and carries no protocol
+/// elicitation id semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrowserAuthorizationResponse {
+    /// The host opened the authorization URL; keep waiting for the callback.
+    Proceed,
+    /// The host dismissed the prompt; treat the flow as user-cancelled.
+    Cancel,
+}
+
 #[derive(Debug, Clone)]
 pub struct ElicitationResponse {
     pub action: ElicitationAction,
     pub content: Option<Value>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct UrlElicitationCompleteParams {
-    pub server_name: String,
-    pub elicitation_id: String,
 }
 
 /// Events emitted by MCP clients that require attention from the host
@@ -71,11 +75,32 @@ pub struct UrlElicitationCompleteParams {
 #[derive(Debug)]
 pub enum McpClientEvent {
     Elicitation(ElicitationRequest),
-    UrlElicitationComplete(UrlElicitationCompleteParams),
+    /// A private Aether event: ask the host to show a browser authorization
+    /// prompt for `server_name`. Unlike the removed protocol URL elicitation,
+    /// this carries no elicitation id, never serializes as an MCP notification,
+    /// and is answered through `response_sender`.
+    BrowserAuthorizationRequested {
+        server_name: String,
+        message: String,
+        url: String,
+        response_sender: oneshot::Sender<BrowserAuthorizationResponse>,
+    },
+    /// A private Aether event: the browser flow for `server_name` finished.
+    /// Unlike the removed protocol completion notification, this carries no
+    /// elicitation id and never serializes as an MCP notification.
+    BrowserAuthorizationCompleted {
+        server_name: String,
+    },
     ServerStatusesChanged(Vec<McpServerStatusEntry>),
     ToolDefinitionsChanged(Vec<ToolDefinition>),
-    ServerInstructionsUpdated { server: String, instructions: Option<String> },
-    AuthenticationFailed { server: String, error: String },
+    ServerInstructionsUpdated {
+        server: String,
+        instructions: Option<String>,
+    },
+    AuthenticationFailed {
+        server: String,
+        error: String,
+    },
     ConnectionReady(McpConnectionDetails),
 }
 

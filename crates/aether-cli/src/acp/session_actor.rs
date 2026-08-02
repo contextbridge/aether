@@ -1,4 +1,6 @@
-use acp_utils::notifications::{ElicitationParams, McpNotification};
+use acp_utils::notifications::{
+    BrowserAuthorizationParams, ElicitationParams, ElicitationRequest as AetherElicitationRequest, McpNotification,
+};
 use acp_utils::server::AcpServerError;
 use aether_auth::OAuthCredentialStorage;
 use aether_core::context::ext::conversation_messages_from_events;
@@ -9,11 +11,13 @@ use agent_client_protocol::{Client, ConnectionTo, JsonRpcNotification, Responder
 use llm::catalog::LlmModel;
 use llm::parser::ModelProviderParser;
 use llm::{ChatMessage, ContentBlock, ProviderConnectionOverrides, ReasoningEffort};
-use mcp_utils::client::{ElicitationRequest, McpClientEvent, McpServerStatusEntry, cancel_result};
+use mcp_utils::client::{
+    BrowserAuthorizationResponse, ElicitationRequest, McpClientEvent, McpServerStatusEntry, cancel_result,
+};
 use rmcp::model::{ElicitRequestParams, ElicitResult};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
@@ -565,12 +569,15 @@ fn on_mcp_client_event(connection: &ConnectionTo<Client>, event: McpClientEvent)
         McpClientEvent::Elicitation(elicitation) => {
             spawn_elicitation_request(connection, elicitation);
         }
-        McpClientEvent::UrlElicitationComplete(params) => {
+        McpClientEvent::BrowserAuthorizationRequested { server_name, message, url, response_sender } => {
+            spawn_browser_authorization_request(connection, server_name, message, url, response_sender);
+        }
+        McpClientEvent::BrowserAuthorizationCompleted { server_name } => {
             if let Err(e) = connection
-                .send_notification(McpNotification::UrlElicitationComplete(params))
+                .send_notification(McpNotification::BrowserAuthorizationCompleted { server_name })
                 .map_err(|e| AcpServerError::protocol("_aether/mcp_event", e))
             {
-                error!("Failed to send URL elicitation complete notification: {:?}", e);
+                error!("Failed to send browser authorization completion notification: {:?}", e);
             }
         }
         McpClientEvent::ServerStatusesChanged(servers) => send_mcp_server_status(connection, servers),
@@ -617,8 +624,55 @@ fn spawn_elicitation_request(connection: &ConnectionTo<Client>, elicitation: Eli
     }
 }
 
+/// Forward a private browser-authorization prompt to the ACP peer as a
+/// `_aether/browser_authorization` request and map the peer's `proceed`
+/// verdict back onto the OAuth handler's response channel. Never serializes as
+/// an MCP notification and carries no protocol elicitation id.
+async fn on_browser_authorization_request(
+    connection: &ConnectionTo<Client>,
+    server_name: String,
+    message: String,
+    url: String,
+    response_sender: oneshot::Sender<BrowserAuthorizationResponse>,
+) {
+    let params = BrowserAuthorizationParams { server_name, message, url };
+    let outcome = match connection.send_request(params).block_task().await {
+        Ok(response) => {
+            if response.proceed {
+                BrowserAuthorizationResponse::Proceed
+            } else {
+                BrowserAuthorizationResponse::Cancel
+            }
+        }
+        Err(e) => {
+            error!("Failed to send browser authorization request: {:?}", e);
+            BrowserAuthorizationResponse::Cancel
+        }
+    };
+
+    if response_sender.send(outcome).is_err() {
+        error!("Failed to send browser authorization response: receiver dropped");
+    }
+}
+
+fn spawn_browser_authorization_request(
+    connection: &ConnectionTo<Client>,
+    server_name: String,
+    message: String,
+    url: String,
+    response_sender: oneshot::Sender<BrowserAuthorizationResponse>,
+) {
+    let connection = connection.clone();
+    if let Err(e) = connection.clone().spawn(async move {
+        on_browser_authorization_request(&connection, server_name, message, url, response_sender).await;
+        Ok(())
+    }) {
+        error!("Failed to spawn browser authorization request handler: {e:?}");
+    }
+}
+
 fn build_elicitation_params(server_name: &str, request: &ElicitRequestParams) -> ElicitationParams {
-    ElicitationParams { server_name: server_name.to_string(), request: request.clone() }
+    ElicitationParams { server_name: server_name.to_string(), request: AetherElicitationRequest::from(request.clone()) }
 }
 
 #[cfg(test)]
@@ -796,35 +850,30 @@ mod tests {
         let params = build_elicitation_params("test-server", &elicitation);
         assert_eq!(params.server_name, "test-server");
         match &params.request {
-            ElicitRequestParams::FormElicitationParams { message, requested_schema, .. } => {
+            AetherElicitationRequest::Form { message, requested_schema, .. } => {
                 assert_eq!(message, "Pick a color");
                 assert_eq!(requested_schema.properties.len(), 1);
                 assert!(requested_schema.properties.contains_key("approved"));
             }
-            ElicitRequestParams::UrlElicitationParams { .. } => panic!("Expected Form, got Url"),
-            _ => panic!("Expected Form elicitation"),
+            AetherElicitationRequest::Url(_) => panic!("Expected Form, got Url"),
+            AetherElicitationRequest::Unsupported => panic!("Expected Form elicitation"),
         }
     }
 
     #[test]
     fn test_build_elicitation_params_from_url() {
-        let elicitation = ElicitRequestParams::UrlElicitationParams {
-            meta: None,
-            message: "Authorize GitHub".to_string(),
-            url: "https://github.com/login/oauth".to_string(),
-            elicitation_id: "el-123".to_string(),
-        };
+        let elicitation =
+            acp_utils::elicitation::rmcp_url_elicitation("Authorize GitHub", "https://github.com/login/oauth");
 
         let params = build_elicitation_params("github", &elicitation);
         assert_eq!(params.server_name, "github");
         match &params.request {
-            ElicitRequestParams::UrlElicitationParams { message, url, elicitation_id, .. } => {
-                assert_eq!(message, "Authorize GitHub");
-                assert_eq!(url, "https://github.com/login/oauth");
-                assert_eq!(elicitation_id, "el-123");
+            AetherElicitationRequest::Url(url_request) => {
+                assert_eq!(url_request.message, "Authorize GitHub");
+                assert_eq!(url_request.url, "https://github.com/login/oauth");
             }
-            ElicitRequestParams::FormElicitationParams { .. } => panic!("Expected Url, got Form"),
-            _ => panic!("Expected URL elicitation"),
+            AetherElicitationRequest::Form { .. } => panic!("Expected Url, got Form"),
+            AetherElicitationRequest::Unsupported => panic!("Expected URL elicitation"),
         }
     }
 
@@ -835,20 +884,18 @@ mod tests {
         use tokio::task::LocalSet;
 
         #[tokio::test(flavor = "current_thread")]
-        async fn url_elicitation_complete_is_forwarded_as_mcp_notification() {
+        async fn browser_authorization_completed_is_forwarded_as_private_notification() {
             LocalSet::new()
                 .run_until(async {
                     let (cx, mut peer) = test_connection().await;
-                    let event =
-                        McpClientEvent::UrlElicitationComplete(mcp_utils::client::UrlElicitationCompleteParams {
-                            server_name: "github".to_string(),
-                            elicitation_id: "el-42".to_string(),
-                        });
+                    let event = McpClientEvent::BrowserAuthorizationCompleted { server_name: "github".to_string() };
 
                     on_mcp_client_event(&cx, event);
 
                     let received = peer.next_mcp_notification().await;
-                    assert!(matches!(received, McpNotification::UrlElicitationComplete(_)));
+                    assert!(
+                        matches!(received, McpNotification::BrowserAuthorizationCompleted { server_name } if server_name == "github")
+                    );
                 })
                 .await;
         }
@@ -907,7 +954,7 @@ mod tests {
 
                     match peer.next_mcp_notification().await {
                         McpNotification::ServerStatus { servers } => assert!(servers.is_empty()),
-                        other @ McpNotification::UrlElicitationComplete(_) => {
+                        other @ McpNotification::BrowserAuthorizationCompleted { .. } => {
                             panic!("expected empty server status notification, got {other:?}")
                         }
                     }
@@ -934,7 +981,7 @@ mod tests {
 
                     match peer.next_mcp_notification().await {
                         McpNotification::ServerStatus { servers } => assert_eq!(servers[0].name, "github"),
-                        other @ McpNotification::UrlElicitationComplete(_) => {
+                        other @ McpNotification::BrowserAuthorizationCompleted { .. } => {
                             panic!("expected server status notification, got {other:?}")
                         }
                     }
@@ -979,50 +1026,90 @@ mod tests {
         }
 
         #[tokio::test(flavor = "current_thread")]
-        async fn url_elicitation_request_does_not_block_completion_notifications() {
+        async fn browser_authorization_request_forwards_params_and_response() {
             LocalSet::new()
                 .run_until(async {
-                    let (cx, mut peer) = test_connection().await;
-                    let responder_rx = peer.capture_next_elicitation();
+                    let (cx, peer) = test_connection().await;
+                    let responder_rx = peer.capture_next_browser_authorization();
                     let (tx, rx) = oneshot::channel();
-                    let elicitation = ElicitationRequest {
-                        server_name: "github".to_string(),
-                        request: ElicitRequestParams::UrlElicitationParams {
-                            meta: None,
-                            message: "Authorize".to_string(),
-                            url: "https://example.com/oauth".to_string(),
-                            elicitation_id: "el-1".to_string(),
-                        },
-                        response_sender: tx,
-                    };
-
-                    on_mcp_client_event(&cx, McpClientEvent::Elicitation(elicitation));
-                    let responder = responder_rx.await.expect("URL elicitation request should reach peer");
 
                     on_mcp_client_event(
                         &cx,
-                        McpClientEvent::UrlElicitationComplete(mcp_utils::client::UrlElicitationCompleteParams {
+                        McpClientEvent::BrowserAuthorizationRequested {
                             server_name: "github".to_string(),
-                            elicitation_id: "el-1".to_string(),
-                        }),
+                            message: "Open this URL to authorize MCP server access.".to_string(),
+                            url: "https://github.com/login/oauth/authorize".to_string(),
+                            response_sender: tx,
+                        },
+                    );
+
+                    let responder = responder_rx.await.expect("browser authorization request should reach peer");
+                    let _ = responder
+                        .respond(acp_utils::notifications::BrowserAuthorizationResponseParams { proceed: false });
+
+                    let result = rx.await.expect("spawned browser authorization request should forward the response");
+                    assert_eq!(result, BrowserAuthorizationResponse::Cancel);
+                })
+                .await;
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn browser_authorization_proceed_forwards_to_handler() {
+            LocalSet::new()
+                .run_until(async {
+                    let (cx, peer) = test_connection().await;
+                    let responder_rx = peer.capture_next_browser_authorization();
+                    let (tx, rx) = oneshot::channel();
+
+                    on_mcp_client_event(
+                        &cx,
+                        McpClientEvent::BrowserAuthorizationRequested {
+                            server_name: "github".to_string(),
+                            message: "Open this URL to authorize MCP server access.".to_string(),
+                            url: "https://github.com/login/oauth/authorize".to_string(),
+                            response_sender: tx,
+                        },
+                    );
+
+                    let responder = responder_rx.await.expect("browser authorization request should reach peer");
+                    let _ = responder
+                        .respond(acp_utils::notifications::BrowserAuthorizationResponseParams { proceed: true });
+
+                    let result = rx.await.expect("spawned browser authorization request should forward the response");
+                    assert_eq!(result, BrowserAuthorizationResponse::Proceed);
+                })
+                .await;
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn browser_authorization_completed_remains_a_private_notification() {
+            LocalSet::new()
+                .run_until(async {
+                    let (cx, mut peer) = test_connection().await;
+                    let (tx, _rx) = oneshot::channel();
+
+                    on_mcp_client_event(
+                        &cx,
+                        McpClientEvent::BrowserAuthorizationRequested {
+                            server_name: "github".to_string(),
+                            message: "Open this URL to authorize MCP server access.".to_string(),
+                            url: "https://github.com/login/oauth/authorize".to_string(),
+                            response_sender: tx,
+                        },
+                    );
+                    on_mcp_client_event(
+                        &cx,
+                        McpClientEvent::BrowserAuthorizationCompleted { server_name: "github".to_string() },
                     );
 
                     match peer.next_mcp_notification().await {
-                        McpNotification::UrlElicitationComplete(params) => {
-                            assert_eq!(params.server_name, "github");
-                            assert_eq!(params.elicitation_id, "el-1");
+                        McpNotification::BrowserAuthorizationCompleted { server_name } => {
+                            assert_eq!(server_name, "github");
                         }
                         other @ McpNotification::ServerStatus { .. } => {
-                            panic!("expected URL completion notification, got {other:?}")
+                            panic!("expected browser authorization completion notification, got {other:?}")
                         }
                     }
-
-                    let _ = responder.respond(acp_utils::notifications::ElicitationResponse {
-                        action: rmcp::model::ElicitationAction::Accept,
-                        content: None,
-                    });
-                    let result = rx.await.expect("spawned URL request should forward response");
-                    assert_eq!(result.action, rmcp::model::ElicitationAction::Accept);
                 })
                 .await;
         }
@@ -1069,12 +1156,7 @@ mod tests {
                     let (tx, rx) = oneshot::channel();
                     let elicitation = ElicitationRequest {
                         server_name: "test-server".to_string(),
-                        request: ElicitRequestParams::UrlElicitationParams {
-                            meta: None,
-                            message: "Authorize".to_string(),
-                            url: "https://example.com".to_string(),
-                            elicitation_id: "el-1".to_string(),
-                        },
+                        request: acp_utils::elicitation::rmcp_url_elicitation("Authorize", "https://example.com"),
                         response_sender: tx,
                     };
 

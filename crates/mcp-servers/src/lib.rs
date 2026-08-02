@@ -2,6 +2,8 @@
 
 pub mod error;
 
+pub(crate) mod mrtr;
+
 #[cfg(feature = "coding")]
 pub(crate) mod search;
 

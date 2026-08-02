@@ -13,9 +13,9 @@ use rmcp::{
     RoleServer, ServerHandler,
     model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, CancelledNotification, CancelledNotificationParam,
-        ElicitRequestParams, ElicitResult, ElicitationAction, ErrorData, Implementation, InputRequest, InputRequests,
-        InputRequiredResult, ListToolsResult, PaginatedRequestParams, ProgressNotification, ProgressNotificationParam,
-        RequestId, ServerCapabilities, ServerInfo, ServerNotification, Tool,
+        ElicitRequest, ElicitRequestParams, ElicitResult, ElicitationAction, ErrorData, Implementation, InputRequest,
+        InputRequests, InputRequiredResult, ListToolsResult, PaginatedRequestParams, ProgressNotification,
+        ProgressNotificationParam, RequestId, ServerCapabilities, ServerInfo, ServerNotification, Tool,
     },
     service::{DynService, MaybeSendFuture, NotificationContext, RequestContext},
 };
@@ -290,16 +290,9 @@ fn form_input_request(message: &str) -> InputRequest {
 }
 
 fn url_input_request(message: &str, url: &str) -> InputRequest {
-    serde_json::from_value(json!({
-        "method": "elicitation/create",
-        "params": {
-            "mode": "url",
-            "message": message,
-            "url": url,
-            "elicitationId": "el-mrtr-1"
-        }
-    }))
-    .expect("valid url input request")
+    // rmcp 3.0 still requires its removed legacy id field; the boundary helper
+    // supplies a placeholder that Aether never reads or asserts on.
+    InputRequest::Elicitation(ElicitRequest::new(acp_utils::elicitation::rmcp_url_elicitation(message, url)))
 }
 
 fn sampling_input_request() -> InputRequest {
@@ -472,9 +465,8 @@ async fn single_round_url_elicitation_resolves_through_ui_channel() {
 
     let captured = script_rx.recv().await.expect("a URL elicitation was dispatched");
     match captured.request {
-        ElicitRequestParams::UrlElicitationParams { url, elicitation_id, .. } => {
+        ElicitRequestParams::UrlElicitationParams { url, .. } => {
             assert_eq!(url, "https://example.com/mrtr/auth");
-            assert_eq!(elicitation_id, "el-mrtr-1");
         }
         other => panic!("expected url elicitation, got {other:?}"),
     }
