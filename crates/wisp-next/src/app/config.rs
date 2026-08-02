@@ -1,8 +1,9 @@
 use super::{App, RuntimeEffect};
-use crate::session_config_view::{SessionConfigView, as_select};
+use crate::components::theme::Theme;
+use crate::session::session_config_view::{SessionConfigView, as_select};
+use crate::session::tasks::Task;
 use crate::settings::UiSettings;
-use crate::settings_overlay::{SettingsMenuEntry, SettingsMenuValue};
-use crate::theme::Theme;
+use crate::settings::overlay::{SettingsChange, SettingsMenuEntry, SettingsMenuValue};
 use acp_utils::config_option_id::ConfigOptionId;
 use agent_client_protocol::schema::{self as acp};
 use utils::ReasoningEffort;
@@ -44,7 +45,7 @@ impl App {
     /// at a time, because two racing saves can finish in either order and leave
     /// both the renderer and the settings file on a choice the user moved past.
     pub(super) fn apply_theme_change(&mut self, value: &str) {
-        self.apply_settings_change(&crate::settings_overlay::SettingsChange {
+        self.apply_settings_change(&SettingsChange {
             config_id: acp_utils::config_option_id::THEME_CONFIG_ID.to_string(),
             new_value: value.to_string(),
         });
@@ -74,7 +75,7 @@ impl App {
         let mut settings = self.ui.settings.clone();
         settings.theme.file = (!value.is_empty()).then(|| value.clone());
         self.theme_change.in_flight = true;
-        self.spawn(crate::tasks::Task::ApplyTheme { settings, value });
+        self.spawn(Task::ApplyTheme { settings, value });
     }
 }
 

@@ -1,9 +1,10 @@
 use super::config::{build_theme_entries, update_config_option_value};
 use super::{App, Layer, WorkspaceMoveState};
-use crate::picker::CommandEntry;
-use crate::settings_overlay::{SettingsChange, SettingsOverlay};
-use crate::surface::Action;
-use crate::workspace_status::WorkspaceStatus;
+use crate::session::tasks::Task;
+use crate::session::workspace_status::{WorkspaceStatus, home_relative_path};
+use crate::settings::overlay::{SettingsChange, SettingsOverlay};
+use crate::surfaces::picker::CommandEntry;
+use crate::surfaces::surface::Action;
 use acp_utils::notifications::AetherCapabilities;
 use agent_client_protocol::schema::{self as acp, SessionId};
 
@@ -63,7 +64,7 @@ impl App {
         overlay.upsert_local_entries(build_theme_entries(&self.ui.settings, &[]));
         overlay.add_status_entries();
         self.open_layer(Layer::Settings(overlay));
-        self.spawn(crate::tasks::Task::ListThemes);
+        self.spawn(Task::ListThemes);
     }
 
     pub(super) fn refresh_settings_themes(&mut self, files: &[String]) {
@@ -158,10 +159,10 @@ impl App {
     }
 
     pub(super) fn on_workspace_moved(&mut self, new_cwd: std::path::PathBuf) {
-        self.spawn(crate::tasks::Task::ResolveWorkspace { cwd: new_cwd.clone() });
+        self.spawn(Task::ResolveWorkspace { cwd: new_cwd.clone() });
         self.close_layer();
         self.reset_conversation();
-        self.notify(&format!("Moved to {}", crate::workspace_status::home_relative_path(&new_cwd)));
+        self.notify(&format!("Moved to {}", home_relative_path(&new_cwd)));
         self.workspace_move_state = WorkspaceMoveState::LoadingSession;
         self.session_loading_buffer.begin_load(self.agent.session_id.clone());
         if let Err(error) = self.agent.handle.load_session(&self.agent.session_id, &new_cwd) {

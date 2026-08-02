@@ -1,18 +1,20 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use crate::annotation::{Draft, DraftKey, Row};
-use crate::edit_buffer::EditBuffer;
-use crate::git_diff::{DiffScope, FileDiff, FileStatus, GitDiffDocument, PatchAnchor, ReviewQueue, StageState};
+use crate::components::edit_buffer::EditBuffer;
+use crate::components::selection::{Direction, SelectionState};
+use crate::screens::annotation::{Draft, DraftKey, Row};
+use crate::screens::git_diff::{
+    DiffScope, FileDiff, FileStatus, GitDiffDocument, PatchAnchor, ReviewQueue, StageState,
+};
 use crate::screens::review::{DocumentPane, Pane};
-use crate::selection::{Direction, SelectionState};
 
-use crate::surface::Action;
+use crate::surfaces::surface::Action;
 
 use super::task;
 
 use super::tasks::GitDiffTask;
-use crate::generation::Generation;
+use crate::components::generation::Generation;
 
 pub struct GitDiffScreen {
     pub(super) working_dir: PathBuf,

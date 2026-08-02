@@ -1,13 +1,13 @@
 use super::config::extract_config_selections;
 use super::session::merge_builtins;
 use super::{App, ExitState, Layer, WorkspaceMoveState};
-use crate::modal::ElicitationModal;
-use crate::picker::CommandEntry;
+use crate::conversation::tool_calls::ToolStatus;
 use crate::screens::plan_review::PlanReviewScreen;
-use crate::session_picker::SessionPicker;
 use crate::settings::ContextUsageDisplay;
-use crate::tool_calls::ToolStatus;
-use crate::workspace_picker::WorkspacePicker;
+use crate::surfaces::modal::ElicitationModal;
+use crate::surfaces::picker::CommandEntry;
+use crate::surfaces::session_picker::SessionPicker;
+use crate::surfaces::workspace_picker::WorkspacePicker;
 use acp_utils::client::AcpEvent;
 use acp_utils::notifications::McpNotification;
 use agent_client_protocol::schema::{self as acp, SessionId};

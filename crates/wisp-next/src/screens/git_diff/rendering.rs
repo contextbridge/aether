@@ -5,18 +5,18 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph, Widget};
 use std::collections::HashSet;
 
-use crate::annotation::{AnnotatedRows, Draft, Row, draft_key, wrapped_with_cursor};
-use crate::diff::{DiffTone, SPLIT_VIEW_MIN_WIDTH, diff_line, join_split, split_side, split_widths};
-use crate::git_diff::{FileDiff, FileStatus, PatchAnchor, PatchLine, PatchLineKind, StageState};
-use crate::list_view::ListView;
+use crate::components::diff::{DiffTone, SPLIT_VIEW_MIN_WIDTH, diff_line, join_split, split_side, split_widths};
+use crate::components::list_view::ListView;
+use crate::components::syntax::SyntaxHighlighter;
+use crate::components::theme::Theme;
+use crate::components::widgets::{TextInput, key_hints};
+use crate::components::wrap::{as_u16, fit_line, wrap_text_char};
 use crate::renderer::DrawContext;
+use crate::screens::annotation::{AnnotatedRows, Draft, Row, draft_key, wrapped_with_cursor};
+use crate::screens::git_diff::{FileDiff, FileStatus, PatchAnchor, PatchLine, PatchLineKind, StageState};
 use crate::screens::review::{Pane, body_and_footer, focused_title};
-use crate::surface::{Action, MouseAction, Surface};
-use crate::syntax::SyntaxHighlighter;
-use crate::tasks::TaskResult;
-use crate::theme::Theme;
-use crate::widgets::{TextInput, key_hints};
-use crate::wrap::{as_u16, fit_line, wrap_text_char};
+use crate::session::tasks::TaskResult;
+use crate::surfaces::surface::{Action, MouseAction, Surface};
 
 use super::GitDiffScreen;
 use super::state::{BottomBar, DiffViewKey, DrawerEntry, GitDiffLoadState, PatchCursor, PatchKey, PatchRow, PatchRows};

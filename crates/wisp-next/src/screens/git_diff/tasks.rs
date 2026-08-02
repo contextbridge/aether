@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use futures::FutureExt;
 
-use crate::generation::Generation;
-use crate::git_diff::{
+use crate::components::generation::Generation;
+use crate::screens::git_diff::{
     DiffScope, FileStatus, GitDiffDocument, GitDiffError, commit, discard_file, stage_all, stage_files, unstage_all,
     unstage_files,
 };

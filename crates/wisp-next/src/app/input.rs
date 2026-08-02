@@ -1,12 +1,12 @@
 use super::config::{cycle_quick_option, cycle_reasoning_option, update_config_option_value};
 use super::{App, ExitState, Layer};
-use crate::composer::ComposerOutcome;
-use crate::dropped_files::parse_dropped_file_paths;
-use crate::picker::CommandEntry;
 use crate::renderer::DrawContext;
 use crate::screens::git_diff::GitDiffScreen;
-use crate::surface::{MouseAction, Surface, UiEvent};
-use crate::tasks::TaskResult;
+use crate::session::tasks::TaskResult;
+use crate::surfaces::composer::ComposerOutcome;
+use crate::surfaces::dropped_files::parse_dropped_file_paths;
+use crate::surfaces::picker::CommandEntry;
+use crate::surfaces::surface::{MouseAction, Surface, UiEvent};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};

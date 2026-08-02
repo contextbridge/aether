@@ -2,20 +2,20 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Position;
 
 use super::GitDiffScreen;
-use crate::annotation::{apply_draft_key, paste_into_draft};
-use crate::edit_buffer::apply_edit_key;
-use crate::git_diff::{CommentContext, PatchAnchor, QueuedComment};
+use crate::components::edit_buffer::apply_edit_key;
+use crate::screens::annotation::{apply_draft_key, paste_into_draft};
 use crate::screens::git_diff::GitDiffEvent;
-use crate::surface::Action;
-use crate::surface::MouseAction;
-use crate::surface::is_composed_char;
+use crate::screens::git_diff::{CommentContext, PatchAnchor, QueuedComment};
+use crate::surfaces::surface::Action;
+use crate::surfaces::surface::MouseAction;
+use crate::surfaces::surface::is_composed_char;
 
 use super::rendering::plural;
 use super::state::{BottomBar, GitDiffLoadState, PatchCursor, PendingAction};
 use super::task;
 use super::tasks::GitDiffTask;
+use crate::components::selection::Direction;
 use crate::screens::review::{MOUSE_SCROLL_LINES, Pane};
-use crate::selection::Direction;
 
 /// Rendered rows a page key moves the patch pane.
 const PAGE_SCROLL_LINES: usize = 10;

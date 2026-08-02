@@ -6,9 +6,9 @@
 //! the document pane's scroll-and-cursor behaviour live here, so each screen
 //! decides only what its rows say and which keys it answers.
 
-use crate::annotation::AnnotatedRows;
-use crate::selection::{Direction, scroll_into_view, step_clamped};
-use crate::theme::Theme;
+use crate::components::selection::{Direction, scroll_into_view, step_clamped};
+use crate::components::theme::Theme;
+use crate::screens::annotation::AnnotatedRows;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};

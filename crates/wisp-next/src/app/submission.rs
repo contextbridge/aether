@@ -1,6 +1,7 @@
 use super::App;
-use crate::attachments::{AttachmentOutcome, PromptAttachment};
-use crate::session_config_view::SessionConfigView;
+use crate::session::session_config_view::SessionConfigView;
+use crate::session::tasks::Task;
+use crate::surfaces::attachments::{AttachmentOutcome, PromptAttachment};
 use acp_utils::config_option_id::ConfigOptionId;
 use agent_client_protocol::schema as acp;
 
@@ -24,7 +25,7 @@ impl App {
                 warnings: Vec::new(),
             });
         } else {
-            self.spawn(crate::tasks::Task::PrepareSubmission { attachments: all_attachments });
+            self.spawn(Task::PrepareSubmission { attachments: all_attachments });
         }
     }
 

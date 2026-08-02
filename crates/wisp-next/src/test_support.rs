@@ -7,11 +7,11 @@
 //! task settling, and drawing through the same seams the event loop uses.
 
 use crate::app::{App, AppConfig, RuntimeEffect};
+use crate::components::theme::Theme;
 use crate::renderer::Renderer;
+use crate::session::terminal::inline_viewport_height;
+use crate::session::workspace_status::WorkspaceStatus;
 use crate::settings::UiSettings;
-use crate::terminal::inline_viewport_height;
-use crate::theme::Theme;
-use crate::workspace_status::WorkspaceStatus;
 use acp_utils::client::{AcpEvent, AcpPromptHandle, PromptCommand};
 use acp_utils::notifications::AetherCapabilities;
 use agent_client_protocol::schema::{self as acp, SessionId};
@@ -31,39 +31,41 @@ pub mod app {
 }
 
 pub mod attachments {
-    pub use crate::attachments::{AttachmentKind, PromptAttachment, build_attachments, classify_attachment};
+    pub use crate::surfaces::attachments::{AttachmentKind, PromptAttachment, build_attachments, classify_attachment};
 }
 
 pub mod composer {
-    pub use crate::composer::Composer;
+    pub use crate::surfaces::composer::Composer;
 }
 
 pub mod elicitation {
-    pub use crate::elicitation::ElicitationResponder;
+    pub use crate::surfaces::elicitation::ElicitationResponder;
 }
 
 pub mod filterable_list {
-    pub use crate::filterable_list::FilterableList;
+    pub use crate::components::filterable_list::FilterableList;
 }
 
 pub mod generation {
-    pub use crate::generation::Generation;
+    pub use crate::components::generation::Generation;
 }
 
 pub mod git_diff {
-    pub use crate::git_diff::{FileDiff, FileStatus, GitDiffDocument, Hunk, PatchLine, PatchLineKind, StageState};
+    pub use crate::screens::git_diff::{
+        FileDiff, FileStatus, GitDiffDocument, Hunk, PatchLine, PatchLineKind, StageState,
+    };
 }
 
 pub mod picker {
-    pub use crate::picker::{CommandEntry, index_files};
+    pub use crate::surfaces::picker::{CommandEntry, index_files};
 }
 
 pub mod plan_review {
-    pub use crate::plan_review::{PlanDocument, ReviewComment, compile_feedback};
+    pub use crate::screens::plan_review::{PlanDocument, ReviewComment, compile_feedback};
 }
 
 pub mod progress_indicator {
-    pub use crate::progress_indicator::SPINNER_FRAMES;
+    pub use crate::conversation::progress_indicator::SPINNER_FRAMES;
 }
 
 pub mod renderer {
@@ -81,11 +83,11 @@ pub mod screens {
 }
 
 pub mod selection {
-    pub use crate::selection::Direction;
+    pub use crate::components::selection::Direction;
 }
 
 pub mod session_config_view {
-    pub use crate::session_config_view::SessionConfigView;
+    pub use crate::session::session_config_view::SessionConfigView;
 }
 
 pub mod settings {
@@ -93,35 +95,35 @@ pub mod settings {
 }
 
 pub mod settings_overlay {
-    pub use crate::settings_overlay::SettingsOverlay;
+    pub use crate::settings::overlay::SettingsOverlay;
 }
 
 pub mod surface {
-    pub use crate::surface::{Action, MouseAction, Surface, UiEvent};
+    pub use crate::surfaces::surface::{Action, MouseAction, Surface, UiEvent};
 }
 
 pub mod syntax {
-    pub use crate::syntax::SyntaxHighlighter;
+    pub use crate::components::syntax::SyntaxHighlighter;
 }
 
 pub mod tasks {
-    pub use crate::tasks::{Task, TaskResult};
+    pub use crate::session::tasks::{Task, TaskResult};
 }
 
 pub mod theme {
-    pub use crate::theme::Theme;
+    pub use crate::components::theme::Theme;
 }
 
 pub mod tool_calls {
-    pub use crate::tool_calls::ToolStatus;
+    pub use crate::conversation::tool_calls::ToolStatus;
 }
 
 pub mod terminal {
-    pub use crate::terminal::{inline_viewport_height, inline_viewport_needs_resync};
+    pub use crate::session::terminal::{inline_viewport_height, inline_viewport_needs_resync};
 }
 
 pub mod workspace_status {
-    pub use crate::workspace_status::WorkspaceStatus;
+    pub use crate::session::workspace_status::WorkspaceStatus;
 }
 
 /// A whole UI scenario: the app, the renderer that owns its scrollback, the
