@@ -1,7 +1,7 @@
 pub mod common;
 
 use crate::coding::error::GrepError;
-use crate::coding::tools::glob_filter::{PathGlobMatcher, build_path_matcher};
+use crate::coding::tools::glob_filter::{CaseSensitivity, PathGlobMatcher, build_path_matcher};
 use aether_lspd::extensions_for_alias as extensions_for_type;
 use common::{CountSink, HasMatchSink, MatchCollectorSink, MatchData, OutputMode};
 use grep::{
@@ -156,7 +156,7 @@ fn perform_grep_sync(mut args: GrepInput) -> Result<GrepOutput, GrepError> {
         args.path = None;
     }
 
-    let path_matcher = build_path_matcher(args.glob.as_deref(), false)?;
+    let path_matcher = build_path_matcher(args.glob.as_deref(), CaseSensitivity::Sensitive)?;
 
     let matcher = build_matcher(&args.pattern, args.case_insensitive, args.multiline)?;
 
