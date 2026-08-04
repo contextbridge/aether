@@ -28,8 +28,10 @@ workspace = true
 default = ["coding", "skills", "tasks", "subagents", "plan"]
 test-helpers = []
 file-ops = ["dep:thiserror"]
+mrtr = ["dep:uuid", "rmcp/request-state"]
 coding = [
     "file-ops",
+    "mrtr",
     "dep:aether-project",
     "dep:aether-lspd",
     "dep:futures",
@@ -58,7 +60,7 @@ tasks = [
     "dep:tempfile",
     "dep:thiserror",
 ]
-plan = ["file-ops"]
+plan = ["file-ops", "mrtr"]
 subagents = [
     "coding",
     "skills",
@@ -72,7 +74,7 @@ subagents = [
     "dep:futures",
     "dep:tracing",
 ]
-survey = []
+survey = ["mrtr"]
 all = ["coding", "skills", "tasks", "subagents", "survey", "plan"]
 stdio = ["coding", "skills", "tasks", "survey", "subagents", "plan", "rmcp/transport-io"]
 
@@ -98,7 +100,7 @@ tracing = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }
 lsp-types = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
-uuid = { workspace = true }
+uuid = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
 htmd = { workspace = true, optional = true }
 dom_smoothie = { workspace = true, optional = true }

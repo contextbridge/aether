@@ -2,6 +2,7 @@
 
 pub mod error;
 
+#[cfg(feature = "mrtr")]
 pub(crate) mod mrtr;
 
 #[cfg(feature = "coding")]

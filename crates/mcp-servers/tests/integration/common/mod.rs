@@ -6,7 +6,10 @@ use aether_lspd::testing::TestProject;
 use mcp_servers::coding::CodingMcp;
 use mcp_utils::testing::connect;
 use rmcp::RoleClient;
-use rmcp::model::{CallToolRequestParams, CallToolResult, ClientCapabilities, ClientInfo, Implementation};
+use rmcp::model::{
+    CallToolRequestParams, CallToolResult, ClientCapabilities, ClientInfo, FormElicitationCapability, Implementation,
+    UrlElicitationCapability,
+};
 use rmcp::service::RunningService;
 use rmcp::{RoleServer, Service};
 use serde::Serialize;
@@ -22,7 +25,12 @@ const POLL_INTERVAL: Duration = Duration::from_millis(500);
 pub type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
 pub fn test_client_info() -> ClientInfo {
-    ClientInfo::new(ClientCapabilities::default(), Implementation::new("test-client", "0.1.0"))
+    let mut capabilities = ClientCapabilities::builder().enable_elicitation().build();
+    if let Some(elicitation) = capabilities.elicitation.as_mut() {
+        elicitation.form = Some(FormElicitationCapability::default());
+        elicitation.url = Some(UrlElicitationCapability::default());
+    }
+    ClientInfo::new(capabilities, Implementation::new("test-client", "0.1.0"))
 }
 
 pub fn test_error(message: impl Into<String>) -> std::io::Error {

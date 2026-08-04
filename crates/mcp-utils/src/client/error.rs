@@ -44,6 +44,12 @@ pub enum McpError {
     /// JSON serialization/deserialization error
     #[error("JSON error: {0}")]
     JsonError(String),
+    /// The server sent malformed MRTR input or an invalid elicitation response.
+    #[error("Malformed MRTR input: {0}")]
+    MalformedMrtrInput(String),
+    /// The server requested an input method Aether does not implement.
+    #[error("Unsupported MRTR input method: {0}")]
+    UnsupportedMrtrInput(String),
     /// Generic error for other cases
     #[error("{0}")]
     Other(String),

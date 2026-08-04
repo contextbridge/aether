@@ -1,6 +1,6 @@
 MCP server for collecting structured user input via the MCP elicitation protocol.
 
-Provides an `ask_user` tool that presents a JSON Schema-defined form to the user and returns their response. This enables agents to gather structured data (confirmations, choices, text input) during a workflow without free-form conversation.
+Provides an `ask_user` tool that presents a JSON Schema-defined form to the user through an MCP 2026-07-28 multi-round-trip request (MRTR). The first call returns `resultType: "input_required"` with a keyed elicitation; the retry echoes the original arguments and opaque request state and returns the existing `accepted`/`data` structured output. Decline and cancel produce `accepted: false`. Interactive calls require a client advertising form elicitation.
 
 # Construction
 

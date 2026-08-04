@@ -132,15 +132,17 @@ mod tests {
         }
     }
 
-    fn recording_opener() -> (impl Fn(&str) -> Result<(), UrlHandlerError>, Arc<Mutex<Vec<String>>>) {
-        let opened = Arc::new(Mutex::new(Vec::new()));
-        let opened_for_test = opened.clone();
+    type RecordingOpener = (Box<dyn Fn(&str) -> Result<(), UrlHandlerError> + Send + Sync>, Arc<Mutex<Vec<String>>>);
+
+    fn recording_opener() -> RecordingOpener {
+        let recorded_urls = Arc::new(Mutex::new(Vec::new()));
+        let recorded_urls_for_assertion = recorded_urls.clone();
         (
-            move |url: &str| {
-                opened.lock().unwrap().push(url.to_string());
+            Box::new(move |url: &str| {
+                recorded_urls.lock().unwrap().push(url.to_string());
                 Ok(())
-            },
-            opened_for_test,
+            }),
+            recorded_urls_for_assertion,
         )
     }
 
@@ -154,7 +156,7 @@ mod tests {
             .run_until(async {
                 let (cx, mut peer) = test_connection().await;
                 let (responder, rx) = peer.fake_browser_authorization(&cx).await;
-                let (opener, opened) = recording_opener();
+                let (opener, recorded_urls) = recording_opener();
                 let mut prompt = BrowserAuthorizationPrompt::with_url_handlers(
                     params("github", "https://github.com/oauth"),
                     responder,
@@ -171,7 +173,7 @@ mod tests {
 
                 let response = rx.await.expect("responder should be consumed");
                 assert!(response.proceed, "opening the browser proceeds with the flow");
-                assert_eq!(opened.lock().unwrap().as_slice(), &["https://github.com/oauth"]);
+                assert_eq!(recorded_urls.lock().unwrap().as_slice(), &["https://github.com/oauth"]);
             })
             .await;
     }

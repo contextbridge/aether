@@ -4,13 +4,12 @@ use rmcp::{
     RoleServer, ServerHandler,
     handler::server::{
         router::tool::ToolRouter,
-        tool::ToolCallContext,
         wrapper::{Json, Parameters},
     },
     model::{
-        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ElicitRequest, ElicitRequestParams,
-        ElicitationAction, ElicitationSchema, EnumSchema, ErrorData, Implementation, InputRequest, InputRequests,
-        InputRequiredResult, ProgressNotificationParam, ServerCapabilities, ServerInfo,
+        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ElicitRequestParams, ElicitationAction,
+        ElicitationSchema, EnumSchema, ErrorData, Implementation, ProgressNotificationParam, ServerCapabilities,
+        ServerInfo,
     },
     service::RequestContext,
     tool, tool_handler, tool_router,
@@ -66,32 +65,14 @@ use tools::web_search::search_client::BraveSearchClient;
 use tools::web_search::{WebSearchInput, WebSearchOutput, WebSearcher};
 use tools::write_file::{WriteFileArgs, WriteFileResponse, write_file_contents};
 
-use crate::mrtr::PendingRequestTable;
+use crate::mrtr::{
+    elicitation_result, input_required, new_request_state_codec, require_form_elicitation, route_tool_call,
+    seal_request_state, verify_request_state,
+};
 
 /// Wire key used for the allow/deny decision in permission elicitation forms
 /// and for the corresponding `inputResponses` entry on MRTR retries.
 const PERMISSION_INPUT_KEY: &str = "decision";
-
-/// Continuation state for one in-flight permission approval. The token alone
-/// proves the server issued the approval request; the stored fingerprint is the
-/// exact approved operation (tool name plus canonical arguments), so a retry
-/// cannot reuse a token across a different tool or mutated arguments.
-#[derive(Clone)]
-struct PendingPermission {
-    operation: String,
-}
-
-/// Canonical, equality-preserving fingerprint of the exact operation a
-/// permission round was opened for: tool name plus a stable serialization of
-/// the arguments. `serde_json` object keys serialize in sorted order (the map
-/// type is `BTreeMap`-backed without `preserve_order`), so semantically equal
-/// argument objects always produce the same fingerprint regardless of key order.
-fn operation_fingerprint(request: &CallToolRequestParams) -> Result<String, ErrorData> {
-    let arguments = serde_json::to_string(&request.arguments).map_err(|error| {
-        ErrorData::invalid_params(format!("{} arguments are not representable: {error}", request.name), None)
-    })?;
-    Ok(format!("{}\0{arguments}", request.name))
-}
 
 impl<T: CodingTools + 'static> CodingMcp<T> {
     /// Manual `call_tool` interception for permission-gated tools: rmcp's tool
@@ -104,8 +85,8 @@ impl<T: CodingTools + 'static> CodingMcp<T> {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         if self.permission_mode != PermissionMode::AlwaysAllow && Self::is_permission_gated(request.name.as_ref()) {
-            if let Some(token) = request.request_state.clone() {
-                return self.resolve_permission_round(&token, request, context).await;
+            if request.request_state.is_some() {
+                return self.resolve_permission_round(request, context).await;
             }
             if request.input_responses.is_some() {
                 return Err(ErrorData::invalid_params(
@@ -113,14 +94,11 @@ impl<T: CodingTools + 'static> CodingMcp<T> {
                     None,
                 ));
             }
-            if let Some(response) = self.start_permission_round(&request).await? {
+            if let Some(response) = self.start_permission_round(&request, &context)? {
                 return Ok(response);
             }
-            let tool_call_context = ToolCallContext::new(self, request, context);
-            return self.tool_router.call(tool_call_context).await;
         }
-        let tool_call_context = ToolCallContext::new(self, request, context);
-        self.tool_router.call(tool_call_context).await
+        route_tool_call(self, &self.tool_router, request, context).await
     }
 }
 
@@ -197,9 +175,7 @@ pub struct CodingMcp<T: CodingTools = DefaultCodingTools> {
     configured_rules_dirs: Vec<PathBuf>,
     /// Permission mode controlling user approval for tool calls
     permission_mode: PermissionMode,
-    /// Pending permission approvals for permission-gated tools, keyed by the
-    /// opaque `requestState` token handed out with each `InputRequiredResult`.
-    pending_permissions: PendingRequestTable<PendingPermission>,
+    request_state_codec: rmcp::model::RequestStateCodec,
 }
 
 fn build_rule_catalog(configured_rules_dirs: &[PathBuf]) -> aether_project::PromptCatalog {
@@ -297,7 +273,7 @@ impl<T: CodingTools + 'static> CodingMcp<T> {
             read_rule_state: prompt_rule_matcher::PromptRuleMatcher::default(),
             configured_rules_dirs: Vec::new(),
             permission_mode: PermissionMode::AlwaysAllow,
-            pending_permissions: PendingRequestTable::new(),
+            request_state_codec: new_request_state_codec(),
         }
     }
 
@@ -413,19 +389,18 @@ When using tools that take file paths, always use absolute paths from:
     /// First round for a permission-gated tool: open the allow/deny form as an
     /// `InputRequiredResult` and park the approval under an opaque token.
     /// Returns `None` when the call needs no approval and should run directly.
-    async fn start_permission_round(
+    fn start_permission_round(
         &self,
         request: &CallToolRequestParams,
+        context: &RequestContext<RoleServer>,
     ) -> Result<Option<CallToolResponse>, ErrorData> {
         let Some((tool_name, description)) = self.permission_needed(request)? else {
             return Ok(None);
         };
+        require_form_elicitation(context)?;
         let form = Self::build_permission_form(tool_name, &description);
-        let operation = operation_fingerprint(request)?;
-        let token = self.pending_permissions.insert(PendingPermission { operation }).await;
-        let mut requests = InputRequests::new();
-        requests.insert(PERMISSION_INPUT_KEY.to_string(), InputRequest::Elicitation(ElicitRequest::new(form)));
-        Ok(Some(CallToolResponse::InputRequired(InputRequiredResult::new(Some(requests), Some(token)))))
+        let state = seal_request_state(&self.request_state_codec, request.name.as_ref(), request.arguments.as_ref());
+        Ok(Some(input_required(PERMISSION_INPUT_KEY, form, state)))
     }
 
     /// Retry round for a permission-gated tool: the client echoed
@@ -434,20 +409,15 @@ When using tools that take file paths, always use absolute paths from:
     /// tool-level error. Unknown or mismatched state is a protocol error.
     async fn resolve_permission_round(
         &self,
-        token: &str,
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        let pending = self.pending_permissions.take(token).await.ok_or_else(|| {
-            ErrorData::invalid_params("permission retry carried an unknown or expired requestState", None)
-        })?;
-        if operation_fingerprint(&request)? != pending.operation {
-            return Err(ErrorData::invalid_params(
-                "permission retry changed the approved operation across MRTR rounds",
-                None,
-            ));
-        }
-        let result = permission_elicitation_result(request.input_responses.as_ref())?;
+        let state = request
+            .request_state
+            .as_deref()
+            .ok_or_else(|| ErrorData::invalid_params("permission retry is missing requestState", None))?;
+        verify_request_state(&self.request_state_codec, state, request.name.as_ref(), request.arguments.as_ref())?;
+        let result = elicitation_result(request.input_responses.as_ref(), PERMISSION_INPUT_KEY)?;
 
         let approved = match result.action {
             ElicitationAction::Accept => {
@@ -459,8 +429,7 @@ When using tools that take file paths, always use absolute paths from:
         };
 
         if approved {
-            let tool_call_context = ToolCallContext::new(self, request, context);
-            return self.tool_router.call(tool_call_context).await;
+            return route_tool_call(self, &self.tool_router, request, context).await;
         }
 
         let message = if result.action == ElicitationAction::Cancel {
@@ -878,21 +847,6 @@ fn tool_argument_string(request: &CallToolRequestParams, keys: &[&str]) -> Resul
         }
     }
     Err(ErrorData::invalid_params(format!("{} is missing required argument '{}'", request.name, keys[0]), None))
-}
-
-/// Extract the client's `ElicitResult` for the permission decision from an
-/// MRTR retry.
-fn permission_elicitation_result(
-    input_responses: Option<&rmcp::model::InputResponses>,
-) -> Result<rmcp::model::ElicitResult, ErrorData> {
-    let responses = input_responses.ok_or_else(|| {
-        ErrorData::invalid_params("permission retry carried requestState without inputResponses", None)
-    })?;
-    let value = responses.get(PERMISSION_INPUT_KEY).cloned().ok_or_else(|| {
-        ErrorData::invalid_params(format!("permission retry is missing inputResponses[{PERMISSION_INPUT_KEY}]"), None)
-    })?;
-    serde_json::from_value(value)
-        .map_err(|error| ErrorData::invalid_params(format!("permission retry has a malformed response: {error}"), None))
 }
 
 #[cfg(feature = "test-helpers")]

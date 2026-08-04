@@ -25,7 +25,7 @@ use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 
 /// The bounded MRTR round limit the executor must enforce.
-const EXPECTED_ROUND_LIMIT: usize = 8;
+const EXPECTED_ROUND_LIMIT: usize = 10;
 
 // Fake servers
 
@@ -473,7 +473,7 @@ async fn single_round_url_elicitation_resolves_through_ui_channel() {
 }
 
 #[tokio::test]
-async fn multi_round_elicitation_accumulates_responses_and_uses_latest_state() {
+async fn multi_round_elicitation_replaces_responses_and_uses_latest_state() {
     let server = ScriptedMrtrServer::new(2, vec!["state-1".to_string(), "state-2".to_string()]);
     let received = server.received.clone();
     let mut spawn = spawn_server(server.into_dyn()).await;
@@ -497,10 +497,9 @@ async fn multi_round_elicitation_accumulates_responses_and_uses_latest_state() {
     assert_eq!(
         calls[2].input_responses,
         Some(json!({
-            "round-0": { "action": "accept", "content": { "reason": "first" } },
             "round-1": { "action": "accept", "content": { "reason": "second" } }
         })),
-        "responses from every round must be collected and forwarded"
+        "responses are replaced for each retry rather than accumulated"
     );
 
     let mut captured = Vec::new();
@@ -745,7 +744,7 @@ async fn unsupported_input_request_is_reported_as_invalid_response() {
 
     let err = run.result.expect_err("Aether cannot fulfill sampling input requests");
     assert!(
-        err.error.contains("only elicitation/create is supported"),
+        err.error.contains("Unsupported MRTR input method"),
         "expected an invalid-input-response error, got: {}",
         err.error
     );

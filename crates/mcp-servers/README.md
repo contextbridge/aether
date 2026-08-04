@@ -1,6 +1,6 @@
 # mcp-servers
 
-Pre-built [MCP](https://modelcontextprotocol.io/) tool servers for Aether agents. Each server runs in-process and is gated behind a feature flag so you only compile what you need.
+Pre-built [MCP](https://modelcontextprotocol.io/) tool servers for Aether agents. Each server runs in-process and is gated behind a feature flag so you only compile what you need. Interactive first-party tools use SEP-2322 multi-round-trip requests (MRTR) from MCP protocol `2026-07-28`; the client must advertise form elicitation. Signed, expiring request state binds each retry to its original tool invocation without storing a per-request session.
 
 | Feature | Server | What it provides |
 |---------|--------|-----------------|
@@ -156,5 +156,6 @@ let server = CodingMcp::new()
 - **`tasks`** -- task tracking (no dependency on `coding`)
 - **`subagents`** -- sub-agent spawning (implies `coding`, `skills`, `tasks`, `survey`, `plan`)
 - **`survey`** -- structured human elicitation tooling
-- **`plan`** -- markdown plan submission and approval workflow
+- **`plan`** -- markdown plan submission and MRTR approval workflow
+- Interactive `coding`, `plan`, and `survey` flows are MRTR-only. Non-interactive tools remain available to older protocol peers; no legacy nested elicitation fallback is emitted.
 - **`all`** -- explicit alias enabling all built-in servers

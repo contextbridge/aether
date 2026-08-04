@@ -9,8 +9,8 @@ use futures::stream::StreamExt;
 use llm::{ToolCallError, ToolCallRequest, ToolCallResult};
 use rmcp::RoleClient;
 use rmcp::model::{
-    CallToolRequestParams, ElicitRequestParams, ElicitResult, ElicitationAction, GetPromptResult, InputRequest,
-    InputRequiredResult, InputResponses, ProgressNotificationParam, Prompt, RequestMetaObject, ServerResult,
+    CallToolRequestParams, DEFAULT_MRTR_MAX_ROUNDS, GetPromptResult, ProgressNotificationParam, Prompt,
+    RequestMetaObject, ServerResult,
 };
 use rmcp::service::{PeerRequestOptions, RequestHandle, RunningService};
 use std::collections::HashSet;
@@ -31,7 +31,7 @@ pub enum ToolExecutionEvent {
 /// failing. After exactly this many input rounds, one final retry is still
 /// attempted; a further `input_required` fails the operation before its input
 /// is resolved.
-pub const MRTR_MAX_ROUNDS: usize = 8;
+pub const MRTR_MAX_ROUNDS: usize = DEFAULT_MRTR_MAX_ROUNDS;
 
 /// Errors raised by the MRTR-aware tool execution loop.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -236,13 +236,14 @@ async fn execute_mcp_call(
     use super::tool_bridge::mcp_result_to_tool_call_result;
 
     let deadline = tokio::time::Instant::now().checked_add(timeout);
-    let mut collected_responses: Option<InputResponses> = None;
-    let mut request_state: Option<String> = None;
+    let mut collected_responses = None;
+    let mut request_state = None;
     let mut input_rounds = 0usize;
+    let base_params = params;
 
     loop {
         remaining_before(deadline, timeout)?;
-        let round_params = build_round_params(&params, collected_responses.as_ref(), request_state.as_deref());
+        let round_params = build_round_params(&base_params, collected_responses.as_ref(), request_state.as_deref());
         let server_result =
             send_mrtr_round(&client, round_params, trace_meta.clone(), deadline, timeout, &tool_call_id, &event_tx)
                 .await?;
@@ -257,17 +258,13 @@ async fn execute_mcp_call(
                 }
                 input_rounds += 1;
                 let state = input_required.request_state.clone();
+                let had_requests = input_required.input_requests.as_ref().is_some_and(|requests| !requests.is_empty());
                 let responses = collect_input_responses(&client, input_required, deadline, timeout, &event_tx).await?;
-                if !responses.is_empty() {
-                    collected_responses = Some(match collected_responses {
-                        Some(mut all) => {
-                            all.extend(responses);
-                            all
-                        }
-                        None => responses,
-                    });
-                }
+                collected_responses = (!responses.is_empty()).then_some(responses);
                 request_state = state;
+                if !had_requests {
+                    sleep_state_only_round(input_rounds, deadline, timeout, &event_tx).await?;
+                }
             }
             other => {
                 return Err(ToolExecutionError::ProtocolMismatch {
@@ -419,96 +416,73 @@ async fn cancel_round(
 /// consumer event receiver cancels the wait.
 async fn collect_input_responses(
     client: &Arc<RunningService<RoleClient, McpClient>>,
-    input_required: InputRequiredResult,
+    input_required: rmcp::model::InputRequiredResult,
     deadline: Option<tokio::time::Instant>,
     timeout: Duration,
     event_tx: &mpsc::Sender<ToolExecutionEvent>,
-) -> Result<InputResponses, ToolExecutionError> {
-    let Some(requests) = input_required.input_requests else {
-        if input_required.request_state.is_none() {
-            return Err(ToolExecutionError::ProtocolMismatch {
-                detail: "InputRequiredResult carried neither inputRequests nor requestState".into(),
-            });
-        }
-        return Ok(InputResponses::new());
-    };
-
-    let mut responses = InputResponses::new();
-    for (key, request) in requests {
-        let response = match deadline {
-            Some(deadline) => tokio::time::timeout_at(deadline, fulfill_input_request(client, request, event_tx))
-                .await
-                .map_err(|_| ToolExecutionError::Timeout { timeout })??,
-            None => fulfill_input_request(client, request, event_tx).await?,
-        };
-        responses.insert(key, response);
-    }
-    Ok(responses)
-}
-
-/// Fulfill one server-initiated input request through the existing
-/// `ClientHandler`/UI elicitation channel. The resulting `ElicitResult` is
-/// forwarded verbatim, including decline and cancel actions, so the server
-/// decides the final outcome. A dropped consumer event receiver cancels the
-/// wait.
-async fn fulfill_input_request(
-    client: &Arc<RunningService<RoleClient, McpClient>>,
-    request: InputRequest,
-    event_tx: &mpsc::Sender<ToolExecutionEvent>,
-) -> Result<serde_json::Value, ToolExecutionError> {
-    let InputRequest::Elicitation(elicitation) = request else {
-        return Err(ToolExecutionError::InvalidInputResponse {
-            detail: "Aether cannot fulfill this input request: only elicitation/create is supported".into(),
-        });
-    };
-    let is_form = matches!(&elicitation.params, ElicitRequestParams::FormElicitationParams { .. });
-
-    let dispatch = client.service().dispatch_elicitation(elicitation.params);
-    tokio::pin!(dispatch);
-    let result = tokio::select! {
-        biased;
-        result = &mut dispatch => result,
-        () = event_tx.closed() => {
-            return Err(ToolExecutionError::Cancelled {
-                reason: Some("consumer dropped the tool execution event stream".into()),
-            });
-        }
-    };
-
-    validate_elicitation_result(is_form, &result)?;
-    serde_json::to_value(&result).map_err(|e| ToolExecutionError::InvalidInputResponse {
-        detail: format!("failed to serialize elicitation result: {e}"),
-    })
-}
-
-/// Accepted form responses must carry object-shaped `content` so the retry is
-/// representable on the wire; decline and cancel are forwarded verbatim, and
-/// URL acceptances carry no content. Full schema validation is deliberately
-/// out of scope here (Phase 5).
-fn validate_elicitation_result(is_form: bool, result: &ElicitResult) -> Result<(), ToolExecutionError> {
-    if is_form
-        && result.action == ElicitationAction::Accept
-        && !matches!(result.content, Some(serde_json::Value::Object(_)))
+) -> Result<rmcp::model::InputResponses, ToolExecutionError> {
+    if input_required.input_requests.as_ref().is_none_or(std::collections::BTreeMap::is_empty)
+        && input_required.request_state.is_none()
     {
-        return Err(ToolExecutionError::InvalidInputResponse {
-            detail: "accepted form response must provide object-shaped content".into(),
+        return Err(ToolExecutionError::ProtocolMismatch {
+            detail: "InputRequiredResult carried neither usable inputRequests nor requestState".into(),
         });
     }
-    Ok(())
+    let fulfill = client.service().fulfill_mrtr_input_requests(input_required.input_requests.unwrap_or_default());
+    let result = if let Some(deadline) = deadline {
+        tokio::select! {
+            biased;
+            () = event_tx.closed() => return Err(ToolExecutionError::Cancelled { reason: Some("consumer dropped the tool execution event stream".into()) }),
+            result = tokio::time::timeout_at(deadline, fulfill) => result.map_err(|_| ToolExecutionError::Timeout { timeout })?,
+        }
+    } else {
+        tokio::select! {
+            biased;
+            () = event_tx.closed() => return Err(ToolExecutionError::Cancelled { reason: Some("consumer dropped the tool execution event stream".into()) }),
+            result = fulfill => result,
+        }
+    };
+    result.map_err(|error| ToolExecutionError::InvalidInputResponse { detail: error.to_string() })
+}
+
+async fn sleep_state_only_round(
+    round: usize,
+    deadline: Option<tokio::time::Instant>,
+    timeout: Duration,
+    event_tx: &mpsc::Sender<ToolExecutionEvent>,
+) -> Result<(), ToolExecutionError> {
+    let delay = Duration::from_millis(match round {
+        1 => 50,
+        2 => 100,
+        3 => 200,
+        _ => 250,
+    });
+    let sleep = tokio::time::sleep(delay);
+    tokio::pin!(sleep);
+    if let Some(deadline) = deadline {
+        tokio::select! {
+            biased;
+            () = event_tx.closed() => Err(ToolExecutionError::Cancelled { reason: Some("consumer dropped the tool execution event stream".into()) }),
+            () = tokio::time::sleep_until(deadline) => Err(ToolExecutionError::Timeout { timeout }),
+            () = &mut sleep => Ok(()),
+        }
+    } else {
+        tokio::select! {
+            biased;
+            () = event_tx.closed() => Err(ToolExecutionError::Cancelled { reason: Some("consumer dropped the tool execution event stream".into()) }),
+            () = &mut sleep => Ok(()),
+        }
+    }
 }
 
 fn build_round_params(
     params: &CallToolRequestParams,
-    input_responses: Option<&InputResponses>,
+    input_responses: Option<&rmcp::model::InputResponses>,
     request_state: Option<&str>,
 ) -> CallToolRequestParams {
     let mut round_params = params.clone();
-    if let Some(responses) = input_responses {
-        round_params = round_params.with_input_responses(responses.clone());
-    }
-    if let Some(state) = request_state {
-        round_params = round_params.with_request_state(state.to_string());
-    }
+    round_params.input_responses = input_responses.cloned();
+    round_params.request_state = request_state.map(str::to_string);
     round_params
 }
 

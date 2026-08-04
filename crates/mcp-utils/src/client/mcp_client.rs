@@ -2,12 +2,16 @@
 use rmcp::{
     ClientHandler, RoleClient,
     handler::client::progress::ProgressDispatcher,
-    model::{ClientInfo, ElicitRequestParams, ElicitResult, ElicitationAction, ErrorData, ProgressNotificationParam},
+    model::{
+        ClientInfo, ElicitRequestParams, ElicitResult, ElicitationAction, ErrorData, InputRequest, InputRequests,
+        InputResponses, ProgressNotificationParam,
+    },
     service::{NotificationContext, RequestContext},
 };
 use std::result::Result;
 use tokio::sync::{mpsc, oneshot};
 
+use crate::client::error::McpError;
 use crate::client::{ElicitationRequest, McpClientEvent};
 
 pub struct McpClient {
@@ -36,6 +40,37 @@ impl McpClient {
             return cancel_result();
         }
         response_rx.await.unwrap_or_else(|_| cancel_result())
+    }
+
+    /// Fulfill all embedded MRTR input requests through the existing host UI.
+    /// Every request is validated before the first form is displayed.
+    pub async fn fulfill_mrtr_input_requests(&self, requests: InputRequests) -> Result<InputResponses, McpError> {
+        for (key, request) in &requests {
+            if !matches!(request, InputRequest::Elicitation(_)) {
+                return Err(McpError::UnsupportedMrtrInput(format!("key {key} uses an unsupported request method")));
+            }
+        }
+
+        let mut responses = InputResponses::new();
+        for (key, request) in requests {
+            let InputRequest::Elicitation(elicitation) = request else {
+                unreachable!("MRTR requests were preflighted above")
+            };
+            let is_form = matches!(&elicitation.params, ElicitRequestParams::FormElicitationParams { .. });
+            let result = self.dispatch_elicitation(elicitation.params).await;
+            if is_form
+                && result.action == ElicitationAction::Accept
+                && !matches!(result.content, Some(serde_json::Value::Object(_)))
+            {
+                return Err(McpError::MalformedMrtrInput(
+                    "accepted form response must provide object-shaped content".into(),
+                ));
+            }
+            let value =
+                serde_json::to_value(result).map_err(|error| McpError::MalformedMrtrInput(error.to_string()))?;
+            responses.insert(key, value);
+        }
+        Ok(responses)
     }
 }
 

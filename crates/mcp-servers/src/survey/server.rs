@@ -1,15 +1,16 @@
-use crate::mrtr::PendingRequestTable;
+use crate::mrtr::{
+    elicitation_result, input_required, new_request_state_codec, require_form_elicitation, route_tool_call,
+    seal_request_state, verify_request_state,
+};
 use rmcp::{
     RoleServer, ServerHandler,
     handler::server::{
         router::tool::ToolRouter,
-        tool::ToolCallContext,
         wrapper::{Json, Parameters},
     },
     model::{
-        CallToolRequestParams, CallToolResponse, CallToolResult, ElicitRequest, ElicitRequestParams, ElicitResult,
-        ElicitationAction, ElicitationSchema, ErrorData, Implementation, InputRequest, InputRequests,
-        InputRequiredResult, ServerCapabilities, ServerInfo,
+        CallToolRequestParams, CallToolResponse, CallToolResult, ElicitRequestParams, ElicitationAction,
+        ElicitationSchema, ErrorData, Implementation, ServerCapabilities, ServerInfo,
     },
     service::RequestContext,
     tool, tool_handler, tool_router,
@@ -35,14 +36,7 @@ fn parse_schema(value: serde_json::Value) -> Result<ElicitationSchema, serde_jso
 #[derive(Clone)]
 pub struct SurveyMcp {
     tool_router: ToolRouter<Self>,
-    pending: PendingRequestTable<PendingSurvey>,
-}
-
-/// Continuation state for one in-flight `ask_user` MRTR interaction.
-#[derive(Clone)]
-struct PendingSurvey {
-    message: String,
-    schema: ElicitationSchema,
+    request_state_codec: rmcp::model::RequestStateCodec,
 }
 
 impl Default for SurveyMcp {
@@ -53,40 +47,40 @@ impl Default for SurveyMcp {
 
 impl SurveyMcp {
     pub fn new() -> Self {
-        Self { tool_router: Self::tool_router(), pending: PendingRequestTable::new() }
+        Self { tool_router: Self::tool_router(), request_state_codec: new_request_state_codec() }
     }
 
     pub fn from_args(_args: Vec<String>) -> Result<Self, crate::error::ServerInitError> {
         Ok(Self::new())
     }
 
-    /// First round: parse the requested schema, open the form as an
-    /// `InputRequiredResult`, and park the continuation under an opaque token.
-    async fn start_ask_user_round(&self, request: CallToolRequestParams) -> Result<CallToolResponse, ErrorData> {
+    fn start_ask_user_round(
+        &self,
+        request: &CallToolRequestParams,
+        context: &RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, ErrorData> {
+        require_form_elicitation(context)?;
         let arguments =
-            request.arguments.ok_or_else(|| ErrorData::invalid_params("ask_user requires arguments", None))?;
-        let args: AskUserInput = serde_json::from_value(Value::Object(arguments))
+            request.arguments.clone().ok_or_else(|| ErrorData::invalid_params("ask_user requires arguments", None))?;
+        let args: AskUserInput = serde_json::from_value(Value::Object(arguments.clone()))
             .map_err(|error| ErrorData::invalid_params(format!("failed to deserialize parameters: {error}"), None))?;
         let schema = parse_schema(args.schema)
             .map_err(|error| ErrorData::invalid_params(format!("invalid schema: {error}"), None))?;
-
-        Ok(self.require_input(args.message, schema).await)
+        let state = seal_request_state(&self.request_state_codec, ASK_USER_TOOL, Some(&arguments));
+        Ok(input_required(
+            INPUT_KEY,
+            ElicitRequestParams::FormElicitationParams { meta: None, message: args.message, requested_schema: schema },
+            state,
+        ))
     }
 
-    /// Retry round: the client echoed `requestState` and `inputResponses`.
-    /// Accept completes the survey; decline and cancel report `accepted:
-    /// false`; invalid state is a protocol error; content that fails basic
-    /// schema validation opens one more input round.
-    async fn resolve_ask_user_round(
-        &self,
-        token: &str,
-        input_responses: Option<rmcp::model::InputResponses>,
-    ) -> Result<CallToolResponse, ErrorData> {
-        let pending = self.pending.take(token).await.ok_or_else(|| {
-            ErrorData::invalid_params("ask_user retry carried an unknown or expired requestState", None)
-        })?;
-        let result = elicitation_result(input_responses, INPUT_KEY)?;
-
+    fn resolve_ask_user_round(&self, request: &CallToolRequestParams) -> Result<CallToolResponse, ErrorData> {
+        let state = request
+            .request_state
+            .as_deref()
+            .ok_or_else(|| ErrorData::invalid_params("ask_user retry is missing requestState", None))?;
+        verify_request_state(&self.request_state_codec, state, ASK_USER_TOOL, request.arguments.as_ref())?;
+        let result = elicitation_result(request.input_responses.as_ref(), INPUT_KEY)?;
         match result.action {
             ElicitationAction::Accept => {
                 let Some(content) = result.content else {
@@ -95,8 +89,26 @@ impl SurveyMcp {
                         "data": Value::Null,
                     }))));
                 };
-                if validate_against_schema(&pending.schema, &content).is_err() {
-                    return Ok(self.require_input(pending.message, pending.schema).await);
+                let arguments = request
+                    .arguments
+                    .as_ref()
+                    .ok_or_else(|| ErrorData::invalid_params("ask_user retry is missing arguments", None))?;
+                let args: AskUserInput = serde_json::from_value(Value::Object(arguments.clone())).map_err(|error| {
+                    ErrorData::invalid_params(format!("ask_user retry has malformed arguments: {error}"), None)
+                })?;
+                let schema = parse_schema(args.schema).map_err(|error| {
+                    ErrorData::invalid_params(format!("ask_user retry has invalid schema: {error}"), None)
+                })?;
+                if validate_against_schema(&schema, &content).is_err() {
+                    return Ok(input_required(
+                        INPUT_KEY,
+                        ElicitRequestParams::FormElicitationParams {
+                            meta: None,
+                            message: args.message,
+                            requested_schema: schema,
+                        },
+                        state.to_string(),
+                    ));
                 }
                 Ok(CallToolResponse::Complete(CallToolResult::structured(serde_json::json!({
                     "accepted": true,
@@ -111,20 +123,6 @@ impl SurveyMcp {
             }
             _ => Err(ErrorData::invalid_params("ask_user response carried an unsupported action", None)),
         }
-    }
-
-    async fn require_input(&self, message: String, schema: ElicitationSchema) -> CallToolResponse {
-        let token = self.pending.insert(PendingSurvey { message: message.clone(), schema: schema.clone() }).await;
-        let mut requests = InputRequests::new();
-        requests.insert(
-            INPUT_KEY.to_string(),
-            InputRequest::Elicitation(ElicitRequest::new(ElicitRequestParams::FormElicitationParams {
-                meta: None,
-                message,
-                requested_schema: schema,
-            })),
-        );
-        CallToolResponse::InputRequired(InputRequiredResult::new(Some(requests), Some(token)))
     }
 }
 
@@ -194,36 +192,18 @@ impl ServerHandler for SurveyMcp {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         if request.name.as_ref() == ASK_USER_TOOL {
-            return match request.request_state.as_deref() {
-                Some(token) => self.resolve_ask_user_round(token, request.input_responses).await,
-                None if request.input_responses.is_some() => {
-                    Err(ErrorData::invalid_params("ask_user retry carried inputResponses without requestState", None))
-                }
-                None => self.start_ask_user_round(request).await,
+            return if request.request_state.is_some() {
+                self.resolve_ask_user_round(&request)
+            } else if request.input_responses.is_some() {
+                Err(ErrorData::invalid_params("ask_user retry carried inputResponses without requestState", None))
+            } else {
+                self.start_ask_user_round(&request, &context)
             };
         }
-        let tool_call_context = ToolCallContext::new(self, request, context);
-        self.tool_router.call(tool_call_context).await
+        route_tool_call(self, &self.tool_router, request, context).await
     }
 }
 
-/// Extract the client's `ElicitResult` for `key` from an MRTR retry.
-fn elicitation_result(
-    input_responses: Option<rmcp::model::InputResponses>,
-    key: &str,
-) -> Result<ElicitResult, ErrorData> {
-    let responses = input_responses
-        .ok_or_else(|| ErrorData::invalid_params("ask_user retry carried requestState without inputResponses", None))?;
-    let value = responses
-        .get(key)
-        .cloned()
-        .ok_or_else(|| ErrorData::invalid_params(format!("ask_user retry is missing inputResponses[{key}]"), None))?;
-    serde_json::from_value(value)
-        .map_err(|error| ErrorData::invalid_params(format!("ask_user retry has a malformed response: {error}"), None))
-}
-
-/// Minimal schema check: every `required` property must be present and
-/// non-null. Full schema validation is deliberately out of scope here.
 fn validate_against_schema(schema: &ElicitationSchema, content: &Value) -> Result<(), String> {
     let object = content.as_object().ok_or_else(|| "response must be an object".to_string())?;
     for required in schema.required.iter().flatten() {

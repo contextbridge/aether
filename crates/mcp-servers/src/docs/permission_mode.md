@@ -1,6 +1,6 @@
 Controls whether tool calls in [`CodingMcp`](crate::CodingMcp) require user approval before executing.
 
-When a tool call is gated, the server uses MCP elicitation to ask the user for confirmation before proceeding. Read-only tools (`read_file`, `grep`, `find`, `list_files`) are never gated regardless of mode.
+When a tool call is gated, the server uses MCP 2026-07-28 multi-round-trip requests (MRTR) to ask the user for confirmation before proceeding. The initial `tools/call` returns `resultType: "input_required"`; the client retries with the original arguments, the exact opaque `requestState`, and the keyed elicitation response. No filesystem or process side effect runs before an integrity-checked `allow` response. Interactive permission requests require a modern client advertising form elicitation; older protocol peers can use only non-interactive tools.
 
 # Variants
 

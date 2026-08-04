@@ -1,6 +1,9 @@
 use crate::error::ServerInitError;
 use crate::file_ops::{FileEdit, FileError, apply_edits, read_text_file, write_text_file};
-use crate::mrtr::PendingRequestTable;
+use crate::mrtr::{
+    elicitation_result, input_required, new_request_state_codec, require_form_elicitation, route_tool_call,
+    seal_request_state, verify_request_state,
+};
 use crate::workspace_paths::resolve_path;
 use clap::Parser;
 use mcp_utils::display_meta::{FileDiff, ToolDisplayMeta, ToolResultMeta, basename};
@@ -8,14 +11,13 @@ use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     handler::server::{
         router::tool::ToolRouter,
-        tool::ToolCallContext,
         wrapper::{Json, Parameters},
     },
     model::{
-        CallToolRequestParams, CallToolResponse, CallToolResult, ElicitRequest, ElicitRequestParams, ElicitResult,
-        ElicitationAction, ElicitationSchema, EnumSchema, GetPromptRequestParams, GetPromptResponse, Implementation,
-        InputRequest, InputRequests, InputRequiredResult, ListPromptsResult, PaginatedRequestParams, Prompt,
-        PromptArgument, PromptMessage, RequestMetaObject, Role, ServerCapabilities, ServerInfo,
+        CallToolRequestParams, CallToolResponse, CallToolResult, ElicitRequestParams, ElicitationAction,
+        ElicitationSchema, EnumSchema, GetPromptRequestParams, GetPromptResponse, Implementation, ListPromptsResult,
+        PaginatedRequestParams, Prompt, PromptArgument, PromptMessage, RequestMetaObject, Role, ServerCapabilities,
+        ServerInfo,
     },
     service::RequestContext,
     tool, tool_handler, tool_router,
@@ -79,15 +81,7 @@ pub struct PlanMcp {
     plans_dir: PathBuf,
     prompt_file: Option<PathBuf>,
     submit_command: Vec<String>,
-    pending: PendingRequestTable<PendingPlanReview>,
-}
-
-/// Continuation state for one in-flight `submit_plan` MRTR interaction. The
-/// token proves the server issued the review; the plan name is kept so a retry
-/// cannot reuse a token for a different plan.
-#[derive(Clone)]
-struct PendingPlanReview {
-    plan_name: String,
+    request_state_codec: rmcp::model::RequestStateCodec,
 }
 
 #[tool_router]
@@ -98,7 +92,7 @@ impl PlanMcp {
             plans_dir: default_plans_dir(),
             prompt_file: None,
             submit_command: Vec::new(),
-            pending: PendingRequestTable::new(),
+            request_state_codec: new_request_state_codec(),
         }
     }
 
@@ -112,7 +106,7 @@ impl PlanMcp {
             plans_dir: absolutize(plans_dir.unwrap_or(default_plans_dir)),
             prompt_file,
             submit_command,
-            pending: PendingRequestTable::new(),
+            request_state_codec: new_request_state_codec(),
         })
     }
 
@@ -127,7 +121,7 @@ impl PlanMcp {
             plans_dir: plans_dir.map_or(default_plans_dir, |path| resolve_path(base_dir, path)),
             prompt_file: prompt_file.map(|path| resolve_path(base_dir, path)),
             submit_command,
-            pending: PendingRequestTable::new(),
+            request_state_codec: new_request_state_codec(),
         })
     }
 
@@ -217,9 +211,12 @@ impl PlanMcp {
         })
     }
 
-    /// First round: load the plan, open the review form as an
-    /// `InputRequiredResult`, and park the continuation under an opaque token.
-    async fn start_plan_review(&self, request: CallToolRequestParams) -> Result<CallToolResponse, McpError> {
+    async fn start_plan_review(
+        &self,
+        request: CallToolRequestParams,
+        context: &RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, McpError> {
+        require_form_elicitation(context)?;
         let plan_name = submit_plan_name(request.arguments.clone())?;
         let plan = match Plan::load_by_name(&self.plans_dir, &plan_name).await {
             Ok(plan) => plan,
@@ -231,33 +228,20 @@ impl PlanMcp {
         };
         let form = Self::build_elicitation_form(&plan)
             .map_err(|error| McpError::internal_error(format!("failed to build plan review form: {error}"), None))?;
-        Ok(self.require_plan_review(plan_name, form).await)
+        Ok(self.require_plan_review(form, request.arguments.as_ref()))
     }
 
     /// Retry round: the client echoed `requestState` and `inputResponses`.
     /// Approve completes with `approved: true`; deny, decline, and cancel all
     /// complete with `approved: false` (deny carries optional feedback); an
     /// unknown token or a retry that switched plans is a protocol error.
-    async fn resolve_plan_review(&self, request: CallToolRequestParams) -> Result<CallToolResponse, McpError> {
-        let token = request.request_state.as_deref().ok_or_else(|| {
-            McpError::invalid_params("submit_plan retry carried inputResponses without requestState", None)
-        })?;
-        let pending = self.pending.take(token).await.ok_or_else(|| {
-            McpError::invalid_params("submit_plan retry carried an unknown or expired requestState", None)
-        })?;
-        let retried_plan = submit_plan_name(request.arguments.clone())?;
-        if retried_plan != pending.plan_name {
-            return Err(McpError::invalid_params("submit_plan retry changed planName across MRTR rounds", None));
-        }
-        let responses = request.input_responses.ok_or_else(|| {
-            McpError::invalid_params("submit_plan retry carried requestState without inputResponses", None)
-        })?;
-        let value = responses.get(DECISION).cloned().ok_or_else(|| {
-            McpError::invalid_params(format!("submit_plan retry is missing inputResponses[{DECISION}]"), None)
-        })?;
-        let result: ElicitResult = serde_json::from_value(value).map_err(|error| {
-            McpError::invalid_params(format!("submit_plan retry has a malformed response: {error}"), None)
-        })?;
+    fn resolve_plan_review(&self, request: &CallToolRequestParams) -> Result<CallToolResponse, McpError> {
+        let state = request
+            .request_state
+            .as_deref()
+            .ok_or_else(|| McpError::invalid_params("submit_plan retry is missing requestState", None))?;
+        verify_request_state(&self.request_state_codec, state, SUBMIT_PLAN_TOOL, request.arguments.as_ref())?;
+        let result = elicitation_result(request.input_responses.as_ref(), DECISION)?;
 
         match result.action {
             ElicitationAction::Accept => {
@@ -298,11 +282,13 @@ impl PlanMcp {
         }
     }
 
-    async fn require_plan_review(&self, plan_name: String, form: ElicitRequestParams) -> CallToolResponse {
-        let token = self.pending.insert(PendingPlanReview { plan_name }).await;
-        let mut requests = InputRequests::new();
-        requests.insert(DECISION.to_string(), InputRequest::Elicitation(ElicitRequest::new(form)));
-        CallToolResponse::InputRequired(InputRequiredResult::new(Some(requests), Some(token)))
+    fn require_plan_review(
+        &self,
+        form: ElicitRequestParams,
+        arguments: Option<&serde_json::Map<String, serde_json::Value>>,
+    ) -> CallToolResponse {
+        let state = seal_request_state(&self.request_state_codec, SUBMIT_PLAN_TOOL, arguments);
+        input_required(DECISION, form, state)
     }
 }
 
@@ -325,7 +311,7 @@ impl ServerHandler for PlanMcp {
     ) -> Result<CallToolResponse, McpError> {
         if request.name.as_ref() == SUBMIT_PLAN_TOOL && self.submit_command.is_empty() {
             if request.request_state.is_some() {
-                return self.resolve_plan_review(request).await;
+                return self.resolve_plan_review(&request);
             }
             if request.input_responses.is_some() {
                 return Err(McpError::invalid_params(
@@ -333,10 +319,9 @@ impl ServerHandler for PlanMcp {
                     None,
                 ));
             }
-            return self.start_plan_review(request).await;
+            return self.start_plan_review(request, &context).await;
         }
-        let tool_call_context = ToolCallContext::new(self, request, context);
-        self.tool_router.call(tool_call_context).await
+        route_tool_call(self, &self.tool_router, request, context).await
     }
 
     async fn list_prompts(

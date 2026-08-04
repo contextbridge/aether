@@ -14,7 +14,7 @@
 //! name the removed id in exactly one narrowly named boundary file
 //! (`crates/acp-utils/src/elicitation.rs`), where rmcp 3.0's legacy URL
 //! constructor still requires it; everywhere else both the camelCase and
-//! snake_case spellings are forbidden. `ClientHandler` `create_elicitation`
+//! `snake_case` spellings are forbidden. `ClientHandler` `create_elicitation`
 //! is asserted to remain intact because rmcp's modern MRTR driver resolves
 //! input requests through it.
 
@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 const ELICITATION_ID_BOUNDARY_FILE: &str = "crates/acp-utils/src/elicitation.rs";
 
 /// The removed protocol id spellings (JSON key, event names, type/field names,
-/// and fixture literals). Both the camelCase and snake_case forms are banned
+/// and fixture literals). Both the camelCase and `snake_case` forms are banned
 /// in Aether sources; only `ELICITATION_ID_BOUNDARY_FILE` is exempt.
 const FORBIDDEN_ID_PATTERNS: &[&str] = &["elicitationId", "elicitation_id"];
 

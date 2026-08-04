@@ -48,7 +48,7 @@ async fn coding_with_permission(
     client: McpClient,
 ) -> TestResult<TestClient<CodingMcp, McpClient>> {
     let server = CodingMcp::new().with_root_dir(root.path().to_path_buf()).with_permission_mode(mode);
-    TestClient::start_with(|| server, client).await
+    Box::pin(TestClient::start_with(|| server, client)).await
 }
 
 #[tokio::test]
@@ -334,7 +334,7 @@ async fn coding_permission_retry_with_changed_edit_file_arguments_is_rejected_wi
 
 #[tokio::test]
 #[allow(clippy::large_futures)]
-async fn coding_permission_exact_retry_runs_the_approved_operation_and_state_is_single_use() -> TestResult {
+async fn coding_permission_exact_retry_runs_the_approved_operation_and_state_binds_arguments() -> TestResult {
     let root = TempDir::new()?;
     let (client, _event_rx) = elicitation_client("coding-test");
     let mcp = coding_with_permission(mcp_servers::coding::PermissionMode::AlwaysAsk, &root, client).await?;
@@ -367,13 +367,12 @@ async fn coding_permission_exact_retry_runs_the_approved_operation_and_state_is_
     assert!(!approved.is_error.unwrap_or(false), "approved bash should complete: {approved:?}");
     assert!(root.path().join("approved.txt").exists(), "the approved command must have run");
 
-    // requestState is opaque and single-use: replaying the consumed token with
-    // the exact same operation must be rejected.
+    // A valid signed state may be replayed, but it remains bound to the exact operation.
     let replay = mcp
         .raw()
         .call_tool(
             CallToolRequestParams::new("bash")
-                .with_arguments(json!({ "command": "touch approved.txt" }).as_object().unwrap().clone())
+                .with_arguments(json!({ "command": "touch changed.txt" }).as_object().unwrap().clone())
                 .with_input_responses(rmcp::model::InputResponses::from([(
                     "decision".to_string(),
                     json!({ "action": "accept", "content": { "decision": "allow" } }),
@@ -381,7 +380,7 @@ async fn coding_permission_exact_retry_runs_the_approved_operation_and_state_is_
                 .with_request_state(token),
         )
         .await;
-    assert!(replay.is_err(), "a consumed requestState must not be reusable");
+    assert!(replay.is_err(), "requestState must not authorize changed arguments");
     Ok(())
 }
 
