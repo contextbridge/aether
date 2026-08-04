@@ -40,7 +40,7 @@ wisp = { package = "aether-wisp", path = "../wisp", version = "0.4.39" }
 tui = { package = "aether-tui", path = "../tui", default-features = false, features = ["syntax"], version = "0.2.19" }
 acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["server", "testing"], version = "0.3.37" }
 agent-client-protocol = { workspace = true }
-aether-lspd = { path = "../aether-lspd", version = "0.1.30" }
+aether-lspd = { path = "../aether-lspd", version = "0.1.31" }
 rmcp = { workspace = true, features = ["client", "elicitation", "server", "transport-streamable-http-client-reqwest"] }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "io-util", "net", "fs", "time"] }
