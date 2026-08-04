@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.12](https://github.com/contextbridge/aether/compare/aether-telemetry-v0.1.11...aether-telemetry-v0.1.12) - 2026-08-04
+
+### Other
+
+- scheduled code-cleanup ([#315](https://github.com/contextbridge/aether/pull/315))
+
 ## [0.1.11](https://github.com/contextbridge/aether/compare/aether-telemetry-v0.1.10...aether-telemetry-v0.1.11) - 2026-07-29
 
 ### Added

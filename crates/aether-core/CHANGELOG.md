@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.31](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.6.30...aether-agent-core-v0.6.31) - 2026-08-04
+
+### Other
+
+- *(deps)* bump rmcp from 1.8.0 to 3.0.0 ([#223](https://github.com/contextbridge/aether/pull/223))
+- scheduled code-cleanup ([#315](https://github.com/contextbridge/aether/pull/315))
+- scheduled code-cleanup ([#313](https://github.com/contextbridge/aether/pull/313))
+
 ## [0.6.30](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.6.29...aether-agent-core-v0.6.30) - 2026-07-29
 
 ### Added
