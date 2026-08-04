@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.11](https://github.com/contextbridge/aether/compare/aether-auth-v0.1.10...aether-auth-v0.1.11) - 2026-08-04
+
+### Other
+
+- *(deps)* bump rmcp from 1.8.0 to 3.0.0 ([#223](https://github.com/contextbridge/aether/pull/223))
+
 ## [0.1.10](https://github.com/contextbridge/aether/compare/aether-auth-v0.1.9...aether-auth-v0.1.10) - 2026-07-28
 
 ### Other

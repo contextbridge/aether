@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.39](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.38...aether-wisp-v0.4.39) - 2026-08-04
+
+### Other
+
+- *(deps)* bump rmcp from 1.8.0 to 3.0.0 ([#223](https://github.com/contextbridge/aether/pull/223))
+- scheduled code-cleanup ([#318](https://github.com/contextbridge/aether/pull/318))
+
 ## [0.4.38](https://github.com/contextbridge/aether/compare/aether-wisp-v0.4.37...aether-wisp-v0.4.38) - 2026-07-29
 
 ### Other
