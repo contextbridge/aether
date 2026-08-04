@@ -21,7 +21,7 @@ impl App {
             Event::Paste(text) => UiEvent::Paste(text),
             Event::Mouse(mouse) => {
                 let Some(action) = MouseAction::from_event(mouse.kind) else { return };
-                UiEvent::Mouse(action, Position::new(mouse.column, mouse.row))
+                UiEvent::Mouse(action, (mouse.column, mouse.row))
             }
             _ => return,
         };
@@ -51,7 +51,7 @@ impl App {
             }
             UiEvent::Key(_) => {}
             UiEvent::Paste(text) => self.on_composer_paste(&text),
-            UiEvent::Mouse(action, position) => self.composer.on_overlay_mouse(action, position.y),
+            UiEvent::Mouse(action, (_, row)) => self.composer.on_overlay_mouse(action, row),
         }
         self.refresh_progress();
     }
@@ -200,7 +200,7 @@ impl App {
     /// Draws the open layer over the conversation, returning where it wants the
     /// terminal cursor.
     pub fn render_layer(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
-        self.layer.as_mut()?.surface().render(area, buf, cx)
+        self.layer.as_mut()?.render(area, buf, cx)
     }
 
     /// Routes a completed task to its single owner.

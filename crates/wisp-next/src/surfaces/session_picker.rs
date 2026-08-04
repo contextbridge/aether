@@ -9,7 +9,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Paragraph, Widget};
+use ratatui::widgets::{Block, Paragraph, StatefulWidget, Widget};
 use std::collections::HashMap;
 
 /// Picker for resuming a previous session, with an optional preview pane.
@@ -17,6 +17,16 @@ pub struct SessionPicker {
     sessions: FilterableList<acp::SessionInfo>,
     preview_enabled: bool,
     previews: HashMap<String, PreviewState>,
+}
+
+pub(super) struct SessionPickerView<'a> {
+    theme: &'a Theme,
+}
+
+impl<'a> SessionPickerView<'a> {
+    pub(super) fn new(theme: &'a Theme) -> Self {
+        Self { theme }
+    }
 }
 
 /// Below this width the preview pane is dropped and the list gets the full area.
@@ -75,22 +85,19 @@ impl SessionPicker {
 
     fn render_list(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
         let title = self.sessions.search_title("Sessions");
-        self.sessions
-            .view(theme, |session| {
-                let name = session
-                    .title
-                    .as_deref()
-                    .unwrap_or_else(|| session.cwd.file_name().map_or("?", |name| name.to_str().unwrap_or("?")));
-                let cwd = session
-                    .cwd
-                    .file_name()
-                    .map_or_else(|| session.cwd.display().to_string(), |name| name.to_string_lossy().into_owned());
-                Line::styled(format!("  {}  {cwd}", truncate_to_width(name, 48)), Style::new().fg(theme.text_secondary))
-            })
-            .empty_message("  (no matching sessions)")
-            .bordered(title)
-            .scrollbar()
-            .render(area, buf);
+        let (view, selection) = self.sessions.view(theme, |session| {
+            let name = session
+                .title
+                .as_deref()
+                .unwrap_or_else(|| session.cwd.file_name().map_or("?", |name| name.to_str().unwrap_or("?")));
+            let cwd = session
+                .cwd
+                .file_name()
+                .map_or_else(|| session.cwd.display().to_string(), |name| name.to_string_lossy().into_owned());
+            Line::styled(format!("  {}  {cwd}", truncate_to_width(name, 48)), Style::new().fg(theme.text_secondary))
+        });
+        let view = view.empty_message("  (no matching sessions)").bordered(title).scrollbar();
+        StatefulWidget::render(view, area, buf, selection);
     }
 
     fn render_preview(&self, area: Rect, buf: &mut Buffer, theme: &Theme) {
@@ -152,6 +159,28 @@ impl SessionPicker {
     }
 }
 
+impl StatefulWidget for SessionPickerView<'_> {
+    type State = SessionPicker;
+
+    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+        if !state.has_sessions() {
+            Paragraph::new("  No previous sessions found.")
+                .style(Style::new().fg(self.theme.muted))
+                .block(Block::bordered().title(" Sessions ").style(Style::new().fg(self.theme.text_primary)))
+                .render(area, buf);
+            return;
+        }
+
+        if area.width >= PREVIEW_MIN_WIDTH {
+            let [list_area, preview_area] =
+                Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(area);
+            state.render_list(list_area, buf, self.theme);
+            state.render_preview(preview_area, buf, self.theme);
+        } else {
+            state.render_list(area, buf, self.theme);
+        }
+    }
+}
 impl Surface for SessionPicker {
     fn activate(&mut self) -> Vec<Action> {
         one(self.sessions.selected_entry().map(|session| Action::LoadSession {
@@ -168,25 +197,11 @@ impl Surface for SessionPicker {
     fn on_selection_changed(&mut self) -> Vec<Action> {
         self.preview_request()
     }
+}
 
-    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
-        let theme = cx.theme;
-        if !self.has_sessions() {
-            Paragraph::new("  No previous sessions found.")
-                .style(Style::new().fg(theme.muted))
-                .block(Block::bordered().title(" Sessions ").style(Style::new().fg(theme.text_primary)))
-                .render(area, buf);
-            return None;
-        }
-
-        if area.width >= PREVIEW_MIN_WIDTH {
-            let [list_area, preview_area] =
-                Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(area);
-            self.render_list(list_area, buf, theme);
-            self.render_preview(preview_area, buf, theme);
-        } else {
-            self.render_list(area, buf, theme);
-        }
+impl SessionPicker {
+    pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
+        StatefulWidget::render(SessionPickerView::new(cx.theme), area, buf, self);
         None
     }
 }

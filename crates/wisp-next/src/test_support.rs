@@ -56,6 +56,10 @@ pub mod git_diff {
     };
 }
 
+pub mod list_view {
+    pub use crate::components::list_view::ListView;
+}
+
 pub mod picker {
     pub use crate::surfaces::picker::{CommandEntry, index_files};
 }
@@ -65,7 +69,9 @@ pub mod plan_review {
 }
 
 pub mod progress_indicator {
-    pub use crate::conversation::progress_indicator::SPINNER_FRAMES;
+    pub use crate::conversation::progress_indicator::{
+        ProgressActivity, ProgressIndicator, ProgressIndicatorView, SPINNER_FRAMES, WorkspaceProgress,
+    };
 }
 
 pub mod renderer {
@@ -82,8 +88,12 @@ pub mod screens {
     }
 }
 
+pub mod widgets {
+    pub use crate::components::widgets::{RowsView, TextInput};
+}
+
 pub mod selection {
-    pub use crate::components::selection::Direction;
+    pub use crate::components::selection::{Direction, SelectionState};
 }
 
 pub mod session_config_view {

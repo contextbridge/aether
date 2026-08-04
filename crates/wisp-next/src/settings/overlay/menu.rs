@@ -10,11 +10,22 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::Line;
-use ratatui::widgets::Widget;
+use ratatui::widgets::StatefulWidget;
 
 pub(super) struct SettingsMenu {
     pub(super) rows: Vec<MenuRow>,
     pub(super) selection: SelectionState,
+}
+
+pub(super) struct SettingsMenuView<'a> {
+    rows: &'a [MenuRow],
+    theme: &'a Theme,
+}
+
+impl<'a> SettingsMenuView<'a> {
+    pub(super) fn new(rows: &'a [MenuRow], theme: &'a Theme) -> Self {
+        Self { rows, theme }
+    }
 }
 
 /// One row of the settings menu.
@@ -112,12 +123,7 @@ impl SettingsMenu {
     }
 
     pub(super) fn render(&mut self, area: Rect, buffer: &mut Buffer, theme: &Theme) {
-        let rows: Vec<Line<'static>> = self
-            .rows
-            .iter()
-            .map(|row| Line::styled(format!(" {}", row.label()), Style::new().fg(theme.text_primary)))
-            .collect();
-        ListView::new(rows, &mut self.selection, theme).pane(" (no settings options)").render(area, buffer);
+        StatefulWidget::render(SettingsMenuView::new(&self.rows, theme), area, buffer, &mut self.selection);
     }
 
     /// Adds or refreshes the row that opens `kind`'s pane.
@@ -139,8 +145,20 @@ impl SettingsMenu {
     }
 }
 
-/// The menu entry for one select-kind config option, or nothing when it offers
-/// no values to pick between.
+impl StatefulWidget for SettingsMenuView<'_> {
+    type State = SelectionState;
+
+    fn render(self, area: Rect, buffer: &mut Buffer, state: &mut Self::State) {
+        let rows = self
+            .rows
+            .iter()
+            .map(|row| Line::styled(format!(" {}", row.label()), Style::new().fg(self.theme.text_primary)))
+            .collect();
+        let view = ListView::new(rows, self.theme).pane(" (no settings options)");
+        StatefulWidget::render(view, area, buffer, state);
+    }
+}
+
 fn menu_entry(option: &SessionConfigOption) -> Option<SettingsMenuEntry> {
     let select = as_select(option)?;
     let flat_options = select_values(select);

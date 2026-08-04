@@ -1,11 +1,8 @@
 use crate::components::selection::Direction;
-use crate::renderer::DrawContext;
 use crate::session::tasks::{Task, TaskResult};
 use acp_utils::notifications::WorkspaceMoveTarget;
 use agent_client_protocol::schema::SessionId;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::buffer::Buffer;
-use ratatui::layout::{Position, Rect};
 use std::path::PathBuf;
 
 pub(crate) const COMPOSED_MODIFIERS: KeyModifiers = KeyModifiers::CONTROL
@@ -29,13 +26,9 @@ pub(crate) fn is_press(key: KeyEvent) -> bool {
 /// a picker, a modal, or a full-screen view.
 ///
 /// Exactly one is active at a time, so `App` routes keys, mouse events, and
-/// rendering through this trait without re-matching on which one it is. The few
-/// ACP updates that do need a concrete surface reach for it through
-/// [`Layer`](crate::app::Layer) instead.
+/// lifecycle work through this trait. Rendering is dispatched separately by
+/// the closed [`Layer`](crate::app::Layer) enum.
 pub trait Surface {
-    /// Draws the surface, returning where the terminal cursor should sit.
-    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position>;
-
     /// Acts on whatever is focused. The default [`Surface::on_surface_key`] runs
     /// this on Enter, and list surfaces run it again when a click lands on a row.
     fn activate(&mut self) -> Vec<Action> {
@@ -120,7 +113,7 @@ pub trait Surface {
             UiEvent::Key(key) if is_press(key) => self.on_key(key),
             UiEvent::Key(_) => Vec::new(),
             UiEvent::Paste(text) => self.on_paste(&text),
-            UiEvent::Mouse(action, position) => self.on_mouse(action, position.y, position.x),
+            UiEvent::Mouse(action, (column, row)) => self.on_mouse(action, row, column),
         }
     }
 
@@ -208,7 +201,7 @@ pub trait SurfaceList {
 pub enum UiEvent {
     Key(KeyEvent),
     Paste(String),
-    Mouse(MouseAction, Position),
+    Mouse(MouseAction, (u16, u16)),
 }
 
 /// What a mouse event asks of whatever is under the pointer.

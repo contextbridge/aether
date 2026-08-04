@@ -103,8 +103,38 @@ impl<A> Default for AnnotatedRows<A> {
     }
 }
 
+/// Visual command for a window of annotated document rows.
+pub struct AnnotatedRowsView<'a, A> {
+    rows: &'a AnnotatedRows<A>,
+    offset: usize,
+    cursor: Option<usize>,
+    theme: &'a Theme,
+}
+
+impl<'a, A> AnnotatedRowsView<'a, A> {
+    pub fn new(rows: &'a AnnotatedRows<A>, offset: usize, cursor: Option<usize>, theme: &'a Theme) -> Self {
+        Self { rows, offset, cursor, theme }
+    }
+}
+
+impl<A: Copy + PartialEq> Widget for AnnotatedRowsView<'_, A> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let (body, track) = rows_and_track(area, true);
+        for (index, row) in self.rows.rows.iter().skip(self.offset).enumerate() {
+            let Some(row_area) = row_area(body, index) else {
+                break;
+            };
+            row.line.as_ref().render(row_area, buf);
+            if self.cursor == Some(self.offset + index) {
+                paint_cursor_row(row_area, buf, self.theme);
+            }
+        }
+        render_vertical_scrollbar(track, buf, self.rows.rows.len(), self.offset);
+    }
+}
+
 impl<A: Copy + PartialEq> AnnotatedRows<A> {
-    /// Columns left for content once [`AnnotatedRows::render`] reserves the
+    /// Columns left for content once [`AnnotatedRowsView`] reserves the
     /// scrollbar track. Rows are built to this width.
     pub fn content_width(area_width: u16) -> u16 {
         area_width.saturating_sub(SCROLLBAR_WIDTH)
@@ -156,22 +186,6 @@ impl<A: Copy + PartialEq> AnnotatedRows<A> {
     /// Where the draft's text cursor sits, as a row and column.
     pub fn draft_cursor(&self) -> Option<(usize, u16)> {
         self.draft_cursor
-    }
-
-    /// Draws the rows visible from `offset`, painting `cursor` in the cursor
-    /// colours and reserving the rightmost column for the scrollbar track.
-    pub fn render(&self, area: Rect, buf: &mut Buffer, offset: usize, cursor: Option<usize>, theme: &Theme) {
-        let (body, track) = rows_and_track(area, true);
-        for (index, row) in self.rows.iter().skip(offset).enumerate() {
-            let Some(row_area) = row_area(body, index) else {
-                break;
-            };
-            row.line.as_ref().render(row_area, buf);
-            if cursor == Some(offset + index) {
-                paint_cursor_row(row_area, buf, theme);
-            }
-        }
-        render_vertical_scrollbar(track, buf, self.rows.len(), offset);
     }
 }
 

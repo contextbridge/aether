@@ -10,7 +10,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Widget};
+use ratatui::widgets::{Paragraph, StatefulWidget, Widget};
 
 use std::ops::Range;
 use std::path::Path;
@@ -28,6 +28,26 @@ pub struct PromptSearchPicker {
     loading: bool,
     error: Option<String>,
     search_generation: Generation,
+}
+
+pub(super) struct PromptSearchView<'a> {
+    query: &'a str,
+    results: &'a [PromptSearchResult],
+    loading: bool,
+    error: Option<&'a str>,
+    theme: &'a Theme,
+}
+
+impl<'a> PromptSearchView<'a> {
+    pub(super) fn new(
+        query: &'a str,
+        results: &'a [PromptSearchResult],
+        loading: bool,
+        error: Option<&'a str>,
+        theme: &'a Theme,
+    ) -> Self {
+        Self { query, results, loading, error, theme }
+    }
 }
 
 impl PromptSearchPicker {
@@ -124,6 +144,23 @@ impl PromptSearchPicker {
     }
 
     pub fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
+        let query = self.query.text();
+        let results = &self.results;
+        let loading = self.loading;
+        let error = self.error.as_deref();
+        StatefulWidget::render(
+            PromptSearchView::new(query, results, loading, error, theme),
+            area,
+            buf,
+            &mut self.selection,
+        );
+    }
+}
+
+impl StatefulWidget for PromptSearchView<'_> {
+    type State = SelectionState;
+
+    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
         if area.is_empty() {
             return;
         }
@@ -132,11 +169,11 @@ impl PromptSearchPicker {
             ratatui::layout::Constraint::Min(0),
         ])
         .areas(area);
-        Paragraph::new(Line::styled(format!("history search: {}", self.query.text()), Style::new().fg(theme.info)))
+        Paragraph::new(Line::styled(format!("history search: {}", self.query), Style::new().fg(self.theme.info)))
             .render(header_area, buf);
 
-        let message = self.error.as_ref().map(|error| format!("  error: {error}")).or_else(|| {
-            if self.query.text().trim().is_empty() {
+        let message = self.error.map(|error| format!("  error: {error}")).or_else(|| {
+            if self.query.trim().is_empty() {
                 Some("  type to search prompt history".to_string())
             } else if self.loading && self.results.is_empty() {
                 Some("  searching…".to_string())
@@ -147,18 +184,17 @@ impl PromptSearchPicker {
             }
         });
         if let Some(message) = message {
-            Paragraph::new(message).style(Style::new().fg(theme.muted)).render(results_area, buf);
+            Paragraph::new(message).style(Style::new().fg(self.theme.muted)).render(results_area, buf);
             return;
         }
 
         let width = usize::from(results_area.width.max(1));
-        let rows = self.results.iter().map(|result| result_line(result, width, theme)).collect();
-        ListView::new(rows, &mut self.selection, theme).render(results_area, buf);
+        let rows = self.results.iter().map(|result| result_line(result, width, self.theme)).collect();
+        let view = ListView::new(rows, self.theme);
+        StatefulWidget::render(view, results_area, buf, state);
     }
 }
 
-/// One result row: the prompt with its matched span highlighted, and the
-/// originating directory pushed to the right when there is room for it.
 fn result_line(result: &PromptSearchResult, max_width: usize, theme: &Theme) -> Line<'static> {
     let cwd_display = abbreviate_cwd(&result.cwd, MAX_CWD_WIDTH);
     let cwd_width = cwd_display.width();

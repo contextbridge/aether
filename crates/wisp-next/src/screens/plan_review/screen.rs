@@ -5,7 +5,7 @@ use ratatui::layout::{Constraint, Layout, Position, Rect};
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Paragraph, Widget};
+use ratatui::widgets::{Block, Paragraph, StatefulWidget, Widget};
 use utils::plan_review::{PlanReviewDecision, PlanReviewElicitationMeta};
 
 use crate::components::edit_buffer::EditBuffer;
@@ -21,7 +21,9 @@ use crate::screens::annotation::{AnnotatedRows, Draft, apply_draft_key, block_cu
 use crate::screens::plan_review::{
     PlanDocument, ReviewComment, SourceMarkdownLine, compile_feedback, render_markdown_source_lines,
 };
-use crate::screens::review::{DocumentPane, MOUSE_SCROLL_LINES, Pane, body_and_footer, focused_border, focused_title};
+use crate::screens::review::{
+    DocumentPane, DocumentPaneView, MOUSE_SCROLL_LINES, Pane, body_and_footer, focused_border, focused_title,
+};
 use crate::surfaces::elicitation::ElicitationResponder;
 use crate::surfaces::surface::{Action, MouseAction, Surface, is_composed_char};
 
@@ -42,6 +44,27 @@ pub struct PlanReviewScreen {
     draft: Option<Draft<usize>>,
     focus: Pane,
     responder: ElicitationResponder,
+}
+
+pub(super) struct PlanReviewView<'a, 'b> {
+    theme: &'a Theme,
+    highlighter: &'b mut SyntaxHighlighter,
+    theme_generation: Generation,
+}
+
+impl<'a, 'b> PlanReviewView<'a, 'b> {
+    pub(super) fn new(theme: &'a Theme, highlighter: &'b mut SyntaxHighlighter, theme_generation: Generation) -> Self {
+        Self { theme, highlighter, theme_generation }
+    }
+}
+
+impl StatefulWidget for PlanReviewView<'_, '_> {
+    type State = PlanReviewScreen;
+
+    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+        state.ensure_source_presentation(self.theme, self.highlighter, self.theme_generation);
+        state.render_screen(area, buf, self.theme);
+    }
 }
 
 /// The plan as rendered rows, with review comments woven in.
@@ -274,12 +297,9 @@ impl PlanReviewScreen {
         } else {
             Style::new().fg(theme.accent)
         };
-        ListView::new(rows, &mut self.outline_selection, theme)
-            .block(block)
-            .scrollbar()
-            .highlight_symbol("> ")
-            .highlight_style(highlight_style)
-            .render(area, buf);
+        let view =
+            ListView::new(rows, theme).block(block).scrollbar().highlight_symbol("> ").highlight_style(highlight_style);
+        StatefulWidget::render(view, area, buf, &mut self.outline_selection);
     }
 
     fn render_plan(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
@@ -306,7 +326,7 @@ impl PlanReviewScreen {
         self.plan.cursor = self.plan.cursor.min(self.source_line_max_index());
         let rows = self.build_rows(gutter_width, content_width, theme);
         self.plan.set_rows(rows);
-        self.plan.render(inner, buf, focused, theme);
+        StatefulWidget::render(DocumentPaneView::new(theme, focused), inner, buf, &mut self.plan);
     }
 
     /// Lays the plan out as rendered rows, with each comment and the draft woven
@@ -399,14 +419,15 @@ impl Surface for PlanReviewScreen {
         Vec::new()
     }
 
-    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
-        self.ensure_source_presentation(cx.theme, cx.highlighter, cx.theme_generation);
-        self.render_screen(area, buf, cx.theme);
-        None
-    }
-
     fn cancel(&mut self) {
         self.responder.cancel();
+    }
+}
+
+impl PlanReviewScreen {
+    pub fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
+        StatefulWidget::render(PlanReviewView::new(cx.theme, cx.highlighter, cx.theme_generation), area, buf, self);
+        None
     }
 }
 

@@ -139,15 +139,18 @@ impl<T> FilterableList<T> {
         );
     }
 
-    /// The matching entries as [`ListView`] rows, each built by `row`. Decorate
-    /// the result with the usual [`ListView`] chrome.
-    ///
-    /// `row` runs only for the entries actually drawn, so filtering a list of
-    /// every file in the working tree does not format one row per match.
-    pub fn view<'a>(&'a mut self, theme: &'a Theme, mut row: impl FnMut(&T) -> Line<'static> + 'a) -> ListView<'a> {
+    /// The matching entries as a [`ListView`] and its persistent selection state.
+    /// Rows run only for entries actually drawn, so filtering a list of every
+    /// file in the working tree does not format one row per match.
+    pub fn view<'a>(
+        &'a mut self,
+        theme: &'a Theme,
+        mut row: impl FnMut(&T) -> Line<'static> + 'a,
+    ) -> (ListView<'a>, &'a mut SelectionState) {
         let Self { entries, filtered_indices, selection, .. } = self;
         let (entries, filtered_indices) = (&*entries, &*filtered_indices);
-        ListView::lazy(filtered_indices.len(), move |index| row(&entries[filtered_indices[index]]), selection, theme)
+        let view = ListView::lazy(filtered_indices.len(), move |index| row(&entries[filtered_indices[index]]), theme);
+        (view, selection)
     }
 
     fn refilter(&mut self) {

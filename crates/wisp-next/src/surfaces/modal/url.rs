@@ -20,6 +20,23 @@ pub(super) struct UrlModal {
     pub(super) copy_message: Option<String>,
 }
 
+pub(super) struct UrlModalView<'a> {
+    modal: &'a UrlModal,
+    theme: &'a Theme,
+}
+
+impl<'a> UrlModalView<'a> {
+    pub(super) fn new(modal: &'a UrlModal, theme: &'a Theme) -> Self {
+        Self { modal, theme }
+    }
+}
+
+impl Widget for UrlModalView<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        Paragraph::new(Text::from(self.modal.body_lines(self.theme, area.width))).render(area, buf);
+    }
+}
+
 impl UrlModal {
     pub(super) fn new(server_name: String, elicitation_id: String, message: String, url: String) -> Self {
         let parsed_url = url::Url::parse(&url);
@@ -57,7 +74,7 @@ impl UrlModal {
     /// the URL worth a second look. The surrounding frame and key hints belong
     /// to the host.
     pub(super) fn render(&self, area: Rect, buf: &mut Buffer, theme: &Theme) {
-        Paragraph::new(Text::from(self.body_lines(theme, area.width))).render(area, buf);
+        UrlModalView::new(self, theme).render(area, buf);
     }
 
     /// What is being authorized, where the browser would go, and anything about

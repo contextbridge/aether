@@ -1,17 +1,27 @@
-use super::{KeyHint, LiveSettingsData, SettingsPane, summarize};
+use super::{KeyHint, LiveSettingsData, SettingsPaneBehavior, summarize};
 use crate::components::filterable_list::FilterableList;
-use crate::renderer::DrawContext;
+use crate::components::theme::Theme;
 use crate::surfaces::surface::{Action, Surface, SurfaceList, one};
 use agent_client_protocol::schema::AuthMethod;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::Line;
-use ratatui::widgets::Widget;
+use ratatui::widgets::StatefulWidget;
 
 /// Provider authentication status, with a login action per provider.
 pub(super) struct ProviderLoginPane {
     entries: FilterableList<ProviderLoginEntry>,
+}
+
+pub(super) struct ProviderLoginView<'a> {
+    theme: &'a Theme,
+}
+
+impl<'a> ProviderLoginView<'a> {
+    pub(super) fn new(theme: &'a Theme) -> Self {
+        Self { theme }
+    }
 }
 
 #[derive(Clone)]
@@ -51,26 +61,34 @@ impl Surface for ProviderLoginPane {
     fn activates_on_click(&self) -> bool {
         true
     }
+}
 
-    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
-        let theme = cx.theme;
-        self.entries
-            .view(theme, |entry| {
-                let (indicator, detail, style) = match entry.status {
-                    ProviderLoginStatus::NeedsLogin => ("⚡", "needs login", Style::new().fg(theme.warning)),
-                    ProviderLoginStatus::Authenticating => ("⏳", "authenticating...", Style::new().fg(theme.warning)),
-                    ProviderLoginStatus::LoggedIn => ("✓", "logged in", Style::new().fg(theme.success)),
-                };
-                Line::styled(format!(" {}  {indicator} {detail}", entry.name), style)
-            })
-            .empty_message(" (no providers need login)")
-            .highlight_style(Style::new().fg(theme.background).bg(theme.warning))
-            .render(area, buf);
+impl ProviderLoginPane {
+    pub(super) fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) -> Option<Position> {
+        StatefulWidget::render(ProviderLoginView::new(theme), area, buf, &mut self.entries);
         None
     }
 }
 
-impl SettingsPane for ProviderLoginPane {
+impl StatefulWidget for ProviderLoginView<'_> {
+    type State = FilterableList<ProviderLoginEntry>;
+
+    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+        let (view, selection) = state.view(self.theme, |entry| {
+            let (indicator, detail, style) = match entry.status {
+                ProviderLoginStatus::NeedsLogin => ("⚡", "needs login", Style::new().fg(self.theme.warning)),
+                ProviderLoginStatus::Authenticating => ("⏳", "authenticating...", Style::new().fg(self.theme.warning)),
+                ProviderLoginStatus::LoggedIn => ("✓", "logged in", Style::new().fg(self.theme.success)),
+            };
+            Line::styled(format!(" {}  {indicator} {detail}", entry.name), style)
+        });
+        let view = view
+            .empty_message(" (no providers need login)")
+            .highlight_style(Style::new().fg(self.theme.background).bg(self.theme.warning));
+        StatefulWidget::render(view, area, buf, selection);
+    }
+}
+impl SettingsPaneBehavior for ProviderLoginPane {
     fn refresh(&mut self, live: &LiveSettingsData) {
         let keep = self.entries.selected_entry().map(|entry| entry.method_id.clone());
         self.entries = list_of(live.providers.clone());

@@ -34,17 +34,30 @@ pub fn row_area(area: Rect, index: usize) -> Option<Rect> {
     (offset < area.height).then(|| Rect { y: area.y + offset, height: 1, ..area })
 }
 
-/// Draws `lines` one per row from the top of `area`, stopping when it runs out
-/// of rows.
-///
-/// One line per row rather than a [`Paragraph`], which would copy every line
-/// into a `Text` first.
-pub fn render_rows<'a>(lines: impl IntoIterator<Item = &'a Line<'static>>, area: Rect, buf: &mut Buffer) {
-    for (index, line) in lines.into_iter().enumerate() {
-        let Some(row) = row_area(area, index) else {
-            return;
-        };
-        line.render(row, buf);
+/// Draws already-built rows directly into a buffer area.
+#[derive(Clone)]
+pub struct RowsView<'a> {
+    lines: Cow<'a, [Line<'static>]>,
+}
+
+impl<'a> RowsView<'a> {
+    pub fn new(lines: &'a [Line<'static>]) -> Self {
+        Self { lines: Cow::Borrowed(lines) }
+    }
+
+    pub fn from_iter(lines: impl IntoIterator<Item = Line<'static>>) -> Self {
+        Self { lines: Cow::Owned(lines.into_iter().collect()) }
+    }
+}
+
+impl Widget for RowsView<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        for (index, line) in self.lines.iter().enumerate() {
+            let Some(row) = row_area(area, index) else {
+                return;
+            };
+            line.render(row, buf);
+        }
     }
 }
 
@@ -129,6 +142,18 @@ impl Widget for TextInput<'_> {
     }
 }
 
+impl Widget for &TextInput<'_> {
+    fn render(self, area: Rect, buffer: &mut Buffer) {
+        let prefix_width = self.prefix.width().min(usize::from(area.width));
+        let available = usize::from(area.width).saturating_sub(prefix_width);
+        let (visible, _) = visible_window(self.buffer, available);
+        Paragraph::new(Line::from(vec![
+            Span::styled(self.prefix, self.prefix_style),
+            Span::styled(visible, self.style),
+        ]))
+        .render(area, buffer);
+    }
+}
 fn visible_window(buffer: &EditBuffer, width: usize) -> (String, usize) {
     if width == 0 {
         return (String::new(), 0);

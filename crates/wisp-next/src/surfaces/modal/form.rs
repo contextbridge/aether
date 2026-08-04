@@ -6,13 +6,13 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Widget};
+use ratatui::widgets::{Paragraph, StatefulWidget, Widget};
 use serde_json::{Map, Value};
 
 use crate::components::edit_buffer::{EditBuffer, apply_edit_key};
 use crate::components::selection::{Direction, scroll_into_view};
 use crate::components::theme::Theme;
-use crate::components::widgets::{KeyHint, render_rows, render_vertical_scrollbar, rows_and_track};
+use crate::components::widgets::{KeyHint, RowsView, render_vertical_scrollbar, rows_and_track};
 use crate::components::wrap::{as_u16, wrap_line};
 use crate::surfaces::surface::is_composed_char;
 
@@ -23,6 +23,16 @@ pub(super) struct FormModal {
     pub(super) selected: usize,
     validation_error: Option<String>,
     body: BodyView,
+}
+
+pub(super) struct FormModalView<'a> {
+    theme: &'a Theme,
+}
+
+impl<'a> FormModalView<'a> {
+    pub(super) fn new(theme: &'a Theme) -> Self {
+        Self { theme }
+    }
 }
 
 /// The scrolling middle of the modal, where the fields are drawn.
@@ -204,22 +214,32 @@ impl FormModal {
     /// Draws the form's request header and scrolling fields into the supplied
     /// content area. The surrounding frame and key hints belong to the host.
     pub(super) fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
-        let header = self.header_lines(theme, area.width);
+        StatefulWidget::render(FormModalView::new(theme), area, buf, self);
+    }
+}
+
+impl StatefulWidget for FormModalView<'_> {
+    type State = FormModal;
+
+    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+        let header = state.header_lines(self.theme, area.width);
         let [header_area, body_area] =
             Layout::vertical([Constraint::Length(as_u16(header.len())), Constraint::Min(0)]).areas(area);
 
         Paragraph::new(header).render(header_area, buf);
 
         let (rows_area, track_area) = rows_and_track(body_area, true);
-        let (lines, field_of_row) = self.field_rows(theme, rows_area.width);
-        self.body.area = rows_area;
-        self.body.field_of_row = field_of_row;
-        self.body.scroll = self.scrolled_to_selection(usize::from(rows_area.height));
+        let (lines, field_of_row) = state.field_rows(self.theme, rows_area.width);
+        state.body.area = rows_area;
+        state.body.field_of_row = field_of_row;
+        state.body.scroll = state.scrolled_to_selection(usize::from(rows_area.height));
 
-        render_rows(lines.iter().skip(self.body.scroll), rows_area, buf);
-        render_vertical_scrollbar(track_area, buf, lines.len(), self.body.scroll);
+        RowsView::from_iter(lines.iter().skip(state.body.scroll).cloned()).render(rows_area, buf);
+        render_vertical_scrollbar(track_area, buf, lines.len(), state.body.scroll);
     }
+}
 
+impl FormModal {
     fn header_lines(&self, theme: &Theme, width: u16) -> Vec<Line<'static>> {
         let title = Line::styled(
             format!("Request from {}", self.server_name),

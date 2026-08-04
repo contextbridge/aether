@@ -13,7 +13,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Position, Rect};
 use ratatui::text::Text;
-use ratatui::widgets::{Paragraph, Widget};
+use ratatui::widgets::{Paragraph, StatefulWidget, Widget};
 
 use self::form::{FormAction, FormModal};
 use self::frame::ModalFrame;
@@ -30,6 +30,35 @@ pub struct ElicitationModal {
     responder: ElicitationResponder,
     browser_opener: BrowserOpener,
     clipboard_writer: ClipboardWriter,
+}
+
+pub(super) struct ElicitationModalView<'a> {
+    theme: &'a Theme,
+}
+
+impl<'a> ElicitationModalView<'a> {
+    pub(super) fn new(theme: &'a Theme) -> Self {
+        Self { theme }
+    }
+}
+
+impl StatefulWidget for ElicitationModalView<'_> {
+    type State = ElicitationModal;
+
+    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+        let (title, footer) = match &state.kind {
+            ModalKind::Form(form) => ("Elicitation", key_hints(&form.hints(), self.theme)),
+            ModalKind::Url(_) => ("URL authorization", key_hints(&url::HINTS, self.theme)),
+        };
+        let frame =
+            ModalFrame::new(title, Some(footer), Constraint::Percentage(80), Constraint::Percentage(80), self.theme);
+        let inner = frame.inner(area);
+        (&frame).render(area, buf);
+        match &mut state.kind {
+            ModalKind::Form(form) => form.render(inner, buf, self.theme),
+            ModalKind::Url(url) => url.render(inner, buf, self.theme),
+        }
+    }
 }
 
 enum ModalKind {
@@ -189,18 +218,11 @@ impl Surface for ElicitationModal {
     fn cancel(&mut self) {
         self.responder.cancel();
     }
+}
 
-    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
-        let (title, footer) = match &self.kind {
-            ModalKind::Form(form) => ("Elicitation", key_hints(&form.hints(), cx.theme)),
-            ModalKind::Url(_) => ("URL authorization", key_hints(&url::HINTS, cx.theme)),
-        };
-        let frame = ModalFrame::new(title, Some(footer), Constraint::Percentage(80), Constraint::Percentage(80));
-        let inner = frame.render(area, buf, cx.theme);
-        match &mut self.kind {
-            ModalKind::Form(form) => form.render(inner, buf, cx.theme),
-            ModalKind::Url(url) => url.render(inner, buf, cx.theme),
-        }
+impl ElicitationModal {
+    pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
+        StatefulWidget::render(ElicitationModalView::new(cx.theme), area, buf, self);
         None
     }
 }

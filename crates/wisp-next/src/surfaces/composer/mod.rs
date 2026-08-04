@@ -1,4 +1,5 @@
 mod view;
+pub(crate) use view::ComposerBodyView;
 
 use crate::components::edit_buffer::{EditBuffer, apply_edit_key};
 use crate::components::generation::Generation;

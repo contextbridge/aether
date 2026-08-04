@@ -1,23 +1,34 @@
-use super::{KeyHint, LiveSettingsData, SettingsPane, summarize};
+use super::{KeyHint, LiveSettingsData, SettingsPaneBehavior, summarize};
 use crate::components::list_view::ListView;
 use crate::components::selection::{Direction, SelectionState};
-use crate::renderer::DrawContext;
+use crate::components::theme::Theme;
 use crate::surfaces::surface::{Action, Surface, one};
 use acp_utils::notifications::{McpServerStatus, McpServerStatusEntry};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::Line;
-use ratatui::widgets::Widget;
+use ratatui::widgets::StatefulWidget;
 
 /// Read-only view of MCP server health, with authentication for OAuth servers.
+pub(super) struct ServerStatusView<'a> {
+    rows: &'a [ServerStatusRow],
+    theme: &'a Theme,
+}
+
+impl<'a> ServerStatusView<'a> {
+    pub(super) fn new(rows: &'a [ServerStatusRow], theme: &'a Theme) -> Self {
+        Self { rows, theme }
+    }
+}
+
 pub(super) struct ServerStatusPane {
     rows: Vec<ServerStatusRow>,
     selection: SelectionState,
 }
 
 #[derive(Clone)]
-enum ServerStatusRow {
+pub(super) enum ServerStatusRow {
     Header(String),
     Spacer,
     Server { entry: McpServerStatusEntry, indented: bool },
@@ -32,7 +43,7 @@ impl ServerStatusPane {
 
     fn selected_entry(&self) -> Option<&McpServerStatusEntry> {
         match self.selection.selected().and_then(|selected| self.rows.get(selected))? {
-            ServerStatusRow::Server { entry, .. } => Some(entry),
+            ServerStatusRow::Server { entry, .. } => Some(&entry),
             ServerStatusRow::Header(_) | ServerStatusRow::Spacer => None,
         }
     }
@@ -78,35 +89,44 @@ impl Surface for ServerStatusPane {
         self.selection.step(rows.len(), direction, |index| is_server(&rows[index]));
         Vec::new()
     }
+}
 
-    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
-        let theme = cx.theme;
+impl ServerStatusPane {
+    pub(super) fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) -> Option<Position> {
+        StatefulWidget::render(ServerStatusView::new(&self.rows, theme), area, buf, &mut self.selection);
+        None
+    }
+}
+
+impl StatefulWidget for ServerStatusView<'_> {
+    type State = SelectionState;
+
+    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
         let rows = self.rows.iter().map(|row| match row {
-            ServerStatusRow::Header(label) => Line::styled(label.clone(), Style::new().fg(theme.heading)),
+            ServerStatusRow::Header(label) => Line::styled(label.clone(), Style::new().fg(self.theme.heading)),
             ServerStatusRow::Spacer => Line::default(),
             ServerStatusRow::Server { entry, indented } => {
                 let (indicator, detail) = server_status_detail(entry);
                 let prefix = if *indented { "  " } else { "" };
                 let style = match &entry.status {
                     McpServerStatus::Connected { .. } | McpServerStatus::Connecting => {
-                        Style::new().fg(theme.text_primary)
+                        Style::new().fg(self.theme.text_primary)
                     }
-                    McpServerStatus::Failed { .. } => Style::new().fg(theme.error),
-                    McpServerStatus::Authenticating | McpServerStatus::NeedsOAuth => Style::new().fg(theme.warning),
+                    McpServerStatus::Failed { .. } => Style::new().fg(self.theme.error),
+                    McpServerStatus::Authenticating | McpServerStatus::NeedsOAuth => {
+                        Style::new().fg(self.theme.warning)
+                    }
                 };
                 let row_prefix = if area.width > 30 { " " } else { "" };
                 let name_separator = if area.width <= 30 { " " } else { "  " };
                 Line::styled(format!("{row_prefix}{prefix}{}{name_separator}{indicator} {detail}", entry.name), style)
             }
         });
-        ListView::new(rows.collect(), &mut self.selection, theme)
-            .pane(" (no MCP servers configured)")
-            .render(area, buf);
-        None
+        let view = ListView::new(rows.collect(), self.theme).pane(" (no MCP servers configured)");
+        StatefulWidget::render(view, area, buf, state);
     }
 }
-
-impl SettingsPane for ServerStatusPane {
+impl SettingsPaneBehavior for ServerStatusPane {
     fn refresh(&mut self, live: &LiveSettingsData) {
         let keep = self.selected_entry().map(|entry| entry.name.clone());
         self.set_rows(live.servers.clone(), keep.as_deref());

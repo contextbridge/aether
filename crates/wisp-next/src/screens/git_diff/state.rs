@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+use ratatui::layout::Position;
+
 use crate::components::edit_buffer::EditBuffer;
 use crate::components::selection::{Direction, SelectionState};
 use crate::screens::annotation::{Draft, DraftKey, Row};
@@ -40,6 +42,7 @@ pub struct GitDiffScreen {
     pub(super) patch: PatchView,
     pub(super) review: Review,
     pub(super) request: Request,
+    pub(super) last_cursor: Option<Position>,
 }
 
 /// The patch pane: the document under review, plus the two cached renders
@@ -160,6 +163,7 @@ impl GitDiffScreen {
             patch: PatchView::default(),
             review: Review::default(),
             request: Request::default(),
+            last_cursor: None,
         };
         let task = screen.begin_load();
         (screen, task)

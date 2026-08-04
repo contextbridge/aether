@@ -7,6 +7,7 @@ use crate::conversation::progress_indicator::{ProgressActivity, ProgressIndicato
 use crate::conversation::status_line::StatusLineModel;
 use crate::conversation::tool_calls::{SubAgentState, ToolCallLog, ToolStatus};
 use crate::conversation::transcript::{SegmentContent, Transcript};
+use crate::renderer::DrawContext;
 use crate::screens::git_diff::GitDiffScreen;
 use crate::screens::plan_review::PlanReviewScreen;
 use crate::session::session_loading_buffer::SessionLoadingBuffer;
@@ -25,6 +26,8 @@ use crate::surfaces::workspace_picker::WorkspacePicker;
 use acp_utils::client::{AcpEvent, AcpPromptHandle};
 use acp_utils::notifications::{AetherCapabilities, McpServerStatusEntry};
 use agent_client_protocol::schema::{self as acp, SessionId};
+use ratatui::buffer::Buffer;
+use ratatui::layout::{Position, Rect};
 use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -73,6 +76,17 @@ impl Layer {
     /// it, which also stops the transcript committing to terminal scrollback.
     pub fn is_fullscreen(&self) -> bool {
         matches!(self, Self::GitDiff(_) | Self::PlanReview(_))
+    }
+
+    pub fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
+        match self {
+            Self::Settings(surface) => surface.render(area, buf, cx),
+            Self::Sessions(surface) => surface.render(area, buf, cx),
+            Self::Workspaces(surface) => surface.render(area, buf, cx),
+            Self::Elicitation(surface) => surface.render(area, buf, cx),
+            Self::GitDiff(surface) => surface.render(area, buf, cx),
+            Self::PlanReview(surface) => surface.render(area, buf, cx),
+        }
     }
 
     fn surface(&mut self) -> &mut dyn Surface {

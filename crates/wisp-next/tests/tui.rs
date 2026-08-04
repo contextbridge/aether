@@ -42,5 +42,5 @@ mod subagents;
 mod terminal_interaction;
 #[path = "tui/terminal_session.rs"]
 mod terminal_session;
-#[path = "tui/workspace.rs"]
-mod workspace;
+#[path = "tui/widgets.rs"]
+mod widgets;

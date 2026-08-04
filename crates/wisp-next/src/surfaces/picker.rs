@@ -2,6 +2,7 @@ use crate::components::filterable_list::FilterableList;
 use crate::components::generation::Generation;
 use crate::components::list_view::ListView;
 use crate::components::selection::Direction;
+use crate::components::selection::SelectionState;
 use crate::components::theme::Theme;
 use ratatui::style::Style;
 use ratatui::text::Line;
@@ -109,12 +110,15 @@ impl CompletionOverlay {
         1 + self.entries.filtered_len().clamp(1, max_rows.max(1))
     }
 
-    pub fn view<'a>(&'a mut self, theme: &'a Theme) -> ListView<'a> {
+    pub fn view<'a>(&'a mut self, theme: &'a Theme) -> (ListView<'a>, &'a mut SelectionState) {
         let empty_message = self.empty_message;
-        self.entries
-            .view(theme, |entry| Line::styled(format!("  {}", entry.label()), Style::new().fg(theme.text_secondary)))
+        let (view, selection) = self
+            .entries
+            .view(theme, |entry| Line::styled(format!("  {}", entry.label()), Style::new().fg(theme.text_secondary)));
+        let view = view
             .empty_message(empty_message)
-            .block(Block::new().borders(Borders::TOP).border_style(Style::new().fg(theme.muted)))
+            .block(Block::new().borders(Borders::TOP).border_style(Style::new().fg(theme.muted)));
+        (view, selection)
     }
 
     fn new(trigger: char, entries: Vec<CompletionEntry>, empty_message: &'static str) -> Self {

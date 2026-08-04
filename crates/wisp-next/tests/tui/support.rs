@@ -26,7 +26,7 @@ pub(crate) use tokio::sync::mpsc::UnboundedReceiver;
 pub(crate) use tokio::task::LocalSet;
 pub(crate) use wisp_next::test_support::TestUi;
 pub(crate) use wisp_next::test_support::TestUiBuilder;
-pub(crate) use wisp_next::test_support::app::{App, AppConfig, HistoryItem, RuntimeEffect, WorkspaceMoveState};
+pub(crate) use wisp_next::test_support::app::{App, AppConfig, HistoryItem, RuntimeEffect};
 pub(crate) use wisp_next::test_support::attachments::{
     AttachmentKind, PromptAttachment, build_attachments, classify_attachment,
 };
@@ -291,12 +291,13 @@ pub(crate) fn has_cell(buffer: &Buffer, symbol: &str, predicate: impl Fn(&Cell) 
 
 /// Renders the composer's completion list and reports whether `needle` shows up.
 pub(crate) fn completion_contains(composer: &mut Composer, needle: &str) -> bool {
-    use ratatui::widgets::Widget;
+    use ratatui::widgets::StatefulWidget;
     let theme = Theme::default();
     let area = ratatui::layout::Rect::new(0, 0, 80, 8);
     let mut buffer = Buffer::empty(area);
     if let Some(overlay) = composer.completion() {
-        overlay.view(&theme).render(area, &mut buffer);
+        let (view, selection) = overlay.view(&theme);
+        StatefulWidget::render(view, area, &mut buffer, selection);
     }
     buffer_text(&buffer).contains(needle)
 }

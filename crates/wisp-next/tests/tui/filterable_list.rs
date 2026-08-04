@@ -1,7 +1,7 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
-use ratatui::widgets::Widget;
+use ratatui::widgets::StatefulWidget;
 use wisp_next::test_support::filterable_list::FilterableList;
 use wisp_next::test_support::selection::Direction;
 use wisp_next::test_support::theme::Theme;
@@ -47,10 +47,10 @@ fn maps_a_click_to_the_row_drawn_under_it() {
     for _ in 0..7 {
         list.step(Direction::Forward);
     }
-    list.view(&Theme::default(), |entry| Line::raw(entry.clone()))
-        .empty_message("empty")
-        .bordered("items")
-        .render(area, &mut buffer);
+    let theme = Theme::default();
+    let (view, selection) = list.view(&theme, |entry| Line::raw(entry.clone()));
+    let view = view.empty_message("empty").bordered("items");
+    StatefulWidget::render(view, area, &mut buffer, selection);
 
     let offset = list.offset();
     assert!(offset > 0, "the selection should have scrolled the list");
@@ -64,10 +64,10 @@ fn ignores_clicks_outside_the_rows_it_drew() {
     let area = Rect::new(0, 0, 20, 4);
     let mut list = FilterableList::new(vec!["only".to_string()], Clone::clone);
     let mut buffer = Buffer::empty(area);
-    list.view(&Theme::default(), |entry| Line::raw(entry.clone()))
-        .empty_message("empty")
-        .bordered("items")
-        .render(area, &mut buffer);
+    let theme = Theme::default();
+    let (view, selection) = list.view(&theme, |entry| Line::raw(entry.clone()));
+    let view = view.empty_message("empty").bordered("items");
+    StatefulWidget::render(view, area, &mut buffer, selection);
 
     assert!(!list.select_at(0), "the top border is not a row");
     assert!(!list.select_at(3), "the bottom border is not a row");

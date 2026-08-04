@@ -6,7 +6,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Paragraph, Widget};
+use ratatui::widgets::{Block, Paragraph, StatefulWidget, Widget};
 use unicode_width::UnicodeWidthStr;
 
 /// Rows drawn against a [`SelectionState`], with the chrome every list pane in
@@ -22,7 +22,6 @@ use unicode_width::UnicodeWidthStr;
 /// hit-tested against the same area they were drawn into.
 pub struct ListView<'a> {
     rows: Rows<'a>,
-    selection: &'a mut SelectionState,
     theme: &'a Theme,
     empty_message: &'a str,
     block: Option<Block<'static>>,
@@ -34,22 +33,16 @@ pub struct ListView<'a> {
 impl<'a> ListView<'a> {
     /// Rows already in hand, for the lists short enough that building them all
     /// costs nothing.
-    pub fn new(rows: Vec<Line<'static>>, selection: &'a mut SelectionState, theme: &'a Theme) -> Self {
+    pub fn new(rows: Vec<Line<'static>>, theme: &'a Theme) -> Self {
         let len = rows.len();
         let mut rows = rows;
-        Self::lazy(len, move |index| std::mem::take(&mut rows[index]), selection, theme)
+        Self::lazy(len, move |index| std::mem::take(&mut rows[index]), theme)
     }
 
     /// `len` rows, each built by `row` only if it is drawn.
-    pub fn lazy(
-        len: usize,
-        row: impl FnMut(usize) -> Line<'static> + 'a,
-        selection: &'a mut SelectionState,
-        theme: &'a Theme,
-    ) -> Self {
+    pub fn lazy(len: usize, row: impl FnMut(usize) -> Line<'static> + 'a, theme: &'a Theme) -> Self {
         Self {
             rows: Rows { len, build: Box::new(row) },
-            selection,
             theme,
             empty_message: "",
             block: None,
@@ -101,9 +94,11 @@ impl<'a> ListView<'a> {
     }
 }
 
-impl Widget for ListView<'_> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        let Self { mut rows, selection, theme, empty_message, block, scrollbar, highlight, highlight_symbol } = self;
+impl StatefulWidget for ListView<'_> {
+    type State = SelectionState;
+
+    fn render(self, area: Rect, buf: &mut Buffer, selection: &mut Self::State) {
+        let Self { mut rows, theme, empty_message, block, scrollbar, highlight, highlight_symbol } = self;
         let inner = block.as_ref().map_or(area, |block| block.inner(area));
         if let Some(block) = block {
             block.render(area, buf);
@@ -214,7 +209,7 @@ mod tests {
                     built.push(index);
                     Line::raw(index.to_string())
                 };
-                frame.render_widget(ListView::lazy(50_000, rows, &mut selection, &theme), frame.area());
+                frame.render_stateful_widget(ListView::lazy(50_000, rows, &theme), frame.area(), &mut selection);
             })
             .unwrap();
 

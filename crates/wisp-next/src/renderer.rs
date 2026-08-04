@@ -9,15 +9,15 @@ use crate::components::generation::Generation;
 use crate::components::markdown::render_markdown;
 use crate::components::syntax::SyntaxHighlighter;
 use crate::components::theme::Theme;
-use crate::components::widgets::render_rows;
+use crate::components::widgets::RowsView;
 use crate::components::wrap::{as_u16, truncate_to_width, wrap_line, wrap_text};
 use crate::conversation::plan_view::PlanView;
-use crate::conversation::progress_indicator::spinner_frame;
+use crate::conversation::progress_indicator::{ProgressIndicator, ProgressIndicatorView, spinner_frame};
 use crate::conversation::status_line::StatusLine;
 use crate::conversation::tool_calls::{SUB_AGENT_VISIBLE_TOOL_LIMIT, SubAgentState, ToolStatus};
 use crate::session::terminal::INLINE_SCROLLBACK_RESERVE;
 use crate::settings::UiSettings;
-use crate::surfaces::composer::ComposerLayout;
+use crate::surfaces::composer::{ComposerBodyView, ComposerLayout};
 use agent_client_protocol::schema::PlanEntry;
 use ratatui::Frame;
 use ratatui::Terminal;
@@ -26,7 +26,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Paragraph, Widget};
+use ratatui::widgets::{Paragraph, StatefulWidget, Widget};
 use unicode_width::UnicodeWidthStr;
 
 /// Most rows the completion list and history search may claim.
@@ -306,7 +306,7 @@ struct FrameLayout {
     status_line_rows: u16,
     plan_entries: Vec<PlanEntry>,
     plan_height: u16,
-    progress_lines: Vec<Line<'static>>,
+    progress_height: u16,
     live_lines: Vec<Line<'static>>,
     /// Columns of blank gutter each side of the conversation content.
     content_padding: u16,
@@ -334,7 +334,8 @@ impl FrameLayout {
         // cannot squeeze out the conversation.
         let plan_height =
             as_u16(PlanView::new(&plan_entries, renderer.theme()).line_count()).min(remaining.div_ceil(3));
-        let progress_lines = app.progress_indicator().lines(renderer.theme(), app.spinner_tick());
+        let progress_height =
+            ProgressIndicatorView::new(app.progress_indicator(), renderer.theme(), app.spinner_tick()).height();
         let live_lines =
             if app.full_screen_active() { Vec::new() } else { live_history_lines(app, renderer, area.width) };
 
@@ -347,7 +348,7 @@ impl FrameLayout {
             status_line_rows,
             plan_entries,
             plan_height,
-            progress_lines,
+            progress_height,
             live_lines,
             content_padding: as_u16(app.content_padding()),
             transcript_height: remaining.saturating_sub(plan_height),
@@ -376,7 +377,7 @@ impl FrameLayout {
     fn committed_capacity(&self) -> usize {
         usize::from(self.transcript_height)
             .saturating_sub(self.live_lines.len())
-            .saturating_sub(self.progress_lines.len())
+            .saturating_sub(usize::from(self.progress_height))
     }
 }
 
@@ -385,7 +386,15 @@ fn draw_frame(frame: &mut Frame, app: &mut App, renderer: &mut Renderer, layout:
     let buf = frame.buffer_mut();
 
     PlanView::new(&layout.plan_entries, renderer.theme()).render(layout.indent(plan_area), buf);
-    draw_transcript(layout, renderer.scrollback.lines(), transcript_area, buf);
+    draw_transcript(
+        layout,
+        renderer.scrollback.lines(),
+        transcript_area,
+        buf,
+        app.progress_indicator(),
+        renderer.theme(),
+        app.spinner_tick(),
+    );
 
     let cursor = render_composer(layout, app, composer_area, buf, renderer.theme());
     layout.status_line.render(status_area, buf);
@@ -398,21 +407,30 @@ fn draw_frame(frame: &mut Frame, app: &mut App, renderer: &mut Renderer, layout:
 
 /// Stacks committed scrollback, the streaming tail, and the progress indicator
 /// against the bottom of `area`, trimming the oldest rows first.
-fn draw_transcript(layout: &FrameLayout, committed: &[Line<'static>], area: Rect, buf: &mut Buffer) {
+fn draw_transcript(
+    layout: &FrameLayout,
+    committed: &[Line<'static>],
+    area: Rect,
+    buf: &mut Buffer,
+    progress_indicator: &ProgressIndicator,
+    theme: &Theme,
+    tick: usize,
+) {
     let mut remaining = usize::from(area.height);
-    let progress = tail(&layout.progress_lines, &mut remaining);
+    let progress_height = usize::from(layout.progress_height).min(remaining);
+    remaining = remaining.saturating_sub(progress_height);
     let live = tail(&layout.live_lines, &mut remaining);
     let committed = tail(committed, &mut remaining);
 
     let [committed_area, live_area, progress_area] = Layout::vertical([
         Constraint::Length(as_u16(committed.len())),
         Constraint::Length(as_u16(live.len())),
-        Constraint::Length(as_u16(progress.len())),
+        Constraint::Length(as_u16(progress_height)),
     ])
     .areas(area);
-    render_rows(committed, committed_area, buf);
-    render_rows(live, live_area, buf);
-    render_rows(progress, layout.indent(progress_area), buf);
+    RowsView::new(committed).render(committed_area, buf);
+    RowsView::new(live).render(live_area, buf);
+    ProgressIndicatorView::new(progress_indicator, theme, tick).render(layout.indent(progress_area), buf);
 }
 
 /// The last `remaining` lines of `lines`, decrementing `remaining` by how many
@@ -458,20 +476,15 @@ fn render_composer(
     if completion_area.height > 0
         && let Some(overlay) = app.composer_mut().completion()
     {
-        overlay.view(theme).render(completion_area, buf);
+        let (view, selection) = overlay.view(theme);
+        StatefulWidget::render(view, completion_area, buf, selection);
     }
 
-    // Keep the cursor line visible when the composer is taller than its area.
     let skip = layout.composer_layout.lines.len().saturating_sub(usize::from(body_area.height));
-    render_rows(&layout.composer_layout.lines[skip..], body_area, buf);
-
-    let cursor_row = usize::from(layout.composer_layout.cursor.y);
-    if cursor_row < skip {
-        return None;
-    }
-    let x = body_area.x.saturating_add(layout.composer_layout.cursor.x);
-    let y = body_area.y.saturating_add(as_u16(cursor_row - skip));
-    (x < body_area.right() && y < body_area.bottom()).then(|| Position::new(x, y))
+    let body = ComposerBodyView::new(&layout.composer_layout, skip);
+    let cursor = body.cursor_position(body_area);
+    body.render(body_area, buf);
+    cursor
 }
 
 fn indent_lines(lines: Vec<Line<'static>>, padding: usize) -> Vec<Line<'static>> {

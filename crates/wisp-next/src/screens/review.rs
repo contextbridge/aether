@@ -8,10 +8,11 @@
 
 use crate::components::selection::{Direction, scroll_into_view, step_clamped};
 use crate::components::theme::Theme;
-use crate::screens::annotation::AnnotatedRows;
+use crate::screens::annotation::{AnnotatedRows, AnnotatedRowsView};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
+use ratatui::widgets::{StatefulWidget, Widget};
 
 /// Rendered rows a mouse wheel notch moves the focused pane.
 pub(crate) const MOUSE_SCROLL_LINES: usize = 3;
@@ -60,6 +61,33 @@ pub(crate) struct DocumentPane<A> {
     area: Rect,
 }
 
+/// Stateful rendering command for a document pane. The pane remains the
+/// durable owner of scroll, cursor, and last-rendered hit-test geometry.
+pub(crate) struct DocumentPaneView<'a, A> {
+    theme: &'a Theme,
+    mark_cursor: bool,
+    marker: std::marker::PhantomData<fn() -> A>,
+}
+
+impl<'a, A> DocumentPaneView<'a, A> {
+    pub(crate) fn new(theme: &'a Theme, mark_cursor: bool) -> Self {
+        Self { theme, mark_cursor, marker: std::marker::PhantomData }
+    }
+}
+
+impl<A: Copy + Default + PartialEq> StatefulWidget for DocumentPaneView<'_, A> {
+    type State = DocumentPane<A>;
+
+    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+        state.area = area;
+        if let Some(row) = state.cursor_row() {
+            state.scroll = scroll_into_view(state.scroll, row, usize::from(area.height));
+        }
+        let cursor = state.cursor_row();
+        AnnotatedRowsView::new(&state.rows, state.scroll, self.mark_cursor.then_some(cursor).flatten(), self.theme)
+            .render(area, buf);
+    }
+}
 impl<A: Default> Default for DocumentPane<A> {
     fn default() -> Self {
         Self { rows: AnnotatedRows::default(), cursor: A::default(), scroll: 0, area: Rect::ZERO }
@@ -109,17 +137,6 @@ impl<A: Copy + Default + PartialEq> DocumentPane<A> {
     pub(crate) fn focus_at(&mut self, row: u16) {
         let clicked = self.scroll + usize::from(row.saturating_sub(self.area.y));
         self.follow_row(clicked);
-    }
-
-    /// Draws the rows, scrolling the least it can to keep the cursor on screen
-    /// and marking it when this pane has focus.
-    pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer, mark_cursor: bool, theme: &Theme) {
-        self.area = area;
-        let cursor_row = self.cursor_row();
-        if let Some(row) = cursor_row {
-            self.scroll = scroll_into_view(self.scroll, row, usize::from(area.height));
-        }
-        self.rows.render(area, buf, self.scroll, mark_cursor.then_some(cursor_row).flatten(), theme);
     }
 
     fn follow_scroll(&mut self) {

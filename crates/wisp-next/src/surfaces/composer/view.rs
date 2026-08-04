@@ -1,10 +1,13 @@
 use super::{Composer, ComposerLayout};
 use crate::components::theme::Theme;
+use crate::components::widgets::RowsView;
 use crate::components::wrap::{fit_prefix, wrap_text_char};
 use crate::surfaces::attachments::{AttachmentKind, classify_attachment};
-use ratatui::layout::Position;
+use ratatui::buffer::Buffer;
+use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
+use ratatui::widgets::Widget;
 use std::ops::Range;
 use unicode_width::UnicodeWidthStr;
 
@@ -46,6 +49,36 @@ impl InputLayout {
     pub(super) fn byte_at(&self, text: &str, row: usize, column: usize) -> Option<usize> {
         let row = self.rows.get(row)?;
         Some(row.start + fit_prefix(&text[row.clone()], column).0)
+    }
+}
+
+/// The composer body as a clipped, one-frame widget. Its cursor calculation
+/// uses the same visible range as its painting, so terminal placement cannot
+/// drift from wrapped input rows.
+pub(crate) struct ComposerBodyView<'a> {
+    layout: &'a ComposerLayout,
+    first_row: usize,
+}
+
+impl<'a> ComposerBodyView<'a> {
+    pub(crate) fn new(layout: &'a ComposerLayout, first_row: usize) -> Self {
+        Self { layout, first_row }
+    }
+
+    pub(crate) fn cursor_position(&self, area: Rect) -> Option<Position> {
+        let cursor = self.layout.cursor;
+        if usize::from(cursor.y) < self.first_row {
+            return None;
+        }
+        let x = area.x.saturating_add(cursor.x);
+        let y = area.y.saturating_add(u16::try_from(usize::from(cursor.y) - self.first_row).unwrap_or(u16::MAX));
+        (x < area.right() && y < area.bottom()).then_some(Position::new(x, y))
+    }
+}
+
+impl Widget for ComposerBodyView<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        RowsView::new(&self.layout.lines[self.first_row.min(self.layout.lines.len())..]).render(area, buf);
     }
 }
 

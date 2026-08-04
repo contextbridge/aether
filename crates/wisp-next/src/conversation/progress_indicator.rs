@@ -1,6 +1,9 @@
 use crate::components::theme::Theme;
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
+use ratatui::widgets::{Paragraph, Widget};
 
 pub const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -86,6 +89,33 @@ pub struct ProgressIndicator {
     turn_count: usize,
 }
 
+/// A one-frame rendering command for a persistent progress indicator.
+pub struct ProgressIndicatorView<'a> {
+    indicator: &'a ProgressIndicator,
+    theme: &'a Theme,
+    tick: usize,
+}
+
+impl<'a> ProgressIndicatorView<'a> {
+    pub fn new(indicator: &'a ProgressIndicator, theme: &'a Theme, tick: usize) -> Self {
+        Self { indicator, theme, tick }
+    }
+
+    pub fn line_count(&self) -> usize {
+        self.indicator.is_active().then_some(3).unwrap_or(0)
+    }
+
+    pub fn height(&self) -> u16 {
+        u16::try_from(self.line_count()).unwrap_or(u16::MAX)
+    }
+}
+
+impl Widget for ProgressIndicatorView<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        Paragraph::new(self.indicator.lines(self.theme, self.tick)).render(area, buf);
+    }
+}
+
 impl ProgressIndicator {
     pub fn update(&mut self, activity: ProgressActivity, turn_count: usize) {
         self.display = activity.display();
@@ -104,8 +134,7 @@ impl ProgressIndicator {
         *self = Self::default();
     }
 
-    /// The indicator's rows, to be drawn into an already-indented area.
-    pub fn lines(&self, theme: &Theme, tick: usize) -> Vec<Line<'static>> {
+    fn lines(&self, theme: &Theme, tick: usize) -> Vec<Line<'static>> {
         if !self.is_active() {
             return Vec::new();
         }

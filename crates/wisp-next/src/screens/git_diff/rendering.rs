@@ -2,7 +2,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Clear, Paragraph, Widget};
+use ratatui::widgets::{Block, Clear, Paragraph, StatefulWidget, Widget};
 use std::collections::HashSet;
 
 use crate::components::diff::{DiffTone, SPLIT_VIEW_MIN_WIDTH, diff_line, join_split, split_side, split_widths};
@@ -14,14 +14,39 @@ use crate::components::wrap::{as_u16, fit_line, wrap_text_char};
 use crate::renderer::DrawContext;
 use crate::screens::annotation::{AnnotatedRows, Draft, Row, draft_key, wrapped_with_cursor};
 use crate::screens::git_diff::{FileDiff, FileStatus, PatchAnchor, PatchLine, PatchLineKind, StageState};
-use crate::screens::review::{Pane, body_and_footer, focused_title};
+use crate::screens::review::{DocumentPaneView, Pane, body_and_footer, focused_title};
 use crate::session::tasks::TaskResult;
 use crate::surfaces::surface::{Action, MouseAction, Surface};
 
 use super::GitDiffScreen;
 use super::state::{BottomBar, DiffViewKey, DrawerEntry, GitDiffLoadState, PatchCursor, PatchKey, PatchRow, PatchRows};
 
-/// Below this width the file drawer is hidden and the patch gets the full area.
+pub(super) struct GitDiffView<'a, 'b> {
+    theme: &'a Theme,
+    highlighter: &'b mut SyntaxHighlighter,
+    theme_generation: crate::components::generation::Generation,
+}
+
+impl<'a, 'b> GitDiffView<'a, 'b> {
+    pub(super) fn new(
+        theme: &'a Theme,
+        highlighter: &'b mut SyntaxHighlighter,
+        theme_generation: crate::components::generation::Generation,
+    ) -> Self {
+        Self { theme, highlighter, theme_generation }
+    }
+}
+
+impl StatefulWidget for GitDiffView<'_, '_> {
+    type State = GitDiffScreen;
+
+    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+        let mut context =
+            DrawContext { theme: self.theme, highlighter: self.highlighter, theme_generation: self.theme_generation };
+        state.last_cursor = state.render_screen(area, buf, &mut context);
+    }
+}
+
 pub(super) const DRAWER_MIN_WIDTH: u16 = 72;
 
 /// Narrowest the drawer can be resized to before it stops being a usable file list.
@@ -80,10 +105,10 @@ impl GitDiffScreen {
     fn render_drawer(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
         let rows: Vec<Line<'static>> =
             self.drawer_entries().iter().map(|entry| self.drawer_line(entry, theme)).collect();
-        ListView::new(rows, &mut self.drawer_selection, theme)
+        let view = ListView::new(rows, theme)
             .highlight_style(Style::new().fg(theme.background).bg(theme.accent).add_modifier(Modifier::BOLD))
-            .scrollbar()
-            .render(area, buf);
+            .scrollbar();
+        StatefulWidget::render(view, area, buf, &mut self.drawer_selection);
     }
 
     fn drawer_line(&self, entry: &DrawerEntry, theme: &Theme) -> Line<'static> {
@@ -147,7 +172,7 @@ impl GitDiffScreen {
         // The cursor is only marked while the reviewer is browsing: a draft
         // already has the terminal cursor sitting in its box.
         let mark_cursor = self.focus == Pane::Document && self.review.draft.is_none();
-        self.patch.document.render(content_area, buf, mark_cursor, theme);
+        StatefulWidget::render(DocumentPaneView::new(theme, mark_cursor), content_area, buf, &mut self.patch.document);
         self.draft_cursor_position(content_area)
     }
 
@@ -414,9 +439,12 @@ impl Surface for GitDiffScreen {
         self.handle_mouse(action, row, column);
         Vec::new()
     }
+}
 
-    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
-        self.render_screen(area, buf, cx)
+impl GitDiffScreen {
+    pub fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
+        StatefulWidget::render(GitDiffView::new(cx.theme, cx.highlighter, cx.theme_generation), area, buf, self);
+        self.last_cursor.take()
     }
 }
 

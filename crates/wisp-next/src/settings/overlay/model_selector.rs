@@ -1,9 +1,8 @@
-use super::{KeyHint, SettingsChange, SettingsMenuValue, SettingsPane, message_for_change};
+use super::{KeyHint, SettingsChange, SettingsMenuValue, SettingsPaneBehavior, message_for_change};
 use crate::components::filterable_list::FilterableList;
 use crate::components::selection::Direction;
 use crate::components::theme::Theme;
 use crate::components::wrap::truncate_to_width;
-use crate::renderer::DrawContext;
 use crate::surfaces::surface::{Action, Surface, SurfaceList, is_composed_char};
 use acp_utils::config_option_id::ConfigOptionId;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -11,7 +10,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::Line;
-use ratatui::widgets::{Paragraph, Widget};
+use ratatui::widgets::{Paragraph, StatefulWidget, Widget};
 use std::collections::BTreeSet;
 use utils::ReasoningEffort;
 
@@ -24,6 +23,17 @@ pub(super) struct ModelSelector {
     original_models: BTreeSet<String>,
     reasoning_effort: Option<ReasoningEffort>,
     original_reasoning_effort: Option<ReasoningEffort>,
+}
+
+pub(super) struct ModelSelectorView<'a> {
+    selected: &'a BTreeSet<String>,
+    theme: &'a Theme,
+}
+
+impl<'a> ModelSelectorView<'a> {
+    pub(super) fn new(selected: &'a BTreeSet<String>, theme: &'a Theme) -> Self {
+        Self { selected, theme }
+    }
 }
 
 /// Header rows above the model list: search, current selection, column titles.
@@ -110,16 +120,6 @@ impl ModelSelector {
     fn reasoning_label(&self) -> &'static str {
         ReasoningEffort::config_str(self.reasoning_effort)
     }
-
-    fn selected_names(&self) -> String {
-        self.items
-            .entries()
-            .iter()
-            .filter(|item| self.selected_models.contains(&item.value))
-            .map(|item| item.name.as_str())
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
 }
 
 impl Surface for ModelSelector {
@@ -152,9 +152,11 @@ impl Surface for ModelSelector {
         self.clamp_reasoning_to_focused();
         Vec::new()
     }
+}
 
-    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
-        self.render_pane(area, buf, cx.theme);
+impl ModelSelector {
+    pub(super) fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) -> Option<Position> {
+        StatefulWidget::render(ModelSelectorView::new(&self.selected_models, theme), area, buf, &mut self.items);
         None
     }
 }
@@ -178,58 +180,66 @@ impl ModelSelector {
         }
         changes
     }
+}
 
-    fn render_pane(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
+impl StatefulWidget for ModelSelectorView<'_> {
+    type State = FilterableList<SettingsMenuValue>;
+
+    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
         let [header_area, list_area] =
             Layout::vertical([Constraint::Length(HEADER_ROWS), Constraint::Min(0)]).areas(area);
         let name_width = name_column_width(list_area.width);
+        let selected_names = state
+            .entries()
+            .iter()
+            .filter(|item| self.selected.contains(&item.value))
+            .map(|item| item.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
         let header = format!(
             " Model search: {}\n Selected: {}\n {blank:CHECKBOX_WIDTH$}{model:name_width$}{capabilities:CAPABILITY_WIDTH$}Status",
-            self.items.query(),
-            self.selected_names(),
+            state.query(),
+            selected_names,
             blank = "",
             model = "Model",
             capabilities = "Capabilities",
             CHECKBOX_WIDTH = CHECKBOX_WIDTH,
             CAPABILITY_WIDTH = CAPABILITY_WIDTH,
         );
-        Paragraph::new(header).style(Style::new().fg(theme.text_secondary)).render(header_area, buf);
+        Paragraph::new(header).style(Style::new().fg(self.theme.text_secondary)).render(header_area, buf);
 
-        let selected = &self.selected_models;
-        self.items
-            .view(theme, |value| {
-                let is_selected = selected.contains(&value.value);
-                let status = if value.is_disabled {
-                    value
-                        .description
-                        .as_deref()
-                        .and_then(|description| description.strip_prefix("Unavailable: "))
-                        .unwrap_or("unavailable")
-                } else if is_selected {
-                    "selected"
+        let selected = self.selected;
+        let (view, selection) = state.view(self.theme, |value| {
+            let is_selected = selected.contains(&value.value);
+            let status = if value.is_disabled {
+                value
+                    .description
+                    .as_deref()
+                    .and_then(|description| description.strip_prefix("Unavailable: "))
+                    .unwrap_or("unavailable")
+            } else if is_selected {
+                "selected"
+            } else {
+                ""
+            };
+            let checkbox = if is_selected { "[x] " } else { "[ ] " };
+            let label = truncate_to_width(model_label(&value.name), name_width.saturating_sub(1));
+            let capabilities = capability_tags(value.meta.supports_image, value.meta.supports_audio);
+            let status = truncate_to_width(status, STATUS_WIDTH);
+            Line::styled(
+                format!(" {checkbox}{label:name_width$}{capabilities:CAPABILITY_WIDTH$}{status}"),
+                if value.is_disabled {
+                    Style::new().fg(self.theme.text_secondary)
                 } else {
-                    ""
-                };
-                let checkbox = if is_selected { "[x] " } else { "[ ] " };
-                let label = truncate_to_width(model_label(&value.name), name_width.saturating_sub(1));
-                let capabilities = capability_tags(value.meta.supports_image, value.meta.supports_audio);
-                let status = truncate_to_width(status, STATUS_WIDTH);
-                Line::styled(
-                    format!(" {checkbox}{label:name_width$}{capabilities:CAPABILITY_WIDTH$}{status}"),
-                    if value.is_disabled {
-                        Style::new().fg(theme.text_secondary)
-                    } else {
-                        Style::new().fg(theme.text_primary)
-                    },
-                )
-            })
-            .pane(" (no matches found)")
-            .scrollbar()
-            .render(list_area, buf);
+                    Style::new().fg(self.theme.text_primary)
+                },
+            )
+        });
+        StatefulWidget::render(view.pane(" (no matches found)").scrollbar(), list_area, buf, selection);
     }
 }
 
-impl SettingsPane for ModelSelector {
+impl SettingsPaneBehavior for ModelSelector {
     fn take_changes(&mut self) -> Vec<Action> {
         self.pending_changes().iter().map(message_for_change).collect()
     }

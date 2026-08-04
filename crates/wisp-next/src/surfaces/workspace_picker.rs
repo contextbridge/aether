@@ -11,7 +11,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Paragraph, Widget};
+use ratatui::widgets::{Block, Paragraph, StatefulWidget, Widget};
 use std::path::{Path, PathBuf};
 
 /// Picker for moving the session to another workspace, or naming a new one.
@@ -19,6 +19,16 @@ pub struct WorkspacePicker {
     rows: FilterableList<WorkspaceRow>,
     parent_dir: Option<PathBuf>,
     mode: Mode,
+}
+
+pub(super) struct WorkspacePickerView<'a> {
+    theme: &'a Theme,
+}
+
+impl<'a> WorkspacePickerView<'a> {
+    pub(super) fn new(theme: &'a Theme) -> Self {
+        Self { theme }
+    }
 }
 
 enum Mode {
@@ -75,26 +85,22 @@ impl WorkspacePicker {
 
     fn render_list(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
         let title = self.rows.search_title("Workspaces");
-        self.rows
-            .view(theme, |row| match row {
-                WorkspaceRow::Existing(entry) => Line::styled(
-                    format!("  {}", home_relative_path(&entry.path)),
-                    Style::new().fg(theme.text_secondary),
-                ),
-                WorkspaceRow::CreateNew => Line::styled(format!("  {CREATE_NEW_LABEL}"), Style::new().fg(theme.info)),
-            })
-            .empty_message("  (no matching workspaces)")
-            .bordered(title)
-            .scrollbar()
-            .render(area, buf);
+        let (view, selection) = self.rows.view(theme, |row| match row {
+            WorkspaceRow::Existing(entry) => {
+                Line::styled(format!("  {}", home_relative_path(&entry.path)), Style::new().fg(theme.text_secondary))
+            }
+            WorkspaceRow::CreateNew => Line::styled(format!("  {CREATE_NEW_LABEL}"), Style::new().fg(theme.info)),
+        });
+        let view = view.empty_message("  (no matching workspaces)").bordered(title).scrollbar();
+        StatefulWidget::render(view, area, buf, selection);
     }
 
-    fn render_name_input(&self, name: &EditBuffer, area: Rect, buf: &mut Buffer, theme: &Theme) {
+    fn render_name_input(parent_dir: Option<&Path>, name: &EditBuffer, area: Rect, buf: &mut Buffer, theme: &Theme) {
         let block = Block::bordered().title(" New workspace ").style(Style::new().fg(theme.text_primary));
         let inner = block.inner(area);
         block.render(area, buf);
 
-        if let Some(parent) = &self.parent_dir {
+        if let Some(parent) = parent_dir {
             let hint = Line::from(Span::styled(
                 format!("  will be created in {}/", home_relative_path(parent)),
                 Style::new().fg(theme.muted),
@@ -111,6 +117,18 @@ impl WorkspacePicker {
     }
 }
 
+impl StatefulWidget for WorkspacePickerView<'_> {
+    type State = WorkspacePicker;
+
+    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+        match &state.mode {
+            Mode::List => state.render_list(area, buf, self.theme),
+            Mode::NamingNew { name } => {
+                WorkspacePicker::render_name_input(state.parent_dir.as_deref(), name, area, buf, self.theme);
+            }
+        }
+    }
+}
 impl Surface for WorkspacePicker {
     /// Acts on the focused row: existing workspaces move immediately, while
     /// "create new" switches to the name prompt.
@@ -148,16 +166,11 @@ impl Surface for WorkspacePicker {
     fn list(&mut self) -> Option<&mut dyn SurfaceList> {
         matches!(self.mode, Mode::List).then(|| &mut self.rows as &mut dyn SurfaceList)
     }
+}
 
-    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
-        let theme = cx.theme;
-        match &self.mode {
-            Mode::List => self.render_list(area, buf, theme),
-            Mode::NamingNew { name } => {
-                let name = name.clone();
-                self.render_name_input(&name, area, buf, theme);
-            }
-        }
+impl WorkspacePicker {
+    pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
+        StatefulWidget::render(WorkspacePickerView::new(cx.theme), area, buf, self);
         None
     }
 }

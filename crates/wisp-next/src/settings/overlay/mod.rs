@@ -82,7 +82,7 @@ impl PaneKind {
 pub struct SettingsOverlay {
     menu: SettingsMenu,
     /// The pane drawn over the menu. `None` means the menu itself has focus.
-    pane: Option<Box<dyn SettingsPane>>,
+    pane: Option<SettingsPane>,
     current_reasoning_effort: Option<String>,
     live: LiveSettingsData,
     /// A request the overlay answers itself, drawn under the pane and owning
@@ -98,17 +98,17 @@ pub(crate) struct LiveSettingsData {
     pub(crate) providers: Vec<ProviderLoginEntry>,
 }
 
-/// One screen inside the settings overlay.
+pub(crate) use crate::components::widgets::KeyHint;
+
 ///
 /// Panes are ordinary [`Surface`]s — they get the same key routing, filtering,
 /// and mouse handling as every other layer — plus the two things only a settings
 /// pane has: footer hints, and agent-pushed data that can change underneath it.
 ///
-/// The overlay never asks which pane it is holding, so this is a trait object
-/// rather than an enum: adding a pane is a new type and a new arm of
-/// [`SettingsOverlay::open_selected_pane`], not an edit to four dispatch
-/// methods.
-trait SettingsPane: Surface {
+/// Panes share input behavior through this trait. Their concrete rendering is
+/// selected by the closed [`SettingsPane`] enum above, so rendering does not
+/// require a trait-object widget API.
+trait SettingsPaneBehavior: Surface {
     /// Key hints for the overlay footer while this pane has focus.
     fn footer(&self) -> Vec<KeyHint>;
 
@@ -124,8 +124,68 @@ trait SettingsPane: Surface {
     }
 }
 
-pub(crate) use crate::components::widgets::KeyHint;
+enum SettingsPane {
+    ServerStatus(ServerStatusPane),
+    ProviderLogin(ProviderLoginPane),
+    ModelSelector(ModelSelector),
+    Picker(SettingsPicker),
+}
 
+impl SettingsPane {
+    fn surface_mut(&mut self) -> &mut dyn Surface {
+        match self {
+            Self::ServerStatus(pane) => pane,
+            Self::ProviderLogin(pane) => pane,
+            Self::ModelSelector(pane) => pane,
+            Self::Picker(pane) => pane,
+        }
+    }
+
+    fn surface(&self) -> &dyn Surface {
+        match self {
+            Self::ServerStatus(pane) => pane,
+            Self::ProviderLogin(pane) => pane,
+            Self::ModelSelector(pane) => pane,
+            Self::Picker(pane) => pane,
+        }
+    }
+
+    fn footer(&self) -> Vec<KeyHint> {
+        match self {
+            Self::ServerStatus(pane) => pane.footer(),
+            Self::ProviderLogin(pane) => pane.footer(),
+            Self::ModelSelector(pane) => pane.footer(),
+            Self::Picker(pane) => pane.footer(),
+        }
+    }
+
+    fn refresh(&mut self, live: &LiveSettingsData) {
+        match self {
+            Self::ServerStatus(pane) => pane.refresh(live),
+            Self::ProviderLogin(pane) => pane.refresh(live),
+            Self::ModelSelector(pane) => pane.refresh(live),
+            Self::Picker(pane) => pane.refresh(live),
+        }
+    }
+
+    fn take_changes(&mut self) -> Vec<Action> {
+        match self {
+            Self::ServerStatus(pane) => pane.take_changes(),
+            Self::ProviderLogin(pane) => pane.take_changes(),
+            Self::ModelSelector(pane) => pane.take_changes(),
+            Self::Picker(pane) => pane.take_changes(),
+        }
+    }
+
+    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
+        match self {
+            Self::ServerStatus(pane) => pane.render(area, buf, cx.theme),
+            Self::ProviderLogin(pane) => pane.render(area, buf, cx.theme),
+            Self::ModelSelector(pane) => pane.render(area, buf, cx.theme),
+            Self::Picker(pane) => pane.render(area, buf, cx.theme),
+        }
+    }
+}
 impl SettingsOverlay {
     pub fn new(
         config_options: &[SessionConfigOption],
@@ -222,7 +282,7 @@ impl SettingsOverlay {
         }
         self.pane
             .as_ref()
-            .map_or_else(|| vec![("Enter", "select".into()), ("Esc", "close".into())], |pane| pane.footer())
+            .map_or_else(|| vec![("Enter", "select".into()), ("Esc", "close".into())], SettingsPane::footer)
     }
 
     fn set_provider_status(&mut self, method_id: &str, status: ProviderLoginStatus) {
@@ -277,7 +337,7 @@ impl SettingsOverlay {
             UiEvent::Mouse(MouseAction::ScrollUp, _) => self.menu.step(Direction::Backward),
             UiEvent::Mouse(MouseAction::ScrollDown, _) => self.menu.step(Direction::Forward),
             UiEvent::Mouse(MouseAction::Click, position) => {
-                if self.menu.click_at(position.y) {
+                if self.menu.click_at(position.1) {
                     self.pane = self.open_selected_pane();
                 }
             }
@@ -296,21 +356,21 @@ impl SettingsOverlay {
         Vec::new()
     }
 
-    fn open_selected_pane(&self) -> Option<Box<dyn SettingsPane>> {
-        let pane: Box<dyn SettingsPane> = match self.menu.selected_row()? {
+    fn open_selected_pane(&self) -> Option<SettingsPane> {
+        let pane = match self.menu.selected_row()? {
             MenuRow::Pane { kind: PaneKind::McpServers, .. } => {
-                Box::new(ServerStatusPane::new(self.live.servers.clone()))
+                SettingsPane::ServerStatus(ServerStatusPane::new(self.live.servers.clone()))
             }
             MenuRow::Pane { kind: PaneKind::ProviderLogins, .. } => {
-                Box::new(ProviderLoginPane::new(self.live.providers.clone()))
+                SettingsPane::ProviderLogin(ProviderLoginPane::new(self.live.providers.clone()))
             }
-            MenuRow::Select(entry) if entry.multi_select => Box::new(ModelSelector::new(
+            MenuRow::Select(entry) if entry.multi_select => SettingsPane::ModelSelector(ModelSelector::new(
                 entry.config_id.clone(),
                 entry.values.clone(),
                 &entry.current_raw_value,
                 self.current_reasoning_effort.as_deref(),
             )),
-            MenuRow::Select(entry) => Box::new(SettingsPicker::from_entry(entry)?),
+            MenuRow::Select(entry) => SettingsPane::Picker(SettingsPicker::from_entry(entry)?),
         };
         Some(pane)
     }
@@ -352,7 +412,7 @@ impl Surface for SettingsOverlay {
             }
             return Vec::new();
         }
-        let Some(pane) = self.pane.as_deref_mut() else {
+        let Some(pane) = self.pane.as_mut() else {
             return self.on_menu_event(&event);
         };
         // Esc leaves the pane rather than the overlay, committing whatever the
@@ -363,7 +423,7 @@ impl Surface for SettingsOverlay {
                 messages.push(Action::Close);
                 messages
             }
-            event => pane.on_ui_event(event),
+            event => pane.surface_mut().on_ui_event(event),
         };
         self.apply(messages)
     }
@@ -371,10 +431,16 @@ impl Surface for SettingsOverlay {
     /// A URL request wants the terminal's own text selection back, so the URL
     /// can be copied by hand when opening a browser is not an option.
     fn needs_mouse_capture(&self) -> bool {
-        self.pending_elicitation.as_ref().is_none_or(Surface::needs_mouse_capture)
+        if let Some(pending) = self.pending_elicitation.as_ref() {
+            pending.needs_mouse_capture()
+        } else {
+            self.pane.as_ref().is_none_or(|pane| pane.surface().needs_mouse_capture())
+        }
     }
+}
 
-    fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
+impl SettingsOverlay {
+    pub fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
         let theme = cx.theme;
         if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
             Clear.render(area, buf);
@@ -383,9 +449,15 @@ impl Surface for SettingsOverlay {
             return None;
         }
         let footer = key_hints(&self.footer_hints(), theme);
-        let frame =
-            ModalFrame::new("Configuration", Some(footer), Constraint::Percentage(80), Constraint::Percentage(80));
-        let inner = frame.render(area, buf, theme);
+        let frame = ModalFrame::new(
+            "Configuration",
+            Some(footer),
+            Constraint::Percentage(80),
+            Constraint::Percentage(80),
+            theme,
+        );
+        let inner = frame.inner(area);
+        (&frame).render(area, buf);
 
         let (content, prompt) = self.split_for_prompt(inner, theme);
         let cursor = self.render_content(content, buf, cx);
@@ -394,8 +466,6 @@ impl Surface for SettingsOverlay {
             return cursor;
         };
         pending.render_inline(prompt, buf, theme);
-        // The request owns input, so it is not the pane behind it that the
-        // terminal cursor belongs to.
         None
     }
 }
