@@ -3,13 +3,13 @@ use super::{
     config::{McpHttpConfig, McpServer, McpTransport},
     mcp_client::McpClient,
 };
-use crate::{client::OAuthHandlerContext, transport::create_in_memory_transport};
+use crate::{client::OAuthHandlerContext, protocol::client_lifecycle_mode, transport::create_in_memory_transport};
 use aether_auth::{OAuthCredentialStorage, create_auth_manager_from_store, perform_oauth_flow};
 use llm::ToolAnnotations;
 use rmcp::{
     RoleClient, RoleServer, ServiceExt,
     model::{ClientInfo, Tool as RmcpTool},
-    serve_client,
+    serve_client_with_lifecycle,
     service::{DynService, RunningService},
     transport::{
         StreamableHttpClientTransport, TokioChildProcess, auth::AuthClient,
@@ -104,7 +104,7 @@ impl McpServerConnection {
         mcp_client: McpClient,
     ) -> Result<Self> {
         let transport = StreamableHttpClientTransport::with_client(auth_client, config);
-        let client = serve_client(mcp_client, transport)
+        let client = serve_client_with_lifecycle(mcp_client, transport, client_lifecycle_mode())
             .await
             .map_err(|e| McpError::ConnectionFailed(format!("reconnect failed for '{name}': {e}")))?;
         Ok(Self::from_parts(client, None))
@@ -215,7 +215,7 @@ async fn connect_stdio(
     };
     let stderr_task = stderr.map(|stderr| spawn_stderr_logger(server_name.to_string(), stderr));
 
-    match serve_client(mcp_client, proc).await {
+    match serve_client_with_lifecycle(mcp_client, proc, client_lifecycle_mode()).await {
         Ok(client) => McpConnectOutcome::Connected {
             conn: McpServerConnection::from_parts(client, stderr_task),
             reauth_config: None,
@@ -290,10 +290,10 @@ async fn connect_http(
         tracing::debug!("Using OAuth for server '{name}'");
         let auth_client = AuthClient::new(reqwest::Client::default(), auth_manager);
         let transport = StreamableHttpClientTransport::with_client(auth_client, config.transport.clone());
-        serve_client(mcp_client, transport).await.map_err(conn_err)
+        serve_client_with_lifecycle(mcp_client, transport, client_lifecycle_mode()).await.map_err(conn_err)
     } else {
         let transport = StreamableHttpClientTransport::from_config(config.transport.clone());
-        serve_client(mcp_client, transport).await.map_err(conn_err)
+        serve_client_with_lifecycle(mcp_client, transport, client_lifecycle_mode()).await.map_err(conn_err)
     };
 
     match result {
@@ -341,7 +341,7 @@ async fn serve_in_memory(
         }
     });
 
-    let client = serve_client(mcp_client, client_transport)
+    let client = serve_client_with_lifecycle(mcp_client, client_transport, client_lifecycle_mode())
         .await
         .map_err(|e| McpError::ConnectionFailed(format!("Failed to connect to in-memory server '{label}': {e}")))?;
 
