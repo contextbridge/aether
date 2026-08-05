@@ -188,9 +188,9 @@ For `http` and `sse` servers that require OAuth, Aether defaults to dynamic clie
 | `coding`    | File I/O, bash, grep/find, web fetch/search, and LSP-backed coding tools | `--root-dir <path>`, repeat `--rules-dir <path>`, `--permission-mode always-allow\|auto\|always-ask`, `--disable-lsp` |
 | `skills`    | Skill discovery, slash-command prompts, and rules                        | Required: repeat `--dir <path>`                                                                                         |
 | `tasks`     | Hierarchical task management                                             | Optional `--dir <base>` for persistent storage                                                                        |
-| `subagents` | Spawn child agents from loaded settings                                  | `--project-root <path>` (alias: `--dir`, defaults to `.`)                                                             |
+| `subagents` | Spawn child agents from loaded settings                                  | `--project-root <path>` (alias: `--dir`; defaults to the workspace root)                                              |
 | `survey`    | Structured human-in-the-loop questions                                   | No args                                                                                                               |
-| `plan`      | Plan prompt and markdown plan review                                     | Optional `--prompt-file <path>`, plus optional trailing submit command                                                |
+| `plan`      | Plan prompt and markdown plan review                                     | Optional `--plans-dir <path>`, `--prompt-file <path>`, plus optional trailing submit command                          |
 
 <CardGrid>
   <LinkCard
