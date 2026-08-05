@@ -64,7 +64,7 @@ impl PathGlobMatcher {
             add_glob(&mut builder, root_pattern, case_sensitivity)?;
         }
 
-        Ok(Self { matcher: builder.build().map_err(|e| GlobError::BuildFailed(e.to_string()))?, kind })
+        Ok(Self { matcher: builder.build().map_err(GlobError::BuildFailed)?, kind })
     }
 
     pub fn matches(&self, path: &Path, search_root: &Path) -> bool {

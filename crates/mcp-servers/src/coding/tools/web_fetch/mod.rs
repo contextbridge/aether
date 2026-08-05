@@ -112,7 +112,7 @@ fn normalize_url(url: &str) -> Result<String, WebFetchError> {
         url.to_string()
     };
 
-    Url::parse(&url).map(|u| u.to_string()).map_err(|e| WebFetchError::InvalidUrl(e.to_string()))
+    Url::parse(&url).map(|u| u.to_string()).map_err(WebFetchError::InvalidUrl)
 }
 
 fn extract_title(html: &str) -> Option<String> {

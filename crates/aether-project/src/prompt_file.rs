@@ -147,7 +147,7 @@ impl PromptFile {
             harmful: self.harmful,
         };
 
-        let yaml = serde_yml::to_string(&frontmatter).map_err(|e| PromptFileError::Yaml(e.to_string()))?;
+        let yaml = serde_yml::to_string(&frontmatter)?;
         let yaml = normalize_frontmatter_yaml(&yaml);
 
         let file_content = if self.body.is_empty() {
@@ -169,8 +169,7 @@ impl PromptFile {
         let (yaml_str, body) =
             utils::markdown_file::split_frontmatter(content).ok_or(PromptFileError::MissingFrontmatter)?;
 
-        let frontmatter: PromptFrontmatter =
-            serde_yml::from_str(yaml_str).map_err(|e| PromptFileError::Yaml(e.to_string()))?;
+        let frontmatter: PromptFrontmatter = serde_yml::from_str(yaml_str)?;
 
         Ok((frontmatter, body.to_string()))
     }
@@ -223,7 +222,7 @@ pub enum PromptFileError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
     #[error("YAML error: {0}")]
-    Yaml(String),
+    Yaml(#[from] serde_yml::Error),
     #[error("missing YAML frontmatter")]
     MissingFrontmatter,
     #[error("skill '{name}' has an empty description")]

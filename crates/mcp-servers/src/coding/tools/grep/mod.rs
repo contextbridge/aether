@@ -222,7 +222,7 @@ fn build_matcher(
         matcher_builder.multi_line(true).dot_matches_new_line(true);
     }
 
-    matcher_builder.build(pattern).map_err(|e| GrepError::InvalidRegex(e.to_string()))
+    matcher_builder.build(pattern).map_err(GrepError::InvalidRegex)
 }
 
 fn build_searcher(args: &GrepInput) -> SearcherBuilder {
