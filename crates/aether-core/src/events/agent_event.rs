@@ -1,7 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::{ContextEvent, MessageEvent, ModelEvent, ToolEvent, TurnEvent, TurnOutcome};
+use super::{ContextEvent, MessageEvent, ModelEvent, StreamState, ToolEvent, TurnEvent, TurnOutcome};
 
 /// A canonical event on the agent's output stream.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -15,12 +15,20 @@ pub enum AgentEvent {
 }
 
 impl AgentEvent {
-    pub fn text(message_id: &str, chunk: &str, is_complete: bool) -> Self {
-        Self::Message(MessageEvent::Text { message_id: message_id.into(), chunk: chunk.into(), is_complete })
+    pub fn text(message_id: &str, chunk: &str, state: StreamState) -> Self {
+        Self::Message(MessageEvent::Text {
+            message_id: message_id.into(),
+            chunk: chunk.into(),
+            is_complete: state.is_complete(),
+        })
     }
 
-    pub fn thought(message_id: &str, chunk: &str, is_complete: bool) -> Self {
-        Self::Message(MessageEvent::Thought { message_id: message_id.into(), chunk: chunk.into(), is_complete })
+    pub fn thought(message_id: &str, chunk: &str, state: StreamState) -> Self {
+        Self::Message(MessageEvent::Thought {
+            message_id: message_id.into(),
+            chunk: chunk.into(),
+            is_complete: state.is_complete(),
+        })
     }
 
     pub fn turn_ended(outcome: TurnOutcome) -> Self {
@@ -56,7 +64,7 @@ mod tests {
 
     #[test]
     fn serializes_nested_event_contract() {
-        let event = AgentEvent::text("m1", "hello", true);
+        let event = AgentEvent::text("m1", "hello", StreamState::Complete);
         assert_eq!(
             serde_json::to_value(event).unwrap(),
             serde_json::json!({"category":"message","event":{"type":"text","message_id":"m1","chunk":"hello","is_complete":true}})
@@ -66,7 +74,7 @@ mod tests {
     #[test]
     fn nested_events_roundtrip() {
         let events = [
-            AgentEvent::text("m", "text", true),
+            AgentEvent::text("m", "text", StreamState::Complete),
             AgentEvent::Tool(ToolEvent::DefinitionsUpdated { tools: vec![] }),
             AgentEvent::Turn(TurnEvent::LlmCallEnded {
                 purpose: LlmCallPurpose::Chat,
@@ -85,7 +93,7 @@ mod tests {
     #[test]
     fn turn_outcome_returns_outcome_only_for_turn_end() {
         assert_eq!(AgentEvent::turn_ended(TurnOutcome::Completed).turn_outcome(), Some(&TurnOutcome::Completed));
-        assert_eq!(AgentEvent::text("m", "text", true).turn_outcome(), None);
+        assert_eq!(AgentEvent::text("m", "text", StreamState::Complete).turn_outcome(), None);
         assert_eq!(AgentEvent::Turn(TurnEvent::Started { content: vec![] }).turn_outcome(), None);
     }
 }

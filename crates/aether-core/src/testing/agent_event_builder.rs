@@ -1,5 +1,4 @@
-use crate::events::AgentEvent;
-use crate::events::ToolEvent;
+use crate::events::{AgentEvent, StreamState, ToolEvent};
 use llm::{ToolCallError, ToolCallRequest, ToolCallResult};
 use serde::Serialize;
 
@@ -20,7 +19,7 @@ impl AgentEventBuilder {
 
     pub fn text(mut self, chunks: &[&str]) -> Self {
         for chunk in chunks {
-            self.chunks.push(AgentEvent::text(&self.message_id, chunk, false));
+            self.chunks.push(AgentEvent::text(&self.message_id, chunk, StreamState::Partial));
             self.full_text.push_str(chunk);
         }
         self
@@ -80,7 +79,7 @@ impl AgentEventBuilder {
     }
 
     pub fn build(mut self) -> Vec<AgentEvent> {
-        self.chunks.push(AgentEvent::text(&self.message_id, &self.full_text, true));
+        self.chunks.push(AgentEvent::text(&self.message_id, &self.full_text, StreamState::Complete));
 
         self.chunks
     }

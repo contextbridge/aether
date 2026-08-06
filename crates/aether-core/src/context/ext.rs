@@ -84,7 +84,7 @@ fn apply_agent_event(ctx: &mut Context, event: &AgentEvent, acc: &mut TurnAccumu
 
 #[cfg(test)]
 mod tests {
-    use crate::events::TurnOutcome;
+    use crate::events::{StreamState, TurnOutcome};
     use crate::session::{SessionControlEvent, last_agent_from_events};
 
     use super::*;
@@ -103,7 +103,7 @@ mod tests {
     }
 
     fn text_complete(chunk: &str) -> AgentEvent {
-        AgentEvent::text("msg_1", chunk, true)
+        AgentEvent::text("msg_1", chunk, StreamState::Complete)
     }
 
     fn tool_result(id: &str, name: &str, result: &str) -> AgentEvent {
@@ -253,7 +253,7 @@ mod tests {
 
     #[test]
     fn streaming_chunks_are_ignored() {
-        let ctx = run_agent_events(&[AgentEvent::text("msg_1", "partial", false)]);
+        let ctx = run_agent_events(&[AgentEvent::text("msg_1", "partial", StreamState::Partial)]);
         assert_eq!(ctx.message_count(), 1);
     }
 
@@ -262,7 +262,7 @@ mod tests {
         let ctx = run_agent_events(&[
             text_complete("Turn 1"),
             AgentEvent::turn_ended(TurnOutcome::Completed),
-            AgentEvent::text("msg_2", "Turn 2", true),
+            AgentEvent::text("msg_2", "Turn 2", StreamState::Complete),
             AgentEvent::turn_ended(TurnOutcome::Completed),
         ]);
         assert_eq!(ctx.message_count(), 3);

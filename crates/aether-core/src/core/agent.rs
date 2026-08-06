@@ -4,7 +4,7 @@ use crate::core::prompt_cache_key::derive_prompt_cache_key;
 pub use crate::core::retry_config::RetryConfig;
 use crate::events::{
     AgentCommand, AgentEvent, AgentObserver, Command, CompactionOutcome, ContextEvent, ContextUsage, LlmCallOutcome,
-    LlmCallPurpose, ModelEvent, ToolEvent, TurnEvent, TurnOutcome, UserCommand,
+    LlmCallPurpose, ModelEvent, StreamState, ToolEvent, TurnEvent, TurnOutcome, UserCommand,
 };
 use crate::mcp::run_mcp_task::{McpCommand, ToolExecutionEvent};
 use futures::Stream;
@@ -211,10 +211,10 @@ impl Agent {
             let reasoning = AssistantReasoning::from_parts(reasoning_summary_text.clone(), encrypted_reasoning);
             self.update_context(&message_content, reasoning, completed_tool_calls);
 
-            self.emit(AgentEvent::text(&id, &message_content, true)).await;
+            self.emit(AgentEvent::text(&id, &message_content, StreamState::Complete)).await;
 
             if !reasoning_summary_text.is_empty() {
-                self.emit(AgentEvent::thought(&id, &reasoning_summary_text, true)).await;
+                self.emit(AgentEvent::thought(&id, &reasoning_summary_text, StreamState::Complete)).await;
             }
         }
 
@@ -451,7 +451,7 @@ impl Agent {
             Reasoning { chunk } => {
                 state.reasoning_summary_text.push_str(&chunk);
                 if let Some(id) = state.current_message_id.clone() {
-                    self.emit(AgentEvent::thought(&id, &chunk, false)).await;
+                    self.emit(AgentEvent::thought(&id, &chunk, StreamState::Partial)).await;
                 }
             }
 
@@ -498,7 +498,7 @@ impl Agent {
         state.message_content.push_str(&chunk);
 
         if let Some(id) = state.current_message_id.clone() {
-            self.emit(AgentEvent::text(&id, &chunk, false)).await;
+            self.emit(AgentEvent::text(&id, &chunk, StreamState::Partial)).await;
         }
     }
 

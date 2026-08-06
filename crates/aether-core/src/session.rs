@@ -202,7 +202,7 @@ pub fn last_agent_from_events(initial: Option<String>, events: &[SessionEvent]) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::{LlmCallPurpose, TurnOutcome};
+    use crate::events::{LlmCallPurpose, StreamState, TurnOutcome};
 
     fn agent(event: AgentEvent) -> SessionEvent {
         SessionEvent::Agent(event)
@@ -217,7 +217,7 @@ mod tests {
             delay_ms: 10,
         }));
         let cancelled = agent(AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Cancelled }));
-        let partial = agent(AgentEvent::text("m", "partial", false));
+        let partial = agent(AgentEvent::text("m", "partial", StreamState::Partial));
         let compaction_ended = agent(AgentEvent::Context(ContextEvent::CompactionEnded {
             outcome: crate::events::CompactionOutcome::Completed,
         }));
