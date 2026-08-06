@@ -465,7 +465,7 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aether_core::events::{AgentEvent, TurnOutcome};
+    use aether_core::events::{AgentEvent, StreamState, TurnOutcome};
     use llm::testing::FakeLlmProvider;
     use llm::{LlmError, ToolCallRequest, ToolCallResult};
 
@@ -481,14 +481,17 @@ mod tests {
             },
         });
 
-        assert_eq!(get_transcript_line(&AgentEvent::text("msg_1", "hi", true), 100).unwrap(), "[agent] hi");
+        assert_eq!(
+            get_transcript_line(&AgentEvent::text("msg_1", "hi", StreamState::Complete), 100).unwrap(),
+            "[agent] hi"
+        );
         assert_eq!(get_transcript_line(&call, 100).unwrap(), "[tool-call] bash arguments={}");
         assert_eq!(get_transcript_line(&AgentEvent::turn_ended(TurnOutcome::Completed), 100).unwrap(), "[done]");
     }
 
     #[test]
     fn transcript_lines_truncate_long_payloads() {
-        let line = get_transcript_line(&AgentEvent::text("msg_1", &"a".repeat(50), true), 10).unwrap();
+        let line = get_transcript_line(&AgentEvent::text("msg_1", &"a".repeat(50), StreamState::Complete), 10).unwrap();
 
         assert_eq!(line, format!("[agent] {}... [truncated]", "a".repeat(10)));
     }
@@ -545,7 +548,7 @@ mod tests {
                     arguments: "{}".to_string(),
                 },
             }),
-            AgentEvent::text("msg_1", "all done", true),
+            AgentEvent::text("msg_1", "all done", StreamState::Complete),
         ];
 
         let judge = judge()

@@ -254,31 +254,34 @@ fn setup_tracing(verbose: bool) {
 
 #[cfg(test)]
 mod tests {
-    use aether_core::events::ContextUsage;
+    use aether_core::events::{ContextUsage, StreamState};
 
     use super::*;
 
     #[test]
     fn format_text_formats_complete_text() {
-        assert_eq!(format_text(&AgentEvent::text("id", "hello world", true)), Some("hello world".to_string()));
+        assert_eq!(
+            format_text(&AgentEvent::text("id", "hello world", StreamState::Complete)),
+            Some("hello world".to_string())
+        );
     }
 
     #[test]
     fn format_text_skips_incomplete_text() {
-        assert_eq!(format_text(&AgentEvent::text("id", "partial", false)), None);
+        assert_eq!(format_text(&AgentEvent::text("id", "partial", StreamState::Partial)), None);
     }
 
     #[test]
     fn format_text_formats_complete_thought() {
         assert_eq!(
-            format_text(&AgentEvent::thought("id", "reasoning here", true)),
+            format_text(&AgentEvent::thought("id", "reasoning here", StreamState::Complete)),
             Some("Thought: reasoning here".to_string())
         );
     }
 
     #[test]
     fn format_text_skips_incomplete_thought() {
-        assert_eq!(format_text(&AgentEvent::thought("id", "partial", false)), None);
+        assert_eq!(format_text(&AgentEvent::thought("id", "partial", StreamState::Partial)), None);
     }
 
     #[test]
@@ -419,8 +422,8 @@ mod tests {
 
     #[test]
     fn event_kind_none_for_non_output_fragments() {
-        assert_eq!(event_kind(&AgentEvent::text("id", "x", false)), None);
-        assert_eq!(event_kind(&AgentEvent::thought("id", "x", false)), None);
+        assert_eq!(event_kind(&AgentEvent::text("id", "x", StreamState::Partial)), None);
+        assert_eq!(event_kind(&AgentEvent::thought("id", "x", StreamState::Partial)), None);
         assert_eq!(
             event_kind(&AgentEvent::Tool(ToolEvent::CallUpdate {
                 tool_call_id: "tc1".to_string(),
@@ -443,7 +446,7 @@ mod tests {
             &[]
         ));
         assert!(should_emit(&AgentEvent::turn_ended(TurnOutcome::Completed), &[]));
-        assert!(!should_emit(&AgentEvent::text("id", "x", false), &[]));
+        assert!(!should_emit(&AgentEvent::text("id", "x", StreamState::Partial), &[]));
         assert!(!should_emit(
             &AgentEvent::Tool(ToolEvent::CallUpdate { tool_call_id: "tc1".to_string(), chunk: "x".to_string() }),
             &[],
@@ -478,8 +481,8 @@ mod tests {
         use clap::ValueEnum;
 
         let samples = vec![
-            (AgentEvent::text("id", "x", true), CliEventKind::Text),
-            (AgentEvent::thought("id", "x", true), CliEventKind::Thought),
+            (AgentEvent::text("id", "x", StreamState::Complete), CliEventKind::Text),
+            (AgentEvent::thought("id", "x", StreamState::Complete), CliEventKind::Thought),
             (tool_call_msg(), CliEventKind::ToolCall),
             (tool_result_msg(), CliEventKind::ToolResult),
             (

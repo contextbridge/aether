@@ -1,6 +1,6 @@
 use super::agent::{Agent, AgentRunResult, RunError};
 use crate::Task;
-use aether_core::events::{AgentEvent, ToolEvent, TurnOutcome};
+use aether_core::events::{AgentEvent, StreamState, ToolEvent, TurnOutcome};
 use async_stream::try_stream;
 use futures::Stream;
 use llm::ToolCallResult;
@@ -21,7 +21,7 @@ impl FakeAgent {
 
     pub fn success() -> Self {
         Self::new(vec![
-            AgentEvent::text("fake_1", "Task completed successfully", true),
+            AgentEvent::text("fake_1", "Task completed successfully", StreamState::Complete),
             AgentEvent::turn_ended(TurnOutcome::Completed),
         ])
     }
@@ -38,7 +38,7 @@ impl FakeAgent {
                 },
                 result_meta: None,
             }),
-            AgentEvent::text("fake_2", "Task completed using tools", true),
+            AgentEvent::text("fake_2", "Task completed using tools", StreamState::Complete),
             AgentEvent::turn_ended(TurnOutcome::Completed),
         ])
     }

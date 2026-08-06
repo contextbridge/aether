@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use aether_core::core::RetryConfig;
 use aether_core::events::{
-    AgentEvent, AgentObserver, LlmCallOutcome, LlmCallPurpose, ToolEvent, TurnEvent, TurnOutcome,
+    AgentEvent, AgentObserver, LlmCallOutcome, LlmCallPurpose, StreamState, ToolEvent, TurnEvent, TurnOutcome,
 };
 use aether_core::testing::{AddNumbersRequest, AgentTrace, DivideNumbersRequest, TestScenario, test_agent};
 use aether_telemetry::{
@@ -285,7 +285,7 @@ async fn completed_llm_calls_capture_token_usage_breakdown() -> Result<(), Box<d
 async fn completed_message_sets_turn_output_without_streamed_chunks() -> Result<(), Box<dyn Error>> {
     let trace = AgentTrace::from_events(vec![
         AgentEvent::Turn(TurnEvent::Started { content: vec![] }),
-        AgentEvent::text("m1", "complete response", true),
+        AgentEvent::text("m1", "complete response", StreamState::Complete),
         AgentEvent::turn_ended(TurnOutcome::Completed),
     ]);
 
