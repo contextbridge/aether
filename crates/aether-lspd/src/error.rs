@@ -18,7 +18,7 @@ pub enum DaemonError {
 
     /// Lockfile error
     #[error("Lockfile error: {0}")]
-    LockfileError(String),
+    LockfileError(#[source] io::Error),
 }
 
 /// Result type for daemon operations

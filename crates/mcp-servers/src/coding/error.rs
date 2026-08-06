@@ -3,6 +3,7 @@
 //! This module provides structured error types for all coding tool operations,
 //! replacing the previous `Result<T, String>` pattern with proper `thiserror` enums.
 
+use std::io;
 use thiserror::Error;
 
 pub use crate::file_ops::FileError;
@@ -64,11 +65,11 @@ pub enum BashError {
 
     /// Invalid regex pattern for filtering
     #[error("Invalid regex pattern: {0}")]
-    InvalidRegex(String),
+    InvalidRegex(#[source] regex::Error),
 
     /// Failed to join background task
     #[error("Failed to join background task: {0}")]
-    JoinFailed(String),
+    JoinFailed(#[source] tokio::task::JoinError),
 
     /// Shell ID not found
     #[error("Shell ID not found: {0}")]
@@ -88,7 +89,7 @@ pub enum GlobError {
 
     /// Failed to build glob set
     #[error("Failed to build glob set: {0}")]
-    BuildFailed(String),
+    BuildFailed(#[source] globset::Error),
 }
 
 /// Errors related to grep search operations
@@ -100,7 +101,7 @@ pub enum GrepError {
 
     /// Invalid regex pattern
     #[error("Invalid regex pattern: {0}")]
-    InvalidRegex(String),
+    InvalidRegex(#[source] grep::regex::Error),
 
     /// Search error during file processing
     #[error("Search error: {0}")]
@@ -164,15 +165,15 @@ pub enum FindError {
 pub enum ListFilesError {
     /// Failed to read directory
     #[error("Failed to read directory: {0}")]
-    ReadDirFailed(String),
+    ReadDirFailed(#[source] io::Error),
 
     /// Failed to read directory entry
     #[error("Failed to read entry: {0}")]
-    ReadEntryFailed(String),
+    ReadEntryFailed(#[source] io::Error),
 
     /// Failed to read metadata
     #[error("Failed to read metadata: {0}")]
-    MetadataFailed(String),
+    MetadataFailed(#[source] io::Error),
 }
 
 /// Errors related to web fetch operations
@@ -180,7 +181,7 @@ pub enum ListFilesError {
 pub enum WebFetchError {
     /// Invalid URL format
     #[error("Invalid URL: {0}")]
-    InvalidUrl(String),
+    InvalidUrl(#[source] url::ParseError),
 
     /// HTTP request failed
     #[error("Request failed: {0}")]

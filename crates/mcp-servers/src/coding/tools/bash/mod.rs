@@ -98,7 +98,7 @@ pub async fn read_background_bash(
     // Collect all available output
     let mut output = String::new();
     let filter_regex = if let Some(pattern) = filter {
-        Some(regex::Regex::new(&pattern).map_err(|e| BashError::InvalidRegex(e.to_string()))?)
+        Some(regex::Regex::new(&pattern).map_err(BashError::InvalidRegex)?)
     } else {
         None
     };
@@ -114,7 +114,7 @@ pub async fn read_background_bash(
     }
 
     if task_handle.is_finished() {
-        let (exit_code, killed) = task_handle.await.map_err(|e| BashError::JoinFailed(e.to_string()))?;
+        let (exit_code, killed) = task_handle.await.map_err(BashError::JoinFailed)?;
 
         let status = if killed { BackgroundShellStatus::Failed } else { BackgroundShellStatus::Completed };
 

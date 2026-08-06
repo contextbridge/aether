@@ -38,8 +38,8 @@ impl LspDaemon {
             create_dir_all(parent).map_err(DaemonError::Io)?;
         }
 
-        let _lockfile = PidLockfile::acquire(&self.socket_path.with_extension("lock"))
-            .map_err(|e| DaemonError::LockfileError(e.to_string()))?;
+        let _lockfile =
+            PidLockfile::acquire(&self.socket_path.with_extension("lock")).map_err(DaemonError::LockfileError)?;
 
         let _ = remove_file(&self.socket_path);
 

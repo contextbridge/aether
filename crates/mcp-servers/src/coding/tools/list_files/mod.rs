@@ -55,13 +55,12 @@ pub async fn list_files(args: ListFilesArgs) -> Result<ListFilesResult, ListFile
     let mut files = Vec::new();
 
     // Read directory entries
-    let mut entries =
-        tokio::fs::read_dir(target_path).await.map_err(|e| ListFilesError::ReadDirFailed(e.to_string()))?;
+    let mut entries = tokio::fs::read_dir(target_path).await.map_err(ListFilesError::ReadDirFailed)?;
 
-    while let Some(entry) = entries.next_entry().await.map_err(|e| ListFilesError::ReadEntryFailed(e.to_string()))? {
+    while let Some(entry) = entries.next_entry().await.map_err(ListFilesError::ReadEntryFailed)? {
         let path = entry.path();
-        let entry_file_type = entry.file_type().await.map_err(|e| ListFilesError::MetadataFailed(e.to_string()))?;
-        let metadata = entry.metadata().await.map_err(|e| ListFilesError::MetadataFailed(e.to_string()))?;
+        let entry_file_type = entry.file_type().await.map_err(ListFilesError::MetadataFailed)?;
+        let metadata = entry.metadata().await.map_err(ListFilesError::MetadataFailed)?;
 
         let name = entry.file_name().to_string_lossy().to_string();
 
