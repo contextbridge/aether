@@ -135,7 +135,7 @@ Because `aether headless` exits non-zero on a failed turn, `runHeadless()` **rej
 | `settingsFile`  | Path to an alternate settings JSON file.                                                             |
 | `systemPrompt`  | Additional system prompt text.                                                                       |
 | `output`        | `"text"`, `"pretty"`, or `"json"`. Defaults to `"text"`. See [output formats](/aether/running/headless/#output-formats). |
-| `events`        | Event kinds to emit (only meaningful with `output: "json"`). See [event filtering](/aether/running/headless/#event-filtering).   |
+| `events`        | Event kinds to emit (applies to any output format). See [event filtering](/aether/running/headless/#event-filtering).   |
 | `verbose`       | Verbose diagnostic logging to stderr.                                                                |
 | `providers`     | Provider connection overrides, such as custom Bedrock endpoints or auth behavior.                    |
 | `traceContext`  | A remote W3C `traceparent` with optional `tracestate`, or a standalone `traceId`. See [Telemetry](/aether/settings/telemetry/#correlating-sdk-runs). |

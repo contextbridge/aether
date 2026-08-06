@@ -18,7 +18,7 @@ The `subagents` server lets one agent delegate work to other configured agents. 
 }
 ```
 
-`--project-root` loads `.aether/settings.json` from that directory. `--dir` is accepted as an alias. When omitted, the server uses `.`.
+`--project-root` loads `.aether/settings.json` from that directory. `--dir` is accepted as an alias. When omitted, the built-in in-memory server uses the workspace root; the standalone `subagents-mcp` binary defaults to the current directory.
 
 ## Available sub-agents
 
