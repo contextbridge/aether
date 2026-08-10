@@ -288,14 +288,11 @@ pub struct ElicitationResponse {
     pub content: Option<serde_json::Value>,
 }
 
-pub use mcp_utils::client::UrlElicitationCompleteParams;
-
 /// Server→client MCP extension notifications (relay → wisp).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonRpcNotification)]
 #[notification(method = "_aether/mcp_event")]
 pub enum McpNotification {
     ServerStatus { servers: Vec<McpServerStatusEntry> },
-    UrlElicitationComplete(UrlElicitationCompleteParams),
 }
 
 /// Client→server MCP extension requests (wisp → relay).
@@ -484,18 +481,6 @@ mod tests {
 
         let untyped = msg.to_untyped_message().expect("serializable");
         assert_eq!(untyped.method(), "_aether/mcp_event");
-        let parsed = McpNotification::parse_message(untyped.method(), untyped.params()).expect("roundtrip");
-        assert_eq!(parsed, msg);
-    }
-
-    #[test]
-    fn mcp_notification_url_elicitation_complete_roundtrip() {
-        let msg = McpNotification::UrlElicitationComplete(UrlElicitationCompleteParams {
-            server_name: "github".to_string(),
-            elicitation_id: "el-456".to_string(),
-        });
-
-        let untyped = msg.to_untyped_message().expect("serializable");
         let parsed = McpNotification::parse_message(untyped.method(), untyped.params()).expect("roundtrip");
         assert_eq!(parsed, msg);
     }
