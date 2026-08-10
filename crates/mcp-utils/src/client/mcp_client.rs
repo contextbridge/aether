@@ -2,10 +2,7 @@
 use rmcp::{
     ClientHandler, RoleClient,
     handler::client::progress::ProgressDispatcher,
-    model::{
-        ClientInfo, ConstString, CustomNotification, ElicitRequestParams, ElicitResult, ElicitationAction,
-        ElicitationResponseNotificationMethod, ErrorData, ProgressNotificationParam,
-    },
+    model::{ClientInfo, ElicitRequestParams, ElicitResult, ElicitationAction, ErrorData, ProgressNotificationParam},
     service::{NotificationContext, RequestContext},
 };
 use std::result::Result;
@@ -31,8 +28,8 @@ impl McpClient {
 
     /// Dispatch an elicitation request through the shared event channel.
     ///
-    /// Used by both the `create_elicitation` handler and the `-32042`
-    /// `URL_ELICITATION_REQUIRED` error path to ensure the same user-facing flow.
+    /// Used by both the `create_elicitation` handler and the MRTR round loop
+    /// in `execute_mcp_call` to ensure the same user-facing flow.
     pub async fn dispatch_elicitation(&self, request: ElicitRequestParams) -> ElicitResult {
         let (response_tx, response_rx) = oneshot::channel();
         let elicitation_request =
@@ -42,17 +39,6 @@ impl McpClient {
             return cancel_result();
         }
         response_rx.await.unwrap_or_else(|_| cancel_result())
-    }
-
-    /// Forward a URL elicitation completion through the shared event channel.
-    pub async fn forward_url_elicitation_complete(&self, elicitation_id: String) {
-        let event = McpClientEvent::UrlElicitationComplete(super::UrlElicitationCompleteParams {
-            server_name: self.server_name.clone(),
-            elicitation_id,
-        });
-        if self.event_sender.send(event).await.is_err() {
-            tracing::warn!("Failed to forward URL elicitation completion: receiver dropped");
-        }
     }
 }
 
@@ -75,28 +61,6 @@ impl ClientHandler for McpClient {
         _context: RequestContext<RoleClient>,
     ) -> Result<ElicitResult, ErrorData> {
         Ok(self.dispatch_elicitation(request).await)
-    }
-
-    async fn on_custom_notification(
-        &self,
-        notification: CustomNotification,
-        _context: NotificationContext<RoleClient>,
-    ) {
-        if notification.method != ElicitationResponseNotificationMethod::VALUE {
-            return;
-        }
-
-        let Some(elicitation_id) = notification
-            .params
-            .as_ref()
-            .and_then(|params| params.get("elicitationId"))
-            .and_then(serde_json::Value::as_str)
-        else {
-            tracing::warn!("URL elicitation completion notification is missing elicitationId");
-            return;
-        };
-
-        self.forward_url_elicitation_complete(elicitation_id.to_string()).await;
     }
 }
 
@@ -190,33 +154,6 @@ mod tests {
         let result = client.dispatch_elicitation(request).await;
         handle.await.unwrap();
         assert_eq!(result.action, ElicitationAction::Accept);
-    }
-
-    #[tokio::test]
-    async fn forward_url_elicitation_complete_uses_server_name_and_id() {
-        let (event_tx, mut event_rx) = mpsc::channel(1);
-        let client = make_client(event_tx);
-
-        client.forward_url_elicitation_complete("el-456".to_string()).await;
-
-        let event = event_rx.recv().await.unwrap();
-        match event {
-            McpClientEvent::UrlElicitationComplete(params) => {
-                assert_eq!(params.server_name, "test-server");
-                assert_eq!(params.elicitation_id, "el-456");
-            }
-            other => panic!("expected UrlElicitationComplete, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn forward_url_elicitation_complete_swallows_dropped_receiver() {
-        let (event_tx, event_rx) = mpsc::channel(1);
-        drop(event_rx);
-        let client = make_client(event_tx);
-
-        // Should not panic even though the receiver is dropped.
-        client.forward_url_elicitation_complete("el-gone".to_string()).await;
     }
 
     #[test]

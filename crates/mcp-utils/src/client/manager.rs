@@ -21,7 +21,6 @@ use rmcp::{
     },
     service::RunningService,
 };
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
@@ -59,19 +58,12 @@ pub struct ElicitationResponse {
     pub content: Option<Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct UrlElicitationCompleteParams {
-    pub server_name: String,
-    pub elicitation_id: String,
-}
-
 /// Events emitted by MCP clients that require attention from the host
 /// (e.g. the relay or TUI). Flows through a single channel from `McpManager`
 /// to the consumer.
 #[derive(Debug)]
 pub enum McpClientEvent {
     Elicitation(ElicitationRequest),
-    UrlElicitationComplete(UrlElicitationCompleteParams),
     ServerStatusesChanged(Vec<McpServerStatusEntry>),
     ToolDefinitionsChanged(Vec<ToolDefinition>),
     ServerInstructionsUpdated { server: String, instructions: Option<String> },
