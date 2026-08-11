@@ -2,6 +2,7 @@
 
 pub mod display_meta;
 mod protocol;
+pub mod server;
 pub mod status;
 pub mod testing;
 pub mod transport;
