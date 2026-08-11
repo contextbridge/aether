@@ -312,6 +312,7 @@ dependencies = [
  "aether-doctest",
  "aether-llm",
  "aether-utils",
+ "async-stream",
  "futures",
  "regex",
  "reqwest 0.13.4",
