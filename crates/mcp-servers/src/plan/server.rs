@@ -3,16 +3,19 @@ use crate::file_ops::{FileEdit, FileError, apply_edits, read_text_file, write_te
 use crate::workspace_paths::resolve_path;
 use clap::Parser;
 use mcp_utils::display_meta::{FileDiff, ToolDisplayMeta, ToolResultMeta, basename};
+use mcp_utils::server::mrtr::{ELICITATION_UNSUPPORTED, Elicited, MrtrAction, get_next_mrtr_action, parse_response};
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     handler::server::{
         router::tool::ToolRouter,
+        tool::{InputResponses, schema_for_output},
         wrapper::{Json, Parameters},
     },
     model::{
-        ElicitRequestParams, ElicitationAction, ElicitationSchema, EnumSchema, GetPromptRequestParams,
-        GetPromptResponse, Implementation, ListPromptsResult, PaginatedRequestParams, Prompt, PromptArgument,
-        PromptMessage, RequestMetaObject, Role, ServerCapabilities, ServerInfo,
+        ElicitRequest, ElicitRequestParams, ElicitResult, ElicitationAction, ElicitationSchema, EnumSchema,
+        GetPromptRequestParams, GetPromptResponse, Implementation, InputRequest, InputRequests, ListPromptsResult,
+        PaginatedRequestParams, Prompt, PromptArgument, PromptMessage, RequestMetaObject, Role, ServerCapabilities,
+        ServerInfo,
     },
     service::RequestContext,
     tool, tool_handler, tool_router,
@@ -155,51 +158,43 @@ impl PlanMcp {
     }
 
     #[doc = include_str!("./submit_plan_description.md")]
-    #[tool(annotations(
-        read_only_hint = false,
-        destructive_hint = false,
-        idempotent_hint = false,
-        open_world_hint = true
-    ))]
+    #[tool(
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false, open_world_hint = true),
+        output_schema = schema_for_output::<SubmitPlanOutput>()
+    )]
     pub async fn submit_plan(
         &self,
         request: Parameters<SubmitPlanInput>,
+        responses: InputResponses,
         context: RequestContext<RoleServer>,
-    ) -> Result<Json<SubmitPlanOutput>, String> {
+    ) -> Result<Elicited<Json<SubmitPlanOutput>>, McpError> {
         let Parameters(input) = request;
-        let plan = Plan::load_by_name(&self.plans_dir, &input.plan_name).await.map_err(|e| e.to_string())?;
+        let plan = match Plan::load_by_name(&self.plans_dir, &input.plan_name).await {
+            Ok(plan) => plan,
+            Err(e) => return Ok(Elicited::error(e.to_string())),
+        };
 
         if !self.submit_command.is_empty() {
-            return run_external_submit(&plan, &self.submit_command).await.map(Json).map_err(|e| e.to_string());
+            return match run_external_submit(&plan, &self.submit_command).await {
+                Ok(output) => Ok(Elicited::Done(Json(output))),
+                Err(e) => Ok(Elicited::error(e.to_string())),
+            };
         }
 
-        let form = Self::build_elicitation_form(&plan)?;
-        let result = context.peer.create_elicitation(form).await.map_err(|e| e.to_string())?;
+        let action = get_next_mrtr_action(responses.0.as_ref(), || {
+            let params = Self::build_elicitation_form(&plan).map_err(|e| McpError::internal_error(e, None))?;
+            Ok(InputRequests::from([("review".to_string(), InputRequest::Elicitation(ElicitRequest::new(params)))]))
+        })?
+        .validate_for_client(&context);
 
-        if result.action != ElicitationAction::Accept {
-            return Ok(Json(SubmitPlanOutput { approved: false, feedback: None }));
-        }
+        let responses = match action {
+            MrtrAction::Request(request) => return Ok(Elicited::Respond(request.into())),
+            MrtrAction::Abort(_) => return Ok(Elicited::error(ELICITATION_UNSUPPORTED)),
+            MrtrAction::Resume(responses) => responses,
+        };
+        let result: ElicitResult = parse_response(&responses, "review")?;
 
-        let decision = result
-            .content
-            .as_ref()
-            .and_then(|content| content.get(DECISION))
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or(PlanReviewDecision::Deny.as_str());
-
-        if decision == PlanReviewDecision::Approve.as_str() {
-            return Ok(Json(SubmitPlanOutput { approved: true, feedback: None }));
-        }
-
-        let feedback = result
-            .content
-            .as_ref()
-            .and_then(|content| content.get(FEEDBACK))
-            .and_then(serde_json::Value::as_str)
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty());
-
-        Ok(Json(SubmitPlanOutput { approved: false, feedback }))
+        Ok(Elicited::Done(Json(review_decision(&result))))
     }
 
     fn build_elicitation_form(plan: &Plan) -> Result<ElicitRequestParams, String> {
@@ -462,6 +457,33 @@ fn absolutize(path: PathBuf) -> PathBuf {
 fn stderr_suffix(stderr: &str) -> String {
     let trimmed = stderr.trim();
     if trimmed.is_empty() { String::new() } else { format!(": {trimmed}") }
+}
+
+fn review_decision(result: &ElicitResult) -> SubmitPlanOutput {
+    if result.action != ElicitationAction::Accept {
+        return SubmitPlanOutput { approved: false, feedback: None };
+    }
+
+    let decision = result
+        .content
+        .as_ref()
+        .and_then(|content| content.get(DECISION))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(PlanReviewDecision::Deny.as_str());
+
+    if decision == PlanReviewDecision::Approve.as_str() {
+        return SubmitPlanOutput { approved: true, feedback: None };
+    }
+
+    let feedback = result
+        .content
+        .as_ref()
+        .and_then(|content| content.get(FEEDBACK))
+        .and_then(serde_json::Value::as_str)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    SubmitPlanOutput { approved: false, feedback }
 }
 
 async fn run_external_submit(plan: &Plan, command: &[String]) -> Result<SubmitPlanOutput, PlanError> {

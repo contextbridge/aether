@@ -1,14 +1,16 @@
 use aether_project::PromptCatalog;
 use clap::Parser;
 use rmcp::{
-    RoleServer, ServerHandler,
+    ErrorData, RoleServer, ServerHandler,
     handler::server::{
         router::tool::ToolRouter,
+        tool::ToolCallContext,
         wrapper::{Json, Parameters},
     },
     model::{
-        ElicitRequestParams, ElicitationSchema, EnumSchema, Implementation, ProgressNotificationParam,
-        ServerCapabilities, ServerInfo,
+        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ElicitRequest, ElicitRequestParams,
+        ElicitResult, ElicitationAction, ElicitationSchema, EnumSchema, Implementation, InputRequest, InputRequests,
+        ProgressNotificationParam, ServerCapabilities, ServerInfo,
     },
     service::RequestContext,
     tool, tool_handler, tool_router,
@@ -47,6 +49,8 @@ use crate::{
     lsp::tools::document_info::{LspDocumentInput, LspDocumentOutput, execute_lsp_document},
     workspace_paths::WorkspacePaths,
 };
+use mcp_utils::server::mrtr::{MrtrAction, get_next_mrtr_action, parse_response};
+use mcp_utils::server::tool::parse_arguments;
 
 use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename, truncate};
 use tools::ast_grep::{AstGrepInput, AstGrepOutput, perform_ast_grep};
@@ -83,7 +87,8 @@ pub enum PermissionMode {
     AlwaysAllow,
     /// File writes auto-execute; destructive bash commands trigger elicitation.
     Auto,
-    /// All write/edit/bash calls trigger elicitation; read-only tools are ungated.
+    /// Every destructive-annotated tool call triggers elicitation; read-only
+    /// tools are ungated.
     AlwaysAsk,
 }
 
@@ -154,6 +159,44 @@ impl<T: CodingTools + 'static> ServerHandler for CodingMcp<T> {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("coding-mcp", "0.1.0"))
             .with_instructions(instructions)
+    }
+
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, ErrorData> {
+        if let Some(prompt) = self.permission_prompt(&request) {
+            let action = get_next_mrtr_action(request.input_responses.as_ref(), || {
+                Ok(InputRequests::from([(
+                    "permission".to_string(),
+                    InputRequest::Elicitation(ElicitRequest::new(decision_form(
+                        &prompt.tool_name,
+                        &prompt.description,
+                    ))),
+                )]))
+            })?
+            .validate_for_client(&context);
+
+            match action {
+                MrtrAction::Request(request) => return Ok(request.into()),
+                MrtrAction::Abort(_) => {
+                    let message = permission_unsupported(&prompt.tool_name);
+                    return Ok(CallToolResult::error(vec![ContentBlock::text(message)]).into());
+                }
+                MrtrAction::Resume(responses) => {
+                    let result: ElicitResult = parse_response(&responses, "permission")?;
+                    if !permission_granted(&result) {
+                        return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                            "Operation declined by user: {}",
+                            prompt.tool_name
+                        ))])
+                        .into());
+                    }
+                }
+            }
+        }
+        self.tool_router.call(ToolCallContext::new(self, request, context)).await
     }
 }
 
@@ -299,71 +342,47 @@ When using tools that take file paths, always use absolute paths from:
         )
     }
 
-    /// Prompt the user for approval via elicitation. Always sends the prompt —
-    /// callers are responsible for deciding when to call this based on `permission_mode`.
-    ///
-    /// Returns `Ok(())` if allowed, or `Err` with either a generic decline
-    /// message or the user's feedback explaining what to do instead.
-    async fn elicit_permission(
-        &self,
-        context: &RequestContext<RoleServer>,
-        tool_name: &str,
-        description: &str,
-    ) -> Result<(), String> {
-        let message = format!("Allow {tool_name}: {description}?");
-        let result = context
-            .peer
-            .create_elicitation(ElicitRequestParams::FormElicitationParams {
-                meta: None,
-                message,
-                requested_schema: ElicitationSchema::builder()
-                    .required_enum_schema(
-                        "decision",
-                        EnumSchema::builder(vec!["allow".into(), "deny".into()])
-                            .untitled()
-                            .with_default("deny")
-                            .unwrap()
-                            .build(),
-                    )
-                    .build()
-                    .unwrap(),
-            })
-            .await
-            .map_err(|e| format!("Elicitation failed: {e}"))?;
-
-        let allowed = result.content.as_ref().and_then(|c| c.get("decision")).and_then(|v| v.as_str()) == Some("allow");
-
-        if allowed { Ok(()) } else { Err(format!("Operation declined by user: {tool_name}")) }
-    }
-
-    /// Ask the user for permission to run a bash command. In `Auto` mode only
-    /// triggers for destructive commands; in `AlwaysAsk` mode triggers always.
-    async fn check_bash_permission(&self, context: &RequestContext<RoleServer>, command: &str) -> Result<(), String> {
-        match self.permission_mode {
-            PermissionMode::AlwaysAllow => Ok(()),
-            PermissionMode::AlwaysAsk => self.elicit_permission(context, "bash", command).await,
-            PermissionMode::Auto => {
-                if is_dangerous_cmd(command) {
-                    self.elicit_permission(context, "bash", command).await
-                } else {
-                    Ok(())
-                }
-            }
+    /// Decide whether a tool call needs user approval before it may run.
+    /// Gating is derived from the tool's `destructive_hint` annotation:
+    /// `AlwaysAsk` gates every destructive tool, `Auto` gates only bash
+    /// commands the classifier deems dangerous. Malformed arguments pass
+    /// through ungated so the tool itself reports the parse error.
+    fn permission_prompt(&self, request: &CallToolRequestParams) -> Option<PermissionPrompt> {
+        let name = request.name.as_ref();
+        let destructive = self
+            .tool_router
+            .get(name)
+            .and_then(|tool| tool.annotations.as_ref())
+            .and_then(|annotations| annotations.destructive_hint)
+            .unwrap_or(false);
+        if !destructive {
+            return None;
         }
-    }
 
-    /// Ask the user for permission to write/edit a file. Only triggers in
-    /// `AlwaysAsk` mode; `Auto` and `AlwaysAllow` auto-approve file mutations.
-    async fn check_write_permission(
-        &self,
-        context: &RequestContext<RoleServer>,
-        tool_name: &str,
-        file_path: &str,
-    ) -> Result<(), String> {
-        if self.permission_mode == PermissionMode::AlwaysAsk {
-            self.elicit_permission(context, tool_name, file_path).await
-        } else {
-            Ok(())
+        match self.permission_mode {
+            PermissionMode::AlwaysAllow => None,
+            PermissionMode::Auto => {
+                if name != "bash" {
+                    return None;
+                }
+                let command = parse_arguments::<BashInput>(request).ok()?.command;
+                is_dangerous_cmd(&command)
+                    .then(|| PermissionPrompt { tool_name: name.to_string(), description: command })
+            }
+            PermissionMode::AlwaysAsk => {
+                let description = match name {
+                    "bash" => parse_arguments::<BashInput>(request).ok()?.command,
+                    "write_file" | "edit_file" => {
+                        let file_path = parse_arguments::<FilePathArg>(request).ok()?.file_path;
+                        self.resolve_file_arg(&file_path).unwrap_or(file_path)
+                    }
+                    _ => {
+                        let args = request.arguments.as_ref().and_then(|a| serde_json::to_string(a).ok());
+                        truncate(&args.unwrap_or_default(), 80)
+                    }
+                };
+                Some(PermissionPrompt { tool_name: name.to_string(), description })
+            }
         }
     }
 
@@ -500,7 +519,6 @@ When using tools that take file paths, always use absolute paths from:
         args.file_path = self.resolve_file_arg(&args.file_path)?;
         notify_preview(&context, ToolDisplayMeta::new("Write file", basename(&args.file_path))).await;
 
-        self.check_write_permission(&context, "write_file", &args.file_path).await?;
         self.ensure_read_before_overwrite(&args.file_path).await?;
 
         let response = self.tools.write_file(args).await.map_err(|e| e.to_string())?;
@@ -526,7 +544,6 @@ When using tools that take file paths, always use absolute paths from:
         args.file_path = self.resolve_file_arg(&args.file_path)?;
         notify_preview(&context, ToolDisplayMeta::new("Edit file", basename(&args.file_path))).await;
 
-        self.check_write_permission(&context, "edit_file", &args.file_path).await?;
         self.ensure_read_before_edit(&args.file_path).await?;
 
         let response = self.tools.edit_file(args).await.map_err(|e| e.to_string())?;
@@ -565,8 +582,6 @@ When using tools that take file paths, always use absolute paths from:
     ) -> Result<Json<BashOutput>, String> {
         let Parameters(args) = request;
         notify_preview(&context, ToolDisplayMeta::new("Run command", truncate(&args.command, 40))).await;
-
-        self.check_bash_permission(&context, &args.command).await?;
 
         let command = args.command.clone();
         let cwd = self.root_dir.clone();
@@ -738,6 +753,52 @@ When using tools that take file paths, always use absolute paths from:
         notify_preview(&context, ToolDisplayMeta::new("LSP rename", &input.symbol)).await;
         let lsp = self.lsp.as_ref().ok_or("LSP not configured")?;
         execute_lsp_rename(input, lsp.as_ref()).await.map(Json).map_err(|e| e.to_string())
+    }
+}
+
+/// A pending user-approval prompt for a gated tool call.
+struct PermissionPrompt {
+    tool_name: String,
+    description: String,
+}
+
+/// The file-path argument shared by `write_file` and `edit_file`, extracted
+/// for permission descriptions without parsing the full tool input. Must stay
+/// in sync with the serde naming of `WriteFileArgs`/`EditFileArgs`.
+#[derive(serde::Deserialize)]
+struct FilePathArg {
+    #[serde(rename = "filePath", alias = "file_path")]
+    file_path: String,
+}
+
+fn permission_granted(result: &ElicitResult) -> bool {
+    result.action == ElicitationAction::Accept
+        && result.content.as_ref().and_then(|c| c.get("decision")).and_then(|v| v.as_str()) == Some("allow")
+}
+
+fn permission_unsupported(tool_name: &str) -> String {
+    format!(
+        "Permission required for {tool_name}, but the connected client cannot prompt the user \
+         (MCP elicitation over protocol 2026-07-28 or newer). Use --permission-mode always-allow \
+         or an elicitation-capable client."
+    )
+}
+
+fn decision_form(tool_name: &str, description: &str) -> ElicitRequestParams {
+    ElicitRequestParams::FormElicitationParams {
+        meta: None,
+        message: format!("Allow {tool_name}: {description}?"),
+        requested_schema: ElicitationSchema::builder()
+            .required_enum_schema(
+                "decision",
+                EnumSchema::builder(vec!["allow".into(), "deny".into()])
+                    .untitled()
+                    .with_default("deny")
+                    .unwrap()
+                    .build(),
+            )
+            .build()
+            .unwrap(),
     }
 }
 
