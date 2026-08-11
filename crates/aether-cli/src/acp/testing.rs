@@ -531,9 +531,7 @@ fn assert_available_commands(update: SessionUpdate, expected: &[&str], unexpecte
 }
 
 fn assert_server_status(notification: McpNotification, expected: &[&str]) {
-    let McpNotification::ServerStatus { servers } = notification else {
-        panic!("expected server status notification");
-    };
+    let McpNotification::ServerStatus { servers } = notification;
     let names = servers.iter().map(|server| server.name.as_str()).collect::<Vec<_>>();
     for server_name in expected {
         assert!(names.contains(server_name), "expected server {server_name} in {names:?}");
@@ -541,9 +539,7 @@ fn assert_server_status(notification: McpNotification, expected: &[&str]) {
 }
 
 fn assert_server_status_exact(notification: McpNotification, expected: &[&str]) {
-    let McpNotification::ServerStatus { servers } = notification else {
-        panic!("expected server status notification");
-    };
+    let McpNotification::ServerStatus { servers } = notification;
     let names = servers.iter().map(|server| server.name.as_str()).collect::<Vec<_>>();
     assert_eq!(names, expected);
 }
