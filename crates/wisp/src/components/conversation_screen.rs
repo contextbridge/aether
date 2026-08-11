@@ -10,14 +10,12 @@ use crate::components::session_picker::{SessionEntry, SessionPicker, SessionPick
 use crate::components::tool_call_statuses::{PromptTermination, ToolCallStatuses};
 use crate::components::workspace_picker::{WorkspacePicker, WorkspacePickerMessage};
 use crate::keybindings::Keybindings;
-use acp_utils::ElicitRequestParams;
 use acp_utils::notifications::{
     AetherCapabilities, ElicitationResponse, PromptSearchParams, PromptSearchResponse, SessionPreviewResponse,
     WorkspaceEntry, WorkspaceMoveTarget,
 };
 use agent_client_protocol::Responder;
 use agent_client_protocol::schema::{self as acp, SessionId};
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::Instant;
 use tui::{Component, Cursor, Event, Frame, Insets, ViewContext};
@@ -77,7 +75,6 @@ pub struct ConversationScreen {
     waiting_for_response: bool,
     pub(crate) active_modal: Option<Modal>,
     pub(crate) content_padding: usize,
-    pub(crate) pending_url_elicitations: HashSet<(String, String)>,
     capabilities: AetherCapabilities,
 }
 
@@ -99,7 +96,6 @@ impl ConversationScreen {
             waiting_for_response: false,
             active_modal: None,
             content_padding,
-            pending_url_elicitations: HashSet::new(),
             capabilities,
         }
     }
@@ -162,7 +158,6 @@ impl ConversationScreen {
         self.compaction_active = false;
         self.plan_tracker.clear();
         self.progress_indicator = ProgressIndicator::default();
-        self.pending_url_elicitations.clear();
     }
 
     pub fn request_workspace_picker(&mut self) -> Result<ConversationScreenMessage, &'static str> {
@@ -309,29 +304,11 @@ impl ConversationScreen {
         params: acp_utils::notifications::ElicitationParams,
         responder: Responder<ElicitationResponse>,
     ) {
-        if let ElicitRequestParams::UrlElicitationParams { elicitation_id, .. } = &params.request {
-            self.pending_url_elicitations.insert((params.server_name.clone(), elicitation_id.clone()));
-        }
         self.active_modal = Some(Modal::Elicitation(ElicitationForm::from_params(params, responder)));
     }
 
     pub fn on_sub_agent_progress(&mut self, progress: &acp_utils::notifications::SubAgentProgressParams) {
         self.tool_call_statuses.on_sub_agent_progress(progress);
-    }
-
-    pub fn on_url_elicitation_complete(&mut self, params: &acp_utils::notifications::UrlElicitationCompleteParams) {
-        let key = (params.server_name.clone(), params.elicitation_id.clone());
-        if self.pending_url_elicitations.remove(&key) {
-            if let Some(Modal::Elicitation(form)) = self.active_modal.as_mut()
-                && form.accept_url_complete(params)
-            {
-                self.active_modal = None;
-            }
-            self.conversation.push_user_message(&format!(
-                "[wisp] {} finished the browser flow. Retry the previous request if it did not resume automatically.",
-                params.server_name
-            ));
-        }
     }
 
     fn plan_tracker_has_tick_driven_visibility(&self) -> bool {
@@ -348,10 +325,10 @@ impl ConversationScreen {
                         ElicitationMessage::Responded => {
                             self.active_modal = None;
                         }
-                        ElicitationMessage::UrlOpened { elicitation_id, server_name } => {
-                            self.pending_url_elicitations.insert((server_name.clone(), elicitation_id.clone()));
+                        ElicitationMessage::UrlAccepted { server_name } => {
+                            self.active_modal = None;
                             self.conversation.push_user_message(&format!(
-                                "[wisp] Opened browser for {server_name}. Complete the flow, then retry the previous action if needed."
+                                "[wisp] Opened browser for {server_name}. Waiting for the browser flow to finish."
                             ));
                         }
                     }

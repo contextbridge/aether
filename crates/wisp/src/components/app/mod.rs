@@ -600,12 +600,6 @@ impl App {
                 }
                 self.server_statuses = servers;
             }
-            McpNotification::UrlElicitationComplete(params) => {
-                if let Some(ref mut overlay) = self.settings_overlay {
-                    overlay.on_url_elicitation_complete(&params);
-                }
-                self.conversation_screen.on_url_elicitation_complete(&params);
-            }
         }
     }
 
@@ -1552,99 +1546,6 @@ mod tests {
         assert!(rx.try_recv().is_err(), "model was unchanged, no extra command expected");
     }
 
-    #[tokio::test]
-    async fn url_completion_appends_status_text_for_known_pending_id() {
-        let mut app = make_app();
-
-        app.conversation_screen.pending_url_elicitations.insert(("github".to_string(), "el-1".to_string()));
-
-        let params = acp_utils::notifications::UrlElicitationCompleteParams {
-            server_name: "github".to_string(),
-            elicitation_id: "el-1".to_string(),
-        };
-        app.conversation_screen.on_url_elicitation_complete(&params);
-
-        let messages: Vec<_> = app
-            .conversation_screen
-            .conversation
-            .segments()
-            .filter_map(|seg| match seg {
-                SegmentContent::UserMessage(text) if text.contains("github") && text.contains("finished") => Some(text),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(messages.len(), 1, "should show completion message for known ID");
-        assert!(messages[0].to_lowercase().contains("retry"), "completion message should mention retry");
-    }
-
-    #[tokio::test]
-    async fn url_completion_ignores_unknown_id() {
-        let mut app = make_app();
-
-        // No pending elicitations registered
-        let params = acp_utils::notifications::UrlElicitationCompleteParams {
-            server_name: "unknown-server".to_string(),
-            elicitation_id: "el-unknown".to_string(),
-        };
-        app.conversation_screen.on_url_elicitation_complete(&params);
-
-        let has_completion = app
-            .conversation_screen
-            .conversation
-            .segments()
-            .any(|seg| matches!(seg, SegmentContent::UserMessage(t) if t.contains("finished")));
-        assert!(!has_completion, "should not show completion message for unknown ID");
-    }
-
-    #[tokio::test]
-    async fn url_completion_ignores_mismatched_server_name_for_known_id() {
-        let mut app = make_app();
-
-        app.conversation_screen.pending_url_elicitations.insert(("github".to_string(), "el-1".to_string()));
-
-        let params = acp_utils::notifications::UrlElicitationCompleteParams {
-            server_name: "linear".to_string(),
-            elicitation_id: "el-1".to_string(),
-        };
-        app.conversation_screen.on_url_elicitation_complete(&params);
-
-        assert!(
-            app.conversation_screen.pending_url_elicitations.contains(&("github".to_string(), "el-1".to_string())),
-            "mismatched server name should not clear the pending elicitation"
-        );
-        let has_completion = app
-            .conversation_screen
-            .conversation
-            .segments()
-            .any(|seg| matches!(seg, SegmentContent::UserMessage(t) if t.contains("finished")));
-        assert!(!has_completion, "should not show completion message for mismatched server name");
-    }
-
-    #[tokio::test]
-    async fn url_completion_ignores_duplicate_id() {
-        let mut app = make_app();
-
-        app.conversation_screen.pending_url_elicitations.insert(("github".to_string(), "el-1".to_string()));
-
-        let params = acp_utils::notifications::UrlElicitationCompleteParams {
-            server_name: "github".to_string(),
-            elicitation_id: "el-1".to_string(),
-        };
-
-        // First completion should show message
-        app.conversation_screen.on_url_elicitation_complete(&params);
-        // Second completion should be silently ignored (ID already removed)
-        app.conversation_screen.on_url_elicitation_complete(&params);
-
-        let count = app
-            .conversation_screen
-            .conversation
-            .segments()
-            .filter(|seg| matches!(seg, SegmentContent::UserMessage(t) if t.contains("finished")))
-            .count();
-        assert_eq!(count, 1, "should show exactly one completion message, not duplicates");
-    }
-
     #[tokio::test(flavor = "current_thread")]
     async fn ctrl_g_blocked_during_url_elicitation_modal() {
         LocalSet::new()
@@ -1661,20 +1562,6 @@ mod tests {
                 assert!(!app.screen_router.is_git_diff(), "git diff should not open during URL elicitation modal");
             })
             .await;
-    }
-
-    #[tokio::test]
-    async fn reset_after_context_cleared_clears_pending_url_elicitations() {
-        let mut app = make_app();
-        app.conversation_screen.pending_url_elicitations.insert(("github".to_string(), "el-1".to_string()));
-        app.conversation_screen.pending_url_elicitations.insert(("linear".to_string(), "el-2".to_string()));
-
-        app.conversation_screen.reset_after_context_cleared();
-
-        assert!(
-            app.conversation_screen.pending_url_elicitations.is_empty(),
-            "pending URL elicitations should be cleared on reset"
-        );
     }
 
     #[tokio::test]

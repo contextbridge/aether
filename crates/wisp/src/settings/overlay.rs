@@ -5,9 +5,7 @@ use crate::components::model_selector::{ModelEntry, ModelSelector, ModelSelector
 use crate::components::provider_login::{ProviderLoginMessage, ProviderLoginOverlay};
 use crate::components::server_status::{ServerStatusMessage, ServerStatusOverlay};
 use acp_utils::config_option_id::ConfigOptionId;
-use acp_utils::notifications::{
-    ElicitationParams, ElicitationResponse, McpServerStatusEntry, UrlElicitationCompleteParams,
-};
+use acp_utils::notifications::{ElicitationParams, ElicitationResponse, McpServerStatusEntry};
 use agent_client_protocol::Responder;
 use agent_client_protocol::schema::{self as acp, SessionConfigKind, SessionConfigOption};
 use tui::Panel;
@@ -144,12 +142,6 @@ impl SettingsOverlay {
         self.pending_elicitation = Some(ElicitationForm::from_params(params, responder));
     }
 
-    pub fn on_url_elicitation_complete(&mut self, params: &UrlElicitationCompleteParams) {
-        if self.pending_elicitation.as_mut().is_some_and(|form| form.accept_url_complete(params)) {
-            self.pending_elicitation = None;
-        }
-    }
-
     pub fn needs_mouse_capture(&self) -> bool {
         self.pending_elicitation.is_none()
     }
@@ -226,7 +218,11 @@ impl Component for SettingsOverlay {
 
         if let Some(form) = self.pending_elicitation.as_mut() {
             let outcome = form.on_event(event).await;
-            if outcome.unwrap_or_default().into_iter().any(|msg| matches!(msg, ElicitationMessage::Responded)) {
+            if outcome
+                .unwrap_or_default()
+                .into_iter()
+                .any(|msg| matches!(msg, ElicitationMessage::Responded | ElicitationMessage::UrlAccepted { .. }))
+            {
                 self.pending_elicitation = None;
             }
             return Some(vec![]);
