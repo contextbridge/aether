@@ -1,4 +1,4 @@
-use crate::client::manager::{ElicitationRequest, McpClientEvent, OAuthHandlerContext, UrlElicitationCompleteParams};
+use crate::client::manager::{ElicitationRequest, McpClientEvent, OAuthHandlerContext};
 use aether_auth::{OAuthCallback, OAuthError, OAuthHandler, accept_oauth_callback};
 use futures::future::BoxFuture;
 use rmcp::model::{ElicitRequestParams, ElicitationAction};
@@ -6,7 +6,7 @@ use std::num::NonZeroU16;
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 
-pub const AETHER_OAUTH_ELICITATION_ID: &str = "aether-oauth";
+const AETHER_OAUTH_ELICITATION_ID: &str = "aether-oauth";
 
 /// `OAuthHandler` that dispatches the OAuth authorization URL to the host
 pub struct ElicitingOAuthHandler {
@@ -70,15 +70,6 @@ impl OAuthHandler for ElicitingOAuthHandler {
                 },
             }?;
 
-            let complete = UrlElicitationCompleteParams {
-                server_name: self.server_name.clone(),
-                elicitation_id: AETHER_OAUTH_ELICITATION_ID.to_string(),
-            };
-
-            if self.event_sender.send(McpClientEvent::UrlElicitationComplete(complete)).await.is_err() {
-                tracing::warn!("Failed to send OAuth URL elicitation completion: receiver dropped");
-            }
-
             Ok(callback)
         })
     }
@@ -87,6 +78,47 @@ impl OAuthHandler for ElicitingOAuthHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rmcp::model::ElicitResult;
+    use std::sync::Arc;
+    use tokio::{io::AsyncWriteExt, task::yield_now};
+
+    #[tokio::test]
+    async fn accepting_browser_prompt_keeps_waiting_for_oauth_callback() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let handler = Arc::new(
+            ElicitingOAuthHandler::new(OAuthHandlerContext {
+                server_name: "slack".to_string(),
+                callback_port: None,
+                tx,
+            })
+            .unwrap(),
+        );
+        let port = handler
+            .redirect_uri()
+            .strip_prefix("http://localhost:")
+            .and_then(|value| value.strip_suffix('/'))
+            .unwrap()
+            .parse::<u16>()
+            .unwrap();
+
+        let authorize = {
+            let handler = Arc::clone(&handler);
+            tokio::spawn(async move { handler.authorize("https://example.com/oauth").await })
+        };
+        let McpClientEvent::Elicitation(request) = rx.recv().await.unwrap() else {
+            panic!("expected OAuth elicitation");
+        };
+        request.response_sender.send(ElicitResult::new(ElicitationAction::Accept)).unwrap();
+        yield_now().await;
+        assert!(!authorize.is_finished(), "accepting the prompt must not complete OAuth");
+
+        let mut callback = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        callback.write_all(b"GET /?code=test-code&state=test-state HTTP/1.1\r\nHost: localhost\r\n\r\n").await.unwrap();
+
+        let result = authorize.await.unwrap().unwrap();
+        assert_eq!(result.code, "test-code");
+        assert_eq!(result.state, "test-state");
+    }
 
     #[tokio::test]
     async fn configured_callback_port_uses_registered_localhost_redirect() {

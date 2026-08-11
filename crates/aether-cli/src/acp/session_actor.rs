@@ -565,14 +565,6 @@ fn on_mcp_client_event(connection: &ConnectionTo<Client>, event: McpClientEvent)
         McpClientEvent::Elicitation(elicitation) => {
             spawn_elicitation_request(connection, elicitation);
         }
-        McpClientEvent::UrlElicitationComplete(params) => {
-            if let Err(e) = connection
-                .send_notification(McpNotification::UrlElicitationComplete(params))
-                .map_err(|e| AcpServerError::protocol("_aether/mcp_event", e))
-            {
-                error!("Failed to send URL elicitation complete notification: {:?}", e);
-            }
-        }
         McpClientEvent::ServerStatusesChanged(servers) => send_mcp_server_status(connection, servers),
         McpClientEvent::ConnectionReady(snapshot) => send_mcp_server_status(connection, snapshot.server_statuses),
         McpClientEvent::AuthenticationFailed { server, error } => {
@@ -835,25 +827,6 @@ mod tests {
         use tokio::task::LocalSet;
 
         #[tokio::test(flavor = "current_thread")]
-        async fn url_elicitation_complete_is_forwarded_as_mcp_notification() {
-            LocalSet::new()
-                .run_until(async {
-                    let (cx, mut peer) = test_connection().await;
-                    let event =
-                        McpClientEvent::UrlElicitationComplete(mcp_utils::client::UrlElicitationCompleteParams {
-                            server_name: "github".to_string(),
-                            elicitation_id: "el-42".to_string(),
-                        });
-
-                    on_mcp_client_event(&cx, event);
-
-                    let received = peer.next_mcp_notification().await;
-                    assert!(matches!(received, McpNotification::UrlElicitationComplete(_)));
-                })
-                .await;
-        }
-
-        #[tokio::test(flavor = "current_thread")]
         async fn server_status_change_forwards_status_notification() {
             LocalSet::new()
                 .run_until(async {
@@ -905,12 +878,8 @@ mod tests {
 
                     on_mcp_client_event(&cx, McpClientEvent::ServerStatusesChanged(vec![]));
 
-                    match peer.next_mcp_notification().await {
-                        McpNotification::ServerStatus { servers } => assert!(servers.is_empty()),
-                        other @ McpNotification::UrlElicitationComplete(_) => {
-                            panic!("expected empty server status notification, got {other:?}")
-                        }
-                    }
+                    let McpNotification::ServerStatus { servers } = peer.next_mcp_notification().await;
+                    assert!(servers.is_empty());
                 })
                 .await;
         }
@@ -932,12 +901,8 @@ mod tests {
 
                     on_mcp_client_event(&cx, McpClientEvent::ConnectionReady(snapshot));
 
-                    match peer.next_mcp_notification().await {
-                        McpNotification::ServerStatus { servers } => assert_eq!(servers[0].name, "github"),
-                        other @ McpNotification::UrlElicitationComplete(_) => {
-                            panic!("expected server status notification, got {other:?}")
-                        }
-                    }
+                    let McpNotification::ServerStatus { servers } = peer.next_mcp_notification().await;
+                    assert_eq!(servers[0].name, "github");
                 })
                 .await;
         }
@@ -974,55 +939,6 @@ mod tests {
 
                     let received = peer.next_elicitation_request().await;
                     assert_eq!(received.server_name, "test-server");
-                })
-                .await;
-        }
-
-        #[tokio::test(flavor = "current_thread")]
-        async fn url_elicitation_request_does_not_block_completion_notifications() {
-            LocalSet::new()
-                .run_until(async {
-                    let (cx, mut peer) = test_connection().await;
-                    let responder_rx = peer.capture_next_elicitation();
-                    let (tx, rx) = oneshot::channel();
-                    let elicitation = ElicitationRequest {
-                        server_name: "github".to_string(),
-                        request: ElicitRequestParams::UrlElicitationParams {
-                            meta: None,
-                            message: "Authorize".to_string(),
-                            url: "https://example.com/oauth".to_string(),
-                            elicitation_id: "el-1".to_string(),
-                        },
-                        response_sender: tx,
-                    };
-
-                    on_mcp_client_event(&cx, McpClientEvent::Elicitation(elicitation));
-                    let responder = responder_rx.await.expect("URL elicitation request should reach peer");
-
-                    on_mcp_client_event(
-                        &cx,
-                        McpClientEvent::UrlElicitationComplete(mcp_utils::client::UrlElicitationCompleteParams {
-                            server_name: "github".to_string(),
-                            elicitation_id: "el-1".to_string(),
-                        }),
-                    );
-
-                    match peer.next_mcp_notification().await {
-                        McpNotification::UrlElicitationComplete(params) => {
-                            assert_eq!(params.server_name, "github");
-                            assert_eq!(params.elicitation_id, "el-1");
-                        }
-                        other @ McpNotification::ServerStatus { .. } => {
-                            panic!("expected URL completion notification, got {other:?}")
-                        }
-                    }
-
-                    let _ = responder.respond(acp_utils::notifications::ElicitationResponse {
-                        action: rmcp::model::ElicitationAction::Accept,
-                        content: None,
-                    });
-                    let result = rx.await.expect("spawned URL request should forward response");
-                    assert_eq!(result.action, rmcp::model::ElicitationAction::Accept);
                 })
                 .await;
         }

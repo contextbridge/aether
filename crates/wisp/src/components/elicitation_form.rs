@@ -1,6 +1,4 @@
-use acp_utils::notifications::{
-    ElicitRequestParams, ElicitationAction, ElicitationParams, ElicitationResponse, UrlElicitationCompleteParams,
-};
+use acp_utils::notifications::{ElicitRequestParams, ElicitationAction, ElicitationParams, ElicitationResponse};
 use acp_utils::{
     ConstTitle, ElicitationSchema, EnumSchema, MultiSelectEnumSchema, PrimitiveSchemaDefinition, SingleSelectEnumSchema,
 };
@@ -15,9 +13,8 @@ use tui::{
 
 pub enum ElicitationMessage {
     Responded,
-    /// Emitted when a URL modal successfully opens the browser.
-    UrlOpened {
-        elicitation_id: String,
+    /// A URL modal opened the browser and accepted the elicitation.
+    UrlAccepted {
         server_name: String,
     },
 }
@@ -167,10 +164,11 @@ impl Component for ElicitationForm {
                     return Some(vec![]);
                 };
                 match outcome {
-                    UrlPromptOutcome::Opened => Some(vec![ElicitationMessage::UrlOpened {
-                        elicitation_id: prompt.elicitation_id.clone(),
-                        server_name: prompt.server_name.clone(),
-                    }]),
+                    UrlPromptOutcome::Opened => {
+                        let response = ElicitationResponse { action: ElicitationAction::Accept, content: None };
+                        let _ = self.responder.take().map(|r| r.respond(response));
+                        Some(vec![ElicitationMessage::UrlAccepted { server_name: prompt.server_name.clone() }])
+                    }
                     UrlPromptOutcome::Copied => Some(vec![]),
                     UrlPromptOutcome::Cancelled => {
                         let _ = self.responder.take().map(|r| r.respond(Self::cancel()));
@@ -258,22 +256,6 @@ impl ElicitationForm {
 
     pub fn cancel() -> ElicitationResponse {
         ElicitationResponse { action: ElicitationAction::Cancel, content: None }
-    }
-
-    /// If this form is showing the URL prompt that `params` refers to, accept
-    /// it and consume the responder. Returns true iff the form was answered.
-    pub fn accept_url_complete(&mut self, params: &UrlElicitationCompleteParams) -> bool {
-        let ElicitationUi::Url(prompt) = &self.ui else {
-            return false;
-        };
-        if prompt.server_name != params.server_name || prompt.elicitation_id != params.elicitation_id {
-            return false;
-        }
-        let response = self.confirm();
-        if let Some(responder) = self.responder.take() {
-            let _ = responder.respond(response);
-        }
-        true
     }
 }
 
@@ -829,6 +811,29 @@ mod tests {
                 let response = form.confirm();
                 assert_eq!(response.action, ElicitationAction::Accept);
                 assert_eq!(response.content.unwrap()["decision"], "deny");
+            })
+            .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn opening_browser_on_mrtr_url_prompt_accepts_immediately() {
+        LocalSet::new()
+            .run_until(async {
+                let (cx, mut peer) = test_connection().await;
+                let (responder, rx) = peer.fake_elicitation(&cx).await;
+                let params = crate::test_helpers::url_elicitation_params("github", "el-1", "https://example.com/auth");
+                let mut form = ElicitationForm::with_browser_opener(params, responder, |_| Ok(()));
+
+                let messages = form.on_event(&key(tui::KeyCode::Enter)).await.expect("enter should be handled");
+
+                assert!(
+                    messages.iter().any(
+                        |m| matches!(m, ElicitationMessage::UrlAccepted { server_name } if server_name == "github")
+                    )
+                );
+                let response = rx.await.expect("opening the browser should answer the elicitation");
+                assert_eq!(response.action, ElicitationAction::Accept);
+                assert!(response.content.is_none());
             })
             .await;
     }

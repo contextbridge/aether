@@ -4,9 +4,12 @@
 
 use aether_lspd::testing::TestProject;
 use mcp_servers::coding::CodingMcp;
-use mcp_utils::testing::connect;
+use mcp_utils::client::{McpClient, elicitation_capabilities};
+use mcp_utils::testing::{ElicitationScript, connect};
 use rmcp::RoleClient;
-use rmcp::model::{CallToolRequestParams, CallToolResult, ClientCapabilities, ClientInfo, Implementation};
+use rmcp::model::{
+    CallToolRequestParams, CallToolResult, ClientCapabilities, ClientInfo, ElicitResult, Implementation,
+};
 use rmcp::service::RunningService;
 use rmcp::{RoleServer, Service};
 use serde::Serialize;
@@ -14,6 +17,7 @@ use std::fs::{create_dir_all, read_to_string};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tempfile::{TempDir, tempdir};
+use tokio::sync::mpsc;
 
 /// Default timeout for polling operations (60 seconds).
 const POLL_TIMEOUT: Duration = Duration::from_mins(1);
@@ -23,6 +27,27 @@ pub type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
 pub fn test_client_info() -> ClientInfo {
     ClientInfo::new(ClientCapabilities::default(), Implementation::new("test-client", "0.1.0"))
+}
+
+/// Client info declaring the same form + url elicitation support that
+/// `McpManager` advertises in production.
+pub fn test_client_info_with_elicitation() -> ClientInfo {
+    ClientInfo::new(elicitation_capabilities(), Implementation::new("test-client", "0.1.0"))
+}
+
+/// An `McpClient` whose elicitation events go nowhere; elicitation-dependent
+/// calls resolve as Cancel.
+pub fn silent_mcp_client(server_name: &str) -> McpClient {
+    let (event_tx, _event_rx) = mpsc::channel(8);
+    McpClient::new(test_client_info_with_elicitation(), server_name.to_string(), event_tx)
+}
+
+/// An `McpClient` plus a script answering the next elicitation request with
+/// `response` and capturing what arrived for assertions.
+pub fn scripted_mcp_client(server_name: &str, response: ElicitResult) -> (McpClient, ElicitationScript) {
+    let (event_tx, event_rx) = mpsc::channel(8);
+    let client = McpClient::new(test_client_info_with_elicitation(), server_name.to_string(), event_tx);
+    (client, ElicitationScript::spawn(event_rx, [response]))
 }
 
 pub fn test_error(message: impl Into<String>) -> std::io::Error {

@@ -5,6 +5,9 @@ use rmcp::{
     service::{ClientInitializeError, RunningService, ServerInitializeError},
 };
 
+#[cfg(feature = "client")]
+pub use elicitation_script::{CapturedElicitation, ElicitationScript};
+
 /// Helper function to connect an MCP server and client via in-memory transport
 /// This handles the dual-era discovery/initialization handshake by running both concurrently
 pub async fn connect<S, C>(
@@ -34,6 +37,65 @@ pub enum ConnectError {
     ServerInit(ServerInitializeError),
     #[error("Client initialization failed: {0}")]
     ClientInit(ClientInitializeError),
+}
+
+#[cfg(feature = "client")]
+mod elicitation_script {
+    use crate::client::McpClientEvent;
+    use rmcp::model::{ElicitRequestParams, ElicitResult, ElicitationAction};
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex, PoisonError};
+    use tokio::sync::mpsc;
+    use tokio::task::JoinHandle;
+
+    /// Scripts the user's side of elicitation round trips: answers each
+    /// incoming request with the next queued response (Cancel once the queue
+    /// is empty) and records what arrived for assertions.
+    pub struct ElicitationScript {
+        captured: Arc<Mutex<Vec<CapturedElicitation>>>,
+        task: JoinHandle<()>,
+    }
+
+    #[derive(Clone)]
+    pub struct CapturedElicitation {
+        pub server_name: String,
+        pub request: ElicitRequestParams,
+    }
+
+    impl ElicitationScript {
+        pub fn spawn(
+            mut event_rx: mpsc::Receiver<McpClientEvent>,
+            responses: impl IntoIterator<Item = ElicitResult>,
+        ) -> Self {
+            let mut responses = responses.into_iter().collect::<VecDeque<_>>();
+            let captured = Arc::new(Mutex::new(Vec::new()));
+            let recorder = Arc::clone(&captured);
+            let task = tokio::spawn(async move {
+                while let Some(event) = event_rx.recv().await {
+                    if let McpClientEvent::Elicitation(event) = event {
+                        recorder
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .push(CapturedElicitation { server_name: event.server_name, request: event.request });
+                        let response =
+                            responses.pop_front().unwrap_or_else(|| ElicitResult::new(ElicitationAction::Cancel));
+                        let _ = event.response_sender.send(response);
+                    }
+                }
+            });
+            Self { captured, task }
+        }
+
+        pub fn captured(&self) -> Vec<CapturedElicitation> {
+            self.captured.lock().unwrap_or_else(PoisonError::into_inner).clone()
+        }
+    }
+
+    impl Drop for ElicitationScript {
+        fn drop(&mut self) {
+            self.task.abort();
+        }
+    }
 }
 
 #[cfg(test)]

@@ -1,11 +1,14 @@
+use mcp_utils::server::mrtr::{ELICITATION_UNSUPPORTED, Elicited, MrtrAction, get_next_mrtr_action, parse_response};
 use rmcp::{
-    RoleServer, ServerHandler,
+    ErrorData, RoleServer, ServerHandler,
     handler::server::{
         router::tool::ToolRouter,
+        tool::{InputResponses, schema_for_output},
         wrapper::{Json, Parameters},
     },
     model::{
-        ElicitRequestParams, ElicitationAction, ElicitationSchema, Implementation, ServerCapabilities, ServerInfo,
+        ElicitRequest, ElicitRequestParams, ElicitResult, ElicitationAction, ElicitationSchema, Implementation,
+        InputRequest, InputRequests, ServerCapabilities, ServerInfo,
     },
     service::RequestContext,
     tool, tool_handler, tool_router,
@@ -72,30 +75,36 @@ impl SurveyMcp {
     /// Use this to gather information from the user when you need specific inputs
     /// (text, numbers, booleans, selections). The schema parameter defines the form
     /// fields using JSON Schema format.
-    #[tool(annotations(
-        read_only_hint = false,
-        destructive_hint = false,
-        idempotent_hint = false,
-        open_world_hint = true
-    ))]
+    #[tool(
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false, open_world_hint = true),
+        output_schema = schema_for_output::<AskUserOutput>()
+    )]
     pub async fn ask_user(
         &self,
         request: Parameters<AskUserInput>,
+        responses: InputResponses,
         context: RequestContext<RoleServer>,
-    ) -> Result<Json<AskUserOutput>, String> {
-        let Parameters(args) = request;
-        let schema = parse_schema(args.schema).map_err(|e| e.to_string())?;
-        let result = context
-            .peer
-            .create_elicitation(ElicitRequestParams::FormElicitationParams {
-                meta: None,
-                message: args.message,
-                requested_schema: schema,
-            })
-            .await
-            .map_err(|e| format!("Elicitation failed: {e}"))?;
+    ) -> Result<Elicited<Json<AskUserOutput>>, ErrorData> {
+        let Parameters(AskUserInput { message, schema }) = request;
+        let schema =
+            parse_schema(schema).map_err(|e| ErrorData::invalid_params(format!("invalid schema: {e}"), None))?;
 
-        Ok(Json(AskUserOutput { accepted: result.action == ElicitationAction::Accept, data: result.content }))
+        let action = get_next_mrtr_action(responses.0.as_ref(), || {
+            let params = ElicitRequestParams::FormElicitationParams { meta: None, message, requested_schema: schema };
+            Ok(InputRequests::from([("answer".to_string(), InputRequest::Elicitation(ElicitRequest::new(params)))]))
+        })?
+        .validate_for_client(&context);
+        let responses = match action {
+            MrtrAction::Request(request) => return Ok(Elicited::Respond(request.into())),
+            MrtrAction::Abort(_) => return Ok(Elicited::error(ELICITATION_UNSUPPORTED)),
+            MrtrAction::Resume(responses) => responses,
+        };
+        let result: ElicitResult = parse_response(&responses, "answer")?;
+
+        Ok(Elicited::Done(Json(AskUserOutput {
+            accepted: result.action == ElicitationAction::Accept,
+            data: result.content,
+        })))
     }
 }
 

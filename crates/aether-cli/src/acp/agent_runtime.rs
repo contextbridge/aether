@@ -241,9 +241,7 @@ async fn on_mcp_event(
             tracing::debug!("MCP connection ready");
             Some(McpClientEvent::ConnectionReady(next_snapshot))
         }
-        event @ (McpClientEvent::Elicitation(_)
-        | McpClientEvent::UrlElicitationComplete(_)
-        | McpClientEvent::AuthenticationFailed { .. }) => Some(event),
+        event @ (McpClientEvent::Elicitation(_) | McpClientEvent::AuthenticationFailed { .. }) => Some(event),
     }
 }
 

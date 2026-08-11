@@ -4,15 +4,15 @@ use std::time::Duration;
 
 use aether_core::core::RetryConfig;
 use aether_core::events::{AgentEvent, LlmCallOutcome, LlmCallPurpose, TurnOutcome};
-use aether_core::testing::{AddNumbersRequest, TestScenario, test_agent};
+use aether_core::testing::{TestScenario, test_agent};
 use llm::testing::llm_response;
 use llm::{LlmError, LlmResponse, StopReason};
 
 #[tokio::test]
 async fn tool_call_turn_emits_full_trace() -> Result<(), Box<dyn Error>> {
-    let tool_request = AddNumbersRequest::new(3, 5);
+    let tool_request = serde_json::json!({ "a": 3, "b": 5 });
     let llm_responses = [
-        llm_response("m1").tool_call("call_1", "test__add_numbers", &[&tool_request.json()?]).build(),
+        llm_response("m1").tool_call("call_1", "test__add_numbers", &[&tool_request.to_string()]).build(),
         llm_response("m2").text(&["The sum is 8"]).build(),
     ];
 

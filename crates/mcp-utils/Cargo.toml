@@ -28,6 +28,7 @@ default = ["client"]
 client = [
     "dep:aether-auth",
     "aether-auth/mcp",
+    "dep:async-stream",
     "dep:llm",
     "dep:reqwest",
     "dep:thiserror",
@@ -39,13 +40,14 @@ client = [
 futures = { workspace = true }
 serde = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "sync", "net", "time"] }
-rmcp = { workspace = true, features = ["client", "server"] }
+rmcp = { workspace = true, features = ["client", "elicitation", "server"] }
 tracing = { workspace = true }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.11" }
 schemars = { workspace = true }
 
 # client-only deps
 aether-auth = { path = "../aether-auth", version = "0.1.11", optional = true }
+async-stream = { workspace = true, optional = true }
 llm = { package = "aether-llm", path = "../llm", optional = true, version = "0.7.26" }
 serde_json = { workspace = true }
 regex = { workspace = true }

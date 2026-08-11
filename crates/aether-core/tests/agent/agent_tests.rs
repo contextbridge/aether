@@ -4,13 +4,11 @@ use std::time::Duration;
 
 use aether_core::{
     events::{AgentEvent, Command, TurnOutcome, UserCommand},
-    testing::{
-        AddNumbersRequest, AddNumbersResult, DivideNumbersRequest, SlowToolRequest, agent_event, content_events,
-        test_agent,
-    },
+    testing::{agent_event, content_events, test_agent},
 };
 use llm::testing::{FakeLlmProvider, llm_response};
 use llm::{ChatMessage, ContentBlock, LlmResponse, StopReason, ToolDefinition};
+use serde_json::json;
 use tokio::sync::mpsc;
 
 fn split_json_in_half(input: &str) -> (&str, &str) {
@@ -71,14 +69,14 @@ async fn test_llm_call_lifecycle_reports_model_and_usage() -> Result<(), Box<dyn
 
 #[tokio::test]
 async fn test_single_tool_call() -> Result<(), Box<dyn Error>> {
-    let tool_request = AddNumbersRequest::new(3, 5);
-    let tool_result = AddNumbersResult::new(8);
+    let tool_request = json!({ "a": 3, "b": 5 });
+    let tool_result = json!({ "sum": 8 });
     let (m1_id, t1_id, t1_name) = ("message_1", "call_1", "test__add_numbers");
     let m2_id = "message-2";
     let chunks = ["The", " sum", " is", " 8"];
 
     let llm_responses = [
-        llm_response(m1_id).tool_call(t1_id, t1_name, &[&tool_request.json()?]).build(),
+        llm_response(m1_id).tool_call(t1_id, t1_name, &[&tool_request.to_string()]).build(),
         llm_response(m2_id).text(&chunks).build(),
     ];
 
@@ -98,9 +96,9 @@ async fn test_single_tool_call() -> Result<(), Box<dyn Error>> {
 
 #[tokio::test]
 async fn failed_mcp_command_submission_completes_the_tool_with_an_error() -> Result<(), Box<dyn Error>> {
-    let tool_request = AddNumbersRequest::new(3, 5);
+    let tool_request = json!({ "a": 3, "b": 5 });
     let llm = FakeLlmProvider::new(vec![
-        llm_response("message_1").tool_call("call_1", "test__add_numbers", &[&tool_request.json()?]).build(),
+        llm_response("message_1").tool_call("call_1", "test__add_numbers", &[&tool_request.to_string()]).build(),
         llm_response("message_2").text(&["recovered"]).build(),
     ]);
     let (mcp_tx, mcp_rx) = mpsc::channel(1);
@@ -134,8 +132,8 @@ async fn failed_mcp_command_submission_completes_the_tool_with_an_error() -> Res
 
 #[tokio::test]
 async fn test_tool_request_arg_emits_tool_call_update() -> Result<(), Box<dyn Error>> {
-    let tool_request = AddNumbersRequest::new(3, 5);
-    let request_json = tool_request.json()?;
+    let tool_request = json!({ "a": 3, "b": 5 });
+    let request_json = tool_request.to_string();
     let (arg_chunk_1, arg_chunk_2) = split_json_in_half(&request_json);
     let llm_responses = [
         llm_response("message_1").tool_call("call_1", "test__add_numbers", &[arg_chunk_1, arg_chunk_2]).build(),
@@ -183,11 +181,11 @@ async fn test_tool_request_arg_emits_tool_call_update() -> Result<(), Box<dyn Er
 
 #[tokio::test]
 async fn test_tool_call_failure() -> Result<(), Box<dyn Error>> {
-    let tool_request = DivideNumbersRequest::new(10, 0);
+    let tool_request = json!({ "a": 10, "b": 0 });
     let chunks = ["I", " apologize", ",", " but", " division", " by", " zero", " is", " not", " allowed", "."];
 
     let llm_responses = [
-        llm_response("message_1").tool_call("call_1", "test__divide_numbers", &[&tool_request.json()?]).build(),
+        llm_response("message_1").tool_call("call_1", "test__divide_numbers", &[&tool_request.to_string()]).build(),
         llm_response("message_2").text(&chunks).build(),
     ];
 
@@ -260,11 +258,11 @@ async fn test_tool_timeout() -> Result<(), Box<dyn Error>> {
     let tool_duration = 2000;
     let tool_timeout = 500;
 
-    let tool_request = SlowToolRequest::new(tool_duration);
+    let tool_request = json!({ "sleep_ms": tool_duration });
     let (m1_id, t1_id, t1_name) = ("message_1", "call_1", "test__slow_tool");
 
     let llm_responses = [
-        llm_response(m1_id).tool_call(t1_id, t1_name, &[&tool_request.json()?]).build(),
+        llm_response(m1_id).tool_call(t1_id, t1_name, &[&tool_request.to_string()]).build(),
         llm_response("message_2").text(&["done"]).build(),
     ];
 
@@ -348,9 +346,9 @@ async fn test_auto_continue_not_triggered_for_opening_message() -> Result<(), Bo
 
 #[tokio::test]
 async fn test_auto_continue_triggers_on_length_stop_reason() -> Result<(), Box<dyn Error>> {
-    let tool_request = AddNumbersRequest::new(2, 3);
+    let tool_request = json!({ "a": 2, "b": 3 });
     let llm_responses = [
-        llm_response("msg_1").tool_call("call_1", "test__add_numbers", &[&tool_request.json()?]).build(),
+        llm_response("msg_1").tool_call("call_1", "test__add_numbers", &[&tool_request.to_string()]).build(),
         vec![
             LlmResponse::start("msg_2"),
             LlmResponse::text("I'm thinking about the problem..."),
@@ -423,10 +421,10 @@ async fn test_auto_continue_triggers_on_empty_length_stop_reason() -> Result<(),
 
 #[tokio::test]
 async fn test_auto_continue_respects_max_limit() -> Result<(), Box<dyn Error>> {
-    let tool_request = AddNumbersRequest::new(2, 3);
+    let tool_request = json!({ "a": 2, "b": 3 });
 
     let llm_responses = [
-        llm_response("msg_1").tool_call("call_1", "test__add_numbers", &[&tool_request.json()?]).build(),
+        llm_response("msg_1").tool_call("call_1", "test__add_numbers", &[&tool_request.to_string()]).build(),
         vec![
             LlmResponse::start("msg_2"),
             LlmResponse::text("Thinking..."),
@@ -461,10 +459,10 @@ async fn test_auto_continue_respects_max_limit() -> Result<(), Box<dyn Error>> {
 
 #[tokio::test]
 async fn test_auto_continue_disabled_with_zero() -> Result<(), Box<dyn Error>> {
-    let tool_request = AddNumbersRequest::new(2, 3);
+    let tool_request = json!({ "a": 2, "b": 3 });
 
     let llm_responses = [
-        llm_response("msg_1").tool_call("call_1", "test__add_numbers", &[&tool_request.json()?]).build(),
+        llm_response("msg_1").tool_call("call_1", "test__add_numbers", &[&tool_request.to_string()]).build(),
         vec![
             LlmResponse::start("msg_2"),
             LlmResponse::text("No completion signal here"),
@@ -486,15 +484,15 @@ async fn test_auto_continue_disabled_with_zero() -> Result<(), Box<dyn Error>> {
 
 #[tokio::test]
 async fn test_reasoning_content_is_saved_in_context_after_tool_call() -> Result<(), Box<dyn Error>> {
-    let tool_request = AddNumbersRequest::new(2, 3);
+    let tool_request = json!({ "a": 2, "b": 3 });
 
     let llm_responses = [
         vec![
             LlmResponse::start("msg_1"),
             LlmResponse::reasoning("internal plan"),
             LlmResponse::tool_request_start("call_1", "test__add_numbers"),
-            LlmResponse::tool_request_arg("call_1", &tool_request.json()?),
-            LlmResponse::tool_request_complete("call_1", "test__add_numbers", &tool_request.json()?),
+            LlmResponse::tool_request_arg("call_1", &tool_request.to_string()),
+            LlmResponse::tool_request_complete("call_1", "test__add_numbers", &tool_request.to_string()),
             LlmResponse::done(),
         ],
         llm_response("msg_2").text(&["Done"]).build(),

@@ -7,7 +7,7 @@ use super::{
         ConnectConfig, McpConnectAttempt, McpConnectOutcome, McpServerConnection, Tool, authenticate_http,
         connect_server,
     },
-    mcp_client::McpClient,
+    mcp_client::{McpClient, elicitation_capabilities},
     naming::{create_namespaced_tool_name, split_on_server_name},
     tool_proxy::ToolProxy,
 };
@@ -16,12 +16,11 @@ use futures::future::join_all;
 use rmcp::{
     RoleClient,
     model::{
-        CallToolRequestParams, ClientCapabilities, ClientInfo, ElicitRequestParams, ElicitResult, ElicitationAction,
-        FormElicitationCapability, Implementation, Tool as RmcpTool, UrlElicitationCapability,
+        CallToolRequestParams, ClientInfo, ElicitRequestParams, ElicitResult, ElicitationAction, Implementation,
+        Tool as RmcpTool,
     },
     service::RunningService,
 };
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
@@ -59,19 +58,12 @@ pub struct ElicitationResponse {
     pub content: Option<Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct UrlElicitationCompleteParams {
-    pub server_name: String,
-    pub elicitation_id: String,
-}
-
 /// Events emitted by MCP clients that require attention from the host
 /// (e.g. the relay or TUI). Flows through a single channel from `McpManager`
 /// to the consumer.
 #[derive(Debug)]
 pub enum McpClientEvent {
     Elicitation(ElicitationRequest),
-    UrlElicitationComplete(UrlElicitationCompleteParams),
     ServerStatusesChanged(Vec<McpServerStatusEntry>),
     ToolDefinitionsChanged(Vec<ToolDefinition>),
     ServerInstructionsUpdated { server: String, instructions: Option<String> },
@@ -101,18 +93,12 @@ pub struct McpManager {
 
 impl McpManager {
     pub fn new(event_sender: mpsc::Sender<McpClientEvent>, oauth_handler_factory: Option<OAuthHandlerFactory>) -> Self {
-        let mut capabilities = ClientCapabilities::builder().enable_elicitation().build();
-        if let Some(elicitation) = capabilities.elicitation.as_mut() {
-            elicitation.form = Some(FormElicitationCapability::default());
-            elicitation.url = Some(UrlElicitationCapability::default());
-        }
-
         Self {
             servers: HashMap::new(),
             server_order: Vec::new(),
             proxy: None,
             aether_home: None,
-            client_info: ClientInfo::new(capabilities, Implementation::new("aether", "0.1.0")),
+            client_info: ClientInfo::new(elicitation_capabilities(), Implementation::new("aether", "0.1.0")),
             event_sender,
             root_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             oauth_handler_factory,

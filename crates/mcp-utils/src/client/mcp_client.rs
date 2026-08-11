@@ -3,8 +3,8 @@ use rmcp::{
     ClientHandler, RoleClient,
     handler::client::progress::ProgressDispatcher,
     model::{
-        ClientInfo, ConstString, CustomNotification, ElicitRequestParams, ElicitResult, ElicitationAction,
-        ElicitationResponseNotificationMethod, ErrorData, ProgressNotificationParam,
+        ClientCapabilities, ClientInfo, ElicitRequestParams, ElicitResult, ElicitationAction, ErrorData,
+        FormElicitationCapability, ProgressNotificationParam, UrlElicitationCapability,
     },
     service::{NotificationContext, RequestContext},
 };
@@ -16,7 +16,7 @@ use crate::client::{ElicitationRequest, McpClientEvent};
 pub struct McpClient {
     client_info: ClientInfo,
     server_name: String,
-    pub progress_dispatcher: ProgressDispatcher,
+    pub(crate) progress_dispatcher: ProgressDispatcher,
     event_sender: mpsc::Sender<McpClientEvent>,
 }
 
@@ -31,8 +31,8 @@ impl McpClient {
 
     /// Dispatch an elicitation request through the shared event channel.
     ///
-    /// Used by both the `create_elicitation` handler and the `-32042`
-    /// `URL_ELICITATION_REQUIRED` error path to ensure the same user-facing flow.
+    /// Used by both the `create_elicitation` handler and the MRTR round loop
+    /// in `call_tool_mrtr` to ensure the same user-facing flow.
     pub async fn dispatch_elicitation(&self, request: ElicitRequestParams) -> ElicitResult {
         let (response_tx, response_rx) = oneshot::channel();
         let elicitation_request =
@@ -43,21 +43,20 @@ impl McpClient {
         }
         response_rx.await.unwrap_or_else(|_| cancel_result())
     }
-
-    /// Forward a URL elicitation completion through the shared event channel.
-    pub async fn forward_url_elicitation_complete(&self, elicitation_id: String) {
-        let event = McpClientEvent::UrlElicitationComplete(super::UrlElicitationCompleteParams {
-            server_name: self.server_name.clone(),
-            elicitation_id,
-        });
-        if self.event_sender.send(event).await.is_err() {
-            tracing::warn!("Failed to forward URL elicitation completion: receiver dropped");
-        }
-    }
 }
 
 pub fn cancel_result() -> ElicitResult {
     ElicitResult::new(ElicitationAction::Cancel)
+}
+
+/// The client capabilities Aether advertises to MCP servers: form + url elicitation.
+pub fn elicitation_capabilities() -> ClientCapabilities {
+    let mut capabilities = ClientCapabilities::builder().enable_elicitation().build();
+    if let Some(elicitation) = capabilities.elicitation.as_mut() {
+        elicitation.form = Some(FormElicitationCapability::default());
+        elicitation.url = Some(UrlElicitationCapability::default());
+    }
+    capabilities
 }
 
 impl ClientHandler for McpClient {
@@ -76,45 +75,16 @@ impl ClientHandler for McpClient {
     ) -> Result<ElicitResult, ErrorData> {
         Ok(self.dispatch_elicitation(request).await)
     }
-
-    async fn on_custom_notification(
-        &self,
-        notification: CustomNotification,
-        _context: NotificationContext<RoleClient>,
-    ) {
-        if notification.method != ElicitationResponseNotificationMethod::VALUE {
-            return;
-        }
-
-        let Some(elicitation_id) = notification
-            .params
-            .as_ref()
-            .and_then(|params| params.get("elicitationId"))
-            .and_then(serde_json::Value::as_str)
-        else {
-            tracing::warn!("URL elicitation completion notification is missing elicitationId");
-            return;
-        };
-
-        self.forward_url_elicitation_complete(elicitation_id.to_string()).await;
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rmcp::model::{
-        ClientCapabilities, ElicitationSchema, FormElicitationCapability, Implementation, UrlElicitationCapability,
-    };
+    use rmcp::model::{ElicitationSchema, Implementation};
     use std::collections::BTreeMap;
 
     fn test_client_info() -> ClientInfo {
-        let mut capabilities = ClientCapabilities::builder().enable_elicitation().build();
-        if let Some(elicitation) = capabilities.elicitation.as_mut() {
-            elicitation.form = Some(FormElicitationCapability::default());
-            elicitation.url = Some(UrlElicitationCapability::default());
-        }
-        ClientInfo::new(capabilities, Implementation::new("test", "0.1.0"))
+        ClientInfo::new(elicitation_capabilities(), Implementation::new("test", "0.1.0"))
     }
 
     fn make_client(event_sender: mpsc::Sender<McpClientEvent>) -> McpClient {
@@ -190,33 +160,6 @@ mod tests {
         let result = client.dispatch_elicitation(request).await;
         handle.await.unwrap();
         assert_eq!(result.action, ElicitationAction::Accept);
-    }
-
-    #[tokio::test]
-    async fn forward_url_elicitation_complete_uses_server_name_and_id() {
-        let (event_tx, mut event_rx) = mpsc::channel(1);
-        let client = make_client(event_tx);
-
-        client.forward_url_elicitation_complete("el-456".to_string()).await;
-
-        let event = event_rx.recv().await.unwrap();
-        match event {
-            McpClientEvent::UrlElicitationComplete(params) => {
-                assert_eq!(params.server_name, "test-server");
-                assert_eq!(params.elicitation_id, "el-456");
-            }
-            other => panic!("expected UrlElicitationComplete, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn forward_url_elicitation_complete_swallows_dropped_receiver() {
-        let (event_tx, event_rx) = mpsc::channel(1);
-        drop(event_rx);
-        let client = make_client(event_tx);
-
-        // Should not panic even though the receiver is dropped.
-        client.forward_url_elicitation_complete("el-gone".to_string()).await;
     }
 
     #[test]

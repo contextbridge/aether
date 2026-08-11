@@ -21,7 +21,6 @@
       "name": "Explore",
       "description": "Explores codebases to find relevant files, patterns, and integration points",
       "model": "deepseek:deepseek-v4-flash",
-      "reasoningEffort": "high",
       "userInvocable": false,
       "agentInvocable": true,
       "prompts": [".aether/agents/codebase-explorer/AGENTS.md"],

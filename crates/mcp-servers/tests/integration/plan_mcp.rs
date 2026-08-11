@@ -1,18 +1,19 @@
-use crate::common::{TestClient, TestResult};
+use crate::common::{TestClient, TestResult, scripted_mcp_client, silent_mcp_client, test_client_info};
 use mcp_servers::file_ops::FileEdit;
 use mcp_servers::plan::{EditPlanInput, SubmitPlanInput, WritePlanInput};
 use mcp_servers::{DEFAULT_PLAN_PROMPT, PlanMcp};
-use mcp_utils::client::{McpClient, McpClientEvent};
-use rmcp::model::{ElicitRequestParams, ElicitResult, ElicitationAction, GetPromptRequestParams};
+use mcp_utils::client::McpClient;
+use rmcp::model::{
+    CallToolRequestParams, CallToolResponse, ElicitRequestParams, ElicitResult, ElicitationAction,
+    GetPromptRequestParams, InputRequest, InputResponses,
+};
 use serde_json::json;
 use std::fs;
 use tempfile::TempDir;
-use tokio::sync::mpsc;
 use utils::plan_review::PlanReviewElicitationMeta;
 
 fn silent_client() -> McpClient {
-    let (event_tx, _event_rx) = mpsc::channel(8);
-    McpClient::new(crate::common::test_client_info(), "plan-test-server".to_string(), event_tx)
+    silent_mcp_client("plan-test-server")
 }
 
 fn write_plan_input(plan_name: &str, content: &str) -> WritePlanInput {
@@ -31,22 +32,6 @@ async fn submit_plan_raw(mcp: &TestClient<PlanMcp, McpClient>, plan_name: &str) 
     mcp.call_raw("submit_plan", submit_plan_input(plan_name)).await.expect("call submit_plan")
 }
 
-fn respond_to_elicitation_request(
-    mut event_rx: mpsc::Receiver<McpClientEvent>,
-    response: ElicitResult,
-) -> tokio::task::JoinHandle<Option<ElicitRequestParams>> {
-    tokio::spawn(async move {
-        while let Some(event) = event_rx.recv().await {
-            if let McpClientEvent::Elicitation(req) = event {
-                let captured = req.request;
-                let _ = req.response_sender.send(response);
-                return Some(captured);
-            }
-        }
-        None
-    })
-}
-
 #[tokio::test]
 async fn submit_plan_attaches_plan_review_metadata_and_preserves_schema() -> TestResult {
     let temp_dir = TempDir::new()?;
@@ -56,11 +41,8 @@ async fn submit_plan_attaches_plan_review_metadata_and_preserves_schema() -> Tes
         .await?;
     mcp.call("write_plan", write_plan_input("example", plan_content)).await?;
 
-    let (event_tx, event_rx) = mpsc::channel(8);
-    let client = McpClient::new(crate::common::test_client_info(), "plan-test-server".to_string(), event_tx);
-
-    let task_handle = respond_to_elicitation_request(
-        event_rx,
+    let (client, elicitation) = scripted_mcp_client(
+        "plan-test-server",
         ElicitResult::new(ElicitationAction::Accept).with_content(json!({ "decision": "approve" })),
     );
 
@@ -70,7 +52,7 @@ async fn submit_plan_attaches_plan_review_metadata_and_preserves_schema() -> Tes
     assert!(result["feedback"].is_null());
 
     let plan_path = temp_dir.path().join("example-plan.md");
-    let elicitation_request = task_handle.await?.expect("expected elicitation request");
+    let elicitation_request = elicitation.captured().pop().expect("expected elicitation request").request;
     let ElicitRequestParams::FormElicitationParams { meta, requested_schema, .. } = elicitation_request else {
         panic!("submit_plan should issue form elicitation request");
     };
@@ -85,6 +67,89 @@ async fn submit_plan_attaches_plan_review_metadata_and_preserves_schema() -> Tes
     assert_eq!(parsed_meta.ui, "planReview");
     assert_eq!(parsed_meta.plan_path, plan_path.display().to_string());
     assert_eq!(parsed_meta.markdown, plan_content);
+    Ok(())
+}
+
+#[tokio::test]
+async fn submit_plan_manual_two_step_keeps_review_meta_and_completes() -> TestResult {
+    let temp_dir = TempDir::new()?;
+    let mcp = TestClient::start_with(|| PlanMcp::new().with_plans_dir(temp_dir.path().to_path_buf()), silent_client())
+        .await?;
+    mcp.call("write_plan", write_plan_input("example", "# Plan\n\nShip it.")).await?;
+
+    let first = mcp
+        .raw()
+        .call_tool_once(
+            CallToolRequestParams::new("submit_plan")
+                .with_arguments(json!({ "planName": "example" }).as_object().unwrap().clone()),
+        )
+        .await?;
+
+    let CallToolResponse::InputRequired(input_required) = first else {
+        panic!("first submit_plan call should require input, got {first:?}");
+    };
+    assert!(input_required.request_state.is_none(), "stateless servers should not emit request_state");
+    let requests = input_required.input_requests.expect("input requests should be present");
+    let InputRequest::Elicitation(elicit) = requests.get("review").expect("input request keyed 'review'") else {
+        panic!("expected an elicitation input request");
+    };
+    let ElicitRequestParams::FormElicitationParams { meta, .. } = &elicit.params else {
+        panic!("expected form elicitation");
+    };
+    let meta = meta.as_ref().expect("plan review metadata should survive MRTR transport");
+    PlanReviewElicitationMeta::parse(Some(&meta.0)).expect("should parse plan review metadata");
+
+    let mut responses = InputResponses::new();
+    responses.insert(
+        "review".to_string(),
+        serde_json::to_value(
+            ElicitResult::new(ElicitationAction::Accept)
+                .with_content(json!({ "decision": "deny", "feedback": "needs tests" })),
+        )?,
+    );
+    let second = mcp
+        .raw()
+        .call_tool_once(
+            CallToolRequestParams::new("submit_plan")
+                .with_arguments(json!({ "planName": "example" }).as_object().unwrap().clone())
+                .with_input_responses(responses),
+        )
+        .await?;
+
+    let CallToolResponse::Complete(result) = second else {
+        panic!("retry should complete, got {second:?}");
+    };
+    let structured = result.structured_content.expect("structured output");
+    assert_eq!(structured["approved"], false);
+    assert_eq!(structured["feedback"], "needs tests");
+    Ok(())
+}
+
+#[tokio::test]
+async fn submit_plan_for_missing_plan_returns_tool_error() -> TestResult {
+    let temp_dir = TempDir::new()?;
+    let mcp = TestClient::start_with(|| PlanMcp::new().with_plans_dir(temp_dir.path().to_path_buf()), silent_client())
+        .await?;
+
+    let result = mcp.call_raw("submit_plan", submit_plan_input("missing")).await?;
+    assert!(result.is_error.unwrap_or(false), "missing plan should be a tool error: {result:?}");
+    let text = result.content.first().and_then(|c| c.as_text()).expect("error text");
+    assert!(text.text.contains("missing"), "error should name the plan: {}", text.text);
+    Ok(())
+}
+
+#[tokio::test]
+async fn submit_plan_without_elicitation_capability_returns_friendly_error() -> TestResult {
+    let temp_dir = TempDir::new()?;
+    let mcp =
+        TestClient::start_with(|| PlanMcp::new().with_plans_dir(temp_dir.path().to_path_buf()), test_client_info())
+            .await?;
+    mcp.call("write_plan", write_plan_input("example", "# Plan")).await?;
+
+    let result = mcp.call_raw("submit_plan", submit_plan_input("example")).await?;
+    assert!(result.is_error.unwrap_or(false), "expected a tool error: {result:?}");
+    let text = result.content.first().and_then(|c| c.as_text()).expect("error text");
+    assert!(text.text.contains("does not support"), "error should explain the capability gap: {}", text.text);
     Ok(())
 }
 
