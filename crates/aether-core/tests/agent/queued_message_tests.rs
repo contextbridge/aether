@@ -2,7 +2,7 @@ use aether_core::events::{AgentEvent, MessageEvent, ToolEvent, TurnEvent};
 use std::sync::Arc;
 
 use aether_core::events::TurnOutcome;
-use aether_core::testing::{AddNumbersRequest, TestScenario, test_agent};
+use aether_core::testing::{TestScenario, test_agent};
 use llm::testing::llm_response;
 use llm::{ChatMessage, ContentBlock, Context, LlmResponse, StopReason};
 use tokio::sync::Notify;
@@ -42,7 +42,7 @@ async fn queued_text_suppresses_intermediate_done_between_turns() {
 
 #[tokio::test]
 async fn user_message_during_tool_execution_is_queued() {
-    let request_json = AddNumbersRequest::new(2, 3).json().expect("serialize tool request");
+    let request_json = serde_json::json!({ "a": 2, "b": 3 }).to_string();
     let turns = vec![
         llm_response("msg_1").tool_call("call_1", "test__add_numbers", &[&request_json]).build(),
         vec![LlmResponse::start("msg_2"), LlmResponse::text("done"), LlmResponse::done()],
