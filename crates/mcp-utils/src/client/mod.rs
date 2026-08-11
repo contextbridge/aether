@@ -24,7 +24,7 @@ pub use manager::{
     ElicitationRequest, McpClientEvent, McpConnectionDetails, McpManager, McpServerStatus, McpServerStatusEntry,
     OAuthHandlerContext, OAuthHandlerFactory,
 };
-pub use mcp_client::{McpClient, cancel_result};
+pub use mcp_client::{McpClient, cancel_result, elicitation_capabilities};
 pub use mrtr::AbortReason;
 pub use naming::{SERVERNAME_DELIMITER, split_on_server_name};
 pub use oauth_handler::ElicitingOAuthHandler;

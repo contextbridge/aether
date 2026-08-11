@@ -2,7 +2,10 @@
 use rmcp::{
     ClientHandler, RoleClient,
     handler::client::progress::ProgressDispatcher,
-    model::{ClientInfo, ElicitRequestParams, ElicitResult, ElicitationAction, ErrorData, ProgressNotificationParam},
+    model::{
+        ClientCapabilities, ClientInfo, ElicitRequestParams, ElicitResult, ElicitationAction, ErrorData,
+        FormElicitationCapability, ProgressNotificationParam, UrlElicitationCapability,
+    },
     service::{NotificationContext, RequestContext},
 };
 use std::result::Result;
@@ -46,6 +49,16 @@ pub fn cancel_result() -> ElicitResult {
     ElicitResult::new(ElicitationAction::Cancel)
 }
 
+/// The client capabilities Aether advertises to MCP servers: form + url elicitation.
+pub fn elicitation_capabilities() -> ClientCapabilities {
+    let mut capabilities = ClientCapabilities::builder().enable_elicitation().build();
+    if let Some(elicitation) = capabilities.elicitation.as_mut() {
+        elicitation.form = Some(FormElicitationCapability::default());
+        elicitation.url = Some(UrlElicitationCapability::default());
+    }
+    capabilities
+}
+
 impl ClientHandler for McpClient {
     fn get_info(&self) -> ClientInfo {
         self.client_info.clone()
@@ -67,18 +80,11 @@ impl ClientHandler for McpClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rmcp::model::{
-        ClientCapabilities, ElicitationSchema, FormElicitationCapability, Implementation, UrlElicitationCapability,
-    };
+    use rmcp::model::{ElicitationSchema, Implementation};
     use std::collections::BTreeMap;
 
     fn test_client_info() -> ClientInfo {
-        let mut capabilities = ClientCapabilities::builder().enable_elicitation().build();
-        if let Some(elicitation) = capabilities.elicitation.as_mut() {
-            elicitation.form = Some(FormElicitationCapability::default());
-            elicitation.url = Some(UrlElicitationCapability::default());
-        }
-        ClientInfo::new(capabilities, Implementation::new("test", "0.1.0"))
+        ClientInfo::new(elicitation_capabilities(), Implementation::new("test", "0.1.0"))
     }
 
     fn make_client(event_sender: mpsc::Sender<McpClientEvent>) -> McpClient {
