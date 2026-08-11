@@ -6,7 +6,7 @@ use aether_core::core::RetryConfig;
 use aether_core::events::{
     AgentEvent, AgentObserver, LlmCallOutcome, LlmCallPurpose, StreamState, ToolEvent, TurnEvent, TurnOutcome,
 };
-use aether_core::testing::{AddNumbersRequest, AgentTrace, DivideNumbersRequest, TestScenario, test_agent};
+use aether_core::testing::{AgentTrace, TestScenario, test_agent};
 use aether_telemetry::{
     GENAI_SEMCONV_SCHEMA_URL, GenAiMetrics, OtelInstrumentation, OtelObserver, genai_instrumentation_scope,
 };
@@ -156,10 +156,10 @@ async fn capture_content_gates_input_output_and_tool_payloads() -> Result<(), Bo
 
 #[tokio::test]
 async fn tool_only_llm_call_captures_generation_output() -> Result<(), Box<dyn Error>> {
-    let request = AddNumbersRequest::new(3, 5);
+    let request = serde_json::json!({ "a": 3, "b": 5 });
     let responses = [
         llm_response("m1")
-            .tool_call("call_1", "test__add_numbers", &[&request.json()?])
+            .tool_call("call_1", "test__add_numbers", &[&request.to_string()])
             .build_with_stop_reason(StopReason::ToolCalls),
         llm_response("m2").text(&["The sum is 8"]).build(),
     ];
@@ -299,9 +299,9 @@ async fn completed_message_sets_turn_output_without_streamed_chunks() -> Result<
 
 #[tokio::test]
 async fn tool_error_ends_the_tool_span_with_error_status() -> Result<(), Box<dyn Error>> {
-    let request = DivideNumbersRequest::new(8, 0);
+    let request = serde_json::json!({ "a": 8, "b": 0 });
     let responses = [
-        llm_response("m1").tool_call("call_1", "test__divide_numbers", &[&request.json()?]).build(),
+        llm_response("m1").tool_call("call_1", "test__divide_numbers", &[&request.to_string()]).build(),
         llm_response("m2").text(&["that did not work"]).build(),
     ];
     let trace = test_agent().llm_responses(&responses).user_text("8/0 = ?").run_trace().await?;
@@ -419,11 +419,11 @@ async fn genai_metrics_use_the_expected_scope_units_and_attributes() -> Result<(
 /// A real agent turn that streams text, calls `test__add_numbers`, and reports
 /// token usage, captured through the agent's actual event stream.
 async fn happy_tool_trace() -> Result<AgentTrace, Box<dyn Error>> {
-    let request = AddNumbersRequest::new(3, 5);
+    let request = serde_json::json!({ "a": 3, "b": 5 });
     let responses = [
         llm_response("m1")
             .text(&["hello "])
-            .tool_call("call_1", "test__add_numbers", &[&request.json()?])
+            .tool_call("call_1", "test__add_numbers", &[&request.to_string()])
             .usage(100, 20)
             .build(),
         llm_response("m2").text(&["The sum is 8"]).usage(30, 7).build(),
