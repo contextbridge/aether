@@ -28,6 +28,7 @@ default = ["client"]
 client = [
     "dep:aether-auth",
     "aether-auth/mcp",
+    "dep:async-stream",
     "dep:llm",
     "dep:reqwest",
     "dep:thiserror",
@@ -46,6 +47,7 @@ schemars = { workspace = true }
 
 # client-only deps
 aether-auth = { path = "../aether-auth", version = "0.1.11", optional = true }
+async-stream = { workspace = true, optional = true }
 llm = { package = "aether-llm", path = "../llm", optional = true, version = "0.7.26" }
 serde_json = { workspace = true }
 regex = { workspace = true }

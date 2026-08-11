@@ -7,10 +7,11 @@ mod call_tool;
 mod connection;
 mod connection_attempt_manager;
 mod mcp_client;
+mod mrtr;
 mod naming;
 mod tool_proxy;
 
-pub use call_tool::{CallToolRequestHandle, call_tool_with_options};
+pub use call_tool::{CallToolError, CallToolOptions, ToolCallEvent, call_tool};
 pub use config::{
     InMemoryServerConfig, InMemoryType, McpConfig, McpHttpConfig, McpOAuthConfig, McpServer, McpServerCloneError,
     McpServerConfig, McpTransport, ParseError, RemoteServerConfig, RemoteType, ServerFactory, StdioServerConfig,
@@ -24,6 +25,7 @@ pub use manager::{
     OAuthHandlerContext, OAuthHandlerFactory,
 };
 pub use mcp_client::{McpClient, cancel_result};
+pub use mrtr::AbortReason;
 pub use naming::{SERVERNAME_DELIMITER, split_on_server_name};
 pub use oauth_handler::ElicitingOAuthHandler;
 

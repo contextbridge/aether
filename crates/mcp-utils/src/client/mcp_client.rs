@@ -13,7 +13,7 @@ use crate::client::{ElicitationRequest, McpClientEvent};
 pub struct McpClient {
     client_info: ClientInfo,
     server_name: String,
-    pub progress_dispatcher: ProgressDispatcher,
+    pub(crate) progress_dispatcher: ProgressDispatcher,
     event_sender: mpsc::Sender<McpClientEvent>,
 }
 
@@ -29,7 +29,7 @@ impl McpClient {
     /// Dispatch an elicitation request through the shared event channel.
     ///
     /// Used by both the `create_elicitation` handler and the MRTR round loop
-    /// in `execute_mcp_call` to ensure the same user-facing flow.
+    /// in `call_tool_mrtr` to ensure the same user-facing flow.
     pub async fn dispatch_elicitation(&self, request: ElicitRequestParams) -> ElicitResult {
         let (response_tx, response_rx) = oneshot::channel();
         let elicitation_request =
