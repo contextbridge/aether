@@ -422,7 +422,7 @@ impl Agent {
                 .await;
         }
         self.streams.remove(&StreamKey::Llm);
-        for tool_id in self.tool_executions.abort(tool_policy) {
+        for tool_id in self.tool_executions.abort(&tool_policy) {
             self.streams.remove(&StreamKey::Tool(tool_id));
         }
     }

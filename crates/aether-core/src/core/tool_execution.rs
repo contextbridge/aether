@@ -142,7 +142,7 @@ impl ToolExecutions {
         removed
     }
 
-    pub(super) fn abort(&mut self, policy: ToolAbortPolicy) -> Vec<String> {
+    pub(super) fn abort(&mut self, policy: &ToolAbortPolicy) -> Vec<String> {
         let mut removed = Vec::new();
         self.executions.retain(|tool_id, execution| {
             execution.cancellation_token.cancel();
