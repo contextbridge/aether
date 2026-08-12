@@ -1,13 +1,15 @@
 use crate::client::McpClient;
+use crate::client::elicitation::{ElicitInputsError, elicit_inputs};
 use crate::client::mrtr::{AbortReason, MrtrAction, MrtrState};
+use crate::client::task::{TaskDriver, TaskErrorReason};
 use async_stream::stream;
 use futures::Stream;
 use futures::StreamExt;
 use futures::future::{Either, select};
 use rmcp::RoleClient;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CallToolResult, ClientRequest, InputRequest, InputRequests,
-    InputResponses, ProgressNotificationParam, Request, RequestMetaObject, ServerResult,
+    CallToolRequestParams, CallToolResponse, CallToolResult, ClientRequest, CreateTaskResult, InputRequests,
+    InputResponses, ProgressNotificationParam, Request, RequestMetaObject, ServerResult, Task,
 };
 use rmcp::service::{PeerRequestOptions, RequestHandle, RunningService, ServiceError};
 use std::pin::pin;
@@ -24,7 +26,10 @@ pub struct CallToolOptions {
 #[derive(Debug)]
 pub enum ToolCallEvent {
     Progress(ProgressNotificationParam),
+    TaskCreated(CreateTaskResult),
+    TaskStatus(Task),
     Complete(Result<CallToolResult, CallToolError>),
+    TaskComplete { task: Task, result: Result<CallToolResult, CallToolError> },
 }
 
 #[derive(Debug, Error)]
@@ -43,8 +48,13 @@ pub enum CallToolError {
     },
     #[error("{}", reason.message(server, *timeout))]
     Aborted { server: String, reason: AbortReason, timeout: Duration },
-    #[error("Server '{server}' returned a task, but this client does not support the tasks extension")]
-    UnsupportedTask { server: String },
+    #[error("Task '{task_id}' from server '{server}' {reason}")]
+    Task {
+        server: String,
+        task_id: String,
+        #[source]
+        reason: TaskErrorReason,
+    },
     #[error("Server '{server}' returned a tool call response kind this client does not support")]
     UnsupportedResponse { server: String },
 }
@@ -121,8 +131,12 @@ pub fn call_tool(
                         }
                     }
                 }
-                Ok(CallToolResponse::Task(_)) => {
-                    yield ToolCallEvent::Complete(Err(CallToolError::UnsupportedTask { server: server_name }));
+                Ok(CallToolResponse::Task(task)) => {
+                    let events = TaskDriver::new(&server_name, client.as_ref(), options.timeout).stream(task);
+                    let mut events = pin!(events);
+                    while let Some(event) = events.next().await {
+                        yield event;
+                    }
                     return;
                 }
                 Ok(_) => {
@@ -153,16 +167,14 @@ async fn elicit_input(
     server_name: &str,
     requests: InputRequests,
 ) -> Result<InputResponses, CallToolError> {
-    let mut responses = InputResponses::new();
-    for (key, request) in requests {
-        let InputRequest::Elicitation(elicitation_request) = request else {
-            return Err(CallToolError::UnsupportedInput { server: server_name.to_string() });
-        };
-        let result = client.dispatch_elicitation(elicitation_request.params).await;
-        mrtr_state.record_response(&result);
-        let response = serde_json::to_value(result)
-            .map_err(|source| CallToolError::SerializeResponse { server: server_name.to_string(), source })?;
-        responses.insert(key, response);
+    let (responses, results) = elicit_inputs(client, requests).await.map_err(|error| match error {
+        ElicitInputsError::UnsupportedInput => CallToolError::UnsupportedInput { server: server_name.to_string() },
+        ElicitInputsError::Serialize(source) => {
+            CallToolError::SerializeResponse { server: server_name.to_string(), source }
+        }
+    })?;
+    for result in &results {
+        mrtr_state.record_response(result);
     }
     Ok(responses)
 }

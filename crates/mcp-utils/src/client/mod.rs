@@ -6,9 +6,11 @@ pub mod oauth_handler;
 mod call_tool;
 mod connection;
 mod connection_attempt_manager;
+mod elicitation;
 mod mcp_client;
 mod mrtr;
 mod naming;
+mod task;
 mod tool_proxy;
 
 pub use call_tool::{CallToolError, CallToolOptions, ToolCallEvent, call_tool};
@@ -24,10 +26,11 @@ pub use manager::{
     ElicitationRequest, McpClientEvent, McpConnectionDetails, McpManager, McpServerStatus, McpServerStatusEntry,
     OAuthHandlerContext, OAuthHandlerFactory,
 };
-pub use mcp_client::{McpClient, cancel_result, elicitation_capabilities};
+pub use mcp_client::{McpClient, cancel_result, client_capabilities};
 pub use mrtr::AbortReason;
 pub use naming::{SERVERNAME_DELIMITER, split_on_server_name};
 pub use oauth_handler::ElicitingOAuthHandler;
+pub use task::TaskErrorReason;
 
 use std::path::PathBuf;
 

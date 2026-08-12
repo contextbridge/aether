@@ -7,7 +7,7 @@ use super::{
         ConnectConfig, McpConnectAttempt, McpConnectOutcome, McpServerConnection, Tool, authenticate_http,
         connect_server,
     },
-    mcp_client::{McpClient, elicitation_capabilities},
+    mcp_client::{McpClient, client_capabilities},
     naming::{create_namespaced_tool_name, split_on_server_name},
     tool_proxy::ToolProxy,
 };
@@ -98,7 +98,7 @@ impl McpManager {
             server_order: Vec::new(),
             proxy: None,
             aether_home: None,
-            client_info: ClientInfo::new(elicitation_capabilities(), Implementation::new("aether", "0.1.0")),
+            client_info: ClientInfo::new(client_capabilities(), Implementation::new("aether", "0.1.0")),
             event_sender,
             root_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             oauth_handler_factory,
