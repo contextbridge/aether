@@ -6,6 +6,7 @@ use super::{ContextEvent, MessageEvent, ModelEvent, StreamState, ToolEvent, Turn
 /// A canonical event on the agent's output stream.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "category", content = "event", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum AgentEvent {
     Message(MessageEvent),
     Tool(ToolEvent),
@@ -41,8 +42,18 @@ impl AgentEvent {
             Self::Message(MessageEvent::Text { chunk, .. } | MessageEvent::Thought { chunk, .. }) => {
                 Some(chunk.clone())
             }
-            Self::Tool(ToolEvent::Result { result, .. }) => Some(result.result.clone()),
-            Self::Tool(ToolEvent::Error { error }) => Some(error.error.clone()),
+            Self::Tool(ToolEvent::Result { result, .. } | ToolEvent::TaskCompleted { result, .. }) => {
+                Some(result.result.clone())
+            }
+            Self::Tool(ToolEvent::Error { error } | ToolEvent::TaskFailed { error, .. }) => Some(error.error.clone()),
+            Self::Tool(ToolEvent::TaskCreated { task_id, .. }) => Some(task_id.clone()),
+            Self::Tool(ToolEvent::TaskStatus { task_id, status, status_message, .. }) => {
+                Some(status_message.as_ref().map_or_else(
+                    || format!("{task_id}: {status}"),
+                    |message| format!("{task_id}: {status} - {message}"),
+                ))
+            }
+            Self::Tool(ToolEvent::TaskCancelled { task_id, .. }) => Some(format!("{task_id}: cancelled")),
             Self::Context(ContextEvent::CompactionResult { summary, .. }) => Some(summary.clone()),
             _ => None,
         }
