@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::events::ToolEvent;
+use crate::events::{TaskOutcome, TaskOutcomeState};
 use mcp_utils::{
     client::{CallToolError, SERVERNAME_DELIMITER},
     display_meta::ToolResultMeta,
@@ -76,16 +76,16 @@ pub fn mcp_result_to_tool_call_result(
     }
 }
 
-pub fn map_task_result_to_tool_event(
+pub fn map_task_result_to_outcome(
     request: ToolCallRequest,
     task: Task,
     outcome: Result<CallToolResult, CallToolError>,
-) -> ToolEvent {
-    let task_id = task.task_id;
-    match convert_tool_result(&request, outcome) {
-        Ok((result, result_meta)) => ToolEvent::TaskCompleted { request, task_id, result, result_meta },
-        Err(error) => ToolEvent::TaskFailed { request, task_id, error },
-    }
+) -> TaskOutcome {
+    let state = match convert_tool_result(&request, outcome) {
+        Ok((result, result_meta)) => TaskOutcomeState::Completed { result, result_meta },
+        Err(error) => TaskOutcomeState::Failed { error },
+    };
+    TaskOutcome { request, task_id: task.task_id, state }
 }
 
 pub fn convert_tool_result(

@@ -5,7 +5,9 @@ mod agent_registry;
 mod error;
 mod prompt;
 mod prompt_cache_key;
+mod queued_input;
 mod retry_config;
+mod tool_execution;
 
 pub use crate::events::{AgentCommand, AgentEvent, Command, UserCommand};
 pub use agent::*;
