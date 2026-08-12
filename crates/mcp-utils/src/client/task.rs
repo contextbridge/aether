@@ -3,6 +3,7 @@ use crate::client::call_tool::{CallToolError, ToolCallEvent};
 use crate::client::elicitation::{ElicitInputsError, elicit_inputs};
 use async_stream::stream;
 use futures::Stream;
+use futures::future::{Either, select};
 use rmcp::RoleClient;
 use rmcp::model::{
     CancelTaskParams, CreateTaskResult, GetTaskParams, InputRequests, Task, TaskPayload, TaskStatus, UpdateTaskParams,
@@ -10,9 +11,12 @@ use rmcp::model::{
 use rmcp::service::{RunningService, ServiceError};
 use std::collections::HashSet;
 use std::future::Future;
+use std::pin::pin;
 use std::time::Duration;
 use thiserror::Error;
+use tokio::time::error::Elapsed;
 use tokio::time::{Instant, sleep, timeout, timeout_at};
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Error)]
 pub enum TaskErrorReason {
@@ -44,6 +48,7 @@ pub(crate) struct TaskDriver<'a> {
     server_name: &'a str,
     client: &'a RunningService<RoleClient, McpClient>,
     timeout: Duration,
+    cancellation_token: CancellationToken,
     default_poll_interval: Duration,
 }
 
@@ -52,14 +57,15 @@ impl<'a> TaskDriver<'a> {
         server_name: &'a str,
         client: &'a RunningService<RoleClient, McpClient>,
         timeout: Duration,
+        cancellation_token: CancellationToken,
     ) -> Self {
-        Self { client, server_name, timeout, default_poll_interval: Duration::from_millis(1_000) }
+        Self { client, server_name, timeout, cancellation_token, default_poll_interval: Duration::from_secs(1) }
     }
 
     pub(crate) fn stream(self, created: CreateTaskResult) -> impl Stream<Item = ToolCallEvent> + 'a {
         stream! {
             yield ToolCallEvent::TaskCreated(created.clone());
-            let deadline = TaskDeadline::after(self.timeout);
+            let bounds = TaskBounds::new(self.timeout, self.cancellation_token.clone());
             let mut task = created.task;
             let mut answered_input_keys = HashSet::new();
 
@@ -69,8 +75,8 @@ impl<'a> TaskDriver<'a> {
                     return;
                 }
 
-                let detailed_task = match deadline
-                    .timeout(self.client.get_task(GetTaskParams::new(task.task_id.clone())))
+                let detailed_task = match bounds
+                    .run(self.client.get_task(GetTaskParams::new(task.task_id.clone())))
                     .await
                 {
                     Ok(Ok(result)) => result.task,
@@ -78,8 +84,8 @@ impl<'a> TaskDriver<'a> {
                         yield self.cancel(task, TaskErrorReason::Get(source)).await;
                         return;
                     }
-                    Err(_) => {
-                        yield self.cancel(task, TaskErrorReason::TimedOut { timeout: self.timeout }).await;
+                    Err(interrupt) => {
+                        yield self.interrupted(task, interrupt).await;
                         return;
                     }
                 };
@@ -92,9 +98,16 @@ impl<'a> TaskDriver<'a> {
                 match detailed_task.payload {
                     TaskPayload::Working => {}
                     TaskPayload::InputRequired { input_requests } => {
-                        if let Err(reason) = self.elicit_inputs(&deadline, input_requests, &mut answered_input_keys, &task.task_id).await {
-                            yield self.cancel(task, reason).await;
-                            return;
+                        match bounds.run(self.elicit_inputs(input_requests, &mut answered_input_keys, &task.task_id)).await {
+                            Ok(Ok(())) => {}
+                            Ok(Err(reason)) => {
+                                yield self.cancel(task, reason).await;
+                                return;
+                            }
+                            Err(interrupt) => {
+                                yield self.interrupted(task, interrupt).await;
+                                return;
+                            }
                         }
                     }
                     TaskPayload::Completed { result } => {
@@ -118,9 +131,9 @@ impl<'a> TaskDriver<'a> {
                     }
                 }
 
-                let duration = task.poll_interval_ms.map(Duration::from_millis).unwrap_or(self.default_poll_interval);
-                if deadline.timeout(sleep(duration)).await.is_err() {
-                    yield self.cancel(task, TaskErrorReason::TimedOut { timeout: self.timeout }).await;
+                let duration = task.poll_interval_ms.map_or(self.default_poll_interval, Duration::from_millis);
+                if let Err(interrupt) = bounds.run(sleep(duration)).await {
+                    yield self.interrupted(task, interrupt).await;
                     return;
                 }
             }
@@ -129,7 +142,6 @@ impl<'a> TaskDriver<'a> {
 
     async fn elicit_inputs(
         &self,
-        deadline: &TaskDeadline,
         input_requests: InputRequests,
         answered_input_keys: &mut HashSet<String>,
         task_id: &str,
@@ -138,30 +150,24 @@ impl<'a> TaskDriver<'a> {
             return Err(TaskErrorReason::RepeatedInput);
         }
 
-        let (responses, _) = deadline
-            .timeout(elicit_inputs(self.client.service(), input_requests))
-            .await
-            .map_err(|_| TaskErrorReason::TimedOut { timeout: self.timeout })??;
-
+        let (responses, _) = elicit_inputs(self.client.service(), input_requests).await?;
         answered_input_keys.extend(responses.keys().cloned());
 
-        let client = self.client;
-        deadline
-            .timeout(client.update_task(UpdateTaskParams::new(task_id, responses)))
-            .await
-            .map_err(|_| TaskErrorReason::TimedOut { timeout: self.timeout })?
-            .map_err(TaskErrorReason::Update)
+        self.client.update_task(UpdateTaskParams::new(task_id, responses)).await.map_err(TaskErrorReason::Update)
+    }
+
+    async fn interrupted(&self, task: Task, interrupt: InterruptedReason) -> ToolCallEvent {
+        match interrupt {
+            InterruptedReason::TimedOut => self.cancel(task, TaskErrorReason::TimedOut { timeout: self.timeout }).await,
+            InterruptedReason::Cancelled => {
+                cancel_server_task(self.client, self.server_name, &task.task_id).await;
+                ToolCallEvent::Cancelled { task_id: Some(task.task_id) }
+            }
+        }
     }
 
     async fn cancel(&self, task: Task, reason: TaskErrorReason) -> ToolCallEvent {
-        let task_id = task.task_id.clone();
-        match timeout(Duration::from_secs(1), self.client.cancel_task(CancelTaskParams::new(&task_id))).await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => {
-                tracing::warn!(server = %self.server_name, %task_id, "Failed to cancel abandoned MCP task: {error}");
-            }
-            Err(_) => tracing::warn!(server = %self.server_name, %task_id, "Timed out cancelling abandoned MCP task"),
-        }
+        cancel_server_task(self.client, self.server_name, &task.task_id).await;
         self.fail(task, reason)
     }
 
@@ -175,11 +181,51 @@ impl<'a> TaskDriver<'a> {
     }
 }
 
+pub(crate) async fn cancel_server_task(
+    client: &RunningService<RoleClient, McpClient>,
+    server_name: &str,
+    task_id: &str,
+) {
+    match timeout(Duration::from_secs(1), client.cancel_task(CancelTaskParams::new(task_id))).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            tracing::warn!(server = %server_name, %task_id, "Failed to cancel abandoned MCP task: {error}");
+        }
+        Err(_) => tracing::warn!(server = %server_name, %task_id, "Timed out cancelling abandoned MCP task"),
+    }
+}
+
 impl From<ElicitInputsError> for TaskErrorReason {
     fn from(error: ElicitInputsError) -> Self {
         match error {
             ElicitInputsError::UnsupportedInput => Self::UnsupportedInput,
             ElicitInputsError::Serialize(source) => Self::Serialize(source),
+        }
+    }
+}
+
+struct TaskBounds {
+    deadline: TaskDeadline,
+    cancel: CancellationToken,
+}
+
+enum InterruptedReason {
+    TimedOut,
+    Cancelled,
+}
+
+impl TaskBounds {
+    fn new(timeout: Duration, cancel: CancellationToken) -> Self {
+        Self { deadline: TaskDeadline::after(timeout), cancel }
+    }
+
+    async fn run<T>(&self, future: impl Future<Output = T>) -> Result<T, InterruptedReason> {
+        let timedout = pin!(self.deadline.timeout(future));
+        let cancelled = pin!(self.cancel.cancelled());
+        match select(timedout, cancelled).await {
+            Either::Left((Ok(value), _)) => Ok(value),
+            Either::Left((Err(_), _)) => Err(InterruptedReason::TimedOut),
+            Either::Right(((), _)) => Err(InterruptedReason::Cancelled),
         }
     }
 }
@@ -194,7 +240,7 @@ impl TaskDeadline {
         Instant::now().checked_add(timeout).map_or(Self::FarFuture, Self::At)
     }
 
-    async fn timeout<T>(&self, future: impl Future<Output = T>) -> Result<T, tokio::time::error::Elapsed> {
+    async fn timeout<T>(&self, future: impl Future<Output = T>) -> Result<T, Elapsed> {
         match self {
             Self::At(deadline) => timeout_at(*deadline, future).await,
             Self::FarFuture => Ok(future.await),
@@ -267,6 +313,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn call_tool_cancellation_cancels_server_task_and_ends_stream() {
+        let seed = task(TaskStatus::Working);
+        let server = FakeMcpServer::new()
+            .with_tool(FakeTool::new("deferred").responds(FakeToolResponse::task(CreateTaskResult::new(seed.clone()))))
+            .with_task("task-1", [DetailedTask::new(seed, TaskPayload::Working)]);
+        let state = server.state();
+        let (event_tx, _event_rx) = mpsc::channel::<McpClientEvent>(4);
+        let client = McpClient::new(
+            ClientInfo::new(client_capabilities(), Implementation::new("test-client", "0.1.0")),
+            "task-server".into(),
+            event_tx,
+        );
+        let (_server, client) = connect(server, client).await.expect("connect task server");
+
+        let cancel = CancellationToken::new();
+        let options = CallToolOptions { timeout: Duration::from_secs(5), meta: None, cancel: cancel.clone() };
+        let mut events = pin!(call_tool(Arc::new(client), CallToolRequestParams::new("deferred"), options));
+
+        assert!(matches!(events.next().await, Some(ToolCallEvent::TaskCreated(_))));
+        cancel.cancel();
+        let mut last = None;
+        while let Some(event) = events.next().await {
+            last = Some(event);
+        }
+
+        assert!(matches!(last, Some(ToolCallEvent::Cancelled { task_id: Some(task_id) }) if task_id == "task-1"));
+        assert_eq!(state.task_cancel_ids(), ["task-1"]);
+    }
+
+    #[tokio::test]
     async fn call_tool_deadline_includes_task_elicitation() {
         let result = task_test([input_required_task()]).with_timeout(Duration::from_millis(25)).run().await;
 
@@ -328,7 +404,7 @@ mod tests {
             let events = call_tool(
                 Arc::new(client),
                 CallToolRequestParams::new("deferred"),
-                CallToolOptions { timeout: self.timeout, meta: None },
+                CallToolOptions { timeout: self.timeout, ..CallToolOptions::default() },
             )
             .collect()
             .await;

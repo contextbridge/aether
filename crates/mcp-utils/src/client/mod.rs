@@ -31,6 +31,7 @@ pub use mrtr::AbortReason;
 pub use naming::{SERVERNAME_DELIMITER, split_on_server_name};
 pub use oauth_handler::ElicitingOAuthHandler;
 pub use task::TaskErrorReason;
+pub use tokio_util::sync::CancellationToken;
 
 use std::path::PathBuf;
 
