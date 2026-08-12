@@ -1,7 +1,11 @@
 use std::path::{Path, PathBuf};
 
-use mcp_utils::{client::SERVERNAME_DELIMITER, display_meta::ToolResultMeta};
-use rmcp::model::CallToolRequestParams;
+use crate::events::ToolEvent;
+use mcp_utils::{
+    client::{CallToolError, SERVERNAME_DELIMITER},
+    display_meta::ToolResultMeta,
+};
+use rmcp::model::{CallToolRequestParams, CallToolResult, Task};
 use serde_json;
 
 use llm::{ToolCallError, ToolCallRequest, ToolCallResult};
@@ -70,6 +74,27 @@ pub fn mcp_result_to_tool_call_result(
             result_meta,
         ))
     }
+}
+
+pub fn map_task_result_to_tool_event(
+    request: ToolCallRequest,
+    task: Task,
+    outcome: Result<CallToolResult, CallToolError>,
+) -> ToolEvent {
+    let task_id = task.task_id;
+    match convert_tool_result(&request, outcome) {
+        Ok((result, result_meta)) => ToolEvent::TaskCompleted { request, task_id, result, result_meta },
+        Err(error) => ToolEvent::TaskFailed { request, task_id, error },
+    }
+}
+
+pub fn convert_tool_result(
+    request: &ToolCallRequest,
+    outcome: Result<CallToolResult, CallToolError>,
+) -> Result<(ToolCallResult, Option<ToolResultMeta>), ToolCallError> {
+    outcome
+        .map_err(|error| ToolCallError::from_request(request, error.to_string()))
+        .and_then(|mcp_result| mcp_result_to_tool_call_result(request, mcp_result))
 }
 
 fn spillover_dir() -> PathBuf {

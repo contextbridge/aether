@@ -1,27 +1,18 @@
 use crate::events::TraceContext;
-use crate::mcp::tool_bridge::mcp_result_to_tool_call_result;
 use mcp_utils::client::{
-    CallToolOptions, McpConnectAttempt, McpConnectionAttemptManager, McpError, McpManager, McpServer,
-    McpServerStatusEntry, ToolCallEvent, call_tool,
+    CallToolError, CallToolOptions, CancellationToken, McpConnectAttempt, McpConnectionAttemptManager, McpError,
+    McpManager, McpServer, McpServerStatusEntry, ToolCallEvent, call_tool,
 };
-use mcp_utils::display_meta::ToolResultMeta;
 
-use futures::StreamExt;
-use llm::{ToolCallError, ToolCallRequest, ToolCallResult};
-use rmcp::model::{GetPromptResult, ProgressNotificationParam, Prompt};
+use futures::{Stream, StreamExt};
+use llm::ToolCallRequest;
+use rmcp::model::{GetPromptResult, Prompt};
 use std::collections::HashSet;
 use std::pin::pin;
 use std::time::Duration;
 use tokio::select;
-use tokio::sync::mpsc;
-use tokio::sync::oneshot;
-
-/// Events emitted during tool execution lifecycle
-#[derive(Debug)]
-pub enum ToolExecutionEvent {
-    Progress { tool_id: String, progress: ProgressNotificationParam },
-    Complete { tool_id: String, result: Result<ToolCallResult, ToolCallError>, result_meta: Option<ToolResultMeta> },
-}
+use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinSet;
 
 const MCP_AUTH_TIMEOUT: Duration = Duration::from_mins(3);
 
@@ -32,7 +23,8 @@ pub enum McpCommand {
         request: ToolCallRequest,
         trace_context: Option<TraceContext>,
         timeout: Duration,
-        tx: mpsc::Sender<ToolExecutionEvent>,
+        tx: mpsc::Sender<ToolCallEvent>,
+        cancel: CancellationToken,
     },
     ListPrompts {
         tx: oneshot::Sender<Result<Vec<Prompt>, String>>,
@@ -55,6 +47,7 @@ pub async fn run_mcp_task(
     mut command_rx: mpsc::Receiver<McpCommand>,
     pending_servers: Vec<McpServer>,
 ) {
+    let mut tool_executions = JoinSet::new();
     let mut mcp_connection_attempts = McpConnectionAttemptManager::default();
     let mut pending_connections: HashSet<String> = pending_servers.iter().map(|server| server.name.clone()).collect();
     for server in pending_servers {
@@ -70,7 +63,7 @@ pub async fn run_mcp_task(
         select! {
             command = command_rx.recv() => {
                 let Some(command) = command else { break; };
-                on_command(command, &mut mcp, &mut mcp_connection_attempts).await;
+                on_command(command, &mut mcp, &mut mcp_connection_attempts, &mut tool_executions).await;
             }
 
             Some(joined) = mcp_connection_attempts.join_next(), if !mcp_connection_attempts.is_empty() => {
@@ -85,52 +78,57 @@ pub async fn run_mcp_task(
                     Err(e) => tracing::error!("MCP auth task did not complete normally: {e:?}"),
                 }
             }
+
+            Some(joined) = tool_executions.join_next(), if !tool_executions.is_empty() => {
+                if let Err(e) = joined {
+                    tracing::warn!("MCP tool execution ended unexpectedly: {e:?}");
+                }
+            }
         }
     }
 
+    tool_executions.abort_all();
+    while tool_executions.join_next().await.is_some() {}
     mcp_connection_attempts.shutdown().await;
     mcp.shutdown().await;
     tracing::debug!("MCP manager task ended");
 }
 
-async fn on_command(command: McpCommand, mcp: &mut McpManager, auth_tasks: &mut McpConnectionAttemptManager) {
-    match command {
-        McpCommand::ExecuteTool { request, trace_context, timeout, tx } => {
-            let tool_id = request.id.clone();
+async fn execute_tool(
+    events: impl Stream<Item = ToolCallEvent>,
+    tx: mpsc::Sender<ToolCallEvent>,
+    cancel: CancellationToken,
+) {
+    let mut events = pin!(events);
+    while let Some(event) = events.next().await {
+        if tx.send(event).await.is_err() {
+            cancel.cancel();
+            break;
+        }
+    }
+}
 
+async fn on_command(
+    command: McpCommand,
+    mcp: &mut McpManager,
+    auth_tasks: &mut McpConnectionAttemptManager,
+    tool_executions: &mut JoinSet<()>,
+) {
+    match command {
+        McpCommand::ExecuteTool { request, trace_context, timeout, tx, cancel } => {
             match mcp.get_client_for_tool(&request.name, &request.arguments) {
                 Ok((client, params)) => {
-                    let options = CallToolOptions { timeout, meta: trace_context.as_ref().map(TraceContext::to_meta) };
-                    tokio::spawn(async move {
-                        let mut events = pin!(call_tool(client, params, options));
-                        while let Some(event) = events.next().await {
-                            match event {
-                                ToolCallEvent::Progress(progress) => {
-                                    let progress_event =
-                                        ToolExecutionEvent::Progress { tool_id: tool_id.clone(), progress };
-                                    let _ = tx.send(progress_event).await;
-                                }
-                                ToolCallEvent::Complete(outcome) => {
-                                    let (result, result_meta) = match outcome
-                                        .map_err(|e| ToolCallError::from_request(&request, e.to_string()))
-                                        .and_then(|mcp_result| mcp_result_to_tool_call_result(&request, mcp_result))
-                                    {
-                                        Ok((result, meta)) => (Ok(result), meta),
-                                        Err(e) => (Err(e), None),
-                                    };
-                                    let _ =
-                                        tx.send(ToolExecutionEvent::Complete { tool_id, result, result_meta }).await;
-                                    return;
-                                }
-                            }
-                        }
-                    });
+                    let options = CallToolOptions {
+                        timeout,
+                        meta: trace_context.as_ref().map(TraceContext::to_meta),
+                        cancel: cancel.clone(),
+                    };
+                    tool_executions.spawn(execute_tool(call_tool(client, params, options), tx, cancel));
                 }
                 Err(e) => {
                     tracing::error!("Failed to get client for tool {}: {e}", request.name);
-                    let error = ToolCallError::from_request(&request, format!("Failed to get client: {e}"));
-                    let _ =
-                        tx.send(ToolExecutionEvent::Complete { tool_id, result: Err(error), result_meta: None }).await;
+                    let error = CallToolError::Unavailable { message: format!("Failed to get client: {e}") };
+                    let _ = tx.send(ToolCallEvent::Complete(Err(error))).await;
                 }
             }
         }
