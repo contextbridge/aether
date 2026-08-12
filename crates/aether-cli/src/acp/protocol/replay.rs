@@ -8,35 +8,41 @@ use super::events::{NotificationMode, map_agent_event_to_notification};
 
 /// Replay session events to the client as ACP notifications.
 pub async fn replay_to_client(events: &[SessionEvent], connection: &ConnectionTo<Client>, session_id: &SessionId) {
-    for notif in map_session_events_to_notifications(events, session_id) {
-        if let Err(e) = connection.send_notification(notif).map_err(|e| AcpServerError::protocol("session/update", e)) {
-            tracing::error!("Failed to send replay notification: {e:?}");
+    for event in events {
+        for notif in map_session_event_to_notifications(event, session_id) {
+            if let Err(e) =
+                connection.send_notification(notif).map_err(|e| AcpServerError::protocol("session/update", e))
+            {
+                tracing::error!("Failed to send replay notification: {e:?}");
+            }
         }
     }
 }
 
+pub fn map_session_event_to_notifications(event: &SessionEvent, session_id: &SessionId) -> Vec<SessionNotification> {
+    match event {
+        SessionEvent::User(UserEvent::Message { content }) => content
+            .iter()
+            .map(|block| {
+                SessionNotification::new(
+                    session_id.clone(),
+                    SessionUpdate::UserMessageChunk(ContentChunk::new(map_user_content_block(block))),
+                )
+            })
+            .collect(),
+        SessionEvent::Agent(message) => {
+            map_agent_event_to_notification(session_id.clone(), message, NotificationMode::Replay).into_iter().collect()
+        }
+        SessionEvent::User(_) | SessionEvent::Control(_) => Vec::new(),
+    }
+}
+
+#[cfg(test)]
 pub fn map_session_events_to_notifications(
     events: &[SessionEvent],
     session_id: &SessionId,
 ) -> Vec<SessionNotification> {
-    let mut out = Vec::new();
-    for event in events {
-        match event {
-            SessionEvent::User(UserEvent::Message { content }) => {
-                for block in content {
-                    out.push(SessionNotification::new(
-                        session_id.clone(),
-                        SessionUpdate::UserMessageChunk(ContentChunk::new(map_user_content_block(block))),
-                    ));
-                }
-            }
-            SessionEvent::Agent(message) => {
-                out.extend(map_agent_event_to_notification(session_id.clone(), message, NotificationMode::Replay));
-            }
-            SessionEvent::User(_) | SessionEvent::Control(_) => {}
-        }
-    }
-    out
+    events.iter().flat_map(|event| map_session_event_to_notifications(event, session_id)).collect()
 }
 
 #[cfg(test)]
