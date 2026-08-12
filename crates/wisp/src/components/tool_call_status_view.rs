@@ -85,6 +85,7 @@ pub struct ToolCallStatusView<'a> {
 #[derive(Clone)]
 pub enum ToolCallStatus {
     Running,
+    Background,
     Success,
     Error(String),
 }
@@ -96,6 +97,7 @@ impl ToolCallStatusView<'_> {
                 let frame = FRAMES[self.tick as usize % FRAMES.len()];
                 (frame.to_string(), context.theme.info())
             }
+            ToolCallStatus::Background => ("…".to_string(), context.theme.muted()),
             ToolCallStatus::Success => ("✓".to_string(), context.theme.success()),
             ToolCallStatus::Error(_) => ("✗".to_string(), context.theme.error()),
         };
@@ -107,7 +109,7 @@ impl ToolCallStatusView<'_> {
 
         let display_text = self.display_value.filter(|v| !v.is_empty()).map_or_else(
             || match self.status {
-                ToolCallStatus::Running => String::new(),
+                ToolCallStatus::Running | ToolCallStatus::Background => String::new(),
                 _ => format_arguments(self.arguments),
             },
             |v| format!(" ({v})"),

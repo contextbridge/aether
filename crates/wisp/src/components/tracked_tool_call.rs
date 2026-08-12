@@ -47,9 +47,8 @@ impl TrackedToolCall {
             acp::ToolCallStatus::Failed => {
                 self.status = ToolCallStatus::Error("failed".to_string());
             }
-            acp::ToolCallStatus::InProgress | acp::ToolCallStatus::Pending => {
-                self.status = ToolCallStatus::Running;
-            }
+            acp::ToolCallStatus::InProgress => self.status = ToolCallStatus::Running,
+            acp::ToolCallStatus::Pending => self.status = ToolCallStatus::Background,
             _ => {}
         }
     }
