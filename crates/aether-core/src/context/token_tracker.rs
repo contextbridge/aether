@@ -1,3 +1,4 @@
+use crate::events::ContextUsage;
 use llm::TokenUsage;
 
 /// Default threshold for triggering context compaction (85%)
@@ -114,6 +115,26 @@ impl TokenTracker {
     /// prevent immediate re-triggering of compaction.
     pub fn reset_current_usage(&mut self) {
         self.last_usage = TokenUsage::default();
+    }
+}
+
+impl From<&TokenTracker> for ContextUsage {
+    fn from(tracker: &TokenTracker) -> Self {
+        let last = tracker.last_usage();
+        Self {
+            usage_ratio: tracker.usage_ratio(),
+            context_limit: tracker.context_limit(),
+            input_tokens: last.input_tokens,
+            output_tokens: last.output_tokens,
+            cache_read_tokens: last.cache_read_tokens,
+            cache_creation_tokens: last.cache_creation_tokens,
+            reasoning_tokens: last.reasoning_tokens,
+            total_input_tokens: tracker.total_input_tokens(),
+            total_output_tokens: tracker.total_output_tokens(),
+            total_cache_read_tokens: tracker.total_cache_read_tokens(),
+            total_cache_creation_tokens: tracker.total_cache_creation_tokens(),
+            total_reasoning_tokens: tracker.total_reasoning_tokens(),
+        }
     }
 }
 

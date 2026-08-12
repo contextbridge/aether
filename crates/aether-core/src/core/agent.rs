@@ -1,19 +1,22 @@
 use crate::context::{CompactionConfig, CompactionError, CompactionResult, Compactor, TokenTracker};
 use crate::core::PromptCache;
 use crate::core::prompt_cache_key::derive_prompt_cache_key;
+use crate::core::queued_input::QueuedInput;
 pub use crate::core::retry_config::RetryConfig;
+use crate::core::tool_execution::{ToolAbortPolicy, ToolExecutionUpdate, ToolExecutions};
 use crate::events::{
     AgentCommand, AgentEvent, AgentObserver, Command, CompactionOutcome, ContextEvent, ContextUsage, LlmCallOutcome,
-    LlmCallPurpose, ModelEvent, StreamState, ToolEvent, TurnEvent, TurnOutcome, UserCommand,
+    LlmCallPurpose, ModelEvent, StreamState, TaskOutcome, ToolEvent, TurnEvent, TurnOutcome, UserCommand,
 };
-use crate::mcp::run_mcp_task::{McpCommand, ToolExecutionEvent};
+use crate::mcp::run_mcp_task::McpCommand;
 use futures::Stream;
 use llm::types::IsoString;
 use llm::{
     AssistantReasoning, ChatMessage, Context, EncryptedReasoningContent, LlmError, LlmResponse, StopReason,
     StreamingModelProvider, TokenUsage, ToolCallError, ToolCallRequest, ToolCallResult,
 };
-use std::collections::{HashMap, HashSet, VecDeque};
+use mcp_utils::client::{CallToolError, ToolCallEvent};
+use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -28,18 +31,19 @@ use tokio_stream::wrappers::ReceiverStream;
 enum StreamEvent {
     LlmRequestStarted { attempt: u32 },
     Llm(Result<LlmResponse, LlmError>),
-    ToolExecution(ToolExecutionEvent),
+    ToolExecution(ToolCallEvent),
     Command(Command),
+    InputClosed,
     Compaction(Result<CompactionResult, CompactionError>),
 }
 
 type EventStream = Pin<Box<dyn Stream<Item = StreamEvent> + Send>>;
 
-/// Keys for the merged stream map. Tool-call ids come from the provider, so a
-/// typed key keeps them from colliding with the reserved streams.
+/// Keys for the merged stream map. Tool-call IDs come from providers, so the
+/// typed key keeps them from colliding with reserved streams.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum StreamKey {
-    User,
+    Input,
     Llm,
     Compaction,
     Tool(String),
@@ -70,9 +74,9 @@ pub struct Agent {
     compaction_config: Option<CompactionConfig>,
     auto_continue: AutoContinue,
     retry_config: RetryConfig,
-    active_requests: HashMap<String, ToolCallRequest>,
-    queued_user_messages: VecDeque<Vec<llm::ContentBlock>>,
-    pending_turn_messages: Vec<Vec<llm::ContentBlock>>,
+    tool_executions: ToolExecutions,
+    pending_inputs: VecDeque<QueuedInput>,
+    queued_inputs: VecDeque<QueuedInput>,
     context_window: Option<u32>,
     prompt_cache: PromptCache,
     turn_active: bool,
@@ -86,7 +90,10 @@ impl Agent {
         message_tx: mpsc::Sender<AgentEvent>,
     ) -> Self {
         let mut streams: StreamMap<StreamKey, EventStream> = StreamMap::new();
-        streams.insert(StreamKey::User, Box::pin(ReceiverStream::new(command_rx).map(StreamEvent::Command)));
+        let input_stream = ReceiverStream::new(command_rx)
+            .map(StreamEvent::Command)
+            .chain(futures::stream::once(async { StreamEvent::InputClosed }));
+        streams.insert(StreamKey::Input, Box::pin(input_stream));
 
         let context_limit = config.context_window.or_else(|| config.llm.context_window());
 
@@ -102,9 +109,9 @@ impl Agent {
             compaction_config: config.compaction_config,
             auto_continue: config.auto_continue,
             retry_config: config.retry_config,
-            active_requests: HashMap::new(),
-            queued_user_messages: VecDeque::new(),
-            pending_turn_messages: Vec::new(),
+            tool_executions: ToolExecutions::default(),
+            pending_inputs: VecDeque::new(),
+            queued_inputs: VecDeque::new(),
             context_window: config.context_window,
             prompt_cache: config.prompt_cache,
             turn_active: false,
@@ -122,10 +129,11 @@ impl Agent {
     }
 
     pub async fn run(mut self) {
-        let mut state = IterationState::new();
+        let mut state = IterationState::default();
+        let mut input_closed = false;
         self.emit_tool_definitions().await;
 
-        while let Some((_, event)) = self.streams.next().await {
+        while let Some((stream_key, event)) = self.streams.next().await {
             match event {
                 StreamEvent::Command(Command::UserCommand(UserCommand::Cancel)) => {
                     self.on_user_cancel(&mut state).await;
@@ -137,10 +145,9 @@ impl Agent {
 
                 StreamEvent::Command(Command::UserCommand(UserCommand::Text { content })) => {
                     if self.is_busy() {
-                        self.queued_user_messages.push_back(content);
+                        self.queued_inputs.push_back(QueuedInput::User(content));
                     } else {
-                        state = IterationState::new();
-                        self.on_user_text(content).await;
+                        self.begin_turn(QueuedInput::User(content), &mut state).await;
                     }
                 }
 
@@ -165,6 +172,10 @@ impl Agent {
                     self.on_replace_conversation(messages, &mut state).await;
                 }
 
+                StreamEvent::InputClosed => {
+                    input_closed = true;
+                }
+
                 StreamEvent::LlmRequestStarted { attempt } => {
                     self.begin_chat_call(attempt).await;
                 }
@@ -174,7 +185,10 @@ impl Agent {
                 }
 
                 StreamEvent::ToolExecution(tool_event) => {
-                    self.on_tool_execution_event(tool_event, &mut state).await;
+                    let StreamKey::Tool(tool_id) = stream_key else {
+                        unreachable!("tool events must come from a tool stream")
+                    };
+                    self.on_tool_execution_event(tool_id, tool_event, &mut state).await;
                 }
 
                 StreamEvent::Compaction(result) => {
@@ -182,12 +196,16 @@ impl Agent {
                 }
             }
 
-            if state.is_complete() {
-                let Some(id) = state.current_message_id.take() else {
-                    continue;
-                };
-                let iteration = std::mem::replace(&mut state, IterationState::new());
+            if state.is_complete(self.tool_executions.has_foreground())
+                && let Some(id) = state.current_message_id.take()
+            {
+                let iteration = std::mem::take(&mut state);
                 self.on_iteration_complete(id, iteration).await;
+            }
+
+            if input_closed && !self.turn_active && !self.is_busy() && self.tool_executions.is_empty() {
+                self.abort_in_flight_work(ToolAbortPolicy::CancelAll).await;
+                break;
             }
         }
 
@@ -209,7 +227,7 @@ impl Agent {
 
         if has_content {
             let reasoning = AssistantReasoning::from_parts(reasoning_summary_text.clone(), encrypted_reasoning);
-            self.update_context(&message_content, reasoning, completed_tool_calls);
+            self.context.push_assistant_turn(&message_content, reasoning, completed_tool_calls);
 
             self.emit(AgentEvent::text(&id, &message_content, StreamState::Complete)).await;
 
@@ -218,8 +236,8 @@ impl Agent {
             }
         }
 
-        let has_queued_text = !self.queued_user_messages.is_empty();
-        if has_queued_text || has_tool_calls {
+        let has_queued_input = !self.queued_inputs.is_empty();
+        if has_queued_input || has_tool_calls {
             self.auto_continue.reset();
             self.start_next_turn().await;
         } else if should_auto_continue {
@@ -227,13 +245,13 @@ impl Agent {
             tracing::info!(
                 "LLM stopped with {:?}, auto-continuing (attempt {}/{})",
                 stop_reason,
-                self.auto_continue.count(),
-                self.auto_continue.max()
+                self.auto_continue.count,
+                self.auto_continue.max
             );
 
             self.emit(AgentEvent::Turn(TurnEvent::AutoContinue {
-                attempt: self.auto_continue.count(),
-                max_attempts: self.auto_continue.max(),
+                attempt: self.auto_continue.count,
+                max_attempts: self.auto_continue.max,
             }))
             .await;
 
@@ -247,7 +265,8 @@ impl Agent {
     }
 
     async fn start_next_turn(&mut self) {
-        self.pending_turn_messages.extend(self.queued_user_messages.drain(..));
+        debug_assert!(self.pending_inputs.is_empty());
+        self.pending_inputs.append(&mut self.queued_inputs);
         if self.compaction_needed() {
             self.begin_compaction().await;
         } else {
@@ -256,48 +275,59 @@ impl Agent {
     }
 
     async fn start_chat_turn(&mut self) {
-        self.commit_pending_turn_messages();
+        self.commit_pending_inputs().await;
         self.start_llm_stream(None, 0).await;
     }
 
     async fn on_user_cancel(&mut self, state: &mut IterationState) {
-        self.abort_in_flight_work().await;
-        self.commit_pending_turn_messages();
-        self.queued_user_messages.clear();
-        *state = IterationState::new();
+        self.abort_in_flight_work(ToolAbortPolicy::PreserveBackgroundAcknowledgements).await;
+        self.commit_pending_inputs().await;
+        self.queued_inputs.retain(|input| matches!(input, QueuedInput::TaskOutcome(_)));
+        self.commit_queued_inputs().await;
+        *state = IterationState::default();
         self.finish_turn(TurnOutcome::Cancelled).await;
     }
 
+    async fn discard_in_flight_work(&mut self, state: &mut IterationState) {
+        self.abort_in_flight_work(ToolAbortPolicy::CancelAll).await;
+        self.pending_inputs.clear();
+        self.queued_inputs.clear();
+        self.auto_continue.reset();
+        *state = IterationState::default();
+    }
+
     async fn on_user_clear_context(&mut self, state: &mut IterationState) {
-        self.abort_in_flight_work().await;
-        self.queued_user_messages.clear();
-        self.pending_turn_messages.clear();
+        self.discard_in_flight_work(state).await;
         self.context.clear_conversation();
         self.token_tracker.reset_current_usage();
-        self.auto_continue.reset();
-        *state = IterationState::new();
-
         self.emit(AgentEvent::Context(ContextEvent::Cleared)).await;
         self.finish_turn(TurnOutcome::Cancelled).await;
     }
 
     async fn on_replace_conversation(&mut self, messages: Vec<ChatMessage>, state: &mut IterationState) {
-        self.abort_in_flight_work().await;
-        self.queued_user_messages.clear();
-        self.pending_turn_messages.clear();
+        self.discard_in_flight_work(state).await;
         self.context.replace_conversation(messages);
-        self.auto_continue.reset();
-        *state = IterationState::new();
         self.emit(self.context_usage_message()).await;
         self.finish_turn(TurnOutcome::Cancelled).await;
     }
 
-    async fn on_user_text(&mut self, content: Vec<llm::ContentBlock>) {
+    async fn begin_turn(&mut self, input: QueuedInput, state: &mut IterationState) {
+        *state = IterationState::default();
         self.auto_continue.reset();
         self.turn_active = true;
-        self.emit(AgentEvent::Turn(TurnEvent::Started { content: content.clone() })).await;
-        self.queued_user_messages.push_back(content);
+        let content = input.content_blocks();
+        self.emit(AgentEvent::Turn(TurnEvent::Started { content })).await;
+        self.queued_inputs.push_back(input);
         self.start_next_turn().await;
+    }
+
+    async fn enqueue_task_outcome(&mut self, outcome: TaskOutcome, state: &mut IterationState) {
+        let input = QueuedInput::TaskOutcome(Box::new(outcome));
+        if self.is_busy() {
+            self.queued_inputs.push_back(input);
+        } else {
+            self.begin_turn(input, state).await;
+        }
     }
 
     async fn on_update_instruction(&mut self, server: String, body: Option<String>) {
@@ -372,19 +402,17 @@ impl Agent {
             "Retrying LLM request after transient failure"
         );
 
-        // The previous stream may have emitted partial tool-call deltas
-        // before interrupting so we drop them to ensure we rebuild tool state
-        self.active_requests.clear();
+        self.tool_executions.retire_foreground();
         self.start_llm_stream(Some(delay), state.retry_attempt).await;
     }
 
     fn is_busy(&self) -> bool {
         self.streams.contains_key(&StreamKey::Llm)
             || self.streams.contains_key(&StreamKey::Compaction)
-            || !self.active_requests.is_empty()
+            || self.tool_executions.has_foreground()
     }
 
-    async fn abort_in_flight_work(&mut self) {
+    async fn abort_in_flight_work(&mut self, tool_policy: ToolAbortPolicy) {
         if self.llm_call_active {
             self.finish_chat_call(LlmCallOutcome::Cancelled).await;
         }
@@ -398,10 +426,9 @@ impl Agent {
                 .await;
         }
         self.streams.remove(&StreamKey::Llm);
-        for tool_id in self.active_requests.keys().cloned().collect::<Vec<_>>() {
+        for tool_id in self.tool_executions.abort(&tool_policy) {
             self.streams.remove(&StreamKey::Tool(tool_id));
         }
-        self.active_requests.clear();
     }
 
     /// Inject a continuation prompt when the LLM stops due to a resumable reason.
@@ -462,15 +489,16 @@ impl Agent {
             }
 
             ToolRequestStart { id, name } => {
-                self.handle_tool_request_start(id, name).await;
+                let request = ToolCallRequest { id, name, arguments: String::new() };
+                self.emit(AgentEvent::Tool(ToolEvent::Call { request })).await;
             }
 
             ToolRequestArg { id, chunk } => {
-                self.handle_tool_request_arg(id, chunk).await;
+                self.emit(AgentEvent::Tool(ToolEvent::CallUpdate { tool_call_id: id, chunk })).await;
             }
 
             ToolRequestComplete { tool_call } => {
-                self.handle_tool_completion(tool_call, state).await;
+                self.handle_tool_completion(tool_call).await;
             }
 
             Done { stop_reason } => {
@@ -502,29 +530,8 @@ impl Agent {
         }
     }
 
-    async fn handle_tool_request_start(&mut self, id: String, name: String) {
-        let request = ToolCallRequest { id: id.clone(), name, arguments: String::new() };
-        self.active_requests.insert(id, request.clone());
-
-        self.emit(AgentEvent::Tool(ToolEvent::Call { request })).await;
-    }
-
-    async fn handle_tool_request_arg(&mut self, id: String, chunk: String) {
-        let Some(request) = self.active_requests.get_mut(&id) else {
-            return;
-        };
-        request.arguments.push_str(&chunk);
-
-        self.emit(AgentEvent::Tool(ToolEvent::CallUpdate { tool_call_id: id, chunk })).await;
-    }
-
-    async fn handle_tool_completion(&mut self, tool_call: ToolCallRequest, state: &mut IterationState) {
-        state.pending_tool_ids.insert(tool_call.id.clone());
-        debug_assert!(
-            self.active_requests.contains_key(&tool_call.id),
-            "tool call {} should already be in active_requests from handle_tool_request_start",
-            tool_call.id
-        );
+    async fn handle_tool_completion(&mut self, tool_call: ToolCallRequest) {
+        let cancel = self.tool_executions.start(tool_call.clone());
 
         let (tx, rx) = mpsc::channel(100);
         let stream = ReceiverStream::new(rx).map(StreamEvent::ToolExecution);
@@ -539,18 +546,22 @@ impl Agent {
         .await;
 
         let Some(mcp_command_tx) = self.mcp_command_tx.clone() else {
-            emit_tool_failure(&tx, ToolCallError::from_request(&tool_call, "MCP task is not available")).await;
+            emit_tool_failure(&tx, "MCP task is not available").await;
             return;
         };
 
         let trace_context = self.observers.iter().find_map(|observer| observer.tool_trace_context(&tool_id));
-        let tool_error = ToolCallError::from_request(&tool_call, "Failed to send tool request to MCP task");
-        let command =
-            McpCommand::ExecuteTool { request: tool_call, trace_context, timeout: self.tool_timeout, tx: tx.clone() };
+        let command = McpCommand::ExecuteTool {
+            request: tool_call,
+            trace_context,
+            timeout: self.tool_timeout,
+            tx: tx.clone(),
+            cancel,
+        };
 
         if mcp_command_tx.send(command).await.is_err() {
             tracing::warn!("Failed to send tool request to MCP task");
-            emit_tool_failure(&tx, tool_error).await;
+            emit_tool_failure(&tx, "Failed to send tool request to MCP task").await;
         }
     }
 
@@ -565,23 +576,7 @@ impl Agent {
     }
 
     fn context_usage_message(&self) -> AgentEvent {
-        let last = self.token_tracker.last_usage();
-        AgentEvent::Context(ContextEvent::UsageUpdated {
-            usage: ContextUsage {
-                usage_ratio: self.token_tracker.usage_ratio(),
-                context_limit: self.token_tracker.context_limit(),
-                input_tokens: last.input_tokens,
-                output_tokens: last.output_tokens,
-                cache_read_tokens: last.cache_read_tokens,
-                cache_creation_tokens: last.cache_creation_tokens,
-                reasoning_tokens: last.reasoning_tokens,
-                total_input_tokens: self.token_tracker.total_input_tokens(),
-                total_output_tokens: self.token_tracker.total_output_tokens(),
-                total_cache_read_tokens: self.token_tracker.total_cache_read_tokens(),
-                total_cache_creation_tokens: self.token_tracker.total_cache_creation_tokens(),
-                total_reasoning_tokens: self.token_tracker.total_reasoning_tokens(),
-            },
-        })
+        AgentEvent::Context(ContextEvent::UsageUpdated { usage: ContextUsage::from(&self.token_tracker) })
     }
 
     fn compaction_needed(&self) -> bool {
@@ -635,51 +630,40 @@ impl Agent {
         self.start_chat_turn().await;
     }
 
-    async fn on_tool_execution_event(&mut self, event: ToolExecutionEvent, state: &mut IterationState) {
-        match event {
-            ToolExecutionEvent::Progress { tool_id, progress } => {
-                tracing::debug!(
-                    "Tool progress for {}: {}/{}",
-                    tool_id,
-                    progress.progress,
-                    progress.total.unwrap_or(0.0)
-                );
-
-                if let Some(request) = self.active_requests.get(&tool_id).cloned() {
-                    self.emit(AgentEvent::Tool(ToolEvent::Progress {
-                        request,
-                        progress: progress.progress,
-                        total: progress.total,
-                        message: progress.message.clone(),
-                    }))
-                    .await;
-                }
+    async fn on_tool_execution_event(&mut self, tool_id: String, event: ToolCallEvent, state: &mut IterationState) {
+        match self.tool_executions.on_event(&tool_id, event) {
+            ToolExecutionUpdate::Event(event) => {
+                self.emit(AgentEvent::Tool(event)).await;
             }
-
-            ToolExecutionEvent::Complete { tool_id: _, result, result_meta } => match result {
-                Ok(tool_result) => {
-                    tracing::debug!("Tool result received: {} -> {}", tool_result.name, tool_result.result.len());
-
-                    if state.pending_tool_ids.remove(&tool_result.id) {
-                        self.active_requests.remove(&tool_result.id);
-                        state.completed_tool_calls.push(Ok(tool_result.clone()));
-
-                        self.emit(AgentEvent::Tool(ToolEvent::Result { result: tool_result, result_meta })).await;
-                    } else {
-                        tracing::debug!("Ignoring stale tool result for id: {}", tool_result.id);
-                    }
-                }
-
-                Err(tool_error) => {
-                    if state.pending_tool_ids.remove(&tool_error.id) {
-                        self.active_requests.remove(&tool_error.id);
-                        state.completed_tool_calls.push(Err(tool_error.clone()));
-
-                        self.emit(AgentEvent::Tool(ToolEvent::Error { error: tool_error })).await;
-                    }
-                }
-            },
+            ToolExecutionUpdate::Completed { result, event } => {
+                self.streams.remove(&StreamKey::Tool(tool_id));
+                state.completed_tool_calls.push(result);
+                self.emit(AgentEvent::Tool(event)).await;
+            }
+            ToolExecutionUpdate::TaskCreated { result, event } => {
+                state.completed_tool_calls.push(Ok(result));
+                self.emit(AgentEvent::Tool(event)).await;
+            }
+            ToolExecutionUpdate::TaskCompleted(outcome) => {
+                self.streams.remove(&StreamKey::Tool(tool_id));
+                self.enqueue_task_outcome(outcome, state).await;
+            }
+            ToolExecutionUpdate::TaskCancelled(outcome) => {
+                self.streams.remove(&StreamKey::Tool(tool_id));
+                self.record_task_outcome(outcome).await;
+            }
+            ToolExecutionUpdate::Retired => {
+                self.streams.remove(&StreamKey::Tool(tool_id));
+            }
+            ToolExecutionUpdate::Ignored => {
+                tracing::debug!(%tool_id, "Ignoring unexpected tool execution event");
+            }
         }
+    }
+
+    async fn record_task_outcome(&mut self, outcome: TaskOutcome) {
+        self.context.add_message(outcome.context_message());
+        self.emit(AgentEvent::Tool(outcome.into())).await;
     }
 
     fn refresh_prompt_cache_key(&mut self) {
@@ -687,19 +671,34 @@ impl Agent {
         self.context.set_prompt_cache_key(Some(key));
     }
 
-    fn update_context(
-        &mut self,
-        message_content: &str,
-        reasoning: AssistantReasoning,
-        completed_tools: Vec<Result<ToolCallResult, ToolCallError>>,
-    ) {
-        self.context.push_assistant_turn(message_content, reasoning, completed_tools);
+    async fn commit_pending_inputs(&mut self) {
+        let inputs = std::mem::take(&mut self.pending_inputs);
+        self.commit_inputs(inputs).await;
     }
 
-    fn commit_pending_turn_messages(&mut self) {
-        let content: Vec<_> = self.pending_turn_messages.drain(..).flatten().collect();
+    async fn commit_queued_inputs(&mut self) {
+        let inputs = std::mem::take(&mut self.queued_inputs);
+        self.commit_inputs(inputs).await;
+    }
+
+    async fn commit_inputs(&mut self, inputs: VecDeque<QueuedInput>) {
+        let mut user_content = Vec::new();
+        for input in inputs {
+            match input {
+                QueuedInput::User(content) => user_content.extend(content),
+                QueuedInput::TaskOutcome(outcome) => {
+                    self.commit_user_content(&mut user_content);
+                    self.record_task_outcome(*outcome).await;
+                }
+            }
+        }
+        self.commit_user_content(&mut user_content);
+    }
+
+    fn commit_user_content(&mut self, content: &mut Vec<llm::ContentBlock>) {
         if !content.is_empty() {
-            self.context.add_message(ChatMessage::User { content, timestamp: IsoString::now() });
+            self.context
+                .add_message(ChatMessage::User { content: std::mem::take(content), timestamp: IsoString::now() });
         }
     }
 
@@ -751,9 +750,9 @@ impl Agent {
     }
 }
 
-async fn emit_tool_failure(tx: &mpsc::Sender<ToolExecutionEvent>, error: ToolCallError) {
-    let tool_id = error.id.clone();
-    let _ = tx.send(ToolExecutionEvent::Complete { tool_id, result: Err(error), result_meta: None }).await;
+async fn emit_tool_failure(tx: &mpsc::Sender<ToolCallEvent>, message: &str) {
+    let error = CallToolError::Unavailable { message: message.to_string() };
+    let _ = tx.send(ToolCallEvent::Complete(Err(error))).await;
 }
 
 pub(crate) struct AutoContinue {
@@ -777,23 +776,14 @@ impl AutoContinue {
     fn advance(&mut self) {
         self.count += 1;
     }
-
-    fn count(&self) -> u32 {
-        self.count
-    }
-
-    fn max(&self) -> u32 {
-        self.max
-    }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct IterationState {
     current_message_id: Option<String>,
     message_content: String,
     reasoning_summary_text: String,
     encrypted_reasoning: Option<EncryptedReasoningContent>,
-    pending_tool_ids: HashSet<String>,
     completed_tool_calls: Vec<Result<ToolCallResult, ToolCallError>>,
     llm_done: bool,
     stop_reason: Option<StopReason>,
@@ -802,21 +792,6 @@ struct IterationState {
 }
 
 impl IterationState {
-    fn new() -> Self {
-        Self {
-            current_message_id: None,
-            message_content: String::new(),
-            reasoning_summary_text: String::new(),
-            encrypted_reasoning: None,
-            pending_tool_ids: HashSet::new(),
-            completed_tool_calls: Vec::new(),
-            llm_done: false,
-            stop_reason: None,
-            retry_attempt: 0,
-            call_usage: None,
-        }
-    }
-
     fn on_llm_start(&mut self, message_id: String) {
         self.current_message_id = Some(message_id);
         self.message_content.clear();
@@ -826,7 +801,7 @@ impl IterationState {
         self.call_usage = None;
     }
 
-    fn is_complete(&self) -> bool {
-        self.llm_done && self.pending_tool_ids.is_empty()
+    fn is_complete(&self, has_foreground_tools: bool) -> bool {
+        self.llm_done && !has_foreground_tools
     }
 }

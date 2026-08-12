@@ -25,6 +25,7 @@ workspace = true
 
 [features]
 default = ["client"]
+testing = ["client"]
 client = [
     "dep:aether-auth",
     "aether-auth/mcp",
@@ -37,9 +38,11 @@ client = [
 ]
 
 [dependencies]
+chrono = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "sync", "net", "time"] }
+tokio-util = { workspace = true }
 rmcp = { workspace = true, features = ["client", "elicitation", "server"] }
 tracing = { workspace = true }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.11" }

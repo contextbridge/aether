@@ -52,7 +52,7 @@ utils = { package = "aether-utils", path = "../utils", version = "0.2.11" }
 tempfile = { workspace = true, optional = true }
 
 [features]
-testing = ["rmcp/server", "dep:tempfile"]
+testing = ["rmcp/server", "dep:tempfile", "mcp_utils/testing"]
 
 [dev-dependencies]
 aether-core = { package = "aether-agent-core", path = ".", features = ["testing"] }

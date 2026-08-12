@@ -1,30 +1,39 @@
 use crate::client::McpClient;
+use crate::client::elicitation::{ElicitInputsError, elicit_inputs};
 use crate::client::mrtr::{AbortReason, MrtrAction, MrtrState};
+use crate::client::task::{TaskDriver, TaskErrorReason};
 use async_stream::stream;
 use futures::Stream;
 use futures::StreamExt;
 use futures::future::{Either, select};
 use rmcp::RoleClient;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CallToolResult, ClientRequest, InputRequest, InputRequests,
-    InputResponses, ProgressNotificationParam, Request, RequestMetaObject, ServerResult,
+    CallToolRequestParams, CallToolResponse, CallToolResult, ClientRequest, CreateTaskResult, InputRequests,
+    InputResponses, ProgressNotificationParam, Request, RequestMetaObject, ServerResult, Task,
 };
 use rmcp::service::{PeerRequestOptions, RequestHandle, RunningService, ServiceError};
 use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
+use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Default)]
 pub struct CallToolOptions {
     pub timeout: Duration,
     pub meta: Option<RequestMetaObject>,
+    pub cancel: CancellationToken,
 }
 
 #[derive(Debug)]
 pub enum ToolCallEvent {
     Progress(ProgressNotificationParam),
+    TaskCreated(CreateTaskResult),
+    TaskStatus(Task),
     Complete(Result<CallToolResult, CallToolError>),
+    TaskComplete { task: Task, result: Result<CallToolResult, CallToolError> },
+    Cancelled { task_id: Option<String> },
 }
 
 #[derive(Debug, Error)]
@@ -43,10 +52,17 @@ pub enum CallToolError {
     },
     #[error("{}", reason.message(server, *timeout))]
     Aborted { server: String, reason: AbortReason, timeout: Duration },
-    #[error("Server '{server}' returned a task, but this client does not support the tasks extension")]
-    UnsupportedTask { server: String },
+    #[error("Task '{task_id}' from server '{server}' {reason}")]
+    Task {
+        server: String,
+        task_id: String,
+        #[source]
+        reason: TaskErrorReason,
+    },
     #[error("Server '{server}' returned a tool call response kind this client does not support")]
     UnsupportedResponse { server: String },
+    #[error("{message}")]
+    Unavailable { message: String },
 }
 
 pub fn call_tool(
@@ -60,30 +76,31 @@ pub fn call_tool(
 
         loop {
             let request = ClientRequest::CallToolRequest(Request::new(params.clone()));
-            let request_options = {
-                let request_options = PeerRequestOptions::with_timeout(options.timeout);
-                match &options.meta {
-                    Some(meta) => request_options.with_meta(meta.clone()),
-                    None => request_options,
-                }
-            };
-
-            let handle = match client.send_cancellable_request(request, request_options).await {
-                Ok(handle) => handle,
-                Err(e) => {
+            let send = pin!(client.send_cancellable_request(request, peer_request_options(&options)));
+            let handle = match select(send, pin!(options.cancel.cancelled())).await {
+                Either::Left((Ok(handle), _)) => handle,
+                Either::Left((Err(e), _)) => {
                     yield ToolCallEvent::Complete(Err(CallToolError::Send(e)));
+                    return;
+                }
+                Either::Right(((), _)) => {
+                    yield ToolCallEvent::Cancelled { task_id: None };
                     return;
                 }
             };
 
             let mut progress = client.service().progress_dispatcher.subscribe(handle.progress_token.clone()).await;
-            let mut response_future = pin!(await_tool_response(handle));
+            let mut response_or_cancel = pin!(await_response_or_cancel(handle, &options.cancel));
             let response = loop {
-                match select(progress.next(), response_future.as_mut()).await {
+                match select(progress.next(), response_or_cancel.as_mut()).await {
                     Either::Left((Some(progress), _)) => yield ToolCallEvent::Progress(progress),
-                    Either::Left((None, result_future)) => break result_future.await,
-                    Either::Right((result, _)) => break result,
+                    Either::Left((None, response_or_cancel)) => break response_or_cancel.await,
+                    Either::Right((response, _)) => break response,
                 }
+            };
+            let Some(response) = response else {
+                yield ToolCallEvent::Cancelled { task_id: None };
+                return;
             };
 
             match response {
@@ -94,19 +111,27 @@ pub fn call_tool(
                 Ok(CallToolResponse::InputRequired(input_required)) => {
                     match mrtr_state.tick(input_required) {
                         MrtrAction::Poll { backoff, request_state } => {
-                            tokio::time::sleep(backoff).await;
+                            let backoff = pin!(sleep(backoff));
+                            if let Either::Right(((), _)) = select(backoff, pin!(options.cancel.cancelled())).await {
+                                yield ToolCallEvent::Cancelled { task_id: None };
+                                return;
+                            }
                             params.input_responses = None;
                             params.request_state = Some(request_state);
                         }
                         MrtrAction::Elicit { input_requests, request_state } => {
-                            let result = elicit_input(client.service(), &mut mrtr_state, &server_name, input_requests).await;
-                            match result {
-                                Ok(responses) => {
+                            let elicit = pin!(elicit_input(client.service(), &mut mrtr_state, &server_name, input_requests));
+                            match select(elicit, pin!(options.cancel.cancelled())).await {
+                                Either::Left((Ok(responses), _)) => {
                                     params.input_responses = Some(responses);
                                     params.request_state = request_state;
                                 }
-                                Err(e) => {
+                                Either::Left((Err(e), _)) => {
                                     yield ToolCallEvent::Complete(Err(e));
+                                    return;
+                                }
+                                Either::Right(((), _)) => {
+                                    yield ToolCallEvent::Cancelled { task_id: None };
                                     return;
                                 }
                             }
@@ -121,8 +146,12 @@ pub fn call_tool(
                         }
                     }
                 }
-                Ok(CallToolResponse::Task(_)) => {
-                    yield ToolCallEvent::Complete(Err(CallToolError::UnsupportedTask { server: server_name }));
+                Ok(CallToolResponse::Task(task)) => {
+                    let driver = TaskDriver::new(&server_name, client.as_ref(), options.timeout, options.cancel.clone());
+                    let mut events = Box::pin(driver.stream(task));
+                    while let Some(event) = events.next().await {
+                        yield event;
+                    }
                     return;
                 }
                 Ok(_) => {
@@ -135,6 +164,25 @@ pub fn call_tool(
                 }
             }
         }
+    }
+}
+
+fn peer_request_options(options: &CallToolOptions) -> PeerRequestOptions {
+    let request_options = PeerRequestOptions::with_timeout(options.timeout);
+    match &options.meta {
+        Some(meta) => request_options.with_meta(meta.clone()),
+        None => request_options,
+    }
+}
+
+async fn await_response_or_cancel(
+    handle: RequestHandle<RoleClient>,
+    cancel: &CancellationToken,
+) -> Option<Result<CallToolResponse, ServiceError>> {
+    let response = pin!(await_tool_response(handle));
+    match select(response, pin!(cancel.cancelled())).await {
+        Either::Left((response, _)) => Some(response),
+        Either::Right(((), _)) => None,
     }
 }
 
@@ -153,16 +201,14 @@ async fn elicit_input(
     server_name: &str,
     requests: InputRequests,
 ) -> Result<InputResponses, CallToolError> {
-    let mut responses = InputResponses::new();
-    for (key, request) in requests {
-        let InputRequest::Elicitation(elicitation_request) = request else {
-            return Err(CallToolError::UnsupportedInput { server: server_name.to_string() });
-        };
-        let result = client.dispatch_elicitation(elicitation_request.params).await;
-        mrtr_state.record_response(&result);
-        let response = serde_json::to_value(result)
-            .map_err(|source| CallToolError::SerializeResponse { server: server_name.to_string(), source })?;
-        responses.insert(key, response);
+    let (responses, results) = elicit_inputs(client, requests).await.map_err(|error| match error {
+        ElicitInputsError::UnsupportedInput => CallToolError::UnsupportedInput { server: server_name.to_string() },
+        ElicitInputsError::Serialize(source) => {
+            CallToolError::SerializeResponse { server: server_name.to_string(), source }
+        }
+    })?;
+    for result in &results {
+        mrtr_state.record_response(result);
     }
     Ok(responses)
 }

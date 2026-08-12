@@ -1,4 +1,4 @@
-use crate::events::{AgentEvent, ContextEvent, MessageEvent, ToolEvent, TurnEvent};
+use crate::events::{AgentEvent, ContextEvent, MessageEvent, ToolEvent, TurnEvent, task_created_result};
 use crate::session::{SessionEvent, UserEvent};
 use llm::types::IsoString;
 use llm::{AssistantReasoning, ChatMessage, Context, ToolCallError, ToolCallResult};
@@ -57,7 +57,10 @@ fn apply_agent_event(ctx: &mut Context, event: &AgentEvent, acc: &mut TurnAccumu
         AgentEvent::Tool(ToolEvent::Result { result, .. }) => {
             acc.tool_results.push(Ok(result.clone()));
         }
-        AgentEvent::Tool(ToolEvent::Error { error, .. }) => {
+        AgentEvent::Tool(ToolEvent::TaskCreated { request, task_id, .. }) => {
+            acc.tool_results.push(Ok(task_created_result(request, task_id)));
+        }
+        AgentEvent::Tool(ToolEvent::Error { error }) => {
             acc.tool_results.push(Err(error.clone()));
         }
         AgentEvent::Turn(TurnEvent::Ended { .. }) => {
@@ -77,6 +80,13 @@ fn apply_agent_event(ctx: &mut Context, event: &AgentEvent, acc: &mut TurnAccumu
         }
         AgentEvent::Context(ContextEvent::CompactionResult { summary, .. }) => {
             *ctx = ctx.with_compacted_summary(summary);
+        }
+        AgentEvent::Tool(
+            event @ (ToolEvent::TaskCompleted { .. } | ToolEvent::TaskFailed { .. } | ToolEvent::TaskCancelled { .. }),
+        ) => {
+            if let Some(message) = event.task_context_message() {
+                ctx.add_message(message);
+            }
         }
         _ => {}
     }
@@ -315,6 +325,34 @@ mod tests {
             other => panic!("Expected Assistant, got {other:?}"),
         }
         assert!(ctx.messages()[2].is_tool_result());
+    }
+
+    #[test]
+    fn from_events_preserves_failed_tool_calls() {
+        let ctx = Context::from_events(&[
+            user_session("Read missing.txt"),
+            agent_session(AgentEvent::Tool(ToolEvent::Error {
+                error: ToolCallError {
+                    id: "call_1".to_string(),
+                    name: "read_file".to_string(),
+                    arguments: Some(r#"{"path":"missing.txt"}"#.to_string()),
+                    error: "file not found".to_string(),
+                },
+            })),
+            agent_session(AgentEvent::turn_ended(TurnOutcome::Completed)),
+        ]);
+
+        assert_eq!(ctx.message_count(), 3);
+        assert!(matches!(
+            &ctx.messages()[1],
+            ChatMessage::Assistant { tool_calls, .. }
+                if tool_calls.len() == 1 && tool_calls[0].id == "call_1"
+        ));
+        assert!(matches!(
+            &ctx.messages()[2],
+            ChatMessage::ToolCallResult(Err(error))
+                if error.id == "call_1" && error.error == "file not found"
+        ));
     }
 
     #[test]

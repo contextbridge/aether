@@ -44,6 +44,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let total_str = total.map(|t| format!("/{t}")).unwrap_or_default();
                 println!("Tool '{}' progress: {}{}{}", request.name, msg, progress, total_str);
             }
+            Some(AgentEvent::Tool(ToolEvent::TaskStatus { request, status, status_message, .. })) => {
+                let detail = status_message.as_deref().unwrap_or(&status);
+                println!("Tool '{}' background status: {detail}", request.name);
+            }
+            Some(AgentEvent::Tool(ToolEvent::TaskCompleted { request, task_id, result, .. })) => {
+                println!("Tool '{}' background task {task_id} completed: {}", request.name, result.result);
+            }
+            Some(AgentEvent::Tool(ToolEvent::TaskFailed { request, task_id, error, .. })) => {
+                eprintln!("Tool '{}' background task {task_id} failed: {}", request.name, error.error);
+            }
+            Some(AgentEvent::Tool(ToolEvent::TaskCancelled { request, task_id, .. })) => {
+                println!("Tool '{}' background task {task_id} cancelled", request.name);
+            }
             Some(AgentEvent::Turn(TurnEvent::Ended { outcome })) => {
                 match outcome {
                     TurnOutcome::Completed => println!("Agent finished processing"),
@@ -87,7 +100,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 AgentEvent::Tool(
                     ToolEvent::CallUpdate { .. }
                     | ToolEvent::ExecutionStarted { .. }
-                    | ToolEvent::DefinitionsUpdated { .. },
+                    | ToolEvent::DefinitionsUpdated { .. }
+                    | ToolEvent::TaskCreated { .. },
                 )
                 | AgentEvent::Turn(
                     TurnEvent::Started { .. } | TurnEvent::LlmCallStarted { .. } | TurnEvent::LlmCallEnded { .. },

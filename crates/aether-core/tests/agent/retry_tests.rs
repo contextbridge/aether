@@ -4,8 +4,9 @@ use std::time::Duration;
 
 use aether_core::core::RetryConfig;
 use aether_core::events::{AgentEvent, TurnOutcome};
-use aether_core::testing::test_agent;
+use aether_core::testing::{FakeMcpServer, FakeTool, FakeToolResponse, test_agent};
 use llm::{LlmError, LlmResponse};
+use rmcp::model::{CreateTaskResult, DetailedTask, Task, TaskPayload, TaskStatus};
 
 fn fast_retry(max_attempts: u32) -> RetryConfig {
     RetryConfig { max_attempts, base_delay: Duration::from_millis(1), max_delay: Duration::from_millis(5) }
@@ -23,6 +24,55 @@ fn retry_attempts(messages: &[AgentEvent]) -> Vec<u32> {
 
 fn has_failed_turn(messages: &[AgentEvent]) -> bool {
     messages.iter().any(|m| matches!(m, AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Failed { .. } })))
+}
+
+#[tokio::test(start_paused = true)]
+async fn deferred_event_after_retry_clears_pending_tool_and_cancels_task() -> Result<(), Box<dyn Error>> {
+    let arguments = serde_json::json!({}).to_string();
+    let mut interrupted = llm::testing::llm_response("msg_1")
+        .tool_call("deferred-call", "tasks__deferred", &[&arguments])
+        .build()
+        .into_iter()
+        .map(Ok)
+        .collect::<Vec<_>>();
+    interrupted.pop();
+    interrupted.push(Err(LlmError::StreamInterrupted("retry after tool call".into())));
+    let attempts = vec![
+        interrupted,
+        vec![Ok(LlmResponse::start("msg_2")), Ok(LlmResponse::text("recovered")), Ok(LlmResponse::done())],
+    ];
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let task = Task::new("stale-task", TaskStatus::Working, now.clone(), now).with_poll_interval_ms(10);
+    let server = FakeMcpServer::new()
+        .with_tool(
+            FakeTool::new("deferred")
+                .responds(FakeToolResponse::task(CreateTaskResult::new(task.clone())).delay(Duration::from_millis(10))),
+        )
+        .with_task("stale-task", [DetailedTask::new(task, TaskPayload::Working)]);
+    let server_state = server.state();
+
+    let result = test_agent()
+        .fake_mcp_server("tasks", server)
+        .retry_config(fast_retry(1))
+        .llm_result_responses(&attempts)
+        .user_text("go")
+        .run_with_context()
+        .await?;
+
+    assert!(
+        matches!(result.messages.last().and_then(AgentEvent::turn_outcome), Some(TurnOutcome::Completed)),
+        "stale deferred result must not block iteration completion: {:?}",
+        result.messages,
+    );
+    assert!(
+        !result.messages.iter().any(|event| matches!(event, AgentEvent::Tool(aether_core::events::ToolEvent::TaskCreated { request, .. }) if request.id == "deferred-call")),
+        "stale deferred event should not be surfaced after retry: {:?}",
+        result.messages,
+    );
+    assert_eq!(server_state.task_cancel_ids(), ["stale-task"]);
+
+    Ok(())
 }
 
 #[tokio::test(start_paused = true)]

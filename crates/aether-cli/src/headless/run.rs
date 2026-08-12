@@ -124,11 +124,15 @@ fn event_kind(msg: &AgentEvent) -> Option<CliEventKind> {
         AgentEvent::Message(MessageEvent::Text { is_complete: true, .. }) => Some(CliEventKind::Text),
         AgentEvent::Message(MessageEvent::Thought { is_complete: true, .. }) => Some(CliEventKind::Thought),
         AgentEvent::Tool(ToolEvent::Call { .. }) => Some(CliEventKind::ToolCall),
-        AgentEvent::Tool(ToolEvent::Result { .. }) => Some(CliEventKind::ToolResult),
-        AgentEvent::Tool(ToolEvent::Error { .. }) => Some(CliEventKind::ToolError),
+        AgentEvent::Tool(
+            ToolEvent::Result { .. } | ToolEvent::TaskCreated { .. } | ToolEvent::TaskCompleted { .. },
+        ) => Some(CliEventKind::ToolResult),
+        AgentEvent::Tool(ToolEvent::Error { .. } | ToolEvent::TaskFailed { .. } | ToolEvent::TaskCancelled { .. }) => {
+            Some(CliEventKind::ToolError)
+        }
         AgentEvent::Turn(TurnEvent::AutoContinue { .. }) => Some(CliEventKind::AutoContinue),
         AgentEvent::Model(ModelEvent::Switched { .. }) => Some(CliEventKind::ModelSwitched),
-        AgentEvent::Tool(ToolEvent::Progress { .. }) => Some(CliEventKind::ToolProgress),
+        AgentEvent::Tool(ToolEvent::Progress { .. } | ToolEvent::TaskStatus { .. }) => Some(CliEventKind::ToolProgress),
         AgentEvent::Context(ContextEvent::CompactionStarted { .. }) => Some(CliEventKind::ContextCompactionStarted),
         AgentEvent::Context(ContextEvent::CompactionEnded { .. }) => Some(CliEventKind::ContextCompactionEnded),
         AgentEvent::Context(ContextEvent::CompactionResult { .. }) => Some(CliEventKind::ContextCompactionResult),
@@ -168,6 +172,25 @@ fn format_text(msg: &AgentEvent) -> Option<String> {
             Some(format!("Tool error [{}]: {}", error.name, error.error))
         }
 
+        AgentEvent::Tool(ToolEvent::TaskStatus { request, task_id, status, status_message }) => Some(format!(
+            "Task status [{}]: {} {}{}",
+            request.name,
+            task_id,
+            status,
+            status_message.as_deref().map(|message| format!(" - {message}")).unwrap_or_default()
+        )),
+        AgentEvent::Tool(ToolEvent::TaskCreated { request, task_id, .. }) => {
+            Some(format!("Tool deferred [{}]: task {}", request.name, task_id))
+        }
+        AgentEvent::Tool(ToolEvent::TaskCompleted { request, task_id, result, .. }) => {
+            Some(format!("Background task completed [{}]: {}: {}", request.name, task_id, result.result))
+        }
+        AgentEvent::Tool(ToolEvent::TaskFailed { request, task_id, error, .. }) => {
+            Some(format!("Background task failed [{}]: {}: {}", request.name, task_id, error.error))
+        }
+        AgentEvent::Tool(ToolEvent::TaskCancelled { request, task_id, .. }) => {
+            Some(format!("Background task cancelled [{}]: {task_id}", request.name))
+        }
         AgentEvent::Turn(TurnEvent::Ended { outcome }) => Some(match outcome {
             TurnOutcome::Completed => "Done".to_string(),
             TurnOutcome::Cancelled => "Cancelled".to_string(),

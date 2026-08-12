@@ -7,6 +7,14 @@ use rmcp::{
 
 #[cfg(feature = "client")]
 pub use elicitation_script::{CapturedElicitation, ElicitationScript};
+#[cfg(all(feature = "client", any(test, feature = "testing")))]
+pub use fake_mcp::{
+    CapturedTaskUpdate, CapturedToolCall, FakeMcpServer, FakeMcpState, FakeTool, FakeToolResponse, fake_mcp,
+    fake_mcp_with_proxy,
+};
+
+#[cfg(all(feature = "client", any(test, feature = "testing")))]
+mod fake_mcp;
 
 /// Helper function to connect an MCP server and client via in-memory transport
 /// This handles the dual-era discovery/initialization handshake by running both concurrently

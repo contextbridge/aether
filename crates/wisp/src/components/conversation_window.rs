@@ -43,7 +43,6 @@ impl ConversationBuffer {
         self.close_thought_block();
         self.segments.push(Segment { content: SegmentContent::UserMessage(text.to_string()) });
     }
-
     pub fn append_text_chunk(&mut self, chunk: &str) {
         if chunk.is_empty() {
             return;

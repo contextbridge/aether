@@ -4,7 +4,7 @@
 
 use aether_lspd::testing::TestProject;
 use mcp_servers::coding::CodingMcp;
-use mcp_utils::client::{McpClient, elicitation_capabilities};
+use mcp_utils::client::{McpClient, client_capabilities};
 use mcp_utils::testing::{ElicitationScript, connect};
 use rmcp::RoleClient;
 use rmcp::model::{
@@ -32,7 +32,7 @@ pub fn test_client_info() -> ClientInfo {
 /// Client info declaring the same form + url elicitation support that
 /// `McpManager` advertises in production.
 pub fn test_client_info_with_elicitation() -> ClientInfo {
-    ClientInfo::new(elicitation_capabilities(), Implementation::new("test-client", "0.1.0"))
+    ClientInfo::new(client_capabilities(), Implementation::new("test-client", "0.1.0"))
 }
 
 /// An `McpClient` whose elicitation events go nowhere; elicitation-dependent

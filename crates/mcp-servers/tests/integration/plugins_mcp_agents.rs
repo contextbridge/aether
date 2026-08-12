@@ -3,11 +3,13 @@ use aether_auth::FakeOAuthCredentialStore;
 use aether_core::agent_spec::McpConfigSource;
 use aether_core::core::AgentDeps;
 use aether_core::mcp::mcp;
-use aether_core::mcp::run_mcp_task::{McpCommand, ToolExecutionEvent};
+use aether_core::mcp::run_mcp_task::McpCommand;
+use aether_core::mcp::tool_bridge::convert_tool_result;
 use aether_project::{AetherSettings, AetherSettingsSource, AgentCatalog, SettingsFileSource};
 use mcp_servers::McpBuilderExt;
 use mcp_servers::subagents::SubAgentsMcp;
 use mcp_servers::subagents::tools::{SpawnSubAgentsInput, SubAgentTask};
+use mcp_utils::client::ToolCallEvent;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -242,12 +244,18 @@ async fn call_subagent_through_manager(
     let (event_tx, mut event_rx) = mpsc::channel(4);
     spawn
         .command_tx
-        .send(McpCommand::ExecuteTool { request, trace_context: None, timeout: Duration::MAX, tx: event_tx })
+        .send(McpCommand::ExecuteTool {
+            request: request.clone(),
+            trace_context: None,
+            timeout: Duration::MAX,
+            tx: event_tx,
+            cancel: mcp_utils::client::CancellationToken::new(),
+        })
         .await?;
 
     while let Some(event) = event_rx.recv().await {
-        if let ToolExecutionEvent::Complete { result, .. } = event {
-            let result = result.map_err(|error| test_error(error.error))?;
+        if let ToolCallEvent::Complete(outcome) = event {
+            let (result, _) = convert_tool_result(&request, outcome).map_err(|error| test_error(error.error))?;
             return Ok(result.result);
         }
     }

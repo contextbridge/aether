@@ -23,7 +23,7 @@ pub use message_event::{MessageEvent, StreamState};
 pub use model_event::ModelEvent;
 pub use observer::{AgentObserver, DynObserverFactory, McpRequestInstrumentation, ObserverFactory};
 pub use sub_agent_progress::SubAgentProgressPayload;
-pub use tool_event::ToolEvent;
+pub use tool_event::{TaskOutcome, TaskOutcomeState, ToolEvent, task_created_result};
 pub use trace_context::{TRACEPARENT_KEY, TRACESTATE_KEY, TraceContext};
 pub use turn_event::{LlmCallOutcome, LlmCallPurpose, RetryInfo, TurnEvent, TurnOutcome};
 pub use user_message::{AgentCommand, Command, UserCommand};

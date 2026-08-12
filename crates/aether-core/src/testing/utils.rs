@@ -14,6 +14,7 @@ use crate::testing::{AgentTrace, FakeAgentObserver, FakeMcpServer};
 use llm::{ChatMessage, Context, LlmError, LlmModel, LlmResponse, ModelSettings, StreamingModelProvider};
 
 use llm::testing::FakeLlmProvider;
+use mcp_utils::client::McpServer;
 
 pub async fn drain_until(
     receiver: &mut mpsc::Receiver<AgentEvent>,
@@ -205,7 +206,7 @@ struct AgentTestConfig {
     max_auto_continues: Option<u32>,
     retry_config: Option<RetryConfig>,
     observers: Vec<Box<dyn AgentObserver>>,
-    include_fake_mcp: bool,
+    mcp_servers: Option<Vec<McpServer>>,
     initial_messages: Vec<ChatMessage>,
     system_prompt: Option<Prompt>,
     compaction: Option<CompactionConfig>,
@@ -239,7 +240,7 @@ impl TestAgentBuilder {
                 max_auto_continues: None,
                 retry_config: None,
                 observers: Vec::new(),
-                include_fake_mcp: true,
+                mcp_servers: Some(vec![fake_mcp("test", FakeMcpServer::new())]),
                 initial_messages: Vec::new(),
                 system_prompt: None,
                 compaction: None,
@@ -303,7 +304,13 @@ impl TestAgentBuilder {
 
     /// Run without the default fake MCP server when the scenario does not exercise tools.
     pub fn without_mcp(mut self) -> Self {
-        self.agent.include_fake_mcp = false;
+        self.agent.mcp_servers = None;
+        self
+    }
+
+    /// Replace the default fake MCP server with a scripted server.
+    pub fn fake_mcp_server(mut self, name: &str, server: FakeMcpServer) -> Self {
+        self.agent.mcp_servers = Some(vec![fake_mcp(name, server)]);
         self
     }
 
@@ -373,16 +380,9 @@ impl TestAgentBuilder {
         }
         let captured_contexts = llm.captured_contexts();
 
-        let mut mcp_spawn = if config.include_fake_mcp {
-            Some(
-                mcp("/workspace")
-                    .with_servers(vec![fake_mcp("test", FakeMcpServer::new())])
-                    .spawn()
-                    .await
-                    .map_err(AgentError::from)?,
-            )
-        } else {
-            None
+        let mut mcp_spawn = match config.mcp_servers {
+            Some(servers) => Some(mcp("/workspace").with_servers(servers).spawn().await.map_err(AgentError::from)?),
+            None => None,
         };
 
         let mut builder = agent(llm);

@@ -313,6 +313,7 @@ dependencies = [
  "aether-llm",
  "aether-utils",
  "async-stream",
+ "chrono",
  "futures",
  "regex",
  "reqwest 0.13.4",
@@ -323,6 +324,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.19",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]

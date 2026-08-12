@@ -62,7 +62,15 @@ impl SessionEvent {
                 AgentEvent::Message(
                     MessageEvent::Text { is_complete, .. } | MessageEvent::Thought { is_complete, .. },
                 ) => *is_complete,
-                AgentEvent::Tool(ToolEvent::Call { .. } | ToolEvent::Result { .. } | ToolEvent::Error { .. })
+                AgentEvent::Tool(
+                    ToolEvent::Call { .. }
+                    | ToolEvent::Result { .. }
+                    | ToolEvent::Error { .. }
+                    | ToolEvent::TaskCreated { .. }
+                    | ToolEvent::TaskCompleted { .. }
+                    | ToolEvent::TaskFailed { .. }
+                    | ToolEvent::TaskCancelled { .. },
+                )
                 | AgentEvent::Turn(
                     TurnEvent::RetryScheduled { .. }
                     | TurnEvent::AutoContinue { .. }
@@ -81,6 +89,7 @@ impl SessionEvent {
                     ToolEvent::CallUpdate { .. }
                     | ToolEvent::ExecutionStarted { .. }
                     | ToolEvent::Progress { .. }
+                    | ToolEvent::TaskStatus { .. }
                     | ToolEvent::DefinitionsUpdated { .. },
                 )
                 | AgentEvent::Turn(

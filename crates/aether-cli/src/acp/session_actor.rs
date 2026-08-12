@@ -5,7 +5,7 @@ use aether_core::context::ext::conversation_messages_from_events;
 use aether_core::events::{AgentCommand, AgentEvent, Command, ToolEvent, TurnOutcome};
 use aether_core::session::{SessionControlEvent, SessionEvent, UserEvent};
 use agent_client_protocol::schema::{self as acp, PromptResponse, SessionId, SetSessionConfigOptionResponse};
-use agent_client_protocol::{Client, ConnectionTo, JsonRpcNotification, Responder};
+use agent_client_protocol::{Client, ConnectionTo, Responder};
 use llm::catalog::LlmModel;
 use llm::parser::ModelProviderParser;
 use llm::{ChatMessage, ContentBlock, ProviderConnectionOverrides, ReasoningEffort};
@@ -519,14 +519,14 @@ fn send_mcp_server_status(connection: &ConnectionTo<Client>, servers: Vec<McpSer
 }
 
 fn forward_notification(connection: &ConnectionTo<Client>, acp_session_id: &SessionId, msg: &AgentEvent) {
-    if let Some(notification) = map_agent_event_to_session_notification(acp_session_id.clone(), msg) {
-        if let Err(e) =
+    if let Some(notification) = map_agent_event_to_session_notification(acp_session_id.clone(), msg)
+        && let Err(e) =
             connection.send_notification(notification).map_err(|e| AcpServerError::protocol("session/update", e))
-        {
-            error!("Failed to send session notification: {:?}", e);
-        }
-    } else if let Some(agent_notif) = try_into_agent_notification(msg)
-        && let Err(e) = send_agent_notification(connection, agent_notif)
+    {
+        error!("Failed to send session notification: {:?}", e);
+    }
+    if let Some(agent_notif) = try_into_agent_notification(msg)
+        && let Err(e) = send_agent_notification(connection, &agent_notif)
     {
         error!("Failed to send ext notification: {:?}", e);
     }
@@ -542,22 +542,11 @@ fn forward_notification(connection: &ConnectionTo<Client>, acp_session_id: &Sess
 
 fn send_agent_notification(
     connection: &ConnectionTo<Client>,
-    notification: AgentExtNotification,
-) -> Result<(), AcpServerError> {
-    match notification {
-        AgentExtNotification::ContextUsage(params) => send_extension_notification(connection, params),
-        AgentExtNotification::ContextCompaction(params) => send_extension_notification(connection, params),
-        AgentExtNotification::ContextCleared(params) => send_extension_notification(connection, params),
-        AgentExtNotification::SubAgentProgress(params) => send_extension_notification(connection, params),
-    }
-}
-
-fn send_extension_notification<N: JsonRpcNotification>(
-    connection: &ConnectionTo<Client>,
-    notification: N,
+    notification: &AgentExtNotification,
 ) -> Result<(), AcpServerError> {
     let method = notification.method().to_string();
-    connection.send_notification(notification).map_err(|error| AcpServerError::protocol(method, error))
+    let untyped = notification.to_untyped().map_err(|error| AcpServerError::protocol(method.clone(), error))?;
+    connection.send_notification(untyped).map_err(|error| AcpServerError::protocol(method, error))
 }
 
 fn on_mcp_client_event(connection: &ConnectionTo<Client>, event: McpClientEvent) {

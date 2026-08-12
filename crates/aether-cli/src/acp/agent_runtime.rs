@@ -126,6 +126,7 @@ impl Drop for AgentRuntime {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum RuntimeEvent {
     Agent { agent: AgentKey, message: AgentEvent },
     Mcp { agent: AgentKey, event: McpClientEvent },

@@ -49,9 +49,8 @@ pub fn cancel_result() -> ElicitResult {
     ElicitResult::new(ElicitationAction::Cancel)
 }
 
-/// The client capabilities Aether advertises to MCP servers: form + url elicitation.
-pub fn elicitation_capabilities() -> ClientCapabilities {
-    let mut capabilities = ClientCapabilities::builder().enable_elicitation().build();
+pub fn client_capabilities() -> ClientCapabilities {
+    let mut capabilities = ClientCapabilities::builder().enable_elicitation().enable_tasks().build();
     if let Some(elicitation) = capabilities.elicitation.as_mut() {
         elicitation.form = Some(FormElicitationCapability::default());
         elicitation.url = Some(UrlElicitationCapability::default());
@@ -84,7 +83,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     fn test_client_info() -> ClientInfo {
-        ClientInfo::new(elicitation_capabilities(), Implementation::new("test", "0.1.0"))
+        ClientInfo::new(client_capabilities(), Implementation::new("test", "0.1.0"))
     }
 
     fn make_client(event_sender: mpsc::Sender<McpClientEvent>) -> McpClient {
@@ -163,11 +162,14 @@ mod tests {
     }
 
     #[test]
-    fn capabilities_include_form_and_url() {
+    fn capabilities_include_form_url_and_tasks() {
         let info = test_client_info();
         let caps = &info.capabilities;
         let elicitation = caps.elicitation.as_ref().expect("elicitation capability should be set");
         assert!(elicitation.form.is_some(), "form capability should be advertised");
         assert!(elicitation.url.is_some(), "url capability should be advertised");
+        assert!(
+            caps.extensions.as_ref().is_some_and(|extensions| extensions.contains_key("io.modelcontextprotocol/tasks"))
+        );
     }
 }
