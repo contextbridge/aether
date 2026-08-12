@@ -25,6 +25,7 @@ workspace = true
 
 [features]
 default = ["client"]
+testing = ["client"]
 client = [
     "dep:aether-auth",
     "aether-auth/mcp",
@@ -37,6 +38,7 @@ client = [
 ]
 
 [dependencies]
+chrono = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "sync", "net", "time"] }
