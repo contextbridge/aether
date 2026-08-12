@@ -29,9 +29,9 @@ pub fn test_client_info() -> ClientInfo {
     ClientInfo::new(ClientCapabilities::default(), Implementation::new("test-client", "0.1.0"))
 }
 
-/// Client info declaring the same form + url elicitation support that
-/// `McpManager` advertises in production.
-pub fn test_client_info_with_elicitation() -> ClientInfo {
+/// Client info declaring the same capabilities `McpManager` advertises in
+/// production: form + url elicitation and MCP tasks.
+pub fn production_client_info() -> ClientInfo {
     ClientInfo::new(client_capabilities(), Implementation::new("test-client", "0.1.0"))
 }
 
@@ -39,14 +39,14 @@ pub fn test_client_info_with_elicitation() -> ClientInfo {
 /// calls resolve as Cancel.
 pub fn silent_mcp_client(server_name: &str) -> McpClient {
     let (event_tx, _event_rx) = mpsc::channel(8);
-    McpClient::new(test_client_info_with_elicitation(), server_name.to_string(), event_tx)
+    McpClient::new(production_client_info(), server_name.to_string(), event_tx)
 }
 
 /// An `McpClient` plus a script answering the next elicitation request with
 /// `response` and capturing what arrived for assertions.
 pub fn scripted_mcp_client(server_name: &str, response: ElicitResult) -> (McpClient, ElicitationScript) {
     let (event_tx, event_rx) = mpsc::channel(8);
-    let client = McpClient::new(test_client_info_with_elicitation(), server_name.to_string(), event_tx);
+    let client = McpClient::new(production_client_info(), server_name.to_string(), event_tx);
     (client, ElicitationScript::spawn(event_rx, [response]))
 }
 

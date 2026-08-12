@@ -1,9 +1,9 @@
 use super::error::CodingError;
+use super::tools::bash::execute_command_in_dir;
 use super::{
-    AstGrepInput, AstGrepOutput, BackgroundProcessHandle, BashInput, BashResult, EditFileArgs, EditFileResponse,
-    FindInput, FindOutput, GrepInput, GrepOutput, ListFilesArgs, ListFilesResult, ReadBackgroundBashOutput,
-    ReadFileArgs, ReadFileResult, WriteFileArgs, WriteFileResponse, edit_file_contents, execute_command_in_dir,
-    find_files, list_files, perform_ast_grep, perform_grep, read_background_bash, read_file_contents,
+    AstGrepInput, AstGrepOutput, BashInput, BashOutput, EditFileArgs, EditFileResponse, FindInput, FindOutput,
+    GrepInput, GrepOutput, ListFilesArgs, ListFilesResult, ReadFileArgs, ReadFileResult, WriteFileArgs,
+    WriteFileResponse, edit_file_contents, find_files, list_files, perform_ast_grep, perform_grep, read_file_contents,
     tools_trait::CodingTools, write_file_contents,
 };
 use std::path::PathBuf;
@@ -39,16 +39,8 @@ impl CodingTools for DefaultCodingTools {
         list_files(args).await.map_err(CodingError::from)
     }
 
-    async fn bash(&self, args: BashInput, cwd: Option<PathBuf>) -> Result<BashResult, CodingError> {
+    async fn bash(&self, args: BashInput, cwd: Option<PathBuf>) -> Result<BashOutput, CodingError> {
         execute_command_in_dir(args, cwd.as_deref()).await.map_err(CodingError::from)
-    }
-
-    async fn read_background_bash(
-        &self,
-        handle: BackgroundProcessHandle,
-        filter: Option<String>,
-    ) -> Result<(ReadBackgroundBashOutput, Option<BackgroundProcessHandle>), CodingError> {
-        read_background_bash(handle, filter).await.map_err(CodingError::from)
     }
 
     async fn grep(&self, args: GrepInput) -> Result<GrepOutput, CodingError> {

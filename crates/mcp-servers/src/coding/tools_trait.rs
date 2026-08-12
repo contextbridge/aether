@@ -1,10 +1,9 @@
-use std::fmt::Debug;
 use std::future::Future;
 use std::path::PathBuf;
 
 use super::error::CodingError;
 use super::tools::ast_grep::{AstGrepInput, AstGrepOutput, perform_ast_grep};
-use super::tools::bash::{BackgroundProcessHandle, BashInput, BashResult, ReadBackgroundBashOutput};
+use super::tools::bash::{BashInput, BashOutput};
 use super::tools::edit_file::{EditFileArgs, EditFileResponse};
 use super::tools::find::{FindInput, FindOutput, find_files};
 use super::tools::grep::{GrepInput, GrepOutput, perform_grep};
@@ -13,7 +12,7 @@ use super::tools::read_file::{ReadFileArgs, ReadFileResult};
 use super::tools::write_file::{WriteFileArgs, WriteFileResponse};
 
 #[doc = include_str!("../docs/coding_tools.md")]
-pub trait CodingTools: Send + Sync + Debug {
+pub trait CodingTools: Send + Sync {
     /// Read a file's contents
     fn read_file(&self, args: ReadFileArgs) -> impl Future<Output = Result<ReadFileResult, CodingError>> + Send;
 
@@ -26,19 +25,12 @@ pub trait CodingTools: Send + Sync + Debug {
     /// List files in a directory
     fn list_files(&self, args: ListFilesArgs) -> impl Future<Output = Result<ListFilesResult, CodingError>> + Send;
 
-    /// Execute a bash command with an optional working directory
+    // Execute a bash command with an optional working directory
     fn bash(
         &self,
         args: BashInput,
         cwd: Option<PathBuf>,
-    ) -> impl Future<Output = Result<BashResult, CodingError>> + Send;
-
-    /// Read output from a background bash process
-    fn read_background_bash(
-        &self,
-        handle: BackgroundProcessHandle,
-        filter: Option<String>,
-    ) -> impl Future<Output = Result<(ReadBackgroundBashOutput, Option<BackgroundProcessHandle>), CodingError>> + Send;
+    ) -> impl Future<Output = Result<BashOutput, CodingError>> + Send;
 
     /// Search file contents using regex patterns.
     fn grep(&self, args: GrepInput) -> impl Future<Output = Result<GrepOutput, CodingError>> + Send {

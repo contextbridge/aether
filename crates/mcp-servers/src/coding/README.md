@@ -42,8 +42,7 @@ File operations, code search, bash execution, LSP integration, and web tools. Th
 
 | Tool | Description |
 |------|-------------|
-| `bash` | Execute a shell command with optional timeout (max 10 minutes, default 2 minutes). Supports background execution. |
-| `read_background_bash` | Read output from a background bash process by its shell ID. Supports regex filtering. |
+| `bash` | Execute a shell command with optional timeout. Set `runInBackground: true` to return an MCP Task; the client must support the Tasks extension and receives complete output when the task finishes. |
 
 ### Web
 

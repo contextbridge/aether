@@ -33,8 +33,7 @@ let server = CodingMcp::with_tools(my_custom_tools);
 - `list_files` -- List directory contents with metadata
 
 **Shell & search:**
-- `bash` -- Execute shell commands (with background process support)
-- `read_background_bash` -- Read output from a running background process
+- `bash` -- Execute shell commands (with background process support) 
 - `grep` -- Regex search across files with glob filters
 - `find` -- Find files by glob pattern. Bare patterns like `README*`, `justfile`, and `*.rs` match basenames recursively; slash-containing patterns like `crates/**/*.rs` match paths relative to the search path. Limited searches stop early and set `truncated` when more matches exist.
 
