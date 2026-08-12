@@ -125,11 +125,12 @@ async fn user_cancel_surfaces_background_task_cancellation() {
 #[tokio::test]
 async fn user_cancel_preserves_queued_background_task_outcome() {
     let now = chrono::Utc::now().to_rfc3339();
-    let seed = Task::new("queued-task", TaskStatus::Working, now.clone(), now.clone()).with_poll_interval_ms(10);
+    let initial_task =
+        Task::new("queued-task", TaskStatus::Working, now.clone(), now.clone()).with_poll_interval_ms(10);
     let completed = Task::new("queued-task", TaskStatus::Completed, now.clone(), now);
     let result = CallToolResult::success(vec![rmcp::model::ContentBlock::text("finished")]);
     let server = FakeMcpServer::new()
-        .with_tool(FakeTool::new("deferred").responds(FakeToolResponse::task(CreateTaskResult::new(seed))))
+        .with_tool(FakeTool::new("deferred").responds(FakeToolResponse::task(CreateTaskResult::new(initial_task))))
         .with_task(
             "queued-task",
             [DetailedTask::new(

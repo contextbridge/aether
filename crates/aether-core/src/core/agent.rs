@@ -75,6 +75,7 @@ pub struct Agent {
     auto_continue: AutoContinue,
     retry_config: RetryConfig,
     tool_executions: ToolExecutions,
+    pending_inputs: VecDeque<QueuedInput>,
     queued_inputs: VecDeque<QueuedInput>,
     context_window: Option<u32>,
     prompt_cache: PromptCache,
@@ -109,6 +110,7 @@ impl Agent {
             auto_continue: config.auto_continue,
             retry_config: config.retry_config,
             tool_executions: ToolExecutions::default(),
+            pending_inputs: VecDeque::new(),
             queued_inputs: VecDeque::new(),
             context_window: config.context_window,
             prompt_cache: config.prompt_cache,
@@ -201,7 +203,7 @@ impl Agent {
                 self.on_iteration_complete(id, iteration).await;
             }
 
-            if input_closed && !self.turn_active && !self.is_busy() {
+            if input_closed && !self.turn_active && !self.is_busy() && self.tool_executions.is_empty() {
                 self.abort_in_flight_work(ToolAbortPolicy::CancelAll).await;
                 break;
             }
@@ -263,6 +265,8 @@ impl Agent {
     }
 
     async fn start_next_turn(&mut self) {
+        debug_assert!(self.pending_inputs.is_empty());
+        self.pending_inputs.append(&mut self.queued_inputs);
         if self.compaction_needed() {
             self.begin_compaction().await;
         } else {
@@ -271,12 +275,13 @@ impl Agent {
     }
 
     async fn start_chat_turn(&mut self) {
-        self.commit_queued_inputs().await;
+        self.commit_pending_inputs().await;
         self.start_llm_stream(None, 0).await;
     }
 
     async fn on_user_cancel(&mut self, state: &mut IterationState) {
         self.abort_in_flight_work(ToolAbortPolicy::PreserveBackgroundAcknowledgements).await;
+        self.commit_pending_inputs().await;
         self.queued_inputs.retain(|input| matches!(input, QueuedInput::TaskOutcome(_)));
         self.commit_queued_inputs().await;
         *state = IterationState::default();
@@ -285,6 +290,7 @@ impl Agent {
 
     async fn discard_in_flight_work(&mut self, state: &mut IterationState) {
         self.abort_in_flight_work(ToolAbortPolicy::CancelAll).await;
+        self.pending_inputs.clear();
         self.queued_inputs.clear();
         self.auto_continue.reset();
         *state = IterationState::default();
@@ -396,9 +402,7 @@ impl Agent {
             "Retrying LLM request after transient failure"
         );
 
-        for tool_id in self.tool_executions.cancel_foreground() {
-            self.streams.remove(&StreamKey::Tool(tool_id));
-        }
+        self.tool_executions.retire_foreground();
         self.start_llm_stream(Some(delay), state.retry_attempt).await;
     }
 
@@ -648,6 +652,9 @@ impl Agent {
                 self.streams.remove(&StreamKey::Tool(tool_id));
                 self.record_task_outcome(outcome).await;
             }
+            ToolExecutionUpdate::Retired => {
+                self.streams.remove(&StreamKey::Tool(tool_id));
+            }
             ToolExecutionUpdate::Ignored => {
                 tracing::debug!(%tool_id, "Ignoring unexpected tool execution event");
             }
@@ -664,8 +671,17 @@ impl Agent {
         self.context.set_prompt_cache_key(Some(key));
     }
 
+    async fn commit_pending_inputs(&mut self) {
+        let inputs = std::mem::take(&mut self.pending_inputs);
+        self.commit_inputs(inputs).await;
+    }
+
     async fn commit_queued_inputs(&mut self) {
-        let inputs: Vec<_> = self.queued_inputs.drain(..).collect();
+        let inputs = std::mem::take(&mut self.queued_inputs);
+        self.commit_inputs(inputs).await;
+    }
+
+    async fn commit_inputs(&mut self, inputs: VecDeque<QueuedInput>) {
         let mut user_content = Vec::new();
         for input in inputs {
             match input {

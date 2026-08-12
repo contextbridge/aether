@@ -15,6 +15,7 @@ pub(super) enum ToolExecutionUpdate {
     Completed { result: Result<ToolCallResult, ToolCallError>, event: ToolEvent },
     TaskCompleted(TaskOutcome),
     TaskCancelled(TaskOutcome),
+    Retired,
     Ignored,
 }
 
@@ -34,6 +35,7 @@ enum ToolExecutionPhase {
     Foreground,
     Background,
     Cancelling,
+    Retiring,
 }
 
 impl ToolExecutions {
@@ -54,6 +56,10 @@ impl ToolExecutions {
         self.executions.values().any(|execution| execution.phase == ToolExecutionPhase::Foreground)
     }
 
+    pub(super) fn is_empty(&self) -> bool {
+        self.executions.is_empty()
+    }
+
     pub(super) fn on_event(&mut self, tool_id: &str, event: ToolCallEvent) -> ToolExecutionUpdate {
         match event {
             ToolCallEvent::Progress(progress) => {
@@ -71,6 +77,10 @@ impl ToolExecutions {
                 let Some(execution) = self.executions.get_mut(tool_id) else {
                     return ToolExecutionUpdate::Ignored;
                 };
+                if execution.phase == ToolExecutionPhase::Retiring {
+                    execution.cancellation_token.cancel();
+                    return ToolExecutionUpdate::Ignored;
+                }
                 if execution.phase != ToolExecutionPhase::Foreground {
                     return ToolExecutionUpdate::Ignored;
                 }
@@ -97,12 +107,18 @@ impl ToolExecutions {
                 })
             }
             ToolCallEvent::TaskComplete { task, result } => {
+                if self.take_retiring(tool_id).is_some() {
+                    return ToolExecutionUpdate::Retired;
+                }
                 let Some(execution) = self.take_background(tool_id) else {
                     return ToolExecutionUpdate::Ignored;
                 };
                 ToolExecutionUpdate::TaskCompleted(map_task_result_to_outcome(execution.request, task, result))
             }
             ToolCallEvent::Cancelled { task_id } => {
+                if self.take_retiring(tool_id).is_some() {
+                    return ToolExecutionUpdate::Retired;
+                }
                 let Some(execution) = self.take_background(tool_id) else {
                     return ToolExecutionUpdate::Ignored;
                 };
@@ -113,6 +129,9 @@ impl ToolExecutions {
                 })
             }
             ToolCallEvent::Complete(outcome) => {
+                if self.take_retiring(tool_id).is_some() {
+                    return ToolExecutionUpdate::Retired;
+                }
                 let Some(execution) = self.take_foreground(tool_id) else {
                     return ToolExecutionUpdate::Ignored;
                 };
@@ -129,17 +148,12 @@ impl ToolExecutions {
         }
     }
 
-    pub(super) fn cancel_foreground(&mut self) -> Vec<String> {
-        let mut removed = Vec::new();
-        self.executions.retain(|tool_id, execution| {
-            if execution.phase != ToolExecutionPhase::Foreground {
-                return true;
+    pub(super) fn retire_foreground(&mut self) {
+        for execution in self.executions.values_mut() {
+            if execution.phase == ToolExecutionPhase::Foreground {
+                execution.phase = ToolExecutionPhase::Retiring;
             }
-            execution.cancellation_token.cancel();
-            removed.push(tool_id.clone());
-            false
-        });
-        removed
+        }
     }
 
     pub(super) fn abort(&mut self, policy: &ToolAbortPolicy) -> Vec<String> {
@@ -160,6 +174,13 @@ impl ToolExecutions {
 
     fn foreground(&self, tool_id: &str) -> Option<&ToolExecution> {
         self.executions.get(tool_id).filter(|execution| execution.phase == ToolExecutionPhase::Foreground)
+    }
+
+    fn take_retiring(&mut self, tool_id: &str) -> Option<ToolExecution> {
+        if self.executions.get(tool_id)?.phase != ToolExecutionPhase::Retiring {
+            return None;
+        }
+        self.executions.remove(tool_id)
     }
 
     fn take_foreground(&mut self, tool_id: &str) -> Option<ToolExecution> {
