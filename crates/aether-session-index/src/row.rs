@@ -120,36 +120,64 @@ impl From<&AgentEvent> for EventProjection {
             AgentEvent::Message(MessageEvent::Thought { message_id, .. }) => {
                 Self { message_id: Some(message_id.clone()), ..Self::new("agent", "message_thought") }
             }
-            AgentEvent::Tool(ToolEvent::Call { request }) => Self {
-                tool_call_id: Some(request.id.clone()),
-                tool_name: Some(request.name.clone()),
-                tool_arguments: Some(request.arguments.clone()),
-                ..Self::new("agent", "tool_call")
-            },
-            AgentEvent::Tool(ToolEvent::Result { result, .. }) => Self {
+            AgentEvent::Tool(event) => Self::from_tool(event),
+            AgentEvent::Turn(event) => Self::from_turn(event),
+            AgentEvent::Context(event) => Self::from_context(event),
+            AgentEvent::Model(ModelEvent::Switched { new, .. }) => {
+                Self { model_name: Some(new.clone()), ..Self::new("agent", "model_switched") }
+            }
+        }
+    }
+}
+
+impl EventProjection {
+    fn new(kind: &'static str, event_type: &'static str) -> Self {
+        Self { kind, event_type, ..Self::default() }
+    }
+
+    fn from_tool(event: &ToolEvent) -> Self {
+        match event {
+            ToolEvent::Call { request } => Self::for_tool_request("tool_call", request, None),
+            ToolEvent::Result { result, .. } => Self {
                 tool_call_id: Some(result.id.clone()),
                 tool_name: Some(result.name.clone()),
                 tool_arguments: Some(result.arguments.clone()),
                 ..Self::new("agent", "tool_result")
             },
-            AgentEvent::Tool(ToolEvent::Error { error }) => Self {
+            ToolEvent::Error { error } => Self {
                 tool_call_id: Some(error.id.clone()),
                 tool_name: Some(error.name.clone()),
                 tool_arguments: error.arguments.clone(),
                 outcome: Some("failed"),
                 ..Self::new("agent", "tool_error")
             },
-            AgentEvent::Tool(ToolEvent::CallUpdate { .. }) => Self::new("agent", "tool_call_update"),
-            AgentEvent::Tool(ToolEvent::ExecutionStarted { .. }) => Self::new("agent", "tool_execution_started"),
-            AgentEvent::Tool(ToolEvent::Progress { .. }) => Self::new("agent", "tool_progress"),
-            AgentEvent::Tool(ToolEvent::DefinitionsUpdated { .. }) => Self::new("agent", "tool_definitions_updated"),
-            AgentEvent::Turn(TurnEvent::Started { .. }) => Self::new("agent", "turn_started"),
-            AgentEvent::Turn(TurnEvent::RetryScheduled { .. }) => Self::new("agent", "retry_scheduled"),
-            AgentEvent::Turn(TurnEvent::LlmCallStarted { model, display_name, .. }) => Self {
+            ToolEvent::TaskCreated { request, .. } => Self::for_tool_request("tool_deferred", request, None),
+            ToolEvent::TaskStatus { request, .. } => Self::for_tool_request("tool_task_status", request, None),
+            ToolEvent::TaskCompleted { request, .. } => {
+                Self::for_tool_request("tool_task_completed", request, Some("completed"))
+            }
+            ToolEvent::TaskFailed { request, .. } => {
+                Self::for_tool_request("tool_task_failed", request, Some("failed"))
+            }
+            ToolEvent::TaskCancelled { request, .. } => {
+                Self::for_tool_request("tool_task_cancelled", request, Some("cancelled"))
+            }
+            ToolEvent::CallUpdate { .. } => Self::new("agent", "tool_call_update"),
+            ToolEvent::ExecutionStarted { .. } => Self::new("agent", "tool_execution_started"),
+            ToolEvent::Progress { .. } => Self::new("agent", "tool_progress"),
+            ToolEvent::DefinitionsUpdated { .. } => Self::new("agent", "tool_definitions_updated"),
+        }
+    }
+
+    fn from_turn(event: &TurnEvent) -> Self {
+        match event {
+            TurnEvent::Started { .. } => Self::new("agent", "turn_started"),
+            TurnEvent::RetryScheduled { .. } => Self::new("agent", "retry_scheduled"),
+            TurnEvent::LlmCallStarted { model, display_name, .. } => Self {
                 model_name: model.clone().or_else(|| Some(display_name.clone())),
                 ..Self::new("agent", "llm_call_started")
             },
-            AgentEvent::Turn(TurnEvent::LlmCallEnded { outcome, .. }) => Self {
+            TurnEvent::LlmCallEnded { outcome, .. } => Self {
                 outcome: Some(match outcome {
                     aether_core::events::LlmCallOutcome::Completed { .. } => "completed",
                     aether_core::events::LlmCallOutcome::Failed { .. } => "failed",
@@ -157,8 +185,8 @@ impl From<&AgentEvent> for EventProjection {
                 }),
                 ..Self::new("agent", "llm_call_ended")
             },
-            AgentEvent::Turn(TurnEvent::AutoContinue { .. }) => Self::new("agent", "auto_continue"),
-            AgentEvent::Turn(TurnEvent::Ended { outcome }) => Self {
+            TurnEvent::AutoContinue { .. } => Self::new("agent", "auto_continue"),
+            TurnEvent::Ended { outcome } => Self {
                 outcome: Some(match outcome {
                     TurnOutcome::Completed => "completed",
                     TurnOutcome::Cancelled => "cancelled",
@@ -166,10 +194,13 @@ impl From<&AgentEvent> for EventProjection {
                 }),
                 ..Self::new("agent", "turn_ended")
             },
-            AgentEvent::Context(ContextEvent::CompactionStarted { .. }) => {
-                Self::new("agent", "context_compaction_started")
-            }
-            AgentEvent::Context(ContextEvent::CompactionEnded { outcome }) => Self {
+        }
+    }
+
+    fn from_context(event: &ContextEvent) -> Self {
+        match event {
+            ContextEvent::CompactionStarted { .. } => Self::new("agent", "context_compaction_started"),
+            ContextEvent::CompactionEnded { outcome } => Self {
                 outcome: Some(match outcome {
                     aether_core::events::CompactionOutcome::Completed => "completed",
                     aether_core::events::CompactionOutcome::Failed { .. } => "failed",
@@ -177,10 +208,8 @@ impl From<&AgentEvent> for EventProjection {
                 }),
                 ..Self::new("agent", "context_compaction_ended")
             },
-            AgentEvent::Context(ContextEvent::CompactionResult { .. }) => {
-                Self::new("agent", "context_compaction_result")
-            }
-            AgentEvent::Context(ContextEvent::UsageUpdated { usage }) => Self {
+            ContextEvent::CompactionResult { .. } => Self::new("agent", "context_compaction_result"),
+            ContextEvent::UsageUpdated { usage } => Self {
                 usage_ratio: usage.usage_ratio,
                 context_limit: usage.context_limit.map(clamp_i64),
                 input_tokens: Some(clamp_i64(usage.input_tokens)),
@@ -195,17 +224,22 @@ impl From<&AgentEvent> for EventProjection {
                 total_reasoning_tokens: Some(clamp_i64(usage.total_reasoning_tokens)),
                 ..Self::new("agent", "context_usage")
             },
-            AgentEvent::Context(ContextEvent::Cleared) => Self::new("agent", "context_cleared"),
-            AgentEvent::Model(ModelEvent::Switched { new, .. }) => {
-                Self { model_name: Some(new.clone()), ..Self::new("agent", "model_switched") }
-            }
+            ContextEvent::Cleared => Self::new("agent", "context_cleared"),
         }
     }
-}
 
-impl EventProjection {
-    fn new(kind: &'static str, event_type: &'static str) -> Self {
-        Self { kind, event_type, ..Self::default() }
+    fn for_tool_request(
+        event_type: &'static str,
+        request: &llm::ToolCallRequest,
+        outcome: Option<&'static str>,
+    ) -> Self {
+        Self {
+            tool_call_id: Some(request.id.clone()),
+            tool_name: Some(request.name.clone()),
+            tool_arguments: Some(request.arguments.clone()),
+            outcome,
+            ..Self::new("agent", event_type)
+        }
     }
 }
 
