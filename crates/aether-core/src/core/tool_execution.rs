@@ -63,7 +63,9 @@ impl ToolExecutions {
     pub(super) fn on_event(&mut self, tool_id: &str, event: ToolCallEvent) -> ToolExecutionUpdate {
         match event {
             ToolCallEvent::Progress(progress) => {
-                let Some(execution) = self.foreground(tool_id) else {
+                let Some(execution) = self.executions.get(tool_id).filter(|execution| {
+                    matches!(execution.phase, ToolExecutionPhase::Foreground | ToolExecutionPhase::Background)
+                }) else {
                     return ToolExecutionUpdate::Ignored;
                 };
                 ToolExecutionUpdate::Event(ToolEvent::Progress {
@@ -170,10 +172,6 @@ impl ToolExecutions {
             preserve
         });
         removed
-    }
-
-    fn foreground(&self, tool_id: &str) -> Option<&ToolExecution> {
-        self.executions.get(tool_id).filter(|execution| execution.phase == ToolExecutionPhase::Foreground)
     }
 
     fn take_retiring(&mut self, tool_id: &str) -> Option<ToolExecution> {
