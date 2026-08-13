@@ -26,14 +26,14 @@
   },
   "dependencies": {
     "@aether-agent/sdk": "^0.4.1",
-    "testcontainers": "^12.0.3",
+    "testcontainers": "^12.1.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/dockerode": "^4.0.1",
-    "@types/node": "^26.1.1",
+    "@types/node": "^26.1.2",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.10"
   },
   "engines": {
     "node": ">=24"
