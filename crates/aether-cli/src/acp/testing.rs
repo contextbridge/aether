@@ -28,7 +28,7 @@ use agent_client_protocol::{Agent, Client, ConnectionTo};
 use llm::ProviderConnectionOverrides;
 use llm::testing::FakeLlmProvider;
 use llm::{ChatMessage, Context, LlmResponse, StreamingModelProvider};
-use mcp_utils::client::{McpServer, McpTransport};
+use mcp_utils::client::{McpServer, McpTransport, ToolExposure};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -383,7 +383,7 @@ impl RuntimeFactory for FakeRuntimeFactory {
             vec![McpServer::new(
                 server_name.clone(),
                 McpTransport::InMemory { server: FakePromptMcp::new(prompt_name).into_dyn() },
-                false,
+                ToolExposure::Direct,
             )]
         });
         let mut spawn = mcp(&self.cwd)

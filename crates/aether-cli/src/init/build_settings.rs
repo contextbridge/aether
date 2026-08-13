@@ -4,7 +4,7 @@ use super::recommendations::{ProviderRecommendations, recommended_for_provider};
 use aether_core::agent_spec::{ToolFilter, ToolMatcher};
 use aether_project::{AetherSettings, AgentConfig, McpSourceSpec, PromptSource};
 use llm::{ReasoningEffort, catalog::Provider};
-use mcp_utils::client::{InMemoryServerConfig, InMemoryType, McpServerConfig};
+use mcp_utils::client::{InMemoryServerConfig, InMemoryType, McpServerConfig, ToolExposure};
 
 const SYSTEM_PATH: &str = "SYSTEM.md";
 const SYSTEM_MD: &str = include_str!("templates/SYSTEM.md");
@@ -255,7 +255,7 @@ fn mcps(servers: Vec<(&str, Vec<String>)>) -> McpSourceSpec {
                     type_: InMemoryType::InMemory,
                     args,
                     input: None,
-                    proxy: false,
+                    proxy: ToolExposure::Direct,
                 }),
             )
         })
