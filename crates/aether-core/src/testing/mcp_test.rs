@@ -2,7 +2,9 @@ use crate::events::{TaskOutcomeState, TraceContext, task_created_result};
 use crate::mcp::run_mcp_task::McpCommand;
 use crate::mcp::tool_bridge::{convert_tool_result, map_task_result_to_outcome};
 use crate::mcp::{McpRuntime, mcp};
-use mcp_utils::client::{CancellationToken, McpConnectionDetails, McpServer, McpTransport, ToolCallEvent};
+use mcp_utils::client::{
+    CancellationToken, McpConnectionDetails, McpServer, McpTransport, ToolCallEvent, ToolExposure,
+};
 use mcp_utils::testing::ElicitationScript;
 use rmcp::ServerHandler;
 use rmcp::model::{CreateTaskResult, ElicitResult, ProgressNotificationParam};
@@ -75,14 +77,22 @@ impl McpTestBuilder {
     where
         S: ServerHandler,
     {
-        self.add_server(name, server, false)
+        self.server_with_exposure(name, server, ToolExposure::Direct)
     }
 
-    pub fn proxy_server<S>(self, name: impl Into<String>, server: S) -> Self
+    pub fn proxy_server<T>(self, name: impl Into<String>, server: T) -> Self
     where
-        S: ServerHandler,
+        T: ServerHandler,
     {
-        self.add_server(name, server, true)
+        self.server_with_exposure(name, server, ToolExposure::proxied_all())
+    }
+
+    pub fn server_with_exposure<T>(mut self, name: impl Into<String>, server: T, exposure: ToolExposure) -> Self
+    where
+        T: ServerHandler,
+    {
+        self.servers.push(McpServer::new(name, McpTransport::InMemory { server: Box::new(server) }, exposure));
+        self
     }
 
     pub fn elicitation_response(mut self, response: ElicitResult) -> Self {
@@ -123,14 +133,6 @@ impl McpTestBuilder {
             next_call_id: AtomicU64::new(1),
             _aether_home: aether_home,
         }
-    }
-
-    fn add_server<S>(mut self, name: impl Into<String>, server: S, proxy: bool) -> Self
-    where
-        S: ServerHandler,
-    {
-        self.servers.push(McpServer::new(name, McpTransport::InMemory { server: Box::new(server) }, proxy));
-        self
     }
 }
 

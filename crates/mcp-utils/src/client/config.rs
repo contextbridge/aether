@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Debug, Formatter};
 use std::num::NonZeroU16;
 use std::path::Path;
-use utils::is_false;
+use utils::matches_name_pattern;
 use utils::variables::{VarError, Vars};
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
@@ -43,9 +43,9 @@ pub struct StdioServerConfig {
     #[serde(default)]
     pub env: HashMap<String, String>,
 
-    /// Expose this server's tools through Aether's tool proxy.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub proxy: bool,
+    /// Controls which tools are exposed through Aether's shared tool proxy.
+    #[serde(default, skip_serializing_if = "ToolExposure::is_direct")]
+    pub proxy: ToolExposure,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
@@ -73,9 +73,9 @@ pub struct RemoteServerConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth: Option<McpOAuthConfig>,
 
-    /// Expose this server's tools through Aether's tool proxy.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub proxy: bool,
+    /// Controls which tools are exposed through Aether's shared tool proxy.
+    #[serde(default, skip_serializing_if = "ToolExposure::is_direct")]
+    pub proxy: ToolExposure,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
@@ -93,9 +93,9 @@ pub struct InMemoryServerConfig {
     #[serde(default)]
     pub input: Option<Value>,
 
-    /// Expose this server's tools through Aether's tool proxy.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub proxy: bool,
+    /// Controls which tools are exposed through Aether's shared tool proxy.
+    #[serde(default, skip_serializing_if = "ToolExposure::is_direct")]
+    pub proxy: ToolExposure,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
@@ -119,10 +119,32 @@ pub enum InMemoryType {
     InMemory,
 }
 
+/// Which of a server's tools are routed through Aether's shared tool proxy.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(from = "ToolExposureConfig", into = "ToolExposureConfig")]
+#[schemars(with = "ToolExposureConfig")]
+pub enum ToolExposure {
+    #[default]
+    Direct,
+    Proxied(ToolProxyRules),
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ToolProxyRules {
+    /// Tool names to proxy. An empty list includes every tool.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub include: Vec<String>,
+
+    /// Tool names to avoid proxying and directly expose. Exclude rules take precedence over include rules.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude: Vec<String>,
+}
+
 pub struct McpServer {
     pub name: String,
     pub transport: McpTransport,
-    pub proxy: bool,
+    pub tool_exposure: ToolExposure,
 }
 
 pub enum McpTransport {
@@ -153,9 +175,90 @@ impl From<StreamableHttpClientTransportConfig> for McpHttpConfig {
     }
 }
 
+impl ToolExposure {
+    pub fn proxied_all() -> Self {
+        Self::Proxied(ToolProxyRules::default())
+    }
+
+    pub fn is_direct(&self) -> bool {
+        matches!(self, Self::Direct)
+    }
+
+    pub fn is_proxied(&self) -> bool {
+        matches!(self, Self::Proxied(_))
+    }
+
+    pub fn is_direct_tool(&self, tool_name: &str) -> bool {
+        match self {
+            Self::Direct => true,
+            Self::Proxied(rules) => !rules.matches(tool_name),
+        }
+    }
+
+    /// Route every tool through the proxy, preserving any existing rules.
+    pub fn mark_proxied(&mut self) {
+        if self.is_direct() {
+            *self = Self::proxied_all();
+        }
+    }
+}
+
+impl ToolProxyRules {
+    pub fn new(include: &[&str], exclude: &[&str]) -> Self {
+        Self {
+            include: include.iter().map(ToString::to_string).collect(),
+            exclude: exclude.iter().map(ToString::to_string).collect(),
+        }
+    }
+
+    fn matches(&self, tool_name: &str) -> bool {
+        let included =
+            self.include.is_empty() || self.include.iter().any(|pattern| matches_name_pattern(pattern, tool_name));
+        let excluded = self.exclude.iter().any(|pattern| matches_name_pattern(pattern, tool_name));
+        included && !excluded
+    }
+}
+
+/// The `proxy` config field's wire shape: a boolean or an include/exclude object.
+#[derive(Deserialize, Serialize, JsonSchema)]
+#[serde(untagged)]
+enum ToolExposureConfig {
+    Enabled(bool),
+    Rules(ToolProxyRules),
+}
+
+impl From<ToolExposureConfig> for ToolExposure {
+    fn from(repr: ToolExposureConfig) -> Self {
+        match repr {
+            ToolExposureConfig::Enabled(false) => Self::Direct,
+            ToolExposureConfig::Enabled(true) => Self::proxied_all(),
+            ToolExposureConfig::Rules(rules) => Self::Proxied(rules),
+        }
+    }
+}
+
+impl From<ToolExposure> for ToolExposureConfig {
+    fn from(exposure: ToolExposure) -> Self {
+        match exposure {
+            ToolExposure::Direct => Self::Enabled(false),
+            ToolExposure::Proxied(rules) if rules == ToolProxyRules::default() => Self::Enabled(true),
+            ToolExposure::Proxied(rules) => Self::Rules(rules),
+        }
+    }
+}
+
 impl McpServer {
-    pub fn new(name: impl Into<String>, transport: McpTransport, proxy: bool) -> Self {
-        Self { name: name.into(), transport, proxy }
+    pub fn new(name: impl Into<String>, transport: McpTransport, tool_exposure: ToolExposure) -> Self {
+        Self { name: name.into(), transport, tool_exposure }
+    }
+
+    pub fn with_exposure(mut self, exposure: ToolExposure) -> Self {
+        self.tool_exposure = exposure;
+        self
+    }
+
+    pub fn is_proxied(&self) -> bool {
+        self.tool_exposure.is_proxied()
     }
 
     /// Clone this server config. Fails for [`McpTransport::InMemory`], whose
@@ -169,7 +272,7 @@ impl McpServer {
             McpTransport::Http(config) => McpTransport::Http(config.clone()),
             McpTransport::InMemory { .. } => return Err(McpServerCloneError(self.name.clone())),
         };
-        Ok(Self { name: self.name.clone(), transport, proxy: self.proxy })
+        Ok(Self { name: self.name.clone(), transport, tool_exposure: self.tool_exposure.clone() })
     }
 }
 
@@ -182,7 +285,7 @@ impl Debug for McpServer {
         f.debug_struct("McpServer")
             .field("name", &self.name)
             .field("transport", &self.transport)
-            .field("proxy", &self.proxy)
+            .field("tool_exposure", &self.tool_exposure)
             .finish()
     }
 }
@@ -266,26 +369,27 @@ impl McpConfig {
 
     pub fn mark_all_proxy(&mut self) {
         for server in self.servers.values_mut() {
-            server.set_proxy(true);
+            server.mark_proxied();
         }
     }
 }
 
 impl McpServerConfig {
-    pub fn proxy(&self) -> bool {
+    pub fn proxy(&self) -> &ToolExposure {
         match self {
-            McpServerConfig::Stdio(config) => config.proxy,
-            McpServerConfig::Remote(config) => config.proxy,
-            McpServerConfig::InMemory(config) => config.proxy,
+            McpServerConfig::Stdio(config) => &config.proxy,
+            McpServerConfig::Remote(config) => &config.proxy,
+            McpServerConfig::InMemory(config) => &config.proxy,
         }
     }
 
-    pub fn set_proxy(&mut self, value: bool) {
-        match self {
-            McpServerConfig::Stdio(config) => config.proxy = value,
-            McpServerConfig::Remote(config) => config.proxy = value,
-            McpServerConfig::InMemory(config) => config.proxy = value,
-        }
+    pub fn mark_proxied(&mut self) {
+        let proxy = match self {
+            McpServerConfig::Stdio(config) => &mut config.proxy,
+            McpServerConfig::Remote(config) => &mut config.proxy,
+            McpServerConfig::InMemory(config) => &mut config.proxy,
+        };
+        proxy.mark_proxied();
     }
 
     pub async fn into_server(
@@ -295,9 +399,12 @@ impl McpServerConfig {
         vars: &Vars,
         force_proxy: bool,
     ) -> Result<McpServer, ParseError> {
-        let proxy = force_proxy || self.proxy();
+        let mut exposure = self.proxy().clone();
+        if force_proxy {
+            exposure.mark_proxied();
+        }
         let transport = self.into_transport(name.clone(), factories, vars).await?;
-        Ok(McpServer::new(name, transport, proxy))
+        Ok(McpServer { name, transport, tool_exposure: exposure })
     }
 
     async fn into_transport(
@@ -382,7 +489,7 @@ mod tests {
             McpServerConfig::Stdio(StdioServerConfig { command, args, proxy, .. }) => {
                 assert_eq!(command, "npx");
                 assert_eq!(args, &["-y", "chrome-devtools-mcp"]);
-                assert!(!proxy);
+                assert!(proxy.is_direct());
             }
             other => panic!("expected Stdio server, got {other:?}"),
         }
@@ -393,7 +500,7 @@ mod tests {
         let config =
             McpConfig::from_json(r#"{"servers": {"playwright": {"type": "stdio", "command": "npx", "proxy": true}}}"#)
                 .unwrap();
-        assert!(config.servers.get("playwright").unwrap().proxy());
+        assert!(config.servers.get("playwright").unwrap().proxy().is_proxied());
     }
 
     #[test]
@@ -457,12 +564,24 @@ mod tests {
     }
 
     #[test]
-    fn from_json_files_last_file_wins_on_collision_including_proxy() {
+    fn from_json_rejects_unknown_exposure_fields_for_all_transports() {
+        for server in [
+            r#"{"command":"x","direct_tool":["bash"]}"#,
+            r#"{"type":"http","url":"https://example.com","direct_tool":["bash"]}"#,
+            r#"{"type":"in-memory","direct_tool":["bash"]}"#,
+        ] {
+            let json = format!(r#"{{"servers":{{"bad":{server}}}}}"#);
+            assert!(McpConfig::from_json(&json).is_err(), "unknown field was accepted: {server}");
+        }
+    }
+
+    #[test]
+    fn from_json_files_last_file_wins_on_collision_including_exposure() {
         let dir = tempdir().unwrap();
         let a = write_config(
             dir.path(),
             "a.json",
-            r#"{"servers":{"coding":{"type":"stdio","command":"from_a","proxy":true}}}"#,
+            r#"{"servers":{"coding":{"type":"stdio","command":"from_a","proxy":{"exclude":["bash"]}}}}"#,
         );
         let b = write_config(dir.path(), "b.json", r#"{"servers":{"coding":{"type":"stdio","command":"from_b"}}}"#);
 
@@ -470,7 +589,7 @@ mod tests {
         match merged_ab.servers.get("coding").unwrap() {
             McpServerConfig::Stdio(StdioServerConfig { command, proxy, .. }) => {
                 assert_eq!(command, "from_b");
-                assert!(!proxy);
+                assert_eq!(proxy, &ToolExposure::Direct);
             }
             other => panic!("expected Stdio, got {other:?}"),
         }
@@ -479,7 +598,7 @@ mod tests {
         match merged_ba.servers.get("coding").unwrap() {
             McpServerConfig::Stdio(StdioServerConfig { command, proxy, .. }) => {
                 assert_eq!(command, "from_a");
-                assert!(*proxy);
+                assert_eq!(proxy, &ToolExposure::Proxied(ToolProxyRules::new(&[], &["bash"])));
             }
             other => panic!("expected Stdio, got {other:?}"),
         }
@@ -492,7 +611,7 @@ mod tests {
         )
         .unwrap();
         config.mark_all_proxy();
-        assert!(config.servers.values().all(McpServerConfig::proxy));
+        assert!(config.servers.values().all(|server| server.proxy().is_proxied()));
     }
 
     #[test]
@@ -523,8 +642,8 @@ mod tests {
         let servers = config.into_servers(&HashMap::new(), &Vars::new()).await.unwrap();
 
         assert_eq!(servers.len(), 2);
-        assert!(!servers.iter().find(|s| s.name == "github").unwrap().proxy);
-        assert!(servers.iter().find(|s| s.name == "playwright").unwrap().proxy);
+        assert!(!servers.iter().find(|s| s.name == "github").unwrap().is_proxied());
+        assert!(servers.iter().find(|s| s.name == "playwright").unwrap().is_proxied());
     }
 
     #[tokio::test]
@@ -532,7 +651,69 @@ mod tests {
         let config =
             McpConfig::from_json(r#"{"servers":{"github":{"type":"stdio","command":"g","proxy":false}}}"#).unwrap();
         let servers = config.into_servers_with_proxy(&HashMap::new(), &Vars::new(), true).await.unwrap();
-        assert!(servers[0].proxy);
+        assert!(servers[0].is_proxied());
+    }
+
+    #[test]
+    fn proxy_accepts_boolean_or_include_exclude_rules_for_all_transport_shapes() {
+        let config = McpConfig::from_json(
+            r#"{"servers":{"all":{"command":"a","proxy":true},"stdio":{"command":"x","proxy":{"include":["lsp_*"],"exclude":["lsp_rename"]}},"http":{"type":"http","url":"https://example.com","proxy":{"exclude":["bash"]}},"memory":{"type":"in-memory","proxy":{"include":["read"]}}}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.servers["all"].proxy(), &ToolExposure::proxied_all());
+        assert_eq!(
+            config.servers["stdio"].proxy(),
+            &ToolExposure::Proxied(ToolProxyRules::new(&["lsp_*"], &["lsp_rename"]))
+        );
+        assert_eq!(config.servers["http"].proxy(), &ToolExposure::Proxied(ToolProxyRules::new(&[], &["bash"])));
+        assert_eq!(config.servers["memory"].proxy(), &ToolExposure::Proxied(ToolProxyRules::new(&["read"], &[])));
+    }
+
+    #[test]
+    fn proxy_rules_serialize_inside_proxy_and_defaults_are_omitted() {
+        let config = McpConfig::from_json(
+            r#"{"servers":{"coding":{"command":"x","proxy":{"exclude":["bash","lsp_*"]}},"direct":{"command":"y"},"full":{"command":"z","proxy":true}}}"#,
+        )
+        .unwrap();
+        let value = serde_json::to_value(config).unwrap();
+
+        assert_eq!(value["servers"]["coding"]["proxy"], serde_json::json!({"exclude":["bash", "lsp_*"]}));
+        assert!(value["servers"]["direct"].get("proxy").is_none());
+        assert_eq!(value["servers"]["full"]["proxy"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn legacy_direct_tools_is_rejected() {
+        let result =
+            McpConfig::from_json(r#"{"servers":{"coding":{"command":"x","proxy":true,"direct_tools":["bash"]}}}"#);
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn proxy_rules_partition_tools_with_exclude_winning() {
+        let config = McpConfig::from_json(
+            r#"{"servers":{"coding":{"command":"server","proxy":{"include":["lsp_*","bash"],"exclude":["lsp_rename"]}}}}"#,
+        )
+        .unwrap();
+        let servers = config.into_servers(&HashMap::new(), &Vars::new()).await.unwrap();
+        let exposure = &servers[0].tool_exposure;
+
+        assert!(!exposure.is_direct_tool("lsp_hover"));
+        assert!(exposure.is_direct_tool("lsp_rename"));
+        assert!(!exposure.is_direct_tool("bash"));
+        assert!(exposure.is_direct_tool("read_file"));
+    }
+
+    #[tokio::test]
+    async fn forced_proxy_preserves_per_server_proxy_rules() {
+        let config =
+            McpConfig::from_json(r#"{"servers":{"coding":{"command":"server","proxy":{"exclude":["bash"]}}}}"#)
+                .unwrap();
+        let servers = config.into_servers_with_proxy(&HashMap::new(), &Vars::new(), true).await.unwrap();
+        assert!(servers[0].is_proxied());
+        assert!(servers[0].tool_exposure.is_direct_tool("bash"));
+        assert!(!servers[0].tool_exposure.is_direct_tool("read_file"));
     }
 
     #[tokio::test]

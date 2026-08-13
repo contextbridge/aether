@@ -74,7 +74,6 @@ pub(super) struct ConnectConfig {
 /// The result of attempting to connect (or authenticate) to an MCP server.
 pub struct McpConnectAttempt {
     pub name: String,
-    pub proxied: bool,
     pub outcome: McpConnectOutcome,
 }
 
@@ -85,8 +84,8 @@ pub enum McpConnectOutcome {
 }
 
 impl McpConnectAttempt {
-    pub fn failed(name: impl Into<String>, error: McpError, proxied: bool) -> Self {
-        Self { name: name.into(), proxied, outcome: McpConnectOutcome::Failed { error } }
+    pub fn failed(name: impl Into<String>, error: McpError) -> Self {
+        Self { name: name.into(), outcome: McpConnectOutcome::Failed { error } }
     }
 }
 
@@ -126,7 +125,7 @@ impl McpServerConnection {
 }
 
 pub(super) async fn connect_server(server: McpServer, ctx: &ConnectConfig) -> McpConnectAttempt {
-    let McpServer { name, transport, proxy: proxied } = server;
+    let McpServer { name, transport, tool_exposure: _ } = server;
     let reauth_config = reauth_config_for(&transport, ctx.oauth_handler_factory.as_ref());
     let mcp_client = McpClient::new(ctx.client_info.clone(), name.clone(), ctx.event_sender.clone());
 
@@ -147,15 +146,10 @@ pub(super) async fn connect_server(server: McpServer, ctx: &ConnectConfig) -> Mc
         }
     };
 
-    McpConnectAttempt { name, proxied, outcome: outcome.with_reauth(reauth_config) }
+    McpConnectAttempt { name, outcome: outcome.with_reauth(reauth_config) }
 }
 
-pub async fn authenticate_http(
-    name: String,
-    config: McpHttpConfig,
-    ctx: Arc<ConnectConfig>,
-    proxied: bool,
-) -> McpConnectAttempt {
+pub async fn authenticate_http(name: String, config: McpHttpConfig, ctx: Arc<ConnectConfig>) -> McpConnectAttempt {
     let outcome = match async {
         let factory = ctx
             .oauth_handler_factory
@@ -186,7 +180,7 @@ pub async fn authenticate_http(
         Err(error) => McpConnectOutcome::Failed { error },
     };
 
-    McpConnectAttempt { name, proxied, outcome }
+    McpConnectAttempt { name, outcome }
 }
 
 impl McpConnectOutcome {

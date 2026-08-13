@@ -152,6 +152,8 @@ The `mcp.json` file configures MCP tool servers:
 - **coding** — Filesystem tools (read, write, bash, etc.) plus optional auto-read rules from configured `--rules-dir` paths
 - **skills** — Slash commands and reusable prompts loaded from the configured `--dir` paths
 
+Set `"proxy": true` on a server to place all of its tools behind Aether's shared `proxy__call_tool`. To partition tools, use `"proxy": { "include": [...], "exclude": [...] }`; patterns are exact MCP-local names or trailing-`*` prefixes, and `exclude` wins.
+
 ## Slash Commands
 
 Slash commands are markdown files served by the `skills` MCP server from any directory passed via `--dir`. Each entry is either a single `.md` file or a directory containing `SKILL.md` (plus optional supporting files). To make a prompt appear as a `/slash-command` in the TUI / ACP client, set `userInvocable: true` in its frontmatter.

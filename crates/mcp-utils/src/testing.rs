@@ -10,7 +10,6 @@ pub use elicitation_script::{CapturedElicitation, ElicitationScript};
 #[cfg(all(feature = "client", any(test, feature = "testing")))]
 pub use fake_mcp::{
     CapturedTaskUpdate, CapturedToolCall, FakeMcpServer, FakeMcpState, FakeTool, FakeToolResponse, fake_mcp,
-    fake_mcp_with_proxy,
 };
 
 #[cfg(all(feature = "client", any(test, feature = "testing")))]
