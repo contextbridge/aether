@@ -8,10 +8,10 @@ use rmcp::{
         wrapper::{Json, Parameters},
     },
     model::{
-        CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams, ClientCapabilities, ContentBlock,
-        CreateTaskResult, ElicitRequest, ElicitRequestParams, ElicitResult, ElicitationAction, ElicitationSchema,
-        EnumSchema, GetTaskParams, GetTaskResult, Implementation, InputRequest, InputRequests,
-        ProgressNotificationParam, ServerCapabilities, ServerInfo, UpdateTaskParams,
+        CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams, ContentBlock, CreateTaskResult,
+        ElicitRequest, ElicitRequestParams, ElicitResult, ElicitationAction, ElicitationSchema, EnumSchema,
+        GetTaskParams, GetTaskResult, Implementation, InputRequest, InputRequests, ProgressNotificationParam,
+        ServerCapabilities, ServerInfo, UpdateTaskParams,
     },
     service::RequestContext,
     task_manager::{TaskContext, TaskExit, TaskManager, TaskOptions},
@@ -46,6 +46,7 @@ use crate::{
     workspace_paths::WorkspacePaths,
 };
 use mcp_utils::server::mrtr::{MrtrAction, get_next_mrtr_action, parse_response};
+use mcp_utils::server::tasks::{BACKGROUND_TASK_TTL_MS, require_tasks_capability};
 use mcp_utils::server::tool::parse_arguments;
 
 use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename, truncate};
@@ -160,11 +161,7 @@ impl<T: CodingTools + 'static> ServerHandler for CodingMcp<T> {
     ) -> Result<CallToolResponse, ErrorData> {
         let background_args = background_bash_args(&request);
         if let Some(args) = &background_args {
-            if !context.client_capabilities().is_some_and(|capabilities| capabilities.supports_tasks()) {
-                return Err(ErrorData::missing_required_client_capability(
-                    ClientCapabilities::builder().enable_tasks().build(),
-                ));
-            }
+            require_tasks_capability(&context)?;
             validate_args(args).map_err(|error| ErrorData::invalid_params(error.to_string(), None))?;
         }
 
@@ -284,12 +281,6 @@ fn is_dangerous_cmd(command: &str) -> bool {
 
     false
 }
-
-/// Bounds both how long a background command may run and how long its finished
-/// result stays pollable — rmcp couples the hard-stop and terminal-entry
-/// eviction to this single TTL. `None` would retain every finished task's
-/// output for the server's lifetime.
-const BACKGROUND_TASK_TTL_MS: u64 = 3_600_000;
 
 #[tool_router]
 impl<T: CodingTools + 'static> CodingMcp<T> {
