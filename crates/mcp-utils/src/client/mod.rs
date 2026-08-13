@@ -17,7 +17,7 @@ pub use call_tool::{CallToolError, CallToolOptions, ToolCallEvent, call_tool};
 pub use config::{
     InMemoryServerConfig, InMemoryType, McpConfig, McpHttpConfig, McpOAuthConfig, McpServer, McpServerCloneError,
     McpServerConfig, McpTransport, ParseError, RemoteServerConfig, RemoteType, ServerFactory, StdioServerConfig,
-    StdioType,
+    StdioType, ToolExposure, ToolProxyRules,
 };
 pub use connection::{McpConnectAttempt, McpConnectOutcome, McpServerConnection};
 pub use connection_attempt_manager::McpConnectionAttemptManager;

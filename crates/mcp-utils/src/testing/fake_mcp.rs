@@ -1,4 +1,4 @@
-use crate::client::{McpServer, McpTransport};
+use crate::client::{McpServer, McpTransport, ToolExposure};
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     model::{
@@ -15,11 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 pub fn fake_mcp(name: &str, server: FakeMcpServer) -> McpServer {
-    fake_mcp_with_proxy(name, server, false)
-}
-
-pub fn fake_mcp_with_proxy(name: &str, server: FakeMcpServer, proxy: bool) -> McpServer {
-    McpServer::new(name, McpTransport::InMemory { server: server.into_dyn() }, proxy)
+    McpServer::new(name, McpTransport::InMemory { server: server.into_dyn() }, ToolExposure::Direct)
 }
 
 /// A fake MCP server preloaded with the classic math tools (`add_numbers`,
@@ -146,7 +142,7 @@ impl FakeMcpState {
         self.lock().task_cancel_ids.push(request.task_id);
     }
 
-    fn add_tool(&self, tool: FakeTool) {
+    pub fn add_tool(&self, tool: FakeTool) {
         self.lock().tools.insert(tool.definition.name.to_string(), tool);
     }
 
