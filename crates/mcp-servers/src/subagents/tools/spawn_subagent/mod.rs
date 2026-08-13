@@ -3,15 +3,18 @@ use aether_core::{
     agent_spec::McpConfigSource,
     core::{AgentBuilder, AgentDeps, AgentHandle, Prompt},
     events::{AgentEvent, Command, MessageEvent, TurnEvent, TurnOutcome, UserCommand},
-    mcp::{McpSpawnResult, mcp, run_mcp_task::McpCommand},
+    mcp::{McpRuntime, McpSpawnResult, mcp, run_mcp_task::McpCommand},
 };
+use futures::FutureExt;
 use llm::ToolDefinition;
 use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::{spawn, sync::mpsc};
+use tokio::sync::mpsc;
+use tokio::task::JoinSet;
 
 /// Reference to a file artifact discovered or modified by a sub-agent
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -83,6 +86,9 @@ pub struct SubAgentTask {
 pub struct SpawnSubAgentsInput {
     /// Array of agent tasks to execute in parallel
     pub tasks: Vec<SubAgentTask>,
+    /// Run sub-agents in the background, so you can continue work without waiting for them to complete.
+    #[serde(default, alias = "run_in_background", skip_serializing_if = "std::ops::Not::not")]
+    pub run_in_background: bool,
 }
 
 /// Status of a sub-agent execution
@@ -91,7 +97,6 @@ pub struct SpawnSubAgentsInput {
 pub enum SubAgentStatus {
     Success,
     Error,
-    Cancelled,
 }
 
 /// Result from a single sub-agent
@@ -180,28 +185,32 @@ impl AgentExecutor {
         let task_count = tasks.len();
         let first_agent_name = tasks.first().unwrap().agent_name.clone();
 
-        let handles: Vec<_> = tasks
-            .into_iter()
-            .enumerate()
-            .map(|(i, task)| {
-                let executor = self.clone();
-                spawn(async move { executor.execute_single(format!("task_{i}"), task).await })
-            })
-            .collect();
+        let mut children = JoinSet::new();
+        for (index, task) in tasks.into_iter().enumerate() {
+            let executor = self.clone();
+            let task_id = format!("task_{index}");
+            let agent_name = task.agent_name.clone();
+            children.spawn(async move {
+                let result = AssertUnwindSafe(executor.execute_single(task_id.clone(), task))
+                    .catch_unwind()
+                    .await
+                    .unwrap_or_else(|panic| SubAgentResult {
+                        task_id,
+                        agent_name,
+                        status: SubAgentStatus::Error,
+                        output: None,
+                        error: Some(format!("Sub-agent task panicked: {}", panic_message(&panic))),
+                    });
+                (index, result)
+            });
+        }
 
-        let results: Vec<SubAgentResult> = futures::future::join_all(handles)
-            .await
-            .into_iter()
-            .map(|join_result| {
-                join_result.unwrap_or_else(|e| SubAgentResult {
-                    task_id: "unknown".to_string(),
-                    agent_name: "unknown".to_string(),
-                    status: SubAgentStatus::Error,
-                    output: None,
-                    error: Some(format!("Task panicked: {e}")),
-                })
-            })
-            .collect();
+        let mut indexed_results = Vec::with_capacity(task_count);
+        while let Some(joined) = children.join_next().await {
+            indexed_results.push(joined.expect("sub-agent tasks are only aborted when the batch future is dropped"));
+        }
+        indexed_results.sort_unstable_by_key(|(index, _)| *index);
+        let results: Vec<SubAgentResult> = indexed_results.into_iter().map(|(_, result)| result).collect();
 
         let success_count = results.iter().filter(|r| matches!(r.status, SubAgentStatus::Success)).count();
 
@@ -224,20 +233,21 @@ impl AgentExecutor {
                 .resolve_agent_invocable(&task.agent_name)
                 .map_err(|error| error.to_string())?;
 
-            let mut spawn_result = self.spawn_mcps(&spec.mcp_config_sources).await?;
-            let snapshot = spawn_result
-                .block_until_ready()
-                .await
-                .ok_or_else(|| "MCP bootstrap aborted before completion".to_string())?;
+            let mut spawn = self.spawn_mcps(&spec.mcp_config_sources).await?;
+            let snapshot =
+                spawn.block_until_ready().await.ok_or_else(|| "MCP bootstrap aborted before completion".to_string())?;
+            let (mcp_runtime, _) = spawn.split();
 
             let filtered_tools = spec.tools.apply(snapshot.tool_definitions);
             spec.prompts.push(Prompt::McpInstructions(snapshot.instructions));
-            let command_tx = spawn_result.command_tx;
+            let command_tx = mcp_runtime.command_tx().clone();
 
-            let (user_tx, mut agent_rx, _agent_handle) = self.spawn_agent(spec, command_tx, filtered_tools).await?;
+            let (user_tx, mut agent_rx, agent_handle) = self.spawn_agent(spec, command_tx, filtered_tools).await?;
+            let running_agent = RunningAgent { user_tx, agent_handle, _mcp_runtime: mcp_runtime };
 
             let prompt_with_instructions = format!("{}\n\n{}", task.prompt, STRUCTURED_OUTPUT_INSTRUCTIONS);
-            user_tx
+            running_agent
+                .user_tx
                 .send(Command::UserCommand(UserCommand::Text {
                     content: vec![llm::ContentBlock::text(&prompt_with_instructions)],
                 }))
@@ -315,6 +325,26 @@ impl AgentExecutor {
             .await
             .map_err(|e| format!("Failed to spawn agent: {e}"))
     }
+}
+
+struct RunningAgent {
+    user_tx: mpsc::Sender<Command>,
+    agent_handle: AgentHandle,
+    _mcp_runtime: McpRuntime,
+}
+
+impl Drop for RunningAgent {
+    fn drop(&mut self) {
+        self.agent_handle.abort();
+    }
+}
+
+fn panic_message(panic: &(dyn std::any::Any + Send)) -> &str {
+    panic
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("unknown panic")
 }
 
 #[cfg(test)]
