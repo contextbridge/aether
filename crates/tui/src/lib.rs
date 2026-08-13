@@ -1,6 +1,5 @@
 #![doc = include_str!("../README.md")]
 
-// Core modules - always available
 pub(crate) mod components;
 pub(crate) mod diffs;
 pub(crate) mod focus;
@@ -11,7 +10,6 @@ pub(crate) use rendering::style;
 pub(crate) mod terminal_codes;
 pub(crate) mod theme;
 
-// Feature-gated modules
 #[cfg(feature = "syntax")]
 mod syntax_highlighting;
 
@@ -32,7 +30,6 @@ pub(crate) mod runtime;
 #[cfg(feature = "testing")]
 pub mod testing;
 
-// Core re-exports - always available
 pub use components::bordered_text_field::BorderedTextField;
 pub use components::checkbox::Checkbox;
 pub use components::form::{Form, FormField, FormFieldKind, FormMessage};
@@ -58,30 +55,24 @@ pub use rendering::render_context::{Insets, Size};
 pub use rendering::style::Style;
 pub use theme::{Theme, ThemeBuildError};
 
-// Rendering (always available - no runtime dependency)
 pub use rendering::renderer::{Renderer, RendererCommand};
 
-// Runtime
 pub use crossterm::event::Event as CrosstermEvent;
 pub use runtime::terminal::terminal_size;
 pub use runtime::{MouseCapture, TerminalConfig, TerminalRuntime, TerminalSession};
 
-// &str text utilities
 pub use rendering::soft_wrap::{
     display_width_text, pad_text_to_width, soft_wrap_line, soft_wrap_text_position, truncate_line, truncate_text,
 };
 
-// Span type
 pub use rendering::span::Span;
 
-// Markdown
 #[cfg(feature = "syntax")]
 pub use markdown::{
     MarkdownBlock, MarkdownHeading, MarkdownRenderResult, SourceMappedLine, SourceMarkdownLine,
     SourceMarkdownRenderResult, parse_markdown_headings, render_markdown_result, render_markdown_source_lines,
 };
 
-// Feature-gated re-exports
 #[cfg(feature = "syntax")]
 pub use diffs::diff::highlight_diff;
 
@@ -105,7 +96,6 @@ pub use fuzzy_matcher::Searchable;
 #[cfg(feature = "picker")]
 pub use fuzzy_matcher::FuzzyMatcher;
 
-// Terminal event types (re-exported from crossterm)
 pub use crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };

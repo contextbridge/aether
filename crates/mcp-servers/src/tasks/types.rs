@@ -124,7 +124,6 @@ pub struct Task {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deps: Vec<TaskId>,
 
-    // === Result/handoff fields (flattened) ===
     /// Summary of work done (1-3 sentences)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
@@ -239,7 +238,6 @@ pub struct TaskUpdate {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deps: Option<Vec<TaskId>>,
 
-    // === Result/handoff fields (flattened) ===
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
 
