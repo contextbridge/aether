@@ -2,11 +2,12 @@ use crate::client::McpClient;
 use crate::client::call_tool::{CallToolError, ToolCallEvent};
 use crate::client::elicitation::{ElicitInputsError, elicit_inputs};
 use async_stream::stream;
-use futures::Stream;
 use futures::future::{Either, select};
+use futures::{Stream, StreamExt, pin_mut};
 use rmcp::RoleClient;
 use rmcp::model::{
-    CancelTaskParams, CreateTaskResult, GetTaskParams, InputRequests, Task, TaskPayload, TaskStatus, UpdateTaskParams,
+    CancelTaskParams, CreateTaskResult, GetTaskParams, InputRequests, ProgressNotificationParam, Task, TaskPayload,
+    TaskStatus, UpdateTaskParams,
 };
 use rmcp::service::{RunningService, ServiceError};
 use std::collections::HashSet;
@@ -62,11 +63,42 @@ impl<'a> TaskDriver<'a> {
         Self { client, server_name, timeout, cancellation_token, default_poll_interval: Duration::from_secs(1) }
     }
 
-    pub(crate) fn stream(self, created: CreateTaskResult) -> impl Stream<Item = ToolCallEvent> + 'a {
+    pub(crate) fn stream<T: Stream<Item = ProgressNotificationParam> + Send + 'a>(
+        self,
+        created: CreateTaskResult,
+        progress_events: T,
+    ) -> impl Stream<Item = ToolCallEvent> + 'a {
         stream! {
             yield ToolCallEvent::TaskCreated(created.clone());
+            let task_events = self.stream_task_events(created.task);
+            pin_mut!(task_events);
+            pin_mut!(progress_events);
+
+            loop {
+                tokio::select! {
+                    progress_event = progress_events.next() => {
+                        let Some(progress_event) = progress_event else {
+                            while let Some(event) = task_events.next().await {
+                                yield event;
+                            }
+                            return;
+                        };
+                        yield ToolCallEvent::Progress(progress_event);
+                    }
+                    event = task_events.next() => {
+                        let Some(event) = event else {
+                            return;
+                        };
+                        yield event;
+                    }
+                }
+            }
+        }
+    }
+
+    fn stream_task_events(self, mut task: Task) -> impl Stream<Item = ToolCallEvent> + 'a {
+        stream! {
             let bounds = TaskBounds::new(self.timeout, self.cancellation_token.clone());
-            let mut task = created.task;
             let mut answered_input_keys = HashSet::new();
 
             loop {
@@ -297,6 +329,44 @@ mod tests {
                     && result.content.first().and_then(|content| content.as_text()).is_some_and(|text| text.text == "finished")
         ));
         assert_eq!(result.state.task_get_ids(), ["task-1"]);
+    }
+
+    #[tokio::test]
+    async fn call_tool_forwards_progress_after_task_creation() {
+        let seed = task(TaskStatus::Working);
+        let server = FakeMcpServer::new()
+            .with_tool(
+                FakeTool::new("deferred")
+                    .responds(FakeToolResponse::task(CreateTaskResult::new(seed)).task_progress(1.0, Some(2.0))),
+            )
+            .with_task(
+                "task-1",
+                [DetailedTask::new(task(TaskStatus::Working), TaskPayload::Working), completed_task()],
+            );
+        let (event_tx, _event_rx) = mpsc::channel::<McpClientEvent>(4);
+        let client = McpClient::new(
+            ClientInfo::new(client_capabilities(), Implementation::new("test-client", "0.1.0")),
+            "task-server".into(),
+            event_tx,
+        );
+        let (_server, client) = connect(server, client).await.expect("connect task server");
+
+        let events = call_tool(
+            Arc::new(client),
+            CallToolRequestParams::new("deferred"),
+            CallToolOptions { timeout: Duration::from_secs(1), ..CallToolOptions::default() },
+        )
+        .collect::<Vec<_>>()
+        .await;
+
+        assert!(matches!(events.first(), Some(ToolCallEvent::TaskCreated(_))));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            ToolCallEvent::Progress(progress)
+                if (progress.progress - 1.0).abs() < f64::EPSILON
+                    && progress.total.is_some_and(|total| (total - 2.0).abs() < f64::EPSILON)
+        )));
+        assert!(matches!(events.last(), Some(ToolCallEvent::TaskComplete { result: Ok(_), .. })));
     }
 
     #[tokio::test]
