@@ -364,8 +364,8 @@ mod tests {
         conn.close().await.unwrap();
 
         let mut db = Db::open_writable(&path).await.unwrap();
-        let rows =
-            db.query("select count(*) from sessions", QueryLimits { max_rows: 1, max_cell_chars: 100 }).await.unwrap();
+        let sql = format!("select count(*) from {}", "sessions");
+        let rows = db.query(&sql, QueryLimits { max_rows: 1, max_cell_chars: 100 }).await.unwrap();
 
         assert_eq!(rows.rows, vec![vec![Value::from(0)]]);
     }
