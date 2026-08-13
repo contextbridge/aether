@@ -148,7 +148,7 @@ pub fn call_tool(
                 }
                 Ok(CallToolResponse::Task(task)) => {
                     let driver = TaskDriver::new(&server_name, client.as_ref(), options.timeout, options.cancel.clone());
-                    let mut events = Box::pin(driver.stream(task));
+                    let mut events = Box::pin(driver.stream(task, progress));
                     while let Some(event) = events.next().await {
                         yield event;
                     }

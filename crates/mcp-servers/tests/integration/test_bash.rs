@@ -1,295 +1,116 @@
+use mcp_servers::CodingMcp;
 use mcp_servers::coding::error::BashError;
-use mcp_servers::coding::tools::bash::{
-    BackgroundProcessHandle, BackgroundShellStatus, BashInput, BashResult, ReadBackgroundBashOutput, execute_command,
-    read_background_bash,
-};
+use mcp_servers::coding::tools::bash::{BashInput, execute_command, execute_command_in_dir};
+use rmcp::model::{CallToolRequestParams, CallToolResponse, TaskPayload, TaskStatus};
 use std::fs::canonicalize;
 
-async fn read_until_terminal(mut handle: BackgroundProcessHandle, filter: Option<String>) -> ReadBackgroundBashOutput {
-    let mut output = String::new();
-    loop {
-        let (mut result, next) = read_background_bash(handle, filter.clone()).await.unwrap();
-        output.push_str(&result.output);
-        if let Some(next) = next {
-            handle = next;
-            tokio::task::yield_now().await;
-        } else {
-            result.output = output;
-            return result;
-        }
-    }
-}
+use super::common::{TestClient, TestResult, production_client_info, test_client_info};
 
 #[tokio::test]
 async fn test_basic_command() {
-    let args = BashInput {
-        command: "echo 'hello world'".to_string(),
-        timeout: None,
-        description: None,
-        run_in_background: None,
-    };
-
-    let result = execute_command(args).await.unwrap();
-
-    match result {
-        BashResult::Completed(output) => {
-            assert_eq!(output.output.trim(), "hello world");
-            assert_eq!(output.exit_code, 0);
-            assert_eq!(output.killed, Some(false));
-            assert_eq!(output.shell_id, None);
-        }
-        BashResult::Background(_) => panic!("Expected completed result, got background"),
-    }
+    let output =
+        execute_command(BashInput { command: "echo 'hello world'".into(), ..Default::default() }).await.unwrap();
+    assert_eq!(output.output.trim(), "hello world");
+    assert_eq!(output.exit_code, 0);
+    assert!(!output.killed);
 }
 
 #[tokio::test]
-async fn test_command_with_exit_code() {
-    let args = BashInput { command: "exit 42".to_string(), timeout: None, description: None, run_in_background: None };
-
-    let result = execute_command(args).await.unwrap();
-
-    match result {
-        BashResult::Completed(output) => {
-            assert_eq!(output.exit_code, 42);
-            assert_eq!(output.killed, Some(false));
-        }
-        BashResult::Background(_) => panic!("Expected completed result, got background"),
-    }
-}
-
-#[tokio::test]
-async fn test_command_with_stderr() {
-    let args = BashInput {
-        command: "echo 'error' >&2".to_string(),
-        timeout: None,
-        description: None,
-        run_in_background: None,
-    };
-
-    let result = execute_command(args).await.unwrap();
-
-    match result {
-        BashResult::Completed(output) => {
-            assert_eq!(output.output.trim(), "error");
-            assert_eq!(output.exit_code, 0);
-        }
-        BashResult::Background(_) => panic!("Expected completed result, got background"),
-    }
+async fn test_command_with_exit_code_and_stderr() {
+    let output =
+        execute_command(BashInput { command: "echo error >&2; exit 42".into(), ..Default::default() }).await.unwrap();
+    assert!(output.output.contains("error"));
+    assert_eq!(output.exit_code, 42);
+    assert!(!output.killed);
 }
 
 #[tokio::test]
 async fn test_command_timeout() {
-    let args = BashInput {
-        command: "sleep 10".to_string(),
-        timeout: Some(100), // 100ms timeout
-        description: None,
-        run_in_background: None,
-    };
-
-    let result = execute_command(args).await.unwrap();
-
-    match result {
-        BashResult::Completed(output) => {
-            assert!(output.output.contains("timed out"));
-            assert_eq!(output.exit_code, -1);
-            assert_eq!(output.killed, Some(true));
-        }
-        BashResult::Background(_) => panic!("Expected completed result, got background"),
-    }
+    let output = execute_command(BashInput { command: "sleep 10".into(), timeout: Some(100), ..Default::default() })
+        .await
+        .unwrap();
+    assert!(output.output.contains("timed out"));
+    assert_eq!(output.exit_code, -1);
+    assert!(output.killed);
 }
 
 #[tokio::test]
 async fn test_timeout_validation() {
-    let args = BashInput {
-        command: "echo test".to_string(),
-        timeout: Some(700_000), // Exceeds max of 600000
-        description: None,
-        run_in_background: None,
-    };
-
-    let result = execute_command(args).await;
-    assert!(result.is_err());
+    let result =
+        execute_command(BashInput { command: "echo test".into(), timeout: Some(700_000), ..Default::default() }).await;
     assert!(matches!(result.unwrap_err(), BashError::TimeoutTooLarge));
 }
 
 #[tokio::test]
-async fn test_background_process() {
-    let args = BashInput {
-        command: "echo 'line1'; sleep 0.1; echo 'line2'".to_string(),
-        timeout: None,
-        description: Some("Test background command".to_string()),
-        run_in_background: Some(true),
-    };
-
-    let result = execute_command(args).await.unwrap();
-
-    match result {
-        BashResult::Background(handle) => {
-            assert!(!handle.shell_id.is_empty());
-
-            let (result1, mut handle_opt) = read_background_bash(handle, None).await.unwrap();
-            assert!(
-                result1.status == BackgroundShellStatus::Running || result1.status == BackgroundShellStatus::Completed
-            );
-
-            let mut combined_output = result1.output.clone();
-            let (final_status, final_exit) = loop {
-                let Some(handle) = handle_opt.take() else {
-                    panic!("expected at least one read iteration");
-                };
-                let (result, next) = read_background_bash(handle, None).await.unwrap();
-                combined_output.push_str(&result.output);
-                match next {
-                    Some(h) => {
-                        handle_opt = Some(h);
-                        tokio::task::yield_now().await;
-                    }
-                    None => break (result.status, result.exit_code),
-                }
-            };
-
-            assert_eq!(final_status, BackgroundShellStatus::Completed);
-            assert_eq!(final_exit, Some(0));
-            assert!(combined_output.contains("line1"));
-            assert!(combined_output.contains("line2"));
-        }
-        BashResult::Completed(_) => panic!("Expected background result, got completed"),
-    }
-}
-
-#[tokio::test]
-async fn test_background_process_with_timeout() {
-    let args = BashInput {
-        command: "sleep 10".to_string(),
-        timeout: Some(100), // 100ms timeout
-        description: None,
-        run_in_background: Some(true),
-    };
-
-    let result = execute_command(args).await.unwrap();
-
-    match result {
-        BashResult::Background(handle) => {
-            let result = read_until_terminal(handle, None).await;
-
-            assert_eq!(result.status, BackgroundShellStatus::Failed);
-            assert!(result.output.contains("timed out"));
-        }
-        BashResult::Completed(_) => panic!("Expected background result, got completed"),
-    }
-}
-
-#[tokio::test]
 async fn test_rm_command_blocked() {
-    let args = BashInput { command: "rm".to_string(), timeout: None, description: None, run_in_background: None };
-
-    let result = execute_command(args).await;
-    assert!(result.is_err());
+    let result = execute_command(BashInput { command: "rm".into(), ..Default::default() }).await;
     assert!(matches!(result.unwrap_err(), BashError::Forbidden(_)));
 }
 
 #[tokio::test]
-async fn test_read_background_bash() {
-    let args = BashInput {
-        command: "echo 'line1'; sleep 0.1; echo 'line2'; echo 'error' >&2".to_string(),
-        timeout: None,
-        description: None,
-        run_in_background: Some(true),
-    };
-
-    let result = execute_command(args).await.unwrap();
-
-    match result {
-        BashResult::Background(handle) => {
-            let result = read_until_terminal(handle, None).await;
-
-            assert!(result.output.contains("line1"));
-            assert!(result.output.contains("line2"));
-            assert!(result.output.contains("error"));
-            assert_eq!(result.status, BackgroundShellStatus::Completed);
-            assert_eq!(result.exit_code, Some(0));
-        }
-        BashResult::Completed(_) => panic!("Expected background result"),
-    }
-}
-
-#[tokio::test]
-async fn test_read_background_bash_with_filter() {
-    let args = BashInput {
-        command: "echo 'ERROR: something went wrong'; echo 'INFO: all good'; echo 'ERROR: another issue'".to_string(),
-        timeout: None,
-        description: None,
-        run_in_background: Some(true),
-    };
-
-    let result = execute_command(args).await.unwrap();
-
-    match result {
-        BashResult::Background(handle) => {
-            let result = read_until_terminal(handle, Some("ERROR".to_string())).await;
-
-            assert!(result.output.contains("ERROR: something went wrong"));
-            assert!(result.output.contains("ERROR: another issue"));
-            assert!(!result.output.contains("INFO: all good"));
-            assert_eq!(result.status, BackgroundShellStatus::Completed);
-        }
-        BashResult::Completed(_) => panic!("Expected background result"),
-    }
-}
-
-#[tokio::test]
-async fn test_read_background_bash_running_status() {
-    let args =
-        BashInput { command: "sleep 10".to_string(), timeout: None, description: None, run_in_background: Some(true) };
-
-    let result = execute_command(args).await.unwrap();
-
-    match result {
-        BashResult::Background(handle) => {
-            let (result, _) = read_background_bash(handle, None).await.unwrap();
-
-            assert_eq!(result.status, BackgroundShellStatus::Running);
-            assert_eq!(result.exit_code, None);
-        }
-        BashResult::Completed(_) => panic!("Expected background result"),
-    }
-}
-
-#[tokio::test]
-async fn test_read_background_bash_failed_status() {
-    let args = BashInput {
-        command: "sleep 10".to_string(),
-        timeout: Some(100), // Will timeout
-        description: None,
-        run_in_background: Some(true),
-    };
-
-    let result = execute_command(args).await.unwrap();
-
-    match result {
-        BashResult::Background(handle) => {
-            let result = read_until_terminal(handle, None).await;
-
-            assert_eq!(result.status, BackgroundShellStatus::Failed);
-            assert!(result.exit_code.is_some());
-        }
-        BashResult::Completed(_) => panic!("Expected background result"),
-    }
-}
-
-#[tokio::test]
 async fn test_execute_command_in_dir_foreground() -> Result<(), Box<dyn std::error::Error>> {
-    use mcp_servers::coding::tools::bash::execute_command_in_dir;
-
     let temp = tempfile::tempdir()?;
-    let args = BashInput { command: "pwd".to_string(), timeout: None, description: None, run_in_background: None };
-    let result = execute_command_in_dir(args, Some(temp.path())).await?;
-    let BashResult::Completed(output) = result else {
-        return Err("Expected completed result".into());
+    let output =
+        execute_command_in_dir(BashInput { command: "pwd".into(), ..Default::default() }, Some(temp.path())).await?;
+    assert_eq!(canonicalize(output.output.trim())?, canonicalize(temp.path())?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn background_bash_uses_tasks_and_returns_structured_output() -> TestResult {
+    let client = TestClient::start_with(CodingMcp::new, production_client_info()).await?;
+    let response = client
+        .raw()
+        .call_tool_once(
+            CallToolRequestParams::new("bash").with_arguments(
+                serde_json::json!({
+                    "command": "echo stdout; echo stderr >&2; exit 7",
+                    "runInBackground": true
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        )
+        .await?;
+    let CallToolResponse::Task(created) = response else {
+        panic!("expected task response: {response:?}");
     };
+    assert_eq!(created.task.status, TaskStatus::Working);
 
-    let pwd = output.output.trim();
+    let detailed = loop {
+        let result = client.raw().get_task(rmcp::model::GetTaskParams::new(created.task.task_id.clone())).await?;
+        if result.task.status().is_terminal() {
+            break result.task;
+        }
+        tokio::task::yield_now().await;
+    };
+    let TaskPayload::Completed { result } = detailed.payload else {
+        panic!("expected completed task");
+    };
+    let result: rmcp::model::CallToolResult = serde_json::from_value(serde_json::Value::Object(result))?;
+    assert_eq!(result.is_error, Some(false));
+    let structured = result.structured_content.as_ref().unwrap();
+    let output = structured["output"].as_str().unwrap();
+    assert!(output.contains("stdout"));
+    assert!(output.contains("stderr"));
+    assert_eq!(structured["exitCode"], 7);
+    Ok(())
+}
 
-    assert_eq!(canonicalize(pwd)?, canonicalize(temp.path())?);
+#[tokio::test]
+async fn background_bash_requires_tasks_capability() -> TestResult {
+    let client = TestClient::start_with(CodingMcp::new, test_client_info()).await?;
+    let error = client
+        .raw()
+        .call_tool_once(CallToolRequestParams::new("bash").with_arguments(
+            serde_json::json!({ "command": "echo never", "runInBackground": true }).as_object().unwrap().clone(),
+        ))
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().to_lowercase().contains("missing required client capability"),
+        "unexpected error: {error}"
+    );
     Ok(())
 }

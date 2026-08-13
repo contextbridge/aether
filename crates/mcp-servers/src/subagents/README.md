@@ -1,7 +1,7 @@
 # SubAgentsMcp
 
 Spawn and orchestrate sub-agents authored in project `.aether/settings.json`.
-Sub-agents run in parallel and have access to built-in MCP servers.
+Sub-agents in a batch run concurrently and have access to built-in MCP servers. Foreground execution is the default. Background execution returns one protocol-level MCP Task, requires MCP Tasks support, and cancelling the batch task stops all remaining agents.
 
 **Flag:** `--project-root <path>` (defaults to current directory; `--dir` alias supported)
 
@@ -46,26 +46,29 @@ Only agents with `agentInvocable: true` are exposed by SubAgentsMcp. Top-level `
 
 | Tool | Description |
 |------|-------------|
-| `spawn_subagent` | Spawn one or more sub-agents with specific prompts. All agents run in parallel. |
+| `spawn_subagent` | Spawn one or more sub-agents concurrently. Waits for the whole batch by default; `runInBackground: true` returns an MCP Task. |
 
 ## Spawning Agents
 
-`spawn_subagent` accepts a list of tasks, each with an `agent_name` and `prompt`. All tasks execute in parallel:
+`spawn_subagent` accepts a list of tasks, each with an `agentName` and `prompt`. All children execute concurrently and results preserve input order. By default the call waits for the entire batch, allowing the parent to use the results in its next step. Set `runInBackground: true` for independent work that may complete later:
 
 ```json
 {
   "tasks": [
-    { "agent_name": "explore", "prompt": "Find all API endpoints in this codebase" },
-    { "agent_name": "explore", "prompt": "Document the database schema" }
-  ]
+    {"agentName": "codebase-explorer", "prompt": "Find all API endpoints"},
+    {"agentName": "rust-code-monkey", "prompt": "Write tests for auth module"}
+  ],
+  "runInBackground": true
 }
 ```
 
 ## Structured Output
 
-Sub-agents are encouraged to return structured output with:
+Foreground calls return `results`, `successCount`, `errorCount`, and display metadata directly. Background calls return an MCP Task whose completed payload contains the same data. Background mode requires the client to support MCP Tasks.
+
+Each item in `results` includes the child agent's structured output. Child agents are instructed to return:
 
 - **summary** -- what was accomplished
 - **artifacts** -- files read or modified
 - **decisions** -- key decisions made
-- **next_steps** -- suggested follow-up actions
+- **nextSteps** -- suggested follow-up actions

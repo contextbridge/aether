@@ -62,7 +62,7 @@ Tool filters use exact tool names or a trailing `*` prefix match. For example, `
 
 | Tool             | Description                                                           |
 | ---------------- | --------------------------------------------------------------------- |
-| `spawn_subagent` | Spawn one or more sub-agent tasks in parallel and return all results. |
+| `spawn_subagent` | Spawn all requested agents concurrently. Wait for results by default, or run as an MCP Task. |
 
 ## Example
 
@@ -81,7 +81,11 @@ Tool filters use exact tool names or a trailing `*` prefix match. For example, `
 }
 ```
 
-The output contains one result per input task, in input order:
+`spawn_subagent` waits for the whole batch by default, so the parent receives all results before its next reasoning step. All children run concurrently, and the output contains one result per input task in input order. Rich child progress may be displayed while the call runs.
+
+For independent work that can complete later, set `runInBackground: true` at the top level. The call then immediately returns one MCP Task for the whole batch. Background mode requires MCP Tasks support; cancelling the task stops all remaining agents, and its completed payload has the same shape as the foreground response.
+
+The result payload is:
 
 ```json
 {
@@ -113,10 +117,12 @@ Aether appends structured-output instructions to each sub-agent prompt. Agents a
 | `nextSteps` | Recommended follow-up tasks.                                |
 | `details`   | Optional expanded detail.                                   |
 
-The tool currently returns the sub-agent's raw final output string. Parent agents should parse or summarize that output before continuing.
+Each result's `output` contains the sub-agent's raw final output string. Parent agents should parse or summarize it before continuing.
 
 ## Failure modes
 
-- If no `agentInvocable` agents are registered and tasks are requested, the tool returns an error and should not be retried until configuration changes.
+- Clients that do not advertise MCP Tasks support can use foreground mode but cannot set `runInBackground: true`.
+- If a background batch task is cancelled, all remaining child execution is stopped.
+- If no `agentInvocable` agents are registered and tasks are requested, the tool returns an error before creating a task and should not be retried until configuration changes.
 - If a named agent is missing or not `agentInvocable`, that task result is returned with `status: "error"`.
 - Empty `tasks` returns an empty result set.

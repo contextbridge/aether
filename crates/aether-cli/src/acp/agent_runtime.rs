@@ -7,7 +7,7 @@ use aether_core::agent_spec::AgentSpec;
 use aether_core::agent_spec::ToolFilter;
 use aether_core::core::{AgentDeps, AgentHandle};
 use aether_core::events::{AgentCommand, AgentEvent, Command};
-use aether_core::mcp::run_mcp_task::McpCommand;
+use aether_core::mcp::{McpRuntime, run_mcp_task::McpCommand};
 use llm::ChatMessage;
 use mcp_utils::client::{
     ElicitingOAuthHandler, McpClientEvent, McpConnectionDetails, McpError, McpServer, McpServerStatusEntry,
@@ -27,10 +27,9 @@ pub(crate) const RUNTIME_EVENT_CHANNEL_CAPACITY: usize = 50;
 
 pub(crate) struct AgentRuntime {
     agent_tx: mpsc::Sender<Command>,
-    mcp_tx: mpsc::Sender<McpCommand>,
     latest_mcp_snapshot: watch::Receiver<McpConnectionDetails>,
     agent_handle: Option<AgentHandle>,
-    mcp_handle: JoinHandle<()>,
+    mcp_runtime: McpRuntime,
     agent_pump_handle: JoinHandle<()>,
     mcp_pump_handle: JoinHandle<()>,
 }
@@ -43,9 +42,8 @@ impl AgentRuntime {
         agent_tx: mpsc::Sender<Command>,
         mut agent_rx: mpsc::Receiver<AgentEvent>,
         agent_handle: Option<AgentHandle>,
-        mcp_tx: mpsc::Sender<McpCommand>,
         mut event_rx: mpsc::Receiver<McpClientEvent>,
-        mcp_handle: JoinHandle<()>,
+        mcp_runtime: McpRuntime,
         snapshot: McpConnectionDetails,
         runtime_event_tx: mpsc::Sender<RuntimeEvent>,
     ) -> Self {
@@ -75,7 +73,7 @@ impl AgentRuntime {
             }
         });
 
-        Self { agent_tx, mcp_tx, latest_mcp_snapshot, agent_handle, mcp_handle, agent_pump_handle, mcp_pump_handle }
+        Self { agent_tx, latest_mcp_snapshot, agent_handle, mcp_runtime, agent_pump_handle, mcp_pump_handle }
     }
 
     pub(crate) async fn send_agent_command(&self, command: Command) -> Result<(), SessionError> {
@@ -93,18 +91,18 @@ impl AgentRuntime {
     }
 
     pub(crate) fn mcp_tx(&self) -> &mpsc::Sender<McpCommand> {
-        &self.mcp_tx
+        self.mcp_runtime.command_tx()
     }
 
     pub(crate) async fn list_prompts(&self) -> Result<Vec<McpPrompt>, SessionError> {
-        list_prompts(&self.mcp_tx).await.map_err(|error| match error {
+        list_prompts(self.mcp_tx()).await.map_err(|error| match error {
             SlashCommandError::CommandChannel(message) => SessionError::CommandChannel(message),
             other => SessionError::McpOperation(other.to_string()),
         })
     }
 
     pub(crate) async fn authenticate_mcp_server(&self, name: &str) -> Result<(), SessionError> {
-        self.mcp_tx
+        self.mcp_tx()
             .send(McpCommand::AuthenticateServer { name: name.to_string() })
             .await
             .map_err(|e| SessionError::CommandChannel(format!("failed to send AuthenticateServer command: {e}")))
@@ -120,7 +118,6 @@ impl Drop for AgentRuntime {
         if let Some(handle) = &self.agent_handle {
             handle.abort();
         }
-        self.mcp_handle.abort();
         self.agent_pump_handle.abort();
         self.mcp_pump_handle.abort();
     }
@@ -186,16 +183,15 @@ impl RuntimeFactory for ProductionRuntimeFactory {
             server_statuses: Vec::new(),
         };
 
-        let Runtime { agent_tx, agent_rx, agent_handle, mcp_tx, event_rx, mcp_handle } = runtime;
+        let Runtime { agent_tx, agent_rx, agent_handle, event_rx, mcp_runtime } = runtime;
         Ok(AgentRuntime::new(
             agent,
             spec,
             agent_tx,
             agent_rx,
             Some(agent_handle),
-            mcp_tx,
             event_rx,
-            mcp_handle,
+            mcp_runtime,
             snapshot,
             runtime_event_tx,
         ))

@@ -1,7 +1,7 @@
 use crate::events::{TaskOutcomeState, TraceContext, task_created_result};
-use crate::mcp::mcp;
 use crate::mcp::run_mcp_task::McpCommand;
 use crate::mcp::tool_bridge::{convert_tool_result, map_task_result_to_outcome};
+use crate::mcp::{McpRuntime, mcp};
 use mcp_utils::client::{CancellationToken, McpConnectionDetails, McpServer, McpTransport, ToolCallEvent};
 use mcp_utils::testing::ElicitationScript;
 use rmcp::ServerHandler;
@@ -38,6 +38,7 @@ fn task_outcome(outcome: crate::events::TaskOutcome) -> TaskOutcome {
 
 pub struct McpTest {
     command_tx: mpsc::Sender<McpCommand>,
+    _runtime: McpRuntime,
     snapshot: McpConnectionDetails,
     elicitations: ElicitationScript,
     deferred_tools: tokio::sync::Mutex<VecDeque<DeferredTool>>,
@@ -108,11 +109,13 @@ impl McpTestBuilder {
             .await
             .expect("MCP test manager spawns");
         let snapshot = spawn.block_until_ready().await.expect("MCP test manager becomes ready");
+        let (runtime, event_rx) = spawn.split();
 
         McpTest {
-            command_tx: spawn.command_tx,
+            command_tx: runtime.command_tx().clone(),
+            _runtime: runtime,
             snapshot,
-            elicitations: ElicitationScript::spawn(spawn.event_rx, self.elicitation_responses),
+            elicitations: ElicitationScript::spawn(event_rx, self.elicitation_responses),
             deferred_tools: tokio::sync::Mutex::new(VecDeque::new()),
             cancel_tokens: Mutex::new(HashMap::new()),
             trace_context: self.trace_context,

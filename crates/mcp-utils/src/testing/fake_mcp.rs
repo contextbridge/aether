@@ -58,6 +58,7 @@ pub struct FakeToolResponse {
     response: CallToolResponse,
     delay: Duration,
     progress: Vec<(f64, Option<f64>)>,
+    task_progress: Vec<(f64, Option<f64>)>,
 }
 
 impl FakeMcpServer {
@@ -215,7 +216,7 @@ impl FakeTool {
 
 impl FakeToolResponse {
     pub fn new(response: impl Into<CallToolResponse>) -> Self {
-        Self { response: response.into(), delay: Duration::ZERO, progress: Vec::new() }
+        Self { response: response.into(), delay: Duration::ZERO, progress: Vec::new(), task_progress: Vec::new() }
     }
 
     pub fn text(text: impl Into<String>) -> Self {
@@ -233,6 +234,11 @@ impl FakeToolResponse {
 
     pub fn progress(mut self, progress: f64, total: Option<f64>) -> Self {
         self.progress.push((progress, total));
+        self
+    }
+
+    pub fn task_progress(mut self, progress: f64, total: Option<f64>) -> Self {
+        self.task_progress.push((progress, total));
         self
     }
 }
@@ -337,6 +343,20 @@ impl ServerHandler for FakeMcpServer {
                     notification = notification.with_total(total);
                 }
                 let _ = context.peer.notify_progress(notification).await;
+            }
+            if !response.task_progress.is_empty() {
+                let peer = context.peer.clone();
+                let token = token.clone();
+                tokio::spawn(async move {
+                    tokio::task::yield_now().await;
+                    for (progress, total) in response.task_progress {
+                        let mut notification = ProgressNotificationParam::new(token.clone(), progress);
+                        if let Some(total) = total {
+                            notification = notification.with_total(total);
+                        }
+                        let _ = peer.notify_progress(notification).await;
+                    }
+                });
             }
         }
         Ok(response.response)

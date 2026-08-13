@@ -47,7 +47,7 @@ async fn run_agent(config: RunConfig, telemetry: Option<Arc<TelemetryRuntime>>) 
         .build_ready(vec![])
         .await?;
 
-    let prompt = expand_prompt(&agent.mcp_tx, config.prompt).await;
+    let prompt = expand_prompt(agent.mcp_runtime.command_tx(), config.prompt).await;
 
     agent
         .agent_tx

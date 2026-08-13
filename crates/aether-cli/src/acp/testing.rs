@@ -20,7 +20,6 @@ use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::{AgentSpec, AgentSpecExposure};
 use aether_core::core::{AgentBuilder, AgentHandle, Prompt};
 use aether_core::events::{AgentEvent, Command, MessageEvent};
-use aether_core::mcp::McpSpawnResult;
 use aether_core::mcp::mcp;
 use aether_core::session::{SessionControlEvent, SessionEvent, SessionMeta, UserEvent, last_agent_from_events};
 use aether_project::AgentCatalog;
@@ -396,7 +395,7 @@ impl RuntimeFactory for FakeRuntimeFactory {
             .block_until_ready()
             .await
             .ok_or_else(|| SessionError::McpOperation("fake MCP bootstrap aborted".to_string()))?;
-        let McpSpawnResult { command_tx: mcp_tx, event_rx, handle: mcp_handle } = spawn;
+        let (mcp_runtime, event_rx) = spawn.split();
 
         let filtered_tools = spec.tools.apply(snapshot.tool_definitions.clone());
         let mut builder = AgentBuilder::new(provider).max_auto_continues(0);
@@ -404,7 +403,7 @@ impl RuntimeFactory for FakeRuntimeFactory {
             builder = builder.system_prompt(prompt.clone());
         }
         let (agent_tx, agent_rx, agent_handle) = builder
-            .tools(mcp_tx.clone(), filtered_tools)
+            .tools(mcp_runtime.command_tx().clone(), filtered_tools)
             .messages(initial_messages)
             .spawn()
             .await
@@ -416,9 +415,8 @@ impl RuntimeFactory for FakeRuntimeFactory {
             agent_tx,
             agent_rx,
             Some(agent_handle),
-            mcp_tx,
             event_rx,
-            mcp_handle,
+            mcp_runtime,
             snapshot,
             runtime_event_tx,
         ))
@@ -458,7 +456,7 @@ impl RuntimeFactory for StubRuntimeFactory {
             .block_until_ready()
             .await
             .ok_or_else(|| SessionError::McpOperation("stub MCP bootstrap aborted".to_string()))?;
-        let McpSpawnResult { command_tx: mcp_tx, event_rx, handle: mcp_handle } = spawn;
+        let (mcp_runtime, event_rx) = spawn.split();
 
         Ok(AgentRuntime::new(
             agent,
@@ -466,9 +464,8 @@ impl RuntimeFactory for StubRuntimeFactory {
             parts.tx,
             parts.rx,
             Some(parts.handle),
-            mcp_tx,
             event_rx,
-            mcp_handle,
+            mcp_runtime,
             snapshot,
             runtime_event_tx,
         ))

@@ -19,18 +19,39 @@ pub fn mcp(root_dir: impl AsRef<Path>) -> McpBuilder {
     McpBuilder::new(root_dir)
 }
 
-/// Handle to the spawned MCP manager task. Consumers receive incremental
-/// updates over `event_rx` (starting with an initial `ServerStatusesChanged`
-/// reflecting every configured server in `Connecting`) and can call
-/// `block_until_ready()` to block until every server has finished its initial
-/// connection attempt.
+/// Owns a spawned MCP manager. Dropping this value aborts the manager task.
+pub struct McpRuntime {
+    command_tx: Sender<McpCommand>,
+    handle: JoinHandle<()>,
+}
+
+impl McpRuntime {
+    pub fn command_tx(&self) -> &Sender<McpCommand> {
+        &self.command_tx
+    }
+}
+
+impl Drop for McpRuntime {
+    fn drop(&mut self) {
+        self.handle.abort();
+    }
+}
+
+/// A freshly spawned MCP manager paired with its event stream. Consumers
+/// receive incremental updates over the event stream (starting with an initial
+/// `ServerStatusesChanged` reflecting every configured server in `Connecting`)
+/// and can call [`split`](Self::split) to separate the stream from the
+/// [`McpRuntime`] that keeps the manager task alive.
 pub struct McpSpawnResult {
-    pub command_tx: Sender<McpCommand>,
-    pub event_rx: Receiver<McpClientEvent>,
-    pub handle: JoinHandle<()>,
+    runtime: McpRuntime,
+    event_rx: Receiver<McpClientEvent>,
 }
 
 impl McpSpawnResult {
+    pub fn command_tx(&self) -> &Sender<McpCommand> {
+        self.runtime.command_tx()
+    }
+
     /// Block until the manager finishes bootstrapping every initially-configured
     /// server, then return the consolidated snapshot. Returns `None` if the
     /// event channel closes before `ConnectionReady` is received.
@@ -41,6 +62,10 @@ impl McpSpawnResult {
             }
         }
         None
+    }
+
+    pub fn split(self) -> (McpRuntime, Receiver<McpClientEvent>) {
+        (self.runtime, self.event_rx)
     }
 }
 
@@ -165,7 +190,7 @@ impl McpBuilder {
 
         let mcp_handle = tokio::spawn(run_mcp_task(mcp_manager, mcp_command_rx, pending));
 
-        Ok(McpSpawnResult { command_tx: mcp_command_tx, event_rx, handle: mcp_handle })
+        Ok(McpSpawnResult { runtime: McpRuntime { command_tx: mcp_command_tx, handle: mcp_handle }, event_rx })
     }
 }
 
@@ -266,7 +291,7 @@ mod tests {
 
     #[tokio::test]
     async fn spawn_returns_immediately_and_emits_initial_connecting_status() {
-        let mut spawn = McpBuilder::new("/workspace")
+        let spawn = McpBuilder::new("/workspace")
             .from_mcp_config_sources(&[json_source(
                 r#"{"servers":{"slow":{"type":"stdio","command":"sleep","args":["30"]}}}"#,
             )])
@@ -276,12 +301,12 @@ mod tests {
             .await
             .expect("spawn should succeed");
 
-        let event = spawn.event_rx.try_recv().expect("spawn() should buffer an initial ServerStatusesChanged");
+        let (_runtime, mut event_rx) = spawn.split();
+        let event = event_rx.try_recv().expect("spawn() should buffer an initial ServerStatusesChanged");
         let McpClientEvent::ServerStatusesChanged(statuses) = event else {
             panic!("expected ServerStatusesChanged, got {event:?}");
         };
         assert!(matches!(statuses[0].status, McpServerStatus::Connecting));
-        spawn.handle.abort();
     }
 
     #[tokio::test]

@@ -1,4 +1,4 @@
-Executes bash commands in a persistent shell session.
+Executes a bash command. Each call runs in a fresh shell — no state persists between calls.
 
 **For terminal operations only** (git, npm, docker, cargo, etc.). Use dedicated tools for file operations.
 
@@ -12,8 +12,8 @@ Executes bash commands in a persistent shell session.
 
 - `command` — **required**, the bash command
 - `description` — concise description (5-10 words)
-- `timeout` — max runtime in ms (default: 120000, max: 600000)
-- `run_in_background` — run async, check output with `read_background_bash`
+- `timeout` — max runtime in ms (max: 600000)
+- `run_in_background` — Run a task in the background. You don't need to poll, results are delivered automatically into context when it completes.
 
 ## Tips
 

@@ -2,7 +2,7 @@ use aether_core::events::{AgentEvent, MessageEvent, ToolEvent, TurnEvent};
 use aether_core::testing::{FakeMcpServer, FakeTool, FakeToolResponse, TestScenario, test_agent};
 use llm::LlmResponse;
 use llm::testing::llm_response;
-use rmcp::model::{CallToolResult, CreateTaskResult, DetailedTask, Task, TaskPayload, TaskStatus};
+use rmcp::model::{CallToolResult, ContentBlock, CreateTaskResult, DetailedTask, Task, TaskPayload, TaskStatus};
 use std::sync::Arc;
 use tokio::sync::Notify;
 
@@ -84,6 +84,61 @@ async fn immediate_background_outcome_follows_deferred_event() {
         .position(|event| matches!(event, AgentEvent::Tool(ToolEvent::TaskCompleted { request, .. } | ToolEvent::TaskFailed { request, .. }) if request.id == "terminal-call"))
         .unwrap();
     assert!(deferred < outcome);
+}
+
+#[tokio::test]
+async fn background_task_progress_reaches_agent_events() {
+    let now = chrono::Utc::now().to_rfc3339();
+    let seed = Task::new("progress-task", TaskStatus::Working, now.clone(), now.clone()).with_poll_interval_ms(10);
+    let working = Task::new("progress-task", TaskStatus::Working, now.clone(), now.clone()).with_poll_interval_ms(10);
+    let completed = Task::new("progress-task", TaskStatus::Completed, now.clone(), now);
+    let result = CallToolResult::success(vec![ContentBlock::text("finished")]);
+    let server = FakeMcpServer::new()
+        .with_tool(
+            FakeTool::new("deferred")
+                .responds(FakeToolResponse::task(CreateTaskResult::new(seed)).task_progress(1.0, Some(2.0))),
+        )
+        .with_task(
+            "progress-task",
+            [
+                DetailedTask::new(working, TaskPayload::Working),
+                DetailedTask::new(
+                    completed,
+                    TaskPayload::Completed {
+                        result: serde_json::from_value(serde_json::to_value(result).unwrap()).unwrap(),
+                    },
+                ),
+            ],
+        );
+    let arguments = serde_json::json!({}).to_string();
+
+    let events = test_agent()
+        .fake_mcp_server("tasks", server)
+        .llm_responses(&[
+            llm_response("msg_1").tool_call("progress-call", "tasks__deferred", &[&arguments]).build(),
+            llm_response("msg_2").text(&["background task started"]).build(),
+            llm_response("msg_3").text(&["handled result"]).build(),
+        ])
+        .scenario(
+            TestScenario::new()
+                .user_text("start background task")
+                .wait_for(|event| matches!(event, AgentEvent::Tool(ToolEvent::TaskCreated { request, .. }) if request.id == "progress-call"))
+                .wait_for(|event| matches!(event, AgentEvent::Tool(ToolEvent::Progress { request, .. }) if request.id == "progress-call"))
+                .wait_for_turn_end(),
+        )
+        .run()
+        .await
+        .unwrap();
+
+    let created = events
+        .iter()
+        .position(|event| matches!(event, AgentEvent::Tool(ToolEvent::TaskCreated { request, .. }) if request.id == "progress-call"))
+        .unwrap();
+    let progress = events
+        .iter()
+        .position(|event| matches!(event, AgentEvent::Tool(ToolEvent::Progress { request, .. }) if request.id == "progress-call"))
+        .unwrap();
+    assert!(created < progress);
 }
 
 #[tokio::test]

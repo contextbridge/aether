@@ -8,23 +8,19 @@ use rmcp::{
         wrapper::{Json, Parameters},
     },
     model::{
-        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ElicitRequest, ElicitRequestParams,
-        ElicitResult, ElicitationAction, ElicitationSchema, EnumSchema, Implementation, InputRequest, InputRequests,
-        ProgressNotificationParam, ServerCapabilities, ServerInfo,
+        CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams, ContentBlock, CreateTaskResult,
+        ElicitRequest, ElicitRequestParams, ElicitResult, ElicitationAction, ElicitationSchema, EnumSchema,
+        GetTaskParams, GetTaskResult, Implementation, InputRequest, InputRequests, ProgressNotificationParam,
+        ServerCapabilities, ServerInfo, UpdateTaskParams,
     },
     service::RequestContext,
+    task_manager::{TaskContext, TaskExit, TaskManager, TaskOptions},
     tool, tool_handler, tool_router,
 };
-use std::fmt::Write as _;
+use std::fmt::{Debug, Formatter, Write as _};
 use std::path::PathBuf;
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
-use tokio::{
-    fs::try_exists,
-    sync::{Mutex, RwLock},
-};
+use std::{collections::HashSet, sync::Arc};
+use tokio::{fs::try_exists, sync::RwLock};
 
 pub mod default_tools;
 pub mod error;
@@ -50,14 +46,12 @@ use crate::{
     workspace_paths::WorkspacePaths,
 };
 use mcp_utils::server::mrtr::{MrtrAction, get_next_mrtr_action, parse_response};
+use mcp_utils::server::tasks::{BACKGROUND_TASK_TTL_MS, require_tasks_capability};
 use mcp_utils::server::tool::parse_arguments;
 
 use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename, truncate};
 use tools::ast_grep::{AstGrepInput, AstGrepOutput, perform_ast_grep};
-use tools::bash::{
-    BackgroundProcessHandle, BashInput, BashOutput, BashResult, ReadBackgroundBashInput, ReadBackgroundBashOutput,
-    execute_command_in_dir, read_background_bash,
-};
+use tools::bash::{BashInput, BashOutput, validate_args};
 use tools::edit_file::{EditFileArgs, EditFileResponse, edit_file_contents};
 use tools::find::{FindInput, FindOutput, find_files};
 use tools::grep::{GrepInput, GrepOutput, perform_grep};
@@ -123,13 +117,12 @@ impl CodingMcpArgs {
 }
 
 #[doc = include_str!("../docs/coding_mcp.md")]
-#[derive(Debug)]
 pub struct CodingMcp<T: CodingTools = DefaultCodingTools> {
     tool_router: ToolRouter<Self>,
-    background_processes: Mutex<HashMap<String, BackgroundProcessHandle>>,
+    task_manager: TaskManager,
     /// Track files that have been read to enforce read-before-edit safety
     files_read: RwLock<HashSet<String>>,
-    tools: T,
+    tools: Arc<T>,
     /// Optional LSP operations (enabled with `.with_lsp()`)
     lsp: Option<Arc<LspRegistry>>,
     web_fetcher: WebFetcher,
@@ -156,7 +149,7 @@ fn build_rule_catalog(configured_rules_dirs: &[PathBuf]) -> aether_project::Prom
 impl<T: CodingTools + 'static> ServerHandler for CodingMcp<T> {
     fn get_info(&self) -> ServerInfo {
         let instructions = self.build_instructions();
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().enable_tasks().build())
             .with_server_info(Implementation::new("coding-mcp", "0.1.0"))
             .with_instructions(instructions)
     }
@@ -166,6 +159,12 @@ impl<T: CodingTools + 'static> ServerHandler for CodingMcp<T> {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
+        let background_args = background_bash_args(&request);
+        if let Some(args) = &background_args {
+            require_tasks_capability(&context)?;
+            validate_args(args).map_err(|error| ErrorData::invalid_params(error.to_string(), None))?;
+        }
+
         if let Some(prompt) = self.permission_prompt(&request) {
             let action = get_next_mrtr_action(request.input_responses.as_ref(), || {
                 Ok(InputRequests::from([(
@@ -196,7 +195,37 @@ impl<T: CodingTools + 'static> ServerHandler for CodingMcp<T> {
                 }
             }
         }
+        if let Some(args) = background_args {
+            return Ok(CallToolResponse::Task(CreateTaskResult::new(self.create_background_bash_task(args))));
+        }
+
         self.tool_router.call(ToolCallContext::new(self, request, context)).await
+    }
+
+    async fn get_task(
+        &self,
+        request: GetTaskParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<GetTaskResult, ErrorData> {
+        Ok(GetTaskResult::new(self.task_manager.get_task(&request.task_id)?))
+    }
+
+    async fn update_task(
+        &self,
+        request: UpdateTaskParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<(), ErrorData> {
+        self.task_manager.update_task(&request.task_id, request.input_responses)?;
+        Ok(())
+    }
+
+    async fn cancel_task(
+        &self,
+        request: CancelTaskParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<(), ErrorData> {
+        self.task_manager.cancel_task(&request.task_id)?;
+        Ok(())
     }
 }
 
@@ -259,9 +288,9 @@ impl<T: CodingTools + 'static> CodingMcp<T> {
     pub fn with_tools(tools: T) -> Self {
         Self {
             tool_router: Self::tool_router(),
-            background_processes: Mutex::new(HashMap::new()),
+            task_manager: TaskManager::new(),
             files_read: RwLock::new(HashSet::new()),
-            tools,
+            tools: Arc::new(tools),
             lsp: None,
             web_fetcher: WebFetcher::new(),
             web_searcher: WebSearcher::try_new().ok(),
@@ -299,6 +328,28 @@ impl<T: CodingTools + 'static> CodingMcp<T> {
     pub fn with_permission_mode(mut self, mode: PermissionMode) -> Self {
         self.permission_mode = mode;
         self
+    }
+
+    fn create_background_bash_task(&self, args: BashInput) -> rmcp::model::Task {
+        let tools = Arc::clone(&self.tools);
+        let cwd = self.root_dir.clone();
+        let description = args.description.clone().unwrap_or_else(|| truncate(&args.command, 80));
+        let options = TaskOptions::new().with_ttl_ms(BACKGROUND_TASK_TTL_MS).with_status_message(description);
+
+        self.task_manager.spawn(options, move |task_context: TaskContext| {
+            Box::pin(async move {
+                tokio::select! {
+                    () = task_context.cancelled() => Err(TaskExit::Cancelled),
+                    result = tools.bash(args, Some(cwd)) => Ok(match result {
+                        Ok(output) => serde_json::to_value(output).map_or_else(
+                            |error| CallToolResult::error(vec![ContentBlock::text(error.to_string())]),
+                            CallToolResult::structured,
+                        ),
+                        Err(error) => CallToolResult::error(vec![ContentBlock::text(error.to_string())]),
+                    }),
+                }
+            })
+        })
     }
 
     fn workspace_paths(&self) -> WorkspacePaths {
@@ -583,56 +634,8 @@ When using tools that take file paths, always use absolute paths from:
         let Parameters(args) = request;
         notify_preview(&context, ToolDisplayMeta::new("Run command", truncate(&args.command, 40))).await;
 
-        let command = args.command.clone();
         let cwd = self.root_dir.clone();
         let result = self.tools.bash(args, Some(cwd)).await.map_err(|e| e.to_string())?;
-
-        match result {
-            BashResult::Completed(output) => Ok(Json(output)),
-            BashResult::Background(handle) => {
-                let shell_id = handle.shell_id.clone();
-
-                // Store the background process
-                self.background_processes.lock().await.insert(shell_id.clone(), handle);
-
-                let display_meta =
-                    ToolDisplayMeta::new("Run command", format!("{} (background)", truncate(&command, 40)));
-
-                // Return immediate response with shell_id
-                Ok(Json(BashOutput {
-                    output: String::new(),
-                    exit_code: 0,
-                    killed: None,
-                    shell_id: Some(shell_id),
-                    meta: Some(display_meta.into()),
-                }))
-            }
-        }
-    }
-
-    #[doc = include_str!("tools/bash/read_background_description.md")]
-    #[tool(annotations(read_only_hint = true, open_world_hint = false))]
-    pub async fn read_background_bash(
-        &self,
-        request: Parameters<ReadBackgroundBashInput>,
-    ) -> Result<Json<ReadBackgroundBashOutput>, String> {
-        let Parameters(args) = request;
-
-        let handle = self
-            .background_processes
-            .lock()
-            .await
-            .remove(&args.bash_id)
-            .ok_or_else(|| format!("Shell ID not found: {}", args.bash_id))?;
-
-        let (result, handle_opt) =
-            self.tools.read_background_bash(handle, args.filter).await.map_err(|e| e.to_string())?;
-
-        // Put handle back if still running
-        if let Some(handle) = handle_opt {
-            self.background_processes.lock().await.insert(args.bash_id, handle);
-        }
-
         Ok(Json(result))
     }
 
@@ -799,6 +802,33 @@ fn decision_form(tool_name: &str, description: &str) -> ElicitRequestParams {
             )
             .build()
             .unwrap(),
+    }
+}
+
+fn background_bash_args(request: &CallToolRequestParams) -> Option<BashInput> {
+    if request.name.as_ref() != "bash" {
+        return None;
+    }
+
+    let args = parse_arguments::<BashInput>(request).ok()?;
+    args.run_in_background.is_some_and(|background| background).then_some(args)
+}
+
+// TaskManager has no Drop of its own: aborting the tasks here drops their
+// in-flight command futures, whose kill_on_drop reaps the child processes.
+impl<T: CodingTools> Drop for CodingMcp<T> {
+    fn drop(&mut self) {
+        self.task_manager.shutdown();
+    }
+}
+
+impl<T: CodingTools> Debug for CodingMcp<T> {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CodingMcp")
+            .field("root_dir", &self.root_dir)
+            .field("permission_mode", &self.permission_mode)
+            .finish_non_exhaustive()
     }
 }
 

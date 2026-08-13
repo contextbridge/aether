@@ -62,22 +62,6 @@ pub enum BashError {
     /// Failed to spawn process
     #[error("Failed to execute command '{command}': {reason}")]
     SpawnFailed { command: String, reason: String },
-
-    /// Invalid regex pattern for filtering
-    #[error("Invalid regex pattern: {0}")]
-    InvalidRegex(#[source] regex::Error),
-
-    /// Failed to join background task
-    #[error("Failed to join background task: {0}")]
-    JoinFailed(#[source] tokio::task::JoinError),
-
-    /// Shell ID not found
-    #[error("Shell ID not found: {0}")]
-    ShellNotFound(String),
-
-    /// Wait on child process failed
-    #[error("Wait failed: {0}")]
-    WaitFailed(String),
 }
 
 /// Errors related to building glob filters, shared across search tools
