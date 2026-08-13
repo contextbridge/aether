@@ -7,7 +7,8 @@ use serde_json::Value;
 use sqlx::migrate::{MigrateError, Migrator};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteRow};
 use sqlx::{
-    Column, Connection, Executor, QueryBuilder, Row, Sqlite, SqliteConnection, Transaction, TypeInfo, ValueRef,
+    AssertSqlSafe, Column, Connection, Executor, QueryBuilder, Row, SqlSafeStr, Sqlite, SqliteConnection, Transaction,
+    TypeInfo, ValueRef,
 };
 use std::collections::{HashMap, HashSet};
 use std::fs::create_dir_all;
@@ -138,7 +139,8 @@ impl Db {
     }
 
     pub(crate) async fn query(&mut self, sql: &str, limits: QueryLimits) -> Result<QueryOutput, SessionIndexError> {
-        let describe = self.conn.describe(sql).await?;
+        let sql = AssertSqlSafe(sql).into_sql_str();
+        let describe = self.conn.describe(sql.clone()).await?;
         let columns = describe.columns().iter().map(|column| column.name().to_string()).collect::<Vec<_>>();
         let mut rows = sqlx::query(sql).fetch(&mut self.conn);
         let mut output_rows = Vec::new();
@@ -362,8 +364,8 @@ mod tests {
         conn.close().await.unwrap();
 
         let mut db = Db::open_writable(&path).await.unwrap();
-        let rows =
-            db.query("select count(*) from sessions", QueryLimits { max_rows: 1, max_cell_chars: 100 }).await.unwrap();
+        let sql = format!("select count(*) from {}", "sessions");
+        let rows = db.query(&sql, QueryLimits { max_rows: 1, max_cell_chars: 100 }).await.unwrap();
 
         assert_eq!(rows.rows, vec![vec![Value::from(0)]]);
     }
