@@ -8,4 +8,5 @@
 
 pub(crate) mod mappers;
 pub(crate) mod streaming;
+#[cfg(any(feature = "bedrock", feature = "codex"))]
 pub(crate) mod transport;

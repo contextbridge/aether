@@ -35,6 +35,7 @@ impl ResponsesRequestPolicy {
         }
     }
 
+    #[cfg(feature = "codex")]
     pub const fn codex() -> Self {
         Self {
             provider: Provider::Codex,
@@ -45,6 +46,7 @@ impl ResponsesRequestPolicy {
         }
     }
 
+    #[cfg(feature = "bedrock")]
     pub const fn mantle() -> Self {
         Self {
             provider: Provider::Bedrock,
@@ -364,6 +366,7 @@ mod tests {
         assert!(openai_body("gpt-4.1", &context)["reasoning"].is_null());
     }
 
+    #[cfg(feature = "codex")]
     #[test]
     fn a_provider_default_effort_always_ships_with_a_reasoning_object() {
         let context = Context::new(vec![ChatMessage::user("Hi")], vec![]);
@@ -374,6 +377,7 @@ mod tests {
         assert_eq!(body["reasoning"]["summary"], "auto");
     }
 
+    #[cfg(feature = "codex")]
     #[test]
     fn tool_strict_is_sent_verbatim_per_policy() {
         let tools = vec![ToolDefinition::new("read_file", "Read a file", serde_json::json!({ "type": "object" }))];
