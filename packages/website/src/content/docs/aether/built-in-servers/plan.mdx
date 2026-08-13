@@ -17,7 +17,7 @@ The `plan` server gives Aether a "plan mode" with scoped tools for writing, edit
 }
 ```
 
-When registered through Aether's built-in server wiring, plans default to `${WORKSPACE}/docs/aether/plans`. Standalone `plan-mcp` defaults to `docs/aether/plans` relative to its process cwd. Pass `--plans-dir` to override it:
+When registered through Aether's built-in server wiring, plans default to `${WORKSPACE}/docs/aether/plans`. The standalone `mcp-servers-stdio --server plan` binary defaults to `docs/aether/plans` relative to its process cwd. Pass `--plans-dir` to override it:
 
 ```json title=".aether/mcp.json"
 {
