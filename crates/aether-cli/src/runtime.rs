@@ -3,15 +3,14 @@ use aether_core::agent_spec::{AgentSpec, McpConfigSource};
 use aether_core::core::{AgentBuilder, AgentDeps, AgentHandle, Prompt};
 use aether_core::events::{AgentEvent, Command};
 use aether_core::mcp::McpBuilder;
-use aether_core::mcp::McpSpawnResult;
 use aether_core::mcp::mcp;
 use aether_core::mcp::run_mcp_task::McpCommand;
+use aether_core::mcp::{McpRuntime, McpSpawnResult};
 use llm::{ChatMessage, ToolDefinition};
 use mcp_servers::McpBuilderExt;
 use mcp_utils::client::{McpClientEvent, McpConnectionDetails, McpServer, OAuthHandlerFactory};
 use std::path::PathBuf;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::task::JoinHandle;
 use tracing::debug;
 
 pub struct RuntimeBuilder {
@@ -27,9 +26,8 @@ pub struct Runtime {
     pub agent_tx: Sender<Command>,
     pub agent_rx: Receiver<AgentEvent>,
     pub agent_handle: AgentHandle,
-    pub mcp_tx: Sender<McpCommand>,
     pub event_rx: Receiver<McpClientEvent>,
-    pub mcp_handle: JoinHandle<()>,
+    pub mcp_runtime: McpRuntime,
 }
 
 pub struct PromptInfo {
@@ -78,10 +76,10 @@ impl RuntimeBuilder {
     ) -> Result<Runtime, CliError> {
         let deps = self.agent_deps.clone();
         let (spec, spawn) = self.spawn_mcp().await?;
-        let McpSpawnResult { command_tx: mcp_tx, event_rx, handle: mcp_handle } = spawn;
+        let (mcp_runtime, event_rx) = spawn.split();
 
         let (agent_tx, agent_rx, agent_handle) =
-            spawn_agent(&spec, &deps, mcp_tx.clone(), Vec::new(), |mut agent_builder| {
+            spawn_agent(&spec, &deps, mcp_runtime.command_tx().clone(), Vec::new(), |mut agent_builder| {
                 if let Some(prompt) = custom_prompt {
                     agent_builder = agent_builder.system_prompt(prompt);
                 }
@@ -92,7 +90,7 @@ impl RuntimeBuilder {
             })
             .await?;
 
-        Ok(Runtime { agent_tx, agent_rx, agent_handle, mcp_tx, event_rx, mcp_handle })
+        Ok(Runtime { agent_tx, agent_rx, agent_handle, event_rx, mcp_runtime })
     }
 
     /// Spawn MCP, block until every server finishes its initial connection,
@@ -108,19 +106,19 @@ impl RuntimeBuilder {
             .block_until_ready()
             .await
             .ok_or_else(|| CliError::McpError("MCP bootstrap aborted before completion".to_string()))?;
-        let McpSpawnResult { command_tx: mcp_tx, event_rx, handle: mcp_handle } = spawn;
+        let (mcp_runtime, event_rx) = spawn.split();
 
         let filtered_tools = spec.tools.apply(snapshot.tool_definitions.clone());
         let mut runtime_spec = spec;
         runtime_spec.prompts.push(Prompt::McpInstructions(snapshot.instructions.clone()));
 
         let (agent_tx, agent_rx, agent_handle) =
-            spawn_agent(&runtime_spec, &deps, mcp_tx.clone(), filtered_tools, |agent_builder| {
+            spawn_agent(&runtime_spec, &deps, mcp_runtime.command_tx().clone(), filtered_tools, |agent_builder| {
                 agent_builder.messages(messages)
             })
             .await?;
 
-        Ok((Runtime { agent_tx, agent_rx, agent_handle, mcp_tx, event_rx, mcp_handle }, snapshot))
+        Ok((Runtime { agent_tx, agent_rx, agent_handle, event_rx, mcp_runtime }, snapshot))
     }
 
     pub async fn build_prompt_info(self) -> Result<PromptInfo, CliError> {
