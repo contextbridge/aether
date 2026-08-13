@@ -157,7 +157,6 @@ async fn on_command(
                         Err(_) => McpConnectAttempt::failed(
                             server_name,
                             McpError::ConnectionFailed("authentication timed out after 3 minutes".to_string()),
-                            false,
                         ),
                     }
                 });

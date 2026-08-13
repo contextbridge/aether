@@ -50,7 +50,7 @@ async fn test_parse_stdio_config() {
     );
     with_env!([("GITHUB_TOKEN", "test_token")], {
         let server = parse_one(&json).await;
-        assert!(!server.proxy);
+        assert!(!server.is_proxied());
         match server.transport {
             McpTransport::Stdio { command, args, env } => {
                 assert_eq!(server.name, "githubMcp");
@@ -181,8 +181,8 @@ async fn test_parse_per_server_proxy_config() {
     }"#;
     let servers = parse_servers(json).await.unwrap();
     assert_eq!(servers.len(), 2);
-    assert!(servers.iter().find(|s| s.name == "github").unwrap().proxy);
-    assert!(!servers.iter().find(|s| s.name == "sentry").unwrap().proxy);
+    assert!(servers.iter().find(|s| s.name == "github").unwrap().is_proxied());
+    assert!(!servers.iter().find(|s| s.name == "sentry").unwrap().is_proxied());
 }
 
 #[test]

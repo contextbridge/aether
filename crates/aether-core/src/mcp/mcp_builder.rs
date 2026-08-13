@@ -185,7 +185,6 @@ impl McpBuilder {
 
         mcp_manager = mcp_manager.with_root_dir(self.root_dir);
 
-        mcp_manager.bootstrap_proxy_setup(&self.servers).await?;
         let pending = mcp_manager.register_pending(self.servers).await?;
 
         let mcp_handle = tokio::spawn(run_mcp_task(mcp_manager, mcp_command_rx, pending));
@@ -198,7 +197,7 @@ impl McpBuilder {
 mod tests {
     use super::*;
     use mcp_utils::{
-        client::{McpServerConfig, McpTransport, StdioServerConfig, StdioType},
+        client::{McpServerConfig, McpTransport, StdioServerConfig, StdioType, ToolExposure},
         status::McpServerStatus,
     };
     use std::collections::{BTreeMap, HashMap};
@@ -229,7 +228,7 @@ mod tests {
                 command: "from_inline".to_string(),
                 args: Vec::new(),
                 env: HashMap::new(),
-                proxy: false,
+                proxy: ToolExposure::Direct,
             }),
         )]));
         let sources = vec![
@@ -262,7 +261,7 @@ mod tests {
     async fn file_source_proxy_true_marks_all_file_servers_proxied() {
         let (_dir, file_path) = write_config_file(
             "proxied.json",
-            r#"{"servers":{"github":{"type":"stdio","command":"g","proxy":false},"browser":{"type":"stdio","command":"b"}}}"#,
+            r#"{"servers":{"github":{"type":"stdio","command":"g","proxy":{"exclude":["status"]}},"browser":{"type":"stdio","command":"b"}}}"#,
         );
 
         let builder = McpBuilder::new("/workspace")
@@ -272,6 +271,7 @@ mod tests {
 
         assert_eq!(proxy_for(&builder, "github"), Some(true));
         assert_eq!(proxy_for(&builder, "browser"), Some(true));
+        assert!(is_direct_tool(&builder, "github", "status"));
     }
 
     #[tokio::test]
@@ -359,7 +359,15 @@ mod tests {
         })
     }
 
+    fn is_direct_tool(builder: &McpBuilder, server_name: &str, tool_name: &str) -> bool {
+        builder
+            .servers
+            .iter()
+            .find(|server| server.name == server_name)
+            .is_some_and(|server| server.tool_exposure.is_direct_tool(tool_name))
+    }
+
     fn proxy_for(builder: &McpBuilder, name: &str) -> Option<bool> {
-        builder.servers.iter().find(|server| server.name == name).map(|server| server.proxy)
+        builder.servers.iter().find(|server| server.name == name).map(mcp_utils::client::McpServer::is_proxied)
     }
 }

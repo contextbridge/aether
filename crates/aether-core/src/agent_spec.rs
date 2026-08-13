@@ -7,6 +7,7 @@ use crate::core::Prompt;
 use llm::{LlmModel, ModelSettings, ProviderConnectionOverrides, ReasoningEffort, ToolDefinition};
 use mcp_utils::client::McpConfig;
 use std::path::PathBuf;
+use utils::matches_name_pattern;
 
 #[derive(Debug, Clone)]
 pub enum McpConfigSource {
@@ -108,7 +109,7 @@ impl ToolMatcher {
 
     pub fn matches(&self, tool: &ToolDefinition) -> bool {
         match self {
-            Self::Name(pattern) => matches_pattern(pattern, &tool.name),
+            Self::Name(pattern) => matches_name_pattern(pattern, &tool.name),
             Self::Annotations(matcher) => matcher.matches(tool),
         }
     }
@@ -178,11 +179,6 @@ impl ToolFilter {
         let denied = self.deny.iter().any(|matcher| matcher.matches(tool));
         allowed && !denied
     }
-}
-
-/// Match a pattern against a name, supporting a trailing `*` wildcard.
-fn matches_pattern(pattern: &str, name: &str) -> bool {
-    if let Some(prefix) = pattern.strip_suffix('*') { name.starts_with(prefix) } else { pattern == name }
 }
 
 /// Defines how an agent can be invoked.
@@ -424,11 +420,13 @@ mod tests {
     }
 
     #[test]
-    fn matches_pattern_exact_and_wildcard() {
-        assert!(matches_pattern("foo", "foo"));
-        assert!(!matches_pattern("foo", "foobar"));
-        assert!(matches_pattern("foo*", "foobar"));
-        assert!(matches_pattern("foo*", "foo"));
-        assert!(!matches_pattern("bar*", "foo"));
+    fn tool_matcher_uses_exact_and_trailing_wildcard_names() {
+        let exact = ToolMatcher::name("foo");
+        let wildcard = ToolMatcher::name("foo*");
+        assert!(exact.matches(&make_tool("foo")));
+        assert!(!exact.matches(&make_tool("foobar")));
+        assert!(wildcard.matches(&make_tool("foobar")));
+        assert!(wildcard.matches(&make_tool("foo")));
+        assert!(!wildcard.matches(&make_tool("bar")));
     }
 }
