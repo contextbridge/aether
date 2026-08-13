@@ -19,35 +19,29 @@ mod syntax;
 #[doc = include_str!("../docs/theme.md")]
 #[derive(Clone, Debug)]
 pub struct Theme {
-    // Base colors
     fg: Color,
     bg: Color,
     accent: Color,
     highlight_bg: Color,
     highlight_fg: Color,
 
-    // Text colors
     text_secondary: Color,
     code_fg: Color,
     code_bg: Color,
 
-    // Markdown semantic colors
     heading: Color,
     link: Color,
     blockquote: Color,
     muted: Color,
 
-    // Status colors
     success: Color,
     warning: Color,
     error: Color,
     info: Color,
     secondary: Color,
 
-    // Layout colors
     sidebar_bg: Color,
 
-    // Diff colors
     diff_added_fg: Color,
     diff_removed_fg: Color,
     diff_added_bg: Color,

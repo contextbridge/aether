@@ -1518,8 +1518,6 @@ mod tests {
     use serde_json::json;
     use tempfile::NamedTempFile;
 
-    // ── Helper unit tests ────────────────────────────────────────────────────
-
     #[test]
     fn model_id_to_variant_pascal_cases_segments() {
         assert_eq!(model_id_to_variant("claude-sonnet-4-5-20250929"), "ClaudeSonnet4520250929");
@@ -1873,8 +1871,6 @@ mod tests {
         assert_eq!(codex.context_window, 272_000);
         assert_eq!(openai.context_window, 1_050_000);
     }
-
-    // ── Markdown docs ────────────────────────────────────────────────────────
 
     #[test]
     fn generate_uses_codex_subscription_model_ids() {

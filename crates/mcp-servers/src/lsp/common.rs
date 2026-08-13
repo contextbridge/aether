@@ -353,8 +353,6 @@ mod tests {
         assert_eq!(ctx, "");
     }
 
-    // --- find_word_boundary_match tests ---
-
     #[test]
     fn test_word_boundary_match_basic() {
         assert_eq!(find_word_boundary_match("use std::HashMap;", "HashMap"), Some(9));
@@ -364,8 +362,6 @@ mod tests {
     fn test_word_boundary_match_no_partial() {
         assert_eq!(find_word_boundary_match("let x = HashMapExtra;", "HashMap"), None);
     }
-
-    // --- find_symbol_line tests ---
 
     #[test]
     fn test_find_symbol_line_import() {
