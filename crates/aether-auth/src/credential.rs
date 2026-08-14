@@ -3,13 +3,14 @@ use oauth2::basic::BasicClient;
 use oauth2::reqwest::redirect::Policy;
 use oauth2::{ClientId, RefreshToken, TokenResponse, TokenUrl};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::time::Duration;
 
 use crate::OAuthError;
 
 const TOKEN_EXPIRY_GRACE_PERIOD: Duration = Duration::from_mins(1);
 
-/// Credential for an OAuth provider.
+/// Credential for a non-MCP OAuth provider.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OAuthCredential {
     pub client_id: String,
@@ -17,9 +18,6 @@ pub struct OAuthCredential {
     pub refresh_token: Option<String>,
     /// Unix timestamp in milliseconds when the token expires.
     pub expires_at: Option<u64>,
-    /// Scopes the authorization server granted with this token.
-    #[serde(default)]
-    pub granted_scopes: Vec<String>,
 }
 
 impl OAuthCredential {
@@ -30,10 +28,6 @@ impl OAuthCredential {
             access_token: token_response.access_token().secret().clone(),
             refresh_token: token_response.refresh_token().map(|token| token.secret().clone()),
             expires_at: expires_at_from_duration(token_response.expires_in()),
-            granted_scopes: token_response
-                .scopes()
-                .map(|scopes| scopes.iter().map(|scope| scope.to_string()).collect())
-                .unwrap_or_default(),
         }
     }
 
@@ -79,19 +73,33 @@ impl OAuthCredential {
     }
 }
 
-/// Trait for loading and saving OAuth credentials, keyed by provider ID or credential key.
+/// Storage for namespaced, opaque OAuth JSON values.
 ///
 /// Implementations include [`OsKeyringStore`](crate::OsKeyringStore) (OS keychain, feature `keyring`)
 /// and the in-memory [`FakeOAuthCredentialStore`](crate::FakeOAuthCredentialStore) for tests.
 #[async_trait]
 pub trait OAuthCredentialStorage: Send + Sync {
-    async fn load_credential(&self, key: &str) -> Result<Option<OAuthCredential>, OAuthError>;
+    async fn load(&self, key: &str) -> Result<Option<Value>, OAuthError>;
 
-    async fn save_credential(&self, key: &str, credential: OAuthCredential) -> Result<(), OAuthError>;
+    async fn save(&self, key: &str, value: Value) -> Result<(), OAuthError>;
 
-    async fn delete_credential(&self, key: &str) -> Result<(), OAuthError>;
+    async fn delete(&self, key: &str) -> Result<(), OAuthError>;
 
-    fn has_credential(&self, key: &str) -> bool;
+    fn contains(&self, key: &str) -> bool;
+
+    async fn load_credential(&self, key: &str) -> Result<Option<OAuthCredential>, OAuthError> {
+        self.load(key)
+            .await?
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|error| OAuthError::CredentialStore(format!("invalid credential: {error}")))
+    }
+
+    async fn save_credential(&self, key: &str, credential: OAuthCredential) -> Result<(), OAuthError> {
+        let value = serde_json::to_value(credential)
+            .map_err(|error| OAuthError::CredentialStore(format!("failed to serialize credential: {error}")))?;
+        self.save(key, value).await
+    }
 }
 
 fn expires_at_from_duration(duration: Option<Duration>) -> Option<u64> {
@@ -163,7 +171,6 @@ mod tests {
             access_token: "access".to_string(),
             refresh_token: None,
             expires_at,
-            granted_scopes: Vec::new(),
         }
     }
 }

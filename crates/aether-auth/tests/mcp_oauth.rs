@@ -1,25 +1,19 @@
 #![cfg(feature = "mcp")]
 
 use aether_auth::{
-    FakeOAuthCredentialStore, OAuthCallback, OAuthCredential, OAuthCredentialStorage, OAuthError, OAuthHandler,
+    FakeOAuthCredentialStore, OAuthCallback, OAuthCredentialStorage, OAuthError, OAuthHandler,
     create_auth_manager_from_store, perform_oauth_flow,
 };
 use futures::future::BoxFuture;
+use rmcp::transport::auth::StoredCredentials;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]
 async fn configured_client_id_ignores_credentials_for_another_client() {
-    let store = Arc::new(FakeOAuthCredentialStore::new().with_credential(
-        "slack",
-        OAuthCredential {
-            client_id: "old-client".to_string(),
-            access_token: "old-token".to_string(),
-            refresh_token: None,
-            expires_at: None,
-            granted_scopes: Vec::new(),
-        },
-    ));
+    let stored = StoredCredentials::new("old-client".to_string(), None, Vec::new(), None);
+    let store =
+        Arc::new(FakeOAuthCredentialStore::new().with_value("mcp:slack", serde_json::to_value(stored).unwrap()));
 
     let manager =
         create_auth_manager_from_store("slack", "https://mcp.slack.com/mcp", Some("configured-client"), store.clone())
@@ -27,8 +21,8 @@ async fn configured_client_id_ignores_credentials_for_another_client() {
             .unwrap();
 
     assert!(manager.is_none());
-    let preserved = store.load_credential("slack").await.unwrap().expect("mismatched credential should be preserved");
-    assert_eq!(preserved.client_id, "old-client");
+    let preserved = store.load("mcp:slack").await.unwrap().expect("mismatched credential should be preserved");
+    assert_eq!(preserved["client_id"], "old-client");
 }
 
 struct FakeHandler {

@@ -2,10 +2,11 @@
 
 use async_trait::async_trait;
 use keyring_core::{CredentialStore as KeyringCredentialStore, Entry, Error as KeyringError};
+use serde_json::Value;
 use std::sync::{Arc, LazyLock};
 use tokio::task;
 
-use crate::{OAuthCredential, OAuthCredentialStorage, OAuthError};
+use crate::{OAuthCredentialStorage, OAuthError};
 
 const KEYCHAIN_SERVICE: &str = "aether-oauth-v1";
 
@@ -46,32 +47,32 @@ impl OsKeyringStore {
 
 #[async_trait]
 impl OAuthCredentialStorage for OsKeyringStore {
-    async fn load_credential(&self, key: &str) -> Result<Option<OAuthCredential>, OAuthError> {
+    async fn load(&self, key: &str) -> Result<Option<Value>, OAuthError> {
         let store = self.clone();
         let key = key.to_string();
         spawn_blocking(move || load_from_keyring(&store, &key)).await
     }
 
-    async fn save_credential(&self, key: &str, credential: OAuthCredential) -> Result<(), OAuthError> {
+    async fn save(&self, key: &str, value: Value) -> Result<(), OAuthError> {
         let store = self.clone();
         let key = key.to_string();
-        spawn_blocking(move || save_to_keyring(&store, &key, &credential)).await
+        spawn_blocking(move || save_to_keyring(&store, &key, &value)).await
     }
 
-    async fn delete_credential(&self, key: &str) -> Result<(), OAuthError> {
+    async fn delete(&self, key: &str) -> Result<(), OAuthError> {
         let store = self.clone();
         let key = key.to_string();
         spawn_blocking(move || delete_from_keyring(&store, &key)).await
     }
 
-    fn has_credential(&self, key: &str) -> bool {
-        try_has_credential(self, key).unwrap_or(false)
+    fn contains(&self, key: &str) -> bool {
+        try_contains(self, key).unwrap_or(false)
     }
 }
 
 type BackendFactory = Box<dyn FnOnce() -> Result<Arc<KeyringCredentialStore>, OAuthError> + Send + Sync>;
 
-fn try_has_credential(store: &OsKeyringStore, key: &str) -> Result<bool, OAuthError> {
+fn try_contains(store: &OsKeyringStore, key: &str) -> Result<bool, OAuthError> {
     let entry = credential_entry(store, key)?;
     match entry.get_credential() {
         Ok(_) => Ok(true),
@@ -85,7 +86,7 @@ fn credential_entry(store: &OsKeyringStore, key: &str) -> Result<Entry, OAuthErr
     build_keyring_entry(backend.as_ref(), key)
 }
 
-fn load_from_keyring(store: &OsKeyringStore, key: &str) -> Result<Option<OAuthCredential>, OAuthError> {
+fn load_from_keyring(store: &OsKeyringStore, key: &str) -> Result<Option<Value>, OAuthError> {
     let entry = credential_entry(store, key)?;
     match entry.get_secret() {
         Ok(blob) => serde_json::from_slice(&blob)
@@ -96,9 +97,9 @@ fn load_from_keyring(store: &OsKeyringStore, key: &str) -> Result<Option<OAuthCr
     }
 }
 
-fn save_to_keyring(store: &OsKeyringStore, key: &str, credential: &OAuthCredential) -> Result<(), OAuthError> {
+fn save_to_keyring(store: &OsKeyringStore, key: &str, value: &Value) -> Result<(), OAuthError> {
     let entry = credential_entry(store, key)?;
-    let blob = serde_json::to_vec(credential)
+    let blob = serde_json::to_vec(value)
         .map_err(|e| OAuthError::CredentialStore(format!("failed to serialize credential: {e}")))?;
     entry.set_secret(&blob).map_err(map_keyring_err)?;
     Ok(())
@@ -167,6 +168,7 @@ async fn spawn_blocking<T: Send + 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::OAuthCredential;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn credential() -> OAuthCredential {
@@ -175,7 +177,6 @@ mod tests {
             access_token: "access".to_string(),
             refresh_token: Some("refresh".to_string()),
             expires_at: Some(1234),
-            granted_scopes: Vec::new(),
         }
     }
 
@@ -208,10 +209,10 @@ mod tests {
     async fn delete_removes_credential() {
         let store = OsKeyringStore::with_mock_store().unwrap();
         store.save_credential("server", credential()).await.unwrap();
-        assert!(store.has_credential("server"));
+        assert!(store.contains("server"));
 
-        store.delete_credential("server").await.unwrap();
-        assert!(!store.has_credential("server"));
+        store.delete("server").await.unwrap();
+        assert!(!store.contains("server"));
     }
 
     #[tokio::test]
@@ -237,10 +238,10 @@ mod tests {
         let save_err = store.save_credential("k", credential()).await.unwrap_err();
         assert!(matches!(save_err, OAuthError::CredentialStore(m) if m.contains("no dbus")));
 
-        let delete_err = store.delete_credential("k").await.unwrap_err();
+        let delete_err = store.delete("k").await.unwrap_err();
         assert!(matches!(delete_err, OAuthError::CredentialStore(m) if m.contains("no dbus")));
 
-        assert!(!store.has_credential("k"));
+        assert!(!store.contains("k"));
     }
 
     #[tokio::test]

@@ -1,4 +1,4 @@
-use crate::credential::{OAuthCredential, OAuthCredentialStorage};
+use crate::credential::OAuthCredentialStorage;
 use crate::error::OAuthError;
 use age::scrypt::{Identity, Recipient as ScryptRecipient};
 use age::secrecy::SecretString;
@@ -6,6 +6,7 @@ use age::{Decryptor, Encryptor};
 use async_trait::async_trait;
 use dirs::home_dir;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::env::var;
 use std::io::{Read, Write};
@@ -15,9 +16,9 @@ use std::sync::Mutex;
 
 const DEFAULT_PASSWORD_ENV: &str = "AETHER_CREDENTIALS_PASSWORD";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct CredentialStore {
-    credentials: HashMap<String, OAuthCredential>,
+    credentials: HashMap<String, Value>,
 }
 
 pub struct EncryptedFileOAuthCredentialStorage {
@@ -86,14 +87,14 @@ impl EncryptedFileOAuthCredentialStorage {
         Ok(plaintext)
     }
 
-    fn load(&self) -> Result<CredentialStore, OAuthError> {
+    fn load_store(&self) -> Result<CredentialStore, OAuthError> {
         if !self.path.exists() {
-            return Ok(CredentialStore { credentials: HashMap::new() });
+            return Ok(CredentialStore::default());
         }
 
         let bytes = std::fs::read(&self.path)?;
         if bytes.is_empty() {
-            return Ok(CredentialStore { credentials: HashMap::new() });
+            return Ok(CredentialStore::default());
         }
 
         let plaintext = Self::decrypt(&bytes, &self.passphrase)?;
@@ -107,7 +108,7 @@ impl EncryptedFileOAuthCredentialStorage {
             .lock()
             .map_err(|_| OAuthError::CredentialStore("Failed to acquire write lock on credential store".to_string()))?;
 
-        let mut store = self.load()?;
+        let mut store = self.load_store()?;
         mutate(&mut store);
 
         let plaintext = serde_json::to_vec(&store)
@@ -146,31 +147,33 @@ fn write_atomic(path: &Path, data: &[u8]) -> Result<(), OAuthError> {
 
 #[async_trait]
 impl OAuthCredentialStorage for EncryptedFileOAuthCredentialStorage {
-    async fn load_credential(&self, key: &str) -> Result<Option<OAuthCredential>, OAuthError> {
-        let store = self.load()?;
-        Ok(store.credentials.get(key).cloned())
+    async fn load(&self, key: &str) -> Result<Option<serde_json::Value>, OAuthError> {
+        Ok(self.load_store()?.credentials.get(key).cloned())
     }
 
-    async fn save_credential(&self, key: &str, credential: OAuthCredential) -> Result<(), OAuthError> {
+    async fn save(&self, key: &str, value: serde_json::Value) -> Result<(), OAuthError> {
         self.update(|store| {
-            store.credentials.insert(key.to_string(), credential);
+            store.credentials.insert(key.to_string(), value);
         })
     }
 
-    async fn delete_credential(&self, key: &str) -> Result<(), OAuthError> {
+    async fn delete(&self, key: &str) -> Result<(), OAuthError> {
         self.update(|store| {
             store.credentials.remove(key);
         })
     }
 
-    fn has_credential(&self, key: &str) -> bool {
-        self.load().is_ok_and(|store| store.credentials.contains_key(key))
+    fn contains(&self, key: &str) -> bool {
+        self.load_store().is_ok_and(|store| store.credentials.contains_key(key))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::fs::write;
+
     use super::*;
+    use crate::OAuthCredential;
 
     /// `N = 2^10`, fast enough that the KDF stops dominating the suite.
     const TEST_WORK_FACTOR: u8 = 10;
@@ -186,7 +189,6 @@ mod tests {
         assert_eq!(loaded.client_id, "client_1");
         assert_eq!(loaded.access_token, "tok_abc");
         assert_eq!(loaded.refresh_token.as_deref(), Some("ref_xyz"));
-        assert_eq!(loaded.granted_scopes, vec!["scope1"]);
     }
 
     #[tokio::test]
@@ -199,10 +201,10 @@ mod tests {
     async fn delete_removes_credential() {
         let store = temp_store("pass");
         store.save_credential("server-1", test_credential()).await.unwrap();
-        assert!(store.has_credential("server-1"));
+        assert!(store.contains("server-1"));
 
-        store.delete_credential("server-1").await.unwrap();
-        assert!(!store.has_credential("server-1"));
+        store.delete("server-1").await.unwrap();
+        assert!(!store.contains("server-1"));
     }
 
     #[tokio::test]
@@ -226,14 +228,12 @@ mod tests {
             access_token: "token_a".to_string(),
             refresh_token: None,
             expires_at: None,
-            granted_scopes: vec![],
         };
         let cred_b = OAuthCredential {
             client_id: "b".to_string(),
             access_token: "token_b".to_string(),
             refresh_token: None,
             expires_at: None,
-            granted_scopes: vec![],
         };
 
         store.save_credential("server-a", cred_a).await.unwrap();
@@ -254,14 +254,12 @@ mod tests {
             access_token: "v1".to_string(),
             refresh_token: None,
             expires_at: None,
-            granted_scopes: vec![],
         };
         let cred_v2 = OAuthCredential {
             client_id: "c".to_string(),
             access_token: "v2".to_string(),
             refresh_token: None,
             expires_at: None,
-            granted_scopes: vec![],
         };
 
         store.save_credential("server", cred_v1).await.unwrap();
@@ -269,6 +267,44 @@ mod tests {
 
         let loaded = store.load_credential("server").await.unwrap().unwrap();
         assert_eq!(loaded.access_token, "v2");
+    }
+
+    #[tokio::test]
+    async fn loads_existing_encrypted_file_format() {
+        let store = temp_store("pass");
+        let plaintext = serde_json::to_vec(&serde_json::json!({
+            "credentials": {
+                "codex": {
+                    "client_id": "client_1",
+                    "access_token": "tok_abc",
+                    "refresh_token": "ref_xyz",
+                    "expires_at": 9_999_999_999_999_u64
+                }
+            }
+        }))
+        .unwrap();
+        let ciphertext =
+            EncryptedFileOAuthCredentialStorage::encrypt(&plaintext, "pass", Some(TEST_WORK_FACTOR)).unwrap();
+
+        write(&store.path, ciphertext).unwrap();
+        let credential = store.load_credential("codex").await.unwrap().expect("existing credential");
+        assert_eq!(credential.access_token, "tok_abc");
+    }
+
+    #[tokio::test]
+    async fn secrets_round_trip_through_encrypted_file() {
+        let store = temp_store("pass");
+        let secret = serde_json::json!({"client_id": "c", "granted_scopes": ["read"]});
+
+        store.save("mcp:slack", secret.clone()).await.unwrap();
+        store.save_credential("slack", test_credential()).await.unwrap();
+        let reopened = EncryptedFileOAuthCredentialStorage::new(store.path.clone(), "pass".to_string())
+            .with_scrypt_work_factor(TEST_WORK_FACTOR);
+        assert_eq!(reopened.load("mcp:slack").await.unwrap(), Some(secret));
+        assert!(reopened.load_credential("slack").await.unwrap().is_some());
+
+        reopened.delete("mcp:slack").await.unwrap();
+        assert!(store.load("mcp:slack").await.unwrap().is_none());
     }
 
     #[test]
@@ -286,7 +322,6 @@ mod tests {
             access_token: "tok_abc".to_string(),
             refresh_token: Some("ref_xyz".to_string()),
             expires_at: Some(9_999_999_999_999),
-            granted_scopes: vec!["scope1".to_string()],
         }
     }
 

@@ -8,38 +8,43 @@ use crate::error::OAuthError;
 
 #[derive(Default)]
 pub struct FakeOAuthCredentialStore {
-    credentials: Mutex<HashMap<String, OAuthCredential>>,
+    values: Mutex<HashMap<String, serde_json::Value>>,
 }
 
 impl FakeOAuthCredentialStore {
     pub fn new() -> Self {
-        Self { credentials: Mutex::new(HashMap::new()) }
+        Self::default()
     }
 
     pub fn with_credential(self, key: &str, credential: OAuthCredential) -> Self {
-        self.credentials.lock().unwrap().insert(key.to_string(), credential);
+        self.values.lock().unwrap().insert(key.to_string(), serde_json::to_value(credential).unwrap());
+        self
+    }
+
+    pub fn with_value(self, key: &str, value: serde_json::Value) -> Self {
+        self.values.lock().unwrap().insert(key.to_string(), value);
         self
     }
 }
 
 #[async_trait]
 impl OAuthCredentialStorage for FakeOAuthCredentialStore {
-    async fn load_credential(&self, server_id: &str) -> Result<Option<OAuthCredential>, OAuthError> {
-        Ok(self.credentials.lock().unwrap().get(server_id).cloned())
+    async fn load(&self, key: &str) -> Result<Option<serde_json::Value>, OAuthError> {
+        Ok(self.values.lock().unwrap().get(key).cloned())
     }
 
-    async fn save_credential(&self, key: &str, credential: OAuthCredential) -> Result<(), OAuthError> {
-        self.credentials.lock().unwrap().insert(key.to_string(), credential);
+    async fn save(&self, key: &str, value: serde_json::Value) -> Result<(), OAuthError> {
+        self.values.lock().unwrap().insert(key.to_string(), value);
         Ok(())
     }
 
-    async fn delete_credential(&self, key: &str) -> Result<(), OAuthError> {
-        self.credentials.lock().unwrap().remove(key);
+    async fn delete(&self, key: &str) -> Result<(), OAuthError> {
+        self.values.lock().unwrap().remove(key);
         Ok(())
     }
 
-    fn has_credential(&self, key: &str) -> bool {
-        self.credentials.lock().unwrap().contains_key(key)
+    fn contains(&self, key: &str) -> bool {
+        self.values.lock().unwrap().contains_key(key)
     }
 }
 
@@ -62,7 +67,6 @@ mod tests {
             access_token: "tok_abc".to_string(),
             refresh_token: Some("ref_xyz".to_string()),
             expires_at: Some(9_999_999_999_999),
-            granted_scopes: Vec::new(),
         };
 
         store.save_credential("my-server", cred.clone()).await.unwrap();
@@ -81,17 +85,29 @@ mod tests {
             access_token: "t".to_string(),
             refresh_token: None,
             expires_at: None,
-            granted_scopes: Vec::new(),
         };
         store.save_credential("x", cred).await.unwrap();
-        assert!(store.has_credential("x"));
+        assert!(store.contains("x"));
 
-        store.delete_credential("x").await.unwrap();
-        assert!(!store.has_credential("x"));
+        store.delete("x").await.unwrap();
+        assert!(!store.contains("x"));
+    }
+
+    #[tokio::test]
+    async fn secrets_round_trip_and_delete() {
+        let store = FakeOAuthCredentialStore::new().with_value("mcp:slack", serde_json::json!({"a": 1}));
+
+        assert_eq!(store.load("mcp:slack").await.unwrap(), Some(serde_json::json!({"a": 1})));
+
+        store.save("mcp:slack", serde_json::json!({"a": 2})).await.unwrap();
+        assert_eq!(store.load("mcp:slack").await.unwrap(), Some(serde_json::json!({"a": 2})));
+
+        store.delete("mcp:slack").await.unwrap();
+        assert!(store.load("mcp:slack").await.unwrap().is_none());
     }
 
     #[test]
-    fn has_credential_reflects_state() {
+    fn has_value_reflects_state() {
         let store = FakeOAuthCredentialStore::new().with_credential(
             "present",
             OAuthCredential {
@@ -99,11 +115,10 @@ mod tests {
                 access_token: "t".to_string(),
                 refresh_token: None,
                 expires_at: None,
-                granted_scopes: Vec::new(),
             },
         );
 
-        assert!(store.has_credential("present"));
-        assert!(!store.has_credential("absent"));
+        assert!(store.contains("present"));
+        assert!(!store.contains("absent"));
     }
 }
