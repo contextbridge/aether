@@ -1,6 +1,5 @@
-use agent_client_protocol::JsonRpcMessage;
-use agent_client_protocol::jsonrpcmsg::{Id, Params, Request};
-use agent_client_protocol::schema::{InitializeRequest, ProtocolVersion};
+use agent_client_protocol::schema::ProtocolVersion;
+use agent_client_protocol::schema::v1::InitializeRequest;
 use std::error::Error;
 use std::io::{BufRead, BufReader, Error as IoError, Write};
 use std::os::fd::OwnedFd;
@@ -48,6 +47,40 @@ fn options_json_with_trace_context_serves_acp() -> TestResult {
     assert_serves_initialize(command)
 }
 
+#[test]
+fn pipe_backed_stdio_rejects_unknown_non_underscore_methods() -> TestResult {
+    let log_dir = tempfile::tempdir()?;
+    let mut child = acp_command(log_dir.path()).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?;
+    let mut stdin = child.stdin.take().ok_or_else(|| IoError::other("child stdin"))?;
+    let stdout = child.stdout.take().ok_or_else(|| IoError::other("child stdout"))?;
+    let mut reader = BufReader::new(stdout);
+
+    stdin.write_all(initialize_line()?.as_bytes())?;
+    stdin.flush()?;
+
+    let mut response = String::new();
+    reader.read_line(&mut response)?;
+    assert_initialize_response(&response)?;
+
+    stdin.write_all(non_underscore_batch_line()?.as_bytes())?;
+    stdin.flush()?;
+
+    response.clear();
+    reader.read_line(&mut response)?;
+    let responses: serde_json::Value = serde_json::from_str(&response)?;
+    let responses = responses.as_array().ok_or_else(|| IoError::other("expected a grouped response array"))?;
+    assert_eq!(responses.len(), 2, "expected one response per batch entry: {response}");
+    for (index, id) in [2u64, 3].into_iter().enumerate() {
+        assert_eq!(responses[index]["id"], serde_json::json!(id), "response order should match the batch: {response}");
+        let message = responses[index]["error"]["message"].as_str().unwrap_or_default();
+        assert!(message.contains("Method not found"), "expected Method not found: {response}");
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+    Ok(())
+}
+
 fn assert_serves_initialize(mut command: Command) -> TestResult {
     let mut child = command.stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?;
     let mut stdin = child.stdin.take().ok_or_else(|| IoError::other("child stdin"))?;
@@ -78,10 +111,22 @@ fn acp_command(log_dir: &std::path::Path) -> Command {
 }
 
 fn initialize_line() -> TestResult<String> {
-    let message = InitializeRequest::new(ProtocolVersion::LATEST).to_untyped_message()?;
-    let params = serde_json::from_value::<Params>(message.params)?;
-    let request = Request::new_v2(message.method, Some(params), Some(Id::Number(1)));
-    Ok(format!("{}\n", serde_json::to_string(&request)?))
+    let params = serde_json::to_value(InitializeRequest::new(ProtocolVersion::V1))?;
+    let line = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "initialize",
+        "params": params,
+        "id": 1
+    });
+    Ok(format!("{}\n", serde_json::to_string(&line)?))
+}
+
+fn non_underscore_batch_line() -> TestResult<String> {
+    let batch = serde_json::json!([
+        {"jsonrpc": "2.0", "method": "unknown/one", "params": {}, "id": 2},
+        {"jsonrpc": "2.0", "method": "unknown/two", "params": {}, "id": 3}
+    ]);
+    Ok(format!("{}\n", serde_json::to_string(&batch)?))
 }
 
 fn assert_initialize_response(line: &str) -> TestResult {

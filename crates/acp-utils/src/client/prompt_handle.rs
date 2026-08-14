@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::{ContentBlock, SessionId};
+use agent_client_protocol::schema::v1::{ContentBlock, SessionId};
 use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
 
@@ -118,7 +118,7 @@ impl AcpPromptHandle {
 
 #[cfg(test)]
 mod tests {
-    use agent_client_protocol::schema::TextContent;
+    use agent_client_protocol::schema::v1::TextContent;
 
     use super::*;
 

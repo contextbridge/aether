@@ -7,41 +7,39 @@ use tokio::task::LocalSet;
 #[test]
 fn parses_shell_command() {
     let agent = TokioAcpAgent::from_str("aether acp --foo bar").expect("parses");
-    let server = agent.stdio();
-    assert_eq!(server.command.as_path(), Path::new("aether"));
-    assert_eq!(server.args.as_slice(), &["acp", "--foo", "bar"]);
+    let config = agent.config();
+    assert_eq!(config.command(), Path::new("aether"));
+    assert_eq!(config.arguments(), &["acp", "--foo", "bar"]);
 }
 
 #[test]
 fn parses_quoted_shell_command() {
     let agent = TokioAcpAgent::from_str(r#"python "my agent.py" --name "Test Agent""#).expect("parses");
-    let server = agent.stdio();
-    assert_eq!(server.command.as_path(), Path::new("python"));
-    assert_eq!(server.args.as_slice(), &["my agent.py", "--name", "Test Agent"]);
+    let config = agent.config();
+    assert_eq!(config.command(), Path::new("python"));
+    assert_eq!(config.arguments(), &["my agent.py", "--name", "Test Agent"]);
 }
 
 #[test]
 fn parses_leading_environment_variables() {
     let agent = TokioAcpAgent::from_str("RUST_LOG=debug aether acp").expect("parses");
-    let server = agent.stdio();
-    assert_eq!(server.command.as_path(), Path::new("aether"));
-    assert_eq!(server.args.as_slice(), &["acp"]);
-    assert_eq!(server.env[0].name, "RUST_LOG");
-    assert_eq!(server.env[0].value, "debug");
+    let config = agent.config();
+    assert_eq!(config.command(), Path::new("aether"));
+    assert_eq!(config.arguments(), &["acp"]);
+    assert_eq!(config.environment().get("RUST_LOG").map(String::as_str), Some("debug"));
 }
 
 #[test]
-fn parses_json_stdio_agent_config() {
+fn parses_json_process_agent_config() {
     let agent = TokioAcpAgent::from_str(
-        r#"{"type":"stdio","name":"test-agent","command":"/usr/bin/python","args":["agent.py","--verbose"],"env":[{"name":"RUST_LOG","value":"debug"}]}"#,
+        r#"{"command":"/usr/bin/python","args":["agent.py","--verbose"],"env":{"RUST_LOG":"debug"}}"#,
     )
     .expect("parses");
 
-    let server = agent.stdio();
-    assert_eq!(server.command.as_path(), Path::new("/usr/bin/python"));
-    assert_eq!(server.args.as_slice(), &["agent.py", "--verbose"]);
-    assert_eq!(server.env[0].name, "RUST_LOG");
-    assert_eq!(server.env[0].value, "debug");
+    let config = agent.config();
+    assert_eq!(config.command(), Path::new("/usr/bin/python"));
+    assert_eq!(config.arguments(), &["agent.py", "--verbose"]);
+    assert_eq!(config.environment().get("RUST_LOG").map(String::as_str), Some("debug"));
 }
 
 #[test]
@@ -51,9 +49,15 @@ fn rejects_empty_command() {
 }
 
 #[test]
-fn rejects_non_stdio_transport_at_parse_time() {
-    let json = r#"{"type":"http","name":"remote","url":"https://example.com/agent","headers":[]}"#;
-    assert!(TokioAcpAgent::from_str(json).is_err());
+fn rejects_legacy_mcp_server_json() {
+    let stdio = r#"{"type":"stdio","name":"test-agent","command":"/usr/bin/python","args":["agent.py"],"env":[{"name":"RUST_LOG","value":"debug"}]}"#;
+    assert!(TokioAcpAgent::from_str(stdio).is_err());
+
+    let http = r#"{"type":"http","name":"remote","url":"https://example.com/agent","headers":[]}"#;
+    assert!(TokioAcpAgent::from_str(http).is_err());
+
+    let array_env = r#"{"command":"python","args":["agent.py"],"env":[{"name":"RUST_LOG","value":"debug"}]}"#;
+    assert!(TokioAcpAgent::from_str(array_env).is_err());
 }
 
 #[tokio::test(flavor = "current_thread")]

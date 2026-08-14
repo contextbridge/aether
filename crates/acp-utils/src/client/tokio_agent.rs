@@ -3,10 +3,9 @@
 //! `agent_client_protocol::AcpAgent` spawns the child via smol's
 //! `async_process::Command`, which wraps stdio in `blocking::Unblock`. Inside a
 //! tokio runtime that causes a busy loop. This avoids the issue by spawning stdio agents with `tokio::process::Command`
-//!
-use agent_client_protocol::schema::{McpServer, McpServerStdio};
+
 use agent_client_protocol::util::internal_error;
-use agent_client_protocol::{AcpAgent, ByteStreams, ConnectTo, Error, Role, util};
+use agent_client_protocol::{AcpAgent, AcpAgentConfig, ByteStreams, ConnectTo, Error, Role, util};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::str::FromStr;
@@ -16,26 +15,22 @@ use tokio::sync::oneshot;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 pub struct TokioAcpAgent {
-    stdio: McpServerStdio,
+    config: AcpAgentConfig,
 }
 
 impl TokioAcpAgent {
     pub fn from_command(command: impl Into<PathBuf>, args: Vec<String>) -> Self {
-        let command = command.into();
-        let name = command.file_name().and_then(|name| name.to_str()).unwrap_or("acp-agent").to_string();
-        let mut stdio = McpServerStdio::new(name, command);
-        stdio.args = args;
-        Self { stdio }
+        Self { config: AcpAgentConfig::new(command).args(args) }
     }
 
-    pub fn stdio(&self) -> &McpServerStdio {
-        &self.stdio
+    pub fn config(&self) -> &AcpAgentConfig {
+        &self.config
     }
 }
 
 impl<T: Role> ConnectTo<T> for TokioAcpAgent {
     async fn connect_to(self, client: impl ConnectTo<T::Counterpart>) -> Result<(), Error> {
-        connect_stdio::<T>(self.stdio, client).await
+        connect_stdio::<T>(self.config, client).await
     }
 }
 
@@ -43,19 +38,16 @@ impl FromStr for TokioAcpAgent {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match AcpAgent::from_str(s)?.into_server() {
-            McpServer::Stdio(stdio) => Ok(Self { stdio }),
-            _ => Err(util::internal_error("unsupported ACP agent transport")),
-        }
+        Ok(Self { config: AcpAgent::from_str(s)?.into_config() })
     }
 }
 
-async fn connect_stdio<T: Role>(server: McpServerStdio, client: impl ConnectTo<T::Counterpart>) -> Result<(), Error> {
+async fn connect_stdio<T: Role>(config: AcpAgentConfig, client: impl ConnectTo<T::Counterpart>) -> Result<(), Error> {
     let (stdin, stdout, stderr, mut child) = {
-        let mut cmd = Command::new(&server.command);
-        cmd.args(&server.args);
-        for env_var in &server.env {
-            cmd.env(&env_var.name, &env_var.value);
+        let mut cmd = Command::new(config.command());
+        cmd.args(config.arguments());
+        for (name, value) in config.environment() {
+            cmd.env(name, value);
         }
 
         let mut child = cmd

@@ -1,7 +1,7 @@
 use acp_utils::notifications::{
     ContextUsage, ContextUsageParams, SubAgentEvent, SubAgentProgressParams, SubAgentToolRequest,
 };
-use agent_client_protocol::schema as acp;
+use agent_client_protocol::schema::v1 as acp;
 
 use super::common::*;
 

@@ -647,7 +647,18 @@ impl SpanExt for SpanData {
     }
 
     fn assert_attr(&self, key: &str, expected: impl Into<Value>) {
-        assert_eq!(self.attr(key), Some(expected.into()), "unexpected span attribute {key:?} on {:?}", self.name);
+        let actual = self.attr(key);
+        let expected = expected.into();
+        if let (Some(Value::String(actual_str)), Value::String(expected_str)) = (&actual, &expected)
+            && let (Ok(actual_json), Ok(expected_json)) = (
+                serde_json::from_str::<JsonValue>(actual_str.as_str()),
+                serde_json::from_str::<JsonValue>(expected_str.as_str()),
+            )
+        {
+            assert_eq!(actual_json, expected_json, "unexpected span attribute {key:?} on {:?}", self.name);
+            return;
+        }
+        assert_eq!(actual, Some(expected), "unexpected span attribute {key:?} on {:?}", self.name);
     }
 
     fn assert_no_attr(&self, key: &str) {

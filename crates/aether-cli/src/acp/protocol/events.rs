@@ -6,7 +6,7 @@ use aether_core::events::{
     AgentEvent, ContextEvent, MessageEvent, ModelEvent, SubAgentProgressPayload, ToolEvent, TurnEvent, TurnOutcome,
     aether_tool_name_meta, humanize_tool_name, parse_tool_call_chunk,
 };
-use agent_client_protocol::schema::{
+use agent_client_protocol::schema::v1::{
     self as acp, Content, ContentBlock, ContentChunk, Diff, MessageId, PlanEntry, PlanEntryPriority, PlanEntryStatus,
     SessionId, SessionNotification, SessionUpdate, TextContent, ToolCall, ToolCallContent, ToolCallId, ToolCallStatus,
     ToolCallUpdate, ToolCallUpdateFields,

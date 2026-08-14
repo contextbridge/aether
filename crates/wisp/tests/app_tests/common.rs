@@ -4,7 +4,7 @@ use acp_utils::notifications::{AetherCapabilities, WorkspaceListResponse};
 use acp_utils::notifications::{ElicitationParams, WorkspaceEntry};
 use acp_utils::notifications::{ElicitationResponse, WorkspaceMoveResponse};
 use agent_client_protocol::Responder;
-use agent_client_protocol::schema::{self as acp, AuthMethod, SessionCapabilities, SessionConfigOption};
+use agent_client_protocol::schema::v1::{self as acp, AuthMethod, SessionCapabilities, SessionConfigOption};
 use std::path::PathBuf;
 use tokio::sync::mpsc::UnboundedReceiver;
 pub(super) use tui::KeyCode::{Backspace, Down, Enter, Esc, Up};

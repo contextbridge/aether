@@ -1,5 +1,5 @@
 use acp_utils::content::format_embedded_resource;
-use agent_client_protocol::schema::{self as acp, ContentBlock, TextContent};
+use agent_client_protocol::schema::v1::{self as acp, ContentBlock, TextContent};
 use llm::ContentBlock as LlmContentBlock;
 
 /// Convert client-supplied ACP content blocks into LLM content blocks for the

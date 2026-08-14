@@ -7,6 +7,7 @@ Utilities for the [Agent Client Protocol](https://agentclientprotocol.com/) (ACP
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
 
+- [Protocol compatibility](#protocol-compatibility)
 - [Key Types](#key-types)
 - [Feature Flags](#feature-flags)
 - [License](#license)
@@ -18,6 +19,7 @@ Utilities for the [Agent Client Protocol](https://agentclientprotocol.com/) (ACP
 - **`ElicitationParams` / `ElicitationResponse`** -- Schema-driven user prompts and responses
 - **`ContextUsageParams`** -- Token usage tracking notifications
 - **`McpNotification` / `McpRequest`** -- MCP message tunneling over ACP
+- **`TokioAcpAgent`** -- Tokio-native ACP transport
 
 ## Feature Flags
 

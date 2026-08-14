@@ -1,5 +1,5 @@
 use acp_utils::server::AcpServerError;
-use agent_client_protocol::schema::{self as acp, SessionId};
+use agent_client_protocol::schema::v1::{self as acp, SessionId};
 use agent_client_protocol::{Client, ConnectionTo};
 use llm::ContentBlock;
 use tracing::{error, info};

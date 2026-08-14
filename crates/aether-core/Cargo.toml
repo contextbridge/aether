@@ -41,7 +41,6 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 clap = { workspace = true }
 thiserror = { workspace = true }
-agent-client-protocol = { workspace = true }
 acp_utils = { package = "aether-acp-utils", path = "../acp-utils", default-features = false, version = "0.3.37" }
 glob = { workspace = true }
 regex = { workspace = true }

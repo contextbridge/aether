@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::{SessionId, SessionUpdate};
+use agent_client_protocol::schema::v1::{SessionId, SessionUpdate};
 use std::collections::HashMap;
 
 #[derive(Default)]

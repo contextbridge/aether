@@ -77,7 +77,7 @@ async fn test_spinner_visible_after_prompt_submit() -> TestResult {
 
 #[tokio::test]
 async fn test_spinner_persists_on_session_update() -> TestResult {
-    use agent_client_protocol::schema as acp;
+    use agent_client_protocol::schema::v1 as acp;
 
     let mut renderer = RendererTest::new().size((TEST_WIDTH, 40)).build()?;
 

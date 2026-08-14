@@ -1,3 +1,5 @@
+use std::future::Future;
+
 use crate::protocol::client_lifecycle_mode;
 use crate::transport::create_in_memory_transport;
 use rmcp::{
@@ -15,27 +17,28 @@ pub use fake_mcp::{
 #[cfg(all(feature = "client", any(test, feature = "testing")))]
 mod fake_mcp;
 
+pub type ConnectedServices<T, U> = (RunningService<RoleServer, T>, RunningService<RoleClient, U>);
+
 /// Helper function to connect an MCP server and client via in-memory transport
 /// This handles the dual-era discovery/initialization handshake by running both concurrently
-pub async fn connect<S, C>(
-    server: S,
-    client: C,
-) -> Result<(RunningService<RoleServer, S>, RunningService<RoleClient, C>), ConnectError>
+pub fn connect<T, U>(server: T, client: U) -> impl Future<Output = Result<ConnectedServices<T, U>, ConnectError>>
 where
-    S: Service<RoleServer>,
-    C: Service<RoleClient>,
+    T: Service<RoleServer>,
+    U: Service<RoleClient>,
 {
-    let (client_transport, server_transport) = create_in_memory_transport();
+    Box::pin(async move {
+        let (client_transport, server_transport) = create_in_memory_transport();
 
-    let (server_result, client_result) = tokio::join!(
-        serve_server(server, server_transport),
-        serve_client_with_lifecycle(client, client_transport, client_lifecycle_mode())
-    );
+        let (server_result, client_result) = tokio::join!(
+            serve_server(server, server_transport),
+            serve_client_with_lifecycle(client, client_transport, client_lifecycle_mode())
+        );
 
-    let server = server_result.map_err(ConnectError::ServerInit)?;
-    let client = client_result.map_err(ConnectError::ClientInit)?;
+        let server = server_result.map_err(ConnectError::ServerInit)?;
+        let client = client_result.map_err(ConnectError::ClientInit)?;
 
-    Ok((server, client))
+        Ok((server, client))
+    })
 }
 
 #[derive(Debug, thiserror::Error)]

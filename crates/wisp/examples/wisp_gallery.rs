@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use agent_client_protocol::schema::{PlanEntry, PlanEntryPriority, PlanEntryStatus};
+use agent_client_protocol::schema::v1::{PlanEntry, PlanEntryPriority, PlanEntryStatus};
 use tui::{
     Component, CrosstermEvent, Event, Frame, Gallery, GalleryMessage, Line, MouseCapture, TerminalConfig,
     TerminalRuntime, Theme, ViewContext, terminal_size,

@@ -1,7 +1,7 @@
 use acp_utils::config_option_id::ConfigOptionId;
 use aether_cli::acp::testing::{AcpTestHarness, FakeAgentSwitchingSession};
-use agent_client_protocol::schema::{
-    ContentBlock, PromptRequest, SetSessionConfigOptionRequest, StopReason, TextContent,
+use agent_client_protocol::schema::v1::{
+    ContentBlock, PromptRequest, PromptResponse, SetSessionConfigOptionRequest, StopReason, TextContent,
 };
 use std::future::Future;
 use tokio::task::LocalSet;
@@ -200,7 +200,7 @@ fn send_prompt(
     harness: &AcpTestHarness,
     fake: &FakeAgentSwitchingSession,
     text: &str,
-) -> impl Future<Output = Result<agent_client_protocol::schema::PromptResponse, agent_client_protocol::Error>> + use<> {
+) -> impl Future<Output = Result<PromptResponse, agent_client_protocol::Error>> + use<> {
     let response = harness.client_cx.send_request(PromptRequest::new(
         fake.session_id().clone(),
         vec![ContentBlock::Text(TextContent::new(text.to_string()))],
@@ -222,7 +222,7 @@ async fn select_mode(harness: &AcpTestHarness, fake: &FakeAgentSwitchingSession,
         .send_request(SetSessionConfigOptionRequest::new(
             fake.session_id().clone(),
             ConfigOptionId::Mode.as_str(),
-            mode.to_string(),
+            mode,
         ))
         .block_task()
         .await

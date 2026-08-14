@@ -3,7 +3,7 @@ use crate::components::reasoning_bar::{reasoning_bar, reasoning_color};
 use crate::settings::{ResolvedStatusLineSettings, StatusLineSegmentConfig, StatusLineStyle};
 use crate::workspace_status::WorkspaceStatus;
 use acp_utils::config_option_id::ConfigOptionId;
-use agent_client_protocol::schema::{
+use agent_client_protocol::schema::v1::{
     self as acp, SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOptions,
 };
 use tui::{Color, FitOptions, Frame, Line, ViewContext, display_width_text};

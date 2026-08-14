@@ -78,6 +78,7 @@ impl std::fmt::Display for InputKind {
 
 /// Tool-method return value for MRTR tools: either a mid-flight response or the
 /// tool's final output.
+#[allow(clippy::large_enum_variant)]
 pub enum Elicited<T> {
     Respond(CallToolResponse),
     Done(T),

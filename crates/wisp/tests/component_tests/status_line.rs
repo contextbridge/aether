@@ -1,5 +1,5 @@
 use acp_utils::config_option_id::ConfigOptionId;
-use agent_client_protocol::schema::{self as acp, SessionConfigOption, SessionConfigOptionCategory};
+use agent_client_protocol::schema::v1::{self as acp, SessionConfigOption, SessionConfigOptionCategory};
 use tui::ViewContext;
 use tui::testing::render_lines;
 use wisp::components::status_line::{ContextUsageDisplay, StatusLine};

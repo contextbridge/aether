@@ -7,7 +7,7 @@ use crate::components::server_status::{ServerStatusMessage, ServerStatusOverlay}
 use acp_utils::config_option_id::ConfigOptionId;
 use acp_utils::notifications::{ElicitationParams, ElicitationResponse, McpServerStatusEntry};
 use agent_client_protocol::Responder;
-use agent_client_protocol::schema::{self as acp, SessionConfigKind, SessionConfigOption};
+use agent_client_protocol::schema::v1::{self as acp, SessionConfigKind, SessionConfigOption};
 use tui::Panel;
 use tui::{Component, Cursor, Event, Frame, Line, ViewContext};
 use unicode_width::UnicodeWidthStr;
@@ -412,7 +412,7 @@ mod tests {
     use crate::test_helpers::key;
     use acp_utils::config_option_id::THEME_CONFIG_ID;
     use acp_utils::notifications::{McpServerAuthCapability, McpServerStatus};
-    use agent_client_protocol::schema::{SessionConfigOption, SessionConfigSelectOption};
+    use agent_client_protocol::schema::v1::{SessionConfigOption, SessionConfigSelectOption};
     use tui::KeyCode;
 
     fn select_opt(id: &'static str, name: &'static str) -> SessionConfigSelectOption {

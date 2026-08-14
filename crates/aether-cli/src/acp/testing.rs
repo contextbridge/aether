@@ -23,7 +23,7 @@ use aether_core::events::{AgentEvent, Command, MessageEvent};
 use aether_core::mcp::mcp;
 use aether_core::session::{SessionControlEvent, SessionEvent, SessionMeta, UserEvent, last_agent_from_events};
 use aether_project::AgentCatalog;
-use agent_client_protocol::schema::{SessionId, SessionUpdate};
+use agent_client_protocol::schema::v1::{SessionId, SessionUpdate};
 use agent_client_protocol::{Agent, Client, ConnectionTo};
 use llm::ProviderConnectionOverrides;
 use llm::testing::FakeLlmProvider;
