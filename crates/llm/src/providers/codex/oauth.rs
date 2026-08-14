@@ -42,11 +42,22 @@ pub async fn perform_codex_oauth_flow(store: &dyn OAuthCredentialStorage) -> Res
     // Port 1455 is hardcoded because the Codex API has a fixed redirect URI
     // (http://localhost:1455/auth/callback) registered with OpenAI's OAuth server.
     let handler = BrowserOAuthHandler::with_redirect_uri(REDIRECT_URI, 1455)?;
-    let callback = handler.authorize(auth_url.as_str()).await?;
-
-    if callback.state != state {
+    let callback_url = handler.authorize(auth_url.as_str()).await?;
+    let callback = Url::parse(&callback_url)
+        .map_err(|error| OAuthError::InvalidCallback(format!("Invalid callback URL: {error}")))?;
+    let mut code = None;
+    let mut callback_state = None;
+    for (name, value) in callback.query_pairs() {
+        match name.as_ref() {
+            "code" => code = Some(value.into_owned()),
+            "state" => callback_state = Some(value.into_owned()),
+            _ => {}
+        }
+    }
+    if callback_state.as_deref() != Some(&state) {
         return Err(OAuthError::StateMismatch.into());
     }
+    let code = code.ok_or_else(|| OAuthError::InvalidCallback("No authorization code in callback".to_string()))?;
 
     let oauth_client = BasicClient::new(ClientId::new(CLIENT_ID.to_string()))
         .set_auth_uri(
@@ -65,7 +76,7 @@ pub async fn perform_codex_oauth_flow(store: &dyn OAuthCredentialStorage) -> Res
     let http_client = oauth_http_client()?;
 
     let token_response = oauth_client
-        .exchange_code(AuthorizationCode::new(callback.code))
+        .exchange_code(AuthorizationCode::new(code))
         .set_pkce_verifier(pkce_verifier)
         .request_async(&http_client)
         .await
