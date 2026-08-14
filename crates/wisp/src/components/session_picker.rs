@@ -234,9 +234,7 @@ fn push_preview_lines(
         lines.push(Line::with_style(format!(" Tool calls: {}", preview.tool_call_count), muted));
     }
     lines.push(Line::new(String::new()));
-    for turn in &preview.transcript {
-        lines.push(preview_turn_line(turn.role, &turn.text, context));
-    }
+    lines.extend(preview.transcript.iter().map(|turn| preview_turn_line(turn.role, &turn.text, context)));
     if preview.truncated {
         lines.push(Line::with_style(" … preview truncated", muted));
     }

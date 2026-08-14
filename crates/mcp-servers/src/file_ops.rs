@@ -142,13 +142,11 @@ fn resolve_edits(content: &str, edits: &[FileEdit]) -> Result<Vec<ResolvedEdit>,
             continue;
         }
         let chosen = if *replace_all { starts.as_slice() } else { &starts[..1] };
-        for &start in chosen {
-            resolved.push(ResolvedEdit {
-                range: start..start + old_string.len(),
-                replacement: new_string.clone(),
-                edit_index: index,
-            });
-        }
+        resolved.extend(chosen.iter().map(|&start| ResolvedEdit {
+            range: start..start + old_string.len(),
+            replacement: new_string.clone(),
+            edit_index: index,
+        }));
     }
 
     resolved.sort_by_key(|edit| edit.range.start);

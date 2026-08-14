@@ -135,12 +135,14 @@ fn process_diff_op(op: DiffOp, old: &[&str], new: &[&str], s: &mut DiffBuildStat
             if s.first_change_line.is_none() {
                 s.first_change_line = Some(s.old_line_num + 1);
             }
-            for i in 0..old_len {
-                s.lines.push(DiffLine { tag: DiffTag::Removed, content: get_line(old, old_index + i).to_string() });
-            }
-            for i in 0..new_len {
-                s.lines.push(DiffLine { tag: DiffTag::Added, content: get_line(new, new_index + i).to_string() });
-            }
+            s.lines.extend(
+                (0..old_len)
+                    .map(|i| DiffLine { tag: DiffTag::Removed, content: get_line(old, old_index + i).to_string() }),
+            );
+            s.lines.extend(
+                (0..new_len)
+                    .map(|i| DiffLine { tag: DiffTag::Added, content: get_line(new, new_index + i).to_string() }),
+            );
             for i in 0..old_len.max(new_len) {
                 let left = (i < old_len).then(|| {
                     s.old_line_num += 1;

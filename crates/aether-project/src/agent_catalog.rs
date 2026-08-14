@@ -49,10 +49,12 @@ impl AgentCatalog {
         let provider_connections = settings.providers.clone();
         let defaults = AgentDefaults { prompts: settings.prompts, mcps: settings.mcps, providers: settings.providers };
         let mut seen_names = HashSet::new();
-        let mut specs = Vec::with_capacity(settings.agents.len());
-        for (index, entry) in settings.agents.into_iter().enumerate() {
-            specs.push(resolve_agent_entry(project_root, entry, &defaults, index, &mut seen_names)?);
-        }
+        let specs = settings
+            .agents
+            .into_iter()
+            .enumerate()
+            .map(|(index, entry)| resolve_agent_entry(project_root, entry, &defaults, index, &mut seen_names))
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Self::with_defaults(project_root.to_path_buf(), specs, selected_agent, provider_connections))
     }

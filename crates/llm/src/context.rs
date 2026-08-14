@@ -126,9 +126,7 @@ impl Context {
             tool_calls: tool_requests,
         });
 
-        for result in completed_tools {
-            self.messages.push(ChatMessage::ToolCallResult(result));
-        }
+        self.messages.extend(completed_tools.into_iter().map(ChatMessage::ToolCallResult));
     }
 
     /// Return a copy with encrypted reasoning projected onto `model`.

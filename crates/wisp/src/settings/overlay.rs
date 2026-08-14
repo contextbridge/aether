@@ -388,9 +388,12 @@ fn render_settings_url_prompt(prompt: &UrlPrompt, context: &ViewContext) -> Fram
     ];
 
     if !prompt.warnings.is_empty() {
-        for warning in &prompt.warnings {
-            lines.push(Line::with_style(format!("      {warning}"), tui::Style::fg(context.theme.warning())));
-        }
+        lines.extend(
+            prompt
+                .warnings
+                .iter()
+                .map(|warning| Line::with_style(format!("      {warning}"), tui::Style::fg(context.theme.warning()))),
+        );
     }
 
     if let Some(message) = &prompt.copy_message {

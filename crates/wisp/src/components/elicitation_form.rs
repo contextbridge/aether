@@ -285,9 +285,7 @@ pub fn render_url_prompt(prompt: &UrlPrompt, ctx: &ViewContext) -> Frame {
 
     if !prompt.warnings.is_empty() {
         lines.push(Line::default());
-        for warning in &prompt.warnings {
-            lines.push(Line::styled(warning, warning_color));
-        }
+        lines.extend(prompt.warnings.iter().map(|warning| Line::styled(warning, warning_color)));
     }
 
     if let Some(ref message) = prompt.copy_message {

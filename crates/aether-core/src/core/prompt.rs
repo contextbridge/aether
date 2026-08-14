@@ -196,9 +196,7 @@ impl Prompt {
             }
             match resolve_source_files(workspace_root, source) {
                 Ok(paths) => {
-                    for path in paths {
-                        prompts.push(Prompt::file(path, workspace_root.to_path_buf()));
-                    }
+                    prompts.extend(paths.into_iter().map(|path| Prompt::file(path, workspace_root.to_path_buf())));
                 }
                 Err(PromptSourceError::Missing { .. }) if source.is_optional() => {}
                 Err(PromptSourceError::UnresolvedVariable { variable, .. }) if source.is_optional() => {
@@ -348,9 +346,11 @@ fn format_mcp_instructions(instructions: &BTreeMap<String, String>) -> String {
     let mut parts = vec!["# MCP Server Instructions\n".to_string()];
     parts.push("You are connected to the following MCP servers:\n".to_string());
 
-    for (server_name, body) in instructions {
-        parts.push(format!("<mcp-server name=\"{server_name}\">\n{body}\n</mcp-server>\n"));
-    }
+    parts.extend(
+        instructions
+            .iter()
+            .map(|(server_name, body)| format!("<mcp-server name=\"{server_name}\">\n{body}\n</mcp-server>\n")),
+    );
 
     parts.join("\n")
 }

@@ -315,14 +315,12 @@ async fn build_untracked_file_diff(repo_root: &Path, relative_path: String) -> F
         new_line_no: None,
     }];
 
-    for (i, line) in text_lines.iter().enumerate() {
-        patch_lines.push(PatchLine {
-            kind: PatchLineKind::Added,
-            text: (*line).to_string(),
-            old_line_no: None,
-            new_line_no: Some(i + 1),
-        });
-    }
+    patch_lines.extend(text_lines.iter().enumerate().map(|(i, line)| PatchLine {
+        kind: PatchLineKind::Added,
+        text: (*line).to_string(),
+        old_line_no: None,
+        new_line_no: Some(i + 1),
+    }));
 
     let hunk = Hunk {
         header: hunk_header,

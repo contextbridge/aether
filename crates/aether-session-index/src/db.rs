@@ -152,10 +152,9 @@ impl Db {
                 truncated_rows = true;
                 break;
             }
-            let mut values = Vec::with_capacity(columns.len());
-            for index in 0..columns.len() {
-                values.push(sqlite_value_to_json(&row, index, limits.max_cell_chars, &mut truncated_cells)?);
-            }
+            let values = (0..columns.len())
+                .map(|index| sqlite_value_to_json(&row, index, limits.max_cell_chars, &mut truncated_cells))
+                .collect::<Result<Vec<_>, _>>()?;
             output_rows.push(values);
         }
 

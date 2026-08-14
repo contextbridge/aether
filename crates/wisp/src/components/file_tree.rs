@@ -326,23 +326,20 @@ mod tests {
     use crate::git_diff::{FileDiff, FileStatus, Hunk, PatchLine, PatchLineKind, StageState};
 
     fn file(path: &str, status: FileStatus, additions: usize, deletions: usize) -> FileDiff {
-        let mut lines = Vec::new();
-        for i in 0..additions {
-            lines.push(PatchLine {
+        let mut lines: Vec<PatchLine> = (0..additions)
+            .map(|i| PatchLine {
                 kind: PatchLineKind::Added,
                 text: format!("added {i}"),
                 old_line_no: None,
                 new_line_no: Some(i + 1),
-            });
-        }
-        for i in 0..deletions {
-            lines.push(PatchLine {
-                kind: PatchLineKind::Removed,
-                text: format!("removed {i}"),
-                old_line_no: Some(i + 1),
-                new_line_no: None,
-            });
-        }
+            })
+            .collect();
+        lines.extend((0..deletions).map(|i| PatchLine {
+            kind: PatchLineKind::Removed,
+            text: format!("removed {i}"),
+            old_line_no: Some(i + 1),
+            new_line_no: None,
+        }));
         FileDiff {
             old_path: None,
             path: path.to_string(),

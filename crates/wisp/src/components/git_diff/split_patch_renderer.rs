@@ -197,33 +197,31 @@ fn pair_changed_block<'a>(removed: &[SideInfo<'a>], added: &[SideInfo<'a>]) -> V
     for op in diff.ops() {
         match *op {
             similar::DiffOp::Equal { old_index, new_index, len } => {
-                for offset in 0..len {
-                    rows.push(split_row(Some(removed[old_index + offset]), Some(added[new_index + offset])));
-                }
+                rows.extend(
+                    (0..len)
+                        .map(|offset| split_row(Some(removed[old_index + offset]), Some(added[new_index + offset]))),
+                );
             }
             similar::DiffOp::Delete { old_index, old_len, .. } => {
-                for side in &removed[old_index..old_index + old_len] {
-                    rows.push(split_row(Some(*side), None));
-                }
+                rows.extend(removed[old_index..old_index + old_len].iter().map(|side| split_row(Some(*side), None)));
             }
             similar::DiffOp::Insert { new_index, new_len, .. } => {
-                for side in &added[new_index..new_index + new_len] {
-                    rows.push(split_row(None, Some(*side)));
-                }
+                rows.extend(added[new_index..new_index + new_len].iter().map(|side| split_row(None, Some(*side))));
             }
             similar::DiffOp::Replace { old_index, old_len, new_index, new_len } => {
                 let pair_len = old_len.min(new_len);
 
-                for offset in 0..pair_len {
-                    rows.push(split_row(Some(removed[old_index + offset]), Some(added[new_index + offset])));
-                }
+                rows.extend(
+                    (0..pair_len)
+                        .map(|offset| split_row(Some(removed[old_index + offset]), Some(added[new_index + offset]))),
+                );
 
-                for side in &removed[old_index + pair_len..old_index + old_len] {
-                    rows.push(split_row(Some(*side), None));
-                }
-                for side in &added[new_index + pair_len..new_index + new_len] {
-                    rows.push(split_row(None, Some(*side)));
-                }
+                rows.extend(
+                    removed[old_index + pair_len..old_index + old_len].iter().map(|side| split_row(Some(*side), None)),
+                );
+                rows.extend(
+                    added[new_index + pair_len..new_index + new_len].iter().map(|side| split_row(None, Some(*side))),
+                );
             }
         }
     }

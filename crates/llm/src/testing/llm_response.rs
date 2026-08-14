@@ -14,9 +14,7 @@ impl LlmResponseBuilder {
     }
 
     pub fn text(mut self, chunks: &[&str]) -> Self {
-        for chunk in chunks {
-            self.chunks.push(LlmResponse::text(chunk));
-        }
+        self.chunks.extend(chunks.iter().copied().map(LlmResponse::text));
 
         self
     }
@@ -24,9 +22,7 @@ impl LlmResponseBuilder {
     pub fn tool_call(mut self, id: &str, name: &str, argument_chunks: &[&str]) -> Self {
         self.chunks.push(LlmResponse::tool_request_start(id, name));
 
-        for chunk in argument_chunks {
-            self.chunks.push(LlmResponse::tool_request_arg(id, chunk));
-        }
+        self.chunks.extend(argument_chunks.iter().map(|chunk| LlmResponse::tool_request_arg(id, chunk)));
 
         self.chunks.push(LlmResponse::tool_request_complete(id, name, &argument_chunks.join("")));
 

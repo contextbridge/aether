@@ -172,16 +172,16 @@ pub(crate) fn map_messages(messages: &[ChatMessage]) -> Result<(Option<String>, 
                         status: None,
                     })));
                 }
-                for tc in tool_calls {
-                    items.push(InputItem::Item(Item::FunctionCall(FunctionToolCall {
+                items.extend(tool_calls.iter().map(|tc| {
+                    InputItem::Item(Item::FunctionCall(FunctionToolCall {
                         call_id: tc.id.clone(),
                         name: tc.name.clone(),
                         arguments: tc.arguments.clone(),
                         namespace: None,
                         id: None,
                         status: None,
-                    })));
-                }
+                    }))
+                }));
             }
             ChatMessage::ToolCallResult(result) => match result {
                 Ok(r) => {
