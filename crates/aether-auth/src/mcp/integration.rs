@@ -1,122 +1,102 @@
 use super::credential_store::McpCredentialStore;
 use crate::{OAuthCredentialStorage, OAuthError, OAuthHandler};
-use rmcp::transport::auth::{AuthClient, AuthError, AuthorizationManager, OAuthClientConfig};
+use rmcp::transport::auth::{
+    AuthClient, AuthError, AuthorizationManager, AuthorizationRequest, AuthorizationSession, OAuthClientConfig,
+};
 use std::sync::Arc;
 
 const OAUTH_CLIENT_NAME: &str = "Aether MCP Client";
 
-/// Returns `Ok(Some(manager))` if credentials were found and initialized successfully,
-/// `Ok(None)` if no stored credentials exist, or `Err` on failure.
-///
-/// When `expected_client_id` is given, stored credentials issued to a different client
-/// are ignored, forcing a fresh authorization flow.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum OAuthClientRegistration {
+    PreRegistered(String),
+    ClientMetadata(String),
+    #[default]
+    Dynamic,
+}
+
+impl OAuthClientRegistration {
+    pub fn pre_registered_client_id(&self) -> Option<&str> {
+        match self {
+            Self::PreRegistered(client_id) => Some(client_id),
+            Self::ClientMetadata(_) | Self::Dynamic => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct OAuthFlowOptions {
+    pub client_registration: OAuthClientRegistration,
+    pub challenge: Option<String>,
+}
+
 pub async fn create_auth_manager_from_store(
     server_id: &str,
     base_url: &str,
     expected_client_id: Option<&str>,
+    redirect_uri: &str,
     store: Arc<dyn OAuthCredentialStorage>,
 ) -> Result<Option<AuthorizationManager>, OAuthError> {
     let credential_store =
         McpCredentialStore::new(store, server_id.to_string()).with_expected_client_id(expected_client_id);
+    let Some(stored) = credential_store.load_stored().await? else { return Ok(None) };
+    let manager = {
+        let mut manager = AuthorizationManager::new(base_url).await.map_err(rmcp_err("OAuth init failed"))?;
+        manager.set_credential_store(credential_store);
 
-    let mut auth_manager = AuthorizationManager::new(base_url).await.map_err(rmcp_err("OAuth init failed"))?;
-    auth_manager.set_credential_store(credential_store);
+        if !manager.initialize_from_store().await.map_err(rmcp_err("credential store load failed"))? {
+            return Ok(None);
+        }
 
-    if auth_manager.initialize_from_store().await.map_err(rmcp_err("credential store load failed"))? {
-        Ok(Some(auth_manager))
-    } else {
-        Ok(None)
-    }
+        manager
+            .configure_client(OAuthClientConfig::new(stored.client_id, redirect_uri))
+            .map_err(rmcp_err("OAuth client restoration failed"))?;
+
+        manager
+    };
+
+    Ok(Some(manager))
 }
 
-/// Run a full OAuth authorization flow against an MCP server.
-///
-/// Discovers the server's authorization metadata, obtains a client (the pre-registered
-/// `client_id` when given, dynamic registration otherwise), opens the browser (via the
-/// handler), handles the callback, and returns an `AuthClient` ready for authenticated
-/// HTTP transport. When `store` is `Some`, the resulting tokens are persisted via the
-/// store; when `None`, tokens live only for the lifetime of the returned `AuthClient`.
+/// Run an interactive MCP OAuth flow using rmcp's state machine.
 pub async fn perform_oauth_flow(
     server_id: &str,
     base_url: &str,
     handler: &dyn OAuthHandler,
-    client_id: Option<&str>,
+    options: OAuthFlowOptions,
     store: Option<Arc<dyn OAuthCredentialStorage>>,
 ) -> Result<AuthClient<reqwest::Client>, OAuthError> {
     let mut manager = AuthorizationManager::new(base_url).await.map_err(rmcp_err("OAuth init failed"))?;
-
     if let Some(store) = store {
         manager.set_credential_store(
-            McpCredentialStore::new(store, server_id.to_string()).with_expected_client_id(client_id),
+            McpCredentialStore::new(store, server_id.to_string())
+                .with_expected_client_id(options.client_registration.pre_registered_client_id()),
         );
     }
 
-    let metadata = manager.resolve_metadata().await.map_err(rmcp_err("OAuth metadata discovery failed"))?.metadata;
-    manager.set_metadata(metadata);
-
-    let scopes = manager.select_scopes(None, &[]);
-    let scope_refs = scopes.iter().map(String::as_str).collect::<Vec<_>>();
-    let client_config = match client_id {
-        Some(client_id) => OAuthClientConfig::new(client_id, handler.redirect_uri()),
-        None => manager
-            .register_client(OAUTH_CLIENT_NAME, handler.redirect_uri(), &scope_refs)
-            .await
-            .map_err(rmcp_err("dynamic client registration failed"))?,
-    };
-    manager.configure_client(client_config).map_err(rmcp_err("OAuth client configuration failed"))?;
-
-    let auth_url =
-        manager.get_authorization_url(&scope_refs).await.map_err(rmcp_err("get_authorization_url failed"))?;
-
-    // Some authorization servers (e.g. Sentry) bake `resource` into their
-    // authorization_endpoint metadata. rmcp then adds its own `resource` param,
-    // producing a duplicate that the server rejects with "invalid_target".
-    let callback = handler.authorize(&dedupe_query_params(&auth_url)).await?;
-
-    manager
-        .exchange_code_for_token(&callback.code, &callback.state)
+    let resolution = manager
+        .resolve_metadata_from_challenge(options.challenge.as_deref())
         .await
-        .map_err(rmcp_err("token exchange failed"))?;
+        .map_err(rmcp_err("OAuth metadata discovery failed"))?;
+    manager.set_metadata(resolution.metadata);
 
-    Ok(AuthClient::new(reqwest::Client::default(), manager))
+    let request = AuthorizationRequest::new(handler.redirect_uri()).with_client_name(OAUTH_CLIENT_NAME);
+    let session = AuthorizationSession::new(
+        manager,
+        match options.client_registration {
+            OAuthClientRegistration::PreRegistered(client_id) => request.with_preregistered_client(client_id),
+            OAuthClientRegistration::ClientMetadata(url) => request.with_client_metadata_url(url),
+            OAuthClientRegistration::Dynamic => request,
+        },
+    )
+    .await
+    .map_err(|(_, error)| rmcp_err("OAuth authorization failed")(error))?;
+
+    let callback_url = handler.authorize(session.get_authorization_url()).await?;
+    session.handle_callback_url(&callback_url).await.map_err(rmcp_err("token exchange failed"))?;
+    Ok(AuthClient::new(reqwest::Client::default(), session.auth_manager))
 }
 
 fn rmcp_err(context: &'static str) -> impl Fn(AuthError) -> OAuthError {
-    move |e| OAuthError::Rmcp(format!("{context}: {e}"))
-}
-
-fn dedupe_query_params(url_str: &str) -> String {
-    let Ok(mut url) = url::Url::parse(url_str) else {
-        return url_str.to_string();
-    };
-    let pairs: std::collections::HashMap<String, String> =
-        url.query_pairs().map(|(k, v)| (k.into_owned(), v.into_owned())).collect();
-    url.query_pairs_mut().clear().extend_pairs(&pairs);
-    url.to_string()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn dedupes_duplicate_resource_param() {
-        let input = "https://example.com/oauth/authorize?resource=https%3A%2F%2Fa%2Fb&response_type=code&client_id=x&resource=https%3A%2F%2Fa%2Fb";
-        let out = dedupe_query_params(input);
-        let url = url::Url::parse(&out).unwrap();
-        let resources: Vec<_> = url.query_pairs().filter(|(k, _)| k == "resource").collect();
-        assert_eq!(resources.len(), 1);
-        assert_eq!(resources[0].1, "https://a/b");
-        assert!(url.query_pairs().any(|(k, _)| k == "response_type"));
-        assert!(url.query_pairs().any(|(k, _)| k == "client_id"));
-    }
-
-    #[test]
-    fn preserves_unique_params() {
-        let input = "https://example.com/?resource=x&other=y";
-        let out = dedupe_query_params(input);
-        let url = url::Url::parse(&out).unwrap();
-        let pairs: Vec<_> = url.query_pairs().collect();
-        assert_eq!(pairs.len(), 2);
-    }
+    move |error| OAuthError::Rmcp(format!("{context}: {error}"))
 }

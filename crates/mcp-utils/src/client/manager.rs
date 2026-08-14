@@ -241,12 +241,13 @@ impl McpManager {
 
         let name = name.to_string();
         let config = record.reauth_config.clone().expect("checked above");
+        let challenge = record.oauth_challenge.clone();
         let ctx = self.connect_config();
 
         self.set_state(&name, ServerState::Authenticating);
         self.emit_server_statuses_changed().await;
 
-        Ok(async move { authenticate_http(name, config, ctx).await })
+        Ok(async move { authenticate_http(name, config, challenge, ctx).await })
     }
 
     pub async fn apply_connection_attempt(&mut self, attempt: McpConnectAttempt) {
@@ -262,11 +263,12 @@ impl McpManager {
                     Err(error) => self.apply_authentication_failure(name, error.to_string()).await,
                 }
             }
-            McpConnectOutcome::NeedsOAuth { config, error } => {
+            McpConnectOutcome::NeedsOAuth { config, challenge, error } => {
                 tracing::warn!("Server '{name}' needs OAuth: {error}");
                 if let Some(record) = self.servers.get_mut(&name) {
                     record.state = ServerState::NeedsOAuth;
                     record.reauth_config = Some(config);
+                    record.oauth_challenge = challenge;
                 }
                 self.emit_server_statuses_changed().await;
             }
@@ -495,6 +497,7 @@ impl McpManager {
 
         let record = self.servers.get_mut(name).expect("record checked above");
         record.reauth_config = reauth_config.or_else(|| record.reauth_config.clone());
+        record.oauth_challenge = None;
         record.state = ServerState::Connected { connection: conn, tools: tools.iter().map(Tool::from).collect() };
         Ok(())
     }
@@ -572,6 +575,7 @@ impl Drop for McpManager {
 struct ServerRecord {
     state: ServerState,
     reauth_config: Option<McpHttpConfig>,
+    oauth_challenge: Option<String>,
     exposure: ToolExposure,
 }
 
@@ -597,7 +601,7 @@ impl From<&ServerState> for McpServerStatus {
 
 impl ServerRecord {
     fn new(state: ServerState, reauth_config: Option<McpHttpConfig>, exposure: ToolExposure) -> Self {
-        Self { state, reauth_config, exposure }
+        Self { state, reauth_config, oauth_challenge: None, exposure }
     }
 
     fn tools(&self) -> &[Tool] {
@@ -681,7 +685,7 @@ mod tests {
     use crate::client::config::{McpHttpConfig, McpServer, McpTransport, ToolExposure};
     use crate::client::connection::{McpConnectAttempt, McpConnectOutcome};
     use crate::status::McpServerAuthCapability;
-    use aether_auth::{OAuthCallback, OAuthError, OAuthHandler};
+    use aether_auth::{OAuthError, OAuthHandler};
     use futures::future::BoxFuture;
     use rmcp::{
         Json, RoleServer, ServerHandler,
@@ -763,7 +767,7 @@ mod tests {
             "http://127.0.0.1:0/oauth2callback"
         }
 
-        fn authorize(&self, _auth_url: &str) -> BoxFuture<'_, Result<OAuthCallback, OAuthError>> {
+        fn authorize(&self, _auth_url: &str) -> BoxFuture<'_, Result<String, OAuthError>> {
             Box::pin(async { Err(OAuthError::UserCancelled) })
         }
     }

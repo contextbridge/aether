@@ -1,3 +1,4 @@
+use aether_auth::OAuthClientRegistration;
 use futures::future::BoxFuture;
 use rmcp::{RoleServer, service::DynService, transport::streamable_http_client::StreamableHttpClientTransportConfig};
 use schemars::JsonSchema;
@@ -48,11 +49,18 @@ pub struct StdioServerConfig {
     pub proxy: ToolExposure,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
+pub const AETHER_OAUTH_CLIENT_METADATA_URL: &str = "https://aether-agent.io/oauth/client-metadata.json";
+pub const AETHER_OAUTH_CALLBACK_PORT: NonZeroU16 = NonZeroU16::new(3118).unwrap();
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct McpOAuthConfig {
-    pub client_id: String,
-    pub callback_port: NonZeroU16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_metadata_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub callback_port: Option<NonZeroU16>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
@@ -159,13 +167,41 @@ pub struct McpHttpConfig {
     pub oauth: Option<McpOAuthConfig>,
 }
 
-impl McpHttpConfig {
-    pub fn oauth_client_id(&self) -> Option<&str> {
-        self.oauth.as_ref().map(|oauth| oauth.client_id.as_str())
-    }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedOAuth {
+    pub client_registration: OAuthClientRegistration,
+    pub callback_port: NonZeroU16,
+}
 
-    pub fn callback_port(&self) -> Option<NonZeroU16> {
-        self.oauth.as_ref().map(|oauth| oauth.callback_port)
+impl ResolvedOAuth {
+    pub fn redirect_uri(&self) -> String {
+        loopback_redirect_uri(self.callback_port.get())
+    }
+}
+
+pub fn loopback_redirect_uri(port: u16) -> String {
+    format!("http://localhost:{port}/")
+}
+
+impl McpHttpConfig {
+    pub fn resolved_oauth(&self) -> Option<ResolvedOAuth> {
+        if self.transport.auth_header.is_some() {
+            return None;
+        }
+        let oauth = self.oauth.as_ref();
+        let client_registration = match oauth {
+            Some(McpOAuthConfig { client_id: Some(client_id), .. }) => {
+                OAuthClientRegistration::PreRegistered(client_id.clone())
+            }
+            Some(McpOAuthConfig { client_metadata_url: Some(url), .. }) => {
+                OAuthClientRegistration::ClientMetadata(url.clone())
+            }
+            _ => OAuthClientRegistration::ClientMetadata(AETHER_OAUTH_CLIENT_METADATA_URL.to_string()),
+        };
+        Some(ResolvedOAuth {
+            client_registration,
+            callback_port: oauth.and_then(|oauth| oauth.callback_port).unwrap_or(AETHER_OAUTH_CALLBACK_PORT),
+        })
     }
 }
 
@@ -439,7 +475,14 @@ impl McpServerConfig {
 
                 let oauth = oauth
                     .map(|oauth| -> Result<McpOAuthConfig, VarError> {
-                        Ok(McpOAuthConfig { client_id: vars.expand(&oauth.client_id)?, ..oauth })
+                        Ok(McpOAuthConfig {
+                            client_id: oauth.client_id.map(|value| vars.expand(&value)).transpose()?,
+                            client_metadata_url: oauth
+                                .client_metadata_url
+                                .map(|value| vars.expand(&value))
+                                .transpose()?,
+                            callback_port: oauth.callback_port,
+                        })
                     })
                     .transpose()?;
 

@@ -52,7 +52,7 @@ let loaded = store.load_credential("anthropic").await?;
 # }
 ```
 
-For MCP servers that require OAuth, the `mcp` feature provides `perform_oauth_flow`, which orchestrates the full authorization-code flow (browser launch, callback capture, token exchange, credential storage) and `create_auth_manager_from_store`, which builds an `rmcp::transport::auth::AuthorizationManager` from stored credentials with automatic token refresh.
+For MCP servers that require OAuth, the `mcp` feature integrates Aether's browser and callback UI with `rmcp`'s authorization state machine. 
 
 ## Feature Flags
 

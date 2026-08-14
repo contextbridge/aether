@@ -1,4 +1,4 @@
-use aether_auth::{OAuthCallback, OAuthError, OAuthHandler, accept_oauth_callback};
+use aether_auth::{OAuthError, OAuthHandler, accept_oauth_callback};
 use aether_core::mcp::mcp;
 use aether_core::testing::{FakeMcpServer, fake_mcp};
 use futures::future::BoxFuture;
@@ -95,31 +95,6 @@ fn test_manager_with_home(with_oauth: bool) -> (tempfile::TempDir, McpManager) {
     (home, manager)
 }
 
-struct FakeOAuthHandler {
-    callback: OAuthCallback,
-    redirect_uri: String,
-}
-
-impl FakeOAuthHandler {
-    fn new(code: &str, state: &str) -> Self {
-        Self {
-            callback: OAuthCallback { code: code.to_string(), state: state.to_string() },
-            redirect_uri: "http://127.0.0.1:0/oauth2callback".to_string(),
-        }
-    }
-}
-
-impl OAuthHandler for FakeOAuthHandler {
-    fn redirect_uri(&self) -> &str {
-        &self.redirect_uri
-    }
-
-    fn authorize(&self, _auth_url: &str) -> BoxFuture<'_, Result<OAuthCallback, OAuthError>> {
-        let callback = self.callback.clone();
-        Box::pin(async move { Ok(callback) })
-    }
-}
-
 struct CancellingOAuthHandler;
 
 impl OAuthHandler for CancellingOAuthHandler {
@@ -127,22 +102,13 @@ impl OAuthHandler for CancellingOAuthHandler {
         "http://127.0.0.1:0/oauth2callback"
     }
 
-    fn authorize(&self, _auth_url: &str) -> BoxFuture<'_, Result<OAuthCallback, OAuthError>> {
+    fn authorize(&self, _auth_url: &str) -> BoxFuture<'_, Result<String, OAuthError>> {
         Box::pin(async { Err(OAuthError::UserCancelled) })
     }
 }
 
 fn fake_oauth_handler_factory() -> OAuthHandlerFactory {
     Arc::new(|_ctx| Ok(Arc::new(CancellingOAuthHandler)))
-}
-
-#[tokio::test]
-async fn fake_oauth_handler_returns_configured_callback() {
-    let handler = FakeOAuthHandler::new("test_code", "test_state");
-    let result = handler.authorize("https://example.com/auth").await;
-    let callback = result.unwrap();
-    assert_eq!(callback.code, "test_code");
-    assert_eq!(callback.state, "test_state");
 }
 
 #[tokio::test]
@@ -154,7 +120,7 @@ async fn cancelling_handler_returns_user_cancelled() {
 
 #[tokio::test]
 async fn builder_with_oauth_handler_factory_spawns_successfully() {
-    let handler = Arc::new(FakeOAuthHandler::new("code", "state"));
+    let handler = Arc::new(CancellingOAuthHandler);
 
     let mut spawn = mcp("/workspace")
         .with_oauth_handler_factory(Arc::new(move |_ctx| Ok(handler.clone())))
@@ -182,7 +148,9 @@ async fn real_401_challenge_is_classified_as_needs_oauth() {
     )
     .await;
     let mut manager = test_manager(true);
+
     manager.add_mcps(vec![endpoint.server("protected")]).await.unwrap();
+
     let status = &manager.server_statuses()[0];
     assert!(matches!(status.status, McpServerStatus::NeedsOAuth));
     assert_eq!(status.auth_capability, McpServerAuthCapability::OAuth);
@@ -236,17 +204,11 @@ async fn accept_oauth_callback_parses_code_and_state() {
     let _response = client.get(&callback_url).send().await.expect("Failed to send callback request");
 
     let result = handle.await.unwrap();
-    let callback = result.unwrap();
-    assert_eq!(callback.code, "abc123");
-    assert_eq!(callback.state, "csrf_token");
-}
-
-#[tokio::test]
-async fn oauth_handler_is_dyn_compatible() {
-    let handler: Arc<dyn OAuthHandler> = Arc::new(FakeOAuthHandler::new("code", "state"));
-    let result = handler.authorize("https://example.com").await;
-    assert!(result.is_ok());
-    assert_eq!(result.unwrap().code, "code");
+    let callback_url = result.unwrap();
+    let callback = reqwest::Url::parse(&callback_url).unwrap();
+    let params = callback.query_pairs().collect::<std::collections::HashMap<_, _>>();
+    assert_eq!(params.get("code").map(AsRef::as_ref), Some("abc123"));
+    assert_eq!(params.get("state").map(AsRef::as_ref), Some("csrf_token"));
 }
 
 #[tokio::test]
