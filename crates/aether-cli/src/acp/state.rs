@@ -425,7 +425,7 @@ fn build_auth_methods(store: &dyn OAuthCredentialStorage) -> Vec<AuthMethod> {
                 .find(|m| m.oauth_provider_id() == Some(id))
                 .map_or(id, |m| m.provider_display_name());
             let mut method = acp::AuthMethodAgent::new(id, display);
-            if store.has_credential(id) {
+            if store.contains(id) {
                 method = method.description("authenticated");
             }
             AuthMethod::Agent(method)

@@ -37,7 +37,7 @@ mod tests {
         );
 
         let store = oauth_credential_store_from_config(config).unwrap();
-        assert!(!store.has_credential("anything"));
+        assert!(!store.contains("anything"));
     }
 
     #[test]
