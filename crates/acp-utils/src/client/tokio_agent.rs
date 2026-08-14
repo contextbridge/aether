@@ -89,8 +89,12 @@ async fn connect_stdio<T: Role>(config: AcpAgentConfig, client: impl ConnectTo<T
     };
 
     let bytes = ByteStreams::new(stdin.compat_write(), stdout.compat());
+    tokio::pin!(child_fut);
     tokio::select! {
-        result = ConnectTo::<T>::connect_to(bytes, client) => result,
-        result = child_fut => result,
+        result = &mut child_fut => result,
+        result = ConnectTo::<T>::connect_to(bytes, client) => {
+            result?;
+            child_fut.await
+        }
     }
 }
