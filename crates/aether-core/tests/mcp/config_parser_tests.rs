@@ -1,6 +1,7 @@
 use mcp_utils::client::{McpConfig, McpHttpConfig, McpServer, McpTransport, ParseError};
 use std::collections::HashMap;
 use std::env;
+use std::num::NonZeroU16;
 use utils::variables::Vars;
 
 async fn parse_servers(json: &str) -> Result<Vec<McpServer>, ParseError> {
@@ -80,8 +81,8 @@ async fn test_parse_http_oauth_config() {
     let server = parse_one(&json).await;
     match server.transport {
         McpTransport::Http(McpHttpConfig { oauth: Some(oauth), .. }) => {
-            assert_eq!(oauth.client_id, "1601185624273.8899143856786");
-            assert_eq!(oauth.callback_port.get(), 3118);
+            assert_eq!(oauth.client_id.as_deref(), Some("1601185624273.8899143856786"));
+            assert_eq!(oauth.callback_port.map(NonZeroU16::get), Some(3118));
         }
         other => panic!("Expected HTTP OAuth config, got {other:?}"),
     }
