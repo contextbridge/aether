@@ -284,10 +284,10 @@ async fn connect_http(
         tracing::debug!("Using OAuth for server '{name}'");
         let auth_client = AuthClient::new(reqwest::Client::default(), auth_manager);
         let transport = StreamableHttpClientTransport::with_client(auth_client, config.transport.clone());
-        serve_client_with_lifecycle(mcp_client, transport, client_lifecycle_mode()).await.map_err(conn_err)
+        serve_client_with_lifecycle(mcp_client, transport, client_lifecycle_mode()).await
     } else {
         let transport = StreamableHttpClientTransport::from_config(config.transport.clone());
-        serve_client_with_lifecycle(mcp_client, transport, client_lifecycle_mode()).await.map_err(conn_err)
+        serve_client_with_lifecycle(mcp_client, transport, client_lifecycle_mode()).await
     };
 
     match result {
@@ -295,8 +295,10 @@ async fn connect_http(
             McpConnectOutcome::Connected { conn: McpServerConnection::from_parts(client, None), reauth_config: None }
         }
         Err(error) => {
+            let authorization_required = error.is_authorization_required() || error.auth_challenge().is_some();
+            let error = conn_err(error);
             tracing::warn!("Failed to connect to MCP server '{name}': {error}");
-            if oauth_handler_factory.is_some() && config.transport.auth_header.is_none() {
+            if oauth_handler_factory.is_some() && config.transport.auth_header.is_none() && authorization_required {
                 McpConnectOutcome::NeedsOAuth { config, error }
             } else {
                 McpConnectOutcome::Failed { error }
