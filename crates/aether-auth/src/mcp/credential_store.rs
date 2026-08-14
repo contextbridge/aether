@@ -7,6 +7,9 @@ use crate::{OAuthCredentialStorage, OAuthError};
 /// Per-server adapter that binds an [`OAuthCredentialStorage`] to a single MCP server id
 /// and implements `rmcp::transport::auth::CredentialStore` by persisting rmcp's
 /// [`StoredCredentials`] verbatim as a namespaced, opaque JSON secret.
+///
+/// rmcp owns the credential schema (tokens, granted scopes, issuer binding,
+/// `token_received_at`), so nothing is translated in either direction.
 #[derive(Clone)]
 pub struct McpCredentialStore {
     server_id: String,
@@ -26,6 +29,21 @@ impl McpCredentialStore {
         self
     }
 
+    /// Load and filter persisted credentials.
+    pub async fn load_stored(&self) -> Result<Option<StoredCredentials>, OAuthError> {
+        self.store
+            .load(&self.secret_key())
+            .await?
+            .map(serde_json::from_value::<StoredCredentials>)
+            .transpose()
+            .map_err(|error| OAuthError::CredentialStore(format!("invalid MCP credential: {error}")))
+            .map(|credentials| {
+                credentials.filter(|credential| {
+                    self.expected_client_id.as_deref().is_none_or(|expected| credential.client_id == expected)
+                })
+            })
+    }
+
     fn secret_key(&self) -> String {
         format!("mcp:{}", self.server_id)
     }
@@ -34,18 +52,7 @@ impl McpCredentialStore {
 #[async_trait]
 impl CredentialStore for McpCredentialStore {
     async fn load(&self) -> Result<Option<StoredCredentials>, AuthError> {
-        self.store
-            .load(&self.secret_key())
-            .await
-            .map_err(|error| internal_err(&error))?
-            .map(serde_json::from_value::<StoredCredentials>)
-            .transpose()
-            .map_err(|error| AuthError::InternalError(format!("invalid MCP credential: {error}")))
-            .map(|credentials| {
-                credentials.filter(|credential| {
-                    self.expected_client_id.as_deref().is_none_or(|expected| credential.client_id == expected)
-                })
-            })
+        self.load_stored().await.map_err(|e| internal_err(&e))
     }
 
     async fn save(&self, credentials: StoredCredentials) -> Result<(), AuthError> {
