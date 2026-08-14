@@ -79,7 +79,7 @@ pub struct McpConnectAttempt {
 
 pub enum McpConnectOutcome {
     Connected { conn: McpServerConnection, reauth_config: Option<McpHttpConfig> },
-    NeedsOAuth { config: McpHttpConfig, error: McpError },
+    NeedsOAuth { config: McpHttpConfig, challenge: Option<String>, error: McpError },
     Failed { error: McpError },
 }
 
@@ -149,15 +149,23 @@ pub(super) async fn connect_server(server: McpServer, ctx: &ConnectConfig) -> Mc
     McpConnectAttempt { name, outcome: outcome.with_reauth(reauth_config) }
 }
 
-pub async fn authenticate_http(name: String, config: McpHttpConfig, ctx: Arc<ConnectConfig>) -> McpConnectAttempt {
+pub async fn authenticate_http(
+    name: String,
+    config: McpHttpConfig,
+    challenge: Option<String>,
+    ctx: Arc<ConnectConfig>,
+) -> McpConnectAttempt {
     let outcome = match async {
         let factory = ctx
             .oauth_handler_factory
             .as_ref()
             .ok_or_else(|| McpError::ConnectionFailed(format!("No OAuth handler factory available for '{name}'")))?;
+        let oauth = config
+            .resolved_oauth()
+            .ok_or_else(|| McpError::ConnectionFailed(format!("OAuth is not available for '{name}'")))?;
         let handler = factory(OAuthHandlerContext {
             server_name: name.clone(),
-            callback_port: config.callback_port(),
+            callback_port: Some(oauth.callback_port),
             tx: ctx.event_sender.clone(),
         })?;
 
@@ -165,7 +173,7 @@ pub async fn authenticate_http(name: String, config: McpHttpConfig, ctx: Arc<Con
             &name,
             &config.transport.uri,
             handler.as_ref(),
-            config.oauth_client_id(),
+            aether_auth::OAuthFlowOptions { client_registration: oauth.client_registration, challenge },
             ctx.oauth_credential_store.clone(),
         )
         .await
@@ -261,11 +269,16 @@ async fn connect_http(
     oauth_credential_store: Option<&Arc<dyn OAuthCredentialStorage>>,
 ) -> McpConnectOutcome {
     let conn_err = |e| McpError::ConnectionFailed(format!("HTTP MCP server {name}: {e}"));
-    let stored_auth_manager = if let Some(store) = oauth_credential_store
-        && config.transport.auth_header.is_none()
-    {
-        match create_auth_manager_from_store(name, &config.transport.uri, config.oauth_client_id(), Arc::clone(store))
-            .await
+    let oauth = config.resolved_oauth();
+    let restored = if let (Some(store), Some(oauth)) = (oauth_credential_store, oauth.as_ref()) {
+        match create_auth_manager_from_store(
+            name,
+            &config.transport.uri,
+            oauth.client_registration.pre_registered_client_id(),
+            &oauth.redirect_uri(),
+            Arc::clone(store),
+        )
+        .await
         {
             Ok(manager) => manager,
             Err(e) => {
@@ -280,9 +293,9 @@ async fn connect_http(
     } else {
         None
     };
-    let result = if let Some(auth_manager) = stored_auth_manager {
+    let result = if let Some(manager) = restored {
         tracing::debug!("Using OAuth for server '{name}'");
-        let auth_client = AuthClient::new(reqwest::Client::default(), auth_manager);
+        let auth_client = AuthClient::new(reqwest::Client::default(), manager);
         let transport = StreamableHttpClientTransport::with_client(auth_client, config.transport.clone());
         serve_client_with_lifecycle(mcp_client, transport, client_lifecycle_mode()).await
     } else {
@@ -295,11 +308,12 @@ async fn connect_http(
             McpConnectOutcome::Connected { conn: McpServerConnection::from_parts(client, None), reauth_config: None }
         }
         Err(error) => {
-            let authorization_required = error.is_authorization_required() || error.auth_challenge().is_some();
+            let challenge = error.auth_challenge().map(str::to_string);
+            let authorization_required = error.is_authorization_required();
             let error = conn_err(error);
             tracing::warn!("Failed to connect to MCP server '{name}': {error}");
-            if oauth_handler_factory.is_some() && config.transport.auth_header.is_none() && authorization_required {
-                McpConnectOutcome::NeedsOAuth { config, error }
+            if oauth_handler_factory.is_some() && oauth.is_some() && (authorization_required || challenge.is_some()) {
+                McpConnectOutcome::NeedsOAuth { config, challenge, error }
             } else {
                 McpConnectOutcome::Failed { error }
             }

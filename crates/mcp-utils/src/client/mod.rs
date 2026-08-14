@@ -15,9 +15,10 @@ mod tool_proxy;
 
 pub use call_tool::{CallToolError, CallToolOptions, ToolCallEvent, call_tool};
 pub use config::{
-    InMemoryServerConfig, InMemoryType, McpConfig, McpHttpConfig, McpOAuthConfig, McpServer, McpServerCloneError,
-    McpServerConfig, McpTransport, ParseError, RemoteServerConfig, RemoteType, ServerFactory, StdioServerConfig,
-    StdioType, ToolExposure, ToolProxyRules,
+    AETHER_OAUTH_CALLBACK_PORT, AETHER_OAUTH_CLIENT_METADATA_URL, InMemoryServerConfig, InMemoryType, McpConfig,
+    McpHttpConfig, McpOAuthConfig, McpServer, McpServerCloneError, McpServerConfig, McpTransport, ParseError,
+    RemoteServerConfig, RemoteType, ResolvedOAuth, ServerFactory, StdioServerConfig, StdioType, ToolExposure,
+    ToolProxyRules, loopback_redirect_uri,
 };
 pub use connection::{McpConnectAttempt, McpConnectOutcome, McpServerConnection};
 pub use connection_attempt_manager::McpConnectionAttemptManager;

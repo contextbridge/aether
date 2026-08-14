@@ -25,10 +25,18 @@ A remote streamable-HTTP server using a pre-registered public OAuth client:
 }
 ```
 
-When `oauth` is omitted, Aether uses dynamic client registration and a random
-loopback callback port. When present, Aether binds the configured callback port
-and advertises `http://localhost:<callbackPort>/`, which must match the redirect
-URI registered for the OAuth client.
+When a remote HTTP server returns an OAuth challenge, Aether uses its first-party
+Client ID Metadata Document at
+`https://aether-agent.io/oauth/client-metadata.json` and listens on
+`127.0.0.1:3118`, advertising the exact redirect URI `http://localhost:3118/`.
+If port 3118 is occupied, authentication fails until the port is available.
+
+The `oauth` object is optional. Set `clientMetadataUrl` for a custom CIMD, or
+`clientId` for a pre-registered public client; a configured `clientId` takes
+priority. `callbackPort` defaults to 3118 and must exactly match the client's
+registered redirect URI. If the authorization server does not advertise CIMD,
+Aether falls back to deprecated Dynamic Client Registration. An explicit
+`Authorization` header bypasses OAuth entirely.
 
 A remote server using a bearer token:
 
