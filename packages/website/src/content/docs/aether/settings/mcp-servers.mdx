@@ -125,7 +125,7 @@ If a server entry has a `command` and no `type`, it is treated as `"type": "stdi
     | `type` | `"http"` | Required. |
     | `url` | `string` | Streamable HTTP endpoint URL. |
     | `headers` | `object` | Optional headers. Aether currently forwards the `Authorization` header to the transport. |
-    | `oauth` | `object` | Optional pre-registered public OAuth client. See [Pre-registered OAuth clients](#pre-registered-oauth-clients). |
+    | `oauth` | `object` | Optional custom CIMD or pre-registered public OAuth client settings. See [OAuth clients](#oauth-clients). |
     | `proxy` | `boolean \| object` | `true` proxies every tool; an object partitions tools with `include` and `exclude` patterns. |
 
   </TabItem>
@@ -151,15 +151,17 @@ If a server entry has a `command` and no `type`, it is treated as `"type": "stdi
     | `type` | `"sse"` | Required. |
     | `url` | `string` | SSE endpoint URL. |
     | `headers` | `object` | Optional headers. Aether currently forwards the `Authorization` header to the transport. |
-    | `oauth` | `object` | Optional pre-registered public OAuth client. See [Pre-registered OAuth clients](#pre-registered-oauth-clients). |
+    | `oauth` | `object` | Optional custom CIMD or pre-registered public OAuth client settings. See [OAuth clients](#oauth-clients). |
     | `proxy` | `boolean \| object` | `true` proxies every tool; an object partitions tools with `include` and `exclude` patterns. |
 
   </TabItem>
 </Tabs>
 
-## Pre-registered OAuth clients
+## OAuth clients
 
-For `http` and `sse` servers that require OAuth, Aether defaults to dynamic client registration (RFC 7591) with a random loopback callback port. Some providers (Slack, for example) only accept a pre-registered public client. Set `oauth` to bind a fixed callback port and advertise `http://localhost:<callbackPort>/`, which must match the redirect URI registered for the client:
+For `http` and `sse` servers that return an OAuth challenge, Aether defaults to its first-party Client ID Metadata Document (CIMD) at `https://aether-agent.io/oauth/client-metadata.json`. The callback listener binds `http://localhost:3118/`. If port 3118 is occupied, authentication fails rather than selecting an unregistered redirect URI.
+
+Set `oauth.clientMetadataUrl` to use a custom CIMD, or `oauth.clientId` for a public client pre-registered with the provider. A pre-registered client ID takes priority when both are configured:
 
 ```json title=".aether/mcp.json"
 {
@@ -178,8 +180,11 @@ For `http` and `sse` servers that require OAuth, Aether defaults to dynamic clie
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `oauth.clientId` | `string` | OAuth client ID registered with the provider. Supports `$VAR` / `${VAR}` expansion. |
-| `oauth.callbackPort` | `number` | Loopback TCP port for the OAuth callback. Must match the redirect URI registered for the client. |
+| `oauth.clientId` | `string` | Public OAuth client ID registered with the provider. Takes priority over CIMD. Supports `$VAR` / `${VAR}` expansion. |
+| `oauth.clientMetadataUrl` | `string` | HTTPS URL of a custom Client ID Metadata Document. Supports variable expansion. |
+| `oauth.callbackPort` | `number` | Loopback callback port; defaults to `3118`. The advertised URI is `http://localhost:<callbackPort>/` and must exactly match the client metadata or registration. |
+
+When the authorization server does not advertise CIMD support, Aether falls back to deprecated Dynamic Client Registration for compatibility. OAuth discovery, PKCE, scopes, `offline_access`, resource indicators, refresh, and issuer validation are handled by `rmcp`. An explicit bearer `Authorization` header remains authoritative and bypasses OAuth.
 
 ## Built-in servers
 
