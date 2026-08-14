@@ -1,0 +1,9 @@
+{
+  "client_id": "https://aether-agent.io/oauth/client-metadata.json",
+  "client_name": "Aether",
+  "redirect_uris": ["http://localhost:3118/"],
+  "grant_types": ["authorization_code", "refresh_token"],
+  "response_types": ["code"],
+  "token_endpoint_auth_method": "none",
+  "application_type": "native"
+}
