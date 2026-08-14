@@ -78,11 +78,12 @@ The theme colors the entire UI: conversation text, syntax highlighting, diff ren
 
 Open with `/settings`. The overlay shows all configurable options:
 
-- **Model** — Override the model used by the currently active agent runtime
-- **Reasoning effort** — Set thinking budget (also cyclable with `Tab`)
+- **Model** — Override the model used by the currently active agent runtime. Each selected model exposes its own reasoning effort selector.
 - **Mode** — Switch to a different user-invocable agent profile, including its prompts, MCP servers, tools, model, and provider settings (also cyclable with `Shift+Tab`)
 - **MCP servers** — View connected servers and their status
 - **Provider logins** — Authenticate with providers that require it
+
+Reasoning effort is not a separate row — cycle it with `Tab` or set it inside the model selector.
 
 These options are advertised by the agent — the terminal UI discovers them at session start. Different agents may expose different options.
 

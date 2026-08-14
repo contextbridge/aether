@@ -1,0 +1,229 @@
+---
+title: Field reference
+description: Complete schema for every field in an Aether settings file.
+---
+
+import { LinkCard, CardGrid } from "@astrojs/starlight/components";
+
+Aether settings (`$HOME/.aether/settings.json`, `.aether/settings.json`, or `--settings-json`) use a single JSON object. All keys are `camelCase`, and unknown keys are rejected. This page documents every field, its type, and whether it is required.
+
+See [Overview](/aether/settings/overview/) for a guided tour and [User and Project Settings](/aether/settings/user-project-settings/) for file locations and merge rules.
+
+## AetherSettings
+
+The root of a settings file. Only `agents` is required; every other field is optional.
+
+| Field | Type | Default | Description |
+| ----- | ---- | ------- | ----------- |
+| `agent` | `string` | first user-invocable agent | Name of the agent to launch by default. Must match a `name` in `agents`. |
+| `prompts` | [`PromptSource[]`](#promptsource) | `[]` | Default prompt sources shared by every agent. An agent inherits these only when its own `prompts` is empty. |
+| `mcps` | [`McpSourceSpec[]`](#mcpsourcespec) | `[]` | Default MCP sources shared by every agent. An agent inherits these only when its own `mcps` is empty. |
+| `providers` | `object` | `{}` | Per-provider connection overrides keyed by provider name. Merged under each agent unless the agent sets its own `providers`. See [ProviderConnectionOverride](#providerconnectionoverride). |
+| `credentialsStore` | [`CredentialsStoreConfig`](#credentialsstoreconfig) | `keyring` | Credential storage backend for OAuth tokens. |
+| `telemetry` | [`TelemetrySettings`](#telemetrysettings) | — | OpenTelemetry `GenAI` configuration. Its presence enables telemetry. |
+| `agents` | [`AgentConfig[]`](#agentconfig) | — | **Required.** The agents defined for this project. Must contain at least one agent. |
+
+```json title=".aether/settings.json"
+{
+  "agent": "Build",
+  "prompts": ["AGENTS.md"],
+  "mcps": [".aether/mcp.json"],
+  "agents": [
+    {
+      "name": "Build",
+      "description": "Builds features and fixes bugs",
+      "model": "anthropic:claude-sonnet-4-5-20250929",
+      "userInvocable": true
+    }
+  ]
+}
+```
+
+## AgentConfig
+
+A single agent definition. `name`, `description`, and `model` are required. Every agent must be invocable on at least one surface — set `userInvocable`, `agentInvocable`, or both.
+
+| Field | Type | Default | Description |
+| ----- | ---- | ------- | ----------- |
+| `name` | `string` | — | **Required.** Agent identifier. Names are trimmed for merge and lookup. |
+| `description` | `string` | — | **Required.** Human-readable description shown in UIs and sub-agent listings. |
+| `model` | `string` | — | **Required.** Model spec in `provider:model-id` form. Accepts a comma-separated [alloy](/aether/settings/llm-providers/#alloying) to round-robin across turns. |
+| `reasoningEffort` | [`ReasoningEffort`](#reasoningeffort) | provider default | Thinking budget for providers that support extended reasoning. |
+| `modelSettings` | [`ModelSettings`](#modelsettings) | provider default | Sampling controls. Omitted knobs keep the provider/model default. |
+| `contextWindow` | `integer` | model advertised | Override for the model's context window, in tokens. Must be `>= 1`. |
+| `userInvocable` | `boolean` | `false` | Exposes the agent as a user-selectable mode in the TUI and editor. |
+| `agentInvocable` | `boolean` | `false` | Exposes the agent to the [`subagents`](/aether/built-in-servers/subagents/) server so other agents can spawn it. |
+| `providers` | `object` | `{}` | Per-agent provider overrides, merged over the top-level `providers`. See [ProviderConnectionOverride](#providerconnectionoverride). |
+| `prompts` | [`PromptSource[]`](#promptsource) | inherited | Agent-specific prompt sources. A non-empty array **replaces** the top-level `prompts`. |
+| `mcps` | [`McpSourceSpec[]`](#mcpsourcespec) | inherited | Agent-specific MCP sources. A non-empty array **replaces** the top-level `mcps`. |
+| `tools` | [`ToolFilter`](#toolfilter) | allow all | Per-agent MCP tool filter (allow/deny). |
+
+```json title=".aether/settings.json"
+{
+  "name": "Review",
+  "description": "Reviews diffs and suggests changes",
+  "model": "anthropic:claude-sonnet-4-5-20250929",
+  "userInvocable": true,
+  "reasoningEffort": "high",
+  "modelSettings": { "temperature": 0.2 },
+  "prompts": [".aether/REVIEW.md"],
+  "tools": { "allow": [{ "readOnly": true }, "plan__*"] }
+}
+```
+
+## PromptSource
+
+A prompt source is a file, a glob, or inline text. A bare JSON string is shorthand for a required file:
+
+```json
+"AGENTS.md"
+```
+
+| Type | Object form | Fields |
+| ---- | ----------- | ------ |
+| `file` | `{ "type": "file", "path": ".aether/BUILD.md" }` | `path` (`string`); `optional` (`boolean`, default `false`). |
+| `glob` | `{ "type": "glob", "pattern": ".aether/prompts/*.md" }` | `pattern` (`string`); `optional` (`boolean`, default `false`). |
+| `text` | `{ "type": "text", "text": "Be concise." }` | `text` (`string`). |
+
+Required files must exist and required globs must match at least one file. Add `"optional": true` to skip a missing file, zero-match glob, or unresolved variable. See [Prompts](/aether/settings/system-prompts/) for path resolution and shell interpolation.
+
+## McpSourceSpec
+
+An MCP source is a config file or an inline set of servers. A bare JSON string is shorthand for a required file:
+
+```json
+".aether/mcp.json"
+```
+
+| Type | Object form | Fields |
+| ---- | ----------- | ------ |
+| `file` | `{ "type": "file", "path": ".aether/mcp.json" }` | `path` (`string`); `proxy` (`boolean`, default `false`); `optional` (`boolean`, default `false`). |
+| `inline` | `{ "type": "inline", "servers": { ... } }` | `servers` (object of server name → server config). |
+
+See [Tools](/aether/settings/mcp-servers/) for server types (`stdio`, `http`, `sse`, `in-memory`), proxying, and per-server `proxy` rules.
+
+## ModelSettings
+
+Sampling controls applied to an agent's model calls. All fields are optional; each omission keeps the provider/model default.
+
+| Field | Type | Description |
+| ----- | ---- | ----------- |
+| `temperature` | `number` | Sampling temperature. Lower is more deterministic. |
+| `topP` | `number` | Nucleus sampling: the probability mass to sample from. |
+| `maxTokens` | `integer` | Upper bound on the number of tokens generated in the response. |
+
+```json
+"modelSettings": { "temperature": 0.2, "topP": 0.95, "maxTokens": 8192 }
+```
+
+## ProviderConnectionOverride
+
+Applied at the top-level `providers` and/or per-agent `providers`, keyed by provider name (e.g. `"azure-foundry"`, `"bedrock"`, `"ollama"`).
+
+| Field | Type | Description |
+| ----- | ---- | ----------- |
+| `url` | `string` | Base URL override for the provider's API endpoint. |
+| `auth` | `"default" \| "none"` | Authentication mode. `default` uses the provider's normal credential chain; `none` disables auth (for local or unauthenticated servers behind a trusted proxy). |
+| `requestModel` | `string` | Provider-specific model or deployment target sent in requests, without changing the catalog identity used for capabilities, context window, and display. |
+| `inferenceProfileArn` | `string` | AWS Bedrock application inference profile ARN to route requests through. |
+
+See [LLMs](/aether/settings/llm-providers/#provider-overrides) for provider-specific guidance.
+
+## ToolFilter
+
+Restricts which discovered MCP tools an agent can use. `allow` is applied first; `deny` then removes matching tools, so deny wins. An empty (or omitted) filter allows all tools.
+
+| Field | Type | Description |
+| ----- | ---- | ----------- |
+| `allow` | [`ToolMatcher[]`](#toolmatcher) | If non-empty, only matching tools are allowed. |
+| `deny` | [`ToolMatcher[]`](#toolmatcher) | Matching tools are removed. |
+
+### ToolMatcher
+
+Either a fully qualified tool name pattern (a string) or an annotation matcher (an object). A `ToolFilter` array may freely mix both.
+
+| Form | Example | Description |
+| ---- | ------- | ----------- |
+| Name pattern | `"coding__bash"` | Exact name, or a trailing `*` prefix wildcard such as `"coding__*"`. Wildcards are only valid at the end. |
+| Annotation matcher | `{ "readOnly": true }` | Matches tools by their MCP annotations (see table below). |
+
+Annotation matcher fields:
+
+| Field | MCP annotation | Meaning |
+| ----- | -------------- | ------- |
+| `readOnly` | `readOnlyHint` | The tool should not modify its environment. |
+| `destructive` | `destructiveHint` | The tool may perform destructive updates. |
+| `idempotent` | `idempotentHint` | Repeated calls with the same arguments should not add effects. |
+| `openWorld` | `openWorldHint` | The tool may interact with external systems or the network. |
+
+## CredentialsStoreConfig
+
+OAuth tokens (such as Codex login) are stored in a credential store. Defaults to the OS keyring when `credentialsStore` is unset.
+
+| Type | Form | Description |
+| ---- | ---- | ----------- |
+| `keyring` | `{ "type": "keyring" }` | OS keyring (default). |
+| `memory` | `{ "type": "memory" }` | In-memory only; cleared when the process exits. Intended for tests. |
+| `encryptedFile` | `{ "type": "encryptedFile" }` | Encrypted file. Optional fields: `path` (defaults to `.aether/credentials.enc` in the Aether home); `passwordEnv` (env var holding the passphrase; defaults to `AETHER_CREDENTIALS_PASSWORD`). |
+
+## ReasoningEffort
+
+Thinking budget for providers that support extended reasoning. Providers that do not support the requested effort ignore it or map it to their closest available setting.
+
+| Value | Meaning |
+| ----- | ------- |
+| `"minimal"` | Minimal or no thinking. |
+| `"low"` | Minimal thinking. |
+| `"medium"` | Moderate thinking. |
+| `"high"` | Extended thinking. |
+| `"xhigh"` | High thinking budget for providers that expose additional levels. |
+| `"max"` | Maximum thinking budget for providers that expose a top level. |
+
+## TelemetrySettings
+
+OpenTelemetry `GenAI` telemetry configuration. Adding a `telemetry` section enables telemetry. See [Telemetry](/aether/settings/telemetry/) for export behavior and privacy.
+
+| Field | Type | Default | Description |
+| ----- | ---- | ------- | ----------- |
+| `serviceName` | `string` | `"aether"` | The OpenTelemetry `service.name` resource attribute. |
+| `sampleRatio` | `number` | `1.0` | Fraction of traces to sample, from `0.0` through `1.0`. Metrics are unaffected. |
+| `captureContent` | `boolean` | `false` | Whether to export prompt, response, reasoning, tool-definition, and tool-argument content. |
+| `traces` | `{ "enabled": boolean }` | `{ "enabled": true }` | Trace signal toggle. |
+| `metrics` | `{ "enabled": boolean }` | `{ "enabled": true }` | Metric signal toggle. |
+| `otlp` | [`OtlpSettings`](#otlpsettings) | — | OTLP/HTTP exporter configuration. |
+
+Set both `traces.enabled` and `metrics.enabled` to `false` to keep a telemetry section without creating an exporter.
+
+### OtlpSettings
+
+Aether sends OTLP over HTTP/Protobuf. An endpoint is required whenever either signal is enabled — either the shared `endpoint` or the corresponding signal-specific override.
+
+| Field | Type | Description |
+| ----- | ---- | ----------- |
+| `endpoint` | `string` | Base URL for the collector. Aether appends `/v1/traces` and `/v1/metrics` for the respective signals. |
+| `tracesEndpoint` | `string` | Exact OTLP/HTTP trace export URL. Overrides the traces URL derived from `endpoint`. |
+| `metricsEndpoint` | `string` | Exact OTLP/HTTP metric export URL. Overrides the metrics URL derived from `endpoint`. |
+| `headers` | `object` | HTTP headers sent with OTLP requests. Values support `$VAR` / `${VAR}` expansion. |
+
+<CardGrid>
+  <LinkCard
+    title="Overview"
+    description="Guided tour of agents, prompts, and tools"
+    href="/aether/settings/overview/"
+  />
+  <LinkCard
+    title="LLMs"
+    description="Model specs, providers, and reasoning effort"
+    href="/aether/settings/llm-providers/"
+  />
+  <LinkCard
+    title="Tools"
+    description="MCP sources, server types, and tool filters"
+    href="/aether/settings/mcp-servers/"
+  />
+  <LinkCard
+    title="Telemetry"
+    description="Traces, metrics, and OTLP export"
+    href="/aether/settings/telemetry/"
+  />
+</CardGrid>

@@ -16,11 +16,8 @@ export const installBrewCode = `$ brew install contextbridge/tap/aether`;
 export const installShellCode = `$ curl --proto '=https' --tlsv1.2 -LsSf https://github.com/contextbridge/aether/releases/latest/download/aether-agent-cli-installer.sh | sh`;
 export const installCargoCode = `$ cargo install aether-agent-cli`;
 export const firstRunCode = `$ aether
-✓ Created .aether/settings.json
-✓ Created .aether/mcp.json
-✓ Created .aether/BUILD.md
-✓ Created AGENTS.md
-Launching TUI via aether acp...`;
+# interactive onboarding writes config to ~/.aether
+Wrote ~/.aether/settings.json`;
 
 export const showPromptCode = `$ aether show-prompt -a Build
 
@@ -392,7 +389,7 @@ console.log(message.update);
     <div class="flex flex-col gap-16">
       <ToolShowcaseItem
         title="Run in a TUI"
-        description="First run opens onboarding when .aether/settings.json is missing, writes project-local config, and launches the terminal UI backed by aether acp."
+        description="First run opens onboarding when no agents are configured in your user or project settings, writes user-level config to ~/.aether, and launches the terminal UI backed by aether acp."
       >
         <Code
           code={firstRunCode}
