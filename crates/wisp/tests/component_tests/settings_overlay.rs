@@ -1,5 +1,5 @@
 use acp_utils::notifications::{McpServerAuthCapability, McpServerStatus, McpServerStatusEntry};
-use agent_client_protocol::schema::{self as acp, SessionConfigSelectOption};
+use agent_client_protocol::schema::v1::{self as acp, SessionConfigOption, SessionConfigSelectOption};
 use tui::testing::render_component;
 use tui::{Component, Event, KeyCode, KeyEvent, KeyModifiers, ViewContext};
 use wisp::settings::menu::SettingsMenu;
@@ -7,7 +7,7 @@ use wisp::settings::overlay::{SettingsMessage, SettingsOverlay};
 
 fn make_menu() -> SettingsMenu {
     let options = vec![
-        agent_client_protocol::schema::SessionConfigOption::select(
+        SessionConfigOption::select(
             "provider",
             "Provider",
             "openrouter",
@@ -16,7 +16,7 @@ fn make_menu() -> SettingsMenu {
                 SessionConfigSelectOption::new("ollama", "Ollama"),
             ],
         ),
-        agent_client_protocol::schema::SessionConfigOption::select(
+        SessionConfigOption::select(
             "model",
             "Model",
             "gpt-4o",
@@ -33,7 +33,7 @@ fn make_multi_select_menu() -> SettingsMenu {
     let mut meta = serde_json::Map::new();
     meta.insert("multi_select".to_string(), serde_json::Value::Bool(true));
     let options = vec![
-        agent_client_protocol::schema::SessionConfigOption::select(
+        SessionConfigOption::select(
             "provider",
             "Provider",
             "openrouter",
@@ -42,7 +42,7 @@ fn make_multi_select_menu() -> SettingsMenu {
                 SessionConfigSelectOption::new("ollama", "Ollama"),
             ],
         ),
-        agent_client_protocol::schema::SessionConfigOption::select(
+        SessionConfigOption::select(
             "model",
             "Model",
             "gpt-4o",
@@ -297,7 +297,7 @@ fn very_small_terminal_shows_fallback() {
 fn update_settings_options_never_renders_reasoning_row() {
     // Initial options include model + reasoning_effort
     let initial_options = vec![
-        agent_client_protocol::schema::SessionConfigOption::select(
+        SessionConfigOption::select(
             "model",
             "Model",
             "claude-opus",
@@ -306,7 +306,7 @@ fn update_settings_options_never_renders_reasoning_row() {
                 SessionConfigSelectOption::new("deepseek-chat", "DeepSeek Chat"),
             ],
         ),
-        agent_client_protocol::schema::SessionConfigOption::select(
+        SessionConfigOption::select(
             "reasoning_effort",
             "Reasoning Effort",
             "high",
@@ -327,7 +327,7 @@ fn update_settings_options_never_renders_reasoning_row() {
     assert!(!text.contains("Reasoning Effort"), "Reasoning Effort should NOT appear initially; got:\n{text}");
 
     // After update to model-only options, still no Reasoning Effort
-    let updated_options = vec![agent_client_protocol::schema::SessionConfigOption::select(
+    let updated_options = vec![SessionConfigOption::select(
         "model",
         "Model",
         "deepseek-chat",
@@ -364,8 +364,7 @@ async fn tall_terminal_shows_more_picker_items() {
     // Create a menu with many model options
     let many_models: Vec<SessionConfigSelectOption> =
         (0..20).map(|i| SessionConfigSelectOption::new(format!("model-{i}"), format!("Model {i}"))).collect();
-    let options =
-        vec![agent_client_protocol::schema::SessionConfigOption::select("model", "Model", "model-0", many_models)];
+    let options = vec![SessionConfigOption::select("model", "Model", "model-0", many_models)];
     let menu = SettingsMenu::from_config_options(&options);
     let mut overlay = SettingsOverlay::new(menu, vec![], vec![]);
     overlay.on_event(&Event::Key(key(KeyCode::Enter))).await; // open picker

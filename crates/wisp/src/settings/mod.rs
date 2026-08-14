@@ -9,7 +9,7 @@ use crate::components::provider_login::{ProviderLoginEntry, ProviderLoginStatus,
 use crate::components::server_status::server_status_summary;
 use acp_utils::notifications::McpServerStatusEntry;
 use acp_utils::settings::SettingsStore;
-use agent_client_protocol::schema::{AuthMethod, SessionConfigOption};
+use agent_client_protocol::schema::v1::{AuthMethod, SessionConfigOption};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::path::{Path, PathBuf};
 use tracing::warn;
@@ -418,7 +418,7 @@ fn theme_file_from_picker_value(value: &str) -> Option<String> {
 
 pub(crate) fn cycle_quick_option(config_options: &[SessionConfigOption]) -> Option<(String, String)> {
     use crate::components::status_line::is_cycleable_mode_option;
-    use agent_client_protocol::schema::{SessionConfigKind, SessionConfigSelectOptions};
+    use agent_client_protocol::schema::v1::{SessionConfigKind, SessionConfigSelectOptions};
 
     let option = config_options.iter().find(|option| is_cycleable_mode_option(option))?;
 

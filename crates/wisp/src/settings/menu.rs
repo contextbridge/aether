@@ -1,7 +1,7 @@
 pub use super::types::{SettingsChange, SettingsMenuEntry, SettingsMenuEntryKind, SettingsMenuValue};
 use acp_utils::config_meta::{ConfigOptionMeta, SelectOptionMeta};
 use acp_utils::config_option_id::{ConfigOptionId, THEME_CONFIG_ID};
-use agent_client_protocol::schema::{SessionConfigKind, SessionConfigOption, SessionConfigSelectOptions};
+use agent_client_protocol::schema::v1::{SessionConfigKind, SessionConfigOption, SessionConfigSelectOptions};
 use tui::{Component, Event, Frame, Line, SelectItem, SelectList, SelectListMessage, ViewContext};
 
 pub struct SettingsMenu {
@@ -256,7 +256,9 @@ impl SettingsMenu {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::schema::{SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOption};
+    use agent_client_protocol::schema::v1::{
+        SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOption,
+    };
     use tui::{KeyCode, KeyEvent, KeyModifiers};
 
     fn sel(id: &str, name: &str, current: &str, values: &[(&str, &str)]) -> SessionConfigOption {

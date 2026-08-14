@@ -6,12 +6,13 @@ use acp_utils::notifications::{
 use acp_utils::server::AcpServerError;
 use aether_auth::OAuthCredentialStorage;
 use aether_telemetry::TelemetryRuntime;
-use agent_client_protocol::schema::{
+use agent_client_protocol::schema::ProtocolVersion;
+use agent_client_protocol::schema::v1::{
     self as acp, AgentCapabilities, AuthMethod, AuthenticateRequest, AuthenticateResponse, CancelNotification,
     ConfigOptionUpdate, Implementation, InitializeRequest, InitializeResponse, ListSessionsRequest,
     ListSessionsResponse, LoadSessionRequest, LoadSessionResponse, McpCapabilities, NewSessionRequest,
-    NewSessionResponse, PromptCapabilities, PromptRequest, PromptResponse, ProtocolVersion, SessionId,
-    SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
+    NewSessionResponse, PromptCapabilities, PromptRequest, PromptResponse, SessionId, SessionNotification,
+    SessionUpdate, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
 };
 use agent_client_protocol::{Client, ConnectionTo, Responder};
 use llm::catalog::{LlmModel, ModelSpec, get_local_models};
@@ -292,7 +293,14 @@ impl AcpState {
     ) {
         let session_id = args.session_id.0.to_string();
         let config_id = args.config_id.0.to_string();
-        let value = args.value.0.to_string();
+        let value = match args.value {
+            acp::SessionConfigOptionValue::ValueId { value } => value.0.to_string(),
+            acp::SessionConfigOptionValue::Boolean { value } => value.to_string(),
+            _ => {
+                respond_err(responder, acp::Error::invalid_params());
+                return;
+            }
+        };
         info!("set_session_config_option: session={session_id}, config={config_id}, value={value}");
 
         let setting = match ConfigSetting::parse(&config_id, &value) {
@@ -512,7 +520,7 @@ mod tests {
     async fn initialize_always_advertises_load_session_support() {
         let state = test_state();
         let response =
-            state.initialize(InitializeRequest::new(ProtocolVersion::LATEST)).await.expect("initialize succeeds");
+            state.initialize(InitializeRequest::new(ProtocolVersion::V1)).await.expect("initialize succeeds");
         let json = serde_json::to_string(&response).expect("response serializes");
         assert!(json.contains("\"loadSession\":true"));
     }
@@ -521,7 +529,7 @@ mod tests {
     async fn initialize_advertises_aether_capabilities_once() {
         let state = test_state();
         let response =
-            state.initialize(InitializeRequest::new(ProtocolVersion::LATEST)).await.expect("initialize succeeds");
+            state.initialize(InitializeRequest::new(ProtocolVersion::V1)).await.expect("initialize succeeds");
         assert_eq!(
             AetherCapabilities::from_meta(response.agent_capabilities.prompt_capabilities.meta.as_ref()),
             AetherCapabilities::default()

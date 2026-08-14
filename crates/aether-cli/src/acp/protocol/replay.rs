@@ -1,6 +1,6 @@
 use acp_utils::server::AcpServerError;
 use aether_core::session::{SessionEvent, UserEvent};
-use agent_client_protocol::schema::{ContentChunk, SessionId, SessionNotification, SessionUpdate};
+use agent_client_protocol::schema::v1::{ContentChunk, SessionId, SessionNotification, SessionUpdate};
 use agent_client_protocol::{Client, ConnectionTo};
 
 use super::content::map_user_content_block;
@@ -48,7 +48,7 @@ pub fn map_session_events_to_notifications(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::schema as acp;
+    use agent_client_protocol::schema::v1 as acp;
 
     #[test]
     fn replay_emits_user_media_chunks_in_order() {

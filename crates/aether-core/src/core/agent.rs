@@ -28,6 +28,7 @@ use tokio_stream::wrappers::ReceiverStream;
 
 /// Internal event type for merging LLM and tool result streams
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 enum StreamEvent {
     LlmRequestStarted { attempt: u32 },
     Llm(Result<LlmResponse, LlmError>),

@@ -1,4 +1,4 @@
-use agent_client_protocol::schema as acp;
+use agent_client_protocol::schema::v1 as acp;
 use rmcp::model::Prompt as McpPrompt;
 
 /// Converts an MCP Prompt to an ACP `AvailableCommand`

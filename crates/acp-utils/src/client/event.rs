@@ -1,8 +1,8 @@
 use acp::Error;
 use acp::Responder;
-use acp::schema::{SessionUpdate, StopReason};
+use acp::schema::v1::{SessionUpdate, StopReason};
 use agent_client_protocol as acp;
-use agent_client_protocol::schema::{SessionConfigOption, SessionId, SessionInfo};
+use agent_client_protocol::schema::v1::{SessionConfigOption, SessionId, SessionInfo};
 
 use crate::notifications::{
     AuthMethodsUpdatedParams, ContextClearedParams, ContextCompactionParams, ContextUsageParams, ElicitationParams,

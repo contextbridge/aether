@@ -2,7 +2,7 @@ use super::state::AcpState;
 use acp_utils::notifications::{
     McpRequest, PromptSearchParams, SessionPreviewParams, WorkspaceListParams, WorkspaceMoveParams,
 };
-use agent_client_protocol::schema::{
+use agent_client_protocol::schema::v1::{
     AuthenticateRequest, CancelNotification, InitializeRequest, ListSessionsRequest, LoadSessionRequest,
     NewSessionRequest, PromptRequest, SetSessionConfigOptionRequest,
 };

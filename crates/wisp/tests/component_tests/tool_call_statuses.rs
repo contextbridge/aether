@@ -1,5 +1,5 @@
 use super::support::tool_events::*;
-use agent_client_protocol::schema as acp;
+use agent_client_protocol::schema::v1 as acp;
 use serde_json::json;
 use tui::testing::{assert_buffer_eq, render_component, render_lines};
 use tui::{BRAILLE_FRAMES as FRAMES, DiffLine, DiffPreview, DiffTag, Line, SplitDiffEntry, SplitDiffRow, ViewContext};

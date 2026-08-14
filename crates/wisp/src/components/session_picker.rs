@@ -1,6 +1,6 @@
 use crate::components::common::input_box_frame;
 use acp_utils::notifications::{SessionDisplayMeta, SessionPreviewResponse, SessionPreviewRole};
-use agent_client_protocol::schema as acp;
+use agent_client_protocol::schema::v1 as acp;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

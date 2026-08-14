@@ -1,4 +1,4 @@
-use agent_client_protocol::schema as acp;
+use agent_client_protocol::schema::v1 as acp;
 use tui::testing::assert_buffer_eq;
 
 use super::common::*;

@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::{HttpHeader, McpServer};
+use agent_client_protocol::schema::v1::{HttpHeader, McpServer};
 use mcp_utils::client::{McpServer as RuntimeMcpServer, McpTransport, ToolExposure};
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 
@@ -62,7 +62,7 @@ fn http_config(url: String, headers: &[HttpHeader]) -> StreamableHttpClientTrans
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::schema as acp;
+    use agent_client_protocol::schema::v1 as acp;
 
     #[test]
     fn test_map_acp_stdio_server() {

@@ -1,8 +1,9 @@
 use acp_utils::client::spawn_acp_session;
 use acp_utils::testing::duplex_pair;
-use agent_client_protocol::schema::{
+use agent_client_protocol::schema::ProtocolVersion;
+use agent_client_protocol::schema::v1::{
     CancelNotification, Implementation, InitializeRequest, InitializeResponse, NewSessionRequest, NewSessionResponse,
-    PromptRequest, ProtocolVersion, SessionId, SetSessionConfigOptionRequest,
+    PromptRequest, SessionId, SetSessionConfigOptionRequest,
 };
 use agent_client_protocol::{self as acp, Agent};
 use std::path::PathBuf;

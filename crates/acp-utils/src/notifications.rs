@@ -2,7 +2,7 @@
 //! notifications.
 use std::path::PathBuf;
 
-use agent_client_protocol::schema::AuthMethod;
+use agent_client_protocol::schema::v1::{AuthMethod, Meta};
 use agent_client_protocol::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 pub use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
 pub use rmcp::model::ElicitRequestParams;
@@ -234,12 +234,12 @@ impl SessionDisplayMeta {
     }
 
     #[must_use]
-    pub fn to_meta(&self) -> agent_client_protocol::schema::Meta {
+    pub fn to_meta(&self) -> Meta {
         to_aether_meta(self)
     }
 
     #[must_use]
-    pub fn from_meta(meta: Option<&agent_client_protocol::schema::Meta>) -> Self {
+    pub fn from_meta(meta: Option<&Meta>) -> Self {
         from_aether_meta(meta)
     }
 }
@@ -257,23 +257,23 @@ pub struct AetherCapabilities {
 
 impl AetherCapabilities {
     #[must_use]
-    pub fn to_meta(self) -> agent_client_protocol::schema::Meta {
+    pub fn to_meta(self) -> Meta {
         to_aether_meta(&self)
     }
 
     #[must_use]
-    pub fn from_meta(meta: Option<&agent_client_protocol::schema::Meta>) -> Self {
+    pub fn from_meta(meta: Option<&Meta>) -> Self {
         from_aether_meta(meta)
     }
 }
 
-fn to_aether_meta<T: Serialize>(value: &T) -> agent_client_protocol::schema::Meta {
-    let mut meta = agent_client_protocol::schema::Meta::new();
+fn to_aether_meta<T: Serialize>(value: &T) -> Meta {
+    let mut meta = Meta::new();
     meta.insert(AETHER_META_NAMESPACE.to_string(), serde_json::json!(value));
     meta
 }
 
-fn from_aether_meta<T: DeserializeOwned + Default>(meta: Option<&agent_client_protocol::schema::Meta>) -> T {
+fn from_aether_meta<T: DeserializeOwned + Default>(meta: Option<&Meta>) -> T {
     meta.and_then(|m| m.get(AETHER_META_NAMESPACE))
         .cloned()
         .and_then(|value| serde_json::from_value(value).ok())
@@ -357,7 +357,7 @@ pub struct SubAgentToolError {
 #[cfg(test)]
 mod tests {
     use agent_client_protocol::JsonRpcMessage;
-    use agent_client_protocol::schema::AuthMethodAgent;
+    use agent_client_protocol::schema::v1::AuthMethodAgent;
 
     use super::*;
 

@@ -1,5 +1,5 @@
 use acp_utils::notifications::ToolResultMeta;
-use agent_client_protocol::schema as acp;
+use agent_client_protocol::schema::v1 as acp;
 use std::collections::HashMap;
 
 use crate::components::tool_call_status_view::ToolCallStatus;

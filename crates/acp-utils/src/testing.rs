@@ -12,7 +12,7 @@
 //! and returns a receiver that resolves when the responder is consumed.
 
 use crate::notifications::{ElicitationParams, ElicitationResponse, McpNotification};
-use agent_client_protocol::schema::SessionNotification;
+use agent_client_protocol::schema::v1::SessionNotification;
 use agent_client_protocol::{
     self as acp, Agent, Builder, ByteStreams, Client, ConnectionTo, HandleDispatchFrom, NullRun, Responder,
 };

@@ -1,6 +1,6 @@
 use aether_cli::acp::testing::AcpTestHarness;
 use aether_core::core::agent;
-use agent_client_protocol::schema::{
+use agent_client_protocol::schema::v1::{
     CancelNotification, ContentBlock, PromptRequest, SessionId, SessionUpdate, StopReason, TextContent,
 };
 use llm::LlmResponse;

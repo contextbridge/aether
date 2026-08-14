@@ -15,7 +15,7 @@ use acp_utils::notifications::{
     WorkspaceEntry, WorkspaceMoveTarget,
 };
 use agent_client_protocol::Responder;
-use agent_client_protocol::schema::{self as acp, SessionId};
+use agent_client_protocol::schema::v1::{self as acp, SessionId};
 use std::path::PathBuf;
 use std::time::Instant;
 use tui::{Component, Cursor, Event, Frame, Insets, ViewContext};

@@ -4,7 +4,7 @@ use aether_auth::OAuthCredentialStorage;
 use aether_core::context::ext::conversation_messages_from_events;
 use aether_core::events::{AgentCommand, AgentEvent, Command, ToolEvent, TurnOutcome};
 use aether_core::session::{SessionControlEvent, SessionEvent, UserEvent};
-use agent_client_protocol::schema::{self as acp, PromptResponse, SessionId, SetSessionConfigOptionResponse};
+use agent_client_protocol::schema::v1::{self as acp, PromptResponse, SessionId, SetSessionConfigOptionResponse};
 use agent_client_protocol::{Client, ConnectionTo, Responder};
 use llm::catalog::LlmModel;
 use llm::parser::ModelProviderParser;
@@ -540,6 +540,7 @@ fn forward_notification(connection: &ConnectionTo<Client>, acp_session_id: &Sess
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn send_agent_notification(
     connection: &ConnectionTo<Client>,
     notification: &AgentExtNotification,

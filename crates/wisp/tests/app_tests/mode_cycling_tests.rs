@@ -1,5 +1,5 @@
 use acp_utils::client::PromptCommand;
-use agent_client_protocol::schema::{
+use agent_client_protocol::schema::v1::{
     self as acp, SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOption,
 };
 use tui::{KeyCode, KeyEvent, KeyModifiers};

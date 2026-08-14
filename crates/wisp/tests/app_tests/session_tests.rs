@@ -1,6 +1,6 @@
 use acp_utils::client::PromptCommand;
 use acp_utils::notifications::{SessionDisplayMeta, SessionPreviewResponse, SessionPreviewRole, SessionPreviewTurn};
-use agent_client_protocol::schema as acp;
+use agent_client_protocol::schema::v1 as acp;
 use std::path::PathBuf;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tui::testing::assert_buffer_eq;

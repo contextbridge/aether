@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::{self as acp};
+use agent_client_protocol::schema::v1::{self as acp};
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
@@ -129,7 +129,7 @@ impl PlanTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::schema::{PlanEntryPriority, PlanEntryStatus};
+    use agent_client_protocol::schema::v1::{PlanEntryPriority, PlanEntryStatus};
 
     const GRACE_PERIOD: Duration = Duration::from_secs(3);
 

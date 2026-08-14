@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::{PlanEntry, PlanEntryStatus};
+use agent_client_protocol::schema::v1::{PlanEntry, PlanEntryStatus};
 
 use tui::{FitOptions, Frame, Line, Style, ViewContext};
 
@@ -58,7 +58,7 @@ impl PlanView<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::schema::{PlanEntry, PlanEntryPriority, PlanEntryStatus};
+    use agent_client_protocol::schema::v1::{PlanEntry, PlanEntryPriority, PlanEntryStatus};
 
     fn ctx() -> ViewContext {
         ViewContext::new((80, 24))
