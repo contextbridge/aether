@@ -12,7 +12,7 @@ pub use credential::{OAuthCredential, OAuthCredentialStorage, oauth_http_client}
 pub use encrypted_file::EncryptedFileOAuthCredentialStorage;
 pub use error::OAuthError;
 pub use fake::FakeOAuthCredentialStore;
-pub use handler::{OAuthCallback, OAuthHandler};
+pub use handler::OAuthHandler;
 
 #[cfg(feature = "keyring")]
 pub mod keyring;
@@ -22,4 +22,6 @@ pub use keyring::OsKeyringStore;
 #[cfg(feature = "mcp")]
 pub mod mcp;
 #[cfg(feature = "mcp")]
-pub use mcp::{McpCredentialStore, create_auth_manager_from_store, perform_oauth_flow};
+pub use mcp::{
+    McpCredentialStore, OAuthClientRegistration, OAuthFlowOptions, create_auth_manager_from_store, perform_oauth_flow,
+};

@@ -21,7 +21,7 @@ keyring = [
     "dep:windows-native-keyring-store",
     "dep:dbus-secret-service-keyring-store",
 ]
-mcp = ["dep:rmcp", "dep:url"]
+mcp = ["dep:rmcp"]
 
 [dependencies]
 age = { workspace = true }
@@ -41,7 +41,7 @@ keyring-core = { workspace = true, optional = true }
 rmcp = { workspace = true, optional = true, features = ["auth", "client"] }
 oauth2 = { workspace = true }
 reqwest = { workspace = true }
-url = { workspace = true, optional = true }
+url = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 apple-native-keyring-store = { workspace = true, optional = true }
