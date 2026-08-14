@@ -25,7 +25,7 @@ await runHeadless({
   binaryPath: process.env.AETHER_BIN ?? "/usr/local/bin/aether",
   prompt,
   cwd: process.env.AETHER_EVAL_CWD ?? process.cwd(),
-  model: process.env.AETHER_EVAL_MODEL ?? "zai:glm-5.2",
+  model: process.env.AETHER_EVAL_MODEL ?? "zai:glm-5.3",
   settings: { agents: [], mcps: [weather.spec] },
   output: "json",
   stdout: "inherit",

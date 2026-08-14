@@ -3,7 +3,7 @@
     {
       "name": "Cheap",
       "description": "ZAI GLM-5 with high reasoning",
-      "model": "zai:glm-5.2",
+      "model": "zai:glm-5.3",
       "reasoningEffort": "high",
       "userInvocable": true,
       "prompts": [".aether/SYSTEM.md", "AGENTS.md"],
