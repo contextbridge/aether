@@ -341,7 +341,6 @@ mod tests {
                 access_token: access_token.clone(),
                 refresh_token: Some("refresh-old".to_string()),
                 expires_at: Some(u64::MAX),
-                granted_scopes: Vec::new(),
             },
         ));
 
@@ -498,7 +497,6 @@ mod tests {
             access_token: access_token.to_string(),
             refresh_token: refresh_token.map(str::to_string),
             expires_at: Some(0),
-            granted_scopes: Vec::new(),
         }
     }
 

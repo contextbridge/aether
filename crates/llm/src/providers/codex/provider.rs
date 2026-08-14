@@ -209,7 +209,6 @@ mod tests {
             access_token: test_jwt("account-1"),
             refresh_token: None,
             expires_at: Some(u64::MAX),
-            granted_scopes: Vec::new(),
         };
         let store: Arc<dyn OAuthCredentialStorage> =
             Arc::new(FakeOAuthCredentialStore::new().with_credential("codex", credential));
