@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::ops::Deref;
 
 fn needs_oauth_login(model: &LlmModel, store: &dyn OAuthCredentialStorage) -> bool {
-    model.oauth_provider_id().is_some_and(|id| !store.has_credential(id))
+    model.oauth_provider_id().is_some_and(|id| !store.contains(id))
 }
 
 pub(crate) fn supports_prompt_image(model: &LlmModel) -> bool {

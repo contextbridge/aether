@@ -1,26 +1,22 @@
 use async_trait::async_trait;
-use oauth2::{AccessToken, RefreshToken};
-use rmcp::transport::auth::{
-    AuthError, CredentialStore, OAuthTokenResponse, StoredCredentials, VendorExtraTokenFields,
-};
+use rmcp::transport::auth::{AuthError, CredentialStore, StoredCredentials};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::{OAuthCredential, OAuthCredentialStorage};
+use crate::{OAuthCredentialStorage, OAuthError};
 
 /// Per-server adapter that binds an [`OAuthCredentialStorage`] to a single MCP server id
-/// and implements `rmcp::transport::auth::CredentialStore`.
+/// and implements `rmcp::transport::auth::CredentialStore` by persisting rmcp's
+/// [`StoredCredentials`] verbatim as a namespaced, opaque JSON secret.
 #[derive(Clone)]
 pub struct McpCredentialStore {
     server_id: String,
     store: Arc<dyn OAuthCredentialStorage>,
     expected_client_id: Option<String>,
-    now_fn: fn() -> SystemTime,
 }
 
 impl McpCredentialStore {
     pub fn new(store: Arc<dyn OAuthCredentialStorage>, server_id: String) -> Self {
-        Self { server_id, store, expected_client_id: None, now_fn: SystemTime::now }
+        Self { server_id, store, expected_client_id: None }
     }
 
     /// Only serve stored credentials issued to this client id; credentials for any
@@ -30,272 +26,139 @@ impl McpCredentialStore {
         self
     }
 
-    pub fn with_now_fn(mut self, f: fn() -> SystemTime) -> Self {
-        self.now_fn = f;
-        self
-    }
-
-    fn now(&self) -> SystemTime {
-        (self.now_fn)()
+    fn secret_key(&self) -> String {
+        format!("mcp:{}", self.server_id)
     }
 }
 
 #[async_trait]
 impl CredentialStore for McpCredentialStore {
     async fn load(&self) -> Result<Option<StoredCredentials>, AuthError> {
-        let cred = self
-            .store
-            .load_credential(&self.server_id)
+        self.store
+            .load(&self.secret_key())
             .await
-            .map_err(|e| AuthError::InternalError(e.to_string()))?
-            .filter(|c| self.expected_client_id.as_deref().is_none_or(|expected| c.client_id == expected));
-
-        let now = self.now();
-        Ok(cred.map(|c| {
-            let token_received_at = c.expires_at.map(|_| now.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs());
-            let token_response = build_token_response(&c, now);
-            StoredCredentials::new(c.client_id, Some(token_response), c.granted_scopes, token_received_at)
-        }))
+            .map_err(|error| internal_err(&error))?
+            .map(serde_json::from_value::<StoredCredentials>)
+            .transpose()
+            .map_err(|error| AuthError::InternalError(format!("invalid MCP credential: {error}")))
+            .map(|credentials| {
+                credentials.filter(|credential| {
+                    self.expected_client_id.as_deref().is_none_or(|expected| credential.client_id == expected)
+                })
+            })
     }
 
     async fn save(&self, credentials: StoredCredentials) -> Result<(), AuthError> {
-        let token = credentials
-            .token_response
-            .ok_or_else(|| AuthError::InternalError("No token response to save".to_string()))?;
-
-        let preserved_refresh_token = self
-            .store
-            .load_credential(&self.server_id)
-            .await
-            .map_err(|e| AuthError::InternalError(e.to_string()))?
-            .and_then(|cred| (cred.client_id == credentials.client_id).then_some(cred.refresh_token).flatten());
-        let credential = OAuthCredential::from_token_response(credentials.client_id, &token);
-        let credential = OAuthCredential {
-            refresh_token: credential.refresh_token.or(preserved_refresh_token),
-            granted_scopes: credentials.granted_scopes,
-            ..credential
-        };
-        self.store
-            .save_credential(&self.server_id, credential)
-            .await
-            .map_err(|e| AuthError::InternalError(e.to_string()))
+        let value = serde_json::to_value(&credentials)
+            .map_err(|e| AuthError::InternalError(format!("failed to serialize credentials: {e}")))?;
+        self.store.save(&self.secret_key(), value).await.map_err(|e| internal_err(&e))
     }
 
     async fn clear(&self) -> Result<(), AuthError> {
-        self.store.delete_credential(&self.server_id).await.map_err(|e| AuthError::InternalError(e.to_string()))
+        self.store.delete(&self.secret_key()).await.map_err(|e| internal_err(&e))
     }
 }
 
-fn build_token_response(cred: &OAuthCredential, now: SystemTime) -> OAuthTokenResponse {
-    let mut response = OAuthTokenResponse::new(
-        AccessToken::new(cred.access_token.clone()),
-        oauth2::basic::BasicTokenType::Bearer,
-        VendorExtraTokenFields::default(),
-    );
-
-    if let Some(ref refresh) = cred.refresh_token {
-        response.set_refresh_token(Some(RefreshToken::new(refresh.clone())));
-    }
-
-    if let Some(expires_at_millis) = cred.expires_at {
-        let expires_at = UNIX_EPOCH + Duration::from_millis(expires_at_millis);
-        let remaining = expires_at.duration_since(now).unwrap_or_default();
-        response.set_expires_in(Some(&remaining));
-    }
-
-    response
+fn internal_err(error: &OAuthError) -> AuthError {
+    AuthError::InternalError(error.to_string())
 }
 
 #[cfg(test)]
 mod tests {
-    use oauth2::TokenResponse;
     use oauth2::basic::BasicTokenType;
+    use oauth2::{AccessToken, RefreshToken, TokenResponse};
+    use rmcp::transport::auth::{OAuthTokenResponse, VendorExtraTokenFields};
+    use std::time::Duration;
 
     use super::*;
     use crate::FakeOAuthCredentialStore;
 
-    const FAKE_NOW_SECS: u64 = 2_000_000;
-
-    fn fake_now() -> SystemTime {
-        UNIX_EPOCH + Duration::from_secs(FAKE_NOW_SECS)
+    fn stored_credentials(client_id: &str) -> StoredCredentials {
+        let mut token_response = OAuthTokenResponse::new(
+            AccessToken::new("access".to_string()),
+            BasicTokenType::Bearer,
+            VendorExtraTokenFields::default(),
+        );
+        token_response.set_refresh_token(Some(RefreshToken::new("refresh".to_string())));
+        token_response.set_expires_in(Some(&Duration::from_hours(1)));
+        StoredCredentials::new(client_id.to_string(), Some(token_response), vec!["read".to_string()], Some(2_000_000))
+            .with_issuer(Some("https://issuer.example".to_string()))
     }
 
     fn mcp_store(store: Arc<FakeOAuthCredentialStore>) -> McpCredentialStore {
-        McpCredentialStore::new(store, "server".to_string()).with_now_fn(fake_now)
-    }
-
-    fn credential_expiring_at(expires_at: SystemTime) -> OAuthCredential {
-        OAuthCredential {
-            client_id: "client".to_string(),
-            access_token: "access".to_string(),
-            refresh_token: Some("refresh".to_string()),
-            expires_at: Some(systime_to_millis(expires_at)),
-            granted_scopes: Vec::new(),
-        }
-    }
-
-    fn systime_to_millis(t: SystemTime) -> u64 {
-        u64::try_from(t.duration_since(UNIX_EPOCH).unwrap_or_default().as_millis()).unwrap_or(u64::MAX)
+        McpCredentialStore::new(store, "server".to_string())
     }
 
     #[tokio::test]
-    async fn mcp_store_round_trips_stored_credentials() {
+    async fn save_then_load_round_trips_stored_credentials_verbatim() {
         let store = Arc::new(FakeOAuthCredentialStore::new());
         let mcp_store = mcp_store(store.clone());
-        let cred = credential_expiring_at(fake_now());
-        let token_response = build_token_response(&cred, fake_now());
-        let stored = StoredCredentials::new(cred.client_id, Some(token_response), Vec::new(), Some(FAKE_NOW_SECS));
 
-        CredentialStore::save(&mcp_store, stored).await.unwrap();
+        CredentialStore::save(&mcp_store, stored_credentials("client")).await.unwrap();
 
         let loaded = CredentialStore::load(&mcp_store).await.unwrap().unwrap();
-        let token = loaded.token_response.unwrap();
         assert_eq!(loaded.client_id, "client");
+        assert_eq!(loaded.granted_scopes, vec!["read"]);
+        assert_eq!(loaded.token_received_at, Some(2_000_000));
+        assert_eq!(loaded.issuer.as_deref(), Some("https://issuer.example"));
+        let token = loaded.token_response.unwrap();
         assert_eq!(token.access_token().secret(), "access");
         assert_eq!(token.refresh_token().map(|t| t.secret().as_str()), Some("refresh"));
+        assert_eq!(token.expires_in(), Some(Duration::from_hours(1)));
     }
 
     #[tokio::test]
-    async fn mcp_store_preserves_existing_refresh_token_when_save_omits_one() {
+    async fn tokenless_registration_round_trips() {
         let store = Arc::new(FakeOAuthCredentialStore::new());
-        store.save_credential("server", credential_expiring_at(fake_now())).await.unwrap();
         let mcp_store = mcp_store(store.clone());
-        let stored = StoredCredentials::new(
-            "client".to_string(),
-            Some(OAuthTokenResponse::new(
-                AccessToken::new("token".to_string()),
-                BasicTokenType::Bearer,
-                VendorExtraTokenFields::default(),
-            )),
-            Vec::new(),
-            Some(FAKE_NOW_SECS),
-        );
+        let registration =
+            StoredCredentials::new("https://client.example/metadata.json".to_string(), None, Vec::new(), None)
+                .with_issuer(Some("https://new-issuer.example".to_string()));
 
-        CredentialStore::save(&mcp_store, stored).await.unwrap();
-        let loaded = CredentialStore::load(&mcp_store).await.unwrap().unwrap();
-        let token = loaded.token_response.unwrap();
-        assert_eq!(token.access_token().secret(), "token");
-        assert_eq!(token.refresh_token().map(|t| t.secret().as_str()), Some("refresh"));
+        CredentialStore::save(&mcp_store, registration).await.unwrap();
+
+        let loaded = CredentialStore::load(&mcp_store).await.unwrap().expect("portable client registration");
+        assert_eq!(loaded.client_id, "https://client.example/metadata.json");
+        assert_eq!(loaded.issuer.as_deref(), Some("https://new-issuer.example"));
+        assert!(loaded.token_response.is_none());
     }
 
     #[tokio::test]
     async fn load_filters_credentials_for_unexpected_client() {
         let store = Arc::new(FakeOAuthCredentialStore::new());
-        store.save_credential("server", credential_expiring_at(fake_now())).await.unwrap();
+        CredentialStore::save(&mcp_store(store.clone()), stored_credentials("client")).await.unwrap();
 
-        let mcp_store = mcp_store(store.clone()).with_expected_client_id(Some("other-client"));
+        let filtered = mcp_store(store.clone()).with_expected_client_id(Some("other-client"));
 
-        assert!(CredentialStore::load(&mcp_store).await.unwrap().is_none());
-        assert!(store.load_credential("server").await.unwrap().is_some());
+        assert!(CredentialStore::load(&filtered).await.unwrap().is_none());
+        assert!(store.load("mcp:server").await.unwrap().is_some());
     }
 
     #[tokio::test]
     async fn load_serves_credentials_for_expected_client() {
         let store = Arc::new(FakeOAuthCredentialStore::new());
-        store.save_credential("server", credential_expiring_at(fake_now())).await.unwrap();
+        CredentialStore::save(&mcp_store(store.clone()), stored_credentials("client")).await.unwrap();
 
-        let mcp_store = mcp_store(store).with_expected_client_id(Some("client"));
+        let matching = mcp_store(store).with_expected_client_id(Some("client"));
 
-        let loaded = CredentialStore::load(&mcp_store).await.unwrap().unwrap();
-        assert_eq!(loaded.client_id, "client");
+        assert_eq!(CredentialStore::load(&matching).await.unwrap().unwrap().client_id, "client");
     }
 
     #[tokio::test]
-    async fn mcp_store_clear_removes_credential() {
-        let store = Arc::new(FakeOAuthCredentialStore::new());
-        store.save_credential("server", credential_expiring_at(fake_now())).await.unwrap();
+    async fn load_rejects_undecodable_value() {
+        let store = Arc::new(FakeOAuthCredentialStore::new().with_value("mcp:server", serde_json::json!("invalid")));
 
+        assert!(CredentialStore::load(&mcp_store(store)).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn clear_removes_credential() {
+        let store = Arc::new(FakeOAuthCredentialStore::new());
         let mcp_store = mcp_store(store.clone());
+        CredentialStore::save(&mcp_store, stored_credentials("client")).await.unwrap();
+
         CredentialStore::clear(&mcp_store).await.unwrap();
 
-        assert!(store.load_credential("server").await.unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn load_populates_token_received_at_when_expiry_info_present() {
-        let store = Arc::new(FakeOAuthCredentialStore::new());
-        store.save_credential("server", credential_expiring_at(fake_now() + Duration::from_hours(1))).await.unwrap();
-
-        let loaded = CredentialStore::load(&mcp_store(store)).await.unwrap().unwrap();
-
-        assert_eq!(loaded.token_received_at, Some(FAKE_NOW_SECS));
-    }
-
-    #[tokio::test]
-    async fn load_omits_token_received_at_when_no_expiry_info() {
-        let cred = OAuthCredential {
-            client_id: "client".to_string(),
-            access_token: "access".to_string(),
-            refresh_token: Some("refresh".to_string()),
-            expires_at: None,
-            granted_scopes: Vec::new(),
-        };
-        let store = Arc::new(FakeOAuthCredentialStore::new());
-        store.save_credential("server", cred).await.unwrap();
-
-        let loaded = CredentialStore::load(&mcp_store(store)).await.unwrap().unwrap();
-
-        assert!(loaded.token_received_at.is_none());
-        assert!(loaded.token_response.unwrap().expires_in().is_none());
-    }
-
-    #[tokio::test]
-    async fn expired_credential_with_refresh_token_sets_zero_expires_in() {
-        let store = Arc::new(FakeOAuthCredentialStore::new());
-        store.save_credential("server", credential_expiring_at(fake_now() - Duration::from_mins(10))).await.unwrap();
-
-        let loaded = CredentialStore::load(&mcp_store(store)).await.unwrap().unwrap();
-        let token = loaded.token_response.as_ref().unwrap();
-
-        assert_eq!(token.expires_in(), Some(Duration::ZERO));
-        assert_eq!(loaded.token_received_at, Some(FAKE_NOW_SECS));
-        assert_eq!(token.refresh_token().map(|t| t.secret().as_str()), Some("refresh"));
-    }
-
-    #[tokio::test]
-    async fn unexpired_credential_sets_exact_remaining_expires_in() {
-        let store = Arc::new(FakeOAuthCredentialStore::new());
-        store.save_credential("server", credential_expiring_at(fake_now() + Duration::from_hours(1))).await.unwrap();
-
-        let loaded = CredentialStore::load(&mcp_store(store)).await.unwrap().unwrap();
-        let token = loaded.token_response.as_ref().unwrap();
-
-        assert_eq!(token.expires_in(), Some(Duration::from_hours(1)));
-    }
-
-    #[tokio::test]
-    async fn load_round_trips_granted_scopes() {
-        let cred = OAuthCredential {
-            granted_scopes: vec!["read".to_string(), "write".to_string()],
-            ..credential_expiring_at(fake_now() + Duration::from_hours(1))
-        };
-        let store = Arc::new(FakeOAuthCredentialStore::new());
-        store.save_credential("server", cred).await.unwrap();
-
-        let loaded = CredentialStore::load(&mcp_store(store)).await.unwrap().unwrap();
-
-        assert_eq!(loaded.granted_scopes, vec!["read".to_string(), "write".to_string()]);
-    }
-
-    #[tokio::test]
-    async fn save_persists_granted_scopes_from_rmcp() {
-        let store = Arc::new(FakeOAuthCredentialStore::new());
-        let mcp_store = mcp_store(store.clone());
-        let token_response = OAuthTokenResponse::new(
-            AccessToken::new("access".to_string()),
-            BasicTokenType::Bearer,
-            VendorExtraTokenFields::default(),
-        );
-        let stored = StoredCredentials::new(
-            "client".to_string(),
-            Some(token_response),
-            vec!["read".to_string(), "admin".to_string()],
-            Some(FAKE_NOW_SECS),
-        );
-
-        CredentialStore::save(&mcp_store, stored).await.unwrap();
-
-        let persisted = store.load_credential("server").await.unwrap().unwrap();
-        assert_eq!(persisted.granted_scopes, vec!["read".to_string(), "admin".to_string()]);
+        assert!(store.load("mcp:server").await.unwrap().is_none());
     }
 }
