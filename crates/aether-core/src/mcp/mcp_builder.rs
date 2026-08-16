@@ -1,12 +1,13 @@
 use mcp_utils::client::{
     McpClientEvent, McpConfig, McpConnectionDetails, McpError, McpManager, McpServer, OAuthHandlerFactory, ParseError,
-    ServerFactory,
+    ProgressiveDiscoveryInstructions, ServerFactory, ToolFilter,
 };
 use utils::{SettingsStore, variables::Vars};
 
 use crate::agent_spec::McpConfigSource;
 use crate::core::AgentDeps;
 
+use super::McpCommandClient;
 use super::run_mcp_task::{McpCommand, run_mcp_task};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -14,6 +15,8 @@ use tokio::{
     sync::mpsc::{self, Receiver, Sender},
     task::JoinHandle,
 };
+
+const CHANNEL_CAPACITY: usize = 1000;
 
 pub fn mcp(root_dir: impl AsRef<Path>) -> McpBuilder {
     McpBuilder::new(root_dir)
@@ -26,8 +29,8 @@ pub struct McpRuntime {
 }
 
 impl McpRuntime {
-    pub fn command_tx(&self) -> &Sender<McpCommand> {
-        &self.command_tx
+    pub fn command_client(&self) -> McpCommandClient {
+        McpCommandClient::new(self.command_tx.clone())
     }
 }
 
@@ -48,8 +51,8 @@ pub struct McpSpawnResult {
 }
 
 impl McpSpawnResult {
-    pub fn command_tx(&self) -> &Sender<McpCommand> {
-        self.runtime.command_tx()
+    pub fn command_client(&self) -> McpCommandClient {
+        self.runtime.command_client()
     }
 
     /// Block until the manager finishes bootstrapping every initially-configured
@@ -72,12 +75,12 @@ impl McpSpawnResult {
 pub struct McpBuilder {
     servers: Vec<McpServer>,
     factories: HashMap<String, ServerFactory>,
-    mcp_channel_capacity: usize,
     root_dir: PathBuf,
     oauth_handler_factory: Option<OAuthHandlerFactory>,
     agent_deps: AgentDeps,
-    aether_home: Option<PathBuf>,
     vars: Vars,
+    tool_filter: ToolFilter,
+    progressive_discovery_instructions: Option<ProgressiveDiscoveryInstructions>,
 }
 
 impl McpBuilder {
@@ -91,12 +94,12 @@ impl McpBuilder {
         Self {
             servers: Vec::new(),
             factories: HashMap::new(),
-            mcp_channel_capacity: 1000,
             root_dir: root_dir.as_ref().to_path_buf(),
             oauth_handler_factory: None,
             agent_deps: AgentDeps::default(),
-            aether_home: None,
             vars,
+            tool_filter: ToolFilter::default(),
+            progressive_discovery_instructions: None,
         }
     }
 
@@ -130,10 +133,23 @@ impl McpBuilder {
         self
     }
 
+    pub fn with_tool_filter(mut self, filter: ToolFilter) -> Self {
+        self.tool_filter = filter;
+        self
+    }
+
+    pub fn has_deferred_tools(&self) -> bool {
+        self.servers.iter().any(McpServer::has_deferred_tools)
+    }
+
+    pub fn with_progressive_discovery_instructions(mut self, instructions: ProgressiveDiscoveryInstructions) -> Self {
+        self.progressive_discovery_instructions = Some(instructions);
+        self
+    }
+
     pub fn with_aether_home(mut self, aether_home: impl Into<PathBuf>) -> Self {
         let aether_home = aether_home.into();
         self.vars.insert("AETHER_HOME", aether_home.to_string_lossy().into_owned());
-        self.aether_home = Some(aether_home);
         self
     }
 
@@ -154,10 +170,10 @@ impl McpBuilder {
         let mut merged = McpConfig::default();
         for source in sources {
             let config = match source {
-                McpConfigSource::File { path, proxy } => {
+                McpConfigSource::File { path, defer_tools } => {
                     let mut config = McpConfig::from_json_file(path)?;
-                    if *proxy {
-                        config.mark_all_proxy();
+                    if *defer_tools {
+                        config.defer_all_tools();
                     }
                     config
                 }
@@ -172,24 +188,23 @@ impl McpBuilder {
     }
 
     pub async fn spawn(self) -> Result<McpSpawnResult, McpError> {
-        let (mcp_command_tx, mcp_command_rx) = mpsc::channel::<McpCommand>(self.mcp_channel_capacity);
-        let (event_tx, event_rx) = mpsc::channel::<McpClientEvent>(self.mcp_channel_capacity);
+        let (command_tx, command_rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let (event_tx, event_rx) = mpsc::channel::<McpClientEvent>(CHANNEL_CAPACITY);
 
-        let mut mcp_manager = McpManager::new(event_tx, self.oauth_handler_factory);
+        let mut mcp_manager = McpManager::new(event_tx, self.oauth_handler_factory).with_tool_filter(self.tool_filter);
+        if let Some(instructions) = self.progressive_discovery_instructions {
+            mcp_manager = mcp_manager.with_progressive_discovery_instructions(instructions);
+        }
         if let Some(store) = self.agent_deps.oauth_credential_store {
             mcp_manager = mcp_manager.with_oauth_credential_store(store);
         }
-        if let Some(aether_home) = self.aether_home {
-            mcp_manager = mcp_manager.with_aether_home(aether_home);
-        }
 
         mcp_manager = mcp_manager.with_root_dir(self.root_dir);
-
         let pending = mcp_manager.register_pending(self.servers).await?;
 
-        let mcp_handle = tokio::spawn(run_mcp_task(mcp_manager, mcp_command_rx, pending));
+        let mcp_handle = tokio::spawn(run_mcp_task(mcp_manager, command_rx, pending));
 
-        Ok(McpSpawnResult { runtime: McpRuntime { command_tx: mcp_command_tx, handle: mcp_handle }, event_rx })
+        Ok(McpSpawnResult { runtime: McpRuntime { command_tx, handle: mcp_handle }, event_rx })
     }
 }
 
@@ -228,7 +243,7 @@ mod tests {
                 command: "from_inline".to_string(),
                 args: Vec::new(),
                 env: HashMap::new(),
-                proxy: ToolExposure::Direct,
+                defer_tools: ToolExposure::ModelVisible,
             }),
         )]));
         let sources = vec![
@@ -240,7 +255,7 @@ mod tests {
         let builder = builder_from_sources(&sources).await;
 
         assert_eq!(command_for(&builder, "coding"), Some("from_inline"));
-        assert_eq!(proxy_for(&builder, "coding"), Some(false));
+        assert_eq!(deferred_tools_for(&builder, "coding"), Some(false));
     }
 
     #[tokio::test]
@@ -258,35 +273,48 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_source_proxy_true_marks_all_file_servers_proxied() {
+    async fn file_source_deferred_true_marks_all_file_servers_deferred() {
         let (_dir, file_path) = write_config_file(
-            "proxied.json",
-            r#"{"servers":{"github":{"type":"stdio","command":"g","proxy":{"exclude":["status"]}},"browser":{"type":"stdio","command":"b"}}}"#,
+            "deferred.json",
+            r#"{"servers":{"github":{"type":"stdio","command":"g","deferTools":{"exclude":["status"]}},"browser":{"type":"stdio","command":"b"}}}"#,
         );
 
         let builder = McpBuilder::new("/workspace")
-            .from_mcp_config_sources(&[McpConfigSource::File { path: file_path, proxy: true }])
+            .from_mcp_config_sources(&[McpConfigSource::deferred(file_path)])
             .await
             .unwrap();
 
-        assert_eq!(proxy_for(&builder, "github"), Some(true));
-        assert_eq!(proxy_for(&builder, "browser"), Some(true));
-        assert!(is_direct_tool(&builder, "github", "status"));
+        assert_eq!(deferred_tools_for(&builder, "github"), Some(true));
+        assert_eq!(deferred_tools_for(&builder, "browser"), Some(true));
+        assert!(is_model_visible_tool(&builder, "github", "status"));
     }
 
     #[tokio::test]
-    async fn later_sources_override_proxy_flag() {
+    async fn later_sources_override_deferred_flag() {
         let (_dir, file_path) =
-            write_config_file("proxied.json", r#"{"servers":{"coding":{"type":"stdio","command":"from_file"}}}"#);
+            write_config_file("deferred.json", r#"{"servers":{"coding":{"type":"stdio","command":"from_file"}}}"#);
         let sources = vec![
-            McpConfigSource::File { path: file_path, proxy: true },
-            json_source(r#"{"servers":{"coding":{"type":"stdio","command":"from_json","proxy":false}}}"#),
+            McpConfigSource::deferred(file_path),
+            json_source(r#"{"servers":{"coding":{"type":"stdio","command":"from_json","deferTools":false}}}"#),
         ];
 
         let builder = builder_from_sources(&sources).await;
 
         assert_eq!(command_for(&builder, "coding"), Some("from_json"));
-        assert_eq!(proxy_for(&builder, "coding"), Some(false));
+        assert_eq!(deferred_tools_for(&builder, "coding"), Some(false));
+    }
+
+    #[tokio::test]
+    async fn deferred_capability_is_required_only_by_effective_deferred_config() {
+        let visible =
+            builder_from_sources(&[json_source(r#"{"servers":{"coding":{"type":"stdio","command":"server"}}}"#)]).await;
+        let deferred = builder_from_sources(&[json_source(
+            r#"{"servers":{"github":{"type":"stdio","command":"server","deferTools":true}}}"#,
+        )])
+        .await;
+
+        assert!(!visible.has_deferred_tools());
+        assert!(deferred.has_deferred_tools());
     }
 
     #[tokio::test]
@@ -359,15 +387,15 @@ mod tests {
         })
     }
 
-    fn is_direct_tool(builder: &McpBuilder, server_name: &str, tool_name: &str) -> bool {
+    fn is_model_visible_tool(builder: &McpBuilder, server_name: &str, tool_name: &str) -> bool {
         builder
             .servers
             .iter()
             .find(|server| server.name == server_name)
-            .is_some_and(|server| server.tool_exposure.is_direct_tool(tool_name))
+            .is_some_and(|server| server.tool_exposure.is_model_visible(tool_name))
     }
 
-    fn proxy_for(builder: &McpBuilder, name: &str) -> Option<bool> {
-        builder.servers.iter().find(|server| server.name == name).map(mcp_utils::client::McpServer::is_proxied)
+    fn deferred_tools_for(builder: &McpBuilder, name: &str) -> Option<bool> {
+        builder.servers.iter().find(|server| server.name == name).map(mcp_utils::client::McpServer::has_deferred_tools)
     }
 }

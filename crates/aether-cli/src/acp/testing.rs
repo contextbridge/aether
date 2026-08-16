@@ -383,10 +383,11 @@ impl RuntimeFactory for FakeRuntimeFactory {
             vec![McpServer::new(
                 server_name.clone(),
                 McpTransport::InMemory { server: FakePromptMcp::new(prompt_name).into_dyn() },
-                ToolExposure::Direct,
+                ToolExposure::ModelVisible,
             )]
         });
         let mut spawn = mcp(&self.cwd)
+            .with_tool_filter(spec.tools.clone())
             .with_servers(servers)
             .spawn()
             .await
@@ -397,13 +398,13 @@ impl RuntimeFactory for FakeRuntimeFactory {
             .ok_or_else(|| SessionError::McpOperation("fake MCP bootstrap aborted".to_string()))?;
         let (mcp_runtime, event_rx) = spawn.split();
 
-        let filtered_tools = spec.tools.apply(snapshot.tool_definitions.clone());
+        let tool_definitions = snapshot.tool_definitions.clone();
         let mut builder = AgentBuilder::new(provider).max_auto_continues(0);
         for prompt in &spec.prompts {
             builder = builder.system_prompt(prompt.clone());
         }
         let (agent_tx, agent_rx, agent_handle) = builder
-            .tools(mcp_runtime.command_tx().clone(), filtered_tools)
+            .tools(mcp_runtime.command_client(), tool_definitions)
             .messages(initial_messages)
             .spawn()
             .await
@@ -411,12 +412,12 @@ impl RuntimeFactory for FakeRuntimeFactory {
 
         Ok(AgentRuntime::new(
             agent,
-            spec,
             agent_tx,
             agent_rx,
             Some(agent_handle),
             event_rx,
             mcp_runtime,
+            None,
             snapshot,
             runtime_event_tx,
         ))
@@ -439,7 +440,7 @@ impl RuntimeFactory for StubRuntimeFactory {
     async fn spawn(
         &self,
         agent: AgentKey,
-        spec: &AgentSpec,
+        _spec: &AgentSpec,
         _initial_messages: Vec<ChatMessage>,
         runtime_event_tx: mpsc::Sender<RuntimeEvent>,
     ) -> Result<AgentRuntime, SessionError> {
@@ -460,12 +461,12 @@ impl RuntimeFactory for StubRuntimeFactory {
 
         Ok(AgentRuntime::new(
             agent,
-            spec,
             parts.tx,
             parts.rx,
             Some(parts.handle),
             event_rx,
             mcp_runtime,
+            None,
             snapshot,
             runtime_event_tx,
         ))

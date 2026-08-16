@@ -186,7 +186,7 @@ Give your agent tools via the `mcps` field (Aether agents get tools exclusively 
 }
 ```
 
-Aether can load `mcp.json` files. To enable dynamic tool discovery and prevent MCP tools definitions from being loaded directly into context, set `proxy: true` (this is usually what you want).
+Aether can load `mcp.json` files. Progressive Tool Discovery keeps deferred tool definitions out of the initial model context and loads them on demand. Set `deferTools: true` on a file source to defer every tool from every server in that file.
 
 ```json {15-17} title=".aether/settings.json"
 {
@@ -203,7 +203,7 @@ Aether can load `mcp.json` files. To enable dynamic tool discovery and prevent M
         { "type": "glob", "pattern": "prompt-fragments/*.md", "optional": true },
         { "type": "text", "text": "Prefer small, reviewable patches." }
       ],
-      "mcps": [{ "type": "file", "path": "mcp.json", "proxy": true }]
+      "mcps": [{ "type": "file", "path": "mcp.json", "deferTools": true }]
     }
   ]
 }

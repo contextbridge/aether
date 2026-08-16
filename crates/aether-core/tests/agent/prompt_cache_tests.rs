@@ -89,11 +89,13 @@ async fn capture_cache_key_with(
     tools: Vec<ToolDefinition>,
     user_prompt: &str,
 ) -> Result<String, Box<dyn Error>> {
-    let (mcp_tx, _mcp_rx) = mpsc::channel(1);
     let llm = fake_llm(model, 1)?;
     let captured = llm.captured_contexts();
-    let (tx, mut rx, _handle) =
-        agent(llm).system_prompt(Prompt::text(system_prompt)).tools(mcp_tx, tools).spawn().await?;
+    let (tx, mut rx, _handle) = agent(llm)
+        .system_prompt(Prompt::text(system_prompt))
+        .tools(aether_core::mcp::McpCommandClient::unavailable(), tools)
+        .spawn()
+        .await?;
 
     send_prompt(&tx, &mut rx, user_prompt).await?;
 

@@ -1,4 +1,4 @@
-Executes a bash command. Each call runs in a fresh shell — no state persists between calls.
+Executes a command in a fresh shell — no state persists between calls.
 
 **For terminal operations only** (git, npm, docker, cargo, etc.). Use dedicated tools for file operations.
 

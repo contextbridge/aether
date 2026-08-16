@@ -9,8 +9,9 @@ use super::{
     },
     mcp_client::{McpClient, client_capabilities},
     naming::{create_namespaced_tool_name, split_on_server_name},
-    tool_proxy::{self, PROXY_CALL_TOOL_NAME, PROXY_SERVER_NAME},
+    tool_filter::ToolFilter,
 };
+use crate::tool_gateway::ServerDescription;
 use aether_auth::{OAuthCredentialStorage, OAuthHandler};
 use futures::future::join_all;
 use rmcp::{
@@ -18,16 +19,20 @@ use rmcp::{
     model::{CallToolRequestParams, ClientInfo, ElicitRequestParams, ElicitResult, ElicitationAction, Implementation},
     service::RunningService,
 };
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::num::NonZeroU16;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+pub type ProgressiveDiscoveryInstructions = Arc<dyn Fn(&[ServerDescription]) -> String + Send + Sync>;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 pub use crate::status::{McpServerAuthCapability, McpServerStatus, McpServerStatusEntry};
+
+pub const PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME: &str = "progressive-discovery";
 
 pub type OAuthHandlerFactory = Arc<dyn Fn(OAuthHandlerContext) -> Result<Arc<dyn OAuthHandler>> + Send + Sync>;
 
@@ -73,35 +78,42 @@ pub struct McpConnectionDetails {
     pub server_statuses: Vec<McpServerStatusEntry>,
 }
 
+#[derive(Debug)]
+pub enum McpManagerEvent {
+    ToolCatalogChanged { server: String, result: std::result::Result<Vec<Tool>, String> },
+}
+
 /// Manages connections to multiple MCP servers and their tools
 pub struct McpManager {
     servers: HashMap<String, ServerRecord>,
     server_order: Vec<String>,
-    aether_home: Option<PathBuf>,
     client_info: ClientInfo,
     event_sender: mpsc::Sender<McpClientEvent>,
+    manager_event_sender: mpsc::UnboundedSender<McpManagerEvent>,
+    manager_event_receiver: Option<mpsc::UnboundedReceiver<McpManagerEvent>>,
     root_dir: PathBuf,
     oauth_handler_factory: Option<OAuthHandlerFactory>,
     oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
+    tool_filter: ToolFilter,
+    progressive_discovery_instructions: Option<ProgressiveDiscoveryInstructions>,
 }
 
 impl McpManager {
     pub fn new(event_sender: mpsc::Sender<McpClientEvent>, oauth_handler_factory: Option<OAuthHandlerFactory>) -> Self {
+        let (manager_event_sender, manager_event_receiver) = mpsc::unbounded_channel();
         Self {
             servers: HashMap::new(),
             server_order: Vec::new(),
-            aether_home: None,
             client_info: ClientInfo::new(client_capabilities(), Implementation::new("aether", "0.1.0")),
             event_sender,
+            manager_event_sender,
+            manager_event_receiver: Some(manager_event_receiver),
             root_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             oauth_handler_factory,
             oauth_credential_store: None,
+            tool_filter: ToolFilter::default(),
+            progressive_discovery_instructions: None,
         }
-    }
-
-    pub fn with_aether_home(mut self, aether_home: impl Into<PathBuf>) -> Self {
-        self.aether_home = Some(aether_home.into());
-        self
     }
 
     pub fn with_oauth_credential_store(mut self, store: Arc<dyn OAuthCredentialStorage>) -> Self {
@@ -114,16 +126,25 @@ impl McpManager {
         self
     }
 
-    pub async fn register_pending(&mut self, servers: Vec<McpServer>) -> Result<Vec<McpServer>> {
-        let adds_proxied = servers.iter().any(|server| server.tool_exposure.is_proxied());
-        let proxy_name_taken = self.servers.contains_key(PROXY_SERVER_NAME)
-            || servers.iter().any(|server| server.name == PROXY_SERVER_NAME);
-        if (adds_proxied || self.proxy_enabled()) && proxy_name_taken {
-            return Err(McpError::Other("server name 'proxy' collides with the tool proxy".into()));
-        }
+    pub fn with_tool_filter(mut self, filter: ToolFilter) -> Self {
+        self.tool_filter = filter;
+        self
+    }
 
-        if adds_proxied && !self.proxy_enabled() {
-            tool_proxy::clean_dir(&self.proxy_tool_dir()?).await?;
+    pub fn with_progressive_discovery_instructions(mut self, instructions: ProgressiveDiscoveryInstructions) -> Self {
+        self.progressive_discovery_instructions = Some(instructions);
+        self
+    }
+
+    pub async fn register_pending(&mut self, servers: Vec<McpServer>) -> Result<Vec<McpServer>> {
+        let adds_deferred_tools = servers.iter().any(|server| server.tool_exposure.has_deferred_tools());
+        let instruction_name_taken = self.servers.contains_key(PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME)
+            || servers.iter().any(|server| server.name == PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME);
+        if (adds_deferred_tools || self.has_deferred_tools()) && instruction_name_taken {
+            return Err(McpError::Other(
+                "server name 'progressive-discovery' collides with the progressive discovery instruction namespace"
+                    .into(),
+            ));
         }
 
         for server in &servers {
@@ -137,6 +158,27 @@ impl McpManager {
     pub fn connect_pending_task(&self, server: McpServer) -> impl Future<Output = McpConnectAttempt> + Send + 'static {
         let ctx = self.connect_config();
         async move { connect_server(server, &ctx).await }
+    }
+
+    pub fn take_event_receiver(&mut self) -> mpsc::UnboundedReceiver<McpManagerEvent> {
+        self.manager_event_receiver.take().expect("MCP manager event receiver can only be taken once")
+    }
+
+    pub async fn apply_event(&mut self, event: McpManagerEvent) {
+        match event {
+            McpManagerEvent::ToolCatalogChanged { server, result: Ok(tools) } => {
+                let Some(record) = self.servers.get_mut(&server) else { return };
+                if !record.replace_tools(tools) {
+                    return;
+                }
+                self.emit_server_statuses_changed().await;
+                self.emit_tool_definitions_changed().await;
+                self.emit_catalog_instructions_changed(&server).await;
+            }
+            McpManagerEvent::ToolCatalogChanged { server, result: Err(error) } => {
+                tracing::warn!(server, error, "Failed to refresh MCP tool catalog");
+            }
+        }
     }
 
     pub async fn add_mcps(&mut self, servers: Vec<McpServer>) -> Result<()> {
@@ -161,10 +203,6 @@ impl McpManager {
         let (server_name, tool_name) = split_on_server_name(namespaced_tool_name)
             .ok_or_else(|| McpError::InvalidToolNameFormat(namespaced_tool_name.to_string()))?;
 
-        if server_name == PROXY_SERVER_NAME && self.proxy_enabled() {
-            return self.resolve_proxy_call(arguments_json);
-        }
-
         let client =
             self.client_for_server(server_name).ok_or_else(|| McpError::ServerNotFound(server_name.to_string()))?;
 
@@ -177,22 +215,90 @@ impl McpManager {
         Ok((client, params))
     }
 
+    pub fn deferred_servers(&self) -> Vec<ServerDescription> {
+        self.server_order
+            .iter()
+            .filter_map(|name| {
+                let record = self.servers.get(name)?;
+                if record.connection().is_none()
+                    || !record
+                        .tools()
+                        .iter()
+                        .any(|tool| record.is_deferred(&tool.name) && self.is_tool_allowed(name, tool))
+                {
+                    return None;
+                }
+                Some(ServerDescription { name: name.clone(), description: record.description(name) })
+            })
+            .collect()
+    }
+
+    pub async fn list_deferred_tools(&mut self, server: &str) -> Result<Vec<ToolDefinition>> {
+        let discovered_tools = {
+            let (_, connection) = self.deferred_record(server)?;
+            connection.list_tools().await?.iter().map(Tool::from).collect()
+        };
+        let record = self.servers.get_mut(server).ok_or_else(|| McpError::ServerNotFound(server.to_string()))?;
+        let ServerState::Connected { tools, .. } = &mut record.state else {
+            return Err(McpError::DeferredServerNotConnected(server.to_string()));
+        };
+        *tools = discovered_tools;
+
+        let record = self.servers.get(server).expect("server was resolved above");
+        Ok(record
+            .tools()
+            .iter()
+            .filter(|tool| record.is_deferred(&tool.name) && self.is_tool_allowed(server, tool))
+            .map(|tool| deferred_tool_definition(server, tool))
+            .collect())
+    }
+
+    pub async fn deferred_tool(&mut self, server: &str, tool: &str) -> Result<ToolDefinition> {
+        self.list_deferred_tools(server)
+            .await?
+            .into_iter()
+            .find(|candidate| candidate.name == tool)
+            .ok_or_else(|| McpError::ToolNotFound(format!("'{tool}' on server '{server}'")))
+    }
+
+    pub fn resolve_deferred_tool(
+        &self,
+        server: &str,
+        tool: &str,
+        arguments: Map<String, Value>,
+    ) -> Result<(Arc<RunningService<RoleClient, McpClient>>, CallToolRequestParams)> {
+        let (record, connection) = self.deferred_record(server)?;
+        let Some(catalog_tool) = record.tools().iter().find(|candidate| candidate.name == tool) else {
+            return Err(McpError::ToolNotFound(format!("'{tool}' on server '{server}'")));
+        };
+        if !record.is_deferred(tool) || !self.is_tool_allowed(server, catalog_tool) {
+            return Err(McpError::ToolNotFound(format!("'{tool}' on server '{server}'")));
+        }
+        Ok((connection.client.clone(), CallToolRequestParams::new(tool.to_string()).with_arguments(arguments)))
+    }
+
+    pub fn progressive_discovery_instructions(&self) -> Option<String> {
+        let servers = self.deferred_servers();
+        (!servers.is_empty())
+            .then(|| self.progressive_discovery_instructions.as_ref().map(|render| render(&servers)))
+            .flatten()
+    }
+
+    pub fn has_deferred_tools(&self) -> bool {
+        self.servers.values().any(|record| record.exposure.has_deferred_tools())
+    }
+
     pub fn tool_definitions(&self) -> Vec<ToolDefinition> {
         let mut definitions = Vec::new();
-        if self.proxy_enabled() {
-            definitions.push(tool_proxy::call_tool_definition());
-        }
         for name in &self.server_order {
             let Some(record) = self.servers.get(name) else { continue };
-            definitions.extend(record.tools().iter().filter(|tool| record.is_direct_tool(&tool.name)).map(|tool| {
-                ToolDefinition::new(
-                    create_namespaced_tool_name(name, &tool.name),
-                    tool.description.clone(),
-                    tool.parameters.clone(),
-                )
-                .with_server(name.clone())
-                .with_annotations(tool.annotations.clone())
-            }));
+            definitions.extend(
+                record
+                    .tools()
+                    .iter()
+                    .filter(|tool| record.is_model_visible(&tool.name) && self.is_tool_allowed(name, tool))
+                    .map(|tool| namespaced_tool_definition(name, tool)),
+            );
         }
         definitions
     }
@@ -201,7 +307,7 @@ impl McpManager {
         let mut instructions: BTreeMap<String, String> = self
             .servers
             .iter()
-            .filter(|(_, record)| record.has_direct_tools())
+            .filter(|(name, record)| self.has_model_visible_tools(name, record))
             .filter_map(|(name, record)| {
                 record
                     .connection()
@@ -210,8 +316,8 @@ impl McpManager {
             })
             .collect();
 
-        if let Some((name, body)) = self.proxy_instructions() {
-            instructions.insert(name, body);
+        if let Some(body) = self.progressive_discovery_instructions() {
+            instructions.insert(PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME.to_string(), body);
         }
 
         instructions
@@ -253,8 +359,8 @@ impl McpManager {
     pub async fn apply_connection_attempt(&mut self, attempt: McpConnectAttempt) {
         let McpConnectAttempt { name, outcome } = attempt;
         match outcome {
-            McpConnectOutcome::Connected { conn, reauth_config } => {
-                match self.register_connection(&name, conn, reauth_config).await {
+            McpConnectOutcome::Connected { conn, tools, reauth_config } => {
+                match self.register_connection(&name, conn, tools, reauth_config) {
                     Ok(()) => {
                         self.emit_server_statuses_changed().await;
                         self.emit_tool_definitions_changed().await;
@@ -279,63 +385,70 @@ impl McpManager {
     }
 
     /// List all prompts from all connected MCP servers with namespacing
-    pub async fn list_prompts(&self) -> Result<Vec<rmcp::model::Prompt>> {
-        let futures: Vec<_> = self
+    pub fn list_prompts(&self) -> impl Future<Output = Result<Vec<rmcp::model::Prompt>>> + Send + 'static {
+        let clients: Vec<_> = self
             .servers
             .iter()
             .filter_map(|(server_name, record)| {
                 let conn = record.connection()?;
                 conn.client.peer_info()?.capabilities.prompts.as_ref()?;
-                let server_name = server_name.clone();
-                let client = conn.client.clone();
-                Some(async move {
-                    let prompts_response = client.list_prompts(None).await.map_err(|e| {
-                        McpError::PromptListFailed(format!("Failed to list prompts for {server_name}: {e}"))
-                    })?;
+                Some((server_name.clone(), conn.client.clone()))
+            })
+            .collect();
 
-                    let namespaced_prompts: Vec<rmcp::model::Prompt> = prompts_response
+        async move {
+            let futures = clients.into_iter().map(|(server_name, client)| async move {
+                let prompts_response = client.list_prompts(None).await.map_err(|e| {
+                    McpError::PromptListFailed(format!("Failed to list prompts for {server_name}: {e}"))
+                })?;
+
+                Ok::<_, McpError>(
+                    prompts_response
                         .prompts
                         .into_iter()
                         .map(|prompt| {
                             let namespaced_name = create_namespaced_tool_name(&server_name, &prompt.name);
                             rmcp::model::Prompt::new(namespaced_name, prompt.description, prompt.arguments)
                         })
-                        .collect();
+                        .collect::<Vec<_>>(),
+                )
+            });
 
-                    Ok::<_, McpError>(namespaced_prompts)
-                })
-            })
-            .collect();
-
-        let results = join_all(futures).await;
-        let mut all_prompts = Vec::new();
-        for result in results {
-            all_prompts.extend(result?);
+            let mut all_prompts = Vec::new();
+            for result in join_all(futures).await {
+                all_prompts.extend(result?);
+            }
+            Ok(all_prompts)
         }
-
-        Ok(all_prompts)
     }
 
     /// Get a specific prompt by namespaced name
-    pub async fn get_prompt(
+    pub fn get_prompt(
         &self,
         namespaced_prompt_name: &str,
         arguments: Option<serde_json::Map<String, serde_json::Value>>,
-    ) -> Result<rmcp::model::GetPromptResult> {
-        let (server_name, prompt_name) = split_on_server_name(namespaced_prompt_name)
-            .ok_or_else(|| McpError::InvalidToolNameFormat(namespaced_prompt_name.to_string()))?;
+    ) -> impl Future<Output = Result<rmcp::model::GetPromptResult>> + Send + 'static {
+        let resolved = split_on_server_name(namespaced_prompt_name)
+            .ok_or_else(|| McpError::InvalidToolNameFormat(namespaced_prompt_name.to_string()))
+            .and_then(|(server_name, prompt_name)| {
+                let client = self
+                    .connection_for(server_name)
+                    .map(|connection| connection.client.clone())
+                    .ok_or_else(|| McpError::ServerNotFound(server_name.to_string()))?;
+                Ok((client, server_name.to_string(), prompt_name.to_string()))
+            });
 
-        let server_conn =
-            self.connection_for(server_name).ok_or_else(|| McpError::ServerNotFound(server_name.to_string()))?;
+        async move {
+            let (client, server_name, prompt_name) = resolved?;
+            let mut request = rmcp::model::GetPromptRequestParams::new(prompt_name.clone());
+            if let Some(args) = arguments {
+                request = request.with_arguments(args);
+            }
 
-        let mut request = rmcp::model::GetPromptRequestParams::new(prompt_name);
-        if let Some(args) = arguments {
-            request = request.with_arguments(args);
+            client.get_prompt(request).await.map_err(|e| {
+                McpError::PromptGetFailed(format!("Failed to get prompt '{prompt_name}' from {server_name}: {e}"))
+            })
         }
-
-        server_conn.client.get_prompt(request).await.map_err(|e| {
-            McpError::PromptGetFailed(format!("Failed to get prompt '{prompt_name}' from {server_name}: {e}"))
-        })
     }
 
     /// Shutdown all servers and wait for their tasks to complete
@@ -375,9 +488,24 @@ impl McpManager {
         self.emit_event(McpClientEvent::ToolDefinitionsChanged(self.tool_definitions())).await;
     }
 
+    async fn emit_catalog_instructions_changed(&self, server_name: &str) {
+        let Some(record) = self.servers.get(server_name) else { return };
+        let instructions = self
+            .has_model_visible_tools(server_name, record)
+            .then(|| record.connection().and_then(|connection| connection.instructions.clone()))
+            .flatten();
+        self.emit_event(McpClientEvent::ServerInstructionsUpdated { server: server_name.to_string(), instructions })
+            .await;
+        self.emit_event(McpClientEvent::ServerInstructionsUpdated {
+            server: PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME.to_string(),
+            instructions: self.progressive_discovery_instructions(),
+        })
+        .await;
+    }
+
     async fn emit_instructions_after_connect(&self, server_name: &str) {
         let Some(record) = self.servers.get(server_name) else { return };
-        if record.has_direct_tools()
+        if self.has_model_visible_tools(server_name, record)
             && let Some(instructions) = record.connection().and_then(|conn| conn.instructions.as_ref()).cloned()
         {
             self.emit_event(McpClientEvent::ServerInstructionsUpdated {
@@ -387,31 +515,15 @@ impl McpManager {
             .await;
         }
 
-        if record.exposure.is_proxied()
-            && let Some((server, body)) = self.proxy_instructions()
+        if record.exposure.has_deferred_tools()
+            && let Some(body) = self.progressive_discovery_instructions()
         {
-            self.emit_event(McpClientEvent::ServerInstructionsUpdated { server, instructions: Some(body) }).await;
-        }
-    }
-
-    fn proxy_instructions(&self) -> Option<(String, String)> {
-        if !self.proxy_enabled() {
-            return None;
-        }
-        let tool_dir = self.proxy_tool_dir().ok()?;
-        let descriptions = self
-            .server_order
-            .iter()
-            .filter_map(|name| {
-                let record = self.servers.get(name)?;
-                if !record.exposure.is_proxied() {
-                    return None;
-                }
-                let conn = record.connection()?;
-                Some((name.clone(), tool_proxy::extract_server_description(&conn.client, name)))
+            self.emit_event(McpClientEvent::ServerInstructionsUpdated {
+                server: PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME.to_string(),
+                instructions: Some(body),
             })
-            .collect::<Vec<_>>();
-        Some((PROXY_SERVER_NAME.to_string(), tool_proxy::build_instructions(&tool_dir, &descriptions)))
+            .await;
+        }
     }
 
     pub async fn emit_connection_ready(&self) {
@@ -437,68 +549,24 @@ impl McpManager {
         Arc::new(ConnectConfig {
             client_info: self.client_info.clone(),
             event_sender: self.event_sender.clone(),
+            manager_event_sender: self.manager_event_sender.clone(),
             root_dir: self.root_dir.clone(),
             oauth_handler_factory: self.oauth_handler_factory.clone(),
             oauth_credential_store: self.oauth_credential_store.clone(),
         })
     }
 
-    fn proxy_enabled(&self) -> bool {
-        self.servers.values().any(|record| record.exposure.is_proxied())
-    }
-
-    fn proxy_tool_dir(&self) -> Result<PathBuf> {
-        self.aether_home.as_ref().map(|home| tool_proxy::dir_in_home(home)).map_or_else(tool_proxy::dir, Ok)
-    }
-
-    fn resolve_proxy_call(
-        &self,
-        arguments_json: &str,
-    ) -> Result<(Arc<RunningService<RoleClient, McpClient>>, CallToolRequestParams)> {
-        let call = tool_proxy::resolve_call(arguments_json)?;
-        let record = self.servers.get(&call.server).ok_or_else(|| McpError::ServerNotFound(call.server.clone()))?;
-        if !record.exposure.is_proxied() {
-            return Err(McpError::ServerNotProxied(call.server));
-        }
-        if record.is_direct_tool(&call.tool) {
-            let direct_name = create_namespaced_tool_name(&call.server, &call.tool);
-            if record.has_tool(&call.tool) {
-                return Err(McpError::DirectToolRequiresDirectRoute { tool_name: call.tool, direct_name });
-            }
-            return Err(McpError::ToolNotFound(direct_name));
-        }
-        let conn = record.connection().ok_or_else(|| McpError::ProxiedServerNotConnected(call.server.clone()))?;
-        let params = CallToolRequestParams::new(call.tool).with_arguments(call.arguments.unwrap_or_default());
-        Ok((conn.client.clone(), params))
-    }
-
-    async fn register_connection(
+    fn register_connection(
         &mut self,
         name: &str,
         conn: McpServerConnection,
+        tools: Vec<Tool>,
         reauth_config: Option<McpHttpConfig>,
     ) -> Result<()> {
-        let tools = conn
-            .list_tools()
-            .await
-            .map_err(|e| McpError::ToolDiscoveryFailed(format!("Failed to list tools for {name}: {e}")))?;
-        let record = self.servers.get(name).ok_or_else(|| McpError::ServerNotFound(name.to_string()))?;
-        let exposure = record.exposure.clone();
-
-        if exposure.is_proxied() {
-            let write_result = match self.proxy_tool_dir() {
-                Ok(tool_dir) => tool_proxy::write_tool_entries_to_dir(name, &tools, &exposure, &tool_dir).await,
-                Err(error) => Err(error),
-            };
-            if let Err(error) = write_result {
-                tracing::warn!(server = %name, %error, "Failed to write proxy tool discovery files");
-            }
-        }
-
-        let record = self.servers.get_mut(name).expect("record checked above");
+        let record = self.servers.get_mut(name).ok_or_else(|| McpError::ServerNotFound(name.to_string()))?;
         record.reauth_config = reauth_config.or_else(|| record.reauth_config.clone());
         record.oauth_challenge = None;
-        record.state = ServerState::Connected { connection: conn, tools: tools.iter().map(Tool::from).collect() };
+        record.state = ServerState::Connected { connection: conn, tools };
         Ok(())
     }
 
@@ -519,7 +587,7 @@ impl McpManager {
         match self.servers.get_mut(name) {
             Some(record) => record.state = state,
             None => {
-                self.servers.insert(name.to_string(), ServerRecord::new(state, None, ToolExposure::Direct));
+                self.servers.insert(name.to_string(), ServerRecord::new(state, None, ToolExposure::ModelVisible));
             }
         }
     }
@@ -543,17 +611,34 @@ impl McpManager {
         self.connection_for(server_name).map(|conn| conn.client.clone())
     }
 
-    fn is_routable_tool(&self, namespaced_tool_name: &str) -> bool {
-        if namespaced_tool_name == PROXY_CALL_TOOL_NAME && self.proxy_enabled() {
-            return true;
+    fn deferred_record(&self, server: &str) -> Result<(&ServerRecord, &McpServerConnection)> {
+        let record = self.servers.get(server).ok_or_else(|| McpError::ServerNotFound(server.to_string()))?;
+        if !record.exposure.has_deferred_tools() {
+            return Err(McpError::ServerHasNoDeferredTools(server.to_string()));
         }
+        let connection = record.connection().ok_or_else(|| McpError::DeferredServerNotConnected(server.to_string()))?;
+        Ok((record, connection))
+    }
+
+    fn is_routable_tool(&self, namespaced_tool_name: &str) -> bool {
         match split_on_server_name(namespaced_tool_name) {
-            Some((server_name, tool_name)) => self
-                .servers
-                .get(server_name)
-                .is_some_and(|record| record.is_direct_tool(tool_name) && record.has_tool(tool_name)),
+            Some((server_name, tool_name)) => {
+                self.servers.get(server_name).is_some_and(|record| {
+                    record.tools().iter().find(|tool| tool.name == tool_name).is_some_and(|tool| {
+                        record.is_model_visible(tool_name) && self.is_tool_allowed(server_name, tool)
+                    })
+                })
+            }
             None => false,
         }
+    }
+
+    fn has_model_visible_tools(&self, server: &str, record: &ServerRecord) -> bool {
+        record.tools().iter().any(|tool| record.is_model_visible(&tool.name) && self.is_tool_allowed(server, tool))
+    }
+
+    fn is_tool_allowed(&self, server: &str, tool: &Tool) -> bool {
+        self.tool_filter.is_tool_allowed(&namespaced_tool_definition(server, tool))
     }
 }
 
@@ -614,16 +699,35 @@ impl ServerRecord {
         }
     }
 
-    fn has_direct_tools(&self) -> bool {
-        self.tools().iter().any(|tool| self.is_direct_tool(&tool.name))
+    fn description(&self, name: &str) -> String {
+        self.connection()
+            .and_then(|connection| connection.client.peer_info())
+            .and_then(|info| {
+                info.server_info
+                    .as_ref()
+                    .and_then(|server_info| server_info.description.as_deref())
+                    .filter(|description| !description.is_empty())
+                    .map(ToString::to_string)
+            })
+            .unwrap_or_else(|| name.to_string())
     }
 
-    fn is_direct_tool(&self, tool_name: &str) -> bool {
-        self.exposure.is_direct_tool(tool_name)
+    fn is_model_visible(&self, tool_name: &str) -> bool {
+        self.exposure.is_model_visible(tool_name)
     }
 
-    fn has_tool(&self, tool_name: &str) -> bool {
-        self.tools().iter().any(|tool| tool.name == tool_name)
+    fn is_deferred(&self, tool_name: &str) -> bool {
+        self.exposure.is_deferred(tool_name)
+    }
+
+    fn replace_tools(&mut self, next_tools: Vec<Tool>) -> bool {
+        match &mut self.state {
+            ServerState::Connected { tools, .. } => {
+                *tools = next_tools;
+                true
+            }
+            _ => false,
+        }
     }
 
     fn connection(&self) -> Option<&McpServerConnection> {
@@ -661,8 +765,24 @@ impl ServerRecord {
     fn status_entry(&self, name: &str) -> McpServerStatusEntry {
         McpServerStatusEntry::new(name, self.status())
             .with_auth_capability(self.auth_capability())
-            .with_proxied(self.exposure.is_proxied())
+            .with_deferred_tools(self.exposure.has_deferred_tools())
     }
+}
+
+fn namespaced_tool_definition(server: &str, tool: &Tool) -> ToolDefinition {
+    ToolDefinition::new(
+        create_namespaced_tool_name(server, &tool.name),
+        tool.description.clone(),
+        tool.parameters.clone(),
+    )
+    .with_server(server)
+    .with_annotations(tool.annotations.clone())
+}
+
+fn deferred_tool_definition(server: &str, tool: &Tool) -> ToolDefinition {
+    ToolDefinition::new(tool.name.clone(), tool.description.clone(), tool.parameters.clone())
+        .with_server(server)
+        .with_annotations(tool.annotations.clone())
 }
 
 /// Awaits `handle` for up to 5 seconds, logging whether the server shut down
@@ -680,18 +800,24 @@ async fn await_server_shutdown(server_name: &str, handle: JoinHandle<()>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{McpClientEvent, McpManager, McpServerStatus, PROXY_SERVER_NAME, ServerState};
-    use crate::client::OAuthHandlerFactory;
+    use super::{
+        McpClientEvent, McpManager, McpServerStatus, PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME, ServerState, ToolFilter,
+    };
     use crate::client::config::{McpHttpConfig, McpServer, McpTransport, ToolExposure};
     use crate::client::connection::{McpConnectAttempt, McpConnectOutcome};
+    use crate::client::{OAuthHandlerFactory, ToolMatcher};
     use crate::status::McpServerAuthCapability;
     use aether_auth::{OAuthError, OAuthHandler};
     use futures::future::BoxFuture;
     use rmcp::{
         Json, RoleServer, ServerHandler,
-        handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-        model::{Implementation, ServerCapabilities, ServerInfo},
-        service::DynService,
+        handler::server::{
+            router::tool::{ToolRoute, ToolRouter},
+            tool::ToolCallContext,
+            wrapper::Parameters,
+        },
+        model::{CallToolResponse, CallToolResult, Implementation, ListToolsResult, ServerCapabilities, ServerInfo},
+        service::{DynService, MaybeSendFuture, NotificationContext},
         tool, tool_handler, tool_router,
         transport::streamable_http_client::StreamableHttpClientTransportConfig,
     };
@@ -701,7 +827,7 @@ mod tests {
         io,
         sync::{Arc, Mutex},
     };
-    use tokio::sync::mpsc;
+    use tokio::sync::{Notify, RwLock, mpsc};
 
     #[derive(Clone)]
     struct TestServer {
@@ -747,6 +873,61 @@ mod tests {
     }
 
     #[derive(Clone)]
+    struct ChangingToolServer {
+        router: Arc<RwLock<ToolRouter<Self>>>,
+        remove_tool: Arc<Notify>,
+    }
+
+    impl ChangingToolServer {
+        fn new() -> Self {
+            let mut router = ToolRouter::new();
+            router.add_route(ToolRoute::new_dyn(
+                rmcp::model::Tool::new("changing", "A changing tool", Arc::new(serde_json::Map::default())),
+                |_| Box::pin(async { Ok(CallToolResult::default().into()) }),
+            ));
+            Self { router: Arc::new(RwLock::new(router)), remove_tool: Arc::new(Notify::new()) }
+        }
+    }
+
+    impl ServerHandler for ChangingToolServer {
+        fn get_info(&self) -> ServerInfo {
+            ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        }
+
+        async fn call_tool(
+            &self,
+            request: rmcp::model::CallToolRequestParams,
+            context: rmcp::service::RequestContext<RoleServer>,
+        ) -> std::result::Result<CallToolResponse, rmcp::ErrorData> {
+            self.router.read().await.call(ToolCallContext::new(self, request, context)).await
+        }
+
+        async fn list_tools(
+            &self,
+            _request: Option<rmcp::model::PaginatedRequestParams>,
+            _context: rmcp::service::RequestContext<RoleServer>,
+        ) -> std::result::Result<ListToolsResult, rmcp::ErrorData> {
+            Ok(ListToolsResult::with_all_items(self.router.read().await.list_all()))
+        }
+
+        fn on_initialized(
+            &self,
+            context: NotificationContext<RoleServer>,
+        ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
+            let router = self.router.clone();
+            let remove_tool = self.remove_tool.clone();
+            let peer = context.peer.clone();
+            async move {
+                router.write().await.bind_peer_notifier(&peer);
+                tokio::spawn(async move {
+                    remove_tool.notified().await;
+                    router.write().await.disable_route("changing");
+                });
+            }
+        }
+    }
+
+    #[derive(Clone)]
     struct SharedWriter(Arc<Mutex<Vec<u8>>>);
 
     impl io::Write for SharedWriter {
@@ -784,7 +965,7 @@ mod tests {
     async fn authenticate_server_task_rejects_record_without_reauth_config() {
         let (event_sender, _event_receiver) = mpsc::channel(1);
         let mut manager = McpManager::new(event_sender, Some(test_oauth_handler_factory()));
-        manager.register_record("public", ServerState::Connecting, None, ToolExposure::Direct);
+        manager.register_record("public", ServerState::Connecting, None, ToolExposure::ModelVisible);
 
         let error = match manager.authenticate_server_task("public").await {
             Ok(_) => panic!("non-OAuth server should be rejected"),
@@ -801,7 +982,7 @@ mod tests {
             "remote",
             ServerState::NeedsOAuth,
             Some(http_config("http://localhost:19999/mcp")),
-            ToolExposure::Direct,
+            ToolExposure::ModelVisible,
         );
 
         let _task = manager.authenticate_server_task("remote").await.expect("auth should start");
@@ -824,7 +1005,7 @@ mod tests {
             "remote",
             ServerState::NeedsOAuth,
             Some(http_config("http://localhost:19999/mcp")),
-            ToolExposure::Direct,
+            ToolExposure::ModelVisible,
         );
         let _task = manager.authenticate_server_task("remote").await.expect("auth should start");
         let _authenticating_event = event_receiver.recv().await.expect("authenticating status change event");
@@ -864,14 +1045,14 @@ mod tests {
             "with-oauth",
             ServerState::Connecting,
             Some(http_config("http://localhost/mcp")),
-            ToolExposure::Direct,
+            ToolExposure::ModelVisible,
         );
-        manager.register_record("without-oauth", ServerState::Connecting, None, ToolExposure::Direct);
+        manager.register_record("without-oauth", ServerState::Connecting, None, ToolExposure::ModelVisible);
         manager.register_record(
             "needs-oauth",
             ServerState::NeedsOAuth,
             Some(http_config("http://localhost/mcp2")),
-            ToolExposure::Direct,
+            ToolExposure::ModelVisible,
         );
 
         let statuses = manager.server_statuses();
@@ -893,12 +1074,12 @@ mod tests {
             McpServer::new(
                 "alpha",
                 McpTransport::InMemory { server: TestServer::default().into_dyn() },
-                ToolExposure::Direct,
+                ToolExposure::ModelVisible,
             ),
             McpServer::new(
                 "beta",
                 McpTransport::InMemory { server: TestServer::default().into_dyn() },
-                ToolExposure::proxied_all(),
+                ToolExposure::deferred_all(),
             ),
         ];
 
@@ -909,7 +1090,7 @@ mod tests {
         assert_eq!(statuses.len(), 2);
         assert!(matches!(statuses.iter().find(|s| s.name == "alpha").unwrap().status, McpServerStatus::Connecting));
         assert!(matches!(statuses.iter().find(|s| s.name == "beta").unwrap().status, McpServerStatus::Connecting));
-        assert!(statuses.iter().find(|s| s.name == "beta").unwrap().proxied);
+        assert!(statuses.iter().find(|s| s.name == "beta").unwrap().deferred_tools);
 
         let event = event_receiver.try_recv().expect("expected initial ServerStatusesChanged emission");
         let McpClientEvent::ServerStatusesChanged(emitted) = event else {
@@ -926,7 +1107,7 @@ mod tests {
         let servers = vec![McpServer::new(
             "test",
             McpTransport::InMemory { server: TestServer::default().into_dyn() },
-            ToolExposure::Direct,
+            ToolExposure::ModelVisible,
         )];
         manager.add_mcps(servers).await.unwrap();
 
@@ -943,7 +1124,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn server_statuses_mark_direct_and_proxied_servers_without_proxy_row() {
+    async fn server_statuses_mark_model_visible_and_deferred_servers_without_synthetic_row() {
         let (event_sender, _event_receiver) = mpsc::channel(32);
         let mut manager = McpManager::new(event_sender, None);
         manager
@@ -951,12 +1132,12 @@ mod tests {
                 McpServer::new(
                     "direct",
                     McpTransport::InMemory { server: TestServer::default().into_dyn() },
-                    ToolExposure::Direct,
+                    ToolExposure::ModelVisible,
                 ),
                 McpServer::new(
                     "math",
                     McpTransport::InMemory { server: TestServer::default().into_dyn() },
-                    ToolExposure::proxied_all(),
+                    ToolExposure::deferred_all(),
                 ),
             ])
             .await
@@ -964,9 +1145,113 @@ mod tests {
 
         let statuses = manager.server_statuses();
         assert_eq!(statuses.iter().map(|status| status.name.as_str()).collect::<Vec<_>>(), vec!["direct", "math"]);
-        assert!(!statuses.iter().find(|status| status.name == "direct").unwrap().proxied);
-        assert!(statuses.iter().find(|status| status.name == "math").unwrap().proxied);
-        assert!(!statuses.iter().any(|status| status.name == PROXY_SERVER_NAME));
+        assert!(!statuses.iter().find(|status| status.name == "direct").unwrap().deferred_tools);
+        assert!(statuses.iter().find(|status| status.name == "math").unwrap().deferred_tools);
+        assert!(!statuses.iter().any(|status| status.name == PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME));
+
+        assert_eq!(
+            manager.tool_definitions().iter().map(|tool| tool.name.as_str()).collect::<Vec<_>>(),
+            ["direct__echo"]
+        );
+        let servers = manager.deferred_servers();
+        assert_eq!(servers.iter().map(|server| server.name.as_str()).collect::<Vec<_>>(), ["math"]);
+        assert_eq!(manager.list_deferred_tools("math").await.unwrap()[0].name, "echo");
+        let definition = manager.deferred_tool("math", "echo").await.unwrap();
+        assert_eq!(definition.server.as_deref(), Some("math"));
+        assert_eq!(definition.name, "echo");
+        assert!(manager.resolve_deferred_tool("math", "echo", serde_json::Map::new()).is_ok());
+        assert!(manager.resolve_deferred_tool("direct", "echo", serde_json::Map::new()).is_err());
+    }
+
+    #[tokio::test]
+    async fn tool_filter_controls_discovery_and_execution() {
+        let (event_sender, _event_receiver) = mpsc::channel(32);
+        let filter = ToolFilter { allow: vec![ToolMatcher::name("direct__echo")], deny: Vec::new() };
+        let mut manager = McpManager::new(event_sender, None).with_tool_filter(filter);
+        manager
+            .add_mcps(vec![
+                McpServer::new(
+                    "direct",
+                    McpTransport::InMemory { server: TestServer::default().into_dyn() },
+                    ToolExposure::ModelVisible,
+                ),
+                McpServer::new(
+                    "blocked",
+                    McpTransport::InMemory { server: TestServer::default().into_dyn() },
+                    ToolExposure::ModelVisible,
+                ),
+                McpServer::new(
+                    "math",
+                    McpTransport::InMemory { server: TestServer::default().into_dyn() },
+                    ToolExposure::deferred_all(),
+                ),
+            ])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            manager.tool_definitions().iter().map(|tool| tool.name.as_str()).collect::<Vec<_>>(),
+            ["direct__echo"]
+        );
+        assert!(manager.get_client_for_tool("direct__echo", "{}").is_ok());
+        assert!(manager.get_client_for_tool("blocked__echo", "{}").is_err());
+        assert!(manager.deferred_servers().is_empty());
+        assert!(manager.list_deferred_tools("math").await.unwrap().is_empty());
+        assert!(manager.deferred_tool("math", "echo").await.is_err());
+        assert!(manager.resolve_deferred_tool("math", "echo", serde_json::Map::new()).is_err());
+        assert!(manager.progressive_discovery_instructions().is_none());
+    }
+
+    #[tokio::test]
+    async fn annotation_filter_blocks_discovery_and_execution() {
+        let (event_sender, _event_receiver) = mpsc::channel(32);
+        let filter = ToolFilter { allow: Vec::new(), deny: vec![ToolMatcher::read_only()] };
+        let mut manager = McpManager::new(event_sender, None).with_tool_filter(filter);
+        manager
+            .add_mcps(vec![
+                McpServer::new(
+                    "direct",
+                    McpTransport::InMemory { server: TestServer::default().into_dyn() },
+                    ToolExposure::ModelVisible,
+                ),
+                McpServer::new(
+                    "deferred",
+                    McpTransport::InMemory { server: TestServer::default().into_dyn() },
+                    ToolExposure::deferred_all(),
+                ),
+            ])
+            .await
+            .unwrap();
+
+        assert!(manager.tool_definitions().is_empty());
+        assert!(manager.get_client_for_tool("direct__echo", "{}").is_err());
+        assert!(manager.deferred_servers().is_empty());
+        assert!(manager.list_deferred_tools("deferred").await.unwrap().is_empty());
+        assert!(manager.resolve_deferred_tool("deferred", "echo", serde_json::Map::new()).is_err());
+    }
+
+    #[tokio::test]
+    async fn tool_list_changed_notification_updates_catalog() {
+        let (event_sender, _event_receiver) = mpsc::channel(32);
+        let mut manager = McpManager::new(event_sender, None);
+        let mut manager_events = manager.take_event_receiver();
+        let server = ChangingToolServer::new();
+        let remove_tool = server.remove_tool.clone();
+        manager
+            .add_mcps(vec![McpServer::new(
+                "changing",
+                McpTransport::InMemory { server: Box::new(server) },
+                ToolExposure::ModelVisible,
+            )])
+            .await
+            .unwrap();
+        assert_eq!(manager.tool_definitions()[0].name, "changing__changing");
+
+        remove_tool.notify_one();
+        manager.apply_event(manager_events.recv().await.unwrap()).await;
+
+        assert!(manager.tool_definitions().is_empty());
+        assert!(manager.get_client_for_tool("changing__changing", "{}").is_err());
     }
 
     #[tokio::test]
@@ -978,12 +1263,12 @@ mod tests {
                 McpServer::new(
                     "git",
                     McpTransport::InMemory { server: TestServer::default().into_dyn() },
-                    ToolExposure::Direct,
+                    ToolExposure::ModelVisible,
                 ),
                 McpServer::new(
                     "github",
                     McpTransport::InMemory { server: TestServer::default().into_dyn() },
-                    ToolExposure::Direct,
+                    ToolExposure::ModelVisible,
                 ),
             ])
             .await
@@ -1008,7 +1293,7 @@ mod tests {
             .add_mcps(vec![McpServer::new(
                 "test",
                 McpTransport::InMemory { server: TestServer::default().into_dyn() },
-                ToolExposure::Direct,
+                ToolExposure::ModelVisible,
             )])
             .await
             .unwrap();
@@ -1028,7 +1313,7 @@ mod tests {
             .add_mcps(vec![McpServer::new(
                 "test",
                 McpTransport::InMemory { server: TestServer::default().into_dyn() },
-                ToolExposure::Direct,
+                ToolExposure::ModelVisible,
             )])
             .await
             .unwrap();

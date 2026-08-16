@@ -1,13 +1,12 @@
 use super::agent_key::AgentKey;
 use super::error::SessionError;
 use crate::runtime::{Runtime, RuntimeBuilder};
-use crate::slash_commands::{SlashCommandError, list_prompts};
+use crate::slash_commands::list_prompts;
 use aether_auth::OAuthHandler;
 use aether_core::agent_spec::AgentSpec;
-use aether_core::agent_spec::ToolFilter;
 use aether_core::core::{AgentDeps, AgentHandle};
 use aether_core::events::{AgentCommand, AgentEvent, Command};
-use aether_core::mcp::{McpRuntime, run_mcp_task::McpCommand};
+use aether_core::mcp::{DeferredToolGatewayHandle, McpCommandClient, McpRuntime};
 use llm::ChatMessage;
 use mcp_utils::client::{
     ElicitingOAuthHandler, McpClientEvent, McpConnectionDetails, McpError, McpServer, McpServerStatusEntry,
@@ -30,6 +29,7 @@ pub(crate) struct AgentRuntime {
     latest_mcp_snapshot: watch::Receiver<McpConnectionDetails>,
     agent_handle: Option<AgentHandle>,
     mcp_runtime: McpRuntime,
+    _deferred_tool_gateway: Option<DeferredToolGatewayHandle>,
     agent_pump_handle: JoinHandle<()>,
     mcp_pump_handle: JoinHandle<()>,
 }
@@ -38,12 +38,12 @@ impl AgentRuntime {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         agent: AgentKey,
-        spec: &AgentSpec,
         agent_tx: mpsc::Sender<Command>,
         mut agent_rx: mpsc::Receiver<AgentEvent>,
         agent_handle: Option<AgentHandle>,
         mut event_rx: mpsc::Receiver<McpClientEvent>,
         mcp_runtime: McpRuntime,
+        deferred_tool_gateway: Option<DeferredToolGatewayHandle>,
         snapshot: McpConnectionDetails,
         runtime_event_tx: mpsc::Sender<RuntimeEvent>,
     ) -> Self {
@@ -58,12 +58,10 @@ impl AgentRuntime {
             }
         });
 
-        let tool_filter = spec.tools.clone();
         let mcp_agent_tx = agent_tx.clone();
         let mcp_pump_handle = tokio::spawn(async move {
             while let Some(event) = event_rx.recv().await {
-                let Some(relay_event) = on_mcp_event(event, &latest_mcp_snapshot_tx, &tool_filter, &mcp_agent_tx).await
-                else {
+                let Some(relay_event) = on_mcp_event(event, &latest_mcp_snapshot_tx, &mcp_agent_tx).await else {
                     continue;
                 };
                 if runtime_event_tx.send(RuntimeEvent::Mcp { agent: agent.clone(), event: relay_event }).await.is_err()
@@ -73,7 +71,15 @@ impl AgentRuntime {
             }
         });
 
-        Self { agent_tx, latest_mcp_snapshot, agent_handle, mcp_runtime, agent_pump_handle, mcp_pump_handle }
+        Self {
+            agent_tx,
+            latest_mcp_snapshot,
+            agent_handle,
+            mcp_runtime,
+            _deferred_tool_gateway: deferred_tool_gateway,
+            agent_pump_handle,
+            mcp_pump_handle,
+        }
     }
 
     pub(crate) async fn send_agent_command(&self, command: Command) -> Result<(), SessionError> {
@@ -90,22 +96,19 @@ impl AgentRuntime {
             .map_err(|e| SessionError::CommandChannel(format!("failed to sync active conversation: {e}")))
     }
 
-    pub(crate) fn mcp_tx(&self) -> &mpsc::Sender<McpCommand> {
-        self.mcp_runtime.command_tx()
+    pub(crate) fn mcp_client(&self) -> McpCommandClient {
+        self.mcp_runtime.command_client()
     }
 
     pub(crate) async fn list_prompts(&self) -> Result<Vec<McpPrompt>, SessionError> {
-        list_prompts(self.mcp_tx()).await.map_err(|error| match error {
-            SlashCommandError::CommandChannel(message) => SessionError::CommandChannel(message),
-            other => SessionError::McpOperation(other.to_string()),
-        })
+        list_prompts(&self.mcp_client()).await.map_err(|error| SessionError::McpOperation(error.to_string()))
     }
 
     pub(crate) async fn authenticate_mcp_server(&self, name: &str) -> Result<(), SessionError> {
-        self.mcp_tx()
-            .send(McpCommand::AuthenticateServer { name: name.to_string() })
+        self.mcp_client()
+            .authenticate_server(name)
             .await
-            .map_err(|e| SessionError::CommandChannel(format!("failed to send AuthenticateServer command: {e}")))
+            .map_err(|e| SessionError::CommandChannel(format!("failed to authenticate MCP server: {e}")))
     }
 
     pub(crate) fn mcp_server_statuses(&self) -> Vec<McpServerStatusEntry> {
@@ -183,15 +186,15 @@ impl RuntimeFactory for ProductionRuntimeFactory {
             server_statuses: Vec::new(),
         };
 
-        let Runtime { agent_tx, agent_rx, agent_handle, event_rx, mcp_runtime } = runtime;
+        let Runtime { agent_tx, agent_rx, agent_handle, event_rx, mcp_runtime, deferred_tool_gateway } = runtime;
         Ok(AgentRuntime::new(
             agent,
-            spec,
             agent_tx,
             agent_rx,
             Some(agent_handle),
             event_rx,
             mcp_runtime,
+            deferred_tool_gateway,
             snapshot,
             runtime_event_tx,
         ))
@@ -201,14 +204,12 @@ impl RuntimeFactory for ProductionRuntimeFactory {
 async fn on_mcp_event(
     event: McpClientEvent,
     snapshot_tx: &watch::Sender<McpConnectionDetails>,
-    tool_filter: &ToolFilter,
     agent_tx: &mpsc::Sender<Command>,
 ) -> Option<McpClientEvent> {
     match event {
         McpClientEvent::ToolDefinitionsChanged(tool_definitions) => {
             snapshot_tx.send_modify(|snapshot| snapshot.tool_definitions.clone_from(&tool_definitions));
-            let filtered_tools = tool_filter.apply(tool_definitions);
-            if let Err(error) = agent_tx.send(Command::agent(AgentCommand::UpdateTools(filtered_tools))).await {
+            if let Err(error) = agent_tx.send(Command::agent(AgentCommand::UpdateTools(tool_definitions))).await {
                 tracing::error!("Failed to send updated tools to agent runtime: {error:?}");
             }
             None

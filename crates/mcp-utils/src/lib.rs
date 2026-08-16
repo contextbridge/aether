@@ -9,5 +9,7 @@ pub mod transport;
 
 #[cfg(feature = "client")]
 pub mod client;
+#[cfg(feature = "client")]
+pub mod tool_gateway;
 
 pub use rmcp::ServiceExt;

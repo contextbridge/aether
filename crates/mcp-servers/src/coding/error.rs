@@ -62,6 +62,10 @@ pub enum BashError {
     /// Failed to spawn process
     #[error("Failed to execute command '{command}': {reason}")]
     SpawnFailed { command: String, reason: String },
+
+    /// Spawned but failed while waiting for output
+    #[error("Failed to capture output of command '{command}': {reason}")]
+    CaptureFailed { command: String, reason: String },
 }
 
 /// Errors related to building glob filters, shared across search tools

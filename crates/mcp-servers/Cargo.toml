@@ -47,6 +47,7 @@ coding = [
     "dep:htmd",
     "dep:dom_smoothie",
     "dep:url",
+    "dep:nix",
 ]
 skills = [
     "dep:aether-project",
@@ -102,6 +103,7 @@ chrono = { workspace = true, optional = true }
 htmd = { workspace = true, optional = true }
 dom_smoothie = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
+nix = { workspace = true, optional = true, features = ["signal", "process"] }
 
 # tasks feature
 tempfile = { workspace = true, optional = true }

@@ -255,7 +255,7 @@ fn mcps(servers: Vec<(&str, Vec<String>)>) -> McpSourceSpec {
                     type_: InMemoryType::InMemory,
                     args,
                     input: None,
-                    proxy: ToolExposure::Direct,
+                    defer_tools: ToolExposure::ModelVisible,
                 }),
             )
         })

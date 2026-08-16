@@ -3,7 +3,7 @@ use crate::agent_spec::AgentSpec;
 use crate::context::CompactionConfig;
 use crate::core::{Agent, AgentDeps, Prompt, PromptCache, Result};
 use crate::events::{AgentEvent, AgentObserver, Command};
-use crate::mcp::run_mcp_task::McpCommand;
+use crate::mcp::McpCommandClient;
 use llm::parser::ModelProviderParser;
 use llm::types::IsoString;
 use llm::{ChatMessage, Context, ModelSettings, StreamingModelProvider, ToolDefinition};
@@ -39,7 +39,7 @@ pub struct AgentBuilder {
     prompts: Vec<Prompt>,
     tool_definitions: Vec<ToolDefinition>,
     initial_messages: Vec<ChatMessage>,
-    mcp_tx: Option<Sender<McpCommand>>,
+    mcp_tx: Option<McpCommandClient>,
     channel_capacity: usize,
     tool_timeout: Duration,
     compaction_config: Option<CompactionConfig>,
@@ -107,7 +107,7 @@ impl AgentBuilder {
         self
     }
 
-    pub fn tools(mut self, tx: Sender<McpCommand>, tools: Vec<ToolDefinition>) -> Self {
+    pub fn tools(mut self, tx: McpCommandClient, tools: Vec<ToolDefinition>) -> Self {
         self.tool_definitions = tools;
         self.mcp_tx = Some(tx);
         self

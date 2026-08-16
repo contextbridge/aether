@@ -163,18 +163,18 @@ export const toolsExternalCode = `{
   }
 }`;
 
-export const proxyConfigCode = `{
+export const progressiveDiscoveryConfigCode = `{
   "servers": {
     "chrome-devtools": {
       "type": "stdio",
       "command": "npx",
       "args": ["-y", "chrome-devtools-mcp@latest"],
-      "proxy": true
+      "deferTools": true
     },
     "linear": {
       "type": "http",
       "url": "https://mcp.linear.app/mcp",
-      "proxy": true
+      "deferTools": true
     }
   }
 }`;
@@ -364,12 +364,12 @@ console.log(message.update);
         />
       </ToolShowcaseItem>
       <ToolShowcaseItem
-        title="MCP tool proxy stops tools from eating your context"
-        description="Set proxy on external servers (or on a file source) and Aether exposes a single proxy__call_tool plus on-disk tool definitions, so agents discover nested tools on demand instead of loading every schema up front."
+        title="Progressive Tool Discovery saves context"
+        description="Set deferTools on external servers or file sources. Aether keeps their schemas out of the initial model context, then lets agents discover and invoke tools on demand through aether mcp."
         border={false}
       >
         <Code
-          code={proxyConfigCode}
+          code={progressiveDiscoveryConfigCode}
           lang="json"
           title=".aether/mcp.json"
           meta="ins={3-17}"

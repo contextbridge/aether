@@ -1,5 +1,5 @@
 use super::error::CodingError;
-use super::tools::bash::execute_command_in_dir;
+use super::tools::bash::{BashEnvironment, execute_command_in_dir_with_env};
 use super::{
     AstGrepInput, AstGrepOutput, BashInput, BashOutput, EditFileArgs, EditFileResponse, FindInput, FindOutput,
     GrepInput, GrepOutput, ListFilesArgs, ListFilesResult, ReadFileArgs, ReadFileResult, WriteFileArgs,
@@ -13,12 +13,19 @@ use std::path::PathBuf;
 /// This is the standard behavior for `CodingMcp` when running outside
 /// of an ACP context.
 #[derive(Debug, Default)]
-pub struct DefaultCodingTools;
+pub struct DefaultCodingTools {
+    bash_environment: BashEnvironment,
+}
 
 impl DefaultCodingTools {
     /// Create a new `DefaultCodingTools` instance
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+
+    pub fn with_bash_environment(mut self, environment: BashEnvironment) -> Self {
+        self.bash_environment = environment;
+        self
     }
 }
 
@@ -40,7 +47,7 @@ impl CodingTools for DefaultCodingTools {
     }
 
     async fn bash(&self, args: BashInput, cwd: Option<PathBuf>) -> Result<BashOutput, CodingError> {
-        execute_command_in_dir(args, cwd.as_deref()).await.map_err(CodingError::from)
+        execute_command_in_dir_with_env(args, cwd.as_deref(), &self.bash_environment).await.map_err(CodingError::from)
     }
 
     async fn grep(&self, args: GrepInput) -> Result<GrepOutput, CodingError> {

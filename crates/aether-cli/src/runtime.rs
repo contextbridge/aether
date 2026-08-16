@@ -4,10 +4,9 @@ use aether_core::core::{AgentBuilder, AgentDeps, AgentHandle, Prompt};
 use aether_core::events::{AgentEvent, Command};
 use aether_core::mcp::McpBuilder;
 use aether_core::mcp::mcp;
-use aether_core::mcp::run_mcp_task::McpCommand;
-use aether_core::mcp::{McpRuntime, McpSpawnResult};
+use aether_core::mcp::{DeferredToolGateway, DeferredToolGatewayHandle, McpCommandClient, McpRuntime, McpSpawnResult};
 use llm::{ChatMessage, ToolDefinition};
-use mcp_servers::McpBuilderExt;
+use mcp_servers::setup::{McpBuilderExt, aether_bash_environment, assemble_progressive_discovery};
 use mcp_utils::client::{McpClientEvent, McpConnectionDetails, McpServer, OAuthHandlerFactory};
 use std::path::PathBuf;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -28,6 +27,7 @@ pub struct Runtime {
     pub agent_handle: AgentHandle,
     pub event_rx: Receiver<McpClientEvent>,
     pub mcp_runtime: McpRuntime,
+    pub deferred_tool_gateway: Option<DeferredToolGatewayHandle>,
 }
 
 pub struct PromptInfo {
@@ -75,11 +75,12 @@ impl RuntimeBuilder {
         messages: Option<Vec<ChatMessage>>,
     ) -> Result<Runtime, CliError> {
         let deps = self.agent_deps.clone();
-        let (spec, spawn) = self.spawn_mcp().await?;
+        let (spec, spawn, gateway) = self.spawn_mcp().await?;
+        let deferred_tool_gateway = gateway.map(|gateway| gateway.start(spawn.command_client()));
         let (mcp_runtime, event_rx) = spawn.split();
 
         let (agent_tx, agent_rx, agent_handle) =
-            spawn_agent(&spec, &deps, mcp_runtime.command_tx().clone(), Vec::new(), |mut agent_builder| {
+            spawn_agent(&spec, &deps, mcp_runtime.command_client(), Vec::new(), |mut agent_builder| {
                 if let Some(prompt) = custom_prompt {
                     agent_builder = agent_builder.system_prompt(prompt);
                 }
@@ -90,7 +91,7 @@ impl RuntimeBuilder {
             })
             .await?;
 
-        Ok(Runtime { agent_tx, agent_rx, agent_handle, event_rx, mcp_runtime })
+        Ok(Runtime { agent_tx, agent_rx, agent_handle, event_rx, mcp_runtime, deferred_tool_gateway })
     }
 
     /// Spawn MCP, block until every server finishes its initial connection,
@@ -101,45 +102,47 @@ impl RuntimeBuilder {
     /// callers that need the agent ready to use tools on its first turn.
     pub async fn build_ready(self, messages: Vec<ChatMessage>) -> Result<(Runtime, McpConnectionDetails), CliError> {
         let deps = self.agent_deps.clone();
-        let (spec, mut spawn) = self.spawn_mcp().await?;
+        let (spec, mut spawn, gateway) = self.spawn_mcp().await?;
+        let deferred_tool_gateway = gateway.map(|gateway| gateway.start(spawn.command_client()));
         let snapshot = spawn
             .block_until_ready()
             .await
             .ok_or_else(|| CliError::McpError("MCP bootstrap aborted before completion".to_string()))?;
         let (mcp_runtime, event_rx) = spawn.split();
 
-        let filtered_tools = spec.tools.apply(snapshot.tool_definitions.clone());
+        let tool_definitions = snapshot.tool_definitions.clone();
         let mut runtime_spec = spec;
         runtime_spec.prompts.push(Prompt::McpInstructions(snapshot.instructions.clone()));
 
         let (agent_tx, agent_rx, agent_handle) =
-            spawn_agent(&runtime_spec, &deps, mcp_runtime.command_tx().clone(), filtered_tools, |agent_builder| {
+            spawn_agent(&runtime_spec, &deps, mcp_runtime.command_client(), tool_definitions, |agent_builder| {
                 agent_builder.messages(messages)
             })
             .await?;
 
-        Ok((Runtime { agent_tx, agent_rx, agent_handle, event_rx, mcp_runtime }, snapshot))
+        Ok((Runtime { agent_tx, agent_rx, agent_handle, event_rx, mcp_runtime, deferred_tool_gateway }, snapshot))
     }
 
     pub async fn build_prompt_info(self) -> Result<PromptInfo, CliError> {
-        let (spec, mut spawn) = self.spawn_mcp().await?;
+        let (spec, mut spawn, gateway) = self.spawn_mcp().await?;
+        let _deferred_tool_gateway = gateway.map(|gateway| gateway.start(spawn.command_client()));
         let details = spawn
             .block_until_ready()
             .await
             .ok_or_else(|| CliError::McpError("MCP bootstrap aborted before completion".to_string()))?;
-        let filtered_tools = spec.tools.apply(details.tool_definitions);
-        Ok(PromptInfo { spec, tool_definitions: filtered_tools })
+        Ok(PromptInfo { spec, tool_definitions: details.tool_definitions })
     }
 
-    async fn spawn_mcp(self) -> Result<(AgentSpec, McpSpawnResult), CliError> {
+    async fn spawn_mcp(self) -> Result<(AgentSpec, McpSpawnResult, Option<DeferredToolGateway>), CliError> {
         let deps = self.agent_deps.clone();
-        let mut builder = mcp(&self.cwd);
+        let bash_environment = aether_bash_environment();
+        let mut builder = mcp(&self.cwd)
+            .with_tool_filter(self.spec.tools.clone())
+            .with_builtin_servers(deps, bash_environment.clone());
 
         if let Some(apply_oauth) = self.oauth_applicator {
             builder = apply_oauth(builder);
         }
-
-        builder = builder.with_builtin_servers(deps);
 
         if !self.extra_mcp_servers.is_empty() {
             builder = builder.with_servers(self.extra_mcp_servers);
@@ -159,22 +162,23 @@ impl RuntimeBuilder {
                 .map_err(|e| CliError::McpError(e.to_string()))?;
         }
 
+        let (builder, gateway) = assemble_progressive_discovery(builder, &bash_environment);
         let spawn = builder.spawn().await.map_err(|e| CliError::McpError(e.to_string()))?;
-        Ok((self.spec, spawn))
+        Ok((self.spec, spawn, gateway))
     }
 }
 
 async fn spawn_agent(
     spec: &AgentSpec,
     deps: &AgentDeps,
-    mcp_tx: Sender<McpCommand>,
+    mcp_client: McpCommandClient,
     tool_definitions: Vec<ToolDefinition>,
     configure: impl FnOnce(AgentBuilder) -> AgentBuilder,
 ) -> Result<(Sender<Command>, Receiver<AgentEvent>, AgentHandle), CliError> {
     let builder = AgentBuilder::from_spec(spec, vec![], deps)
         .await
         .map_err(|error| CliError::AgentError(error.to_string()))?
-        .tools(mcp_tx, tool_definitions);
+        .tools(mcp_client, tool_definitions);
 
     configure(builder).spawn().await.map_err(|error| CliError::AgentError(error.to_string()))
 }

@@ -29,6 +29,7 @@ testing = ["client"]
 client = [
     "dep:aether-auth",
     "aether-auth/mcp",
+    "dep:uuid",
     "dep:async-stream",
     "dep:llm",
     "dep:reqwest",
@@ -41,7 +42,7 @@ client = [
 chrono = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true }
-tokio = { workspace = true, features = ["rt", "macros", "sync", "net", "time"] }
+tokio = { workspace = true, features = ["rt", "macros", "sync", "net", "time", "io-util"] }
 tokio-util = { workspace = true }
 rmcp = { workspace = true, features = ["client", "elicitation", "server"] }
 tracing = { workspace = true }
@@ -56,9 +57,11 @@ serde_json = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true }
 
 [dev-dependencies]
 aether-doctest = { path = "../doctest" }
 rmcp = { workspace = true, features = ["macros"] }
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 tracing-subscriber = { workspace = true }

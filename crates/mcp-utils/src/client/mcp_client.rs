@@ -8,21 +8,38 @@ use rmcp::{
     },
     service::{NotificationContext, RequestContext},
 };
-use std::result::Result;
+use std::{future::Future, result::Result};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::client::{ElicitationRequest, McpClientEvent};
+use super::{ElicitationRequest, McpClientEvent, McpManagerEvent, connection::Tool};
 
 pub struct McpClient {
     client_info: ClientInfo,
     server_name: String,
     pub(crate) progress_dispatcher: ProgressDispatcher,
     event_sender: mpsc::Sender<McpClientEvent>,
+    manager_event_sender: mpsc::UnboundedSender<McpManagerEvent>,
 }
 
 impl McpClient {
     pub fn new(client_info: ClientInfo, server_name: String, event_sender: mpsc::Sender<McpClientEvent>) -> Self {
-        Self { client_info, server_name, progress_dispatcher: ProgressDispatcher::new(), event_sender }
+        let (manager_event_sender, _) = mpsc::unbounded_channel();
+        Self::with_manager_events(client_info, server_name, event_sender, manager_event_sender)
+    }
+
+    pub(super) fn with_manager_events(
+        client_info: ClientInfo,
+        server_name: String,
+        event_sender: mpsc::Sender<McpClientEvent>,
+        manager_event_sender: mpsc::UnboundedSender<McpManagerEvent>,
+    ) -> Self {
+        Self {
+            client_info,
+            server_name,
+            progress_dispatcher: ProgressDispatcher::new(),
+            event_sender,
+            manager_event_sender,
+        }
     }
 
     pub fn server_name(&self) -> &str {
@@ -73,6 +90,20 @@ impl ClientHandler for McpClient {
         _context: RequestContext<RoleClient>,
     ) -> Result<ElicitResult, ErrorData> {
         Ok(self.dispatch_elicitation(request).await)
+    }
+
+    fn on_tool_list_changed(&self, context: NotificationContext<RoleClient>) -> impl Future<Output = ()> + Send + '_ {
+        let server = self.server_name.clone();
+        let manager_event_sender = self.manager_event_sender.clone();
+        async move {
+            let result = context
+                .peer
+                .list_tools(None)
+                .await
+                .map(|response| response.tools.iter().map(Tool::from).collect())
+                .map_err(|error| error.to_string());
+            let _ = manager_event_sender.send(McpManagerEvent::ToolCatalogChanged { server, result });
+        }
     }
 }
 

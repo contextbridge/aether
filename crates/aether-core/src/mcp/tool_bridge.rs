@@ -37,11 +37,21 @@ pub fn tool_call_request_to_mcp(request: &ToolCallRequest) -> Result<CallToolReq
     Ok(params)
 }
 
-/// Convert an rmcp `CallToolResult` and request to `ToolCallResult` or `ToolCallError`,
-/// extracting any `_meta` metadata from structured content.
+fn call_tool_result_value(result: &CallToolResult) -> Result<serde_json::Value, serde_json::Error> {
+    result.structured_content.clone().map_or_else(
+        || {
+            result
+                .content
+                .first()
+                .map_or_else(|| Ok(serde_json::Value::String("No result".to_string())), serde_json::to_value)
+        },
+        Ok,
+    )
+}
+
 pub fn mcp_result_to_tool_call_result(
     request: &ToolCallRequest,
-    mcp_result: rmcp::model::CallToolResult,
+    mcp_result: &rmcp::model::CallToolResult,
 ) -> Result<(ToolCallResult, Option<ToolResultMeta>), ToolCallError> {
     if mcp_result.is_error.unwrap_or(false) {
         let error_msg = mcp_result.content.first().map_or_else(
@@ -60,7 +70,9 @@ pub fn mcp_result_to_tool_call_result(
             error: format!("Tool execution error: {error_msg}"),
         })
     } else {
-        let (result_value, result_meta) = extract_result_and_meta(mcp_result.structured_content, &mcp_result.content);
+        let result_value = call_tool_result_value(mcp_result)
+            .unwrap_or_else(|_| serde_json::Value::String("Serialization error".to_string()));
+        let (result_value, result_meta) = extract_result_and_meta(result_value);
         // YAML is ~18% more token-efficient than JSON for LLM consumption
         let yaml = serde_yml::to_string(&result_value).unwrap_or_else(|_| result_value.to_string());
         let result_str = maybe_spillover(&request.id, yaml, TOOL_RESULT_MAX_BYTES, &spillover_dir());
@@ -94,7 +106,7 @@ pub fn convert_tool_result(
 ) -> Result<(ToolCallResult, Option<ToolResultMeta>), ToolCallError> {
     outcome
         .map_err(|error| ToolCallError::from_request(request, error.to_string()))
-        .and_then(|mcp_result| mcp_result_to_tool_call_result(request, mcp_result))
+        .and_then(|mcp_result| mcp_result_to_tool_call_result(request, &mcp_result))
 }
 
 fn spillover_dir() -> PathBuf {
@@ -130,20 +142,9 @@ fn maybe_spillover(tool_id: &str, result: String, max_bytes: usize, dir: &Path) 
     )
 }
 
-fn extract_result_and_meta(
-    structured_content: Option<serde_json::Value>,
-    content: &[rmcp::model::ContentBlock],
-) -> (serde_json::Value, Option<ToolResultMeta>) {
-    if let Some(mut val) = structured_content {
-        let result_meta = extract_result_meta(&mut val);
-        (val, result_meta)
-    } else {
-        let fallback = content.first().map_or_else(
-            || serde_json::Value::String("No result".to_string()),
-            |c| serde_json::to_value(c).unwrap_or(serde_json::Value::String("Serialization error".to_string())),
-        );
-        (fallback, None)
-    }
+fn extract_result_and_meta(mut value: serde_json::Value) -> (serde_json::Value, Option<ToolResultMeta>) {
+    let result_meta = extract_result_meta(&mut value);
+    (value, result_meta)
 }
 
 fn extract_result_meta(value: &mut serde_json::Value) -> Option<ToolResultMeta> {
@@ -183,7 +184,7 @@ mod tests {
     fn call_structured(structured: serde_json::Value) -> (ToolCallResult, Option<ToolResultMeta>) {
         let mut mcp = McpCallToolResult::structured(structured);
         mcp.content = vec![];
-        mcp_result_to_tool_call_result(&req(), mcp).unwrap()
+        mcp_result_to_tool_call_result(&req(), &mcp).unwrap()
     }
 
     fn extract_preview(result: &str) -> &str {
@@ -200,7 +201,7 @@ mod tests {
         });
         let mut mcp = McpCallToolResult::structured(structured);
         mcp.content = vec![ContentBlock::text("plain text fallback")];
-        let (result, meta) = mcp_result_to_tool_call_result(&req(), mcp).unwrap();
+        let (result, meta) = mcp_result_to_tool_call_result(&req(), &mcp).unwrap();
 
         assert!(!result.result.contains("_meta"));
         assert!(result.result.contains("success"));
@@ -270,7 +271,7 @@ mod tests {
     #[test]
     fn test_tool_call_result_falls_back_to_content() {
         let mcp = McpCallToolResult::success(vec![ContentBlock::text("plain text result")]);
-        let (result, meta) = mcp_result_to_tool_call_result(&req(), mcp).unwrap();
+        let (result, meta) = mcp_result_to_tool_call_result(&req(), &mcp).unwrap();
         assert!(result.result.contains("plain text result"));
         assert!(meta.is_none());
     }
@@ -329,7 +330,7 @@ mod tests {
         })
         .unwrap();
         assert!(good.get("_meta").is_some(), "expected `_meta` key, got: {good}");
-        let (stripped, meta) = extract_result_and_meta(Some(good), &[]);
+        let (stripped, meta) = extract_result_and_meta(good);
         let rm = meta.expect("meta should be extracted");
         assert_eq!(rm.display.title, "Read file");
         assert_eq!(rm.display.value, "file.rs, 50 lines");
@@ -340,14 +341,14 @@ mod tests {
                 .unwrap();
         assert!(broken.get("_meta").is_none(), "should be mangled by camelCase");
         assert!(broken.get("meta").is_some());
-        let (_, meta) = extract_result_and_meta(Some(broken), &[]);
+        let (_, meta) = extract_result_and_meta(broken);
         assert!(meta.is_none(), "extraction should fail when _meta is mangled");
     }
 
     #[test]
     fn test_tool_call_result_handles_text_error_without_sdk_debug_output() {
         let mcp = McpCallToolResult::error(vec![ContentBlock::text("Error: file not found")]);
-        let err = mcp_result_to_tool_call_result(&req(), mcp).unwrap_err();
+        let err = mcp_result_to_tool_call_result(&req(), &mcp).unwrap_err();
         assert_eq!(err.error, "Tool execution error: Error: file not found");
     }
 
@@ -360,7 +361,7 @@ mod tests {
         }))
         .unwrap();
         let mcp = McpCallToolResult::error(vec![image]);
-        let err = mcp_result_to_tool_call_result(&req(), mcp).unwrap_err();
+        let err = mcp_result_to_tool_call_result(&req(), &mcp).unwrap_err();
         assert_eq!(err.error, r#"Tool execution error: {"type":"image","data":"aW1hZ2U=","mimeType":"image/png"}"#);
     }
 
@@ -426,7 +427,7 @@ mod tests {
             ToolCallRequest { id: "spill_integration".into(), name: "big_tool".into(), arguments: "{}".into() };
         let mut mcp = McpCallToolResult::structured(json!({"data": "x".repeat(TOOL_RESULT_MAX_BYTES + 1000)}));
         mcp.content = vec![];
-        let (result, _) = mcp_result_to_tool_call_result(&request, mcp).unwrap();
+        let (result, _) = mcp_result_to_tool_call_result(&request, &mcp).unwrap();
         for expected in ["<preview>", "Tool result too large", "spill_integration.txt"] {
             assert!(result.result.contains(expected));
         }

@@ -5,15 +5,12 @@ pub enum McpError {
     /// Tool not found in the registry
     #[error("Tool not found: {0}")]
     ToolNotFound(String),
-    /// The tool is exposed directly and cannot be called through the proxy.
-    #[error("Tool '{tool_name}' is exposed directly; call '{direct_name}' instead")]
-    DirectToolRequiresDirectRoute { tool_name: String, direct_name: String },
-    /// The server's tools are not routed through the proxy
-    #[error("Server '{0}' is not part of the tool proxy")]
-    ServerNotProxied(String),
-    /// The proxied server has no active connection
-    #[error("Proxied server '{0}' is not connected")]
-    ProxiedServerNotConnected(String),
+    /// The server has no tools configured for deferred discovery.
+    #[error("Server '{0}' has no deferred tools")]
+    ServerHasNoDeferredTools(String),
+    /// The deferred-tool server has no active connection.
+    #[error("Deferred-tool server '{0}' is not connected")]
+    DeferredServerNotConnected(String),
     /// Invalid tool name format (should be `server__tool`)
     #[error("Invalid tool name format: {0}")]
     InvalidToolNameFormat(String),

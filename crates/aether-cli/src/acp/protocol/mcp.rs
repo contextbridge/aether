@@ -25,19 +25,19 @@ fn try_map_mcp_server(server: McpServer) -> Option<RuntimeMcpServer> {
                 args: stdio.args,
                 env: stdio.env.into_iter().map(|e| (e.name, e.value)).collect(),
             },
-            ToolExposure::Direct,
+            ToolExposure::ModelVisible,
         )),
 
         Http(http) => Some(RuntimeMcpServer::new(
             http.name,
             McpTransport::Http(http_config(http.url, &http.headers).into()),
-            ToolExposure::Direct,
+            ToolExposure::ModelVisible,
         )),
 
         Sse(sse) => Some(RuntimeMcpServer::new(
             sse.name,
             McpTransport::Http(http_config(sse.url, &sse.headers).into()),
-            ToolExposure::Direct,
+            ToolExposure::ModelVisible,
         )),
 
         _ => None,

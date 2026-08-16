@@ -4,7 +4,6 @@ use aether_core::agent_spec::McpConfigSource;
 use aether_core::core::AgentDeps;
 use aether_core::events::{AgentEvent, AgentObserver, McpRequestInstrumentation, ObserverFactory, TraceContext};
 use aether_core::mcp::mcp;
-use aether_core::mcp::run_mcp_task::McpCommand;
 use aether_core::mcp::tool_bridge::convert_tool_result;
 use aether_project::{AetherSettings, AetherSettingsSource, AgentCatalog, SettingsFileSource};
 use mcp_servers::McpBuilderExt;
@@ -354,7 +353,7 @@ async fn call_subagent_through_manager(
     input: SpawnSubAgentsInput,
 ) -> TestResult<String> {
     let mut spawn = mcp(project_root)
-        .with_builtin_servers(deps)
+        .with_builtin_servers(deps, mcp_servers::coding::tools::bash::BashEnvironment::default())
         .from_mcp_config_sources(&[McpConfigSource::Json(
             r#"{"servers":{"subagents":{"type":"in-memory","args":[]}}}"#.to_string(),
         )])
@@ -376,14 +375,8 @@ async fn call_subagent_through_manager(
 
     let (event_tx, mut event_rx) = mpsc::channel(4);
     spawn
-        .command_tx()
-        .send(McpCommand::ExecuteTool {
-            request: request.clone(),
-            trace_context: None,
-            timeout: Duration::MAX,
-            tx: event_tx,
-            cancel: mcp_utils::client::CancellationToken::new(),
-        })
+        .command_client()
+        .execute_tool(request.clone(), None, Duration::MAX, event_tx, mcp_utils::client::CancellationToken::new())
         .await?;
 
     while let Some(event) = event_rx.recv().await {
@@ -472,7 +465,7 @@ fn create_project_with_codex_agent() -> TempDir {
 async fn subagent_instructions(project_root: &Path, catalog: AgentCatalog) -> String {
     let deps = AgentDeps::default().with_agent_registry(catalog.registry().clone());
     let mut spawn = mcp(project_root)
-        .with_builtin_servers(deps)
+        .with_builtin_servers(deps, mcp_servers::coding::tools::bash::BashEnvironment::default())
         .from_mcp_config_sources(&[McpConfigSource::Json(
             r#"{"servers":{"subagents":{"type":"in-memory","args":[]}}}"#.to_string(),
         )])

@@ -1,5 +1,5 @@
 use crate::events::{TaskOutcomeState, TraceContext, task_created_result};
-use crate::mcp::run_mcp_task::McpCommand;
+use crate::mcp::McpCommandClient;
 use crate::mcp::tool_bridge::{convert_tool_result, map_task_result_to_outcome};
 use crate::mcp::{McpRuntime, mcp};
 use mcp_utils::client::{
@@ -39,7 +39,7 @@ fn task_outcome(outcome: crate::events::TaskOutcome) -> TaskOutcome {
 }
 
 pub struct McpTest {
-    command_tx: mpsc::Sender<McpCommand>,
+    command_client: McpCommandClient,
     _runtime: McpRuntime,
     snapshot: McpConnectionDetails,
     elicitations: ElicitationScript,
@@ -48,7 +48,6 @@ pub struct McpTest {
     trace_context: Option<TraceContext>,
     tool_timeout: Duration,
     next_call_id: AtomicU64,
-    _aether_home: tempfile::TempDir,
 }
 
 pub struct TaskOutcome {
@@ -77,14 +76,14 @@ impl McpTestBuilder {
     where
         S: ServerHandler,
     {
-        self.server_with_exposure(name, server, ToolExposure::Direct)
+        self.server_with_exposure(name, server, ToolExposure::ModelVisible)
     }
 
-    pub fn proxy_server<T>(self, name: impl Into<String>, server: T) -> Self
+    pub fn deferred_server<T>(self, name: impl Into<String>, server: T) -> Self
     where
         T: ServerHandler,
     {
-        self.server_with_exposure(name, server, ToolExposure::proxied_all())
+        self.server_with_exposure(name, server, ToolExposure::deferred_all())
     }
 
     pub fn server_with_exposure<T>(mut self, name: impl Into<String>, server: T, exposure: ToolExposure) -> Self
@@ -111,18 +110,12 @@ impl McpTestBuilder {
     }
 
     pub async fn build(self) -> McpTest {
-        let aether_home = tempfile::tempdir().expect("temp aether home is created");
-        let mut spawn = mcp("/workspace")
-            .with_aether_home(aether_home.path())
-            .with_servers(self.servers)
-            .spawn()
-            .await
-            .expect("MCP test manager spawns");
+        let mut spawn = mcp("/workspace").with_servers(self.servers).spawn().await.expect("MCP test manager spawns");
         let snapshot = spawn.block_until_ready().await.expect("MCP test manager becomes ready");
         let (runtime, event_rx) = spawn.split();
 
         McpTest {
-            command_tx: runtime.command_tx().clone(),
+            command_client: runtime.command_client(),
             _runtime: runtime,
             snapshot,
             elicitations: ElicitationScript::spawn(event_rx, self.elicitation_responses),
@@ -131,7 +124,6 @@ impl McpTestBuilder {
             trace_context: self.trace_context,
             tool_timeout: if self.tool_timeout.is_zero() { DEFAULT_TOOL_TIMEOUT } else { self.tool_timeout },
             next_call_id: AtomicU64::new(1),
-            _aether_home: aether_home,
         }
     }
 }
@@ -148,14 +140,8 @@ impl McpTest {
         let request_for_outcome = request.clone();
         let cancel = CancellationToken::new();
         self.cancel_tokens.lock().expect("cancel token lock").insert(request.id.clone(), cancel.clone());
-        self.command_tx
-            .send(McpCommand::ExecuteTool {
-                request,
-                trace_context: self.trace_context.clone(),
-                timeout: self.tool_timeout,
-                tx: event_tx,
-                cancel,
-            })
+        self.command_client
+            .execute_tool(request, self.trace_context.clone(), self.tool_timeout, event_tx, cancel)
             .await
             .expect("MCP test manager accepts tool call");
 

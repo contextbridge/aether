@@ -3,7 +3,7 @@ use aether_core::events::{
     AgentEvent, Command, CompactionOutcome, ContextEvent, LlmCallOutcome, MessageEvent, ModelEvent, ToolEvent,
     TurnEvent, TurnOutcome,
 };
-use aether_core::mcp::run_mcp_task::McpCommand;
+use aether_core::mcp::McpCommandClient;
 use aether_telemetry::TelemetryRuntime;
 use std::io;
 use std::process::ExitCode;
@@ -47,7 +47,7 @@ async fn run_agent(config: RunConfig, telemetry: Option<Arc<TelemetryRuntime>>) 
         .build_ready(vec![])
         .await?;
 
-    let prompt = expand_prompt(agent.mcp_runtime.command_tx(), config.prompt).await;
+    let prompt = expand_prompt(&agent.mcp_runtime.command_client(), config.prompt).await;
 
     agent
         .agent_tx
@@ -63,12 +63,12 @@ async fn run_agent(config: RunConfig, telemetry: Option<Arc<TelemetryRuntime>>) 
     Ok(exit_code)
 }
 
-async fn expand_prompt(mcp_tx: &mpsc::Sender<McpCommand>, prompt: String) -> String {
+async fn expand_prompt(mcp_client: &McpCommandClient, prompt: String) -> String {
     let Some(slash_command) = parse_slash_command(&prompt) else {
         return prompt;
     };
 
-    match expand_slash_command(mcp_tx, slash_command.command_name, slash_command.args_text).await {
+    match expand_slash_command(mcp_client, slash_command.command_name, slash_command.args_text).await {
         Ok(expanded) => expanded,
         Err(error) => {
             error!("Failed to expand slash command: {error}");

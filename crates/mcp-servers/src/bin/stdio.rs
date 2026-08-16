@@ -1,7 +1,12 @@
+use std::env::current_exe;
+
 use clap::Parser;
+use mcp_servers::coding::tools::bash::BashEnvironment;
 use mcp_servers::plan::default_plans_dir;
 use mcp_servers::workspace_paths::{current_dir, resolve_path};
-use mcp_servers::{CodingMcp, CodingMcpArgs, PlanMcp, SkillsMcp, SubAgentsMcp, SurveyMcp, TasksMcp};
+use mcp_servers::{
+    CodingMcp, CodingMcpArgs, DefaultCodingTools, PlanMcp, SkillsMcp, SubAgentsMcp, SurveyMcp, TasksMcp,
+};
 use mcp_utils::ServiceExt;
 use rmcp::ServerHandler;
 use rmcp::transport::io::stdio;
@@ -46,10 +51,12 @@ async fn main() -> Result<(), StdioError> {
                 CodingMcpArgs::from_args(cli.args).map_err(StdioError::ServerArgs)?;
             let root_dir = root_dir.unwrap_or_else(current_dir);
             let rules_dirs = rules_dirs.into_iter().map(|path| resolve_path(&root_dir, path)).collect();
-            let server = CodingMcp::new()
+            let bash_environment = BashEnvironment::for_aether_executable(current_exe().ok().as_deref());
+            let server = CodingMcp::with_tools(DefaultCodingTools::new().with_bash_environment(bash_environment))
                 .with_root_dir(root_dir.clone())
                 .with_rules_dirs(rules_dirs)
                 .with_permission_mode(permission_mode);
+
             let server = if disable_lsp { server } else { server.with_lsp(root_dir) };
             serve_stdio(server).await
         }

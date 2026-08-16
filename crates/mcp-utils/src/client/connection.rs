@@ -66,6 +66,7 @@ impl From<&RmcpTool> for Tool {
 pub(super) struct ConnectConfig {
     pub client_info: ClientInfo,
     pub event_sender: mpsc::Sender<McpClientEvent>,
+    pub manager_event_sender: mpsc::UnboundedSender<super::McpManagerEvent>,
     pub root_dir: PathBuf,
     pub oauth_handler_factory: Option<OAuthHandlerFactory>,
     pub oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
@@ -78,7 +79,7 @@ pub struct McpConnectAttempt {
 }
 
 pub enum McpConnectOutcome {
-    Connected { conn: McpServerConnection, reauth_config: Option<McpHttpConfig> },
+    Connected { conn: McpServerConnection, tools: Vec<Tool>, reauth_config: Option<McpHttpConfig> },
     NeedsOAuth { config: McpHttpConfig, challenge: Option<String>, error: McpError },
     Failed { error: McpError },
 }
@@ -127,7 +128,12 @@ impl McpServerConnection {
 pub(super) async fn connect_server(server: McpServer, ctx: &ConnectConfig) -> McpConnectAttempt {
     let McpServer { name, transport, tool_exposure: _ } = server;
     let reauth_config = reauth_config_for(&transport, ctx.oauth_handler_factory.as_ref());
-    let mcp_client = McpClient::new(ctx.client_info.clone(), name.clone(), ctx.event_sender.clone());
+    let mcp_client = McpClient::with_manager_events(
+        ctx.client_info.clone(),
+        name.clone(),
+        ctx.event_sender.clone(),
+        ctx.manager_event_sender.clone(),
+    );
 
     let outcome = match transport {
         McpTransport::Stdio { command, args, env } => {
@@ -146,7 +152,8 @@ pub(super) async fn connect_server(server: McpServer, ctx: &ConnectConfig) -> Mc
         }
     };
 
-    McpConnectAttempt { name, outcome: outcome.with_reauth(reauth_config) }
+    let outcome = outcome.with_reauth(reauth_config).discover_tools(&name).await;
+    McpConnectAttempt { name, outcome }
 }
 
 pub async fn authenticate_http(
@@ -179,12 +186,21 @@ pub async fn authenticate_http(
         .await
         .map_err(|e| McpError::ConnectionFailed(format!("OAuth failed for '{name}': {e}")))?;
 
-        let mcp_client = McpClient::new(ctx.client_info.clone(), name.clone(), ctx.event_sender.clone());
+        let mcp_client = McpClient::with_manager_events(
+            ctx.client_info.clone(),
+            name.clone(),
+            ctx.event_sender.clone(),
+            ctx.manager_event_sender.clone(),
+        );
         McpServerConnection::reconnect_with_auth(&name, config.transport.clone(), auth_client, mcp_client).await
     }
     .await
     {
-        Ok(conn) => McpConnectOutcome::Connected { conn, reauth_config: Some(config) },
+        Ok(conn) => {
+            McpConnectOutcome::Connected { conn, tools: Vec::new(), reauth_config: Some(config) }
+                .discover_tools(&name)
+                .await
+        }
         Err(error) => McpConnectOutcome::Failed { error },
     };
 
@@ -192,9 +208,21 @@ pub async fn authenticate_http(
 }
 
 impl McpConnectOutcome {
+    async fn discover_tools(self, name: &str) -> Self {
+        match self {
+            Self::Connected { conn, reauth_config, .. } => match conn.list_tools().await {
+                Ok(tools) => Self::Connected { conn, tools: tools.iter().map(Tool::from).collect(), reauth_config },
+                Err(error) => Self::Failed {
+                    error: McpError::ToolDiscoveryFailed(format!("Failed to list tools for {name}: {error}")),
+                },
+            },
+            other => other,
+        }
+    }
+
     fn with_reauth(self, reauth_config: Option<McpHttpConfig>) -> Self {
         match self {
-            Self::Connected { conn, .. } => Self::Connected { conn, reauth_config },
+            Self::Connected { conn, tools, .. } => Self::Connected { conn, tools, reauth_config },
             other => other,
         }
     }
@@ -220,6 +248,7 @@ async fn connect_stdio(
     match serve_client_with_lifecycle(mcp_client, proc, client_lifecycle_mode()).await {
         Ok(client) => McpConnectOutcome::Connected {
             conn: McpServerConnection::from_parts(client, stderr_task),
+            tools: Vec::new(),
             reauth_config: None,
         },
         Err(e) => {
@@ -255,6 +284,7 @@ async fn connect_in_memory(
     match serve_in_memory(server, mcp_client, name).await {
         Ok((client, handle)) => McpConnectOutcome::Connected {
             conn: McpServerConnection::from_parts(client, Some(handle)),
+            tools: Vec::new(),
             reauth_config: None,
         },
         Err(error) => McpConnectOutcome::Failed { error },
@@ -304,9 +334,11 @@ async fn connect_http(
     };
 
     match result {
-        Ok(client) => {
-            McpConnectOutcome::Connected { conn: McpServerConnection::from_parts(client, None), reauth_config: None }
-        }
+        Ok(client) => McpConnectOutcome::Connected {
+            conn: McpServerConnection::from_parts(client, None),
+            tools: Vec::new(),
+            reauth_config: None,
+        },
         Err(error) => {
             let challenge = error.auth_challenge().map(str::to_string);
             let authorization_required = error.is_authorization_required();

@@ -105,20 +105,20 @@ impl SelectItem for ServerStatusRow {
 }
 
 fn build_rows(entries: Vec<McpServerStatusEntry>) -> Vec<ServerStatusRow> {
-    let (proxied, direct): (Vec<_>, Vec<_>) = entries.into_iter().partition(|entry| entry.proxied);
+    let (deferred, model_visible): (Vec<_>, Vec<_>) = entries.into_iter().partition(|entry| entry.deferred_tools);
 
-    if proxied.is_empty() {
-        return direct.into_iter().map(|entry| ServerStatusRow::Server { entry, indented: false }).collect();
+    if deferred.is_empty() {
+        return model_visible.into_iter().map(|entry| ServerStatusRow::Server { entry, indented: false }).collect();
     }
 
     let mut rows = Vec::new();
-    if !direct.is_empty() {
-        rows.push(ServerStatusRow::Header("Direct".to_string()));
-        rows.extend(direct.into_iter().map(|entry| ServerStatusRow::Server { entry, indented: true }));
+    if !model_visible.is_empty() {
+        rows.push(ServerStatusRow::Header("Model-visible".to_string()));
+        rows.extend(model_visible.into_iter().map(|entry| ServerStatusRow::Server { entry, indented: true }));
         rows.push(ServerStatusRow::Spacer);
     }
-    rows.push(ServerStatusRow::Header("Proxied".to_string()));
-    rows.extend(proxied.into_iter().map(|entry| ServerStatusRow::Server { entry, indented: true }));
+    rows.push(ServerStatusRow::Header("Deferred".to_string()));
+    rows.extend(deferred.into_iter().map(|entry| ServerStatusRow::Server { entry, indented: true }));
     rows
 }
 
@@ -177,10 +177,10 @@ mod tests {
     fn mixed_entries() -> Vec<McpServerStatusEntry> {
         vec![
             McpServerStatusEntry::new("github", McpServerStatus::Connected { tool_count: 5 }),
-            McpServerStatusEntry::new("math", McpServerStatus::Connected { tool_count: 3 }).with_proxied(true),
+            McpServerStatusEntry::new("math", McpServerStatus::Connected { tool_count: 3 }).with_deferred_tools(true),
             McpServerStatusEntry::new("linear", McpServerStatus::NeedsOAuth)
                 .with_auth_capability(McpServerAuthCapability::OAuth)
-                .with_proxied(true),
+                .with_deferred_tools(true),
         ]
     }
 
@@ -189,7 +189,7 @@ mod tests {
     }
 
     #[test]
-    fn renders_flat_entries_when_no_proxy_exists() {
+    fn renders_flat_entries_when_no_deferred_servers_exist() {
         let mut overlay = ServerStatusOverlay::new(sample_entries());
         let ctx = ViewContext::new((80, 24));
         let frame = overlay.render(&ctx);
@@ -203,22 +203,21 @@ mod tests {
         assert!(frame.lines()[2].plain_text().contains("slack"));
         assert!(frame.lines()[2].plain_text().contains("✗"));
         assert!(frame.lines()[2].plain_text().contains("connection timeout"));
-        assert!(!frame.lines().iter().any(|line| line.plain_text().contains("Direct")));
+        assert!(!frame.lines().iter().any(|line| line.plain_text().contains("Model-visible")));
     }
 
     #[test]
-    fn renders_direct_and_proxied_sections_when_proxy_exists() {
+    fn renders_model_visible_and_deferred_sections() {
         let mut overlay = ServerStatusOverlay::new(mixed_entries());
         let ctx = ViewContext::new((80, 24));
         let text: Vec<_> = overlay.render(&ctx).lines().iter().map(tui::Line::plain_text).collect();
 
-        assert_eq!(text[0].trim(), "Direct");
+        assert_eq!(text[0].trim(), "Model-visible");
         assert!(text[1].contains("  github  ✓ 5 tools"));
         assert!(text[2].trim().is_empty());
-        assert_eq!(text[3].trim(), "Proxied");
+        assert_eq!(text[3].trim(), "Deferred");
         assert!(text[4].contains("  math  ✓ 3 tools"));
         assert!(text[5].contains("  linear  ⚡ needs authentication"));
-        assert!(!text.join("\n").contains("proxy  ✓ 1 tool"));
     }
 
     #[tokio::test]
@@ -235,7 +234,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn enter_on_proxied_oauth_server_emits_nested_server_name() {
+    async fn enter_on_deferred_oauth_server_emits_nested_server_name() {
         let mut overlay = ServerStatusOverlay::new(mixed_entries());
         overlay.list.set_selected(5);
 
@@ -278,7 +277,7 @@ mod tests {
         overlay.list.set_selected(5);
 
         overlay.update_entries(vec![
-            McpServerStatusEntry::new("linear", McpServerStatus::Connected { tool_count: 7 }).with_proxied(true),
+            McpServerStatusEntry::new("linear", McpServerStatus::Connected { tool_count: 7 }).with_deferred_tools(true),
             McpServerStatusEntry::new("github", McpServerStatus::Connected { tool_count: 3 }),
         ]);
 

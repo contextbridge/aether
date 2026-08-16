@@ -1,6 +1,8 @@
 use mcp_servers::CodingMcp;
 use mcp_servers::coding::error::BashError;
-use mcp_servers::coding::tools::bash::{BashInput, execute_command, execute_command_in_dir};
+use mcp_servers::coding::tools::bash::{
+    BashEnvironment, BashInput, execute_command, execute_command_in_dir, execute_command_in_dir_with_env,
+};
 use rmcp::model::{CallToolRequestParams, CallToolResponse, TaskPayload, TaskStatus};
 use std::fs::canonicalize;
 
@@ -13,6 +15,51 @@ async fn test_basic_command() {
     assert_eq!(output.output.trim(), "hello world");
     assert_eq!(output.exit_code, 0);
     assert!(!output.killed);
+}
+
+#[tokio::test]
+async fn test_uses_real_bash() {
+    let output = execute_command(BashInput {
+        command: "printf '%s\\n%s\\n' \"$BASH_VERSION\" \"$BASH\"".into(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let mut lines = output.output.lines();
+    assert!(!lines.next().unwrap_or_default().is_empty());
+    assert!(lines.next().unwrap_or_default().ends_with("bash"), "{}", output.output);
+    assert_eq!(output.exit_code, 0);
+}
+
+#[tokio::test]
+async fn aether_executable_directory_is_prepended_to_child_path() {
+    let executable = std::path::Path::new("/tmp/aether/bin/aether");
+    let environment = BashEnvironment::for_aether_executable(Some(executable));
+    let output = execute_command_in_dir_with_env(
+        BashInput { command: "printf '%s' \"$PATH\"".into(), ..Default::default() },
+        None,
+        &environment,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(std::env::split_paths(output.output.trim()).next().unwrap(), executable.parent().unwrap());
+}
+
+#[tokio::test]
+async fn environment_overrides_can_be_extended_after_construction() {
+    let environment = BashEnvironment::default();
+    environment.extend([("AETHER_TEST_OVERRIDE", "available")]);
+
+    let output = execute_command_in_dir_with_env(
+        BashInput { command: "printf '%s' \"$AETHER_TEST_OVERRIDE\"".into(), ..Default::default() },
+        None,
+        &environment,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(output.output, "available");
 }
 
 #[tokio::test]

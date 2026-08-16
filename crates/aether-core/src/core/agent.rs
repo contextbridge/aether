@@ -8,7 +8,7 @@ use crate::events::{
     AgentCommand, AgentEvent, AgentObserver, Command, CompactionOutcome, ContextEvent, ContextUsage, LlmCallOutcome,
     LlmCallPurpose, ModelEvent, StreamState, TaskOutcome, ToolEvent, TurnEvent, TurnOutcome, UserCommand,
 };
-use crate::mcp::run_mcp_task::McpCommand;
+use crate::mcp::McpCommandClient;
 use futures::Stream;
 use llm::types::IsoString;
 use llm::{
@@ -53,7 +53,7 @@ enum StreamKey {
 pub(crate) struct AgentConfig {
     pub llm: Arc<dyn StreamingModelProvider>,
     pub context: Context,
-    pub mcp_command_tx: Option<mpsc::Sender<McpCommand>>,
+    pub mcp_command_tx: Option<McpCommandClient>,
     pub tool_timeout: Duration,
     pub compaction_config: Option<CompactionConfig>,
     pub auto_continue: AutoContinue,
@@ -66,7 +66,7 @@ pub(crate) struct AgentConfig {
 pub struct Agent {
     llm: Arc<dyn StreamingModelProvider>,
     context: Context,
-    mcp_command_tx: Option<mpsc::Sender<McpCommand>>,
+    mcp_command_tx: Option<McpCommandClient>,
     message_tx: mpsc::Sender<AgentEvent>,
     observers: Vec<Box<dyn AgentObserver>>,
     streams: StreamMap<StreamKey, EventStream>,
@@ -552,15 +552,7 @@ impl Agent {
         };
 
         let trace_context = self.observers.iter().find_map(|observer| observer.tool_trace_context(&tool_id));
-        let command = McpCommand::ExecuteTool {
-            request: tool_call,
-            trace_context,
-            timeout: self.tool_timeout,
-            tx: tx.clone(),
-            cancel,
-        };
-
-        if mcp_command_tx.send(command).await.is_err() {
+        if mcp_command_tx.execute_tool(tool_call, trace_context, self.tool_timeout, tx.clone(), cancel).await.is_err() {
             tracing::warn!("Failed to send tool request to MCP task");
             emit_tool_failure(&tx, "Failed to send tool request to MCP task").await;
         }
