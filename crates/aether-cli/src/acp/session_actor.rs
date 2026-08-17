@@ -560,7 +560,6 @@ fn on_mcp_client_event(connection: &ConnectionTo<Client>, event: McpClientEvent)
         McpClientEvent::AuthenticationFailed { server, error } => {
             error!("MCP server authentication failed for '{server}': {error}");
         }
-        McpClientEvent::ToolDefinitionsChanged(_) | McpClientEvent::ServerInstructionsUpdated { .. } => {}
     }
 }
 

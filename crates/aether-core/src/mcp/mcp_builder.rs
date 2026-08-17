@@ -6,6 +6,7 @@ use utils::{SettingsStore, variables::Vars};
 
 use crate::agent_spec::McpConfigSource;
 use crate::core::AgentDeps;
+use crate::events::{AgentCommand, Command};
 
 use super::{
     mcp_handle::McpHandle,
@@ -13,7 +14,7 @@ use super::{
 };
 use futures::future::BoxFuture;
 use rmcp::{RoleServer, service::DynService};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::{
@@ -43,6 +44,7 @@ pub type ServerFactory = Box<
 pub struct McpRuntime {
     mcp: McpHandle,
     handle: JoinHandle<()>,
+    agent_sync_handle: Option<JoinHandle<()>>,
 }
 
 impl McpRuntime {
@@ -54,6 +56,9 @@ impl McpRuntime {
 impl Drop for McpRuntime {
     fn drop(&mut self) {
         self.handle.abort();
+        if let Some(handle) = &self.agent_sync_handle {
+            handle.abort();
+        }
     }
 }
 
@@ -62,14 +67,69 @@ impl Drop for McpRuntime {
 /// `ServerStatusesChanged` reflecting every configured server in `Connecting`)
 /// and can call [`split`](Self::split) to separate the stream from the
 /// [`McpRuntime`] that keeps the manager task alive.
-pub struct McpSpawnResult {
+pub struct McpSession {
     runtime: McpRuntime,
     event_rx: Receiver<McpClientEvent>,
 }
 
-impl McpSpawnResult {
+impl McpSession {
     pub fn handle(&self) -> &McpHandle {
         self.runtime.handle()
+    }
+
+    /// Synchronize this session's current and future tools and instructions with
+    /// one agent. Initial state is sent before this method returns.
+    pub async fn connect_agent(mut self, agent_tx: mpsc::Sender<Command>) -> Self {
+        assert!(self.runtime.agent_sync_handle.is_none(), "an MCP session can only connect one agent");
+        let mut snapshots = self.runtime.handle().subscribe();
+        let initial = snapshots.borrow_and_update().clone();
+        let mut previous_tools = initial.tool_definitions();
+        let mut previous_instructions = initial.model_instructions();
+        if agent_tx.send(Command::agent(AgentCommand::UpdateTools(previous_tools.clone()))).await.is_err() {
+            return self;
+        }
+        for (server, body) in &previous_instructions {
+            if agent_tx
+                .send(Command::agent(AgentCommand::UpdateMcpInstructions {
+                    server: server.clone(),
+                    body: Some(body.clone()),
+                }))
+                .await
+                .is_err()
+            {
+                return self;
+            }
+        }
+
+        self.runtime.agent_sync_handle = Some(tokio::spawn(async move {
+            while snapshots.changed().await.is_ok() {
+                let snapshot = snapshots.borrow_and_update().clone();
+                let tools = snapshot.tool_definitions();
+                if tools != previous_tools {
+                    if agent_tx.send(Command::agent(AgentCommand::UpdateTools(tools.clone()))).await.is_err() {
+                        break;
+                    }
+                    previous_tools = tools;
+                }
+
+                let instructions = snapshot.model_instructions();
+                let servers = previous_instructions.keys().chain(instructions.keys()).cloned().collect::<BTreeSet<_>>();
+                for server in servers {
+                    let previous = previous_instructions.get(&server);
+                    let next = instructions.get(&server);
+                    if previous != next
+                        && agent_tx
+                            .send(Command::agent(AgentCommand::UpdateMcpInstructions { server, body: next.cloned() }))
+                            .await
+                            .is_err()
+                    {
+                        return;
+                    }
+                }
+                previous_instructions = instructions;
+            }
+        }));
+        self
     }
 
     /// Block until the manager finishes bootstrapping every initially-configured
@@ -198,7 +258,7 @@ impl McpBuilder {
         Ok(self)
     }
 
-    pub async fn spawn(self) -> Result<McpSpawnResult, McpError> {
+    pub async fn spawn(self) -> Result<McpSession, McpError> {
         let McpBuilder {
             servers,
             factories,
@@ -230,7 +290,7 @@ impl McpBuilder {
         let pending = mcp_manager.register_pending(servers).await?;
         let task = tokio::spawn(run_mcp_task(mcp_manager, manager_rx, pending));
 
-        Ok(McpSpawnResult { runtime: McpRuntime { mcp, handle: task }, event_rx })
+        Ok(McpSession { runtime: McpRuntime { mcp, handle: task, agent_sync_handle: None }, event_rx })
     }
 }
 

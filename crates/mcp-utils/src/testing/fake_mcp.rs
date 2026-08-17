@@ -1,6 +1,6 @@
 use crate::client::{RuntimeMcpServer, RuntimeMcpTransport, ToolExposure};
 use rmcp::{
-    ErrorData as McpError, RoleServer, ServerHandler,
+    ErrorData as McpError, Peer, RoleServer, ServerHandler,
     model::{
         CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams, ContentBlock,
         CreateTaskResult, DetailedTask, GetTaskParams, GetTaskResult, Implementation, ListToolsResult,
@@ -144,6 +144,32 @@ impl FakeMcpState {
 
     pub fn add_tool(&self, tool: FakeTool) {
         self.lock().tools.insert(tool.definition.name.to_string(), tool);
+    }
+
+    pub async fn add_tool_and_notify(&self, tool: FakeTool) {
+        let peers = {
+            let mut inner = self.lock();
+            inner.tools.insert(tool.definition.name.to_string(), tool);
+            inner.peers.clone()
+        };
+        for peer in peers {
+            let _ = peer.notify_tool_list_changed().await;
+        }
+    }
+
+    pub async fn clear_tools_and_notify(&self) {
+        let peers = {
+            let mut inner = self.lock();
+            inner.tools.clear();
+            inner.peers.clone()
+        };
+        for peer in peers {
+            let _ = peer.notify_tool_list_changed().await;
+        }
+    }
+
+    pub fn fail_next_tool_list(&self) {
+        self.lock().tool_list_failures += 1;
     }
 
     fn definitions(&self) -> Vec<Tool> {
@@ -305,9 +331,20 @@ impl ServerHandler for FakeMcpServer {
     ) -> Result<ListToolsResult, McpError> {
         let supports_cache_hints =
             context.protocol_version().is_some_and(|version| version >= ProtocolVersion::V_2026_07_28);
+        let tools = {
+            let mut inner = self.state.lock();
+            if inner.tool_list_failures > 0 {
+                inner.tool_list_failures -= 1;
+                return Err(McpError::internal_error("scripted tools/list failure", None));
+            }
+            if inner.peers.is_empty() {
+                inner.peers.push(context.peer);
+            }
+            inner.tools.values().map(|tool| tool.definition.clone()).collect()
+        };
         Ok(ListToolsResult {
             result_type: Some(ResultType::COMPLETE),
-            tools: self.state.definitions(),
+            tools,
             meta: None,
             next_cursor: None,
             ttl_ms: supports_cache_hints.then_some(0),
@@ -371,6 +408,8 @@ struct FakeMcpStateInner {
     task_cancel_ids: Vec<String>,
     task_get_failures: usize,
     task_update_failures: usize,
+    tool_list_failures: usize,
+    peers: Vec<Peer<RoleServer>>,
 }
 
 fn add_numbers() -> FakeTool {

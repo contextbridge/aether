@@ -175,16 +175,18 @@ async fn selectively_proxied_server_instructions_cover_its_direct_tools() {
 }
 
 #[tokio::test]
-async fn proxy_rejects_tools_added_after_initial_discovery() {
+async fn proxy_catalog_refreshes_after_tool_list_changed() {
     let server = FakeMcpServer::new();
     let state = server.state();
     let test = McpTestBuilder::new().proxy_server("dynamic", server).build().await;
-    state.add_tool(FakeTool::new("added_later").responds(FakeToolResponse::text("available")));
+    let mut snapshots = test.subscribe();
+    snapshots.borrow_and_update();
 
-    let error = call_proxy_tool(&test, "dynamic", "added_later", serde_json::json!({}))
-        .await
-        .expect_err("uncataloged tools fail closed");
-    assert!(error.contains("Tool not found: dynamic__added_later"));
+    state.add_tool_and_notify(FakeTool::new("added_later").responds(FakeToolResponse::text("available"))).await;
+    snapshots.changed().await.expect("refresh publishes a snapshot");
+
+    let result = call_proxy_tool(&test, "dynamic", "added_later", serde_json::json!({})).await.unwrap();
+    assert!(result.contains("available"));
 }
 
 #[tokio::test]

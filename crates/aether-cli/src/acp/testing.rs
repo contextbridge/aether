@@ -400,34 +400,24 @@ impl RuntimeFactory for FakeRuntimeFactory {
         }
         let mut spawn =
             mcp_builder.spawn().await.map_err(|e| SessionError::Build(CliError::McpError(e.to_string())))?;
-        let snapshot = spawn
+        spawn
             .block_until_ready()
             .await
             .ok_or_else(|| SessionError::McpOperation("fake MCP bootstrap aborted".to_string()))?;
-        let (mcp_runtime, event_rx) = spawn.split();
-
-        let filtered_tools = snapshot.tool_definitions();
+        let mcp_handle = spawn.handle().clone();
         let mut builder = AgentBuilder::new(provider).max_auto_continues(0);
         for prompt in &spec.prompts {
             builder = builder.system_prompt(prompt.clone());
         }
         let (agent_tx, agent_rx, agent_handle) = builder
-            .tools(mcp_runtime.handle().clone(), filtered_tools)
+            .tools(mcp_handle, Vec::new())
             .messages(initial_messages)
             .spawn()
             .await
             .map_err(|e| SessionError::Build(CliError::AgentError(e.to_string())))?;
+        let (mcp_runtime, event_rx) = spawn.connect_agent(agent_tx.clone()).await.split();
 
-        Ok(AgentRuntime::new(
-            agent,
-            agent_tx,
-            agent_rx,
-            Some(agent_handle),
-            event_rx,
-            mcp_runtime,
-            snapshot,
-            runtime_event_tx,
-        ))
+        Ok(AgentRuntime::new(agent, agent_tx, agent_rx, Some(agent_handle), event_rx, mcp_runtime, runtime_event_tx))
     }
 }
 
@@ -460,22 +450,13 @@ impl RuntimeFactory for StubRuntimeFactory {
 
         let mut spawn =
             mcp(&self.cwd).spawn().await.map_err(|e| SessionError::Build(CliError::McpError(e.to_string())))?;
-        let snapshot = spawn
+        spawn
             .block_until_ready()
             .await
             .ok_or_else(|| SessionError::McpOperation("stub MCP bootstrap aborted".to_string()))?;
-        let (mcp_runtime, event_rx) = spawn.split();
+        let (mcp_runtime, event_rx) = spawn.connect_agent(parts.tx.clone()).await.split();
 
-        Ok(AgentRuntime::new(
-            agent,
-            parts.tx,
-            parts.rx,
-            Some(parts.handle),
-            event_rx,
-            mcp_runtime,
-            snapshot,
-            runtime_event_tx,
-        ))
+        Ok(AgentRuntime::new(agent, parts.tx, parts.rx, Some(parts.handle), event_rx, mcp_runtime, runtime_event_tx))
     }
 }
 

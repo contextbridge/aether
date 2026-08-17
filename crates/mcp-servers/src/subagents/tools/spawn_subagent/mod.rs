@@ -1,12 +1,11 @@
 use crate::setup::McpBuilderExt;
 use aether_core::{
     agent_spec::McpConfigSource,
-    core::{AgentBuilder, AgentDeps, AgentHandle, Prompt},
+    core::{AgentBuilder, AgentDeps, AgentHandle},
     events::{AgentEvent, Command, MessageEvent, TurnEvent, TurnOutcome, UserCommand},
-    mcp::{McpHandle, McpRuntime, McpSpawnResult, mcp},
+    mcp::{McpRuntime, McpSession, mcp},
 };
 use futures::FutureExt;
-use llm::ToolDefinition;
 use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -227,22 +226,18 @@ impl AgentExecutor {
         let agent_name = task.agent_name.clone();
 
         let result: Result<String, String> = async {
-            let mut spec = self
+            let spec = self
                 .deps
                 .agent_registry
                 .resolve_agent_invocable(&task.agent_name)
                 .map_err(|error| error.to_string())?;
 
             let mut spawn = self.spawn_mcps(&spec.mcp_config_sources, spec.tools.clone()).await?;
-            let snapshot =
-                spawn.block_until_ready().await.ok_or_else(|| "MCP bootstrap aborted before completion".to_string())?;
-            let (mcp_runtime, _) = spawn.split();
+            spawn.block_until_ready().await.ok_or_else(|| "MCP bootstrap aborted before completion".to_string())?;
+            let mcp = spawn.handle().clone();
 
-            let filtered_tools = snapshot.tool_definitions();
-            spec.prompts.push(Prompt::McpInstructions(snapshot.model_instructions()));
-            let mcp = mcp_runtime.handle().clone();
-
-            let (user_tx, mut agent_rx, agent_handle) = self.spawn_agent(spec, mcp, filtered_tools).await?;
+            let (user_tx, mut agent_rx, agent_handle) = self.spawn_agent(spec, mcp).await?;
+            let (mcp_runtime, _) = spawn.connect_agent(user_tx.clone()).await.split();
             let running_agent = RunningAgent { user_tx, agent_handle, _mcp_runtime: mcp_runtime };
 
             let prompt_with_instructions = format!("{}\n\n{}", task.prompt, STRUCTURED_OUTPUT_INSTRUCTIONS);
@@ -302,7 +297,7 @@ impl AgentExecutor {
         &self,
         effective_mcp_config_sources: &[McpConfigSource],
         tool_filter: mcp_utils::client::ToolFilter,
-    ) -> Result<McpSpawnResult, String> {
+    ) -> Result<McpSession, String> {
         let mut builder = mcp(&self.project_root)
             .with_tool_filter(tool_filter)
             .with_agent_deps(self.deps.clone())
@@ -320,13 +315,12 @@ impl AgentExecutor {
     async fn spawn_agent(
         &self,
         spec: aether_core::agent_spec::AgentSpec,
-        mcp: McpHandle,
-        tools: Vec<ToolDefinition>,
+        mcp: aether_core::mcp::McpHandle,
     ) -> Result<(mpsc::Sender<Command>, mpsc::Receiver<AgentEvent>, AgentHandle), String> {
         AgentBuilder::from_spec(&spec, vec![], &self.deps)
             .await
             .map_err(|e| format!("Failed to build agent from spec: {e}"))?
-            .tools(mcp, tools)
+            .tools(mcp, Vec::new())
             .spawn()
             .await
             .map_err(|e| format!("Failed to spawn agent: {e}"))

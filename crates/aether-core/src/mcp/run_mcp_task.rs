@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use std::time::Duration;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinSet;
 
 const MCP_AUTH_TIMEOUT: Duration = Duration::from_mins(3);
 
@@ -16,6 +17,8 @@ pub(super) async fn run_mcp_task(
     mut command_rx: mpsc::Receiver<ManagerCommand>,
     pending_servers: Vec<RuntimeMcpServer>,
 ) {
+    let mut tool_refresh_rx = mcp.take_tool_refresh_receiver();
+    let mut tool_refreshes = JoinSet::new();
     let mut mcp_connection_attempts = McpConnectionAttemptManager::default();
     let mut pending_connections: HashSet<String> = pending_servers.iter().map(|server| server.name.clone()).collect();
     for server in pending_servers {
@@ -45,10 +48,21 @@ pub(super) async fn run_mcp_task(
                     Err(error) => tracing::error!("MCP auth task did not complete normally: {error:?}"),
                 }
             }
+            Some(request) = tool_refresh_rx.recv() => {
+                tool_refreshes.spawn(request.refresh());
+            }
+            Some(joined) = tool_refreshes.join_next(), if !tool_refreshes.is_empty() => {
+                match joined {
+                    Ok(refresh) => mcp.apply_tool_list_refresh(refresh).await,
+                    Err(error) => tracing::warn!(%error, "MCP tool refresh task did not complete normally"),
+                }
+            }
         }
     }
 
     mcp_connection_attempts.shutdown().await;
+    tool_refreshes.abort_all();
+    while tool_refreshes.join_next().await.is_some() {}
     mcp.shutdown().await;
     tracing::debug!("MCP manager task ended");
 }

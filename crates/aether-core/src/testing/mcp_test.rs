@@ -14,6 +14,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
+use tokio::sync::watch;
 
 pub use mcp_utils::testing::CapturedElicitation;
 
@@ -241,6 +242,10 @@ impl McpTest {
 
     pub fn snapshot(&self) -> &McpConnectionDetails {
         &self.snapshot
+    }
+
+    pub fn subscribe(&self) -> watch::Receiver<McpConnectionDetails> {
+        self.mcp.subscribe()
     }
 
     pub fn elicitations(&self) -> Vec<CapturedElicitation> {

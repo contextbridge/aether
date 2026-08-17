@@ -1,4 +1,5 @@
 mod mcp {
+    mod agent_sync_tests;
     mod config_parser_tests;
     mod instructions_tests;
     mod mrtr_tests;
