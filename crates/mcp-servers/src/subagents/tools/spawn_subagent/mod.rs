@@ -236,14 +236,13 @@ impl AgentExecutor {
             let mut spawn = self.spawn_mcps(&spec.mcp_config_sources, &spec.tools).await?;
             let snapshot =
                 spawn.block_until_ready().await.ok_or_else(|| "MCP bootstrap aborted before completion".to_string())?;
-            let (mcp_runtime, _) = spawn.split();
-
-            let tool_definitions = snapshot.tool_definitions;
-            spec.prompts.push(Prompt::McpInstructions(snapshot.instructions));
-            let command_client = mcp_runtime.command_client();
+            let command_client = spawn.command_client();
+            let tool_definitions = snapshot.tool_definitions.clone();
+            spec.prompts.push(Prompt::McpInstructions(snapshot.instructions.clone()));
 
             let (user_tx, mut agent_rx, agent_handle) =
                 self.spawn_agent(spec, command_client, tool_definitions).await?;
+            let (mcp_runtime, _) = spawn.connect_agent(user_tx.clone(), snapshot);
             let running_agent = RunningAgent { user_tx, agent_handle, _mcp_runtime: mcp_runtime };
 
             let prompt_with_instructions = format!("{}\n\n{}", task.prompt, STRUCTURED_OUTPUT_INSTRUCTIONS);

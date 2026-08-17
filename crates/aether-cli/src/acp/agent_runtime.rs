@@ -9,14 +9,12 @@ use aether_core::events::{AgentCommand, AgentEvent, Command};
 use aether_core::mcp::{McpCommandClient, McpRuntime};
 use llm::ChatMessage;
 use mcp_utils::client::{
-    ElicitingOAuthHandler, McpClientEvent, McpConnectionDetails, McpError, McpServer, McpServerStatusEntry,
-    OAuthHandlerFactory,
+    ElicitingOAuthHandler, McpClientEvent, McpError, McpServer, McpServerStatusEntry, OAuthHandlerFactory,
 };
 use rmcp::model::Prompt as McpPrompt;
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 /// Capacity of the channel that fans runtime events from every spawned agent
@@ -26,7 +24,6 @@ pub(crate) const RUNTIME_EVENT_CHANNEL_CAPACITY: usize = 50;
 
 pub(crate) struct AgentRuntime {
     agent_tx: mpsc::Sender<Command>,
-    latest_mcp_snapshot: watch::Receiver<McpConnectionDetails>,
     agent_handle: Option<AgentHandle>,
     mcp_runtime: McpRuntime,
     agent_pump_handle: JoinHandle<()>,
@@ -42,10 +39,8 @@ impl AgentRuntime {
         agent_handle: Option<AgentHandle>,
         mut event_rx: mpsc::Receiver<McpClientEvent>,
         mcp_runtime: McpRuntime,
-        snapshot: McpConnectionDetails,
         runtime_event_tx: mpsc::Sender<RuntimeEvent>,
     ) -> Self {
-        let (latest_mcp_snapshot_tx, latest_mcp_snapshot) = watch::channel(snapshot);
         let agent_event_tx = runtime_event_tx.clone();
         let agent_event_key = agent.clone();
         let agent_pump_handle = tokio::spawn(async move {
@@ -56,20 +51,15 @@ impl AgentRuntime {
             }
         });
 
-        let mcp_agent_tx = agent_tx.clone();
         let mcp_pump_handle = tokio::spawn(async move {
             while let Some(event) = event_rx.recv().await {
-                let Some(relay_event) = on_mcp_event(event, &latest_mcp_snapshot_tx, &mcp_agent_tx).await else {
-                    continue;
-                };
-                if runtime_event_tx.send(RuntimeEvent::Mcp { agent: agent.clone(), event: relay_event }).await.is_err()
-                {
+                if runtime_event_tx.send(RuntimeEvent::Mcp { agent: agent.clone(), event }).await.is_err() {
                     break;
                 }
             }
         });
 
-        Self { agent_tx, latest_mcp_snapshot, agent_handle, mcp_runtime, agent_pump_handle, mcp_pump_handle }
+        Self { agent_tx, agent_handle, mcp_runtime, agent_pump_handle, mcp_pump_handle }
     }
 
     pub(crate) async fn send_agent_command(&self, command: Command) -> Result<(), SessionError> {
@@ -102,7 +92,7 @@ impl AgentRuntime {
     }
 
     pub(crate) fn mcp_server_statuses(&self) -> Vec<McpServerStatusEntry> {
-        self.latest_mcp_snapshot.borrow().server_statuses.clone()
+        self.mcp_runtime.latest_snapshot().map_or_else(Vec::new, |snapshot| snapshot.server_statuses)
     }
 }
 
@@ -170,65 +160,8 @@ impl RuntimeFactory for ProductionRuntimeFactory {
             .agent_deps(self.agent_deps.clone());
 
         let runtime = builder.build(None, Some(initial_messages)).await?;
-        let snapshot = McpConnectionDetails {
-            instructions: BTreeMap::default(),
-            tool_definitions: Vec::new(),
-            server_statuses: Vec::new(),
-        };
-
         let Runtime { agent_tx, agent_rx, agent_handle, event_rx, mcp_runtime } = runtime;
-        Ok(AgentRuntime::new(
-            agent,
-            agent_tx,
-            agent_rx,
-            Some(agent_handle),
-            event_rx,
-            mcp_runtime,
-            snapshot,
-            runtime_event_tx,
-        ))
-    }
-}
-
-async fn on_mcp_event(
-    event: McpClientEvent,
-    snapshot_tx: &watch::Sender<McpConnectionDetails>,
-    agent_tx: &mpsc::Sender<Command>,
-) -> Option<McpClientEvent> {
-    match event {
-        McpClientEvent::ToolDefinitionsChanged(tool_definitions) => {
-            snapshot_tx.send_modify(|snapshot| snapshot.tool_definitions.clone_from(&tool_definitions));
-            if let Err(error) = agent_tx.send(Command::agent(AgentCommand::UpdateTools(tool_definitions))).await {
-                tracing::error!("Failed to send updated tools to agent runtime: {error:?}");
-            }
-            None
-        }
-        McpClientEvent::ServerInstructionsUpdated { server, instructions } => {
-            snapshot_tx.send_modify(|snapshot| match &instructions {
-                Some(body) => {
-                    snapshot.instructions.insert(server.clone(), body.clone());
-                }
-                None => {
-                    snapshot.instructions.remove(&server);
-                }
-            });
-            if let Err(error) =
-                agent_tx.send(Command::agent(AgentCommand::UpdateMcpInstructions { server, body: instructions })).await
-            {
-                tracing::error!("Failed to send updated MCP instructions to agent runtime: {error:?}");
-            }
-            None
-        }
-        McpClientEvent::ServerStatusesChanged(server_statuses) => {
-            snapshot_tx.send_modify(|snapshot| snapshot.server_statuses.clone_from(&server_statuses));
-            Some(McpClientEvent::ServerStatusesChanged(server_statuses))
-        }
-        McpClientEvent::ConnectionReady(next_snapshot) => {
-            snapshot_tx.send_modify(|snapshot| snapshot.clone_from(&next_snapshot));
-            tracing::debug!("MCP connection ready");
-            Some(McpClientEvent::ConnectionReady(next_snapshot))
-        }
-        event @ (McpClientEvent::Elicitation(_) | McpClientEvent::AuthenticationFailed { .. }) => Some(event),
+        Ok(AgentRuntime::new(agent, agent_tx, agent_rx, Some(agent_handle), event_rx, mcp_runtime, runtime_event_tx))
     }
 }
 

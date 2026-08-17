@@ -75,10 +75,10 @@ impl RuntimeBuilder {
     ) -> Result<Runtime, CliError> {
         let deps = self.agent_deps.clone();
         let (spec, spawn) = self.spawn_mcp().await?;
-        let (mcp_runtime, event_rx) = spawn.split();
+        let mcp_client = spawn.command_client();
 
         let (agent_tx, agent_rx, agent_handle) =
-            spawn_agent(&spec, &deps, mcp_runtime.command_client(), Vec::new(), |mut agent_builder| {
+            spawn_agent(&spec, &deps, mcp_client, Vec::new(), |mut agent_builder| {
                 if let Some(prompt) = custom_prompt {
                     agent_builder = agent_builder.system_prompt(prompt);
                 }
@@ -88,6 +88,12 @@ impl RuntimeBuilder {
                 agent_builder
             })
             .await?;
+        let snapshot = McpConnectionDetails {
+            instructions: Default::default(),
+            tool_definitions: Vec::new(),
+            server_statuses: Vec::new(),
+        };
+        let (mcp_runtime, event_rx) = spawn.connect_agent(agent_tx.clone(), snapshot);
 
         Ok(Runtime { agent_tx, agent_rx, agent_handle, event_rx, mcp_runtime })
     }
@@ -105,17 +111,17 @@ impl RuntimeBuilder {
             .block_until_ready()
             .await
             .ok_or_else(|| CliError::McpError("MCP bootstrap aborted before completion".to_string()))?;
-        let (mcp_runtime, event_rx) = spawn.split();
-
+        let mcp_client = spawn.command_client();
         let tool_definitions = snapshot.tool_definitions.clone();
         let mut runtime_spec = spec;
         runtime_spec.prompts.push(Prompt::McpInstructions(snapshot.instructions.clone()));
 
         let (agent_tx, agent_rx, agent_handle) =
-            spawn_agent(&runtime_spec, &deps, mcp_runtime.command_client(), tool_definitions, |agent_builder| {
+            spawn_agent(&runtime_spec, &deps, mcp_client, tool_definitions, |agent_builder| {
                 agent_builder.messages(messages)
             })
             .await?;
+        let (mcp_runtime, event_rx) = spawn.connect_agent(agent_tx.clone(), snapshot.clone());
 
         Ok((Runtime { agent_tx, agent_rx, agent_handle, event_rx, mcp_runtime }, snapshot))
     }

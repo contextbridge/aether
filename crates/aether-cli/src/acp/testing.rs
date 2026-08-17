@@ -396,30 +396,21 @@ impl RuntimeFactory for FakeRuntimeFactory {
             .block_until_ready()
             .await
             .ok_or_else(|| SessionError::McpOperation("fake MCP bootstrap aborted".to_string()))?;
-        let (mcp_runtime, event_rx) = spawn.split();
-
+        let mcp_client = spawn.command_client();
         let tool_definitions = snapshot.tool_definitions.clone();
         let mut builder = AgentBuilder::new(provider).max_auto_continues(0);
         for prompt in &spec.prompts {
             builder = builder.system_prompt(prompt.clone());
         }
         let (agent_tx, agent_rx, agent_handle) = builder
-            .tools(mcp_runtime.command_client(), tool_definitions)
+            .tools(mcp_client, tool_definitions)
             .messages(initial_messages)
             .spawn()
             .await
             .map_err(|e| SessionError::Build(CliError::AgentError(e.to_string())))?;
+        let (mcp_runtime, event_rx) = spawn.connect_agent(agent_tx.clone(), snapshot);
 
-        Ok(AgentRuntime::new(
-            agent,
-            agent_tx,
-            agent_rx,
-            Some(agent_handle),
-            event_rx,
-            mcp_runtime,
-            snapshot,
-            runtime_event_tx,
-        ))
+        Ok(AgentRuntime::new(agent, agent_tx, agent_rx, Some(agent_handle), event_rx, mcp_runtime, runtime_event_tx))
     }
 }
 
@@ -456,18 +447,9 @@ impl RuntimeFactory for StubRuntimeFactory {
             .block_until_ready()
             .await
             .ok_or_else(|| SessionError::McpOperation("stub MCP bootstrap aborted".to_string()))?;
-        let (mcp_runtime, event_rx) = spawn.split();
+        let (mcp_runtime, event_rx) = spawn.connect_agent(parts.tx.clone(), snapshot);
 
-        Ok(AgentRuntime::new(
-            agent,
-            parts.tx,
-            parts.rx,
-            Some(parts.handle),
-            event_rx,
-            mcp_runtime,
-            snapshot,
-            runtime_event_tx,
-        ))
+        Ok(AgentRuntime::new(agent, parts.tx, parts.rx, Some(parts.handle), event_rx, mcp_runtime, runtime_event_tx))
     }
 }
 

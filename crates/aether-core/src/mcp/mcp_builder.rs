@@ -7,6 +7,7 @@ use utils::{SettingsStore, variables::Vars};
 
 use crate::agent_spec::McpConfigSource;
 use crate::core::AgentDeps;
+use crate::events::{AgentCommand, Command};
 
 use super::run_mcp_task::{McpCommand, run_mcp_task};
 use super::{DeferredToolGateway, DeferredToolGatewayHandle, McpCommandClient};
@@ -15,7 +16,10 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::{
-    sync::mpsc::{self, Receiver, Sender},
+    sync::{
+        mpsc::{self, Receiver, Sender},
+        watch,
+    },
     task::JoinHandle,
 };
 
@@ -32,12 +36,14 @@ pub fn mcp(root_dir: impl AsRef<Path>) -> McpBuilder {
     McpBuilder::new(root_dir)
 }
 
-/// Owns a spawned MCP manager and deferred-tool gateway. Dropping this value
-/// shuts down the session.
+/// Owns a spawned MCP manager, deferred-tool gateway, and optional agent
+/// synchronization task. Dropping this value shuts down the session.
 pub struct McpRuntime {
     command_tx: Sender<McpCommand>,
     manager_handle: JoinHandle<()>,
     gateway_handle: Option<DeferredToolGatewayHandle>,
+    agent_sync_handle: Option<JoinHandle<()>>,
+    latest_snapshot: Option<watch::Receiver<McpConnectionDetails>>,
 }
 
 impl McpRuntime {
@@ -52,11 +58,19 @@ impl McpRuntime {
     pub fn deferred_tool_gateway_endpoint(&self) -> Option<&mcp_utils::tool_gateway::UnixSocketPath> {
         self.gateway_handle.as_ref().map(DeferredToolGatewayHandle::endpoint)
     }
+
+    /// Returns the latest MCP state when this runtime was connected to an agent.
+    pub fn latest_snapshot(&self) -> Option<McpConnectionDetails> {
+        self.latest_snapshot.as_ref().map(|snapshot| snapshot.borrow().clone())
+    }
 }
 
 impl Drop for McpRuntime {
     fn drop(&mut self) {
         self.manager_handle.abort();
+        if let Some(handle) = &self.agent_sync_handle {
+            handle.abort();
+        }
     }
 }
 
@@ -85,6 +99,21 @@ impl McpSession {
             }
         }
         None
+    }
+
+    /// Connects MCP catalog events to an agent and returns only host-facing
+    /// events such as statuses, authentication failures, and elicitation.
+    pub fn connect_agent(
+        mut self,
+        agent_tx: Sender<Command>,
+        initial_snapshot: McpConnectionDetails,
+    ) -> (McpRuntime, Receiver<McpClientEvent>) {
+        let (snapshot_tx, latest_snapshot) = watch::channel(initial_snapshot);
+        let (host_event_tx, host_event_rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let agent_sync_handle = tokio::spawn(synchronize_agent(self.event_rx, agent_tx, snapshot_tx, host_event_tx));
+        self.runtime.agent_sync_handle = Some(agent_sync_handle);
+        self.runtime.latest_snapshot = Some(latest_snapshot);
+        (self.runtime, host_event_rx)
     }
 
     pub fn split(self) -> (McpRuntime, Receiver<McpClientEvent>) {
@@ -242,7 +271,66 @@ impl McpBuilder {
         let manager_handle = tokio::spawn(run_mcp_task(mcp_manager, command_rx, pending));
         let gateway_handle = gateway.map(|gateway| gateway.start(McpCommandClient::new(command_tx.clone())));
 
-        Ok(McpSession { runtime: McpRuntime { command_tx, manager_handle, gateway_handle }, event_rx })
+        Ok(McpSession {
+            runtime: McpRuntime {
+                command_tx,
+                manager_handle,
+                gateway_handle,
+                agent_sync_handle: None,
+                latest_snapshot: None,
+            },
+            event_rx,
+        })
+    }
+}
+
+async fn synchronize_agent(
+    mut event_rx: Receiver<McpClientEvent>,
+    agent_tx: Sender<Command>,
+    snapshot_tx: watch::Sender<McpConnectionDetails>,
+    host_event_tx: Sender<McpClientEvent>,
+) {
+    while let Some(event) = event_rx.recv().await {
+        let host_event = match event {
+            McpClientEvent::ToolDefinitionsChanged(tool_definitions) => {
+                snapshot_tx.send_modify(|snapshot| snapshot.tool_definitions.clone_from(&tool_definitions));
+                send_agent_update(&agent_tx, AgentCommand::UpdateTools(tool_definitions)).await;
+                None
+            }
+            McpClientEvent::ServerInstructionsUpdated { server, instructions } => {
+                snapshot_tx.send_modify(|snapshot| match &instructions {
+                    Some(body) => {
+                        snapshot.instructions.insert(server.clone(), body.clone());
+                    }
+                    None => {
+                        snapshot.instructions.remove(&server);
+                    }
+                });
+                send_agent_update(&agent_tx, AgentCommand::UpdateMcpInstructions { server, body: instructions }).await;
+                None
+            }
+            McpClientEvent::ServerStatusesChanged(server_statuses) => {
+                snapshot_tx.send_modify(|snapshot| snapshot.server_statuses.clone_from(&server_statuses));
+                Some(McpClientEvent::ServerStatusesChanged(server_statuses))
+            }
+            McpClientEvent::ConnectionReady(snapshot) => {
+                snapshot_tx.send_replace(snapshot.clone());
+                Some(McpClientEvent::ConnectionReady(snapshot))
+            }
+            event @ (McpClientEvent::Elicitation(_) | McpClientEvent::AuthenticationFailed { .. }) => Some(event),
+        };
+
+        if let Some(event) = host_event
+            && !host_event_tx.is_closed()
+        {
+            let _ = host_event_tx.send(event).await;
+        }
+    }
+}
+
+async fn send_agent_update(agent_tx: &Sender<Command>, command: AgentCommand) {
+    if let Err(error) = agent_tx.send(Command::agent(command)).await {
+        tracing::debug!(%error, "Agent stopped before MCP catalog update could be applied");
     }
 }
 
