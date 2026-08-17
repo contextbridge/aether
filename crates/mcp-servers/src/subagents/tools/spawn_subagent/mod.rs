@@ -233,12 +233,12 @@ impl AgentExecutor {
                 .resolve_agent_invocable(&task.agent_name)
                 .map_err(|error| error.to_string())?;
 
-            let mut spawn = self.spawn_mcps(&spec.mcp_config_sources).await?;
+            let mut spawn = self.spawn_mcps(&spec.mcp_config_sources, spec.tools.clone()).await?;
             let snapshot =
                 spawn.block_until_ready().await.ok_or_else(|| "MCP bootstrap aborted before completion".to_string())?;
             let (mcp_runtime, _) = spawn.split();
 
-            let filtered_tools = spec.tools.apply(snapshot.tool_definitions);
+            let filtered_tools = snapshot.tool_definitions;
             spec.prompts.push(Prompt::McpInstructions(snapshot.instructions));
             let command_tx = mcp_runtime.command_tx().clone();
 
@@ -298,8 +298,12 @@ impl AgentExecutor {
         }
     }
 
-    async fn spawn_mcps(&self, effective_mcp_config_sources: &[McpConfigSource]) -> Result<McpSpawnResult, String> {
-        let mut builder = mcp(&self.project_root).with_builtin_servers(self.deps.clone());
+    async fn spawn_mcps(
+        &self,
+        effective_mcp_config_sources: &[McpConfigSource],
+        tool_filter: mcp_utils::client::ToolFilter,
+    ) -> Result<McpSpawnResult, String> {
+        let mut builder = mcp(&self.project_root).with_tool_filter(tool_filter).with_builtin_servers(self.deps.clone());
 
         if !effective_mcp_config_sources.is_empty() {
             builder = builder

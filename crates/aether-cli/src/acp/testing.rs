@@ -387,6 +387,7 @@ impl RuntimeFactory for FakeRuntimeFactory {
             )]
         });
         let mut spawn = mcp(&self.cwd)
+            .with_tool_filter(spec.tools.clone())
             .with_servers(servers)
             .spawn()
             .await
@@ -397,7 +398,7 @@ impl RuntimeFactory for FakeRuntimeFactory {
             .ok_or_else(|| SessionError::McpOperation("fake MCP bootstrap aborted".to_string()))?;
         let (mcp_runtime, event_rx) = spawn.split();
 
-        let filtered_tools = spec.tools.apply(snapshot.tool_definitions.clone());
+        let filtered_tools = snapshot.tool_definitions.clone();
         let mut builder = AgentBuilder::new(provider).max_auto_continues(0);
         for prompt in &spec.prompts {
             builder = builder.system_prompt(prompt.clone());
@@ -411,7 +412,6 @@ impl RuntimeFactory for FakeRuntimeFactory {
 
         Ok(AgentRuntime::new(
             agent,
-            spec,
             agent_tx,
             agent_rx,
             Some(agent_handle),
@@ -439,7 +439,7 @@ impl RuntimeFactory for StubRuntimeFactory {
     async fn spawn(
         &self,
         agent: AgentKey,
-        spec: &AgentSpec,
+        _spec: &AgentSpec,
         _initial_messages: Vec<ChatMessage>,
         runtime_event_tx: mpsc::Sender<RuntimeEvent>,
     ) -> Result<AgentRuntime, SessionError> {
@@ -460,7 +460,6 @@ impl RuntimeFactory for StubRuntimeFactory {
 
         Ok(AgentRuntime::new(
             agent,
-            spec,
             parts.tx,
             parts.rx,
             Some(parts.handle),

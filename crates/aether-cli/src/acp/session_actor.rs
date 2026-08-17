@@ -884,6 +884,7 @@ mod tests {
                         mcp_utils::client::McpServerStatus::Connected { tool_count: 1 },
                     )];
                     let snapshot = mcp_utils::client::McpConnectionDetails {
+                        catalog: std::sync::Arc::new(mcp_utils::client::ToolCatalog::new()),
                         instructions: std::collections::BTreeMap::new(),
                         tool_definitions: Vec::new(),
                         server_statuses: servers,

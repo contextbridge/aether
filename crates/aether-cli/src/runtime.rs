@@ -108,7 +108,7 @@ impl RuntimeBuilder {
             .ok_or_else(|| CliError::McpError("MCP bootstrap aborted before completion".to_string()))?;
         let (mcp_runtime, event_rx) = spawn.split();
 
-        let filtered_tools = spec.tools.apply(snapshot.tool_definitions.clone());
+        let filtered_tools = snapshot.tool_definitions.clone();
         let mut runtime_spec = spec;
         runtime_spec.prompts.push(Prompt::McpInstructions(snapshot.instructions.clone()));
 
@@ -127,13 +127,13 @@ impl RuntimeBuilder {
             .block_until_ready()
             .await
             .ok_or_else(|| CliError::McpError("MCP bootstrap aborted before completion".to_string()))?;
-        let filtered_tools = spec.tools.apply(details.tool_definitions);
+        let filtered_tools = details.tool_definitions;
         Ok(PromptInfo { spec, tool_definitions: filtered_tools })
     }
 
     async fn spawn_mcp(self) -> Result<(AgentSpec, McpSpawnResult), CliError> {
         let deps = self.agent_deps.clone();
-        let mut builder = mcp(&self.cwd);
+        let mut builder = mcp(&self.cwd).with_tool_filter(self.spec.tools.clone());
 
         if let Some(apply_oauth) = self.oauth_applicator {
             builder = apply_oauth(builder);

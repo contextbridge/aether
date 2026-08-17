@@ -4,14 +4,13 @@ use crate::runtime::{Runtime, RuntimeBuilder};
 use crate::slash_commands::{SlashCommandError, list_prompts};
 use aether_auth::OAuthHandler;
 use aether_core::agent_spec::AgentSpec;
-use aether_core::agent_spec::ToolFilter;
 use aether_core::core::{AgentDeps, AgentHandle};
 use aether_core::events::{AgentCommand, AgentEvent, Command};
 use aether_core::mcp::{McpRuntime, run_mcp_task::McpCommand};
 use llm::ChatMessage;
 use mcp_utils::client::{
     ElicitingOAuthHandler, McpClientEvent, McpConnectionDetails, McpError, McpServer, McpServerStatusEntry,
-    OAuthHandlerFactory,
+    OAuthHandlerFactory, ToolCatalog,
 };
 use rmcp::model::Prompt as McpPrompt;
 use std::collections::BTreeMap;
@@ -38,7 +37,6 @@ impl AgentRuntime {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         agent: AgentKey,
-        spec: &AgentSpec,
         agent_tx: mpsc::Sender<Command>,
         mut agent_rx: mpsc::Receiver<AgentEvent>,
         agent_handle: Option<AgentHandle>,
@@ -58,12 +56,10 @@ impl AgentRuntime {
             }
         });
 
-        let tool_filter = spec.tools.clone();
         let mcp_agent_tx = agent_tx.clone();
         let mcp_pump_handle = tokio::spawn(async move {
             while let Some(event) = event_rx.recv().await {
-                let Some(relay_event) = on_mcp_event(event, &latest_mcp_snapshot_tx, &tool_filter, &mcp_agent_tx).await
-                else {
+                let Some(relay_event) = on_mcp_event(event, &latest_mcp_snapshot_tx, &mcp_agent_tx).await else {
                     continue;
                 };
                 if runtime_event_tx.send(RuntimeEvent::Mcp { agent: agent.clone(), event: relay_event }).await.is_err()
@@ -178,6 +174,7 @@ impl RuntimeFactory for ProductionRuntimeFactory {
 
         let runtime = builder.build(None, Some(initial_messages)).await?;
         let snapshot = McpConnectionDetails {
+            catalog: Arc::new(ToolCatalog::new()),
             instructions: BTreeMap::default(),
             tool_definitions: Vec::new(),
             server_statuses: Vec::new(),
@@ -186,7 +183,6 @@ impl RuntimeFactory for ProductionRuntimeFactory {
         let Runtime { agent_tx, agent_rx, agent_handle, event_rx, mcp_runtime } = runtime;
         Ok(AgentRuntime::new(
             agent,
-            spec,
             agent_tx,
             agent_rx,
             Some(agent_handle),
@@ -201,14 +197,12 @@ impl RuntimeFactory for ProductionRuntimeFactory {
 async fn on_mcp_event(
     event: McpClientEvent,
     snapshot_tx: &watch::Sender<McpConnectionDetails>,
-    tool_filter: &ToolFilter,
     agent_tx: &mpsc::Sender<Command>,
 ) -> Option<McpClientEvent> {
     match event {
         McpClientEvent::ToolDefinitionsChanged(tool_definitions) => {
             snapshot_tx.send_modify(|snapshot| snapshot.tool_definitions.clone_from(&tool_definitions));
-            let filtered_tools = tool_filter.apply(tool_definitions);
-            if let Err(error) = agent_tx.send(Command::agent(AgentCommand::UpdateTools(filtered_tools))).await {
+            if let Err(error) = agent_tx.send(Command::agent(AgentCommand::UpdateTools(tool_definitions))).await {
                 tracing::error!("Failed to send updated tools to agent runtime: {error:?}");
             }
             None

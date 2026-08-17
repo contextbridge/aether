@@ -281,8 +281,9 @@ fn parse_model(agent: &str, model: &str) -> Result<ModelSpec, SettingsError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aether_core::agent_spec::{AgentSpecExposure, ToolFilter};
+    use aether_core::agent_spec::AgentSpecExposure;
     use llm::ModelSettings;
+    use mcp_utils::client::ToolFilter;
     use std::fs;
 
     fn create_temp_project() -> tempfile::TempDir {

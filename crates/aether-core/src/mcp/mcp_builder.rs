@@ -1,6 +1,6 @@
 use mcp_utils::client::{
     McpClientEvent, McpConfig, McpConnectionDetails, McpError, McpManager, McpServer, OAuthHandlerFactory, ParseError,
-    ServerFactory,
+    ServerFactory, ToolFilter,
 };
 use utils::{SettingsStore, variables::Vars};
 
@@ -78,6 +78,7 @@ pub struct McpBuilder {
     agent_deps: AgentDeps,
     aether_home: Option<PathBuf>,
     vars: Vars,
+    tool_filter: ToolFilter,
 }
 
 impl McpBuilder {
@@ -97,11 +98,17 @@ impl McpBuilder {
             agent_deps: AgentDeps::default(),
             aether_home: None,
             vars,
+            tool_filter: ToolFilter::default(),
         }
     }
 
     pub fn with_servers(mut self, servers: Vec<McpServer>) -> Self {
         self.servers.extend(servers);
+        self
+    }
+
+    pub fn with_tool_filter(mut self, filter: ToolFilter) -> Self {
+        self.tool_filter = filter;
         self
     }
 
@@ -175,7 +182,7 @@ impl McpBuilder {
         let (mcp_command_tx, mcp_command_rx) = mpsc::channel::<McpCommand>(self.mcp_channel_capacity);
         let (event_tx, event_rx) = mpsc::channel::<McpClientEvent>(self.mcp_channel_capacity);
 
-        let mut mcp_manager = McpManager::new(event_tx, self.oauth_handler_factory);
+        let mut mcp_manager = McpManager::new(event_tx, self.oauth_handler_factory).with_tool_filter(self.tool_filter);
         if let Some(store) = self.agent_deps.oauth_credential_store {
             mcp_manager = mcp_manager.with_oauth_credential_store(store);
         }

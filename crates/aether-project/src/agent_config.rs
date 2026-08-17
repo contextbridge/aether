@@ -1,6 +1,6 @@
 use crate::{McpSourceSpec, PromptSource};
-use aether_core::agent_spec::ToolFilter;
 use llm::{ModelSettings, ProviderConnectionOverrides, ReasoningEffort};
+use mcp_utils::client::ToolFilter;
 
 #[doc = include_str!("docs/agent_config.md")]
 #[derive(Debug, Clone, Default, PartialEq, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]

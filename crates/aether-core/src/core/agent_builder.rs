@@ -252,8 +252,9 @@ impl AgentBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_spec::{AgentSpecExposure, ToolFilter};
+    use crate::agent_spec::AgentSpecExposure;
     use llm::ProviderConnectionOverrides;
+    use mcp_utils::client::ToolFilter;
 
     #[tokio::test]
     async fn test_agent_handle_is_finished() {
