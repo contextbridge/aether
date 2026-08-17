@@ -38,6 +38,9 @@ pub enum McpError {
     /// Prompt retrieval failed
     #[error("Prompt retrieval failed: {0}")]
     PromptGetFailed(String),
+    /// No factory was registered for a declarative in-memory server.
+    #[error("In-memory MCP server '{server}' requires unregistered factory '{factory}'")]
+    InMemoryFactoryNotFound { server: String, factory: String },
     /// Failed to spawn a stdio server process
     #[error("Failed to spawn '{command}': {reason}")]
     SpawnFailed { command: String, reason: String },

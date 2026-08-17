@@ -1,4 +1,4 @@
-use crate::client::{McpServer, McpTransport, ToolExposure};
+use crate::client::{RuntimeMcpServer, RuntimeMcpTransport, ToolExposure};
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     model::{
@@ -14,8 +14,8 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-pub fn fake_mcp(name: &str, server: FakeMcpServer) -> McpServer {
-    McpServer::new(name, McpTransport::InMemory { server: server.into_dyn() }, ToolExposure::Direct)
+pub fn fake_mcp(name: &str, server: FakeMcpServer) -> RuntimeMcpServer {
+    RuntimeMcpServer::new(name, RuntimeMcpTransport::InMemory { server: server.into_dyn() }, ToolExposure::Direct)
 }
 
 /// A fake MCP server preloaded with the classic math tools (`add_numbers`,

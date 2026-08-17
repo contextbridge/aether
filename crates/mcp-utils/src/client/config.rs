@@ -1,11 +1,9 @@
 use aether_auth::OAuthClientRegistration;
-use futures::future::BoxFuture;
-use rmcp::{RoleServer, service::DynService, transport::streamable_http_client::StreamableHttpClientTransportConfig};
+use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
-use std::fmt::{Debug, Formatter};
 use std::num::NonZeroU16;
 use std::path::Path;
 use utils::matches_name_pattern;
@@ -149,16 +147,25 @@ pub struct ToolProxyRules {
     pub exclude: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
 pub struct McpServer {
     pub name: String,
     pub transport: McpTransport,
     pub tool_exposure: ToolExposure,
 }
 
+#[derive(Debug, Clone)]
 pub enum McpTransport {
     Stdio { command: String, args: Vec<String>, env: HashMap<String, String> },
     Http(McpHttpConfig),
-    InMemory { server: Box<dyn DynService<RoleServer>> },
+    InMemory { spec: InMemoryServerSpec },
+}
+
+#[derive(Clone, Debug)]
+pub struct InMemoryServerSpec {
+    pub factory: String,
+    pub args: Vec<String>,
+    pub input: Option<Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -296,50 +303,7 @@ impl McpServer {
     pub fn is_proxied(&self) -> bool {
         self.tool_exposure.is_proxied()
     }
-
-    /// Clone this server config. Fails for [`McpTransport::InMemory`], whose
-    /// boxed service cannot be duplicated and so cannot be shared across
-    /// independently-spawned MCP managers.
-    pub fn try_clone(&self) -> Result<Self, McpServerCloneError> {
-        let transport = match &self.transport {
-            McpTransport::Stdio { command, args, env } => {
-                McpTransport::Stdio { command: command.clone(), args: args.clone(), env: env.clone() }
-            }
-            McpTransport::Http(config) => McpTransport::Http(config.clone()),
-            McpTransport::InMemory { .. } => return Err(McpServerCloneError(self.name.clone())),
-        };
-        Ok(Self { name: self.name.clone(), transport, tool_exposure: self.tool_exposure.clone() })
-    }
 }
-
-#[derive(Debug, thiserror::Error)]
-#[error("in-memory MCP server `{0}` cannot be cloned across runtimes")]
-pub struct McpServerCloneError(pub String);
-
-impl Debug for McpServer {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("McpServer")
-            .field("name", &self.name)
-            .field("transport", &self.transport)
-            .field("tool_exposure", &self.tool_exposure)
-            .finish()
-    }
-}
-
-impl Debug for McpTransport {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            McpTransport::Stdio { command, args, env } => {
-                f.debug_struct("Stdio").field("command", command).field("args", args).field("env", env).finish()
-            }
-            McpTransport::Http(config) => f.debug_tuple("Http").field(config).finish(),
-            McpTransport::InMemory { .. } => f.debug_struct("InMemory").field("server", &"<DynService>").finish(),
-        }
-    }
-}
-
-pub type ServerFactory =
-    Box<dyn Fn(Vec<String>, Option<Value>) -> BoxFuture<'static, Box<dyn DynService<RoleServer>>> + Send + Sync>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ParseError {
@@ -351,9 +315,6 @@ pub enum ParseError {
 
     #[error("Variable expansion failed: {0}")]
     VarError(#[from] VarError),
-
-    #[error("InMemory server factory '{0}' not registered")]
-    FactoryNotFound(String),
 
     #[error("Invalid nested config in tool-proxy: {0}")]
     InvalidNestedConfig(String),
@@ -382,25 +343,12 @@ impl McpConfig {
         Ok(serde_json::from_str(json)?)
     }
 
-    pub async fn into_servers(
-        self,
-        factories: &HashMap<String, ServerFactory>,
-        vars: &Vars,
-    ) -> Result<Vec<McpServer>, ParseError> {
-        self.into_servers_with_proxy(factories, vars, false).await
+    pub fn into_servers(self, vars: &Vars) -> Result<Vec<McpServer>, ParseError> {
+        self.into_servers_with_proxy(vars, false)
     }
 
-    pub async fn into_servers_with_proxy(
-        self,
-        factories: &HashMap<String, ServerFactory>,
-        vars: &Vars,
-        force_proxy: bool,
-    ) -> Result<Vec<McpServer>, ParseError> {
-        let mut servers = Vec::with_capacity(self.servers.len());
-        for (name, config) in self.servers {
-            servers.push(config.into_server(name, factories, vars, force_proxy).await?);
-        }
-        Ok(servers)
+    pub fn into_servers_with_proxy(self, vars: &Vars, force_proxy: bool) -> Result<Vec<McpServer>, ParseError> {
+        self.servers.into_iter().map(|(name, config)| config.into_server(name, vars, force_proxy)).collect()
     }
 
     pub fn mark_all_proxy(&mut self) {
@@ -428,27 +376,16 @@ impl McpServerConfig {
         proxy.mark_proxied();
     }
 
-    pub async fn into_server(
-        self,
-        name: String,
-        factories: &HashMap<String, ServerFactory>,
-        vars: &Vars,
-        force_proxy: bool,
-    ) -> Result<McpServer, ParseError> {
+    pub fn into_server(self, name: String, vars: &Vars, force_proxy: bool) -> Result<McpServer, ParseError> {
         let mut exposure = self.proxy().clone();
         if force_proxy {
             exposure.mark_proxied();
         }
-        let transport = self.into_transport(name.clone(), factories, vars).await?;
+        let transport = self.into_transport(name.clone(), vars)?;
         Ok(McpServer { name, transport, tool_exposure: exposure })
     }
 
-    async fn into_transport(
-        self,
-        name: String,
-        factories: &HashMap<String, ServerFactory>,
-        vars: &Vars,
-    ) -> Result<McpTransport, ParseError> {
+    fn into_transport(self, name: String, vars: &Vars) -> Result<McpTransport, ParseError> {
         match self {
             McpServerConfig::Stdio(StdioServerConfig { command, args, env, .. }) => Ok(McpTransport::Stdio {
                 command: vars.expand(&command)?,
@@ -490,10 +427,8 @@ impl McpServerConfig {
             }
 
             McpServerConfig::InMemory(InMemoryServerConfig { args, input, .. }) => {
-                let server_factory = factories.get(&name).ok_or_else(|| ParseError::FactoryNotFound(name.clone()))?;
-                let expanded_args = args.into_iter().map(|a| vars.expand(&a)).collect::<Result<Vec<_>, VarError>>()?;
-                let server = server_factory(expanded_args, input).await;
-                Ok(McpTransport::InMemory { server })
+                let args = args.into_iter().map(|a| vars.expand(&a)).collect::<Result<Vec<_>, VarError>>()?;
+                Ok(McpTransport::InMemory { spec: InMemoryServerSpec { factory: name, args, input } })
             }
         }
     }
@@ -682,7 +617,7 @@ mod tests {
             }
         }"#;
         let config = McpConfig::from_json(json).unwrap();
-        let servers = config.into_servers(&HashMap::new(), &Vars::new()).await.unwrap();
+        let servers = config.into_servers(&Vars::new()).unwrap();
 
         assert_eq!(servers.len(), 2);
         assert!(!servers.iter().find(|s| s.name == "github").unwrap().is_proxied());
@@ -693,7 +628,7 @@ mod tests {
     async fn into_servers_with_proxy_forces_proxy_flags() {
         let config =
             McpConfig::from_json(r#"{"servers":{"github":{"type":"stdio","command":"g","proxy":false}}}"#).unwrap();
-        let servers = config.into_servers_with_proxy(&HashMap::new(), &Vars::new(), true).await.unwrap();
+        let servers = config.into_servers_with_proxy(&Vars::new(), true).unwrap();
         assert!(servers[0].is_proxied());
     }
 
@@ -739,7 +674,7 @@ mod tests {
             r#"{"servers":{"coding":{"command":"server","proxy":{"include":["lsp_*","bash"],"exclude":["lsp_rename"]}}}}"#,
         )
         .unwrap();
-        let servers = config.into_servers(&HashMap::new(), &Vars::new()).await.unwrap();
+        let servers = config.into_servers(&Vars::new()).unwrap();
         let exposure = &servers[0].tool_exposure;
 
         assert!(!exposure.is_direct_tool("lsp_hover"));
@@ -753,7 +688,7 @@ mod tests {
         let config =
             McpConfig::from_json(r#"{"servers":{"coding":{"command":"server","proxy":{"exclude":["bash"]}}}}"#)
                 .unwrap();
-        let servers = config.into_servers_with_proxy(&HashMap::new(), &Vars::new(), true).await.unwrap();
+        let servers = config.into_servers_with_proxy(&Vars::new(), true).unwrap();
         assert!(servers[0].is_proxied());
         assert!(servers[0].tool_exposure.is_direct_tool("bash"));
         assert!(!servers[0].tool_exposure.is_direct_tool("read_file"));
@@ -766,7 +701,7 @@ mod tests {
         )
         .unwrap();
         let vars = Vars::new().with("WORKSPACE", "/workspace");
-        let servers = config.into_servers(&HashMap::new(), &vars).await.unwrap();
+        let servers = config.into_servers(&vars).unwrap();
 
         match &servers[0].transport {
             McpTransport::Stdio { args, .. } => {
@@ -783,7 +718,7 @@ mod tests {
         )
         .map_err(|e| e.to_string())?;
 
-        let servers = config.into_servers(&HashMap::new(), &Vars::new()).await.map_err(|e| e.to_string())?;
+        let servers = config.into_servers(&Vars::new()).map_err(|e| e.to_string())?;
         let McpTransport::Http(config) = &servers[0].transport else {
             return Err(format!("expected Http transport, got {:?}", servers[0].transport));
         };
@@ -798,7 +733,7 @@ mod tests {
             r#"{"servers":{"weather":{"type":"http","url":"http://127.0.0.1:9000/mcp","headers":{"Authorization":"Basic dXNlcjpwYXNz"}}}}"#,
         )
         .map_err(|e| e.to_string())?;
-        let servers = config.into_servers(&HashMap::new(), &Vars::new()).await.map_err(|e| e.to_string())?;
+        let servers = config.into_servers(&Vars::new()).map_err(|e| e.to_string())?;
 
         let McpTransport::Http(config) = &servers[0].transport else {
             return Err(format!("expected Http transport, got {:?}", servers[0].transport));
@@ -814,7 +749,7 @@ mod tests {
         )
         .map_err(|e| e.to_string())?;
         let vars = Vars::new().with("TOKEN", "expanded-token");
-        let servers = config.into_servers(&HashMap::new(), &vars).await.map_err(|e| e.to_string())?;
+        let servers = config.into_servers(&vars).map_err(|e| e.to_string())?;
 
         let McpTransport::Http(config) = &servers[0].transport else {
             return Err(format!("expected Http transport, got {:?}", servers[0].transport));

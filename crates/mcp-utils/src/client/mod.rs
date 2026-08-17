@@ -17,17 +17,17 @@ mod tool_proxy;
 
 pub use call_tool::{CallToolError, CallToolOptions, ToolCallEvent, call_tool};
 pub use config::{
-    AETHER_OAUTH_CALLBACK_PORT, AETHER_OAUTH_CLIENT_METADATA_URL, InMemoryServerConfig, InMemoryType, McpConfig,
-    McpHttpConfig, McpOAuthConfig, McpServer, McpServerCloneError, McpServerConfig, McpTransport, ParseError,
-    RemoteServerConfig, RemoteType, ResolvedOAuth, ServerFactory, StdioServerConfig, StdioType, ToolExposure,
-    ToolProxyRules, loopback_redirect_uri,
+    AETHER_OAUTH_CALLBACK_PORT, AETHER_OAUTH_CLIENT_METADATA_URL, InMemoryServerConfig, InMemoryServerSpec,
+    InMemoryType, McpConfig, McpHttpConfig, McpOAuthConfig, McpServer, McpServerConfig, McpTransport, ParseError,
+    RemoteServerConfig, RemoteType, ResolvedOAuth, StdioServerConfig, StdioType, ToolExposure, ToolProxyRules,
+    loopback_redirect_uri,
 };
 pub use connection::{McpConnectAttempt, McpConnectOutcome, McpServerConnection};
 pub use connection_attempt_manager::McpConnectionAttemptManager;
 pub use error::{McpError, Result};
 pub use manager::{
     ElicitationRequest, McpClientEvent, McpConnectionDetails, McpManager, McpServerStatus, McpServerStatusEntry,
-    OAuthHandlerContext, OAuthHandlerFactory,
+    OAuthHandlerContext, OAuthHandlerFactory, RuntimeMcpServer, RuntimeMcpTransport,
 };
 pub use mcp_client::{McpClient, cancel_result, client_capabilities};
 pub use mrtr::AbortReason;

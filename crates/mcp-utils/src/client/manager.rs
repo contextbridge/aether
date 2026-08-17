@@ -2,7 +2,7 @@ use llm::ToolDefinition;
 
 use super::{
     McpError, Result,
-    config::{McpHttpConfig, McpServer, ToolExposure},
+    config::{McpHttpConfig, ToolExposure},
     connection::{
         ConnectConfig, McpConnectAttempt, McpConnectOutcome, McpServerConnection, Tool, authenticate_http,
         connect_server,
@@ -16,9 +16,9 @@ use super::{
 use aether_auth::{OAuthCredentialStorage, OAuthHandler};
 use futures::future::join_all;
 use rmcp::{
-    RoleClient,
+    RoleClient, RoleServer,
     model::{CallToolRequestParams, ClientInfo, ElicitRequestParams, ElicitResult, ElicitationAction, Implementation},
-    service::RunningService,
+    service::{DynService, RunningService},
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -32,6 +32,29 @@ use tokio::task::JoinHandle;
 pub use crate::status::{McpServerAuthCapability, McpServerStatus, McpServerStatusEntry};
 
 pub type OAuthHandlerFactory = Arc<dyn Fn(OAuthHandlerContext) -> Result<Arc<dyn OAuthHandler>> + Send + Sync>;
+
+pub struct RuntimeMcpServer {
+    pub name: String,
+    pub transport: RuntimeMcpTransport,
+    pub tool_exposure: ToolExposure,
+}
+
+pub enum RuntimeMcpTransport {
+    Stdio { command: String, args: Vec<String>, env: HashMap<String, String> },
+    Http(McpHttpConfig),
+    InMemory { server: Box<dyn DynService<RoleServer>> },
+}
+
+impl RuntimeMcpServer {
+    pub fn new(name: impl Into<String>, transport: RuntimeMcpTransport, tool_exposure: ToolExposure) -> Self {
+        Self { name: name.into(), transport, tool_exposure }
+    }
+
+    pub fn with_exposure(mut self, exposure: ToolExposure) -> Self {
+        self.tool_exposure = exposure;
+        self
+    }
+}
 
 /// Context passed to an `OAuthHandlerFactory` so the constructed handler can
 /// dispatch user-facing prompts back to the host through the MCP event channel.
@@ -128,7 +151,7 @@ impl McpManager {
         &self.catalog
     }
 
-    pub async fn register_pending(&mut self, servers: Vec<McpServer>) -> Result<Vec<McpServer>> {
+    pub async fn register_pending(&mut self, servers: Vec<RuntimeMcpServer>) -> Result<Vec<RuntimeMcpServer>> {
         let adds_proxied = servers.iter().any(|server| server.tool_exposure.is_proxied());
         let proxy_name_taken = self.servers.contains_key(PROXY_SERVER_NAME)
             || servers.iter().any(|server| server.name == PROXY_SERVER_NAME);
@@ -148,12 +171,15 @@ impl McpManager {
         Ok(servers)
     }
 
-    pub fn connect_pending_task(&self, server: McpServer) -> impl Future<Output = McpConnectAttempt> + Send + 'static {
+    pub fn connect_pending_task(
+        &self,
+        server: RuntimeMcpServer,
+    ) -> impl Future<Output = McpConnectAttempt> + Send + 'static {
         let ctx = self.connect_config();
         async move { connect_server(server, &ctx).await }
     }
 
-    pub async fn add_mcps(&mut self, servers: Vec<McpServer>) -> Result<()> {
+    pub async fn add_mcps(&mut self, servers: Vec<RuntimeMcpServer>) -> Result<()> {
         let pending = self.register_pending(servers).await?;
         let ctx = self.connect_config();
         let attempts = join_all(pending.into_iter().map(|server| connect_server(server, &ctx))).await;
@@ -644,9 +670,12 @@ async fn await_server_shutdown(server_name: &str, handle: JoinHandle<()>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{McpClientEvent, McpManager, McpServerStatus, PROXY_SERVER_NAME, ServerState};
+    use super::{
+        McpClientEvent, McpManager, McpServerStatus, PROXY_SERVER_NAME, RuntimeMcpServer as McpServer,
+        RuntimeMcpTransport as McpTransport, ServerState,
+    };
     use crate::client::OAuthHandlerFactory;
-    use crate::client::config::{McpHttpConfig, McpServer, McpTransport, ToolExposure};
+    use crate::client::config::{McpHttpConfig, ToolExposure};
     use crate::client::connection::{McpConnectAttempt, McpConnectOutcome};
     use crate::status::McpServerAuthCapability;
     use aether_auth::{OAuthError, OAuthHandler};

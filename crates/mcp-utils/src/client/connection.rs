@@ -1,6 +1,7 @@
 use super::{
     McpClientEvent, McpError, OAuthHandlerFactory, Result,
-    config::{McpHttpConfig, McpServer, McpTransport},
+    config::McpHttpConfig,
+    manager::{RuntimeMcpServer, RuntimeMcpTransport},
     mcp_client::McpClient,
 };
 use crate::{client::OAuthHandlerContext, protocol::client_lifecycle_mode, transport::create_in_memory_transport};
@@ -124,17 +125,17 @@ impl McpServerConnection {
     }
 }
 
-pub(super) async fn connect_server(server: McpServer, ctx: &ConnectConfig) -> McpConnectAttempt {
-    let McpServer { name, transport, tool_exposure: _ } = server;
+pub(super) async fn connect_server(server: RuntimeMcpServer, ctx: &ConnectConfig) -> McpConnectAttempt {
+    let RuntimeMcpServer { name, transport, tool_exposure: _ } = server;
     let reauth_config = reauth_config_for(&transport, ctx.oauth_handler_factory.as_ref());
     let mcp_client = McpClient::new(ctx.client_info.clone(), name.clone(), ctx.event_sender.clone());
 
     let outcome = match transport {
-        McpTransport::Stdio { command, args, env } => {
+        RuntimeMcpTransport::Stdio { command, args, env } => {
             connect_stdio(&name, command, args, env, mcp_client, ctx.root_dir.clone()).await
         }
-        McpTransport::InMemory { server } => connect_in_memory(&name, server, mcp_client).await,
-        McpTransport::Http(config) => {
+        RuntimeMcpTransport::InMemory { server } => connect_in_memory(&name, server, mcp_client).await,
+        RuntimeMcpTransport::Http(config) => {
             connect_http(
                 &name,
                 config,
@@ -322,11 +323,13 @@ async fn connect_http(
 }
 
 fn reauth_config_for(
-    transport: &McpTransport,
+    transport: &RuntimeMcpTransport,
     oauth_handler_factory: Option<&OAuthHandlerFactory>,
 ) -> Option<McpHttpConfig> {
     match transport {
-        McpTransport::Http(config) if oauth_handler_factory.is_some() && config.transport.auth_header.is_none() => {
+        RuntimeMcpTransport::Http(config)
+            if oauth_handler_factory.is_some() && config.transport.auth_header.is_none() =>
+        {
             Some(config.clone())
         }
         _ => None,
