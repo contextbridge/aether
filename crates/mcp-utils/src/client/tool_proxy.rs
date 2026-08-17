@@ -1,9 +1,11 @@
 use crate::client::aether_home;
 
-use super::McpError;
+#[cfg(test)]
 use super::config::ToolExposure;
+#[cfg(test)]
 use super::connection::convert_tool_annotations;
 use super::mcp_client::McpClient;
+use super::{McpError, ServerCatalogEntry, ToolExposureKind};
 use llm::{ToolAnnotations, ToolDefinition};
 use rmcp::{RoleClient, service::RunningService};
 use schemars::JsonSchema;
@@ -71,8 +73,31 @@ pub fn call_tool_definition() -> ToolDefinition {
     .with_server(PROXY_SERVER_NAME.to_string())
 }
 
+pub(super) async fn write_catalog_entries_to_dir(server: &ServerCatalogEntry, tool_dir: &Path) -> Result<(), McpError> {
+    let server_dir = tool_dir.join(server.name());
+    if server_dir.exists() {
+        remove_dir_all(&server_dir).await?;
+    }
+    create_dir_all(&server_dir).await?;
+
+    for tool in server.tools().iter().filter(|tool| tool.allowed() && tool.exposure() == ToolExposureKind::Deferred) {
+        let definition = tool.definition();
+        let entry = ToolFileEntry {
+            name: tool.local_name().to_string(),
+            description: definition.description.clone(),
+            server: server.name().to_string(),
+            parameters: definition.parameters.clone(),
+            annotations: definition.annotations.clone(),
+        };
+        let file_path = server_dir.join(format!("{}.json", tool.local_name()));
+        write(&file_path, serde_json::to_string_pretty(&entry)?).await?;
+    }
+    Ok(())
+}
+
 /// Write the exposure's proxied tool entries to `tool_dir/<server_name>/`,
 /// removing any stale files first. Directly exposed tools are omitted.
+#[cfg(test)]
 pub(super) async fn write_tool_entries_to_dir(
     server_name: &str,
     tools: &[rmcp::model::Tool],

@@ -70,3 +70,11 @@ remain available through their normal `server__tool` names and cannot be called
 through `proxy__call_tool`. Patterns use names local to the MCP server, without
 the `server__` prefix. A selectively proxied server's instructions remain
 available for its directly exposed tools.
+
+Aether records both direct and proxied tools in the per-agent `ToolCatalog`.
+The configured `proxy` rules and agent tool filter are evaluated once when the
+catalog entry is built. All model definitions, proxy discovery files, server
+instructions, status rows, and execution authorization are then projected from
+that same cached state. Agent filter name patterns match canonical
+`server__tool` names; a denied proxied tool is neither written for discovery nor
+executable through `proxy__call_tool`.

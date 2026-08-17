@@ -11,6 +11,8 @@ mod mcp_client;
 mod mrtr;
 mod naming;
 mod task;
+mod tool_catalog;
+mod tool_filter;
 mod tool_proxy;
 
 pub use call_tool::{CallToolError, CallToolOptions, ToolCallEvent, call_tool};
@@ -33,6 +35,11 @@ pub use naming::{SERVERNAME_DELIMITER, split_on_server_name};
 pub use oauth_handler::ElicitingOAuthHandler;
 pub use task::TaskErrorReason;
 pub use tokio_util::sync::CancellationToken;
+pub use tool_catalog::{
+    CatalogTool, CatalogTools, PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME, ServerCatalogEntry, ServerDescription,
+    ToolCatalog, ToolExposureKind, ToolRoute,
+};
+pub use tool_filter::{ToolAnnotationMatcher, ToolFilter, ToolMatcher};
 
 use std::path::PathBuf;
 
