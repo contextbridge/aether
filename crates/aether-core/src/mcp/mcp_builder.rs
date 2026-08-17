@@ -1,6 +1,6 @@
 use mcp_utils::client::{
-    McpClientEvent, McpConfig, McpConnectionDetails, McpError, McpManager, McpServer, OAuthHandlerFactory, ParseError,
-    ServerFactory, ToolFilter,
+    InMemoryServerSpec, McpClientEvent, McpConfig, McpConnectionDetails, McpError, McpManager, McpServer, McpTransport,
+    OAuthHandlerFactory, ParseError, RuntimeMcpServer, RuntimeMcpTransport, ToolFilter,
 };
 use utils::{SettingsStore, variables::Vars};
 
@@ -8,6 +8,8 @@ use crate::agent_spec::McpConfigSource;
 use crate::core::AgentDeps;
 
 use super::run_mcp_task::{McpCommand, run_mcp_task};
+use futures::future::BoxFuture;
+use rmcp::{RoleServer, service::DynService};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tokio::{
@@ -19,15 +21,39 @@ pub fn mcp(root_dir: impl AsRef<Path>) -> McpBuilder {
     McpBuilder::new(root_dir)
 }
 
+#[derive(Clone)]
+pub struct McpHandle(Sender<McpCommand>);
+
+impl McpHandle {
+    pub fn sender(&self) -> &Sender<McpCommand> {
+        &self.0
+    }
+}
+
+#[derive(Clone)]
+pub struct RuntimeServices {
+    pub mcp: McpHandle,
+    pub root_dir: PathBuf,
+    pub agent_deps: AgentDeps,
+}
+
+pub type ServerFactory = Box<
+    dyn Fn(InMemoryServerSpec, RuntimeServices) -> BoxFuture<'static, Box<dyn DynService<RoleServer>>> + Send + Sync,
+>;
+
 /// Owns a spawned MCP manager. Dropping this value aborts the manager task.
 pub struct McpRuntime {
-    command_tx: Sender<McpCommand>,
+    mcp: McpHandle,
     handle: JoinHandle<()>,
 }
 
 impl McpRuntime {
+    pub fn handle(&self) -> &McpHandle {
+        &self.mcp
+    }
+
     pub fn command_tx(&self) -> &Sender<McpCommand> {
-        &self.command_tx
+        self.mcp.sender()
     }
 }
 
@@ -48,6 +74,10 @@ pub struct McpSpawnResult {
 }
 
 impl McpSpawnResult {
+    pub fn handle(&self) -> &McpHandle {
+        self.runtime.handle()
+    }
+
     pub fn command_tx(&self) -> &Sender<McpCommand> {
         self.runtime.command_tx()
     }
@@ -144,16 +174,16 @@ impl McpBuilder {
         self
     }
 
-    pub async fn from_json_files<T: AsRef<Path>>(mut self, paths: &[T]) -> Result<Self, ParseError> {
+    pub fn from_json_files<T: AsRef<Path>>(mut self, paths: &[T]) -> Result<Self, ParseError> {
         if paths.is_empty() {
             return Ok(self);
         }
         let raw = McpConfig::from_json_files(paths)?;
-        self.servers.extend(raw.into_servers(&self.factories, &self.vars).await?);
+        self.servers.extend(raw.into_servers(&self.vars)?);
         Ok(self)
     }
 
-    pub async fn from_mcp_config_sources(mut self, sources: &[McpConfigSource]) -> Result<Self, ParseError> {
+    pub fn from_mcp_config_sources(mut self, sources: &[McpConfigSource]) -> Result<Self, ParseError> {
         if sources.is_empty() {
             return Ok(self);
         }
@@ -174,40 +204,79 @@ impl McpBuilder {
             merged.servers.extend(config.servers);
         }
 
-        self.servers.extend(merged.into_servers(&self.factories, &self.vars).await?);
+        self.servers.extend(merged.into_servers(&self.vars)?);
         Ok(self)
     }
 
     pub async fn spawn(self) -> Result<McpSpawnResult, McpError> {
-        let (mcp_command_tx, mcp_command_rx) = mpsc::channel::<McpCommand>(self.mcp_channel_capacity);
-        let (event_tx, event_rx) = mpsc::channel::<McpClientEvent>(self.mcp_channel_capacity);
+        let McpBuilder {
+            servers,
+            factories,
+            mcp_channel_capacity,
+            root_dir,
+            oauth_handler_factory,
+            agent_deps,
+            aether_home,
+            vars: _,
+            tool_filter,
+        } = self;
+        let (mcp_command_tx, mcp_command_rx) = mpsc::channel::<McpCommand>(mcp_channel_capacity);
+        let (event_tx, event_rx) = mpsc::channel::<McpClientEvent>(mcp_channel_capacity);
+        let mcp = McpHandle(mcp_command_tx);
+        let services = RuntimeServices { mcp: mcp.clone(), root_dir: root_dir.clone(), agent_deps };
+        let servers = resolve_servers(servers, &factories, &services).await?;
 
-        let mut mcp_manager = McpManager::new(event_tx, self.oauth_handler_factory).with_tool_filter(self.tool_filter);
-        if let Some(store) = self.agent_deps.oauth_credential_store {
+        let mut mcp_manager = McpManager::new(event_tx, oauth_handler_factory).with_tool_filter(tool_filter);
+        if let Some(store) = services.agent_deps.oauth_credential_store.clone() {
             mcp_manager = mcp_manager.with_oauth_credential_store(store);
         }
-        if let Some(aether_home) = self.aether_home {
+        if let Some(aether_home) = aether_home {
             mcp_manager = mcp_manager.with_aether_home(aether_home);
         }
+        mcp_manager = mcp_manager.with_root_dir(root_dir);
+        let pending = mcp_manager.register_pending(servers).await?;
+        let task = tokio::spawn(run_mcp_task(mcp_manager, mcp_command_rx, pending));
 
-        mcp_manager = mcp_manager.with_root_dir(self.root_dir);
-
-        let pending = mcp_manager.register_pending(self.servers).await?;
-
-        let mcp_handle = tokio::spawn(run_mcp_task(mcp_manager, mcp_command_rx, pending));
-
-        Ok(McpSpawnResult { runtime: McpRuntime { command_tx: mcp_command_tx, handle: mcp_handle }, event_rx })
+        Ok(McpSpawnResult { runtime: McpRuntime { mcp, handle: task }, event_rx })
     }
+}
+
+async fn resolve_servers(
+    servers: Vec<McpServer>,
+    factories: &HashMap<String, ServerFactory>,
+    services: &RuntimeServices,
+) -> Result<Vec<RuntimeMcpServer>, McpError> {
+    let mut resolved = Vec::with_capacity(servers.len());
+    for McpServer { name, transport, tool_exposure } in servers {
+        let transport = match transport {
+            McpTransport::Stdio { command, args, env } => RuntimeMcpTransport::Stdio { command, args, env },
+            McpTransport::Http(config) => RuntimeMcpTransport::Http(config),
+            McpTransport::InMemory { spec } => {
+                let factory = factories.get(&spec.factory).ok_or_else(|| McpError::InMemoryFactoryNotFound {
+                    server: name.clone(),
+                    factory: spec.factory.clone(),
+                })?;
+                RuntimeMcpTransport::InMemory { server: factory(spec, services.clone()).await }
+            }
+        };
+        resolved.push(RuntimeMcpServer::new(name, transport, tool_exposure));
+    }
+    Ok(resolved)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aether_auth::{FakeOAuthCredentialStore, OAuthCredentialStorage};
+    use futures::FutureExt;
+    use mcp_utils::testing::FakeMcpServer;
     use mcp_utils::{
         client::{McpServerConfig, McpTransport, StdioServerConfig, StdioType, ToolExposure},
         status::McpServerStatus,
     };
     use std::collections::{BTreeMap, HashMap};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
 
     fn write_config_file(name: &str, json: &str) -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
@@ -220,8 +289,60 @@ mod tests {
         McpConfigSource::Json(json.to_string())
     }
 
-    async fn builder_from_sources(sources: &[McpConfigSource]) -> McpBuilder {
-        McpBuilder::new("/workspace").from_mcp_config_sources(sources).await.unwrap()
+    fn builder_from_sources(sources: &[McpConfigSource]) -> McpBuilder {
+        McpBuilder::new("/workspace").from_mcp_config_sources(sources).unwrap()
+    }
+
+    #[tokio::test]
+    async fn in_memory_factory_runs_once_at_spawn_with_runtime_services() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let received = Arc::new(Mutex::new(None::<RuntimeServices>));
+        let factory_calls = Arc::clone(&calls);
+        let factory_received = Arc::clone(&received);
+        let oauth_store: Arc<dyn OAuthCredentialStorage> = Arc::new(FakeOAuthCredentialStore::new());
+        let deps = AgentDeps::new(Arc::clone(&oauth_store), None);
+        let factory: ServerFactory = Box::new(move |spec, services| {
+            factory_calls.fetch_add(1, Ordering::SeqCst);
+            assert_eq!(spec.args, ["--root", "/workspace/tools"]);
+            assert_eq!(spec.input, Some(serde_json::json!({"enabled": true})));
+            *factory_received.lock().unwrap() = Some(services);
+            async move { FakeMcpServer::new().into_dyn() }.boxed()
+        });
+
+        let builder = McpBuilder::new("/workspace")
+            .with_agent_deps(deps)
+            .register_in_memory_server("test", factory)
+            .from_mcp_config_sources(&[json_source(
+                r#"{"servers":{"test":{"type":"in-memory","args":["--root","${WORKSPACE}/tools"],"input":{"enabled":true}}}}"#,
+            )])
+            .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+        let spawn = builder.spawn().await.unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let services = received.lock().unwrap().clone().expect("factory received runtime services");
+        assert_eq!(services.root_dir, PathBuf::from("/workspace"));
+        assert!(services.mcp.sender().same_channel(spawn.handle().sender()));
+        assert!(Arc::ptr_eq(
+            services.agent_deps.oauth_credential_store.as_ref().expect("factory received agent dependencies"),
+            &oauth_store,
+        ));
+    }
+
+    #[tokio::test]
+    async fn missing_in_memory_factory_fails_at_spawn_with_server_and_factory() {
+        let builder = McpBuilder::new("/workspace")
+            .from_mcp_config_sources(&[json_source(r#"{"servers":{"custom":{"type":"in-memory"}}}"#)])
+            .unwrap();
+
+        let Err(error) = builder.spawn().await else {
+            panic!("spawn should reject an unregistered factory");
+        };
+        assert!(matches!(
+            error,
+            McpError::InMemoryFactoryNotFound { ref server, ref factory }
+                if server == "custom" && factory == "custom"
+        ));
     }
 
     #[tokio::test]
@@ -244,7 +365,7 @@ mod tests {
             McpConfigSource::Inline(inline),
         ];
 
-        let builder = builder_from_sources(&sources).await;
+        let builder = builder_from_sources(&sources);
 
         assert_eq!(command_for(&builder, "coding"), Some("from_inline"));
         assert_eq!(proxy_for(&builder, "coding"), Some(false));
@@ -259,7 +380,7 @@ mod tests {
             McpConfigSource::direct(file_path),
         ];
 
-        let builder = builder_from_sources(&sources).await;
+        let builder = builder_from_sources(&sources);
 
         assert_eq!(command_for(&builder, "coding"), Some("from_file"));
     }
@@ -273,7 +394,6 @@ mod tests {
 
         let builder = McpBuilder::new("/workspace")
             .from_mcp_config_sources(&[McpConfigSource::File { path: file_path, proxy: true }])
-            .await
             .unwrap();
 
         assert_eq!(proxy_for(&builder, "github"), Some(true));
@@ -290,7 +410,7 @@ mod tests {
             json_source(r#"{"servers":{"coding":{"type":"stdio","command":"from_json","proxy":false}}}"#),
         ];
 
-        let builder = builder_from_sources(&sources).await;
+        let builder = builder_from_sources(&sources);
 
         assert_eq!(command_for(&builder, "coding"), Some("from_json"));
         assert_eq!(proxy_for(&builder, "coding"), Some(false));
@@ -302,7 +422,6 @@ mod tests {
             .from_mcp_config_sources(&[json_source(
                 r#"{"servers":{"slow":{"type":"stdio","command":"sleep","args":["30"]}}}"#,
             )])
-            .await
             .unwrap()
             .spawn()
             .await
@@ -322,7 +441,6 @@ mod tests {
             .from_mcp_config_sources(&[json_source(
                 r#"{"servers":{"notes":{"type":"stdio","command":"server","args":["--dir","${WORKSPACE}/notes"]}}}"#,
             )])
-            .await
             .unwrap();
 
         assert_eq!(args_for(&builder, "notes"), Some(vec!["--dir".to_string(), "/work/notes".to_string()]));
@@ -337,7 +455,6 @@ mod tests {
             .from_mcp_config_sources(&[json_source(
                 r#"{"servers":{"skills":{"type":"stdio","command":"server","args":["--dir","${AETHER_HOME}/skills"]}}}"#,
             )])
-            .await
             .unwrap();
 
         assert_eq!(

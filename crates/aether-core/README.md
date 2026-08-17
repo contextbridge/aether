@@ -114,8 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 1. Connect to MCP servers
     let mut mcp_runtime = mcp(".")
-        .from_json_files(&["mcp.json"]) // <-- Load MCP servers from one or more JSON files
-        .await?
+        .from_json_files(&["mcp.json"])? // <-- Load MCP servers from one or more JSON files
         .spawn() // <-- Spawn the MCP client into a tokio task (multiple agents can use it)
         .await?;
     let snapshot = mcp_runtime.block_until_ready().await.expect("MCP should initialize");

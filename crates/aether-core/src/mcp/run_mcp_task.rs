@@ -1,7 +1,7 @@
 use crate::events::TraceContext;
 use mcp_utils::client::{
     CallToolError, CallToolOptions, CancellationToken, McpConnectAttempt, McpConnectionAttemptManager, McpError,
-    McpManager, McpServer, McpServerStatusEntry, ToolCallEvent, call_tool,
+    McpManager, McpServerStatusEntry, RuntimeMcpServer, ToolCallEvent, call_tool,
 };
 
 use futures::{Stream, StreamExt};
@@ -45,7 +45,7 @@ pub enum McpCommand {
 pub async fn run_mcp_task(
     mut mcp: McpManager,
     mut command_rx: mpsc::Receiver<McpCommand>,
-    pending_servers: Vec<McpServer>,
+    pending_servers: Vec<RuntimeMcpServer>,
 ) {
     let mut tool_executions = JoinSet::new();
     let mut mcp_connection_attempts = McpConnectionAttemptManager::default();

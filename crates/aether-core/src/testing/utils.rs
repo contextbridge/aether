@@ -9,12 +9,10 @@ use crate::events::{
     AgentCommand, AgentEvent, AgentObserver, Command, ContextEvent, ToolEvent, TurnEvent, UserCommand,
 };
 use crate::mcp::mcp;
-use crate::testing::fake_mcp::fake_mcp;
-use crate::testing::{AgentTrace, FakeAgentObserver, FakeMcpServer};
+use crate::testing::{AgentTrace, FakeAgentObserver, FakeMcpServer, McpBuilderTestExt};
 use llm::{ChatMessage, Context, LlmError, LlmModel, LlmResponse, ModelSettings, StreamingModelProvider};
 
 use llm::testing::FakeLlmProvider;
-use mcp_utils::client::McpServer;
 
 pub async fn drain_until(
     receiver: &mut mpsc::Receiver<AgentEvent>,
@@ -206,7 +204,7 @@ struct AgentTestConfig {
     max_auto_continues: Option<u32>,
     retry_config: Option<RetryConfig>,
     observers: Vec<Box<dyn AgentObserver>>,
-    mcp_servers: Option<Vec<McpServer>>,
+    mcp_server: Option<(String, FakeMcpServer)>,
     initial_messages: Vec<ChatMessage>,
     system_prompt: Option<Prompt>,
     compaction: Option<CompactionConfig>,
@@ -240,7 +238,7 @@ impl TestAgentBuilder {
                 max_auto_continues: None,
                 retry_config: None,
                 observers: Vec::new(),
-                mcp_servers: Some(vec![fake_mcp("test", FakeMcpServer::new())]),
+                mcp_server: Some(("test".to_string(), FakeMcpServer::new())),
                 initial_messages: Vec::new(),
                 system_prompt: None,
                 compaction: None,
@@ -304,13 +302,13 @@ impl TestAgentBuilder {
 
     /// Run without the default fake MCP server when the scenario does not exercise tools.
     pub fn without_mcp(mut self) -> Self {
-        self.agent.mcp_servers = None;
+        self.agent.mcp_server = None;
         self
     }
 
     /// Replace the default fake MCP server with a scripted server.
     pub fn fake_mcp_server(mut self, name: &str, server: FakeMcpServer) -> Self {
-        self.agent.mcp_servers = Some(vec![fake_mcp(name, server)]);
+        self.agent.mcp_server = Some((name.to_string(), server));
         self
     }
 
@@ -380,8 +378,10 @@ impl TestAgentBuilder {
         }
         let captured_contexts = llm.captured_contexts();
 
-        let mut mcp_spawn = match config.mcp_servers {
-            Some(servers) => Some(mcp("/workspace").with_servers(servers).spawn().await.map_err(AgentError::from)?),
+        let mut mcp_spawn = match config.mcp_server {
+            Some((name, server)) => {
+                Some(mcp("/workspace").with_fake_mcp(name, server).spawn().await.map_err(AgentError::from)?)
+            }
             None => None,
         };
 

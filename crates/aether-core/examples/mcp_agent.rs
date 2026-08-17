@@ -14,7 +14,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
     let llm = OpenRouterProvider::default("z-ai/glm-4.5-air")?;
-    let mut spawn = mcp(std::env::current_dir()?).from_json_files(&["examples/mcp.json"]).await?.spawn().await?;
+    let mut spawn = mcp(std::env::current_dir()?).from_json_files(&["examples/mcp.json"])?.spawn().await?;
     let connection_details = spawn.block_until_ready().await.ok_or("MCP bootstrap aborted before completion")?;
 
     let (tx, mut rx, _handle) = agent(llm)

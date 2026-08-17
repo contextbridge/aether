@@ -3,7 +3,8 @@ use aether_core::mcp::mcp;
 use aether_core::testing::{FakeMcpServer, fake_mcp};
 use futures::future::BoxFuture;
 use mcp_utils::client::{
-    McpClientEvent, McpManager, McpServer, McpTransport, OAuthHandlerFactory, ToolExposure, ToolProxyRules,
+    McpClientEvent, McpManager, OAuthHandlerFactory, RuntimeMcpServer, RuntimeMcpTransport, ToolExposure,
+    ToolProxyRules,
 };
 use mcp_utils::status::{McpServerAuthCapability, McpServerStatus};
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
@@ -29,10 +30,10 @@ impl FailingHttpEndpoint {
         Self { uri, task }
     }
 
-    fn server(&self, name: &str, exposure: ToolExposure) -> McpServer {
-        McpServer::new(
+    fn server(&self, name: &str, exposure: ToolExposure) -> RuntimeMcpServer {
+        RuntimeMcpServer::new(
             name,
-            McpTransport::Http(StreamableHttpClientTransportConfig::with_uri(self.uri.as_str()).into()),
+            RuntimeMcpTransport::Http(StreamableHttpClientTransportConfig::with_uri(self.uri.as_str()).into()),
             exposure,
         )
     }
@@ -66,10 +67,10 @@ impl UnauthorizedHttpEndpoint {
         Self { uri, task }
     }
 
-    fn server(&self, name: &str) -> McpServer {
-        McpServer::new(
+    fn server(&self, name: &str) -> RuntimeMcpServer {
+        RuntimeMcpServer::new(
             name,
-            McpTransport::Http(StreamableHttpClientTransportConfig::with_uri(self.uri.as_str()).into()),
+            RuntimeMcpTransport::Http(StreamableHttpClientTransportConfig::with_uri(self.uri.as_str()).into()),
             ToolExposure::Direct,
         )
     }
