@@ -119,7 +119,7 @@ Use `aether-agent-core` as a Rust library to build your own agent in ~25 lines. 
    use aether_core::{
        core::{Prompt, agent},
        events::{AgentEvent, Command, MessageEvent, TurnEvent, TurnOutcome},
-       mcp::{McpSpawnResult, mcp},
+       mcp::mcp,
    };
    use llm::providers::anthropic::AnthropicProvider;
    use std::io::{self, Write};
@@ -130,13 +130,13 @@ Use `aether-agent-core` as a Rust library to build your own agent in ~25 lines. 
        let llm = AnthropicProvider::new(None)?;
 
        // 2. Spawn MCP tool servers from one or more mcp.json files
-       let McpSpawnResult { tool_definitions: tools, command_tx: mcp_tx, .. } =
-           mcp().from_json_files(&["mcp.json"])?.spawn().await?;
+       let mut mcp_runtime = mcp(".").from_json_files(&["mcp.json"])?.spawn().await?;
+       let snapshot = mcp_runtime.block_until_ready().await.ok_or("MCP bootstrap aborted")?;
 
        // 3. Build and spawn the agent
        let (tx, mut rx, _handle) = agent(llm)
            .system_prompt(Prompt::from_globs(vec!["AGENTS.md".into()], ".".into()))
-           .tools(mcp_tx, tools)
+           .tools(mcp_runtime.handle().clone(), snapshot.tool_definitions())
            .spawn()
            .await?;
 

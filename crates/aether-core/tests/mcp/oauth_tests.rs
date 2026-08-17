@@ -131,8 +131,8 @@ async fn builder_with_oauth_handler_factory_spawns_successfully() {
         .unwrap();
     let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
-    assert!(snapshot.tool_definitions.is_empty());
-    assert!(snapshot.instructions.is_empty());
+    assert!(snapshot.tool_definitions().is_empty());
+    assert!(snapshot.model_instructions().is_empty());
 }
 
 #[tokio::test]

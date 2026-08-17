@@ -23,7 +23,7 @@ async fn expand_slash_command_text(runtime: &AgentRuntime, text: String) -> Stri
         return text;
     };
 
-    match expand_slash_command(runtime.mcp_tx(), slash_command.command_name, slash_command.args_text).await {
+    match expand_slash_command(runtime.mcp(), slash_command.command_name, slash_command.args_text).await {
         Ok(expanded) => {
             info!("Expanded slash command -> {} chars", expanded.len());
             expanded

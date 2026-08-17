@@ -3,7 +3,7 @@ use aether_core::{
     agent_spec::McpConfigSource,
     core::{AgentBuilder, AgentDeps, AgentHandle, Prompt},
     events::{AgentEvent, Command, MessageEvent, TurnEvent, TurnOutcome, UserCommand},
-    mcp::{McpRuntime, McpSpawnResult, mcp, run_mcp_task::McpCommand},
+    mcp::{McpHandle, McpRuntime, McpSpawnResult, mcp},
 };
 use futures::FutureExt;
 use llm::ToolDefinition;
@@ -238,11 +238,11 @@ impl AgentExecutor {
                 spawn.block_until_ready().await.ok_or_else(|| "MCP bootstrap aborted before completion".to_string())?;
             let (mcp_runtime, _) = spawn.split();
 
-            let filtered_tools = snapshot.tool_definitions;
-            spec.prompts.push(Prompt::McpInstructions(snapshot.instructions));
-            let command_tx = mcp_runtime.command_tx().clone();
+            let filtered_tools = snapshot.tool_definitions();
+            spec.prompts.push(Prompt::McpInstructions(snapshot.model_instructions()));
+            let mcp = mcp_runtime.handle().clone();
 
-            let (user_tx, mut agent_rx, agent_handle) = self.spawn_agent(spec, command_tx, filtered_tools).await?;
+            let (user_tx, mut agent_rx, agent_handle) = self.spawn_agent(spec, mcp, filtered_tools).await?;
             let running_agent = RunningAgent { user_tx, agent_handle, _mcp_runtime: mcp_runtime };
 
             let prompt_with_instructions = format!("{}\n\n{}", task.prompt, STRUCTURED_OUTPUT_INSTRUCTIONS);
@@ -320,13 +320,13 @@ impl AgentExecutor {
     async fn spawn_agent(
         &self,
         spec: aether_core::agent_spec::AgentSpec,
-        mcp_tx: mpsc::Sender<McpCommand>,
+        mcp: McpHandle,
         tools: Vec<ToolDefinition>,
     ) -> Result<(mpsc::Sender<Command>, mpsc::Receiver<AgentEvent>, AgentHandle), String> {
         AgentBuilder::from_spec(&spec, vec![], &self.deps)
             .await
             .map_err(|e| format!("Failed to build agent from spec: {e}"))?
-            .tools(mcp_tx, tools)
+            .tools(mcp, tools)
             .spawn()
             .await
             .map_err(|e| format!("Failed to spawn agent: {e}"))

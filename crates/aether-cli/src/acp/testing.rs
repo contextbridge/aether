@@ -406,13 +406,13 @@ impl RuntimeFactory for FakeRuntimeFactory {
             .ok_or_else(|| SessionError::McpOperation("fake MCP bootstrap aborted".to_string()))?;
         let (mcp_runtime, event_rx) = spawn.split();
 
-        let filtered_tools = snapshot.tool_definitions.clone();
+        let filtered_tools = snapshot.tool_definitions();
         let mut builder = AgentBuilder::new(provider).max_auto_continues(0);
         for prompt in &spec.prompts {
             builder = builder.system_prompt(prompt.clone());
         }
         let (agent_tx, agent_rx, agent_handle) = builder
-            .tools(mcp_runtime.command_tx().clone(), filtered_tools)
+            .tools(mcp_runtime.handle().clone(), filtered_tools)
             .messages(initial_messages)
             .spawn()
             .await

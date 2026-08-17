@@ -12,8 +12,8 @@ async fn test_fake_mcp_server_has_instructions() {
     let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
     // FakeMcpServer does provide instructions, so we should get them
-    assert_eq!(snapshot.instructions.len(), 1);
-    assert!(snapshot.instructions.get("test").unwrap().contains("A fake MCP server for testing"));
+    assert_eq!(snapshot.model_instructions().len(), 1);
+    assert!(snapshot.model_instructions().get("test").unwrap().contains("A fake MCP server for testing"));
 }
 
 #[tokio::test]
@@ -27,9 +27,9 @@ async fn test_multiple_servers_with_instructions() {
     let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
     // Both servers should have instructions
-    assert_eq!(snapshot.instructions.len(), 2);
-    assert!(snapshot.instructions.get("server1").unwrap().contains("A fake MCP server for testing"));
-    assert!(snapshot.instructions.get("server2").unwrap().contains("A fake MCP server for testing"));
+    assert_eq!(snapshot.model_instructions().len(), 2);
+    assert!(snapshot.model_instructions().get("server1").unwrap().contains("A fake MCP server for testing"));
+    assert!(snapshot.model_instructions().get("server2").unwrap().contains("A fake MCP server for testing"));
 }
 
 #[tokio::test]
@@ -81,7 +81,7 @@ async fn test_agent_builder_includes_mcp_instructions_in_system_prompt() {
     let (tx, mut rx, _handle) = agent(llm)
         .system_prompt(Prompt::text("You are a test agent"))
         .system_prompt(Prompt::McpInstructions(instructions(&[("test-server", "Test instructions")])))
-        .tools(spawn.command_tx().clone(), snapshot.tool_definitions)
+        .tools(spawn.handle().clone(), snapshot.tool_definitions())
         .spawn()
         .await
         .unwrap();
@@ -127,7 +127,7 @@ async fn test_agent_builder_works_without_mcp_instructions() {
     // No mcp_instructions provided - should still work
     let (tx, mut rx, _handle) = agent(llm)
         .system_prompt(Prompt::text("You are a test agent"))
-        .tools(spawn.command_tx().clone(), snapshot.tool_definitions)
+        .tools(spawn.handle().clone(), snapshot.tool_definitions())
         .spawn()
         .await
         .unwrap();

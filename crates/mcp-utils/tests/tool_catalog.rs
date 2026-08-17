@@ -64,10 +64,10 @@ fn catalog_projects_visibility_filtering_instructions_and_routes_consistently() 
         catalog.model_instructions().get(PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME).map(String::as_str),
         Some("Discover proxied tools")
     );
-    assert!(catalog.route_permitted("coding__bash", ToolRoute::ModelVisible));
-    assert!(!catalog.route_permitted("coding__bash", ToolRoute::Deferred));
-    assert!(catalog.route_permitted("coding__write", ToolRoute::Deferred));
-    assert!(!catalog.route_permitted("coding__read", ToolRoute::Deferred));
+    assert!(catalog.route_permitted(&ToolRoute::ModelVisible { namespaced_name: "coding__bash".into() }));
+    assert!(!catalog.route_permitted(&ToolRoute::Deferred { server: "coding".into(), tool: "bash".into() }));
+    assert!(catalog.route_permitted(&ToolRoute::Deferred { server: "coding".into(), tool: "write".into() }));
+    assert!(!catalog.route_permitted(&ToolRoute::Deferred { server: "coding".into(), tool: "read".into() }));
 }
 
 #[test]
@@ -119,7 +119,7 @@ fn disconnected_servers_retain_status_without_exposing_tools_or_instructions() {
     assert!(tools.deferred.is_empty());
     assert!(catalog.discoverable_deferred_servers().is_empty());
     assert!(catalog.model_instructions().is_empty());
-    assert!(!catalog.route_permitted("remote__hidden", ToolRoute::Deferred));
+    assert!(!catalog.route_permitted(&ToolRoute::Deferred { server: "remote".into(), tool: "hidden".into() }));
     assert!(matches!(catalog.servers()[0].status(), McpServerStatus::NeedsOAuth));
     assert!(catalog.servers()[0].status_entry().can_authenticate());
 }

@@ -4,13 +4,13 @@ use aether_core::agent_spec::McpConfigSource;
 use aether_core::core::AgentDeps;
 use aether_core::events::{AgentEvent, AgentObserver, McpRequestInstrumentation, ObserverFactory, TraceContext};
 use aether_core::mcp::mcp;
-use aether_core::mcp::run_mcp_task::McpCommand;
 use aether_core::mcp::tool_bridge::convert_tool_result;
 use aether_project::{AetherSettings, AetherSettingsSource, AgentCatalog, SettingsFileSource};
+use futures::StreamExt;
 use mcp_servers::McpBuilderExt;
 use mcp_servers::subagents::SubAgentsMcp;
 use mcp_servers::subagents::tools::{SpawnSubAgentsInput, SubAgentTask};
-use mcp_utils::client::ToolCallEvent;
+use mcp_utils::client::{CallToolOptions, CancellationToken, ToolCallEvent};
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams, DetailedTask, GetTaskParams,
     TaskPayload, TaskStatus,
@@ -20,7 +20,6 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tempfile::TempDir;
-use tokio::sync::mpsc;
 
 fn spawn_input(tasks: &[(&str, &str)]) -> SpawnSubAgentsInput {
     SpawnSubAgentsInput {
@@ -364,8 +363,8 @@ async fn call_subagent_through_manager(
 
     let snapshot = spawn.block_until_ready().await.ok_or_else(|| test_error("MCP bootstrap aborted"))?;
     let tool = snapshot
-        .tool_definitions
-        .iter()
+        .tool_definitions()
+        .into_iter()
         .find(|tool| tool.name.ends_with("spawn_subagent"))
         .ok_or_else(|| test_error("spawn_subagent tool missing"))?;
     let request = llm::ToolCallRequest {
@@ -374,19 +373,10 @@ async fn call_subagent_through_manager(
         arguments: serde_json::to_string(&input)?,
     };
 
-    let (event_tx, mut event_rx) = mpsc::channel(4);
-    spawn
-        .command_tx()
-        .send(McpCommand::ExecuteTool {
-            request: request.clone(),
-            trace_context: None,
-            timeout: Duration::MAX,
-            tx: event_tx,
-            cancel: mcp_utils::client::CancellationToken::new(),
-        })
-        .await?;
+    let options = CallToolOptions { timeout: Duration::MAX, meta: None, cancel: CancellationToken::new() };
+    let mut events = spawn.handle().call_model_visible(request.name.clone(), &request.arguments, options);
 
-    while let Some(event) = event_rx.recv().await {
+    while let Some(event) = events.next().await {
         match event {
             ToolCallEvent::Complete(outcome) => {
                 let (result, _) = convert_tool_result(&request, outcome).map_err(|error| test_error(error.error))?;
@@ -483,7 +473,7 @@ async fn subagent_instructions(project_root: &Path, catalog: AgentCatalog) -> St
         .expect("Failed to spawn MCP manager");
 
     let snapshot = spawn.block_until_ready().await.expect("MCP bootstrap aborted");
-    snapshot.instructions.get("subagents").expect("Missing subagents instructions").clone()
+    snapshot.model_instructions().get("subagents").expect("Missing subagents instructions").clone()
 }
 
 /// The catalog a standalone server would discover from `test_dir`.

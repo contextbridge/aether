@@ -1,10 +1,10 @@
 use crate::events::{TaskOutcomeState, TraceContext, task_created_result};
-use crate::mcp::run_mcp_task::McpCommand;
 use crate::mcp::tool_bridge::{convert_tool_result, map_task_result_to_outcome};
-use crate::mcp::{McpRuntime, ServerFactory, mcp};
-use futures::FutureExt;
+use crate::mcp::{McpHandle, McpRuntime, ServerFactory, ToolCallStream, mcp};
+use futures::{FutureExt, StreamExt};
 use mcp_utils::client::{
-    CancellationToken, InMemoryServerSpec, McpConnectionDetails, McpServer, McpTransport, ToolCallEvent, ToolExposure,
+    CallToolOptions, CancellationToken, InMemoryServerSpec, McpConnectionDetails, McpServer, McpTransport,
+    ToolCallEvent, ToolExposure,
 };
 use mcp_utils::testing::ElicitationScript;
 use rmcp::model::{CreateTaskResult, ElicitResult, ProgressNotificationParam};
@@ -14,7 +14,6 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
-use tokio::sync::mpsc;
 
 pub use mcp_utils::testing::CapturedElicitation;
 
@@ -41,7 +40,7 @@ fn task_outcome(outcome: crate::events::TaskOutcome) -> TaskOutcome {
 }
 
 pub struct McpTest {
-    command_tx: mpsc::Sender<McpCommand>,
+    mcp: McpHandle,
     _runtime: McpRuntime,
     snapshot: McpConnectionDetails,
     elicitations: ElicitationScript,
@@ -67,7 +66,7 @@ pub struct ToolCallOutcome {
 
 struct DeferredTool {
     request: llm::ToolCallRequest,
-    rx: mpsc::Receiver<ToolCallEvent>,
+    events: ToolCallStream,
 }
 
 impl McpTestBuilder {
@@ -137,7 +136,7 @@ impl McpTestBuilder {
         let (runtime, event_rx) = spawn.split();
 
         McpTest {
-            command_tx: runtime.command_tx().clone(),
+            mcp: runtime.handle().clone(),
             _runtime: runtime,
             snapshot,
             elicitations: ElicitationScript::spawn(event_rx, self.elicitation_responses),
@@ -159,30 +158,25 @@ impl McpTest {
             name: format!("{server}__{tool}"),
             arguments: arguments.to_string(),
         };
-        let (event_tx, mut event_rx) = mpsc::channel(64);
         let request_for_outcome = request.clone();
         let cancel = CancellationToken::new();
         self.cancel_tokens.lock().expect("cancel token lock").insert(request.id.clone(), cancel.clone());
-        self.command_tx
-            .send(McpCommand::ExecuteTool {
-                request,
-                trace_context: self.trace_context.clone(),
-                timeout: self.tool_timeout,
-                tx: event_tx,
-                cancel,
-            })
-            .await
-            .expect("MCP test manager accepts tool call");
+        let options = CallToolOptions {
+            timeout: self.tool_timeout,
+            meta: self.trace_context.as_ref().map(TraceContext::to_meta),
+            cancel,
+        };
+        let mut events = self.mcp.call_model_visible(request.name, &request.arguments, options);
 
         let mut progress = Vec::new();
-        while let Some(event) = event_rx.recv().await {
+        while let Some(event) = events.next().await {
             match event {
                 ToolCallEvent::Progress(event) => progress.push(event),
                 ToolCallEvent::TaskCreated(task) => {
                     self.deferred_tools
                         .lock()
                         .await
-                        .push_back(DeferredTool { request: request_for_outcome.clone(), rx: event_rx });
+                        .push_back(DeferredTool { request: request_for_outcome.clone(), events });
                     return ToolCallOutcome {
                         result: Ok(task_created_result(&request_for_outcome, &task.task.task_id)),
                         progress,
@@ -236,7 +230,7 @@ impl McpTest {
         let mut deferred = self.deferred_tools.lock().await;
         loop {
             let front = deferred.front_mut()?;
-            match front.rx.recv().await {
+            match front.events.next().await {
                 Some(event) => return Some((front.request.clone(), event)),
                 None => {
                     deferred.pop_front();

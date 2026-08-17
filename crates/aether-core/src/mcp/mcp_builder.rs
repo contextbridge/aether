@@ -7,27 +7,25 @@ use utils::{SettingsStore, variables::Vars};
 use crate::agent_spec::McpConfigSource;
 use crate::core::AgentDeps;
 
-use super::run_mcp_task::{McpCommand, run_mcp_task};
+use super::{
+    mcp_handle::McpHandle,
+    run_mcp_task::{ManagerCommand, run_mcp_task},
+};
 use futures::future::BoxFuture;
 use rmcp::{RoleServer, service::DynService};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tokio::{
-    sync::mpsc::{self, Receiver, Sender},
+    sync::{
+        mpsc::{self, Receiver},
+        watch,
+    },
     task::JoinHandle,
 };
 
 pub fn mcp(root_dir: impl AsRef<Path>) -> McpBuilder {
     McpBuilder::new(root_dir)
-}
-
-#[derive(Clone)]
-pub struct McpHandle(Sender<McpCommand>);
-
-impl McpHandle {
-    pub fn sender(&self) -> &Sender<McpCommand> {
-        &self.0
-    }
 }
 
 #[derive(Clone)]
@@ -51,10 +49,6 @@ impl McpRuntime {
     pub fn handle(&self) -> &McpHandle {
         &self.mcp
     }
-
-    pub fn command_tx(&self) -> &Sender<McpCommand> {
-        self.mcp.sender()
-    }
 }
 
 impl Drop for McpRuntime {
@@ -76,10 +70,6 @@ pub struct McpSpawnResult {
 impl McpSpawnResult {
     pub fn handle(&self) -> &McpHandle {
         self.runtime.handle()
-    }
-
-    pub fn command_tx(&self) -> &Sender<McpCommand> {
-        self.runtime.command_tx()
     }
 
     /// Block until the manager finishes bootstrapping every initially-configured
@@ -220,13 +210,16 @@ impl McpBuilder {
             vars: _,
             tool_filter,
         } = self;
-        let (mcp_command_tx, mcp_command_rx) = mpsc::channel::<McpCommand>(mcp_channel_capacity);
+        let (manager_tx, manager_rx) = mpsc::channel::<ManagerCommand>(mcp_channel_capacity);
+        let (snapshot_tx, snapshot_rx) = watch::channel(Arc::new(mcp_utils::client::McpSnapshot::default()));
         let (event_tx, event_rx) = mpsc::channel::<McpClientEvent>(mcp_channel_capacity);
-        let mcp = McpHandle(mcp_command_tx);
+        let mcp = McpHandle::new(manager_tx, snapshot_rx);
         let services = RuntimeServices { mcp: mcp.clone(), root_dir: root_dir.clone(), agent_deps };
         let servers = resolve_servers(servers, &factories, &services).await?;
 
-        let mut mcp_manager = McpManager::new(event_tx, oauth_handler_factory).with_tool_filter(tool_filter);
+        let mut mcp_manager = McpManager::new(event_tx, oauth_handler_factory)
+            .with_tool_filter(tool_filter)
+            .with_snapshot_sender(snapshot_tx);
         if let Some(store) = services.agent_deps.oauth_credential_store.clone() {
             mcp_manager = mcp_manager.with_oauth_credential_store(store);
         }
@@ -235,7 +228,7 @@ impl McpBuilder {
         }
         mcp_manager = mcp_manager.with_root_dir(root_dir);
         let pending = mcp_manager.register_pending(servers).await?;
-        let task = tokio::spawn(run_mcp_task(mcp_manager, mcp_command_rx, pending));
+        let task = tokio::spawn(run_mcp_task(mcp_manager, manager_rx, pending));
 
         Ok(McpSpawnResult { runtime: McpRuntime { mcp, handle: task }, event_rx })
     }
@@ -322,11 +315,34 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         let services = received.lock().unwrap().clone().expect("factory received runtime services");
         assert_eq!(services.root_dir, PathBuf::from("/workspace"));
-        assert!(services.mcp.sender().same_channel(spawn.handle().sender()));
+        assert!(Arc::ptr_eq(&services.mcp.snapshot(), &spawn.handle().snapshot()));
         assert!(Arc::ptr_eq(
             services.agent_deps.oauth_credential_store.as_ref().expect("factory received agent dependencies"),
             &oauth_store,
         ));
+    }
+
+    #[tokio::test]
+    async fn snapshots_are_immutable_and_watch_observes_connection_changes() {
+        let factory: ServerFactory = Box::new(|_, _| async move { FakeMcpServer::new().into_dyn() }.boxed());
+        let mut spawn = McpBuilder::new("/workspace")
+            .register_in_memory_server("test", factory)
+            .from_mcp_config_sources(&[json_source(r#"{"servers":{"test":{"type":"in-memory"}}}"#)])
+            .unwrap()
+            .spawn()
+            .await
+            .unwrap();
+        let old = spawn.handle().snapshot();
+        let mut updates = spawn.handle().subscribe();
+
+        let ready = spawn.block_until_ready().await.expect("bootstrap completes");
+        updates.changed().await.expect("connection publishes a snapshot");
+        let observed = updates.borrow().clone();
+
+        assert!(old.tool_definitions().is_empty());
+        assert_eq!(ready.tool_definitions()[0].name, "test__add_numbers");
+        assert_eq!(observed.tool_definitions(), ready.tool_definitions());
+        assert!(!Arc::ptr_eq(&old, &ready));
     }
 
     #[tokio::test]

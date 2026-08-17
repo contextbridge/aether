@@ -122,7 +122,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 2. Create Agent
     let (tx, mut rx, _handle) = agent(llm)
         .system_prompt(Prompt::file("AGENTS.md", ".")) // <-- Load system prompt from AGENTS.md
-        .tools(mcp_runtime.command_tx, snapshot.tool_definitions) // <-- Give the agent MCP tools
+        .tools(mcp_runtime.handle().clone(), snapshot.tool_definitions()) // <-- Give the agent MCP tools
         .spawn()
         .await?;
 

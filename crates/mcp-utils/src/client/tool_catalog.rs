@@ -49,10 +49,10 @@ pub enum ToolExposureKind {
     Deferred,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolRoute {
-    ModelVisible,
-    Deferred,
+    ModelVisible { namespaced_name: String },
+    Deferred { server: String, tool: String },
 }
 
 impl ToolCatalog {
@@ -112,17 +112,19 @@ impl ToolCatalog {
         instructions
     }
 
-    pub fn route_permitted(&self, namespaced_name: &str, route: ToolRoute) -> bool {
+    pub fn route_permitted(&self, route: &ToolRoute) -> bool {
+        let (namespaced_name, exposure) = match route {
+            ToolRoute::ModelVisible { namespaced_name } => (namespaced_name.clone(), ToolExposureKind::ModelVisible),
+            ToolRoute::Deferred { server, tool } => {
+                (create_namespaced_tool_name(server, tool), ToolExposureKind::Deferred)
+            }
+        };
         let Some(server) = self.servers.iter().find(|server| {
             server.is_connected() && server.tools.iter().any(|tool| tool.namespaced_name == namespaced_name)
         }) else {
             return false;
         };
         let Some(tool) = server.tools.iter().find(|tool| tool.namespaced_name == namespaced_name) else { return false };
-        let exposure = match route {
-            ToolRoute::ModelVisible => ToolExposureKind::ModelVisible,
-            ToolRoute::Deferred => ToolExposureKind::Deferred,
-        };
         tool.allowed && tool.exposure == exposure
     }
 

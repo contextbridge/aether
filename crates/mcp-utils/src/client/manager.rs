@@ -1,7 +1,7 @@
 use llm::ToolDefinition;
 
 use super::{
-    McpError, Result,
+    McpError, McpSnapshot, Result,
     config::{McpHttpConfig, ToolExposure},
     connection::{
         ConnectConfig, McpConnectAttempt, McpConnectOutcome, McpServerConnection, Tool, authenticate_http,
@@ -26,7 +26,7 @@ use std::future::Future;
 use std::num::NonZeroU16;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
 pub use crate::status::{McpServerAuthCapability, McpServerStatus, McpServerStatusEntry};
@@ -91,13 +91,7 @@ pub enum McpClientEvent {
     ConnectionReady(McpConnectionDetails),
 }
 
-#[derive(Debug, Clone)]
-pub struct McpConnectionDetails {
-    pub catalog: Arc<ToolCatalog>,
-    pub instructions: BTreeMap<String, String>,
-    pub tool_definitions: Vec<ToolDefinition>,
-    pub server_statuses: Vec<McpServerStatusEntry>,
-}
+pub type McpConnectionDetails = Arc<McpSnapshot>;
 
 /// Manages connections to multiple MCP servers and their tools
 pub struct McpManager {
@@ -110,6 +104,7 @@ pub struct McpManager {
     root_dir: PathBuf,
     oauth_handler_factory: Option<OAuthHandlerFactory>,
     oauth_credential_store: Option<Arc<dyn OAuthCredentialStorage>>,
+    snapshot_sender: Option<watch::Sender<Arc<McpSnapshot>>>,
 }
 
 impl McpManager {
@@ -124,11 +119,18 @@ impl McpManager {
             root_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             oauth_handler_factory,
             oauth_credential_store: None,
+            snapshot_sender: None,
         }
     }
 
     pub fn with_aether_home(mut self, aether_home: impl Into<PathBuf>) -> Self {
         self.aether_home = Some(aether_home.into());
+        self
+    }
+
+    pub fn with_snapshot_sender(mut self, sender: watch::Sender<Arc<McpSnapshot>>) -> Self {
+        self.snapshot_sender = Some(sender);
+        self.publish_snapshot();
         self
     }
 
@@ -167,6 +169,7 @@ impl McpManager {
             self.register_record(&server.name, ServerState::Connecting, None, server.tool_exposure.clone());
         }
 
+        self.publish_snapshot();
         self.emit_server_statuses_changed().await;
         Ok(servers)
     }
@@ -195,7 +198,9 @@ impl McpManager {
         arguments_json: &str,
     ) -> Result<(Arc<RunningService<RoleClient, McpClient>>, CallToolRequestParams)> {
         if namespaced_tool_name != PROXY_CALL_TOOL_NAME
-            && !self.catalog.route_permitted(namespaced_tool_name, ToolRoute::ModelVisible)
+            && !self
+                .catalog
+                .route_permitted(&ToolRoute::ModelVisible { namespaced_name: namespaced_tool_name.to_string() })
         {
             return Err(McpError::ToolNotFound(namespaced_tool_name.to_string()));
         }
@@ -353,6 +358,8 @@ impl McpManager {
     /// Shutdown all servers and wait for their tasks to complete
     pub async fn shutdown(&mut self) {
         let servers: Vec<(String, ServerRecord)> = self.servers.drain().collect();
+        self.catalog = ToolCatalog::new();
+        self.publish_snapshot();
 
         for (server_name, record) in servers {
             if let Some(conn) = record.into_connection()
@@ -362,15 +369,15 @@ impl McpManager {
                 await_server_shutdown(&server_name, handle).await;
             }
         }
-
-        self.catalog = ToolCatalog::new();
     }
 
     /// Shutdown a specific server by name
     pub async fn shutdown_server(&mut self, server_name: &str) -> Result<()> {
         self.catalog.remove_server(server_name);
         self.refresh_proxy_instructions();
-        if let Some(record) = self.servers.remove(server_name)
+        let record = self.servers.remove(server_name);
+        self.publish_snapshot();
+        if let Some(record) = record
             && let Some(conn) = record.into_connection()
             && let Some(handle) = conn.server_task
         {
@@ -420,13 +427,7 @@ impl McpManager {
     }
 
     pub async fn emit_connection_ready(&self) {
-        self.emit_event(McpClientEvent::ConnectionReady(McpConnectionDetails {
-            catalog: Arc::new(self.catalog.clone()),
-            tool_definitions: self.tool_definitions(),
-            instructions: self.server_instructions(),
-            server_statuses: self.server_statuses(),
-        }))
-        .await;
+        self.emit_event(McpClientEvent::ConnectionReady(self.snapshot())).await;
     }
 
     async fn emit_authentication_failed(&self, server: String, error: String) {
@@ -464,10 +465,11 @@ impl McpManager {
         let call = tool_proxy::resolve_call(arguments_json)?;
         let record = self.servers.get(&call.server).ok_or_else(|| McpError::ServerNotFound(call.server.clone()))?;
         let namespaced_name = create_namespaced_tool_name(&call.server, &call.tool);
-        if self.catalog.route_permitted(&namespaced_name, ToolRoute::ModelVisible) {
+        if self.catalog.route_permitted(&ToolRoute::ModelVisible { namespaced_name: namespaced_name.clone() }) {
             return Err(McpError::DirectToolRequiresDirectRoute { tool_name: call.tool, direct_name: namespaced_name });
         }
-        if !self.catalog.route_permitted(&namespaced_name, ToolRoute::Deferred) {
+        if !self.catalog.route_permitted(&ToolRoute::Deferred { server: call.server.clone(), tool: call.tool.clone() })
+        {
             let uncataloged_proxy_tool = self.catalog.tool(&namespaced_name).is_none()
                 && self.tool_filter.is_empty()
                 && self
@@ -529,6 +531,7 @@ impl McpManager {
         self.servers.get_mut(name).expect("record checked above").state = ServerState::Connected { connection: conn };
         self.catalog.upsert_server(entry);
         self.refresh_proxy_instructions();
+        self.publish_snapshot();
         Ok(())
     }
 
@@ -555,6 +558,7 @@ impl McpManager {
             .with_status(status, auth);
         self.catalog.upsert_server(entry);
         self.refresh_proxy_instructions();
+        self.publish_snapshot();
     }
 
     fn register_record(
@@ -569,6 +573,21 @@ impl McpManager {
             if reauth_config.is_some() { McpServerAuthCapability::OAuth } else { McpServerAuthCapability::Unavailable };
         self.servers.insert(name.to_string(), ServerRecord::new(state, reauth_config));
         self.catalog.upsert_server(ServerCatalogEntry::pending(name, exposure).with_status(status, auth_capability));
+    }
+
+    pub fn snapshot(&self) -> Arc<McpSnapshot> {
+        let clients = self
+            .servers
+            .iter()
+            .filter_map(|(name, record)| record.connection().map(|conn| (name.clone(), conn.client.clone())))
+            .collect();
+        Arc::new(McpSnapshot::new(Arc::new(self.catalog.clone()), Arc::new(clients)))
+    }
+
+    fn publish_snapshot(&self) {
+        if let Some(sender) = &self.snapshot_sender {
+            sender.send_replace(self.snapshot());
+        }
     }
 
     fn connection_for(&self, server_name: &str) -> Option<&McpServerConnection> {
@@ -674,9 +693,9 @@ mod tests {
         McpClientEvent, McpManager, McpServerStatus, PROXY_SERVER_NAME, RuntimeMcpServer as McpServer,
         RuntimeMcpTransport as McpTransport, ServerState,
     };
-    use crate::client::OAuthHandlerFactory;
     use crate::client::config::{McpHttpConfig, ToolExposure};
     use crate::client::connection::{McpConnectAttempt, McpConnectOutcome};
+    use crate::client::{McpSnapshot, OAuthHandlerFactory, ToolRoute};
     use crate::status::McpServerAuthCapability;
     use aether_auth::{OAuthError, OAuthHandler};
     use futures::future::BoxFuture;
@@ -694,7 +713,7 @@ mod tests {
         io,
         sync::{Arc, Mutex},
     };
-    use tokio::sync::mpsc;
+    use tokio::sync::{mpsc, watch};
 
     #[derive(Clone)]
     struct TestServer {
@@ -993,6 +1012,35 @@ mod tests {
 
         assert!(!names(&manager).iter().any(|name| name.starts_with("git__")));
         assert!(names(&manager).contains(&"github__echo".to_string()));
+    }
+
+    #[tokio::test]
+    async fn server_removal_publishes_before_stale_connection_cleanup() {
+        let (event_sender, _event_receiver) = mpsc::channel(32);
+        let (snapshot_sender, mut snapshots) = watch::channel(Arc::new(McpSnapshot::default()));
+        let mut manager = McpManager::new(event_sender, None).with_snapshot_sender(snapshot_sender);
+        manager
+            .add_mcps(vec![McpServer::new(
+                "test",
+                McpTransport::InMemory { server: TestServer::default().into_dyn() },
+                ToolExposure::Direct,
+            )])
+            .await
+            .unwrap();
+        let connected = snapshots.borrow().clone();
+        assert_eq!(connected.tool_definitions()[0].name, "test__echo");
+
+        manager.shutdown_server("test").await.unwrap();
+        snapshots.changed().await.unwrap();
+        let removed = snapshots.borrow().clone();
+
+        assert!(removed.tool_definitions().is_empty());
+        assert!(
+            removed
+                .resolve(ToolRoute::ModelVisible { namespaced_name: "test__echo".to_string() }, serde_json::Map::new(),)
+                .is_err()
+        );
+        assert_eq!(connected.tool_definitions()[0].name, "test__echo");
     }
 
     #[tokio::test]

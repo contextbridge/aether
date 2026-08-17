@@ -8,6 +8,7 @@ mod connection;
 mod connection_attempt_manager;
 mod elicitation;
 mod mcp_client;
+mod mcp_snapshot;
 mod mrtr;
 mod naming;
 mod task;
@@ -30,6 +31,7 @@ pub use manager::{
     OAuthHandlerContext, OAuthHandlerFactory, RuntimeMcpServer, RuntimeMcpTransport,
 };
 pub use mcp_client::{McpClient, cancel_result, client_capabilities};
+pub use mcp_snapshot::McpSnapshot;
 pub use mrtr::AbortReason;
 pub use naming::{SERVERNAME_DELIMITER, split_on_server_name};
 pub use oauth_handler::ElicitingOAuthHandler;
@@ -40,6 +42,7 @@ pub use tool_catalog::{
     ToolCatalog, ToolExposureKind, ToolRoute,
 };
 pub use tool_filter::{ToolAnnotationMatcher, ToolFilter, ToolMatcher};
+pub use tool_proxy::{PROXY_CALL_TOOL_NAME, ResolvedCall, resolve_call as resolve_proxy_call};
 
 use std::path::PathBuf;
 

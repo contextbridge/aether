@@ -4,8 +4,7 @@ use aether_core::core::{AgentBuilder, AgentDeps, AgentHandle, Prompt};
 use aether_core::events::{AgentEvent, Command};
 use aether_core::mcp::McpBuilder;
 use aether_core::mcp::mcp;
-use aether_core::mcp::run_mcp_task::McpCommand;
-use aether_core::mcp::{McpRuntime, McpSpawnResult};
+use aether_core::mcp::{McpHandle, McpRuntime, McpSpawnResult};
 use llm::{ChatMessage, ToolDefinition};
 use mcp_servers::McpBuilderExt;
 use mcp_utils::client::{McpClientEvent, McpConnectionDetails, McpServer, OAuthHandlerFactory};
@@ -79,7 +78,7 @@ impl RuntimeBuilder {
         let (mcp_runtime, event_rx) = spawn.split();
 
         let (agent_tx, agent_rx, agent_handle) =
-            spawn_agent(&spec, &deps, mcp_runtime.command_tx().clone(), Vec::new(), |mut agent_builder| {
+            spawn_agent(&spec, &deps, mcp_runtime.handle().clone(), Vec::new(), |mut agent_builder| {
                 if let Some(prompt) = custom_prompt {
                     agent_builder = agent_builder.system_prompt(prompt);
                 }
@@ -108,12 +107,12 @@ impl RuntimeBuilder {
             .ok_or_else(|| CliError::McpError("MCP bootstrap aborted before completion".to_string()))?;
         let (mcp_runtime, event_rx) = spawn.split();
 
-        let filtered_tools = snapshot.tool_definitions.clone();
+        let filtered_tools = snapshot.tool_definitions();
         let mut runtime_spec = spec;
-        runtime_spec.prompts.push(Prompt::McpInstructions(snapshot.instructions.clone()));
+        runtime_spec.prompts.push(Prompt::McpInstructions(snapshot.model_instructions()));
 
         let (agent_tx, agent_rx, agent_handle) =
-            spawn_agent(&runtime_spec, &deps, mcp_runtime.command_tx().clone(), filtered_tools, |agent_builder| {
+            spawn_agent(&runtime_spec, &deps, mcp_runtime.handle().clone(), filtered_tools, |agent_builder| {
                 agent_builder.messages(messages)
             })
             .await?;
@@ -127,7 +126,7 @@ impl RuntimeBuilder {
             .block_until_ready()
             .await
             .ok_or_else(|| CliError::McpError("MCP bootstrap aborted before completion".to_string()))?;
-        let filtered_tools = details.tool_definitions;
+        let filtered_tools = details.tool_definitions();
         Ok(PromptInfo { spec, tool_definitions: filtered_tools })
     }
 
@@ -165,14 +164,14 @@ impl RuntimeBuilder {
 async fn spawn_agent(
     spec: &AgentSpec,
     deps: &AgentDeps,
-    mcp_tx: Sender<McpCommand>,
+    mcp: McpHandle,
     tool_definitions: Vec<ToolDefinition>,
     configure: impl FnOnce(AgentBuilder) -> AgentBuilder,
 ) -> Result<(Sender<Command>, Receiver<AgentEvent>, AgentHandle), CliError> {
     let builder = AgentBuilder::from_spec(spec, vec![], deps)
         .await
         .map_err(|error| CliError::AgentError(error.to_string()))?
-        .tools(mcp_tx, tool_definitions);
+        .tools(mcp, tool_definitions);
 
     configure(builder).spawn().await.map_err(|error| CliError::AgentError(error.to_string()))
 }

@@ -6,16 +6,16 @@ pub use crate::core::retry_config::RetryConfig;
 use crate::core::tool_execution::{ToolAbortPolicy, ToolExecutionUpdate, ToolExecutions};
 use crate::events::{
     AgentCommand, AgentEvent, AgentObserver, Command, CompactionOutcome, ContextEvent, ContextUsage, LlmCallOutcome,
-    LlmCallPurpose, ModelEvent, StreamState, TaskOutcome, ToolEvent, TurnEvent, TurnOutcome, UserCommand,
+    LlmCallPurpose, ModelEvent, StreamState, TaskOutcome, ToolEvent, TraceContext, TurnEvent, TurnOutcome, UserCommand,
 };
-use crate::mcp::run_mcp_task::McpCommand;
+use crate::mcp::McpHandle;
 use futures::Stream;
 use llm::types::IsoString;
 use llm::{
     AssistantReasoning, ChatMessage, Context, EncryptedReasoningContent, LlmError, LlmResponse, StopReason,
     StreamingModelProvider, TokenUsage, ToolCallError, ToolCallRequest, ToolCallResult,
 };
-use mcp_utils::client::{CallToolError, ToolCallEvent};
+use mcp_utils::client::{CallToolError, CallToolOptions, ToolCallEvent};
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -53,7 +53,7 @@ enum StreamKey {
 pub(crate) struct AgentConfig {
     pub llm: Arc<dyn StreamingModelProvider>,
     pub context: Context,
-    pub mcp_command_tx: Option<mpsc::Sender<McpCommand>>,
+    pub mcp: Option<McpHandle>,
     pub tool_timeout: Duration,
     pub compaction_config: Option<CompactionConfig>,
     pub auto_continue: AutoContinue,
@@ -66,7 +66,7 @@ pub(crate) struct AgentConfig {
 pub struct Agent {
     llm: Arc<dyn StreamingModelProvider>,
     context: Context,
-    mcp_command_tx: Option<mpsc::Sender<McpCommand>>,
+    mcp: Option<McpHandle>,
     message_tx: mpsc::Sender<AgentEvent>,
     observers: Vec<Box<dyn AgentObserver>>,
     streams: StreamMap<StreamKey, EventStream>,
@@ -101,7 +101,7 @@ impl Agent {
         Self {
             llm: config.llm,
             context: config.context,
-            mcp_command_tx: config.mcp_command_tx,
+            mcp: config.mcp,
             message_tx,
             observers: config.observers,
             streams,
@@ -534,10 +534,6 @@ impl Agent {
     async fn handle_tool_completion(&mut self, tool_call: ToolCallRequest) {
         let cancel = self.tool_executions.start(tool_call.clone());
 
-        let (tx, rx) = mpsc::channel(100);
-        let stream = ReceiverStream::new(rx).map(StreamEvent::ToolExecution);
-        self.streams.insert(StreamKey::Tool(tool_call.id.clone()), Box::pin(stream));
-
         let tool_id = tool_call.id.clone();
         tracing::debug!("Tool execution started: {} ({})", tool_call.name, tool_id);
         self.emit(AgentEvent::Tool(ToolEvent::ExecutionStarted {
@@ -546,24 +542,25 @@ impl Agent {
         }))
         .await;
 
-        let Some(mcp_command_tx) = self.mcp_command_tx.clone() else {
-            emit_tool_failure(&tx, "MCP task is not available").await;
+        let Some(mcp) = self.mcp.clone() else {
+            let stream = futures::stream::once(async {
+                StreamEvent::ToolExecution(ToolCallEvent::Complete(Err(CallToolError::Unavailable {
+                    message: "MCP runtime is not available".to_string(),
+                })))
+            });
+            self.streams.insert(StreamKey::Tool(tool_id), Box::pin(stream));
             return;
         };
 
         let trace_context = self.observers.iter().find_map(|observer| observer.tool_trace_context(&tool_id));
-        let command = McpCommand::ExecuteTool {
-            request: tool_call,
-            trace_context,
+        let options = CallToolOptions {
             timeout: self.tool_timeout,
-            tx: tx.clone(),
+            meta: trace_context.as_ref().map(TraceContext::to_meta),
             cancel,
         };
-
-        if mcp_command_tx.send(command).await.is_err() {
-            tracing::warn!("Failed to send tool request to MCP task");
-            emit_tool_failure(&tx, "Failed to send tool request to MCP task").await;
-        }
+        let stream =
+            mcp.call_model_visible(tool_call.name, &tool_call.arguments, options).map(StreamEvent::ToolExecution);
+        self.streams.insert(StreamKey::Tool(tool_id), Box::pin(stream));
     }
 
     async fn handle_llm_usage(&mut self, sample: TokenUsage, state: &mut IterationState) {
@@ -749,11 +746,6 @@ impl Agent {
             max_attempts: self.retry_config.max_attempts,
         })
     }
-}
-
-async fn emit_tool_failure(tx: &mpsc::Sender<ToolCallEvent>, message: &str) {
-    let error = CallToolError::Unavailable { message: message.to_string() };
-    let _ = tx.send(ToolCallEvent::Complete(Err(error))).await;
 }
 
 pub(crate) struct AutoContinue {

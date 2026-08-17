@@ -19,8 +19,8 @@ async fn call_proxy_tool(
         .map_err(|error| error.error)
 }
 
-fn proxy_instructions(snapshot: &McpConnectionDetails) -> &str {
-    snapshot.instructions.get("proxy").expect("Expected proxy instructions")
+fn proxy_instructions(snapshot: &McpConnectionDetails) -> String {
+    snapshot.model_instructions().get("proxy").expect("Expected proxy instructions").clone()
 }
 
 fn extract_tool_dir(instructions: &str) -> Option<String> {
@@ -34,9 +34,9 @@ async fn test_tool_proxy_exposes_only_call_tool() {
     let test = math_proxy().await;
     let snapshot = test.snapshot();
 
-    assert_eq!(snapshot.tool_definitions.len(), 1);
-    assert_eq!(snapshot.tool_definitions[0].name, "proxy__call_tool");
-    assert!(snapshot.tool_definitions[0].description.contains("Execute a tool on a nested MCP server"));
+    assert_eq!(snapshot.tool_definitions().len(), 1);
+    assert_eq!(snapshot.tool_definitions()[0].name, "proxy__call_tool");
+    assert!(snapshot.tool_definitions()[0].description.contains("Execute a tool on a nested MCP server"));
 }
 
 #[tokio::test]
@@ -55,8 +55,8 @@ async fn test_tool_proxy_does_not_expose_nested_server_tools() {
     let test = math_proxy().await;
     let snapshot = test.snapshot();
 
-    assert_eq!(snapshot.tool_definitions.len(), 1);
-    assert_eq!(snapshot.tool_definitions[0].name, "proxy__call_tool");
+    assert_eq!(snapshot.tool_definitions().len(), 1);
+    assert_eq!(snapshot.tool_definitions()[0].name, "proxy__call_tool");
 }
 
 #[tokio::test]
@@ -64,14 +64,14 @@ async fn test_tool_proxy_does_not_leak_nested_instructions() {
     let test = math_proxy().await;
     let snapshot = test.snapshot();
 
-    assert!(!snapshot.instructions.contains_key("math"));
-    assert!(snapshot.instructions.contains_key("proxy"));
+    assert!(!snapshot.model_instructions().contains_key("math"));
+    assert!(snapshot.model_instructions().contains_key("proxy"));
 }
 
 #[tokio::test]
 async fn test_tool_proxy_writes_tool_files_to_disk() {
     let test = math_proxy().await;
-    let tool_dir = extract_tool_dir(proxy_instructions(test.snapshot())).expect("tool directory is listed");
+    let tool_dir = extract_tool_dir(&proxy_instructions(test.snapshot())).expect("tool directory is listed");
     let tool_dir = std::path::Path::new(&tool_dir);
 
     let math_dir = tool_dir.join("math");
@@ -115,8 +115,8 @@ async fn test_tool_proxy_multiple_nested_servers() {
         .await;
     let snapshot = test.snapshot();
 
-    assert_eq!(snapshot.tool_definitions.len(), 1);
-    let tool_dir = extract_tool_dir(proxy_instructions(snapshot)).expect("tool directory is listed");
+    assert_eq!(snapshot.tool_definitions().len(), 1);
+    let tool_dir = extract_tool_dir(&proxy_instructions(snapshot)).expect("tool directory is listed");
     let tool_dir = std::path::Path::new(&tool_dir);
     assert!(tool_dir.join("server_a/add_numbers.json").exists());
     assert!(tool_dir.join("server_b/add_numbers.json").exists());
@@ -127,8 +127,8 @@ async fn test_tool_proxy_member_server_status_shows_connected_and_proxied() {
     let test = math_proxy().await;
     let snapshot = test.snapshot();
 
-    assert!(!snapshot.server_statuses.iter().any(|status| status.name == "proxy"));
-    let math = snapshot.server_statuses.iter().find(|status| status.name == "math").expect("math status exists");
+    assert!(!snapshot.server_statuses().iter().any(|status| status.name == "proxy"));
+    let math = snapshot.server_statuses().into_iter().find(|status| status.name == "math").expect("math status exists");
     assert!(matches!(math.status, mcp_utils::status::McpServerStatus::Connected { .. }));
     assert!(math.proxied);
 }
@@ -151,8 +151,8 @@ async fn include_only_proxy_server_instructions_cover_its_direct_tools() {
         .build()
         .await;
 
-    assert!(test.snapshot().instructions.contains_key("math"));
-    assert!(test.snapshot().instructions.contains_key("proxy"));
+    assert!(test.snapshot().model_instructions().contains_key("math"));
+    assert!(test.snapshot().model_instructions().contains_key("proxy"));
 }
 
 #[tokio::test]
@@ -162,27 +162,29 @@ async fn proxy_rules_with_no_direct_tools_do_not_emit_server_instructions() {
         .build()
         .await;
 
-    assert!(!test.snapshot().instructions.contains_key("math"));
-    assert!(test.snapshot().instructions.contains_key("proxy"));
+    assert!(!test.snapshot().model_instructions().contains_key("math"));
+    assert!(test.snapshot().model_instructions().contains_key("proxy"));
 }
 
 #[tokio::test]
 async fn selectively_proxied_server_instructions_cover_its_direct_tools() {
     let test = selective_math_proxy().await;
 
-    assert!(test.snapshot().instructions.contains_key("math"));
-    assert!(test.snapshot().instructions.contains_key("proxy"));
+    assert!(test.snapshot().model_instructions().contains_key("math"));
+    assert!(test.snapshot().model_instructions().contains_key("proxy"));
 }
 
 #[tokio::test]
-async fn proxy_forwards_tools_added_after_initial_discovery() {
+async fn proxy_rejects_tools_added_after_initial_discovery() {
     let server = FakeMcpServer::new();
     let state = server.state();
     let test = McpTestBuilder::new().proxy_server("dynamic", server).build().await;
     state.add_tool(FakeTool::new("added_later").responds(FakeToolResponse::text("available")));
 
-    let result = call_proxy_tool(&test, "dynamic", "added_later", serde_json::json!({})).await;
-    assert!(result.unwrap().contains("available"));
+    let error = call_proxy_tool(&test, "dynamic", "added_later", serde_json::json!({}))
+        .await
+        .expect_err("uncataloged tools fail closed");
+    assert!(error.contains("Tool not found: dynamic__added_later"));
 }
 
 #[tokio::test]
@@ -199,7 +201,7 @@ async fn mixed_direct_full_proxy_and_selective_servers_have_stable_definitions_a
         .await;
 
     let snapshot = test.snapshot();
-    let names = snapshot.tool_definitions.iter().map(|tool| tool.name.as_str()).collect::<Vec<_>>();
+    let names = snapshot.tool_definitions().into_iter().map(|tool| tool.name).collect::<Vec<_>>();
     assert_eq!(
         names,
         [
@@ -211,7 +213,7 @@ async fn mixed_direct_full_proxy_and_selective_servers_have_stable_definitions_a
         ]
     );
     assert_eq!(
-        snapshot.server_statuses.iter().map(|status| (status.name.as_str(), status.proxied)).collect::<Vec<_>>(),
+        snapshot.server_statuses().iter().map(|status| (status.name.as_str(), status.proxied)).collect::<Vec<_>>(),
         [("direct", false), ("hidden", true), ("selective", true)]
     );
 }
@@ -219,13 +221,13 @@ async fn mixed_direct_full_proxy_and_selective_servers_have_stable_definitions_a
 #[tokio::test]
 async fn selectively_proxied_tools_are_partitioned_between_direct_and_proxy_routes() {
     let test = selective_math_proxy().await;
-    let names: Vec<&str> = test.snapshot().tool_definitions.iter().map(|tool| tool.name.as_str()).collect();
+    let names: Vec<String> = test.snapshot().tool_definitions().into_iter().map(|tool| tool.name).collect();
     assert_eq!(names, ["proxy__call_tool", "math__add_numbers"]);
 
     let direct_tool = test
         .snapshot()
-        .tool_definitions
-        .iter()
+        .tool_definitions()
+        .into_iter()
         .find(|tool| tool.name == "math__add_numbers")
         .expect("selected tool is exposed directly");
     assert!(direct_tool.description.contains("Adds two numbers"));
@@ -278,7 +280,7 @@ async fn proxy_discovery_write_failure_does_not_disconnect_server() {
 #[tokio::test]
 async fn selectively_proxied_tools_are_omitted_from_proxy_discovery_files() {
     let test = selective_math_proxy().await;
-    let tool_dir = extract_tool_dir(proxy_instructions(test.snapshot())).expect("tool directory is listed");
+    let tool_dir = extract_tool_dir(&proxy_instructions(test.snapshot())).expect("tool directory is listed");
     let math_dir = std::path::Path::new(&tool_dir).join("math");
 
     assert!(!math_dir.join("add_numbers.json").exists());
