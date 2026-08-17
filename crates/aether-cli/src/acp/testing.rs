@@ -20,15 +20,16 @@ use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::{AgentSpec, AgentSpecExposure};
 use aether_core::core::{AgentBuilder, AgentHandle, Prompt};
 use aether_core::events::{AgentEvent, Command, MessageEvent};
-use aether_core::mcp::mcp;
+use aether_core::mcp::{ServerFactory, mcp};
 use aether_core::session::{SessionControlEvent, SessionEvent, SessionMeta, UserEvent, last_agent_from_events};
 use aether_project::AgentCatalog;
 use agent_client_protocol::schema::v1::{SessionId, SessionUpdate};
 use agent_client_protocol::{Agent, Client, ConnectionTo};
+use futures::FutureExt;
 use llm::ProviderConnectionOverrides;
 use llm::testing::FakeLlmProvider;
 use llm::{ChatMessage, Context, LlmResponse, StreamingModelProvider};
-use mcp_utils::client::{McpServer, McpTransport, ToolExposure};
+use mcp_utils::client::{InMemoryServerSpec, McpServer, McpTransport, ToolExposure};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -379,19 +380,26 @@ impl RuntimeFactory for FakeRuntimeFactory {
             .take()
             .expect("fake agent runtime spawned more than once");
 
-        let servers = def.mcp.as_ref().map_or_else(Vec::new, |(server_name, prompt_name)| {
-            vec![McpServer::new(
-                server_name.clone(),
-                McpTransport::InMemory { server: FakePromptMcp::new(prompt_name).into_dyn() },
-                ToolExposure::Direct,
-            )]
-        });
-        let mut spawn = mcp(&self.cwd)
-            .with_tool_filter(spec.tools.clone())
-            .with_servers(servers)
-            .spawn()
-            .await
-            .map_err(|e| SessionError::Build(CliError::McpError(e.to_string())))?;
+        let mut mcp_builder = mcp(&self.cwd).with_tool_filter(spec.tools.clone());
+        if let Some((server_name, prompt_name)) = &def.mcp {
+            let factory_name = server_name.clone();
+            let prompt_name = prompt_name.clone();
+            let factory: ServerFactory = Box::new(move |_spec, _services| {
+                let prompt_name = prompt_name.clone();
+                async move { FakePromptMcp::new(&prompt_name).into_dyn() }.boxed()
+            });
+            mcp_builder = mcp_builder.register_in_memory_server(factory_name.clone(), factory).with_servers(vec![
+                McpServer::new(
+                    server_name.clone(),
+                    McpTransport::InMemory {
+                        spec: InMemoryServerSpec { factory: factory_name, args: Vec::new(), input: None },
+                    },
+                    ToolExposure::Direct,
+                ),
+            ]);
+        }
+        let mut spawn =
+            mcp_builder.spawn().await.map_err(|e| SessionError::Build(CliError::McpError(e.to_string())))?;
         let snapshot = spawn
             .block_until_ready()
             .await

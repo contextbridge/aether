@@ -139,7 +139,7 @@ impl RuntimeBuilder {
             builder = apply_oauth(builder);
         }
 
-        builder = builder.with_builtin_servers(deps);
+        builder = builder.with_agent_deps(deps).with_builtin_servers();
 
         if !self.extra_mcp_servers.is_empty() {
             builder = builder.with_servers(self.extra_mcp_servers);
@@ -153,10 +153,8 @@ impl RuntimeBuilder {
 
         if !mcp_config_sources.is_empty() {
             debug!("Loading MCP configs from: {:?}", mcp_config_sources);
-            builder = builder
-                .from_mcp_config_sources(&mcp_config_sources)
-                .await
-                .map_err(|e| CliError::McpError(e.to_string()))?;
+            builder =
+                builder.from_mcp_config_sources(&mcp_config_sources).map_err(|e| CliError::McpError(e.to_string()))?;
         }
 
         let spawn = builder.spawn().await.map_err(|e| CliError::McpError(e.to_string()))?;

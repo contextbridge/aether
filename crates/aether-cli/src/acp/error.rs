@@ -10,8 +10,6 @@ pub enum SessionError {
     CommandChannel(String),
     #[error("MCP operation failed: {0}")]
     McpOperation(String),
-    #[error("unsupported MCP server for agent runtime: {0}")]
-    UnsupportedMcpServer(String),
     #[error("agent runtime not found: {0}")]
     AgentNotFound(String),
     #[error("active agent runtime is not running")]

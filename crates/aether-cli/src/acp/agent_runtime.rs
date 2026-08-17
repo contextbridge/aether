@@ -160,12 +160,7 @@ impl RuntimeFactory for ProductionRuntimeFactory {
         initial_messages: Vec<ChatMessage>,
         runtime_event_tx: mpsc::Sender<RuntimeEvent>,
     ) -> Result<AgentRuntime, SessionError> {
-        let extra_servers = self
-            .mcp_servers
-            .iter()
-            .map(McpServer::try_clone)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| SessionError::UnsupportedMcpServer(e.to_string()))?;
+        let extra_servers = self.mcp_servers.clone();
 
         let builder = RuntimeBuilder::from_spec(self.cwd.clone(), spec.clone())
             .extra_servers(extra_servers)
