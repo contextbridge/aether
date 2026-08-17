@@ -303,12 +303,14 @@ impl AgentExecutor {
         effective_mcp_config_sources: &[McpConfigSource],
         tool_filter: mcp_utils::client::ToolFilter,
     ) -> Result<McpSpawnResult, String> {
-        let mut builder = mcp(&self.project_root).with_tool_filter(tool_filter).with_builtin_servers(self.deps.clone());
+        let mut builder = mcp(&self.project_root)
+            .with_tool_filter(tool_filter)
+            .with_agent_deps(self.deps.clone())
+            .with_builtin_servers();
 
         if !effective_mcp_config_sources.is_empty() {
             builder = builder
                 .from_mcp_config_sources(effective_mcp_config_sources)
-                .await
                 .map_err(|e| format!("Failed to load mcp configs: {e}"))?;
         }
 
