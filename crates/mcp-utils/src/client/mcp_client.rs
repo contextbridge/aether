@@ -95,15 +95,16 @@ impl ClientHandler for McpClient {
     fn on_tool_list_changed(&self, context: NotificationContext<RoleClient>) -> impl Future<Output = ()> + Send + '_ {
         let server = self.server_name.clone();
         let manager_event_sender = self.manager_event_sender.clone();
-        async move {
-            let result = context
-                .peer
+        let peer = context.peer.clone();
+        tokio::spawn(async move {
+            let result = peer
                 .list_tools(None)
                 .await
                 .map(|response| response.tools.iter().map(Tool::from).collect())
                 .map_err(|error| error.to_string());
             let _ = manager_event_sender.send(McpManagerEvent::ToolCatalogChanged { server, result });
-        }
+        });
+        std::future::ready(())
     }
 }
 

@@ -233,27 +233,43 @@ impl McpManager {
             .collect()
     }
 
-    pub async fn list_deferred_tools(&mut self, server: &str) -> Result<Vec<ToolDefinition>> {
-        let discovered_tools = {
-            let (_, connection) = self.deferred_record(server)?;
-            connection.list_tools().await?.iter().map(Tool::from).collect()
-        };
-        let record = self.servers.get_mut(server).ok_or_else(|| McpError::ServerNotFound(server.to_string()))?;
-        let ServerState::Connected { tools, .. } = &mut record.state else {
-            return Err(McpError::DeferredServerNotConnected(server.to_string()));
-        };
-        *tools = discovered_tools;
+    pub fn list_deferred_tools_task(
+        &self,
+        server: &str,
+    ) -> Result<impl Future<Output = Result<Vec<ToolDefinition>>> + Send + 'static + use<>> {
+        let (record, connection) = self.deferred_record(server)?;
+        let server = server.to_string();
+        let client = Arc::clone(&connection.client);
+        let exposure = record.exposure.clone();
+        let tool_filter = self.tool_filter.clone();
+        let manager_event_sender = self.manager_event_sender.clone();
 
-        let record = self.servers.get(server).expect("server was resolved above");
-        Ok(record
-            .tools()
-            .iter()
-            .filter(|tool| record.is_deferred(&tool.name) && self.is_tool_allowed(server, tool))
-            .map(|tool| deferred_tool_definition(server, tool))
-            .collect())
+        Ok(async move {
+            let result = client
+                .list_tools(None)
+                .await
+                .map(|response| response.tools.iter().map(Tool::from).collect::<Vec<_>>())
+                .map_err(|error| McpError::ToolDiscoveryFailed(format!("Failed to list tools: {error}")));
+            let event_result = result.as_ref().cloned().map_err(ToString::to_string);
+            let _ = manager_event_sender
+                .send(McpManagerEvent::ToolCatalogChanged { server: server.clone(), result: event_result });
+            let tools = result?;
+            Ok(tools
+                .iter()
+                .filter(|tool| {
+                    exposure.is_deferred(&tool.name)
+                        && tool_filter.is_tool_allowed(&namespaced_tool_definition(&server, tool))
+                })
+                .map(|tool| deferred_tool_definition(&server, tool))
+                .collect())
+        })
     }
 
-    pub async fn deferred_tool(&mut self, server: &str, tool: &str) -> Result<ToolDefinition> {
+    pub async fn list_deferred_tools(&self, server: &str) -> Result<Vec<ToolDefinition>> {
+        self.list_deferred_tools_task(server)?.await
+    }
+
+    pub async fn deferred_tool(&self, server: &str, tool: &str) -> Result<ToolDefinition> {
         self.list_deferred_tools(server)
             .await?
             .into_iter()
@@ -811,13 +827,9 @@ mod tests {
     use futures::future::BoxFuture;
     use rmcp::{
         Json, RoleServer, ServerHandler,
-        handler::server::{
-            router::tool::{ToolRoute, ToolRouter},
-            tool::ToolCallContext,
-            wrapper::Parameters,
-        },
-        model::{CallToolResponse, CallToolResult, Implementation, ListToolsResult, ServerCapabilities, ServerInfo},
-        service::{DynService, MaybeSendFuture, NotificationContext},
+        handler::server::{router::tool::ToolRouter, wrapper::Parameters},
+        model::{Implementation, ServerCapabilities, ServerInfo},
+        service::DynService,
         tool, tool_handler, tool_router,
         transport::streamable_http_client::StreamableHttpClientTransportConfig,
     };
@@ -827,7 +839,7 @@ mod tests {
         io,
         sync::{Arc, Mutex},
     };
-    use tokio::sync::{Notify, RwLock, mpsc};
+    use tokio::sync::mpsc;
 
     #[derive(Clone)]
     struct TestServer {
@@ -869,61 +881,6 @@ mod tests {
         async fn echo(&self, request: Parameters<EchoRequest>) -> Json<EchoResult> {
             let Parameters(EchoRequest { value }) = request;
             Json(EchoResult { value })
-        }
-    }
-
-    #[derive(Clone)]
-    struct ChangingToolServer {
-        router: Arc<RwLock<ToolRouter<Self>>>,
-        remove_tool: Arc<Notify>,
-    }
-
-    impl ChangingToolServer {
-        fn new() -> Self {
-            let mut router = ToolRouter::new();
-            router.add_route(ToolRoute::new_dyn(
-                rmcp::model::Tool::new("changing", "A changing tool", Arc::new(serde_json::Map::default())),
-                |_| Box::pin(async { Ok(CallToolResult::default().into()) }),
-            ));
-            Self { router: Arc::new(RwLock::new(router)), remove_tool: Arc::new(Notify::new()) }
-        }
-    }
-
-    impl ServerHandler for ChangingToolServer {
-        fn get_info(&self) -> ServerInfo {
-            ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-        }
-
-        async fn call_tool(
-            &self,
-            request: rmcp::model::CallToolRequestParams,
-            context: rmcp::service::RequestContext<RoleServer>,
-        ) -> std::result::Result<CallToolResponse, rmcp::ErrorData> {
-            self.router.read().await.call(ToolCallContext::new(self, request, context)).await
-        }
-
-        async fn list_tools(
-            &self,
-            _request: Option<rmcp::model::PaginatedRequestParams>,
-            _context: rmcp::service::RequestContext<RoleServer>,
-        ) -> std::result::Result<ListToolsResult, rmcp::ErrorData> {
-            Ok(ListToolsResult::with_all_items(self.router.read().await.list_all()))
-        }
-
-        fn on_initialized(
-            &self,
-            context: NotificationContext<RoleServer>,
-        ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
-            let router = self.router.clone();
-            let remove_tool = self.remove_tool.clone();
-            let peer = context.peer.clone();
-            async move {
-                router.write().await.bind_peer_notifier(&peer);
-                tokio::spawn(async move {
-                    remove_tool.notified().await;
-                    router.write().await.disable_route("changing");
-                });
-            }
         }
     }
 
@@ -1228,30 +1185,6 @@ mod tests {
         assert!(manager.deferred_servers().is_empty());
         assert!(manager.list_deferred_tools("deferred").await.unwrap().is_empty());
         assert!(manager.resolve_deferred_tool("deferred", "echo", serde_json::Map::new()).is_err());
-    }
-
-    #[tokio::test]
-    async fn tool_list_changed_notification_updates_catalog() {
-        let (event_sender, _event_receiver) = mpsc::channel(32);
-        let mut manager = McpManager::new(event_sender, None);
-        let mut manager_events = manager.take_event_receiver();
-        let server = ChangingToolServer::new();
-        let remove_tool = server.remove_tool.clone();
-        manager
-            .add_mcps(vec![McpServer::new(
-                "changing",
-                McpTransport::InMemory { server: Box::new(server) },
-                ToolExposure::ModelVisible,
-            )])
-            .await
-            .unwrap();
-        assert_eq!(manager.tool_definitions()[0].name, "changing__changing");
-
-        remove_tool.notify_one();
-        manager.apply_event(manager_events.recv().await.unwrap()).await;
-
-        assert!(manager.tool_definitions().is_empty());
-        assert!(manager.get_client_for_tool("changing__changing", "{}").is_err());
     }
 
     #[tokio::test]

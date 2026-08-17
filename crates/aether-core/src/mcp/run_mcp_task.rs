@@ -1,5 +1,5 @@
 use crate::events::TraceContext;
-use futures::{Stream, StreamExt};
+use futures::{Stream, StreamExt, future::join_all};
 use llm::ToolCallRequest;
 use mcp_utils::client::split_on_server_name;
 use mcp_utils::client::{
@@ -137,21 +137,33 @@ async fn on_command(
         }
 
         McpCommand::ListDeferredTools { reply } => {
-            let mut tools = Vec::new();
-            let mut error = None;
-            for server in mcp.deferred_servers() {
-                match mcp.list_deferred_tools(&server.name).await {
-                    Ok(server_tools) => tools.extend(server_tools.into_iter().map(|mut tool| {
-                        tool.name = format!("{}__{}", server.name, tool.name);
-                        tool
-                    })),
-                    Err(cause) => {
-                        error = Some(cause.to_string());
-                        break;
+            let tasks = mcp
+                .deferred_servers()
+                .into_iter()
+                .filter_map(|server| match mcp.list_deferred_tools_task(&server.name) {
+                    Ok(task) => Some((server.name, task)),
+                    Err(error) => {
+                        tracing::warn!(server = server.name, %error, "Failed to prepare deferred MCP tool discovery");
+                        None
+                    }
+                })
+                .map(|(server, task)| async move { (server, task.await) })
+                .collect::<Vec<_>>();
+            background_operations.spawn(async move {
+                let mut tools = Vec::new();
+                for (server, result) in join_all(tasks).await {
+                    match result {
+                        Ok(server_tools) => tools.extend(server_tools.into_iter().map(|mut tool| {
+                            tool.name = format!("{server}__{}", tool.name);
+                            tool
+                        })),
+                        Err(error) => {
+                            tracing::warn!(server, %error, "Failed to list deferred MCP tools");
+                        }
                     }
                 }
-            }
-            let _ = reply.send(error.map_or(Ok(tools), Err));
+                let _ = reply.send(Ok(tools));
+            });
         }
 
         McpCommand::ExecuteDeferredTool { request, reply } => {
@@ -277,5 +289,166 @@ async fn spawn_streaming_tool_execution(
             let error = CallToolError::Unavailable { message };
             let _ = tx.send(ToolCallEvent::Complete(Err(error))).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mcp_utils::client::{McpServer, McpTransport, ToolExposure};
+    use rmcp::{
+        ServerHandler,
+        model::{ErrorData, ListToolsResult, ServerCapabilities, ServerInfo, Tool},
+        service::RequestContext,
+    };
+    use serde_json::Map;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    use tokio::sync::Notify;
+
+    #[derive(Clone)]
+    struct RefreshServer {
+        tool_name: &'static str,
+        refresh_started: Arc<Notify>,
+        release_refresh: Option<Arc<Notify>>,
+        block_refresh: Arc<AtomicBool>,
+        fail_refresh: Arc<AtomicBool>,
+    }
+
+    impl RefreshServer {
+        fn healthy(tool_name: &'static str) -> Self {
+            Self {
+                tool_name,
+                refresh_started: Arc::new(Notify::new()),
+                release_refresh: None,
+                block_refresh: Arc::new(AtomicBool::new(false)),
+                fail_refresh: Arc::new(AtomicBool::new(false)),
+            }
+        }
+
+        fn blocking(
+            tool_name: &'static str,
+            refresh_started: Arc<Notify>,
+            release_refresh: Arc<Notify>,
+            block_refresh: Arc<AtomicBool>,
+        ) -> Self {
+            Self {
+                tool_name,
+                refresh_started,
+                release_refresh: Some(release_refresh),
+                block_refresh,
+                fail_refresh: Arc::new(AtomicBool::new(false)),
+            }
+        }
+
+        fn failing(tool_name: &'static str, fail_refresh: Arc<AtomicBool>) -> Self {
+            Self {
+                tool_name,
+                refresh_started: Arc::new(Notify::new()),
+                release_refresh: None,
+                block_refresh: Arc::new(AtomicBool::new(false)),
+                fail_refresh,
+            }
+        }
+    }
+
+    impl ServerHandler for RefreshServer {
+        fn get_info(&self) -> ServerInfo {
+            ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        }
+
+        async fn list_tools(
+            &self,
+            _request: Option<rmcp::model::PaginatedRequestParams>,
+            _context: RequestContext<rmcp::RoleServer>,
+        ) -> Result<ListToolsResult, ErrorData> {
+            if self.fail_refresh.load(Ordering::SeqCst) {
+                return Err(ErrorData::internal_error("refresh failed", None));
+            }
+            if let Some(release) = &self.release_refresh
+                && self.block_refresh.load(Ordering::SeqCst)
+            {
+                self.refresh_started.notify_one();
+                release.notified().await;
+            }
+            let tool = Tool::new(self.tool_name, self.tool_name, Arc::new(Map::new()));
+            Ok(ListToolsResult::with_all_items(vec![tool]))
+        }
+    }
+
+    #[tokio::test]
+    async fn listing_deferred_tools_does_not_block_command_dispatch() {
+        let refresh_started = Arc::new(Notify::new());
+        let release_refresh = Arc::new(Notify::new());
+        let block_refresh = Arc::new(AtomicBool::new(false));
+        let server = RefreshServer::blocking(
+            "slow",
+            Arc::clone(&refresh_started),
+            Arc::clone(&release_refresh),
+            Arc::clone(&block_refresh),
+        );
+        let (event_sender, _event_receiver) = mpsc::channel(32);
+        let mut manager = McpManager::new(event_sender, None);
+        manager
+            .add_mcps(vec![McpServer::new(
+                "slow",
+                McpTransport::InMemory { server: Box::new(server) },
+                ToolExposure::deferred_all(),
+            )])
+            .await
+            .unwrap();
+        block_refresh.store(true, Ordering::SeqCst);
+
+        let (command_tx, command_rx) = mpsc::channel(8);
+        let manager_task = tokio::spawn(run_mcp_task(manager, command_rx, Vec::new()));
+        let (list_reply, _list_response) = oneshot::channel();
+        command_tx.send(McpCommand::ListDeferredTools { reply: list_reply }).await.unwrap();
+
+        refresh_started.notified().await;
+        let (servers_reply, mut servers_response) = oneshot::channel();
+        command_tx.send(McpCommand::ListDeferredServers { reply: servers_reply }).await.unwrap();
+        tokio::task::yield_now().await;
+        let command_result = servers_response.try_recv();
+
+        release_refresh.notify_one();
+        manager_task.abort();
+        assert!(command_result.is_ok(), "deferred tool discovery blocked command dispatch");
+    }
+
+    #[tokio::test]
+    async fn listing_deferred_tools_keeps_results_from_healthy_servers() {
+        let fail_refresh = Arc::new(AtomicBool::new(false));
+        let servers = vec![
+            McpServer::new(
+                "broken",
+                McpTransport::InMemory {
+                    server: Box::new(RefreshServer::failing("broken_tool", Arc::clone(&fail_refresh))),
+                },
+                ToolExposure::deferred_all(),
+            ),
+            McpServer::new(
+                "healthy",
+                McpTransport::InMemory { server: Box::new(RefreshServer::healthy("healthy_tool")) },
+                ToolExposure::deferred_all(),
+            ),
+        ];
+        let (event_sender, _event_receiver) = mpsc::channel(32);
+        let mut manager = McpManager::new(event_sender, None);
+        manager.add_mcps(servers).await.unwrap();
+        fail_refresh.store(true, Ordering::SeqCst);
+
+        let (reply, response) = oneshot::channel();
+        let mut auth_tasks = McpConnectionAttemptManager::default();
+        let mut background_operations = JoinSet::new();
+        on_command(McpCommand::ListDeferredTools { reply }, &mut manager, &mut auth_tasks, &mut background_operations)
+            .await;
+        while let Some(result) = background_operations.join_next().await {
+            result.unwrap();
+        }
+
+        let tools = response.await.unwrap().unwrap();
+        assert_eq!(tools.iter().map(|tool| tool.name.as_str()).collect::<Vec<_>>(), ["healthy__healthy_tool"]);
     }
 }
