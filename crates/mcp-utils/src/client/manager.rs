@@ -20,7 +20,7 @@ use rmcp::{
     service::RunningService,
 };
 use serde_json::{Map, Value};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::num::NonZeroU16;
 use std::path::PathBuf;
@@ -165,20 +165,8 @@ impl McpManager {
     }
 
     pub async fn apply_event(&mut self, event: McpManagerEvent) {
-        match event {
-            McpManagerEvent::ToolCatalogChanged { server, result: Ok(tools) } => {
-                let Some(record) = self.servers.get_mut(&server) else { return };
-                if !record.replace_tools(tools) {
-                    return;
-                }
-                self.emit_server_statuses_changed().await;
-                self.emit_tool_definitions_changed().await;
-                self.emit_catalog_instructions_changed(&server).await;
-            }
-            McpManagerEvent::ToolCatalogChanged { server, result: Err(error) } => {
-                tracing::warn!(server, error, "Failed to refresh MCP tool catalog");
-            }
-        }
+        let McpManagerEvent::ToolCatalogChanged { server, result } = event;
+        self.replace_catalog(&server, CatalogReplacement::Refresh(result)).await;
     }
 
     pub async fn add_mcps(&mut self, servers: Vec<McpServer>) -> Result<()> {
@@ -366,8 +354,7 @@ impl McpManager {
         let challenge = record.oauth_challenge.clone();
         let ctx = self.connect_config();
 
-        self.set_state(&name, ServerState::Authenticating);
-        self.emit_server_statuses_changed().await;
+        self.replace_catalog(&name, CatalogReplacement::State(ServerState::Authenticating)).await;
 
         Ok(async move { authenticate_http(name, config, challenge, ctx).await })
     }
@@ -376,23 +363,20 @@ impl McpManager {
         let McpConnectAttempt { name, outcome } = attempt;
         match outcome {
             McpConnectOutcome::Connected { conn, tools, reauth_config } => {
-                match self.register_connection(&name, conn, tools, reauth_config) {
-                    Ok(()) => {
-                        self.emit_server_statuses_changed().await;
-                        self.emit_tool_definitions_changed().await;
-                        self.emit_instructions_after_connect(&name).await;
-                    }
-                    Err(error) => self.apply_authentication_failure(name, error.to_string()).await,
+                if self.servers.contains_key(&name) {
+                    self.replace_catalog(&name, CatalogReplacement::Connected { conn, tools, reauth_config }).await;
+                } else {
+                    let error = McpError::ServerNotFound(name.clone()).to_string();
+                    self.apply_authentication_failure(name, error).await;
                 }
             }
             McpConnectOutcome::NeedsOAuth { config, challenge, error } => {
                 tracing::warn!("Server '{name}' needs OAuth: {error}");
                 if let Some(record) = self.servers.get_mut(&name) {
-                    record.state = ServerState::NeedsOAuth;
                     record.reauth_config = Some(config);
                     record.oauth_challenge = challenge;
                 }
-                self.emit_server_statuses_changed().await;
+                self.replace_catalog(&name, CatalogReplacement::State(ServerState::NeedsOAuth)).await;
             }
             McpConnectOutcome::Failed { error } => {
                 self.apply_authentication_failure(name, error.to_string()).await;
@@ -469,23 +453,14 @@ impl McpManager {
 
     /// Shutdown all servers and wait for their tasks to complete
     pub async fn shutdown(&mut self) {
-        let servers: Vec<(String, ServerRecord)> = self.servers.drain().collect();
-
-        for (server_name, record) in servers {
-            if let Some(conn) = record.into_connection()
-                && let Some(handle) = conn.server_task
-            {
-                drop(conn.client);
-                await_server_shutdown(&server_name, handle).await;
-            }
+        for server_name in self.server_order.clone() {
+            self.shutdown_server(&server_name).await.expect("registered MCP server should shut down");
         }
-
-        self.server_order.clear();
     }
 
     /// Shutdown a specific server by name
     pub async fn shutdown_server(&mut self, server_name: &str) -> Result<()> {
-        if let Some(record) = self.servers.remove(server_name)
+        if let Some(record) = self.replace_catalog(server_name, CatalogReplacement::Remove).await
             && let Some(conn) = record.into_connection()
             && let Some(handle) = conn.server_task
         {
@@ -496,50 +471,89 @@ impl McpManager {
         Ok(())
     }
 
+    async fn replace_catalog(&mut self, server: &str, replacement: CatalogReplacement) -> Option<ServerRecord> {
+        let before = self.catalog_snapshot();
+        let removed = match replacement {
+            CatalogReplacement::Refresh(Ok(tools)) => {
+                if let Some(record) = self.servers.get_mut(server) {
+                    record.replace_tools(tools);
+                }
+                None
+            }
+            CatalogReplacement::Refresh(Err(error)) => {
+                tracing::warn!(server, error, "Failed to refresh MCP tool catalog");
+                None
+            }
+            CatalogReplacement::Connected { conn, tools, reauth_config } => {
+                let record = self.servers.get_mut(server)?;
+                record.reauth_config = reauth_config.or_else(|| record.reauth_config.clone());
+                record.oauth_challenge = None;
+                record.state = ServerState::Connected { connection: conn, tools };
+                None
+            }
+            CatalogReplacement::State(state) => {
+                self.set_state(server, state);
+                None
+            }
+            CatalogReplacement::Remove => {
+                self.server_order.retain(|name| name != server);
+                self.servers.remove(server)
+            }
+        };
+        let after = self.catalog_snapshot();
+        self.emit_catalog_delta(before, &after).await;
+        removed
+    }
+
+    async fn emit_catalog_delta(&self, before: CatalogSnapshot, after: &CatalogSnapshot) {
+        if before.statuses != after.statuses {
+            self.emit_event(McpClientEvent::ServerStatusesChanged(after.statuses.clone())).await;
+        }
+        if before.model_visible_tools != after.model_visible_tools || before.deferred_tools != after.deferred_tools {
+            self.emit_event(McpClientEvent::ToolDefinitionsChanged(after.model_visible_tools.clone())).await;
+        }
+
+        let instruction_servers =
+            before.instructions.keys().chain(after.instructions.keys()).cloned().collect::<BTreeSet<_>>();
+        for server in instruction_servers {
+            let previous = before.instructions.get(&server);
+            let next = after.instructions.get(&server);
+            if previous != next {
+                self.emit_event(McpClientEvent::ServerInstructionsUpdated {
+                    server: server.clone(),
+                    instructions: next.cloned(),
+                })
+                .await;
+            }
+        }
+    }
+
+    fn catalog_snapshot(&self) -> CatalogSnapshot {
+        CatalogSnapshot {
+            model_visible_tools: self.tool_definitions(),
+            deferred_tools: self.deferred_tool_definitions(),
+            statuses: self.server_statuses(),
+            instructions: self.server_instructions(),
+        }
+    }
+
+    fn deferred_tool_definitions(&self) -> Vec<ToolDefinition> {
+        let mut definitions = Vec::new();
+        for name in &self.server_order {
+            let Some(record) = self.servers.get(name) else { continue };
+            definitions.extend(
+                record
+                    .tools()
+                    .iter()
+                    .filter(|tool| record.is_deferred(&tool.name) && self.is_tool_allowed(name, tool))
+                    .map(|tool| deferred_tool_definition(name, tool)),
+            );
+        }
+        definitions
+    }
+
     async fn emit_server_statuses_changed(&self) {
         self.emit_event(McpClientEvent::ServerStatusesChanged(self.server_statuses())).await;
-    }
-
-    async fn emit_tool_definitions_changed(&self) {
-        self.emit_event(McpClientEvent::ToolDefinitionsChanged(self.tool_definitions())).await;
-    }
-
-    async fn emit_catalog_instructions_changed(&self, server_name: &str) {
-        let Some(record) = self.servers.get(server_name) else { return };
-        let instructions = self
-            .has_model_visible_tools(server_name, record)
-            .then(|| record.connection().and_then(|connection| connection.instructions.clone()))
-            .flatten();
-        self.emit_event(McpClientEvent::ServerInstructionsUpdated { server: server_name.to_string(), instructions })
-            .await;
-        self.emit_event(McpClientEvent::ServerInstructionsUpdated {
-            server: PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME.to_string(),
-            instructions: self.progressive_discovery_instructions(),
-        })
-        .await;
-    }
-
-    async fn emit_instructions_after_connect(&self, server_name: &str) {
-        let Some(record) = self.servers.get(server_name) else { return };
-        if self.has_model_visible_tools(server_name, record)
-            && let Some(instructions) = record.connection().and_then(|conn| conn.instructions.as_ref()).cloned()
-        {
-            self.emit_event(McpClientEvent::ServerInstructionsUpdated {
-                server: server_name.to_string(),
-                instructions: Some(instructions),
-            })
-            .await;
-        }
-
-        if record.exposure.has_deferred_tools()
-            && let Some(body) = self.progressive_discovery_instructions()
-        {
-            self.emit_event(McpClientEvent::ServerInstructionsUpdated {
-                server: PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME.to_string(),
-                instructions: Some(body),
-            })
-            .await;
-        }
     }
 
     pub async fn emit_connection_ready(&self) {
@@ -572,20 +586,6 @@ impl McpManager {
         })
     }
 
-    fn register_connection(
-        &mut self,
-        name: &str,
-        conn: McpServerConnection,
-        tools: Vec<Tool>,
-        reauth_config: Option<McpHttpConfig>,
-    ) -> Result<()> {
-        let record = self.servers.get_mut(name).ok_or_else(|| McpError::ServerNotFound(name.to_string()))?;
-        record.reauth_config = reauth_config.or_else(|| record.reauth_config.clone());
-        record.oauth_challenge = None;
-        record.state = ServerState::Connected { connection: conn, tools };
-        Ok(())
-    }
-
     fn remember_server_order(&mut self, name: &str) {
         if !self.server_order.iter().any(|n| n == name) {
             self.server_order.push(name.to_string());
@@ -593,8 +593,7 @@ impl McpManager {
     }
 
     async fn apply_authentication_failure(&mut self, name: String, error: String) {
-        self.set_state(&name, ServerState::Failed { error: error.clone() });
-        self.emit_server_statuses_changed().await;
+        self.replace_catalog(&name, CatalogReplacement::State(ServerState::Failed { error: error.clone() })).await;
         self.emit_authentication_failed(name, error).await;
     }
 
@@ -686,6 +685,20 @@ enum ServerState {
     Authenticating,
     Failed { error: String },
     NeedsOAuth,
+}
+
+enum CatalogReplacement {
+    Refresh(std::result::Result<Vec<Tool>, String>),
+    Connected { conn: McpServerConnection, tools: Vec<Tool>, reauth_config: Option<McpHttpConfig> },
+    State(ServerState),
+    Remove,
+}
+
+struct CatalogSnapshot {
+    model_visible_tools: Vec<ToolDefinition>,
+    deferred_tools: Vec<ToolDefinition>,
+    statuses: Vec<McpServerStatusEntry>,
+    instructions: BTreeMap<String, String>,
 }
 
 impl From<&ServerState> for McpServerStatus {
@@ -817,7 +830,8 @@ async fn await_server_shutdown(server_name: &str, handle: JoinHandle<()>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        McpClientEvent, McpManager, McpServerStatus, PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME, ServerState, ToolFilter,
+        McpClientEvent, McpManager, McpManagerEvent, McpServerStatus, PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME,
+        ServerState, ToolFilter,
     };
     use crate::client::config::{McpHttpConfig, McpServer, McpTransport, ToolExposure};
     use crate::client::connection::{McpConnectAttempt, McpConnectOutcome};
@@ -952,6 +966,93 @@ mod tests {
         let status = servers.iter().find(|entry| entry.name == "remote").expect("remote status");
         assert!(matches!(status.status, McpServerStatus::Authenticating));
         assert_eq!(status.auth_capability, McpServerAuthCapability::OAuth);
+    }
+
+    #[tokio::test]
+    async fn tool_catalog_refresh_emits_deferred_catalog_delta() {
+        let (event_sender, mut event_receiver) = mpsc::channel(32);
+        let mut manager = McpManager::new(event_sender, None)
+            .with_progressive_discovery_instructions(Arc::new(|servers| format!("{} deferred", servers.len())));
+        manager
+            .add_mcps(vec![McpServer::new(
+                "remote",
+                McpTransport::InMemory { server: TestServer::default().into_dyn() },
+                ToolExposure::deferred_all(),
+            )])
+            .await
+            .unwrap();
+        while event_receiver.try_recv().is_ok() {}
+
+        manager
+            .apply_event(McpManagerEvent::ToolCatalogChanged { server: "remote".to_string(), result: Ok(Vec::new()) })
+            .await;
+
+        let events = std::iter::from_fn(|| event_receiver.try_recv().ok()).collect::<Vec<_>>();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            McpClientEvent::ServerStatusesChanged(statuses)
+                if matches!(statuses[0].status, McpServerStatus::Connected { tool_count: 0 })
+        )));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, McpClientEvent::ToolDefinitionsChanged(tools) if tools.is_empty()))
+        );
+        assert!(events.iter().any(|event| matches!(
+            event,
+            McpClientEvent::ServerInstructionsUpdated { server, instructions: None }
+                if server == PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME
+        )));
+    }
+
+    #[tokio::test]
+    async fn authentication_failure_emits_complete_catalog_delta() {
+        let (event_sender, mut event_receiver) = mpsc::channel(32);
+        let mut manager = McpManager::new(event_sender, Some(test_oauth_handler_factory()))
+            .with_progressive_discovery_instructions(Arc::new(|servers| {
+                format!(
+                    "Deferred servers: {}",
+                    servers.iter().map(|server| server.name.as_str()).collect::<Vec<_>>().join(", ")
+                )
+            }));
+        manager
+            .add_mcps(vec![McpServer::new(
+                "remote",
+                McpTransport::InMemory { server: TestServer::default().into_dyn() },
+                ToolExposure::ModelVisible,
+            )])
+            .await
+            .unwrap();
+        while event_receiver.try_recv().is_ok() {}
+
+        manager
+            .apply_connection_attempt(McpConnectAttempt {
+                name: "remote".to_string(),
+                outcome: McpConnectOutcome::Failed {
+                    error: crate::client::McpError::ConnectionFailed("boom".to_string()),
+                },
+            })
+            .await;
+
+        let events = std::iter::from_fn(|| event_receiver.try_recv().ok()).collect::<Vec<_>>();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            McpClientEvent::ServerStatusesChanged(statuses)
+                if matches!(statuses[0].status, McpServerStatus::Failed { .. })
+        )));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, McpClientEvent::ToolDefinitionsChanged(tools) if tools.is_empty()))
+        );
+        assert!(events.iter().any(|event| matches!(
+            event,
+            McpClientEvent::ServerInstructionsUpdated { server, instructions: None } if server == "remote"
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            McpClientEvent::AuthenticationFailed { server, .. } if server == "remote"
+        )));
     }
 
     #[tokio::test]
@@ -1185,6 +1286,41 @@ mod tests {
         assert!(manager.deferred_servers().is_empty());
         assert!(manager.list_deferred_tools("deferred").await.unwrap().is_empty());
         assert!(manager.resolve_deferred_tool("deferred", "echo", serde_json::Map::new()).is_err());
+    }
+
+    #[tokio::test]
+    async fn shutdown_server_emits_complete_catalog_delta() {
+        let (event_sender, mut event_receiver) = mpsc::channel(32);
+        let mut manager = McpManager::new(event_sender, None)
+            .with_progressive_discovery_instructions(Arc::new(|servers| format!("{} deferred", servers.len())));
+        manager
+            .add_mcps(vec![McpServer::new(
+                "test",
+                McpTransport::InMemory { server: TestServer::default().into_dyn() },
+                ToolExposure::deferred_all(),
+            )])
+            .await
+            .unwrap();
+        while event_receiver.try_recv().is_ok() {}
+
+        manager.shutdown_server("test").await.unwrap();
+
+        let events = std::iter::from_fn(|| event_receiver.try_recv().ok()).collect::<Vec<_>>();
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, McpClientEvent::ServerStatusesChanged(statuses) if statuses.is_empty()))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, McpClientEvent::ToolDefinitionsChanged(tools) if tools.is_empty()))
+        );
+        assert!(events.iter().any(|event| matches!(
+            event,
+            McpClientEvent::ServerInstructionsUpdated { server, instructions: None }
+                if server == PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME
+        )));
     }
 
     #[tokio::test]
