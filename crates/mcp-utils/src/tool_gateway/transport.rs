@@ -76,6 +76,12 @@ impl UnixSocketMcpTransport {
     }
 }
 
+impl UnixSocketMcpHandle {
+    pub fn is_finished(&self) -> bool {
+        self.handle.is_finished()
+    }
+}
+
 impl Drop for UnixSocketMcpHandle {
     fn drop(&mut self) {
         self.handle.abort();

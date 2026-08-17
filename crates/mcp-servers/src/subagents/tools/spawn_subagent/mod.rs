@@ -1,9 +1,9 @@
-use crate::setup::{McpBuilderExt, aether_bash_environment, assemble_progressive_discovery};
+use crate::setup::McpBuilderExt;
 use aether_core::{
     agent_spec::{McpConfigSource, ToolFilter},
     core::{AgentBuilder, AgentDeps, AgentHandle, Prompt},
     events::{AgentEvent, Command, MessageEvent, TurnEvent, TurnOutcome, UserCommand},
-    mcp::{DeferredToolGateway, DeferredToolGatewayHandle, McpCommandClient, McpRuntime, McpSpawnResult, mcp},
+    mcp::{McpCommandClient, McpRuntime, McpSession, mcp},
 };
 use futures::FutureExt;
 use llm::ToolDefinition;
@@ -233,8 +233,7 @@ impl AgentExecutor {
                 .resolve_agent_invocable(&task.agent_name)
                 .map_err(|error| error.to_string())?;
 
-            let (mut spawn, gateway) = self.spawn_mcps(&spec.mcp_config_sources, &spec.tools).await?;
-            let deferred_tool_gateway = gateway.map(|gateway| gateway.start(spawn.command_client()));
+            let mut spawn = self.spawn_mcps(&spec.mcp_config_sources, &spec.tools).await?;
             let snapshot =
                 spawn.block_until_ready().await.ok_or_else(|| "MCP bootstrap aborted before completion".to_string())?;
             let (mcp_runtime, _) = spawn.split();
@@ -245,12 +244,7 @@ impl AgentExecutor {
 
             let (user_tx, mut agent_rx, agent_handle) =
                 self.spawn_agent(spec, command_client, tool_definitions).await?;
-            let running_agent = RunningAgent {
-                user_tx,
-                agent_handle,
-                _mcp_runtime: mcp_runtime,
-                _deferred_tool_gateway: deferred_tool_gateway,
-            };
+            let running_agent = RunningAgent { user_tx, agent_handle, _mcp_runtime: mcp_runtime };
 
             let prompt_with_instructions = format!("{}\n\n{}", task.prompt, STRUCTURED_OUTPUT_INSTRUCTIONS);
             running_agent
@@ -309,11 +303,9 @@ impl AgentExecutor {
         &self,
         effective_mcp_config_sources: &[McpConfigSource],
         tool_filter: &ToolFilter,
-    ) -> Result<(McpSpawnResult, Option<DeferredToolGateway>), String> {
-        let bash_environment = aether_bash_environment();
-        let mut builder = mcp(&self.project_root)
-            .with_tool_filter(tool_filter.clone())
-            .with_builtin_servers(self.deps.clone(), bash_environment.clone());
+    ) -> Result<McpSession, String> {
+        let mut builder =
+            mcp(&self.project_root).with_tool_filter(tool_filter.clone()).with_builtin_servers(self.deps.clone());
 
         if !effective_mcp_config_sources.is_empty() {
             builder = builder
@@ -322,8 +314,7 @@ impl AgentExecutor {
                 .map_err(|e| format!("Failed to load mcp configs: {e}"))?;
         }
 
-        let (builder, gateway) = assemble_progressive_discovery(builder, &bash_environment);
-        builder.spawn().await.map(|spawn| (spawn, gateway)).map_err(|e| format!("Failed to spawn MCP manager: {e}"))
+        builder.spawn().await.map_err(|e| format!("Failed to spawn MCP manager: {e}"))
     }
 
     async fn spawn_agent(
@@ -346,7 +337,6 @@ struct RunningAgent {
     user_tx: mpsc::Sender<Command>,
     agent_handle: AgentHandle,
     _mcp_runtime: McpRuntime,
-    _deferred_tool_gateway: Option<DeferredToolGatewayHandle>,
 }
 
 impl Drop for RunningAgent {

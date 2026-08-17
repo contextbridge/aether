@@ -417,7 +417,6 @@ impl RuntimeFactory for FakeRuntimeFactory {
             Some(agent_handle),
             event_rx,
             mcp_runtime,
-            None,
             snapshot,
             runtime_event_tx,
         ))
@@ -466,7 +465,6 @@ impl RuntimeFactory for StubRuntimeFactory {
             Some(parts.handle),
             event_rx,
             mcp_runtime,
-            None,
             snapshot,
             runtime_event_tx,
         ))

@@ -1,4 +1,4 @@
-use aether_core::mcp::{DeferredToolGateway, mcp};
+use aether_core::mcp::{McpBuilder, mcp};
 use aether_core::testing::{FakeMcpServer, FakeTool, FakeToolResponse, fake_mcp};
 use mcp_utils::ServiceExt;
 use mcp_utils::client::{DeferredToolRules, ToolExposure};
@@ -6,16 +6,15 @@ use mcp_utils::tool_gateway::{LIST_SERVERS_TOOL, ServerDescription, UnixSocketPa
 use rmcp::{RoleClient, model::CallToolRequestParams, service::RunningService};
 use serde_json::{Map, json};
 use std::os::unix::fs::PermissionsExt;
+use std::sync::Arc;
 
 #[tokio::test]
 async fn ipc_discovers_and_executes_deferred_tools_over_mcp() {
     let workspace = tempfile::tempdir().unwrap();
-    let gateway = DeferredToolGateway::bind().unwrap();
-    let endpoint = gateway.endpoint();
-    let builder = mcp(workspace.path())
+    let builder = progressive(mcp(workspace.path()))
         .with_servers(vec![fake_mcp("fake", FakeMcpServer::new()).with_exposure(ToolExposure::deferred_all())]);
     let mut spawn = builder.spawn().await.unwrap();
-    let gateway = gateway.start(spawn.command_client());
+    let endpoint = spawn.deferred_tool_gateway_endpoint().unwrap().clone();
     let socket_path = endpoint.socket_path().to_path_buf();
     spawn.block_until_ready().await.unwrap();
     let client = connect(&endpoint).await;
@@ -34,7 +33,6 @@ async fn ipc_discovers_and_executes_deferred_tools_over_mcp() {
     assert_eq!(result.structured_content, Some(json!({"sum": 42})));
 
     drop(client);
-    drop(gateway);
     drop(spawn);
     assert!(!socket_path.exists());
     assert!(tokio::net::UnixStream::connect(&socket_path).await.is_err());
@@ -44,12 +42,10 @@ async fn ipc_discovers_and_executes_deferred_tools_over_mcp() {
 async fn tools_added_after_discovery_are_available_to_gateway() {
     let server = FakeMcpServer::new();
     let state = server.state();
-    let gateway = DeferredToolGateway::bind().unwrap();
-    let endpoint = gateway.endpoint();
-    let builder =
-        mcp("/workspace").with_servers(vec![fake_mcp("fake", server).with_exposure(ToolExposure::deferred_all())]);
+    let builder = progressive(mcp("/workspace"))
+        .with_servers(vec![fake_mcp("fake", server).with_exposure(ToolExposure::deferred_all())]);
     let mut spawn = builder.spawn().await.unwrap();
-    let _gateway = gateway.start(spawn.command_client());
+    let endpoint = spawn.deferred_tool_gateway_endpoint().unwrap().clone();
     spawn.block_until_ready().await.unwrap();
     let client = connect(&endpoint).await;
 
@@ -64,11 +60,10 @@ async fn tools_added_after_discovery_are_available_to_gateway() {
 #[tokio::test]
 async fn selective_policy_partitions_model_visible_and_deferred_routes() {
     let exposure = ToolExposure::Deferred(DeferredToolRules::new(&[], &["add_*"]));
-    let gateway = DeferredToolGateway::bind().unwrap();
-    let endpoint = gateway.endpoint();
-    let builder = mcp("/workspace").with_servers(vec![fake_mcp("fake", FakeMcpServer::new()).with_exposure(exposure)]);
+    let builder = progressive(mcp("/workspace"))
+        .with_servers(vec![fake_mcp("fake", FakeMcpServer::new()).with_exposure(exposure)]);
     let mut spawn = builder.spawn().await.unwrap();
-    let _gateway = gateway.start(spawn.command_client());
+    let endpoint = spawn.deferred_tool_gateway_endpoint().unwrap().clone();
     let snapshot = spawn.block_until_ready().await.unwrap();
     let client = connect(&endpoint).await;
 
@@ -81,17 +76,19 @@ async fn selective_policy_partitions_model_visible_and_deferred_routes() {
 
 #[tokio::test]
 async fn ipc_runtime_directory_is_private() {
-    let gateway = DeferredToolGateway::bind().unwrap();
-    let endpoint = gateway.endpoint();
-    let spawn = mcp("/workspace")
+    let spawn = progressive(mcp("/workspace"))
         .with_servers(vec![fake_mcp("fake", FakeMcpServer::new()).with_exposure(ToolExposure::deferred_all())])
         .spawn()
         .await
         .unwrap();
-    let _gateway = gateway.start(spawn.command_client());
+    let endpoint = spawn.deferred_tool_gateway_endpoint().unwrap();
     let mode = std::fs::metadata(endpoint.socket_path().parent().unwrap()).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o700);
     assert!(endpoint.socket_path().as_os_str().len() < 104);
+}
+
+fn progressive(builder: McpBuilder) -> McpBuilder {
+    builder.with_progressive_discovery(Arc::new(|servers| format!("{} deferred servers", servers.len())), |_| {})
 }
 
 async fn connect(endpoint: &UnixSocketPath) -> RunningService<RoleClient, ()> {

@@ -2,15 +2,18 @@ use mcp_utils::client::{
     McpClientEvent, McpConfig, McpConnectionDetails, McpError, McpManager, McpServer, OAuthHandlerFactory, ParseError,
     ProgressiveDiscoveryInstructions, ServerFactory, ToolFilter,
 };
+use mcp_utils::tool_gateway::UnixSocketPath;
 use utils::{SettingsStore, variables::Vars};
 
 use crate::agent_spec::McpConfigSource;
 use crate::core::AgentDeps;
 
-use super::McpCommandClient;
 use super::run_mcp_task::{McpCommand, run_mcp_task};
+use super::{DeferredToolGateway, DeferredToolGatewayHandle, McpCommandClient};
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tokio::{
     sync::mpsc::{self, Receiver, Sender},
     task::JoinHandle,
@@ -18,41 +21,58 @@ use tokio::{
 
 const CHANNEL_CAPACITY: usize = 1000;
 
+type EnvironmentExtender = Arc<dyn Fn(Vec<(OsString, OsString)>) + Send + Sync>;
+
+struct ProgressiveDiscovery {
+    instructions: ProgressiveDiscoveryInstructions,
+    extend_environment: EnvironmentExtender,
+}
+
 pub fn mcp(root_dir: impl AsRef<Path>) -> McpBuilder {
     McpBuilder::new(root_dir)
 }
 
-/// Owns a spawned MCP manager. Dropping this value aborts the manager task.
+/// Owns a spawned MCP manager and deferred-tool gateway. Dropping this value
+/// shuts down the session.
 pub struct McpRuntime {
     command_tx: Sender<McpCommand>,
-    handle: JoinHandle<()>,
+    manager_handle: JoinHandle<()>,
+    gateway_handle: Option<DeferredToolGatewayHandle>,
 }
 
 impl McpRuntime {
     pub fn command_client(&self) -> McpCommandClient {
         McpCommandClient::new(self.command_tx.clone())
     }
+
+    pub fn has_deferred_tool_gateway(&self) -> bool {
+        self.gateway_handle.as_ref().is_some_and(DeferredToolGatewayHandle::is_running)
+    }
+
+    pub fn deferred_tool_gateway_endpoint(&self) -> Option<&mcp_utils::tool_gateway::UnixSocketPath> {
+        self.gateway_handle.as_ref().map(DeferredToolGatewayHandle::endpoint)
+    }
 }
 
 impl Drop for McpRuntime {
     fn drop(&mut self) {
-        self.handle.abort();
+        self.manager_handle.abort();
     }
 }
 
-/// A freshly spawned MCP manager paired with its event stream. Consumers
-/// receive incremental updates over the event stream (starting with an initial
-/// `ServerStatusesChanged` reflecting every configured server in `Connecting`)
-/// and can call [`split`](Self::split) to separate the stream from the
-/// [`McpRuntime`] that keeps the manager task alive.
-pub struct McpSpawnResult {
+/// A fully assembled MCP session paired with its event stream.
+pub struct McpSession {
     runtime: McpRuntime,
     event_rx: Receiver<McpClientEvent>,
 }
 
-impl McpSpawnResult {
+impl McpSession {
     pub fn command_client(&self) -> McpCommandClient {
         self.runtime.command_client()
+    }
+
+    pub fn deferred_tool_gateway_endpoint(&self) -> Option<&UnixSocketPath> {
+        self.runtime.deferred_tool_gateway_endpoint()
     }
 
     /// Block until the manager finishes bootstrapping every initially-configured
@@ -80,7 +100,7 @@ pub struct McpBuilder {
     agent_deps: AgentDeps,
     vars: Vars,
     tool_filter: ToolFilter,
-    progressive_discovery_instructions: Option<ProgressiveDiscoveryInstructions>,
+    progressive_discovery: Option<ProgressiveDiscovery>,
 }
 
 impl McpBuilder {
@@ -99,7 +119,7 @@ impl McpBuilder {
             agent_deps: AgentDeps::default(),
             vars,
             tool_filter: ToolFilter::default(),
-            progressive_discovery_instructions: None,
+            progressive_discovery: None,
         }
     }
 
@@ -142,8 +162,13 @@ impl McpBuilder {
         self.servers.iter().any(McpServer::has_deferred_tools)
     }
 
-    pub fn with_progressive_discovery_instructions(mut self, instructions: ProgressiveDiscoveryInstructions) -> Self {
-        self.progressive_discovery_instructions = Some(instructions);
+    pub fn with_progressive_discovery(
+        mut self,
+        instructions: ProgressiveDiscoveryInstructions,
+        extend_environment: impl Fn(Vec<(OsString, OsString)>) + Send + Sync + 'static,
+    ) -> Self {
+        self.progressive_discovery =
+            Some(ProgressiveDiscovery { instructions, extend_environment: Arc::new(extend_environment) });
         self
     }
 
@@ -187,13 +212,25 @@ impl McpBuilder {
         Ok(self)
     }
 
-    pub async fn spawn(self) -> Result<McpSpawnResult, McpError> {
+    pub async fn spawn(self) -> Result<McpSession, McpError> {
+        let progressive_discovery = if self.has_deferred_tools() {
+            Some(self.progressive_discovery.ok_or_else(|| {
+                McpError::Other("deferred tools require progressive discovery to be configured".to_string())
+            })?)
+        } else {
+            None
+        };
+        let gateway = progressive_discovery.as_ref().map(|_| DeferredToolGateway::bind()).transpose()?;
+        if let (Some(progressive), Some(gateway)) = (&progressive_discovery, &gateway) {
+            (progressive.extend_environment)(gateway.environment());
+        }
+
         let (command_tx, command_rx) = mpsc::channel(CHANNEL_CAPACITY);
         let (event_tx, event_rx) = mpsc::channel::<McpClientEvent>(CHANNEL_CAPACITY);
 
         let mut mcp_manager = McpManager::new(event_tx, self.oauth_handler_factory).with_tool_filter(self.tool_filter);
-        if let Some(instructions) = self.progressive_discovery_instructions {
-            mcp_manager = mcp_manager.with_progressive_discovery_instructions(instructions);
+        if let Some(progressive) = progressive_discovery {
+            mcp_manager = mcp_manager.with_progressive_discovery_instructions(progressive.instructions);
         }
         if let Some(store) = self.agent_deps.oauth_credential_store {
             mcp_manager = mcp_manager.with_oauth_credential_store(store);
@@ -202,9 +239,10 @@ impl McpBuilder {
         mcp_manager = mcp_manager.with_root_dir(self.root_dir);
         let pending = mcp_manager.register_pending(self.servers).await?;
 
-        let mcp_handle = tokio::spawn(run_mcp_task(mcp_manager, command_rx, pending));
+        let manager_handle = tokio::spawn(run_mcp_task(mcp_manager, command_rx, pending));
+        let gateway_handle = gateway.map(|gateway| gateway.start(McpCommandClient::new(command_tx.clone())));
 
-        Ok(McpSpawnResult { runtime: McpRuntime { command_tx, handle: mcp_handle }, event_rx })
+        Ok(McpSession { runtime: McpRuntime { command_tx, manager_handle, gateway_handle }, event_rx })
     }
 }
 
@@ -315,6 +353,39 @@ mod tests {
 
         assert!(!visible.has_deferred_tools());
         assert!(deferred.has_deferred_tools());
+    }
+
+    #[tokio::test]
+    async fn session_construction_rejects_unconfigured_deferred_tools() {
+        let builder = McpBuilder::new("/workspace")
+            .from_mcp_config_sources(&[json_source(
+                r#"{"servers":{"deferred":{"type":"stdio","command":"server","deferTools":true}}}"#,
+            )])
+            .await
+            .unwrap();
+
+        let error = match builder.spawn().await {
+            Ok(_) => panic!("deferred tools must not become inaccessible"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(error, McpError::Other(message) if message.contains("progressive discovery")));
+    }
+
+    #[tokio::test]
+    async fn session_construction_starts_deferred_tool_gateway() {
+        let session = McpBuilder::new("/workspace")
+            .from_mcp_config_sources(&[json_source(
+                r#"{"servers":{"deferred":{"type":"stdio","command":"server","deferTools":true}}}"#,
+            )])
+            .await
+            .unwrap()
+            .with_progressive_discovery(Arc::new(|_| String::new()), |_| {})
+            .spawn()
+            .await
+            .unwrap();
+
+        assert!(session.deferred_tool_gateway_endpoint().unwrap().socket_path().exists());
     }
 
     #[tokio::test]

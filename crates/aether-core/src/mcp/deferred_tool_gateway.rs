@@ -8,7 +8,8 @@ pub struct DeferredToolGateway {
 }
 
 pub struct DeferredToolGatewayHandle {
-    _handle: UnixSocketMcpHandle,
+    endpoint: UnixSocketPath,
+    handle: UnixSocketMcpHandle,
 }
 
 impl DeferredToolGateway {
@@ -25,6 +26,17 @@ impl DeferredToolGateway {
     }
 
     pub fn start(self, client: McpCommandClient) -> DeferredToolGatewayHandle {
-        DeferredToolGatewayHandle { _handle: self.transport.start(client) }
+        let endpoint = self.transport.endpoint();
+        DeferredToolGatewayHandle { endpoint, handle: self.transport.start(client) }
+    }
+}
+
+impl DeferredToolGatewayHandle {
+    pub fn endpoint(&self) -> &UnixSocketPath {
+        &self.endpoint
+    }
+
+    pub fn is_running(&self) -> bool {
+        !self.handle.is_finished()
     }
 }

@@ -353,7 +353,7 @@ async fn call_subagent_through_manager(
     input: SpawnSubAgentsInput,
 ) -> TestResult<String> {
     let mut spawn = mcp(project_root)
-        .with_builtin_servers(deps, mcp_servers::coding::tools::bash::BashEnvironment::default())
+        .with_builtin_servers(deps)
         .from_mcp_config_sources(&[McpConfigSource::Json(
             r#"{"servers":{"subagents":{"type":"in-memory","args":[]}}}"#.to_string(),
         )])
@@ -465,7 +465,7 @@ fn create_project_with_codex_agent() -> TempDir {
 async fn subagent_instructions(project_root: &Path, catalog: AgentCatalog) -> String {
     let deps = AgentDeps::default().with_agent_registry(catalog.registry().clone());
     let mut spawn = mcp(project_root)
-        .with_builtin_servers(deps, mcp_servers::coding::tools::bash::BashEnvironment::default())
+        .with_builtin_servers(deps)
         .from_mcp_config_sources(&[McpConfigSource::Json(
             r#"{"servers":{"subagents":{"type":"in-memory","args":[]}}}"#.to_string(),
         )])

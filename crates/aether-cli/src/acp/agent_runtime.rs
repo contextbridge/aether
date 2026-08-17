@@ -6,7 +6,7 @@ use aether_auth::OAuthHandler;
 use aether_core::agent_spec::AgentSpec;
 use aether_core::core::{AgentDeps, AgentHandle};
 use aether_core::events::{AgentCommand, AgentEvent, Command};
-use aether_core::mcp::{DeferredToolGatewayHandle, McpCommandClient, McpRuntime};
+use aether_core::mcp::{McpCommandClient, McpRuntime};
 use llm::ChatMessage;
 use mcp_utils::client::{
     ElicitingOAuthHandler, McpClientEvent, McpConnectionDetails, McpError, McpServer, McpServerStatusEntry,
@@ -29,7 +29,6 @@ pub(crate) struct AgentRuntime {
     latest_mcp_snapshot: watch::Receiver<McpConnectionDetails>,
     agent_handle: Option<AgentHandle>,
     mcp_runtime: McpRuntime,
-    _deferred_tool_gateway: Option<DeferredToolGatewayHandle>,
     agent_pump_handle: JoinHandle<()>,
     mcp_pump_handle: JoinHandle<()>,
 }
@@ -43,7 +42,6 @@ impl AgentRuntime {
         agent_handle: Option<AgentHandle>,
         mut event_rx: mpsc::Receiver<McpClientEvent>,
         mcp_runtime: McpRuntime,
-        deferred_tool_gateway: Option<DeferredToolGatewayHandle>,
         snapshot: McpConnectionDetails,
         runtime_event_tx: mpsc::Sender<RuntimeEvent>,
     ) -> Self {
@@ -71,15 +69,7 @@ impl AgentRuntime {
             }
         });
 
-        Self {
-            agent_tx,
-            latest_mcp_snapshot,
-            agent_handle,
-            mcp_runtime,
-            _deferred_tool_gateway: deferred_tool_gateway,
-            agent_pump_handle,
-            mcp_pump_handle,
-        }
+        Self { agent_tx, latest_mcp_snapshot, agent_handle, mcp_runtime, agent_pump_handle, mcp_pump_handle }
     }
 
     pub(crate) async fn send_agent_command(&self, command: Command) -> Result<(), SessionError> {
@@ -186,7 +176,7 @@ impl RuntimeFactory for ProductionRuntimeFactory {
             server_statuses: Vec::new(),
         };
 
-        let Runtime { agent_tx, agent_rx, agent_handle, event_rx, mcp_runtime, deferred_tool_gateway } = runtime;
+        let Runtime { agent_tx, agent_rx, agent_handle, event_rx, mcp_runtime } = runtime;
         Ok(AgentRuntime::new(
             agent,
             agent_tx,
@@ -194,7 +184,6 @@ impl RuntimeFactory for ProductionRuntimeFactory {
             Some(agent_handle),
             event_rx,
             mcp_runtime,
-            deferred_tool_gateway,
             snapshot,
             runtime_event_tx,
         ))

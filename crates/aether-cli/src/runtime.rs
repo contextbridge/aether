@@ -4,9 +4,9 @@ use aether_core::core::{AgentBuilder, AgentDeps, AgentHandle, Prompt};
 use aether_core::events::{AgentEvent, Command};
 use aether_core::mcp::McpBuilder;
 use aether_core::mcp::mcp;
-use aether_core::mcp::{DeferredToolGateway, DeferredToolGatewayHandle, McpCommandClient, McpRuntime, McpSpawnResult};
+use aether_core::mcp::{McpCommandClient, McpRuntime, McpSession};
 use llm::{ChatMessage, ToolDefinition};
-use mcp_servers::setup::{McpBuilderExt, aether_bash_environment, assemble_progressive_discovery};
+use mcp_servers::setup::McpBuilderExt;
 use mcp_utils::client::{McpClientEvent, McpConnectionDetails, McpServer, OAuthHandlerFactory};
 use std::path::PathBuf;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -27,7 +27,6 @@ pub struct Runtime {
     pub agent_handle: AgentHandle,
     pub event_rx: Receiver<McpClientEvent>,
     pub mcp_runtime: McpRuntime,
-    pub deferred_tool_gateway: Option<DeferredToolGatewayHandle>,
 }
 
 pub struct PromptInfo {
@@ -75,8 +74,7 @@ impl RuntimeBuilder {
         messages: Option<Vec<ChatMessage>>,
     ) -> Result<Runtime, CliError> {
         let deps = self.agent_deps.clone();
-        let (spec, spawn, gateway) = self.spawn_mcp().await?;
-        let deferred_tool_gateway = gateway.map(|gateway| gateway.start(spawn.command_client()));
+        let (spec, spawn) = self.spawn_mcp().await?;
         let (mcp_runtime, event_rx) = spawn.split();
 
         let (agent_tx, agent_rx, agent_handle) =
@@ -91,7 +89,7 @@ impl RuntimeBuilder {
             })
             .await?;
 
-        Ok(Runtime { agent_tx, agent_rx, agent_handle, event_rx, mcp_runtime, deferred_tool_gateway })
+        Ok(Runtime { agent_tx, agent_rx, agent_handle, event_rx, mcp_runtime })
     }
 
     /// Spawn MCP, block until every server finishes its initial connection,
@@ -102,8 +100,7 @@ impl RuntimeBuilder {
     /// callers that need the agent ready to use tools on its first turn.
     pub async fn build_ready(self, messages: Vec<ChatMessage>) -> Result<(Runtime, McpConnectionDetails), CliError> {
         let deps = self.agent_deps.clone();
-        let (spec, mut spawn, gateway) = self.spawn_mcp().await?;
-        let deferred_tool_gateway = gateway.map(|gateway| gateway.start(spawn.command_client()));
+        let (spec, mut spawn) = self.spawn_mcp().await?;
         let snapshot = spawn
             .block_until_ready()
             .await
@@ -120,12 +117,11 @@ impl RuntimeBuilder {
             })
             .await?;
 
-        Ok((Runtime { agent_tx, agent_rx, agent_handle, event_rx, mcp_runtime, deferred_tool_gateway }, snapshot))
+        Ok((Runtime { agent_tx, agent_rx, agent_handle, event_rx, mcp_runtime }, snapshot))
     }
 
     pub async fn build_prompt_info(self) -> Result<PromptInfo, CliError> {
-        let (spec, mut spawn, gateway) = self.spawn_mcp().await?;
-        let _deferred_tool_gateway = gateway.map(|gateway| gateway.start(spawn.command_client()));
+        let (spec, mut spawn) = self.spawn_mcp().await?;
         let details = spawn
             .block_until_ready()
             .await
@@ -133,12 +129,9 @@ impl RuntimeBuilder {
         Ok(PromptInfo { spec, tool_definitions: details.tool_definitions })
     }
 
-    async fn spawn_mcp(self) -> Result<(AgentSpec, McpSpawnResult, Option<DeferredToolGateway>), CliError> {
+    async fn spawn_mcp(self) -> Result<(AgentSpec, McpSession), CliError> {
         let deps = self.agent_deps.clone();
-        let bash_environment = aether_bash_environment();
-        let mut builder = mcp(&self.cwd)
-            .with_tool_filter(self.spec.tools.clone())
-            .with_builtin_servers(deps, bash_environment.clone());
+        let mut builder = mcp(&self.cwd).with_tool_filter(self.spec.tools.clone()).with_builtin_servers(deps);
 
         if let Some(apply_oauth) = self.oauth_applicator {
             builder = apply_oauth(builder);
@@ -162,9 +155,8 @@ impl RuntimeBuilder {
                 .map_err(|e| CliError::McpError(e.to_string()))?;
         }
 
-        let (builder, gateway) = assemble_progressive_discovery(builder, &bash_environment);
         let spawn = builder.spawn().await.map_err(|e| CliError::McpError(e.to_string()))?;
-        Ok((self.spec, spawn, gateway))
+        Ok((self.spec, spawn))
     }
 }
 

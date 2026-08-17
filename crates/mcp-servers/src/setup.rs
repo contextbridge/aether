@@ -3,7 +3,7 @@ use crate::plan::DEFAULT_PLANS_DIR;
 use crate::workspace_paths::resolve_path;
 use crate::{CodingMcp, CodingMcpArgs, DefaultCodingTools, PlanMcp, SkillsMcp, SubAgentsMcp, SurveyMcp, TasksMcp};
 use aether_core::core::AgentDeps;
-use aether_core::mcp::{DeferredToolGateway, McpBuilder};
+use aether_core::mcp::McpBuilder;
 use futures::FutureExt;
 use mcp_utils::ServiceExt;
 use mcp_utils::client::ServerFactory;
@@ -16,7 +16,7 @@ use tracing::{debug, warn};
 pub trait McpBuilderExt {
     /// Registers all built-in in-memory MCP server factories, resolving their
     /// paths against the builder's configured root directory.
-    fn with_builtin_servers(self, agent_deps: AgentDeps, bash_environment: BashEnvironment) -> Self;
+    fn with_builtin_servers(self, agent_deps: AgentDeps) -> Self;
 }
 
 #[derive(Clone)]
@@ -28,32 +28,6 @@ struct BuiltinServerContext {
 impl BuiltinServerContext {
     fn resolve(&self, path: PathBuf) -> PathBuf {
         resolve_path(&self.root_dir, path)
-    }
-}
-
-pub fn aether_bash_environment() -> BashEnvironment {
-    let executable = std::env::current_exe().ok();
-    BashEnvironment::for_aether_executable(executable.as_deref())
-}
-
-pub fn assemble_progressive_discovery(
-    mut builder: McpBuilder,
-    bash_environment: &BashEnvironment,
-) -> (McpBuilder, Option<DeferredToolGateway>) {
-    if !builder.has_deferred_tools() {
-        return (builder, None);
-    }
-
-    match DeferredToolGateway::bind() {
-        Ok(gateway) => {
-            bash_environment.extend(gateway.environment());
-            builder = builder.with_progressive_discovery_instructions(Arc::new(progressive_discovery_instructions));
-            (builder, Some(gateway))
-        }
-        Err(error) => {
-            warn!(%error, "Failed to bind deferred tool gateway; progressive discovery disabled");
-            (builder, None)
-        }
     }
 }
 
@@ -78,7 +52,10 @@ pub fn progressive_discovery_instructions(servers: &[ServerDescription]) -> Stri
 }
 
 impl McpBuilderExt for McpBuilder {
-    fn with_builtin_servers(self, agent_deps: AgentDeps, bash_environment: BashEnvironment) -> Self {
+    fn with_builtin_servers(self, agent_deps: AgentDeps) -> Self {
+        let executable = std::env::current_exe().ok();
+        let bash_environment = BashEnvironment::for_aether_executable(executable.as_deref());
+        let progressive_environment = bash_environment.clone();
         let builder = self;
         let context =
             BuiltinServerContext { root_dir: builder.root_dir().to_path_buf(), agent_deps: agent_deps.clone() };
@@ -89,6 +66,9 @@ impl McpBuilderExt for McpBuilder {
         let tasks_context = context;
 
         builder
+            .with_progressive_discovery(Arc::new(progressive_discovery_instructions), move |environment| {
+                progressive_environment.extend(environment);
+            })
             .with_agent_deps(agent_deps)
             .register_in_memory_server("coding", coding_server_factory(coding_context, bash_environment))
             .register_in_memory_server(
@@ -180,18 +160,4 @@ fn coding_server_factory(context: BuiltinServerContext, bash_environment: BashEn
         }
         .boxed()
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use aether_core::mcp::mcp;
-
-    #[test]
-    fn progressive_discovery_is_not_assembled_without_deferred_tools() {
-        let (builder, gateway) = assemble_progressive_discovery(mcp("/workspace"), &BashEnvironment::default());
-
-        assert!(!builder.has_deferred_tools());
-        assert!(gateway.is_none());
-    }
 }
