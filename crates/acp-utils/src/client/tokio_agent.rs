@@ -9,6 +9,7 @@ use agent_client_protocol::{AcpAgent, AcpAgentConfig, ByteStreams, ConnectTo, Er
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::str::FromStr;
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::oneshot;
@@ -89,8 +90,14 @@ async fn connect_stdio<T: Role>(config: AcpAgentConfig, client: impl ConnectTo<T
     };
 
     let bytes = ByteStreams::new(stdin.compat_write(), stdout.compat());
+    tokio::pin!(child_fut);
     tokio::select! {
-        result = ConnectTo::<T>::connect_to(bytes, client) => result,
-        result = child_fut => result,
+        result = &mut child_fut => result,
+        result = ConnectTo::<T>::connect_to(bytes, client) => {
+            result?;
+            tokio::time::timeout(Duration::from_secs(1), &mut child_fut)
+                .await
+                .unwrap_or(Ok(()))
+        }
     }
 }
