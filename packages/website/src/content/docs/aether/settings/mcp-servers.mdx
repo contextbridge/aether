@@ -336,7 +336,7 @@ Tools can be deferred in two ways:
 }
 ```
 
-A server's `deferTools` value can be `false`, `true`, or a rule object. `false` (and omission) keeps every tool model-visible. `true` defers every tool. A rule object partitions MCP-local names with `include` and `exclude`; an empty `include` starts with every tool, and `exclude` wins on overlap.
+`deferTools`can be set to: `false`, `true`, or an object; it defaults to `false`. `false` means every tool will be eagerly loaded into context. `true` defers loading every tool for progressive discovery. An object allows controlling which tools within a single MCP server are deferred via `include` and `exclude` rules.
 
 Discover deferred tools progressively, without loading their schemas into the model's initial context:
 
