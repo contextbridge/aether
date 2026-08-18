@@ -23,3 +23,8 @@ Deny always wins over allow:
 ```
 
 Annotation matcher fields are `readOnly`, `destructive`, `idempotent`, and `openWorld`. Missing tool annotations or missing annotation fields do not receive default boolean values and do not match.
+
+MCP name matchers are evaluated against the canonical namespaced name
+(`server__tool`), not the server-local name. The decision is stored in the
+per-agent `ToolCatalog` and applies consistently to model-visible definitions,
+deferred discovery, instructions, and both model-visible and deferred execution routes.

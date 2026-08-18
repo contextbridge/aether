@@ -11,18 +11,37 @@ use rmcp::{
 use std::result::Result;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::client::{ElicitationRequest, McpClientEvent};
+use crate::client::{ElicitationRequest, McpClientEvent, manager::ToolListChangedRequest};
 
 pub struct McpClient {
     client_info: ClientInfo,
     server_name: String,
     pub(crate) progress_dispatcher: ProgressDispatcher,
     event_sender: mpsc::Sender<McpClientEvent>,
+    tool_refresh_sender: Option<mpsc::Sender<ToolListChangedRequest>>,
+    connection_generation: u64,
 }
 
 impl McpClient {
     pub fn new(client_info: ClientInfo, server_name: String, event_sender: mpsc::Sender<McpClientEvent>) -> Self {
-        Self { client_info, server_name, progress_dispatcher: ProgressDispatcher::new(), event_sender }
+        Self {
+            client_info,
+            server_name,
+            progress_dispatcher: ProgressDispatcher::new(),
+            event_sender,
+            tool_refresh_sender: None,
+            connection_generation: 0,
+        }
+    }
+
+    pub(super) fn with_tool_refresh(
+        mut self,
+        sender: mpsc::Sender<ToolListChangedRequest>,
+        connection_generation: u64,
+    ) -> Self {
+        self.tool_refresh_sender = Some(sender);
+        self.connection_generation = connection_generation;
+        self
     }
 
     pub fn server_name(&self) -> &str {
@@ -73,6 +92,16 @@ impl ClientHandler for McpClient {
         _context: RequestContext<RoleClient>,
     ) -> Result<ElicitResult, ErrorData> {
         Ok(self.dispatch_elicitation(request).await)
+    }
+
+    async fn on_tool_list_changed(&self, context: NotificationContext<RoleClient>) {
+        let Some(sender) = &self.tool_refresh_sender else {
+            return;
+        };
+        let request = ToolListChangedRequest::new(self.server_name.clone(), self.connection_generation, context.peer);
+        if sender.send(request).await.is_err() {
+            tracing::debug!(server = %self.server_name, "MCP tool refresh receiver closed");
+        }
     }
 }
 

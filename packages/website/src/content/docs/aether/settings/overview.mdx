@@ -186,7 +186,7 @@ Give your agent tools via the `mcps` field (Aether agents get tools exclusively 
 }
 ```
 
-Aether can load `mcp.json` files. To enable dynamic tool discovery and prevent MCP tools definitions from being loaded directly into context, set `proxy: true` (this is usually what you want).
+Aether can load `mcp.json` files. To enable progressive tool discovery and keep MCP schemas out of the model's initial context, set `deferTools: true`.
 
 ```json {15-17} title=".aether/settings.json"
 {
@@ -203,7 +203,7 @@ Aether can load `mcp.json` files. To enable dynamic tool discovery and prevent M
         { "type": "glob", "pattern": "prompt-fragments/*.md", "optional": true },
         { "type": "text", "text": "Prefer small, reviewable patches." }
       ],
-      "mcps": [{ "type": "file", "path": "mcp.json", "proxy": true }]
+      "mcps": [{ "type": "file", "path": "mcp.json", "deferTools": true }]
     }
   ]
 }
@@ -224,7 +224,7 @@ Aether can load `mcp.json` files. To enable dynamic tool discovery and prevent M
 }
 ```
 
-See [Tools](/aether/settings/mcp-servers/) for MCP source formats, server types, proxying, and path resolution.
+See [Tools](/aether/settings/mcp-servers/) for MCP source formats, server types, deferred tools, and path resolution.
 
 #### Restricting access to tools
 
@@ -273,6 +273,6 @@ The fields agents point at are documented in detail on their own pages:
 
 - [LLMs](/aether/settings/llm-providers/) covers model specs, credentials, reasoning effort, and provider overrides.
 - [Prompts](/aether/settings/system-prompts/) covers prompt source formats, path resolution, optional files, globs, and shell interpolation.
-- [Tools](/aether/settings/mcp-servers/) covers MCP source formats, server configuration, proxying, and tool filters.
+- [Tools](/aether/settings/mcp-servers/) covers MCP source formats, server configuration, deferred tools, and tool filters.
 - [Telemetry](/aether/settings/telemetry/) covers OpenTelemetry traces, metrics, OTLP export, and content-capture privacy.
 - [Subagents](/aether/built-in-servers/subagents/) covers how agents spawn other agents.

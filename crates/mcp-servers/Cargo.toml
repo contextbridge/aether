@@ -81,6 +81,7 @@ stdio = ["coding", "skills", "tasks", "survey", "subagents", "plan", "rmcp/trans
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "sync", "io-util", "fs", "process", "time"] }
+libc = { workspace = true }
 rmcp = { workspace = true, features = ["elicitation", "macros", "server"] }
 schemars = { workspace = true }
 clap = { workspace = true, features = ["env"] }

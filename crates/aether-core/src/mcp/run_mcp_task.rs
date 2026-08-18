@@ -1,14 +1,5 @@
-use crate::events::TraceContext;
-use mcp_utils::client::{
-    CallToolError, CallToolOptions, CancellationToken, McpConnectAttempt, McpConnectionAttemptManager, McpError,
-    McpManager, McpServer, McpServerStatusEntry, ToolCallEvent, call_tool,
-};
-
-use futures::{Stream, StreamExt};
-use llm::ToolCallRequest;
-use rmcp::model::{GetPromptResult, Prompt};
+use mcp_utils::client::{McpConnectAttempt, McpConnectionAttemptManager, McpError, McpManager, RuntimeMcpServer};
 use std::collections::HashSet;
-use std::pin::pin;
 use std::time::Duration;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot};
@@ -16,38 +7,18 @@ use tokio::task::JoinSet;
 
 const MCP_AUTH_TIMEOUT: Duration = Duration::from_mins(3);
 
-/// Commands that can be sent to the MCP manager task
 #[derive(Debug)]
-pub enum McpCommand {
-    ExecuteTool {
-        request: ToolCallRequest,
-        trace_context: Option<TraceContext>,
-        timeout: Duration,
-        tx: mpsc::Sender<ToolCallEvent>,
-        cancel: CancellationToken,
-    },
-    ListPrompts {
-        tx: oneshot::Sender<Result<Vec<Prompt>, String>>,
-    },
-    GetPrompt {
-        name: String,
-        arguments: Option<serde_json::Map<String, serde_json::Value>>,
-        tx: oneshot::Sender<Result<GetPromptResult, String>>,
-    },
-    GetServerStatuses {
-        tx: oneshot::Sender<Vec<McpServerStatusEntry>>,
-    },
-    AuthenticateServer {
-        name: String,
-    },
+pub(super) enum ManagerCommand {
+    AuthenticateServer { name: String, tx: oneshot::Sender<Result<(), McpError>> },
 }
 
-pub async fn run_mcp_task(
+pub(super) async fn run_mcp_task(
     mut mcp: McpManager,
-    mut command_rx: mpsc::Receiver<McpCommand>,
-    pending_servers: Vec<McpServer>,
+    mut command_rx: mpsc::Receiver<ManagerCommand>,
+    pending_servers: Vec<RuntimeMcpServer>,
 ) {
-    let mut tool_executions = JoinSet::new();
+    let mut tool_refresh_rx = mcp.take_tool_refresh_receiver();
+    let mut tool_refreshes = JoinSet::new();
     let mut mcp_connection_attempts = McpConnectionAttemptManager::default();
     let mut pending_connections: HashSet<String> = pending_servers.iter().map(|server| server.name.clone()).collect();
     for server in pending_servers {
@@ -63,9 +34,8 @@ pub async fn run_mcp_task(
         select! {
             command = command_rx.recv() => {
                 let Some(command) = command else { break; };
-                on_command(command, &mut mcp, &mut mcp_connection_attempts, &mut tool_executions).await;
+                on_command(command, &mut mcp, &mut mcp_connection_attempts).await;
             }
-
             Some(joined) = mcp_connection_attempts.join_next(), if !mcp_connection_attempts.is_empty() => {
                 match joined {
                     Ok(attempt) => {
@@ -75,80 +45,31 @@ pub async fn run_mcp_task(
                             mcp.emit_connection_ready().await;
                         }
                     }
-                    Err(e) => tracing::error!("MCP auth task did not complete normally: {e:?}"),
+                    Err(error) => tracing::error!("MCP auth task did not complete normally: {error:?}"),
                 }
             }
-
-            Some(joined) = tool_executions.join_next(), if !tool_executions.is_empty() => {
-                if let Err(e) = joined {
-                    tracing::warn!("MCP tool execution ended unexpectedly: {e:?}");
+            Some(request) = tool_refresh_rx.recv() => {
+                tool_refreshes.spawn(request.refresh());
+            }
+            Some(joined) = tool_refreshes.join_next(), if !tool_refreshes.is_empty() => {
+                match joined {
+                    Ok(refresh) => mcp.apply_tool_list_refresh(refresh).await,
+                    Err(error) => tracing::warn!(%error, "MCP tool refresh task did not complete normally"),
                 }
             }
         }
     }
 
-    tool_executions.abort_all();
-    while tool_executions.join_next().await.is_some() {}
     mcp_connection_attempts.shutdown().await;
+    tool_refreshes.abort_all();
+    while tool_refreshes.join_next().await.is_some() {}
     mcp.shutdown().await;
     tracing::debug!("MCP manager task ended");
 }
 
-async fn execute_tool(
-    events: impl Stream<Item = ToolCallEvent>,
-    tx: mpsc::Sender<ToolCallEvent>,
-    cancel: CancellationToken,
-) {
-    let mut events = pin!(events);
-    while let Some(event) = events.next().await {
-        if tx.send(event).await.is_err() {
-            cancel.cancel();
-            break;
-        }
-    }
-}
-
-async fn on_command(
-    command: McpCommand,
-    mcp: &mut McpManager,
-    auth_tasks: &mut McpConnectionAttemptManager,
-    tool_executions: &mut JoinSet<()>,
-) {
+async fn on_command(command: ManagerCommand, mcp: &mut McpManager, auth_tasks: &mut McpConnectionAttemptManager) {
     match command {
-        McpCommand::ExecuteTool { request, trace_context, timeout, tx, cancel } => {
-            match mcp.get_client_for_tool(&request.name, &request.arguments) {
-                Ok((client, params)) => {
-                    let options = CallToolOptions {
-                        timeout,
-                        meta: trace_context.as_ref().map(TraceContext::to_meta),
-                        cancel: cancel.clone(),
-                    };
-                    tool_executions.spawn(execute_tool(call_tool(client, params, options), tx, cancel));
-                }
-                Err(e) => {
-                    tracing::error!("Failed to get client for tool {}: {e}", request.name);
-                    let error = CallToolError::Unavailable { message: format!("Failed to get client: {e}") };
-                    let _ = tx.send(ToolCallEvent::Complete(Err(error))).await;
-                }
-            }
-        }
-
-        McpCommand::ListPrompts { tx } => {
-            let result = mcp.list_prompts().await.map_err(|e| format!("Failed to list prompts: {e}"));
-            let _ = tx.send(result);
-        }
-
-        McpCommand::GetPrompt { name: namespaced_name, arguments, tx } => {
-            let result =
-                mcp.get_prompt(&namespaced_name, arguments).await.map_err(|e| format!("Failed to get prompt: {e}"));
-            let _ = tx.send(result);
-        }
-
-        McpCommand::GetServerStatuses { tx } => {
-            let _ = tx.send(mcp.server_statuses());
-        }
-
-        McpCommand::AuthenticateServer { name } => match mcp.authenticate_server_task(&name).await {
+        ManagerCommand::AuthenticateServer { name, tx } => match mcp.authenticate_server_task(&name).await {
             Ok(task) => {
                 let server_name = name.clone();
                 auth_tasks.spawn(name, async move {
@@ -160,8 +81,11 @@ async fn on_command(
                         ),
                     }
                 });
+                let _ = tx.send(Ok(()));
             }
-            Err(e) => tracing::warn!("Authentication failed for '{name}': {e}"),
+            Err(error) => {
+                let _ = tx.send(Err(error));
+            }
         },
     }
 }

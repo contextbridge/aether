@@ -3,7 +3,7 @@ use crate::agent_spec::AgentSpec;
 use crate::context::CompactionConfig;
 use crate::core::{Agent, AgentDeps, Prompt, PromptCache, Result};
 use crate::events::{AgentEvent, AgentObserver, Command};
-use crate::mcp::run_mcp_task::McpCommand;
+use crate::mcp::McpHandle;
 use llm::parser::ModelProviderParser;
 use llm::types::IsoString;
 use llm::{ChatMessage, Context, ModelSettings, StreamingModelProvider, ToolDefinition};
@@ -39,7 +39,7 @@ pub struct AgentBuilder {
     prompts: Vec<Prompt>,
     tool_definitions: Vec<ToolDefinition>,
     initial_messages: Vec<ChatMessage>,
-    mcp_tx: Option<Sender<McpCommand>>,
+    mcp: Option<McpHandle>,
     channel_capacity: usize,
     tool_timeout: Duration,
     compaction_config: Option<CompactionConfig>,
@@ -57,7 +57,7 @@ impl AgentBuilder {
             prompts: Vec::new(),
             tool_definitions: Vec::new(),
             initial_messages: Vec::new(),
-            mcp_tx: None,
+            mcp: None,
             channel_capacity: 1000,
             tool_timeout: Duration::from_mins(20),
             compaction_config: Some(CompactionConfig::default()),
@@ -107,9 +107,9 @@ impl AgentBuilder {
         self
     }
 
-    pub fn tools(mut self, tx: Sender<McpCommand>, tools: Vec<ToolDefinition>) -> Self {
+    pub fn tools(mut self, mcp: McpHandle, tools: Vec<ToolDefinition>) -> Self {
         self.tool_definitions = tools;
-        self.mcp_tx = Some(tx);
+        self.mcp = Some(mcp);
         self
     }
 
@@ -232,7 +232,7 @@ impl AgentBuilder {
         let config = AgentConfig {
             llm: self.llm,
             context,
-            mcp_command_tx: self.mcp_tx,
+            mcp: self.mcp,
             tool_timeout: self.tool_timeout,
             compaction_config: self.compaction_config,
             auto_continue: AutoContinue::new(self.max_auto_continues),
@@ -252,8 +252,9 @@ impl AgentBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_spec::{AgentSpecExposure, ToolFilter};
+    use crate::agent_spec::AgentSpecExposure;
     use llm::ProviderConnectionOverrides;
+    use mcp_utils::client::ToolFilter;
 
     #[tokio::test]
     async fn test_agent_handle_is_finished() {

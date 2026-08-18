@@ -251,9 +251,10 @@ pub(crate) fn get_all_models(discovered: &[LlmModel]) -> Vec<LlmModel> {
 mod tests {
     use super::*;
     use aether_auth::FakeOAuthCredentialStore;
-    use aether_core::agent_spec::{AgentSpecExposure, ToolFilter};
+    use aether_core::agent_spec::AgentSpecExposure;
     use agent_client_protocol::schema::v1::{SessionConfigKind, SessionConfigSelectOption, SessionConfigSelectOptions};
     use llm::catalog::{AnthropicModel, BedrockFoundationModel, BedrockModel, DeepSeekModel, GeminiModel};
+    use mcp_utils::client::ToolFilter;
 
     fn test_models() -> Vec<LlmModel> {
         vec![

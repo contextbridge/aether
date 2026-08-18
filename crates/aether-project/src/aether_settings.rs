@@ -390,7 +390,7 @@ fn inline_prompt_sources(sources: &[PromptSource], root: &Path) -> Result<Vec<Pr
 fn inline_mcp_sources(sources: &[McpSourceSpec], root: &Path) -> Result<Vec<McpSourceSpec>, SettingsError> {
     let mut inlined = Vec::new();
     for source in sources {
-        let McpSourceSpec::File(McpFileSpec { path, proxy, optional }) = source else {
+        let McpSourceSpec::File(McpFileSpec { path, defer_tools, optional }) = source else {
             inlined.push(source.clone());
             continue;
         };
@@ -421,8 +421,8 @@ fn inline_mcp_sources(sources: &[McpSourceSpec], root: &Path) -> Result<Vec<McpS
 
         let mut config = McpConfig::from_json_file(&full_path)
             .map_err(|e| SettingsError::IoError(format!("Failed to read MCP config '{}': {e}", full_path.display())))?;
-        if *proxy {
-            config.mark_all_proxy();
+        if *defer_tools {
+            config.defer_all_tools();
         }
         inlined.push(McpSourceSpec::Inline { servers: config.servers });
     }
@@ -827,7 +827,7 @@ mod tests {
         }));
         assert!(matches!(
             &spec.mcp_config_sources[0],
-            McpConfigSource::File { path, proxy: false } if path == &aether_home.join("mcp/user.json")
+            McpConfigSource::File { path, defer_tools: false } if path == &aether_home.join("mcp/user.json")
         ));
     }
 
@@ -1044,12 +1044,20 @@ mod tests {
     }
 
     #[test]
-    fn serializes_proxied_mcp_file_as_typed_object() {
-        let source: McpSourceSpec = McpFileSpec::new("mcp.json").proxy().into();
+    fn deserializes_legacy_proxy_mcp_file_as_deferred() {
+        let source: McpSourceSpec =
+            serde_json::from_value(serde_json::json!({"type":"file", "path":"mcp.json", "proxy":true})).unwrap();
+
+        assert!(matches!(source, McpSourceSpec::File(McpFileSpec { defer_tools: true, .. })));
+    }
+
+    #[test]
+    fn serializes_deferred_mcp_file_as_typed_object() {
+        let source: McpSourceSpec = McpFileSpec::new("mcp.json").defer_tools().into();
 
         let value = serde_json::to_value(source).unwrap();
 
-        assert_eq!(value, serde_json::json!({"type":"file", "path":"mcp.json", "proxy":true}));
+        assert_eq!(value, serde_json::json!({"type":"file", "path":"mcp.json", "deferTools":true}));
     }
 
     #[test]
@@ -1115,7 +1123,7 @@ mod tests {
         }));
         assert!(matches!(
             &spec.mcp_config_sources[0],
-            McpConfigSource::File { path, proxy: false } if *path == project.path().join(".aether/mcp.json")
+            McpConfigSource::File { path, defer_tools: false } if *path == project.path().join(".aether/mcp.json")
         ));
     }
 
@@ -1260,14 +1268,14 @@ mod tests {
     }
 
     #[test]
-    fn optional_existing_mcp_source_preserves_proxy_flag() {
+    fn optional_existing_mcp_source_preserves_defer_tools_flag() {
         let project = tempfile::tempdir().unwrap();
         write_file(project.path(), "BASE.md", "Base instructions");
         write_file(project.path(), "mcp.json", r#"{"servers":{}}"#);
         let config = AetherSettings {
             agents: vec![AgentConfig {
                 prompts: vec![PromptSource::file("BASE.md")],
-                mcps: vec![McpFileSpec::new("mcp.json").proxy().optional().into()],
+                mcps: vec![McpFileSpec::new("mcp.json").defer_tools().optional().into()],
                 ..agent_config("alpha")
             }],
             ..AetherSettings::default()
@@ -1276,7 +1284,7 @@ mod tests {
         let catalog = AgentCatalog::from_settings(project.path(), config).unwrap();
         let spec = catalog.resolve("alpha").unwrap();
 
-        assert!(matches!(&spec.mcp_config_sources[0], McpConfigSource::File { proxy: true, .. }));
+        assert!(matches!(&spec.mcp_config_sources[0], McpConfigSource::File { defer_tools: true, .. }));
     }
 
     #[test]

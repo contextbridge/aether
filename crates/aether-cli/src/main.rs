@@ -3,6 +3,7 @@ use aether_cli::error::CliError;
 use aether_cli::generate_command::{GenerateArgs, GenerateCommandError, run as run_generate_command};
 use aether_cli::headless::{HeadlessArgs, run_headless};
 use aether_cli::init::{InitError, InitOutcome, InitRequest, next_steps_message, run_init};
+use aether_cli::mcp_command::{McpArgs, McpCommandError, run as run_mcp_command};
 use aether_cli::settings::SettingsCommand;
 use aether_cli::show_prompt::{PromptArgs, run_prompt};
 use aether_project::{AgentCatalog, project_settings_path, user_settings_path};
@@ -23,6 +24,8 @@ enum MainError {
     Acp(#[from] AcpRunError),
     #[error("{0}")]
     Init(#[from] InitError),
+    #[error("{0}")]
+    Mcp(#[from] McpCommandError),
     #[error("{0}")]
     Lspd(#[from] aether_lspd::LspdRunError),
     #[error("{0}")]
@@ -56,6 +59,8 @@ enum Command {
     Acp(AcpArgs),
     /// Print the fully assembled system prompt (for debugging)
     ShowPrompt(PromptArgs),
+    /// Discover and call deferred MCP tools
+    Mcp(McpArgs),
     /// Manage Aether settings
     #[command(subcommand)]
     Settings(SettingsCommand),
@@ -88,6 +93,8 @@ fn main() -> ExitCode {
             rt.block_on(run_prompt(args)).map(|()| ExitCode::SUCCESS).map_err(Into::into)
         }
 
+        Some(Command::Mcp(args)) => rt.block_on(run_mcp_command(args)).map(|()| ExitCode::SUCCESS).map_err(Into::into),
+
         Some(Command::Settings(SettingsCommand::Init(args))) => rt.block_on(run_init_command(args.into())),
 
         Some(Command::Lspd(args)) => aether_lspd::run_lspd(args).map(|()| ExitCode::SUCCESS).map_err(Into::into),
@@ -99,7 +106,10 @@ fn main() -> ExitCode {
         Ok(code) => code,
         Err(e) => {
             eprintln!("Error: {e}");
-            ExitCode::FAILURE
+            match e {
+                MainError::Mcp(error) => ExitCode::from(error.exit_code()),
+                _ => ExitCode::FAILURE,
+            }
         }
     }
 }

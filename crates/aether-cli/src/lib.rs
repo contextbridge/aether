@@ -6,6 +6,7 @@ pub mod error;
 pub mod generate_command;
 pub mod headless;
 pub mod init;
+pub mod mcp_command;
 pub mod mcp_config_args;
 pub mod output;
 pub mod provider_connection_args;

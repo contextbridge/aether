@@ -152,7 +152,7 @@ The `mcp.json` file configures MCP tool servers:
 - **coding** — Filesystem tools (read, write, bash, etc.) plus optional auto-read rules from configured `--rules-dir` paths
 - **skills** — Slash commands and reusable prompts loaded from the configured `--dir` paths
 
-Set `"proxy": true` on a server to place all of its tools behind Aether's shared `proxy__call_tool`. To partition tools, use `"proxy": { "include": [...], "exclude": [...] }`; patterns are exact MCP-local names or trailing-`*` prefixes, and `exclude` wins.
+Set `"deferTools": true` on a server to keep its schemas out of the model-visible tool definitions. Use `aether mcp --help` to discover deferred servers, then `aether mcp <server> --help` and `aether mcp <server> <tool> --help` to inspect tools and schemas. Invoke a tool with `--json '{...}'` or a JSON object on stdin. To partition tools, use `"deferTools": { "include": [...], "exclude": [...] }`; patterns are exact MCP-local names or trailing-`*` prefixes, and `exclude` wins.
 
 ## Slash Commands
 
@@ -233,7 +233,7 @@ Define agents with specific model, prompts, and tool configurations:
 
 - **`agent`** — Optional default user-invocable agent name.
 - **Top-level `prompts`** — Ordered default prompt sources used by agents that do not define their own `prompts`. File paths can be written as strings; typed objects support `{ "type": "text", "text": "..." }`, `{ "type": "file", "path": "..." }`, and `{ "type": "glob", "pattern": "..." }`.
-- **Top-level `mcps`** — Ordered default MCP config sources used by agents that do not define their own `mcps`. File paths can be written as strings; typed objects support `{ "type": "file", "path": "...", "proxy": false }` and inline `{ "type": "inline", "servers": { ... } }` entries.
+- **Top-level `mcps`** — Ordered default MCP config sources used by agents that do not define their own `mcps`. File paths can be written as strings; typed objects support `{ "type": "file", "path": "...", "deferTools": false }` and inline `{ "type": "inline", "servers": { ... } }` entries.
 - **Agent `prompts`** — Optional ordered prompt sources that override top-level `prompts` for that agent. Supports the same string shorthand and typed objects as top-level `prompts`.
 - **Agent `mcps`** — Optional ordered MCP config sources that override top-level `mcps` for that agent. Supports the same string shorthand and typed objects as top-level `mcps`.
 - **`userInvocable: true`** — Agent appears as a mode option in ACP clients (e.g., Wisp's Shift+Tab)

@@ -32,7 +32,6 @@ client = [
     "dep:async-stream",
     "dep:llm",
     "dep:reqwest",
-    "dep:thiserror",
     "rmcp/transport-streamable-http-client-reqwest",
     "rmcp/transport-child-process",
 ]
@@ -43,7 +42,7 @@ futures = { workspace = true }
 serde = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "sync", "net", "time"] }
 tokio-util = { workspace = true }
-rmcp = { workspace = true, features = ["client", "elicitation", "server"] }
+rmcp = { workspace = true, features = ["client", "elicitation", "server", "transport-async-rw"] }
 tracing = { workspace = true }
 utils = { package = "aether-utils", path = "../utils", version = "0.2.11" }
 schemars = { workspace = true }
@@ -55,7 +54,8 @@ llm = { package = "aether-llm", path = "../llm", optional = true, version = "0.7
 serde_json = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true, optional = true }
-thiserror = { workspace = true, optional = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 aether-doctest = { path = "../doctest" }

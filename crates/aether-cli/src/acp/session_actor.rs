@@ -556,11 +556,10 @@ fn on_mcp_client_event(connection: &ConnectionTo<Client>, event: McpClientEvent)
             spawn_elicitation_request(connection, elicitation);
         }
         McpClientEvent::ServerStatusesChanged(servers) => send_mcp_server_status(connection, servers),
-        McpClientEvent::ConnectionReady(snapshot) => send_mcp_server_status(connection, snapshot.server_statuses),
+        McpClientEvent::ConnectionReady(snapshot) => send_mcp_server_status(connection, snapshot.server_statuses()),
         McpClientEvent::AuthenticationFailed { server, error } => {
             error!("MCP server authentication failed for '{server}': {error}");
         }
-        McpClientEvent::ToolDefinitionsChanged(_) | McpClientEvent::ServerInstructionsUpdated { .. } => {}
     }
 }
 
@@ -875,7 +874,7 @@ mod tests {
         }
 
         #[tokio::test(flavor = "current_thread")]
-        async fn connection_ready_forwards_server_status() {
+        async fn status_event_forwards_server_status() {
             LocalSet::new()
                 .run_until(async {
                     let (cx, mut peer) = test_connection().await;
@@ -883,13 +882,7 @@ mod tests {
                         "github",
                         mcp_utils::client::McpServerStatus::Connected { tool_count: 1 },
                     )];
-                    let snapshot = mcp_utils::client::McpConnectionDetails {
-                        instructions: std::collections::BTreeMap::new(),
-                        tool_definitions: Vec::new(),
-                        server_statuses: servers,
-                    };
-
-                    on_mcp_client_event(&cx, McpClientEvent::ConnectionReady(snapshot));
+                    on_mcp_client_event(&cx, McpClientEvent::ServerStatusesChanged(servers));
 
                     let McpNotification::ServerStatus { servers } = peer.next_mcp_notification().await;
                     assert_eq!(servers[0].name, "github");

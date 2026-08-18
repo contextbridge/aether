@@ -5,13 +5,17 @@
 //! tokio runtime that causes a busy loop. This avoids the issue by spawning stdio agents with `tokio::process::Command`
 
 use agent_client_protocol::util::internal_error;
-use agent_client_protocol::{AcpAgent, AcpAgentConfig, ByteStreams, ConnectTo, Error, Role, util};
+use agent_client_protocol::{
+    AcpAgent, AcpAgentConfig, ByteStreams, ConnectTo, Error, INCOMING_TRANSPORT_CLOSED_REASON, Role,
+    is_incoming_transport_closed,
+};
 use std::path::PathBuf;
-use std::process::Stdio;
+use std::process::{ExitStatus, Stdio};
 use std::str::FromStr;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::oneshot;
+use tokio::time::{Duration, timeout};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 pub struct TokioAcpAgent {
@@ -78,19 +82,54 @@ async fn connect_stdio<T: Role>(config: AcpAgentConfig, client: impl ConnectTo<T
     });
 
     let child_fut = async move {
-        match child.wait().await {
-            Ok(s) if s.success() => Ok(()),
-            Ok(s) => {
-                let stderr = stderr_rx.await.unwrap_or_default();
-                Err(util::internal_error(format!("agent process exited ({s}): {stderr}")))
-            }
-            Err(e) => Err(Error::into_internal_error(e)),
-        }
+        let status = child.wait().await.map_err(Error::into_internal_error)?;
+        finish_child_exit(status, stderr_rx).await
     };
 
     let bytes = ByteStreams::new(stdin.compat_write(), stdout.compat());
+    let protocol_fut = ConnectTo::<T>::connect_to(bytes, client);
+    tokio::pin!(child_fut);
+
     tokio::select! {
-        result = ConnectTo::<T>::connect_to(bytes, client) => result,
-        result = child_fut => result,
+        result = &mut child_fut => result,
+        result = protocol_fut => match result {
+            Ok(()) => timeout(SHUTDOWN_GRACE_PERIOD, &mut child_fut).await.unwrap_or(Ok(())),
+            Err(protocol_error) if has_incoming_transport_closed(&protocol_error) => {
+                match timeout(SHUTDOWN_GRACE_PERIOD, &mut child_fut).await {
+                    Ok(Err(child_error)) => Err(child_error),
+                    _ => Err(protocol_error),
+                }
+            }
+            Err(error) => Err(error),
+        },
     }
 }
+
+fn has_incoming_transport_closed(error: &Error) -> bool {
+    fn data_has_reason(data: &serde_json::Value) -> bool {
+        data.get("reason").and_then(serde_json::Value::as_str) == Some(INCOMING_TRANSPORT_CLOSED_REASON)
+            || data.get("data").is_some_and(data_has_reason)
+    }
+
+    is_incoming_transport_closed(error) || error.data.as_ref().is_some_and(data_has_reason)
+}
+
+async fn finish_child_exit(status: ExitStatus, stderr_rx: oneshot::Receiver<String>) -> Result<(), Error> {
+    if status.success() {
+        return Ok(());
+    }
+
+    let stderr = match timeout(SHUTDOWN_GRACE_PERIOD, stderr_rx).await {
+        Ok(Ok(stderr)) => stderr,
+        _ => String::new(),
+    };
+    let message = if stderr.is_empty() {
+        format!("agent process exited ({status})")
+    } else {
+        format!("agent process exited ({status}): {stderr}")
+    };
+
+    Err(internal_error(message))
+}
+
+const SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(1);

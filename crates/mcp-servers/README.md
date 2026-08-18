@@ -68,7 +68,7 @@ These servers use Aether's `in-memory` transport type -- they run inside your ag
 }
 ```
 
-Each server key must match a factory registered with `McpBuilder::register_in_memory_server()`. The `args` array is parsed as CLI flags by each server:
+Each server key must match a factory registered with `McpBuilder::register_in_memory_server()`. Config loading only records a cloneable in-memory server specification and expands its variables. The factory is invoked exactly once during `McpBuilder::spawn`, after the runtime MCP handle exists. It receives the specification plus `RuntimeServices` containing the live `McpHandle`, root directory, and `AgentDeps`. The `args` array is parsed as CLI flags by each server:
 
 | Server | Flag | Default | Description |
 |--------|------|---------|-------------|
@@ -83,28 +83,26 @@ To register factories and load the config:
 
 ```rust,ignore
 use aether_core::mcp::mcp;
-use futures::FutureExt;
-use mcp_servers::{CodingMcp, PlanMcp, SkillsMcp, SubAgentsMcp, TasksMcp};
+use mcp_servers::McpBuilderExt;
 
-let builder = mcp()
-    .register_in_memory_server("coding", Box::new(|_args| {
-        async move { CodingMcp::new().into_dyn() }.boxed()
-    }))
-    .register_in_memory_server("skills", Box::new(|args| {
-        async move { SkillsMcp::from_args(args).unwrap().into_dyn() }.boxed()
-    }))
-    .register_in_memory_server("tasks", Box::new(|args| {
-        async move { TasksMcp::from_args(args).unwrap().into_dyn() }.boxed()
-    }))
-    .register_in_memory_server("subagents", Box::new(|args| {
-        async move { SubAgentsMcp::standalone_from_args(args).unwrap().into_dyn() }.boxed()
-    }))
-    .register_in_memory_server("plan", Box::new(|_args| {
-        async move { PlanMcp::new().into_dyn() }.boxed()
-    }));
+let builder = mcp("/my/project")
+    .with_agent_deps(deps)
+    .with_builtin_servers()
+    .from_json_files(&["mcp.json"])?;
 
-// Load mcp.json -- matches server keys to registered factories
-let builder = builder.from_json_files(&["mcp.json"]).await?;
+// Built-in factories have not run yet. They receive RuntimeServices here.
+let runtime = builder.spawn().await?;
+```
+
+Custom factories use the same lazy signature:
+
+```rust,ignore
+builder.register_in_memory_server("custom", Box::new(|spec, services| {
+    async move {
+        CustomMcp::new(spec.args, services.root_dir, services.mcp).into_dyn()
+    }
+    .boxed()
+}));
 ```
 
 ## Programmatic Usage

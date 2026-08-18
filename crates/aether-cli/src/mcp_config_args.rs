@@ -15,7 +15,7 @@ impl McpConfigArgs {
         self.mcp_configs
             .iter()
             .map(|path| project_root.join(path))
-            .map(McpConfigSource::direct)
+            .map(McpConfigSource::model_visible)
             .chain(self.mcp_config_jsons.iter().cloned().map(McpConfigSource::Json))
             .collect()
     }
