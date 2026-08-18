@@ -243,10 +243,10 @@ fn resolve_mcp_config_sources(
     entries
         .iter()
         .filter_map(|entry| match entry {
-            McpSourceSpec::File(McpFileSpec { path, proxy, optional }) => match path.resolve(workspace_root) {
+            McpSourceSpec::File(McpFileSpec { path, defer_tools, optional }) => match path.resolve(workspace_root) {
                 Ok(full_path) => {
                     if full_path.is_file() {
-                        Some(Ok(McpConfigSource::file(full_path, *proxy)))
+                        Some(Ok(McpConfigSource::file(full_path, *defer_tools)))
                     } else if *optional {
                         None
                     } else {
@@ -323,7 +323,7 @@ mod tests {
         spec.mcp_config_sources
             .iter()
             .filter_map(|source| match source {
-                McpConfigSource::File { path, proxy } => Some((path.clone(), *proxy)),
+                McpConfigSource::File { path, defer_tools } => Some((path.clone(), *defer_tools)),
                 McpConfigSource::Json(_) | McpConfigSource::Inline(_) => None,
             })
             .collect()
@@ -741,7 +741,7 @@ mod tests {
         write_file(dir.path(), "agent-mcp.json", "{}");
 
         let mut planner = make_spec("planner", AgentSpecExposure::both());
-        planner.mcp_config_sources = vec![McpConfigSource::direct(dir.path().join("agent-mcp.json"))];
+        planner.mcp_config_sources = vec![McpConfigSource::model_visible(dir.path().join("agent-mcp.json"))];
 
         let catalog = AgentCatalog::new(dir.path().to_path_buf(), vec![planner], None);
 

@@ -24,7 +24,7 @@
     "chrome-devtools": {
       "command": "npx",
       "args": ["chrome-devtools-mcp@latest"],
-      "proxy": true
+      "deferTools": true
     }
   }
 }
