@@ -36,12 +36,7 @@ impl McpSnapshot {
     }
 
     pub fn tool_definitions(&self) -> Vec<ToolDefinition> {
-        let mut definitions =
-            self.catalog.tools().model_visible.into_iter().map(|tool| tool.definition().clone()).collect::<Vec<_>>();
-        if !self.catalog.discoverable_deferred_servers().is_empty() {
-            definitions.insert(0, super::tool_proxy::call_tool_definition());
-        }
-        definitions
+        self.catalog.tools().model_visible.into_iter().map(|tool| tool.definition().clone()).collect()
     }
 
     pub fn model_instructions(&self) -> std::collections::BTreeMap<String, String> {

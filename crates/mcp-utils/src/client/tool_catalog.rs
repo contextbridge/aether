@@ -197,7 +197,7 @@ impl ServerCatalogEntry {
     pub fn status_entry(&self) -> McpServerStatusEntry {
         McpServerStatusEntry::new(&self.name, self.status.clone())
             .with_auth_capability(self.auth_capability)
-            .with_proxied(self.exposure.is_proxied())
+            .with_deferred_tools(self.exposure.has_deferred_tools())
     }
     pub(crate) fn pending(name: impl Into<String>, exposure: ToolExposure) -> Self {
         let name = name.into();
@@ -232,7 +232,7 @@ impl ServerCatalogEntry {
                 )
                 .with_server(name.clone())
                 .with_annotations(tool.annotations.clone());
-                let exposure_kind = if exposure.is_direct_tool(&tool.name) {
+                let exposure_kind = if exposure.is_model_visible_tool(&tool.name) {
                     ToolExposureKind::ModelVisible
                 } else {
                     ToolExposureKind::Deferred

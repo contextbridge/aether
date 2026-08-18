@@ -1,6 +1,6 @@
 use mcp_utils::client::{
-    CatalogTool, PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME, ServerCatalogEntry, ToolAnnotationMatcher, ToolCatalog,
-    ToolExposure, ToolExposureKind, ToolFilter, ToolMatcher, ToolProxyRules, ToolRoute,
+    CatalogTool, DeferredToolRules, PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME, ServerCatalogEntry, ToolAnnotationMatcher,
+    ToolCatalog, ToolExposure, ToolExposureKind, ToolFilter, ToolMatcher, ToolRoute,
 };
 use mcp_utils::status::{McpServerAuthCapability, McpServerStatus};
 use rmcp::model::{Tool, ToolAnnotations};
@@ -44,10 +44,10 @@ fn catalog_projects_visibility_filtering_instructions_and_routes_consistently() 
             ..ToolAnnotationMatcher::default()
         })],
     };
-    let exposure = ToolExposure::Proxied(ToolProxyRules::new(&["read", "write"], &["bash"]));
+    let exposure = ToolExposure::Deferred(DeferredToolRules::new(&["read", "write"], &["bash"]));
     let mut catalog = ToolCatalog::new();
     catalog.upsert_server(connected_entry("coding", exposure, &tools, &filter));
-    catalog.set_progressive_discovery_instructions(Some("Discover proxied tools".to_string()));
+    catalog.set_progressive_discovery_instructions(Some("Discover deferred tools".to_string()));
 
     let tools = catalog.tools();
     assert_eq!(
@@ -63,7 +63,7 @@ fn catalog_projects_visibility_filtering_instructions_and_routes_consistently() 
     assert_eq!(catalog.model_instructions().get("coding").map(String::as_str), Some("coding instructions"));
     assert_eq!(
         catalog.model_instructions().get(PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME).map(String::as_str),
-        Some("Discover proxied tools")
+        Some("Discover deferred tools")
     );
     assert!(catalog.route_permitted(&ToolRoute::ModelVisible { namespaced_name: "coding__bash".into() }));
     assert!(!catalog.route_permitted(&ToolRoute::Deferred { server: "coding".into(), tool: "bash".into() }));
@@ -76,8 +76,8 @@ fn catalog_preserves_names_schema_annotations_metadata_and_order() {
     let tools =
         vec![tool("first").with_annotations(ToolAnnotations::new().read_only(true).idempotent(true)), tool("second")];
     let mut catalog = ToolCatalog::new();
-    catalog.upsert_server(connected_entry("alpha", ToolExposure::Direct, &tools, &ToolFilter::default()));
-    catalog.upsert_server(connected_entry("beta", ToolExposure::proxied_all(), &tools, &ToolFilter::default()));
+    catalog.upsert_server(connected_entry("alpha", ToolExposure::ModelVisible, &tools, &ToolFilter::default()));
+    catalog.upsert_server(connected_entry("beta", ToolExposure::deferred_all(), &tools, &ToolFilter::default()));
 
     let first = catalog.tool("alpha__first").unwrap();
     assert_eq!(first.namespaced_name(), "alpha__first");
@@ -109,7 +109,7 @@ fn disconnected_servers_retain_status_without_exposing_tools_or_instructions() {
         Some("not visible".to_string()),
         McpServerStatus::NeedsOAuth,
         McpServerAuthCapability::OAuth,
-        ToolExposure::proxied_all(),
+        ToolExposure::deferred_all(),
         &tools,
         &ToolFilter::default(),
     ));
@@ -128,9 +128,14 @@ fn disconnected_servers_retain_status_without_exposing_tools_or_instructions() {
 #[test]
 fn replacement_preserves_server_position_and_removal_is_atomic() {
     let mut catalog = ToolCatalog::new();
-    catalog.upsert_server(connected_entry("first", ToolExposure::Direct, &[tool("old")], &ToolFilter::default()));
-    catalog.upsert_server(connected_entry("second", ToolExposure::Direct, &[tool("other")], &ToolFilter::default()));
-    catalog.upsert_server(connected_entry("first", ToolExposure::Direct, &[tool("new")], &ToolFilter::default()));
+    catalog.upsert_server(connected_entry("first", ToolExposure::ModelVisible, &[tool("old")], &ToolFilter::default()));
+    catalog.upsert_server(connected_entry(
+        "second",
+        ToolExposure::ModelVisible,
+        &[tool("other")],
+        &ToolFilter::default(),
+    ));
+    catalog.upsert_server(connected_entry("first", ToolExposure::ModelVisible, &[tool("new")], &ToolFilter::default()));
 
     assert_eq!(catalog.servers().iter().map(ServerCatalogEntry::name).collect::<Vec<_>>(), ["first", "second"]);
     assert!(catalog.tool("first__old").is_none());

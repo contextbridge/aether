@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 pub fn fake_mcp(name: &str, server: FakeMcpServer) -> RuntimeMcpServer {
-    RuntimeMcpServer::new(name, RuntimeMcpTransport::InMemory { server: server.into_dyn() }, ToolExposure::Direct)
+    RuntimeMcpServer::new(name, RuntimeMcpTransport::InMemory { server: server.into_dyn() }, ToolExposure::ModelVisible)
 }
 
 /// A fake MCP server preloaded with the classic math tools (`add_numbers`,

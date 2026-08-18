@@ -7,21 +7,17 @@ use super::{
         ConnectConfig, McpConnectAttempt, McpConnectOutcome, McpServerConnection, Tool, authenticate_http,
         connect_server,
     },
-    mcp_client::{McpClient, client_capabilities},
+    mcp_client::client_capabilities,
     naming::{create_namespaced_tool_name, split_on_server_name},
-    tool_catalog::{ServerCatalogEntry, ToolCatalog, ToolRoute},
+    tool_catalog::{ServerCatalogEntry, ToolCatalog},
     tool_filter::ToolFilter,
-    tool_proxy::{self, PROXY_CALL_TOOL_NAME, PROXY_SERVER_NAME},
 };
 use aether_auth::{OAuthCredentialStorage, OAuthHandler};
 use futures::future::join_all;
 use rmcp::{
     Peer, RoleClient, RoleServer,
-    model::{
-        CallToolRequestParams, ClientInfo, ElicitRequestParams, ElicitResult, ElicitationAction, Implementation,
-        Tool as RmcpTool,
-    },
-    service::{DynService, RunningService},
+    model::{ClientInfo, ElicitRequestParams, ElicitResult, ElicitationAction, Implementation, Tool as RmcpTool},
+    service::DynService,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -127,7 +123,6 @@ pub struct McpManager {
     servers: HashMap<String, ServerRecord>,
     catalog: ToolCatalog,
     tool_filter: ToolFilter,
-    aether_home: Option<PathBuf>,
     client_info: ClientInfo,
     event_sender: mpsc::Sender<McpClientEvent>,
     root_dir: PathBuf,
@@ -147,7 +142,6 @@ impl McpManager {
             servers: HashMap::new(),
             catalog: ToolCatalog::new(),
             tool_filter: ToolFilter::default(),
-            aether_home: None,
             client_info: ClientInfo::new(client_capabilities(), Implementation::new("aether", "0.1.0")),
             event_sender,
             root_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
@@ -163,11 +157,6 @@ impl McpManager {
 
     pub fn take_tool_refresh_receiver(&mut self) -> mpsc::Receiver<ToolListChangedRequest> {
         self.tool_refresh_receiver.take().expect("tool refresh receiver can only be taken once")
-    }
-
-    pub fn with_aether_home(mut self, aether_home: impl Into<PathBuf>) -> Self {
-        self.aether_home = Some(aether_home.into());
-        self
     }
 
     pub fn with_progressive_discovery_instructions(mut self, instructions: impl Into<String>) -> Self {
@@ -201,17 +190,6 @@ impl McpManager {
     }
 
     pub async fn register_pending(&mut self, servers: Vec<RuntimeMcpServer>) -> Result<Vec<RuntimeMcpServer>> {
-        let adds_proxied = servers.iter().any(|server| server.tool_exposure.is_proxied());
-        let proxy_name_taken = self.servers.contains_key(PROXY_SERVER_NAME)
-            || servers.iter().any(|server| server.name == PROXY_SERVER_NAME);
-        if (adds_proxied || self.proxy_enabled()) && proxy_name_taken {
-            return Err(McpError::Other("server name 'proxy' collides with the tool proxy".into()));
-        }
-
-        if adds_proxied && !self.proxy_enabled() {
-            tool_proxy::clean_dir(&self.proxy_tool_dir()?).await?;
-        }
-
         for server in &servers {
             self.register_record(&server.name, ServerState::Connecting, None, server.tool_exposure.clone());
         }
@@ -239,45 +217,8 @@ impl McpManager {
         Ok(())
     }
 
-    pub fn get_client_for_tool(
-        &self,
-        namespaced_tool_name: &str,
-        arguments_json: &str,
-    ) -> Result<(Arc<RunningService<RoleClient, McpClient>>, CallToolRequestParams)> {
-        if namespaced_tool_name != PROXY_CALL_TOOL_NAME
-            && !self
-                .catalog
-                .route_permitted(&ToolRoute::ModelVisible { namespaced_name: namespaced_tool_name.to_string() })
-        {
-            return Err(McpError::ToolNotFound(namespaced_tool_name.to_string()));
-        }
-
-        let (server_name, tool_name) = split_on_server_name(namespaced_tool_name)
-            .ok_or_else(|| McpError::InvalidToolNameFormat(namespaced_tool_name.to_string()))?;
-
-        if server_name == PROXY_SERVER_NAME && self.proxy_enabled() {
-            return self.resolve_proxy_call(arguments_json);
-        }
-
-        let client =
-            self.client_for_server(server_name).ok_or_else(|| McpError::ServerNotFound(server_name.to_string()))?;
-
-        let arguments = serde_json::from_str::<serde_json::Value>(arguments_json)?.as_object().cloned();
-        let mut params = CallToolRequestParams::new(tool_name.to_string());
-        if let Some(args) = arguments {
-            params = params.with_arguments(args);
-        }
-
-        Ok((client, params))
-    }
-
     pub fn tool_definitions(&self) -> Vec<ToolDefinition> {
-        let mut definitions =
-            self.catalog.tools().model_visible.into_iter().map(|tool| tool.definition().clone()).collect::<Vec<_>>();
-        if !self.catalog.discoverable_deferred_servers().is_empty() {
-            definitions.insert(0, tool_proxy::call_tool_definition());
-        }
-        definitions
+        self.catalog.tools().model_visible.into_iter().map(|tool| tool.definition().clone()).collect()
     }
 
     pub fn server_instructions(&self) -> BTreeMap<String, String> {
@@ -333,7 +274,7 @@ impl McpManager {
                 return;
             }
         };
-        if let Err(error) = self.replace_catalog_tools(&server, &tools).await {
+        if let Err(error) = self.replace_catalog_tools(&server, &tools) {
             tracing::warn!(server = %server, %error, "Failed to apply refreshed MCP tools; retaining previous catalog");
             return;
         }
@@ -445,7 +386,7 @@ impl McpManager {
     /// Shutdown a specific server by name
     pub async fn shutdown_server(&mut self, server_name: &str) -> Result<()> {
         self.catalog.remove_server(server_name);
-        self.refresh_proxy_instructions();
+        self.refresh_progressive_discovery_instructions();
         let record = self.servers.remove(server_name);
         self.publish_snapshot();
         if let Some(record) = record
@@ -463,19 +404,10 @@ impl McpManager {
         self.emit_event(McpClientEvent::ServerStatusesChanged(self.server_statuses())).await;
     }
 
-    fn refresh_proxy_instructions(&mut self) {
-        let descriptions = self.catalog.discoverable_deferred_servers();
-        let instructions = if descriptions.is_empty() {
-            None
-        } else if let Some(instructions) = &self.progressive_discovery_instructions {
-            Some(instructions.clone())
-        } else {
-            self.proxy_tool_dir().ok().map(|tool_dir| {
-                let descriptions =
-                    descriptions.into_iter().map(|server| (server.name, server.description)).collect::<Vec<_>>();
-                tool_proxy::build_instructions(&tool_dir, &descriptions)
-            })
-        };
+    fn refresh_progressive_discovery_instructions(&mut self) {
+        let instructions = (!self.catalog.discoverable_deferred_servers().is_empty())
+            .then(|| self.progressive_discovery_instructions.clone())
+            .flatten();
         self.catalog.set_progressive_discovery_instructions(instructions);
     }
 
@@ -505,41 +437,6 @@ impl McpManager {
         })
     }
 
-    fn proxy_enabled(&self) -> bool {
-        self.catalog.servers().iter().any(|server| server.exposure().is_proxied())
-    }
-
-    fn proxy_tool_dir(&self) -> Result<PathBuf> {
-        self.aether_home.as_ref().map(|home| tool_proxy::dir_in_home(home)).map_or_else(tool_proxy::dir, Ok)
-    }
-
-    fn resolve_proxy_call(
-        &self,
-        arguments_json: &str,
-    ) -> Result<(Arc<RunningService<RoleClient, McpClient>>, CallToolRequestParams)> {
-        let call = tool_proxy::resolve_call(arguments_json)?;
-        let record = self.servers.get(&call.server).ok_or_else(|| McpError::ServerNotFound(call.server.clone()))?;
-        let namespaced_name = create_namespaced_tool_name(&call.server, &call.tool);
-        if self.catalog.route_permitted(&ToolRoute::ModelVisible { namespaced_name: namespaced_name.clone() }) {
-            return Err(McpError::DirectToolRequiresDirectRoute { tool_name: call.tool, direct_name: namespaced_name });
-        }
-        if !self.catalog.route_permitted(&ToolRoute::Deferred { server: call.server.clone(), tool: call.tool.clone() })
-        {
-            let uncataloged_proxy_tool = self.catalog.tool(&namespaced_name).is_none()
-                && self.tool_filter.is_empty()
-                && self
-                    .catalog
-                    .server(&call.server)
-                    .is_some_and(|server| !server.exposure().is_direct_tool(&call.tool));
-            if !uncataloged_proxy_tool {
-                return Err(McpError::ToolNotFound(namespaced_name));
-            }
-        }
-        let conn = record.connection().ok_or_else(|| McpError::ProxiedServerNotConnected(call.server.clone()))?;
-        let params = CallToolRequestParams::new(call.tool).with_arguments(call.arguments.unwrap_or_default());
-        Ok((conn.client.clone(), params))
-    }
-
     async fn register_connection(
         &mut self,
         name: &str,
@@ -559,7 +456,12 @@ impl McpManager {
             record.oauth_challenge = None;
             record.auth_capability()
         };
-        let description = tool_proxy::extract_server_description(&conn.client, name);
+        let description = conn
+            .client
+            .peer_info()
+            .and_then(|info| info.server_info.as_ref()?.description.clone())
+            .filter(|description| !description.is_empty())
+            .unwrap_or_else(|| name.to_string());
         let instructions = conn.instructions.clone();
         let catalog_tools = tools.iter().map(Tool::from).collect::<Vec<_>>();
         let entry = ServerCatalogEntry::from_tools(
@@ -573,24 +475,14 @@ impl McpManager {
             &self.tool_filter,
         );
 
-        if exposure.is_proxied() {
-            let write_result = match self.proxy_tool_dir() {
-                Ok(tool_dir) => tool_proxy::write_catalog_entries_to_dir(&entry, &tool_dir).await,
-                Err(error) => Err(error),
-            };
-            if let Err(error) = write_result {
-                tracing::warn!(server = %name, %error, "Failed to write proxy tool discovery files");
-            }
-        }
-
         self.servers.get_mut(name).expect("record checked above").state = ServerState::Connected { connection: conn };
         self.catalog.upsert_server(entry);
-        self.refresh_proxy_instructions();
+        self.refresh_progressive_discovery_instructions();
         self.publish_snapshot();
         Ok(())
     }
 
-    async fn replace_catalog_tools(&mut self, name: &str, tools: &[RmcpTool]) -> Result<()> {
+    fn replace_catalog_tools(&mut self, name: &str, tools: &[RmcpTool]) -> Result<()> {
         let existing = self.catalog.server(name).cloned().ok_or_else(|| McpError::ServerNotFound(name.to_string()))?;
         let catalog_tools = tools.iter().map(Tool::from).collect::<Vec<_>>();
         let entry = ServerCatalogEntry::from_tools(
@@ -603,12 +495,8 @@ impl McpManager {
             &catalog_tools,
             &self.tool_filter,
         );
-        if existing.exposure().is_proxied() {
-            let tool_dir = self.proxy_tool_dir()?;
-            tool_proxy::write_catalog_entries_to_dir(&entry, &tool_dir).await?;
-        }
         self.catalog.upsert_server(entry);
-        self.refresh_proxy_instructions();
+        self.refresh_progressive_discovery_instructions();
         self.publish_snapshot();
         Ok(())
     }
@@ -632,10 +520,10 @@ impl McpManager {
             .catalog
             .server(name)
             .cloned()
-            .unwrap_or_else(|| ServerCatalogEntry::pending(name, ToolExposure::Direct))
+            .unwrap_or_else(|| ServerCatalogEntry::pending(name, ToolExposure::ModelVisible))
             .with_status(status, auth);
         self.catalog.upsert_server(entry);
-        self.refresh_proxy_instructions();
+        self.refresh_progressive_discovery_instructions();
         self.publish_snapshot();
     }
 
@@ -670,10 +558,6 @@ impl McpManager {
 
     fn connection_for(&self, server_name: &str) -> Option<&McpServerConnection> {
         self.servers.get(server_name).and_then(ServerRecord::connection)
-    }
-
-    fn client_for_server(&self, server_name: &str) -> Option<Arc<RunningService<RoleClient, McpClient>>> {
-        self.connection_for(server_name).map(|conn| conn.client.clone())
     }
 }
 
@@ -768,7 +652,7 @@ async fn await_server_shutdown(server_name: &str, handle: JoinHandle<()>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        McpClientEvent, McpManager, McpServerStatus, PROXY_SERVER_NAME, RuntimeMcpServer as McpServer,
+        McpClientEvent, McpManager, McpServerStatus, RuntimeMcpServer as McpServer,
         RuntimeMcpTransport as McpTransport, ServerState, ToolListRefresh,
     };
     use crate::client::config::{McpHttpConfig, ToolExposure};
@@ -874,7 +758,7 @@ mod tests {
     async fn authenticate_server_task_rejects_record_without_reauth_config() {
         let (event_sender, _event_receiver) = mpsc::channel(1);
         let mut manager = McpManager::new(event_sender, Some(test_oauth_handler_factory()));
-        manager.register_record("public", ServerState::Connecting, None, ToolExposure::Direct);
+        manager.register_record("public", ServerState::Connecting, None, ToolExposure::ModelVisible);
 
         let error = match manager.authenticate_server_task("public").await {
             Ok(_) => panic!("non-OAuth server should be rejected"),
@@ -891,7 +775,7 @@ mod tests {
             "remote",
             ServerState::NeedsOAuth,
             Some(http_config("http://localhost:19999/mcp")),
-            ToolExposure::Direct,
+            ToolExposure::ModelVisible,
         );
 
         let _task = manager.authenticate_server_task("remote").await.expect("auth should start");
@@ -914,7 +798,7 @@ mod tests {
             "remote",
             ServerState::NeedsOAuth,
             Some(http_config("http://localhost:19999/mcp")),
-            ToolExposure::Direct,
+            ToolExposure::ModelVisible,
         );
         let _task = manager.authenticate_server_task("remote").await.expect("auth should start");
         let _authenticating_event = event_receiver.recv().await.expect("authenticating status change event");
@@ -954,14 +838,14 @@ mod tests {
             "with-oauth",
             ServerState::Connecting,
             Some(http_config("http://localhost/mcp")),
-            ToolExposure::Direct,
+            ToolExposure::ModelVisible,
         );
-        manager.register_record("without-oauth", ServerState::Connecting, None, ToolExposure::Direct);
+        manager.register_record("without-oauth", ServerState::Connecting, None, ToolExposure::ModelVisible);
         manager.register_record(
             "needs-oauth",
             ServerState::NeedsOAuth,
             Some(http_config("http://localhost/mcp2")),
-            ToolExposure::Direct,
+            ToolExposure::ModelVisible,
         );
 
         let statuses = manager.server_statuses();
@@ -977,19 +861,18 @@ mod tests {
     #[tokio::test]
     async fn register_pending_marks_every_server_connecting_and_emits_status() {
         let (event_sender, mut event_receiver) = mpsc::channel(32);
-        let home = tempfile::tempdir().unwrap();
-        let mut manager = McpManager::new(event_sender, None).with_aether_home(home.path());
+        let mut manager = McpManager::new(event_sender, None);
 
         let servers = vec![
             McpServer::new(
                 "alpha",
                 McpTransport::InMemory { server: TestServer::default().into_dyn() },
-                ToolExposure::Direct,
+                ToolExposure::ModelVisible,
             ),
             McpServer::new(
                 "beta",
                 McpTransport::InMemory { server: TestServer::default().into_dyn() },
-                ToolExposure::proxied_all(),
+                ToolExposure::deferred_all(),
             ),
         ];
 
@@ -1000,7 +883,7 @@ mod tests {
         assert_eq!(statuses.len(), 2);
         assert!(matches!(statuses.iter().find(|s| s.name == "alpha").unwrap().status, McpServerStatus::Connecting));
         assert!(matches!(statuses.iter().find(|s| s.name == "beta").unwrap().status, McpServerStatus::Connecting));
-        assert!(statuses.iter().find(|s| s.name == "beta").unwrap().proxied);
+        assert!(statuses.iter().find(|s| s.name == "beta").unwrap().deferred_tools);
 
         let event = event_receiver.try_recv().expect("expected initial ServerStatusesChanged emission");
         let McpClientEvent::ServerStatusesChanged(emitted) = event else {
@@ -1010,21 +893,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn server_statuses_mark_direct_and_proxied_servers_without_proxy_row() {
+    async fn server_statuses_mark_model_visible_and_deferred_servers() {
         let (event_sender, _event_receiver) = mpsc::channel(32);
-        let home = tempfile::tempdir().unwrap();
-        let mut manager = McpManager::new(event_sender, None).with_aether_home(home.path());
+        let mut manager = McpManager::new(event_sender, None);
         manager
             .add_mcps(vec![
                 McpServer::new(
                     "direct",
                     McpTransport::InMemory { server: TestServer::default().into_dyn() },
-                    ToolExposure::Direct,
+                    ToolExposure::ModelVisible,
                 ),
                 McpServer::new(
                     "math",
                     McpTransport::InMemory { server: TestServer::default().into_dyn() },
-                    ToolExposure::proxied_all(),
+                    ToolExposure::deferred_all(),
                 ),
             ])
             .await
@@ -1032,9 +914,8 @@ mod tests {
 
         let statuses = manager.server_statuses();
         assert_eq!(statuses.iter().map(|status| status.name.as_str()).collect::<Vec<_>>(), vec!["direct", "math"]);
-        assert!(!statuses.iter().find(|status| status.name == "direct").unwrap().proxied);
-        assert!(statuses.iter().find(|status| status.name == "math").unwrap().proxied);
-        assert!(!statuses.iter().any(|status| status.name == PROXY_SERVER_NAME));
+        assert!(!statuses.iter().find(|status| status.name == "direct").unwrap().deferred_tools);
+        assert!(statuses.iter().find(|status| status.name == "math").unwrap().deferred_tools);
     }
 
     #[tokio::test]
@@ -1046,12 +927,12 @@ mod tests {
                 McpServer::new(
                     "git",
                     McpTransport::InMemory { server: TestServer::default().into_dyn() },
-                    ToolExposure::Direct,
+                    ToolExposure::ModelVisible,
                 ),
                 McpServer::new(
                     "github",
                     McpTransport::InMemory { server: TestServer::default().into_dyn() },
-                    ToolExposure::Direct,
+                    ToolExposure::ModelVisible,
                 ),
             ])
             .await
@@ -1077,7 +958,7 @@ mod tests {
             .add_mcps(vec![McpServer::new(
                 "test",
                 McpTransport::InMemory { server: TestServer::default().into_dyn() },
-                ToolExposure::Direct,
+                ToolExposure::ModelVisible,
             )])
             .await
             .unwrap();
@@ -1106,7 +987,7 @@ mod tests {
             .add_mcps(vec![McpServer::new(
                 "test",
                 McpTransport::InMemory { server: TestServer::default().into_dyn() },
-                ToolExposure::Direct,
+                ToolExposure::ModelVisible,
             )])
             .await
             .unwrap();
@@ -1134,7 +1015,7 @@ mod tests {
             .add_mcps(vec![McpServer::new(
                 "test",
                 McpTransport::InMemory { server: TestServer::default().into_dyn() },
-                ToolExposure::Direct,
+                ToolExposure::ModelVisible,
             )])
             .await
             .unwrap();
@@ -1162,7 +1043,7 @@ mod tests {
             .add_mcps(vec![McpServer::new(
                 "test",
                 McpTransport::InMemory { server: TestServer::default().into_dyn() },
-                ToolExposure::Direct,
+                ToolExposure::ModelVisible,
             )])
             .await
             .unwrap();
@@ -1182,7 +1063,7 @@ mod tests {
             .add_mcps(vec![McpServer::new(
                 "test",
                 McpTransport::InMemory { server: TestServer::default().into_dyn() },
-                ToolExposure::Direct,
+                ToolExposure::ModelVisible,
             )])
             .await
             .unwrap();

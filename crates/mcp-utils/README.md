@@ -20,13 +20,12 @@ Utilities for the [Model Context Protocol](https://modelcontextprotocol.io/) (MC
 - **`ToolCatalog`** -- The per-agent, I/O-free view of MCP servers, tools, exposure, filtering, instructions, and route authorization
 - **`ToolDisplayMeta` / `ToolResultMeta`** -- Metadata for rendering tool calls and results in UIs
 
-`McpManager` owns the live connections and atomically replaces catalog entries after successful discovery. Model-visible tools, proxy discovery files, instructions, statuses, and execution checks are projections of that catalog, so denied or disconnected tools cannot be exposed through another route.
 
 ## Feature Flags
 
 | Feature | Description | Default |
 |---------|-------------|---------|
-| `client` | MCP client with OAuth, server management, and tool proxying | yes |
+| `client` | MCP client with OAuth, server management, and deferred tool routing | yes |
 
 ## License
 
