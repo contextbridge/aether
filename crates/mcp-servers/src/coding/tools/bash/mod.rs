@@ -1,7 +1,8 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
-use std::time::Duration;
+use std::env::current_exe;
+use std::os::unix::process::CommandExt;
+use std::{collections::BTreeMap, path::Path, process::Stdio, time::Duration};
 use tokio::process::Command;
 
 use crate::coding::error::BashError;
@@ -36,6 +37,42 @@ pub struct BashOutput {
     pub meta: Option<ToolResultMeta>,
 }
 
+/// Immutable environment overrides inherited by Bash commands.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BashEnvironment {
+    vars: BTreeMap<String, String>,
+}
+
+impl BashEnvironment {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_var(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.vars.insert(name.into(), value.into());
+        self
+    }
+
+    pub fn with_path_prepend(self, directory: impl AsRef<Path>) -> Self {
+        let directory = directory.as_ref().to_string_lossy().into_owned();
+        let current = std::env::var("PATH").unwrap_or_default();
+        let mut entries = vec![directory.clone()];
+        entries.extend(current.split(':').filter(|entry| *entry != directory).map(str::to_owned));
+        self.with_var("PATH", entries.join(":"))
+    }
+
+    pub fn with_current_exe_dir_on_path(self) -> Self {
+        let Some(directory) = current_exe().ok().and_then(|path| path.parent().map(Path::to_path_buf)) else {
+            return self;
+        };
+        self.with_path_prepend(directory)
+    }
+
+    pub fn vars(&self) -> &BTreeMap<String, String> {
+        &self.vars
+    }
+}
+
 pub fn validate_args(args: &BashInput) -> Result<(), BashError> {
     if args.command.trim() == "rm" {
         return Err(BashError::Forbidden("Deleting files with a bare 'rm' is not allowed".to_string()));
@@ -48,12 +85,12 @@ pub fn validate_args(args: &BashInput) -> Result<(), BashError> {
     Ok(())
 }
 
-pub async fn execute_command(args: BashInput) -> Result<BashOutput, BashError> {
-    execute_command_in_dir(args, None).await
-}
-
 /// Runs `args.command` to completion; `args.timeout: None` means no timeout.
-pub async fn execute_command_in_dir(args: BashInput, cwd: Option<&Path>) -> Result<BashOutput, BashError> {
+pub async fn execute_command(
+    args: BashInput,
+    cwd: Option<&Path>,
+    environment: &BashEnvironment,
+) -> Result<BashOutput, BashError> {
     validate_args(&args)?;
 
     let timeout = args.timeout.map(Duration::from_millis);
@@ -63,27 +100,47 @@ pub async fn execute_command_in_dir(args: BashInput, cwd: Option<&Path>) -> Resu
     if let Some(dir) = cwd {
         command.current_dir(dir);
     }
-    command.kill_on_drop(true);
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    command.envs(environment.vars());
+    command.as_std_mut().process_group(0);
+
+    let child = command
+        .spawn()
+        .map_err(|error| BashError::SpawnFailed { command: args.command.clone(), reason: error.to_string() })?;
+    let mut process_group = ProcessGroupGuard::new(child.id());
+    let mut child_task = tokio::spawn(child.wait_with_output());
 
     let output = match timeout {
         Some(timeout) => {
-            let Ok(result) = tokio::time::timeout(timeout, command.output()).await else {
-                let display_meta = ToolDisplayMeta::new(
-                    "Run command",
-                    format!("{} (exit -1, timed out)", truncate(&args.command, 40)),
-                );
-                return Ok(BashOutput {
-                    output: format!("Command timed out after {}ms", timeout.as_millis()),
-                    exit_code: -1,
-                    killed: true,
-                    meta: Some(display_meta.into()),
-                });
-            };
-            result
+            tokio::select! {
+                result = &mut child_task => result,
+                () = tokio::time::sleep(timeout) => {
+                    process_group.kill();
+                    let _ = tokio::time::timeout(Duration::from_secs(5), &mut child_task).await;
+                    let display_meta = ToolDisplayMeta::new(
+                        "Run command",
+                        format!("{} (exit -1, timed out)", truncate(&args.command, 40)),
+                    );
+                    return Ok(BashOutput {
+                        output: format!("Command timed out after {}ms", timeout.as_millis()),
+                        exit_code: -1,
+                        killed: true,
+                        meta: Some(display_meta.into()),
+                    });
+                }
+            }
         }
-        None => command.output().await,
-    }
-    .map_err(|error| BashError::SpawnFailed { command: args.command.clone(), reason: error.to_string() })?;
+        None => child_task.await,
+    };
+    let output = match output {
+        Ok(output) => output,
+        Err(error) => {
+            return Err(BashError::SpawnFailed { command: args.command.clone(), reason: error.to_string() });
+        }
+    };
+    let output =
+        output.map_err(|error| BashError::SpawnFailed { command: args.command.clone(), reason: error.to_string() })?;
+    process_group.disarm();
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -92,4 +149,55 @@ pub async fn execute_command_in_dir(args: BashInput, cwd: Option<&Path>) -> Resu
         ToolDisplayMeta::new("Run command", format!("{} (exit {exit_code})", truncate(&args.command, 40)));
 
     Ok(BashOutput { output: format!("{stdout}{stderr}"), exit_code, killed: false, meta: Some(display_meta.into()) })
+}
+
+/// Kills an entire process group on drop unless disarmed after a clean exit.
+///
+/// `Child::kill`/`kill_on_drop` signal only the direct child (`bash`), leaving
+/// its spawned commands orphaned; killing the process group covers the tree.
+/// Disarming matters because the kernel may recycle the group id once reaped.
+struct ProcessGroupGuard {
+    pgid: Option<u32>,
+}
+
+impl ProcessGroupGuard {
+    fn new(pgid: Option<u32>) -> Self {
+        Self { pgid }
+    }
+
+    fn kill(&mut self) {
+        if let Some(pgid) = self.pgid.take() {
+            unsafe {
+                libc::killpg(pgid as libc::pid_t, libc::SIGKILL);
+            }
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.pgid = None;
+    }
+}
+
+impl Drop for ProcessGroupGuard {
+    fn drop(&mut self) {
+        self.kill();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn environment_overrides_are_passed_to_bash() {
+        let environment = BashEnvironment::new().with_var("AETHER_TEST_VALUE", "present");
+        let output = execute_command(
+            BashInput { command: "printf '%s' \"$AETHER_TEST_VALUE\"".into(), ..Default::default() },
+            None,
+            &environment,
+        )
+        .await
+        .unwrap();
+        assert_eq!(output.output, "present");
+    }
 }

@@ -1,5 +1,5 @@
 use super::error::CodingError;
-use super::tools::bash::execute_command_in_dir;
+use super::tools::bash::{BashEnvironment, execute_command};
 use super::{
     AstGrepInput, AstGrepOutput, BashInput, BashOutput, EditFileArgs, EditFileResponse, FindInput, FindOutput,
     GrepInput, GrepOutput, ListFilesArgs, ListFilesResult, ReadFileArgs, ReadFileResult, WriteFileArgs,
@@ -11,14 +11,23 @@ use std::path::PathBuf;
 /// Default implementation that uses local filesystem operations.
 ///
 /// This is the standard behavior for `CodingMcp` when running outside
-/// of an ACP context.
-#[derive(Debug, Default)]
-pub struct DefaultCodingTools;
+/// of an ACP context. Bash commands inherit the Aether executable's
+/// directory on `PATH` so the `aether` CLI resolves from Bash.
+#[derive(Debug)]
+pub struct DefaultCodingTools {
+    bash_environment: BashEnvironment,
+}
+
+impl Default for DefaultCodingTools {
+    fn default() -> Self {
+        Self { bash_environment: BashEnvironment::default().with_current_exe_dir_on_path() }
+    }
+}
 
 impl DefaultCodingTools {
     /// Create a new `DefaultCodingTools` instance
     pub fn new() -> Self {
-        Self
+        Self::default()
     }
 }
 
@@ -40,7 +49,7 @@ impl CodingTools for DefaultCodingTools {
     }
 
     async fn bash(&self, args: BashInput, cwd: Option<PathBuf>) -> Result<BashOutput, CodingError> {
-        execute_command_in_dir(args, cwd.as_deref()).await.map_err(CodingError::from)
+        execute_command(args, cwd.as_deref(), &self.bash_environment).await.map_err(CodingError::from)
     }
 
     async fn grep(&self, args: GrepInput) -> Result<GrepOutput, CodingError> {

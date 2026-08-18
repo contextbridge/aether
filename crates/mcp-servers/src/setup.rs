@@ -51,7 +51,11 @@ impl McpBuilderExt for McpBuilder {
             Box::new(|spec, services| {
                 async move {
                     SkillsMcp::from_args_with_base_dir(spec.args, &services.root_dir)
-                        .expect("Failed to parse SkillsMcp args")
+                        .map_err(|error| {
+                            warn!("Failed to parse SkillsMcp args: {error}, using defaults");
+                            error
+                        })
+                        .unwrap_or_else(|_| SkillsMcp::new(&[]).with_root_dir(services.root_dir.clone()))
                         .into_dyn()
                 }
                 .boxed()
@@ -61,8 +65,13 @@ impl McpBuilderExt for McpBuilder {
             "subagents",
             Box::new(|spec, services| {
                 async move {
-                    SubAgentsMcp::embedded_from_args(spec.args, &services.root_dir, services.agent_deps)
-                        .expect("Failed to parse SubAgentsMcp args")
+                    let agent_deps = services.agent_deps.clone();
+                    SubAgentsMcp::embedded_from_args(spec.args, &services.root_dir, agent_deps.clone())
+                        .map_err(|error| {
+                            warn!("Failed to parse SubAgentsMcp args: {error}, using defaults");
+                            error
+                        })
+                        .unwrap_or_else(|_| SubAgentsMcp::embedded(services.root_dir.clone(), agent_deps))
                         .into_dyn()
                 }
                 .boxed()
@@ -78,7 +87,11 @@ impl McpBuilderExt for McpBuilder {
                 async move {
                     let default_plans_dir = services.root_dir.join(DEFAULT_PLANS_DIR);
                     PlanMcp::from_args_with_base_dir(spec.args, default_plans_dir, &services.root_dir)
-                        .expect("Failed to parse PlanMcp args")
+                        .map_err(|error| {
+                            warn!("Failed to parse PlanMcp args: {error}, using defaults");
+                            error
+                        })
+                        .unwrap_or_else(|_| PlanMcp::new())
                         .into_dyn()
                 }
                 .boxed()
