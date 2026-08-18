@@ -287,6 +287,8 @@ async fn tool_proxy_partial_connection_works() {
     assert_eq!(defs[0].name, "proxy__call_tool");
 
     let instructions = manager.server_instructions();
-    let proxy_instr = instructions.get("proxy").expect("Expected proxy instructions");
+    let proxy_instr = instructions
+        .get(mcp_utils::client::PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME)
+        .expect("Expected proxy instructions");
     assert!(proxy_instr.contains("working"), "Instructions should mention the connected server");
 }

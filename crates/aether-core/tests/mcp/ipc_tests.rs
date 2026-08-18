@@ -145,7 +145,9 @@ async fn gateway_runtime(server: FakeMcpServer, exposure: ToolExposure, filter: 
         },
         exposure,
     );
+    let aether_home = tempfile::tempdir().unwrap();
     let mut session = mcp("/workspace")
+        .with_aether_home(aether_home.path())
         .with_servers(vec![configured])
         .with_tool_filter(filter)
         .register_in_memory_server("fake", factory)

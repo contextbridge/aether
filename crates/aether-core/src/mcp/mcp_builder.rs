@@ -1,6 +1,7 @@
 use mcp_utils::client::{
     InMemoryServerSpec, McpClientEvent, McpConfig, McpConnectionDetails, McpError, McpManager, McpServer, McpTransport,
-    OAuthHandlerFactory, ParseError, RuntimeMcpServer, RuntimeMcpTransport, ToolFilter,
+    OAuthHandlerFactory, PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME, ParseError, RuntimeMcpServer, RuntimeMcpTransport,
+    ToolFilter,
 };
 use mcp_utils::tool_gateway::{AETHER_MCP_IPC_SOCKET, UnixSocketMcpTransport, UnixSocketPath, UnixSocketServer};
 use utils::{SettingsStore, variables::Vars};
@@ -171,6 +172,7 @@ pub struct McpBuilder {
     aether_home: Option<PathBuf>,
     vars: Vars,
     tool_filter: ToolFilter,
+    progressive_discovery_instructions: Option<String>,
 }
 
 impl McpBuilder {
@@ -191,6 +193,7 @@ impl McpBuilder {
             aether_home: None,
             vars,
             tool_filter: ToolFilter::default(),
+            progressive_discovery_instructions: None,
         }
     }
 
@@ -201,6 +204,11 @@ impl McpBuilder {
 
     pub fn with_tool_filter(mut self, filter: ToolFilter) -> Self {
         self.tool_filter = filter;
+        self
+    }
+
+    pub fn with_progressive_discovery_instructions(mut self, instructions: impl Into<String>) -> Self {
+        self.progressive_discovery_instructions = Some(instructions.into());
         self
     }
 
@@ -281,7 +289,13 @@ impl McpBuilder {
             aether_home,
             vars: _,
             tool_filter,
+            progressive_discovery_instructions,
         } = self;
+        if servers.iter().any(|server| server.tool_exposure.is_proxied())
+            && servers.iter().any(|server| server.name == PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME)
+        {
+            return Err(McpError::ReservedServerName(PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME.to_string()));
+        }
         let (manager_tx, manager_rx) = mpsc::channel::<ManagerCommand>(mcp_channel_capacity);
         let (snapshot_tx, snapshot_rx) = watch::channel(Arc::new(mcp_utils::client::McpSnapshot::default()));
         let (event_tx, event_rx) = mpsc::channel::<McpClientEvent>(mcp_channel_capacity);
@@ -304,6 +318,9 @@ impl McpBuilder {
         let mut mcp_manager = McpManager::new(event_tx, oauth_handler_factory)
             .with_tool_filter(tool_filter)
             .with_snapshot_sender(snapshot_tx);
+        if let Some(instructions) = progressive_discovery_instructions {
+            mcp_manager = mcp_manager.with_progressive_discovery_instructions(instructions);
+        }
         if let Some(store) = services.agent_deps.oauth_credential_store.clone() {
             mcp_manager = mcp_manager.with_oauth_credential_store(store);
         }
@@ -586,6 +603,19 @@ mod tests {
             args_for(&builder, "skills"),
             Some(vec!["--dir".to_string(), home.path().join("skills").to_string_lossy().into_owned()])
         );
+    }
+
+    #[tokio::test]
+    async fn reserved_progressive_discovery_server_is_rejected_when_gateway_is_enabled() {
+        let result = McpBuilder::new("/workspace")
+            .from_mcp_config_sources(&[json_source(
+                r#"{"servers":{"progressive-discovery":{"type":"stdio","command":"server"},"deferred":{"type":"stdio","command":"server","proxy":true}}}"#,
+            )])
+            .unwrap()
+            .spawn()
+            .await;
+
+        assert!(matches!(result, Err(McpError::ReservedServerName(name)) if name == "progressive-discovery"));
     }
 
     #[test]

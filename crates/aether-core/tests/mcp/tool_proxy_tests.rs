@@ -1,5 +1,8 @@
 use aether_core::testing::{FakeMcpServer, FakeTool, FakeToolResponse, McpTest, McpTestBuilder, fake_mcp};
-use mcp_utils::client::{McpClientEvent, McpConnectionDetails, McpManager, ToolExposure, ToolProxyRules};
+use mcp_utils::client::{
+    McpClientEvent, McpConnectionDetails, McpManager, PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME, ToolExposure,
+    ToolProxyRules,
+};
 use tokio::sync::mpsc;
 
 async fn math_proxy() -> McpTest {
@@ -20,7 +23,11 @@ async fn call_proxy_tool(
 }
 
 fn proxy_instructions(snapshot: &McpConnectionDetails) -> String {
-    snapshot.model_instructions().get("proxy").expect("Expected proxy instructions").clone()
+    snapshot
+        .model_instructions()
+        .get(PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME)
+        .expect("Expected proxy instructions")
+        .clone()
 }
 
 fn extract_tool_dir(instructions: &str) -> Option<String> {
@@ -65,7 +72,7 @@ async fn test_tool_proxy_does_not_leak_nested_instructions() {
     let snapshot = test.snapshot();
 
     assert!(!snapshot.model_instructions().contains_key("math"));
-    assert!(snapshot.model_instructions().contains_key("proxy"));
+    assert!(snapshot.model_instructions().contains_key(PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME));
 }
 
 #[tokio::test]
@@ -152,7 +159,7 @@ async fn include_only_proxy_server_instructions_cover_its_direct_tools() {
         .await;
 
     assert!(test.snapshot().model_instructions().contains_key("math"));
-    assert!(test.snapshot().model_instructions().contains_key("proxy"));
+    assert!(test.snapshot().model_instructions().contains_key(PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME));
 }
 
 #[tokio::test]
@@ -163,7 +170,7 @@ async fn proxy_rules_with_no_direct_tools_do_not_emit_server_instructions() {
         .await;
 
     assert!(!test.snapshot().model_instructions().contains_key("math"));
-    assert!(test.snapshot().model_instructions().contains_key("proxy"));
+    assert!(test.snapshot().model_instructions().contains_key(PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME));
 }
 
 #[tokio::test]
@@ -171,7 +178,7 @@ async fn selectively_proxied_server_instructions_cover_its_direct_tools() {
     let test = selective_math_proxy().await;
 
     assert!(test.snapshot().model_instructions().contains_key("math"));
-    assert!(test.snapshot().model_instructions().contains_key("proxy"));
+    assert!(test.snapshot().model_instructions().contains_key(PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME));
 }
 
 #[tokio::test]
