@@ -31,6 +31,7 @@ fn connected_entry(name: &str, exposure: ToolExposure, tools: &[Tool], filter: &
 
 #[test]
 fn catalog_projects_visibility_filtering_instructions_and_routes_consistently() {
+    assert_eq!(PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME, "progressive-discovery");
     let tools = vec![
         tool("bash"),
         tool("read").with_annotations(ToolAnnotations::new().read_only(true).open_world(false)),

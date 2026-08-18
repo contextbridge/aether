@@ -38,6 +38,9 @@ pub enum McpError {
     /// Prompt retrieval failed
     #[error("Prompt retrieval failed: {0}")]
     PromptGetFailed(String),
+    /// A configured server conflicts with an Aether-owned instruction namespace.
+    #[error("MCP server name '{0}' is reserved by Aether")]
+    ReservedServerName(String),
     /// No factory was registered for a declarative in-memory server.
     #[error("In-memory MCP server '{server}' requires unregistered factory '{factory}'")]
     InMemoryFactoryNotFound { server: String, factory: String },

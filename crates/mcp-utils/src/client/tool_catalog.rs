@@ -3,7 +3,7 @@ use crate::status::{McpServerAuthCapability, McpServerStatus, McpServerStatusEnt
 use llm::ToolDefinition;
 use std::collections::BTreeMap;
 
-pub const PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME: &str = "proxy";
+pub const PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME: &str = "progressive-discovery";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerDescription {

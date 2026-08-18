@@ -137,6 +137,7 @@ pub struct McpManager {
     tool_refresh_sender: mpsc::Sender<ToolListChangedRequest>,
     tool_refresh_receiver: Option<mpsc::Receiver<ToolListChangedRequest>>,
     next_connection_generation: Arc<AtomicU64>,
+    progressive_discovery_instructions: Option<String>,
 }
 
 impl McpManager {
@@ -156,6 +157,7 @@ impl McpManager {
             tool_refresh_sender,
             tool_refresh_receiver: Some(tool_refresh_receiver),
             next_connection_generation: Arc::new(AtomicU64::new(1)),
+            progressive_discovery_instructions: None,
         }
     }
 
@@ -165,6 +167,11 @@ impl McpManager {
 
     pub fn with_aether_home(mut self, aether_home: impl Into<PathBuf>) -> Self {
         self.aether_home = Some(aether_home.into());
+        self
+    }
+
+    pub fn with_progressive_discovery_instructions(mut self, instructions: impl Into<String>) -> Self {
+        self.progressive_discovery_instructions = Some(instructions.into());
         self
     }
 
@@ -457,15 +464,18 @@ impl McpManager {
     }
 
     fn refresh_proxy_instructions(&mut self) {
-        let instructions = self.proxy_tool_dir().ok().and_then(|tool_dir| {
-            let descriptions = self
-                .catalog
-                .discoverable_deferred_servers()
-                .into_iter()
-                .map(|server| (server.name, server.description))
-                .collect::<Vec<_>>();
-            (!descriptions.is_empty()).then(|| tool_proxy::build_instructions(&tool_dir, &descriptions))
-        });
+        let descriptions = self.catalog.discoverable_deferred_servers();
+        let instructions = if descriptions.is_empty() {
+            None
+        } else if let Some(instructions) = &self.progressive_discovery_instructions {
+            Some(instructions.clone())
+        } else {
+            self.proxy_tool_dir().ok().map(|tool_dir| {
+                let descriptions =
+                    descriptions.into_iter().map(|server| (server.name, server.description)).collect::<Vec<_>>();
+                tool_proxy::build_instructions(&tool_dir, &descriptions)
+            })
+        };
         self.catalog.set_progressive_discovery_instructions(instructions);
     }
 
