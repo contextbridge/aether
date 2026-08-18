@@ -112,11 +112,12 @@ impl TryFrom<McpArgs> for Request {
             (Some(server), None, true) => Ok(Request::Help(HelpLevel::Server(server))),
             (Some(server), Some(tool), true) => Ok(Request::Help(HelpLevel::Tool { server, tool })),
             (Some(server), Some(tool), false) => {
-                let stdin = read_stdin()?;
-                if args.json.is_some() && stdin.is_some() {
-                    return Err(McpCommandError::Usage("--json and JSON on stdin are mutually exclusive".into()));
-                }
-                let json = parse_json_object(args.json.as_deref().or(stdin.as_deref()))?;
+                let json = if let Some(input) = args.json.as_deref() {
+                    parse_json_object(Some(input))?
+                } else {
+                    let stdin = read_stdin()?;
+                    parse_json_object(stdin.as_deref())?
+                };
                 Ok(Request::Call { server, tool, json, timeout_seconds: args.timeout_seconds })
             }
             (Some(_), None, false) | (None, Some(_), _) => Err(McpCommandError::Usage(

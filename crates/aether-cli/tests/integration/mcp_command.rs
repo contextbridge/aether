@@ -107,6 +107,24 @@ async fn calls_accept_empty_json_flag_or_stdin_and_print_one_json_value() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn json_flag_does_not_wait_for_open_stdin() {
+    let (_server, socket) = gateway();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_aether"));
+    command
+        .args(["mcp", "demo", "echo", "--json", r#"{"message":"flag"}"#])
+        .env(AETHER_MCP_IPC_SOCKET, socket)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().unwrap();
+    let _open_stdin = child.stdin.take().unwrap();
+    let output = child.wait_with_output().unwrap();
+
+    assert_success(&output);
+    assert_eq!(stdout_json(&output), json!({"echoed": "flag"}));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn coding_bash_composes_real_cli_with_jq_pipes_redirects_and_scripts() {
     let (_server, socket) = gateway();
     let workspace = tempfile::tempdir().unwrap();
@@ -130,6 +148,7 @@ async fn coding_bash_composes_real_cli_with_jq_pipes_redirects_and_scripts() {
             command: concat!(
                 "printf '%s' '{\"message\":\"pipe\"}' | aether mcp demo echo | jq -r .echoed > pipe.txt && ",
                 "aether mcp demo echo --json '{\"message\":\"redirect\"}' > result.json && ",
+                "aether mcp demo echo > empty.json && ",
                 "test \"$(jq -r .echoed result.json)\" = redirect && ",
                 "value=\"$(aether mcp demo echo --json '{\"message\":\"substitution\"}' | jq -r .echoed)\" && ",
                 "test \"$value\" = substitution && ./call.sh"
@@ -153,6 +172,13 @@ async fn coding_bash_composes_real_cli_with_jq_pipes_redirects_and_scripts() {
         .unwrap(),
         json!({"echoed": "redirect"})
     );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(
+            &std::fs::read_to_string(workspace.path().join("empty.json")).unwrap()
+        )
+        .unwrap(),
+        json!({"echoed": null})
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -175,9 +201,10 @@ async fn usage_errors_exit_two_and_runtime_errors_exit_one() {
         assert_eq!(output.status.code(), Some(2), "stderr: {}", String::from_utf8_lossy(&output.stderr));
     }
 
-    let conflict =
+    let explicit_json_wins =
         run(&socket, &["mcp", "demo", "echo", "--json", r#"{"message":"flag"}"#], Some(r#"{"message":"stdin"}"#));
-    assert_eq!(conflict.status.code(), Some(2), "stderr: {}", String::from_utf8_lossy(&conflict.stderr));
+    assert_success(&explicit_json_wins);
+    assert_eq!(stdout_json(&explicit_json_wins), json!({"echoed": "flag"}));
 
     let tool_error = run(&socket, &["mcp", "demo", "fail"], None);
     assert_eq!(tool_error.status.code(), Some(1), "stderr: {}", String::from_utf8_lossy(&tool_error.stderr));
