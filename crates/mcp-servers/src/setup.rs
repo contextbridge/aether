@@ -7,6 +7,10 @@ use futures::FutureExt;
 use mcp_utils::ServiceExt;
 use tracing::{debug, warn};
 
+pub fn progressive_discovery_instructions() -> String {
+    include_str!("progressive_discovery_instructions.md").to_string()
+}
+
 #[doc = include_str!("docs/mcp_builder_ext.md")]
 pub trait McpBuilderExt {
     /// Registers built-in in-memory MCP factories. Servers are constructed at
@@ -113,6 +117,7 @@ impl McpBuilderExt for McpBuilder {
                 .boxed()
             }),
         )
+        .with_progressive_discovery_instructions(progressive_discovery_instructions())
     }
 }
 
