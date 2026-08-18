@@ -50,7 +50,7 @@ async fn test_parse_stdio_config() {
     );
     with_env!([("GITHUB_TOKEN", "test_token")], {
         let server = parse_one(&json);
-        assert!(!server.is_proxied());
+        assert!(!server.has_deferred_tools());
         match server.transport {
             McpTransport::Stdio { command, args, env } => {
                 assert_eq!(server.name, "githubMcp");
@@ -174,26 +174,26 @@ async fn test_env_var_in_url() {
 }
 
 #[tokio::test]
-async fn test_parse_per_server_proxy_config() {
+async fn test_parse_per_server_defer_tools_config() {
     let json = r#"{
         "servers": {
             "github": {
                 "type": "stdio",
                 "command": "npx",
                 "args": ["-y", "@modelcontextprotocol/server-github"],
-                "proxy": true
+                "deferTools": true
             },
             "sentry": { "type": "http", "url": "https://sentry.example.com/mcp" }
         }
     }"#;
     let servers = parse_servers(json).unwrap();
     assert_eq!(servers.len(), 2);
-    assert!(servers.iter().find(|s| s.name == "github").unwrap().is_proxied());
-    assert!(!servers.iter().find(|s| s.name == "sentry").unwrap().is_proxied());
+    assert!(servers.iter().find(|s| s.name == "github").unwrap().has_deferred_tools());
+    assert!(!servers.iter().find(|s| s.name == "sentry").unwrap().has_deferred_tools());
 }
 
 #[test]
-fn test_rejects_proxy_server_type() {
-    let json = server_json("outer", r#"{ "type": "proxy", "servers": { "bad": { "type": "in-memory" } } }"#);
+fn test_rejects_unknown_server_type() {
+    let json = server_json("outer", r#"{ "type": "unknown", "servers": { "bad": { "type": "in-memory" } } }"#);
     assert!(McpConfig::from_json(&json).is_err());
 }

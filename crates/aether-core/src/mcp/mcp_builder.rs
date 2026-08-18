@@ -261,10 +261,10 @@ impl McpBuilder {
         let mut merged = McpConfig::default();
         for source in sources {
             let config = match source {
-                McpConfigSource::File { path, proxy } => {
+                McpConfigSource::File { path, defer_tools } => {
                     let mut config = McpConfig::from_json_file(path)?;
-                    if *proxy {
-                        config.mark_all_proxy();
+                    if *defer_tools {
+                        config.defer_all_tools();
                     }
                     config
                 }
@@ -286,12 +286,12 @@ impl McpBuilder {
             root_dir,
             oauth_handler_factory,
             agent_deps,
-            aether_home,
+            aether_home: _,
             vars: _,
             tool_filter,
             progressive_discovery_instructions,
         } = self;
-        if servers.iter().any(|server| server.tool_exposure.is_proxied())
+        if servers.iter().any(|server| server.tool_exposure.has_deferred_tools())
             && servers.iter().any(|server| server.name == PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME)
         {
             return Err(McpError::ReservedServerName(PROGRESSIVE_DISCOVERY_INSTRUCTION_NAME.to_string()));
@@ -300,7 +300,7 @@ impl McpBuilder {
         let (snapshot_tx, snapshot_rx) = watch::channel(Arc::new(mcp_utils::client::McpSnapshot::default()));
         let (event_tx, event_rx) = mpsc::channel::<McpClientEvent>(mcp_channel_capacity);
         let mcp = McpHandle::new(manager_tx, snapshot_rx);
-        let gateway_transport = if servers.iter().any(|server| server.tool_exposure.is_proxied()) {
+        let gateway_transport = if servers.iter().any(|server| server.tool_exposure.has_deferred_tools()) {
             let path = UnixSocketPath::new().map_err(|error| McpError::TransportError(error.to_string()))?;
             Some(UnixSocketMcpTransport::bind(path).map_err(|error| McpError::TransportError(error.to_string()))?)
         } else {
@@ -323,9 +323,6 @@ impl McpBuilder {
         }
         if let Some(store) = services.agent_deps.oauth_credential_store.clone() {
             mcp_manager = mcp_manager.with_oauth_credential_store(store);
-        }
-        if let Some(aether_home) = aether_home {
-            mcp_manager = mcp_manager.with_aether_home(aether_home);
         }
         mcp_manager = mcp_manager.with_root_dir(root_dir);
         let pending = mcp_manager.register_pending(servers).await?;
@@ -435,7 +432,7 @@ mod tests {
         });
         let spawn = McpBuilder::new("/workspace")
             .register_in_memory_server("test", factory)
-            .from_mcp_config_sources(&[json_source(r#"{"servers":{"test":{"type":"in-memory","proxy":true}}}"#)])
+            .from_mcp_config_sources(&[json_source(r#"{"servers":{"test":{"type":"in-memory","deferTools":true}}}"#)])
             .unwrap()
             .spawn()
             .await
@@ -498,11 +495,11 @@ mod tests {
                 command: "from_inline".to_string(),
                 args: Vec::new(),
                 env: HashMap::new(),
-                proxy: ToolExposure::Direct,
+                defer_tools: ToolExposure::ModelVisible,
             }),
         )]));
         let sources = vec![
-            McpConfigSource::direct(file_path),
+            McpConfigSource::model_visible(file_path),
             json_source(r#"{"servers":{"coding":{"type":"stdio","command":"from_json"}}}"#),
             McpConfigSource::Inline(inline),
         ];
@@ -510,7 +507,7 @@ mod tests {
         let builder = builder_from_sources(&sources);
 
         assert_eq!(command_for(&builder, "coding"), Some("from_inline"));
-        assert_eq!(proxy_for(&builder, "coding"), Some(false));
+        assert_eq!(deferred_tools_for(&builder, "coding"), Some(false));
     }
 
     #[tokio::test]
@@ -519,7 +516,7 @@ mod tests {
             write_config_file("mcp.json", r#"{"servers":{"coding":{"type":"stdio","command":"from_file"}}}"#);
         let sources = vec![
             json_source(r#"{"servers":{"coding":{"type":"stdio","command":"from_json"}}}"#),
-            McpConfigSource::direct(file_path),
+            McpConfigSource::model_visible(file_path),
         ];
 
         let builder = builder_from_sources(&sources);
@@ -528,34 +525,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_source_proxy_true_marks_all_file_servers_proxied() {
+    async fn file_source_defer_tools_marks_all_file_servers_deferred() {
         let (_dir, file_path) = write_config_file(
-            "proxied.json",
-            r#"{"servers":{"github":{"type":"stdio","command":"g","proxy":{"exclude":["status"]}},"browser":{"type":"stdio","command":"b"}}}"#,
+            "deferred.json",
+            r#"{"servers":{"github":{"type":"stdio","command":"g","deferTools":{"exclude":["status"]}},"browser":{"type":"stdio","command":"b"}}}"#,
         );
 
         let builder = McpBuilder::new("/workspace")
-            .from_mcp_config_sources(&[McpConfigSource::File { path: file_path, proxy: true }])
+            .from_mcp_config_sources(&[McpConfigSource::File { path: file_path, defer_tools: true }])
             .unwrap();
 
-        assert_eq!(proxy_for(&builder, "github"), Some(true));
-        assert_eq!(proxy_for(&builder, "browser"), Some(true));
+        assert_eq!(deferred_tools_for(&builder, "github"), Some(true));
+        assert_eq!(deferred_tools_for(&builder, "browser"), Some(true));
         assert!(is_direct_tool(&builder, "github", "status"));
     }
 
     #[tokio::test]
-    async fn later_sources_override_proxy_flag() {
+    async fn later_sources_override_defer_tools_flag() {
         let (_dir, file_path) =
-            write_config_file("proxied.json", r#"{"servers":{"coding":{"type":"stdio","command":"from_file"}}}"#);
+            write_config_file("deferred.json", r#"{"servers":{"coding":{"type":"stdio","command":"from_file"}}}"#);
         let sources = vec![
-            McpConfigSource::File { path: file_path, proxy: true },
-            json_source(r#"{"servers":{"coding":{"type":"stdio","command":"from_json","proxy":false}}}"#),
+            McpConfigSource::File { path: file_path, defer_tools: true },
+            json_source(r#"{"servers":{"coding":{"type":"stdio","command":"from_json","deferTools":false}}}"#),
         ];
 
         let builder = builder_from_sources(&sources);
 
         assert_eq!(command_for(&builder, "coding"), Some("from_json"));
-        assert_eq!(proxy_for(&builder, "coding"), Some(false));
+        assert_eq!(deferred_tools_for(&builder, "coding"), Some(false));
     }
 
     #[tokio::test]
@@ -609,7 +606,7 @@ mod tests {
     async fn reserved_progressive_discovery_server_is_rejected_when_gateway_is_enabled() {
         let result = McpBuilder::new("/workspace")
             .from_mcp_config_sources(&[json_source(
-                r#"{"servers":{"progressive-discovery":{"type":"stdio","command":"server"},"deferred":{"type":"stdio","command":"server","proxy":true}}}"#,
+                r#"{"servers":{"progressive-discovery":{"type":"stdio","command":"server"},"deferred":{"type":"stdio","command":"server","deferTools":true}}}"#,
             )])
             .unwrap()
             .spawn()
@@ -643,10 +640,10 @@ mod tests {
             .servers
             .iter()
             .find(|server| server.name == server_name)
-            .is_some_and(|server| server.tool_exposure.is_direct_tool(tool_name))
+            .is_some_and(|server| server.tool_exposure.is_model_visible_tool(tool_name))
     }
 
-    fn proxy_for(builder: &McpBuilder, name: &str) -> Option<bool> {
-        builder.servers.iter().find(|server| server.name == name).map(mcp_utils::client::McpServer::is_proxied)
+    fn deferred_tools_for(builder: &McpBuilder, name: &str) -> Option<bool> {
+        builder.servers.iter().find(|server| server.name == name).map(mcp_utils::client::McpServer::has_deferred_tools)
     }
 }

@@ -24,7 +24,7 @@ impl McpBuilderTestExt for McpBuilder {
             McpTransport::InMemory {
                 spec: InMemoryServerSpec { factory: factory_name, args: Vec::new(), input: None },
             },
-            ToolExposure::Direct,
+            ToolExposure::ModelVisible,
         )])
     }
 }

@@ -22,7 +22,7 @@ async fn session_synchronizes_agent_while_forwarding_host_events() {
         McpTransport::InMemory {
             spec: InMemoryServerSpec { factory: "dynamic-factory".to_string(), args: Vec::new(), input: None },
         },
-        mcp_utils::client::ToolExposure::Direct,
+        mcp_utils::client::ToolExposure::ModelVisible,
     );
     let session = mcp("/workspace")
         .register_in_memory_server("dynamic-factory", factory)

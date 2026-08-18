@@ -7,6 +7,5 @@ mod mcp {
     mod oauth_tests;
     mod server_round_trip_tests;
     mod task_tests;
-    mod tool_proxy_tests;
     mod trace_context_tests;
 }

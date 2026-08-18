@@ -10,21 +10,21 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub enum McpConfigSource {
-    File { path: PathBuf, proxy: bool },
+    File { path: PathBuf, defer_tools: bool },
     Json(String),
     Inline(McpConfig),
 }
 
 impl McpConfigSource {
-    pub fn file(path: PathBuf, proxy: bool) -> Self {
-        Self::File { path, proxy }
+    pub fn file(path: PathBuf, defer_tools: bool) -> Self {
+        Self::File { path, defer_tools }
     }
 
-    pub fn direct(path: PathBuf) -> Self {
+    pub fn model_visible(path: PathBuf) -> Self {
         Self::file(path, false)
     }
 
-    pub fn proxied(path: PathBuf) -> Self {
+    pub fn deferred(path: PathBuf) -> Self {
         Self::file(path, true)
     }
 }
@@ -57,8 +57,8 @@ pub struct AgentSpec {
     pub provider_connections: ProviderConnectionOverrides,
     /// Resolved MCP config sources for this agent, applied in order.
     ///
-    /// Direct server name collisions use last-source-wins semantics. Proxy-enabled
-    /// file sources are merged into a single runtime tool proxy.
+    /// Model-visible server name collisions use last-source-wins semantics. File sources
+    /// can defer all of their tools for progressive discovery.
     pub mcp_config_sources: Vec<McpConfigSource>,
     /// How this agent can be invoked.
     pub exposure: AgentSpecExposure,

@@ -3,7 +3,7 @@ use aether_core::testing::{FakeMcpServer, FakeTool, FakeToolResponse};
 use futures::FutureExt;
 use mcp_utils::ServiceExt;
 use mcp_utils::client::{
-    InMemoryServerSpec, McpServer, McpTransport, ToolExposure, ToolFilter, ToolMatcher, ToolProxyRules,
+    DeferredToolRules, InMemoryServerSpec, McpServer, McpTransport, ToolExposure, ToolFilter, ToolMatcher,
 };
 use mcp_utils::tool_gateway::{LIST_SERVERS_TOOL, connect};
 use rmcp::model::{
@@ -24,7 +24,7 @@ async fn no_deferred_servers_do_not_create_a_gateway() {
         McpTransport::InMemory {
             spec: InMemoryServerSpec { factory: "fake".to_string(), args: Vec::new(), input: None },
         },
-        ToolExposure::Direct,
+        ToolExposure::ModelVisible,
     );
     let session = mcp("/workspace")
         .with_servers(vec![configured])
@@ -38,7 +38,7 @@ async fn no_deferred_servers_do_not_create_a_gateway() {
 
 #[tokio::test]
 async fn gateway_discovers_and_calls_only_deferred_tools() {
-    let exposure = ToolExposure::Proxied(ToolProxyRules::new(&["divide_numbers"], &[]));
+    let exposure = ToolExposure::Deferred(DeferredToolRules::new(&["divide_numbers"], &[]));
     let (_runtime, endpoint) = gateway_runtime(FakeMcpServer::new(), exposure, ToolFilter::default()).await;
     let client = ().serve(connect(&endpoint).await.unwrap()).await.unwrap();
 
@@ -82,7 +82,7 @@ async fn gateway_discovers_and_calls_only_deferred_tools() {
 async fn gateway_discovery_and_execution_share_the_tool_filter() {
     let server = FakeMcpServer::new().with_tool(FakeTool::new("secret").responds(FakeToolResponse::text("hidden")));
     let filter = ToolFilter { allow: Vec::new(), deny: vec![ToolMatcher::name("math__secret")] };
-    let (_runtime, endpoint) = gateway_runtime(server, ToolExposure::proxied_all(), filter).await;
+    let (_runtime, endpoint) = gateway_runtime(server, ToolExposure::deferred_all(), filter).await;
     let client = ().serve(connect(&endpoint).await.unwrap()).await.unwrap();
 
     let tools = client.list_tools(None).await.unwrap().tools;
@@ -111,7 +111,7 @@ async fn gateway_reduces_mcp_task_completion_to_the_final_result() {
                 },
             )],
         );
-    let (_runtime, endpoint) = gateway_runtime(server, ToolExposure::proxied_all(), ToolFilter::default()).await;
+    let (_runtime, endpoint) = gateway_runtime(server, ToolExposure::deferred_all(), ToolFilter::default()).await;
     let client = ().serve(connect(&endpoint).await.unwrap()).await.unwrap();
 
     let response = client.call_tool_once(CallToolRequestParams::new("math__background")).await.unwrap();
@@ -123,7 +123,7 @@ async fn gateway_reduces_mcp_task_completion_to_the_final_result() {
 #[tokio::test]
 async fn gateway_socket_is_removed_with_the_runtime() {
     let (runtime, endpoint) =
-        gateway_runtime(FakeMcpServer::new(), ToolExposure::proxied_all(), ToolFilter::default()).await;
+        gateway_runtime(FakeMcpServer::new(), ToolExposure::deferred_all(), ToolFilter::default()).await;
     let directory = endpoint.parent().unwrap().to_path_buf();
     assert!(endpoint.exists());
 

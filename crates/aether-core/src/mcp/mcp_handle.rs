@@ -1,9 +1,6 @@
 use super::run_mcp_task::ManagerCommand;
 use futures::{Stream, future::join_all};
-use mcp_utils::client::{
-    CallToolError, CallToolOptions, McpError, McpSnapshot, PROXY_CALL_TOOL_NAME, ToolCallEvent, ToolRoute, call_tool,
-    resolve_proxy_call,
-};
+use mcp_utils::client::{CallToolError, CallToolOptions, McpError, McpSnapshot, ToolCallEvent, ToolRoute, call_tool};
 use rmcp::model::{GetPromptRequestParams, GetPromptResult, Prompt};
 use serde_json::{Map, Value};
 use std::{pin::Pin, sync::Arc};
@@ -63,21 +60,15 @@ impl McpHandle {
         arguments_json: &str,
         options: CallToolOptions,
     ) -> ToolCallStream {
-        let parsed = if namespaced_name == PROXY_CALL_TOOL_NAME {
-            resolve_proxy_call(arguments_json).map(|call| {
-                (ToolRoute::Deferred { server: call.server, tool: call.tool }, call.arguments.unwrap_or_default())
+        let parsed = serde_json::from_str::<Value>(arguments_json)
+            .map_err(McpError::from)
+            .and_then(|value| {
+                value
+                    .as_object()
+                    .cloned()
+                    .ok_or_else(|| McpError::JsonError("tool arguments must be a JSON object".to_string()))
             })
-        } else {
-            serde_json::from_str::<Value>(arguments_json)
-                .map_err(McpError::from)
-                .and_then(|value| {
-                    value
-                        .as_object()
-                        .cloned()
-                        .ok_or_else(|| McpError::JsonError("tool arguments must be a JSON object".to_string()))
-                })
-                .map(|arguments| (ToolRoute::ModelVisible { namespaced_name }, arguments))
-        };
+            .map(|arguments| (ToolRoute::ModelVisible { namespaced_name }, arguments));
         match parsed {
             Ok((route, arguments)) => self.call(route, arguments, options),
             Err(error) => failed_call(error),

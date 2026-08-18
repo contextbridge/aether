@@ -50,7 +50,6 @@ pub struct McpTest {
     trace_context: Option<TraceContext>,
     tool_timeout: Duration,
     next_call_id: AtomicU64,
-    _aether_home: tempfile::TempDir,
 }
 
 pub struct TaskOutcome {
@@ -79,14 +78,14 @@ impl McpTestBuilder {
     where
         S: ServerHandler + Clone + Send + Sync + 'static,
     {
-        self.server_with_exposure(name, server, ToolExposure::Direct)
+        self.server_with_exposure(name, server, ToolExposure::ModelVisible)
     }
 
-    pub fn proxy_server<T>(self, name: impl Into<String>, server: T) -> Self
+    pub fn deferred_server<T>(self, name: impl Into<String>, server: T) -> Self
     where
         T: ServerHandler + Clone + Send + Sync + 'static,
     {
-        self.server_with_exposure(name, server, ToolExposure::proxied_all())
+        self.server_with_exposure(name, server, ToolExposure::deferred_all())
     }
 
     pub fn server_with_exposure<T>(mut self, name: impl Into<String>, server: T, exposure: ToolExposure) -> Self
@@ -127,11 +126,12 @@ impl McpTestBuilder {
     }
 
     pub async fn build(self) -> McpTest {
-        let aether_home = tempfile::tempdir().expect("temp aether home is created");
-        let builder = self.factories.into_iter().fold(
-            mcp("/workspace").with_aether_home(aether_home.path()).with_servers(self.servers),
-            |builder, (name, factory)| builder.register_in_memory_server(name, factory),
-        );
+        let builder = self
+            .factories
+            .into_iter()
+            .fold(mcp("/workspace").with_servers(self.servers), |builder, (name, factory)| {
+                builder.register_in_memory_server(name, factory)
+            });
         let mut spawn = builder.spawn().await.expect("MCP test manager spawns");
         let snapshot = spawn.block_until_ready().await.expect("MCP test manager becomes ready");
         let (runtime, event_rx) = spawn.split();
@@ -146,7 +146,6 @@ impl McpTestBuilder {
             trace_context: self.trace_context,
             tool_timeout: if self.tool_timeout.is_zero() { DEFAULT_TOOL_TIMEOUT } else { self.tool_timeout },
             next_call_id: AtomicU64::new(1),
-            _aether_home: aether_home,
         }
     }
 }
