@@ -29,6 +29,11 @@ impl DefaultCodingTools {
     pub fn new() -> Self {
         Self::default()
     }
+
+    pub fn with_bash_environment(mut self, environment: BashEnvironment) -> Self {
+        self.bash_environment = environment;
+        self
+    }
 }
 
 impl CodingTools for DefaultCodingTools {

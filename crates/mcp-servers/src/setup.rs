@@ -1,7 +1,8 @@
+use crate::coding::tools::bash::BashEnvironment;
 use crate::plan::DEFAULT_PLANS_DIR;
 use crate::workspace_paths::resolve_path;
 use crate::{CodingMcp, CodingMcpArgs, DefaultCodingTools, PlanMcp, SkillsMcp, SubAgentsMcp, SurveyMcp, TasksMcp};
-use aether_core::mcp::McpBuilder;
+use aether_core::mcp::{McpBuilder, RuntimeServices};
 use futures::FutureExt;
 use mcp_utils::ServiceExt;
 use tracing::{debug, warn};
@@ -36,7 +37,8 @@ impl McpBuilderExt for McpBuilder {
                         permission_mode,
                         rules_dirs.len()
                     );
-                    let server = CodingMcp::with_tools(DefaultCodingTools::new())
+                    let tools = DefaultCodingTools::new().with_bash_environment(coding_bash_environment(&services));
+                    let server = CodingMcp::with_tools(tools)
                         .with_rules_dirs(rules_dirs)
                         .with_root_dir(root_dir.clone())
                         .with_permission_mode(permission_mode);
@@ -112,4 +114,13 @@ impl McpBuilderExt for McpBuilder {
             }),
         )
     }
+}
+
+fn coding_bash_environment(services: &RuntimeServices) -> BashEnvironment {
+    services
+        .shell_environment
+        .iter()
+        .fold(BashEnvironment::new().with_current_exe_dir_on_path(), |environment, (name, value)| {
+            environment.with_var(name, value)
+        })
 }
