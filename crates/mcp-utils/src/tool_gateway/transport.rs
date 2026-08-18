@@ -113,10 +113,16 @@ impl UnixSocketMcpTransport {
                 };
                 let Ok((stream, _)) = accepted else { break };
                 let server = server.clone();
+                let connection_cancellation = accept_cancellation.clone();
                 accept_connections.lock().unwrap().spawn(async move {
                     match server.serve(stream).await {
                         Ok(running) => {
-                            let _ = running.waiting().await;
+                            let service_cancellation = running.cancellation_token();
+                            let mut waiting = Box::pin(running.waiting());
+                            tokio::select! {
+                                () = connection_cancellation.cancelled() => service_cancellation.cancel(),
+                                _ = &mut waiting => {}
+                            }
                         }
                         Err(error) => tracing::debug!(%error, "MCP Unix socket client ended during initialization"),
                     }
@@ -146,7 +152,7 @@ impl Drop for UnixSocketServer {
     fn drop(&mut self) {
         self.cancellation.cancel();
         self.task.abort();
-        self.connections.lock().unwrap().abort_all();
+        self.connections.lock().unwrap().detach_all();
     }
 }
 
@@ -237,31 +243,21 @@ mod tests {
     #[tokio::test]
     async fn dropping_server_cancels_in_flight_connections() {
         use rmcp::model::CallToolRequestParams;
-        use std::sync::atomic::{AtomicBool, Ordering};
         use std::time::Duration;
         use tokio::sync::watch;
-
-        struct Cancelled(Arc<AtomicBool>);
-        impl Drop for Cancelled {
-            fn drop(&mut self) {
-                self.0.store(true, Ordering::SeqCst);
-            }
-        }
 
         #[derive(Clone)]
         struct SlowServer {
             tool_router: ToolRouter<Self>,
             started: watch::Sender<bool>,
-            cancelled: Arc<AtomicBool>,
         }
 
         #[tool_router]
         impl SlowServer {
             #[tool(description = "Blocks until the connection is aborted")]
             async fn slow(&self) -> String {
-                let _cancelled = Cancelled(self.cancelled.clone());
                 let _ = self.started.send(true);
-                tokio::time::sleep(Duration::from_secs(600)).await;
+                tokio::time::sleep(Duration::from_mins(10)).await;
                 "done".to_string()
             }
         }
@@ -277,12 +273,7 @@ mod tests {
         let transport = UnixSocketMcpTransport::bind(path).unwrap();
         let socket = transport.path().to_path_buf();
         let (started_tx, mut started_rx) = watch::channel(false);
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let _server = transport.spawn(SlowServer {
-            tool_router: SlowServer::tool_router(),
-            started: started_tx,
-            cancelled: cancelled.clone(),
-        });
+        let server = transport.spawn(SlowServer { tool_router: SlowServer::tool_router(), started: started_tx });
 
         let client = ().serve(connect(&socket).await.unwrap()).await.unwrap();
         let call = tokio::spawn(async move {
@@ -290,10 +281,7 @@ mod tests {
         });
         started_rx.changed().await.unwrap();
 
-        drop(_server);
-        while !cancelled.load(Ordering::SeqCst) {
-            tokio::task::yield_now().await;
-        }
-        let _ = call;
+        drop(server);
+        call.await.unwrap();
     }
 }

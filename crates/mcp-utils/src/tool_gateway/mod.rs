@@ -1,6 +1,6 @@
 mod transport;
 
-pub use transport::{UnixSocketMcpTransport, UnixSocketPath, UnixSocketTransportError, connect};
+pub use transport::{UnixSocketMcpTransport, UnixSocketPath, UnixSocketServer, UnixSocketTransportError, connect};
 
 /// Environment variable used to pass the active session endpoint to child tools.
 pub const AETHER_MCP_IPC_SOCKET: &str = "AETHER_MCP_IPC_SOCKET";
