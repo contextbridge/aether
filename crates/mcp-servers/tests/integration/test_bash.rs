@@ -3,8 +3,39 @@ use mcp_servers::coding::error::BashError;
 use mcp_servers::coding::tools::bash::{BashEnvironment, BashInput, execute_command};
 use rmcp::model::{CallToolRequestParams, CallToolResponse, TaskPayload, TaskStatus};
 use std::fs::canonicalize;
+use std::process::{Command, Stdio};
 
 use super::common::{TestClient, TestResult, production_client_info, test_client_info};
+
+#[tokio::test]
+async fn bash_commands_receive_eof_instead_of_inherited_stdin() {
+    const OPEN_STDIN: &str = "AETHER_TEST_BASH_OPEN_STDIN";
+
+    if std::env::var_os(OPEN_STDIN).is_some() {
+        let output = execute_command(
+            BashInput { command: "read input || printf '%s' eof".into(), ..Default::default() },
+            None,
+            &BashEnvironment::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(output.output, "eof");
+        return;
+    }
+
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args(["--exact", "bash_commands_receive_eof_instead_of_inherited_stdin", "--nocapture"])
+        .env(OPEN_STDIN, "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().unwrap();
+    let _open_stdin = child.stdin.take().unwrap();
+    let output = child.wait_with_output().unwrap();
+
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+}
 
 #[tokio::test]
 async fn test_basic_command() {

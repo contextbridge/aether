@@ -100,7 +100,7 @@ pub async fn execute_command(
     if let Some(dir) = cwd {
         command.current_dir(dir);
     }
-    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     command.envs(environment.vars());
     command.as_std_mut().process_group(0);
 
