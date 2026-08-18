@@ -2,6 +2,7 @@ use mcp_utils::client::{
     InMemoryServerSpec, McpClientEvent, McpConfig, McpConnectionDetails, McpError, McpManager, McpServer, McpTransport,
     OAuthHandlerFactory, ParseError, RuntimeMcpServer, RuntimeMcpTransport, ToolFilter,
 };
+use mcp_utils::tool_gateway::{AETHER_MCP_IPC_SOCKET, UnixSocketMcpTransport, UnixSocketPath, UnixSocketServer};
 use utils::{SettingsStore, variables::Vars};
 
 use crate::agent_spec::McpConfigSource;
@@ -9,12 +10,13 @@ use crate::core::AgentDeps;
 use crate::events::{AgentCommand, Command};
 
 use super::{
+    gateway_service::GatewayService,
     mcp_handle::McpHandle,
     run_mcp_task::{ManagerCommand, run_mcp_task},
 };
 use futures::future::BoxFuture;
 use rmcp::{RoleServer, service::DynService};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::{
@@ -34,6 +36,7 @@ pub struct RuntimeServices {
     pub mcp: McpHandle,
     pub root_dir: PathBuf,
     pub agent_deps: AgentDeps,
+    pub shell_environment: BTreeMap<String, String>,
 }
 
 pub type ServerFactory = Box<
@@ -45,11 +48,16 @@ pub struct McpRuntime {
     mcp: McpHandle,
     handle: JoinHandle<()>,
     agent_sync_handle: Option<JoinHandle<()>>,
+    gateway: Option<UnixSocketServer>,
 }
 
 impl McpRuntime {
     pub fn handle(&self) -> &McpHandle {
         &self.mcp
+    }
+
+    pub fn gateway_endpoint(&self) -> Option<&Path> {
+        self.gateway.as_ref().map(UnixSocketServer::path)
     }
 }
 
@@ -75,6 +83,10 @@ pub struct McpSession {
 impl McpSession {
     pub fn handle(&self) -> &McpHandle {
         self.runtime.handle()
+    }
+
+    pub fn gateway_endpoint(&self) -> Option<&Path> {
+        self.runtime.gateway_endpoint()
     }
 
     /// Synchronize this session's current and future tools and instructions with
@@ -274,7 +286,19 @@ impl McpBuilder {
         let (snapshot_tx, snapshot_rx) = watch::channel(Arc::new(mcp_utils::client::McpSnapshot::default()));
         let (event_tx, event_rx) = mpsc::channel::<McpClientEvent>(mcp_channel_capacity);
         let mcp = McpHandle::new(manager_tx, snapshot_rx);
-        let services = RuntimeServices { mcp: mcp.clone(), root_dir: root_dir.clone(), agent_deps };
+        let gateway_transport = if servers.iter().any(|server| server.tool_exposure.is_proxied()) {
+            let path = UnixSocketPath::new().map_err(|error| McpError::TransportError(error.to_string()))?;
+            Some(UnixSocketMcpTransport::bind(path).map_err(|error| McpError::TransportError(error.to_string()))?)
+        } else {
+            None
+        };
+        let shell_environment = gateway_transport
+            .as_ref()
+            .map(|transport| {
+                BTreeMap::from([(AETHER_MCP_IPC_SOCKET.to_string(), transport.path().to_string_lossy().into_owned())])
+            })
+            .unwrap_or_default();
+        let services = RuntimeServices { mcp: mcp.clone(), root_dir: root_dir.clone(), agent_deps, shell_environment };
         let servers = resolve_servers(servers, &factories, &services).await?;
 
         let mut mcp_manager = McpManager::new(event_tx, oauth_handler_factory)
@@ -289,8 +313,9 @@ impl McpBuilder {
         mcp_manager = mcp_manager.with_root_dir(root_dir);
         let pending = mcp_manager.register_pending(servers).await?;
         let task = tokio::spawn(run_mcp_task(mcp_manager, manager_rx, pending));
+        let gateway = gateway_transport.map(|transport| transport.spawn(GatewayService::new(mcp.clone())));
 
-        Ok(McpSession { runtime: McpRuntime { mcp, handle: task, agent_sync_handle: None }, event_rx })
+        Ok(McpSession { runtime: McpRuntime { mcp, handle: task, agent_sync_handle: None, gateway }, event_rx })
     }
 }
 
@@ -380,6 +405,30 @@ mod tests {
             services.agent_deps.oauth_credential_store.as_ref().expect("factory received agent dependencies"),
             &oauth_store,
         ));
+        assert!(services.shell_environment.is_empty());
+    }
+
+    #[tokio::test]
+    async fn deferred_gateway_is_bound_before_in_memory_factories_run() {
+        let received = Arc::new(Mutex::new(None::<RuntimeServices>));
+        let factory_received = Arc::clone(&received);
+        let factory: ServerFactory = Box::new(move |_, services| {
+            *factory_received.lock().unwrap() = Some(services);
+            async move { FakeMcpServer::new().into_dyn() }.boxed()
+        });
+        let spawn = McpBuilder::new("/workspace")
+            .register_in_memory_server("test", factory)
+            .from_mcp_config_sources(&[json_source(r#"{"servers":{"test":{"type":"in-memory","proxy":true}}}"#)])
+            .unwrap()
+            .spawn()
+            .await
+            .unwrap();
+
+        let services = received.lock().unwrap().clone().expect("factory received runtime services");
+        let inherited =
+            services.shell_environment.get(AETHER_MCP_IPC_SOCKET).expect("factory receives gateway endpoint");
+        assert_eq!(Path::new(inherited), spawn.gateway_endpoint().expect("gateway endpoint exists"));
+        assert!(Path::new(inherited).exists());
     }
 
     #[tokio::test]
