@@ -1,6 +1,6 @@
 [package]
 name = "aether-llm"
-version = "0.7.26"
+version = "0.7.27"
 edition = "2024"
 description = "Multi-provider LLM abstraction layer for the Aether AI agent framework"
 license = "MIT"
@@ -66,15 +66,15 @@ serde_json = { workspace = true }
 
 tracing = { workspace = true }
 
-utils = { package = "aether-utils", path = "../utils", version = "0.2.11" }
+utils = { package = "aether-utils", path = "../utils", version = "0.2.12" }
 
 # Codex deps
-aether-auth = { path = "../aether-auth", version = "0.1.11", optional = true }
+aether-auth = { path = "../aether-auth", version = "0.1.12", optional = true }
 oauth2 = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
 
 [build-dependencies]
-llm-codegen = { package = "aether-llm-codegen", path = "../llm-codegen", version = "0.2.18" }
+llm-codegen = { package = "aether-llm-codegen", path = "../llm-codegen", version = "0.2.19" }
 
 [dev-dependencies]
 aether-doctest = { path = "../doctest" }

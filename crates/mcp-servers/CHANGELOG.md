@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.39](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.38...aether-mcp-servers-v0.4.39) - 2026-08-19
+
+### Added
+
+- Deferred (proxied) tools can now be composed via the Bash tool  ([#360](https://github.com/contextbridge/aether/pull/360))
+- *(mcp-servers)* Bash and Sub-agents can now be run in foreground or background by main agent ([#340](https://github.com/contextbridge/aether/pull/340))
+- Support MCP tasks  ([#339](https://github.com/contextbridge/aether/pull/339))
+
+### Other
+
+- scheduled code-cleanup ([#331](https://github.com/contextbridge/aether/pull/331))
+- Upgrade to rmcp 3.1.1 and MCP tool calls now use multi round trip requests (MRTR) ([#337](https://github.com/contextbridge/aether/pull/337))
+- scheduled code-cleanup ([#328](https://github.com/contextbridge/aether/pull/328))
+- release ([#325](https://github.com/contextbridge/aether/pull/325))
+
 ## [0.4.38](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.4.37...aether-mcp-servers-v0.4.38) - 2026-08-04
 
 ### Other

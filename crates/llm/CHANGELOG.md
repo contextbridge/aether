@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.27](https://github.com/contextbridge/aether/compare/aether-llm-v0.7.26...aether-llm-v0.7.27) - 2026-08-19
+
+### Added
+
+- *(mcp)* support Client ID Metadata Documents ([#348](https://github.com/contextbridge/aether/pull/348))
+
+### Other
+
+- Update models ([#363](https://github.com/contextbridge/aether/pull/363))
+- Update models ([#359](https://github.com/contextbridge/aether/pull/359))
+- Update models ([#349](https://github.com/contextbridge/aether/pull/349))
+- Refactor/credential storage ([#345](https://github.com/contextbridge/aether/pull/345))
+- cleanup warnings
+- Update models ([#336](https://github.com/contextbridge/aether/pull/336))
+
 ## [0.7.26](https://github.com/contextbridge/aether/compare/aether-llm-v0.7.25...aether-llm-v0.7.26) - 2026-08-04
 
 ### Other

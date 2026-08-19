@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.38](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.3.37...aether-acp-utils-v0.3.38) - 2026-08-19
+
+### Added
+
+- Deferred (proxied) tools can now be composed via the Bash tool  ([#360](https://github.com/contextbridge/aether/pull/360))
+
+### Other
+
+- *(deps)* bump agent-client-protocol from 0.14.0 to 2.0.0 ([#285](https://github.com/contextbridge/aether/pull/285))
+- Upgrade to rmcp 3.1.1 and MCP tool calls now use multi round trip requests (MRTR) ([#337](https://github.com/contextbridge/aether/pull/337))
+
 ## [0.3.37](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.3.36...aether-acp-utils-v0.3.37) - 2026-08-04
 
 ### Other

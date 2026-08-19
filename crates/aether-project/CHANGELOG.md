@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.33](https://github.com/contextbridge/aether/compare/aether-project-v0.5.32...aether-project-v0.5.33) - 2026-08-19
+
+### Added
+
+- Deferred (proxied) tools can now be composed via the Bash tool  ([#360](https://github.com/contextbridge/aether/pull/360))
+
+### Other
+
+- scheduled code-cleanup ([#328](https://github.com/contextbridge/aether/pull/328))
+
 ## [0.5.32](https://github.com/contextbridge/aether/compare/aether-project-v0.5.31...aether-project-v0.5.32) - 2026-08-04
 
 ### Other

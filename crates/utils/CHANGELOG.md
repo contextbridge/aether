@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.12](https://github.com/contextbridge/aether/compare/aether-utils-v0.2.11...aether-utils-v0.2.12) - 2026-08-19
+
+### Added
+
+- Allow proxying tools within a MCP server ([#341](https://github.com/contextbridge/aether/pull/341))
+
 ## [0.2.11](https://github.com/contextbridge/aether/compare/aether-utils-v0.2.10...aether-utils-v0.2.11) - 2026-07-20
 
 ### Added

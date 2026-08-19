@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.19](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.18...aether-llm-codegen-v0.2.19) - 2026-08-19
+
+### Other
+
+- scheduled code-cleanup ([#331](https://github.com/contextbridge/aether/pull/331))
+
 ## [0.2.18](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.17...aether-llm-codegen-v0.2.18) - 2026-07-28
 
 ### Fixed
