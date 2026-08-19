@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.13](https://github.com/contextbridge/aether/compare/aether-telemetry-v0.1.12...aether-telemetry-v0.1.13) - 2026-08-19
+
+### Other
+
+- *(deps)* bump agent-client-protocol from 0.14.0 to 2.0.0 ([#285](https://github.com/contextbridge/aether/pull/285))
+- Upgrade to rmcp 3.1.1 and MCP tool calls now use multi round trip requests (MRTR) ([#337](https://github.com/contextbridge/aether/pull/337))
+- scheduled code-cleanup ([#329](https://github.com/contextbridge/aether/pull/329))
+
 ## [0.1.12](https://github.com/contextbridge/aether/compare/aether-telemetry-v0.1.11...aether-telemetry-v0.1.12) - 2026-08-04
 
 ### Other

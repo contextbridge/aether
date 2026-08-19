@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.32](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.6.31...aether-agent-core-v0.6.32) - 2026-08-19
+
+### Added
+
+- Deferred (proxied) tools can now be composed via the Bash tool  ([#360](https://github.com/contextbridge/aether/pull/360))
+- *(mcp)* support Client ID Metadata Documents ([#348](https://github.com/contextbridge/aether/pull/348))
+- Allow proxying tools within a MCP server ([#341](https://github.com/contextbridge/aether/pull/341))
+- *(mcp-servers)* Bash and Sub-agents can now be run in foreground or background by main agent ([#340](https://github.com/contextbridge/aether/pull/340))
+- Support MCP tasks  ([#339](https://github.com/contextbridge/aether/pull/339))
+
+### Fixed
+
+- *(mcp)* classify OAuth challenges accurately ([#347](https://github.com/contextbridge/aether/pull/347))
+
+### Other
+
+- *(deps)* bump agent-client-protocol from 0.14.0 to 2.0.0 ([#285](https://github.com/contextbridge/aether/pull/285))
+- remove nested Cargo lockfiles ([#352](https://github.com/contextbridge/aether/pull/352))
+- Upgrade to rmcp 3.1.1 and MCP tool calls now use multi round trip requests (MRTR) ([#337](https://github.com/contextbridge/aether/pull/337))
+- scheduled code-cleanup ([#329](https://github.com/contextbridge/aether/pull/329))
+
 ## [0.6.31](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.6.30...aether-agent-core-v0.6.31) - 2026-08-04
 
 ### Other
