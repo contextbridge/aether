@@ -114,8 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 1. Connect to MCP servers
     let mut mcp_runtime = mcp(".")
-        .from_json_files(&["mcp.json"]) // <-- Load MCP servers from one or more JSON files
-        .await?
+        .from_json_files(&["mcp.json"])? // <-- Load MCP servers from one or more JSON files
         .spawn() // <-- Spawn the MCP client into a tokio task (multiple agents can use it)
         .await?;
     let snapshot = mcp_runtime.block_until_ready().await.expect("MCP should initialize");
@@ -123,7 +122,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 2. Create Agent
     let (tx, mut rx, _handle) = agent(llm)
         .system_prompt(Prompt::file("AGENTS.md", ".")) // <-- Load system prompt from AGENTS.md
-        .tools(mcp_runtime.command_tx, snapshot.tool_definitions) // <-- Give the agent MCP tools
+        .tools(mcp_runtime.handle().clone(), snapshot.tool_definitions()) // <-- Give the agent MCP tools
         .spawn()
         .await?;
 

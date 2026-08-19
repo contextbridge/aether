@@ -1,11 +1,11 @@
 use aether_cli::init::{HarnessIntegration, InitError, InitOutcome, InitTarget, OverwriteMode, Preset, apply_init};
-use aether_core::agent_spec::ToolMatcher;
 use aether_core::core::Prompt;
 use aether_project::{AetherSettings, AgentCatalog, McpSourceSpec, PromptSource};
 use llm::catalog::Provider;
 use llm::{LlmModel, ReasoningEffort};
 use mcp_servers::{CodingMcpArgs, PlanMcpArgs, SkillsMcpArgs, SubAgentsMcpArgs, TasksMcpArgs};
 use mcp_utils::client::McpServerConfig;
+use mcp_utils::client::ToolMatcher;
 use std::collections::BTreeMap;
 use std::path::Path;
 

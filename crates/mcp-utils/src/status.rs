@@ -21,13 +21,13 @@ pub struct McpServerStatusEntry {
     pub name: String,
     pub status: McpServerStatus,
     pub auth_capability: McpServerAuthCapability,
-    #[serde(default)]
-    pub proxied: bool,
+    #[serde(rename = "deferTools", default)]
+    pub deferred_tools: bool,
 }
 
 impl McpServerStatusEntry {
     pub fn new(name: impl Into<String>, status: McpServerStatus) -> Self {
-        Self { name: name.into(), status, auth_capability: McpServerAuthCapability::Unavailable, proxied: false }
+        Self { name: name.into(), status, auth_capability: McpServerAuthCapability::Unavailable, deferred_tools: false }
     }
 
     pub fn with_auth_capability(mut self, auth: McpServerAuthCapability) -> Self {
@@ -35,8 +35,8 @@ impl McpServerStatusEntry {
         self
     }
 
-    pub fn with_proxied(mut self, proxied: bool) -> Self {
-        self.proxied = proxied;
+    pub fn with_deferred_tools(mut self, deferred_tools: bool) -> Self {
+        self.deferred_tools = deferred_tools;
         self
     }
 

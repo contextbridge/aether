@@ -1,11 +1,10 @@
 use aether_auth::OAuthClientRegistration;
 use mcp_utils::client::{McpConfig, McpHttpConfig, McpTransport};
-use std::collections::HashMap;
 use utils::variables::Vars;
 
 #[tokio::test]
 async fn http_oauth_defaults_to_aether_cimd_and_fixed_callback() {
-    let config = parse_http_config(r#"{ "type": "http", "url": "https://example.com/mcp" }"#, &Vars::new()).await;
+    let config = parse_http_config(r#"{ "type": "http", "url": "https://example.com/mcp" }"#, &Vars::new());
     let oauth = config.resolved_oauth().expect("OAuth should be offered without an auth header");
 
     assert_eq!(
@@ -30,8 +29,7 @@ async fn custom_cimd_expands_variables_and_preregistered_client_takes_priority()
             }
         }"#,
         &vars,
-    )
-    .await;
+    );
     let oauth = config.resolved_oauth().expect("OAuth should be offered without an auth header");
 
     assert_eq!(oauth.client_registration, OAuthClientRegistration::PreRegistered("registered".to_string()));
@@ -48,15 +46,14 @@ async fn bearer_header_bypasses_oauth_defaults() {
             "headers": { "Authorization": "Bearer token" }
         }"#,
         &Vars::new(),
-    )
-    .await;
+    );
 
     assert!(config.resolved_oauth().is_none());
 }
 
-async fn parse_http_config(server: &str, vars: &Vars) -> McpHttpConfig {
+fn parse_http_config(server: &str, vars: &Vars) -> McpHttpConfig {
     let json = format!(r#"{{ "servers": {{ "remote": {server} }} }}"#);
-    let mut servers = McpConfig::from_json(&json).unwrap().into_servers(&HashMap::new(), vars).await.unwrap();
+    let mut servers = McpConfig::from_json(&json).unwrap().into_servers(vars).unwrap();
     assert_eq!(servers.len(), 1);
     let server = servers.remove(0);
     let McpTransport::Http(config) = server.transport else { panic!("expected HTTP transport") };

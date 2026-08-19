@@ -3,6 +3,7 @@ mod acp_cancellation;
 mod acp_prompt_search;
 mod acp_stdio;
 mod acp_workspace_move;
+mod mcp_command;
 mod run_init;
 mod slash_commands;
 mod trace_context;

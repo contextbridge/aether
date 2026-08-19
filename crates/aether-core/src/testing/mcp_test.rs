@@ -1,19 +1,20 @@
 use crate::events::{TaskOutcomeState, TraceContext, task_created_result};
-use crate::mcp::run_mcp_task::McpCommand;
 use crate::mcp::tool_bridge::{convert_tool_result, map_task_result_to_outcome};
-use crate::mcp::{McpRuntime, mcp};
+use crate::mcp::{McpHandle, McpRuntime, ServerFactory, ToolCallStream, mcp};
+use futures::{FutureExt, StreamExt};
 use mcp_utils::client::{
-    CancellationToken, McpConnectionDetails, McpServer, McpTransport, ToolCallEvent, ToolExposure,
+    CallToolOptions, CancellationToken, InMemoryServerSpec, McpConnectionDetails, McpServer, McpTransport,
+    ToolCallEvent, ToolExposure,
 };
 use mcp_utils::testing::ElicitationScript;
-use rmcp::ServerHandler;
 use rmcp::model::{CreateTaskResult, ElicitResult, ProgressNotificationParam};
+use rmcp::{RoleServer, ServerHandler, service::DynService};
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::watch;
 
 pub use mcp_utils::testing::CapturedElicitation;
 
@@ -22,6 +23,7 @@ const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(10);
 #[derive(Default)]
 pub struct McpTestBuilder {
     servers: Vec<McpServer>,
+    factories: Vec<(String, ServerFactory)>,
     elicitation_responses: Vec<ElicitResult>,
     trace_context: Option<TraceContext>,
     tool_timeout: Duration,
@@ -39,7 +41,7 @@ fn task_outcome(outcome: crate::events::TaskOutcome) -> TaskOutcome {
 }
 
 pub struct McpTest {
-    command_tx: mpsc::Sender<McpCommand>,
+    mcp: McpHandle,
     _runtime: McpRuntime,
     snapshot: McpConnectionDetails,
     elicitations: ElicitationScript,
@@ -48,7 +50,6 @@ pub struct McpTest {
     trace_context: Option<TraceContext>,
     tool_timeout: Duration,
     next_call_id: AtomicU64,
-    _aether_home: tempfile::TempDir,
 }
 
 pub struct TaskOutcome {
@@ -65,7 +66,7 @@ pub struct ToolCallOutcome {
 
 struct DeferredTool {
     request: llm::ToolCallRequest,
-    rx: mpsc::Receiver<ToolCallEvent>,
+    events: ToolCallStream,
 }
 
 impl McpTestBuilder {
@@ -75,23 +76,37 @@ impl McpTestBuilder {
 
     pub fn server<S>(self, name: impl Into<String>, server: S) -> Self
     where
-        S: ServerHandler,
+        S: ServerHandler + Clone + Send + Sync + 'static,
     {
-        self.server_with_exposure(name, server, ToolExposure::Direct)
+        self.server_with_exposure(name, server, ToolExposure::ModelVisible)
     }
 
-    pub fn proxy_server<T>(self, name: impl Into<String>, server: T) -> Self
+    pub fn deferred_server<T>(self, name: impl Into<String>, server: T) -> Self
     where
-        T: ServerHandler,
+        T: ServerHandler + Clone + Send + Sync + 'static,
     {
-        self.server_with_exposure(name, server, ToolExposure::proxied_all())
+        self.server_with_exposure(name, server, ToolExposure::deferred_all())
     }
 
     pub fn server_with_exposure<T>(mut self, name: impl Into<String>, server: T, exposure: ToolExposure) -> Self
     where
-        T: ServerHandler,
+        T: ServerHandler + Clone + Send + Sync + 'static,
     {
-        self.servers.push(McpServer::new(name, McpTransport::InMemory { server: Box::new(server) }, exposure));
+        let name = name.into();
+        let factory_name = format!("test-{}", self.factories.len());
+        let factory_server = server;
+        let factory: ServerFactory = Box::new(move |_spec, _services| {
+            let server = factory_server.clone();
+            async move { Box::new(server) as Box<dyn DynService<RoleServer>> }.boxed()
+        });
+        self.factories.push((factory_name.clone(), factory));
+        self.servers.push(McpServer::new(
+            name,
+            McpTransport::InMemory {
+                spec: InMemoryServerSpec { factory: factory_name, args: Vec::new(), input: None },
+            },
+            exposure,
+        ));
         self
     }
 
@@ -111,18 +126,18 @@ impl McpTestBuilder {
     }
 
     pub async fn build(self) -> McpTest {
-        let aether_home = tempfile::tempdir().expect("temp aether home is created");
-        let mut spawn = mcp("/workspace")
-            .with_aether_home(aether_home.path())
-            .with_servers(self.servers)
-            .spawn()
-            .await
-            .expect("MCP test manager spawns");
+        let builder = self
+            .factories
+            .into_iter()
+            .fold(mcp("/workspace").with_servers(self.servers), |builder, (name, factory)| {
+                builder.register_in_memory_server(name, factory)
+            });
+        let mut spawn = builder.spawn().await.expect("MCP test manager spawns");
         let snapshot = spawn.block_until_ready().await.expect("MCP test manager becomes ready");
         let (runtime, event_rx) = spawn.split();
 
         McpTest {
-            command_tx: runtime.command_tx().clone(),
+            mcp: runtime.handle().clone(),
             _runtime: runtime,
             snapshot,
             elicitations: ElicitationScript::spawn(event_rx, self.elicitation_responses),
@@ -131,7 +146,6 @@ impl McpTestBuilder {
             trace_context: self.trace_context,
             tool_timeout: if self.tool_timeout.is_zero() { DEFAULT_TOOL_TIMEOUT } else { self.tool_timeout },
             next_call_id: AtomicU64::new(1),
-            _aether_home: aether_home,
         }
     }
 }
@@ -144,30 +158,25 @@ impl McpTest {
             name: format!("{server}__{tool}"),
             arguments: arguments.to_string(),
         };
-        let (event_tx, mut event_rx) = mpsc::channel(64);
         let request_for_outcome = request.clone();
         let cancel = CancellationToken::new();
         self.cancel_tokens.lock().expect("cancel token lock").insert(request.id.clone(), cancel.clone());
-        self.command_tx
-            .send(McpCommand::ExecuteTool {
-                request,
-                trace_context: self.trace_context.clone(),
-                timeout: self.tool_timeout,
-                tx: event_tx,
-                cancel,
-            })
-            .await
-            .expect("MCP test manager accepts tool call");
+        let options = CallToolOptions {
+            timeout: self.tool_timeout,
+            meta: self.trace_context.as_ref().map(TraceContext::to_meta),
+            cancel,
+        };
+        let mut events = self.mcp.call_model_visible(request.name, &request.arguments, options);
 
         let mut progress = Vec::new();
-        while let Some(event) = event_rx.recv().await {
+        while let Some(event) = events.next().await {
             match event {
                 ToolCallEvent::Progress(event) => progress.push(event),
                 ToolCallEvent::TaskCreated(task) => {
                     self.deferred_tools
                         .lock()
                         .await
-                        .push_back(DeferredTool { request: request_for_outcome.clone(), rx: event_rx });
+                        .push_back(DeferredTool { request: request_for_outcome.clone(), events });
                     return ToolCallOutcome {
                         result: Ok(task_created_result(&request_for_outcome, &task.task.task_id)),
                         progress,
@@ -221,7 +230,7 @@ impl McpTest {
         let mut deferred = self.deferred_tools.lock().await;
         loop {
             let front = deferred.front_mut()?;
-            match front.rx.recv().await {
+            match front.events.next().await {
                 Some(event) => return Some((front.request.clone(), event)),
                 None => {
                     deferred.pop_front();
@@ -232,6 +241,10 @@ impl McpTest {
 
     pub fn snapshot(&self) -> &McpConnectionDetails {
         &self.snapshot
+    }
+
+    pub fn subscribe(&self) -> watch::Receiver<McpConnectionDetails> {
+        self.mcp.subscribe()
     }
 
     pub fn elicitations(&self) -> Vec<CapturedElicitation> {

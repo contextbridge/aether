@@ -288,6 +288,7 @@ dependencies = [
  "grep",
  "htmd",
  "ignore",
+ "libc",
  "lsp-types",
  "regex",
  "reqwest 0.13.4",
@@ -325,6 +326,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

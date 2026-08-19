@@ -2,33 +2,34 @@ use aether_core::core::Prompt;
 use aether_core::events::TurnEvent;
 use aether_core::events::{AgentEvent, Command, UserCommand};
 use aether_core::mcp::mcp;
-use aether_core::testing::{FakeMcpServer, fake_mcp, mcp_instructions as instructions};
+use aether_core::testing::{FakeMcpServer, McpBuilderTestExt, mcp_instructions as instructions};
 use llm::testing::FakeLlmProvider;
 
 #[tokio::test]
 async fn test_fake_mcp_server_has_instructions() {
     // FakeMcpServer has instructions set to "A fake MCP server for testing"
-    let mut spawn = mcp("/workspace").with_servers(vec![fake_mcp("test", FakeMcpServer::new())]).spawn().await.unwrap();
+    let mut spawn = mcp("/workspace").with_fake_mcp("test", FakeMcpServer::new()).spawn().await.unwrap();
     let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
     // FakeMcpServer does provide instructions, so we should get them
-    assert_eq!(snapshot.instructions.len(), 1);
-    assert!(snapshot.instructions.get("test").unwrap().contains("A fake MCP server for testing"));
+    assert_eq!(snapshot.model_instructions().len(), 1);
+    assert!(snapshot.model_instructions().get("test").unwrap().contains("A fake MCP server for testing"));
 }
 
 #[tokio::test]
 async fn test_multiple_servers_with_instructions() {
     let mut spawn = mcp("/workspace")
-        .with_servers(vec![fake_mcp("server1", FakeMcpServer::new()), fake_mcp("server2", FakeMcpServer::new())])
+        .with_fake_mcp("server1", FakeMcpServer::new())
+        .with_fake_mcp("server2", FakeMcpServer::new())
         .spawn()
         .await
         .unwrap();
     let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
     // Both servers should have instructions
-    assert_eq!(snapshot.instructions.len(), 2);
-    assert!(snapshot.instructions.get("server1").unwrap().contains("A fake MCP server for testing"));
-    assert!(snapshot.instructions.get("server2").unwrap().contains("A fake MCP server for testing"));
+    assert_eq!(snapshot.model_instructions().len(), 2);
+    assert!(snapshot.model_instructions().get("server1").unwrap().contains("A fake MCP server for testing"));
+    assert!(snapshot.model_instructions().get("server2").unwrap().contains("A fake MCP server for testing"));
 }
 
 #[tokio::test]
@@ -74,13 +75,13 @@ async fn test_agent_builder_includes_mcp_instructions_in_system_prompt() {
     let llm = FakeLlmProvider::new(vec![]);
     let captured_contexts = llm.captured_contexts();
 
-    let mut spawn = mcp("/workspace").with_servers(vec![fake_mcp("test", FakeMcpServer::new())]).spawn().await.unwrap();
+    let mut spawn = mcp("/workspace").with_fake_mcp("test", FakeMcpServer::new()).spawn().await.unwrap();
     let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
     let (tx, mut rx, _handle) = agent(llm)
         .system_prompt(Prompt::text("You are a test agent"))
         .system_prompt(Prompt::McpInstructions(instructions(&[("test-server", "Test instructions")])))
-        .tools(spawn.command_tx().clone(), snapshot.tool_definitions)
+        .tools(spawn.handle().clone(), snapshot.tool_definitions())
         .spawn()
         .await
         .unwrap();
@@ -120,13 +121,13 @@ async fn test_agent_builder_works_without_mcp_instructions() {
     let llm = FakeLlmProvider::new(vec![]);
     let captured_contexts = llm.captured_contexts();
 
-    let mut spawn = mcp("/workspace").with_servers(vec![fake_mcp("test", FakeMcpServer::new())]).spawn().await.unwrap();
+    let mut spawn = mcp("/workspace").with_fake_mcp("test", FakeMcpServer::new()).spawn().await.unwrap();
     let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
     // No mcp_instructions provided - should still work
     let (tx, mut rx, _handle) = agent(llm)
         .system_prompt(Prompt::text("You are a test agent"))
-        .tools(spawn.command_tx().clone(), snapshot.tool_definitions)
+        .tools(spawn.handle().clone(), snapshot.tool_definitions())
         .spawn()
         .await
         .unwrap();

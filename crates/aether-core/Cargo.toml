@@ -34,7 +34,7 @@ base16ct = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
 tokio-stream = { workspace = true }
 async-openai = { workspace = true }
-rmcp = { workspace = true, features = ["client", "elicitation"] }
+rmcp = { workspace = true, features = ["client", "server", "elicitation"] }
 schemars = { workspace = true }
 chrono = { workspace = true }
 tracing = { workspace = true }
@@ -51,7 +51,7 @@ utils = { package = "aether-utils", path = "../utils", version = "0.2.11" }
 tempfile = { workspace = true, optional = true }
 
 [features]
-testing = ["rmcp/server", "dep:tempfile", "mcp_utils/testing"]
+testing = ["dep:tempfile", "mcp_utils/testing"]
 
 [dev-dependencies]
 aether-core = { package = "aether-agent-core", path = ".", features = ["testing"] }

@@ -162,14 +162,17 @@ impl ToolExecutions {
         let mut removed = Vec::new();
         self.executions.retain(|tool_id, execution| {
             execution.cancellation_token.cancel();
-            let preserve = matches!(policy, ToolAbortPolicy::PreserveBackgroundAcknowledgements)
-                && matches!(execution.phase, ToolExecutionPhase::Background | ToolExecutionPhase::Cancelling);
-            if preserve {
-                execution.phase = ToolExecutionPhase::Cancelling;
+            let background = matches!(execution.phase, ToolExecutionPhase::Background | ToolExecutionPhase::Cancelling);
+            if background {
+                execution.phase = match policy {
+                    ToolAbortPolicy::PreserveBackgroundAcknowledgements => ToolExecutionPhase::Cancelling,
+                    ToolAbortPolicy::CancelAll => ToolExecutionPhase::Retiring,
+                };
+                true
             } else {
                 removed.push(tool_id.clone());
+                false
             }
-            preserve
         });
         removed
     }

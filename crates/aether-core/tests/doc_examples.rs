@@ -1,9 +1,9 @@
 //! Ensures the JSON examples embedded in config doc comments stay valid.
 //! These `.md` files are rendered into the auto-generated settings reference.
 
-use aether_core::agent_spec::ToolFilter;
 use aether_core::core::PromptSource;
 use aether_doctest::assert_json_examples;
+use mcp_utils::client::ToolFilter;
 
 #[test]
 fn prompt_source_examples_parse() {

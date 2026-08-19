@@ -191,12 +191,12 @@ Define a general-purpose agent in user settings and let projects extend it:
         { "type": "file", "path": "${WORKSPACE}/AGENTS.md", "optional": true }
       ],
       "mcps": [
-        { "type": "file", "path": "mcp.json", "proxy": true },
+        { "type": "file", "path": "mcp.json", "deferTools": true },
         {
           "type": "file",
           "path": "${WORKSPACE}/.aether/mcp.json",
           "optional": true,
-          "proxy": true
+          "deferTools": true
         }
       ]
     }

@@ -3,7 +3,8 @@ use aether_core::mcp::mcp;
 use aether_core::testing::{FakeMcpServer, fake_mcp};
 use futures::future::BoxFuture;
 use mcp_utils::client::{
-    McpClientEvent, McpManager, McpServer, McpTransport, OAuthHandlerFactory, ToolExposure, ToolProxyRules,
+    DeferredToolRules, McpClientEvent, McpManager, OAuthHandlerFactory, RuntimeMcpServer, RuntimeMcpTransport,
+    ToolExposure,
 };
 use mcp_utils::status::{McpServerAuthCapability, McpServerStatus};
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
@@ -29,10 +30,10 @@ impl FailingHttpEndpoint {
         Self { uri, task }
     }
 
-    fn server(&self, name: &str, exposure: ToolExposure) -> McpServer {
-        McpServer::new(
+    fn server(&self, name: &str, exposure: ToolExposure) -> RuntimeMcpServer {
+        RuntimeMcpServer::new(
             name,
-            McpTransport::Http(StreamableHttpClientTransportConfig::with_uri(self.uri.as_str()).into()),
+            RuntimeMcpTransport::Http(StreamableHttpClientTransportConfig::with_uri(self.uri.as_str()).into()),
             exposure,
         )
     }
@@ -66,11 +67,11 @@ impl UnauthorizedHttpEndpoint {
         Self { uri, task }
     }
 
-    fn server(&self, name: &str) -> McpServer {
-        McpServer::new(
+    fn server(&self, name: &str) -> RuntimeMcpServer {
+        RuntimeMcpServer::new(
             name,
-            McpTransport::Http(StreamableHttpClientTransportConfig::with_uri(self.uri.as_str()).into()),
-            ToolExposure::Direct,
+            RuntimeMcpTransport::Http(StreamableHttpClientTransportConfig::with_uri(self.uri.as_str()).into()),
+            ToolExposure::ModelVisible,
         )
     }
 }
@@ -85,14 +86,6 @@ fn test_manager(with_oauth: bool) -> McpManager {
     let (event_tx, _) = mpsc::channel::<McpClientEvent>(50);
     let factory = if with_oauth { Some(fake_oauth_handler_factory()) } else { None };
     McpManager::new(event_tx, factory)
-}
-
-fn test_manager_with_home(with_oauth: bool) -> (tempfile::TempDir, McpManager) {
-    let home = tempfile::tempdir().unwrap();
-    let (event_tx, _) = mpsc::channel::<McpClientEvent>(50);
-    let factory = if with_oauth { Some(fake_oauth_handler_factory()) } else { None };
-    let manager = McpManager::new(event_tx, factory).with_aether_home(home.path());
-    (home, manager)
 }
 
 struct CancellingOAuthHandler;
@@ -130,15 +123,15 @@ async fn builder_with_oauth_handler_factory_spawns_successfully() {
         .unwrap();
     let snapshot = spawn.block_until_ready().await.expect("bootstrap completes");
 
-    assert!(snapshot.tool_definitions.is_empty());
-    assert!(snapshot.instructions.is_empty());
+    assert!(snapshot.tool_definitions().is_empty());
+    assert!(snapshot.model_instructions().is_empty());
 }
 
 #[tokio::test]
 async fn http_server_without_handler_stashes_failed_status() {
     let endpoint = FailingHttpEndpoint::bind().await;
     let mut manager = test_manager(false);
-    assert!(manager.add_mcps(vec![endpoint.server("test_server", ToolExposure::Direct)]).await.is_ok());
+    assert!(manager.add_mcps(vec![endpoint.server("test_server", ToolExposure::ModelVisible)]).await.is_ok());
 }
 
 #[tokio::test]
@@ -162,7 +155,7 @@ async fn http_server_with_handler_classifies_non_auth_failure_as_failed() {
     let endpoint = FailingHttpEndpoint::bind().await;
     let mut manager = test_manager(true);
 
-    assert!(manager.add_mcps(vec![endpoint.server("test_oauth_server", ToolExposure::Direct)]).await.is_ok());
+    assert!(manager.add_mcps(vec![endpoint.server("test_oauth_server", ToolExposure::ModelVisible)]).await.is_ok());
 
     let statuses = manager.server_statuses();
     assert_eq!(statuses.len(), 1);
@@ -183,8 +176,8 @@ async fn add_mcps_continues_on_oauth_failure() {
     assert!(
         manager
             .add_mcps(vec![
-                endpoint.server("failing_server_1", ToolExposure::Direct),
-                endpoint.server("failing_server_2", ToolExposure::Direct)
+                endpoint.server("failing_server_1", ToolExposure::ModelVisible),
+                endpoint.server("failing_server_2", ToolExposure::ModelVisible)
             ])
             .await
             .is_ok()
@@ -212,13 +205,13 @@ async fn accept_oauth_callback_parses_code_and_state() {
 }
 
 #[tokio::test]
-async fn tool_proxy_with_failing_http_surfaces_failure() {
+async fn deferred_server_with_failing_http_surfaces_failure() {
     let endpoint = FailingHttpEndpoint::bind().await;
-    let (_home, mut manager) = test_manager_with_home(true);
+    let mut manager = test_manager(true);
 
     let servers = vec![
-        fake_mcp("local", FakeMcpServer::new()).with_exposure(ToolExposure::proxied_all()),
-        endpoint.server("remote", ToolExposure::proxied_all()),
+        fake_mcp("local", FakeMcpServer::new()).with_exposure(ToolExposure::deferred_all()),
+        endpoint.server("remote", ToolExposure::deferred_all()),
     ];
 
     let _ = manager.add_mcps(servers).await;
@@ -232,60 +225,54 @@ async fn tool_proxy_with_failing_http_surfaces_failure() {
     );
     assert_eq!(remote_status.auth_capability, McpServerAuthCapability::Unavailable);
     assert!(!remote_status.can_authenticate());
-    assert!(remote_status.proxied, "Expected remote to be marked as proxied");
+    assert!(remote_status.deferred_tools, "Expected remote to have deferred tools");
 
     let local_status = statuses.iter().find(|s| s.name == "local").expect("Expected status entry for 'local'");
     assert!(matches!(local_status.status, McpServerStatus::Connected { .. }));
-    assert!(local_status.proxied);
-    assert!(!statuses.iter().any(|s| s.name == "proxy"));
-
-    let defs = manager.tool_definitions();
-    assert_eq!(defs.len(), 1);
-    assert_eq!(defs[0].name, "proxy__call_tool");
+    assert!(local_status.deferred_tools);
+    assert!(manager.tool_definitions().is_empty());
 }
 
 #[tokio::test]
 async fn selective_policy_survives_reconnection_after_failure() {
     let endpoint = FailingHttpEndpoint::bind().await;
-    let (home, mut manager) = test_manager_with_home(true);
-    let selective = endpoint.server("remote", ToolExposure::Proxied(ToolProxyRules::new(&[], &["add_*"])));
+    let mut manager = test_manager(true);
+    let selective = endpoint.server("remote", ToolExposure::Deferred(DeferredToolRules::new(&[], &["add_*"])));
     manager.add_mcps(vec![selective]).await.unwrap();
 
     assert!(manager.authenticate_server_task("remote").await.is_err());
 
-    let connected = fake_mcp("remote", FakeMcpServer::new()).with_exposure(ToolExposure::proxied_all());
+    let connected = fake_mcp("remote", FakeMcpServer::new()).with_exposure(ToolExposure::deferred_all());
     let attempt = manager.connect_pending_task(connected).await;
     manager.apply_connection_attempt(attempt).await;
 
     let remote = manager.server_statuses().into_iter().find(|status| status.name == "remote").unwrap();
     assert!(matches!(remote.status, McpServerStatus::Connected { .. }));
-    assert!(remote.proxied);
+    assert!(remote.deferred_tools);
     let names = manager.tool_definitions().into_iter().map(|tool| tool.name).collect::<Vec<_>>();
-    assert_eq!(names, ["proxy__call_tool", "remote__add_numbers"]);
-
-    let remote_dir = home.path().join("tool-proxy/proxy/remote");
-    assert!(!remote_dir.join("add_numbers.json").exists());
-    assert!(remote_dir.join("divide_numbers.json").exists());
-    assert!(remote_dir.join("slow_tool.json").exists());
+    assert_eq!(names, ["remote__add_numbers"]);
 }
 
 #[tokio::test]
-async fn tool_proxy_partial_connection_works() {
+async fn deferred_tools_partial_connection_works() {
     let endpoint = FailingHttpEndpoint::bind().await;
-    let (_home, mut manager) = test_manager_with_home(false);
+    let mut manager = test_manager(false);
 
     let servers = vec![
-        fake_mcp("working", FakeMcpServer::new()).with_exposure(ToolExposure::proxied_all()),
-        endpoint.server("broken", ToolExposure::proxied_all()),
+        fake_mcp("working", FakeMcpServer::new()).with_exposure(ToolExposure::deferred_all()),
+        endpoint.server("broken", ToolExposure::deferred_all()),
     ];
 
     let _ = manager.add_mcps(servers).await;
 
-    let defs = manager.tool_definitions();
-    assert_eq!(defs.len(), 1);
-    assert_eq!(defs[0].name, "proxy__call_tool");
-
-    let instructions = manager.server_instructions();
-    let proxy_instr = instructions.get("proxy").expect("Expected proxy instructions");
-    assert!(proxy_instr.contains("working"), "Instructions should mention the connected server");
+    assert!(manager.tool_definitions().is_empty());
+    let statuses = manager.server_statuses();
+    assert!(matches!(
+        statuses.iter().find(|status| status.name == "working").unwrap().status,
+        McpServerStatus::Connected { .. }
+    ));
+    assert!(matches!(
+        statuses.iter().find(|status| status.name == "broken").unwrap().status,
+        McpServerStatus::Failed { .. }
+    ));
 }

@@ -12,18 +12,18 @@ pub enum McpSourceSpec {
 #[derive(Debug, Clone, PartialEq)]
 pub struct McpFileSpec {
     pub path: ResourcePath,
-    pub proxy: bool,
+    pub defer_tools: bool,
     pub optional: bool,
 }
 
 impl McpFileSpec {
     pub fn new(path: impl Into<ResourcePath>) -> Self {
-        Self { path: path.into(), proxy: false, optional: false }
+        Self { path: path.into(), defer_tools: false, optional: false }
     }
 
     #[must_use]
-    pub fn proxy(mut self) -> Self {
-        self.proxy = true;
+    pub fn defer_tools(mut self) -> Self {
+        self.defer_tools = true;
         self
     }
 
@@ -57,8 +57,8 @@ impl<'de> Deserialize<'de> for McpSourceSpec {
     fn deserialize<T: Deserializer<'de>>(deserializer: T) -> Result<Self, T::Error> {
         Ok(match PathOrObject::<McpSourceSpecObject>::deserialize(deserializer)? {
             PathOrObject::Path(path) => Self::File(McpFileSpec::new(path)),
-            PathOrObject::Object(McpSourceSpecObject::File { path, proxy, optional }) => {
-                Self::File(McpFileSpec { path, proxy, optional })
+            PathOrObject::Object(McpSourceSpecObject::File { path, defer_tools, optional }) => {
+                Self::File(McpFileSpec { path, defer_tools, optional })
             }
             PathOrObject::Object(McpSourceSpecObject::Inline { servers }) => Self::Inline { servers },
         })
@@ -68,9 +68,9 @@ impl<'de> Deserialize<'de> for McpSourceSpec {
 impl Serialize for McpSourceSpec {
     fn serialize<T: Serializer>(&self, serializer: T) -> Result<T::Ok, T::Error> {
         match self {
-            Self::File(McpFileSpec { path, proxy: false, optional: false }) => path.serialize(serializer),
-            Self::File(McpFileSpec { path, proxy, optional }) => Serialize::serialize(
-                &McpSourceSpecObject::File { path: path.clone(), proxy: *proxy, optional: *optional },
+            Self::File(McpFileSpec { path, defer_tools: false, optional: false }) => path.serialize(serializer),
+            Self::File(McpFileSpec { path, defer_tools, optional }) => Serialize::serialize(
+                &McpSourceSpecObject::File { path: path.clone(), defer_tools: *defer_tools, optional: *optional },
                 serializer,
             ),
             Self::Inline { servers } => {
@@ -98,8 +98,8 @@ impl schemars::JsonSchema for McpSourceSpec {
 enum McpSourceSpecObject {
     File {
         path: ResourcePath,
-        #[serde(default, skip_serializing_if = "is_false")]
-        proxy: bool,
+        #[serde(rename = "deferTools", alias = "proxy", default, skip_serializing_if = "is_false")]
+        defer_tools: bool,
         #[serde(default, skip_serializing_if = "is_false")]
         optional: bool,
     },
