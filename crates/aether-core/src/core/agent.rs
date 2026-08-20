@@ -204,9 +204,11 @@ impl Agent {
                 self.on_iteration_complete(id, iteration).await;
             }
 
-            if input_closed && !self.turn_active && !self.is_busy() && self.tool_executions.is_empty() {
+            if input_closed && !self.turn_active && !self.is_busy() {
+                if self.tool_executions.is_empty() {
+                    break;
+                }
                 self.abort_in_flight_work(ToolAbortPolicy::CancelAll).await;
-                break;
             }
         }
 

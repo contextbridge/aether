@@ -160,16 +160,18 @@ impl ToolExecutions {
 
     pub(super) fn abort(&mut self, policy: &ToolAbortPolicy) -> Vec<String> {
         let mut removed = Vec::new();
-        self.executions.retain(|tool_id, execution| {
-            execution.cancellation_token.cancel();
-            let background = matches!(execution.phase, ToolExecutionPhase::Background | ToolExecutionPhase::Cancelling);
-            if background {
+        self.executions.retain(|tool_id, execution| match execution.phase {
+            ToolExecutionPhase::Background | ToolExecutionPhase::Cancelling => {
+                execution.cancellation_token.cancel();
                 execution.phase = match policy {
                     ToolAbortPolicy::PreserveBackgroundAcknowledgements => ToolExecutionPhase::Cancelling,
                     ToolAbortPolicy::CancelAll => ToolExecutionPhase::Retiring,
                 };
                 true
-            } else {
+            }
+            ToolExecutionPhase::Retiring if matches!(policy, ToolAbortPolicy::CancelAll) => true,
+            ToolExecutionPhase::Foreground | ToolExecutionPhase::Retiring => {
+                execution.cancellation_token.cancel();
                 removed.push(tool_id.clone());
                 false
             }

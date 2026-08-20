@@ -9,6 +9,20 @@ use rmcp::{RoleServer, service::DynService};
 use tokio::sync::mpsc;
 
 #[tokio::test]
+async fn session_synchronization_does_not_keep_agent_input_open() {
+    let session = mcp("/workspace").spawn().await.unwrap();
+    let (agent_tx, agent_rx) = mpsc::channel(32);
+    let (runtime, _) = session.connect_agent(agent_tx.clone()).await.split();
+
+    assert_eq!(agent_rx.sender_strong_count(), 1);
+    assert_eq!(agent_rx.sender_weak_count(), 1);
+
+    drop(agent_tx);
+    assert_eq!(agent_rx.sender_strong_count(), 0);
+    drop(runtime);
+}
+
+#[tokio::test]
 async fn session_synchronizes_agent_while_forwarding_host_events() {
     let server = FakeMcpServer::new();
     let state = server.state();
@@ -32,7 +46,7 @@ async fn session_synchronizes_agent_while_forwarding_host_events() {
         .unwrap();
     let handle = session.handle().clone();
     let (agent_tx, mut agent_rx) = mpsc::channel(32);
-    let (runtime, mut host_events) = session.connect_agent(agent_tx).await.split();
+    let (runtime, mut host_events) = session.connect_agent(agent_tx.clone()).await.split();
 
     let mut received_initial_tools = false;
     let mut received_initial_instructions = false;
