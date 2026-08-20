@@ -114,8 +114,12 @@ impl McpSession {
             }
         }
 
+        let agent_tx = agent_tx.downgrade();
         self.runtime.agent_sync_handle = Some(tokio::spawn(async move {
             while snapshots.changed().await.is_ok() {
+                let Some(agent_tx) = agent_tx.upgrade() else {
+                    break;
+                };
                 let snapshot = snapshots.borrow_and_update().clone();
                 let tools = snapshot.tool_definitions();
                 if tools != previous_tools {

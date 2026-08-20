@@ -142,6 +142,35 @@ async fn background_task_progress_reaches_agent_events() {
 }
 
 #[tokio::test]
+async fn closing_agent_input_cancels_background_tasks() {
+    let now = chrono::Utc::now().to_rfc3339();
+    let task = Task::new("shutdown-task", TaskStatus::Working, now.clone(), now).with_poll_interval_ms(10);
+    let server = FakeMcpServer::new()
+        .with_tool(FakeTool::new("deferred").responds(FakeToolResponse::task(CreateTaskResult::new(task.clone()))))
+        .with_task("shutdown-task", [DetailedTask::new(task, TaskPayload::Working)]);
+    let server_state = server.state();
+    let arguments = serde_json::json!({}).to_string();
+
+    test_agent()
+        .fake_mcp_server("tasks", server)
+        .llm_responses(&[
+            llm_response("msg_1").tool_call("shutdown-call", "tasks__deferred", &[&arguments]).build(),
+            llm_response("msg_2").text(&["background task started"]).build(),
+        ])
+        .scenario(
+            TestScenario::new()
+                .user_text("start background task")
+                .wait_for(|event| matches!(event, AgentEvent::Tool(ToolEvent::TaskCreated { request, .. }) if request.id == "shutdown-call"))
+                .wait_for_turn_end(),
+        )
+        .run()
+        .await
+        .unwrap();
+
+    assert_eq!(server_state.task_cancel_ids(), ["shutdown-task"]);
+}
+
+#[tokio::test]
 async fn user_cancel_surfaces_background_task_cancellation() {
     let now = chrono::Utc::now().to_rfc3339();
     let task = Task::new("cancel-task", TaskStatus::Working, now.clone(), now).with_poll_interval_ms(10);
