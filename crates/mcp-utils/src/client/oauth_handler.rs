@@ -42,7 +42,7 @@ impl OAuthHandler for ElicitingOAuthHandler {
         Box::pin(async move {
             let (response_sender, response_rx) = oneshot::channel();
             self.event_sender
-                .send(McpClientEvent::Elicitation(ElicitationRequest {
+                .send(McpClientEvent::Elicitation(Box::new(ElicitationRequest {
                     server_name: self.server_name.clone(),
                     request: ElicitRequestParams::UrlElicitationParams {
                         meta: None,
@@ -51,7 +51,7 @@ impl OAuthHandler for ElicitingOAuthHandler {
                         elicitation_id: AETHER_OAUTH_ELICITATION_ID.to_string(),
                     },
                     response_sender,
-                }))
+                })))
                 .await
                 .map_err(|_| OAuthError::Rmcp("OAuth prompt channel closed".to_string()))?;
 

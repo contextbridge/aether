@@ -57,7 +57,7 @@ impl McpClient {
         let elicitation_request =
             ElicitationRequest { server_name: self.server_name.clone(), request, response_sender: response_tx };
 
-        if self.event_sender.send(McpClientEvent::Elicitation(elicitation_request)).await.is_err() {
+        if self.event_sender.send(McpClientEvent::Elicitation(Box::new(elicitation_request))).await.is_err() {
             return cancel_result();
         }
         response_rx.await.unwrap_or_else(|_| cancel_result())
@@ -121,7 +121,7 @@ mod tests {
 
     fn unwrap_elicitation(event: McpClientEvent) -> ElicitationRequest {
         match event {
-            McpClientEvent::Elicitation(req) => req,
+            McpClientEvent::Elicitation(req) => *req,
             other => panic!("expected Elicitation, got {other:?}"),
         }
     }

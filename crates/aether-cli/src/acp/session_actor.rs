@@ -553,7 +553,7 @@ fn send_agent_notification(
 fn on_mcp_client_event(connection: &ConnectionTo<Client>, event: McpClientEvent) {
     match event {
         McpClientEvent::Elicitation(elicitation) => {
-            spawn_elicitation_request(connection, elicitation);
+            spawn_elicitation_request(connection, *elicitation);
         }
         McpClientEvent::ServerStatusesChanged(servers) => send_mcp_server_status(connection, servers),
         McpClientEvent::ConnectionReady(snapshot) => send_mcp_server_status(connection, snapshot.server_statuses()),
@@ -946,7 +946,7 @@ mod tests {
                         response_sender: tx,
                     };
 
-                    on_mcp_client_event(&cx, McpClientEvent::Elicitation(elicitation));
+                    on_mcp_client_event(&cx, McpClientEvent::Elicitation(Box::new(elicitation)));
 
                     let responder = responder_rx.await.expect("form elicitation request should reach peer");
                     let _ = responder.respond(acp_utils::notifications::ElicitationResponse {

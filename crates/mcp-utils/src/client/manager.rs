@@ -110,7 +110,7 @@ pub struct ElicitationResponse {
 /// to the consumer.
 #[derive(Debug)]
 pub enum McpClientEvent {
-    Elicitation(ElicitationRequest),
+    Elicitation(Box<ElicitationRequest>),
     ServerStatusesChanged(Vec<McpServerStatusEntry>),
     AuthenticationFailed { server: String, error: String },
     ConnectionReady(McpConnectionDetails),
