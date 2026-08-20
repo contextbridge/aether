@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.33](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.6.32...aether-agent-core-v0.6.33) - 2026-08-20
+
+### Fixed
+
+- *(aether-core)* allow headless agents to shut down ([#367](https://github.com/contextbridge/aether/pull/367))
+
 ## [0.6.32](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.6.31...aether-agent-core-v0.6.32) - 2026-08-19
 
 ### Added

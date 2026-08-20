@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.37](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.36...aether-agent-cli-v0.7.37) - 2026-08-20
+
+### Other
+
+- fix Clippy error by boxing enum
+
 ## [0.7.36](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.35...aether-agent-cli-v0.7.36) - 2026-08-19
 
 ### Added

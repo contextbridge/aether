@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.33](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.5.32...aether-mcp-utils-v0.5.33) - 2026-08-20
+
+### Other
+
+- fix Clippy error by boxing enum
+
 ## [0.5.32](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.5.31...aether-mcp-utils-v0.5.32) - 2026-08-19
 
 ### Added
