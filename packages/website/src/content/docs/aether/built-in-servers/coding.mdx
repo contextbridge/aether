@@ -24,7 +24,7 @@ Supported args:
 | -------------------------------------------------- | ------------------------------------------------------------------------------- |
 | `--root-dir <path>`                                | Workspace root. Users don't need to set this as Aether sets this automatically. |
 | `--rules-dir <path>`                               | Directory to load Rules from. Repeatable.                                       |
-| `--permission-mode always-allow\|auto\|always-ask` | Approval behavior for write/edit/bash tools. Default is `always-allow`.         |
+| `--permission-mode always-allow\|auto\|always-ask` | Approval behavior for destructive tools. Default is `always-allow`.               |
 | `--disable-lsp`                                    | Do not attach LSP-backed coding tools.                                          |
 
 Permission modes:
@@ -33,7 +33,7 @@ Permission modes:
 | -------------- | ------------------------------------------------------------------------------------ |
 | `always-allow` | Tool calls execute without eliciting approval. This is the default.                  |
 | `auto`         | File writes auto-execute; destructive bash commands ask for approval.                |
-| `always-ask`   | `write_file`, `edit_file`, and `bash` ask for approval; read-only tools are ungated. |
+| `always-ask`   | Every destructive tool — `write_file`, `edit_file`, `bash`, and `lsp_rename` — asks for approval; read-only tools are ungated. |
 
 ## File operations
 
@@ -56,7 +56,7 @@ Permission modes:
 
 | Tool                   | Description                                                                                     |
 | ---------------------- | ----------------------------------------------------------------------------------------------- |
-| `bash`                 | Execute a shell command. Background mode uses MCP Tasks and returns complete output at completion. |
+| `bash`                 | Execute a shell command. Pass `run_in_background` to run it as a background MCP task that returns its complete output at completion. |
 
 ## Web
 

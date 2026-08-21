@@ -84,7 +84,7 @@ aether headless --model bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0 \
 
 <Tabs>
   <TabItem label="text">
-    Human-readable lines. Final text is printed as plain text; tool calls, tool results, errors, context usage, and other selected events are formatted as simple lines.
+    Human-readable lines. Final text is printed as plain text; tool calls, tool results, errors, context usage, and other selected events are formatted as simple lines. Background MCP tasks get their own lines as they start and finish (`Tool deferred ...`, `Background task completed ...`, `Background task failed ...`, `Background task cancelled ...`).
 
     ```bash
     aether headless --output text "What does this project do?"
