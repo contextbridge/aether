@@ -319,9 +319,8 @@ async fn test_auto_continue_not_triggered_for_end_turn() -> Result<(), Box<dyn E
     let messages =
         test_agent().llm_responses(&llm_responses).user_text("do something").max_auto_continues(3).run().await?;
 
-    let auto_continue_count =
-        messages.iter().filter(|m| matches!(m, AgentEvent::Turn(TurnEvent::AutoContinue { .. }))).count();
-    assert_eq!(auto_continue_count, 0, "Expected no AutoContinue messages for normal end-turn completion");
+    let attempts = auto_continue_attempts(&messages);
+    assert!(attempts.is_empty(), "Expected no AutoContinue messages for normal end-turn completion, got {attempts:?}");
 
     assert!(matches!(messages.last().and_then(AgentEvent::turn_outcome), Some(TurnOutcome::Completed)));
 
@@ -336,9 +335,11 @@ async fn test_auto_continue_not_triggered_for_opening_message() -> Result<(), Bo
 
     let messages = test_agent().llm_responses(&llm_responses).user_text("hello").max_auto_continues(3).run().await?;
 
-    let auto_continue_count =
-        messages.iter().filter(|m| matches!(m, AgentEvent::Turn(TurnEvent::AutoContinue { .. }))).count();
-    assert_eq!(auto_continue_count, 0, "Expected no AutoContinue messages for opening message without tool calls");
+    let attempts = auto_continue_attempts(&messages);
+    assert!(
+        attempts.is_empty(),
+        "Expected no AutoContinue messages for opening message without tool calls, got {attempts:?}"
+    );
 
     assert!(matches!(messages.last().and_then(AgentEvent::turn_outcome), Some(TurnOutcome::Completed)));
 
@@ -350,41 +351,15 @@ async fn test_auto_continue_triggers_on_length_stop_reason() -> Result<(), Box<d
     let tool_request = json!({ "a": 2, "b": 3 });
     let llm_responses = [
         llm_response("msg_1").tool_call("call_1", "test__add_numbers", &[&tool_request.to_string()]).build(),
-        vec![
-            LlmResponse::start("msg_2"),
-            LlmResponse::text("I'm thinking about the problem..."),
-            LlmResponse::done_with_stop_reason(StopReason::Length),
-        ],
-        vec![
-            LlmResponse::start("msg_3"),
-            LlmResponse::text("Let me continue..."),
-            LlmResponse::done_with_stop_reason(StopReason::Length),
-        ],
-        vec![
-            LlmResponse::start("msg_4"),
-            LlmResponse::text("Done!"),
-            LlmResponse::done_with_stop_reason(StopReason::EndTurn),
-        ],
+        llm_response("msg_2").text(&["I'm thinking about the problem..."]).build_with_stop_reason(StopReason::Length),
+        llm_response("msg_3").text(&["Let me continue..."]).build_with_stop_reason(StopReason::Length),
+        llm_response("msg_4").text(&["Done!"]).build(),
     ];
 
     let messages =
         test_agent().llm_responses(&llm_responses).user_text("do something").max_auto_continues(5).run().await?;
 
-    let auto_continue_count =
-        messages.iter().filter(|m| matches!(m, AgentEvent::Turn(TurnEvent::AutoContinue { .. }))).count();
-    assert_eq!(
-        auto_continue_count, 2,
-        "Expected 2 AutoContinue messages after length stop reasons, got {auto_continue_count}"
-    );
-
-    let auto_continues: Vec<_> = messages
-        .iter()
-        .filter_map(|m| match m {
-            AgentEvent::Turn(TurnEvent::AutoContinue { attempt, max_attempts }) => Some((*attempt, *max_attempts)),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(auto_continues, vec![(1, 5), (2, 5)]);
+    assert_eq!(auto_continue_attempts(&messages), vec![(1, 5), (2, 5)]);
 
     Ok(())
 }
@@ -392,20 +367,18 @@ async fn test_auto_continue_triggers_on_length_stop_reason() -> Result<(), Box<d
 #[tokio::test]
 async fn test_auto_continue_triggers_on_empty_length_stop_reason() -> Result<(), Box<dyn Error>> {
     let llm_responses = [
-        vec![LlmResponse::start("msg_1"), LlmResponse::done_with_stop_reason(StopReason::Length)],
-        vec![
-            LlmResponse::start("msg_2"),
-            LlmResponse::text("Recovered after compaction"),
-            LlmResponse::done_with_stop_reason(StopReason::EndTurn),
-        ],
+        llm_response("msg_1").build_with_stop_reason(StopReason::Length),
+        llm_response("msg_2").text(&["Recovered after compaction"]).build(),
     ];
 
     let messages =
         test_agent().llm_responses(&llm_responses).user_text("do something").max_auto_continues(3).run().await?;
 
-    let auto_continue_count =
-        messages.iter().filter(|m| matches!(m, AgentEvent::Turn(TurnEvent::AutoContinue { .. }))).count();
-    assert_eq!(auto_continue_count, 1, "Expected AutoContinue after an empty length stop, got {messages:?}");
+    assert_eq!(
+        auto_continue_attempts(&messages),
+        vec![(1, 3)],
+        "Expected AutoContinue after an empty length stop, got {messages:?}"
+    );
 
     assert!(
         messages.iter().any(|m| matches!(
@@ -426,29 +399,19 @@ async fn test_auto_continue_respects_max_limit() -> Result<(), Box<dyn Error>> {
 
     let llm_responses = [
         llm_response("msg_1").tool_call("call_1", "test__add_numbers", &[&tool_request.to_string()]).build(),
-        vec![
-            LlmResponse::start("msg_2"),
-            LlmResponse::text("Thinking..."),
-            LlmResponse::done_with_stop_reason(StopReason::Length),
-        ],
-        vec![
-            LlmResponse::start("msg_3"),
-            LlmResponse::text("Still thinking..."),
-            LlmResponse::done_with_stop_reason(StopReason::Length),
-        ],
-        vec![
-            LlmResponse::start("msg_4"),
-            LlmResponse::text("More thinking..."),
-            LlmResponse::done_with_stop_reason(StopReason::Length),
-        ],
+        llm_response("msg_2").text(&["Thinking..."]).build_with_stop_reason(StopReason::Length),
+        llm_response("msg_3").text(&["Still thinking..."]).build_with_stop_reason(StopReason::Length),
+        llm_response("msg_4").text(&["More thinking..."]).build_with_stop_reason(StopReason::Length),
     ];
 
     let messages =
         test_agent().llm_responses(&llm_responses).user_text("do something").max_auto_continues(2).run().await?;
 
-    let auto_continue_count =
-        messages.iter().filter(|m| matches!(m, AgentEvent::Turn(TurnEvent::AutoContinue { .. }))).count();
-    assert_eq!(auto_continue_count, 2, "Expected 2 AutoContinue messages (max limit), got {auto_continue_count}");
+    assert_eq!(
+        auto_continue_attempts(&messages),
+        vec![(1, 2), (2, 2)],
+        "Expected 2 AutoContinue messages (max limit), got {messages:?}"
+    );
 
     assert!(
         matches!(messages.last().and_then(AgentEvent::turn_outcome), Some(TurnOutcome::Completed)),
@@ -464,23 +427,29 @@ async fn test_auto_continue_disabled_with_zero() -> Result<(), Box<dyn Error>> {
 
     let llm_responses = [
         llm_response("msg_1").tool_call("call_1", "test__add_numbers", &[&tool_request.to_string()]).build(),
-        vec![
-            LlmResponse::start("msg_2"),
-            LlmResponse::text("No completion signal here"),
-            LlmResponse::done_with_stop_reason(StopReason::Length),
-        ],
+        llm_response("msg_2").text(&["No completion signal here"]).build_with_stop_reason(StopReason::Length),
     ];
 
     let messages =
         test_agent().llm_responses(&llm_responses).user_text("do something").max_auto_continues(0).run().await?;
 
-    let auto_continue_count =
-        messages.iter().filter(|m| matches!(m, AgentEvent::Turn(TurnEvent::AutoContinue { .. }))).count();
-    assert_eq!(auto_continue_count, 0, "Expected no AutoContinue messages when max_auto_continues=0");
+    let attempts = auto_continue_attempts(&messages);
+    assert!(attempts.is_empty(), "Expected no AutoContinue messages when max_auto_continues=0, got {attempts:?}");
 
     assert!(matches!(messages.last().and_then(AgentEvent::turn_outcome), Some(TurnOutcome::Completed)));
 
     Ok(())
+}
+
+/// `(attempt, max_attempts)` for every auto-continue the agent emitted, in order.
+fn auto_continue_attempts(events: &[AgentEvent]) -> Vec<(u32, u32)> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::Turn(TurnEvent::AutoContinue { attempt, max_attempts }) => Some((*attempt, *max_attempts)),
+            _ => None,
+        })
+        .collect()
 }
 
 #[tokio::test]
