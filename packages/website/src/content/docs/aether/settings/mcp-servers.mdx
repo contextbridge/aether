@@ -346,7 +346,7 @@ aether mcp <server> --help
 aether mcp <server> <tool> --help
 ```
 
-Invoke tools with exactly one JSON object supplied through `--json` or stdin. Because this is a real subprocess, it composes with ordinary Bash pipelines, redirects, `&&`, command substitution, and scripts:
+Invoke tools with exactly one JSON object supplied through `--json` or stdin. Tool calls time out after 600 seconds; pass `--timeout <seconds>` to change it. Because this is a real subprocess, it composes with ordinary Bash pipelines, redirects, `&&`, command substitution, and scripts:
 
 ```bash
 aether mcp linear list_issues --json '{"state":"open"}' | jq .
@@ -357,7 +357,7 @@ Only the private session socket and Aether executable directory are injected int
 
 ## Variable expansion
 
-Variables are expanded in two places: MCP source paths in settings, and server fields inside MCP JSON files. Environment variables are expanded in stdio `command`, stdio `args`, stdio `env` values, in-memory `args`, HTTP/SSE `url`, and the HTTP/SSE `Authorization` header value. `${WORKSPACE}` is also available when server configs are converted into running MCP servers.
+Variables are expanded in two places: MCP source paths in settings, and server fields inside MCP JSON files. Environment variables are expanded in stdio `command`, stdio `args`, stdio `env` values, in-memory `args`, HTTP/SSE `url`, and the HTTP/SSE `Authorization` header value. `${WORKSPACE}` and `${AETHER_HOME}` (the user-level Aether home, honoring the `AETHER_HOME` env var) are also available when server configs are converted into running MCP servers.
 
 Supported syntax:
 

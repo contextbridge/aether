@@ -222,7 +222,7 @@ OAuth tokens (such as Codex login) are stored in a credential store. By default 
 | ---------------- | ------------------------------------------------------- | ------------------------------------------------------------------------ |
 | `keyring`        | —                                                       | OS keyring (default).                                                    |
 | `memory`         | —                                                       | In-memory only; cleared when the process exits. Intended for tests.      |
-| `encryptedFile`  | `path` (optional), `passwordEnv` (optional)             | Encrypted file. `path` defaults to `.aether/credentials.enc` in the Aether home; `passwordEnv` names the env var holding the passphrase (defaults to `AETHER_CREDENTIALS_PASSWORD`). |
+| `encryptedFile`  | `path` (optional), `passwordEnv` (optional)             | Encrypted file. `path` defaults to `$HOME/.aether/credentials.enc`; `passwordEnv` names the env var holding the passphrase (defaults to `AETHER_CREDENTIALS_PASSWORD`). |
 
 ```json title=".aether/settings.json"
 {
