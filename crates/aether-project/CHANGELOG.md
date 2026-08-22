@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.35](https://github.com/contextbridge/aether/compare/aether-project-v0.5.34...aether-project-v0.5.35) - 2026-08-22
+
+### Other
+
+- updated the following local packages: aether-utils, aether-agent-core, aether-llm, aether-mcp-utils
+
 ## [0.5.34](https://github.com/contextbridge/aether/compare/aether-project-v0.5.33...aether-project-v0.5.34) - 2026-08-20
 
 ### Other

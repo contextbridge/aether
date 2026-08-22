@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.33](https://github.com/contextbridge/aether/compare/aether-lspd-v0.1.32...aether-lspd-v0.1.33) - 2026-08-22
+
+### Added
+
+- *(wisp)* Rewrite Wisp with Ratatui and remove its custom crossterm tui ([#373](https://github.com/contextbridge/aether/pull/373))
+
 ## [0.1.32](https://github.com/contextbridge/aether/compare/aether-lspd-v0.1.31...aether-lspd-v0.1.32) - 2026-08-19
 
 ### Other
