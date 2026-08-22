@@ -46,8 +46,8 @@ rustdoc-args = ["--cfg", "docsrs"]
 workspace = true
 
 [dependencies]
-utils = { package = "aether-utils", path = "../utils", version = "0.2.12" }
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client"], version = "0.3.39" }
+utils = { package = "aether-utils", path = "../utils", version = "0.2.13" }
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client"], version = "0.3.40" }
 agent-client-protocol = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
@@ -72,6 +72,6 @@ url = { workspace = true }
 unicode-width = { workspace = true }
 
 [dev-dependencies]
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client", "testing"], version = "0.3.39" }
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client", "testing"], version = "0.3.40" }
 serde_json = { workspace = true }
 tempfile = { workspace = true }

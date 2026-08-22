@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.13](https://github.com/contextbridge/aether/compare/aether-utils-v0.2.12...aether-utils-v0.2.13) - 2026-08-22
+
+### Added
+
+- *(wisp)* Rewrite Wisp with Ratatui and remove its custom crossterm tui ([#373](https://github.com/contextbridge/aether/pull/373))
+
 ## [0.2.12](https://github.com/contextbridge/aether/compare/aether-utils-v0.2.11...aether-utils-v0.2.12) - 2026-08-19
 
 ### Added

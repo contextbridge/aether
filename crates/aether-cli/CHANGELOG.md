@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.38](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.37...aether-agent-cli-v0.7.38) - 2026-08-22
+
+### Added
+
+- *(wisp)* Rewrite Wisp with Ratatui and remove its custom crossterm tui ([#373](https://github.com/contextbridge/aether/pull/373))
+
 ## [0.7.37](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.7.36...aether-agent-cli-v0.7.37) - 2026-08-20
 
 ### Other
