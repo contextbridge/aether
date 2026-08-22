@@ -160,10 +160,8 @@ async fn run_default_command() -> Result<ExitCode, MainError> {
         }
     }
 
-    run_tui("aether acp", load_or_create_settings(default_status_line()))
-        .await
-        .map(|()| ExitCode::SUCCESS)
-        .map_err(Into::into)
+    let settings = load_or_create_settings().with_default_status_line(default_status_line());
+    run_tui("aether acp", settings, None).await.map(|()| ExitCode::SUCCESS).map_err(Into::into)
 }
 
 fn default_status_line() -> StatusLineSettings {

@@ -36,8 +36,8 @@ aether-telemetry = { path = "../aether-telemetry", version = "0.1.14" }
 llm = { package = "aether-llm", path = "../llm", features = ["bedrock", "codex"], version = "0.7.28" }
 mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.5.33" }
 mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", features = ["all"], version = "0.4.40" }
-wisp = { package = "aether-wisp", path = "../wisp", version = "0.4.41" }
-tui = { package = "aether-tui", path = "../tui", default-features = false, features = ["syntax"], version = "0.2.20" }
+wisp = { package = "aether-wisp", path = "../wisp", version = "0.5.0" }
+ratatui = { workspace = true }
 acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["server", "testing"], version = "0.3.39" }
 agent-client-protocol = { workspace = true }
 aether-lspd = { path = "../aether-lspd", version = "0.1.32" }

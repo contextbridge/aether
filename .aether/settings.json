@@ -10,14 +10,6 @@
       "mcps": ["mcp.json"]
     },
     {
-      "name": "Local",
-      "description": "Llama.cpp",
-      "model": "llamacpp:unsloth/Qwen3.5-9B-GGUF",
-      "userInvocable": true,
-      "prompts": [".aether/SYSTEM.md", "AGENTS.md"],
-      "mcps": ["mcp.json"]
-    },
-    {
       "name": "Explore",
       "description": "Explores codebases to find relevant files, patterns, and integration points",
       "model": "deepseek:deepseek-v4-flash",

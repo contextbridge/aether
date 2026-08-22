@@ -18,7 +18,10 @@ use crate::lsp::common::{LocationResult, enrich_locations, for_each_document_sym
 use crate::lsp::error::LspError;
 use crate::lsp::registry::LspRegistry;
 use crate::search::find_files_containing;
-use aether_lspd::{LanguageId, LspClient, get_config_for_language, metadata_for, symbol_kind_to_string};
+use aether_lspd::{
+    ClientError, LSP_REQUEST_TIMED_OUT, LanguageId, LspClient, get_config_for_language, metadata_for,
+    symbol_kind_to_string,
+};
 
 /// Language server selected for a workspace symbol search.
 #[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
@@ -123,7 +126,14 @@ pub async fn execute_lsp_workspace_search(
     let language = LanguageId::from(input.language);
     let client = registry.get_or_spawn_for_language(language).await?;
     let server_extensions = server_extensions(language);
-    let symbols = client.workspace_symbol(input.query.clone()).await?;
+    // A server that rejects workspace/symbol outright (rather than timing out)
+    // is treated as having no results, so the document-symbol fallback below
+    // covers both an unsupported request and an empty answer.
+    let symbols = match client.workspace_symbol(input.query.clone()).await {
+        Ok(symbols) => symbols,
+        Err(ClientError::LspError { code, .. }) if code != LSP_REQUEST_TIMED_OUT => Vec::new(),
+        Err(error) => return Err(error.into()),
+    };
     let mut all_results: Vec<_> = symbols
         .into_iter()
         .filter(|symbol| is_server_language_path(&uri_to_path(&symbol.location.uri), &server_extensions))

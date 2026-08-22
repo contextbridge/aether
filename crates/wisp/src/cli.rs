@@ -2,7 +2,7 @@ use clap::Parser;
 
 #[derive(Parser, Clone)]
 #[command(name = "wisp")]
-#[command(about = "A TUI for AI coding agents via the Agent Client Protocol")]
+#[command(about = "A terminal UI for AI coding agents via the Agent Client Protocol")]
 pub struct Cli {
     #[arg(
         short = 'a',
