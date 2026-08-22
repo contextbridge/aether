@@ -110,12 +110,10 @@ impl FileView {
             .enumerate()
             .map(|(i, text)| {
                 let new_line_no = i + 1;
-                let added = self.added_line_numbers.contains(&new_line_no);
-                PatchLine {
-                    kind: if added { PatchLineKind::Added } else { PatchLineKind::Context },
-                    text: text.to_string(),
-                    old_line_no: (!added).then_some(new_line_no),
-                    new_line_no: Some(new_line_no),
+                if self.added_line_numbers.contains(&new_line_no) {
+                    PatchLine::added(*text, new_line_no)
+                } else {
+                    PatchLine::context(*text, new_line_no, new_line_no)
                 }
             })
             .collect();
@@ -484,20 +482,7 @@ mod tests {
                 old_count: 1,
                 new_start: 1,
                 new_count: 2,
-                lines: vec![
-                    PatchLine {
-                        kind: PatchLineKind::Context,
-                        text: "fn main() {".to_string(),
-                        old_line_no: Some(1),
-                        new_line_no: Some(1),
-                    },
-                    PatchLine {
-                        kind: PatchLineKind::Added,
-                        text: "    let value = 1;".to_string(),
-                        old_line_no: None,
-                        new_line_no: Some(2),
-                    },
-                ],
+                lines: vec![PatchLine::context("fn main() {", 1, 1), PatchLine::added("    let value = 1;", 2)],
             }],
             binary: false,
         }

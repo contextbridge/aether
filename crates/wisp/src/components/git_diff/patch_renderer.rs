@@ -143,20 +143,7 @@ mod tests {
 
     #[test]
     fn rendered_patch_contains_insert_row_lookup() {
-        let file = make_file(vec![
-            PatchLine {
-                kind: PatchLineKind::HunkHeader,
-                text: "@@ -1,1 +1,1 @@".to_string(),
-                old_line_no: None,
-                new_line_no: None,
-            },
-            PatchLine {
-                kind: PatchLineKind::Context,
-                text: "fn test()".to_string(),
-                old_line_no: Some(1),
-                new_line_no: Some(1),
-            },
-        ]);
+        let file = make_file(vec![PatchLine::hunk_header("@@ -1,1 +1,1 @@"), PatchLine::context("fn test()", 1, 1)]);
         let context = ViewContext::new((120, 24));
         let result = RenderedPatch::from_file_diff(&file, 80, &context);
 
@@ -167,15 +154,7 @@ mod tests {
     #[test]
     fn long_lines_soft_wrapped_to_right_width() {
         let long_content = "x".repeat(200);
-        let file = make_file(vec![
-            PatchLine {
-                kind: PatchLineKind::HunkHeader,
-                text: "@@ -1,1 +1,1 @@".to_string(),
-                old_line_no: None,
-                new_line_no: None,
-            },
-            PatchLine { kind: PatchLineKind::Added, text: long_content, old_line_no: None, new_line_no: Some(1) },
-        ]);
+        let file = make_file(vec![PatchLine::hunk_header("@@ -1,1 +1,1 @@"), PatchLine::added(long_content, 1)]);
         let context = ViewContext::new((120, 24));
         let right_width = 60;
         let result = RenderedPatch::from_file_diff(&file, right_width, &context);
@@ -210,15 +189,7 @@ mod tests {
     #[test]
     fn added_row_continuation_preserves_added_background() {
         let long_content = "x".repeat(200);
-        let file = make_file(vec![
-            PatchLine {
-                kind: PatchLineKind::HunkHeader,
-                text: "@@ -1,1 +1,1 @@".to_string(),
-                old_line_no: None,
-                new_line_no: None,
-            },
-            PatchLine { kind: PatchLineKind::Added, text: long_content, old_line_no: None, new_line_no: Some(1) },
-        ]);
+        let file = make_file(vec![PatchLine::hunk_header("@@ -1,1 +1,1 @@"), PatchLine::added(long_content, 1)]);
         let context = ViewContext::new((120, 24));
         let added_bg = context.theme.diff_added_bg();
         let result = RenderedPatch::from_file_diff(&file, 60, &context);
@@ -238,15 +209,7 @@ mod tests {
 
     #[test]
     fn empty_added_line_fills_full_width_with_added_background() {
-        let file = make_file(vec![
-            PatchLine {
-                kind: PatchLineKind::HunkHeader,
-                text: "@@ -1,1 +1,1 @@".to_string(),
-                old_line_no: None,
-                new_line_no: None,
-            },
-            PatchLine { kind: PatchLineKind::Added, text: String::new(), old_line_no: None, new_line_no: Some(1) },
-        ]);
+        let file = make_file(vec![PatchLine::hunk_header("@@ -1,1 +1,1 @@"), PatchLine::added(String::new(), 1)]);
         let context = ViewContext::new((120, 24));
         let added_bg = context.theme.diff_added_bg();
         let total_width = 60;

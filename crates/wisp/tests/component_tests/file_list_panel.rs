@@ -1,7 +1,7 @@
 use tui::testing::{TestTerminal, assert_buffer_eq, cols, key, render_component};
 use tui::{Component, Event, KeyCode, KeyModifiers, MouseEvent, MouseEventKind, ViewContext};
 use wisp::components::file_list_panel::FileListPanel;
-use wisp::git_diff::{FileDiff, FileStatus, Hunk, PatchLine, PatchLineKind, StageState};
+use wisp::git_diff::{FileDiff, FileStatus, Hunk, PatchLine, StageState};
 
 const W: u16 = 40;
 
@@ -26,20 +26,10 @@ fn assert_selected_tree_row(term: &TestTerminal, selected: usize, unselected: us
 fn file(path: &str, status: FileStatus, additions: usize, deletions: usize) -> FileDiff {
     let mut lines = Vec::new();
     for i in 0..additions {
-        lines.push(PatchLine {
-            kind: PatchLineKind::Added,
-            text: format!("added {i}"),
-            old_line_no: None,
-            new_line_no: Some(i + 1),
-        });
+        lines.push(PatchLine::added(format!("added {i}"), i + 1));
     }
     for i in 0..deletions {
-        lines.push(PatchLine {
-            kind: PatchLineKind::Removed,
-            text: format!("removed {i}"),
-            old_line_no: Some(i + 1),
-            new_line_no: None,
-        });
+        lines.push(PatchLine::removed(format!("removed {i}"), i + 1));
     }
     FileDiff {
         old_path: None,

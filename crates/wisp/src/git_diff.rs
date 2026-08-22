@@ -59,6 +59,33 @@ pub struct PatchLine {
     pub new_line_no: Option<usize>,
 }
 
+impl PatchLine {
+    pub fn hunk_header(header: &str) -> Self {
+        Self { kind: PatchLineKind::HunkHeader, text: header.to_string(), old_line_no: None, new_line_no: None }
+    }
+
+    pub fn context(text: impl Into<String>, old_line_no: usize, new_line_no: usize) -> Self {
+        Self {
+            kind: PatchLineKind::Context,
+            text: text.into(),
+            old_line_no: Some(old_line_no),
+            new_line_no: Some(new_line_no),
+        }
+    }
+
+    pub fn added(text: impl Into<String>, new_line_no: usize) -> Self {
+        Self { kind: PatchLineKind::Added, text: text.into(), old_line_no: None, new_line_no: Some(new_line_no) }
+    }
+
+    pub fn removed(text: impl Into<String>, old_line_no: usize) -> Self {
+        Self { kind: PatchLineKind::Removed, text: text.into(), old_line_no: Some(old_line_no), new_line_no: None }
+    }
+
+    pub fn meta(text: impl Into<String>) -> Self {
+        Self { kind: PatchLineKind::Meta, text: text.into(), old_line_no: None, new_line_no: None }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PatchLineKind {
     HunkHeader,
@@ -308,20 +335,10 @@ async fn build_untracked_file_diff(repo_root: &Path, relative_path: String) -> F
 
     let hunk_header = format!("@@ -0,0 +1,{line_count} @@");
 
-    let mut patch_lines = vec![PatchLine {
-        kind: PatchLineKind::HunkHeader,
-        text: hunk_header.clone(),
-        old_line_no: None,
-        new_line_no: None,
-    }];
+    let mut patch_lines = vec![PatchLine::hunk_header(&hunk_header)];
 
     for (i, line) in text_lines.iter().enumerate() {
-        patch_lines.push(PatchLine {
-            kind: PatchLineKind::Added,
-            text: (*line).to_string(),
-            old_line_no: None,
-            new_line_no: Some(i + 1),
-        });
+        patch_lines.push(PatchLine::added(*line, i + 1));
     }
 
     let hunk = Hunk {
@@ -478,12 +495,7 @@ fn parse_hunk(lines: &[&str]) -> Result<(Hunk, usize), GitDiffError> {
     let (old_start, old_count, new_start, new_count) = parse_hunk_header(header)?;
 
     let mut patch_lines = Vec::new();
-    patch_lines.push(PatchLine {
-        kind: PatchLineKind::HunkHeader,
-        text: header.to_string(),
-        old_line_no: None,
-        new_line_no: None,
-    });
+    patch_lines.push(PatchLine::hunk_header(header));
 
     let mut old_line = old_start;
     let mut new_line = new_start;
@@ -496,45 +508,20 @@ fn parse_hunk(lines: &[&str]) -> Result<(Hunk, usize), GitDiffError> {
         }
 
         if let Some(text) = line.strip_prefix('+') {
-            patch_lines.push(PatchLine {
-                kind: PatchLineKind::Added,
-                text: text.to_string(),
-                old_line_no: None,
-                new_line_no: Some(new_line),
-            });
+            patch_lines.push(PatchLine::added(text, new_line));
             new_line += 1;
         } else if let Some(text) = line.strip_prefix('-') {
-            patch_lines.push(PatchLine {
-                kind: PatchLineKind::Removed,
-                text: text.to_string(),
-                old_line_no: Some(old_line),
-                new_line_no: None,
-            });
+            patch_lines.push(PatchLine::removed(text, old_line));
             old_line += 1;
         } else if let Some(text) = line.strip_prefix(' ') {
-            patch_lines.push(PatchLine {
-                kind: PatchLineKind::Context,
-                text: text.to_string(),
-                old_line_no: Some(old_line),
-                new_line_no: Some(new_line),
-            });
+            patch_lines.push(PatchLine::context(text, old_line, new_line));
             old_line += 1;
             new_line += 1;
         } else if line.starts_with('\\') {
-            patch_lines.push(PatchLine {
-                kind: PatchLineKind::Meta,
-                text: line.to_string(),
-                old_line_no: None,
-                new_line_no: None,
-            });
+            patch_lines.push(PatchLine::meta(line));
         } else {
             // Treat as context (git sometimes omits the leading space for empty lines)
-            patch_lines.push(PatchLine {
-                kind: PatchLineKind::Context,
-                text: line.to_string(),
-                old_line_no: Some(old_line),
-                new_line_no: Some(new_line),
-            });
+            patch_lines.push(PatchLine::context(line, old_line, new_line));
             old_line += 1;
             new_line += 1;
         }

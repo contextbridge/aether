@@ -192,7 +192,7 @@ mod tests {
     }
 
     fn added_line(text: &str) -> PatchLine {
-        PatchLine { kind: PatchLineKind::Added, text: text.to_string(), old_line_no: None, new_line_no: Some(1) }
+        PatchLine::added(text, 1)
     }
 
     fn rendered_patch_contains(compositor: &GitDiffCompositor, marker: &str) -> bool {
@@ -259,20 +259,7 @@ mod tests {
 
     #[test]
     fn comment_splices_preserve_input_order_for_same_anchor() {
-        let file = make_file(vec![
-            PatchLine {
-                kind: PatchLineKind::HunkHeader,
-                text: "@@ -1,1 +1,1 @@".to_string(),
-                old_line_no: None,
-                new_line_no: None,
-            },
-            PatchLine {
-                kind: PatchLineKind::Added,
-                text: "new_line();".to_string(),
-                old_line_no: None,
-                new_line_no: Some(1),
-            },
-        ]);
+        let file = make_file(vec![PatchLine::hunk_header("@@ -1,1 +1,1 @@"), PatchLine::added("new_line();", 1)]);
 
         let anchor = CommentAnchor(PatchAnchor { hunk: 0, line: 1 });
         let comments = vec![queued(anchor, "alpha"), queued(anchor, "beta")];
@@ -290,20 +277,7 @@ mod tests {
 
     #[test]
     fn comment_splice_uses_correct_after_row() {
-        let file = make_file(vec![
-            PatchLine {
-                kind: PatchLineKind::HunkHeader,
-                text: "@@ -1,1 +1,1 @@".to_string(),
-                old_line_no: None,
-                new_line_no: None,
-            },
-            PatchLine {
-                kind: PatchLineKind::Added,
-                text: "new_line();".to_string(),
-                old_line_no: None,
-                new_line_no: Some(1),
-            },
-        ]);
+        let file = make_file(vec![PatchLine::hunk_header("@@ -1,1 +1,1 @@"), PatchLine::added("new_line();", 1)]);
 
         let anchor = CommentAnchor(PatchAnchor { hunk: 0, line: 1 });
         let comments = vec![queued(anchor, "a comment")];

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use wisp::git_diff::{FileDiff, FileStatus, GitDiffDocument, Hunk, PatchLine, PatchLineKind, StageState};
+use wisp::git_diff::{FileDiff, FileStatus, GitDiffDocument, Hunk, PatchLine, StageState};
 
 pub fn git_diff_document(files: Vec<FileDiff>) -> GitDiffDocument {
     GitDiffDocument { repo_root: PathBuf::from("/tmp/test"), files }
@@ -22,7 +22,7 @@ pub fn modified_file_with_hunks(path: &str, hunks: Vec<Hunk>) -> FileDiff {
 }
 
 pub fn added_file(path: &str, lines: &[&str]) -> FileDiff {
-    let body_lines = lines.iter().enumerate().map(|(index, line)| added_line(*line, index + 1)).collect();
+    let body_lines = lines.iter().enumerate().map(|(index, line)| PatchLine::added(*line, index + 1)).collect();
     FileDiff {
         old_path: None,
         path: path.to_string(),
@@ -41,32 +41,10 @@ pub fn hunk(
     new_count: usize,
     body_lines: Vec<PatchLine>,
 ) -> Hunk {
-    let mut lines = vec![PatchLine {
-        kind: PatchLineKind::HunkHeader,
-        text: header.to_string(),
-        old_line_no: None,
-        new_line_no: None,
-    }];
+    let mut lines = vec![PatchLine::hunk_header(header)];
     lines.extend(body_lines);
 
     Hunk { header: header.to_string(), old_start, old_count, new_start, new_count, lines }
-}
-
-pub fn context_line(text: impl Into<String>, old_line_no: usize, new_line_no: usize) -> PatchLine {
-    PatchLine {
-        kind: PatchLineKind::Context,
-        text: text.into(),
-        old_line_no: Some(old_line_no),
-        new_line_no: Some(new_line_no),
-    }
-}
-
-pub fn removed_line(text: impl Into<String>, old_line_no: usize) -> PatchLine {
-    PatchLine { kind: PatchLineKind::Removed, text: text.into(), old_line_no: Some(old_line_no), new_line_no: None }
-}
-
-pub fn added_line(text: impl Into<String>, new_line_no: usize) -> PatchLine {
-    PatchLine { kind: PatchLineKind::Added, text: text.into(), old_line_no: None, new_line_no: Some(new_line_no) }
 }
 
 pub fn sample_git_diff_document() -> GitDiffDocument {
@@ -74,10 +52,10 @@ pub fn sample_git_diff_document() -> GitDiffDocument {
         modified_file(
             "a.rs",
             vec![
-                context_line("fn main() {", 1, 1),
-                removed_line("    old();", 2),
-                added_line("    new();", 2),
-                context_line("}", 3, 3),
+                PatchLine::context("fn main() {", 1, 1),
+                PatchLine::removed("    old();", 2),
+                PatchLine::added("    new();", 2),
+                PatchLine::context("}", 3, 3),
             ],
         ),
         added_file("b.rs", &["new_content"]),
@@ -97,9 +75,9 @@ pub fn wrapping_split_document() -> GitDiffDocument {
             1,
             2,
             vec![
-                removed_line("LEFT_MARK", 1),
-                added_line(format!("RIGHT_HEAD {} RIGHT_TAIL", "A".repeat(140)), 1),
-                context_line("}", 2, 2),
+                PatchLine::removed("LEFT_MARK", 1),
+                PatchLine::added(format!("RIGHT_HEAD {} RIGHT_TAIL", "A".repeat(140)), 1),
+                PatchLine::context("}", 2, 2),
             ],
         )],
         binary: false,
@@ -118,7 +96,7 @@ pub fn comment_diff_document() -> GitDiffDocument {
             0,
             1,
             3,
-            vec![added_line("line_one", 1), added_line("line_two", 2), added_line("line_three", 3)],
+            vec![PatchLine::added("line_one", 1), PatchLine::added("line_two", 2), PatchLine::added("line_three", 3)],
         )],
         binary: false,
     }])

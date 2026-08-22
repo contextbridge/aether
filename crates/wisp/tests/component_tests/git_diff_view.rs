@@ -1,12 +1,12 @@
 use super::support::git_diff::{
-    added_line, comment_diff_document, context_line, git_diff_document, hunk, modified_file_with_hunks, removed_line,
-    sample_git_diff_document, wrapping_split_document,
+    comment_diff_document, git_diff_document, hunk, modified_file_with_hunks, sample_git_diff_document,
+    wrapping_split_document,
 };
 use std::path::PathBuf;
 use tui::testing::{assert_buffer_eq, cols, key, render_component, render_lines};
 use tui::{Component, Event, KeyCode, MIN_GUTTER_WIDTH, SEPARATOR_WIDTH, ViewContext};
 use wisp::components::app::{GitDiffLoadState, GitDiffMode};
-use wisp::git_diff::GitDiffDocument;
+use wisp::git_diff::{GitDiffDocument, PatchLine};
 
 const LEFT_HINT_LINE: &str = "j/k move  space stage  t scope  A stage all  C commit  d discard  Esc close";
 const RIGHT_HINT_LINE: &str = "space stage  t scope  c comment  C commit  d discard  s submit  o full file  Esc close";
@@ -89,7 +89,7 @@ fn wrapped_split_diff_continuation_row_keeps_neutral_padding() {
 fn diff_header_aligns_with_split_line_numbers() {
     let mut mode = make_mode(git_diff_document(vec![modified_file_with_hunks(
         "x.rs",
-        vec![hunk("@@ -1,2 +1,2 @@", 1, 2, 1, 2, vec![removed_line("old();", 1), added_line("new();", 1)])],
+        vec![hunk("@@ -1,2 +1,2 @@", 1, 2, 1, 2, vec![PatchLine::removed("old();", 1), PatchLine::added("new();", 1)])],
     )]));
     let lines = render_component(|ctx| mode.render(ctx), 140, 7).get_lines();
     let header = lines.iter().find(|line| line.contains("x.rs  modified")).expect("diff header should render");
@@ -107,7 +107,7 @@ fn git_diff_view_keeps_wrapped_code_out_of_the_line_number_gutter() {
             2,
             1,
             2,
-            vec![removed_line("LEFT_MARK", 1), added_line(format!("RIGHT_HEAD {filler} RIGHT_TAIL"), 1)],
+            vec![PatchLine::removed("LEFT_MARK", 1), PatchLine::added(format!("RIGHT_HEAD {filler} RIGHT_TAIL"), 1)],
         )],
     )]));
     let term = render_component(|ctx| mode.render(ctx), 140, 7);
@@ -137,8 +137,11 @@ fn screenshot_shaped_git_diff_wrap_row_stays_out_of_gutters() {
             57,
             2,
             vec![
-                removed_line("let left = left_lines.get(i).cloned().unwrap_or_else(|| blank_panel(left_panel));", 56),
-                added_line(
+                PatchLine::removed(
+                    "let left = left_lines.get(i).cloned().unwrap_or_else(|| blank_panel(left_panel));",
+                    56,
+                ),
+                PatchLine::added(
                     "let left = left_lines.get(i).cloned().unwrap_or_else(|| blank_panel(left_panel, theme.code_bg()));",
                     57,
                 ),
@@ -284,9 +287,9 @@ fn unified_added_only_diff_uses_one_line_number_column() {
             50,
             3,
             vec![
-                context_line("pub use existing::Item;", 50, 50),
-                added_line("pub use diffs::intraline::{IntralineEmphasis, intraline_emphasis};", 51),
-                context_line("pub use focus::{FocusOutcome, FocusRing};", 51, 52),
+                PatchLine::context("pub use existing::Item;", 50, 50),
+                PatchLine::added("pub use diffs::intraline::{IntralineEmphasis, intraline_emphasis};", 51),
+                PatchLine::context("pub use focus::{FocusOutcome, FocusRing};", 51, 52),
             ],
         )],
     )]));
@@ -360,11 +363,11 @@ async fn opening_full_file_retains_split_layout() {
             1,
             4,
             vec![
-                context_line("fn main() {", 1, 1),
-                removed_line("    old_call();", 2),
-                added_line("    new_call();", 2),
-                context_line("    keep();", 3, 3),
-                context_line("}", 4, 4),
+                PatchLine::context("fn main() {", 1, 1),
+                PatchLine::removed("    old_call();", 2),
+                PatchLine::added("    new_call();", 2),
+                PatchLine::context("    keep();", 3, 3),
+                PatchLine::context("}", 4, 4),
             ],
         )],
     )]);
@@ -412,11 +415,11 @@ async fn opening_full_file_stays_unified_when_narrow() {
             1,
             4,
             vec![
-                context_line("fn main() {", 1, 1),
-                removed_line("    old_call();", 2),
-                added_line("    new_call();", 2),
-                context_line("    keep();", 3, 3),
-                context_line("}", 4, 4),
+                PatchLine::context("fn main() {", 1, 1),
+                PatchLine::removed("    old_call();", 2),
+                PatchLine::added("    new_call();", 2),
+                PatchLine::context("    keep();", 3, 3),
+                PatchLine::context("}", 4, 4),
             ],
         )],
     )]);
@@ -443,7 +446,7 @@ async fn opening_full_file_stays_unified_when_narrow() {
 
 #[test]
 fn scroll_track_appears_when_patch_overflows_viewport() {
-    let body: Vec<_> = (1..=40).map(|line_no| added_line(format!("line_{line_no}();"), line_no)).collect();
+    let body: Vec<_> = (1..=40).map(|line_no| PatchLine::added(format!("line_{line_no}();"), line_no)).collect();
     let mut mode = make_mode(git_diff_document(vec![modified_file_with_hunks(
         "long.rs",
         vec![hunk("@@ -0,0 +1,40 @@", 0, 0, 1, 40, body)],
@@ -517,7 +520,7 @@ async fn send_keys(mode: &mut GitDiffMode, codes: &[KeyCode]) {
 #[tokio::test]
 async fn commit_composer_keeps_cursor_off_the_last_row() {
     use wisp::git_diff::StageState;
-    let body: Vec<_> = (0..40).map(|i| context_line(format!("line {i}"), i + 1, i + 1)).collect();
+    let body: Vec<_> = (0..40).map(|i| PatchLine::context(format!("line {i}"), i + 1, i + 1)).collect();
     let mut file = modified_file_with_hunks("a.rs", vec![hunk("@@ -1,40 +1,40 @@", 1, 40, 1, 40, body)]);
     file.staged = StageState::Staged;
     let mut mode = make_mode(git_diff_document(vec![file]));
@@ -545,7 +548,7 @@ async fn commit_composer_keeps_cursor_off_the_last_row() {
 #[tokio::test]
 async fn empty_commit_message_surfaces_error() {
     use wisp::git_diff::StageState;
-    let body: Vec<_> = (0..3).map(|i| context_line(format!("line {i}"), i + 1, i + 1)).collect();
+    let body: Vec<_> = (0..3).map(|i| PatchLine::context(format!("line {i}"), i + 1, i + 1)).collect();
     let mut file = modified_file_with_hunks("a.rs", vec![hunk("@@ -1,3 +1,3 @@", 1, 3, 1, 3, body)]);
     file.staged = StageState::Staged;
     let mut mode = make_mode(git_diff_document(vec![file]));
