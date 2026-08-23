@@ -11,16 +11,6 @@ export type AgentSelection =
   | { agent?: never; model: string; reasoningEffort?: ReasoningEffort }
   | { agent?: never; model?: never; reasoningEffort?: never };
 
-export interface AetherElicitationRequest {
-  method: "_aether/elicitation";
-  params: Record<string, unknown>;
-}
-
-export interface AetherElicitationResponse {
-  action: "accept" | "decline" | "cancel";
-  content?: Record<string, unknown>;
-}
-
 export interface SdkMcpToolDefinition<Schema extends z.ZodRawShape> {
   name: string;
   description: string;
@@ -41,5 +31,6 @@ export type AetherMessage =
       method: string;
       params: Record<string, unknown>;
     }
+  | { type: "elicitation_complete"; elicitationId: string }
   | { type: "result"; sessionId: string; stopReason: acp.StopReason }
   | { type: "error"; error: unknown };

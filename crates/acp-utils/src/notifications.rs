@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use agent_client_protocol::schema::v1::{AuthMethod, Meta};
 use agent_client_protocol::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 pub use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
-pub use rmcp::model::ElicitRequestParams;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 pub use mcp_utils::status::{McpServerAuthCapability, McpServerStatus, McpServerStatusEntry};
@@ -81,20 +80,6 @@ pub struct ContextClearedParams {}
 pub struct AuthMethodsUpdatedParams {
     pub auth_methods: Vec<AuthMethod>,
 }
-
-/// Request parameters for the `_aether/elicitation` ext method.
-///
-/// Carries the full RMCP elicitation request plus the originating server name
-/// so the client can distinguish form vs URL mode and display which server is
-/// requesting.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonRpcRequest)]
-#[request(method = "_aether/elicitation", response = ElicitationResponse)]
-pub struct ElicitationParams {
-    pub server_name: String,
-    pub request: ElicitRequestParams,
-}
-
-pub use rmcp::model::ElicitationAction;
 
 /// Parameters for the `_aether/prompt_search` request.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonRpcRequest)]
@@ -272,14 +257,6 @@ fn from_aether_meta<T: DeserializeOwned + Default>(meta: Option<&Meta>) -> T {
         .unwrap_or_default()
 }
 
-/// Response returned from the client for an elicitation request.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonRpcResponse)]
-pub struct ElicitationResponse {
-    pub action: ElicitationAction,
-    /// Structured form data when action is "accept".
-    pub content: Option<serde_json::Value>,
-}
-
 /// Server→client MCP extension notifications (relay → wisp).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonRpcNotification)]
 #[notification(method = "_aether/mcp_event")]
@@ -446,48 +423,6 @@ mod tests {
 
         let untyped = params.to_untyped_message().expect("serializable");
         assert_eq!(untyped.method(), "_aether/sub_agent_progress");
-    }
-
-    #[test]
-    fn elicitation_params_roundtrip() {
-        use rmcp::model::{ElicitationSchema, EnumSchema};
-
-        let params = ElicitationParams {
-            server_name: "github".to_string(),
-            request: ElicitRequestParams::FormElicitationParams {
-                meta: None,
-                message: "Pick a color".to_string(),
-                requested_schema: ElicitationSchema::builder()
-                    .required_enum_schema(
-                        "color",
-                        EnumSchema::builder(vec!["red".into(), "green".into(), "blue".into()]).untitled().build(),
-                    )
-                    .build()
-                    .unwrap(),
-            },
-        };
-
-        let untyped = params.to_untyped_message().expect("serializable");
-        assert_eq!(untyped.method(), "_aether/elicitation");
-        let parsed = ElicitationParams::parse_message(untyped.method(), untyped.params()).expect("roundtrip");
-        assert_eq!(parsed, params);
-    }
-
-    #[test]
-    fn elicitation_params_url_variant_has_mode_field() {
-        let params = ElicitationParams {
-            server_name: "github".to_string(),
-            request: ElicitRequestParams::UrlElicitationParams {
-                meta: None,
-                message: "Authorize GitHub".to_string(),
-                url: "https://github.com/login/oauth".to_string(),
-                elicitation_id: "el-123".to_string(),
-            },
-        };
-
-        let json = serde_json::to_string(&params).unwrap();
-        assert!(json.contains("\"mode\":\"url\""));
-        assert!(json.contains("\"server_name\":\"github\""));
     }
 
     #[test]

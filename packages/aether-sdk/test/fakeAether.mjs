@@ -5,7 +5,8 @@
 //   - initialize -> respond with V1 capabilities.
 //   - newSession -> echo session id, store settings + _meta to log file.
 //   - prompt -> emit a session_update chunk, optionally request a permission
-//     decision and/or call a custom MCP tool, then return stopReason="end_turn".
+//     decision, request an elicitation, and/or call a custom MCP tool, then
+//     return stopReason="end_turn".
 //
 // Configurable via env:
 //   FAKE_AETHER_CALL_MCP_SERVER   Name of the SDK-supplied MCP server to call
@@ -13,6 +14,7 @@
 //   FAKE_AETHER_TOOL_ARGS         JSON-encoded args (default {"value":"hi"})
 //   FAKE_AETHER_REQUEST_PERMISSION  If set, send a requestPermission RPC and
 //                                 echo the chosen outcome as the chunk text.
+//   FAKE_AETHER_REQUEST_ELICITATION  If set, exercise ACP elicitation.
 //   FAKE_AETHER_LOG_FILE          Optional path; debug events written there.
 
 import { Readable, Writable } from "node:stream";
@@ -132,6 +134,20 @@ const agent = {
         ],
       });
       chunkText = JSON.stringify(decision.outcome);
+    }
+
+    if (process.env.FAKE_AETHER_REQUEST_ELICITATION) {
+      const response = await conn.unstable_createElicitation({
+        mode: "form",
+        sessionId: params.sessionId,
+        requestedSchema: {
+          type: "object",
+          properties: { name: { type: "string", title: "Name" } },
+        },
+        message: "What is your name?",
+      });
+      chunkText = JSON.stringify(response);
+      await conn.unstable_completeElicitation({ elicitationId: "elicit-1" });
     }
 
     await conn.sessionUpdate({

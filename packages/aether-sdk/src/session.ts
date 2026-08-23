@@ -9,12 +9,7 @@ import {
   type SettingsSelection,
 } from "./agentProcess.js";
 import { AetherSdkError, throwIfAborted } from "./errors.js";
-import type {
-  AetherElicitationRequest,
-  AetherElicitationResponse,
-  AetherMessage,
-  AgentSelection,
-} from "./types.js";
+import type { AetherMessage, AgentSelection } from "./types.js";
 
 const SDK_VERSION = "0.3.6";
 
@@ -32,9 +27,14 @@ export type CommonAetherSessionOptions = Pick<
   abortSignal?: AbortSignal;
   /** Defaults to {@link autoApprovePermissions}. */
   onPermissionRequest?: PermissionRequestHandler;
+  /**
+   * Handles native ACP `elicitation/create` requests from the agent. When
+   * omitted, the SDK responds with `{ action: "cancel" }` and does not
+   * advertise the `elicitation` client capability.
+   */
   onElicitation?: (
-    request: AetherElicitationRequest,
-  ) => Promise<AetherElicitationResponse>;
+    request: acp.CreateElicitationRequest,
+  ) => Promise<acp.CreateElicitationResponse>;
 };
 
 export type AetherSessionOptions = CommonAetherSessionOptions &
@@ -100,6 +100,7 @@ export class AetherSession {
       clientCapabilities: {
         fs: { readTextFile: false, writeTextFile: false },
         terminal: false,
+        ...(onElicitation ? { elicitation: { form: {}, url: {} } } : {}),
       },
     });
 
@@ -258,18 +259,20 @@ function createAcpClient(
       return onPermissionRequest(request);
     },
 
-    async extMethod(
-      method: string,
-      params: Record<string, unknown>,
-    ): Promise<Record<string, unknown>> {
-      if (method === "_aether/elicitation" && onElicitation) {
-        return (await onElicitation({
-          method: "_aether/elicitation",
-          params,
-        })) as unknown as Record<string, unknown>;
-      }
-      if (method === "_aether/elicitation") return { action: "cancel" };
-      throw new acp.RequestError(-32601, `Unknown extMethod: ${method}`);
+    async unstable_createElicitation(
+      request: acp.CreateElicitationRequest,
+    ): Promise<acp.CreateElicitationResponse> {
+      if (!onElicitation) return { action: "cancel" };
+      return onElicitation(request);
+    },
+
+    async unstable_completeElicitation(
+      notification: acp.CompleteElicitationNotification,
+    ): Promise<void> {
+      events.push({
+        type: "elicitation_complete",
+        elicitationId: notification.elicitationId,
+      });
     },
 
     async extNotification(

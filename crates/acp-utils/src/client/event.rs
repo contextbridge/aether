@@ -2,12 +2,13 @@ use acp::Error;
 use acp::Responder;
 use acp::schema::v1::{SessionUpdate, StopReason};
 use agent_client_protocol as acp;
-use agent_client_protocol::schema::v1::{SessionConfigOption, SessionId, SessionInfo};
+use agent_client_protocol::schema::v1::{
+    CreateElicitationRequest, CreateElicitationResponse, SessionConfigOption, SessionId, SessionInfo,
+};
 
 use crate::notifications::{
-    AuthMethodsUpdatedParams, ContextClearedParams, ContextCompactionParams, ElicitationParams, ElicitationResponse,
-    McpNotification, PromptSearchResponse, SessionPreviewResponse, SubAgentProgressParams, WorkspaceListResponse,
-    WorkspaceMoveResponse,
+    AuthMethodsUpdatedParams, ContextClearedParams, ContextCompactionParams, McpNotification, PromptSearchResponse,
+    SessionPreviewResponse, SubAgentProgressParams, WorkspaceListResponse, WorkspaceMoveResponse,
 };
 
 /// Events forwarded from the ACP connection to the main event loop.
@@ -18,7 +19,7 @@ pub enum AcpEvent {
     SubAgentProgress(SubAgentProgressParams),
     AuthMethodsUpdated(AuthMethodsUpdatedParams),
     McpNotification(McpNotification),
-    ElicitationRequest { params: ElicitationParams, responder: Responder<ElicitationResponse> },
+    ElicitationRequest { params: Box<CreateElicitationRequest>, responder: Responder<CreateElicitationResponse> },
     PromptDone(StopReason),
     PromptError(Error),
     AuthenticateComplete { method_id: String },
