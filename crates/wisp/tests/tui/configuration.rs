@@ -11,15 +11,41 @@ fn required_elicitation_field_must_be_completed() {
         }))
         .unwrap();
 
-        let mut response_rx = with_elicitation(&mut app, form_elicitation("", schema)).await;
+        let mut response_rx = with_elicitation(&mut app, form_elicitation("test", "", schema)).await;
         app.key(key(KeyCode::Enter));
         assert!(response_rx.try_recv().is_err());
         app.type_text("Ada");
         app.key(key(KeyCode::Enter));
 
         let response = response_rx.await.unwrap();
-        assert_eq!(response.action, ElicitationAction::Accept);
-        assert_eq!(response.content, Some(serde_json::json!({ "name": "Ada" })));
+        assert_eq!(accepted_content(&response), serde_json::json!({ "name": "Ada" }));
+    });
+}
+
+#[test]
+fn form_with_unsupported_required_field_is_cancelled() {
+    block_on_local(async {
+        let mut app = make_app();
+        let request: CreateElicitationRequest = serde_json::from_value(serde_json::json!({
+            "mode": "form",
+            "sessionId": "test-session",
+            "message": "Mixed schema",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" },
+                    "future": { "type": "future_widget" }
+                },
+                "required": ["future"]
+            }
+        }))
+        .unwrap();
+
+        let response_rx = with_elicitation(&mut app, request).await;
+
+        let response = response_rx.await.unwrap();
+        assert!(matches!(response.action, ElicitationAction::Cancel));
+        assert!(!app.app().has_modal());
     });
 }
 
@@ -28,25 +54,15 @@ fn elicitation_request_is_accepted_interactively() {
     block_on_local(async {
         let mut app = make_app();
 
-        let response_rx = with_elicitation(
-            &mut app,
-            ElicitationParams {
-                server_name: "test-server".to_string(),
-                request: ElicitRequestParams::FormElicitationParams {
-                    meta: None,
-                    message: "Confirm the action".to_string(),
-                    requested_schema: ElicitationSchema::builder().build().unwrap(),
-                },
-            },
-        )
-        .await;
+        let response_rx =
+            with_elicitation(&mut app, form_elicitation("test-server", "Confirm the action", ElicitationSchema::new()))
+                .await;
         assert!(app.app().has_modal());
 
         app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
         let response = response_rx.await.unwrap();
-        assert_eq!(response.action, ElicitationAction::Accept);
-        assert_eq!(response.content, Some(serde_json::json!({})));
+        assert_eq!(accepted_content(&response), serde_json::json!({}));
         assert!(!app.app().has_modal());
     });
 }
@@ -170,18 +186,7 @@ fn double_ctrl_c_exits_over_elicitation_modal() {
     block_on_local(async {
         let mut app = make_app();
 
-        with_elicitation(
-            &mut app,
-            ElicitationParams {
-                server_name: "test-server".to_string(),
-                request: ElicitRequestParams::FormElicitationParams {
-                    meta: None,
-                    message: String::new(),
-                    requested_schema: ElicitationSchema::builder().build().unwrap(),
-                },
-            },
-        )
-        .await;
+        with_elicitation(&mut app, form_elicitation("test-server", "", ElicitationSchema::new())).await;
         assert!(app.app().has_modal());
         assert_ctrl_c_exits(&mut app);
     });
@@ -194,14 +199,11 @@ fn form_modal_composed_space_does_not_answer() {
 
         let response_rx = with_elicitation(
             &mut app,
-            ElicitationParams {
-                server_name: "test-server".to_string(),
-                request: ElicitRequestParams::FormElicitationParams {
-                    meta: None,
-                    message: String::new(),
-                    requested_schema: ElicitationSchema::builder().optional_bool("approved", false).build().unwrap(),
-                },
-            },
+            form_elicitation(
+                "test-server",
+                "",
+                ElicitationSchema::new().property("approved", BooleanPropertySchema::new().default_value(false), false),
+            ),
         )
         .await;
         assert!(app.app().has_modal());
@@ -212,10 +214,9 @@ fn form_modal_composed_space_does_not_answer() {
         app.key(key(KeyCode::Enter));
 
         let response = response_rx.await.unwrap();
-        assert_eq!(response.action, ElicitationAction::Accept);
         assert_eq!(
-            response.content,
-            Some(serde_json::json!({ "approved": false })),
+            accepted_content(&response),
+            serde_json::json!({ "approved": false }),
             "composed spaces must not answer a choice page; only the arrows do"
         );
     });

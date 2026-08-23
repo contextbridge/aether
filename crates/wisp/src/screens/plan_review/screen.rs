@@ -1,4 +1,3 @@
-use acp_utils::notifications::ElicitationAction;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
@@ -135,16 +134,13 @@ impl PlanReviewScreen {
                 ReviewOutcome::Cancelled
             }
             KeyCode::Char('a') => {
-                self.responder
-                    .respond(ElicitationAction::Accept, Some(PlanReviewDecision::Approve.response_content(None)));
+                self.responder.accept_strings([("decision", PlanReviewDecision::Approve.as_str())]);
                 ReviewOutcome::Submitted("Approved the plan".to_string())
             }
             KeyCode::Char('r') => {
                 let feedback = compile_feedback(&self.document, &self.comments);
-                self.responder.respond(
-                    ElicitationAction::Accept,
-                    Some(PlanReviewDecision::Deny.response_content(Some(&feedback))),
-                );
+                self.responder
+                    .accept_strings([("decision", PlanReviewDecision::Deny.as_str()), ("feedback", &feedback)]);
                 ReviewOutcome::Submitted("Requested changes to the plan".to_string())
             }
             KeyCode::Char('u') => {

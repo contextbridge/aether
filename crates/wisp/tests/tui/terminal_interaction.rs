@@ -5,7 +5,10 @@ use ratatui::buffer::Buffer;
 use wisp::app::WorkspaceMoveState;
 use wisp::command::{AgentCommand, Command, GitCommand, TerminalCommand};
 
-use super::support::{TestUi, TestUiBuilder, block_on_local, buffer_text, form_elicitation, with_elicitation};
+use super::support::{
+    BooleanPropertySchema, ElicitationSchema, StringPropertySchema, TestUi, TestUiBuilder, accepted_content,
+    block_on_local, buffer_text, form_elicitation, with_elicitation,
+};
 
 /// Whether the app asked the terminal to ring the bell, draining whatever else
 /// it had queued along with it.
@@ -587,13 +590,13 @@ mod event_routing {
     fn form_modal_scroll_changes_field() {
         block_on_local(async {
             let mut ui = make_ui();
-            let schema = acp_utils::ElicitationSchema::builder()
-                .required_string("field1")
-                .required_string("field2")
-                .build()
-                .unwrap();
+            let schema = ElicitationSchema::new().property("field1", StringPropertySchema::new(), true).property(
+                "field2",
+                StringPropertySchema::new(),
+                true,
+            );
 
-            with_elicitation(&mut ui, form_elicitation("Test", schema)).await;
+            with_elicitation(&mut ui, form_elicitation("test", "Test", schema)).await;
 
             assert!(ui.app().needs_mouse_capture());
 
@@ -613,12 +616,12 @@ mod event_routing {
             const QUESTIONS: usize = 40;
 
             let mut ui = make_ui();
-            let mut builder = acp_utils::ElicitationSchema::builder();
+            let mut schema = ElicitationSchema::new();
             for index in 0..QUESTIONS {
-                builder = builder.optional_bool(format!("question_{index:02}"), false);
+                schema = schema.property(format!("question_{index:02}"), BooleanPropertySchema::new(), false);
             }
 
-            with_elicitation(&mut ui, form_elicitation("Pick some", builder.build().unwrap())).await;
+            with_elicitation(&mut ui, form_elicitation("test", "Pick some", schema)).await;
 
             ui.draw();
             let shows = |ui: &mut TestUi, needle: &str| screen_rows(ui).iter().any(|row| row.contains(needle));
@@ -643,13 +646,11 @@ mod event_routing {
             const OPTIONS: usize = 40;
 
             let values = (0..OPTIONS).map(|index| format!("option_{index:02}")).collect::<Vec<_>>();
-            let schema = acp_utils::ElicitationSchema::builder()
-                .optional_enum_schema("choice", acp_utils::EnumSchema::builder(values).untitled().build())
-                .build()
-                .unwrap();
+            let schema =
+                ElicitationSchema::new().property("choice", StringPropertySchema::new().enum_values(values), false);
 
             let mut ui = make_ui();
-            with_elicitation(&mut ui, form_elicitation("Pick one", schema)).await;
+            with_elicitation(&mut ui, form_elicitation("test", "Pick one", schema)).await;
 
             ui.draw();
             let shows = |ui: &mut TestUi, needle: &str| screen_rows(ui).iter().any(|row| row.contains(needle));
@@ -673,13 +674,11 @@ mod event_routing {
     fn form_modal_click_answers_the_option_under_the_pointer() {
         block_on_local(async {
             let mut ui = make_ui();
-            let schema = acp_utils::ElicitationSchema::builder()
-                .optional_bool("alpha", false)
-                .optional_bool("bravo", false)
-                .build()
-                .unwrap();
+            let schema = ElicitationSchema::new()
+                .property("alpha", BooleanPropertySchema::new().default_value(false), false)
+                .property("bravo", BooleanPropertySchema::new().default_value(false), false);
 
-            let response_rx = with_elicitation(&mut ui, form_elicitation("Pick one", schema)).await;
+            let response_rx = with_elicitation(&mut ui, form_elicitation("test", "Pick one", schema)).await;
 
             ui.draw();
 
@@ -694,7 +693,7 @@ mod event_routing {
             ui.key(key(KeyCode::Enter));
 
             let response = response_rx.await.unwrap();
-            assert_eq!(response.content, Some(serde_json::json!({ "alpha": true, "bravo": false })));
+            assert_eq!(accepted_content(&response), serde_json::json!({ "alpha": true, "bravo": false }));
         });
     }
 
@@ -704,20 +703,16 @@ mod event_routing {
     fn form_modal_click_hits_every_row_an_option_occupies() {
         block_on_local(async {
             let mut ui = make_ui();
-            let schema = acp_utils::ElicitationSchema::builder()
-                .optional_enum_schema(
-                    "choice",
-                    acp_utils::EnumSchema::builder(vec![
-                        "a-very-long-option-title-that-certainly-wraps-onto-a-second-row".to_string(),
-                        "short".to_string(),
-                    ])
-                    .untitled()
-                    .build(),
-                )
-                .build()
-                .unwrap();
+            let schema = ElicitationSchema::new().property(
+                "choice",
+                StringPropertySchema::new().enum_values(vec![
+                    "a-very-long-option-title-that-certainly-wraps-onto-a-second-row".to_string(),
+                    "short".to_string(),
+                ]),
+                false,
+            );
 
-            let response_rx = with_elicitation(&mut ui, form_elicitation("Pick one", schema)).await;
+            let response_rx = with_elicitation(&mut ui, form_elicitation("test", "Pick one", schema)).await;
 
             ui.draw();
 
@@ -735,10 +730,10 @@ mod event_routing {
 
             let response = response_rx.await.unwrap();
             assert_eq!(
-                response.content,
-                Some(serde_json::json!({
+                accepted_content(&response),
+                serde_json::json!({
                     "choice": "a-very-long-option-title-that-certainly-wraps-onto-a-second-row"
-                }))
+                })
             );
         });
     }

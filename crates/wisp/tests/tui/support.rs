@@ -1,16 +1,18 @@
-pub(crate) use acp_utils::ElicitationSchema;
 pub(crate) use acp_utils::client::AcpEvent;
 pub(crate) use acp_utils::config_meta::SelectOptionMeta;
 pub(crate) use acp_utils::config_option_id::ConfigOptionId;
 pub(crate) use acp_utils::notifications::{
-    AuthMethodsUpdatedParams, ContextClearedParams, ContextCompactionParams, ElicitRequestParams, ElicitationAction,
-    ElicitationParams, ElicitationResponse, McpNotification, McpServerAuthCapability, McpServerStatus,
-    McpServerStatusEntry, SessionPreviewResponse, SessionPreviewRole, SessionPreviewTurn, SubAgentEvent,
-    SubAgentProgressParams, SubAgentToolRequest, SubAgentToolResult, WorkspaceEntry, WorkspaceListResponse,
-    WorkspaceMoveResponse,
+    AuthMethodsUpdatedParams, ContextClearedParams, ContextCompactionParams, McpNotification, McpServerAuthCapability,
+    McpServerStatus, McpServerStatusEntry, SessionPreviewResponse, SessionPreviewRole, SessionPreviewTurn,
+    SubAgentEvent, SubAgentProgressParams, SubAgentToolRequest, SubAgentToolResult, WorkspaceEntry,
+    WorkspaceListResponse, WorkspaceMoveResponse,
 };
 pub(crate) use acp_utils::testing::test_connection;
-pub(crate) use agent_client_protocol::schema::v1::{self as acp, SessionId};
+pub(crate) use agent_client_protocol::schema::v1::{
+    self as acp, BooleanPropertySchema, CreateElicitationRequest, CreateElicitationResponse, ElicitationAction,
+    ElicitationFormMode, ElicitationSchema, ElicitationSessionScope, ElicitationUrlMode, SessionId,
+    StringPropertySchema,
+};
 pub(crate) use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 pub(crate) use ratatui::buffer::{Buffer, Cell};
 pub(crate) use ratatui::layout::Position;
@@ -45,35 +47,56 @@ pub(crate) use wisp::theme::Theme;
 pub(crate) use wisp::view::generation::Generation;
 pub(crate) use wisp::view::syntax::SyntaxHighlighter;
 
-/// Runs `body` on a current-thread runtime inside a `LocalSet`: the ACP test
-/// connection spawns `!Send` tasks, so they need a local set to live in.
 pub(crate) fn block_on_local<F: std::future::Future>(body: F) -> F::Output {
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
     LocalSet::new().block_on(&runtime, body)
 }
 
-/// A form elicitation carrying `schema`, as an MCP server would send one.
-pub(crate) fn form_elicitation(message: &str, schema: ElicitationSchema) -> ElicitationParams {
-    ElicitationParams {
-        server_name: "test".to_string(),
-        request: ElicitRequestParams::FormElicitationParams {
-            meta: None,
-            message: message.to_string(),
-            requested_schema: schema,
-        },
-    }
+pub(crate) fn form_elicitation(
+    server_name: &str,
+    message: &str,
+    schema: ElicitationSchema,
+) -> CreateElicitationRequest {
+    CreateElicitationRequest::new(
+        ElicitationFormMode::new(ElicitationSessionScope::new("test-session"), schema),
+        message,
+    )
+    .meta(server_meta(server_name))
 }
 
-/// Hands `ui` an elicitation request over a live test connection and returns the
-/// channel the agent's answer comes back on. Must run inside [`block_on_local`].
+pub(crate) fn url_elicitation(server_name: &str, url: &str, elicitation_id: &str) -> CreateElicitationRequest {
+    CreateElicitationRequest::new(
+        ElicitationUrlMode::new(ElicitationSessionScope::new("test-session"), elicitation_id.to_string(), url),
+        "Open this URL to authorize MCP server access.",
+    )
+    .meta(server_meta(server_name))
+}
+
+fn server_meta(server_name: &str) -> acp::Meta {
+    acp::Meta::from_iter([(
+        acp_utils::notifications::AETHER_META_NAMESPACE.to_string(),
+        serde_json::json!({ "mcpServer": server_name }),
+    )])
+}
+
 pub(crate) async fn with_elicitation(
     ui: &mut TestUi,
-    params: ElicitationParams,
-) -> tokio::sync::oneshot::Receiver<ElicitationResponse> {
+    params: CreateElicitationRequest,
+) -> tokio::sync::oneshot::Receiver<CreateElicitationResponse> {
     let (cx, mut peer) = test_connection().await;
     let (responder, response_rx) = peer.fake_elicitation(&cx).await;
-    ui.acp_event(AcpEvent::ElicitationRequest { params, responder });
+    ui.acp_event(AcpEvent::ElicitationRequest { params: Box::new(params), responder });
     response_rx
+}
+
+pub(crate) fn accepted_content(response: &CreateElicitationResponse) -> serde_json::Value {
+    let ElicitationAction::Accept(accept) = &response.action else {
+        panic!("expected an accepted elicitation, got {:?}", response.action);
+    };
+    match &accept.content {
+        Some(content) => serde_json::to_value(content).expect("elicitation content is JSON-serializable"),
+        None => serde_json::Value::Null,
+    }
 }
 
 pub(crate) fn message_texts(app: &TestUi) -> impl Iterator<Item = &str> {

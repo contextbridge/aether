@@ -18,9 +18,9 @@ use crate::theme::Theme;
 use crate::view::selection::Direction;
 use crate::view::widgets::key_hints;
 use acp_utils::config_meta::SelectOptionMeta;
-use acp_utils::notifications::{ElicitationParams, ElicitationResponse, McpServerStatusEntry};
+use acp_utils::notifications::McpServerStatusEntry;
 use agent_client_protocol::Responder;
-use agent_client_protocol::schema::v1::AuthMethod;
+use agent_client_protocol::schema::v1::{AuthMethod, CreateElicitationRequest, CreateElicitationResponse};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
@@ -214,13 +214,13 @@ impl SettingsOverlay {
     /// host handlers so tests observe URL opens without spawning a browser.
     pub fn on_elicitation_request(
         &mut self,
-        params: ElicitationParams,
-        responder: Responder<ElicitationResponse>,
+        params: CreateElicitationRequest,
+        responder: Responder<CreateElicitationResponse>,
         browser_opener: BrowserOpener,
         clipboard_writer: ClipboardWriter,
     ) {
         self.pending_elicitation =
-            Some(ElicitationModal::with_url_handlers(params, responder, browser_opener, clipboard_writer));
+            ElicitationModal::with_url_handlers(params, responder, browser_opener, clipboard_writer);
     }
 
     /// Drops an unanswered request, which cancels it.

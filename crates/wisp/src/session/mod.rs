@@ -10,8 +10,9 @@ use crate::session::workspace_status::WorkspaceStatus;
 use acp_utils::client::{AcpClientError, AcpEvent, AcpPromptHandle, TokioAcpAgent, spawn_acp_session};
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    AuthMethod, Implementation, InitializeRequest, NewSessionRequest, PromptCapabilities, SessionCapabilities,
-    SessionConfigOption, SessionId,
+    AuthMethod, ClientCapabilities, ElicitationCapabilities, ElicitationFormCapabilities, ElicitationUrlCapabilities,
+    Implementation, InitializeRequest, NewSessionRequest, PromptCapabilities, SessionCapabilities, SessionConfigOption,
+    SessionId,
 };
 use std::env::current_dir;
 use std::path::PathBuf;
@@ -37,6 +38,7 @@ impl Session {
         let workspace_status = WorkspaceStatus::initial(&working_dir);
         let agent = TokioAcpAgent::from_str(agent_command).map_err(AcpClientError::InvalidAgentCommand)?;
         let init_request = InitializeRequest::new(ProtocolVersion::LATEST)
+            .client_capabilities(client_capabilities())
             .client_info(Implementation::new("wisp", env!("CARGO_PKG_VERSION")));
         let acp_session = spawn_acp_session(agent, init_request, NewSessionRequest::new(working_dir.clone())).await?;
 
@@ -53,4 +55,12 @@ impl Session {
             workspace_status,
         })
     }
+}
+
+fn client_capabilities() -> ClientCapabilities {
+    ClientCapabilities::new().elicitation(
+        ElicitationCapabilities::new()
+            .form(ElicitationFormCapabilities::new())
+            .url(ElicitationUrlCapabilities::new()),
+    )
 }

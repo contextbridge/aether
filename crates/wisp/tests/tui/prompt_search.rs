@@ -331,18 +331,7 @@ fn prompt_search_ctrl_r_does_not_steal_from_modal() {
     let mut app = make_app_with_prompt_search();
 
     block_on_local(async {
-        with_elicitation(
-            &mut app,
-            ElicitationParams {
-                server_name: "test".to_string(),
-                request: ElicitRequestParams::FormElicitationParams {
-                    meta: None,
-                    message: String::new(),
-                    requested_schema: ElicitationSchema::builder().build().unwrap(),
-                },
-            },
-        )
-        .await;
+        with_elicitation(&mut app, form_elicitation("test", "", ElicitationSchema::new())).await;
     });
 
     assert!(app.app().has_modal());

@@ -1,35 +1,44 @@
-use acp_utils::notifications::{ElicitationAction, ElicitationResponse};
 use agent_client_protocol::Responder;
-use serde_json::Value;
+use agent_client_protocol::schema::v1::{
+    CreateElicitationResponse, ElicitationAcceptAction, ElicitationAction, ElicitationContentValue,
+};
+use std::collections::BTreeMap;
 
-/// Answers one elicitation, exactly once.
-///
-/// Dropping it unanswered cancels, so tearing navigation down can never leave the
-/// agent waiting on a reply that will not come. Every route or overlay that holds an
-/// elicitation goes through this instead of writing its own `Drop`.
-pub struct ElicitationResponder(Option<Box<dyn FnOnce(ElicitationResponse) + Send>>);
+pub struct ElicitationResponder(Option<Box<dyn FnOnce(CreateElicitationResponse) + Send>>);
 
 impl ElicitationResponder {
-    pub fn new(responder: Responder<ElicitationResponse>) -> Self {
+    pub fn new(responder: Responder<CreateElicitationResponse>) -> Self {
         Self::from_fn(move |response| {
             let _ = responder.respond(response);
         })
     }
 
     /// For tests, which observe the answer without an ACP connection.
-    pub fn from_fn(respond: impl FnOnce(ElicitationResponse) + Send + 'static) -> Self {
+    pub fn from_fn(respond: impl FnOnce(CreateElicitationResponse) + Send + 'static) -> Self {
         Self(Some(Box::new(respond)))
     }
 
-    /// Sends `action`, or does nothing when this elicitation is already answered.
-    pub fn respond(&mut self, action: ElicitationAction, content: Option<Value>) {
-        if let Some(respond) = self.0.take() {
-            respond(ElicitationResponse { action, content });
-        }
+    pub fn accept(&mut self, content: Option<BTreeMap<String, ElicitationContentValue>>) {
+        self.respond(ElicitationAction::Accept(ElicitationAcceptAction::new().content(content)));
+    }
+
+    pub fn accept_strings<const T: usize>(&mut self, content: [(&str, &str); T]) {
+        self.accept(Some(
+            content
+                .into_iter()
+                .map(|(name, value)| (name.to_string(), ElicitationContentValue::String(value.to_string())))
+                .collect(),
+        ));
     }
 
     pub fn cancel(&mut self) {
-        self.respond(ElicitationAction::Cancel, None);
+        self.respond(ElicitationAction::Cancel);
+    }
+
+    fn respond(&mut self, action: ElicitationAction) {
+        if let Some(respond) = self.0.take() {
+            respond(CreateElicitationResponse::new(action));
+        }
     }
 
     pub fn is_answered(&self) -> bool {
@@ -43,8 +52,8 @@ impl Drop for ElicitationResponder {
     }
 }
 
-impl From<Responder<ElicitationResponse>> for ElicitationResponder {
-    fn from(responder: Responder<ElicitationResponse>) -> Self {
+impl From<Responder<CreateElicitationResponse>> for ElicitationResponder {
+    fn from(responder: Responder<CreateElicitationResponse>) -> Self {
         Self::new(responder)
     }
 }

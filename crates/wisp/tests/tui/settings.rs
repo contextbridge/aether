@@ -33,18 +33,6 @@ fn auth_methods_updated(methods: Vec<acp::AuthMethod>) -> AcpEvent {
     AcpEvent::AuthMethodsUpdated(AuthMethodsUpdatedParams { auth_methods: methods })
 }
 
-fn url_elicitation(server_name: &str, url: &str, elicitation_id: &str) -> ElicitationParams {
-    ElicitationParams {
-        server_name: server_name.to_string(),
-        request: ElicitRequestParams::UrlElicitationParams {
-            meta: None,
-            message: "Open this URL to authorize MCP server access.".to_string(),
-            url: url.to_string(),
-            elicitation_id: elicitation_id.to_string(),
-        },
-    }
-}
-
 /// Walks settings down to the MCP servers pane and authenticates the selected
 /// server: the flow that makes the agent hand back an OAuth URL.
 fn authenticate_selected_oauth_server(ui: &mut TestUi) {
@@ -303,7 +291,7 @@ fn esc_on_settings_elicitation_cancels_it_and_keeps_the_overlay_open() {
         ui.key(key(KeyCode::Esc));
 
         let response = response_rx.await.unwrap();
-        assert_eq!(response.action, ElicitationAction::Cancel);
+        assert!(matches!(&response.action, ElicitationAction::Cancel));
         assert!(ui.app().has_modal(), "cancelling the request should leave the settings overlay open");
 
         ui.key(key(KeyCode::Esc));
@@ -374,7 +362,7 @@ fn url_elicitation_enter_accepts_and_clears_settings_prompt() {
         assert_eq!(ui.opened_urls(), vec!["https://linear.app/oauth"], "Enter should open the OAuth URL");
 
         let response = response_rx.await.unwrap();
-        assert_eq!(response.action, ElicitationAction::Accept);
+        assert!(matches!(&response.action, ElicitationAction::Accept(_)));
 
         ui.draw();
         let viewport = ui.viewport_text();
@@ -392,14 +380,11 @@ fn form_elicitation_is_answered_inside_the_settings_overlay() {
 
         let response_rx = with_elicitation(
             &mut ui,
-            ElicitationParams {
-                server_name: "linear".to_string(),
-                request: ElicitRequestParams::FormElicitationParams {
-                    meta: None,
-                    message: "Paste an API token".to_string(),
-                    requested_schema: ElicitationSchema::builder().required_string("token").build().unwrap(),
-                },
-            },
+            form_elicitation(
+                "linear",
+                "Paste an API token",
+                ElicitationSchema::new().property("token", StringPropertySchema::new(), true),
+            ),
         )
         .await;
 
@@ -411,8 +396,7 @@ fn form_elicitation_is_answered_inside_the_settings_overlay() {
         ui.key(key(KeyCode::Enter));
 
         let response = response_rx.await.unwrap();
-        assert_eq!(response.action, ElicitationAction::Accept);
-        assert_eq!(response.content.unwrap()["token"], "secret");
+        assert_eq!(accepted_content(&response)["token"], "secret");
         assert!(ui.app().has_modal(), "answering the request should leave the settings overlay open");
     });
 }
@@ -664,24 +648,13 @@ fn connection_closed_cancels_settings_elicitation() {
         ui.key(key(KeyCode::Tab));
         assert!(ui.app().has_modal());
 
-        let response_rx = with_elicitation(
-            &mut ui,
-            ElicitationParams {
-                server_name: "test".to_string(),
-                request: ElicitRequestParams::UrlElicitationParams {
-                    meta: None,
-                    message: "auth".to_string(),
-                    url: "https://example.com".to_string(),
-                    elicitation_id: "el-conn-closed".to_string(),
-                },
-            },
-        )
-        .await;
+        let response_rx =
+            with_elicitation(&mut ui, url_elicitation("test", "https://example.com", "el-conn-closed")).await;
 
         ui.acp_event(AcpEvent::ConnectionClosed);
 
         let response = response_rx.await.unwrap();
-        assert_eq!(response.action, ElicitationAction::Cancel);
+        assert!(matches!(&response.action, ElicitationAction::Cancel));
     });
 }
 
@@ -694,24 +667,13 @@ fn new_session_created_cancels_settings_elicitation() {
         ui.key(key(KeyCode::Tab));
         assert!(ui.app().has_modal());
 
-        let response_rx = with_elicitation(
-            &mut ui,
-            ElicitationParams {
-                server_name: "test".to_string(),
-                request: ElicitRequestParams::UrlElicitationParams {
-                    meta: None,
-                    message: "auth".to_string(),
-                    url: "https://example.com".to_string(),
-                    elicitation_id: "el-new-session".to_string(),
-                },
-            },
-        )
-        .await;
+        let response_rx =
+            with_elicitation(&mut ui, url_elicitation("test", "https://example.com", "el-new-session")).await;
 
         ui.acp_event(AcpEvent::NewSessionCreated { session_id: SessionId::new("new"), config_options: vec![] });
 
         let response = response_rx.await.unwrap();
-        assert_eq!(response.action, ElicitationAction::Cancel);
+        assert!(matches!(&response.action, ElicitationAction::Cancel));
     });
 }
 

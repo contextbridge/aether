@@ -467,18 +467,7 @@ fn new_modal_replaces_session_picker() {
     assert!(app.app().has_session_picker());
 
     block_on_local(async {
-        with_elicitation(
-            &mut app,
-            ElicitationParams {
-                server_name: "test".to_string(),
-                request: ElicitRequestParams::FormElicitationParams {
-                    meta: None,
-                    message: String::new(),
-                    requested_schema: ElicitationSchema::builder().build().unwrap(),
-                },
-            },
-        )
-        .await;
+        with_elicitation(&mut app, form_elicitation("test", "", ElicitationSchema::new())).await;
     });
 
     assert!(!app.app().has_session_picker());
