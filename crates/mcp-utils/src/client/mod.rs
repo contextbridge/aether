@@ -29,7 +29,7 @@ pub use manager::{
     ElicitationRequest, McpClientEvent, McpConnectionDetails, McpManager, McpServerStatus, McpServerStatusEntry,
     OAuthHandlerContext, OAuthHandlerFactory, RuntimeMcpServer, RuntimeMcpTransport,
 };
-pub use mcp_client::{McpClient, cancel_result, client_capabilities};
+pub use mcp_client::{McpClient, cancel_result, client_capabilities, client_capabilities_for};
 pub use mcp_snapshot::McpSnapshot;
 pub use mrtr::AbortReason;
 pub use naming::{SERVERNAME_DELIMITER, split_on_server_name};

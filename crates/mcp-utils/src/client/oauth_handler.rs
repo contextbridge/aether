@@ -55,7 +55,7 @@ impl OAuthHandler for ElicitingOAuthHandler {
                 .await
                 .map_err(|_| OAuthError::Rmcp("OAuth prompt channel closed".to_string()))?;
 
-            tokio::select! {
+            let result = tokio::select! {
                 callback = accept_oauth_callback(&self.listener) => callback,
                 response = response_rx => match response {
                     Ok(result) if matches!(result.action, ElicitationAction::Decline | ElicitationAction::Cancel) => {
@@ -63,7 +63,17 @@ impl OAuthHandler for ElicitingOAuthHandler {
                     }
                     Ok(_) | Err(_) => accept_oauth_callback(&self.listener).await,
                 },
+            };
+            if !matches!(result, Err(OAuthError::UserCancelled)) {
+                let _ = self
+                    .event_sender
+                    .send(McpClientEvent::ElicitationComplete {
+                        server_name: self.server_name.clone(),
+                        elicitation_id: AETHER_OAUTH_ELICITATION_ID.to_string(),
+                    })
+                    .await;
             }
+            result
         })
     }
 }

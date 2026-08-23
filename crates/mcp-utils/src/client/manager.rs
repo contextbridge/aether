@@ -16,10 +16,9 @@ use aether_auth::{OAuthCredentialStorage, OAuthHandler};
 use futures::future::join_all;
 use rmcp::{
     Peer, RoleClient, RoleServer,
-    model::{ClientInfo, ElicitRequestParams, ElicitResult, ElicitationAction, Implementation, Tool as RmcpTool},
+    model::{ClientCapabilities, ClientInfo, ElicitRequestParams, ElicitResult, Implementation, Tool as RmcpTool},
     service::DynService,
 };
-use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::num::NonZeroU16;
@@ -98,18 +97,13 @@ pub struct ElicitationRequest {
     pub response_sender: oneshot::Sender<ElicitResult>,
 }
 
-#[derive(Debug, Clone)]
-pub struct ElicitationResponse {
-    pub action: ElicitationAction,
-    pub content: Option<Value>,
-}
-
 /// Events emitted by MCP clients that require attention from the host
 /// (e.g. the relay or TUI). Flows through a single channel from `McpManager`
 /// to the consumer.
 #[derive(Debug)]
 pub enum McpClientEvent {
     Elicitation(Box<ElicitationRequest>),
+    ElicitationComplete { server_name: String, elicitation_id: String },
     ServerStatusesChanged(Vec<McpServerStatusEntry>),
     AuthenticationFailed { server: String, error: String },
     ConnectionReady(McpConnectionDetails),
@@ -156,6 +150,11 @@ impl McpManager {
 
     pub fn take_tool_refresh_receiver(&mut self) -> mpsc::Receiver<ToolListChangedRequest> {
         self.tool_refresh_receiver.take().expect("tool refresh receiver can only be taken once")
+    }
+
+    pub fn with_client_capabilities(mut self, capabilities: ClientCapabilities) -> Self {
+        self.client_info.capabilities = capabilities;
+        self
     }
 
     pub fn with_progressive_discovery_instructions(mut self, instructions: impl Into<String>) -> Self {
