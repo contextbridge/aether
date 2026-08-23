@@ -556,6 +556,7 @@ fn on_mcp_client_event(connection: &ConnectionTo<Client>, session_id: &SessionId
         McpClientEvent::ElicitationComplete { server_name, elicitation_id } => {
             if let Err(error) = connection
                 .send_notification(elicitation::build_acp_elicitation_completion_notification(
+                    session_id,
                     &server_name,
                     &elicitation_id,
                 ))
@@ -876,7 +877,7 @@ mod tests {
                     );
 
                     let completion = peer.next_elicitation_completion().await;
-                    assert_eq!(&*completion.elicitation_id.0, "github:el-1");
+                    assert_eq!(&*completion.elicitation_id.0, r#"["session-1","github","el-1"]"#);
                 })
                 .await;
         }

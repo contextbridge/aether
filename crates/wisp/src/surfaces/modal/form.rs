@@ -73,6 +73,7 @@ pub(super) struct FormField {
 
 pub(super) enum FormFieldKind {
     Text(EditBuffer),
+    Integer(EditBuffer),
     Number(EditBuffer),
     Boolean(bool),
     Single { options: Vec<SelectOption>, selected: usize },
@@ -198,7 +199,7 @@ impl FormModal {
 
     fn text_buffer(&mut self) -> Option<&mut EditBuffer> {
         match self.focused_kind()? {
-            FormFieldKind::Text(buffer) | FormFieldKind::Number(buffer) => Some(buffer),
+            FormFieldKind::Text(buffer) | FormFieldKind::Integer(buffer) | FormFieldKind::Number(buffer) => Some(buffer),
             _ => None,
         }
     }
@@ -738,7 +739,9 @@ fn question_rows(field: &FormField, theme: &Theme, width: u16, rows: &mut PageRo
         FormFieldKind::Boolean(value) => {
             option_rows(&boolean_options(), boolean_index(*value), None, theme, width, rows);
         }
-        FormFieldKind::Text(buffer) | FormFieldKind::Number(buffer) => input_rows(buffer, theme, width, rows),
+        FormFieldKind::Text(buffer) | FormFieldKind::Integer(buffer) | FormFieldKind::Number(buffer) => {
+            input_rows(buffer, theme, width, rows);
+        }
     }
 }
 
@@ -840,7 +843,7 @@ fn boolean_index(value: bool) -> usize {
 
 impl FormField {
     fn from_schema(name: &str, prop: &ElicitationPropertySchema, required: &[&str]) -> Option<Self> {
-        use FormFieldKind::{Boolean, Number};
+        use FormFieldKind::{Boolean, Integer, Number};
         let (labelling, kind) = match prop {
             ElicitationPropertySchema::Boolean(value) => (
                 labelling(value.title.as_deref(), value.description.as_deref(), name),
@@ -848,7 +851,7 @@ impl FormField {
             ),
             ElicitationPropertySchema::Integer(value) => (
                 labelling(value.title.as_deref(), value.description.as_deref(), name),
-                Number(stringified_default(value.default).into()),
+                Integer(stringified_default(value.default).into()),
             ),
             ElicitationPropertySchema::Number(value) => (
                 labelling(value.title.as_deref(), value.description.as_deref(), name),
@@ -883,16 +886,31 @@ impl FormField {
                     Ok((!value.is_empty()).then(|| ElicitationContentValue::String(value.text().to_string())))
                 }
             }
+            FormFieldKind::Integer(value) => {
+                if value.is_empty() {
+                    return if self.required { Err(missing()) } else { Ok(None) };
+                }
+                let invalid = || format!("{} must be an integer", self.label);
+                value
+                    .text()
+                    .parse::<i64>()
+                    .map(ElicitationContentValue::Integer)
+                    .map(Some)
+                    .map_err(|_| invalid())
+            }
             FormFieldKind::Number(value) => {
                 if value.is_empty() {
                     return if self.required { Err(missing()) } else { Ok(None) };
                 }
                 let invalid = || format!("{} must be a number", self.label);
-                let number: serde_json::Number = serde_json::from_str(value.text()).map_err(|_| invalid())?;
-                Ok(Some(match number.as_i64() {
-                    Some(integer) => ElicitationContentValue::Integer(integer),
-                    None => ElicitationContentValue::Number(number.as_f64().ok_or_else(invalid)?),
-                }))
+                value
+                    .text()
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|number| number.is_finite())
+                    .map(ElicitationContentValue::Number)
+                    .map(Some)
+                    .ok_or_else(invalid)
             }
             FormFieldKind::Boolean(value) => Ok(Some(ElicitationContentValue::Boolean(*value))),
             FormFieldKind::Single { options, selected } => {
@@ -916,7 +934,9 @@ impl FormField {
 
     fn display_value(&self) -> String {
         match &self.kind {
-            FormFieldKind::Text(value) | FormFieldKind::Number(value) => value.text().to_string(),
+            FormFieldKind::Text(value) | FormFieldKind::Integer(value) | FormFieldKind::Number(value) => {
+                value.text().to_string()
+            }
             FormFieldKind::Boolean(value) => if *value { "Yes" } else { "No" }.to_string(),
             FormFieldKind::Single { options, selected } => {
                 options.get(*selected).map(|o| o.title.clone()).unwrap_or_default()
@@ -982,8 +1002,6 @@ fn stringified_default<T: std::fmt::Display>(default: Option<T>) -> String {
     default.map(|value| value.to_string()).unwrap_or_default()
 }
 
-/// The single-question decision form a permission prompt sends, shared with
-/// the modal tests one level up.
 #[cfg(test)]
 pub(super) fn permission_like_schema() -> ElicitationSchema {
     ElicitationSchema::new().property(
@@ -1095,7 +1113,7 @@ mod tests {
             .property("rating", NumberPropertySchema::new().minimum(0.0).maximum(5.0), true);
         let form = test_modal("test".into(), String::new(), &schema);
         assert_eq!(form.fields.len(), 2);
-        assert!(matches!(form.fields[0].kind, FormFieldKind::Number(_)));
+        assert!(matches!(form.fields[0].kind, FormFieldKind::Integer(_)));
         assert!(matches!(form.fields[1].kind, FormFieldKind::Number(_)));
     }
 
@@ -1104,8 +1122,8 @@ mod tests {
         let schema = required("count", IntegerPropertySchema::new().minimum(0).maximum(100).default_value(42));
         let form = test_modal("test".into(), String::new(), &schema);
         match &form.fields[0].kind {
-            FormFieldKind::Number(value) => assert_eq!(value, "42"),
-            _ => panic!("expected Number"),
+            FormFieldKind::Integer(value) => assert_eq!(value, "42"),
+            _ => panic!("expected Integer"),
         }
     }
 
@@ -1297,7 +1315,19 @@ mod tests {
     }
 
     #[test]
-    fn number_field_rejects_non_numeric_input() {
+    fn integer_field_rejects_fractional_input() {
+        let schema = optional("count", IntegerPropertySchema::new());
+        let mut form = test_modal("test".into(), String::new(), &schema);
+
+        form.on_key(key(KeyCode::Char('1')));
+        form.on_key(key(KeyCode::Char('.')));
+        form.on_key(key(KeyCode::Char('5')));
+
+        assert!(matches!(form.on_key(key(KeyCode::Enter)), FormAction::None));
+    }
+
+    #[test]
+    fn number_field_rejects_non_numeric_input_and_preserves_number_type() {
         let schema = optional("score", NumberPropertySchema::new().minimum(0.0).maximum(5.0));
         let mut form = test_modal("test".into(), String::new(), &schema);
 
@@ -1306,7 +1336,7 @@ mod tests {
         assert!(matches!(form.on_key(key(KeyCode::Enter)), FormAction::None), "letters block submit");
 
         form.on_key(key(KeyCode::Backspace));
-        assert_eq!(submitted(&mut form), serde_json::json!({"score": 4}));
+        assert_eq!(submitted(&mut form), serde_json::json!({"score": 4.0}));
     }
 
     #[test]

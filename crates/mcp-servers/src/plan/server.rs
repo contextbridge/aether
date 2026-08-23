@@ -3,7 +3,7 @@ use crate::file_ops::{FileEdit, FileError, apply_edits, read_text_file, write_te
 use crate::workspace_paths::resolve_path;
 use clap::Parser;
 use mcp_utils::display_meta::{FileDiff, ToolDisplayMeta, ToolResultMeta, basename};
-use mcp_utils::server::mrtr::{ELICITATION_UNSUPPORTED, parse_response, validate_input_requests};
+use mcp_utils::server::mrtr::{ELICITATION_UNSUPPORTED, input_requests_supported, parse_response};
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     handler::server::{
@@ -186,7 +186,7 @@ impl PlanMcp {
             let params = Self::build_elicitation_form(&plan).map_err(|e| McpError::internal_error(e, None))?;
             let requests =
                 InputRequests::from([("review".to_string(), InputRequest::Elicitation(ElicitRequest::new(params)))]);
-            if validate_input_requests(context.client_capabilities().as_ref(), &requests).is_err() {
+            if !input_requests_supported(context.client_capabilities().as_ref(), &requests) {
                 return Ok(CallToolResult::error(vec![ContentBlock::text(ELICITATION_UNSUPPORTED)]).into());
             }
             return Ok(InputRequiredResult::from_input_requests(requests).into());

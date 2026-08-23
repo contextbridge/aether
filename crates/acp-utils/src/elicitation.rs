@@ -33,7 +33,7 @@ pub fn map_mcp_elicitation_request_to_acp(
             CreateElicitationRequest::new(
                 acp::ElicitationUrlMode::new(
                     scope(),
-                    build_scoped_elicitation_id(server_name, elicitation_id),
+                    build_scoped_elicitation_id(session_id, server_name, elicitation_id),
                     url.clone(),
                 ),
                 message.clone(),
@@ -63,10 +63,11 @@ pub fn map_acp_elicitation_response_to_mcp(
 }
 
 pub fn build_acp_elicitation_completion_notification(
+    session_id: &SessionId,
     server_name: &str,
     elicitation_id: &str,
 ) -> CompleteElicitationNotification {
-    CompleteElicitationNotification::new(build_scoped_elicitation_id(server_name, elicitation_id))
+    CompleteElicitationNotification::new(build_scoped_elicitation_id(session_id, server_name, elicitation_id))
 }
 
 /// The MCP server a converted elicitation originated from, if any.
@@ -268,8 +269,8 @@ fn owned_string(value: Option<&str>) -> Option<String> {
     value.map(str::to_owned)
 }
 
-fn build_scoped_elicitation_id(server_name: &str, elicitation_id: &str) -> String {
-    format!("{server_name}:{elicitation_id}")
+fn build_scoped_elicitation_id(session_id: &SessionId, server_name: &str, elicitation_id: &str) -> String {
+    json!([session_id.0.as_ref(), server_name, elicitation_id]).to_string()
 }
 
 #[cfg(test)]
@@ -334,7 +335,7 @@ mod tests {
     }
 
     #[test]
-    fn url_ids_are_namespaced_per_mcp_server_and_match_completions() {
+    fn url_ids_are_namespaced_per_session_and_mcp_server() {
         let request = ElicitRequestParams::UrlElicitationParams {
             meta: None,
             message: "Authorize".to_string(),
@@ -344,19 +345,28 @@ mod tests {
 
         let alpha = map_mcp_elicitation_request_to_acp("alpha", &SessionId::new("session-1"), &request).unwrap();
         let bravo = map_mcp_elicitation_request_to_acp("bravo", &SessionId::new("session-1"), &request).unwrap();
+        let other_session =
+            map_mcp_elicitation_request_to_acp("alpha", &SessionId::new("session-2"), &request).unwrap();
         let ElicitationMode::Url(alpha_url) = alpha.mode else { panic!("expected URL mode") };
         let ElicitationMode::Url(bravo_url) = bravo.mode else { panic!("expected URL mode") };
+        let ElicitationMode::Url(other_session_url) = other_session.mode else { panic!("expected URL mode") };
 
         assert_ne!(alpha_url.elicitation_id, bravo_url.elicitation_id);
+        assert_ne!(alpha_url.elicitation_id, other_session_url.elicitation_id);
         assert_eq!(
-            build_acp_elicitation_completion_notification("alpha", "oauth").elicitation_id,
+            build_acp_elicitation_completion_notification(&SessionId::new("session-1"), "alpha", "oauth")
+                .elicitation_id,
             alpha_url.elicitation_id
         );
-        assert_eq!(
-            build_acp_elicitation_completion_notification("bravo", "oauth").elicitation_id,
-            bravo_url.elicitation_id
-        );
         assert_eq!(alpha_url.url, "https://example.com/oauth");
+    }
+
+    #[test]
+    fn url_id_namespacing_is_unambiguous() {
+        let first = build_scoped_elicitation_id(&SessionId::new("session"), "alpha:bravo", "oauth");
+        let second = build_scoped_elicitation_id(&SessionId::new("session"), "alpha", "bravo:oauth");
+
+        assert_ne!(first, second);
     }
 
     #[test]

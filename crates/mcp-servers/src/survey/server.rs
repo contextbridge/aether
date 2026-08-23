@@ -1,4 +1,4 @@
-use mcp_utils::server::mrtr::{ELICITATION_UNSUPPORTED, parse_response, validate_input_requests};
+use mcp_utils::server::mrtr::{ELICITATION_UNSUPPORTED, input_requests_supported, parse_response};
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
     handler::server::{
@@ -95,7 +95,7 @@ impl SurveyMcp {
             let params = ElicitRequestParams::FormElicitationParams { meta: None, message, requested_schema: schema };
             let requests =
                 InputRequests::from([("answer".to_string(), InputRequest::Elicitation(ElicitRequest::new(params)))]);
-            if validate_input_requests(context.client_capabilities().as_ref(), &requests).is_err() {
+            if !input_requests_supported(context.client_capabilities().as_ref(), &requests) {
                 return Ok(CallToolResult::error(vec![ContentBlock::text(ELICITATION_UNSUPPORTED)]).into());
             }
             return Ok(rmcp::model::InputRequiredResult::from_input_requests(requests).into());

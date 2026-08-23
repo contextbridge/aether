@@ -45,7 +45,7 @@ use crate::{
     lsp::tools::document_info::{LspDocumentInput, LspDocumentOutput, execute_lsp_document},
     workspace_paths::WorkspacePaths,
 };
-use mcp_utils::server::mrtr::{AbortReason, InputKind, MrtrAction, parse_response, validate_input_requests};
+use mcp_utils::server::mrtr::{input_requests_supported, parse_response};
 use mcp_utils::server::tasks::{BACKGROUND_TASK_TTL_MS, require_tasks_capability};
 
 use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename, truncate};
@@ -165,9 +165,7 @@ impl<T: CodingTools + 'static> ServerHandler for CodingMcp<T> {
         }
 
         if let Some(prompt) = self.permission_prompt(&request) {
-            let action = if let Some(responses) = request.input_responses.clone() {
-                MrtrAction::Resume(responses)
-            } else {
+            let Some(responses) = request.input_responses.clone() else {
                 let requests = InputRequests::from([(
                     "permission".to_string(),
                     InputRequest::Elicitation(ElicitRequest::new(decision_form(
@@ -175,32 +173,20 @@ impl<T: CodingTools + 'static> ServerHandler for CodingMcp<T> {
                         &prompt.description,
                     ))),
                 )]);
-
-                match validate_input_requests(context.client_capabilities().as_ref(), &requests) {
-                    Ok(()) => MrtrAction::Request(InputRequiredResult::from_input_requests(requests)),
-                    Err(_) => MrtrAction::Abort(AbortReason::UnsupportedInput {
-                        key: "permission".to_string(),
-                        kind: InputKind::FormElicitation,
-                    }),
-                }
-            };
-
-            match action {
-                MrtrAction::Request(request) => return Ok(request.into()),
-                MrtrAction::Abort(_) => {
+                if !input_requests_supported(context.client_capabilities().as_ref(), &requests) {
                     let message = permission_unsupported(&prompt.tool_name);
                     return Ok(CallToolResult::error(vec![ContentBlock::text(message)]).into());
                 }
-                MrtrAction::Resume(responses) => {
-                    let result: ElicitResult = parse_response(&responses, "permission")?;
-                    if !permission_granted(&result) {
-                        return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                            "Operation declined by user: {}",
-                            prompt.tool_name
-                        ))])
-                        .into());
-                    }
-                }
+                return Ok(InputRequiredResult::from_input_requests(requests).into());
+            };
+
+            let result: ElicitResult = parse_response(&responses, "permission")?;
+            if !permission_granted(&result) {
+                return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                    "Operation declined by user: {}",
+                    prompt.tool_name
+                ))])
+                .into());
             }
         }
         if let Some(args) = background_args {
