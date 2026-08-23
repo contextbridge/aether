@@ -52,9 +52,8 @@ impl ToolListChangedRequest {
     pub async fn refresh(self) -> ToolListRefresh {
         let result = self
             .peer
-            .list_tools(None)
+            .list_all_tools()
             .await
-            .map(|response| response.tools)
             .map_err(|error| McpError::ToolDiscoveryFailed(format!("Failed to refresh tools: {error}")));
         ToolListRefresh { server: self.server, generation: self.generation, result }
     }
@@ -318,12 +317,11 @@ impl McpManager {
                 let server_name = server_name.clone();
                 let client = conn.client.clone();
                 Some(async move {
-                    let prompts_response = client.list_prompts(None).await.map_err(|e| {
+                    let prompts = client.list_all_prompts().await.map_err(|e| {
                         McpError::PromptListFailed(format!("Failed to list prompts for {server_name}: {e}"))
                     })?;
 
-                    let namespaced_prompts: Vec<rmcp::model::Prompt> = prompts_response
-                        .prompts
+                    let namespaced_prompts: Vec<rmcp::model::Prompt> = prompts
                         .into_iter()
                         .map(|prompt| {
                             let namespaced_name = create_namespaced_tool_name(&server_name, &prompt.name);

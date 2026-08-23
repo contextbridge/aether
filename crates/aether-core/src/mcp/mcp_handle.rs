@@ -77,13 +77,12 @@ impl McpHandle {
 
     pub async fn list_prompts(&self) -> Result<Vec<Prompt>, McpHandleError> {
         let futures = self.snapshot().clients_with_prompts().into_iter().map(|(server, client)| async move {
-            let response = client
-                .list_prompts(None)
+            let prompts = client
+                .list_all_prompts()
                 .await
                 .map_err(|error| McpHandleError::PromptList { server: server.clone(), message: error.to_string() })?;
             Ok::<_, McpHandleError>(
-                response
-                    .prompts
+                prompts
                     .into_iter()
                     .map(|prompt| {
                         Prompt::new(format!("{server}__{}", prompt.name), prompt.description, prompt.arguments)
