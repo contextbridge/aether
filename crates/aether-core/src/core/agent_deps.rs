@@ -1,6 +1,7 @@
 use crate::core::AgentRegistry;
 use crate::events::{AgentObserver, DynObserverFactory, TraceContext};
 use aether_auth::OAuthCredentialStorage;
+use rmcp::model::ClientCapabilities;
 use std::sync::Arc;
 
 /// Cross-cutting dependencies threaded to every agent a run spawns — the root
@@ -14,6 +15,7 @@ pub struct AgentDeps {
     /// that spawned them.
     pub parent_trace_context: Option<TraceContext>,
     pub agent_registry: AgentRegistry,
+    pub mcp_client_capabilities: Option<ClientCapabilities>,
 }
 
 impl AgentDeps {
@@ -21,12 +23,7 @@ impl AgentDeps {
         oauth_credential_store: Arc<dyn OAuthCredentialStorage>,
         observer_factory: Option<DynObserverFactory>,
     ) -> Self {
-        Self {
-            oauth_credential_store: Some(oauth_credential_store),
-            observer_factory,
-            parent_trace_context: None,
-            agent_registry: AgentRegistry::default(),
-        }
+        Self { oauth_credential_store: Some(oauth_credential_store), observer_factory, ..Self::default() }
     }
 
     /// Continue `parent`'s trace in every agent built from these deps.
@@ -37,6 +34,11 @@ impl AgentDeps {
 
     pub fn with_agent_registry(mut self, registry: AgentRegistry) -> Self {
         self.agent_registry = registry;
+        self
+    }
+
+    pub fn with_mcp_client_capabilities(mut self, capabilities: ClientCapabilities) -> Self {
+        self.mcp_client_capabilities = Some(capabilities);
         self
     }
 

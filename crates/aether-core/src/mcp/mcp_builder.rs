@@ -322,6 +322,9 @@ impl McpBuilder {
         let mut mcp_manager = McpManager::new(event_tx, oauth_handler_factory)
             .with_tool_filter(tool_filter)
             .with_snapshot_sender(snapshot_tx);
+        if let Some(capabilities) = services.agent_deps.mcp_client_capabilities.clone() {
+            mcp_manager = mcp_manager.with_client_capabilities(capabilities);
+        }
         if let Some(instructions) = progressive_discovery_instructions {
             mcp_manager = mcp_manager.with_progressive_discovery_instructions(instructions);
         }
