@@ -182,9 +182,7 @@ impl PlanMcp {
             };
         }
 
-        let responses = if let Some(responses) = responses.0 {
-            responses
-        } else {
+        let Some(responses) = responses.0 else {
             let params = Self::build_elicitation_form(&plan).map_err(|e| McpError::internal_error(e, None))?;
             let requests =
                 InputRequests::from([("review".to_string(), InputRequest::Elicitation(ElicitRequest::new(params)))]);
@@ -195,7 +193,7 @@ impl PlanMcp {
         };
         let result: ElicitResult = parse_response(&responses, "review")?;
 
-        Ok(Json(review_decision(&result)).into_call_tool_result()?)
+        Json(review_decision(&result)).into_call_tool_result()
     }
 
     fn build_elicitation_form(plan: &Plan) -> Result<ElicitRequestParams, String> {

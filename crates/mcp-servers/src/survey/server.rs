@@ -91,9 +91,7 @@ impl SurveyMcp {
         let schema =
             parse_schema(schema).map_err(|e| ErrorData::invalid_params(format!("invalid schema: {e}"), None))?;
 
-        let responses = if let Some(responses) = responses.0 {
-            responses
-        } else {
+        let Some(responses) = responses.0 else {
             let params = ElicitRequestParams::FormElicitationParams { meta: None, message, requested_schema: schema };
             let requests =
                 InputRequests::from([("answer".to_string(), InputRequest::Elicitation(ElicitRequest::new(params)))]);
@@ -104,8 +102,8 @@ impl SurveyMcp {
         };
         let result: ElicitResult = parse_response(&responses, "answer")?;
 
-        Ok(Json(AskUserOutput { accepted: result.action == ElicitationAction::Accept, data: result.content })
-            .into_call_tool_result()?)
+        Json(AskUserOutput { accepted: result.action == ElicitationAction::Accept, data: result.content })
+            .into_call_tool_result()
     }
 }
 
