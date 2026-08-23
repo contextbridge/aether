@@ -63,14 +63,6 @@ impl ContextUsage {
     }
 }
 
-/// Parameters for `_aether/context_usage` notifications.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonRpcNotification)]
-#[notification(method = "_aether/context_usage")]
-pub struct ContextUsageParams {
-    #[serde(flatten)]
-    pub usage: ContextUsage,
-}
-
 /// Parameters for `_aether/context_compaction` notifications.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonRpcNotification)]
 #[notification(method = "_aether/context_compaction")]
@@ -376,48 +368,6 @@ mod tests {
         let move_params =
             WorkspaceMoveParams { session_id: String::new(), target: WorkspaceMoveTarget::New { name: String::new() } };
         assert_eq!(move_params.method(), "_aether/workspace_move");
-    }
-
-    #[test]
-    fn context_usage_params_roundtrip() {
-        let params = ContextUsageParams {
-            usage: ContextUsage {
-                usage_ratio: Some(0.75),
-                context_limit: Some(100_000),
-                input_tokens: 75_000,
-                output_tokens: 1_200,
-                cache_read_tokens: Some(40_000),
-                cache_creation_tokens: Some(2_000),
-                reasoning_tokens: Some(500),
-                total_input_tokens: 200_000,
-                total_output_tokens: 8_000,
-                total_cache_read_tokens: 90_000,
-                total_cache_creation_tokens: 5_000,
-                total_reasoning_tokens: 1_500,
-            },
-        };
-
-        let untyped = params.to_untyped_message().expect("serializable");
-        assert_eq!(untyped.method(), "_aether/context_usage");
-        let parsed = ContextUsageParams::parse_message(untyped.method(), untyped.params()).expect("roundtrip");
-        assert_eq!(parsed, params);
-    }
-
-    #[test]
-    fn context_usage_params_omits_unset_optional_token_fields() {
-        let params = ContextUsageParams {
-            usage: ContextUsage {
-                usage_ratio: Some(0.1),
-                context_limit: Some(1_000),
-                input_tokens: 100,
-                ..ContextUsage::default()
-            },
-        };
-
-        let raw = serde_json::to_string(&params).unwrap();
-        assert!(!raw.contains("\"cache_read_tokens\""));
-        assert!(!raw.contains("\"cache_creation_tokens\""));
-        assert!(!raw.contains("\"reasoning_tokens\""));
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use acp_utils::client::AcpEvent;
-use acp_utils::notifications::{ContextCompactionParams, ContextUsage, ContextUsageParams};
+use acp_utils::notifications::ContextCompactionParams;
 use agent_client_protocol::schema::v1 as acp;
 
 use super::support::*;
@@ -22,10 +22,8 @@ fn running_tool(id: &str, title: &str) -> AcpEvent {
     session_update(acp::SessionUpdate::ToolCall(acp::ToolCall::new(id.to_string(), title)))
 }
 
-fn context_usage(used: u32, limit: u32) -> AcpEvent {
-    AcpEvent::ContextUsage(ContextUsageParams {
-        usage: ContextUsage { input_tokens: used, context_limit: Some(limit), ..ContextUsage::default() },
-    })
+fn context_usage(used: u64, limit: u64) -> AcpEvent {
+    session_update(acp::SessionUpdate::UsageUpdate(acp::UsageUpdate::new(used, limit)))
 }
 
 fn activity_row(ui: &mut TestUi, label: &str) -> String {

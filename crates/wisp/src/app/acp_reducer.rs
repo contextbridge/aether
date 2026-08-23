@@ -42,14 +42,6 @@ impl App {
                 self.finish_prompt(&ToolStatus::Error(format!("failed: {error}")));
                 self.notify(&format!("Prompt failed: {error}"));
             }
-            AcpEvent::ContextUsage(params) => {
-                self.conversation.turn_mut().set_context_usage(
-                    params.usage.context_limit.map(|limit| ContextUsageDisplay {
-                        used_tokens: params.usage.input_tokens,
-                        limit_tokens: limit,
-                    }),
-                );
-            }
             AcpEvent::ContextCompaction(params) => {
                 self.conversation.turn_mut().set_compaction_active(params.active);
             }
@@ -283,6 +275,12 @@ impl App {
             acp::SessionUpdate::Plan(plan) => {
                 self.conversation.plan_tracker_mut().replace(plan.entries.clone(), Instant::now());
                 self.conversation.finish_current_block();
+            }
+            acp::SessionUpdate::UsageUpdate(usage) => {
+                self.conversation.turn_mut().set_context_usage(Some(ContextUsageDisplay {
+                    used_tokens: u32::try_from(usage.used).unwrap_or(u32::MAX),
+                    limit_tokens: u32::try_from(usage.size).unwrap_or(u32::MAX),
+                }));
             }
             _ => {
                 self.conversation.finish_current_block();
