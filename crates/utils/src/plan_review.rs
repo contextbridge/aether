@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 use std::path::Path;
 
 pub const PLAN_REVIEW_UI_KIND: &str = "planReview";
@@ -16,13 +16,6 @@ impl PlanReviewDecision {
         match self {
             Self::Approve => "approve",
             Self::Deny => "deny",
-        }
-    }
-
-    pub fn response_content(self, feedback: Option<&str>) -> Value {
-        match (self, feedback) {
-            (Self::Deny, Some(feedback)) => json!({ "decision": self.as_str(), "feedback": feedback }),
-            _ => json!({ "decision": self.as_str() }),
         }
     }
 }
