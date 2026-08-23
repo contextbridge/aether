@@ -1,14 +1,15 @@
-use mcp_utils::server::mrtr::{ELICITATION_UNSUPPORTED, Elicited, MrtrAction, get_next_mrtr_action, parse_response};
+use mcp_utils::server::mrtr::{ELICITATION_UNSUPPORTED, parse_response, validate_input_requests};
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
     handler::server::{
         router::tool::ToolRouter,
-        tool::{InputResponses, schema_for_output},
+        tool::{InputResponses, IntoCallToolResult, RequestState, schema_for_output},
         wrapper::{Json, Parameters},
     },
     model::{
-        ElicitRequest, ElicitRequestParams, ElicitResult, ElicitationAction, ElicitationSchema, Implementation,
-        InputRequest, InputRequests, ServerCapabilities, ServerInfo,
+        CallToolResponse, CallToolResult, ContentBlock, ElicitRequest, ElicitRequestParams, ElicitResult,
+        ElicitationAction, ElicitationSchema, Implementation, InputRequest, InputRequests, ServerCapabilities,
+        ServerInfo,
     },
     service::RequestContext,
     tool, tool_handler, tool_router,
@@ -83,28 +84,28 @@ impl SurveyMcp {
         &self,
         request: Parameters<AskUserInput>,
         responses: InputResponses,
+        _request_state: RequestState,
         context: RequestContext<RoleServer>,
-    ) -> Result<Elicited<Json<AskUserOutput>>, ErrorData> {
+    ) -> Result<CallToolResponse, ErrorData> {
         let Parameters(AskUserInput { message, schema }) = request;
         let schema =
             parse_schema(schema).map_err(|e| ErrorData::invalid_params(format!("invalid schema: {e}"), None))?;
 
-        let action = get_next_mrtr_action(responses.0.as_ref(), || {
+        let responses = if let Some(responses) = responses.0 {
+            responses
+        } else {
             let params = ElicitRequestParams::FormElicitationParams { meta: None, message, requested_schema: schema };
-            Ok(InputRequests::from([("answer".to_string(), InputRequest::Elicitation(ElicitRequest::new(params)))]))
-        })?
-        .validate_for_client(&context);
-        let responses = match action {
-            MrtrAction::Request(request) => return Ok(Elicited::Respond(request.into())),
-            MrtrAction::Abort(_) => return Ok(Elicited::error(ELICITATION_UNSUPPORTED)),
-            MrtrAction::Resume(responses) => responses,
+            let requests =
+                InputRequests::from([("answer".to_string(), InputRequest::Elicitation(ElicitRequest::new(params)))]);
+            if validate_input_requests(context.client_capabilities().as_ref(), &requests).is_err() {
+                return Ok(CallToolResult::error(vec![ContentBlock::text(ELICITATION_UNSUPPORTED)]).into());
+            }
+            return Ok(rmcp::model::InputRequiredResult::from_input_requests(requests).into());
         };
         let result: ElicitResult = parse_response(&responses, "answer")?;
 
-        Ok(Elicited::Done(Json(AskUserOutput {
-            accepted: result.action == ElicitationAction::Accept,
-            data: result.content,
-        })))
+        Ok(Json(AskUserOutput { accepted: result.action == ElicitationAction::Accept, data: result.content })
+            .into_call_tool_result()?)
     }
 }
 

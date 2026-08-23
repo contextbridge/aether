@@ -3,19 +3,19 @@ use crate::file_ops::{FileEdit, FileError, apply_edits, read_text_file, write_te
 use crate::workspace_paths::resolve_path;
 use clap::Parser;
 use mcp_utils::display_meta::{FileDiff, ToolDisplayMeta, ToolResultMeta, basename};
-use mcp_utils::server::mrtr::{ELICITATION_UNSUPPORTED, Elicited, MrtrAction, get_next_mrtr_action, parse_response};
+use mcp_utils::server::mrtr::{ELICITATION_UNSUPPORTED, parse_response, validate_input_requests};
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     handler::server::{
         router::tool::ToolRouter,
-        tool::{InputResponses, schema_for_output},
+        tool::{InputResponses, IntoCallToolResult, RequestState, schema_for_output},
         wrapper::{Json, Parameters},
     },
     model::{
-        ElicitRequest, ElicitRequestParams, ElicitResult, ElicitationAction, ElicitationSchema, EnumSchema,
-        GetPromptRequestParams, GetPromptResponse, Implementation, InputRequest, InputRequests, ListPromptsResult,
-        PaginatedRequestParams, Prompt, PromptArgument, PromptMessage, RequestMetaObject, Role, ServerCapabilities,
-        ServerInfo,
+        CallToolResponse, CallToolResult, ContentBlock, ElicitRequest, ElicitRequestParams, ElicitResult,
+        ElicitationAction, ElicitationSchema, EnumSchema, GetPromptRequestParams, GetPromptResponse, Implementation,
+        InputRequest, InputRequests, InputRequiredResult, ListPromptsResult, PaginatedRequestParams, Prompt,
+        PromptArgument, PromptMessage, RequestMetaObject, Role, ServerCapabilities, ServerInfo,
     },
     service::RequestContext,
     tool, tool_handler, tool_router,
@@ -166,35 +166,36 @@ impl PlanMcp {
         &self,
         request: Parameters<SubmitPlanInput>,
         responses: InputResponses,
+        _request_state: RequestState,
         context: RequestContext<RoleServer>,
-    ) -> Result<Elicited<Json<SubmitPlanOutput>>, McpError> {
+    ) -> Result<CallToolResponse, McpError> {
         let Parameters(input) = request;
         let plan = match Plan::load_by_name(&self.plans_dir, &input.plan_name).await {
             Ok(plan) => plan,
-            Err(e) => return Ok(Elicited::error(e.to_string())),
+            Err(e) => return Ok(CallToolResult::error(vec![ContentBlock::text(e.to_string())]).into()),
         };
 
         if !self.submit_command.is_empty() {
             return match run_external_submit(&plan, &self.submit_command).await {
-                Ok(output) => Ok(Elicited::Done(Json(output))),
-                Err(e) => Ok(Elicited::error(e.to_string())),
+                Ok(output) => Ok(Json(output).into_call_tool_result()?),
+                Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(e.to_string())]).into()),
             };
         }
 
-        let action = get_next_mrtr_action(responses.0.as_ref(), || {
+        let responses = if let Some(responses) = responses.0 {
+            responses
+        } else {
             let params = Self::build_elicitation_form(&plan).map_err(|e| McpError::internal_error(e, None))?;
-            Ok(InputRequests::from([("review".to_string(), InputRequest::Elicitation(ElicitRequest::new(params)))]))
-        })?
-        .validate_for_client(&context);
-
-        let responses = match action {
-            MrtrAction::Request(request) => return Ok(Elicited::Respond(request.into())),
-            MrtrAction::Abort(_) => return Ok(Elicited::error(ELICITATION_UNSUPPORTED)),
-            MrtrAction::Resume(responses) => responses,
+            let requests =
+                InputRequests::from([("review".to_string(), InputRequest::Elicitation(ElicitRequest::new(params)))]);
+            if validate_input_requests(context.client_capabilities().as_ref(), &requests).is_err() {
+                return Ok(CallToolResult::error(vec![ContentBlock::text(ELICITATION_UNSUPPORTED)]).into());
+            }
+            return Ok(InputRequiredResult::from_input_requests(requests).into());
         };
         let result: ElicitResult = parse_response(&responses, "review")?;
 
-        Ok(Elicited::Done(Json(review_decision(&result))))
+        Ok(Json(review_decision(&result)).into_call_tool_result()?)
     }
 
     fn build_elicitation_form(plan: &Plan) -> Result<ElicitRequestParams, String> {

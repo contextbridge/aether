@@ -4,14 +4,14 @@ use rmcp::{
     ErrorData, RoleServer, ServerHandler,
     handler::server::{
         router::tool::ToolRouter,
-        tool::ToolCallContext,
+        tool::{ToolCallContext, parse_json_object},
         wrapper::{Json, Parameters},
     },
     model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams, ContentBlock, CreateTaskResult,
         ElicitRequest, ElicitRequestParams, ElicitResult, ElicitationAction, ElicitationSchema, EnumSchema,
-        GetTaskParams, GetTaskResult, Implementation, InputRequest, InputRequests, ProgressNotificationParam,
-        ServerCapabilities, ServerInfo, UpdateTaskParams,
+        GetTaskParams, GetTaskResult, Implementation, InputRequest, InputRequests, InputRequiredResult,
+        ProgressNotificationParam, ServerCapabilities, ServerInfo, UpdateTaskParams,
     },
     service::RequestContext,
     task_manager::{TaskContext, TaskExit, TaskManager, TaskOptions},
@@ -45,9 +45,8 @@ use crate::{
     lsp::tools::document_info::{LspDocumentInput, LspDocumentOutput, execute_lsp_document},
     workspace_paths::WorkspacePaths,
 };
-use mcp_utils::server::mrtr::{MrtrAction, get_next_mrtr_action, parse_response};
+use mcp_utils::server::mrtr::{AbortReason, InputKind, MrtrAction, parse_response, validate_input_requests};
 use mcp_utils::server::tasks::{BACKGROUND_TASK_TTL_MS, require_tasks_capability};
-use mcp_utils::server::tool::parse_arguments;
 
 use mcp_utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename, truncate};
 use tools::ast_grep::{AstGrepInput, AstGrepOutput, perform_ast_grep};
@@ -166,16 +165,25 @@ impl<T: CodingTools + 'static> ServerHandler for CodingMcp<T> {
         }
 
         if let Some(prompt) = self.permission_prompt(&request) {
-            let action = get_next_mrtr_action(request.input_responses.as_ref(), || {
-                Ok(InputRequests::from([(
+            let action = if let Some(responses) = request.input_responses.clone() {
+                MrtrAction::Resume(responses)
+            } else {
+                let requests = InputRequests::from([(
                     "permission".to_string(),
                     InputRequest::Elicitation(ElicitRequest::new(decision_form(
                         &prompt.tool_name,
                         &prompt.description,
                     ))),
-                )]))
-            })?
-            .validate_for_client(&context);
+                )]);
+
+                match validate_input_requests(context.client_capabilities().as_ref(), &requests) {
+                    Ok(()) => MrtrAction::Request(InputRequiredResult::from_input_requests(requests)),
+                    Err(_) => MrtrAction::Abort(AbortReason::UnsupportedInput {
+                        key: "permission".to_string(),
+                        kind: InputKind::FormElicitation,
+                    }),
+                }
+            };
 
             match action {
                 MrtrAction::Request(request) => return Ok(request.into()),
@@ -416,15 +424,31 @@ When using tools that take file paths, always use absolute paths from:
                 if name != "bash" {
                     return None;
                 }
-                let command = parse_arguments::<BashInput>(request).ok()?.command;
+                let command = request
+                    .arguments
+                    .clone()
+                    .and_then(|arguments| parse_json_object::<BashInput>(arguments).ok())?
+                    .command;
+
                 is_dangerous_cmd(&command)
                     .then(|| PermissionPrompt { tool_name: name.to_string(), description: command })
             }
             PermissionMode::AlwaysAsk => {
                 let description = match name {
-                    "bash" => parse_arguments::<BashInput>(request).ok()?.command,
+                    "bash" => {
+                        request
+                            .arguments
+                            .clone()
+                            .and_then(|arguments| parse_json_object::<BashInput>(arguments).ok())?
+                            .command
+                    }
                     "write_file" | "edit_file" => {
-                        let file_path = parse_arguments::<FilePathArg>(request).ok()?.file_path;
+                        let file_path = request
+                            .arguments
+                            .clone()
+                            .and_then(|arguments| parse_json_object::<FilePathArg>(arguments).ok())?
+                            .file_path;
+
                         self.resolve_file_arg(&file_path).unwrap_or(file_path)
                     }
                     _ => {
@@ -810,7 +834,7 @@ fn background_bash_args(request: &CallToolRequestParams) -> Option<BashInput> {
         return None;
     }
 
-    let args = parse_arguments::<BashInput>(request).ok()?;
+    let args = request.arguments.clone().and_then(|arguments| parse_json_object::<BashInput>(arguments).ok())?;
     args.run_in_background.is_some_and(|background| background).then_some(args)
 }
 
