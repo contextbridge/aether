@@ -20,8 +20,22 @@ tauri-build = { workspace = true }
 [dependencies]
 tauri = { workspace = true }
 tauri-plugin-opener = { workspace = true }
+acp_utils = { package = "aether-acp-utils", path = "../../../crates/acp-utils", features = ["client"] }
+agent-client-protocol = { workspace = true }
 serde = { workspace = true }
+specta = { version = "=2.0.0-rc.25", features = ["derive"] }
+specta-typescript = "0.0.12"
+tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
 serde_json = { workspace = true }
+ignore = { workspace = true }
+mime_guess = { workspace = true }
+url = { workspace = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "process", "time"] }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [lints]
 workspace = true
