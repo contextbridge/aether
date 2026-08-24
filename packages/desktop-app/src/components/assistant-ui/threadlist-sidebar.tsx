@@ -1,5 +1,6 @@
 import type * as React from "react";
-import { MessagesSquare } from "lucide-react";
+import { GitCompareArrows, MessagesSquare } from "lucide-react";
+import { useAppActions } from "@/app-provider";
 import {
   Sidebar,
   SidebarContent,
@@ -15,6 +16,8 @@ import { ThreadList } from "@/components/assistant-ui/thread-list";
 export function ThreadListSidebar({
   ...props
 }: React.ComponentProps<typeof Sidebar>) {
+  const { openGitReview } = useAppActions();
+
   return (
     <Sidebar {...props}>
       <SidebarHeader className="aui-sidebar-header mb-2 border-b">
@@ -43,6 +46,17 @@ export function ThreadListSidebar({
       </SidebarContent>
       {props.collapsible !== "none" && <SidebarRail />}
       <SidebarFooter className="aui-sidebar-footer border-t">
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              onClick={openGitReview}
+              tooltip="Review changes (Ctrl+G)"
+            >
+              <GitCompareArrows />
+              <span>Review changes</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
         <p className="text-muted-foreground px-2.5 py-1 text-xs">
           Select a session to continue working.
         </p>

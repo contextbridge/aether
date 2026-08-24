@@ -8,6 +8,7 @@ mod app_event;
 mod app_state;
 mod commands;
 mod files;
+pub mod git;
 use app_event::AppEvent;
 use app_state::AppState;
 #[cfg(test)]
@@ -18,7 +19,7 @@ use files::{FileEntry, collect_workspace_files};
 fn bridge_event(session_id: String, connection_id: String, event: AcpEvent) -> Option<AppEvent> {
     match event {
         AcpEvent::SessionUpdate { session_id, update } => {
-            Some(AppEvent::SessionUpdate { session_id: session_id.0.to_string(), connection_id, update: *update })
+            Some(AppEvent::SessionUpdate { session_id: session_id.0.to_string(), connection_id, update })
         }
         AcpEvent::PromptDone(stop_reason) => {
             Some(AppEvent::PromptDone { session_id, connection_id, stop_reason: format!("{stop_reason:?}") })
@@ -39,7 +40,15 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::send_prompt,
             commands::index_workspace_files,
             commands::cancel_prompt,
-            commands::close_session
+            commands::close_session,
+            commands::load_git_snapshot,
+            commands::load_diff_files,
+            commands::stage_git_paths,
+            commands::unstage_git_paths,
+            commands::stage_all_git_changes,
+            commands::unstage_all_git_changes,
+            commands::commit_git_changes,
+            commands::discard_git_path
         ])
         .typ::<AppEvent>()
 }
@@ -65,12 +74,7 @@ pub fn run() {
     let page_state = state.clone();
     tauri::Builder::default()
         .manage(state)
-        .on_page_load(move |_webview, _payload| {
-            let state = page_state.clone();
-            tauri::async_runtime::spawn(async move {
-                state.close_all_sessions().await;
-            });
-        })
+        .on_page_load(move |_webview, _payload| page_state.close_all_sessions())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(bindings.invoke_handler())
         .run(tauri::generate_context!())

@@ -1,6 +1,7 @@
 use crate::AppEvent;
 use crate::app_state::AppState;
 use crate::files::{FileEntry, collect_workspace_files};
+use crate::git::{DiffFileContents, DiffScope, FileStatus, GitRepository, GitSnapshot};
 use agent_client_protocol::schema::v1::SessionConfigOption;
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -61,7 +62,7 @@ pub(crate) async fn set_session_config_option(
     value: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
-    state.set_session_config_option(&session_id, &config_id, &value).await
+    state.set_session_config_option(&session_id, &config_id, &value)
 }
 
 #[tauri::command]
@@ -72,7 +73,7 @@ pub(crate) async fn send_prompt(
     file_paths: Option<Vec<String>>,
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
-    state.send_prompt(&session_id, &text, file_paths.as_deref()).await
+    state.send_prompt(&session_id, &text, file_paths.as_deref())
 }
 
 #[tauri::command]
@@ -84,11 +85,103 @@ pub(crate) fn index_workspace_files(cwd: &str) -> Result<Vec<FileEntry>, String>
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn cancel_prompt(session_id: String, state: State<'_, Arc<AppState>>) -> Result<(), String> {
-    state.cancel_prompt(&session_id).await
+    state.cancel_prompt(&session_id)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn close_session(session_id: String, state: State<'_, Arc<AppState>>) -> Result<(), String> {
-    state.close_session(&session_id).await
+    state.close_session(&session_id)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn load_git_snapshot(
+    session_id: String,
+    scope: DiffScope,
+    state: State<'_, Arc<AppState>>,
+) -> Result<GitSnapshot, String> {
+    repository(&state, &session_id)?.snapshot(scope).await.map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn load_diff_files(
+    session_id: String,
+    path: String,
+    old_path: Option<String>,
+    scope: DiffScope,
+    state: State<'_, Arc<AppState>>,
+) -> Result<DiffFileContents, String> {
+    repository(&state, &session_id)?
+        .load_file_contents(&path, old_path.as_deref(), scope)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn stage_git_paths(
+    session_id: String,
+    paths: Vec<String>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let _guard = state.lock_git_mutations().await;
+    repository(&state, &session_id)?.stage(&paths).await.map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn unstage_git_paths(
+    session_id: String,
+    paths: Vec<String>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let _guard = state.lock_git_mutations().await;
+    repository(&state, &session_id)?.unstage(&paths).await.map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn stage_all_git_changes(session_id: String, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    let _guard = state.lock_git_mutations().await;
+    repository(&state, &session_id)?.stage_all().await.map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn unstage_all_git_changes(session_id: String, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    let _guard = state.lock_git_mutations().await;
+    repository(&state, &session_id)?.unstage_all().await.map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn commit_git_changes(
+    session_id: String,
+    message: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let _guard = state.lock_git_mutations().await;
+    repository(&state, &session_id)?.commit(&message).await.map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn discard_git_path(
+    session_id: String,
+    path: String,
+    old_path: Option<String>,
+    status: FileStatus,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let _guard = state.lock_git_mutations().await;
+    repository(&state, &session_id)?
+        .discard(&path, old_path.as_deref(), status)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+fn repository(state: &State<'_, Arc<AppState>>, session_id: &str) -> Result<GitRepository, String> {
+    state.working_directory(session_id).map(GitRepository::new)
 }

@@ -18,7 +18,7 @@ pub(crate) enum AppEvent {
         connection_id: String,
         session_id: String,
         #[specta(type = AcpSessionUpdateType)]
-        update: SessionUpdate,
+        update: Box<SessionUpdate>,
     },
     PromptDone {
         session_id: String,

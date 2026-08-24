@@ -164,7 +164,7 @@ const ComposerTriggerPopoverImpl: FC<ComposerTriggerPopoverProps> = ({
     <ComposerPrimitive.Unstable_TriggerPopover
       data-slot="composer-trigger-popover"
       className={cn(
-        "aui-composer-trigger-popover bg-popover text-popover-foreground absolute start-0 top-full z-50 mt-2 max-h-80 w-72 overflow-y-auto rounded-xl border shadow-lg",
+        "aui-composer-trigger-popover bg-popover text-popover-foreground absolute start-0 top-full z-50 mt-2 max-h-80 w-full overflow-y-auto rounded-xl border shadow-lg",
         className,
       )}
       {...props}
