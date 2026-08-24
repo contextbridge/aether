@@ -139,7 +139,15 @@ function ConfigSelector({
             : "max-w-52 text-muted-foreground hover:text-foreground"
         }
       />
-      <ModelSelector.Content side="top" searchable={searchable}>
+      <ModelSelector.Content
+        side="bottom"
+        collisionAvoidance={{
+          side: "none",
+          align: "shift",
+          fallbackAxisSide: "none",
+        }}
+        searchable={searchable}
+      >
         {searchable && <ModelSelector.Search />}
         <ModelSelector.List>
           <ModelSelector.Empty />

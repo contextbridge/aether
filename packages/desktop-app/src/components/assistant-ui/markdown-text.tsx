@@ -13,6 +13,7 @@ import { type FC, memo, useState } from "react";
 import { CheckIcon, CopyIcon } from "lucide-react";
 
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
+import { SyntaxHighlighter } from "./shiki-highlighter";
 import { cn } from "@/lib/utils";
 
 const MarkdownTextImpl = () => {
@@ -77,6 +78,7 @@ const useCopyToClipboard = ({
 };
 
 const defaultComponents = memoizeMarkdownComponents({
+  SyntaxHighlighter,
   h1: ({ className, ...props }) => (
     <h1
       className={cn(
