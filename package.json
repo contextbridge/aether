@@ -14,10 +14,12 @@
     "website:build": "pnpm --filter @aether-agent/website build",
     "website:preview": "pnpm --filter @aether-agent/website preview",
     "website:check": "pnpm --filter @aether-agent/website astro check",
+    "desktop:generate-types": "cargo test -p desktop-app --lib tests::exports_typescript_bindings -- --exact",
     "desktop:dev": "pnpm --filter @aether-agent/desktop-app tauri:dev",
     "desktop:build": "pnpm --filter @aether-agent/desktop-app tauri:build",
     "desktop:preview": "pnpm --filter @aether-agent/desktop-app preview",
     "desktop:typecheck": "pnpm --filter @aether-agent/desktop-app build",
+    "desktop:test": "pnpm --filter @aether-agent/desktop-app test",
     "fmt": "prettier --write \"packages/**/*.{ts,mts,cts,mjs,cjs,js,jsx,json,astro,css}\"",
     "fmt-check": "prettier --check \"packages/**/*.{ts,mts,cts,mjs,cjs,js,jsx,json,astro,css}\""
   },
