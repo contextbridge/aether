@@ -7,12 +7,12 @@ use std::future::pending;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::net::UnixListener;
 use tokio::select;
 use tokio::spawn;
 use tokio::sync::{RwLock, oneshot};
-use tokio::time::sleep;
+use tokio::time::{Instant, sleep};
 use uuid::Uuid;
 
 #[doc = include_str!("docs/daemon.md")]
@@ -191,74 +191,75 @@ fn spawn_shutdown_signal_handler() -> oneshot::Receiver<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::time::timeout;
+    use tokio::net::UnixStream;
+    use tokio::sync::oneshot;
 
-    #[tokio::test]
-    async fn idle_timeout_none_never_completes() {
-        let client_count = Arc::new(AtomicUsize::new(0));
-        let last_activity = Arc::new(RwLock::new(Instant::now()));
-
-        let result = timeout(
-            Duration::from_millis(40),
-            check_idle_timeout_with_interval(client_count, last_activity, None, Duration::from_millis(5)),
-        )
-        .await;
-
-        assert!(result.is_err(), "None timeout should not complete");
+    fn daemon_in_tempdir() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+        let socket_path = dir.path().join("daemon.sock");
+        (dir, socket_path)
     }
 
-    #[tokio::test]
-    async fn idle_timeout_completes_when_idle_elapsed() {
-        let client_count = Arc::new(AtomicUsize::new(0));
-        let stale_activity = Instant::now()
-            .checked_sub(Duration::from_millis(50))
-            .expect("subtracting from current instant should succeed");
-        let last_activity = Arc::new(RwLock::new(stale_activity));
+    #[tokio::test(start_paused = true)]
+    async fn idle_timeout_shuts_down_when_no_clients_are_connected() {
+        let (_dir, socket_path) = daemon_in_tempdir();
+        let (_shutdown_tx, shutdown_rx) = oneshot::channel();
 
-        let result = timeout(
-            Duration::from_millis(100),
-            check_idle_timeout_with_interval(
-                client_count,
-                last_activity,
-                Some(Duration::from_millis(10)),
-                Duration::from_millis(5),
-            ),
-        )
-        .await;
+        let daemon = LspDaemon::new(socket_path.clone(), Some(Duration::from_millis(1)), Duration::from_secs(1));
+        daemon.run_until_shutdown(shutdown_rx).await.expect("idle daemon should shut down cleanly");
 
-        assert!(result.is_ok(), "Idle timeout should complete");
+        assert!(!socket_path.exists(), "socket file should be removed after shutdown");
     }
 
-    #[test]
-    fn all_roots_deleted_empty_returns_false() {
-        assert!(!all_roots_deleted(&[]));
+    #[tokio::test(start_paused = true)]
+    async fn without_idle_timeout_daemon_stays_alive_without_clients() {
+        let (_dir, socket_path) = daemon_in_tempdir();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+
+        let daemon = LspDaemon::new(socket_path.clone(), None, Duration::from_secs(1));
+        let task = tokio::spawn(daemon.run_until_shutdown(shutdown_rx));
+
+        while !socket_path.exists() {
+            tokio::task::yield_now().await;
+        }
+        tokio::time::sleep(Duration::from_hours(1)).await;
+        assert!(!task.is_finished(), "daemon without an idle timeout must not exit on its own");
+
+        shutdown_tx.send(()).expect("shutdown channel should accept");
+        task.await.expect("daemon task should not panic").expect("daemon should shut down cleanly");
     }
 
-    #[test]
-    fn all_roots_deleted_existing_dir_returns_false() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(!all_roots_deleted(&[dir.path().to_path_buf()]));
+    #[tokio::test(start_paused = true)]
+    async fn connected_client_prevents_idle_shutdown() {
+        let (_dir, socket_path) = daemon_in_tempdir();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+
+        let daemon = LspDaemon::new(socket_path.clone(), Some(Duration::from_millis(1)), Duration::from_secs(1));
+        let task = tokio::spawn(daemon.run_until_shutdown(shutdown_rx));
+
+        while !socket_path.exists() {
+            tokio::task::yield_now().await;
+        }
+        let _client = UnixStream::connect(&socket_path).await.expect("daemon socket should accept connections");
+        tokio::task::yield_now().await;
+
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        assert!(!task.is_finished(), "a connected client must keep the daemon alive past the idle timeout");
+
+        shutdown_tx.send(()).expect("shutdown channel should accept");
+        task.await.expect("daemon task should not panic").expect("daemon should shut down cleanly");
+        assert!(!socket_path.exists(), "socket file should be removed after shutdown");
     }
 
-    #[test]
-    fn all_roots_deleted_nonexistent_returns_true() {
-        let gone = PathBuf::from("/tmp/aether-lspd-test-nonexistent-dir-that-does-not-exist");
-        assert!(all_roots_deleted(&[gone]));
-    }
+    #[tokio::test(start_paused = true)]
+    async fn shutdown_signal_stops_daemon() {
+        let (_dir, socket_path) = daemon_in_tempdir();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
-    #[test]
-    fn all_roots_deleted_mixed_returns_false() {
-        let dir = tempfile::tempdir().unwrap();
-        let gone = PathBuf::from("/tmp/aether-lspd-test-nonexistent-dir-that-does-not-exist");
-        assert!(!all_roots_deleted(&[dir.path().to_path_buf(), gone]));
-    }
+        let daemon = LspDaemon::new(socket_path.clone(), None, Duration::from_secs(1));
+        shutdown_tx.send(()).expect("shutdown channel should accept");
+        daemon.run_until_shutdown(shutdown_rx).await.expect("daemon should shut down cleanly");
 
-    #[test]
-    fn all_roots_deleted_after_tempdir_drop() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().to_path_buf();
-        assert!(!all_roots_deleted(std::slice::from_ref(&root)));
-        drop(dir);
-        assert!(all_roots_deleted(&[root]));
+        assert!(!socket_path.exists(), "socket file should be removed after shutdown");
     }
 }

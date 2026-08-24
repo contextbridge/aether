@@ -31,7 +31,6 @@ pub struct FileWatcherHandle {
 impl FileWatcherHandle {
     /// Spawn the actor task and return a handle to it.
     pub fn spawn(workspace_root: PathBuf, event_tx: mpsc::Sender<FileWatcherBatch>) -> Self {
-        let (msg_tx, msg_rx) = mpsc::channel(64);
         let (bridge_tx, bridge_rx) = mpsc::channel::<Event>(256);
         let watcher = match create_watcher(&workspace_root, bridge_tx) {
             Ok(w) => {
@@ -43,6 +42,20 @@ impl FileWatcherHandle {
                 None
             }
         };
+        Self::spawn_actor(workspace_root, watcher, bridge_rx, event_tx)
+    }
+
+    /// Wire the actor up to its channels and run it on a spawned task.
+    ///
+    /// The OS watcher is injectable so tests can drive the actor through the same
+    /// bridge channel a real `notify` watcher produces events on.
+    pub(crate) fn spawn_actor(
+        workspace_root: PathBuf,
+        watcher: Option<RecommendedWatcher>,
+        bridge_rx: mpsc::Receiver<Event>,
+        event_tx: mpsc::Sender<FileWatcherBatch>,
+    ) -> Self {
+        let (msg_tx, msg_rx) = mpsc::channel(64);
         let canonical_workspace_root =
             std::fs::canonicalize(&workspace_root).ok().filter(|canonical| canonical != &workspace_root);
         if let Some(canonical) = &canonical_workspace_root {
@@ -328,206 +341,202 @@ mod tests {
         EventKind::Modify(notify::event::ModifyKind::Data(notify::event::DataChange::Content));
     const CREATE_FILE: EventKind = EventKind::Create(notify::event::CreateKind::File);
     const REMOVE_FILE: EventKind = EventKind::Remove(notify::event::RemoveKind::File);
-    const ALL_KINDS: WatchKind =
-        WatchKind::from_bits_truncate(WatchKind::Create.bits() | WatchKind::Change.bits() | WatchKind::Delete.bits());
 
     fn watcher(pattern: &str, kind: Option<WatchKind>) -> FileSystemWatcher {
         FileSystemWatcher { glob_pattern: lsp_types::GlobPattern::String(pattern.into()), kind }
     }
 
-    fn build(watchers: &[FileSystemWatcher]) -> Option<(GlobSet, Vec<WatchKind>)> {
-        let refs: Vec<&FileSystemWatcher> = watchers.iter().collect();
-        build_glob_set(&refs)
+    /// A file watcher driven entirely through its channels: registrations go
+    /// through the public handle, events arrive on the bridge channel a real
+    /// `notify` watcher would feed, and assertions read the emitted batches.
+    struct WatchedProject {
+        dir: tempfile::TempDir,
+        handle: FileWatcherHandle,
+        bridge_tx: mpsc::Sender<Event>,
+        batches: mpsc::Receiver<FileWatcherBatch>,
     }
 
-    fn matched_kind(gs: &GlobSet, kinds: &[WatchKind], path: &str) -> WatchKind {
-        gs.matches(path).iter().fold(WatchKind::empty(), |acc, &i| acc | kinds[i])
-    }
+    impl WatchedProject {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().expect("tempdir should be created");
+            let (bridge_tx, bridge_rx) = mpsc::channel(8);
+            let (event_tx, event_rx) = mpsc::channel(8);
+            let handle = FileWatcherHandle::spawn_actor(dir.path().to_path_buf(), None, bridge_rx, event_tx);
+            Self { dir, handle, bridge_tx, batches: event_rx }
+        }
 
-    fn notify_event(kind: EventKind, paths: Vec<&str>) -> Event {
-        Event {
-            kind,
-            paths: paths.into_iter().map(PathBuf::from).collect(),
-            attrs: notify::event::EventAttributes::new(),
+        /// Register watchers and let the actor apply them before returning.
+        async fn register(&self, id: &str, watchers: Vec<FileSystemWatcher>) {
+            self.handle.register_watchers(id.into(), watchers);
+            tokio::task::yield_now().await;
+        }
+
+        async fn unregister(&self, id: &str) {
+            self.handle.unregister(id.into());
+            tokio::task::yield_now().await;
+        }
+
+        fn path(&self, relative: &str) -> PathBuf {
+            self.dir.path().join(relative)
+        }
+
+        async fn send(&self, kind: EventKind, path: PathBuf) {
+            self.bridge_tx
+                .send(Event { kind, paths: vec![path], attrs: notify::event::EventAttributes::new() })
+                .await
+                .expect("bridge channel should accept events");
+        }
+
+        async fn next_batch(&mut self) -> FileWatcherBatch {
+            self.batches.recv().await.expect("file watcher batch should be emitted")
         }
     }
 
-    fn test_actor(workspace_root: &str) -> (FileWatcherActor, mpsc::Receiver<FileWatcherBatch>) {
-        let (event_tx, event_rx) = mpsc::channel(8);
-        let (_, msg_rx) = mpsc::channel(8);
-        let (_, bridge_rx) = mpsc::channel(8);
-        (
-            FileWatcherActor {
-                _watcher: None,
-                workspace_root: PathBuf::from(workspace_root),
-                canonical_workspace_root: None,
-                event_tx,
-                msg_rx,
-                bridge_rx,
-                forwarded_pending: HashMap::new(),
-                discovered_pending: HashMap::new(),
-                registrations: HashMap::new(),
-                glob_set: GlobSet::empty(),
-                watch_kinds: Vec::new(),
-            },
-            event_rx,
-        )
+    #[tokio::test(start_paused = true)]
+    async fn matching_glob_events_are_forwarded() {
+        let mut project = WatchedProject::new();
+        project.register("reg", vec![watcher("**/*.rs", Some(WatchKind::Change))]).await;
+        project.send(MODIFY_CONTENT, project.path("src/main.rs")).await;
+
+        let batch = project.next_batch().await;
+
+        assert_eq!(batch.forwarded_changes.len(), 1);
+        assert_eq!(batch.forwarded_changes[0].typ, FileChangeType::CHANGED);
+        assert_eq!(
+            batch.forwarded_changes[0].uri.as_str(),
+            path_to_uri(&project.path("src/main.rs")).unwrap().as_str()
+        );
+        assert!(batch.discovered_uris.is_empty());
     }
 
-    fn actor_with_globs(root: &str, globs: &[(&str, WatchKind)]) -> FileWatcherActor {
-        let (mut actor, _) = test_actor(root);
-        for (i, (pattern, kind)) in globs.iter().enumerate() {
-            actor.registrations.insert(format!("reg{i}"), vec![watcher(pattern, Some(*kind))]);
-        }
-        actor.rebuild_glob_state();
-        actor
-    }
+    #[tokio::test(start_paused = true)]
+    async fn events_outside_registered_globs_are_discovered_only() {
+        let mut project = WatchedProject::new();
+        project.register("reg", vec![watcher("**/*.rs", Some(WatchKind::Change))]).await;
+        project.send(MODIFY_CONTENT, project.path("src/main.py")).await;
 
-    #[test]
-    fn test_build_glob_set() {
-        let (gs, kinds) = build(&[watcher("**/*.rs", Some(ALL_KINDS))]).unwrap();
-        assert!(gs.is_match("src/main.rs"));
-        assert!(!gs.is_match("src/main.py"));
-        assert_eq!(kinds, [ALL_KINDS]);
-    }
+        let batch = project.next_batch().await;
 
-    #[test]
-    fn test_build_glob_set_none_cases() {
-        assert!(build(&[watcher("[invalid", None)]).is_none());
-        assert!(build(&[]).is_none());
-    }
-
-    #[test]
-    fn test_build_glob_set_preserves_per_watcher_kinds() {
-        let (gs, kinds) =
-            build(&[watcher("**/*.rs", Some(WatchKind::Create)), watcher("**/*.json", Some(WatchKind::Delete))])
-                .unwrap();
-
-        assert_eq!(matched_kind(&gs, &kinds, "src/main.rs"), WatchKind::Create);
-        assert_eq!(matched_kind(&gs, &kinds, "config.json"), WatchKind::Delete);
-
-        // Wrong event kind for each pattern should not pass the filter
-        assert!(map_event_kind(REMOVE_FILE, WatchKind::Create).is_none());
-        assert!(map_event_kind(CREATE_FILE, WatchKind::Delete).is_none());
-    }
-
-    #[test]
-    fn test_build_glob_set_skips_invalid_keeps_indices_aligned() {
-        let (gs, kinds) = build(&[
-            watcher("**/*.rs", Some(WatchKind::Create)),
-            watcher("[invalid", Some(WatchKind::Change)),
-            watcher("**/*.json", Some(WatchKind::Delete)),
-        ])
-        .unwrap();
-
-        assert_eq!(kinds, [WatchKind::Create, WatchKind::Delete]);
-        assert_eq!(gs.matches("lib.rs"), vec![0]);
-        assert_eq!(gs.matches("data.json"), vec![1]);
-    }
-
-    #[test]
-    fn test_map_event_kind() {
-        for (kind, watch, expected) in [
-            (CREATE_FILE, ALL_KINDS, Some(FileChangeType::CREATED)),
-            (MODIFY_CONTENT, ALL_KINDS, Some(FileChangeType::CHANGED)),
-            (REMOVE_FILE, ALL_KINDS, Some(FileChangeType::DELETED)),
-            (CREATE_FILE, WatchKind::Change, None),
-        ] {
-            assert_eq!(map_event_kind(kind, watch), expected, "kind={kind:?} watch={watch:?}");
-        }
-    }
-
-    #[test]
-    fn test_path_to_uri() {
-        let uri = path_to_uri(Path::new("/home/user/project/src/main.rs")).unwrap();
-        assert_eq!(uri.to_string(), "file:///home/user/project/src/main.rs");
-    }
-
-    #[test]
-    fn test_should_track_implicit_path() {
-        for (label, expected, within, rel, abs) in [
-            (
-                "skips target tree",
-                false,
-                true,
-                "target/debug/incremental/foo.bin",
-                "/tmp/project/target/debug/incremental/foo.bin",
-            ),
-            ("allows targeting dir name", true, true, "targeting/main.rs", "/tmp/project/targeting/main.rs"),
-            ("rejects outside workspace", false, false, "/tmp/other/main.rs", "/tmp/other/main.rs"),
-        ] {
-            assert_eq!(
-                should_track_implicit_path(MODIFY_CONTENT, within, Path::new(rel), Path::new(abs)),
-                expected,
-                "{label}"
-            );
-        }
-    }
-
-    #[test]
-    fn test_rebuild_glob_state_combines_registrations() {
-        let actor = actor_with_globs("/tmp", &[("**/*.rs", WatchKind::Create), ("**/*.json", WatchKind::Delete)]);
-        assert!(actor.glob_set.is_match("src/main.rs"));
-        assert!(actor.glob_set.is_match("config.json"));
-        assert!(!actor.glob_set.is_match("readme.md"));
-        assert_eq!(actor.watch_kinds.len(), 2);
-    }
-
-    #[test]
-    fn test_accumulate_event_implicit_mode_without_globs() {
-        let (mut actor, _) = test_actor("/tmp/project");
-        actor.accumulate_event(&notify_event(MODIFY_CONTENT, vec!["/tmp/project/src/main.rs"]));
-        assert!(actor.forwarded_pending.is_empty());
-        assert_eq!(actor.discovered_pending.len(), 1);
-    }
-
-    #[test]
-    fn test_accumulate_event_matching_glob_forwards_changes() {
-        let mut actor = actor_with_globs("/tmp/project", &[("**/*.rs", WatchKind::Change)]);
-        actor.accumulate_event(&notify_event(MODIFY_CONTENT, vec!["/tmp/project/src/main.rs"]));
-        assert_eq!(actor.forwarded_pending.len(), 1);
-        assert!(actor.discovered_pending.is_empty());
-        let (_, change_type) = actor.forwarded_pending.values().next().unwrap();
-        assert_eq!(*change_type, FileChangeType::CHANGED);
-    }
-
-    #[test]
-    fn test_accumulate_event_tracks_non_matching_paths() {
-        let mut actor = actor_with_globs("/tmp/project", &[("**/*.rs", WatchKind::Change)]);
-        actor.accumulate_event(&notify_event(MODIFY_CONTENT, vec!["/tmp/project/src/main.py"]));
-        assert!(actor.forwarded_pending.is_empty());
-        assert_eq!(actor.discovered_pending.len(), 1);
-    }
-
-    #[test]
-    fn test_accumulate_event_ignores_noise_in_implicit_mode() {
-        for path in ["/tmp/project/target/debug/incremental/foo/dep-graph.bin", "/tmp/other/outside.rs"] {
-            let (mut actor, _) = test_actor("/tmp/project");
-            actor.accumulate_event(&notify_event(MODIFY_CONTENT, vec![path]));
-            assert!(actor.forwarded_pending.is_empty(), "forwarded should be empty for {path}");
-            assert!(actor.discovered_pending.is_empty(), "discovered should be empty for {path}");
-        }
-    }
-
-    #[tokio::test]
-    async fn test_flush_pending_only_discovered_emits_track_only_batch() {
-        let (mut actor, mut event_rx) = test_actor("/tmp/project");
-        actor.accumulate_event(&notify_event(MODIFY_CONTENT, vec!["/tmp/project/src/main.rs"]));
-        actor.flush_pending().await;
-        let batch = event_rx.recv().await.expect("expected file watcher batch");
         assert!(batch.forwarded_changes.is_empty());
         assert_eq!(batch.discovered_uris.len(), 1);
+        assert_eq!(batch.discovered_uris[0].as_str(), path_to_uri(&project.path("src/main.py")).unwrap().as_str());
     }
 
-    #[tokio::test]
-    async fn test_register_and_unregister_via_handle() {
-        let (event_tx, _) = mpsc::channel(64);
-        let handle = FileWatcherHandle::spawn(PathBuf::from("/tmp/test"), event_tx);
-        handle.register_watchers("reg1".into(), vec![watcher("**/*.rs", Some(WatchKind::Create))]);
-        handle.register_watchers("reg2".into(), vec![watcher("**/*.json", Some(WatchKind::Delete))]);
-        handle.unregister("reg1".into());
-        handle.unregister("reg2".into());
-        drop(handle);
-        tokio::task::yield_now().await;
+    #[tokio::test(start_paused = true)]
+    async fn events_are_filtered_by_requested_watch_kinds() {
+        let mut project = WatchedProject::new();
+        project.register("reg", vec![watcher("**/*.rs", Some(WatchKind::Create))]).await;
+
+        project.send(MODIFY_CONTENT, project.path("src/main.rs")).await;
+        project.send(CREATE_FILE, project.path("src/main.rs")).await;
+
+        let batch = project.next_batch().await;
+
+        assert_eq!(batch.forwarded_changes.len(), 1, "only the create should be forwarded");
+        assert_eq!(batch.forwarded_changes[0].typ, FileChangeType::CREATED);
+        assert!(batch.discovered_uris.is_empty(), "glob-matched paths are never discovered");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn per_watcher_kinds_are_preserved_across_registrations() {
+        let mut project = WatchedProject::new();
+        project.register("rust", vec![watcher("**/*.rs", Some(WatchKind::Create))]).await;
+        project.register("json", vec![watcher("**/*.json", Some(WatchKind::Delete))]).await;
+
+        project.send(MODIFY_CONTENT, project.path("src/main.rs")).await;
+        project.send(CREATE_FILE, project.path("src/main.rs")).await;
+        project.send(REMOVE_FILE, project.path("data.json")).await;
+
+        let batch = project.next_batch().await;
+
+        let forwarded: Vec<(String, FileChangeType)> =
+            batch.forwarded_changes.iter().map(|event| (event.uri.as_str().to_string(), event.typ)).collect();
+        assert_eq!(
+            forwarded,
+            vec![
+                (path_to_uri(&project.path("data.json")).unwrap().as_str().to_string(), FileChangeType::DELETED),
+                (path_to_uri(&project.path("src/main.rs")).unwrap().as_str().to_string(), FileChangeType::CREATED),
+            ],
+            "each registration's watch kinds must filter independently"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn invalid_glob_patterns_are_skipped_and_valid_ones_still_work() {
+        let mut project = WatchedProject::new();
+        project.register("reg", vec![watcher("[invalid", None), watcher("**/*.rs", Some(WatchKind::Change))]).await;
+
+        project.send(MODIFY_CONTENT, project.path("src/main.rs")).await;
+        let batch = project.next_batch().await;
+
+        assert_eq!(
+            batch.forwarded_changes.len(),
+            1,
+            "valid globs must survive invalid patterns in the same registration"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn unregister_stops_matching_globs() {
+        let mut project = WatchedProject::new();
+        project.register("reg", vec![watcher("**/*.rs", Some(WatchKind::Change))]).await;
+
+        project.send(MODIFY_CONTENT, project.path("src/main.rs")).await;
+        let batch = project.next_batch().await;
+        assert_eq!(batch.forwarded_changes.len(), 1);
+
+        project.unregister("reg").await;
+        project.send(MODIFY_CONTENT, project.path("src/main.rs")).await;
+        let batch = project.next_batch().await;
+        assert!(batch.forwarded_changes.is_empty());
+        assert_eq!(batch.discovered_uris.len(), 1, "after unregistering, paths are only discovered");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn bursts_of_events_debounce_into_one_deduplicated_sorted_batch() {
+        let mut project = WatchedProject::new();
+        project.register("reg", vec![watcher("**/*.rs", Some(WatchKind::Create | WatchKind::Change))]).await;
+
+        project.send(MODIFY_CONTENT, project.path("src/zeta.rs")).await;
+        project.send(CREATE_FILE, project.path("src/alpha.rs")).await;
+        project.send(MODIFY_CONTENT, project.path("src/alpha.rs")).await;
+
+        let batch = project.next_batch().await;
+
+        let forwarded: Vec<(String, FileChangeType)> =
+            batch.forwarded_changes.iter().map(|event| (event.uri.as_str().to_string(), event.typ)).collect();
+        assert_eq!(
+            forwarded,
+            vec![
+                (path_to_uri(&project.path("src/alpha.rs")).unwrap().as_str().to_string(), FileChangeType::CHANGED),
+                (path_to_uri(&project.path("src/zeta.rs")).unwrap().as_str().to_string(), FileChangeType::CHANGED),
+            ],
+            "bursts must flush as one batch, deduplicated per URI and sorted by URI"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn implicit_discovery_ignores_noise_directories_and_paths_outside_the_workspace() {
+        let mut project = WatchedProject::new();
+        std::fs::create_dir_all(project.path("src")).expect("directory should be created");
+
+        project.send(MODIFY_CONTENT, project.path("target/debug/incremental/dep-graph.bin")).await;
+        project.send(MODIFY_CONTENT, project.path("src")).await;
+        project.send(MODIFY_CONTENT, PathBuf::from("/tmp/aether-lspd-outside-workspace/other.rs")).await;
+        project.send(MODIFY_CONTENT, project.path("targeting/main.rs")).await;
+        project.send(MODIFY_CONTENT, project.path("src/keep.rs")).await;
+
+        let batch = project.next_batch().await;
+
+        let discovered: Vec<String> = batch.discovered_uris.iter().map(|uri| uri.as_str().to_string()).collect();
+        assert_eq!(
+            discovered,
+            vec![
+                path_to_uri(&project.path("src/keep.rs")).unwrap().as_str().to_string(),
+                path_to_uri(&project.path("targeting/main.rs")).unwrap().as_str().to_string(),
+            ],
+            "only files inside the workspace outside noise directories should be discovered"
+        );
+        assert!(batch.forwarded_changes.is_empty());
     }
 }

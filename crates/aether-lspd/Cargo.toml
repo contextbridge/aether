@@ -71,6 +71,7 @@ libc = { workspace = true }
 [dev-dependencies]
 aether-lspd = { path = ".", features = ["testing"] }
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 
 [[bin]]
 name = "aether-lspd"

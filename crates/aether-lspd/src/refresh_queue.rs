@@ -181,6 +181,13 @@ mod tests {
         assert!(queue.recv().await.is_some());
         assert!(queue.recv().await.is_some());
 
+        // An empty recv observes the drained queue and completes the generation.
+        let drain_queue = queue.clone();
+        tokio::spawn(async move {
+            drain_queue.recv().await;
+        });
+        tokio::task::yield_now().await;
+
         waiter.await.unwrap();
     }
 
